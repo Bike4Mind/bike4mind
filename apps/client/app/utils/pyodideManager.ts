@@ -441,6 +441,11 @@ class PyodideManager {
         break;
 
       case 'error':
+        // Guest code can post this too, then keep looping; dropping the frame is what stops it.
+        if (this.executeResolver || this.callResolver) {
+          this.interrupt(msg.error);
+          break;
+        }
         this.clearInitWatchdog();
         this.clearRunLimit();
         this.updateState({
@@ -589,6 +594,8 @@ class PyodideManager {
   ): Promise<PythonFunctionCall> {
     await this.prepareSandbox('none');
     this.refuseIfBusy();
+    // An execute started while this await settled has already switched to the frame with data origins.
+    if (this.network !== 'none') throw new Error(PYTHON_SCRIPT_BUSY);
 
     const paramsJson = params === null ? null : toPythonJson(params);
     const nonce = globalThis.crypto.randomUUID();

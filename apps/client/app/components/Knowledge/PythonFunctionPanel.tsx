@@ -452,13 +452,15 @@ function TestFailure({ test, outcome }: { test: FunctionTestCase; outcome: TestO
       />
     );
   }
-  if (outcome.status === 'failed') return <FailureBlock error={outcome.error} output="" />;
+  if (outcome.status === 'failed') return <FailureBlock error={`${test.name}: ${outcome.error}`} output="" />;
   const { path, expected, actual } = outcome.mismatch;
+  // Quoted, so an empty or blank expected string is still visible.
+  const shown = (value: unknown) => (typeof value === 'string' ? JSON.stringify(value) : formatValue(value));
   return (
     <Alert color="danger" variant="soft" data-testid="python-function-test-failure" sx={{ alignItems: 'flex-start' }}>
-      <Typography level="body-sm">
-        {test.name}: output <code>{path || 'result'}</code> expected <code>{formatValue(expected)}</code>, got{' '}
-        <code>{actual === undefined ? 'nothing' : formatValue(actual)}</code>
+      <Typography level="body-sm" sx={{ wordBreak: 'break-word' }}>
+        {test.name}: output <code>{path || 'result'}</code> expected <code>{shown(expected)}</code>, got{' '}
+        <code>{actual === undefined ? 'nothing' : shown(actual)}</code>
         {toleranceText(test.tolerance)}.
       </Typography>
     </Alert>
@@ -502,7 +504,7 @@ function TestsSection({
           Run tests
         </Button>
       </Stack>
-      <Box sx={{ overflowX: 'auto' }}>
+      <Box sx={{ overflowX: 'auto' }} aria-live="polite" data-testid="python-function-test-results">
         <Table size="sm" borderAxis="xBetween" sx={{ tableLayout: 'auto' }}>
           <thead>
             <tr>

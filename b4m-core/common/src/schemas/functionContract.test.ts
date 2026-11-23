@@ -499,6 +499,11 @@ describe('compareFunctionOutput', () => {
     expect(compareFunctionOutput({ x: 0 }, { x: 1e-9 }, { abs: 1e-6, rel: 0.5 })).toBeNull();
   });
 
+  it('scales the relative tolerance by the expected value, not the actual one', () => {
+    // 10 is within 0.00995 of 1010 but not of 1000.
+    expect(compareFunctionOutput({ x: 1000 }, { x: 1010 }, { rel: 0.00995 })).toMatchObject({ path: 'x' });
+  });
+
   it('never matches NaN or an infinity', () => {
     expect(compareFunctionOutput({ x: Number.NaN }, { x: Number.NaN }, { abs: 1 })).toMatchObject({ path: 'x' });
     expect(compareFunctionOutput({ x: 1 }, { x: Number.NaN }, { abs: 1 })).toMatchObject({ path: 'x' });

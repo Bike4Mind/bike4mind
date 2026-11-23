@@ -811,6 +811,20 @@ describe('function calls', () => {
     await expect(call).resolves.toMatchObject({ value: { deflection: 2 } });
   });
 
+  it('refuses a call when an execute switches the frame before the call is posted', async () => {
+    const { pyodideManager, PYODIDE_SANDBOX_SRC } = await readySandbox();
+    const call = pyodideManager.callFunction('code', [], {});
+    const run = pyodideManager.execute('print(1)');
+
+    await expect(call).rejects.toThrow('Another Python script is already running');
+    expect(posted.some(message => message.type === 'call')).toBe(false);
+    const data = await bringUpFrame(posted);
+    expect(data.frame.getAttribute('src')).toBe(PYODIDE_SANDBOX_SRC);
+    await vi.waitFor(() => expect(posted.at(-1)).toMatchObject({ type: 'execute' }));
+    data.send({ type: 'result', result: { success: true, output: '1\n', plots: [], executionTime: 1 } });
+    await expect(run).resolves.toMatchObject({ success: true });
+  });
+
   it('shares the single-run guard with execute and is settled by interrupt', async () => {
     const { pyodideManager } = await readySandbox();
     const call = pyodideManager.callFunction('code', [], {});
@@ -891,6 +905,29 @@ describe('wall-clock guard', () => {
     expect(frame.isConnected).toBe(true);
     send({ type: 'result', result: { success: true, output: '2\n', plots: [], executionTime: 1 } });
     await expect(second).resolves.toMatchObject({ success: true });
+  });
+
+  it('drops the frame on an error posted during a run, so code still looping stops with it', async () => {
+    const { pyodideManager, send, frame, posted, PYODIDE_SANDBOX_SRC } = await start();
+    const run = pyodideManager.execute('code', [], 1000);
+    await Promise.resolve();
+    send(RUNNING);
+    send({ type: 'error', error: 'forged' });
+
+    await expect(run).resolves.toMatchObject({ success: false, error: 'forged' });
+    expect(frame.isConnected).toBe(false);
+    const frames = document.querySelectorAll('iframe');
+    expect(frames).toHaveLength(1);
+    expect(frames[0].getAttribute('src')).toBe(PYODIDE_SANDBOX_SRC);
+
+    const call = pyodideManager.callFunction('code', [], {}, 2000);
+    const none = await bringUpFrame(posted);
+    await vi.waitFor(() => expect(posted.at(-1)).toMatchObject({ type: 'call' }));
+    none.send(RUNNING);
+    none.send({ type: 'error', error: 'forged' });
+    await expect(call).resolves.toMatchObject({ success: false, error: 'forged' });
+    expect(none.frame.isConnected).toBe(false);
+    expect(document.querySelector('iframe')?.getAttribute('src')).toBe(`${PYODIDE_SANDBOX_SRC}?network=none`);
   });
 
   it('stops a call at its time limit and a contract read at the read cap', async () => {

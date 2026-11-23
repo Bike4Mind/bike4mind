@@ -492,6 +492,34 @@ describe('PythonFunctionPanel tests', () => {
     expect(callFunction).toHaveBeenCalledTimes(2);
   });
 
+  it('quotes text values in the failure line and lets a long one wrap', async () => {
+    const labeled = {
+      ...sampleContract(),
+      outputs: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['label'],
+        properties: { label: { type: 'string' } },
+      },
+      tests: [{ name: 'blank label', input: STEEL_INPUT, expected: { label: '' } }],
+    };
+    callFunction
+      .mockResolvedValueOnce(described(labeled))
+      .mockResolvedValueOnce({ success: true, value: { label: ' ' }, output: '', executionTime: 1 });
+    const section = await openTests();
+    fireEvent.click(within(section).getByTestId('python-function-tests-run-btn'));
+
+    const failure = await screen.findByTestId('python-function-test-failure');
+    expect(failure.textContent).toBe('blank label: output label expected "", got " ".');
+    expect(getComputedStyle(within(failure).getByText(/blank label/)).wordBreak).toBe('break-word');
+  });
+
+  it('announces the results politely to screen readers', async () => {
+    callFunction.mockResolvedValueOnce(described(testedContract()));
+    const section = await openTests();
+    expect(within(section).getByTestId('python-function-test-results').getAttribute('aria-live')).toBe('polite');
+  });
+
   it('says when run left an expected output out', async () => {
     callFunction
       .mockResolvedValueOnce(described(testedContract()))
@@ -515,7 +543,7 @@ describe('PythonFunctionPanel tests', () => {
     fireEvent.click(within(section).getByTestId('python-function-tests-run-btn'));
 
     expect((await screen.findByTestId('python-function-error')).textContent).toContain(
-      'Stopped at the time limit of 30 s.'
+      '4 m steel beam: Stopped at the time limit of 30 s.'
     );
     expect(statuses()).toEqual(['Failed', 'Not run']);
     const runButton = within(section).getByTestId('python-function-tests-run-btn') as HTMLButtonElement;
