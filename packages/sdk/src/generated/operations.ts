@@ -253,6 +253,10 @@ export const operations = {
     method: 'GET',
     path: '/api/v1/briefs/{id}',
   },
+  getBriefSchedule: {
+    method: 'GET',
+    path: '/api/v1/briefs/schedule',
+  },
   getClaudeBundleZip: {
     method: 'GET',
     path: '/api/v1/skills/market/bundles/{id}/claude-plugin.zip',
@@ -536,6 +540,10 @@ export const operations = {
   publishSkillMarketListing: {
     method: 'POST',
     path: '/api/v1/skills/market/listings',
+  },
+  putBriefSchedule: {
+    method: 'PUT',
+    path: '/api/v1/briefs/schedule',
   },
   raiseCompletionRunBudget: {
     method: 'POST',

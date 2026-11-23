@@ -58,6 +58,8 @@ export interface IChatHistoryItemRepository extends IBaseRepository<IChatHistory
   findSessionIdsByImage: (image: string) => Promise<string[]>;
   // Same, matching `images` or `videos`: whether a generated key still has an owner before deletion.
   findSessionIdsByMedia: (key: string) => Promise<string[]>;
+  // Atomically claim one of a turn's `limit` data lake saves; false once the cap is reached or no quest matches.
+  claimLakeSaveSlot: (questId: string, limit: number) => Promise<boolean>;
   // Every organization a user's quests were recorded under, soft-deleted ones included. A DSAR
   // export or deletion has to reach rows the user can no longer see.
   findOrganizationIdsForUser: (userId: string) => Promise<string[]>;

@@ -8,7 +8,7 @@ import { assistantBriefRepository } from '@bike4mind/database';
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
 import { dispatchByMethod } from '@server/middlewares/dispatchByMethod';
 import { perUserRateLimit } from '@server/middlewares/perUserRateLimit';
-import { startBriefComposition } from '@server/briefs/composeBrief';
+import { startBriefComposition } from '@bike4mind/server-utils/briefs/startBriefComposition';
 import { serializeBrief, serializeBriefs } from '@server/briefs/serializeBrief';
 
 const LIST_LIMIT = 20;

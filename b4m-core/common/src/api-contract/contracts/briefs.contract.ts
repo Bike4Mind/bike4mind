@@ -5,6 +5,8 @@ import {
   BriefListResponseSchema,
   BriefReplyRequestSchema,
   BriefReplyResponseSchema,
+  BriefScheduleResponseSchema,
+  BriefScheduleSchema,
   BriefSchema,
 } from '../../schemas/brief';
 import { ApiErrorSchema } from '../../schemas/chat';
@@ -16,7 +18,8 @@ const JWT_ONLY_NOTE =
 
 /**
  * Assistant briefs for native clients. Served by apps/client/pages/api/v1/briefs/index.ts (compose, list),
- * apps/client/pages/api/v1/briefs/[id].ts (read) and .../[id]/decisions/[decisionId]/reply.ts (reply). Composition runs in apps/workers/src/events/briefCompose.ts.
+ * apps/client/pages/api/v1/briefs/[id].ts (read), .../[id]/decisions/[decisionId]/reply.ts (reply) and
+ * apps/client/pages/api/v1/briefs/schedule.ts (schedule). Composition runs in apps/workers/src/events/briefCompose.ts.
  */
 export const composeBriefContract = defineEndpoint({
   method: 'post',
@@ -75,6 +78,56 @@ export const getBriefContract = defineEndpoint({
     429: { description: 'Per-user rate limit exceeded.', schema: ApiErrorSchema },
   },
   codeSample: { authToken: '<access_token>', streaming: false },
+});
+
+const SCHEDULE_NOTE =
+  "Authenticate with a JWT access token of the signed-in user. The schedule is the caller's own; scheduled " +
+  'briefs are composed only when there was activity since the last one.';
+
+const BRIEF_SCHEDULE_EXAMPLE = {
+  enabled: true,
+  timeOfDay: '08:00',
+  days: [1, 2, 3, 4, 5],
+  timeZone: 'America/New_York',
+};
+
+export const getBriefScheduleContract = defineEndpoint({
+  method: 'get',
+  path: '/api/v1/briefs/schedule',
+  operationId: 'getBriefSchedule',
+  summary: 'Get your brief schedule',
+  description: 'Reads when scheduled briefs are composed for you and when the next one is due. ' + SCHEDULE_NOTE,
+  tags: ['AI'],
+  auth: 'jwtOnly',
+  responses: {
+    200: { description: 'Your brief schedule.', schema: BriefScheduleResponseSchema },
+    401: { description: 'Missing or invalid JWT.', schema: ApiErrorSchema },
+    429: { description: 'Per-user rate limit exceeded.', schema: ApiErrorSchema },
+  },
+  codeSample: { authToken: '<access_token>', streaming: false },
+});
+
+export const putBriefScheduleContract = defineEndpoint({
+  method: 'put',
+  path: '/api/v1/briefs/schedule',
+  operationId: 'putBriefSchedule',
+  summary: 'Set your brief schedule',
+  description:
+    'Replaces your brief schedule and returns it with the next due time. `timeOfDay` and `days` are read ' +
+    'in `timeZone`, so a time skipped by a daylight-saving change runs at the shifted time and a repeated ' +
+    'one runs once. ' +
+    SCHEDULE_NOTE,
+  tags: ['AI'],
+  auth: 'jwtOnly',
+  request: BriefScheduleSchema,
+  requestExample: BRIEF_SCHEDULE_EXAMPLE,
+  responses: {
+    200: { description: 'The saved schedule.', schema: BriefScheduleResponseSchema },
+    400: { description: 'Malformed JSON request body.', schema: ApiErrorSchema },
+    401: { description: 'Missing or invalid JWT.', schema: ApiErrorSchema },
+    429: { description: 'Per-user rate limit exceeded.', schema: ApiErrorSchema },
+  },
+  codeSample: { authToken: '<access_token>', body: BRIEF_SCHEDULE_EXAMPLE, streaming: false },
 });
 
 export const replyToBriefDecisionContract = defineEndpoint({
