@@ -63,7 +63,6 @@
   "apps/client/pages/api/v1/sessions/index.ts": { "b4m/require-update-validators": { "count": 1 } },
   "apps/client/server/admin/adminRoles/adapters.ts": { "b4m/require-update-validators": { "count": 1 } },
   "apps/client/server/admin/ai/feedbackTriage.ts": { "b4m/require-update-validators": { "count": 1 } },
-  "apps/client/server/admin/ai/readiness.ts": { "b4m/require-update-validators": { "count": 1 } },
   "apps/client/server/admin/ai/runAdminAi.ts": { "b4m/require-update-validators": { "count": 1 } },
   "apps/client/server/admin/campaignWatches.ts": { "b4m/require-update-validators": { "count": 2 } },
   "apps/client/server/admin/stripeWrite/adminStripeWrite.ts": { "b4m/require-update-validators": { "count": 1 } },
@@ -3559,16 +3558,6 @@
     }
   },
   "apps/workers/src/cron/adminMorningBrief.ts": {
-    "b4m/no-workers-server-bridge": {
-      "count": 1
-    }
-  },
-  "apps/workers/src/events/dlqTriage.test.ts": {
-    "b4m/no-workers-server-bridge": {
-      "count": 1
-    }
-  },
-  "apps/workers/src/events/dlqTriage.ts": {
     "b4m/no-workers-server-bridge": {
       "count": 1
     }
