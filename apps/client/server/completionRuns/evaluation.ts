@@ -13,7 +13,10 @@ import type { ICompletionOptions } from '@bike4mind/llm-adapters';
 
 export function assertEvaluationAuthorized(userId: string): void {
   const allowed = (process.env.B4M_EVALUATION_USER_IDS ?? '').split(',').map(id => id.trim());
-  if (!allowed.includes(userId)) throw new HTTPError(403, 'Evaluation execution is not enabled for this account.');
+  if (!allowed.includes(userId))
+    throw new HTTPError(403, 'Evaluation execution is not enabled for this account.', {
+      errorCode: 'evaluation_not_enabled',
+    });
 }
 
 export function initialEvaluation(limits: CompletionEvaluationLimits) {
@@ -101,16 +104,22 @@ export function evaluationTransport(runId: string, requestId: string, onReady?: 
       };
       await completionRunRepository.updateEvaluation(runId, state => {
         if (state.receipts.some(r => r.requestId === requestId))
-          throw new HTTPError(409, 'Evaluation request already exists; recover its receipt.');
+          throw new HTTPError(409, 'Evaluation request already exists; recover its receipt.', {
+            errorCode: 'evaluation_request_exists',
+          });
         if (state.receipts.some(r => r.status === 'unknown' || r.status === 'pending'))
-          throw new HTTPError(409, 'Recover the outstanding evaluation receipt before admission.');
+          throw new HTTPError(409, 'Recover the outstanding evaluation receipt before admission.', {
+            errorCode: 'evaluation_receipt_outstanding',
+          });
         if (
           !state.limits.modelIds.includes(wireModel) ||
           state.committedProviderUsd + maxProviderUsd > state.limits.maxProviderUsd ||
           state.committedTokens + receipt.maxTokens > state.limits.maxTokens ||
           state.committedRequests >= state.limits.maxRequests
         )
-          throw new HTTPError(422, 'Evaluation budget exhausted or model not admitted.');
+          throw new HTTPError(422, 'Evaluation budget exhausted or model not admitted.', {
+            errorCode: 'evaluation_budget_exhausted',
+          });
         state.receipts.push(receipt);
         state.committedProviderUsd += maxProviderUsd;
         state.committedTokens += receipt.maxTokens;

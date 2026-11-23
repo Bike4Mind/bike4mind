@@ -120,7 +120,10 @@ describe('CompletionRunModel', () => {
           ...input,
           evaluation: { ...input.evaluation, limits: { ...input.evaluation.limits, maxProviderUsd: 149 } },
         })
-      ).rejects.toThrow('different policy');
+      ).rejects.toMatchObject({
+        message: expect.stringContaining('different policy'),
+        additionalInfo: { errorCode: 'evaluation_identity_conflict' },
+      });
     });
     const owner = { userId: 'user-1', ownerType: CreditHolderType.User, ownerId: 'user-1' } as const;
 

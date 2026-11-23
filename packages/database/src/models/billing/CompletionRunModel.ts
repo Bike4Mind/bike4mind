@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from 'crypto';
 import mongoose, { Schema } from 'mongoose';
-import { BadRequestError, CreditHolderType, HTTPError } from '@bike4mind/common';
+import { BadRequestError, CompletionEvaluationStateSchema, CreditHolderType, HTTPError } from '@bike4mind/common';
 
 /** Who a completion run's spend is billed to: the user, or the organization an org-billed key draws on. */
 export type CompletionRunOwnerType = CreditHolderType.User | CreditHolderType.Organization;
@@ -141,7 +141,9 @@ export class CompletionRunRepository {
         existing.budgetCredits !== input.budgetCredits ||
         policy(existing.evaluation.limits) !== policy(input.evaluation.limits)
       )
-        throw new HTTPError(409, 'Evaluation identity already exists with a different policy.');
+        throw new HTTPError(409, 'Evaluation identity already exists with a different policy.', {
+          errorCode: 'evaluation_identity_conflict',
+        });
       return existing;
     }
   }
@@ -160,8 +162,9 @@ export class CompletionRunRepository {
     for (let attempt = 0; attempt < 100; attempt++) {
       const run = await this.findById(runId);
       if (!run?.evaluation) throw new Error('Evaluation run not found');
-      const next = change(structuredClone(run.evaluation));
-      next.revision = run.evaluation.revision + 1;
+      const changed = change(structuredClone(run.evaluation));
+      // `evaluation` is Mixed, so Mongoose validates nothing on it; the schema is the only guard.
+      const next = CompletionEvaluationStateSchema.parse({ ...changed, revision: run.evaluation.revision + 1 });
       const result = await CompletionRunModel.updateOne(
         { _id: runId, 'evaluation.revision': run.evaluation.revision },
         { $set: { evaluation: next } },

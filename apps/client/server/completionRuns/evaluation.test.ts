@@ -54,8 +54,14 @@ describe('evaluation provider reservations', () => {
     const held = db.state.committedProviderUsd;
     await first.unknown();
     expect(db.state.receipts[0].status).toBe('unknown');
-    await expect(evaluationTransport('run', id(1)).admit(model, model.id, 100)).rejects.toThrow('already exists');
-    await expect(evaluationTransport('run', id(2)).admit(model, model.id, 100)).rejects.toThrow('outstanding');
+    await expect(evaluationTransport('run', id(1)).admit(model, model.id, 100)).rejects.toMatchObject({
+      message: expect.stringContaining('already exists'),
+      additionalInfo: { errorCode: 'evaluation_request_exists' },
+    });
+    await expect(evaluationTransport('run', id(2)).admit(model, model.id, 100)).rejects.toMatchObject({
+      message: expect.stringContaining('outstanding'),
+      additionalInfo: { errorCode: 'evaluation_receipt_outstanding' },
+    });
     expect(db.state.committedProviderUsd).toBe(held);
   });
   it('reconciles authoritative cached/reasoning usage once using captured rates', async () => {
@@ -73,7 +79,10 @@ describe('evaluation provider reservations', () => {
   });
   it('fails closed for budget, missing rates and substituted models', async () => {
     db.state.limits.maxTokens = 100;
-    await expect(evaluationTransport('run', id(1)).admit(model, model.id, 100)).rejects.toThrow('budget');
+    await expect(evaluationTransport('run', id(1)).admit(model, model.id, 100)).rejects.toMatchObject({
+      message: expect.stringContaining('budget'),
+      additionalInfo: { errorCode: 'evaluation_budget_exhausted' },
+    });
     await expect(evaluationTransport('run', id(2)).admit({ ...model, pricing: {} }, model.id, 100)).rejects.toThrow(
       'unpriced'
     );
@@ -88,7 +97,12 @@ describe('evaluation provider reservations', () => {
   });
   it('requires a deployment-controlled account grant', () => {
     vi.stubEnv('B4M_EVALUATION_USER_IDS', 'allowed');
-    expect(() => assertEvaluationAuthorized('other')).toThrow('not enabled');
+    expect(() => assertEvaluationAuthorized('other')).toThrow(
+      expect.objectContaining({
+        message: expect.stringContaining('not enabled'),
+        additionalInfo: { errorCode: 'evaluation_not_enabled' },
+      })
+    );
     expect(() => assertEvaluationAuthorized('allowed')).not.toThrow();
     vi.unstubAllEnvs();
   });
