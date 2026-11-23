@@ -15,6 +15,8 @@ import { useRunSpend } from './runSpend';
 import { NeedsYouCard } from './NeedsYouCard';
 import { numberAgents, redactForPresenter, restorePresentedAction, type PresentedStage } from './presenter';
 import type { OrchestratorViewId } from './orchestratorPrefs';
+import type { OrchestratorLayout } from './orchestratorLayout';
+import { StageLayout } from './StageLayout';
 import { assignPersonas, type AgentPersona } from '@shared/agentPersona';
 import { formatRosterCost, summarizeRoster, type AgentView, type ParentView } from './roster';
 import { TableView } from './TableView';
@@ -110,11 +112,15 @@ export interface OrchestratorStageProps {
   onFocusAgentConsumed?(): void;
   /** An example quest picked on the empty stage: put its prompt in the composer. */
   onExampleQuest?(prompt: string): void;
-  view: OrchestratorViewId;
-  onViewChange(view: OrchestratorViewId): void;
+  /** The panes and the view in each (orchestratorLayout.ts); one pane is the stage as a single view. */
+  layout: OrchestratorLayout;
+  onLayoutChange(layout: OrchestratorLayout): void;
   actions: AgentActions;
   introPlaying: boolean;
-  /** Lets the Board and Tavern views register without the stage importing them; Table is the fallback for every id. */
+  /**
+   * Lets the Board and Tavern views register without the stage importing them; Table is the fallback for every
+   * id. Every pane is drawn through this with the same props, so redaction, palette and skin reach each one.
+   */
   renderView?(view: OrchestratorViewId, props: OrchestratorViewProps): ReactNode;
   /** Rendered at the end of the header row. */
   dockControl?: ReactNode;
@@ -153,8 +159,8 @@ export function OrchestratorStage({
   onReadReport,
   focusAgent = null,
   onFocusAgentConsumed,
-  view,
-  onViewChange,
+  layout,
+  onLayoutChange,
   actions,
   introPlaying,
   renderView,
@@ -180,6 +186,10 @@ export function OrchestratorStage({
   const { agents, parent, approvals, desk } = shown;
   const restoreAction = presenting ? (action: ViewAction) => restorePresentedAction(action, rosterAgents) : undefined;
 
+  // Scene-only extras (a banner or agent details placed in the artwork, the Innkeeper's empty stage) belong to
+  // a stage showing one view; in a split they fall back to the stage's own, shared by every pane.
+  const view = layout.panes[0].view;
+  const split = layout.panes.length > 1;
   // Keyed on ids, creation times and titles so status churn does not recompute names; the seed prompt
   // feeds only the epithet and is fixed once an agent is created.
   const personaKey = agents.map(agent => `${agent.id}@${agent.createdAt}@${agent.title}`).join('\n');
@@ -269,7 +279,7 @@ export function OrchestratorStage({
   }, [finale.shown]);
   useAgentSoundEvents(agents, parentNeedsYou);
 
-  const parentScene = view === 'tavern' || view === 'office';
+  const parentScene = !split && (view === 'tavern' || view === 'office');
   const bannerInScene = parentScene && renderView !== undefined && agents.length > 0 && !focused;
   const banner = finale.shown && report && (
     <FinaleBanner
@@ -286,7 +296,7 @@ export function OrchestratorStage({
   );
 
   const detailsInScene =
-    (parentScene || view === 'aquarium') && renderView !== undefined && agents.length > 0 && !focused;
+    (parentScene || (!split && view === 'aquarium')) && renderView !== undefined && agents.length > 0 && !focused;
   const detailsPosition = useAvatarDetailsPosition(selected?.id, detailsInScene && !settled, view);
   const detailsOverlay = selected && (
     // Stay mounted while settled so waking restores the draft and selection.
@@ -413,8 +423,8 @@ export function OrchestratorStage({
       ) : (
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.25, px: 1.5, py: 1 }}>
           <ViewSwitcher
-            view={view}
-            onViewChange={onViewChange}
+            layout={layout}
+            onLayoutChange={onLayoutChange}
             ambient={ambient && { on: ambient.on, onToggle: ambient.onToggle }}
             focus={focus}
             presenter={presenter}
@@ -485,7 +495,11 @@ export function OrchestratorStage({
           ) : snapshot ? (
             <FocusPanel snapshot={snapshot} onAction={onViewAction} />
           ) : renderView ? (
-            renderView(view, viewProps)
+            <StageLayout
+              layout={layout}
+              onLayoutChange={onLayoutChange}
+              renderPane={paneView => renderView(paneView, viewProps)}
+            />
           ) : (
             <TableView {...viewProps} />
           )}
