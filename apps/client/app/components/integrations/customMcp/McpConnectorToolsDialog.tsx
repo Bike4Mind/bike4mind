@@ -96,7 +96,7 @@ const ConnectorTools = ({
       <Typography level="body-xs" data-testid={`${TEST_ID}-provenance`} sx={{ color: 'text.tertiary' }}>
         Descriptions and labels are the server&apos;s own claims.
       </Typography>
-      {tools.length > TOOL_FILTER_THRESHOLD && (
+      {(tools.length > TOOL_FILTER_THRESHOLD || query.length > 0) && (
         <Input
           size="sm"
           value={query}

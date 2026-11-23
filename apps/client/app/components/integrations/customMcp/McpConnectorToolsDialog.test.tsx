@@ -219,6 +219,29 @@ describe('McpConnectorToolsDialog', () => {
     expect(shown()).toHaveLength(11);
   });
 
+  it('keeps an active filter editable when refreshed tools fall below the filter threshold', () => {
+    const tools = Array.from({ length: 10 }, (_, index) => tool({ name: `filler_${index}` }));
+    const onClose = vi.fn();
+    const { rerender } = render(
+      <McpConnectorToolsDialog
+        connection={platformConnector({ tools: [...tools, tool({ name: 'weather' })] })}
+        onClose={onClose}
+      />,
+      { wrapper: Wrapper }
+    );
+    fireEvent.change(screen.getByRole('textbox', { name: 'Filter tools' }), { target: { value: 'weather' } });
+    expect(screen.getAllByRole('listitem')).toHaveLength(1);
+
+    rerender(<McpConnectorToolsDialog connection={platformConnector({ tools })} onClose={onClose} />);
+
+    expect(screen.getByTestId('mcp-connector-tools-no-match')).toBeTruthy();
+    const filter = screen.getByRole('textbox', { name: 'Filter tools' });
+    expect((filter as HTMLInputElement).value).toBe('weather');
+    fireEvent.change(filter, { target: { value: '' } });
+    expect(screen.getAllByRole('listitem')).toHaveLength(10);
+    expect(screen.queryByRole('textbox', { name: 'Filter tools' })).toBeNull();
+  });
+
   it('says a tool has no description, and shows nothing for a connector without one', () => {
     const dialog = open(platformConnector({ tools: [tool({ name: 'ping', description: '' })] }));
 
