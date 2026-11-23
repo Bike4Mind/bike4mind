@@ -16,7 +16,7 @@ import {
 } from '@bike4mind/server-utils/security/wafSharedHelpers';
 import { maskWafRequestHeaders } from './wafHeaderRedaction';
 import { maskWafRequestLine, maskWafRequestUri } from './wafUriRedaction';
-import { WAF_CACHE_TTL, wafQueryCache } from './wafQueryCache';
+import { WAF_CACHE_TTL, wafQueryCache } from '@bike4mind/server-utils/security/wafQueryCache';
 
 export interface WafLogsTopItem {
   name: string;

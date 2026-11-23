@@ -29,9 +29,8 @@ export type ErasureSubject = { userId: string; email: string | null };
 export type ErasureStage = 'beforeDelete' | 'afterDelete';
 
 /**
- * The data holder registry's view of one person, for an admin data subject erasure. The registry
- * lives in the app (apps/client/server/dataSubject/erasureRegistry.ts), which this package cannot
- * import, so callers pass it in.
+ * The data holder registry's view of one person, for an admin data subject erasure. Callers pass
+ * in the registry (../dataSubject/erasureRegistry.ts).
  */
 export type ErasureRegistry = {
   /** Throws when a contributed entry is malformed. Called before the claim so a bad registry purges nothing. */
