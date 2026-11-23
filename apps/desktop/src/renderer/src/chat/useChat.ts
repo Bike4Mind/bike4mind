@@ -34,7 +34,7 @@ import { describeReturn } from './queuedMessages';
 import { applyLiveEvent, coalesceLiveEvents, startReply, type LiveReplyEvent } from '@shared/liveReply';
 import { applyReplyDone } from './replyDone';
 import { withPhase } from './replyStats';
-import { applyPreparingEvents, applyStatusEvents } from './sessionStatus';
+import { applyPreparingEvents, applyStatusEvents, applyUnreadReplyEvents } from './sessionStatus';
 import { EVENT_STAMP_RESOLUTION_MS, REASONING_TAIL_CHARS, totalTokens, type TurnProgress } from './statusLine';
 import { applyWorkspaceEvent, preparingOnSend, type WorkspaceProgress } from './workspaceProgress';
 import { canHoldWorktree, worktreeByDefault } from './worktreeDefault';
@@ -304,6 +304,7 @@ export function useSessionStatuses(): ReadonlyMap<string, ChatSessionStatus> {
 
 export interface SessionStatusFeed {
   statuses: ReadonlyMap<string, ChatSessionStatus>;
+  unreadReplies: ReadonlySet<string>;
   /** Busy sessions still being prepared, by setup step; a subset of the 'processing' ones in `statuses`. */
   preparing: ReadonlyMap<string, SessionSetupStep>;
   /** True once the first snapshot has been folded in, so `statuses` is a baseline rather than a gap. */
@@ -314,6 +315,7 @@ export interface SessionStatusFeed {
 export function useSessionStatusFeed(): SessionStatusFeed {
   const [feed, setFeed] = useState<SessionStatusFeed>(() => ({
     statuses: new Map(),
+    unreadReplies: new Set(),
     preparing: new Map(),
     loaded: false,
   }));
@@ -330,9 +332,11 @@ export function useSessionStatusFeed(): SessionStatusFeed {
       setFeed(current => {
         const statuses = applyStatusEvents(current.statuses, [event]);
         const preparing = applyPreparingEvents(current.preparing, [event]);
+        const unreadReplies = applyUnreadReplyEvents(current.unreadReplies, [event]);
         // Same object for a no-op push, so React skips re-rendering everything that reads the feed.
-        if (statuses === current.statuses && preparing === current.preparing) return current;
-        return { ...current, statuses, preparing };
+        if (statuses === current.statuses && preparing === current.preparing && unreadReplies === current.unreadReplies)
+          return current;
+        return { ...current, statuses, preparing, unreadReplies };
       });
     });
 
@@ -342,6 +346,7 @@ export function useSessionStatusFeed(): SessionStatusFeed {
       setFeed(current => ({
         loaded: true,
         statuses: applyStatusEvents(current.statuses, unspoken),
+        unreadReplies: applyUnreadReplyEvents(current.unreadReplies, unspoken),
         preparing: applyPreparingEvents(current.preparing, unspoken),
       }));
     });

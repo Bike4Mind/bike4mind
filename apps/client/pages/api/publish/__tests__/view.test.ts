@@ -9,6 +9,7 @@ import { createMocks } from 'node-mocks-http';
 
 const { mocks } = vi.hoisted(() => ({
   mocks: {
+    userExists: vi.fn(),
     findOne: vi.fn(),
     lean: vi.fn(),
     updateOne: vi.fn(() => Promise.resolve({})),
@@ -40,6 +41,7 @@ vi.mock('@server/middlewares/optionalJwtAuth', () => ({
 }));
 
 vi.mock('@bike4mind/database', () => ({
+  User: { exists: (...a: unknown[]) => mocks.userExists(...a) },
   PublishedArtifact: {
     findOne: (...a: unknown[]) => {
       mocks.findOne(...a);
@@ -87,6 +89,7 @@ const published = (over: Record<string, unknown> = {}) =>
 beforeEach(() => {
   Object.values(mocks).forEach(m => m.mockReset());
   mocks.updateOne.mockResolvedValue({});
+  mocks.userExists.mockResolvedValue(null);
   mocks.hasGateProof.mockReturnValue(false);
   mocks.checkVisibility.mockResolvedValue({ ok: true });
   mocks.checkShareGrant.mockResolvedValue({ ok: true });
@@ -100,6 +103,28 @@ describe('POST /api/publish/view - whose view counts', () => {
     await promise;
 
     expect(res._getStatusCode()).toBe(204);
+    expect(mocks.updateOne).toHaveBeenCalledWith({ publicId: 'pub1' }, { $inc: { externalViewCount: 1 } });
+  });
+
+  it('records separate reward evidence when the admitted viewer is verified in the database', async () => {
+    published();
+    mocks.userExists.mockResolvedValue({ _id: 'friend' });
+    const { res, promise } = run({ path: '/p/u/scope/slug' }, { id: 'friend' });
+    await promise;
+    expect(res._getStatusCode()).toBe(204);
+    expect(mocks.userExists).toHaveBeenCalledWith({ _id: 'friend', emailVerified: true, deletedAt: null });
+    expect(mocks.updateOne).toHaveBeenCalledWith(
+      { publicId: 'pub1', ownerId: 'owner1', deletedAt: null },
+      { $inc: { verifiedExternalViewCount: 1 } },
+      { runValidators: true }
+    );
+  });
+
+  it('records only analytics for an unverified viewer', async () => {
+    published();
+    const { promise } = run({ path: '/p/u/scope/slug' }, { id: 'friend' });
+    await promise;
+    expect(mocks.updateOne).toHaveBeenCalledTimes(1);
     expect(mocks.updateOne).toHaveBeenCalledWith({ publicId: 'pub1' }, { $inc: { externalViewCount: 1 } });
   });
 

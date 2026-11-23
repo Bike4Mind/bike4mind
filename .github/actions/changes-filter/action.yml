@@ -22,7 +22,7 @@ description: >-
   An unhandled event falls through to the fail-open default on EVERY run of
   that trigger, so the gate it produces diverges from the one the same content
   got elsewhere. The arms are cross-checked against ci.yml's trigger list by
-  packages/scripts/src/checkChangesFilterEvents.test.ts.
+  packages/scripts/src/checkChangesFilterEvents.repo.test.ts.
 
   Requires the repo to be checked out first with fetch-depth: 0.
 
@@ -78,6 +78,8 @@ inputs:
       packages/cli/src/agents/defaults/**
       b4m-core/services/src/llm/evals/**
       **/__fixtures__/**
+      .changeset/changelog-github-retry.cjs
+      .changeset/config.json
   docs-paths:
     description: >-
       Newline-separated git pathspecs (INCLUDE form) defining the docs site.

@@ -3,7 +3,7 @@ import { readFileSync } from 'fs';
 import path from 'path';
 
 // Shared lambda wrappers that register the org alert observer for every handler built on them.
-// Entry-side guards: apps/workers/src/queueHandlers/orgAlertObserverEntries.test.ts and
+// Entry-side guards: apps/workers/src/queueHandlers/orgAlertObserverEntries.repo.test.ts and
 // apps/client/server/chatCompletion/orgAlertObserverEntries.test.ts.
 const WRAPPERS = ['queueHandlers/utils.ts', 'websocket/utils.ts', 's3/utils.ts'];
 

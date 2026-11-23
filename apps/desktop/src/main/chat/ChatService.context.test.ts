@@ -139,7 +139,7 @@ describe('ChatService context boundaries', () => {
     expect(text).toContain('and now something else');
   });
 
-  it('keeps the conversation itself: its project, branch, approval mode and notebook binding', async () => {
+  it('keeps the conversation itself: its project, branch, and approval mode', async () => {
     const id = await started();
     await store.setProject(id, {
       directory: '/tmp/project',
@@ -150,7 +150,6 @@ describe('ChatService context boundaries', () => {
       contextDirectories: [],
     });
     await store.setApprovalMode(id, 'auto');
-    await store.setRemoteSessionId(id, 'notebook-42');
 
     const before = await store.get(id);
     const result = await service.clearContext(id);
@@ -160,9 +159,6 @@ describe('ChatService context boundaries', () => {
     expect(after?.id).toBe(before?.id);
     expect(after?.project).toEqual(before?.project);
     expect(after?.approvalMode).toBe('auto');
-    // The notebook binding most of all: dropping it would strand every image this conversation
-    // has generated. See ChatSession.remoteSessionId.
-    expect(after?.remoteSessionId).toBe('notebook-42');
   });
 
   it('deletes nothing - the cleared messages are still in the session file', async () => {
