@@ -1,16 +1,17 @@
-import type {
-  ApiKeyBillingOwnerType,
-  GeneratedAssetLineageEntry,
-  GeneratedAssetMetadata,
-  GenerationJobDelivery,
-  GenerationJobSource,
-  IGenerationJobDocumentOf,
-  IGenerationJobRepository,
-  ImageJobPurpose,
-  ImageProviderId,
-  ImageValidationFailure,
-  StorageLimitErrorInfo,
-  UsageEventStatus,
+import {
+  IMAGE_JOB_COUNT_MAX,
+  type ApiKeyBillingOwnerType,
+  type GeneratedAssetLineageEntry,
+  type GeneratedAssetMetadata,
+  type GenerationJobDelivery,
+  type GenerationJobSource,
+  type IGenerationJobDocumentOf,
+  type IGenerationJobRepository,
+  type ImageJobPurpose,
+  type ImageProviderId,
+  type ImageValidationFailure,
+  type StorageLimitErrorInfo,
+  type UsageEventStatus,
 } from '@bike4mind/common';
 import type { Logger } from '@bike4mind/observability';
 import type { ImageProviderRegistry } from '@bike4mind/utils/imageProviders';
@@ -24,7 +25,7 @@ import type { SaveGeneratedAssetResult } from '../generatedAssets';
 export const IMAGE_JOB_MAX_WALL_CLOCK_MS = 10 * 60_000;
 
 // Most jobs one "make N" request creates.
-export const IMAGE_JOB_BATCH_MAX = 4;
+export const IMAGE_JOB_BATCH_MAX = IMAGE_JOB_COUNT_MAX;
 
 // A generous single-image size (a large PNG), for the create-time storage check.
 export const IMAGE_JOB_OUTPUT_BYTES_ESTIMATE = 16 * 1024 * 1024;

@@ -46,13 +46,9 @@ async function harness(options: { models?: VideoModel[]; roots?: string[]; prote
   const media: MediaContext = {
     client: client as unknown as MediaApiClient,
     store,
-    cdnUrl: '',
-    notebookName: 'New chat',
     listImageModels: async () => [],
     listVideoModels: async () => options.models ?? [gemini, veo],
     videoJobs: { track },
-    getRemoteSessionId: () => undefined,
-    setRemoteSessionId: vi.fn(),
   };
   const context: ToolContext = {
     roots: options.roots ?? [],

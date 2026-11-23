@@ -120,7 +120,12 @@ export const generateSoundEffectContract = defineEndpoint({
         'but could not be read back, the body carries `jobId`, also sent as `X-B4M-Generation-Job-Id`.',
       schema: soundEffectsTimeoutErrorSchema,
     },
-    503: { description: 'No provider API key is configured for this deployment.', schema: ApiErrorSchema },
+    503: {
+      description:
+        'The provider is unavailable: no API key is configured for this deployment, or the provider account is out ' +
+        'of quota. Reserved credits are refunded.',
+      schema: ApiErrorSchema,
+    },
     504: unretrievableAudioResponse({ noun: 'sound effect', schema: soundEffectsTimeoutErrorSchema }),
   },
   // Served by baseApi, so apiKeyRateLimit sets the windowed X-RateLimit-* headers.

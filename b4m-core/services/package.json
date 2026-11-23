@@ -534,6 +534,7 @@
     "typecheck:scheduler": "tsc --noEmit -p tsconfig.scheduler-test.json",
     "dev": "tsdown --watch",
     "test": "vitest run",
+    "test:repo": "REPO_TEST_LANE=repo vitest run",
     "test:coverage": "vitest run --coverage",
     "test:ui": "vitest --ui"
   },

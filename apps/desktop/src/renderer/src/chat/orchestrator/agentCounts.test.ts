@@ -29,7 +29,7 @@ function session(
   } as ChatSessionSummary;
 }
 
-// One of every state, plus task records waiting on the user's decision, which count as "needs you".
+// Stored task results do not add attention absent from the sidebar's live status.
 const sessions = [
   session('root', null),
   session('working', 'root'),
@@ -82,10 +82,10 @@ describe('agent counts across surfaces', () => {
       1
     );
 
-    expect(stage).toEqual({ total: 10, 'needs-you': 4, working: 1, done: 3, failed: 1, stopped: 1, idle: 1 });
+    expect(stage).toEqual({ total: 10, 'needs-you': 2, working: 1, done: 5, failed: 1, stopped: 1, idle: 1 });
     expect(toggle).toEqual(stage);
     expect(watched).toEqual(stage);
-    expect(tavern).toBe('10 agents: 4 need you, 1 working, 1 failed, 1 stopped, 1 idle, 3 done');
+    expect(tavern).toBe('10 agents: 2 need you, 1 working, 1 failed, 1 stopped, 1 idle, 5 done');
     expect(header).toEqual({ kind: 'header', label: tavern });
     expect(miniStripLabel(snapshot.orchestrations[0])).toBe(`Agent root: ${tavern}`);
     // The menu-bar title and the dock badge count by the same rule as every "needs you" above.

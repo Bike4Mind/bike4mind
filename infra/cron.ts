@@ -638,6 +638,31 @@ const voiceHoldSweepCron = runsScheduledJobs
     })
   : undefined;
 
+// Brief Schedule Reconcile - starts the scheduled assistant briefs that have come due, through the same
+// brief.compose event as POST /api/v1/briefs (its rule carries the DLQ). Each due user is claimed by a
+// compare-and-set on nextBriefAt, so overlapping runs start a slot once. A start that throws hands its
+// slot back, so later runs retry it for up to an hour (RETRY_WINDOW_MS). Self-host twin:
+// apps/workers/src/selfhost/briefScheduleReconcile.ts; keep the schedules in step.
+const briefScheduleReconcileCron = runsScheduledJobs
+  ? new sst.aws.Cron('briefScheduleReconcile', {
+      schedule: 'rate(5 minutes)',
+      function: {
+        vpc: lambdaVpc,
+        handler: 'apps/workers/src/cron/briefScheduleReconcile.handler',
+        runtime: 'nodejs24.x',
+        timeout: '2 minutes',
+        retries: 0,
+        link: [...allSecrets, eventBus],
+        environment: {
+          ...DEFAULT_LAMBDA_ENVIRONMENT,
+        },
+        logging: {
+          retention: '1 week',
+        },
+      },
+    })
+  : undefined;
+
 // Admin Audit Alerts - posts critical Admin Audit Log entries and credit-grant bursts to the security
 // Slack webhook (AdminSettings SlackSecurityAlertsWebhookUrl; unset = off). The stored cursor only
 // advances past posted entries, so the next minute's run is the retry. APP_URL builds the entry links.
@@ -1735,6 +1760,7 @@ export {
   completionSequenceSweepCron,
   creditLotSweepCron,
   voiceHoldSweepCron,
+  briefScheduleReconcileCron,
   creditHoldSweepCron,
   referralRewardReleaseCron,
   sreStaleDispatchCron,

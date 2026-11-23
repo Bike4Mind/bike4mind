@@ -413,7 +413,7 @@ describe('upload moderation gate — every FabFile serve/mint call site is gated
 
       violations.push(
         `${relPath}\n      matched: ${matches.join(', ')}\n      fix: add "if (!isImageServeable(fabFile)) { ... }" ` +
-          `before the serve/mint call, or add an ALLOWLIST entry in fabFileModerationGate.test.ts with an honest reason`
+          `before the serve/mint call, or add an ALLOWLIST entry in fabFileModerationGate.repo.test.ts with an honest reason`
       );
     }
 

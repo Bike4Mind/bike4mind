@@ -1,4 +1,4 @@
-import { defineConfig } from 'vitest/config';
+import { configDefaults, defineConfig } from 'vitest/config';
 import { sharedTest } from '../../vitest.shared';
 import tsconfigPaths from 'vite-tsconfig-paths';
 
@@ -9,6 +9,9 @@ export default defineConfig({
     globals: true,
     environment: 'node',
     include: ['**/*.test.ts'],
+    ...(process.env.REPO_TEST_LANE === 'repo'
+      ? { include: ['**/*.repo.test.ts'] }
+      : { exclude: [...configDefaults.exclude, '**/*.repo.test.ts'] }),
     coverage: {
       provider: 'v8',
       reporter: ['text', 'json', 'html'],
