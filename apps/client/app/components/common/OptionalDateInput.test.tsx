@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { describe, expect, it } from 'vitest';
-import { fireEvent, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes/themePrimitives';
 import { OptionalDateInput } from './OptionalDateInput';
@@ -40,14 +40,32 @@ describe('OptionalDateInput', () => {
     expect(screen.getByTestId('value')).toHaveTextContent('2030-01-15');
   });
 
-  it('returns to the empty state when the date is removed or cleared natively', () => {
+  it('returns to the empty state and focuses the set button when the date is removed', () => {
     render(<Harness initial="2031-02-03" />);
     fireEvent.click(screen.getByRole('button', { name: 'Remove expiry date' }));
     expect(screen.getByTestId('expiry-empty')).toBeInTheDocument();
     expect(screen.getByTestId('value')).toBeEmptyDOMElement();
+    expect(screen.getByTestId('expiry-set-btn')).toHaveFocus();
+  });
 
-    fireEvent.click(screen.getByTestId('expiry-set-btn'));
-    fireEvent.change(screen.getByTestId('expiry'), { target: { value: '' } });
+  it('keeps the input while a segment is being retyped and collapses only once focus leaves', () => {
+    render(<Harness initial="2031-02-03" />);
+    const input = screen.getByTestId('expiry');
+    act(() => input.focus());
+    fireEvent.change(input, { target: { value: '' } });
+    expect(screen.getByTestId('value')).toBeEmptyDOMElement();
+    expect(screen.getByTestId('expiry')).toBe(input);
+    expect(input).toHaveFocus();
+
+    fireEvent.change(input, { target: { value: '2031-02-09' } });
+    expect(screen.getByTestId('value')).toHaveTextContent('2031-02-09');
+
+    fireEvent.change(input, { target: { value: '' } });
+    act(() => screen.getByRole('button', { name: 'Remove expiry date' }).focus());
+    expect(screen.getByTestId('expiry')).toBe(input);
+
+    act(() => input.focus());
+    act(() => input.blur());
     expect(screen.getByTestId('expiry-empty')).toBeInTheDocument();
   });
 });
