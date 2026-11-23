@@ -23,6 +23,7 @@ import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import AddIcon from '@mui/icons-material/Add';
 import { ApiKeyStatus, type IOrgApiKeyView } from '@bike4mind/common';
 import ConfirmationModal from '@client/app/components/common/ConfirmationModal';
+import { OptionalDateInput } from '@client/app/components/common/OptionalDateInput';
 import {
   EditOrgApiKeyAccessModal,
   OrgApiKeyAccessFields,
@@ -228,13 +229,18 @@ const CreateKeyModal: FC<{
             {open && <OrgApiKeyAccessFields organizationId={organizationId} value={access} onChange={setAccess} />}
             <FormControl>
               <FormLabel>Expires on</FormLabel>
-              <Input
-                type="date"
+              <OptionalDateInput
                 value={expiresOn}
-                onChange={event => setExpiresOn(event.target.value)}
-                slotProps={{ input: { min: todayLocal(), 'data-testid': 'org-api-key-expiry-input' } }}
+                onChange={setExpiresOn}
+                emptyLabel="No expiry"
+                setLabel="Set an expiry date"
+                clearLabel="Remove expiry date"
+                initialDate={todayLocal}
+                min={todayLocal()}
+                aria-label="Expires on"
+                testId="org-api-key-expiry-input"
               />
-              <FormHelperText>Optional. Leave empty for a key that does not expire.</FormHelperText>
+              <FormHelperText>Optional. Without a date the key does not expire.</FormHelperText>
             </FormControl>
             <Box display="flex" justifyContent="flex-end" gap={1}>
               <Button variant="plain" color="neutral" onClick={close}>
@@ -258,7 +264,7 @@ const CreateKeyModal: FC<{
 
 /**
  * Org-owned API keys: held by the organization rather than a member, billed to the org, and unaffected by
- * any member leaving. Owner, managers and platform admins (the same gate as the routes, verifyOrgAccess).
+ * any member leaving. Owner, managers and platform admins (the same gate as the routes, manageKeys permission).
  */
 const OrgApiKeysContent: FC<OrgApiKeysSectionProps> = ({ organizationId }) => {
   const request = useKeyRequest();

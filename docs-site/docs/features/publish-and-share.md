@@ -26,6 +26,8 @@ Each publish opens a dialog with the live URL plus the social-share bar (Bluesky
 
 Published pages are served under Bike4Mind's own domain with strict, per-page Content-Security-Policy and a visibility check on every request.
 
+The Live Artifacts gear opens when you publish a page. Its reward becomes eligible after another signed-in account with a verified email views the page. Your own account must also meet the verification and account-age requirements shown in Gears.
+
 ## Publish a multi-file React app
 
 Ask for the entry and all its sibling React files in the same reply. Each sibling needs a unique identifier matching the name used by its relative imports, such as `import Counter from './Counter'` and `identifier="Counter"`.

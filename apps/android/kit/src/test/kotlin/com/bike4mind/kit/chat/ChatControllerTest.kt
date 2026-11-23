@@ -48,7 +48,7 @@ class ChatControllerTest {
             polls++
             return polled ?: error("not polled in this test")
         }
-        override suspend fun send(message: String, sessionId: String?): ChatReceipt {
+        override suspend fun send(message: String, sessionId: String?, fileIds: List<String>): ChatReceipt {
             sent += message to sessionId
             return receipt
         }

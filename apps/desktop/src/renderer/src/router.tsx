@@ -1,14 +1,26 @@
-import { createHashHistory, createRootRoute, createRoute, createRouter } from '@tanstack/react-router';
+import { createHashHistory, createRootRoute, createRoute, createRouter, Outlet } from '@tanstack/react-router';
 import { isImportKind, type ClaudeImportKind } from '@shared/claudeImport';
 import { isSettingsSection, type SettingsSection } from './chat/SettingsPanel';
+import { AppMenuBridge } from './appMenu/AppMenuBridge';
 import { DevLogsWindow } from './devlog/DevLogsWindow';
+import { AppErrorFallback } from './errors/AppErrorFallback';
+import { reportRenderError } from './errors/renderError';
 import { Home } from './routes/Home';
 import { Profile } from './routes/Profile';
 import { Billing } from './routes/Billing';
 import { Settings } from './routes/Settings';
 import { MiniTavern } from './watch/MiniTavern';
 
-const rootRoute = createRootRoute();
+const rootRoute = createRootRoute({
+  component: function RootLayout() {
+    return (
+      <>
+        <AppMenuBridge />
+        <Outlet />
+      </>
+    );
+  },
+});
 
 const indexRoute = createRoute({
   getParentRoute: () => rootRoute,
@@ -73,6 +85,9 @@ export const router = createRouter({
     miniTavernRoute,
   ]),
   history: createHashHistory(),
+  // Every route's render errors land here; main.tsx's AppErrorBoundary covers what sits outside.
+  defaultErrorComponent: ({ error }) => <AppErrorFallback error={error} />,
+  defaultOnCatch: (error, info) => reportRenderError(error, info.componentStack),
 });
 
 declare module '@tanstack/react-router' {

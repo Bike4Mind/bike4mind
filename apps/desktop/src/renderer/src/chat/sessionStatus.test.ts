@@ -1,8 +1,28 @@
 import { describe, expect, it } from 'vitest';
 import type { ChatSessionStatus, SessionSetupStep } from '@shared/chat';
-import { applyPreparingEvents, applyStatusEvents, STATUS_LABEL } from './sessionStatus';
+import { applyPreparingEvents, applyStatusEvents, applyUnreadReplyEvents, STATUS_LABEL } from './sessionStatus';
 
 const empty: ReadonlyMap<string, ChatSessionStatus> = new Map();
+
+describe('applyUnreadReplyEvents', () => {
+  it('tracks unread replies independently of live attention without mutating prior state', () => {
+    const none = new Set<string>();
+    const unread = applyUnreadReplyEvents(none, [{ sessionId: 'a', status: 'needs-action', unreadReply: true }]);
+    expect([...unread]).toEqual(['a']);
+    expect(none.size).toBe(0);
+    expect(applyUnreadReplyEvents(unread, [{ sessionId: 'a', status: 'needs-action', unreadReply: true }])).toBe(
+      unread
+    );
+    expect(applyUnreadReplyEvents(unread, [{ sessionId: 'a', status: 'needs-action' }]).size).toBe(0);
+    expect(applyUnreadReplyEvents(unread, [{ sessionId: 'a', status: 'done' }]).size).toBe(0);
+    expect(
+      applyUnreadReplyEvents(none, [
+        { sessionId: 'a', status: 'needs-action', unreadReply: true },
+        { sessionId: 'a', status: 'processing' },
+      ]).size
+    ).toBe(0);
+  });
+});
 
 describe('applyStatusEvents', () => {
   it('records a busy session', () => {

@@ -6,7 +6,7 @@ import { S3Client, type S3ClientConfig } from '@aws-sdk/client-s3';
  * content-length with x-amz-decoded-content-length on outgoing requests, which disagrees with
  * the SigV4 payload hash on PutObject and fails with XAmzContentSHA256Mismatch (#1535). Route
  * every construction site through this helper instead of `new S3Client()` directly so a new
- * PutObject path can't reintroduce the bug - checkNoRawS3Client.test.ts enforces that.
+ * PutObject path can't reintroduce the bug - checkNoRawS3Client.repo.test.ts enforces that.
  */
 export function createS3Client(config: S3ClientConfig = {}): S3Client {
   return new S3Client({ ...config, requestChecksumCalculation: 'WHEN_REQUIRED' });

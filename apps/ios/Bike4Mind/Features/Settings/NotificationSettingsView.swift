@@ -6,7 +6,8 @@ struct NotificationSettingsView: View {
 
   var body: some View {
     NotificationSettingsContent(
-      push: services.push, prefs: services.notificationPrefs, settings: services.systemSettings)
+      push: services.push, prefs: services.notificationPrefs, settings: services.systemSettings,
+      briefSchedule: services.briefSchedule)
   }
 }
 
@@ -16,16 +17,26 @@ private struct NotificationSettingsContent: View {
   private static let showsCategoryPreferences = false
 
   @State private var model: NotificationSettingsViewModel
+  @State private var brief: BriefScheduleViewModel
   @Environment(\.scenePhase) private var scenePhase
 
-  init(push: PushRegistrationCoordinator, prefs: any NotificationPrefsService, settings: any SystemSettingsOpening) {
+  init(
+    push: PushRegistrationCoordinator, prefs: any NotificationPrefsService, settings: any SystemSettingsOpening,
+    briefSchedule: any BriefScheduleAPI
+  ) {
     _model = State(initialValue: NotificationSettingsViewModel(push: push, prefs: prefs, settings: settings))
+    _brief = State(initialValue: BriefScheduleViewModel(api: briefSchedule))
   }
 
   var body: some View {
     Form {
       Group {
         masterSection
+        // The schedule is server-side, so it shows even while the device-local category toggles stay hidden.
+        // An enabled schedule stays visible with pushes off: it still composes and bills, so it must stay switchable.
+        if model.isMasterEnabled || brief.schedule.enabled {
+          briefScheduleSection
+        }
         if Self.showsCategoryPreferences, model.isMasterEnabled {
           categorySection
         }
@@ -37,6 +48,7 @@ private struct NotificationSettingsContent: View {
     .navigationBarTitleDisplayMode(.inline)
     // Reloads on return from iOS Settings, where the user may have changed the system switch.
     .task(id: scenePhase) { if scenePhase == .active { await model.load() } }
+    .task { await brief.load() }
   }
 
   private var masterSection: some View {
@@ -85,5 +97,69 @@ private struct NotificationSettingsContent: View {
     } footer: {
       if let error = model.saveError { Text(error) }
     }
+  }
+
+  private var briefScheduleSection: some View {
+    Section {
+      Toggle(
+        "Scheduled Brief",
+        isOn: Binding(
+          get: { brief.schedule.enabled },
+          set: { isOn in Task { await brief.setEnabled(isOn) } })
+      )
+      .disabled(!brief.isLoaded || brief.isSaving)
+      .accessibilityIdentifier("settings-brief-schedule-toggle")
+
+      if brief.schedule.enabled {
+        DatePicker(
+          "Time",
+          selection: Binding(
+            get: { brief.time },
+            set: { date in Task { await brief.setTime(date) } }),
+          displayedComponents: .hourAndMinute
+        )
+        .disabled(brief.isSaving)
+        .accessibilityIdentifier("settings-brief-schedule-time")
+
+        HStack(spacing: Tokens.Spacing.xs) {
+          ForEach(brief.weekdays) { day in
+            weekdayChip(day)
+          }
+        }
+        .accessibilityIdentifier("settings-brief-schedule-days")
+      }
+    } header: {
+      Text("Brief")
+    } footer: {
+      Text(briefFooter)
+    }
+  }
+
+  private func weekdayChip(_ day: BriefScheduleViewModel.Weekday) -> some View {
+    let isSelected = brief.isSelected(day.id)
+    let name = Calendar.autoupdatingCurrent.weekdaySymbols[day.id]
+    return Button {
+      Task { await brief.toggleDay(day.id) }
+    } label: {
+      Text(day.shortName)
+        .font(Tokens.Typography.caption)
+        .frame(maxWidth: .infinity, minHeight: 32)
+        .background(Circle().fill(isSelected ? Color.accentColor : Color.clear))
+        .overlay(Circle().stroke(Color.accentColor, lineWidth: 1))
+        .foregroundStyle(isSelected ? Color.white : Color.accentColor)
+    }
+    .buttonStyle(.plain)
+    .disabled(brief.isSaving)
+    .accessibilityLabel(name)
+    .accessibilityAddTraits(isSelected ? .isSelected : [])
+    .accessibilityIdentifier("settings-brief-schedule-day-\(day.id)")
+  }
+
+  private var briefFooter: String {
+    if let error = brief.errorMessage { return error }
+    guard brief.schedule.enabled else {
+      return "Get a summary of what happened, what was handled and what needs you, on the days you pick."
+    }
+    return "Times are in \(brief.timeZoneName). Saving again from another time zone moves the schedule there."
   }
 }

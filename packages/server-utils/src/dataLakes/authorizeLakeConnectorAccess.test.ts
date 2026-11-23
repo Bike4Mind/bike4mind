@@ -1,9 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-const h = vi.hoisted(() => ({ verifyOrgAccess: vi.fn(), verifyOrgAdminRead: vi.fn() }));
+const h = vi.hoisted(() => ({ verifyOrgPermission: vi.fn(), verifyOrgAdminRead: vi.fn() }));
 
 vi.mock('../utils/orgAccess', () => ({
-  verifyOrgAccess: h.verifyOrgAccess,
+  verifyOrgPermission: h.verifyOrgPermission,
   verifyOrgAdminRead: h.verifyOrgAdminRead,
 }));
 
@@ -14,7 +14,7 @@ const member = { id: 'u1', isAdmin: false };
 
 beforeEach(() => {
   vi.clearAllMocks();
-  h.verifyOrgAccess.mockResolvedValue({});
+  h.verifyOrgPermission.mockResolvedValue({});
   h.verifyOrgAdminRead.mockResolvedValue({ org: {}, canManage: true });
 });
 
@@ -22,12 +22,12 @@ describe('authorizeLakeConnectorAccess', () => {
   it('gates an org lake on org owner/manager and returns the org owner', async () => {
     const owner = await authorizeLakeConnectorAccess(member, { organizationId: 'org1', createdByUserId: 'someone' });
 
-    expect(h.verifyOrgAccess).toHaveBeenCalledWith(member, 'org1');
+    expect(h.verifyOrgPermission).toHaveBeenCalledWith(member, 'org1', 'manageContent');
     expect(owner).toEqual({ kind: 'organization', organizationId: 'org1' });
   });
 
   it('propagates an org refusal', async () => {
-    h.verifyOrgAccess.mockRejectedValue(new NotFoundError('Organization not found'));
+    h.verifyOrgPermission.mockRejectedValue(new NotFoundError('Organization not found'));
 
     await expect(
       authorizeLakeConnectorAccess(member, { organizationId: 'org1', createdByUserId: 'u1' })
@@ -38,7 +38,7 @@ describe('authorizeLakeConnectorAccess', () => {
     const owner = await authorizeLakeConnectorAccess(member, { organizationId, createdByUserId: 'u1' });
 
     expect(owner).toEqual({ kind: 'user', userId: 'u1' });
-    expect(h.verifyOrgAccess).not.toHaveBeenCalled();
+    expect(h.verifyOrgPermission).not.toHaveBeenCalled();
   });
 
   it('refuses anyone else on a personal lake - a platform admin included - as a 404', async () => {
@@ -58,7 +58,7 @@ describe('authorizeLakeConnectorRead', () => {
     const result = await authorizeLakeConnectorRead(member, { organizationId: 'org1', createdByUserId: 'someone' });
 
     expect(h.verifyOrgAdminRead).toHaveBeenCalledWith(member, 'org1');
-    expect(h.verifyOrgAccess).not.toHaveBeenCalled();
+    expect(h.verifyOrgPermission).not.toHaveBeenCalled();
     expect(result).toEqual({ owner: { kind: 'organization', organizationId: 'org1' }, canManage: false });
   });
 

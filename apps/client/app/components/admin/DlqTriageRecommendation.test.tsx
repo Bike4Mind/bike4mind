@@ -87,4 +87,83 @@ describe('DLQ triage decisions', () => {
       })
     );
   });
+  it('never presents authorization as a completed queue action', async () => {
+    h.get.mockResolvedValue({
+      data: {
+        suggestion: {
+          id: 'a'.repeat(24),
+          verdict: 'replay',
+          actionClass: 'safe-transient',
+          status: 'accepted',
+          reasons: [],
+        },
+      },
+    });
+    setup();
+    expect(await screen.findByTestId('dlq-triage-execution-m1')).toHaveTextContent('Execution outcome unconfirmed');
+    expect(screen.getByTestId('dlq-triage-m1')).toHaveTextContent('Authorized');
+    expect(screen.queryByTestId('dlq-triage-approve-m1')).not.toBeInTheDocument();
+  });
+  it('shows partial evidence, the registered owner and a sanitized draft without offering replay for a bug', async () => {
+    h.get.mockResolvedValue({
+      data: {
+        suggestion: {
+          id: 'a'.repeat(24),
+          verdict: 'investigate',
+          actionClass: 'review-required',
+          status: 'pending',
+          reasons: [],
+          proposedAction: {
+            facts: {
+              coverage: 'partial-sqs-sample',
+              failureSource: 'recorded',
+              failureCategory: 'bug',
+              consumerVersion: 'unknown',
+              fixVerification: 'unavailable',
+              entityContext: 'present-id-withheld',
+              owner: 'Accounts',
+              expiry: { status: 'within-24-hours', estimatedExpiresAt: null, explanation: 'Estimate only.' },
+              logFallback: { status: 'not-needed', sampledEvents: 0 },
+              issueDraft: { title: 'Investigate consumer failure', body: 'Fix relationship unavailable.' },
+            },
+          },
+        },
+      },
+    });
+    setup();
+    const evidence = await screen.findByTestId('dlq-triage-evidence-m1');
+    expect(evidence).toHaveTextContent('Partial SQS sample; not an inventory');
+    expect(evidence).toHaveTextContent('Failure: Recorded');
+    expect(evidence).toHaveTextContent('Entity context: Present (ID withheld)');
+    expect(evidence).toHaveTextContent('Consumer logs: Not needed');
+    expect(evidence).toHaveTextContent('Expiry: Within 24 hours');
+    expect(evidence).not.toHaveTextContent('present-id-withheld');
+    expect(evidence).toHaveTextContent('Registered owner: Accounts');
+    expect(evidence).toHaveTextContent('no fix has been verified');
+    expect(screen.getByTestId('dlq-triage-draft-m1')).toHaveTextContent('Fix relationship unavailable');
+    expect(screen.queryByTestId('dlq-triage-approve-m1')).not.toBeInTheDocument();
+  });
+  it.each([
+    ['success', 'Replay send acknowledged. Consumer outcome unknown.'],
+    ['discarded', 'Discard deletion acknowledged.'],
+    ['pending', 'Operation started; execution outcome unconfirmed.'],
+    ['failed', 'Operation request failed'],
+    ['skipped', 'Operation skipped; no replay was sent.'],
+  ])('shows durable %s separately from authorization', async (status, text) => {
+    h.get.mockResolvedValue({
+      data: {
+        suggestion: { id: 'a'.repeat(24), verdict: 'replay', status: 'accepted', reasons: [] },
+        execution: { status, operation: 'replay', hasWarning: true, recordedAt: '2026-11-17T00:00:00Z' },
+      },
+    });
+    setup();
+    const execution = await screen.findByTestId('dlq-triage-execution-m1');
+    expect(execution).toHaveTextContent(text);
+    expect(execution).toHaveTextContent('Operation warning recorded');
+    expect(screen.getByText(/^Recorded .* ago$|^Recorded (now|yesterday)$/)).toHaveAttribute(
+      'datetime',
+      '2026-11-17T00:00:00.000Z'
+    );
+    expect(screen.getByTestId('dlq-triage-m1')).toHaveTextContent('Authorized');
+  });
 });

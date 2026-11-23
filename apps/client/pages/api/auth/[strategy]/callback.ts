@@ -28,6 +28,7 @@ import { emitSignupFunnelEvents, recordSignupAcquisition } from '@server/analyti
 import { readVisitId } from '@server/analytics/visitSession';
 import { recordSignupNetwork } from '@server/auth/networkMeta';
 import { recordSignupLanding } from '@server/auth/signupLanding';
+import { creditShareLinkSignup } from '@server/referrals/shareLink';
 import { refreshSignupRiskScore } from '@server/auth/signupRiskScore';
 import { AuthEvents } from '@bike4mind/common';
 import {
@@ -285,6 +286,14 @@ const handler = baseApi({ auth: false })
           // signup naming no product resolves here immediately, which is most of them.
           const signupFunnel = await recordSignupAcquisition({ req, user, method: strategy });
           isSyntheticSignup = signupFunnel.isSynthetic;
+          // The referral cookie is SameSite=Lax for this same cross-site GET (see shareLink.ts).
+          await creditShareLinkSignup({
+            req,
+            res,
+            userId: user.id,
+            method: strategy,
+            isSynthetic: isSyntheticSignup,
+          });
           const funnelUser = {
             id: user.id,
             acquisition: signupFunnel.acquisition,

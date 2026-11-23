@@ -175,7 +175,10 @@ const handler = adminApi({
 
   const safeLogReplay = async (data: Omit<Parameters<typeof dlqReplayLogRepository.logReplay>[0], never>) => {
     try {
-      await dlqReplayLogRepository.logReplay(data);
+      await dlqReplayLogRepository.logReplay({
+        ...data,
+        ...(aiSuggestionId ? { aiSuggestionId, operation: 'replay' as const } : {}),
+      });
     } catch (logError) {
       Logger.error(`[DLQ Replay] Failed to write audit log for message ${data.messageId}`, {
         error: logError instanceof Error ? logError.message : String(logError),

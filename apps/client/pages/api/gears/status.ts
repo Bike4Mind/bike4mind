@@ -36,7 +36,7 @@ export interface GearStatus {
   /** Claimed while the trickle pool was dry: held, and paid by the hourly release. */
   rewardQueued?: boolean;
   /** Unlocked, but the payout's stricter condition isn't met yet (e.g.
-   *  Published: waiting for a non-owner view). */
+   *  Published: waiting for a verified non-owner view). */
   rewardPending?: boolean;
   /** Why rewardPending is true - drives the UI copy so each reason shows the right message. */
   pendingReason?: GearPendingReason;

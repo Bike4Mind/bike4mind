@@ -4,7 +4,7 @@ import path from 'path';
 
 // Org alerts fire only in a process that registered the observer; these entries settle org credits
 // or change rosters and load no other module that registers it. Workers entries: see
-// apps/workers/src/queueHandlers/orgAlertObserverEntries.test.ts.
+// apps/workers/src/queueHandlers/orgAlertObserverEntries.repo.test.ts.
 const ENTRIES = ['chatCompletion/server.ts', 'middlewares/baseApi.ts'];
 
 describe('org alert observer registration', () => {

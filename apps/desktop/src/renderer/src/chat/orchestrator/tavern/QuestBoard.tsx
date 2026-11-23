@@ -7,6 +7,7 @@ import MenuButton from '@mui/joy/MenuButton';
 import MenuItem from '@mui/joy/MenuItem';
 import { keyframes } from '@mui/system';
 import type { AgentView } from '../roster';
+import { AgentPrIndicator } from '../AgentPrIndicator';
 import { PLAQUE_EDGE, PLAQUE_WOOD } from './plaque';
 import { QUEST_DONE_LINGER_MS, questTitle, type QuestNote } from './quests';
 import { QUEST_BOARD, noteCapacity, pinNotes } from './scene';
@@ -61,24 +62,31 @@ function Note({
   name,
   selected,
   onSelect,
+  onOpenPr,
 }: {
   note: QuestNote;
   name: string;
   selected: boolean;
   onSelect(id: string): void;
+  onOpenPr?(id: string): void;
 }) {
   const { agent, done } = note;
   const title = questTitle(agent);
   return (
     <Box
-      component="button"
-      type="button"
+      role="button"
+      tabIndex={0}
       data-testid={`orchestrator-tavern-quest-${agent.id}`}
       data-done={done || undefined}
       aria-label={noteLabel(name, note)}
       aria-pressed={selected}
       title={`${name}: ${title}`}
       onClick={() => onSelect(agent.id)}
+      onKeyDown={event => {
+        if (event.key !== 'Enter' && event.key !== ' ') return;
+        event.preventDefault();
+        onSelect(agent.id);
+      }}
       sx={{
         position: 'relative',
         flex: '0 0 auto',
@@ -129,6 +137,7 @@ function Note({
       <Box component="span" sx={{ ...ellipsis, display: 'block', textDecoration: done ? 'line-through' : 'none' }}>
         {title}
       </Box>
+      <AgentPrIndicator pr={agent.pr} onOpen={() => onOpenPr?.(agent.id)} compact scene />
     </Box>
   );
 }
@@ -139,11 +148,13 @@ function MoreNotes({
   name,
   selectedId,
   onSelect,
+  onOpenPr,
 }: {
   hidden: readonly QuestNote[];
   name(agent: AgentView): string;
   selectedId: string | null;
   onSelect(id: string): void;
+  onOpenPr?(id: string): void;
 }) {
   const holdsSelection = hidden.some(({ agent }) => agent.id === selectedId);
   return (
@@ -199,6 +210,7 @@ function MoreNotes({
             <Box sx={{ ...ellipsis, maxWidth: 280, textDecoration: note.done ? 'line-through' : 'none' }}>
               {`${name(note.agent)}: ${questTitle(note.agent)}`}
             </Box>
+            <AgentPrIndicator pr={note.agent.pr} onOpen={() => onOpenPr?.(note.agent.id)} compact />
           </MenuItem>
         ))}
       </Menu>
@@ -216,11 +228,13 @@ export function QuestBoard({
   name,
   selectedId,
   onSelect,
+  onOpenPr,
 }: {
   notes: readonly QuestNote[];
   name(agent: AgentView): string;
   selectedId: string | null;
   onSelect(id: string): void;
+  onOpenPr?(id: string): void;
 }) {
   const boardRef = useRef<HTMLDivElement>(null);
   const [boardHeight, setBoardHeight] = useState<number | null>(null);
@@ -314,9 +328,12 @@ export function QuestBoard({
                 name={name(note.agent)}
                 selected={note.agent.id === selectedId}
                 onSelect={onSelect}
+                onOpenPr={onOpenPr}
               />
             ))}
-            {hidden.length > 0 && <MoreNotes hidden={hidden} name={name} selectedId={selectedId} onSelect={onSelect} />}
+            {hidden.length > 0 && (
+              <MoreNotes hidden={hidden} name={name} selectedId={selectedId} onSelect={onSelect} onOpenPr={onOpenPr} />
+            )}
           </>
         )}
       </Box>

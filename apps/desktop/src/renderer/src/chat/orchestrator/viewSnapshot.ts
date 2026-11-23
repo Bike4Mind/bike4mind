@@ -71,6 +71,7 @@ export function toViewSnapshot(
 /** What the host does for an accepted action that is not answered over IPC. */
 export interface ViewActionHost {
   openAgent(agentId: string): void;
+  openPr?(agentId: string): void;
   openRoot(): void;
   /** The stage's own Stop (AgentActions.stop); absent where the host has none, and the action rejects. */
   stop?(agentId: string): void | Promise<void>;
@@ -85,6 +86,8 @@ export async function runViewAction(action: ViewAction, host: ViewActionHost): P
   switch (action.kind) {
     case 'open-agent':
       return host.openAgent(action.agentId);
+    case 'open-pr':
+      return host.openPr?.(action.agentId);
     case 'open-root':
       return host.openRoot();
     case 'answer':

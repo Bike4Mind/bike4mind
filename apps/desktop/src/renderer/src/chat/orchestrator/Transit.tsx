@@ -4,11 +4,12 @@ import { keyframes } from '@mui/system';
 import { AGENT_STATE_LABEL, type AgentState } from '@shared/agentState';
 import type { ViewAction, ViewSnapshot } from '@shared/viewSnapshot';
 import { stateJoyColor } from './statePalette';
+import { AgentPrIndicator } from './AgentPrIndicator';
 import { TRANSIT_STOPS, TRANSIT_STOP_LABEL, transitPhase, type TransitStop } from './transitPhase';
 
 /*
  * Built on the view contract alone, as TileWall is: it may import only @shared/viewSnapshot, @shared/agentState,
- * ./statePalette, ./transitPhase, React and the UI kit. snapshotView.tsx hosts it.
+ * ./statePalette, ./AgentPrIndicator, ./transitPhase, React and the UI kit. snapshotView.tsx hosts it.
  */
 
 interface Rider {
@@ -16,6 +17,7 @@ interface Rider {
   state: AgentState;
   title: string;
   line?: string;
+  pr?: ViewSnapshot['agents'][number]['pr'];
   action: ViewAction;
 }
 
@@ -45,6 +47,7 @@ function riders(snapshot: ViewSnapshot) {
       state: agent.state,
       title: agent.title,
       line,
+      pr: agent.pr,
       action: { kind: 'open-agent', agentId: agent.id },
     };
     const phase = transitPhase(agent.state, agent.now);
@@ -59,8 +62,13 @@ function RiderButton({ rider, onAction }: { rider: Rider; onAction(action: ViewA
   const asking = rider.state === 'needs-you';
   return (
     <Box
-      component="button"
-      type="button"
+      role="button"
+      tabIndex={0}
+      onKeyDown={event => {
+        if (event.target !== event.currentTarget || (event.key !== 'Enter' && event.key !== ' ')) return;
+        event.preventDefault();
+        onAction(rider.action);
+      }}
       onClick={() => onAction(rider.action)}
       aria-label={`${rider.title}: ${AGENT_STATE_LABEL[rider.state]}`}
       data-testid={`orchestrator-transit-agent-${rider.key}`}
@@ -111,6 +119,7 @@ function RiderButton({ rider, onAction }: { rider: Rider; onAction(action: ViewA
           {rider.line}
         </Typography>
       )}
+      <AgentPrIndicator pr={rider.pr} onOpen={() => onAction({ kind: 'open-pr', agentId: rider.key })} />
     </Box>
   );
 }

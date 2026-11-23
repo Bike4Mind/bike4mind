@@ -68,7 +68,9 @@ const setReducedMotion = (matches: boolean) =>
 const nextFrames = () => act(() => new Promise<void>(resolve => setTimeout(resolve, 100)));
 
 const sprites = () => [
-  ...el('orchestrator-tavern').querySelectorAll<HTMLElement>('button[data-testid^="orchestrator-tavern-agent-"]'),
+  ...el('orchestrator-tavern').querySelectorAll<HTMLElement>(
+    '[role="button"][data-testid^="orchestrator-tavern-agent-"]'
+  ),
 ];
 
 afterEach(() => {

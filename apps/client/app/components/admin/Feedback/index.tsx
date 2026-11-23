@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { Button, Chip, ListDivider, MenuItem, Option, Select, Stack, Tooltip, Typography } from '@mui/joy';
+import { Button, Chip, ChipDelete, ListDivider, MenuItem, Option, Select, Stack, Tooltip, Typography } from '@mui/joy';
 import DownloadIcon from '@mui/icons-material/Download';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import Papa from 'papaparse';
@@ -149,6 +149,7 @@ const ReporterName = ({ row }: { row: FeedbackRow }) => {
 
 const ReporterCell = ({ row }: { row: FeedbackRow }) => {
   const organization = row.organization && row.organization !== 'Unknown' ? row.organization : undefined;
+  const reporterId = parseObjectId(row.userId);
   return (
     <Stack gap={0.25} alignItems="flex-start" sx={{ minWidth: 0, maxWidth: '100%' }}>
       <Stack direction="row" alignItems="baseline" gap={0.75} sx={{ minWidth: 0, width: '100%' }}>
@@ -165,7 +166,7 @@ const ReporterCell = ({ row }: { row: FeedbackRow }) => {
             {row.userEmail}
           </Typography>
         )}
-        {row.userId && <UserIdChip userId={row.userId} />}
+        {reporterId && <UserIdChip userId={reporterId} />}
       </Stack>
     </Stack>
   );
@@ -271,6 +272,7 @@ const FeedbackTab: React.FC = () => {
     setSearchTerm,
     setStatusFilters,
     setSelectedOrganizations,
+    setUserId,
     setSubject,
     setResolution,
     setTypes,
@@ -480,7 +482,8 @@ const FeedbackTab: React.FC = () => {
     filters.received !== undefined ||
     customRangeSet ||
     filters.comment !== undefined ||
-    filters.selectedOrganizations.length > 0;
+    filters.selectedOrganizations.length > 0 ||
+    filters.userId !== undefined;
   const clearFilters = () => showOnly({ statusFilters: toStatusFilters(FEEDBACK_STATUS_ORDER) });
 
   // `loading` also covers a refetch with rows on screen (keepPreviousData): those rows stay, under a bar.
@@ -656,6 +659,22 @@ const FeedbackTab: React.FC = () => {
             onChange={setSelectedOrganizations}
           />
         )}
+        {filters.userId && (
+          <Chip
+            variant="soft"
+            color="primary"
+            data-testid="feedback-filter-reporter-chip"
+            endDecorator={
+              <ChipDelete
+                aria-label="Show every reporter"
+                data-testid="feedback-filter-reporter-clear"
+                onDelete={() => setUserId(undefined)}
+              />
+            }
+          >
+            Reporter: {currentFeedback.find(row => row.userId === filters.userId)?.username || filters.userId}
+          </Chip>
+        )}
       </Stack>
 
       <Stack
@@ -766,6 +785,12 @@ const FeedbackTab: React.FC = () => {
         onNext={detailNavigation.onNext}
         onClose={closeFeedback}
         onStatusChange={handleStatusChange}
+        onShowReporterReports={userId => {
+          // Every status, so no report the drawer counted is hidden; the list also holds this report and any later ones.
+          // The server drops unverified reports from a userId filter, as the count does.
+          showOnly({ userId, statusFilters: toStatusFilters(FEEDBACK_STATUS_ORDER) });
+          closeFeedback();
+        }}
       />
       {feedbackToClose && (
         <FeedbackCloseDialog feedbackId={feedbackToClose.id} onClose={cancelClose} onConfirm={confirmClose} />

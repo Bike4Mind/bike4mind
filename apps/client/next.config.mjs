@@ -328,6 +328,11 @@ const nextConfig = {
         source: '/embed/:path*',
         destination: '/api/embed/serve',
       },
+      // Share links: sets the referral cookie and redirects to signup (apps/client/server/referrals/shareLink.ts).
+      {
+        source: '/r/:code',
+        destination: '/api/referrals/visit/:code',
+      },
     ];
   },
   poweredByHeader: false,

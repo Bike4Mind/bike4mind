@@ -24,18 +24,23 @@ export type NeedsYouMonitorDeps = {
  */
 export class NeedsYouMonitor {
   private readonly statuses = new Map<string, ChatSessionStatus>();
+  // Sessions asking for something live; an unread finished reply counts on the badge but never alerts.
+  private readonly asking = new Set<string>();
   // Serialised so badge writes land in event order even though each one reads the session list.
   private pending: Promise<void> = Promise.resolve();
 
   constructor(private readonly deps: NeedsYouMonitorDeps) {}
 
   observe(event: ChatSessionStatusEvent): void {
-    const previous = this.statuses.get(event.sessionId);
+    const wasAsking = this.asking.has(event.sessionId);
+    const asking = event.status === 'needs-action' && !event.unreadReply;
     this.statuses.set(event.sessionId, event.status);
+    if (asking) this.asking.add(event.sessionId);
+    else this.asking.delete(event.sessionId);
     if (this.deps.hasWindow()) return;
     // A worker task waiting on a decision counts too, and it surfaces as a session leaves processing,
     // so every status event recounts the badge; only a new needs-action entry also raises a notice.
-    const entered = event.status === 'needs-action' && previous !== 'needs-action' ? event.sessionId : null;
+    const entered = asking && !wasAsking ? event.sessionId : null;
     this.enqueue(() => this.update(entered));
   }
 
@@ -70,7 +75,7 @@ export class NeedsYouMonitor {
     if (this.deps.hasWindow()) return;
     const scope = this.deps.notifyScope();
     this.deps.setBadge(needsYouCount(this.statuses, sessions, scope));
-    if (entered === null || this.statuses.get(entered) !== 'needs-action') return;
+    if (entered === null || !this.asking.has(entered)) return;
     if (!alertableSessions(sessions, scope).has(entered)) return;
     if (this.deps.claim([entered]).length === 0) return;
 

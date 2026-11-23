@@ -4,6 +4,7 @@ import CssBaseline from '@mui/joy/CssBaseline';
 import { CssVarsProvider } from '@mui/joy/styles';
 import { RouterProvider } from '@tanstack/react-router';
 import { publishScrollGutterWidth } from './chat/layout';
+import { AppErrorBoundary } from './errors/AppErrorBoundary';
 import { router } from './router';
 import { desktopTheme } from './theme';
 import { WindowThemeSync } from './WindowThemeSync';
@@ -20,8 +21,10 @@ createRoot(container).render(
   <StrictMode>
     <CssVarsProvider theme={desktopTheme} defaultMode="system">
       <CssBaseline />
-      <WindowThemeSync />
-      <RouterProvider router={router} />
+      <AppErrorBoundary>
+        <WindowThemeSync />
+        <RouterProvider router={router} />
+      </AppErrorBoundary>
     </CssVarsProvider>
   </StrictMode>
 );

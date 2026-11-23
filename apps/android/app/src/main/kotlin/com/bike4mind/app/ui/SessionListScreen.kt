@@ -131,6 +131,7 @@ fun SessionListScreen(
     ) { padding ->
         Box(modifier = Modifier.fillMaxSize().padding(padding)) {
             LazyColumn(modifier = Modifier.fillMaxSize().testTag("sessions-list")) {
+                item(key = "pending-shares") { PendingShares(graph) }
                 state.defaultModel?.let { defaultModel ->
                     item {
                         Text(

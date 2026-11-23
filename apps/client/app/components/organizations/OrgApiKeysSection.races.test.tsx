@@ -317,3 +317,29 @@ describe.each([
     }
   );
 });
+
+describe('create key expiry', () => {
+  it('defaults to an explicit no-expiry state and sends no expiresAt', async () => {
+    transport.post.mockResolvedValue(responseFor('create', 'no-expiry-secret'));
+    render(view('orgA'));
+    const { dialog, submit } = await openAction('create');
+    expect(within(dialog).getByTestId('org-api-key-expiry-input-empty')).toHaveTextContent('No expiry');
+    expect(within(dialog).queryByTestId('org-api-key-expiry-input')).toBeNull();
+    fireEvent.click(submit);
+    await waitFor(() => expect(transport.post).toHaveBeenCalledTimes(1));
+    expect(transport.post.mock.calls[0][1]).not.toHaveProperty('expiresAt');
+  });
+
+  it('sends the end of the picked day once a date is set', async () => {
+    transport.post.mockResolvedValue(responseFor('create', 'dated-secret'));
+    render(view('orgA'));
+    const { dialog, submit } = await openAction('create');
+    fireEvent.click(within(dialog).getByTestId('org-api-key-expiry-input-set-btn'));
+    fireEvent.change(within(dialog).getByTestId('org-api-key-expiry-input'), { target: { value: '2030-05-06' } });
+    fireEvent.click(submit);
+    await waitFor(() => expect(transport.post).toHaveBeenCalledTimes(1));
+    expect(transport.post.mock.calls[0][1]).toMatchObject({
+      expiresAt: new Date('2030-05-06T23:59:59').toISOString(),
+    });
+  });
+});
