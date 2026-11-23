@@ -190,7 +190,7 @@ describe('createCallableFunction', () => {
   it('answers 404 when the head version has no stored content and writes nothing', async () => {
     await ArtifactContent.deleteMany({ artifactId: 'artifact-1' });
 
-    await expect(save()).rejects.toMatchObject({ statusCode: 404 });
+    await expect(save()).rejects.toMatchObject({ statusCode: 404, message: 'Artifact version not found' });
     expect(await CallableFunction.countDocuments({})).toBe(0);
   });
 

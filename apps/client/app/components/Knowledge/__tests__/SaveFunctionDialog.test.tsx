@@ -213,6 +213,8 @@ describe('SaveFunctionDialog', () => {
     expect(error.textContent).toBe(
       'You already have a tool named beam_midspan_deflection. Change the name in FUNCTION, save the artifact, and try again.'
     );
+    expect(within(error).getByTestId('save-function-dialog-error-alert')).toBeTruthy();
+    expect(within(error).queryByTestId('save-function-dialog-replace-alert')).toBeNull();
     expect(screen.getByTestId('save-function-dialog-submit-btn')).toBeTruthy();
     expect(screen.queryByTestId('save-function-dialog-replace-btn')).toBeNull();
   });
@@ -228,8 +230,9 @@ describe('SaveFunctionDialog', () => {
     expect(error.textContent).toBe(
       'You already have a tool named beam_midspan_deflection, saved from an artifact that has since been deleted. Replace it with this one?'
     );
-    expect(error.querySelector('[data-color="warning"]')).toBeTruthy();
-    expect(error.querySelector('[data-color="danger"]')).toBeNull();
+    const alert = within(error).getByTestId('save-function-dialog-replace-alert');
+    expect(getComputedStyle(alert).backgroundColor).toContain('--joy-palette-warning-softBg');
+    expect(within(error).queryByTestId('save-function-dialog-error-alert')).toBeNull();
     expect(screen.queryByTestId('save-function-dialog-submit-btn')).toBeNull();
     fireEvent.click(screen.getByTestId('save-function-dialog-replace-btn'));
 
