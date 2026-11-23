@@ -278,6 +278,14 @@ const addFilesToProjects = async (
     const attachable = files.filter(file =>
       canAttachToProject(file as unknown as AttachableItem, user, project.fileIds)
     );
+    if (attachable.length < files.length) {
+      const kept = new Set(attachable.map(file => file.id));
+      const skipped = files.filter(file => !kept.has(file.id)).map(file => file.id);
+      Logger.globalInstance.warn(
+        `addFilesToProjects: not attaching ${skipped.length} file(s) user ${user.id} cannot share to project ` +
+          `${project.id}: ${skipped.join(', ')}`
+      );
+    }
     if (attachable.length === 0) continue;
     project.fileIds = uniq([...project.fileIds, ...attachable.map(file => file.id)]);
 

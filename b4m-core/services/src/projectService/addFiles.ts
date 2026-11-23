@@ -62,8 +62,14 @@ export const addFiles = async (
   // DEDUPED list, since the reader returns distinct rows and a file sent twice is not one that
   // could not be reached.
   if (files.length !== distinctIdCount(fileIds)) throw new BadRequestError('Some files are not accessible');
-  // Attaching shares the file (read) with every member, so a read-only holder may not attach it.
-  assertCanAttachToProject(files as unknown as AttachableItem[], user, project.fileIds, 'files');
+  // Attaching shares the file (read) with every member, so a read-only holder may not attach it. A
+  // file already in the project as a system prompt is already shared, as in addSystemPrompts.
+  assertCanAttachToProject(
+    files as unknown as AttachableItem[],
+    user,
+    [...project.fileIds, ...(project.systemPrompts ?? []).map(prompt => prompt.fileId)],
+    'files'
+  );
 
   // The ids that RESOLVED, like addSessions: pushing the request list would store `ABC` alongside
   // an existing `abc` as if they were two different files. mergeIds, not uniq, because a row

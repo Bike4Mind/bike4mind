@@ -10,7 +10,7 @@ import { canonicalId } from '../utils/objectIds';
 type Attacher = Pick<IUserDocument, 'id' | 'groups'>;
 
 /** A file or session as the gate reads it; cast at the call site like grantCap's callers do. */
-export type AttachableItem = ShareableAccessShape & { id: string };
+export type AttachableItem = ShareableAccessShape & { id: string; fileName?: string; name?: string };
 
 /**
  * Project membership grants read on every attached item, so attaching an item shares it with every
@@ -40,6 +40,9 @@ export const assertCanAttachToProject = (
   noun: 'files' | 'notebooks'
 ): void => {
   const attached = Array.from(alreadyAttachedIds);
-  if (items.every(item => canAttachToProject(item, attacher, attached))) return;
-  throw new ForbiddenError(`You need share access to add these ${noun} to a project`);
+  const refused = items.filter(item => !canAttachToProject(item, attacher, attached));
+  if (refused.length === 0) return;
+  // Named so the caller knows which pick to drop: the whole batch is refused, nothing is attached.
+  const names = refused.map(item => item.fileName || item.name || item.id).join(', ');
+  throw new ForbiddenError(`You need share access to add these ${noun} to a project: ${names}`);
 };

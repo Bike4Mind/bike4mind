@@ -142,6 +142,33 @@ describe('addFiles share gate', () => {
     const result = await addFiles(adder(), { projectId: 'project-1', fileIds: ['file-1'] }, adapters as never);
     expect(result.fileIds).toEqual(['file-1']);
   });
+
+  it('lets a read-only holder add a file the project already holds as a system prompt', async () => {
+    const file = item('file-1', STRANGER, [{ userId: ADDER, permissions: [Permission.read] }]);
+    const project = { ...projectFor(), systemPrompts: [{ fileId: 'file-1', enabled: true }] };
+    const { adapters } = adaptersFor(project, [file]);
+
+    const result = await addFiles(adder(), { projectId: 'project-1', fileIds: ['file-1'] }, adapters as never);
+    expect(result.fileIds).toEqual(['file-1']);
+  });
+
+  it('names only the refused files in the error', async () => {
+    const own = { ...item('file-own', ADDER), fileName: 'mine.txt' };
+    const readOnly = {
+      ...item('file-ro', STRANGER, [{ userId: ADDER, permissions: [Permission.read] }]),
+      fileName: 'theirs.txt',
+    };
+    const { adapters } = adaptersFor(projectFor(), [own, readOnly]);
+
+    const error = await addFiles(
+      adder(),
+      { projectId: 'project-1', fileIds: ['file-own', 'file-ro'] },
+      adapters as never
+    ).catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(ForbiddenError);
+    expect((error as Error).message).toContain('theirs.txt');
+    expect((error as Error).message).not.toContain('mine.txt');
+  });
 });
 
 describe('addSystemPrompts share gate', () => {
