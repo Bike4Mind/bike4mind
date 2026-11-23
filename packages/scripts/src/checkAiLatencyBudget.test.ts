@@ -20,6 +20,7 @@ import {
   mergeResults,
   msToSec,
   parseCompletionResponse,
+  serializeResults,
   StreamingTimeoutError,
   textStreamBudgetMs,
   TurnTimer,
@@ -385,6 +386,25 @@ describe('mergeResults', () => {
     const a = completedResult(scenario({ id: 'a' }), { response: 'x', responseTimeMs: 1000, renderTimeMs: 0 });
     const b = incompleteResult(scenario({ id: 'b' }), 2000);
     expect(mergeResults([a], [b]).map(r => r.id)).toEqual(['a', 'b']);
+  });
+});
+
+describe('serializeResults', () => {
+  it('replaces an unpaired surrogate so the file holds no lone surrogate escape', () => {
+    // A reply quoting text cut mid-emoji left a lone high surrogate in `response`; jq refuses the
+    // escape JSON.stringify writes for it, and the report job reads the file with jq.
+    const cutFlag = 'English \uD83C';
+    const json = serializeResults({ model: 'm', results: [{ response: cutFlag, nested: { tail: '\uDDEA end' } }] });
+    expect(json).not.toMatch(/\\ud[89a-f][0-9a-f]{2}/i);
+    expect(JSON.parse(json)).toEqual({
+      model: 'm',
+      results: [{ response: 'English \uFFFD', nested: { tail: '\uFFFD end' } }],
+    });
+  });
+
+  it('leaves a complete emoji and non-string values untouched', () => {
+    const output = { model: 'm', thresholdSec: 10, flag: '\uD83C\uDDE9\uD83C\uDDEA', fallback: null };
+    expect(JSON.parse(serializeResults(output))).toEqual(output);
   });
 });
 

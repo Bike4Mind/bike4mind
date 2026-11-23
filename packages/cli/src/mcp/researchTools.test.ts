@@ -338,10 +338,31 @@ describe('research tool operations', () => {
     const listResearchRuns = vi.fn().mockResolvedValue({ data: [rawRun()], nextCursor: null });
     const tools = collect(mockClient({ getConfigHistory, listResearchRuns }));
     await tools.call('get_lake_config_history', { lake_id: 'l1', limit: 20 });
-    expect(getConfigHistory).toHaveBeenCalledWith('l1', 20);
+    expect(getConfigHistory).toHaveBeenCalledWith('l1', 20, false);
+    await tools.call('get_lake_config_history', { lake_id: 'l1', limit: 20, include_files: true });
+    expect(getConfigHistory).toHaveBeenLastCalledWith('l1', 20, true);
     const runs = await tools.call('list_research_runs', { lake_id: 'l1', limit: 5 });
     expect(listResearchRuns).toHaveBeenCalledWith('l1', { limit: 5, cursor: undefined });
     expect(out(runs).runs[0]).not.toHaveProperty('levers');
+  });
+});
+
+describe('get_lake_config_history entries', () => {
+  it('returns both entry arms as the API sent them, with the redacted feed address and no query string', async () => {
+    const entries = [
+      { kind: 'file', event_id: 'f1', action: 'file-added', origin: 'person', target: { kind: 'file', id: 'fab1' } },
+      {
+        kind: 'config',
+        event_id: 'c1',
+        action: 'update-research-config',
+        changes: [],
+        lever_changes: [{ lever: 'feedUrl', before: 'https://example.com/a.xml', after: 'https://example.com/b.xml' }],
+      },
+    ];
+    const getConfigHistory = vi.fn().mockResolvedValue({ entries });
+    const result = await collect(mockClient({ getConfigHistory })).call('get_lake_config_history', { lake_id: 'l1' });
+    expect(out(result).entries).toEqual(entries);
+    expect(JSON.stringify(out(result))).not.toContain('?');
   });
 });
 

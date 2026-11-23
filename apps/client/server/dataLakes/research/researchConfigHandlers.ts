@@ -4,6 +4,7 @@ import {
   dataLakeProposalRepository,
   dataLakeResearchConfigRepository,
   dataLakeRepository,
+  lakeConfigSnapshotRepository,
 } from '@bike4mind/database';
 import {
   RESEARCH_RUN_TRIGGERS,
@@ -36,7 +37,11 @@ export const UpdateResearchConfigInput = ResearchLeversInput.merge(ResearchSched
   name: z.string().optional(),
 });
 
-const db = { dataLakeResearchConfigs: dataLakeResearchConfigRepository, ...lakeConfigAuditDb };
+const db = {
+  dataLakeResearchConfigs: dataLakeResearchConfigRepository,
+  lakeConfigSnapshots: lakeConfigSnapshotRepository,
+  ...lakeConfigAuditDb,
+};
 
 export async function listLakeResearchConfigs(
   req: Request,

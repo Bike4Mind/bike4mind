@@ -20,7 +20,8 @@ const handler = nextRouteForContract(getDataLakeConfigHistoryContract, {
     const view = await readLakeConfigHistory(
       req.validatedParams.id,
       await toMemberAccessContext(req),
-      req.validatedQuery.limit
+      req.validatedQuery.limit,
+      req.validatedQuery.include === 'files'
     );
     return res.json(toPublicConfigHistory(view));
   });

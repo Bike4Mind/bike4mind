@@ -6,6 +6,7 @@ import {
   type IDataLakeProposalDocument,
   type IDataLakeResearchConfigDocument,
   type IDataLakeResearchRunDocument,
+  type LakeConfigHistoryEntry,
   type LakeConfigHistoryFieldChange,
   type LakeConfigHistoryView,
   type ProposalResource,
@@ -256,7 +257,7 @@ const IDENTITY_FIELDS = new Set(['effectiveOwnerUserId', 'createdByUserId']);
 const USER_GRANT_ID = /user:[0-9a-f]{24}/gi;
 const UNKNOWN_USER = 'unknown user';
 
-type PublicChange = ConfigHistoryResponse['data']['entries'][number]['changes'][number];
+type PublicChange = Extract<ConfigHistoryResponse['data']['entries'][number], { kind: 'config' }>['changes'][number];
 
 /*
  * The history stores user ids as values (the owner a lake moved to) and inside access-grant text
@@ -294,20 +295,46 @@ function toPublicChange(change: LakeConfigHistoryFieldChange, userNames: Record<
   return out;
 }
 
+type PublicEntry = ConfigHistoryResponse['data']['entries'][number];
+
+function toPublicEntry(entry: LakeConfigHistoryEntry, userNames: Record<string, string>): PublicEntry {
+  const base = {
+    event_id: entry.eventId,
+    changed_at: iso(entry.changedAt) ?? '',
+    principal_kind: entry.principalKind,
+    principal_name: entry.principalName ?? null,
+  };
+  if (entry.kind === 'file') {
+    return {
+      kind: 'file',
+      ...base,
+      target: { kind: entry.target.kind, id: entry.target.id },
+      action: entry.action,
+      origin: entry.origin,
+      ...(entry.undoesEventId ? { undoes_event_id: entry.undoesEventId } : {}),
+      ...(entry.causedByEventId ? { caused_by_event_id: entry.causedByEventId } : {}),
+    };
+  }
+  return {
+    kind: 'config',
+    ...base,
+    ...(entry.target ? { target: { kind: entry.target.kind, id: entry.target.id } } : {}),
+    manage_rung: entry.manageRung,
+    action: entry.action,
+    changes: entry.changes.map(change => toPublicChange(change, userNames)),
+    ...(entry.leverChanges
+      ? { lever_changes: entry.leverChanges.map(c => ({ lever: c.lever, before: c.before, after: c.after })) }
+      : {}),
+    ...(entry.admittedFabFileId ? { admitted_fab_file_id: entry.admittedFabFileId } : {}),
+  };
+}
+
 export function toPublicConfigHistory(view: LakeConfigHistoryView): ConfigHistoryResponse {
   return {
     data: {
       lake_id: view.lakeId,
       lake_name: view.lakeName,
-      entries: view.entries.map(entry => ({
-        event_id: entry.eventId,
-        changed_at: iso(entry.changedAt) ?? '',
-        principal_kind: entry.principalKind,
-        principal_name: entry.principalName ?? null,
-        manage_rung: entry.manageRung,
-        action: entry.action,
-        changes: entry.changes.map(change => toPublicChange(change, view.userNames)),
-      })),
+      entries: view.entries.map(entry => toPublicEntry(entry, view.userNames)),
       truncated: view.truncated,
       window_starts_at: iso(view.windowStartsAt),
       generated_at: iso(view.generatedAt) ?? '',

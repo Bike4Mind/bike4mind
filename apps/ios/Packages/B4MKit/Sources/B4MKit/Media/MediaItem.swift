@@ -1,6 +1,6 @@
 import Foundation
 
-public enum MediaKind: String, CaseIterable, Hashable, Sendable {
+public enum MediaKind: String, CaseIterable, Hashable, Sendable, Codable {
   case image, video, audio
 
   /// `nil` for anything the gallery cannot show (documents).
@@ -20,7 +20,7 @@ public enum MediaKind: String, CaseIterable, Hashable, Sendable {
 }
 
 /// One generated file as the gallery shows it.
-public struct MediaItem: Identifiable, Hashable, Sendable {
+public struct MediaItem: Identifiable, Hashable, Sendable, Codable {
   public let id: String
   public let kind: MediaKind
   public let fileName: String
@@ -68,7 +68,7 @@ public struct MediaItem: Identifiable, Hashable, Sendable {
   }
 }
 
-public struct MediaPage: Equatable, Sendable {
+public struct MediaPage: Equatable, Sendable, Codable {
   public let items: [MediaItem]
   public let hasMore: Bool
 

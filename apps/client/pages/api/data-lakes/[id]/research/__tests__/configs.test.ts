@@ -53,6 +53,8 @@ vi.mock('@bike4mind/database', () => ({
   dataLakeResearchConfigRepository: {},
   dataLakeProposalRepository: { countPendingByLakes: h.countPendingByLakes },
   lakeConfigChangeEventRepository: {},
+  lakeConfigSnapshotRepository: {},
+  lakeMembershipChangeEventRepository: {},
   adminSettingsRepository: {},
 }));
 vi.mock('@server/dataLakes/assertLakeResearchManage', () => ({

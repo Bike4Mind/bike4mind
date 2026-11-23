@@ -3,6 +3,7 @@ import {
   dataLakeRepository,
   dataLakeAccessGrantRepository,
   lakeConfigChangeEventRepository,
+  lakeMembershipChangeEventRepository,
   userRepository,
   userApiKeyRepository,
 } from '@bike4mind/database';
@@ -13,7 +14,8 @@ import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 export async function readLakeConfigHistory(
   lakeId: string,
   ctx: AccessContext,
-  limit: number | undefined
+  limit: number | undefined,
+  includeFiles = false
 ): Promise<LakeConfigHistoryView> {
   const lake = await dataLakeService.assertLakeAccess(lakeId, ctx, {
     db: { dataLakes: dataLakeRepository, dataLakeAccessGrants: dataLakeAccessGrantRepository },
@@ -29,9 +31,11 @@ export async function readLakeConfigHistory(
   return dataLakeService.assembleLakeConfigHistory(lake, {
     db: {
       lakeConfigChangeEvents: lakeConfigChangeEventRepository,
+      lakeMembershipChangeEvents: lakeMembershipChangeEventRepository,
       users: userRepository,
       userApiKeys: userApiKeyRepository,
     },
     limit,
+    includeFiles,
   });
 }

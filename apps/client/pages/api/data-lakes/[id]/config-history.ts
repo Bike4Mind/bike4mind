@@ -6,7 +6,7 @@ import { toAccessContext } from '@bike4mind/server-utils/dataLakes/toAccessConte
 import { readLakeConfigHistory } from '@server/dataLakes/research/configHistoryHandler';
 
 /**
- * GET /api/data-lakes/:id/config-history[?limit=]
+ * GET /api/data-lakes/:id/config-history[?limit=][&include=files]
  *
  * The owner-facing config-change history (#1769): who changed how this lake answers, what each
  * change moved from and to, and which manage rung authorized it. Read-only, and the FIRST consumer
@@ -26,19 +26,21 @@ import { readLakeConfigHistory } from '@server/dataLakes/research/configHistoryH
  */
 const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
   .use(requireFeatureEnabled('EnableDataLakes'))
-  .get(async (req: Request<{ id: string }, unknown, unknown, { id: string; limit?: string }>, res) => {
-    // Next merges the [id] route param into req.query alongside the ?limit= query string.
-    const { id, limit } = req.query;
-    const ctx = await toAccessContext(req);
+  .get(
+    async (req: Request<{ id: string }, unknown, unknown, { id: string; limit?: string; include?: string }>, res) => {
+      // Next merges the [id] route param into req.query alongside the ?limit= query string.
+      const { id, limit, include } = req.query;
+      const ctx = await toAccessContext(req);
 
-    // Parsed permissively rather than validated: the service clamps into [1, MAX] and falls back to
-    // the default for anything non-finite, so a garbage ?limit= serves a page instead of a 400.
-    // `limit ?` not `limit == null ?`: a bare `?limit=` arrives as '' and `Number('')` is 0, which
-    // the clamp floors to 1 - silently serving a one-row history instead of the default page.
-    const view = await readLakeConfigHistory(id, ctx, limit ? Number(limit) : undefined);
+      // Parsed permissively rather than validated: the service clamps into [1, MAX] and falls back to
+      // the default for anything non-finite, so a garbage ?limit= serves a page instead of a 400.
+      // `limit ?` not `limit == null ?`: a bare `?limit=` arrives as '' and `Number('')` is 0, which
+      // the clamp floors to 1 - silently serving a one-row history instead of the default page.
+      const view = await readLakeConfigHistory(id, ctx, limit ? Number(limit) : undefined, include === 'files');
 
-    return res.json({ data: view });
-  });
+      return res.json({ data: view });
+    }
+  );
 
 export const config = {
   api: { externalResolver: true },

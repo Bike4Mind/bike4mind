@@ -6,18 +6,19 @@ import {
   readAmbient,
   readDockOpen,
   readFocus,
+  readLayout,
   readPresenter,
   readSurface,
-  readView,
   writeAmbient,
   writeDockOpen,
   writeFocus,
+  writeLayout,
   writePresenter,
   writeSurface,
-  writeView,
   type OrchestratorViewId,
   type SessionSurface,
 } from './orchestratorPrefs';
+import { singlePaneLayout, type OrchestratorLayout } from './orchestratorLayout';
 import { buildRoster, descendantIds, type AgentView, type ParentView } from './roster';
 
 const NO_ACTIVITY: ReadonlyMap<string, AgentActivity> = new Map();
@@ -119,8 +120,10 @@ export function useOrchestratorRoster(
 interface OrchestratorPrefs {
   surface: SessionSurface;
   setSurface(surface: SessionSurface): void;
+  layout: OrchestratorLayout;
+  setLayout(layout: OrchestratorLayout): void;
+  /** The first pane's view: what the shell's scene-only behaviour (ambient settle, scene conversation) reads. */
   view: OrchestratorViewId;
-  setView(view: OrchestratorViewId): void;
   dockOpen: boolean;
   setDockOpen(open: boolean): void;
   ambient: boolean;
@@ -135,17 +138,22 @@ interface SessionPrefs {
   sessionId: string | null;
   projectDirectory: string | undefined;
   surface: SessionSurface;
-  view: OrchestratorViewId;
+  layout: OrchestratorLayout;
 }
 
 function readSessionPrefs(sessionId: string | null, projectDirectory: string | undefined): SessionPrefs {
   return sessionId === null
-    ? { sessionId, projectDirectory, surface: 'chat', view: 'tavern' }
-    : { sessionId, projectDirectory, surface: readSurface(sessionId), view: readView(sessionId, projectDirectory) };
+    ? { sessionId, projectDirectory, surface: 'chat', layout: singlePaneLayout('tavern') }
+    : {
+        sessionId,
+        projectDirectory,
+        surface: readSurface(sessionId),
+        layout: readLayout(sessionId, projectDirectory),
+      };
 }
 
 /**
- * Per-session surface and view, plus the global dock, ambient, focus and presenter flags.
+ * Per-session surface and layout, plus the global dock, ambient, focus and presenter flags.
  * Setters update state and storage together.
  */
 export function useOrchestratorPrefs(sessionId: string | null, projectDirectory?: string): OrchestratorPrefs {
@@ -171,11 +179,11 @@ export function useOrchestratorPrefs(sessionId: string | null, projectDirectory?
     [sessionId]
   );
 
-  const setView = useCallback(
-    (view: OrchestratorViewId) => {
+  const setLayout = useCallback(
+    (layout: OrchestratorLayout) => {
       if (sessionId === null) return;
-      writeView(sessionId, view, projectDirectory);
-      setPrefs(previous => ({ ...previous, sessionId, projectDirectory, view }));
+      writeLayout(sessionId, layout, projectDirectory);
+      setPrefs(previous => ({ ...previous, sessionId, projectDirectory, layout }));
     },
     [sessionId, projectDirectory]
   );
@@ -203,8 +211,9 @@ export function useOrchestratorPrefs(sessionId: string | null, projectDirectory?
   return {
     surface: current.surface,
     setSurface,
-    view: current.view,
-    setView,
+    layout: current.layout,
+    setLayout,
+    view: current.layout.panes[0].view,
     dockOpen,
     setDockOpen,
     ambient,

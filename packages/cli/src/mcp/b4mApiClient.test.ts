@@ -1374,5 +1374,7 @@ describe('B4mApiClient lake research routes', () => {
     expect(sent().url).toBe(`${BASE}/config-history?limit=20`);
     await client.getConfigHistory('l1');
     expect(sent().url).toBe(`${BASE}/config-history`);
+    await client.getConfigHistory('l1', 20, true);
+    expect(sent().url).toBe(`${BASE}/config-history?limit=20&include=files`);
   });
 });

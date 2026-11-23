@@ -179,6 +179,7 @@ public final class StudioCreateViewModel {
   /// "Use these settings" from a finished item: its kind, model and values, with the same carry-over rules as a
   /// model switch so a model since removed falls back cleanly. Its prompt fills the bar only when nothing is typed.
   public func use(settingsOf handle: GenerationHandle) async {
+    guard GenerationKind.promptable.contains(handle.kind) else { return }
     kind = handle.kind
     await loadModels()
     let original = handle.modelID.flatMap { id in availableModels.first { $0.id == id } }

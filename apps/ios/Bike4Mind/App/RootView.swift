@@ -145,10 +145,14 @@ struct RootView: View {
     services.accountProfiles.invalidate()
     // The model lists depend on the account's plan, so they go with it.
     services.studioModels.invalidate()
+    // Decoded images are account content too, and this runs for server-forced sign-outs as well as user-initiated ones.
+    ThumbnailCache.shared.removeAll()
     // Cached rows belong to the account that fetched them.
     let realtime = services.realtime
     Task { await realtime.stop() }
     Task { await services.sessionListCache.clear() }
+    let mediaFirstPages = services.mediaFirstPages
+    Task { await mediaFirstPages.invalidate() }
     services.push.sessionDidEnd()
     // A session that ended on its own cannot unregister tokens; the activities still must not linger.
     services.questActivities.sessionDidEnd()

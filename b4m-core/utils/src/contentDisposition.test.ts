@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildContentDisposition } from './contentDisposition';
+import { buildContentDisposition, storageReadOverrides } from './contentDisposition';
 
 const E_ACUTE = String.fromCharCode(0xe9); // e-acute, e.g. resume with an accent
 const A_DIAERESIS = String.fromCharCode(0xe4); // a-diaeresis
@@ -64,5 +64,67 @@ describe('buildContentDisposition', () => {
   it('falls back to a placeholder when nothing printable survives', () => {
     expect(buildContentDisposition('   ')).toBe('attachment; filename="download"');
     expect(buildContentDisposition('')).toBe('attachment; filename="download"');
+  });
+});
+
+describe('storageReadOverrides', () => {
+  it.each(['image/png', 'image/jpeg', 'application/pdf', 'video/mp4', 'audio/mpeg'])(
+    'serves %s inline with a pinned content type',
+    mimeType => {
+      expect(storageReadOverrides({ mimeType, fileName: 'a', key: 'k/a' })).toEqual({ ResponseContentType: mimeType });
+    }
+  );
+
+  it('normalizes case, whitespace and parameters before deciding', () => {
+    expect(storageReadOverrides({ mimeType: ' Image/PNG; foo=bar ', fileName: 'a.png' })).toEqual({
+      ResponseContentType: 'image/png',
+    });
+  });
+
+  it.each([
+    'text/html',
+    'Text/HTML; charset=utf-8',
+    'image/svg+xml',
+    'application/xhtml+xml',
+    'application/xml',
+    'text/xml',
+    'text/plain',
+    'text/javascript',
+    'application/octet-stream',
+    '',
+    undefined,
+    null,
+  ])('forces %s to download as an attachment', mimeType => {
+    expect(storageReadOverrides({ mimeType, fileName: 'page.html', key: 'u/1/page.html' })).toEqual({
+      ResponseContentDisposition: 'attachment; filename="page.html"',
+    });
+  });
+
+  it('falls back to the key segment, then to a generic name, when the file has no name', () => {
+    expect(storageReadOverrides({ mimeType: 'text/html', fileName: '', key: 'modals/banner.html' })).toEqual({
+      ResponseContentDisposition: 'attachment; filename="banner.html"',
+    });
+    expect(storageReadOverrides({ mimeType: 'text/html' })).toEqual({
+      ResponseContentDisposition: 'attachment; filename="download"',
+    });
+  });
+
+  it('sanitizes a hostile filename through buildContentDisposition', () => {
+    const { ResponseContentDisposition } = storageReadOverrides({
+      mimeType: 'text/html',
+      fileName: `x"\r\nSet-Cookie: a=b; r${E_ACUTE}sum${E_ACUTE}.html`,
+    });
+    expect(ResponseContentDisposition).not.toMatch(/[\r\n]/);
+    expect(ResponseContentDisposition).toBe(
+      `attachment; filename="x___Set-Cookie: a=b; r_sum_.html"; filename*=UTF-8''x%22__Set-Cookie%3A%20a%3Db%3B%20r%C3%A9sum%C3%A9.html`
+    );
+  });
+
+  it('truncates a very long filename', () => {
+    const { ResponseContentDisposition } = storageReadOverrides({
+      mimeType: 'text/html',
+      fileName: `${'a'.repeat(200)}.html`,
+    });
+    expect(ResponseContentDisposition).toBe(`attachment; filename="${'a'.repeat(145)}.html"`);
   });
 });

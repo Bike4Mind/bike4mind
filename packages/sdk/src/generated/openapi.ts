@@ -208,7 +208,7 @@ export interface paths {
      *
      *     TOOL SEARCH. On a model whose `GET /api/v1/models` row has `supports_tool_search: true` (`backend` `"anthropic"` or `"bedrock"`), a `tools` entry may set `toolSchema.defer_loading: true`, and a `{ "serverTool": { "type": "tool_search_tool_regex_20251119", "name": "tool_search_tool_regex" } }` (or the `bm25` pair) entry adds Anthropic's tool search, so deferred definitions load only when the model searches for them. The stream then carries `provider_block` events (`{ type, provider: "anthropic", block }`) for the server-run search; echo each block back verbatim, in order, in the assistant `messages` content of the next request, and never answer one with a `tool_result`. When the server-run search loop hits its iteration limit the stream ends with `stopReason: "pause_turn"`; continue by re-sending the conversation with that assistant turn's provider blocks echoed. A client-side search may return `{ "type": "tool_reference", "tool_name": "..." }` blocks inside a `tool_result`'s content. On every other model `defer_loading` is ignored (every tool is sent as usual) and a server tool, a `tool_reference` or an echoed tool search block is refused with a `400` rather than run without it.
      *
-     *     ERRORS. Everything checked before the model provider is called fails with a JSON error body and a real HTTP status, before any stream opens: an empty `messages` array, a conversation with no non-empty user or assistant message (system-only, or only blank content), a malformed request, or an unknown `model` `400` (`errorCode: "unknown_model"` for an unknown model), a bad credential `401`, a key without a required scope `403` (with `required_scopes`), a free-tier account calling a model outside the free-tier allowlist `403` with `errorCode: "model_requires_subscription"` (upgrade the plan or pick a free-tier model), a model the caller's organization policy does not allow `403` with `errorCode: "org_model_not_allowed"`, paused spending `403` with `errorCode: "spend_frozen"`, a body over 25 MB `413`, any other body that fails schema validation `422`, insufficient credits `422` with `errorCode: "insufficient_credits"` (personal or org balance, or an org per-member credit cap), a rate limit `429` with `Retry-After`, a `run` that does not exist or that another user or billing owner minted `404` with `errorCode: "run_not_found"`, and a catalogued model whose provider is not configured on this deployment, or a model that could only come from a self-hosted model server (Ollama, local image) that is currently unreachable, `503` with `errorCode: "provider_not_configured"` (retryable). A provider rejection of caller input that happens before the stream opens is also a JSON `400`, with `errorCode: "invalid_request"` (do not retry it unchanged). Once the stream has opened the status stays `200` and a failure arrives as one terminal in-band `error` event. Branch on that event's `code`, never on `message`, which is prose and may change: `insufficient_credits` (buy credits) when credits run out mid-generation, `invalid_request` when the provider rejects caller input (do not retry it unchanged), `provider_rejected` when the model provider refused our credentials, `content_blocked` when the model declined the request (do not retry it unchanged), `output_budget_exhausted` when a reasoning model spent your whole `max_tokens` thinking and wrote no answer (raise `max_tokens` or omit it; do not retry it unchanged), and `provider_error` for any other provider failure. Treat `code` as optional.
+     *     ERRORS. Everything checked before the model provider is called fails with a JSON error body and a real HTTP status, before any stream opens: an empty `messages` array, a conversation with no non-empty user or assistant message (system-only, or only blank content), a malformed request, or an unknown `model` `400` (`errorCode: "unknown_model"` for an unknown model), a bad credential `401`, a key without a required scope `403` (with `required_scopes`), a free-tier account calling a model outside the free-tier allowlist `403` with `errorCode: "model_requires_subscription"` (upgrade the plan or pick a free-tier model), a model the caller's organization policy does not allow `403` with `errorCode: "org_model_not_allowed"`, paused spending `403` with `errorCode: "spend_frozen"`, a body over 25 MB `413`, any other body that fails schema validation `422`, insufficient credits `422` with `errorCode: "insufficient_credits"` (personal or org balance, or an org per-member credit cap), a `run` minted with a budget that has too little left for even a short answer `422` with `errorCode: "run_budget_exhausted"` (retry once in-flight requests on the run settle, or raise the run budget; buying credits does not), a rate limit `429` with `Retry-After`, a `run` that does not exist or that another user or billing owner minted `404` with `errorCode: "run_not_found"`, and a catalogued model whose provider is not configured on this deployment, or a model that could only come from a self-hosted model server (Ollama, local image) that is currently unreachable, `503` with `errorCode: "provider_not_configured"` (retryable). A provider rejection of caller input that happens before the stream opens is also a JSON `400`, with `errorCode: "invalid_request"` (do not retry it unchanged). Once the stream has opened the status stays `200` and a failure arrives as one terminal in-band `error` event. Branch on that event's `code`, never on `message`, which is prose and may change: `insufficient_credits` (buy credits) when credits run out mid-generation, `invalid_request` when the provider rejects caller input (do not retry it unchanged), `provider_rejected` when the model provider refused our credentials, `content_blocked` when the model declined the request (do not retry it unchanged), `output_budget_exhausted` when a reasoning model spent your whole `max_tokens` thinking and wrote no answer (raise `max_tokens` or omit it; do not retry it unchanged), and `provider_error` for any other provider failure. Treat `code` as optional.
      */
     post: operations['createCompletion'];
     delete?: never;
@@ -229,6 +229,8 @@ export interface paths {
     /**
      * Create a completion run
      * @description Mints a run id that groups the spend of several `POST /api/ai/v1/completions` requests, such as a root session and the workers it spawns. Send the returned `runId` as `run.runId` on each of those requests. The run is bound to the credential that minted it: the same user and the same billing owner (the organization for an organization-billed API key, otherwise the user), and a completion naming a run minted by anyone else is refused with `404` (`errorCode: "run_not_found"`). Minting a run charges nothing, and attributing a completion to it never charges that completion twice.
+     *
+     *     With `budgetCredits`, the run also caps admission: what its completions may claim together. Before calling the model, each completion claims what its first round can cost at its full output budget (less, down to what a short answer costs, when the run has less left) and is capped to that claim, so concurrent completions can never together be admitted past the budget. The claim is priced from an estimate of the input, so a completion that costs more than it claimed is still charged its actual cost, up to what the balance can pay; the run counts that cost and refuses later claims it can no longer cover. A run can go over its budget by at most that miss for each completion in flight. A completion that runs server-side tools claims more the same way before each further round, and ends with `stopReason: "max_tokens"` when the run cannot cover one. A completion the budget cannot cover is refused with `422` (`errorCode: "run_budget_exhausted"`) before anything is charged. Claims return to the run when their completion settles, fails or is abandoned. The account balance and any organization member caps still apply on their own, and buying credits does not raise a run budget. The budget bounds charged credits, so a deployment that does not charge for completions counts nothing against it.
      */
     post: operations['createCompletionRun'];
     delete?: never;
@@ -247,10 +249,32 @@ export interface paths {
     /**
      * Get a completion run's spend
      * @description Returns what a run has cost so far: every `POST /api/ai/v1/completions` request sent with this `run.runId` whose credits have settled, summed once per request from the credit ledger, with breakdowns by role, purpose, model and task attempt. `creditsCharged` is the sum of the amounts each request's `settled` stream event reports, so a client can reconcile its own totals against it. Only settled charges count: a request still running, one whose credits never settled, and one sent without `run` are not included. Readable only with a credential of the same user and billing owner that minted the run; any other run id, including one that does not exist, gets `404` (`errorCode: "run_not_found"`).
+     *
+     *     A run minted with a budget also returns `budget`: the ceiling, what is committed against it (settled charges plus the claims of completions still running), the unsettled part of that, and what is left.
      */
     get: operations['getCompletionRunUsage'];
     put?: never;
     post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/v1/completion-runs/{runId}/budget': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /**
+     * Raise a completion run's budget
+     * @description Sets a higher `budgetCredits` on a run minted with one, so completions refused with `errorCode: "run_budget_exhausted"` can be admitted again. A budget is only ever raised: a value at or below the current budget, or a run minted without a budget, is refused with `409` (`errorCode: "run_budget_not_raised"`). Raising it charges nothing, and buying credits never raises it. Only a credential of the same user and billing owner that minted the run can raise it; any other run id, including one that does not exist, gets `404` (`errorCode: "run_not_found"`).
+     */
+    post: operations['raiseCompletionRunBudget'];
     delete?: never;
     options?: never;
     head?: never;
@@ -1417,7 +1441,7 @@ export interface paths {
     };
     /**
      * Get the config-change history
-     * @description Returns who changed how the lake answers, what each change moved, and which management rung authorized it, newest first. Long free-text settings appear as a size and a same-or-different flag, never as text. `limit` caps the window, and `truncated` is true when older events exist. The response is a window, not a cursor-paginated list.
+     * @description Returns who changed how the lake answers, what each change moved, and which management rung authorized it, newest first. Long free-text settings appear as a size and a same-or-different flag, never as text. Entries with `kind` "config" carry `lever_changes`, one structured move per lever. Entries with `kind` "file" are files added to or removed from the lake, merged in by time. `limit` caps the window across both, and `truncated` is true when older events exist. The response is a window, not a cursor-paginated list.
      */
     get: operations['getDataLakeConfigHistory'];
     put?: never;
@@ -3762,7 +3786,12 @@ export interface components {
        */
       name?: string;
       /** @enum {string} */
-      errorCode?: 'insufficient_credits' | 'spend_cap_exceeded' | 'spend_frozen' | 'free_quest_limit_reached';
+      errorCode?:
+        | 'insufficient_credits'
+        | 'spend_cap_exceeded'
+        | 'spend_frozen'
+        | 'free_quest_limit_reached'
+        | 'run_budget_exhausted';
     };
     createCompletionResponse503: {
       error: string;
@@ -4077,6 +4106,7 @@ export interface components {
      * @example {
      *       "runId": "0b6f3c2e-7d4a-4f51-9a8e-2c1d5e6f7a80",
      *       "rootSessionId": "session-42",
+     *       "budgetCredits": 5000,
      *       "createdAt": "2026-11-10T12:00:00.000Z"
      *     }
      */
@@ -4087,17 +4117,22 @@ export interface components {
        */
       runId: string;
       rootSessionId?: string;
+      /** @description The run budget; absent for a run without one. */
+      budgetCredits?: number;
       /** Format: date-time */
       createdAt: string;
     };
     /**
      * @example {
-     *       "rootSessionId": "session-42"
+     *       "rootSessionId": "session-42",
+     *       "budgetCredits": 5000
      *     }
      */
     createCompletionRunRequest: {
       /** @description Your own id for the conversation that starts the run. A conversation can start many runs; each gets its own id. */
       rootSessionId?: string;
+      /** @description Caps what its completions may claim, in credits; an estimate miss can take the run slightly over. Omit it and the run draws only on the account balance, as before. A budget can be raised later but never added to a run minted without one. */
+      budgetCredits?: number;
     };
     /**
      * @example {
@@ -4156,7 +4191,13 @@ export interface components {
      *           "cacheWriteTokens": 6400
      *         }
      *       ],
-     *       "byAttemptTruncated": false
+     *       "byAttemptTruncated": false,
+     *       "budget": {
+     *         "budgetCredits": 5000,
+     *         "committedCredits": 1012,
+     *         "reservedCredits": 600,
+     *         "remainingCredits": 3988
+     *       }
      *     }
      */
     getCompletionRunUsageResponse200: {
@@ -4235,6 +4276,16 @@ export interface components {
       }[];
       /** @description True when the run has more attempts than `byAttempt` lists; `settled` still counts all of them. */
       byAttemptTruncated: boolean;
+      /** @description Present only for a run minted with a budget. */
+      budget?: {
+        budgetCredits: number;
+        /** @description Settled charges plus the claims of completions still running: what new completions are admitted against. Can sit above `settled.creditsCharged` until those completions settle. */
+        committedCredits: number;
+        /** @description The part of `committedCredits` not yet settled: claims of completions still running, or waiting for the expired-hold sweep. */
+        reservedCredits: number;
+        /** @description `budgetCredits` minus `committedCredits`, never below zero. */
+        remainingCredits: number;
+      };
     };
     getCompletionRunUsageResponse404: {
       error: string;
@@ -4246,6 +4297,57 @@ export interface components {
       name?: string;
       /** @enum {string} */
       errorCode: 'run_not_found';
+    };
+    /**
+     * @example {
+     *       "runId": "0b6f3c2e-7d4a-4f51-9a8e-2c1d5e6f7a80",
+     *       "rootSessionId": "session-42",
+     *       "budgetCredits": 8000,
+     *       "createdAt": "2026-11-10T12:00:00.000Z"
+     *     }
+     */
+    raiseCompletionRunBudgetResponse200: {
+      /**
+       * Format: uuid
+       * @description A run id issued by `POST /api/v1/completion-runs`.
+       */
+      runId: string;
+      rootSessionId?: string;
+      /** @description The run budget; absent for a run without one. */
+      budgetCredits?: number;
+      /** Format: date-time */
+      createdAt: string;
+    };
+    raiseCompletionRunBudgetResponse404: {
+      error: string;
+      request_id?: string;
+      /**
+       * @deprecated
+       * @description Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this.
+       */
+      name?: string;
+      /** @enum {string} */
+      errorCode: 'run_not_found';
+    };
+    raiseCompletionRunBudgetResponse409: {
+      error: string;
+      request_id?: string;
+      /**
+       * @deprecated
+       * @description Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this.
+       */
+      name?: string;
+      /** @enum {string} */
+      errorCode: 'run_budget_not_raised';
+    };
+    /**
+     * @example {
+     *       "budgetCredits": 8000
+     *     }
+     */
+    raiseCompletionRunBudgetRequest: {
+      /** @description The run's new budget, in credits. Must be above the current one: a budget is only ever raised. */
+      budgetCredits: number;
     };
     /**
      * @example {
@@ -9675,66 +9777,107 @@ export interface components {
         lake_id: string;
         lake_name: string;
         /** @description Newest first. */
-        entries: {
-          event_id: string;
-          changed_at: string;
-          /** @enum {string} */
-          principal_kind: 'user' | 'agent' | 'apiKey' | 'system';
-          principal_name: string | null;
-          /** @enum {string} */
-          manage_rung:
-            'platform-admin' | 'grant-owner' | 'creator' | 'grant-curator' | 'org-admin' | 'org-grant' | 'system';
-          /** @enum {string} */
-          action:
-            | 'update'
-            | 'visibility'
-            | 'transfer-ownership'
-            | 'archive'
-            | 'unarchive'
-            | 'delete'
-            | 'restore'
-            | 'promote'
-            | 'demote'
-            | 'purge'
-            | 'auto-activate'
-            | 'grant-access'
-            | 'revoke-access'
-            | 'membership-succession'
-            | 'approve-proposal'
-            | 'auto-approve-proposal'
-            | 'decline-proposal'
-            | 'restore-proposal'
-            | 'create-research-config'
-            | 'update-research-config'
-            | 'delete-research-config'
-            | 'start-research-run'
-            | 'complete-research-run'
-            | 'create'
-            | 'upload-files';
-          changes: {
-            field: string;
-            /** @enum {string} */
-            kind: 'literal' | 'fingerprint';
-            /** @description A literal change only. Absent means unset on that side. */
-            before?: string | number | boolean | null;
-            /** @description A literal change only. Absent means unset on that side. */
-            after?: string | number | boolean | null;
-            /** @description A literal string value was clipped. */
-            truncated?: boolean;
-            /** @description A fingerprint change only. Size, never the text. */
-            before_fingerprint?: {
-              present: boolean;
-              length: number;
-            };
-            /** @description A fingerprint change only. Size, never the text. */
-            after_fingerprint?: {
-              present: boolean;
-              length: number;
-            };
-            /** @description A fingerprint change only. The two sides are the same text. */
-            text_unchanged?: boolean;
-          }[];
-        }[];
+        entries: (
+          | {
+              /** @enum {string} */
+              kind: 'config';
+              event_id: string;
+              changed_at: string;
+              /** @enum {string} */
+              principal_kind: 'user' | 'agent' | 'apiKey' | 'system';
+              principal_name: string | null;
+              /** @description The thing the row is about. Absent on older rows. */
+              target?: {
+                /** @enum {string} */
+                kind: 'researchConfig' | 'proposal' | 'file';
+                id: string;
+              };
+              /** @enum {string} */
+              manage_rung:
+                'platform-admin' | 'grant-owner' | 'creator' | 'grant-curator' | 'org-admin' | 'org-grant' | 'system';
+              /** @enum {string} */
+              action:
+                | 'update'
+                | 'visibility'
+                | 'transfer-ownership'
+                | 'archive'
+                | 'unarchive'
+                | 'delete'
+                | 'restore'
+                | 'promote'
+                | 'demote'
+                | 'purge'
+                | 'auto-activate'
+                | 'grant-access'
+                | 'revoke-access'
+                | 'membership-succession'
+                | 'approve-proposal'
+                | 'auto-approve-proposal'
+                | 'decline-proposal'
+                | 'restore-proposal'
+                | 'create-research-config'
+                | 'update-research-config'
+                | 'delete-research-config'
+                | 'start-research-run'
+                | 'complete-research-run'
+                | 'create'
+                | 'upload-files';
+              changes: {
+                field: string;
+                /** @enum {string} */
+                kind: 'literal' | 'fingerprint';
+                /** @description A literal change only. Absent means unset on that side. */
+                before?: string | number | boolean | null;
+                /** @description A literal change only. Absent means unset on that side. */
+                after?: string | number | boolean | null;
+                /** @description A literal string value was clipped. */
+                truncated?: boolean;
+                /** @description A fingerprint change only. Size, never the text. */
+                before_fingerprint?: {
+                  present: boolean;
+                  length: number;
+                };
+                /** @description A fingerprint change only. Size, never the text. */
+                after_fingerprint?: {
+                  present: boolean;
+                  length: number;
+                };
+                /** @description A fingerprint change only. The two sides are the same text. */
+                text_unchanged?: boolean;
+              }[];
+              /** @description Absent on older rows. */
+              lever_changes?: {
+                lever: string;
+                /** @description Absent or null means unset. A feed address is origin and path only. */
+                before?: unknown;
+                /** @description Null on a delete, which records the setting as it stood. */
+                after?: unknown;
+              }[];
+              /** @description The file an approval admitted. */
+              admitted_fab_file_id?: string;
+            }
+          | {
+              /** @enum {string} */
+              kind: 'file';
+              event_id: string;
+              changed_at: string;
+              /** @enum {string} */
+              principal_kind: 'user' | 'agent' | 'apiKey' | 'system';
+              principal_name: string | null;
+              /** @description The file the row is about. */
+              target: {
+                /** @enum {string} */
+                kind: 'researchConfig' | 'proposal' | 'file';
+                id: string;
+              };
+              /** @enum {string} */
+              action: 'file-added' | 'file-removed';
+              /** @enum {string} */
+              origin: 'connector' | 'person';
+              undoes_event_id?: string;
+              caused_by_event_id?: string;
+            }
+        )[];
         /** @description True when `entries` is a window rather than the whole history. */
         truncated: boolean;
         /** @description The oldest event in the window. Set only when truncated. */
@@ -16253,7 +16396,7 @@ export interface operations {
           'application/json': components['schemas']['ErrorResponse'];
         };
       };
-      /** @description The body failed schema validation, or the caller cannot afford the request (`errorCode: "insufficient_credits"`: personal or org balance, or an org per-member credit cap). */
+      /** @description The body failed schema validation, or the caller cannot afford the request (`errorCode: "insufficient_credits"`: personal or org balance, or an org per-member credit cap), or the `run` budget has too little left (`errorCode: "run_budget_exhausted"`). */
       422: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
@@ -16545,6 +16688,197 @@ export interface operations {
         };
         content: {
           'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Request failed validation. */
+      422: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The request declared a client build (`X-Client-Name` + `X-Client-Version`) older than the minimum this API still serves for that client. Upgrade to `minimum_version` or later. Never sent to a request that omits either header. */
+      426: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['UpgradeRequiredResponse'];
+        };
+      };
+      /** @description Per-user rate limit exceeded. */
+      429: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+    };
+  };
+  raiseCompletionRunBudget: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        /** @description A run id issued by `POST /api/v1/completion-runs`. */
+        runId: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['raiseCompletionRunBudgetRequest'];
+      };
+    };
+    responses: {
+      /** @description The run with its raised budget. */
+      200: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['raiseCompletionRunBudgetResponse200'];
+        };
+      };
+      /** @description Missing or invalid credentials. */
+      401: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The API key does not hold any of the required scopes, or the account is suspended (`errorCode: account_suspended`). */
+      403: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ScopeForbiddenResponse'];
+        };
+      };
+      /** @description The run does not exist, or another user or billing owner minted it (`errorCode: "run_not_found"`). */
+      404: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['raiseCompletionRunBudgetResponse404'];
+        };
+      };
+      /** @description The path does not serve this HTTP method. */
+      405: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description The methods this path serves. GET implies HEAD. */
+          Allow?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The new budget is not above the current one, or the run was minted without a budget (`errorCode: "run_budget_not_raised"`). */
+      409: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['raiseCompletionRunBudgetResponse409'];
         };
       };
       /** @description Request failed validation. */
@@ -28502,8 +28836,10 @@ export interface operations {
   getDataLakeConfigHistory: {
     parameters: {
       query?: {
-        /** @description How many of the newest events to return. Defaults to 200. */
+        /** @description How many of the newest config changes to return. Defaults to 200. With include=files, up to the same number of the newest file rows are returned on top; when config rows are truncated, only file rows no older than the oldest config row returned. */
         limit?: number;
+        /** @description Set to files to also return file add and remove rows. Without it only config changes are returned. */
+        include?: 'files';
       };
       header?: never;
       path: {

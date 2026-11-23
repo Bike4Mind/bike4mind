@@ -16,6 +16,7 @@ import {
   FILE_URL_TTL_SECONDS,
 } from '@bike4mind/utils';
 import { z } from 'zod';
+import { storageReadOverrides, type StorageReadOverrides } from '@bike4mind/utils/contentDisposition';
 
 // Re-exported for the services that stamp `fileUrlExpireAt` on a response.
 export { signedUrlExpiresAt };
@@ -51,6 +52,9 @@ const checkIfGlobalSystemPrompt = async (
   }
 };
 
+/** Raw-link signing options; the overrides keep a non-media upload from rendering on the storage origin. */
+export type FabFileSignOptions = { signingDate?: Date } & StorageReadOverrides;
+
 export interface GetFabFileAdapter {
   db: {
     fabFiles: IFabFileRepository;
@@ -58,11 +62,7 @@ export interface GetFabFileAdapter {
     adminSettings: IAdminSettingsRepository;
   };
   storage: {
-    generateSignedUrl: (
-      path: string,
-      expireInSeconds: number,
-      options?: { signingDate?: Date }
-    ) => Promise<string | null>;
+    generateSignedUrl: (path: string, expireInSeconds: number, options?: FabFileSignOptions) => Promise<string | null>;
     /**
      * Browser-facing callers only: a stable app URL that redirects to a fresh S3 link, so every
      * instance hands out the same URL within a signing window. Server consumers that download
@@ -145,6 +145,7 @@ export const generateSignedUrl = async (
 
   const fileUrl = await storage.generateSignedUrl(fabFile.filePath, FILE_URL_TTL_SECONDS, {
     signingDate: fileUrlSigningDate(),
+    ...storageReadOverrides({ mimeType: fabFile.mimeType, fileName: fabFile.fileName, key: fabFile.filePath }),
   });
   if (!fileUrl) return fabFile;
 
