@@ -559,26 +559,32 @@ export async function generateSafeEmbedding(
   const modelInfo = { contextWindow: embeddingService.maxInputTokens };
   const maxTokens = Math.min(modelInfo.contextWindow - 100, EMBEDDING_TOKEN_LIMITS.MAX_EMBEDDING_TOKENS);
 
-  const tokenCount = await countTokens(text);
+  // The character window is only a first cut sized for typical prose; splitToTokenBudget then
+  // re-counts each window and halves any that dense content pushed over the model's limit.
+  const maxChunkLength = Math.floor(maxTokens * CHARS_PER_TOKEN);
+
+  // Text over two windows would need more than 7 chars per token to fit one call, so skip counting
+  // it whole: BPE is quadratic within an unbroken run, and only bounded windows get encoded then.
+  const tokenCount = text.length > maxChunkLength * 2 ? undefined : await countTokens(text);
+  const needsChunking = tokenCount === undefined || tokenCount > maxTokens;
 
   logger.info('Safe embedding generation', {
     textLength: text.length,
     tokenCount,
     maxTokens,
-    needsChunking: tokenCount > maxTokens,
+    needsChunking,
   });
 
-  if (tokenCount <= maxTokens) {
+  if (!needsChunking) {
     logger.info(`Using embedder ${embeddingService.model} `);
     return await embedOne(embeddingService, text);
   }
 
   // Text is too large - chunk it and average the embeddings
-  logger.warn(`Text exceeds embedding token limit (${tokenCount} > ${maxTokens}), chunking...`);
+  logger.warn(
+    `Text exceeds embedding token limit (${tokenCount ?? `${text.length} chars`} > ${maxTokens}), chunking...`
+  );
 
-  // The character window is only a first cut sized for typical prose; splitToTokenBudget then
-  // re-counts each window and halves any that dense content pushed over the model's limit.
-  const maxChunkLength = Math.floor(maxTokens * CHARS_PER_TOKEN);
   const chunks: string[] = [];
 
   // Create overlapping chunks

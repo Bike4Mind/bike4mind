@@ -70,6 +70,22 @@ describe('generateSafeEmbedding', () => {
     expect(embedded.join('')).toBe(text);
   });
 
+  it('never counts a text longer than two windows in one piece', async () => {
+    const counted: number[] = [];
+    const recordingCounter = async (text: string) => {
+      counted.push(text.length);
+      return Math.ceil(text.length / 4);
+    };
+    const { model, embedded } = strictModel(recordingCounter);
+    // Two 28k-char windows plus some: every count must be of a bounded window, never the whole text.
+    const text = 'word '.repeat(12_000);
+
+    await generateSafeEmbedding(model, text, logger, recordingCounter);
+
+    expect(Math.max(...counted)).toBeLessThanOrEqual(28_000);
+    expect(embedded.length).toBeGreaterThan(1);
+  });
+
   it('embeds text within the limit in one call', async () => {
     const { model, embedded } = strictModel(async text => text.length);
 
