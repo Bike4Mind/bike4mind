@@ -59,7 +59,8 @@ maintainer attestation is essential. No run is dispatched automatically.
 The deterministic candidate is limited to an unchanged main tip with one parent
 and fewer than 300 modified application/core/package JS/TS source files. Added,
 removed, renamed, test, fixture, migration, auth/security and non-source changes
-are refused. The original commit file list is bounded; hitting its cap blocks.
+are refused. Paginated commit file responses are refused rather than assuming
+the first page is the entire change; hitting the file cap also blocks.
 The API creates a child commit whose tree equals the direct parent's tree, then
 opens a **draft** PR. No candidate code is checked out or executed. Existing
 candidate branches are validated; existing PRs, including closed ones, are not
@@ -69,8 +70,8 @@ Prerequisites for writes are Actions/issues permission and, only for confirmed
 draft creation, the existing `RELEASE_APP_ID` / `RELEASE_APP_PRIVATE_KEY` App
 with contents and pull-request write access. This uses the audit autofix App
 pattern so the resulting PR can receive normal CI. There is no fallback token.
-App-token setup errors leave a failed triage run; initial automatic failure
-tracking remains open. Draft API errors append an explicit blocker to tracking.
+App-token setup errors still allow tracking to record the missing-token blocker.
+Draft API errors append an explicit blocker to tracking.
 Draft creation does not run verification, mark ready, merge, or close the issue.
 Current draft CI can skip expensive jobs: a human must mark ready and obtain
 full required checks and full E2E evidence before deciding to merge.
@@ -107,3 +108,9 @@ with reviewed historical CI evidence. Confirm App grants before an authorized
 real draft request. Do not intentionally dispatch a failing full suite or create
 a live revert just to test this automation. Until this is done, rollout remains
 pending operational validation; missing causality is a blocker, never green.
+
+GitHub concurrency serializes writes but retains only one pending run per group:
+bursts can replace an older pending triage invocation. Original CI/E2E runs remain
+red and retain their evidence. Operators must reconcile any missed failures from
+the Actions history (a default dry-run dispatch can inspect a historical run).
+This observer is not a guaranteed-delivery incident queue.

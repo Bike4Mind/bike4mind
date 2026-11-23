@@ -169,6 +169,13 @@ describe('mocked API orchestration', () => {
     expect(h.github.rest.issues.createComment).toHaveBeenCalledWith(expect.objectContaining({ body: expect.stringContaining('Blocked:') }));
     expect(h.github.rest.pulls.create).not.toHaveBeenCalled();
   });
+  it('refuses a paginated commit file list even if the first page looks safe', async () => {
+    const h = harness({ inputs: confirmedInputs, app: true });
+    const response = await h.github.rest.repos.getCommit();
+    h.github.rest.repos.getCommit.mockResolvedValue({ ...response, headers: { link: '<next-page>; rel="next"' } });
+    await expect(h.execute()).rejects.toThrow('blocked');
+    expect(h.github.rest.pulls.create).not.toHaveBeenCalled();
+  });
   it('records a rejected confirmation even when the original run already has a receipt', async () => {
     const h = harness({ inputs: confirmedInputs, main: parent,
       issues: [{ number: 42, body: `${marker(fingerprint(run(), job()))}\n<!-- post-merge-run:100:1 -->` }] });

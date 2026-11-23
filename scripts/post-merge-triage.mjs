@@ -105,7 +105,9 @@ export async function triage({ github, remediation, context, core, inputs = {} }
     if (run.path !== '.github/workflows/ci.yml' || run.conclusion !== 'failure') throw new Error('Only failed full CI can be reverted');
     const reproduction = await getRun(inputs.reproduction_run_id);
     const baseline = await getRun(inputs.parent_run_id);
-    const commit = (await github.rest.repos.getCommit({ ...params, ref: run.head_sha })).data;
+    const commitResponse = await github.rest.repos.getCommit({ ...params, ref: run.head_sha, per_page: 100 });
+    if (commitResponse.headers?.link) throw new Error('Commit file response is paginated; prepare a manual fix');
+    const commit = commitResponse.data;
     parent = commit.parents?.[0]?.sha;
     const main = (await github.rest.repos.getBranch({ ...params, branch: 'main' })).data.commit.sha;
     if (commit.parents?.length !== 1 || main !== run.head_sha || reproduction.head_sha !== run.head_sha ||

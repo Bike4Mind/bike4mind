@@ -55,6 +55,7 @@ jobs:
       - name: Generate draft remediation token
         if: github.event_name == 'workflow_dispatch' && inputs.confirmed_last_change && !inputs.dry_run
         id: app
+        continue-on-error: true
         uses: actions/create-github-app-token@v3
         with:
           client-id: ${{ vars.RELEASE_APP_ID }}
