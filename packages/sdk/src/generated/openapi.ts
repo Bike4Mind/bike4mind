@@ -486,6 +486,30 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  '/api/v1/briefs/schedule': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * Get your brief schedule
+     * @description Reads when scheduled briefs are composed for you and when the next one is due. Authenticate with a JWT access token of the signed-in user. The schedule is the caller's own; scheduled briefs are composed only when there was activity since the last one.
+     */
+    get: operations['getBriefSchedule'];
+    /**
+     * Set your brief schedule
+     * @description Replaces your brief schedule and returns it with the next due time. `timeOfDay` and `days` are read in `timeZone`, so a time skipped by a daylight-saving change runs at the shifted time and a repeated one runs once. Authenticate with a JWT access token of the signed-in user. The schedule is the caller's own; scheduled briefs are composed only when there was activity since the last one.
+     */
+    put: operations['putBriefSchedule'];
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   '/api/v1/assistant/instructions': {
     parameters: {
       query?: never;
@@ -5964,6 +5988,60 @@ export interface components {
           body: string;
         };
       }[];
+    };
+    getBriefScheduleResponse200: {
+      /** @description Null until a schedule has been saved. */
+      schedule: {
+        /** @description Whether scheduled briefs are composed. Disabling keeps the rest of the schedule. */
+        enabled: boolean;
+        /** @description Local wall-clock time in `timeZone`, 24-hour `HH:mm`. */
+        timeOfDay: string;
+        /** @description Local weekdays the brief is composed on, 0 = Sunday through 6 = Saturday. */
+        days: number[];
+        /** @description IANA time zone name, e.g. `America/New_York`. Send the device zone on every save. */
+        timeZone: string;
+      } | null;
+      /** @description ISO 8601 instant of the next scheduled brief; null when the schedule is off or unset. */
+      nextBriefAt: string | null;
+    };
+    putBriefScheduleResponse200: {
+      /** @description Null until a schedule has been saved. */
+      schedule: {
+        /** @description Whether scheduled briefs are composed. Disabling keeps the rest of the schedule. */
+        enabled: boolean;
+        /** @description Local wall-clock time in `timeZone`, 24-hour `HH:mm`. */
+        timeOfDay: string;
+        /** @description Local weekdays the brief is composed on, 0 = Sunday through 6 = Saturday. */
+        days: number[];
+        /** @description IANA time zone name, e.g. `America/New_York`. Send the device zone on every save. */
+        timeZone: string;
+      } | null;
+      /** @description ISO 8601 instant of the next scheduled brief; null when the schedule is off or unset. */
+      nextBriefAt: string | null;
+    };
+    /**
+     * @example {
+     *       "enabled": true,
+     *       "timeOfDay": "08:00",
+     *       "days": [
+     *         1,
+     *         2,
+     *         3,
+     *         4,
+     *         5
+     *       ],
+     *       "timeZone": "America/New_York"
+     *     }
+     */
+    putBriefScheduleRequest: {
+      /** @description Whether scheduled briefs are composed. Disabling keeps the rest of the schedule. */
+      enabled: boolean;
+      /** @description Local wall-clock time in `timeZone`, 24-hour `HH:mm`. */
+      timeOfDay: string;
+      /** @description Local weekdays the brief is composed on, 0 = Sunday through 6 = Saturday. */
+      days: number[];
+      /** @description IANA time zone name, e.g. `America/New_York`. Send the device zone on every save. */
+      timeZone: string;
     };
     listAssistantInstructionsResponse200: {
       /** @description Oldest first. */
@@ -18812,6 +18890,190 @@ export interface operations {
         };
         content: {
           'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The path does not serve this HTTP method. */
+      405: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description The methods this path serves. GET implies HEAD. */
+          Allow?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Request failed validation. */
+      422: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The request declared a client build (`X-Client-Name` + `X-Client-Version`) older than the minimum this API still serves for that client. Upgrade to `minimum_version` or later. Never sent to a request that omits either header. */
+      426: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['UpgradeRequiredResponse'];
+        };
+      };
+      /** @description Per-user rate limit exceeded. */
+      429: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+    };
+  };
+  getBriefSchedule: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Your brief schedule. */
+      200: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['getBriefScheduleResponse200'];
+        };
+      };
+      /** @description Missing or invalid JWT. */
+      401: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The account is suspended (`errorCode: account_suspended`). */
+      403: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ScopeForbiddenResponse'];
+        };
+      };
+      /** @description The path does not serve this HTTP method. */
+      405: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description The methods this path serves. GET implies HEAD. */
+          Allow?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The request declared a client build (`X-Client-Name` + `X-Client-Version`) older than the minimum this API still serves for that client. Upgrade to `minimum_version` or later. Never sent to a request that omits either header. */
+      426: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['UpgradeRequiredResponse'];
+        };
+      };
+      /** @description Per-user rate limit exceeded. */
+      429: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+    };
+  };
+  putBriefSchedule: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['putBriefScheduleRequest'];
+      };
+    };
+    responses: {
+      /** @description The saved schedule. */
+      200: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['putBriefScheduleResponse200'];
+        };
+      };
+      /** @description Malformed JSON request body. */
+      400: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Missing or invalid JWT. */
+      401: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The account is suspended (`errorCode: account_suspended`). */
+      403: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ScopeForbiddenResponse'];
         };
       };
       /** @description The path does not serve this HTTP method. */
