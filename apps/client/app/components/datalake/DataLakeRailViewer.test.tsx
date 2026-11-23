@@ -13,6 +13,9 @@ vi.mock('@client/app/components/Knowledge/KnowledgeViewer', () => ({
   },
 }));
 
+const mockIsMobile = vi.hoisted(() => ({ value: false }));
+vi.mock('@client/app/hooks/useIsMobile', () => ({ useIsMobile: () => mockIsMobile.value }));
+
 import DataLakeRailViewer from './DataLakeRailViewer';
 
 const appTheme = extendTheme({ ...getThemeConfig() });
@@ -31,5 +34,30 @@ describe('DataLakeRailViewer', () => {
     // write collapses the host's docked chat to 0x0 with nothing on-surface to restore it.
     expect(captured[0].autoHideOnEmpty).toBe(false);
     expect(captured[0].showLayoutControls).toBe(false);
+  });
+
+  it('stays an inline rail above the phone breakpoint', () => {
+    mockIsMobile.value = false;
+    render(
+      <CssVarsProvider theme={appTheme}>
+        <DataLakeRailViewer />
+      </CssVarsProvider>
+    );
+    const el = screen.getByTestId('datalake-rail-viewer');
+    expect(el).toHaveAttribute('data-presentation', 'rail');
+    expect(getComputedStyle(el).position).not.toBe('fixed');
+  });
+
+  it('covers the viewport at phone width instead of sitting beside chat', () => {
+    mockIsMobile.value = true;
+    render(
+      <CssVarsProvider theme={appTheme}>
+        <DataLakeRailViewer />
+      </CssVarsProvider>
+    );
+    const el = screen.getByTestId('datalake-rail-viewer');
+    expect(el).toHaveAttribute('data-presentation', 'fullscreen');
+    expect(getComputedStyle(el).position).toBe('fixed');
+    mockIsMobile.value = false;
   });
 });

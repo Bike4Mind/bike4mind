@@ -1,5 +1,6 @@
 import { Box } from '@mui/joy';
 import KnowledgeViewer from '@client/app/components/Knowledge/KnowledgeViewer';
+import { useIsMobile } from '@client/app/hooks/useIsMobile';
 
 /**
  * The KnowledgeViewer for hosts whose chat is docked OUTSIDE the explorer (the premium overlay).
@@ -19,10 +20,20 @@ import KnowledgeViewer from '@client/app/components/Knowledge/KnowledgeViewer';
  *   stays - DataLakeExplorer's layout subscription turns its `hide` write into close-and-restore.
  */
 export default function DataLakeRailViewer() {
+  const isMobile = useIsMobile();
   return (
     <Box
       data-testid="datalake-rail-viewer"
+      data-presentation={isMobile ? 'fullscreen' : 'rail'}
       sx={{
+        // At phone width a side rail leaves the docked chat a sliver with its Send button off
+        // screen, so the viewer covers the viewport instead; Close returns to the page.
+        ...(isMobile && {
+          position: 'fixed',
+          inset: 0,
+          zIndex: theme => theme.zIndex.modal,
+          backgroundColor: 'background.body',
+        }),
         flex: 1,
         minWidth: 0,
         minHeight: 0,
