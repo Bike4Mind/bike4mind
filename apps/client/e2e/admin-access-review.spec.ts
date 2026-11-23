@@ -1,7 +1,7 @@
 import type { APIRequestContext } from '@playwright/test';
 import { test, expect } from './fixtures';
 import { apiCreateTestUser, apiGetMfaCode } from './helpers/api';
-import { getE2ETestId, getTestRunId, getTestUsers } from './helpers/test-users';
+import { getE2ETestId, getTestRunId, getTestUsers, type TestUser } from './helpers/test-users';
 import { AdminPage } from './pages/AdminPage';
 
 /**
@@ -47,12 +47,14 @@ async function createUser(
 test.describe('Admin access review', () => {
   test.describe.configure({ mode: 'serial' });
 
-  const adminA = getTestUsers().admin;
+  // Resolved in beforeAll: core.setup.ts has not written the core data yet when the file loads.
+  let adminA: TestUser;
   let adminB: string;
   let delegateC: string;
   let role: { id: string; name: string };
 
   test.beforeAll(async ({ request }) => {
+    adminA = getTestUsers().admin;
     adminB = await createUser(request, 'access-review-b', true, { mfa: 'unenrolled' });
     delegateC = await createUser(request, 'access-review-c', false);
     await stepUp(request, adminA);
