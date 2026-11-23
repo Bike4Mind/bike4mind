@@ -50,5 +50,8 @@ export const CALLABLE_FUNCTION_LAMBDA_TIMEOUT_SECONDS = Math.ceil(
  */
 export const CALLABLE_FUNCTION_LAMBDA_MEMORY_MB = CALLABLE_FUNCTION_LIMITS.memoryMb + 512;
 
-/** The runtime Lambda's /tmp, in MB: Lambda's maximum, the ceiling on a function's data files cached there. */
+/** The runtime Lambda's /tmp, in MB: Lambda's maximum. */
 export const CALLABLE_FUNCTION_LAMBDA_EPHEMERAL_STORAGE_MB = 10_240;
+
+/** Bounds the runtime's share of the account's concurrency pool, and so its worst-case spend. */
+export const CALLABLE_FUNCTION_LAMBDA_RESERVED_CONCURRENCY = 50;
