@@ -166,44 +166,55 @@ describe('related discovery', () => {
       else process.env.CLIENT_TEST_LANE = previous;
     }
   });
+  it('runs the selected client tests from the client package directory', async () => {
+    const file = 'apps/client/app/constants/apiKeyScopeEndpoints.generated.test.ts';
+    const spec = { moduleId: resolve(root, file), project: { name: 'node' } };
+    const before = process.cwd();
+    let runCwd;
+    const create = vi.fn(async () => ({
+      config: {}, close: vi.fn(), standalone: async () => {},
+      globTestSpecifications: async () => [spec],
+      getRelevantTestSpecifications: async () => [spec],
+      runTestSpecifications: async () => { runCwd = process.cwd(); return { testModules: [], unhandledErrors: [] }; },
+    }));
+    const previous = process.env.CLIENT_TEST_LANE;
+    try {
+      expect(await runRelated({ plan: { mode: 'related', files: [file] }, script: 'test:integration', root, create, run: vi.fn() })).toBe(0);
+      expect(runCwd).toBe(resolve(root, 'apps/client'));
+      expect(process.cwd()).toBe(before);
+    } finally {
+      if (previous === undefined) delete process.env.CLIENT_TEST_LANE;
+      else process.env.CLIENT_TEST_LANE = previous;
+    }
+  });
 });
 
 describe('related CI workflow guard', () => {
   const ci = readFileSync(resolve(root, '.github/workflows/ci.yml'), 'utf8');
-  it('re-evaluates ci:full labels and passes diff inputs as environment data', () => {
-    expect(ci).toMatch(/types: \[.*labeled, unlabeled\]/);
+  it('reads ci:full from PR labels and passes diff inputs as environment data', () => {
     expect(ci).toContain("contains(github.event.pull_request.labels.*.name, 'ci:full')");
     expect(ci).toContain('run: node scripts/ci-related-tests.mjs diff');
     expect(ci).toContain('RELATED_SAFE: ${{ needs.changes.outputs.related-safe }}');
-    expect(ci).toContain("if: github.event.action != 'labeled' && github.event.action != 'unlabeled' || github.event.label.name == 'ci:full'");
-    expect(ci).toContain("github.event.label.name != 'ci:full' && github.run_id || 'tests'");
   });
-  // Ignored label runs must not replace a real validation's required results,
-  // including skipped matrix jobs and the reusable docs workflow caller.
+  // A label-event run on the same head SHA becomes the latest CI run, and GitHub
+  // reads the required Run Tests / CI Complete checks from it alone, so any label
+  // run that skips or renames them leaves an approved PR blocked on "Expected".
+  it('does not run on label events', () => {
+    const types = ci.match(/^  pull_request:\n\s+types: \[(.*)\]$/m)?.[1];
+    expect(types).toBeDefined();
+    const events = types.split(',').map(t => t.trim());
+    expect(events).toContain('synchronize');
+    expect(events).not.toContain('labeled');
+    expect(events).not.toContain('unlabeled');
+    expect(ci).not.toContain('github.event.label.name');
+  });
   it.each([
-    ["changes", "changes"],
-    ["core-build", "Core Build"],
-    ["repo-guards", "Repo Guards"],
-    ["secret-scan", "Secret Scan"],
-    ["leak-shapes", "Leak Shapes"],
-    ["lint", "Lint"],
-    ["openapi", "OpenAPI Spec"],
-    ["test-shards", "Run Tests (${{ matrix.shard.name }})"],
-    ["test", "Run Tests"],
-    ["cli-e2e", "CLI e2e harness"],
-    ["help-docs", "Help Docs Guards"],
-    ["published-dts", "Published Declarations"],
-    ["verify-docs-build", "Verify Docs Build"],
-    ["docs-scan-gate", "Docs Sensitive Scan"],
-    ["ci-complete", "CI Complete"],
-  ])('keeps ignored label events out of the canonical %s check', (id, canonicalName) => {
+    ['test', 'Run Tests'],
+    ['ci-complete', 'CI Complete'],
+  ])('reports the required %s job under its canonical name', (id, canonicalName) => {
     const block = ci.match(new RegExp(`^  ${id}:\\n([\\s\\S]*?)(?=^  [a-z][a-z0-9-]*:|$(?![\\s\\S]))`, 'm'))?.[1];
     expect(block, `missing CI job ${id}`).toBeDefined();
-    const name = block.match(/^ {4}name: (.+)$/m)?.[1];
-    // Bind to the event itself, not a dependency result: real validation failures
-    // and unexpected skips must continue reporting their canonical check names.
-    const ignoredLabelPrefix = "${{ (github.event.action == 'labeled' || github.event.action == 'unlabeled') && github.event.label.name != 'ci:full' && 'Ignored label / ' || '' }}";
-    expect(name).toBe(`${ignoredLabelPrefix}${canonicalName}`);
+    expect(block.match(/^ {4}name: (.+)$/m)?.[1]).toBe(canonicalName);
   });
   it('bypasses turbo only for the client in both lanes before creating any full cache context', () => {
     const blocks = ci.split('          if [ "$SELECTED_FILTER" = \'--filter @bike4mind/client\' ]');
