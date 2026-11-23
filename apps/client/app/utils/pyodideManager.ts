@@ -19,7 +19,12 @@
  * 5. Execution interruption by dropping the sandbox
  */
 
-import type { PyodideWorkerMessage, PyodideWorkerResponse, ExecutionResult } from '@client/app/workers/pyodide/types';
+import {
+  SANDBOX_RUNNING_MESSAGE,
+  type PyodideWorkerMessage,
+  type PyodideWorkerResponse,
+  type ExecutionResult,
+} from '@client/app/workers/pyodide/types';
 import {
   FUNCTION_CONTRACT_LIMITS,
   capFunctionProblems,
@@ -34,6 +39,15 @@ import {
 
 /** The sandbox route. Framed with `allow-scripts` ONLY - never `allow-same-origin`. */
 export const PYODIDE_SANDBOX_SRC = '/api/pyodide-sandbox';
+
+/**
+ * `data` reaches the admin-listed data origins and is where scripts execute; `none` reaches only the Pyodide
+ * distribution and is where functions are read and called. One frame at a time: switching reloads Pyodide.
+ */
+export type PyodideSandboxNetwork = 'data' | 'none';
+
+export const pyodideSandboxSrc = (network: PyodideSandboxNetwork): string =>
+  network === 'none' ? `${PYODIDE_SANDBOX_SRC}?network=none` : PYODIDE_SANDBOX_SRC;
 
 /**
  * How long to wait for the sandbox handshake before giving up.
@@ -73,6 +87,31 @@ export type { ExecutionResult } from '@client/app/workers/pyodide/types';
 
 /** Default execution timeout in milliseconds (30 seconds) */
 const EXECUTION_TIMEOUT_MS = 30000;
+/** Reading FUNCTION runs the module's top level, which should only define things (ms). */
+export const FUNCTION_READ_TIMEOUT_MS = 10000;
+
+/** Timed from the worker's Running status, so package loading is not counted. */
+export const runTimeLimitMessage = (timeoutMs: number): string =>
+  `Stopped at the time limit of ${Math.round(timeoutMs / 1000)} s.`;
+
+/**
+ * JSON for `run`'s keyword arguments. A whole number of 1e21 or more is written out in digits, since
+ * JSON.stringify writes `1e+21`, which Python reads as a float.
+ */
+export function toPythonJson(value: unknown): string {
+  if (typeof value === 'number' && Number.isInteger(value) && Math.abs(value) >= 1e21) {
+    // The shortest form, `2.5e+22`, spelled out: the number as written, not the binary value's every digit.
+    const [mantissa, exponent] = String(value).split('e');
+    const [whole, fraction = ''] = mantissa.split('.');
+    return `${whole}${fraction}${'0'.repeat(Number(exponent) - fraction.length)}`;
+  }
+  if (Array.isArray(value)) return `[${value.map(item => toPythonJson(item ?? null)).join(',')}]`;
+  if (value !== null && typeof value === 'object') {
+    const entries = Object.entries(value).filter(([, item]) => item !== undefined);
+    return `{${entries.map(([key, item]) => `${JSON.stringify(key)}:${toPythonJson(item)}`).join(',')}}`;
+  }
+  return JSON.stringify(value) ?? 'null';
+}
 
 /** A function call read back from the sandbox. `contract` and `value` are parsed but not yet validated. */
 export interface PythonFunctionCall {
@@ -203,6 +242,12 @@ class PyodideManager {
   private executeRejecter: ((error: Error) => void) | null = null;
   private callResolver: ((result: PythonFunctionCall) => void) | null = null;
   private callRejecter: ((error: Error) => void) | null = null;
+  private callNonce: string | null = null;
+  private network: PyodideSandboxNetwork = 'data';
+  // The pending run's time limit, armed once when the worker reports Running and never re-armed, so guest code that
+  // posts the same status cannot extend it.
+  private runLimitMs: number | null = null;
+  private runTimer: ReturnType<typeof setTimeout> | null = null;
   private initResolver: (() => void) | null = null;
   private initRejecter: ((error: Error) => void) | null = null;
   private initIdleTimer: ReturnType<typeof setTimeout> | null = null;
@@ -229,7 +274,7 @@ class PyodideManager {
       }
 
       const frame = document.createElement('iframe');
-      frame.src = PYODIDE_SANDBOX_SRC;
+      frame.src = pyodideSandboxSrc(this.network);
       frame.setAttribute('sandbox', PYODIDE_SANDBOX_TOKENS);
       frame.setAttribute('aria-hidden', 'true');
       frame.setAttribute('title', 'Python execution sandbox');
@@ -359,6 +404,10 @@ class PyodideManager {
         break;
 
       case 'executing':
+        if (msg.message === SANDBOX_RUNNING_MESSAGE && this.runLimitMs !== null && !this.runTimer) {
+          const limit = this.runLimitMs;
+          this.runTimer = setTimeout(() => this.interrupt(runTimeLimitMessage(limit)), limit);
+        }
         this.updateState({ isExecuting: true, executionStatus: msg.message, streamingOutput: '' });
         break;
 
@@ -371,6 +420,7 @@ class PyodideManager {
       case 'result':
         this.updateState({ isExecuting: false, executionStatus: null });
         if (this.executeResolver) {
+          this.clearRunLimit();
           const { result } = msg;
           this.executeResolver(result.error ? { ...result, error: describePythonImportError(result.error) } : result);
           this.executeResolver = null;
@@ -379,17 +429,20 @@ class PyodideManager {
         break;
 
       case 'call-result':
-        // Guest code can post this during an execute; only a pending call may end the running state.
-        if (this.callResolver) {
+        // Guest code can post this during an execute or a call; only the pending call's own nonce ends it.
+        if (this.callResolver && this.callNonce !== null && msg.nonce === this.callNonce) {
+          this.clearRunLimit();
           this.updateState({ isExecuting: false, executionStatus: null });
           this.callResolver(readFunctionCallResult(msg.result));
           this.callResolver = null;
           this.callRejecter = null;
+          this.callNonce = null;
         }
         break;
 
       case 'error':
         this.clearInitWatchdog();
+        this.clearRunLimit();
         this.updateState({
           isLoading: false,
           isExecuting: false,
@@ -412,9 +465,40 @@ class PyodideManager {
           this.callRejecter(new Error(msg.error));
           this.callResolver = null;
           this.callRejecter = null;
+          this.callNonce = null;
         }
         break;
     }
+  }
+
+  private clearRunLimit(): void {
+    if (this.runTimer) clearTimeout(this.runTimer);
+    this.runTimer = null;
+    this.runLimitMs = null;
+  }
+
+  /**
+   * Load Pyodide in a frame with `network` reach, replacing a frame with the other reach. Refuses while a run is
+   * pending, since replacing the frame would end it.
+   */
+  private async prepareSandbox(network: PyodideSandboxNetwork): Promise<void> {
+    this.refuseIfBusy();
+    if (this.network !== network) {
+      this.network = network;
+      if (this.frame || this.initPromise) this.dropSandbox();
+    }
+    if (this.state.isReady && this.frame) return;
+    await this.initialize();
+    // An interrupt landed after the load settled; its replacement frame is not ready yet.
+    if (!this.frame || !this.state.isReady) throw new Error('Execution interrupted');
+    // Another caller switched the frame while this one waited for it to load.
+    if (this.network !== network) throw new Error(PYTHON_SCRIPT_BUSY);
+  }
+
+  // Called again after every await: a second caller would replace the first one's resolver and leave its promise
+  // unsettled forever.
+  private refuseIfBusy(): void {
+    if (this.executeResolver || this.callResolver) throw new Error(PYTHON_SCRIPT_BUSY);
   }
 
   /**
@@ -476,20 +560,13 @@ class PyodideManager {
    * @param timeoutMs - Execution timeout in milliseconds (default: 30s)
    */
   async execute(code: string, packages: string[] = [], timeoutMs = EXECUTION_TIMEOUT_MS): Promise<ExecutionResult> {
-    await this.initialize();
-
-    if (!this.frame) {
-      throw new Error('Python sandbox not available');
-    }
-    // One sandbox, one run: a second caller would replace the first one's resolver and leave
-    // its promise unsettled forever.
-    if (this.executeResolver || this.callResolver) {
-      throw new Error(PYTHON_SCRIPT_BUSY);
-    }
+    await this.prepareSandbox('data');
+    this.refuseIfBusy();
 
     return new Promise<ExecutionResult>((resolve, reject) => {
       this.executeResolver = resolve;
       this.executeRejecter = reject;
+      this.runLimitMs = timeoutMs;
 
       // Cleared here, not only on the worker's first message, so a run never shows the
       // previous run's output.
@@ -500,47 +577,37 @@ class PyodideManager {
   }
 
   /**
-   * Read the code's FUNCTION contract and, unless `params` is null, call `run(**params)`. Shares execute()'s
-   * single-run guard and is stopped the same way, by interrupt().
+   * Read the code's FUNCTION contract and, unless `params` is null, call `run(**params)`, in the network-free
+   * frame. Shares execute()'s single-run guard and is stopped the same way, by interrupt(). Reading the contract
+   * alone is held to `FUNCTION_READ_TIMEOUT_MS` unless a limit is given.
    */
   async callFunction(
     code: string,
     packages: string[] = [],
     params: Record<string, unknown> | null = null,
-    timeoutMs = EXECUTION_TIMEOUT_MS
+    timeoutMs = params === null ? FUNCTION_READ_TIMEOUT_MS : EXECUTION_TIMEOUT_MS
   ): Promise<PythonFunctionCall> {
-    await this.initialize();
+    await this.prepareSandbox('none');
+    this.refuseIfBusy();
 
-    if (!this.frame) {
-      throw new Error('Python sandbox not available');
-    }
-    if (this.executeResolver || this.callResolver) {
-      throw new Error(PYTHON_SCRIPT_BUSY);
-    }
-
-    const paramsJson = params === null ? null : JSON.stringify(params);
+    const paramsJson = params === null ? null : toPythonJson(params);
+    const nonce = globalThis.crypto.randomUUID();
     return new Promise<PythonFunctionCall>((resolve, reject) => {
       this.callResolver = resolve;
       this.callRejecter = reject;
+      this.callNonce = nonce;
+      this.runLimitMs = timeoutMs;
       this.updateState({ isExecuting: true, streamingOutput: '' });
-      this.postToSandbox({ type: 'call', code, packages, paramsJson, timeoutMs });
+      this.postToSandbox({ type: 'call', code, packages, paramsJson, timeoutMs, nonce });
     });
   }
 
   /**
-   * Interrupt the current execution by tearing down the sandbox.
-   * This immediately stops infinite loops or long-running code.
-   * A new sandbox is spawned on the next execution.
+   * Removing the frame destroys the Worker inside it, which is what actually stops a `while True:`; a 'cancel'
+   * message would only be observed between steps. A load still in flight is settled (teardown settles a pending
+   * handshake), so a caller awaiting initialize() hears about it instead of hanging on it.
    */
-  interrupt(): void {
-    if (!this.frame) {
-      return;
-    }
-
-    // Removing the frame destroys the Worker inside it, which is what actually stops a
-    // `while True:`. A 'cancel' message would only be observed between steps.
-    // Settle a load still in flight (teardown settles a pending handshake), so a caller
-    // awaiting initialize() hears about the interrupt instead of hanging on it.
+  private dropSandbox(): void {
     const rejectInit = this.initRejecter;
     this.teardownSandbox();
     this.initPromise = null;
@@ -555,13 +622,25 @@ class PyodideManager {
       loadProgress: 0,
       loadedPackages: new Set(),
     });
+  }
+
+  /**
+   * Interrupt the current execution by tearing down the sandbox, then load a new one, so the next run needs no
+   * click. `reason` is the error the pending run resolves with; the time limit passes its own.
+   */
+  interrupt(reason = 'Execution interrupted'): void {
+    if (!this.frame) {
+      return;
+    }
+    this.clearRunLimit();
+    this.dropSandbox();
 
     // Resolve pending execution with cancellation (include any output captured before interrupt)
     if (this.executeResolver) {
       this.executeResolver({
         success: false,
         output: this.state.streamingOutput,
-        error: 'Execution interrupted',
+        error: reason,
         plots: [],
         executionTime: 0,
       });
@@ -572,11 +651,12 @@ class PyodideManager {
       this.callResolver({
         success: false,
         output: this.state.streamingOutput,
-        error: 'Execution interrupted',
+        error: reason,
         executionTime: 0,
       });
       this.callResolver = null;
       this.callRejecter = null;
+      this.callNonce = null;
     }
 
     // Re-initialize so the Run button becomes enabled again

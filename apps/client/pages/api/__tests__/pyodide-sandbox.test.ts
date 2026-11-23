@@ -17,7 +17,7 @@ import reactSandboxHandler from '../react-artifact-sandbox';
 
 type Handler = (req: NextApiRequest, res: NextApiResponse) => unknown;
 
-async function invokeHandler(target: Handler, method = 'GET') {
+async function invokeHandler(target: Handler, method = 'GET', query: Record<string, string> = {}) {
   const headers: Record<string, string> = {};
   const res = {
     setHeader: vi.fn((key: string, value: string) => {
@@ -28,10 +28,7 @@ async function invokeHandler(target: Handler, method = 'GET') {
     end: vi.fn((body?: string) => body),
   } as unknown as NextApiResponse & { send: ReturnType<typeof vi.fn>; status: ReturnType<typeof vi.fn> };
 
-  const body = await target(
-    { method, query: {}, headers: { host: 'app.example.com' } } as unknown as NextApiRequest,
-    res
-  );
+  const body = await target({ method, query, headers: { host: 'app.example.com' } } as unknown as NextApiRequest, res);
   return { headers, res, body: typeof body === 'string' ? body : String(res.send.mock.calls[0]?.[0] ?? '') };
 }
 
@@ -174,6 +171,26 @@ describe('/api/pyodide-sandbox data origins', () => {
     dataOrigins.current = ['https://cdn.jsdelivr.net', 'https://data.example.com'];
     const connectSrc = directives((await invoke()).headers['Content-Security-Policy'])['connect-src'];
     expect(connectSrc).toBe('https://cdn.jsdelivr.net https://data.example.com');
+  });
+
+  it('serves connect-src with the Pyodide distribution only when asked for ?network=none', async () => {
+    dataOrigins.current = LISTED;
+    const { headers, body } = await invokeHandler(handler, 'GET', { network: 'none' });
+    const connectSrc = directives(headers['Content-Security-Policy'])['connect-src'];
+
+    expect(connectSrc).toBe('https://cdn.jsdelivr.net');
+    expect(headers['Content-Security-Policy']).toBe(CSP_WITH_NO_DATA_ORIGINS);
+    expect(headers['Cache-Control']).toBe('public, max-age=300, s-maxage=300');
+    expect(body).toContain('pyodide-sandbox-ready');
+  });
+
+  it('keeps an operator mirror in the network-free frame, since Pyodide loads from it', async () => {
+    vi.stubEnv('PYODIDE_BASE_URL', 'https://mirror.internal.example/pyodide/v0.25.1/full/');
+    dataOrigins.current = LISTED;
+    const connectSrc = directives(
+      (await invokeHandler(handler, 'GET', { network: 'none' })).headers['Content-Security-Policy']
+    )['connect-src'];
+    expect(connectSrc.split(' ').sort()).toEqual(['https://cdn.jsdelivr.net', 'https://mirror.internal.example']);
   });
 
   it.each([

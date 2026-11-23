@@ -151,7 +151,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(405).end('Method Not Allowed');
   }
 
-  const { origins: dataOrigins, degraded } = await loadPythonArtifactDataOrigins();
+  // `?network=none` is the frame callable functions run in: Pyodide's own distribution and nothing else.
+  const { origins: dataOrigins, degraded } =
+    req.query.network === 'none' ? { origins: [], degraded: false } : await loadPythonArtifactDataOrigins();
 
   res.setHeader('Content-Type', 'text/html; charset=utf-8');
   res.setHeader('Content-Security-Policy', buildSandboxCsp(dataOrigins));
