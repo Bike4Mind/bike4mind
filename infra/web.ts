@@ -196,6 +196,7 @@ import { migratorInvocation } from './database';
 import { websocketApi } from './websocket';
 import { lambdaVpc } from './vpc';
 import { wafLabelForwarding, wafQueryWebAclArn, wafReadPermissions, wafWebAclArn } from './waf';
+import { mailBodyEnvironment, mailBodyPutPermission } from './mailBodyOffload';
 
 // Every queue this stage creates, by SST's physical-name prefix. SST keeps `${app}-${stage}-`
 // in front of a queue name only while app + stage + logical name + 2 fit in 71 characters (SQS's
@@ -455,6 +456,7 @@ export const web = new sst.aws.Nextjs(
       riskEvidenceQueue,
     ],
     permissions: [
+      mailBodyPutPermission(appFilesBucket),
       {
         actions: ['bedrock:*'],
         resources: ['*'],
@@ -602,6 +604,7 @@ export const web = new sst.aws.Nextjs(
       ...providerFederation.permissions,
     ],
     environment: {
+      ...mailBodyEnvironment(appFilesBucket),
       ...DEFAULT_LAMBDA_ENVIRONMENT,
       B4M_DEPLOYED_REVISION: process.env.B4M_DEPLOYED_REVISION || '',
       B4M_BUILD_FINGERPRINT: process.env.B4M_BUILD_FINGERPRINT || '',
