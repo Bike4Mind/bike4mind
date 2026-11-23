@@ -62,7 +62,7 @@ test.describe('Admin access review', () => {
     await stepUp(request, adminA);
     const grant = await request.put(`${baseURL}/api/admin/users/${delegateC}/permissions`, {
       headers: auth(adminA.accessToken),
-      data: { before: [], adminPermissions: ['users:read'], reason: 'access review e2e setup' },
+      data: { before: [], adminPermissions: ['support:read'], reason: 'access review e2e setup' },
     });
     expect(grant.ok(), `delegate grant failed: ${grant.status()} ${await grant.text()}`).toBe(true);
     const created = await request.post(`${baseURL}/api/admin/admin-roles`, {
@@ -85,7 +85,7 @@ test.describe('Admin access review', () => {
     const b = body.admins.find(row => row.userId === adminB);
     const c = body.admins.find(row => row.userId === delegateC);
     expect(b).toMatchObject({ fullAdmin: true, dormant: true, noMfa: true });
-    expect(c).toMatchObject({ fullAdmin: false, permissions: ['users:read'] });
+    expect(c).toMatchObject({ fullAdmin: false, permissions: ['support:read'] });
 
     const self = await request.post(`${baseURL}/api/admin/access-review/decisions`, {
       headers: auth(adminA.accessToken),
