@@ -19,8 +19,7 @@ function requireLogGroupName(logGroup: sst.aws.Function['nodes']['logGroup'], la
  * Every log group that emits `llm-usage-settled` and the credit-overdraft line, i.e. every runtime
  * of executeCompletion (b4m-core/services/src/cliCompletions.ts) or ChatCompletionProcess.process():
  * the ChatCompletion container, the Slack quest processor, and the Next.js server (/api/chat?wait=true
- * and the voice v2 LLM proxy run process() inline, and the batch transforms poll route,
- * apps/client/pages/api/transforms/batch/[id].ts, logs each settled batch).
+ * and the voice v2 LLM proxy run process() inline).
  * infra/llmSpend.ts filters each into the same metrics, and the alarm relay (infra/dlqAlarms.ts)
  * queries all of them to name the accounts behind a young-account spend alarm, so both must read
  * this one list.
