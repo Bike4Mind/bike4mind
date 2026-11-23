@@ -1652,6 +1652,7 @@ const CRAWLER_UA_RE =
 /** Record view analytics and verified reward evidence after page admission.
  * Writes are best-effort so analytics failures do not interrupt serving a page.
  * Bundle browser navigations also report their authenticated view via /api/publish/view.
+ * Anonymous views never count as external: without a credential the owner cannot be told apart.
  */
 function bumpViewCount(
   artifact: { publicId: string; ownerId: string; verifiedExternalViewCount?: number },

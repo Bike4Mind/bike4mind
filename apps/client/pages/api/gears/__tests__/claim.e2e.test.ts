@@ -154,39 +154,36 @@ describe('social gear eligibility on a real replica set', () => {
       externalViewCount: 10,
     });
 
-  it.each(['read', 'write'])(
-    'requires a distinct verified collaborator with %s access, then pays once',
-    async permission => {
-      const owner = await seedUnlockedUser();
-      const friend = await member();
-      const absentId = new mongoose.Types.ObjectId().toString();
-      await Project.updateOne(
-        { userId: owner.id },
-        {
-          $set: {
-            users: [
-              { userId: owner.id, permissions: ['read'] },
-              { userId: friend.id, permissions: [permission] },
-              { userId: absentId, permissions: ['read'] },
-            ],
-          },
-        }
-      );
-      expect(await claim(owner.id, 'shareproject')).toMatchObject({ status: 409, body: { error: 'not_unlocked' } });
-      expect(await balanceOf(owner.id)).toBe(0);
-      await User.updateOne({ _id: friend.id }, { $set: { emailVerified: true } });
-      expect(await claim(owner.id, 'shareproject')).toEqual({
-        status: 200,
-        body: { key: 'shareproject', creditsAwarded: 5000 },
-      });
-      await Project.updateOne({ userId: owner.id }, { $set: { users: [] } });
-      expect(await claim(owner.id, 'shareproject')).toEqual({
-        status: 200,
-        body: { key: 'shareproject', alreadyClaimed: true },
-      });
-      expect(await balanceOf(owner.id)).toBe(5000);
-    }
-  );
+  it('requires a distinct verified collaborator with read access, then pays once', async () => {
+    const owner = await seedUnlockedUser();
+    const friend = await member();
+    const absentId = new mongoose.Types.ObjectId().toString();
+    await Project.updateOne(
+      { userId: owner.id },
+      {
+        $set: {
+          users: [
+            { userId: owner.id, permissions: ['read'] },
+            { userId: friend.id, permissions: ['read'] },
+            { userId: absentId, permissions: ['read'] },
+          ],
+        },
+      }
+    );
+    expect(await claim(owner.id, 'shareproject')).toMatchObject({ status: 409, body: { error: 'not_unlocked' } });
+    expect(await balanceOf(owner.id)).toBe(0);
+    await User.updateOne({ _id: friend.id }, { $set: { emailVerified: true } });
+    expect(await claim(owner.id, 'shareproject')).toEqual({
+      status: 200,
+      body: { key: 'shareproject', creditsAwarded: 5000 },
+    });
+    await Project.updateOne({ userId: owner.id }, { $set: { users: [] } });
+    expect(await claim(owner.id, 'shareproject')).toEqual({
+      status: 200,
+      body: { key: 'shareproject', alreadyClaimed: true },
+    });
+    expect(await balanceOf(owner.id)).toBe(5000);
+  });
 
   it('does not count verified users without live project membership', async () => {
     const owner = await seedUnlockedUser();

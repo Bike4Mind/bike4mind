@@ -6,7 +6,7 @@ export async function hasVerifiedProjectCollaborator(userId: string): Promise<bo
   const members = await Project.aggregate<{ _id: string }>([
     { $match: { userId, deletedAt: null } },
     { $unwind: '$users' },
-    { $match: { 'users.permissions': { $in: ['read', 'write'] } } },
+    { $match: { 'users.permissions': 'read' } },
     { $group: { _id: '$users.userId' } },
   ]);
   const others = members
