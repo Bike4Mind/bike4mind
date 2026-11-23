@@ -1888,6 +1888,7 @@ export function ChatShell({
                     layout={orchestratorLayout}
                     onLayoutChange={changeOrchestratorLayout}
                     actions={agentActions}
+                    onOpenPrLink={(_sessionId, url) => openInBrowserPane(url)}
                     introPlaying={introPhase === 'playing'}
                     renderView={renderOrchestratorView}
                     onParentFocus={focusParentChat}

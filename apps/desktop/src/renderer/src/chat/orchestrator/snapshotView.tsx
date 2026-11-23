@@ -31,6 +31,7 @@ export function snapshotView(
     parent,
     rootId,
     onSelect,
+    onOpenPr,
     onInnkeeperSelect,
     agentDetailsOverlay,
     restoreAction,
@@ -54,7 +55,9 @@ export function snapshotView(
         reportFailure(error);
         return;
       }
-      runViewAction(real, { openAgent: onSelect, openRoot: () => onInnkeeperSelect?.() }).catch(reportFailure);
+      runViewAction(real, { openAgent: onSelect, openPr: onOpenPr, openRoot: () => onInnkeeperSelect?.() }).catch(
+        reportFailure
+      );
     };
 
     return (

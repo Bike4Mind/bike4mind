@@ -561,6 +561,7 @@ export const IPC_CHANNELS = {
    * (auto-merge in particular) are switched on here and nowhere else.
    */
   prWatch: 'pr:watch',
+  prGetState: 'pr:get-state',
   prBind: 'pr:bind',
   prDismiss: 'pr:dismiss',
   prRefresh: 'pr:refresh',
@@ -1466,6 +1467,8 @@ export interface DesktopApi {
      * when it has no PR; a read starts in main when the one in hand is missing or stale.
      */
     watch(sessionId: string | null): Promise<PrBarState | null>;
+    /** Read a selected agent's bar without replacing the conversation's watch. */
+    getState(sessionId: string): Promise<PrBarState | null>;
     /** Bind a pasted PR URL to the conversation. */
     bind(sessionId: string, url: string): Promise<PrActionResult>;
     dismiss(sessionId: string): Promise<PrActionResult>;
