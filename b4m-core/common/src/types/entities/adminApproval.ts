@@ -1,5 +1,6 @@
 import { createHash } from 'crypto';
 import type { AdminPermissionId } from '../../adminPermissions';
+import { canonicalJson } from '../../utils/canonicalJson';
 
 /**
  * Two-person approval for high-risk admin actions. The requester's params are stored as canonical JSON
@@ -113,21 +114,6 @@ export interface IAdminApprovalRepository {
   ): Promise<AdminApproval | null>;
 }
 
-const canonicalize = (value: unknown): unknown => {
-  if (Array.isArray(value)) return value.map(canonicalize);
-  if (value !== null && typeof value === 'object' && !(value instanceof Date)) {
-    const record = value as Record<string, unknown>;
-    return Object.fromEntries(
-      Object.keys(record)
-        .sort()
-        .filter(key => record[key] !== undefined)
-        .map(key => [key, canonicalize(record[key])])
-    );
-  }
-  return value;
-};
-
-/** JSON with object keys sorted at every depth; array order is meaningful and kept. */
-export const canonicalApprovalJson = (value: unknown): string => JSON.stringify(canonicalize(value));
+export const canonicalApprovalJson = canonicalJson;
 
 export const approvalParamsHash = (paramsJson: string): string => createHash('sha256').update(paramsJson).digest('hex');

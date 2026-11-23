@@ -61,6 +61,23 @@ describe('live reply', () => {
     expect(applyLiveEvent(other, { type: 'delta', ...ids, text: 'x' })).toBe(other);
   });
 
+  it('resumes a paused reply without its stop or the error that stop left', () => {
+    const paused: ChatMessage = {
+      id: ids.messageId,
+      role: 'assistant',
+      content: 'Halfway.',
+      createdAt: '2026-01-01T00:00:00.000Z',
+      stopReason: 'session_expired',
+      error: 'Your session expired before this reply finished.',
+    };
+
+    const [reply] = startReply([paused], ids.messageId);
+
+    expect(reply.stopReason).toBeUndefined();
+    expect(reply.error).toBeUndefined();
+    expect(reply.content).toBe('Halfway.');
+  });
+
   it('puts reasoning on the round it precedes, opening a new one after tools', () => {
     const [reply] = fold([
       { type: 'start', ...ids },

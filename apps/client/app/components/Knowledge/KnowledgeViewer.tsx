@@ -7,6 +7,7 @@ chess, lattice, Python). Each type has a dedicated viewer.
 import HighlightedCode from '@client/app/components/common/HighlightedCode';
 import React, { useEffect, useMemo, useState, useCallback, useRef } from 'react';
 import { downloadData } from '@client/app/utils/download';
+import { inlineBlessedScripts } from '@client/app/utils/inlineBlessedScripts';
 import {
   useSessions,
   useWorkBenchFiles,
@@ -473,6 +474,7 @@ const KnowledgeViewer: React.FC<KnowledgeViewerProps> = ({ autoHideOnEmpty = tru
 
   const [isLoading, setIsLoading] = useState(false);
   const [isCopying, setIsCopying] = useState(false);
+  const [isPreparingDownload, setIsPreparingDownload] = useState(false);
   // Publish-and-share for the artifact currently in the viewer.
   const shareUser = useUser(s => s.currentUser);
   // Active account-switcher org (null in personal context) - enables Team/org-scoped publishing.
@@ -1414,21 +1416,33 @@ const KnowledgeViewer: React.FC<KnowledgeViewerProps> = ({ autoHideOnEmpty = tru
             toast.error('Failed to fetch file content');
           }
         } else {
+          const isHtmlFile = currentItem.content.mimeType === 'text/html';
           try {
             if (!currentItem.content.fileUrl) {
               toast.error('No file URL available');
               return;
             }
+            if (isHtmlFile) setIsPreparingDownload(true);
             // Fetch raw binary data to preserve file integrity (not extracted text)
             const response = await fetch(currentItem.content.fileUrl);
             if (!response.ok) {
               throw new Error(`Download failed: ${response.status}`);
             }
             const blob = await response.blob();
-            downloadData(blob, currentItem.content.fileName, currentItem.content.mimeType);
+            let data: Blob | string = blob;
+            if (isHtmlFile) {
+              // A saved HTML artifact still has root-relative library srcs that break off the app host.
+              // Only a changed result replaces the blob, so an untouched file keeps its bytes and encoding.
+              const text = await blob.text();
+              const inlined = await inlineBlessedScripts(text);
+              if (inlined !== text) data = inlined;
+            }
+            downloadData(data, currentItem.content.fileName, currentItem.content.mimeType);
           } catch (error) {
             console.error('Error fetching file content:', error);
             toast.error('Failed to download file');
+          } finally {
+            if (isHtmlFile) setIsPreparingDownload(false);
           }
         }
         break;
@@ -1449,7 +1463,16 @@ const KnowledgeViewer: React.FC<KnowledgeViewerProps> = ({ autoHideOnEmpty = tru
         downloadFile(currentItem.content.content, `${currentItem.content.title || 'component'}.tsx`, 'text/typescript');
         break;
       case 'html':
-        downloadFile(currentItem.content.content, `${currentItem.content.title || 'page'}.html`, 'text/html');
+        setIsPreparingDownload(true);
+        try {
+          downloadFile(
+            await inlineBlessedScripts(currentItem.content.content),
+            `${currentItem.content.title || 'page'}.html`,
+            'text/html'
+          );
+        } finally {
+          setIsPreparingDownload(false);
+        }
         break;
       case 'svg':
         downloadFile(currentItem.content.content, `${currentItem.content.title || 'graphic'}.svg`, 'image/svg+xml');
@@ -1792,24 +1815,26 @@ const KnowledgeViewer: React.FC<KnowledgeViewerProps> = ({ autoHideOnEmpty = tru
               ) : (
                 <Tooltip
                   title={
-                    knowledgeItems[selectedTabIndex]?.type === 'questmaster'
-                      ? questExport.isExporting
-                        ? `Exporting... ${questExport.progress}%`
-                        : 'Export Quest Plan'
-                      : 'Download Content'
+                    isPreparingDownload
+                      ? 'Preparing download...'
+                      : knowledgeItems[selectedTabIndex]?.type === 'questmaster'
+                        ? questExport.isExporting
+                          ? `Exporting... ${questExport.progress}%`
+                          : 'Export Quest Plan'
+                        : 'Download Content'
                   }
                   disableInteractive
                 >
                   <IconButton
                     size="sm"
                     onClick={handleDownload}
-                    disabled={questExport.isExporting || questExport.isStarting}
+                    disabled={questExport.isExporting || questExport.isStarting || isPreparingDownload}
                     sx={(theme: Theme) => ({
                       borderColor: theme.palette.divider,
                     })}
                     data-testid="knowledgeviewer-download-btn"
                   >
-                    {questExport.isExporting ? (
+                    {questExport.isExporting || isPreparingDownload ? (
                       <CircularProgress size="sm" sx={{ '--CircularProgress-size': '16px' }} />
                     ) : (
                       <FileDownloadOutlinedIcon sx={{ fontSize: 16 }} />

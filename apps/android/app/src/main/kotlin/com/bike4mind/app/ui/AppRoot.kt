@@ -30,11 +30,15 @@ fun AppRoot(
     val graph = app.graph.collectAsStateWithLifecycle().value ?: return
     val upgrade by graph.upgradeSignal.notice.collectAsStateWithLifecycle()
     val signedIn by graph.session.isSignedIn.collectAsStateWithLifecycle()
+    val onboardingCompleted by app.onboarding.isCompleted.collectAsStateWithLifecycle()
+    val deletion by graph.deletionSignal.notice.collectAsStateWithLifecycle()
     var restored by remember(graph) { mutableStateOf(false) }
     // A chat is identified by its session id; NEW_CHAT is a conversation the first message will create.
     var openChat by rememberSaveable(graph) { mutableStateOf<String?>(null) }
     // A brief id from a push or a link, or LATEST_BRIEF from the chats list.
     var openBrief by rememberSaveable(graph) { mutableStateOf<String?>(null) }
+    // SETTINGS or DELETE_ACCOUNT while Settings is up.
+    var openSettings by rememberSaveable(graph) { mutableStateOf<String?>(null) }
     val route by pendingRoute.collectAsStateWithLifecycle()
 
     LaunchedEffect(graph) {
@@ -42,13 +46,24 @@ fun AppRoot(
         restored = true
     }
 
+    // Shares belong to the account that made them, so a session that ends (a refresh refused, a sign-out
+    // elsewhere) drops whatever was still queued.
+    LaunchedEffect(graph, restored, signedIn) {
+        if (restored && !signedIn) graph.capture.discardAll()
+    }
+
     // Push registration follows the session; [onSignedIn] is where the host asks for the notification permission.
     LaunchedEffect(graph, signedIn) {
         if (signedIn) {
+            // Someone who got this far never needs the welcome, e.g. a session restored after an upgrade.
+            app.onboarding.complete()
             onSignedIn()
             graph.startPush()
         } else {
             graph.push.sessionDidEnd()
+            // A new session starts clean; a call that still finds the account pending raises it again.
+            graph.deletionSignal.reset()
+            openSettings = null
         }
     }
 
@@ -58,14 +73,17 @@ fun AppRoot(
         if (!restored || !signedIn) return@LaunchedEffect
         when (pending) {
             Route.Sessions -> {
+                openSettings = null
                 openBrief = null
                 openChat = null
             }
             is Route.Session -> {
+                openSettings = null
                 openBrief = null
                 openChat = pending.sessionId
             }
             is Route.Brief -> {
+                openSettings = null
                 openChat = null
                 openBrief = pending.briefId
             }
@@ -79,8 +97,20 @@ fun AppRoot(
     when {
         upgrade != null -> UpgradeScreen(minimumVersion = upgrade?.minimumVersion, recheck = graph::recheckUpgrade)
         !restored -> Unit
+        !signedIn && !onboardingCompleted -> OnboardingScreen(onFinish = app.onboarding::complete)
         !signedIn -> ScreenScope(key = Screen.SignIn(graph)) {
             SignInScreen(app = app, graph = graph, signInError = signInError)
+        }
+        deletion != null -> ScreenScope(key = Screen.Restore(graph)) {
+            AccountRestoreScreen(graph = graph, scheduledFor = deletion?.scheduledFor)
+        }
+        openSettings == DELETE_ACCOUNT -> ScreenScope(key = Screen.DeleteAccount(graph)) {
+            BackHandler { openSettings = SETTINGS }
+            DeleteAccountScreen(graph = graph, onBack = { openSettings = SETTINGS })
+        }
+        openSettings == SETTINGS -> ScreenScope(key = Screen.Settings(graph)) {
+            BackHandler { openSettings = null }
+            SettingsScreen(graph = graph, onBack = { openSettings = null }, onDeleteAccount = { openSettings = DELETE_ACCOUNT })
         }
         openBrief != null -> ScreenScope(key = Screen.Brief(graph, openBrief)) {
             BackHandler { openBrief = null }
@@ -108,6 +138,7 @@ fun AppRoot(
                 onOpen = { openChat = it },
                 onNewChat = { openChat = NEW_CHAT },
                 onOpenBrief = { openBrief = LATEST_BRIEF },
+                onOpenSettings = { openSettings = SETTINGS },
             )
         }
     }
@@ -119,7 +150,12 @@ private sealed interface Screen {
     data class Chat(val graph: AppGraph, val chat: String?) : Screen
     data class Brief(val graph: AppGraph, val brief: String?) : Screen
     data class Sessions(val graph: AppGraph) : Screen
+    data class Settings(val graph: AppGraph) : Screen
+    data class DeleteAccount(val graph: AppGraph) : Screen
+    data class Restore(val graph: AppGraph) : Screen
 }
 
 private const val NEW_CHAT = ""
 private const val LATEST_BRIEF = ""
+private const val SETTINGS = "settings"
+private const val DELETE_ACCOUNT = "delete-account"

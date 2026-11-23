@@ -11,8 +11,7 @@ import { adminBypassLakeIds, grantingLakes, resolveAccessibleLakes } from '../da
 import { holdsDataLakeReadScope } from '../dataLakes/dataLakeScopes';
 import { resolveAuditPrincipal } from '../dataLakes/resolveAuditPrincipal';
 import type { EntitlementRequest } from '../entitlements/index';
-import { getFilesStorage } from '../utils/storage/index';
-import { fileContentUrl } from './browserFileSigner';
+import { fileContentUrl, signFabFileGet, type FabFileSignOptions } from './browserFileSigner';
 import type { Logger } from '@bike4mind/observability';
 import type { ApiKeyInfo } from '../cli/auth';
 
@@ -39,13 +38,9 @@ export function buildFabFileAdapter(req: FabFileAccessRequest, { browser = false
       adminSettings: adminSettingsRepository,
     },
     storage: {
-      generateSignedUrl: async (path: string, expireInSeconds: number, options?: { signingDate?: Date }) => {
+      generateSignedUrl: async (path: string, expireInSeconds: number, options?: FabFileSignOptions) => {
         try {
-          return await getFilesStorage().getSignedUrl(path, 'get', {
-            expiresIn: expireInSeconds,
-            audience: 'browser',
-            signingDate: options?.signingDate,
-          });
+          return await signFabFileGet(path, expireInSeconds, options);
         } catch (error) {
           req.logger.error('Error generating signed URL:', { error, path });
           throw error;

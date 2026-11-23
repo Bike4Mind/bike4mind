@@ -234,6 +234,7 @@ describe('copied file signing', () => {
       expiresIn: 3600,
       audience: 'browser',
       signingDate: expect.any(Date),
+      ResponseContentType: 'image/png',
     });
   });
 

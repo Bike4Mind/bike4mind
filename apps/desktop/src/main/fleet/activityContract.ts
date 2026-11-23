@@ -127,5 +127,4 @@ export function toolCategory(name: string): ToolCategory {
   return 'other';
 }
 
-/** Tools whose success means the turn changed files in the working tree. */
-export const EDIT_TOOLS: ReadonlySet<string> = new Set(['file_write', 'file_edit', 'apply_patch']);
+export { EDIT_TOOLS } from '@shared/threadRewind';

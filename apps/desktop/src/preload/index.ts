@@ -1,6 +1,6 @@
 import type { PendingTaskDecision, RolePolicy, TaskAction, TaskDecisionAnswer } from '@shared/orchestration';
 import { contextBridge, ipcRenderer, webUtils } from 'electron';
-import type { AttentionNotice, AttentionOpenEvent } from '@shared/attention';
+import type { AttentionNotice, AttentionOpenEvent, NotifyScope } from '@shared/attention';
 import type { AccountPage, AuthState, EnvironmentSelection } from '@shared/auth';
 import type { PromptCacheTtl } from '@bike4mind/common';
 import type {
@@ -18,6 +18,7 @@ import type {
   ChatStreamEvent,
   CreateCodeSessionRequest,
   ReasoningEffortSetting,
+  EditMessageRequest,
   SendMessageRequest,
   StartSpawnSuggestionRequest,
   StartSideChatRequest,
@@ -52,7 +53,7 @@ import {
 } from '@shared/ipc';
 import type { PrBarState, PrOption, PrSummaryEvent } from '@shared/pullRequest';
 import type { TerminalCreateRequest, TerminalDataEvent, TerminalsChangedEvent } from '@shared/terminal';
-import type { SkinSummary } from '@shared/mods';
+import type { SkinSummary, SoundPackSummary } from '@shared/mods';
 import type { UpdateState } from '@shared/update';
 import type { UsageWindowId } from '@shared/usage';
 import type { FleetState } from '@shared/fleet';
@@ -86,6 +87,14 @@ const api: DesktopApi = {
       const handler = (_event: unknown, skins: SkinSummary[]) => listener(skins);
       ipcRenderer.on(IPC_CHANNELS.skinsChanged, handler);
       return () => ipcRenderer.removeListener(IPC_CHANNELS.skinsChanged, handler);
+    },
+  },
+  soundPacks: {
+    list: () => ipcRenderer.invoke(IPC_CHANNELS.soundPacksList),
+    onChanged: listener => {
+      const handler = (_event: unknown, packs: SoundPackSummary[]) => listener(packs);
+      ipcRenderer.on(IPC_CHANNELS.soundPacksChanged, handler);
+      return () => ipcRenderer.removeListener(IPC_CHANNELS.soundPacksChanged, handler);
     },
   },
   update: {
@@ -173,6 +182,8 @@ const api: DesktopApi = {
   usage: {
     getHistory: (window: UsageWindowId, force?: boolean) =>
       ipcRenderer.invoke(IPC_CHANNELS.usageGetHistory, window, force ?? false),
+    getLocal: (window: UsageWindowId, force?: boolean) =>
+      ipcRenderer.invoke(IPC_CHANNELS.usageGetLocal, window, force ?? false),
   },
   fleet: {
     getState: () => ipcRenderer.invoke(IPC_CHANNELS.fleetGetState),
@@ -283,6 +294,8 @@ const api: DesktopApi = {
     },
     stopReply: (sessionId: string) => ipcRenderer.invoke(IPC_CHANNELS.chatStopReply, sessionId),
     continueReply: (sessionId: string) => ipcRenderer.invoke(IPC_CHANNELS.chatContinueReply, sessionId),
+    editMessage: (request: EditMessageRequest) => ipcRenderer.invoke(IPC_CHANNELS.chatEditMessage, request),
+    regenerateReply: (sessionId: string) => ipcRenderer.invoke(IPC_CHANNELS.chatRegenerateReply, sessionId),
     clearContext: (sessionId: string) => ipcRenderer.invoke(IPC_CHANNELS.chatClearContext, sessionId),
     compactContext: (sessionId: string, focus?: string) =>
       ipcRenderer.invoke(IPC_CHANNELS.chatCompactContext, sessionId, focus),
@@ -495,6 +508,10 @@ const api: DesktopApi = {
     moveSession: (sessionId: string, sectionId: string | null) =>
       ipcRenderer.invoke(IPC_CHANNELS.sidebarMoveSession, sessionId, sectionId),
   },
+  composerDrafts: {
+    list: () => ipcRenderer.invoke(IPC_CHANNELS.composerDraftsList),
+    save: (sessionId: string, text: string) => ipcRenderer.invoke(IPC_CHANNELS.composerDraftsSave, sessionId, text),
+  },
   mcp: {
     getServers: () => ipcRenderer.invoke(IPC_CHANNELS.mcpGetServers),
     addServer: (input: McpServerInput) => ipcRenderer.invoke(IPC_CHANNELS.mcpAddServer, input),
@@ -565,6 +582,7 @@ const api: DesktopApi = {
   },
   pullRequests: {
     watch: (sessionId: string | null) => ipcRenderer.invoke(IPC_CHANNELS.prWatch, sessionId),
+    getState: (sessionId: string) => ipcRenderer.invoke(IPC_CHANNELS.prGetState, sessionId),
     bind: (sessionId: string, url: string) => ipcRenderer.invoke(IPC_CHANNELS.prBind, sessionId, url),
     dismiss: (sessionId: string) => ipcRenderer.invoke(IPC_CHANNELS.prDismiss, sessionId),
     refresh: (sessionId: string) => ipcRenderer.invoke(IPC_CHANNELS.prRefresh, sessionId),
@@ -609,6 +627,7 @@ const api: DesktopApi = {
     openExternal: (url: string) => ipcRenderer.invoke(IPC_CHANNELS.shellOpenExternal, url),
   },
   attention: {
+    openServerSessions: () => ipcRenderer.invoke(IPC_CHANNELS.handoffOpenServerSessions),
     notify: (notice: AttentionNotice) => ipcRenderer.invoke(IPC_CHANNELS.attentionNotify, notice),
     claim: (sessionIds: string[]) => ipcRenderer.invoke(IPC_CHANNELS.attentionClaim, sessionIds),
     setBadgeCount: (count: number) => ipcRenderer.invoke(IPC_CHANNELS.attentionSetBadge, count),
@@ -618,6 +637,13 @@ const api: DesktopApi = {
       return () => ipcRenderer.removeListener(IPC_CHANNELS.attentionOpen, handler);
     },
     takePendingOpen: () => ipcRenderer.invoke(IPC_CHANNELS.attentionTakePendingOpen),
+    getNotifyScope: () => ipcRenderer.invoke(IPC_CHANNELS.attentionGetNotifyScope),
+    setNotifyScope: (scope: NotifyScope) => ipcRenderer.invoke(IPC_CHANNELS.attentionSetNotifyScope, scope),
+    onNotifyScope: listener => {
+      const handler = (_event: unknown, scope: NotifyScope) => listener(scope);
+      ipcRenderer.on(IPC_CHANNELS.attentionNotifyScope, handler);
+      return () => ipcRenderer.removeListener(IPC_CHANNELS.attentionNotifyScope, handler);
+    },
   },
   watch: {
     getPreferences: () => ipcRenderer.invoke(IPC_CHANNELS.watchGetPreferences),

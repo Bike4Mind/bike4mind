@@ -33,6 +33,7 @@ import { resolve } from 'node:path';
 import { NotAuthenticatedError, SessionRevokedError, type AuthenticatedApiClient } from '@bike4mind/client-auth';
 import { DEFAULT_PROMPT_CACHE_TTL, type CompletionRunAttribution, type PromptCacheTtl } from '@bike4mind/common';
 import { localRunSettlement, type RunSpend } from '@shared/runSpend';
+import { readReplyStats } from '@shared/replyStats';
 import type {
   ChatApprovalDecidedBy,
   ChatApprovalSystemReason,
@@ -54,6 +55,7 @@ import type {
   ChatQueuedMessage,
   ChatRelayOrigin,
   ChatReplyRound,
+  ChatReplyStats,
   ChatSentRound,
   ChatSettledCharge,
   ChatSession,
@@ -106,6 +108,7 @@ import {
   SESSION_EXPIRED_STOP,
 } from '@shared/chat';
 import { AUTO_COMPACT_PERCENT, inputSide, occupiedTokens, shouldAutoCompact } from '@shared/contextLimit';
+import { carriedNotes, isTypedPrompt, regenerableReply } from '@shared/threadRewind';
 import { estimateContextOverhead, type ContextSnapshot } from '@shared/contextBreakdown';
 import { requestGeneration, type GenerationSettings } from '@shared/generation';
 import type { ModelSettings } from '@shared/modelSettings';
@@ -188,12 +191,14 @@ import {
 } from './agentWake';
 import type { PdfPromptText } from './pdfText';
 import type { AttachmentStore } from './AttachmentStore';
+import type { ComposerDraftStore } from './ComposerDraftStore';
 import type { SidebarSectionStore } from './SidebarSectionStore';
 import { childOutcomeDisplay, classifyChildOutcome } from './childOutcome';
 import { sideChatOpening } from './sideChat';
 import { summarizeSession } from '@shared/agentOutcome';
 import { createPhaseTracker, RESPONDING, THINKING, WAITING } from './modelPhase';
 import { createRoundProbe, startRoundTimer, type RoundPhases } from './turnTiming';
+import { buildReplyStats } from './replyStats';
 import { devLog } from '../devlog/DevLogSink';
 import { CHAT_STREAM_TAG } from './devLogTag';
 import {
@@ -478,6 +483,11 @@ type SendOptions = {
   /** Main submitted this message, so the renderer needs its persisted copy. */
   announce?: boolean;
   notes?: readonly string[];
+  /**
+   * An edit of a sent prompt: this message id and every turn after it are dropped just before
+   * the edited text is stored in its place. See editMessage.
+   */
+  replaces?: string;
 };
 
 /**
@@ -579,6 +589,8 @@ export interface ChatServiceDeps {
   access: AccessStore;
   /** Owns attachment bytes. Absent in tests that never attach anything. */
   attachments?: AttachmentStore;
+  /** Unsent composer text; a deleted conversation's draft goes with it. Absent in tests. */
+  composerDrafts?: Pick<ComposerDraftStore, 'forget'>;
   logger: ChatServiceLogger;
   /**
    * Deferred tool loading on supported Claude models (chat/deferredTools.ts). Absent keeps today's
@@ -754,6 +766,7 @@ interface ResumedReply {
   contextSnapshot?: ContextSnapshot;
   /** The model the reply started on, which a resumed run keeps stamping it with. */
   model?: string;
+  stats?: ChatReplyStats;
 }
 
 /** One round as it is produced, before its artifact markup is parsed out of the text. */
@@ -762,6 +775,8 @@ interface RawRound {
   toolCallIds: string[];
   reasoning: string;
   timing: ChatRoundTiming;
+  sentAt: number;
+  reasoningFrames: number;
   usage?: ChatUsage;
   sent: ChatSentRound;
   requestId?: string;
@@ -3020,6 +3035,7 @@ export class ChatService {
       await this.deps.store.delete(sessionId, decisionScope);
       this.markTaskDecisionMutation(sessionId, decisionScope);
     }
+    await this.deps.composerDrafts?.forget(sessionId);
     if (parentId) this.bumpScope(parentId);
     // The stopped reply can settle and reindex while process/browser cleanup is awaiting I/O.
     // Once the serialized delete has finished, no later append can resurrect the session.
@@ -3209,6 +3225,8 @@ export class ChatService {
     }
     if (this.isBusy(sessionId, options.spawnSeed === true)) {
       if (options.loop) return { ok: false, error: 'Loop paused because another turn started. Start /loop again.' };
+      // Queued, an edit would rewind the thread under the turn now running.
+      if (options.replaces) return { ok: false, error: 'This conversation is still replying.' };
       if (!this.deps.queue || released) return { ok: false, error: 'This conversation is still replying.' };
       // A card the model is parked on would hold this message behind the turn forever; the new
       // message is the user moving on, so it closes the question rather than waiting on it.
@@ -3354,7 +3372,15 @@ export class ChatService {
       }
     }
     if (taskClosed) notes = [...(notes ?? []), CLOSED_TASK_NOTE];
-    await this.autoCompact(reconciled);
+    // An edit rewinds here: after every refusal (a refused edit leaves the thread as it was) and
+    // before autoCompact, which must measure and summarise the thread the edited prompt follows.
+    let compactable = reconciled;
+    if (options.replaces) {
+      const truncated = await this.deps.store.truncateFrom(sessionId, options.replaces, isTypedPrompt);
+      if (!truncated) return { ok: false, error: 'That message is no longer in this conversation.' };
+      compactable = { ...reconciled, messages: truncated.messages };
+    }
+    await this.autoCompact(compactable);
     timer?.lap('autoCompact');
     if (options.loop) {
       const current = await this.deps.store.get(sessionId);
@@ -3489,36 +3515,13 @@ export class ChatService {
       return { ok: false, error: 'There is nothing to continue here.' };
     }
 
-    if (session.workerSelection) {
-      try {
-        validateWorkerModel(session.model, (await this.listModels()).models, {
-          localOnly: this.workerLocality(isLocalModel(session.model)),
-          ...session.workerSelection?.requirements,
-        });
-      } catch (error) {
-        return { ok: false, error: error instanceof Error ? error.message : String(error) };
-      }
-    }
-    // A canceled task stays canceled: the Continue carries the conversation on, not the task.
-    if (session.workerTask && session.workerTask.state.status !== 'canceled') {
-      const updated = await this.updateTask(sessionId, task =>
-        task.state.status === 'canceled'
-          ? task
-          : {
-              ...task,
-              state: { status: 'running' },
-            }
-      );
-      if (!updated) return { ok: false, error: 'This task no longer exists.' };
-      if (updated.workerTask?.state.status !== 'canceled') {
-        this.deps.summaryChanged?.(updated);
-        if (session.origin) this.spawnWatch.set(sessionId, { parentSessionId: session.origin.parentSessionId });
-      }
-    }
+    const unready = await this.resumeWorker(sessionId, session);
+    if (unready) return { ok: false, error: unready };
     // Reached only from the Continue button, so whoever clicked it is there to answer a card.
     this.attendedTurns.add(sessionId);
     // A reply stored before it was stamped still says what it started on in its context snapshot.
     const startedOn = last.model ?? last.contextSnapshot?.model;
+    const earlierStats = readReplyStats(last.stats);
     const replyId = this.startReply(session, api, historyScope, {
       id: last.id,
       content: last.content,
@@ -3539,8 +3542,114 @@ export class ChatService {
       ...(startedOn ? { model: startedOn } : {}),
       ...(last.usage ? { usage: last.usage } : {}),
       ...(last.contextSnapshot ? { contextSnapshot: last.contextSnapshot } : {}),
+      ...(earlierStats ? { stats: earlierStats } : {}),
     });
     return { ok: true, messageId: replyId };
+  }
+
+  /**
+   * For a turn that re-runs the conversation without a new prompt (Continue, Regenerate): check
+   * the worker model is still offered and mark a worker task running again. The error to show,
+   * or null when the turn may start.
+   */
+  private async resumeWorker(sessionId: string, session: ChatSession): Promise<string | null> {
+    if (session.workerSelection) {
+      try {
+        validateWorkerModel(session.model, (await this.listModels()).models, {
+          localOnly: this.workerLocality(isLocalModel(session.model)),
+          ...session.workerSelection?.requirements,
+        });
+      } catch (error) {
+        return error instanceof Error ? error.message : String(error);
+      }
+    }
+    // A canceled task stays canceled: the turn carries the conversation on, not the task.
+    if (session.workerTask && session.workerTask.state.status !== 'canceled') {
+      const updated = await this.updateTask(sessionId, task =>
+        task.state.status === 'canceled'
+          ? task
+          : {
+              ...task,
+              state: { status: 'running' },
+            }
+      );
+      if (!updated) return 'This task no longer exists.';
+      if (updated.workerTask?.state.status !== 'canceled') {
+        this.deps.summaryChanged?.(updated);
+        if (session.origin) this.spawnWatch.set(sessionId, { parentSessionId: session.origin.parentSessionId });
+      }
+    }
+    return null;
+  }
+
+  /**
+   * Edit a sent prompt and send it again: the prompt and every turn after it are dropped from
+   * the stored thread (so from what the model is sent next), then the edited text goes out as an
+   * ordinary turn. Side effects of the dropped turns (files written, commands run) are not
+   * undone; the renderer warns about that before calling this (turnsChangedThings).
+   *
+   * Refused rather than queued while a turn is running, and the truncation happens inside the
+   * send's own claim on the session (startAcceptedTurn), after every refusal - so a refused edit
+   * leaves the thread as it was. The original's attachments and point-and-edit note ride with the
+   * edit (see carriedNotes).
+   */
+  async editMessage(sessionId: string, messageId: string, text: string): Promise<SendMessageResult> {
+    if (!isValidSessionId(sessionId)) return { ok: false, error: 'That conversation no longer exists.' };
+    if (this.hasTurnInFlight(sessionId)) return { ok: false, error: 'This conversation is still replying.' };
+    const session = await this.deps.store.get(sessionId);
+    if (!session) return { ok: false, error: 'That conversation no longer exists.' };
+    const original = session.messages.find(message => message.id === messageId);
+    if (!original || !isTypedPrompt(original)) {
+      return { ok: false, error: 'That message is no longer in this conversation.' };
+    }
+    const notes = carriedNotes(original);
+    return this.send(sessionId, text, original.attachments ?? [], {
+      replaces: messageId,
+      ...(notes.length ? { notes } : {}),
+    });
+  }
+
+  /**
+   * Run the last prompt again and replace the reply it got: the reply is dropped from the
+   * stored thread and a new one starts with the conversation's current settings. As with an
+   * edit, what the dropped reply's tools did is not undone.
+   */
+  async regenerateReply(sessionId: string): Promise<SendMessageResult> {
+    const historyScope = this.deps.history?.scopeKey() ?? null;
+    if (!isValidSessionId(sessionId)) return { ok: false, error: 'That conversation no longer exists.' };
+    if (this.hasTurnInFlight(sessionId) || this.abandoning.has(sessionId)) {
+      return { ok: false, error: 'This conversation is still replying.' };
+    }
+
+    // Claimed with no await since the check above, as acceptTurn does, so a send arriving
+    // during the awaits below queues behind this turn instead of racing the truncation.
+    this.accepting.add(sessionId);
+    try {
+      const session = await this.deps.store.get(sessionId);
+      if (!session) return { ok: false, error: 'That conversation no longer exists.' };
+      const api = this.deps.getApiClient();
+      if (!api && !isLocalModel(session.model) && !this.deviceLocal()) {
+        return { ok: false, error: 'Sign in to regenerate this reply.' };
+      }
+      const reply = regenerableReply(session.messages);
+      if (!reply) return { ok: false, error: 'There is no reply to regenerate.' };
+      const unready = await this.resumeWorker(sessionId, session);
+      if (unready) return { ok: false, error: unready };
+
+      const truncated = await this.deps.store.truncateFrom(
+        sessionId,
+        reply.id,
+        (message, stored) => regenerableReply(stored.messages)?.id === message.id
+      );
+      if (!truncated) return { ok: false, error: 'There is no reply to regenerate.' };
+      void this.pruneAttachments(truncated);
+      this.attendedTurns.add(sessionId);
+      return { ok: true, messageId: this.startReply(truncated, api, historyScope) };
+    } finally {
+      this.accepting.delete(sessionId);
+      this.flushQueue(sessionId);
+      this.loops.idle(sessionId);
+    }
   }
 
   /**
@@ -4053,6 +4162,31 @@ export class ChatService {
     // Only this run's rounds: the resumed ones were parsed and cleaned when they were stored,
     // and putting them back through the artifact parser would mint their ids a second time.
     let produced: RawRound[] = [];
+    // Reset with `produced` when a mid-turn message starts a new reply.
+    let toolMs = 0;
+    // Where the last work (a round, or the tools after it) ended, so a wait for a mid-turn message or an
+    // artifact upload before the reply is stored is not counted as the reply's time.
+    let workEndedAt: number | undefined;
+    // None for a reply continued from one stored before stats were kept: its earlier runs' time is
+    // unknown, so nothing measured now could stand for the whole reply its usage covers.
+    const replyStats = (endedAt = workEndedAt ?? Date.now()): ChatReplyStats | undefined => {
+      if (resume && !resume.stats) return undefined;
+      // A run refused before reaching the model adds nothing; a fresh reply that never ran has none.
+      if (produced.length === 0) return resume?.stats;
+      try {
+        return buildReplyStats({
+          endedAt,
+          rounds: produced,
+          toolMs,
+          ...(usage ? { usage } : {}),
+          local: isLocalModel(session.model),
+          ...(resume?.stats ? { earlier: resume.stats } : {}),
+        });
+      } catch (error) {
+        this.deps.logger.warn(`CHAT: reply stats dropped: ${error instanceof Error ? error.message : String(error)}`);
+        return undefined;
+      }
+    };
 
     try {
       // Read before any await: a folder changed while the config loads must still reach the first refresh.
@@ -4440,6 +4574,7 @@ export class ChatService {
           cacheable && !localTurn && lastTiming
             ? { cachedAt: lastTiming.firstTokenAt ?? lastTiming.endedAt, ttl: cacheTtl, model: session.model }
             : undefined;
+        const stats = replyStats();
 
         const message: ChatMessage = {
           id: replyId,
@@ -4454,6 +4589,7 @@ export class ChatService {
           ...(thinking ? { thinking } : {}),
           ...(artifacts.length > 0 ? { artifacts } : {}),
           ...(usage ? { usage } : {}),
+          ...(stats ? { stats } : {}),
           ...(promptCache ? { promptCache } : {}),
           ...(contextSnapshot ? { contextSnapshot } : {}),
           ...(deferred ? { deferred } : {}),
@@ -4474,6 +4610,7 @@ export class ChatService {
           ...(artifacts.length > 0 ? { artifacts } : {}),
           ...(promptCache ? { promptCache } : {}),
           ...(message.questComplete ? { questComplete: true as const } : {}),
+          ...(stats ? { stats } : {}),
         });
       };
 
@@ -4485,7 +4622,7 @@ export class ChatService {
         if (liveState && roundIndex > 0) {
           const next = toolState();
           if (!sameToolState(liveState, next)) {
-            appendLiveToolChange(wire, liveState.tools, next);
+            appendLiveToolChange(wire, liveState, next);
             pin(next.tools);
             [...liveState.tools, ...next.tools].forEach(name => referenced.add(name));
             await this.recordMidTurnToolState(session, next);
@@ -4501,21 +4638,6 @@ export class ChatService {
         let turnSettled: ChatSettledCharge | undefined;
         let turnReasoning = '';
         const splitThinking = createThinkFilter();
-        const timer = startRoundTimer();
-        const append = ({ text: visible, reasoning }: ThinkSplit): void => {
-          if (reasoning) {
-            turnReasoning += reasoning;
-            this.emit({ type: 'reasoning', sessionId, messageId: replyId, text: reasoning });
-          }
-          if (!visible) return;
-          // Every round streams into the SAME message, so without a break here the last
-          // sentence of one round runs into the first word of the next. On the emitted text
-          // only: the wire keeps its own round structure and needs no filler.
-          const text = turnText.length === 0 ? paragraphBreak(content) + visible : visible;
-          content += text;
-          turnText += visible;
-          this.emit({ type: 'delta', sessionId, messageId: replyId, text });
-        };
 
         await this.clearStaleResults(session, toolCalls, produced, wire, replyId);
 
@@ -4535,6 +4657,24 @@ export class ChatService {
             })),
           });
         }
+
+        // Started as the request goes out, so this app's own work above is no server wait.
+        const timer = startRoundTimer();
+        const append = ({ text: visible, reasoning }: ThinkSplit): void => {
+          if (reasoning) {
+            turnReasoning += reasoning;
+            this.emit({ type: 'reasoning', sessionId, messageId: replyId, text: reasoning });
+          }
+          if (!visible) return;
+          if (visible.trim()) timer.text();
+          // Every round streams into the SAME message, so without a break here the last
+          // sentence of one round runs into the first word of the next. On the emitted text
+          // only: the wire keeps its own round structure and needs no filler.
+          const text = turnText.length === 0 ? paragraphBreak(content) + visible : visible;
+          content += text;
+          turnText += visible;
+          this.emit({ type: 'delta', sessionId, messageId: replyId, text });
+        };
 
         const probe = this.deps.turnTiming ? createRoundProbe(roundIndex === 0 ? turnStartedAt : undefined) : undefined;
         const setPhase = createPhaseTracker(phase =>
@@ -4559,7 +4699,8 @@ export class ChatService {
             return;
           }
           if (event.type === 'error') return;
-          if (event.text || event.type === 'tool_use') {
+          // A call starting is output too: its arguments stream from there, and the round is timed from it.
+          if (event.text || event.type === 'tool_use' || event.toolStarted) {
             timer.firstToken();
             releasePrefix?.();
           }
@@ -4568,9 +4709,14 @@ export class ChatService {
             // An empty split is either a bare thinking marker or text the filter is holding
             // back as a possible partial marker; only the first is a thinking frame.
             const marker = !split.text && !split.reasoning && THINK_MARKER.test(event.text);
+            // A hosted provider's bare markers stand for thinking it omitted; a self-hosted server
+            // streams all of its own, so its bare markers are no thinking, live or stored.
+            const omitted = marker && !localTurn;
+            if (split.reasoning || omitted) timer.reasoning(split.reasoning);
             probe?.frame(split.text ? 'text' : split.reasoning ? 'reasoning' : marker ? 'marker' : 'text');
             if (split.text) setPhase(RESPONDING);
-            else if (split.reasoning || marker) setPhase(THINKING);
+            // Whitespace is the empty block of a model with thinking off.
+            else if (split.reasoning.trim() || omitted) setPhase(THINKING);
             append(split);
           }
           if (event.toolStarted) {
@@ -4611,7 +4757,10 @@ export class ChatService {
           : await this.withPrefixWarm(
               warmsWithSiblings && roundIndex === 0 ? prefixKey(session.model, tools, wire[0]) : null,
               controller.signal,
-              release => (releasePrefix = release),
+              release => {
+                releasePrefix = release;
+                timer.modelStarted();
+              },
               () =>
                 streamRound(() =>
                   withRunFallback(
@@ -4655,12 +4804,15 @@ export class ChatService {
           // round has stopped. See readableThinking.
           reasoning: turnReasoning || readableThinking(turnThinking),
           timing,
+          sentAt: timer.sentAt(),
+          reasoningFrames: timer.reasoningFrames(),
           ...(turnUsage ? { usage: turnUsage } : {}),
           ...(turnRequestId ? { requestId: turnRequestId } : {}),
           ...(turnSettled ? { settled: turnSettled } : {}),
           sent: { ...(turnThinking ? { thinking: turnThinking } : {}), text: turnText },
         };
         produced.push(round);
+        workEndedAt = round.timing.endedAt;
 
         // Within one request the server's counts are cumulative, so the last report wins; across
         // the requests an agent turn makes they are separate bills, so the turn's cost is their
@@ -4726,6 +4878,7 @@ export class ChatService {
         // With no working directory a command defaults to the first root, so a call the model wrote
         // for the old first root must not run in whichever folder is now first.
         const baseMoved = !workingDirectory && baseBefore !== undefined && roots[0] !== baseBefore;
+        const toolsStartedAt = Date.now();
         const settled = baseMoved
           ? requested.map((request): ChatToolCall => {
               const call: ChatToolCall = {
@@ -4775,6 +4928,8 @@ export class ChatService {
               replyId,
               controller.signal
             );
+        toolMs += Date.now() - toolsStartedAt;
+        workEndedAt = Date.now();
         toolCalls.push(...settled);
 
         // The system message is left as it was, so the cached prefix survives: a card's own result
@@ -4908,6 +5063,8 @@ export class ChatService {
           content = '';
           toolCalls = [];
           produced = [];
+          workEndedAt = undefined;
+          toolMs = 0;
           usage = undefined;
           contextSnapshot = undefined;
           thinking = undefined;
@@ -4971,6 +5128,7 @@ export class ChatService {
         this.emit({ type: 'error', sessionId, messageId: replyId, message, ...stop });
         return expired ? 'expired' : 'failed';
       }
+      const stats = replyStats(Date.now());
       // Persisted even though it failed: a thread that silently drops the turn leaves the
       // user's own prompt sitting there with no explanation next time they open it.
       await this.settleReply(sessionId, !!resume, historyScope, {
@@ -5003,6 +5161,7 @@ export class ChatService {
             )),
         ...(toolCalls.length > 0 ? { toolCalls } : {}),
         ...(usage ? { usage } : {}),
+        ...(stats ? { stats } : {}),
         ...(contextSnapshot ? { contextSnapshot } : {}),
         ...(deferredTurn ? { deferred: true } : {}),
       });
@@ -5013,6 +5172,7 @@ export class ChatService {
         message,
         ...stop,
         ...(contextSnapshot ? { contextSnapshot } : {}),
+        ...(stats ? { stats } : {}),
       });
       return expired ? 'expired' : 'failed';
     }
@@ -5096,6 +5256,7 @@ export class ChatService {
       // continued plain reply from also holding its first request's charge on the message.
       requestId: message.requestId,
       settled: message.settled,
+      stats: message.stats,
       promptCache: message.promptCache,
       contextSnapshot: message.contextSnapshot,
       questComplete: message.questComplete,
@@ -6176,9 +6337,9 @@ export class ChatService {
   /**
    * A mid-turn change, recorded on the newest user turn so the next turn replays it there. It keeps
    * every tool the turn already had, so nothing this turn called is replayed before its addition;
-   * the next turn's record drops what is no longer offered. Live, the change rode on the newest
-   * tool result instead, so the next turn misses the cache from that prompt on (a known cost,
-   * paid once per mid-turn change).
+   * the next turn's record drops what is no longer offered. Live, the change message (plus the
+   * guidance, when its text changed) rode on the newest tool result instead, so the next turn misses
+   * the cache from that prompt on (a known cost, paid once per mid-turn change).
    */
   private async recordMidTurnToolState(session: ChatSession, next: ChatToolState): Promise<void> {
     const history = sentHistory(session.messages);

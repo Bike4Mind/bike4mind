@@ -32,6 +32,19 @@ describe('todo_write', () => {
     expect(result).toContain('More than one is in progress');
   });
 
+  it('counts cancelled items and offers activeForm and cancelled in its schema', async () => {
+    const result = await todoWrite.run(
+      { todos: [{ content: 'a', status: 'cancelled', activeForm: 'Doing a' }] },
+      context
+    );
+    expect(result).toBe('Plan updated: 0 done, 0 in progress, 0 pending, 1 cancelled.');
+    const item = (
+      todoWrite.schema.parameters as unknown as { properties: { todos: { items: { properties: object } } } }
+    ).properties.todos.items.properties;
+    expect(Object.keys(item)).toEqual(expect.arrayContaining(['activeForm', 'status']));
+    expect(JSON.stringify(item)).toContain('cancelled');
+  });
+
   it('refuses a malformed list so the model corrects it', async () => {
     await expect(todoWrite.run({ todos: [{ content: 'a', status: 'soon' }] }, context)).rejects.toThrow(
       /status "soon"/

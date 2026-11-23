@@ -218,7 +218,7 @@ export function OfficeBackdrop() {
         Paper company
       </text>
       <text x="978" y="29" textAnchor="end" fill="#aebbab" fontFamily="monospace" fontSize="10" letterSpacing="2">
-        BROOKVALE BRANCH / OFFICE
+        BROOKVALE BRANCH
       </text>
     </svg>
   );

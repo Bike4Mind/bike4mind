@@ -531,6 +531,56 @@ describe('the other admin routes', () => {
   });
 });
 
+describe('a platform connector description', () => {
+  const NOTE = 'Searches the team handbook.';
+
+  it('is set on create and changed by PATCH, with only its length in the admin audit', async () => {
+    const created = await call(admin.collection, { method: 'POST', body: createBody({ description: ` ${NOTE} ` }) });
+    expect(created.status).toBe(201);
+    const id = (created.body as { id: string }).id;
+    expect(created.body).toMatchObject({ description: NOTE });
+    expect((await call(admin.collection, { method: 'GET' })).body).toMatchObject([{ id, description: NOTE }]);
+
+    const changed = await call(admin.item, { method: 'PATCH', id, body: { description: 'Reads the handbook.' } });
+    expect(changed.body).toMatchObject({ description: 'Reads the handbook.' });
+    expect(h.adminAudits.at(-1)).toEqual({
+      action: 'settings.mcp_connector.updated',
+      target: { kind: 'settings', id, displayName: 'Docs MCP connector' },
+      summary: 'updated platform MCP connector docs on mcp.example.com',
+      changes: [],
+      details: { descriptionLength: 19 },
+    });
+    await call(admin.item, { method: 'PATCH', id, body: { description: '' } });
+    expect(h.adminAudits.at(-1)).toMatchObject({ details: { descriptionLength: 0 } });
+    expect(h.store.get(id)?.description).toBe('');
+    expect(JSON.stringify(h.adminAudits)).not.toMatch(/handbook/);
+  });
+
+  it('cannot be set or changed by a user who is not an admin, or by a settings reader', async () => {
+    const id = await createPlatform({ description: NOTE });
+    const body = createBody({ slug: 'mine', description: 'Mine now' });
+    expect((await call(admin.collection, { method: 'POST', as: USER, body })).status).toBe(403);
+    const hijack = { description: 'Hijacked' };
+    for (const as of [USER, READER]) {
+      expect((await call(admin.item, { method: 'PATCH', id, as, body: hijack })).status).toBe(403);
+    }
+    expect((await call(user.item, { method: 'PATCH', id, as: USER, body: hijack })).status).toBe(404);
+    expect(h.store.get(id)?.description).toBe(NOTE);
+    expect(h.store.size).toBe(1);
+  });
+
+  it('reaches every user in the member list, and a connector without one carries none', async () => {
+    const described = await createReviewedPlatform({ description: NOTE });
+    const plain = await createReviewedPlatform({ displayName: 'Wiki' });
+
+    for (const as of [USER, { id: 'user-2', organizationId: null }]) {
+      const listed = await listAs(as);
+      expect(listed.find(entry => entry.id === described)).toMatchObject({ ownerType: 'platform', description: NOTE });
+      expect(listed.find(entry => entry.id === plain)).not.toHaveProperty('description');
+    }
+  });
+});
+
 describe('a platform connector seen from the user routes', () => {
   it('is listed for every user as the member view, field by field', async () => {
     const id = await createReviewedPlatform();

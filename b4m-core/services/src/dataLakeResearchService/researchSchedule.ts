@@ -44,7 +44,8 @@ export const RESEARCH_SCHEDULE_BATCH_MAX = 50;
  */
 export const RESEARCH_SCHEDULE_RETRY_MS = 60 * 60 * 1000;
 
-const SCHEDULED_START_FAILED_MESSAGE = 'The scheduled run could not be started. It will be retried in about an hour.';
+export const SCHEDULED_START_FAILED_MESSAGE =
+  'The scheduled run could not be started. It will be retried in about an hour.';
 
 const addUtcMonths = (from: Date, months: number): Date => {
   const next = new Date(from);
@@ -160,13 +161,16 @@ async function fireScheduledConfig(
   return { outcome: 'started', at, runId: run.id };
 }
 
-/** The next due time for an outcome. Only a started run or a full queue (or an inactive lake) waits
+/** The next due time for an outcome. Only a started run, a full queue, a paused schedule or an inactive lake waits
  * a whole period - the other skip reasons clear on their own soon, so retrying within the hour is
  * cheap; an archived lake will not become active again within the hour. */
 function nextRunAtFor(config: ScheduledConfig, outcome: ResearchScheduleOutcome, at: Date): Date {
   const waitsFullPeriod =
     outcome.outcome === 'started' ||
-    (outcome.outcome === 'skipped' && (outcome.reason === 'review_backlog' || outcome.reason === 'lake_inactive'));
+    (outcome.outcome === 'skipped' &&
+      (outcome.reason === 'review_backlog' ||
+        outcome.reason === 'lake_inactive' ||
+        outcome.reason === 'schedule_paused'));
   if (!waitsFullPeriod) return new Date(at.getTime() + RESEARCH_SCHEDULE_RETRY_MS);
   // `nextRunAt` is only a fallback for a row written before the anchor existed: after a retry it
   // holds the retry time, which is exactly the drift the anchor prevents.

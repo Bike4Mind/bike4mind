@@ -338,6 +338,7 @@ export const SettingKeySchema = z.enum([
   'EnableArtifacts',
   'EnableArtifactsDefault',
   'pythonArtifactDataOrigins',
+  'EnableCallableFunctions',
   'EnableAgents',
   'EnableAgentsDefault',
   'EnableAgentMode',
@@ -576,6 +577,10 @@ export const SettingKeySchema = z.enum([
   'spendMonitorMarginMinRatio',
   'spendMonitorMarginWindowHours',
   'spendMonitorMarginCostFloorUsd',
+  'spendMonitorAutoPauseMode',
+  'spendMonitorAutoPauseStandardMinCredits',
+  'spendMonitorAutoPausePaidMinCredits',
+  'spendMonitorAutoPauseTrustedMinCredits',
   'youngAccountSpendPageUsdPerHour',
   'youngAccountSpendWarnUsdPerHour',
   'freeTierDailySystemCostCapUsd',
@@ -1309,6 +1314,10 @@ function makeStringSetting(
       : z.string(),
   };
 }
+
+/** Modes of the spend monitor's automatic pause; read by apps/workers/src/cron/spendMonitor/autoPause.ts. */
+export const SPEND_AUTO_PAUSE_MODES = ['off', 'shadow', 'enforce'] as const;
+export type SpendAutoPauseMode = (typeof SPEND_AUTO_PAUSE_MODES)[number];
 
 /**
  * The default per-user write limit's modes and its default cap. Shared with the middleware that reads
@@ -2787,6 +2796,7 @@ export const API_SERVICE_GROUPS = {
       { key: 'EnableArtifacts', order: 20 },
       { key: 'EnableArtifactsDefault', order: 21 },
       { key: 'pythonArtifactDataOrigins', order: 22 },
+      { key: 'EnableCallableFunctions', order: 23 },
       { key: 'EnableBriefcase', order: 25 },
       { key: 'EnableBriefcaseDefault', order: 26 },
       { key: 'EnableImageTemplates', order: 27 },
@@ -2908,6 +2918,10 @@ export const API_SERVICE_GROUPS = {
       { key: 'spendMonitorMarginMinRatio', order: 19.4942 },
       { key: 'spendMonitorMarginWindowHours', order: 19.4943 },
       { key: 'spendMonitorMarginCostFloorUsd', order: 19.4944 },
+      { key: 'spendMonitorAutoPauseMode', order: 19.4945 },
+      { key: 'spendMonitorAutoPauseStandardMinCredits', order: 19.4946 },
+      { key: 'spendMonitorAutoPausePaidMinCredits', order: 19.4947 },
+      { key: 'spendMonitorAutoPauseTrustedMinCredits', order: 19.4948 },
       { key: 'youngAccountSpendPageUsdPerHour', order: 19.495 },
       { key: 'youngAccountSpendWarnUsdPerHour', order: 19.496 },
       { key: 'freeTierDailySystemCostCapUsd', order: 19.5 },
@@ -3785,6 +3799,19 @@ export const settingsMap = {
     // Plain strings so the update route can name each bad entry; every reader applies
     // resolvePythonArtifactDataOrigins, which drops the whole list if any entry is invalid.
     schema: z.array(z.string()),
+  }),
+  EnableCallableFunctions: makeBooleanSetting({
+    key: 'EnableCallableFunctions',
+    name: 'Enable Callable Functions',
+    defaultValue: false,
+    description:
+      'Lets a person call the run function of a Python artifact with typed inputs. Off (default): Python artifacts behave as before. Can be overridden per organization.',
+    category: 'Experimental',
+    group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
+    order: 23,
+    dependsOn: 'EnableArtifacts',
+    // Read through resolveCallableFunctionsEnabled in packages/server-utils, never as the raw platform value.
+    scope: { settableAt: [SettingScopeLevel.Organization] },
   }),
   EnableAgents: makeBooleanSetting({
     key: 'EnableAgents',
@@ -6214,6 +6241,49 @@ export const settingsMap = {
     min: 1,
     description:
       'USD of provider cost a model needs in the margin window before the margin check can flag it, so low-volume models do not alert. Minimum 1.',
+    group: API_SERVICE_GROUPS.CREDITS.id,
+    category: 'SecOps',
+  }),
+  spendMonitorAutoPauseMode: makeStringSetting({
+    key: 'spendMonitorAutoPauseMode',
+    name: 'Spend Monitor: Automatic Pause Mode',
+    defaultValue: 'shadow',
+    options: [...SPEND_AUTO_PAUSE_MODES],
+    description:
+      '"shadow" (default): an open spend incident that reaches its tier\'s automatic pause threshold is marked "Would pause" on the Spend monitor page, and nothing is paused. "enforce": the paying user, organization or API key gets a spending freeze, which an admin lifts from the Spend monitor page. "off": incidents are never evaluated for pausing.',
+    group: API_SERVICE_GROUPS.CREDITS.id,
+    category: 'SecOps',
+  }),
+  spendMonitorAutoPauseStandardMinCredits: makeNumberSetting({
+    key: 'spendMonitorAutoPauseStandardMinCredits',
+    name: 'Spend Monitor: Automatic Pause Threshold (Standard)',
+    defaultValue: 10_000,
+    int: true,
+    min: 0,
+    description:
+      'Credits per 15-minute window. An open incident on a standard account or API key whose current window spend reaches this value is paused (or marked in shadow mode). 0 turns automatic pausing off for standard accounts.',
+    group: API_SERVICE_GROUPS.CREDITS.id,
+    category: 'SecOps',
+  }),
+  spendMonitorAutoPausePaidMinCredits: makeNumberSetting({
+    key: 'spendMonitorAutoPausePaidMinCredits',
+    name: 'Spend Monitor: Automatic Pause Threshold (Paid)',
+    defaultValue: 0,
+    int: true,
+    min: 0,
+    description:
+      'Credits per 15-minute window. Same as the standard threshold, for accounts held to the paid-account limits. 0 (default) turns automatic pausing off for paid accounts.',
+    group: API_SERVICE_GROUPS.CREDITS.id,
+    category: 'SecOps',
+  }),
+  spendMonitorAutoPauseTrustedMinCredits: makeNumberSetting({
+    key: 'spendMonitorAutoPauseTrustedMinCredits',
+    name: 'Spend Monitor: Automatic Pause Threshold (Trusted)',
+    defaultValue: 0,
+    int: true,
+    min: 0,
+    description:
+      'Credits per 15-minute window. Same as the standard threshold, for trusted accounts. 0 (default) turns automatic pausing off for trusted accounts.',
     group: API_SERVICE_GROUPS.CREDITS.id,
     category: 'SecOps',
   }),

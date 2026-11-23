@@ -13,6 +13,7 @@ const h = vi.hoisted(() => ({
   claimForStart: vi.fn(),
   cancelPendingAttempts: vi.fn(),
   sendToQueue: vi.fn(),
+  reconcile: vi.fn(),
 }));
 
 vi.mock('@server/middlewares/adminApi', () => ({
@@ -41,6 +42,7 @@ vi.mock('@bike4mind/database', () => ({
   withTransaction: (fn: () => Promise<unknown>) => fn(),
 }));
 vi.mock('@bike4mind/server-utils/utils/sqs', () => ({ sendToQueue: h.sendToQueue }));
+vi.mock('@bike4mind/server-utils/email/reconcileEmailJob', () => ({ reconcileEmailJob: h.reconcile }));
 vi.mock('@bike4mind/server-utils/utils/dlqRegistry', () => ({
   getSourceQueueUrl: (name: string) => `queue://${name}`,
 }));
@@ -285,6 +287,9 @@ describe('POST /api/admin/email/jobs/:id/cancel', () => {
       details: { cancelledCount: 3, wholeJob: true },
     });
     expect(h.update.mock.invocationCallOrder[0]).toBeLessThan(h.audit.mock.invocationCallOrder[0]);
+    expect(h.update.mock.calls[0][0]).not.toHaveProperty('cancelledCount');
+    expect(h.reconcile).toHaveBeenCalledWith('job-1');
+    expect(h.update.mock.invocationCallOrder[0]).toBeLessThan(h.reconcile.mock.invocationCallOrder[0]);
   });
 });
 

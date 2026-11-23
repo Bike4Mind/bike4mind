@@ -10,6 +10,7 @@ import {
   composerMenuAction,
   composerPlaceholder,
   composerSubmitAction,
+  recallPromptAction,
   isAttachChord,
   shownSuggestion,
 } from './composerInput';
@@ -340,5 +341,76 @@ describe('appendToDraft', () => {
     expect(appendToDraft('', 'the `lid` part ')).toBe('the `lid` part ');
     expect(appendToDraft('make', 'the `lid` part ')).toBe('make the `lid` part ');
     expect(appendToDraft('make ', 'the `lid` part ')).toBe('make the `lid` part ');
+  });
+});
+
+describe('recallPromptAction', () => {
+  const history = ['newest', 'older', 'oldest'];
+  const key = (
+    name: string,
+    extra: Partial<{ shiftKey: boolean; altKey: boolean; metaKey: boolean; ctrlKey: boolean }> = {}
+  ) => ({
+    key: name,
+    shiftKey: false,
+    altKey: false,
+    metaKey: false,
+    ctrlKey: false,
+    ...extra,
+  });
+  const at = (text: string, caret = 0, end = caret) => ({ text, selectionStart: caret, selectionEnd: end });
+
+  it('fills an empty draft with the last prompt, and goes further back on each Up', () => {
+    const first = recallPromptAction(key('ArrowUp'), at(''), history, null);
+    expect(first).toEqual({ text: 'newest', recall: { index: 0, text: 'newest' } });
+    const second = recallPromptAction(key('ArrowUp'), at('newest'), history, first!.recall);
+    expect(second).toEqual({ text: 'older', recall: { index: 1, text: 'older' } });
+    const third = recallPromptAction(key('ArrowUp'), at('older'), history, second!.recall);
+    expect(third?.text).toBe('oldest');
+    // Past the oldest the key is left alone.
+    expect(recallPromptAction(key('ArrowUp'), at('oldest'), history, third!.recall)).toBeNull();
+  });
+
+  it('moves forward on Down, and past the newest back to an empty box', () => {
+    const older = { index: 1, text: 'older' };
+    expect(recallPromptAction(key('ArrowDown'), at('older'), history, older)).toEqual({
+      text: 'newest',
+      recall: { index: 0, text: 'newest' },
+    });
+    expect(recallPromptAction(key('ArrowDown'), at('newest'), history, { index: 0, text: 'newest' })).toEqual({
+      text: '',
+      recall: null,
+    });
+  });
+
+  it('never overwrites a draft the user typed, or a recalled one they edited', () => {
+    expect(recallPromptAction(key('ArrowUp'), at('my draft'), history, null)).toBeNull();
+    expect(recallPromptAction(key('ArrowUp'), at('newest, changed'), history, { index: 0, text: 'newest' })).toBeNull();
+    expect(recallPromptAction(key('ArrowDown'), at('my draft', 8), history, null)).toBeNull();
+    // Down with nothing recalled has nowhere to go.
+    expect(recallPromptAction(key('ArrowDown'), at(''), history, null)).toBeNull();
+  });
+
+  it('restarts from the newest when the draft was emptied after a recall', () => {
+    expect(recallPromptAction(key('ArrowUp'), at(''), history, { index: 2, text: 'oldest' })?.text).toBe('newest');
+  });
+
+  it('only acts with the caret at the start for Up, and on the last line for Down', () => {
+    const recalled = { index: 0, text: 'line one\nline two' };
+    const lines = ['line one\nline two', 'older'];
+    expect(recallPromptAction(key('ArrowUp'), at('line one\nline two', 3), lines, recalled)).toBeNull();
+    expect(recallPromptAction(key('ArrowUp'), at('line one\nline two', 0, 4), lines, recalled)).toBeNull();
+    expect(recallPromptAction(key('ArrowDown'), at('line one\nline two', 0), lines, recalled)).toBeNull();
+    expect(recallPromptAction(key('ArrowDown'), at('line one\nline two', 12), lines, recalled)).toEqual({
+      text: '',
+      recall: null,
+    });
+  });
+
+  it('leaves modified arrows and other keys alone, and does nothing with no history', () => {
+    for (const modifier of ['shiftKey', 'altKey', 'metaKey', 'ctrlKey'] as const) {
+      expect(recallPromptAction(key('ArrowUp', { [modifier]: true }), at(''), history, null)).toBeNull();
+    }
+    expect(recallPromptAction(key('Enter'), at(''), history, null)).toBeNull();
+    expect(recallPromptAction(key('ArrowUp'), at(''), [], null)).toBeNull();
   });
 });

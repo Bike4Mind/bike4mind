@@ -1,4 +1,4 @@
-import type { CreditHoldRecord } from '@bike4mind/common';
+import { RUN_BUDGET_EXHAUSTED_ERROR_CODE, type CreditHoldRecord } from '@bike4mind/common';
 import { resolveStage } from '../security/resolveStage';
 
 type HoldContext = Pick<CreditHoldRecord, 'ownerId' | 'ownerType'> & {
@@ -50,6 +50,11 @@ function emitHoldMetric(
   }
 }
 
+function isRunBudgetRefusal(error: unknown): boolean {
+  const info = (error as { additionalInfo?: { errorCode?: unknown } } | null)?.additionalInfo;
+  return info?.errorCode === RUN_BUDGET_EXHAUSTED_ERROR_CODE;
+}
+
 export async function observeCreditHold<T>(context: HoldContext, reserve: () => Promise<T>): Promise<T> {
   const startedAt = performance.now();
   let outcome = 'error';
@@ -57,6 +62,9 @@ export async function observeCreditHold<T>(context: HoldContext, reserve: () => 
     const result = await reserve();
     outcome = 'held';
     return result;
+  } catch (error) {
+    if (isRunBudgetRefusal(error)) outcome = 'refused';
+    throw error;
   } finally {
     emitHoldMetric(context, 'HoldLatency', Math.max(0, performance.now() - startedAt), { outcome });
   }

@@ -9,6 +9,7 @@
  * Prices come from the static adapter tables plus the ModelPrice snapshot that model discovery
  * writes to S3 (modelPriceSnapshotWriter.ts); without the snapshot the static tables alone price
  * the hour.
+ * Every run also publishes ModelPriceSnapshotAgeHours and ModelPriceSnapshotMissing for that snapshot.
  *
  * A provider whose admin key is not configured is skipped and publishes ProviderUsagePollSkipped
  * instead. A provider whose report cannot be read fails the run after the others are published, so
@@ -46,6 +47,8 @@ type UsageReportProvider = spendReconciliationService.UsageReportProvider;
 const HOUR_MS = 3_600_000;
 const DAY_MS = 24 * HOUR_MS;
 const SNAPSHOT_STALE_MS = DAY_MS;
+// A snapshot dated further ahead than this is treated as implausible, not as clock skew.
+const SNAPSHOT_FUTURE_SKEW_MS = HOUR_MS;
 // Reserve time for the primary provider reports and metric publication; their own budgets are separate.
 const SNAPSHOT_HEADROOM_MS = 30_000;
 
@@ -120,7 +123,7 @@ async function loadModelPriceSnapshot(
       `[ProviderUsagePoll] model price snapshot generatedAt=${snapshot.generatedAt} rows=${snapshot.rows.length}`
     );
     const ageMs = now.getTime() - Date.parse(snapshot.generatedAt);
-    if (Number.isNaN(ageMs) || ageMs > SNAPSHOT_STALE_MS || ageMs < -HOUR_MS) {
+    if (Number.isNaN(ageMs) || ageMs > SNAPSHOT_STALE_MS || ageMs < -SNAPSHOT_FUTURE_SKEW_MS) {
       logger.warn(
         `[ProviderUsagePoll] model price snapshot timestamp is stale or implausible (generatedAt=${snapshot.generatedAt})`
       );
@@ -133,6 +136,26 @@ async function loadModelPriceSnapshot(
     );
     return undefined;
   }
+}
+
+/**
+ * ModelPriceSnapshotAgeHours is published only for a snapshot with a plausible timestamp; otherwise
+ * ModelPriceSnapshotMissing is 1. Global metrics, so no dimensions. Read by the alarms in infra/providerSpend.ts.
+ */
+export function modelPriceSnapshotMetrics(snapshot: IModelPriceSnapshot | undefined, now: Date): MetricDatum[] {
+  const ageMs = snapshot ? now.getTime() - Date.parse(snapshot.generatedAt) : Number.NaN;
+  const plausible = !Number.isNaN(ageMs) && ageMs >= -SNAPSHOT_FUTURE_SKEW_MS;
+  const metrics: MetricDatum[] = [];
+  if (plausible) {
+    metrics.push({
+      MetricName: 'ModelPriceSnapshotAgeHours',
+      Value: Math.max(0, ageMs / HOUR_MS),
+      Unit: 'None',
+      Timestamp: now,
+    });
+  }
+  metrics.push({ MetricName: 'ModelPriceSnapshotMissing', Value: plausible ? 0 : 1, Unit: 'Count', Timestamp: now });
+  return metrics;
 }
 
 export async function handler(_event: unknown, context: Context) {
@@ -231,14 +254,13 @@ export async function handler(_event: unknown, context: Context) {
     }
   }
 
-  if (metricData.length > 0) {
-    await new CloudWatchClient({}).send(
-      new PutMetricDataCommand({
-        Namespace: `${Resource.App.name}/${Resource.App.stage}/LLMSpend`,
-        MetricData: metricData,
-      })
-    );
-  }
+  metricData.push(...modelPriceSnapshotMetrics(snapshot, now));
+  await new CloudWatchClient({}).send(
+    new PutMetricDataCommand({
+      Namespace: `${Resource.App.name}/${Resource.App.stage}/LLMSpend`,
+      MetricData: metricData,
+    })
+  );
 
   if (failed.length > 0) {
     throw new Error(`[ProviderUsagePoll] usage report failed for ${failed.join(', ')}`);

@@ -1,5 +1,6 @@
 import mongoose, { Model, Schema } from 'mongoose';
 import type {
+  ResearchKeysetPage,
   IDataLakeResearchRun,
   IDataLakeResearchRunDocument,
   IDataLakeResearchRunRepository,
@@ -16,7 +17,7 @@ import {
   RESEARCH_UNLISTED_SOURCES,
 } from '@bike4mind/common';
 import BaseRepository from '@bike4mind/db-core';
-import { ResearchItemRuleSchema } from './DataLakeResearchConfigModel';
+import { ResearchItemRuleSchema, keysetFilter } from './DataLakeResearchConfigModel';
 
 const ModelName = 'DataLakeResearchRun';
 
@@ -51,6 +52,8 @@ const ResearchRunLeversSchema = {
 const ResearchRunTotalsSchema = {
   searchHits: { type: Number, default: 0 },
   filteredBySource: { type: Number, default: 0 },
+  // No default: a run stored before the split must read undefined, not 0, so its combined count keeps its label.
+  unlistedDropped: { type: Number },
   unresolvedRedirect: { type: Number, default: 0 },
   belowRelevance: { type: Number, default: 0 },
   judgeFailed: { type: Number, default: 0 },
@@ -99,7 +102,7 @@ const DataLakeResearchRunSchema = new Schema<IDataLakeResearchRunDocument>(
 );
 
 // One lake's run history, newest first - the panel's only list read.
-DataLakeResearchRunSchema.index({ dataLakeId: 1, createdAt: -1 });
+DataLakeResearchRunSchema.index({ dataLakeId: 1, createdAt: -1, _id: -1 });
 // The rate-limit count: how many runs this lake started in a window.
 DataLakeResearchRunSchema.index({ dataLakeId: 1, status: 1, createdAt: -1 });
 
@@ -127,8 +130,8 @@ class DataLakeResearchRunRepository
     return doc.toJSON() as IDataLakeResearchRunDocument;
   }
 
-  async listByLake(dataLakeId: string, options?: { limit?: number }): Promise<IDataLakeResearchRunDocument[]> {
-    const query = this.runModel.find({ dataLakeId }).sort({ createdAt: -1 });
+  async listByLake(dataLakeId: string, options?: ResearchKeysetPage): Promise<IDataLakeResearchRunDocument[]> {
+    const query = this.runModel.find({ dataLakeId, ...keysetFilter(options?.after) }).sort({ createdAt: -1, _id: -1 });
     if (options?.limit) query.limit(options.limit);
     const docs = await query;
     return docs.map(d => d.toJSON() as IDataLakeResearchRunDocument);

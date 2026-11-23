@@ -13,6 +13,7 @@
  */
 import { StandardUnit } from '@aws-sdk/client-cloudwatch';
 import {
+  completionRunRepository,
   connectDB,
   organizationRepository,
   pendingCreditHoldRepository,
@@ -64,6 +65,8 @@ export async function runCreditHoldSweep({
             users: userRepository,
             organizations: organizationRepository,
           });
+          // A completion's run budget claim goes back with its hold; the run's budget itself is untouched.
+          if (claimed.runClaim) await completionRunRepository.releaseClaim(claimed.runClaim, 0);
         }
         return claimed;
       });

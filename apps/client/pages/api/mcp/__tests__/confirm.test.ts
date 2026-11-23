@@ -93,7 +93,7 @@ describe('POST /api/mcp/confirm', () => {
 
     expect(res._getStatusCode()).toBe(200);
     expect(res._getJSONData()).toMatchObject({ success: true });
-    expect(claimPendingAction).toHaveBeenCalledWith(QUEST_ID, pendingActionTs);
+    expect(claimPendingAction).toHaveBeenCalledWith(QUEST_ID, pendingActionTs, 'approved');
     expect(invokeMcpHandler).toHaveBeenCalledTimes(1);
     expect(vi.mocked(invokeMcpHandler).mock.calls[0][0].toolArgs).toMatchObject({ _executeFromButton: true });
     expect(vi.mocked(invokeMcpHandler).mock.calls[0][0].userId).toBe('user-1');
@@ -357,7 +357,7 @@ describe('POST /api/mcp/confirm', () => {
     const res = await post({ questId: QUEST_ID, sessionId: SESSION_ID, confirmed: true, pendingActionTs });
 
     expect(res._getStatusCode()).toBe(500);
-    expect(claimPendingAction).toHaveBeenCalledWith(QUEST_ID, pendingActionTs);
+    expect(claimPendingAction).toHaveBeenCalledWith(QUEST_ID, pendingActionTs, 'approved');
   });
 
   it('claims the stored action on cancel without invoking the tool', async () => {
@@ -365,7 +365,7 @@ describe('POST /api/mcp/confirm', () => {
 
     expect(res._getStatusCode()).toBe(200);
     expect(res._getJSONData()).toMatchObject({ success: true });
-    expect(claimPendingAction).toHaveBeenCalledWith(QUEST_ID, pendingActionTs);
+    expect(claimPendingAction).toHaveBeenCalledWith(QUEST_ID, pendingActionTs, 'denied');
     expect(invokeMcpHandler).not.toHaveBeenCalled();
   });
 
@@ -399,7 +399,7 @@ describe('POST /api/mcp/confirm', () => {
     const res = await post({ questId: QUEST_ID, sessionId: SESSION_ID, confirmed: true, pendingActionTs: expiredTs });
 
     expect(res._getStatusCode()).toBe(400);
-    expect(claimPendingAction).toHaveBeenCalledWith(QUEST_ID, expiredTs);
+    expect(claimPendingAction).toHaveBeenCalledWith(QUEST_ID, expiredTs, 'lapsed');
     expect(Quest.findByIdAndUpdate).not.toHaveBeenCalled();
     expect(invokeMcpHandler).not.toHaveBeenCalled();
   });
@@ -489,7 +489,7 @@ describe('POST /api/mcp/confirm', () => {
     const res = await post({ questId: QUEST_ID, sessionId: SESSION_ID, confirmed: false, pendingActionTs });
 
     expect(res._getStatusCode()).toBe(200);
-    expect(claimPendingAction).toHaveBeenCalledWith(QUEST_ID, pendingActionTs);
+    expect(claimPendingAction).toHaveBeenCalledWith(QUEST_ID, pendingActionTs, 'denied');
     expect(invokeMcpHandler).not.toHaveBeenCalled();
   });
 });
@@ -517,7 +517,7 @@ describe('POST /api/mcp/confirm - custom connector actions', () => {
     const res = await post({ questId: QUEST_ID, sessionId: SESSION_ID, confirmed: true, pendingActionTs: ts });
 
     expect(res._getJSONData()).toMatchObject({ success: true });
-    expect(claimPendingAction).toHaveBeenCalledWith(QUEST_ID, ts);
+    expect(claimPendingAction).toHaveBeenCalledWith(QUEST_ID, ts, 'approved');
     expect(customMcpToolHost.callTool).toHaveBeenCalledWith({
       connectionId: 'c1',
       userId: 'user-1',
@@ -533,7 +533,7 @@ describe('POST /api/mcp/confirm - custom connector actions', () => {
     const res = await post({ questId: QUEST_ID, sessionId: SESSION_ID, confirmed: false, pendingActionTs: ts });
 
     expect(res._getStatusCode()).toBe(200);
-    expect(claimPendingAction).toHaveBeenCalledWith(QUEST_ID, ts);
+    expect(claimPendingAction).toHaveBeenCalledWith(QUEST_ID, ts, 'denied');
     expect(customMcpToolHost.callTool).not.toHaveBeenCalled();
   });
 

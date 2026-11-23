@@ -85,6 +85,7 @@ describe('OpenAICompatibleChat against vLLM', () => {
     };
     const first = await turn(chat, ask);
     expect(first).toEqual([
+      { type: 'content', toolStarted: { name: 'get_weather', id: 'chatcmpl-tool-9a2b' } },
       {
         type: 'tool_use',
         tools: [{ name: 'get_weather', arguments: '{"city": "Paris"}', id: 'chatcmpl-tool-9a2b' }],
@@ -177,7 +178,7 @@ describe('OpenAICompatibleChat against vLLM', () => {
     expect(toolsChanged).toHaveBeenCalledTimes(2);
     expect((await chat.listModels()).every(model => model.supportsTools === undefined)).toBe(true);
     const events = await turn(chat, ask);
-    expect(events[0]).toMatchObject({ type: 'tool_use' });
+    expect(events.some(event => event.type === 'tool_use')).toBe(true);
   });
 
   it('turns tools off on the next chat after vLLM restarts without tool flags', async () => {
@@ -189,7 +190,7 @@ describe('OpenAICompatibleChat against vLLM', () => {
       tools: [WEATHER_TOOL],
       sessionId: 's1',
     };
-    expect((await turn(chat, ask))[0]).toMatchObject({ type: 'tool_use' });
+    expect((await turn(chat, ask)).some(event => event.type === 'tool_use')).toBe(true);
     vllm.toolFlags = false;
     const notices: string[] = [];
     const events = await turn(chat, ask, notices);
@@ -293,7 +294,7 @@ describe('OpenAICompatibleChat tools versus a fixed context', () => {
     expect(chat.toolsHint()).toMatch(/--max-model-len/);
 
     const events = await turn(chat, chatTurn('small', { tools: [WEATHER_TOOL] }), notices);
-    expect(events[0]).toMatchObject({ type: 'tool_use' });
+    expect(events.some(event => event.type === 'tool_use')).toBe(true);
     expect(vllm.requests.at(-1)?.tools).toHaveLength(1);
     expect((await chat.listModels()).some(model => model.supportsTools === false)).toBe(false);
     expect(chat.toolsHint()).toBeNull();

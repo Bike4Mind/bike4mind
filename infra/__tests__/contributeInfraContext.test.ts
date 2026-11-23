@@ -47,4 +47,10 @@ describe('contributeInfra context', () => {
     expect(context).toMatch(/\balarmTopic: dlqAlarmTopic,/);
     soleMatch(config, /\bcontribute\w*Infra\(infrastructureContext\);/g, 'context contribution');
   });
+
+  it('hands the bus to the heartbeat contributeInfra call through a variable', () => {
+    const declaration = soleMatch(config, /const tavernInfraContext = /g, 'heartbeat infra context');
+    expect(balanced(config, declaration.index, '{', '}')).toMatch(/\beventBus\b/);
+    soleMatch(config, /\bcontributeTavernInfra\(tavernInfraContext\);/g, 'heartbeat infra contribution');
+  });
 });

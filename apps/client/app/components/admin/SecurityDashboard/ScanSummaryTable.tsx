@@ -1,3 +1,4 @@
+import { useCloudScanRequest } from './CloudScanRequest';
 import { useEffect, useState } from 'react';
 import { Box, IconButton, Skeleton, Stack, Tooltip, Typography } from '@mui/joy';
 import PlayArrowOutlinedIcon from '@mui/icons-material/PlayArrowOutlined';
@@ -5,7 +6,6 @@ import { toast } from 'sonner';
 import {
   useAttackSimulationData,
   useRunAttackSimulation,
-  useRunCloudSecurityScan,
   useRunWebSecurityScan,
   useSecopsTriageStatus,
   useSecurityDashboardOverview,
@@ -239,7 +239,7 @@ export function ScanSummaryTable({
   const attack = useAttackSimulationData();
   const filing = useSecopsTriageStatus();
   const runWeb = useRunWebSecurityScan();
-  const runCloud = useRunCloudSecurityScan();
+  const runCloud = useCloudScanRequest();
   const runProwler = useProwlerScanRequest();
   const runProbes = useRunAttackSimulation();
 
@@ -259,7 +259,7 @@ export function ScanSummaryTable({
   const webCheck = checks.find(check => check.id === 'web');
   const cloudCheck = checks.find(check => check.id === 'cloud');
   const webCooldown = useSecurityScanCooldown(webCheck?.lastCheckedAt);
-  const cloudCooldown = useSecurityScanCooldown(cloudCheck?.lastCheckedAt);
+  const cloudCooldown = runCloud.cooldown;
   const prowlerCooldown = useSecurityScanCooldown(prowlerSnapshot?.checkedAt);
   const probesCooldown = useSecurityScanCooldown(
     latestTerminalRun?.finishedAt ?? latestTerminalRun?.startedAt,
@@ -280,14 +280,12 @@ export function ScanSummaryTable({
         }),
     },
     cloud: {
-      label: 'Run cloud baseline scan',
-      pending: runCloud.isPending,
-      blockedReason: blockedReason(cloudCooldown, !overview.data),
-      start: () =>
-        runCloud.mutate(undefined, {
-          onSuccess: () => toast.success('Cloud baseline scan finished.'),
-          onError: notStarted('Cloud baseline scan'),
-        }),
+      label: runCloud.queued ? 'Cloud baseline scan queued' : 'Run cloud baseline scan',
+      pending: runCloud.pending,
+      blockedReason: runCloud.queued
+        ? 'Cloud baseline scan queued; awaiting a new scan result'
+        : blockedReason(cloudCooldown, !overview.data || runCloud.loading),
+      start: runCloud.start,
     },
     prowler: {
       label: runProwler.queued ? 'Prowler scan queued' : 'Run Prowler scan',

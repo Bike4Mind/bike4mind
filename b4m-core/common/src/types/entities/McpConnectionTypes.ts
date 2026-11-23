@@ -219,6 +219,12 @@ export interface IMcpConnection {
   slug: string;
   displayName: string;
   /**
+   * Plain text written by whoever manages the connector, shown under its name in the Tools menu.
+   * Display only: never from the remote server, never sent to a model, never part of a tool's
+   * `versionHash`. Absent when none is set.
+   */
+  description?: string;
+  /**
    * Ciphertext of the normalized URL (lowercased host, no fragment, no userinfo), because servers
    * often carry a key in the query or path. The caller encrypts with `encryptToken` and decrypts
    * after a `*WithCredentials` read, like every other `*Enc` field. Optional in the type because
@@ -273,6 +279,7 @@ export const MCP_CONNECTION_LIMITS = {
   lastErrorMessageLength: 1000,
   serverInfoFieldLength: 200,
   displayNameLength: 100,
+  descriptionLength: 300,
   maxScopes: 50,
   requiredScopeLength: 1000,
   authChallengeUrlLength: 2048,
@@ -364,6 +371,7 @@ export interface IMcpConnectionPublic {
   presetId?: IntegrationId;
   slug: string;
   displayName: string;
+  description?: string;
   displayUrl: string;
   urlHost: string;
   transport: McpConnectionTransport;
@@ -414,6 +422,7 @@ export function toMcpConnectionPublic(
     presetId: doc.presetId,
     slug: doc.slug,
     displayName: doc.displayName,
+    description: doc.description || undefined,
     displayUrl: doc.displayUrl,
     urlHost: doc.urlHost,
     transport: doc.transport,
@@ -459,6 +468,7 @@ export interface IMcpPlatformConnectionMemberView {
   ownerType: 'platform';
   slug: string;
   displayName: string;
+  description?: string;
   urlHost: string;
   status: McpConnectionEffectiveStatus;
   tools: IMcpConnectionToolSummary[];
@@ -478,6 +488,7 @@ export function toMcpPlatformConnectionMemberView(
     ownerType: 'platform',
     slug: doc.slug,
     displayName: doc.displayName,
+    description: doc.description || undefined,
     urlHost: doc.urlHost,
     status: effectiveMcpConnectionStatus(doc, policyVerdict),
     tools: (doc.tools ?? []).filter(tool => tool.enabled && tool.state === 'active'),
@@ -618,9 +629,11 @@ export interface McpToolSettingsUpdate {
   state?: McpToolState;
 }
 
-/** Rename, enable and tool review applied together; omitted parts are left as stored. */
+/** Rename, description, enable and tool review applied together; omitted parts are left as stored. */
 export interface McpConnectionSettingsUpdate {
   displayName?: string;
+  /** Already cleaned by the caller; an empty string clears it. */
+  description?: string;
   enabled?: boolean;
   tools?: McpToolSettingsUpdate[];
 }
@@ -757,8 +770,8 @@ export interface IMcpConnectionRepository extends IBaseRepository<IMcpConnection
     settings: McpToolSettingsUpdate[]
   ): Promise<IMcpConnectionDocument | null>;
   /**
-   * Rename, enable and tool review in one atomic write (bumping `toolsRevision` when tools are
-   * named). Null when not found or not the owner's; throws McpToolVersionConflictError, writing
+   * Rename, description, enable and tool review in one atomic write (bumping `toolsRevision` only
+   * when tools are named). Null when not found or not the owner's; throws McpToolVersionConflictError, writing
    * nothing, when a tool entry's `versionHash` no longer matches the stored tool.
    */
   updateSettings(

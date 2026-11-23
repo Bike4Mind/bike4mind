@@ -45,6 +45,38 @@ can silently turn it into `none`.
 
 ## Inventory
 
+### Focused follow-up: FabFile tag rename
+
+This pass inspected the two positional tag-name writers in `content/FabFileModel.ts`, the
+`tagService/update.ts` caller, its rename tests, and the existing inventory and gate tests.
+It does not constitute a fresh audit of every caller represented in the table below.
+
+| Entity | Path | Constraint | Writer | Load-bearing gate |
+|---|---|---|---|---|
+| FabFile | `tags.$[elem].name` | shared name-length cap, not a schema validator | `claimTagRewriteByUserId` | `assertTagRenameLength` before the claim |
+| FabFile | `tags.$[elem].name`, `primaryTag` | shared name-length cap, not a schema validator | `updateTagsByUserId` | `assertTagRenameLength` before either bulk write |
+
+`tags` is `[Object]`, not a typed subdocument with `tags.name.maxlength`. These writes therefore do
+not appear in the mechanically derived constrained-schema intersection. Adding `runValidators`
+would not enforce a tag-name limit. The service already rejects an overlong destination on a real
+rename before its writes; it allows metadata-only edits of legacy overlong names. The repositories
+now reject overlong destinations too, without rejecting an overlong source being repaired or deleted.
+The claim feeds membership before/after events; the bulk rewrite also changes `primaryTag` and reaches
+soft-deleted files. These values feed membership and tag-count readers, not just logs.
+
+`content/FabFileModel.tagRenameLength.test.ts` covers both repository writers against Mongo: limit + 1
+and 10,000-character destinations reject without changing stored tags or `primaryTag`, the exact cap
+is accepted, and a legacy overlong source can be repaired. Existing service tests cover its separate
+caller gate. Existing `FabFileModel.statusEnumGate.test.ts` and the inventory hook-gate test cover the
+previously added status-family protections; this pass does not replace those gates.
+
+Remaining work is explicitly outside this focused repair: enumerate caller-built patch/spread writes
+through BaseRepository per constrained path; inspect direct writes outside this package, raw-driver
+and bulk writes; trace pipeline expressions and removal/move operators against their destination
+constraints; behaviorally verify route-schema and non-literal repository-check rows rather than only
+checking their references. Other tag creation/replacement/push paths are not newly audited here.
+The table below remains the literal-update inventory, not proof that all database updates are gated.
+
 | Model | Path | Constraint | Writer | Gate | Ref | Note |
 |---|---|---|---|---|---|---|
 | AbuseAssessment | `decisionModel` | enum | `infra/security/AbuseAssessmentModel.ts#AbuseAssessmentRepository.save` | route-schema | `b4m-core/common/src/schemas/settings.ts#AbuseAssessmentConfigSchema` | Sole caller passes config.model, z.enum(DECISION_MODEL_IDS), plus registry check in callablePlatformModel |
@@ -85,6 +117,7 @@ can silently turn it into `none`.
 | BillingMismatch | `resolvedBy` | enum | `billing/BillingMismatchModel.ts#BillingMismatchRepository.resolveMissing` | repository-check | `literal` | writes "reconciliation" |
 | BillingMismatch | `status` | enum | `billing/BillingMismatchModel.ts#BillingMismatchRepository.resolveForSubscription` | repository-check | `literal` | writes "resolved" |
 | BillingMismatch | `status` | enum | `billing/BillingMismatchModel.ts#BillingMismatchRepository.resolveMissing` | repository-check | `literal` | writes "resolved" |
+| CompletionRun | `budgetCredits` | min | `billing/CompletionRunModel.ts#CompletionRunRepository.raiseBudget` | schema | `runValidators` | Passes runValidators; the sole caller (POST completion-runs/{runId}/budget) also validates the body as an int of at least 1. |
 | CreditTransaction | `reversalReason` | enum | `billing/CreditTransactionModel.ts#CreditTransactionRepository.markPurchaseReversed` | route-schema | `apps/client/pages/api/stripe/webhook.ts#reversePurchaseStanding` | Webhook and reconcile script pass literals refunded or dispute_lost only |
 | CreditTransaction | `status` | enum | `billing/CreditTransactionModel.ts#CreditTransactionRepository.updateTransactionStatus` | route-schema | `apps/client/pages/api/stripe/webhook.ts#CreditPurchaseStatus.Failed` | Sole caller passes enum constant CreditPurchaseStatus.Failed |
 | DataLake | `status` | enum | `ai/DataLakeModel.ts#DataLakeRepository.activateIfDraft` | repository-check | `literal` | writes "active" |
@@ -120,9 +153,12 @@ can silently turn it into `none`.
 | DungeonInstance | `status` | enum | `content/DungeonInstanceModel.ts#markExpiring` | repository-check | `literal` | writes "expiring" |
 | EmailJob | `overallStatus` | enum | `infra/email/EmailJobModel.ts#EmailJobRepository.claimForSending` | route-schema | `apps/client/pages/api/admin/email/jobs/[id]/send.ts#claimForSending` | Writer sets SENDING constant; sole caller's updates spread has no status |
 | EmailJob | `status` | enum | `infra/email/EmailJobModel.ts#EmailJobRepository.claimForStart` | route-schema | `apps/client/pages/api/admin/email/jobs/[id]/start.ts#claimForStart` | Writer sets QUEUED constant; sole caller spreads only startedBy |
+| EmailJob | `status` | enum | `infra/email/EmailJobModel.ts#EmailJobRepository.completeRun` | schema | `runValidators` | Writer sets constant EmailJobStatus.COMPLETED |
 | EmailPreferences | `unsubscribedCategories` | enum | `infra/email/EmailPreferencesModel.ts#EmailPreferencesRepository.unsubscribeFromCategory` | route-schema | `apps/client/pages/api/email/unsubscribe.ts#unsubscribeBodySchema` | Body category parsed with z.nativeEnum(EmailCategory) |
 | EmailSendAttempt | `status` | enum | `infra/email/EmailSendAttemptModel.ts#EmailSendAttemptRepository.cancelPendingAttempts` | repository-check | `packages/database/src/models/infra/email/EmailSendAttemptModel.ts#EmailSendAttemptRepository.cancelPendingAttempts` | Writer sets constant EmailSendStatus.CANCELLED |
 | EmailSendAttempt | `status` | enum | `infra/email/EmailSendAttemptModel.ts#EmailSendAttemptRepository.markOpened` | repository-check | `packages/database/src/models/infra/email/EmailSendAttemptModel.ts#EmailSendAttemptRepository.markOpened` | Writer sets constant EmailSendStatus.OPENED |
+| EmailSendAttempt | `status` | enum | `infra/email/EmailSendAttemptModel.ts#EmailSendAttemptRepository.markQueued` | schema | `runValidators` | Writer sets constant EmailSendStatus.QUEUED |
+| EmailSendAttempt | `status` | enum | `infra/email/EmailSendAttemptModel.ts#EmailSendAttemptRepository.markSendFailed` | schema | `runValidators` | Writer sets constant EmailSendStatus.FAILED |
 | EmailSendAttempt | `status` | enum | `infra/email/EmailSendAttemptModel.ts#EmailSendAttemptRepository.recordClick` | repository-check | `packages/database/src/models/infra/email/EmailSendAttemptModel.ts#EmailSendAttemptRepository.recordClick` | Writer sets constant EmailSendStatus.CLICKED |
 | EmailSendAttempt | `status` | enum | `infra/email/EmailSendAttemptModel.ts#EmailSendAttemptRepository.updateStatus` | route-schema | `apps/workers/src/queueHandlers/emailBatch.ts#EmailSendStatus` | All callers in emailBatch.ts pass EmailSendStatus enum constants; updates omit status |
 | EmbedConversation | `messages.role` | enum | `ai/EmbedConversationModel.ts#EmbedConversationRepository.appendMessages` | route-schema | `apps/client/server/chatCompletion/external/embedRoute.ts#appendMessages` | Sole caller passes literal roles 'user' and 'assistant' |
@@ -270,6 +306,7 @@ can silently turn it into `none`.
 | Space | `members.joinedVia` | enum | `infra/admin/SpaceModel.ts#SpaceRepository.transferOwnership` | repository-check | `packages/database/src/models/infra/admin/SpaceModel.ts#SpaceRepository.transferOwnership` | Pipeline writes the former owner's row with the literal "invite" |
 | Space | `members.role` | enum | `infra/admin/SpaceModel.ts#SpaceRepository.setMemberRole` | schema | `runValidators` | update call passes runValidators |
 | Space | `members.role` | enum | `infra/admin/SpaceModel.ts#SpaceRepository.transferOwnership` | repository-check | `packages/database/src/models/infra/admin/SpaceModel.ts#SpaceRepository.transferOwnership` | Pipeline writes the former owner's row with the literal "admin" |
+| SpendAlert | `autoPause.mode` | enum | `billing/SpendAlertModel.ts#SpendAlertRepository.recordAutoPause` | schema | `runValidators` | update call passes runValidators |
 | SreErrorTracking | `fixVerdict.value` | enum | `infra/ops/SreErrorTrackingModel.ts#SreErrorTrackingRepository.setFixVerdict` | route-schema | `apps/workers/src/integrations/github/handlers/PullRequestHandler.ts#SRE_FIX_VERDICT_LABELS` | Value looked up from constant label map; unmapped labels return early |
 | SreErrorTracking | `githubIssueState` | enum | `infra/ops/SreErrorTrackingModel.ts#SreErrorTrackingRepository.setGithubIssueState` | route-schema | `packages/server-utils/src/integrations/github/sreWebhookDispatch.ts#syncSreIssueStateFromWebhook` | Webhook uses literal ternary; issue-state route checks open or closed |
 | SreErrorTracking | `githubIssueState` | enum | `infra/ops/SreErrorTrackingModel.ts#SreErrorTrackingRepository.setGithubIssueStateById` | route-schema | `apps/client/pages/api/sre/tracking/[id]/issue-state.ts#handler` | Caller guards issue.state === open or closed before write |

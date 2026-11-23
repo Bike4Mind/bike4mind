@@ -93,6 +93,8 @@ const NOT_A_REWRITE = new Set([
   'apps/workers/src/queueHandlers/questExport.ts',
   // Stages HTML and stores published-artifact thumbnails; neither upload rewrites FabFile content.
   'apps/workers/src/queueHandlers/publishThumbnail.ts',
+  // Parks an outbound mail body under queued-mail/ for the email-send worker; it writes no FabFile bytes.
+  'packages/server-utils/src/utils/mailer/mailBodyStore.ts',
 ]);
 
 /**

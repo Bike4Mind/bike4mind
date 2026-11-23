@@ -106,6 +106,15 @@ describe('POST /api/admin/dlq/discard', () => {
     });
     expect(h.audit.mock.invocationCallOrder[0]).toBeLessThan(h.acquire.mock.invocationCallOrder[0]);
     expect(h.audit.mock.calls[1][1].details).toMatchObject({ aiSuggestionId: id });
+    expect(h.logReplay).toHaveBeenCalledWith(
+      expect.objectContaining({
+        aiSuggestionId: id,
+        messageId: 'm1',
+        queueLabel: 'quest',
+        operation: 'discard',
+        status: 'pending',
+      })
+    );
     await expect(invoke()).rejects.toThrow('already been decided');
     expect(h.deleteFromQueue).toHaveBeenCalledOnce();
   });

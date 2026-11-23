@@ -31,7 +31,7 @@ Branch on the HTTP status and `errorCode` (JSON), or on the event's `code` (stre
 
 ## Credits
 
-- **422** with `errorCode: "insufficient_credits"` means you cannot afford the request: your personal balance, your organization's balance, or an organization per-member credit cap. Other 422 responses mean the body failed schema validation.
+- **422** with `errorCode: "insufficient_credits"` means you cannot afford the request: your personal balance, your organization's balance, or an organization per-member credit cap. A 422 with `errorCode: "run_budget_exhausted"` is a run budget, not your balance; see [Runs](#runs). Other 422 responses mean the body failed schema validation.
 - On an open stream, running out of credits mid-generation arrives as an `error` event with `code: "insufficient_credits"`.
 - B4M never returns 402.
 
@@ -76,6 +76,7 @@ A 429 body for the request and token limits may also carry `limit` (the limit th
 |--------|--------|
 | 400, 401, 403, 413, 422 | No. Fix the request, key, scopes or balance first. |
 | 404 with `run_not_found` | No. Resend without `run`, or use a run you created. On `GET /api/v1/completion-runs/{runId}/usage`, read a run you created. |
+| 422 with `run_budget_exhausted` | After the run's running requests finish, or after you raise the run budget. |
 | 429 | Yes. Wait `Retry-After` seconds. See [Account-level limits](#account-level-limits) for the `errorCode` values. |
 | 500, 503 | Yes, with exponential backoff. A 503 with `errorCode: "provider_not_configured"` means the model's provider is unavailable here; try later or another model. |
 
@@ -86,6 +87,8 @@ Log the `request_id` from the error body (also sent as the `X-Request-ID` header
 A 404 with `errorCode: "run_not_found"` means the `run.runId` in your request is not a run you created. It is returned before any credit hold or provider call, so nothing is charged. It is not retryable unchanged: resend without `run`, or mint a new run with `POST /api/v1/completion-runs`. See [Streaming](./streaming.md#settled-event).
 
 `GET /api/v1/completion-runs/{runId}/usage` returns the same 404 for a run you did not create, including one that does not exist. It is a read, so nothing is charged either way.
+
+A run minted with `budgetCredits` caps what all of its completions may claim together. Each completion claims what its answer can cost before the model is called, and returns the unused part when it finishes. The claim is priced from an estimate of the input, so a completion that costs more than it claimed is still charged its actual cost to your balance, up to what the balance can pay, and the run can go over its budget by that amount. The run counts it, and refuses later requests it can no longer cover. A 422 with `errorCode: "run_budget_exhausted"` means the run's settled charges plus the claims of requests still running leave too little for even a short answer. Nothing is charged. Retry once those requests finish, or raise the budget with `POST /api/v1/completion-runs/{runId}/budget`. Buying credits does not raise a run budget. `GET /api/v1/completion-runs/{runId}/usage` reports the run's `budget` state. On a deployment that does not charge credits, the budget is not enforced and the `budget` block stays at zero committed credits.
 
 ## Unknown model
 

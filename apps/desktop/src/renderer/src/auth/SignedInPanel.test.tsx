@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { AuthState } from '@shared/auth';
 import { initialUpdateState, reduceUpdate, type UpdateStatus } from '@shared/update';
 import type { AppUpdateController } from '../chat/useAppUpdate';
+import { ExternalLinkIcon } from '../chat/icons';
 import { AccountMenu, SignedInPanel, updateNextStep } from './SignedInPanel';
 
 vi.mock('@tanstack/react-router', () => ({ useNavigate: () => vi.fn() }));
@@ -66,6 +67,7 @@ describe('the account strip', () => {
 
   it('keeps the menu shut until it is asked for', () => {
     expect(html).not.toContain('data-testid="account-menu"');
+    expect(html).not.toContain('Open web conversations');
   });
 });
 
@@ -77,6 +79,15 @@ describe('the account menu', () => {
   it('offers Send Feedback in the avatar menu', () => {
     expect(html).toContain('data-testid="account-feedback-btn"');
     expect(html).toContain('Send Feedback');
+  });
+
+  it('offers web conversations in the account menu with the external-window icon', () => {
+    const menu = document.createElement('div');
+    menu.innerHTML = html;
+    const row = menu.querySelector('[data-testid="account-web-conversations-btn"]');
+    expect(row?.textContent).toBe('Open web conversations');
+    expect(row?.querySelector('svg')?.outerHTML).toBe(renderToStaticMarkup(<ExternalLinkIcon />));
+    expect(html).not.toContain('Server conversations / handoff');
   });
 
   /**
@@ -175,6 +186,29 @@ describe('the account strip with an update waiting', () => {
     mount(controllerIn('available'));
     act(() => byTestId('account-menu-btn')?.click());
     expect(byTestId('update-notice')).toBeNull();
+  });
+
+  it('opens the existing web-conversation window action from the account menu', () => {
+    const openServerSessions = vi.fn(async () => {});
+    (window as unknown as { b4m: unknown }).b4m = {
+      getAppInfo: () => new Promise(() => {}),
+      attention: { openServerSessions },
+    };
+    mount(controllerIn('idle'));
+    expect(byTestId('account-web-conversations-btn')).toBeNull();
+    act(() => byTestId('account-menu-btn')?.click());
+
+    const row = byTestId('account-web-conversations-btn');
+    expect(byTestId('account-menu')?.contains(row)).toBe(true);
+    expect(row?.textContent).toBe('Open web conversations');
+    expect(byTestId('account-web-conversations-description')).toBeNull();
+    expect(byTestId('account-menu')?.textContent).not.toContain(
+      'Opens web conversations in a separate window. Local desktop chats stay on this device.'
+    );
+    expect(row?.hasAttribute('aria-describedby')).toBe(false);
+    expect(openServerSessions).not.toHaveBeenCalled();
+    act(() => row?.click());
+    expect(openServerSessions).toHaveBeenCalledExactlyOnceWith();
   });
 
   describe('the next step the label takes', () => {

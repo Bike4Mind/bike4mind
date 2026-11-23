@@ -110,6 +110,8 @@ export const ADMIN_REASON_PRESETS = {
     'Organization billing contact resolved it',
     'Duplicate of another dispute',
   ],
+  spendFreeze: ['Abnormal spend spike', 'Suspected abuse', 'Requested by account owner'],
+  spendFreezeLift: ['Reviewed: spend is legitimate', 'Account owner contacted', 'Resolved with account owner'],
   stripeDisputeUndoContain: ['Customer verified as legitimate', 'Contained in error'],
   signupRiskReopen: ['Evidence needs a manual look', 'Linked to known abuse', 'Payment disputed or refunded'],
   shadowDetectionVerdict: [
@@ -126,6 +128,7 @@ export const ADMIN_REASON_PRESETS = {
     'Requested by the app owner',
   ],
   identityProviderDelete: ['Replaced by another provider', 'Domain no longer uses single sign-on', 'Created in error'],
+  platformMcpConnectorRemove: ['No longer needed', 'Server retired', 'Replaced by another connector', 'Added in error'],
   partnerSignupRule: ['Partner agreement ended', 'Created in error', 'Replaced by another rule', 'Account cleanup'],
   partnerBackfill: ['Partner onboarding', 'Organization request', 'Rule added after signups', 'Internal testing'],
   signupDomainHoldRelease: ['Reviewed, domain is legitimate', 'Known customer or partner', 'Domain has aged'],
@@ -133,6 +136,15 @@ export const ADMIN_REASON_PRESETS = {
   heldSignupGrantRevoke: ['Abuse / automated signups', 'Credit farming', 'Granted in error'],
   tutorialDraftDelete: ['Superseded by a newer draft', 'Captured in error', 'No longer needed'],
   knowledgeFileRemoval: ['File no longer needed', 'Outdated instructions', 'Missing file reference'],
+  slackWorkspaceDeactivate: ['Workspace no longer used', 'Customer request', 'Bot misbehaving', 'Security concern'],
+  slackExportCancel: ['Started by mistake', 'Wrong channel or date range', 'Taking too long'],
+  githubDisconnect: [
+    'Switching to a new connection',
+    'Credentials compromised or leaked',
+    'Connection no longer needed',
+  ],
+  githubKeyRotate: ['Routine rotation', 'Key compromised or leaked', 'Key about to expire'],
+  githubRepoAccess: ['Pausing GitHub automation', 'Repository access under review', 'Security incident'],
   modelAccess: [
     'Ready for users',
     'Limit to a test group',

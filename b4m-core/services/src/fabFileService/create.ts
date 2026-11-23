@@ -29,6 +29,7 @@ import { assertCanWriteDataLakeTags, assertCanWriteStaticRegistryTags } from '..
 import { reconcileDataLakeFallbackTags } from '../dataLakeService/fallbackLakeTags';
 import { pickOwnerOrganizationId } from './resolveOwnerOrganization';
 import { signedUrlExpiresAt } from './get';
+import { storageReadOverrides, type StorageReadOverrides } from '@bike4mind/utils/contentDisposition';
 
 // The fab-file bucket reaps everything under these prefixes after 1 day (infra/buckets.ts,
 // expire-notebook-exports and expire-generated-audio-offload), so no durable FabFile may be stored there. Pinned to the rule by
@@ -99,12 +100,12 @@ export interface CreateFabFileAdapters {
     scopedSettings?: Pick<IScopedSettingsRepository, 'findOverrides'>;
   };
   storage: {
-    /** `ContentLength` binds a PUT to that byte length (see S3Storage.getSignedUrl). */
+    /** `ContentLength` binds a PUT to that byte length; the Response* overrides apply to a GET (see S3Storage.getSignedUrl). */
     generateSignedUrl: (
       path: string,
       expireInSeconds: number,
       type?: 'get' | 'put',
-      options?: { ContentLength?: number }
+      options?: { ContentLength?: number } & StorageReadOverrides
     ) => Promise<string>;
     upload: (
       path: string,
@@ -306,7 +307,12 @@ export const prepareFabFile = async (
     // moderationStatus to 'clean'/'blocked', and a url is only ever minted on read once clean
     // (see fabFileService/get.ts generateSignedUrl). Non-image content is unaffected.
     if (!mimeType.startsWith('image/')) {
-      buildData.fileUrl = await storage.generateSignedUrl(filePath, DEFAULT_EXPIRE_IN_SECONDS, 'get');
+      buildData.fileUrl = await storage.generateSignedUrl(
+        filePath,
+        DEFAULT_EXPIRE_IN_SECONDS,
+        'get',
+        storageReadOverrides({ mimeType, fileName: params.fileName, key: filePath })
+      );
       buildData.fileUrlExpireAt = signedUrlExpiresAt(buildData.fileUrl, DEFAULT_EXPIRE_IN_SECONDS);
     }
   } else if (!serverUpload) {

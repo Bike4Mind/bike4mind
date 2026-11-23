@@ -367,6 +367,7 @@ export async function purgePersonalLakeById(
       'LakeMembershipRemoval',
       'LakeMembershipChangeEvent',
       'LakeConfigChangeEvent',
+      'LakeConfigSnapshot',
       'LakeSkippedFile',
       'LakeAccessEvent',
       'LakeAccessQueryText',

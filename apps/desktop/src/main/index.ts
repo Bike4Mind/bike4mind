@@ -25,11 +25,12 @@ import { registerSkinScheme } from './mods/skinProtocol';
 import { registerSkins } from './mods';
 import { registerUpdates } from './update';
 import { registerTerminals } from './terminal';
-import { registerUsage } from './usage';
+import { registerLocalUsage, registerUsage } from './usage';
 import { registerAttention } from './attention';
 import { appWindows } from './windows';
 import { registerWatch } from './watch';
 import { registerWindowTheme } from './windowTheme';
+import { registerSessionHandoff } from './handoff';
 
 // electron-vite sets this in dev only; a packaged build loads the renderer off disk.
 const rendererDevUrl = process.env.ELECTRON_RENDERER_URL;
@@ -152,7 +153,11 @@ void app.whenReady().then(async () => {
   // After ready, not before: safeStorage is only usable once the app is ready, and the vault
   // asks it whether encryption is available on its first access.
   const auth = registerAuth();
-  const attention = registerAttention({ openWindow: createWindow });
+  registerSessionHandoff(auth);
+  const attention = registerAttention({
+    openWindow: createWindow,
+    notifyScopePath: join(app.getPath('userData'), 'attention-preferences.json'),
+  });
   registerAccount(auth);
   registerUsage(auth);
   const fleet = registerFleet();
@@ -164,6 +169,7 @@ void app.whenReady().then(async () => {
     simulatorView,
     modelViews,
     pullRequests,
+    composerDrafts,
     claudeImport,
     spareWorktrees,
     modelServers,
@@ -173,6 +179,7 @@ void app.whenReady().then(async () => {
     modelSettings,
     capabilityLedger,
     respondToApproval,
+    store: sessions,
   } = registerChat(auth, {
     sessionClosed: sessionId => terminals.killSession(sessionId),
     releaseSessionTerminals: sessionId => terminals.acquireSessionCleanup(sessionId),
@@ -234,6 +241,7 @@ void app.whenReady().then(async () => {
     needsYou.scopeChanged();
     watch.scopeChanged();
   });
+  registerLocalUsage(auth, sessions, modelServers);
   fleet.setDirectoryResolver(async sessionId => {
     const session = await chat.getSession(sessionId);
     return session?.project?.workingDirectory ?? session?.grantedDirectories?.[0] ?? null;
@@ -342,6 +350,7 @@ void app.whenReady().then(async () => {
   });
 
   app.once('will-quit', () => {
+    composerDrafts.flushSync();
     auth.dispose();
     fleet.dispose();
     models.dispose();

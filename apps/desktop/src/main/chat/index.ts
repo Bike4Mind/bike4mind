@@ -1,3 +1,4 @@
+import { z } from 'zod';
 import { registerOrchestrationIpc } from './orchestrationIpc';
 import { createStudioDiagnostics } from './studio/StudioDiagnostics';
 import { registerStudio } from './studio/registerStudio';
@@ -75,6 +76,8 @@ import { registerLocalContextIpc } from './localContextIpc';
 import { localContextSizing, localHardware, localLlamaServer, relistAfterSave } from './localContextSizing';
 import { findOnPath, resolveUserPath } from './tools/userPath';
 import { SidebarSectionStore } from './SidebarSectionStore';
+import { ComposerDraftStore } from './ComposerDraftStore';
+import { registerComposerDraftsIpc } from './composerDraftsIpc';
 import { registerImageMenuIpc } from './imageMenuIpc';
 import { registerFilePathLinkIpc } from './filePathLinks';
 import { registerSessionExportIpc } from './sessionExportIpc';
@@ -174,6 +177,12 @@ import { appWindows, focusedAppWindow } from '../windows';
 import { registerClaudeImport } from '../claudeImport';
 import type { ClaudeImportService } from '../claudeImport/ClaudeImportService';
 import { rendererNotes } from './rendererNotes';
+
+const editMessageRequestSchema = z.object({
+  sessionId: z.string(),
+  messageId: z.string(),
+  text: z.string(),
+});
 
 const VERBOSE = process.env.B4M_DESKTOP_VERBOSE === '1';
 /** Diagnosis only; see apps/desktop/docs/model-wait-findings.md. */
@@ -318,6 +327,8 @@ export interface RegisteredChat {
   modelViews: ModelLiveViews;
   /** Each conversation's pull request, and the timers that watch it. */
   pullRequests: PrMonitor;
+  /** Unsent composer text, written once more on quit in case a debounced save is still in flight. */
+  composerDrafts: Pick<ComposerDraftStore, 'flushSync'>;
   /** Import from Claude; started once the window is up so it never delays launch. */
   claudeImport: ClaudeImportService;
   /** Spare checkouts, removed on the quit pass that can wait for git. */
@@ -336,6 +347,8 @@ export interface RegisteredChat {
   capabilityLedger: CapabilityLedger;
   /** The one path that answers a tool approval; the menu bar and mini Tavern answer through it too. */
   respondToApproval(approvalId: string, answer: ChatApprovalAnswer): void;
+  /** The session store, which the profile screen's local usage is counted from. */
+  store: SessionStore;
 }
 
 /**
@@ -506,6 +519,9 @@ export function registerChat(
     .catch(error => logger.warn(`CAPABILITIES: could not migrate grants: ${String(error)}`));
   const attachmentsDir = join(userData, 'attachments');
   const attachments = new AttachmentStore(attachmentsDir, logger, shrinkImage);
+  // App-wide like sidebar-sections.json: session ids are unique across scopes.
+  const composerDrafts = new ComposerDraftStore(join(userData, 'composer-drafts.json'));
+  const composerDraftsLoaded = composerDrafts.load();
   const media = new MediaStore(join(userData, 'media'));
   registerMediaProtocol(media);
   registerArtifactProtocol();
@@ -773,6 +789,7 @@ export function registerChat(
     store,
     access,
     attachments,
+    composerDrafts,
     models,
     modelSettings,
     logger,
@@ -1219,12 +1236,13 @@ export function registerChat(
     await service.deleteSession(sessionId, removeWorktree === true);
     await pullRequests.forget(sessionId);
   });
-  registerSidebarIpc(ipcMain, sidebarSections, sessionId =>
+  const isKnownSession = (sessionId: string) =>
     store.get(sessionId).then(
       session => session !== null,
       () => false
-    )
-  );
+    );
+  registerSidebarIpc(ipcMain, sidebarSections, isKnownSession);
+  registerComposerDraftsIpc(ipcMain, composerDrafts, composerDraftsLoaded, isKnownSession);
   ipcMain.handle(IPC_CHANNELS.chatSendMessage, (_event, request: SendMessageRequest) =>
     service.send(request.sessionId, request.text, request.attachments, { notes: rendererNotes(request.notes) })
   );
@@ -1234,6 +1252,16 @@ export function registerChat(
   );
   ipcMain.handle(IPC_CHANNELS.chatGetLoop, (_event, sessionId: string) => service.getLoop(sessionId));
   ipcMain.handle(IPC_CHANNELS.chatContinueReply, (_event, sessionId: string) => service.continueReply(sessionId));
+  ipcMain.handle(IPC_CHANNELS.chatEditMessage, (_event, request: unknown) => {
+    const parsed = editMessageRequestSchema.safeParse(request);
+    if (!parsed.success) return { ok: false, error: 'That edit could not be read.' };
+    return service.editMessage(parsed.data.sessionId, parsed.data.messageId, parsed.data.text);
+  });
+  ipcMain.handle(IPC_CHANNELS.chatRegenerateReply, (_event, sessionId: unknown) =>
+    typeof sessionId === 'string'
+      ? service.regenerateReply(sessionId)
+      : { ok: false, error: 'That conversation no longer exists.' }
+  );
   ipcMain.handle(IPC_CHANNELS.chatClearContext, (_event, sessionId: string) => service.clearContext(sessionId));
   ipcMain.handle(IPC_CHANNELS.chatCompactContext, (_event, sessionId: string, focus?: string) =>
     service.compactContext(sessionId, focus ?? '')
@@ -1626,6 +1654,7 @@ export function registerChat(
     simulatorView,
     modelViews,
     pullRequests,
+    composerDrafts,
     claudeImport,
     spareWorktrees,
     modelServers,
@@ -1638,6 +1667,7 @@ export function registerChat(
     modelSettings,
     capabilityLedger,
     respondToApproval,
+    store,
   };
 }
 

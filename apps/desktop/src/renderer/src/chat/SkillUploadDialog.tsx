@@ -254,12 +254,13 @@ function SubmitResultView({ result, onClose }: { result: Submitted; onClose: () 
         </Typography>
       )}
       <DialogActions>
-        <Button variant="plain" color="neutral" onClick={onClose}>
+        <Button variant="outlined" color="neutral" onClick={onClose}>
           Close
         </Button>
         {result.listing.hasShareLink && (
           <Button
             variant="outlined"
+            color="neutral"
             onClick={() =>
               void window.b4m.skillMarket
                 .copyShareLink(result.listing.id)
@@ -272,6 +273,7 @@ function SubmitResultView({ result, onClose }: { result: Submitted; onClose: () 
         )}
         <Button
           variant="outlined"
+          color="neutral"
           endDecorator={<ExternalLinkIcon />}
           onClick={() => void window.b4m.skillMarket.openOnWeb({ kind: 'listing', id: result.listing.id })}
           data-testid="skill-publish-open-web-btn"
@@ -471,6 +473,7 @@ export function SkillUploadDialog({
             />
             <Button
               variant="outlined"
+              color="neutral"
               disabled={busy || !NAME_PATTERN.test(rename) || rename.length > NAME_MAX}
               onClick={() => {
                 set('name', rename);
@@ -545,7 +548,7 @@ export function SkillUploadDialog({
           >
             Scan and publish
           </Button>
-          <Button variant="plain" color="neutral" onClick={onClose}>
+          <Button variant="outlined" color="neutral" onClick={onClose}>
             Not now
           </Button>
         </DialogActions>
@@ -565,7 +568,7 @@ export function SkillUploadDialog({
           >
             Submit as new version
           </Button>
-          <Button variant="plain" color="neutral" onClick={onClose}>
+          <Button variant="outlined" color="neutral" onClick={onClose}>
             Not now
           </Button>
         </DialogActions>
@@ -582,7 +585,8 @@ export function SkillUploadDialog({
             endDecorator={
               <Button
                 size="sm"
-                variant="plain"
+                variant="outlined"
+                color="neutral"
                 endDecorator={<ExternalLinkIcon />}
                 onClick={() => void window.b4m.skillMarket.openSource(preview.source!.url)}
                 data-testid="skill-upload-source-link"
@@ -698,6 +702,7 @@ export function SkillUploadDialog({
               </Button>
               <Button
                 variant="outlined"
+                color="neutral"
                 disabled={!valid || busy}
                 onClick={() => guarded(() => save('done'))}
                 data-testid="skill-upload-save-btn"
@@ -706,7 +711,7 @@ export function SkillUploadDialog({
               </Button>
             </>
           )}
-          <Button variant="plain" color="neutral" onClick={onClose}>
+          <Button variant="outlined" color="neutral" onClick={onClose}>
             Cancel
           </Button>
         </DialogActions>
@@ -764,7 +769,7 @@ export function SkillUploadDialog({
             >
               Continue
             </Button>
-            <Button variant="plain" color="neutral" onClick={() => setPending(null)}>
+            <Button variant="outlined" color="neutral" onClick={() => setPending(null)}>
               Cancel
             </Button>
           </DialogActions>
