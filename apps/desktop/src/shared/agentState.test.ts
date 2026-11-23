@@ -58,11 +58,11 @@ describe('waiting on background jobs', () => {
     expect(deriveTaskAgentState({ workerTask, lastOutcome: 'finished' }, 'done')).toBe('done');
   });
 
-  // The dock badge counts needs-you by this rule, so background work must never hide a decision.
+  // A pending decision reaches here as 'needs-action' (SessionActivity owns attention), and that outranks jobs.
   it('lets a decision the user owes outrank running jobs', () => {
     const workerTask = { state: completed(false), attentionViewed: false } as WorkerTask;
-    expect(deriveTaskAgentState({ workerTask, lastOutcome: 'finished' }, 'done', jobs)).toBe('needs-you');
     expect(deriveTaskAgentState({ workerTask, lastOutcome: 'finished' }, 'needs-action', jobs)).toBe('needs-you');
+    expect(deriveTaskAgentState({ workerTask, lastOutcome: 'finished' }, 'done', jobs)).toBe('waiting');
   });
 
   it('lets a live turn outrank running jobs', () => {
