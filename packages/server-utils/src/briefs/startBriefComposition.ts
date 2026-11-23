@@ -2,6 +2,8 @@ import { isPushCategoryEnabled } from '@bike4mind/common';
 import {
   agentExecutionRepository,
   assistantBriefRepository,
+  EMAIL_TRIAGE_KINDS,
+  emailTriageItemRepository,
   userRepository,
   type IAssistantBrief,
 } from '@bike4mind/database';
@@ -78,6 +80,8 @@ export type ScheduledBriefDeps = Deps & {
   users: Pick<typeof userRepository, 'findById'>;
   /** Whether the user started any agent run at or after `since`. */
   hasRunsSince(userId: string, since: Date): Promise<boolean>;
+  /** Whether the user has triaged email not yet briefed as of `end`; unwindowed, like the composer's load. */
+  hasPendingEmails(userId: string, end: Date): Promise<boolean>;
 };
 
 const defaultScheduledDeps: ScheduledBriefDeps = {
@@ -87,12 +91,19 @@ const defaultScheduledDeps: ScheduledBriefDeps = {
     const { items } = await agentExecutionRepository.findByUserIdPaginated(userId, { fromDate: since }, { limit: 1 });
     return items.length > 0;
   },
+  hasPendingEmails: async (userId, end) => {
+    const sections = await Promise.all(
+      EMAIL_TRIAGE_KINDS.map(kind => emailTriageItemRepository.listPending(userId, end, 1, kind))
+    );
+    return sections.some(items => items.length > 0);
+  },
 };
 
 /**
  * The scheduled path into the composer: skips users whose schedule is now off, users who turned brief
- * pushes off, and windows with no agent runs (the worker derives approvals from those runs' sessions, so
- * no runs means nothing to report), so none of them costs a model call or leaves a row behind.
+ * pushes off, and windows with no agent runs and no pending triaged email (the worker derives approvals
+ * and questions from the runs' sessions, so those two are its only activity sources), so none of them
+ * costs a model call or leaves a row behind.
  */
 export async function startScheduledBrief(
   userId: string,
@@ -106,8 +117,12 @@ export async function startScheduledBrief(
   if (await deps.briefs.findActiveComposing(userId, deps.now())) return 'in_flight';
 
   const latest = await deps.briefs.findLatestReady(userId);
-  const { periodStart } = briefWindow(latest?.periodEnd, deps.now());
-  if (!(await deps.hasRunsSince(userId, periodStart))) return 'no_activity';
+  const { periodStart, periodEnd } = briefWindow(latest?.periodEnd, deps.now());
+  const [hasRuns, hasEmails] = await Promise.all([
+    deps.hasRunsSince(userId, periodStart),
+    deps.hasPendingEmails(userId, periodEnd),
+  ]);
+  if (!hasRuns && !hasEmails) return 'no_activity';
 
   await startBriefComposition(userId, deps, { scheduled: true });
   return 'enqueued';

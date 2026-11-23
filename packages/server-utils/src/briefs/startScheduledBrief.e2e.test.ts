@@ -3,9 +3,12 @@ import mongoose from 'mongoose';
 import {
   AgentExecutionModel,
   AssistantBriefModel,
+  EmailTriageItemModel,
   User,
   agentExecutionRepository,
   assistantBriefRepository,
+  emailTriageItemRepository,
+  EMAIL_TRIAGE_KINDS,
   userRepository,
 } from '@bike4mind/database';
 import { createMongoServer, MONGO_TEST_TIMEOUT_MS } from '../../../database/src/__test__/createMongoServer';
@@ -31,6 +34,7 @@ beforeEach(async () => {
     User.collection.deleteMany({}),
     AssistantBriefModel.collection.deleteMany({}),
     AgentExecutionModel.collection.deleteMany({}),
+    EmailTriageItemModel.collection.deleteMany({}),
   ]);
 });
 
@@ -48,6 +52,16 @@ const insertUser = async (pushNotifications?: Record<string, boolean>, briefSche
 const insertRun = (userId: string, createdAt: Date) =>
   AgentExecutionModel.collection.insertOne({ userId, sessionId: 's1', query: 'q', status: 'completed', createdAt });
 
+const insertEmail = (userId: string, createdAt: Date) =>
+  EmailTriageItemModel.collection.insertOne({
+    userId,
+    emailId: `e-${userId}`,
+    kind: EMAIL_TRIAGE_KINDS[0],
+    summary: 's',
+    briefedAt: null,
+    createdAt,
+  });
+
 const makeDeps = () => {
   const publishCompose = vi.fn().mockResolvedValue(undefined);
   const deps: ScheduledBriefDeps = {
@@ -56,6 +70,10 @@ const makeDeps = () => {
     hasRunsSince: async (userId, since) =>
       (await agentExecutionRepository.findByUserIdPaginated(userId, { fromDate: since }, { limit: 1 })).items.length >
       0,
+    hasPendingEmails: async (userId, end) =>
+      (
+        await Promise.all(EMAIL_TRIAGE_KINDS.map(kind => emailTriageItemRepository.listPending(userId, end, 1, kind)))
+      ).some(items => items.length > 0),
     publishCompose,
     now: () => now,
   };
@@ -71,6 +89,23 @@ describe('startScheduledBrief', () => {
     expect(await startScheduledBrief(userId, deps)).toBe('enqueued');
     expect(await AssistantBriefModel.countDocuments({ userId, status: 'composing' })).toBe(1);
     expect(publishCompose).toHaveBeenCalledWith(expect.objectContaining({ userId, scheduled: true }));
+  });
+
+  it('enqueues a scheduled brief for pending triaged email even with no agent runs', async () => {
+    const userId = await insertUser();
+    await insertEmail(userId, hoursAgo(6));
+    const { deps, publishCompose } = makeDeps();
+
+    expect(await startScheduledBrief(userId, deps)).toBe('enqueued');
+    expect(publishCompose).toHaveBeenCalledWith(expect.objectContaining({ userId, scheduled: true }));
+  });
+
+  it('reports no_activity with no agent runs and no pending email', async () => {
+    const userId = await insertUser();
+    const { deps, publishCompose } = makeDeps();
+
+    expect(await startScheduledBrief(userId, deps)).toBe('no_activity');
+    expect(publishCompose).not.toHaveBeenCalled();
   });
 
   it('writes no row and publishes nothing for an empty window', async () => {

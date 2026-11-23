@@ -6,7 +6,7 @@
  * RETRY_WINDOW_MS after it fell due; uncertain event acceptance retains the row and advanced slot.
  * The brief itself rides the existing `brief.compose`
  * event; startScheduledBrief skips users whose schedule was turned off after the claim, users with brief
- * pushes off, and windows with no agent runs.
+ * pushes off, and windows with no agent runs and no pending triaged email.
  *
  * Schedule: rate(5 minutes). Self-host twin: apps/workers/src/selfhost/briefScheduleReconcile.ts.
  */

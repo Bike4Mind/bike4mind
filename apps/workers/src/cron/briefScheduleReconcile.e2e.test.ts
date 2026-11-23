@@ -5,6 +5,7 @@ import mongoose from 'mongoose';
 import {
   AgentExecutionModel,
   AssistantBriefModel,
+  EMAIL_TRIAGE_KINDS,
   User,
   agentExecutionRepository,
   assistantBriefRepository,
@@ -94,6 +95,10 @@ const run = (publisher: ScheduledBriefDeps['publishCompose'] = publishCompose) =
           hasRunsSince: async (id, since) =>
             (await agentExecutionRepository.findByUserIdPaginated(id, { fromDate: since }, { limit: 1 })).items.length >
             0,
+          hasPendingEmails: async (id, end) =>
+            (
+              await Promise.all(EMAIL_TRIAGE_KINDS.map(kind => emailTriageItemRepository.listPending(id, end, 1, kind)))
+            ).some(items => items.length > 0),
           publishCompose: publisher,
           now: () => new Date(),
         }),
