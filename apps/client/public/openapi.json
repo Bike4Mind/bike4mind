@@ -4949,6 +4949,49 @@
           "error"
         ]
       },
+      "synthesizeSpeechResponse503": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "string"
+          },
+          "request_id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string",
+            "deprecated": true,
+            "description": "Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this."
+          },
+          "provider": {
+            "type": "string",
+            "enum": [
+              "openai",
+              "elevenlabs"
+            ]
+          },
+          "errorCode": {
+            "type": "string",
+            "enum": [
+              "insufficient_credits",
+              "provider_not_configured",
+              "provider_rejected",
+              "end_user_id_not_allowed",
+              "invalid_end_user_id",
+              "request_timeout"
+            ]
+          },
+          "jobId": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "error"
+        ]
+      },
       "synthesizeSpeechResponse504": {
         "type": "object",
         "properties": {
@@ -39888,6 +39931,60 @@
               }
             }
           },
+          "503": {
+            "description": "Every candidate provider is out of quota, so speech is temporarily unavailable.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/synthesizeSpeechResponse503"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-RateLimit-Limit-Minute": {
+                "description": "Request quota per minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Minute": {
+                "description": "Requests remaining in the current minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Minute": {
+                "description": "Unix epoch (seconds) when the minute window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Limit-Day": {
+                "description": "Request quota per day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Day": {
+                "description": "Requests remaining in the current day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Day": {
+                "description": "Unix epoch (seconds) when the day window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          },
           "504": {
             "description": "The speech took longer than this request can wait. Tagged `errorCode: \"request_timeout\"`. Two cases. (1) It would not be saved to the file browser (a `preview` call, or a storage quota with no room for it), so it could never be retrieved: the generation is cancelled and its credits returned, unless the provider had already started it, in which case that one finishes and is billed, and the response carries `jobId` (also `X-B4M-Generation-Job-Id`) and a `message`. Retrying generates a new clip. (2) It is being saved to the file browser but the request did not send `Prefer: respond-async`: the generation is NOT cancelled and carries on, the audio lands in the file browser when it finishes, and it is billed only if it succeeds. Do not retry, which would generate and bill a second clip. The body carries `jobId`, also sent as `X-B4M-Generation-Job-Id`.",
             "headers": {
@@ -40749,7 +40846,7 @@
             }
           },
           "503": {
-            "description": "No provider API key is configured for this deployment.",
+            "description": "The provider is unavailable: no API key is configured for this deployment, or the provider account is out of quota. Reserved credits are refunded.",
             "headers": {
               "X-Request-ID": {
                 "description": "Correlation id for this request; safe to log and quote in support requests.",
@@ -41590,7 +41687,7 @@
             }
           },
           "503": {
-            "description": "No provider API key is configured for this deployment.",
+            "description": "The provider is unavailable: no API key is configured for this deployment, or the provider account is out of quota. Reserved credits are refunded.",
             "content": {
               "application/json": {
                 "schema": {

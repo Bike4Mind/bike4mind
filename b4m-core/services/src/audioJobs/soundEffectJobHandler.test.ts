@@ -280,6 +280,33 @@ describe('sound effect job handler submit', () => {
     });
   });
 
+  it('fails an exhausted provider quota with its reason, logged at warn, and releases the hold', async () => {
+    const elevenlabs = providerReturning({
+      status: 'failed',
+      retryable: false,
+      message: 'elevenlabs_sound_effect_quota_exhausted',
+      raw: { status: 401, snippet: 'quota_exceeded' },
+    });
+    const { handler, deps } = setup({ providers: { elevenlabs: elevenlabs.provider } });
+    const warn = vi.spyOn(deps.logger, 'warn');
+    const error = vi.spyOn(deps.logger, 'error');
+
+    const step = await handler.submit(makeJob(), stepContext());
+    expect(step).toMatchObject({
+      next: 'failed',
+      error: { code: 'provider_error', message: 'elevenlabs_sound_effect_quota_exhausted', providerStatus: 401 },
+    });
+    expect(warn).toHaveBeenCalledWith(
+      'sound effect provider quota exhausted',
+      expect.objectContaining({ reason: 'elevenlabs_sound_effect_quota_exhausted' })
+    );
+    expect(error).not.toHaveBeenCalled();
+
+    await handler.onTerminal(makeJob({}, { state: 'failed', creditHold: hold }));
+    expect(releaseCreditHold).toHaveBeenCalledWith(hold, unusedCredits);
+    expect(settleCreditHold).not.toHaveBeenCalled();
+  });
+
   it('fails a rate limit at once, as a 429 with a Retry-After, instead of retrying past the inline wait', async () => {
     const { handler } = setup();
     const job = makeJob({ request: { text: 'x [retry]', provider: 'elevenlabs' } });

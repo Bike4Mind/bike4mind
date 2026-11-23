@@ -4639,6 +4639,27 @@ export interface components {
       jobId?: string;
       message?: string;
     };
+    synthesizeSpeechResponse503: {
+      error: string;
+      request_id?: string;
+      /**
+       * @deprecated
+       * @description Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this.
+       */
+      name?: string;
+      /** @enum {string} */
+      provider?: 'openai' | 'elevenlabs';
+      /** @enum {string} */
+      errorCode?:
+        | 'insufficient_credits'
+        | 'provider_not_configured'
+        | 'provider_rejected'
+        | 'end_user_id_not_allowed'
+        | 'invalid_end_user_id'
+        | 'request_timeout';
+      jobId?: string;
+      message?: string;
+    };
     synthesizeSpeechResponse504: {
       error: string;
       request_id?: string;
@@ -17286,6 +17307,29 @@ export interface operations {
           'application/json': components['schemas']['synthesizeSpeechResponse502'];
         };
       };
+      /** @description Every candidate provider is out of quota, so speech is temporarily unavailable. */
+      503: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['synthesizeSpeechResponse503'];
+        };
+      };
       /** @description The speech took longer than this request can wait. Tagged `errorCode: "request_timeout"`. Two cases. (1) It would not be saved to the file browser (a `preview` call, or a storage quota with no room for it), so it could never be retrieved: the generation is cancelled and its credits returned, unless the provider had already started it, in which case that one finishes and is billed, and the response carries `jobId` (also `X-B4M-Generation-Job-Id`) and a `message`. Retrying generates a new clip. (2) It is being saved to the file browser but the request did not send `Prefer: respond-async`: the generation is NOT cancelled and carries on, the audio lands in the file browser when it finishes, and it is billed only if it succeeds. Do not retry, which would generate and bill a second clip. The body carries `jobId`, also sent as `X-B4M-Generation-Job-Id`. */
       504: {
         headers: {
@@ -17627,7 +17671,7 @@ export interface operations {
           'application/json': components['schemas']['ErrorResponse'];
         };
       };
-      /** @description No provider API key is configured for this deployment. */
+      /** @description The provider is unavailable: no API key is configured for this deployment, or the provider account is out of quota. Reserved credits are refunded. */
       503: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
@@ -17972,7 +18016,7 @@ export interface operations {
           'application/json': components['schemas']['generateSoundEffectResponse502'];
         };
       };
-      /** @description No provider API key is configured for this deployment. */
+      /** @description The provider is unavailable: no API key is configured for this deployment, or the provider account is out of quota. Reserved credits are refunded. */
       503: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
