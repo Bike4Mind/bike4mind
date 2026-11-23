@@ -15,6 +15,7 @@ import {
   Button,
   Container,
   FormControl,
+  FormHelperText,
   FormLabel,
   Input,
   Stack,
@@ -641,13 +642,12 @@ const Register: React.FC = () => {
                         sx={inputStyles}
                       />
                       {!registrationClosed && (
-                        <Typography
-                          level="body-xs"
+                        <FormHelperText
                           data-testid="register-invite-optional-hint"
                           sx={{ mt: '6px', color: 'text.tertiary' }}
                         >
                           {t('auth.inviteCodeOptionalHint')}
-                        </Typography>
+                        </FormHelperText>
                       )}
                       {registrationClosed && (
                         <Typography level="body-xs" sx={{ mt: '6px', color: 'text.tertiary' }}>

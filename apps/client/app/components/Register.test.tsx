@@ -148,6 +148,9 @@ describe('Register', () => {
         'Have a code from a friend? Add it here.'
       );
       expect(screen.getByLabelText('Invite code (optional)')).not.toBeRequired();
+      expect(screen.getByLabelText('Invite code (optional)')).toHaveAccessibleDescription(
+        'Have a code from a friend? Add it here.'
+      );
       expect(screen.queryByTestId('register-join-waitlist-link')).not.toBeInTheDocument();
       const user = userEvent.setup();
       await user.type(within(screen.getByTestId('register-username-input')).getByRole('textbox'), 'newbie');
