@@ -101,6 +101,7 @@ import { HeldRelayCard } from './HeldRelayCard';
 import { SessionOpenerContext } from './SessionLink';
 import { clampQuote, quotedMessage } from './quotedReply';
 import { SpawnSuggestionTray } from './SpawnSuggestionTray';
+import { useSpawnLocation } from './spawnLocationSetting';
 import { useHeldRelays } from './useHeldRelays';
 import { TaskDecisionCards, decisionsFor, useTaskDecisions } from './TaskDecisionCards';
 import { pendingDecisionOf } from '@shared/orchestration';
@@ -340,6 +341,7 @@ export function ChatShell({
   const chatSettingsLocked = !activeId || settling || conversation.session?.id !== activeId;
   const openFailed = !!activeId && conversation.openFailedFor === activeId && conversation.session?.id !== activeId;
   const spawnSuggestions = useSpawnSuggestions(conversation.session);
+  const [spawnLocation] = useSpawnLocation();
   const heldRelays = useHeldRelays(persistedId);
   const taskDecisions = useTaskDecisions();
   const markSessionStart = useSessionStartTiming(sessions);
@@ -2169,6 +2171,7 @@ export function ChatShell({
                     suggestions={spawnSuggestions.suggestions}
                     onStart={onStartSuggestion}
                     onDismiss={spawnSuggestions.dismiss}
+                    location={spawnLocation}
                   />
                 </>
               )}

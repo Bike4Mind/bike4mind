@@ -49,6 +49,8 @@ import { nestedSessionsSummary, useNestedSessions } from './nestedSessions';
 import { useMenuBarSetting } from './menuBarSetting';
 import type { NotifyScope } from '@shared/attention';
 import { notifyScopeSummary, useNotifyScope } from './notifyScopeSetting';
+import { spawnLocationSummary, useSpawnLocation } from './spawnLocationSetting';
+import { SPAWN_LOCATIONS, SPAWN_LOCATION_TEXT, type SpawnLocation } from '@shared/spawnLocation';
 import { useOrchestratorSound } from './orchestrator/chime';
 import { SoundMixControl } from './orchestrator/SoundMixControl';
 import { columnStackSx, contentColumnSx, thinScrollbarSx } from './layout';
@@ -279,6 +281,41 @@ function notifyScopeEntry(scope: NotifyScope, setScope: (scope: NotifyScope) => 
         {(['agents', 'all'] as const).map(option => (
           <Button key={option} value={option} data-testid={`settings-notify-scope-${option}-btn`}>
             {NOTIFY_SCOPE_LABEL[option]}
+          </Button>
+        ))}
+      </ToggleButtonGroup>
+    ),
+  };
+}
+
+function spawnLocationEntry(location: SpawnLocation, setLocation: (location: SpawnLocation) => void): ConfigEntry {
+  return {
+    id: 'spawn-location',
+    icon: null,
+    label: 'New agent sessions',
+    summary: spawnLocationSummary(location),
+    description:
+      'Where a session another session hands work to starts. With Approve for me or Full access it starts at once; in Ask mode a card confirms it with one click.',
+    control: (
+      <ToggleButtonGroup
+        size="sm"
+        value={location}
+        onChange={(_event, next) => {
+          if (next) setLocation(next as SpawnLocation);
+        }}
+        aria-label="New agent sessions"
+        data-testid="settings-spawn-location-group"
+        sx={{
+          bgcolor: 'background.level1',
+          borderRadius: 'md',
+          p: 0.5,
+          gap: 0.5,
+          '& .MuiButton-root': { border: 0, borderRadius: 'sm' },
+        }}
+      >
+        {SPAWN_LOCATIONS.map(option => (
+          <Button key={option} value={option} data-testid={`settings-spawn-location-${option}-btn`}>
+            {SPAWN_LOCATION_TEXT[option].label}
           </Button>
         ))}
       </ToggleButtonGroup>
@@ -639,6 +676,7 @@ function useSettingsEntries(
   const [autoFixAttempts, setAutoFixAttempts, autoFixAttemptsError] = useAutoFixAttempts();
   const [menuBar, toggleMenuBar] = useMenuBarSetting();
   const [notifyScope, setNotifyScope] = useNotifyScope();
+  const [spawnLocation, setSpawnLocation] = useSpawnLocation();
   const [localContext, setLocalContext, localContextError, localContextFit] = useLocalContextSetting();
   const [modelServers, setModelServers, modelServersError] = useModelServers();
   const curatedList = useCuratedListSettings();
@@ -648,6 +686,7 @@ function useSettingsEntries(
       appearanceEntry(mode, setMode, theme.palette.mode),
       suggestionsEntry(suggestions, toggleSuggestions, suggestionModel),
       worktreeEntry(worktreeDefault, toggleWorktreeDefault),
+      spawnLocationEntry(spawnLocation, setSpawnLocation),
       autoFixAttemptsEntry(autoFixAttempts, next => void setAutoFixAttempts(next), autoFixAttemptsError),
       nestedSessionsEntry(nestedSessions, toggleNestedSessions),
       orchestratorSoundEntry(orchestratorSound, toggleOrchestratorSound),

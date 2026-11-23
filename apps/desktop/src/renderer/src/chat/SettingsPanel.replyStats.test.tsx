@@ -63,6 +63,11 @@ describe('the reply stats settings', () => {
         setNotifyScope: async () => 'agents',
         onNotifyScope: () => () => undefined,
       },
+      chat: {
+        getSpawnLocation: async () => 'worktree',
+        setSpawnLocation: async () => 'worktree',
+        onSpawnLocation: () => () => undefined,
+      },
     });
     window.localStorage.clear();
     reloadReplyStatsPrefs();

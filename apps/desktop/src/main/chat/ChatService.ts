@@ -217,6 +217,7 @@ import { ensureScratchDirectory, isScratchDirectory, removeScratchDirectory } fr
 import { reasoningEffortFor, requestsThinking } from './reasoningEffort';
 import { auxiliaryGeneration, turnEffortSetting, turnGeneration, turnThinks } from '@shared/modelDefaults';
 import type { ModelSettingsStore } from './ModelSettingsStore';
+import type { SpawnLocationPreference } from './SpawnLocationPreference';
 import { addUsage, foldUsage } from './streamEvents';
 import type { CompletionStreamEvent } from './streamEvents';
 import { LocalModelRemovedError, OllamaLocal, toMessages } from './OllamaLocal';
@@ -599,6 +600,11 @@ export interface ChatServiceDeps {
   models?: ModelCatalog;
   /** Per-model defaults from the Models screen. Absent in tests that do not set any. */
   modelSettings?: Pick<ModelSettingsStore, 'get'>;
+  /**
+   * Where a suggested session starts, from Settings. Absent in tests that do not set it, which
+   * then keep the card for every suggestion, as before the setting existed.
+   */
+  spawnLocation?: Pick<SpawnLocationPreference, 'read'>;
   /** This build's default model: what a new conversation prefers when the user has picked nothing it can have. */
   preferredModel?: string;
   /** The user's last pick in the model picker. Absent in tests that do not exercise it. */
@@ -6098,7 +6104,7 @@ export class ChatService {
         const stored = await this.deps.store.changeSpawnSuggestions(sessionId, current => [...current, suggestion]);
         if (!stored) throw new Error('This conversation no longer exists.');
         this.emitSuggestions(sessionId, stored);
-        return suggestion;
+        return (await this.autoStartSuggestion(sessionId, project, suggestion)) ?? suggestion;
       },
 
       update: (id, changes) =>
@@ -6131,6 +6137,59 @@ export class ChatService {
    * queues behind a live reply exactly as typing it would. See runSuggestionHere.
    */
   async startSpawnSuggestion(request: StartSpawnSuggestionRequest): Promise<SpawnSuggestionResult> {
+    return this.startSuggestion(request, null, false);
+  }
+
+  /**
+   * Start a fresh suggestion without its card, where Settings names a location and the session's
+   * approval mode already lets tools act without asking. Null leaves the card to the user: in Ask
+   * mode, for 'ask', for a worktree outside a git repository, and after a failed start, whose
+   * reason goes on the card. It never falls back to this working directory.
+   */
+  private async autoStartSuggestion(
+    sessionId: string,
+    project: ChatProject,
+    suggestion: ChatSpawnSuggestion
+  ): Promise<ChatSpawnSuggestion | null> {
+    const location = await this.deps.spawnLocation?.read();
+    if (!location || location === 'ask') return null;
+    if (location === 'worktree' && suggestion.repository === false) return null;
+    if ((await this.deps.store.approvalMode(sessionId)) === 'ask') return null;
+    // App-picked, so a leftover branch from an earlier attempt gets -2 rather than a refusal.
+    const picked = location === 'worktree' ? await unusedBranchName(project.directory, suggestion.branch) : null;
+    const result = await this.startSuggestion(
+      {
+        sessionId,
+        suggestionId: suggestion.id,
+        placement: location,
+        prompt: suggestion.prompt,
+        title: suggestion.title,
+        ...(picked ? { branch: picked.branch } : {}),
+      },
+      picked?.reservation ?? null,
+      true
+    );
+    if (result.ok) return result.suggestion;
+    // Released only on failure: a launched spawn owns the reservation. A no-op once released.
+    if (picked?.reservation) releaseBranchName(picked.reservation);
+    const stored = await this.deps.store.changeSpawnSuggestions(sessionId, current =>
+      current.map(entry =>
+        entry.id === suggestion.id && entry.status === 'pending' ? { ...entry, autoStartError: result.error } : entry
+      )
+    );
+    if (stored) this.emitSuggestions(sessionId, stored);
+    return null;
+  }
+
+  /**
+   * `reservation` is the branch an automatic start already holds; `auto` marks a start the model
+   * is told about in its own tool result, so no later turn reports it again.
+   */
+  private async startSuggestion(
+    request: StartSpawnSuggestionRequest,
+    reservation: BranchReservation | null,
+    auto: boolean
+  ): Promise<SpawnSuggestionResult> {
     const { sessionId, suggestionId } = request;
     if (!isValidSessionId(sessionId)) return { ok: false, error: 'That conversation no longer exists.' };
     const key = `${sessionId}:${suggestionId}`;
@@ -6154,7 +6213,9 @@ export class ChatService {
       const branch = typeof request.branch === 'string' ? request.branch.trim() : '';
       if (request.placement === 'worktree' && !branch) return { ok: false, error: 'Name a branch for the worktree.' };
       const placement: SpawnPlacement =
-        request.placement === 'worktree' ? { kind: 'worktree', branch, base: suggestion.base } : { kind: 'local' };
+        request.placement === 'worktree'
+          ? { kind: 'worktree', branch, base: suggestion.base, ...(reservation ? { reservation } : {}) }
+          : { kind: 'local' };
 
       const named = suggestion.derivedTitle && title === suggestion.title ? undefined : title;
       const outcome = await this.spawnSession(parent, prompt, named, placement, async () => {
@@ -6167,13 +6228,15 @@ export class ChatService {
       const stored = await this.deps.store.changeSpawnSuggestions(sessionId, current =>
         current.map(entry => {
           if (entry.id !== suggestionId) return entry;
+          const { autoStartError: _error, ...rest } = entry;
           started = {
-            ...entry,
+            ...rest,
             title,
             prompt,
             status: 'started',
-            unreported: true,
+            ...(auto ? {} : { unreported: true }),
             started: {
+              ...(auto ? { auto: true } : {}),
               sessionId: outcome.session.id,
               title: outcome.session.title,
               placement: placement.kind,

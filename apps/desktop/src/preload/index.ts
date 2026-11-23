@@ -2,6 +2,7 @@ import type { PendingTaskDecision, RolePolicy, TaskAction, TaskDecisionAnswer } 
 import { contextBridge, ipcRenderer, webUtils } from 'electron';
 import type { AttentionNotice, AttentionOpenEvent, NotifyScope } from '@shared/attention';
 import type { AppMenuAction, RendererErrorReport } from '@shared/appShell';
+import type { SpawnLocation } from '@shared/spawnLocation';
 import type { AccountPage, AuthState, EnvironmentSelection } from '@shared/auth';
 import type { PromptCacheTtl } from '@bike4mind/common';
 import type {
@@ -217,6 +218,13 @@ const api: DesktopApi = {
     getLocalContext: () => ipcRenderer.invoke(IPC_CHANNELS.chatGetLocalContext),
     setLocalContext: setting => ipcRenderer.invoke(IPC_CHANNELS.chatSetLocalContext, setting),
     getLocalContextFit: () => ipcRenderer.invoke(IPC_CHANNELS.chatGetLocalContextFit),
+    getSpawnLocation: () => ipcRenderer.invoke(IPC_CHANNELS.chatGetSpawnLocation),
+    setSpawnLocation: (location: SpawnLocation) => ipcRenderer.invoke(IPC_CHANNELS.chatSetSpawnLocation, location),
+    onSpawnLocation: listener => {
+      const handler = (_event: unknown, location: SpawnLocation) => listener(location);
+      ipcRenderer.on(IPC_CHANNELS.chatSpawnLocation, handler);
+      return () => ipcRenderer.removeListener(IPC_CHANNELS.chatSpawnLocation, handler);
+    },
     listCreationTools: (model: string) => ipcRenderer.invoke(IPC_CHANNELS.chatListCreationTools, model),
     setSessionModel: (sessionId: string, model: string) =>
       ipcRenderer.invoke(IPC_CHANNELS.chatSetSessionModel, sessionId, model),

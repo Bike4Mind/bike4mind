@@ -15,8 +15,8 @@ import Sheet from '@mui/joy/Sheet';
 import Stack from '@mui/joy/Stack';
 import Textarea from '@mui/joy/Textarea';
 import Typography from '@mui/joy/Typography';
+import { DEFAULT_SPAWN_LOCATION, type SpawnLocation } from '@shared/spawnLocation';
 import {
-  defaultSpawnPlacement,
   SPAWN_CHOICE_TEXT,
   type ChatSpawnSuggestion,
   type SpawnSuggestionPlacement,
@@ -35,6 +35,7 @@ import {
   type DraftField,
   type SuggestionDraft,
 } from './spawnSuggestionDraft';
+import { initialSpawnChoice } from './spawnLocationSetting';
 
 /** Long enough to be noticed beside a streaming reply, short enough not to linger. */
 const UPDATE_HIGHLIGHT_MS = 1600;
@@ -43,30 +44,18 @@ type StartFn = (request: Omit<StartSpawnSuggestionRequest, 'sessionId'>) => Prom
 
 const CHOICES: readonly SpawnSuggestionPlacement[] = ['worktree', 'local', 'here'];
 
+/**
+ * Where the card's last pick used to be remembered. The Settings location replaced it; the key is
+ * only cleared, so a stale "This folder" from an old card can no longer override Settings.
+ */
 export const SPAWN_CHOICE_STORAGE_KEY = 'b4m.spawnSuggestion.choice';
 
-function readRememberedChoice(): SpawnSuggestionPlacement | null {
+function forgetRememberedChoice(): void {
   try {
-    const stored = window.localStorage.getItem(SPAWN_CHOICE_STORAGE_KEY);
-    return CHOICES.find(choice => choice === stored) ?? null;
+    window.localStorage.removeItem(SPAWN_CHOICE_STORAGE_KEY);
   } catch {
-    return null;
+    // Storage can be unavailable; then there is nothing stored to forget either.
   }
-}
-
-function rememberChoice(choice: SpawnSuggestionPlacement): void {
-  try {
-    window.localStorage.setItem(SPAWN_CHOICE_STORAGE_KEY, choice);
-  } catch {
-    // Storage can be unavailable; the choice then lasts as long as the card.
-  }
-}
-
-/** An absent `repository` is a suggestion stored before the flag existed, which always had one. */
-function initialChoice(repository: boolean): SpawnSuggestionPlacement {
-  const remembered = readRememberedChoice();
-  if (remembered && (remembered !== 'worktree' || repository)) return remembered;
-  return defaultSpawnPlacement(repository);
 }
 
 /**
@@ -84,11 +73,15 @@ export function SpawnSuggestionTray({
   suggestions,
   onStart,
   onDismiss,
+  location = DEFAULT_SPAWN_LOCATION,
 }: {
   suggestions: readonly ChatSpawnSuggestion[];
   onStart: StartFn;
   onDismiss: (suggestionId: string) => Promise<SpawnSuggestionResult>;
+  /** The Settings location, which decides each card's first choice. */
+  location?: SpawnLocation;
 }) {
+  useEffect(forgetRememberedChoice, []);
   const pending = suggestions.filter(suggestion => suggestion.status === 'pending');
   if (pending.length === 0) return null;
   return (
@@ -98,7 +91,13 @@ export function SpawnSuggestionTray({
       data-testid="spawn-suggestion-tray"
     >
       {pending.map(suggestion => (
-        <SpawnSuggestionCard key={suggestion.id} suggestion={suggestion} onStart={onStart} onDismiss={onDismiss} />
+        <SpawnSuggestionCard
+          key={suggestion.id}
+          suggestion={suggestion}
+          onStart={onStart}
+          onDismiss={onDismiss}
+          location={location}
+        />
       ))}
     </Stack>
   );
@@ -114,18 +113,23 @@ export function SpawnSuggestionCard({
   suggestion,
   onStart,
   onDismiss,
+  location = DEFAULT_SPAWN_LOCATION,
 }: {
   suggestion: ChatSpawnSuggestion;
   onStart: StartFn;
   onDismiss: (suggestionId: string) => Promise<SpawnSuggestionResult>;
+  location?: SpawnLocation;
 }) {
   const [draft, setDraftState] = useState<SuggestionDraft | undefined>(() => readDraft(suggestion.id));
   const [expanded, setExpanded] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [highlight, setHighlight] = useState(false);
+  // An absent `repository` is a suggestion stored before the flag existed, which always had one.
   const repository = suggestion.repository !== false;
-  const [choice, setChoice] = useState<SpawnSuggestionPlacement>(() => initialChoice(repository));
+  // Follows Settings (which loads after the first render) until the user picks on this card.
+  const [picked, setPicked] = useState<SpawnSuggestionPlacement | null>(null);
+  const choice = picked ?? initialSpawnChoice(location, repository);
   const [menuOpen, setMenuOpen] = useState(false);
   const seenRevision = useRef(suggestion.revision);
 
@@ -150,8 +154,7 @@ export function SpawnSuggestionCard({
   });
 
   const pick = (next: SpawnSuggestionPlacement) => {
-    setChoice(next);
-    rememberChoice(next);
+    setPicked(next);
     setMenuOpen(false);
   };
 
@@ -285,6 +288,12 @@ export function SpawnSuggestionCard({
           </Button>
         </Stack>
       ))}
+
+      {!error && suggestion.autoStartError && (
+        <Typography level="body-xs" color="warning" sx={{ mt: 1 }} data-testid="spawn-suggestion-auto-error">
+          Could not start it automatically: {suggestion.autoStartError}
+        </Typography>
+      )}
 
       {error && (
         <Typography level="body-xs" color="danger" sx={{ mt: 1 }} data-testid="spawn-suggestion-error">
