@@ -253,7 +253,9 @@ describe('createFabFile (upload moderation gate root cause)', () => {
       mockAdapters
     );
 
-    expect(storageGenerateSignedUrl).toHaveBeenCalledWith(expect.any(String), expect.any(Number), 'get');
+    expect(storageGenerateSignedUrl).toHaveBeenCalledWith(expect.any(String), expect.any(Number), 'get', {
+      ResponseContentDisposition: 'attachment; filename="notes.txt"',
+    });
     expect(result.fileUrl).toBe('https://s3.example.com/signed-url');
     expect(result.fileUrlExpireAt).toBeInstanceOf(Date);
     const persisted = fabFilesCreate.mock.calls[0][0];
@@ -317,7 +319,9 @@ describe('createFabFile (upload moderation gate root cause)', () => {
 
     expect(storageUpload).toHaveBeenCalled();
     // Non-image content path: a GET url is minted immediately (no moderation hold).
-    expect(storageGenerateSignedUrl).toHaveBeenCalledWith(expect.any(String), expect.any(Number), 'get');
+    expect(storageGenerateSignedUrl).toHaveBeenCalledWith(expect.any(String), expect.any(Number), 'get', {
+      ResponseContentType: 'audio/mpeg',
+    });
     expect(result.fileUrl).toBe('https://s3.example.com/signed-url');
 
     const persistedData = fabFilesCreate.mock.calls[0][0];

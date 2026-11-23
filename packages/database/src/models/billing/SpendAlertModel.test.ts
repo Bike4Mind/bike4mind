@@ -147,3 +147,43 @@ describe('SpendAlertRepository.applyEvaluation', () => {
     });
   });
 });
+
+describe('SpendAlertRepository.recordAutoPause', () => {
+  const decision = {
+    mode: 'enforce' as const,
+    decidedAt: new Date('2026-10-30T12:15:00.000Z'),
+    tier: 'standard',
+    thresholdCredits: 10_000,
+    valueCredits: 12_000,
+    freezeId: 'f1',
+  };
+
+  it('records the decision once and refuses a second one', async () => {
+    const { id } = await spendAlertRepository.create(alertFor('u1'));
+
+    await expect(spendAlertRepository.recordAutoPause(id, decision)).resolves.toBe(true);
+    await expect(spendAlertRepository.recordAutoPause(id, { ...decision, mode: 'shadow' })).resolves.toBe(false);
+    await expect(spendAlertRepository.recordAutoPause(id, { ...decision, freezeId: 'f2' })).resolves.toBe(false);
+
+    const stored = await spendAlertRepository.findById(id);
+    expect(stored?.autoPause).toMatchObject({ mode: 'enforce', freezeId: 'f1', thresholdCredits: 10_000 });
+  });
+
+  it('replaces a shadow decision with an enforce one, and not the reverse', async () => {
+    const { id } = await spendAlertRepository.create(alertFor('u1'));
+    const shadow = { ...decision, mode: 'shadow' as const, freezeId: undefined };
+
+    await expect(spendAlertRepository.recordAutoPause(id, shadow)).resolves.toBe(true);
+    await expect(spendAlertRepository.recordAutoPause(id, shadow)).resolves.toBe(false);
+    await expect(spendAlertRepository.recordAutoPause(id, decision)).resolves.toBe(true);
+
+    const stored = await spendAlertRepository.findById(id);
+    expect(stored?.autoPause).toMatchObject({ mode: 'enforce', freezeId: 'f1' });
+  });
+
+  it('no-ops on a resolved incident', async () => {
+    const { id } = await spendAlertRepository.create(alertFor('u1', { status: 'resolved', openKey: undefined }));
+
+    await expect(spendAlertRepository.recordAutoPause(id, decision)).resolves.toBe(false);
+  });
+});

@@ -7,7 +7,11 @@ import {
   type VoiceGenerationVendor,
   type VoiceOutputFormat,
 } from '@bike4mind/common';
-import { isCredentialRejectionResult, type SpeechProviderRequest } from '@bike4mind/utils/audioProviders';
+import {
+  isCredentialRejectionResult,
+  isQuotaExhaustedResult,
+  type SpeechProviderRequest,
+} from '@bike4mind/utils/audioProviders';
 import type { ProviderContext, ProviderTerminalResult } from '@bike4mind/utils/generationProviders';
 import { isUsableApiKey } from '../generationJobs/apiKey';
 import { releaseJobHold, settleJobHold } from '../generationJobs/settlement';
@@ -124,7 +128,15 @@ export function createSpeechJobHandler(deps: SpeechJobDeps): GenerationJobHandle
       context,
       deps
     );
-    return { next: 'succeeded', payload: { ...job.payload, producedBy: { provider: vendor, model }, output } };
+    return {
+      next: 'succeeded',
+      payload: {
+        ...job.payload,
+        producedBy: { provider: vendor, model },
+        output,
+        ...(result.wordTimings && { wordTimings: result.wordTimings }),
+      },
+    };
   };
 
   const settle = async (job: SpeechJob) => {
@@ -170,7 +182,9 @@ export function createSpeechJobHandler(deps: SpeechJobDeps): GenerationJobHandle
 
     async submit(job, context) {
       let lastFailure: { message: string; raw?: unknown } | undefined;
-      // Reported over a later candidate's own refusal: the key at fault is what the caller can act on.
+      // Reported over a later candidate's own refusal: the key at fault is what the caller can act on. An exhausted
+      // quota wins over a rejected key, since it is the one that resolves on its own once credits are topped up.
+      let quotaExhaustion: { message: string; raw: unknown } | undefined;
       let credentialRejection: { message: string; raw: unknown } | undefined;
       for (const vendor of job.payload.candidates) {
         let attempt: Attempt;
@@ -195,15 +209,21 @@ export function createSpeechJobHandler(deps: SpeechJobDeps): GenerationJobHandle
         const result = await attempt.provider.generate(attempt.request, {}, attempt.ctx);
         if (result.status === 'succeeded') return store(job, attempt, result, context);
         if (result.status === 'blocked') return contentBlocked(result.raw);
+        if (isQuotaExhaustedResult(result)) {
+          deps.logger.warn('speech provider quota exhausted', { jobId: job.id, vendor });
+          quotaExhaustion ??= { message: result.message, raw: result.raw };
+          continue;
+        }
         if (isCredentialRejectionResult(result)) {
           deps.logger.warn('speech provider rejected its key', { jobId: job.id, vendor });
           credentialRejection ??= { message: result.message, raw: result.raw };
           continue;
         }
-        if (credentialRejection && !result.retryable) return rejectedStep(credentialRejection);
+        const keyFailure = quotaExhaustion ?? credentialRejection;
+        if (keyFailure && !result.retryable) return rejectedStep(keyFailure);
         return providerFailedStep(result);
       }
-      const failure = credentialRejection ?? lastFailure;
+      const failure = quotaExhaustion ?? credentialRejection ?? lastFailure;
       return failure ? rejectedStep(failure) : failStep('provider_error', 'No text-to-speech provider is available');
     },
 

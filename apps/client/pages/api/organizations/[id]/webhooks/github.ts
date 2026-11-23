@@ -20,8 +20,9 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { orgWebhookConfigRepository } from '@bike4mind/database/infra';
 import { webhookSubscriptionRepository } from '@bike4mind/database/infra';
 import { generateWebhookToken, generateWebhookSecret } from '@server/integrations/github/webhookUtils';
-import { encryptSecret, decryptSecret } from '@bike4mind/server-utils/security/secretEncryption';
-import { verifyOrgOwner } from '@bike4mind/server-utils/utils/orgAccess';
+import { encryptSecret } from '@bike4mind/server-utils/security/secretEncryption';
+import { decryptStoredSecret } from '@bike4mind/server-utils/security/tokenEncryption';
+import { verifyOrgPermission } from '@bike4mind/server-utils/utils/orgAccess';
 import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 import { Config } from '@bike4mind/server-utils/utils/config';
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';
@@ -53,7 +54,7 @@ const handler = baseApi()
       const orgId = req.query.id!;
       const user = req.user!;
 
-      const org = await verifyOrgOwner(user, orgId);
+      const org = await verifyOrgPermission(user, orgId, 'manageIntegrations');
 
       const existingConfig = await orgWebhookConfigRepository.findByOrganizationId(orgId);
       if (existingConfig) {
@@ -126,7 +127,7 @@ const handler = baseApi()
       const user = req.user!;
       const revealSecret = req.query.revealSecret === 'true';
 
-      await verifyOrgOwner(user, orgId);
+      await verifyOrgPermission(user, orgId, 'manageIntegrations');
 
       const webhookConfig = await orgWebhookConfigRepository.findByOrganizationId(orgId);
       if (!webhookConfig) {
@@ -141,11 +142,11 @@ const handler = baseApi()
 
       if (revealSecret && encryptionKey) {
         // Reveal the actual secret (for copying to GitHub)
-        const decryptedSecret = decryptSecret(webhookConfig.secret, encryptionKey);
+        const decryptedSecret = decryptStoredSecret(webhookConfig.secret);
         secretDisplay = decryptedSecret;
       } else if (encryptionKey) {
         // Show masked version
-        const decryptedSecret = decryptSecret(webhookConfig.secret, encryptionKey);
+        const decryptedSecret = decryptStoredSecret(webhookConfig.secret);
         secretDisplay = maskSecret(decryptedSecret);
       } else {
         secretDisplay = '****';
@@ -177,7 +178,7 @@ const handler = baseApi()
       const orgId = req.query.id!;
       const user = req.user!;
 
-      const org = await verifyOrgOwner(user, orgId);
+      const org = await verifyOrgPermission(user, orgId, 'manageIntegrations');
 
       const existingConfig = await orgWebhookConfigRepository.findByOrganizationId(orgId);
       if (!existingConfig) {
@@ -238,7 +239,7 @@ const handler = baseApi()
       let secretMasked = '****';
       const encryptionKey = Config.SECRET_ENCRYPTION_KEY;
       if (encryptionKey) {
-        const decryptedSecret = decryptSecret(updatedConfig.secret, encryptionKey);
+        const decryptedSecret = decryptStoredSecret(updatedConfig.secret);
         secretMasked = maskSecret(decryptedSecret);
       }
 
@@ -267,7 +268,7 @@ const handler = baseApi()
       const orgId = req.query.id!;
       const user = req.user!;
 
-      const org = await verifyOrgOwner(user, orgId);
+      const org = await verifyOrgPermission(user, orgId, 'manageIntegrations');
 
       const webhookConfig = await orgWebhookConfigRepository.findByOrganizationId(orgId);
       if (!webhookConfig) {

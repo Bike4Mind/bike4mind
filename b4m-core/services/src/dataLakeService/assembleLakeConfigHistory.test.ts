@@ -1,9 +1,15 @@
 import { describe, it, expect, vi } from 'vitest';
-import type { IDataLakeDocument, ILakeConfigChangeEventDocument, ILakeConfigFieldChange } from '@bike4mind/common';
+import type {
+  IDataLakeDocument,
+  ILakeConfigChangeEventDocument,
+  ILakeConfigFieldChange,
+  ILakeMembershipChangeEventDocument,
+} from '@bike4mind/common';
 import {
   assembleLakeConfigHistory,
   clampLakeConfigHistoryLimit,
   toLakeConfigHistoryEntry,
+  toLakeFileHistoryEntry,
   LAKE_CONFIG_HISTORY_LIMIT,
   LAKE_CONFIG_HISTORY_MAX_LIMIT,
 } from './assembleLakeConfigHistory';
@@ -39,22 +45,32 @@ const event = (over: Partial<ILakeConfigChangeEventDocument> = {}) =>
 
 const adapters = (
   events: ILakeConfigChangeEventDocument[],
-  over: { findByIds?: ReturnType<typeof vi.fn>; find?: ReturnType<typeof vi.fn>; limit?: number } = {}
+  over: {
+    findByIds?: ReturnType<typeof vi.fn>;
+    find?: ReturnType<typeof vi.fn>;
+    limit?: number;
+    fileEvents?: ILakeMembershipChangeEventDocument[];
+    includeFiles?: boolean;
+  } = {}
 ) => {
   const listByLake = vi.fn().mockResolvedValue(events);
+  const listFilesByLake = vi.fn().mockResolvedValue(over.fileEvents ?? []);
   const findByIds = over.findByIds ?? vi.fn().mockResolvedValue([]);
   const find = over.find ?? vi.fn().mockResolvedValue([]);
   return {
     listByLake,
+    listFilesByLake,
     findByIds,
     find,
     adapters: {
       db: {
         lakeConfigChangeEvents: { listByLake },
+        lakeMembershipChangeEvents: { listByLake: listFilesByLake },
         users: { findByIds } as never,
         userApiKeys: { find } as never,
       },
       limit: over.limit,
+      includeFiles: over.includeFiles,
       now: new Date('2026-08-18T12:00:00Z'),
     },
   };
@@ -553,6 +569,149 @@ describe('assembleLakeConfigHistory', () => {
       lakeId: 'lake1',
       lakeName: 'Ops Lake',
       generatedAt: new Date('2026-08-18T12:00:00Z'),
+    });
+  });
+});
+
+const fileEvent = (over: Partial<ILakeMembershipChangeEventDocument> = {}) =>
+  ({
+    id: 'file1',
+    createdAt: new Date('2026-08-01T00:00:00Z'),
+    principalKind: 'user',
+    principalId: '000000000000000000000001',
+    fabFileId: 'fab1',
+    action: 'added',
+    origin: 'person',
+    ...over,
+  }) as ILakeMembershipChangeEventDocument;
+
+describe('file entries merged into the view', () => {
+  it('maps a membership event to a file entry whose target is the file', () => {
+    const entry = toLakeFileHistoryEntry(fileEvent({ action: 'removed', undoesEventId: 'e0', causedByEventId: 'e9' }));
+    expect(entry).toMatchObject({
+      kind: 'file',
+      action: 'file-removed',
+      target: { kind: 'file', id: 'fab1' },
+      origin: 'person',
+      undoesEventId: 'e0',
+      causedByEventId: 'e9',
+    });
+  });
+
+  it('returns config rows only, without reading membership events, by default', async () => {
+    const { adapters: a, listFilesByLake } = adapters([event({ id: 'c1' })], { fileEvents: [fileEvent()] });
+    const view = await assembleLakeConfigHistory(lake(), a);
+    expect(view.entries.map(e => e.kind)).toEqual(['config']);
+    expect(listFilesByLake).not.toHaveBeenCalled();
+  });
+
+  it('interleaves config and file entries in time order, newest first, when files are included', async () => {
+    const { adapters: a } = adapters(
+      [
+        event({ id: 'c1', createdAt: new Date('2026-08-01T10:00:00Z') }),
+        event({ id: 'c2', createdAt: new Date('2026-08-01T08:00:00Z') }),
+      ],
+      {
+        includeFiles: true,
+        fileEvents: [
+          fileEvent({ id: 'f2', createdAt: new Date('2026-08-01T11:00:00Z'), action: 'removed' }),
+          fileEvent({ id: 'f1', createdAt: new Date('2026-08-01T09:00:00Z') }),
+        ],
+      }
+    );
+    const view = await assembleLakeConfigHistory(lake(), a);
+    expect(view.entries.map(e => e.eventId)).toEqual(['f2', 'c1', 'f1', 'c2']);
+    expect(view.entries.map(e => e.kind)).toEqual(['file', 'config', 'file', 'config']);
+    expect(view.truncated).toBe(false);
+    expect(view.windowStartsAt).toBeUndefined();
+  });
+
+  it('keeps every config row in the page when a burst of newer file events exceeds the page size', async () => {
+    const files = Array.from({ length: 6 }, (_, i) =>
+      fileEvent({ id: `f${i}`, createdAt: new Date(Date.UTC(2026, 7, 2, 12, 0, 10 - i)) })
+    );
+    const { adapters: a } = adapters(
+      [
+        event({ id: 'c1', createdAt: new Date('2026-08-01T10:00:00Z') }),
+        event({ id: 'c2', createdAt: new Date('2026-08-01T09:00:00Z') }),
+      ],
+      { limit: 2, includeFiles: true, fileEvents: files }
+    );
+    const view = await assembleLakeConfigHistory(lake(), a);
+    expect(view.entries.filter(e => e.kind === 'config').map(e => e.eventId)).toEqual(['c1', 'c2']);
+    expect(view.entries.filter(e => e.kind === 'file')).toHaveLength(2);
+    expect(view.truncated).toBe(true);
+    expect(view.windowStartsAt).toEqual(files[1]!.createdAt);
+  });
+
+  it('drops file events older than the oldest kept config row when config is truncated', async () => {
+    const { adapters: a } = adapters(
+      [
+        event({ id: 'c1', createdAt: new Date('2026-08-01T10:00:00Z') }),
+        event({ id: 'c2', createdAt: new Date('2026-08-01T09:00:00Z') }),
+        event({ id: 'c3', createdAt: new Date('2026-08-01T08:00:00Z') }),
+      ],
+      {
+        limit: 2,
+        includeFiles: true,
+        fileEvents: [
+          fileEvent({ id: 'f1', createdAt: new Date('2026-08-01T09:30:00Z') }),
+          fileEvent({ id: 'f2', createdAt: new Date('2026-08-01T08:30:00Z') }),
+        ],
+      }
+    );
+    const view = await assembleLakeConfigHistory(lake(), a);
+    expect(view.entries.map(e => e.eventId)).toEqual(['c1', 'f1', 'c2']);
+    expect(view.truncated).toBe(true);
+    expect(view.windowStartsAt).toEqual(new Date('2026-08-01T09:00:00Z'));
+  });
+
+  it('flags truncation from files alone and starts the window at the oldest kept file', async () => {
+    const { adapters: a } = adapters([event({ id: 'c1', createdAt: new Date('2026-08-01T10:00:00Z') })], {
+      limit: 2,
+      includeFiles: true,
+      fileEvents: [
+        fileEvent({ id: 'f1', createdAt: new Date('2026-08-01T09:00:00Z') }),
+        fileEvent({ id: 'f2', createdAt: new Date('2026-08-01T08:00:00Z') }),
+        fileEvent({ id: 'f3', createdAt: new Date('2026-08-01T07:00:00Z') }),
+      ],
+    });
+    const view = await assembleLakeConfigHistory(lake(), a);
+    expect(view.entries.map(e => e.eventId)).toEqual(['c1', 'f1', 'f2']);
+    expect(view.truncated).toBe(true);
+    expect(view.windowStartsAt).toEqual(new Date('2026-08-01T08:00:00Z'));
+  });
+
+  it('does not flag a merged history whose streams each exactly fill the window', async () => {
+    const { adapters: a } = adapters([event({ id: 'c1' })], {
+      limit: 1,
+      includeFiles: true,
+      fileEvents: [fileEvent({ id: 'f1' })],
+    });
+    const view = await assembleLakeConfigHistory(lake(), a);
+    expect(view.entries).toHaveLength(2);
+    expect(view.truncated).toBe(false);
+  });
+
+  it('renders an old config row without the new fields', () => {
+    const entry = toLakeConfigHistoryEntry(event());
+    expect(entry.kind).toBe('config');
+    expect(entry.target).toBeUndefined();
+    expect(entry.leverChanges).toBeUndefined();
+  });
+
+  it('carries target, leverChanges and the admitted file through', () => {
+    const entry = toLakeConfigHistoryEntry(
+      event({
+        target: { kind: 'proposal', id: 'p1' },
+        leverChanges: [{ lever: 'minRelevance', before: 0.6, after: 0.5 }],
+        admittedFabFileId: 'fab9',
+      })
+    );
+    expect(entry).toMatchObject({
+      target: { kind: 'proposal', id: 'p1' },
+      leverChanges: [{ lever: 'minRelevance', before: 0.6, after: 0.5 }],
+      admittedFabFileId: 'fab9',
     });
   });
 });

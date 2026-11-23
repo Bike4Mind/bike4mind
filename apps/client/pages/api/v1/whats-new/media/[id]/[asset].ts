@@ -1,6 +1,7 @@
 import { FabFile, releaseNoteRepository } from '@bike4mind/database';
 import { getWhatsNewMediaContract, isImageServeable, NotFoundError, releaseNoteMediaUrl } from '@bike4mind/common';
 import { getFilesStorage } from '@bike4mind/server-utils/utils/storage/index';
+import { storageReadOverrides } from '@bike4mind/utils/contentDisposition';
 import { Resource } from 'sst';
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
 import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
@@ -36,6 +37,7 @@ const handler = nextRouteForContract(getWhatsNewMediaContract, {
   const signed = await getFilesStorage().getSignedUrl(key, 'get', {
     expiresIn: SIGNED_URL_TTL_SECONDS,
     audience: 'browser',
+    ...storageReadOverrides({ mimeType: file?.mimeType, fileName: file?.fileName, key }),
   });
   res.setHeader('Cache-Control', CACHE_CONTROL);
   return res.redirect(303, signed);

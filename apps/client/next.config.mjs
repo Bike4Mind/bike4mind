@@ -29,7 +29,7 @@ const HELP_CONTENT_ROOTS = ['./public/help-content/**/*', './app/generated/help-
  * only /api/help/chat retrieves against the vectors. See the comment at the include site.
  */
 const HELP_INDEX = './app/generated/help-index.json';
-const HELP_EMBEDDINGS = './app/generated/help-embeddings.json';
+const HELP_EMBEDDINGS = ['./app/generated/help-embeddings.json', './app/generated/help-embeddings.bin'];
 
 const selfHostResolveAlias = process.env.B4M_SELF_HOST === 'true' ? { sst: '@bike4mind/resource' } : {};
 
@@ -133,7 +133,7 @@ const nextConfig = {
   // Turbopack's own rather than nft, whose collect-build-traces is gated off - and since that
   // module is also the only JS-side reader of this key, the includes here are live only because
   // Turbopack applies them natively. The excludes below are dormant either way; see the note on
-  // them. help-embeddings.json exists only when an embedding key was present at build time (see
+  // them. help-embeddings.json/.bin exist only when an embedding key was present at build time (see
   // .gitignore), and an include matching no file is a silent no-op, so declaring it costs a
   // keyless build nothing.
   outputFileTracingIncludes: {
@@ -142,7 +142,7 @@ const nextConfig = {
     '/api/agents/[id]/missions': [ISOLATED_VM_PREBUILDS],
     '/api/help': [HELP_INDEX],
     '/api/help/content': HELP_CONTENT_ROOTS,
-    '/api/help/chat': [...HELP_CONTENT_ROOTS, HELP_INDEX, HELP_EMBEDDINGS],
+    '/api/help/chat': [...HELP_CONTENT_ROOTS, HELP_INDEX, ...HELP_EMBEDDINGS],
   },
 
   // DORMANT under Turbopack, which is what `next build` uses here: Next only applies these in
@@ -286,6 +286,11 @@ const nextConfig = {
         source: '/.well-known/assetlinks.json',
         destination: '/api/well-known/assetlinks',
       },
+      // Apple app site association: lets the iOS app use its https sign-in callback and universal links
+      {
+        source: '/.well-known/apple-app-site-association',
+        destination: '/api/well-known/apple-app-site-association',
+      },
       // Client ID Metadata Document for custom MCP connector sign-in
       {
         source: '/.well-known/oauth-client/mcp-client.json',
@@ -322,6 +327,11 @@ const nextConfig = {
       {
         source: '/embed/:path*',
         destination: '/api/embed/serve',
+      },
+      // Share links: sets the referral cookie and redirects to signup (apps/client/server/referrals/shareLink.ts).
+      {
+        source: '/r/:code',
+        destination: '/api/referrals/visit/:code',
       },
     ];
   },

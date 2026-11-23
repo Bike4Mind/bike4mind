@@ -6,6 +6,6 @@ import { DLQ_QUEUE_PARAM } from '@bike4mind/common';
 export const DLQ_SEARCH_KEYS = {
   query: 'dlqQuery',
   view: 'dlqView',
-  filters: { feature: 'dlqFeature', queue: DLQ_QUEUE_PARAM },
+  filters: { feature: 'dlqFeature', queue: DLQ_QUEUE_PARAM, failure: 'dlqFailure' },
 } as const;
 export const DLQ_TAB_PARAMS = [...Object.values(DLQ_SEARCH_KEYS.filters), 'dlqMessage'] as const;

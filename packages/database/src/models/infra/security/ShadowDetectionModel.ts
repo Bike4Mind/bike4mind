@@ -158,7 +158,7 @@ const directUserIds = (group: AccountCampaignGroup) =>
 /** Recent records sharing a direct member that one sweep's group is matched against. */
 const CAMPAIGN_MATCH_CANDIDATES = 20;
 
-// Matches the automation grader time budget (apps/client/server/security/shadowDetectionAutoGrade.ts).
+// Matches the automation grader time budget (apps/workers/src/security/shadowDetectionAutoGrade.ts).
 const FLAGGED_BY_OTHERS_MAX_TIME_MS = 20_000;
 
 /**

@@ -1,3 +1,4 @@
+import { z } from 'zod';
 import { registerOrchestrationIpc } from './orchestrationIpc';
 import { createStudioDiagnostics } from './studio/StudioDiagnostics';
 import { registerStudio } from './studio/registerStudio';
@@ -75,12 +76,15 @@ import { registerLocalContextIpc } from './localContextIpc';
 import { localContextSizing, localHardware, localLlamaServer, relistAfterSave } from './localContextSizing';
 import { findOnPath, resolveUserPath } from './tools/userPath';
 import { SidebarSectionStore } from './SidebarSectionStore';
+import { ComposerDraftStore } from './ComposerDraftStore';
+import { registerComposerDraftsIpc } from './composerDraftsIpc';
 import { registerImageMenuIpc } from './imageMenuIpc';
 import { registerFilePathLinkIpc } from './filePathLinks';
 import { registerSessionExportIpc } from './sessionExportIpc';
 import { registerLocalDataExportIpc } from './localDataExportIpc';
 import { registerSessionCreateIpc } from './sessionCreateIpc';
 import { registerSessionOrchestrateIpc } from './sessionOrchestrateIpc';
+import { archiveFromSidebar } from './sessionArchive';
 import { placeNewSession, registerSidebarIpc } from './sidebarIpc';
 import { AttachmentStore } from './AttachmentStore';
 import { BrowserManager, NO_PAGE } from './browser/BrowserManager';
@@ -92,6 +96,7 @@ import { SharePublisher } from './artifacts/SharePublisher';
 import { registerArtifactProtocol } from './artifacts/sandboxProtocol';
 import { registerModelProtocol } from './model3d/engineProtocol';
 import { ModelLiveViews } from './model3d/ModelLiveViews';
+import { ModelVersionStore } from './model3d/ModelVersionStore';
 import { modelIpcHandlers } from './model3d/modelIpc';
 import { ChatService, sessionForRenderer, type ChatServiceDeps } from './ChatService';
 import { DeferredToolsSetting, parseDeferredToolsOverride } from './DeferredToolsSetting';
@@ -172,6 +177,12 @@ import { appWindows, focusedAppWindow } from '../windows';
 import { registerClaudeImport } from '../claudeImport';
 import type { ClaudeImportService } from '../claudeImport/ClaudeImportService';
 import { rendererNotes } from './rendererNotes';
+
+const editMessageRequestSchema = z.object({
+  sessionId: z.string(),
+  messageId: z.string(),
+  text: z.string(),
+});
 
 const VERBOSE = process.env.B4M_DESKTOP_VERBOSE === '1';
 /** Diagnosis only; see apps/desktop/docs/model-wait-findings.md. */
@@ -316,6 +327,8 @@ export interface RegisteredChat {
   modelViews: ModelLiveViews;
   /** Each conversation's pull request, and the timers that watch it. */
   pullRequests: PrMonitor;
+  /** Unsent composer text, written once more on quit in case a debounced save is still in flight. */
+  composerDrafts: Pick<ComposerDraftStore, 'flushSync'>;
   /** Import from Claude; started once the window is up so it never delays launch. */
   claudeImport: ClaudeImportService;
   /** Spare checkouts, removed on the quit pass that can wait for git. */
@@ -334,6 +347,8 @@ export interface RegisteredChat {
   capabilityLedger: CapabilityLedger;
   /** The one path that answers a tool approval; the menu bar and mini Tavern answer through it too. */
   respondToApproval(approvalId: string, answer: ChatApprovalAnswer): void;
+  /** The session store, which the profile screen's local usage is counted from. */
+  store: SessionStore;
 }
 
 /**
@@ -502,7 +517,11 @@ export function registerChat(
       await capabilityLedger.migrate({ roots, trustedProjects, permissions: stored });
     })
     .catch(error => logger.warn(`CAPABILITIES: could not migrate grants: ${String(error)}`));
-  const attachments = new AttachmentStore(join(userData, 'attachments'), logger, shrinkImage);
+  const attachmentsDir = join(userData, 'attachments');
+  const attachments = new AttachmentStore(attachmentsDir, logger, shrinkImage);
+  // App-wide like sidebar-sections.json: session ids are unique across scopes.
+  const composerDrafts = new ComposerDraftStore(join(userData, 'composer-drafts.json'));
+  const composerDraftsLoaded = composerDrafts.load();
   const media = new MediaStore(join(userData, 'media'));
   registerMediaProtocol(media);
   registerArtifactProtocol();
@@ -733,20 +752,25 @@ export function registerChat(
       })
   );
 
-  const modelViews = new ModelLiveViews({
-    state: (sessionId, state) => send(IPC_CHANNELS.modelState, { sessionId, state }),
-    // One rendering is enough: the focused app window, else the first.
-    captureTarget: () => {
-      const target = focusedAppWindow();
-      return target && !target.isDestroyed() ? target.webContents.id : null;
+  const modelViews = new ModelLiveViews(
+    {
+      state: (sessionId, state) => send(IPC_CHANNELS.modelState, { sessionId, state }),
+      // One rendering is enough: the focused app window, else the first.
+      captureTarget: () => {
+        const target = focusedAppWindow();
+        return target && !target.isDestroyed() ? target.webContents.id : null;
+      },
+      captureRequest: (target, request) => {
+        const window = appWindows().find(entry => !entry.isDestroyed() && entry.webContents.id === target);
+        if (!window) return false;
+        window.webContents.send(IPC_CHANNELS.modelCaptureRequest, request);
+        return true;
+      },
+      versionsChanged: sessionId => send(IPC_CHANNELS.modelVersions, { sessionId }),
     },
-    captureRequest: (target, request) => {
-      const window = appWindows().find(entry => !entry.isDestroyed() && entry.webContents.id === target);
-      if (!window) return false;
-      window.webContents.send(IPC_CHANNELS.modelCaptureRequest, request);
-      return true;
-    },
-  });
+    {},
+    new ModelVersionStore(join(userData, 'model-versions'), { warn: message => logger.warn(message) })
+  );
 
   const simulatorDriver = new XcodeSimulatorDriver();
   const simulatorView = new SimulatorLiveView(
@@ -765,6 +789,7 @@ export function registerChat(
     store,
     access,
     attachments,
+    composerDrafts,
     models,
     modelSettings,
     logger,
@@ -812,6 +837,9 @@ export function registerChat(
     get protectedPaths() {
       return toolProtected.paths();
     },
+    // Attachments sit inside userData but hold only what the user attached, so the agent may be
+    // given a folder of them to hand to another tool; the file tools still refuse every write there.
+    shareableUnderProtected: [attachmentsDir],
     get unresolvedProtectedPaths() {
       return toolProtected.unresolved();
     },
@@ -876,9 +904,13 @@ export function registerChat(
     fit: () => local.contextFit(),
   });
   ipcMain.handle(IPC_CHANNELS.chatListCreationTools, (_event, model: string) => service.listCreationTools(model));
-  ipcMain.handle(IPC_CHANNELS.chatSetSessionArchived, (_event, sessionId: string, archived: boolean) =>
-    service.setSessionArchived(sessionId, archived)
-  );
+  ipcMain.handle(IPC_CHANNELS.chatSetSessionArchived, (event, sessionId: unknown, archived: unknown) => {
+    if (typeof sessionId !== 'string' || typeof archived !== 'boolean') return null;
+    return archiveFromSidebar(service, store, sessionId, archived, options => {
+      const window = BrowserWindow.fromWebContents(event.sender);
+      return window ? dialog.showMessageBox(window, options) : dialog.showMessageBox(options);
+    });
+  });
   ipcMain.handle(IPC_CHANNELS.chatListSkills, (_event, raw: unknown) => {
     const scope = parseSkillsScope(raw);
     return scope ? service.listSkills(scope) : NO_SKILLS;
@@ -1144,8 +1176,8 @@ export function registerChat(
   ipcMain.handle(IPC_CHANNELS.chatRemoveContextDirectory, (_event, sessionId: string, directory: string) =>
     service.removeContextDirectory(sessionId, directory)
   );
-  ipcMain.handle(IPC_CHANNELS.chatGetSession, async (_event, sessionId: string) =>
-    sessionForRenderer(await service.getSession(sessionId))
+  ipcMain.handle(IPC_CHANNELS.chatGetSession, async (_event, sessionId: string, viewed?: boolean) =>
+    sessionForRenderer(await service.getSession(sessionId, viewed === true))
   );
   // Keyed by session rather than by a path from the renderer, so this only ever reads the folder
   // the session's own tools run in. A failure is logged, not shown: the bar is a passive readout,
@@ -1204,12 +1236,13 @@ export function registerChat(
     await service.deleteSession(sessionId, removeWorktree === true);
     await pullRequests.forget(sessionId);
   });
-  registerSidebarIpc(ipcMain, sidebarSections, sessionId =>
+  const isKnownSession = (sessionId: string) =>
     store.get(sessionId).then(
       session => session !== null,
       () => false
-    )
-  );
+    );
+  registerSidebarIpc(ipcMain, sidebarSections, isKnownSession);
+  registerComposerDraftsIpc(ipcMain, composerDrafts, composerDraftsLoaded, isKnownSession);
   ipcMain.handle(IPC_CHANNELS.chatSendMessage, (_event, request: SendMessageRequest) =>
     service.send(request.sessionId, request.text, request.attachments, { notes: rendererNotes(request.notes) })
   );
@@ -1219,6 +1252,16 @@ export function registerChat(
   );
   ipcMain.handle(IPC_CHANNELS.chatGetLoop, (_event, sessionId: string) => service.getLoop(sessionId));
   ipcMain.handle(IPC_CHANNELS.chatContinueReply, (_event, sessionId: string) => service.continueReply(sessionId));
+  ipcMain.handle(IPC_CHANNELS.chatEditMessage, (_event, request: unknown) => {
+    const parsed = editMessageRequestSchema.safeParse(request);
+    if (!parsed.success) return { ok: false, error: 'That edit could not be read.' };
+    return service.editMessage(parsed.data.sessionId, parsed.data.messageId, parsed.data.text);
+  });
+  ipcMain.handle(IPC_CHANNELS.chatRegenerateReply, (_event, sessionId: unknown) =>
+    typeof sessionId === 'string'
+      ? service.regenerateReply(sessionId)
+      : { ok: false, error: 'That conversation no longer exists.' }
+  );
   ipcMain.handle(IPC_CHANNELS.chatClearContext, (_event, sessionId: string) => service.clearContext(sessionId));
   ipcMain.handle(IPC_CHANNELS.chatCompactContext, (_event, sessionId: string, focus?: string) =>
     service.compactContext(sessionId, focus ?? '')
@@ -1443,11 +1486,12 @@ export function registerChat(
     if (
       typeof request?.sessionId !== 'string' ||
       typeof request?.title !== 'string' ||
-      typeof request?.content !== 'string'
+      typeof request?.content !== 'string' ||
+      (request.artifactKey !== undefined && typeof request.artifactKey !== 'string')
     ) {
       throw new Error('A conversation, a title and the artifact content are required.');
     }
-    return browser.openArtifact(request.sessionId, request.title, request.content);
+    return browser.openArtifact(request.sessionId, request.title, request.content, request.artifactKey);
   });
   ipcMain.handle(IPC_CHANNELS.browserGo, (_event, request: BrowserGoRequest): BrowserPaneState => {
     const actions: readonly BrowserGoAction[] = ['back', 'forward', 'reload'];
@@ -1610,6 +1654,7 @@ export function registerChat(
     simulatorView,
     modelViews,
     pullRequests,
+    composerDrafts,
     claudeImport,
     spareWorktrees,
     modelServers,
@@ -1622,6 +1667,7 @@ export function registerChat(
     modelSettings,
     capabilityLedger,
     respondToApproval,
+    store,
   };
 }
 

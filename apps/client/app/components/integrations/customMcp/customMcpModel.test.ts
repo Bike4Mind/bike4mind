@@ -1,13 +1,17 @@
 import { describe, expect, it } from 'vitest';
-import type { IMcpConnectionPublic } from '@bike4mind/common';
+import type { IMcpConnectionPublic, IMcpPlatformConnectionMemberView } from '@bike4mind/common';
 import {
   composerConnections,
   connectionChip,
   connectionsFor,
   galleryConnectionState,
   initialToolDrafts,
+  isComposerConnectionOn,
   needsSignIn,
   offeredToolCount,
+  toggleComposerConnection,
+  toolHintLabels,
+  toolTitle,
   toReviewEntries,
   type McpConnectionTool,
 } from './customMcpModel';
@@ -99,5 +103,75 @@ describe('composerConnections', () => {
       connection({ id: 'none-on', tools: [tool({ state: 'active', enabled: false })] }),
     ];
     expect(composerConnections(all).map(c => c.id)).toEqual(['ok']);
+  });
+
+  it('offers a platform connector to the composer, which no drawer manages', () => {
+    const shared: IMcpPlatformConnectionMemberView = {
+      id: 'shared',
+      ownerType: 'platform',
+      slug: 'docs',
+      displayName: 'Docs',
+      urlHost: 'mcp.example.com',
+      status: 'connected',
+      tools: [tool({ state: 'active', enabled: true })],
+      enabled: true,
+    };
+    const all = [
+      connection({ id: 'mine' }),
+      shared,
+      { ...shared, id: 'blocked', status: 'blocked_by_policy' as const },
+    ];
+
+    expect(composerConnections(all).map(c => c.id)).toEqual(['shared']);
+    expect(connectionsFor(all, undefined).map(c => c.id)).toEqual(['mine']);
+  });
+});
+
+describe('connector tool list', () => {
+  it('labels a contradictory read-only claim as a write, the way the review does', () => {
+    expect(toolHintLabels(tool({ annotations: { readOnlyHint: true, destructiveHint: true } }))).toEqual([
+      { label: 'Write', color: 'warning' },
+      { label: 'May delete or overwrite', color: 'neutral' },
+    ]);
+    expect(toolHintLabels(tool({ annotations: { readOnlyHint: true, idempotentHint: true } }))).toEqual([
+      { label: 'Read', color: 'neutral' },
+    ]);
+    expect(toolHintLabels(tool())).toEqual([{ label: 'Write', color: 'warning' }]);
+  });
+
+  it("prefers the tool's own title, then the annotation title", () => {
+    expect(toolTitle(tool({ title: 'Own', annotations: { title: 'Hint' } }))).toBe('Own');
+    expect(toolTitle(tool({ annotations: { title: 'Hint' } }))).toBe('Hint');
+    expect(toolTitle(tool({ title: '' }))).toBeUndefined();
+  });
+});
+
+describe('composer connection switches', () => {
+  const none = { disabledMcpConnections: [], enabledPlatformMcpConnections: [] };
+  const shared = { id: 'p1', slug: 'docs', ownerType: 'platform' as const };
+  const mine = { id: 'u1', slug: 'mine', ownerType: 'user' as const };
+
+  it("starts a platform connector off and the user's own connector on", () => {
+    expect(isComposerConnectionOn(shared, none)).toBe(false);
+    expect(isComposerConnectionOn(mine, none)).toBe(true);
+  });
+
+  it('switches a platform connector on and off by id, leaving the slug list alone', () => {
+    const on = toggleComposerConnection(shared, none);
+    expect(on).toEqual({ enabledPlatformMcpConnections: ['p1'] });
+    const afterOn = { ...none, ...on };
+    expect(isComposerConnectionOn(shared, afterOn)).toBe(true);
+
+    expect(toggleComposerConnection(shared, afterOn)).toEqual({ enabledPlatformMcpConnections: [] });
+    // A recreated connector has a new id, so the old switch does not carry over.
+    expect(isComposerConnectionOn({ ...shared, id: 'p2' }, afterOn)).toBe(false);
+  });
+
+  it("switches the user's own connector off and on by slug, as before", () => {
+    const off = toggleComposerConnection(mine, none);
+    expect(off).toEqual({ disabledMcpConnections: ['mine'] });
+    expect(isComposerConnectionOn(mine, { ...none, ...off })).toBe(false);
+    expect(toggleComposerConnection(mine, { ...none, ...off })).toEqual({ disabledMcpConnections: [] });
+    expect(isComposerConnectionOn(mine, { ...none, enabledPlatformMcpConnections: ['u1'] })).toBe(true);
   });
 });

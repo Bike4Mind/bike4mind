@@ -78,6 +78,7 @@ vi.mock('@bike4mind/services/llm', async () => {
 });
 
 const mockFindCompletionRun = vi.hoisted(() => vi.fn());
+const mockFindActiveFreeze = vi.hoisted(() => vi.fn());
 const mockRecordPlatformEndUser = vi.hoisted(() => vi.fn());
 const mockConnectDB = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 const dbConnection = vi.hoisted(() => ({ readyState: 1 }));
@@ -92,6 +93,7 @@ vi.mock('@bike4mind/database', () => ({
   organizationRepository: {},
   cacheRepository: {},
   completionRunRepository: { findById: mockFindCompletionRun },
+  spendFreezeRepository: { findActiveForSubject: mockFindActiveFreeze },
   User: {},
   userApiKeyRepository: { findById: vi.fn().mockResolvedValue({ id: 'key-1', name: 'cli' }) },
   platformEndUserRepository: { recordSeen: mockRecordPlatformEndUser },
@@ -108,7 +110,7 @@ vi.mock('@bike4mind/server-utils/cli/resolveContractAuth', () => ({ resolveContr
 
 const quotaRelease = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 const mockAdmitApiKeyCompletion = vi.hoisted(() => vi.fn());
-vi.mock('@server/utils/untrustedCompletionQuota', () => ({
+vi.mock('@bike4mind/server-utils/utils/untrustedCompletionQuota', () => ({
   admitApiKeyCompletion: mockAdmitApiKeyCompletion,
   NO_COMPLETION_QUOTA: { release: () => Promise.resolve() },
 }));
@@ -126,7 +128,9 @@ vi.mock('@bike4mind/services', async importOriginal => ({
   cacheService: { get: mockCacheGet, set: vi.fn(), ttl: mockCacheTtl },
 }));
 const mockCheckApiKeyRateLimit = vi.hoisted(() => vi.fn());
-vi.mock('@bike4mind/server-utils/utils/apiKeyRateLimitCheck', () => ({
+vi.mock('@bike4mind/server-utils/utils/apiKeyRateLimitCheck', async importOriginal => ({
+  rateLimitRefusalInfo: (await importOriginal<typeof import('@bike4mind/server-utils/utils/apiKeyRateLimitCheck')>())
+    .rateLimitRefusalInfo,
   extractApiKeyFromHeaders: vi.fn(),
   checkApiKeyRateLimit: mockCheckApiKeyRateLimit,
 }));
@@ -149,14 +153,17 @@ import {
   ApiKeyScope,
   BadRequestError,
   CompletionStreamEventSchema,
+  CompletionsUnprocessableErrorSchema,
   createCompletionContract,
   DAILY_FREE_LIMIT_REACHED_ERROR_CODE,
   ForbiddenError,
   HTTPError,
   InsufficientCreditsErrorSchema,
+  RUN_BUDGET_EXHAUSTED_ERROR_CODE,
   ScopeForbiddenErrorSchema,
   TooManyRequestsError,
   UnauthorizedError,
+  UnprocessableEntityError,
   spendCapExceededError,
 } from '@bike4mind/common';
 
@@ -182,6 +189,7 @@ beforeAll(async () => {
 afterAll(() => server?.close());
 
 beforeEach(() => {
+  mockFindActiveFreeze.mockResolvedValue(null);
   mockAdmitApiKeyCompletion.mockResolvedValue({ release: quotaRelease });
   mockResolveContractAuth.mockResolvedValue({
     method: 'apiKey',
@@ -850,11 +858,62 @@ describe('POST /api/ai/v1/completions - pre-stream failures are JSON with a real
     expect(InsufficientCreditsErrorSchema.safeParse(body).success).toBe(true);
   });
 
+  it('answers a run whose credit budget is used up with 422 run_budget_exhausted', async () => {
+    mockExecuteCompletion.mockRejectedValueOnce(
+      new UnprocessableEntityError("This run's credit budget is used up.", {
+        errorCode: RUN_BUDGET_EXHAUSTED_ERROR_CODE,
+      })
+    );
+    const body = await expectJsonError(await post(), 422);
+    expect(body.errorCode).toBe(RUN_BUDGET_EXHAUSTED_ERROR_CODE);
+    expect(CompletionsUnprocessableErrorSchema.safeParse(body).success).toBe(true);
+  });
+
   it('keeps spend_cap_exceeded distinct on a pre-stream 422', async () => {
     mockExecuteCompletion.mockRejectedValueOnce(spendCapExceededError('key hit its cap'));
     const body = await expectJsonError(await post(), 422);
     expect(body.errorCode).toBe('spend_cap_exceeded');
     expect(InsufficientCreditsErrorSchema.safeParse(body).success).toBe(true);
+  });
+
+  it('answers a frozen caller with 403 spend_frozen, its scope, and no reason, before the cap or the provider', async () => {
+    mockFindActiveFreeze.mockResolvedValue({
+      scopeType: 'apiKey',
+      frozenAt: new Date('2026-11-16T00:00:00.000Z'),
+      reason: 'internal note',
+    });
+    const body = await expectJsonError(await post(), 403);
+    expect(body).toMatchObject({
+      errorCode: 'spend_frozen',
+      frozenScope: 'api_key',
+      frozenAt: '2026-11-16T00:00:00.000Z',
+    });
+    expect(JSON.stringify(body)).not.toContain('internal note');
+    expect(mockCheckFreeTierDailySpendCap).not.toHaveBeenCalled();
+    expect(mockExecuteCompletion).not.toHaveBeenCalled();
+  });
+
+  it('checks the user, billing org and key, and tells executeCompletion the freeze was already checked', async () => {
+    mockResolveContractAuth.mockResolvedValue({
+      method: 'apiKey',
+      userId: 'user-1',
+      apiKeyInfo: { keyId: 'key-1', userId: 'user-1', billingOwnerType: 'User' },
+    });
+    await (await post()).text();
+    expect(mockFindActiveFreeze).toHaveBeenCalledWith({ userId: 'user-1', organizationId: null, apiKeyId: 'key-1' });
+    expect(mockExecuteCompletion).toHaveBeenCalledWith(
+      expect.objectContaining({ spendFreezeChecked: true, apiKeyBillingOwnerType: 'User' })
+    );
+  });
+
+  it('keeps the acting user in the subject of an org-billed key', async () => {
+    mockResolveContractAuth.mockResolvedValue({
+      method: 'apiKey',
+      userId: 'user-1',
+      apiKeyInfo: { keyId: 'key-1', userId: 'user-1', billingOwnerType: 'Organization', organizationId: 'org-1' },
+    });
+    await (await post()).text();
+    expect(mockFindActiveFreeze).toHaveBeenCalledWith({ userId: 'user-1', organizationId: 'org-1', apiKeyId: 'key-1' });
   });
 
   it('answers a catalogued model without a backend with 503 provider_not_configured', async () => {
@@ -976,6 +1035,8 @@ describe('POST /api/ai/v1/completions - rate limits from the real limiters', () 
       allowed: false,
       error: 'Rate limit exceeded: 10 requests per minute. Try again in 12 seconds.',
       retryAfter: 12,
+      limitType: 'minute',
+      limit: 10,
       headers: { 'X-RateLimit-Limit-Minute': 10, 'X-RateLimit-Remaining-Minute': 0 },
     });
 
@@ -984,6 +1045,9 @@ describe('POST /api/ai/v1/completions - rate limits from the real limiters', () 
     expect(res.headers.get('retry-after')).toBe('12');
     expect(res.headers.get('x-ratelimit-limit-minute')).toBe('10');
     expect(res.headers.get('x-ratelimit-remaining-minute')).toBe('0');
+    expect(body.errorCode).toBe('api_key_rate_limit_exceeded');
+    expect(body.limit).toBe(10);
+    expect(body.windowSeconds).toBe(60);
     expect(body).not.toHaveProperty('retryAfter');
     expect(body).not.toHaveProperty('rateLimitHeaders');
   });

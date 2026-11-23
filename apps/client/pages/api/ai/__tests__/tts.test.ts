@@ -389,6 +389,23 @@ describe('POST /api/ai/tts', () => {
     });
   });
 
+  it.each([401, 429])(
+    'answers an exhausted quota (as a %i) with 503 temporarily unavailable, at warn',
+    async status => {
+      const error = { code: 'provider_error', message: 'openai_speech_quota_exhausted', providerStatus: status };
+      mocks.runAudioJobInline.mockResolvedValue(speechJob({ state: 'failed', error }));
+      const { res, logger, promise } = run({ text: 'hi' });
+      await promise;
+      expect(res._getStatusCode()).toBe(503);
+      expect(res._getJSONData()).toEqual({
+        error: 'Text-to-speech is temporarily unavailable. Please try again later.',
+        provider: 'openai',
+      });
+      expect(logger.warn).toHaveBeenCalledWith('TTS synthesis failed', expect.objectContaining({ error }));
+      expect(logger.error).not.toHaveBeenCalled();
+    }
+  );
+
   it('passes a provider rate limit through as 429 with the Retry-After the job recorded', async () => {
     mocks.runAudioJobInline.mockResolvedValue(
       speechJob({
@@ -436,6 +453,20 @@ describe('POST /api/ai/tts', () => {
     expect(res._getStatusCode()).toBe(502);
     expect(res._getJSONData()).toEqual({ error: 'Failed to generate speech', provider: 'openai' });
     expect(logger.error).toHaveBeenCalled();
+  });
+
+  it.each([
+    ['warn', { code: 'orphaned_submit', message: 'cut off', cutOffByStepDeadline: true }],
+    ['error', { code: 'orphaned_submit', message: 'unknown outcome' }],
+    ['error', { code: 'provider_error', message: 'x' }],
+  ] as const)('logs a 502 failure at %s by its error', async (level, error) => {
+    mocks.runAudioJobInline.mockResolvedValue(speechJob({ state: 'failed', error }));
+    const { res, logger, promise } = run({ text: 'hi' });
+    await promise;
+    expect(res._getStatusCode()).toBe(502);
+    const other = level === 'warn' ? 'error' : 'warn';
+    expect(logger[level]).toHaveBeenCalledWith('TTS synthesis failed', expect.objectContaining({ error }));
+    expect(logger[other]).not.toHaveBeenCalledWith('TTS synthesis failed', expect.anything());
   });
 
   it('answers 202 with the job resource when the job does not finish in time', async () => {

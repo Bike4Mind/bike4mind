@@ -21,6 +21,38 @@ final class AppNavigatorTests: XCTestCase {
     XCTAssertNil(navigator.takeOpeningTurn(forSession: "s1"))
   }
 
+  func testBriefRoutePushesTheBriefAndReportsItShowing() {
+    let navigator = AppNavigator()
+    navigator.isDrawerOpen = true
+    navigator.apply(.brief(id: "b1"))
+    XCTAssertEqual(navigator.sessionPath, [.brief(id: "b1")])
+    XCTAssertFalse(navigator.isDrawerOpen)
+    XCTAssertTrue(navigator.isShowing(.brief(id: "b1")))
+    XCTAssertFalse(navigator.isShowing(.brief(id: "b2")))
+  }
+
+  func testOpenLatestBriefPushesAnIdlessBrief() {
+    let navigator = AppNavigator()
+    navigator.openLatestBrief()
+    XCTAssertEqual(navigator.sessionPath, [.brief(id: nil)])
+  }
+
+  func testTheLatestBriefIsNotAssumedToBeThePushedBrief() {
+    let navigator = AppNavigator()
+    navigator.openLatestBrief()
+    XCTAssertFalse(navigator.isShowing(.brief(id: "b2")))
+  }
+
+  func testPushSessionKeepsTheBriefBelowIt() {
+    let navigator = AppNavigator()
+    navigator.apply(.brief(id: "b1"))
+    navigator.pushSession(id: "s1")
+    XCTAssertEqual(navigator.sessionPath.count, 2)
+    XCTAssertEqual(navigator.sessionPath.last?.sessionID, "s1")
+    navigator.pushSession(id: "s1")
+    XCTAssertEqual(navigator.sessionPath.count, 2)
+  }
+
   func testSameSessionDoesNotStackTwice() {
     let navigator = AppNavigator()
     navigator.apply(.session(id: "s1"))
@@ -217,6 +249,36 @@ final class AppNavigatorTests: XCTestCase {
 
 @MainActor
 final class VoiceNavigationTests: XCTestCase {
+  func testABriefStartedConversationCarriesTheBriefID() {
+    let navigator = AppNavigator()
+
+    navigator.startVoiceConversation(.newConversation, briefID: "b1")
+    XCTAssertEqual(navigator.voiceRequest?.briefID, "b1")
+    XCTAssertEqual(navigator.voiceRequest?.target, .newConversation)
+
+    navigator.startVoiceConversation(.session("s1"))
+    XCTAssertNil(navigator.voiceRequest?.briefID)
+  }
+
+  func testListeningFromABriefKeepsTheBriefOnScreen() {
+    let navigator = AppNavigator()
+    navigator.apply(.brief(id: "b1"))
+
+    navigator.startVoiceConversation(.newConversation, briefID: "b1")
+
+    XCTAssertTrue(navigator.isShowing(.brief(id: "b1")))
+    XCTAssertFalse(navigator.isShowing(.home))
+  }
+
+  func testListeningFromANotificationLandsOnThatBrief() {
+    let navigator = AppNavigator()
+    navigator.apply(.settings)
+
+    navigator.startVoiceConversation(.newConversation, briefID: "b2")
+
+    XCTAssertTrue(navigator.isShowing(.brief(id: "b2")))
+  }
+
   func testStartingFromTheDrawerLandsOnHomeAndPresentsTheConversation() {
     let navigator = AppNavigator()
     navigator.apply(.settings)

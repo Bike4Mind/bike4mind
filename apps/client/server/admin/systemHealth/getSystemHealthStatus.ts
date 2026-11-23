@@ -1,6 +1,6 @@
 import { Config } from '@bike4mind/server-utils/utils/config';
 import mongoose from 'mongoose';
-import { MailService, type EmailConfigStatus } from '@bike4mind/server-utils/utils/mailer/index';
+import { getMailConfigStatus, type EmailConfigStatus } from '@bike4mind/server-utils/utils/mailer/configStatus';
 import { getOktaConfigStatus } from '@server/auth/oktaOidcClient';
 import { validateEncryptionKey, validateJwtSecret } from '@server/security/tier1SecretValidators';
 
@@ -31,6 +31,8 @@ export interface SystemHealthResponse {
     readyState: number;
   };
   oauth: OAuthConfigStatus;
+  /** True on a B4M_SELF_HOST deploy, where config comes from env/chart values rather than SST secrets. */
+  selfHost: boolean;
 }
 
 /**
@@ -76,7 +78,13 @@ async function getOAuthConfigStatus(): Promise<OAuthConfigStatus> {
   const oktaWarnings: string[] = [];
 
   // Check JWT_SECRET using shared validator
-  const jwtResult = validateJwtSecret(Config.JWT_SECRET);
+  let jwtSecret: string | undefined;
+  try {
+    jwtSecret = Config.JWT_SECRET;
+  } catch {
+    // Config refuses a placeholder; report it as missing.
+  }
+  const jwtResult = validateJwtSecret(jwtSecret);
   if (!jwtResult.isValid) {
     if (jwtResult.status === 'missing' || jwtResult.status === 'placeholder') {
       oktaMissing.push('JWT_SECRET');
@@ -154,12 +162,13 @@ async function getOAuthConfigStatus(): Promise<OAuthConfigStatus> {
  */
 export async function getSystemHealthStatus(): Promise<SystemHealthResponse> {
   return {
-    email: new MailService().getConfigStatus(),
+    email: getMailConfigStatus(),
     database: {
       type: process.env.MAIN_DB_TYPE || 'MongoAtlas',
       connected: mongoose.connection.readyState === 1,
       readyState: mongoose.connection.readyState,
     },
     oauth: await getOAuthConfigStatus(),
+    selfHost: process.env.B4M_SELF_HOST === 'true',
   };
 }

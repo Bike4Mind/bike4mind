@@ -30,6 +30,7 @@ export function toPublicListing(
     description: l.description,
     visibility: l.visibility,
     organization_id: l.organizationId ?? null,
+    space_id: l.spaceId ?? null,
     tags: l.tags ?? [],
     status: l.status,
     author_name: l.authorName ?? null,

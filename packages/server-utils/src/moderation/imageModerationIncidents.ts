@@ -25,7 +25,7 @@ export function resolveAdminAppUrl(env: Record<string, string | undefined> = pro
 }
 
 // Loaded once, on the first alert.
-let mailerModule: Promise<typeof import('../utils/mailer/index')> | undefined;
+let mailerModule: Promise<typeof import('../utils/mailer/queuedMailer')> | undefined;
 
 type ReviewerListSetting = 'ImageModerationReviewerEmails' | 'ImageModerationEscalationEmails';
 
@@ -45,8 +45,11 @@ const parseStoredEmailList = (raw: unknown): unknown => {
  * of them read the same ImageModerationReviewerEmails and ImageModerationEscalationEmails settings
  * and render the same emails.
  *
- * Mail goes straight through the SMTP mailer rather than the email.send event: the upload scan
- * Lambda records incidents too and is not linked to the event bus.
+ * Mail is queued for the email-send worker, so every function that records an incident has to be
+ * linked to the event bus (infra/__tests__/mailSenderBusLinks.test.ts). An alert that cannot be
+ * queued leaves the incident unstamped for the review sweep to pick up. A queued alert stamps only
+ * alertQueuedAt; the email-send worker stamps alertedAt once a reviewer's copy is delivered
+ * (recordEmailDeliveryOutcome), and the sweep resends one left unconfirmed past its in-flight window.
  */
 export function createReviewerAlertDelivery(options: { skipSettingsCache?: boolean } = {}): IncidentEscalationDelivery {
   const readEmailList = async (name: ReviewerListSetting) => {
@@ -60,9 +63,9 @@ export function createReviewerAlertDelivery(options: { skipSettingsCache?: boole
   return {
     getRecipients: () => readEmailList('ImageModerationReviewerEmails'),
     getEscalationRecipients: () => readEmailList('ImageModerationEscalationEmails'),
-    sendEmail: async (to, email) => {
-      const { default: mailer } = await (mailerModule ??= import('../utils/mailer/index'));
-      return mailer.sendEmail(to, email, { mirror: false, logRecipient: false });
+    sendEmail: async (to, email, ref) => {
+      const { queuedMailer } = await (mailerModule ??= import('../utils/mailer/queuedMailer'));
+      return queuedMailer.sendEmail(to, email, { mirror: false, logRecipient: false, ...(ref && { ref }) });
     },
     appUrl: () => resolveAdminAppUrl(),
     logger: {
@@ -103,20 +106,24 @@ export const imageModerationIncidents = withReviewerAlerts({
   incidents: {
     record: input => imageModerationIncidentRepository.record(input),
     markAlerted: id => imageModerationIncidentRepository.markAlerted(id),
+    markAlertQueued: id => imageModerationIncidentRepository.markAlertQueued(id),
   },
 });
 
 /**
  * Emails the escalation list about an incident a reviewer just escalated and stamps
- * escalationAlertedAt on delivery. Never throws; the review sweep retries a send that was not
- * delivered.
+ * escalationAlertedAt (inline delivery) or escalationAlertQueuedAt (queued). Never throws; the review
+ * sweep retries a send that was not delivered.
  */
 export function sendIncidentEscalationAlert(
   incident: RecordedIncident
-): Promise<{ outcome: IncidentAlertOutcome; alertedAt: Date | null }> {
+): Promise<{ outcome: IncidentAlertOutcome; alertedAt: Date | null; queuedAt: Date | null }> {
   return alertEscalationReviewers(incident, {
     // An admin who has just saved the escalation list should not escalate into a stale cached copy.
     ...createReviewerAlertDelivery({ skipSettingsCache: true }),
-    incidents: { markEscalationAlerted: (id, at) => imageModerationIncidentRepository.markEscalationAlerted(id, at) },
+    incidents: {
+      markEscalationAlerted: (id, at) => imageModerationIncidentRepository.markEscalationAlerted(id, at),
+      markEscalationAlertQueued: (id, at) => imageModerationIncidentRepository.markEscalationAlertQueued(id, at),
+    },
   });
 }

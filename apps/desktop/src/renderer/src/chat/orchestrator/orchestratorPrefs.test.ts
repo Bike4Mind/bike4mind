@@ -14,23 +14,38 @@ import {
   readDockOpen,
   readFinaleSeen,
   readIntroSeen,
+  readLayout,
+  readPresenter,
   readSurface,
   readView,
   writeAmbient,
+  writePresenter,
   writeAmbientHintSeen,
   writeDockOpen,
   writeFinaleSeen,
   writeIntroSeen,
+  writeLayout,
   writeSurface,
   writeView,
 } from './orchestratorPrefs';
+import { singlePaneLayout, type OrchestratorLayout } from './orchestratorLayout';
 
 describe('orchestratorPrefs', () => {
   beforeEach(() => window.localStorage.clear());
   afterEach(() => vi.restoreAllMocks());
 
   it('lists the scenes, then the layouts', () => {
-    expect(ORCHESTRATOR_VIEWS).toEqual(['tavern', 'aquarium', 'board', 'table', 'tile-wall']);
+    expect(ORCHESTRATOR_VIEWS).toEqual([
+      'tavern',
+      'aquarium',
+      'office',
+      'board',
+      'table',
+      'tile-wall',
+      'swimlanes',
+      'constellation',
+      'transit',
+    ]);
   });
 
   it('remembers each session its own view', () => {
@@ -38,6 +53,15 @@ describe('orchestratorPrefs', () => {
     writeView('s2', 'aquarium');
     expect(readView('s1')).toBe('tile-wall');
     expect(readView('s2')).toBe('aquarium');
+  });
+
+  it('remembers Office at the session, project and global levels', () => {
+    writeView('office-session', 'office', '/office-project');
+    writeView('other-session', 'board', '/other-project');
+    expect(readView('office-session', '/other-project')).toBe('office');
+    expect(readView('new-session', '/office-project')).toBe('office');
+    writeView('office-session', 'office', '/office-project');
+    expect(readView('new-session', '/new-project')).toBe('office');
   });
 
   describe('view fallback levels', () => {
@@ -101,6 +125,78 @@ describe('orchestratorPrefs', () => {
       expect(readView('s1', '/p')).toBe('board');
       expect(window.localStorage.getItem(PROJECT + '/p')).toBe('board');
       expect(window.localStorage.getItem(LAST)).toBe('board');
+    });
+  });
+
+  describe('layout', () => {
+    const split: OrchestratorLayout = {
+      split: 'row',
+      panes: [
+        { view: 'board', size: 0.6 },
+        { view: 'transit', size: 0.4 },
+      ],
+    };
+
+    it('migrates a stored single view into a single-pane layout', () => {
+      writeView('s1', 'constellation', '/repo');
+      expect(readLayout('s1', '/repo')).toEqual(singlePaneLayout('constellation'));
+      // A new session in the same project migrates the project's view the same way.
+      expect(readLayout('s2', '/repo')).toEqual(singlePaneLayout('constellation'));
+    });
+
+    it('opens on the Tavern alone when nothing is stored', () => {
+      expect(readLayout('s1')).toEqual(singlePaneLayout('tavern'));
+    });
+
+    it('round-trips a split at the session, project and global levels', () => {
+      writeLayout('s1', split, '/repo');
+      expect(readLayout('s1', '/repo')).toEqual(split);
+      expect(readLayout('s2', '/repo')).toEqual(split);
+      expect(readLayout('s3', '/other')).toEqual(split);
+    });
+
+    it("writes the first pane's view as the single view too", () => {
+      writeLayout('s1', split, '/repo');
+      expect(readView('s1', '/repo')).toBe('board');
+    });
+
+    it("prefers the session's layout over its project's, as for views", () => {
+      writeLayout('s2', split, '/repo');
+      writeLayout('s1', singlePaneLayout('table'), '/repo');
+      expect(readLayout('s1', '/repo')).toEqual(singlePaneLayout('table'));
+      expect(readLayout('s2')).toEqual(split);
+    });
+
+    it('falls back to the single view for a bad saved layout, never throwing', () => {
+      writeView('s1', 'transit');
+      window.localStorage.setItem('b4m.orchestrator.layout.s1', '{"split":"row","panes":[]}');
+      expect(readLayout('s1')).toEqual(singlePaneLayout('transit'));
+      window.localStorage.setItem('b4m.orchestrator.layout.s1', 'not json');
+      expect(readLayout('s1')).toEqual(singlePaneLayout('transit'));
+    });
+
+    it('falls back to the Tavern alone when the layout and view are both unreadable', () => {
+      window.localStorage.setItem('b4m.orchestrator.layout.s1', '[]');
+      window.localStorage.setItem('b4m.orchestrator.view.s1', 'hologram');
+      expect(readLayout('s1')).toEqual(singlePaneLayout('tavern'));
+    });
+
+    it('forgetSessionPrefs clears the session layout but not the project one', () => {
+      writeLayout('s1', split, '/repo');
+      forgetSessionPrefs('s1');
+      expect(window.localStorage.getItem('b4m.orchestrator.layout.s1')).toBeNull();
+      expect(readLayout('s2', '/repo')).toEqual(split);
+    });
+
+    it('yields the default and does not throw when storage throws', () => {
+      vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => {
+        throw new Error('blocked');
+      });
+      vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+        throw new Error('blocked');
+      });
+      expect(() => writeLayout('s1', split, '/repo')).not.toThrow();
+      expect(readLayout('s1', '/repo')).toEqual(singlePaneLayout('tavern'));
     });
   });
 
@@ -234,6 +330,16 @@ describe('orchestratorPrefs', () => {
       });
       expect(readDockWidth()).toBe(DOCK_DEFAULT_WIDTH);
       expect(() => writeDockWidth(500)).not.toThrow();
+    });
+  });
+
+  describe('presenter', () => {
+    it('is off until turned on, and remembers both ways', () => {
+      expect(readPresenter()).toBe(false);
+      writePresenter(true);
+      expect(readPresenter()).toBe(true);
+      writePresenter(false);
+      expect(readPresenter()).toBe(false);
     });
   });
 });

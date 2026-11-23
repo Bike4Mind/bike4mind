@@ -23,7 +23,7 @@ import HTTPTypes
 /// 2. Make a first call: `GET /api/v1/me` with `Authorization: Bearer b4m_live_<key>`. It needs only the `me:read` scope, spends no credits, and returns your identity, plan tier and credit balance.
 /// 3. Read the rest of this page for the behaviour shared across endpoints: rate limits, credits, errors and async jobs.
 ///
-/// Endpoints are grouped by tag: **AI** (chat, completions, embeddings, agent runs, tools, quest polling), **Images**, **Audio**, **Videos**, **Music**, **Transcriptions**, **Sessions**, **Artifacts**, **Files**, **Projects**, **Agents**, **Data Lakes**, **Skills** and **Account**.
+/// Endpoints are grouped by tag: **AI** (chat, completions, embeddings, agent runs, tools, quest polling), **Images**, **Audio**, **Videos**, **Music**, **Transcriptions**, **Sessions**, **Artifacts**, **Files**, **Projects**, **Agents**, **Data Lakes**, **Data Lake Research**, **Skills** and **Account**.
 ///
 /// ## Authentication
 /// Send an API key as `Authorization: Bearer b4m_live_<key>` (canonical), `x-api-key: b4m_live_<key>` (legacy), or `Authorization: ApiKey b4m_live_<key>`. A JWT access token is also accepted in the `Authorization: Bearer` header.
@@ -59,6 +59,8 @@ import HTTPTypes
 /// - `bob:run`
 /// - `slack:post`
 /// - `api-keys:manage`
+/// - `ai:end-user-id`
+/// - `artifacts:publish`
 ///
 /// Per-operation required scopes are published via the `x-required-scopes` extension. Semantics are OR: a key needs ANY ONE of an operation's listed scopes, not all of them. Operations with no `x-required-scopes` enforce no scope (e.g. the JWT-only tools endpoint).
 ///
@@ -71,7 +73,7 @@ import HTTPTypes
 /// - `X-RateLimit-Remaining-Day`
 /// - `X-RateLimit-Reset-Day`
 ///
-/// Reset values are Unix epoch seconds. Exceeding a ceiling returns `429` with a `Retry-After` header; wait that long before retrying. This includes `POST /api/ai/v1/completions`, which rate-limits before it opens its event stream. `GET /api/v1/me`, `GET /api/v1/credits`, `GET /api/v1/models`, `GET /api/v1/video-models`, `GET /api/v1/music-models`, the `GET` list endpoints for `/api/v1/sessions`, `/api/v1/video-generations` and `/api/v1/music-generations`, and the poll endpoints listed under Async jobs are exempt from the per-day ceiling: a poll consumes no daily slot, and only the per-minute limit applies. A request refused at the route scope gate (`403`) or for a bad key (`401`) never reaches the limiter and carries no rate-limit headers.
+/// Reset values are Unix epoch seconds. Exceeding a ceiling returns `429` with a `Retry-After` header; wait that long before retrying. This includes `POST /api/ai/v1/completions`, which rate-limits before it opens its event stream. `GET /api/v1/me`, `GET /api/v1/credits`, `GET /api/v1/models`, `GET /api/v1/image-models`, `GET /api/v1/video-models`, `GET /api/v1/music-models`, the `GET` list endpoints for `/api/v1/sessions`, `/api/v1/video-generations` and `/api/v1/music-generations`, and the poll endpoints listed under Async jobs are exempt from the per-day ceiling: a poll consumes no daily slot, and only the per-minute limit applies. A request refused at the route scope gate (`403`) or for a bad key (`401`) never reaches the limiter and carries no rate-limit headers.
 ///
 /// ## Credits
 /// Generation endpoints spend credits from the balance shown at `credits.balance` on `GET /api/v1/me` (the caller's personal ledger). A key without `me:read` reads the same number from `GET /api/v1/credits`, which accepts `ai:chat`, `ai:generate` and `ai:decide` too. A synchronous call that cannot be paid for fails with `422` and `errorCode: "insufficient_credits"`. On a queued job the same code arrives on the polled result instead (see Async jobs), so check both places.
@@ -87,8 +89,12 @@ import HTTPTypes
 /// - **Agent runs** (`POST /api/v1/agent-executions`) return `202`. Poll `GET /api/v1/agent-executions/{id}` until `status` is `completed`, `failed` or `aborted`.
 /// - **Video generation** (`POST /api/v1/video-generations`) returns `202`. Poll `GET /api/v1/video-generations/{id}` until `state` is `succeeded`, `failed`, `blocked` or `cancelled`.
 /// - **Music generation** (`POST /api/v1/music-generations`) returns `202`. Poll `GET /api/v1/music-generations/{id}` until `state` is `succeeded`, `failed`, `blocked` or `cancelled`.
+/// - **Scene composition** (`POST /api/v1/scene-compositions`) returns `202`. Poll `GET /api/v1/scene-compositions/{id}` until `state` is `succeeded`, `failed`, `blocked` or `cancelled`.
+/// - **Briefs** (`POST /api/v1/briefs`) return `202`. Poll `GET /api/v1/briefs/{id}` until `status` is `ready` or `failed`.
+/// - **Brief replies** (`POST /api/v1/briefs/{id}/decisions/{decisionId}/reply`) return `202` with the `executionId` of the agent run your reply started. Poll `GET /api/v1/agent-executions/{id}` with it.
+/// - **Research runs** (`POST /api/v1/data-lakes/{id}/research/runs`) return `202`. Poll `GET /api/v1/data-lakes/{id}/research/runs/{run_id}` until `status` is `completed` or `failed`.
 /// - **File uploads** (`POST /api/v1/files`) return a presigned `upload_url`; after the `PUT`, poll `GET /api/v1/files/{id}` until `moderation_status` is `clean` before passing the id elsewhere.
-/// - **Audio** endpoints are synchronous and return the result directly.
+/// - **Audio** endpoints are synchronous and return the result directly. A text-to-speech (`POST /api/ai/tts`) or sound-effect (`POST /api/ai/sound-effects`) clip that outlasts the request answers `202` with its job resource instead; it cannot be polled yet, and unless `preview` was set the clip is saved to the file browser when it finishes.
 /// - **Transcriptions** (`POST /api/v1/transcriptions`) are synchronous too: after the upload, one call returns the text. Long audio can outlast the request timeout and fail with a `504`; see that endpoint for the limit.
 ///
 /// Poll with a backoff of a few seconds: each poll counts against the per-minute limit.
@@ -2095,6 +2101,455 @@ public struct Client: APIProtocol {
                     )
                     let contentType = converter.extractContentTypeIfPresent(in: response.headerFields)
                     let body: Operations.ListSessions.Output.TooManyRequests.Body
+                    let chosenContentType = try converter.bestContentType(
+                        received: contentType,
+                        options: [
+                            "application/json"
+                        ]
+                    )
+                    switch chosenContentType {
+                    case "application/json":
+                        body = try await converter.getResponseBodyAsJSON(
+                            Components.Schemas.ErrorResponse.self,
+                            from: responseBody,
+                            transforming: { value in
+                                .json(value)
+                            }
+                        )
+                    default:
+                        preconditionFailure("bestContentType chose an invalid content type.")
+                    }
+                    return .tooManyRequests(.init(
+                        headers: headers,
+                        body: body
+                    ))
+                default:
+                    return .undocumented(
+                        statusCode: response.status.code,
+                        .init(
+                            headerFields: response.headerFields,
+                            body: responseBody
+                        )
+                    )
+                }
+            }
+        )
+    }
+    /// Get a session
+    ///
+    /// Reads a session you own or that was shared with you, including its name, attached knowledge files, tags, and retrieval settings. A missing, deleted, malformed, or inaccessible session is 404. An API key needs notebooks:read or notebooks:write.
+    ///
+    /// - Remark: HTTP `GET /api/v1/sessions/{id}`.
+    /// - Remark: Generated from `#/paths//api/v1/sessions/{id}/get(getSessionById)`.
+    public func getSessionById(_ input: Operations.GetSessionById.Input) async throws -> Operations.GetSessionById.Output {
+        try await client.send(
+            input: input,
+            forOperation: Operations.GetSessionById.id,
+            serializer: { input in
+                let path = try converter.renderedPath(
+                    template: "/api/v1/sessions/{}",
+                    parameters: [
+                        input.path.id
+                    ]
+                )
+                var request: HTTPTypes.HTTPRequest = .init(
+                    soar_path: path,
+                    method: .get
+                )
+                suppressMutabilityWarning(&request)
+                converter.setAcceptHeader(
+                    in: &request.headerFields,
+                    contentTypes: input.headers.accept
+                )
+                return (request, nil)
+            },
+            deserializer: { response, responseBody in
+                switch response.status.code {
+                case 200:
+                    let headers: Operations.GetSessionById.Output.Ok.Headers = .init(
+                        xRequestID: try converter.getOptionalHeaderFieldAsURI(
+                            in: response.headerFields,
+                            name: "X-Request-ID",
+                            as: Swift.String.self
+                        ),
+                        xRateLimitLimitMinute: try converter.getOptionalHeaderFieldAsURI(
+                            in: response.headerFields,
+                            name: "X-RateLimit-Limit-Minute",
+                            as: Swift.Int.self
+                        ),
+                        xRateLimitRemainingMinute: try converter.getOptionalHeaderFieldAsURI(
+                            in: response.headerFields,
+                            name: "X-RateLimit-Remaining-Minute",
+                            as: Swift.Int.self
+                        ),
+                        xRateLimitResetMinute: try converter.getOptionalHeaderFieldAsURI(
+                            in: response.headerFields,
+                            name: "X-RateLimit-Reset-Minute",
+                            as: Swift.Int.self
+                        ),
+                        xRateLimitLimitDay: try converter.getOptionalHeaderFieldAsURI(
+                            in: response.headerFields,
+                            name: "X-RateLimit-Limit-Day",
+                            as: Swift.Int.self
+                        ),
+                        xRateLimitRemainingDay: try converter.getOptionalHeaderFieldAsURI(
+                            in: response.headerFields,
+                            name: "X-RateLimit-Remaining-Day",
+                            as: Swift.Int.self
+                        ),
+                        xRateLimitResetDay: try converter.getOptionalHeaderFieldAsURI(
+                            in: response.headerFields,
+                            name: "X-RateLimit-Reset-Day",
+                            as: Swift.Int.self
+                        )
+                    )
+                    let contentType = converter.extractContentTypeIfPresent(in: response.headerFields)
+                    let body: Operations.GetSessionById.Output.Ok.Body
+                    let chosenContentType = try converter.bestContentType(
+                        received: contentType,
+                        options: [
+                            "application/json"
+                        ]
+                    )
+                    switch chosenContentType {
+                    case "application/json":
+                        body = try await converter.getResponseBodyAsJSON(
+                            Components.Schemas.GetSessionByIdResponse200.self,
+                            from: responseBody,
+                            transforming: { value in
+                                .json(value)
+                            }
+                        )
+                    default:
+                        preconditionFailure("bestContentType chose an invalid content type.")
+                    }
+                    return .ok(.init(
+                        headers: headers,
+                        body: body
+                    ))
+                case 401:
+                    let headers: Operations.GetSessionById.Output.Unauthorized.Headers = .init(xRequestID: try converter.getOptionalHeaderFieldAsURI(
+                        in: response.headerFields,
+                        name: "X-Request-ID",
+                        as: Swift.String.self
+                    ))
+                    let contentType = converter.extractContentTypeIfPresent(in: response.headerFields)
+                    let body: Operations.GetSessionById.Output.Unauthorized.Body
+                    let chosenContentType = try converter.bestContentType(
+                        received: contentType,
+                        options: [
+                            "application/json"
+                        ]
+                    )
+                    switch chosenContentType {
+                    case "application/json":
+                        body = try await converter.getResponseBodyAsJSON(
+                            Components.Schemas.ErrorResponse.self,
+                            from: responseBody,
+                            transforming: { value in
+                                .json(value)
+                            }
+                        )
+                    default:
+                        preconditionFailure("bestContentType chose an invalid content type.")
+                    }
+                    return .unauthorized(.init(
+                        headers: headers,
+                        body: body
+                    ))
+                case 403:
+                    let headers: Operations.GetSessionById.Output.Forbidden.Headers = .init(xRequestID: try converter.getOptionalHeaderFieldAsURI(
+                        in: response.headerFields,
+                        name: "X-Request-ID",
+                        as: Swift.String.self
+                    ))
+                    let contentType = converter.extractContentTypeIfPresent(in: response.headerFields)
+                    let body: Operations.GetSessionById.Output.Forbidden.Body
+                    let chosenContentType = try converter.bestContentType(
+                        received: contentType,
+                        options: [
+                            "application/json"
+                        ]
+                    )
+                    switch chosenContentType {
+                    case "application/json":
+                        body = try await converter.getResponseBodyAsJSON(
+                            Components.Schemas.ScopeForbiddenResponse.self,
+                            from: responseBody,
+                            transforming: { value in
+                                .json(value)
+                            }
+                        )
+                    default:
+                        preconditionFailure("bestContentType chose an invalid content type.")
+                    }
+                    return .forbidden(.init(
+                        headers: headers,
+                        body: body
+                    ))
+                case 404:
+                    let headers: Operations.GetSessionById.Output.NotFound.Headers = .init(
+                        xRequestID: try converter.getOptionalHeaderFieldAsURI(
+                            in: response.headerFields,
+                            name: "X-Request-ID",
+                            as: Swift.String.self
+                        ),
+                        xRateLimitLimitMinute: try converter.getOptionalHeaderFieldAsURI(
+                            in: response.headerFields,
+                            name: "X-RateLimit-Limit-Minute",
+                            as: Swift.Int.self
+                        ),
+                        xRateLimitRemainingMinute: try converter.getOptionalHeaderFieldAsURI(
+                            in: response.headerFields,
+                            name: "X-RateLimit-Remaining-Minute",
+                            as: Swift.Int.self
+                        ),
+                        xRateLimitResetMinute: try converter.getOptionalHeaderFieldAsURI(
+                            in: response.headerFields,
+                            name: "X-RateLimit-Reset-Minute",
+                            as: Swift.Int.self
+                        ),
+                        xRateLimitLimitDay: try converter.getOptionalHeaderFieldAsURI(
+                            in: response.headerFields,
+                            name: "X-RateLimit-Limit-Day",
+                            as: Swift.Int.self
+                        ),
+                        xRateLimitRemainingDay: try converter.getOptionalHeaderFieldAsURI(
+                            in: response.headerFields,
+                            name: "X-RateLimit-Remaining-Day",
+                            as: Swift.Int.self
+                        ),
+                        xRateLimitResetDay: try converter.getOptionalHeaderFieldAsURI(
+                            in: response.headerFields,
+                            name: "X-RateLimit-Reset-Day",
+                            as: Swift.Int.self
+                        )
+                    )
+                    let contentType = converter.extractContentTypeIfPresent(in: response.headerFields)
+                    let body: Operations.GetSessionById.Output.NotFound.Body
+                    let chosenContentType = try converter.bestContentType(
+                        received: contentType,
+                        options: [
+                            "application/json"
+                        ]
+                    )
+                    switch chosenContentType {
+                    case "application/json":
+                        body = try await converter.getResponseBodyAsJSON(
+                            Components.Schemas.ErrorResponse.self,
+                            from: responseBody,
+                            transforming: { value in
+                                .json(value)
+                            }
+                        )
+                    default:
+                        preconditionFailure("bestContentType chose an invalid content type.")
+                    }
+                    return .notFound(.init(
+                        headers: headers,
+                        body: body
+                    ))
+                case 405:
+                    let headers: Operations.GetSessionById.Output.MethodNotAllowed.Headers = .init(
+                        xRequestID: try converter.getOptionalHeaderFieldAsURI(
+                            in: response.headerFields,
+                            name: "X-Request-ID",
+                            as: Swift.String.self
+                        ),
+                        allow: try converter.getOptionalHeaderFieldAsURI(
+                            in: response.headerFields,
+                            name: "Allow",
+                            as: Swift.String.self
+                        )
+                    )
+                    let contentType = converter.extractContentTypeIfPresent(in: response.headerFields)
+                    let body: Operations.GetSessionById.Output.MethodNotAllowed.Body
+                    let chosenContentType = try converter.bestContentType(
+                        received: contentType,
+                        options: [
+                            "application/json"
+                        ]
+                    )
+                    switch chosenContentType {
+                    case "application/json":
+                        body = try await converter.getResponseBodyAsJSON(
+                            Components.Schemas.ErrorResponse.self,
+                            from: responseBody,
+                            transforming: { value in
+                                .json(value)
+                            }
+                        )
+                    default:
+                        preconditionFailure("bestContentType chose an invalid content type.")
+                    }
+                    return .methodNotAllowed(.init(
+                        headers: headers,
+                        body: body
+                    ))
+                case 422:
+                    let headers: Operations.GetSessionById.Output.UnprocessableContent.Headers = .init(
+                        xRequestID: try converter.getOptionalHeaderFieldAsURI(
+                            in: response.headerFields,
+                            name: "X-Request-ID",
+                            as: Swift.String.self
+                        ),
+                        xRateLimitLimitMinute: try converter.getOptionalHeaderFieldAsURI(
+                            in: response.headerFields,
+                            name: "X-RateLimit-Limit-Minute",
+                            as: Swift.Int.self
+                        ),
+                        xRateLimitRemainingMinute: try converter.getOptionalHeaderFieldAsURI(
+                            in: response.headerFields,
+                            name: "X-RateLimit-Remaining-Minute",
+                            as: Swift.Int.self
+                        ),
+                        xRateLimitResetMinute: try converter.getOptionalHeaderFieldAsURI(
+                            in: response.headerFields,
+                            name: "X-RateLimit-Reset-Minute",
+                            as: Swift.Int.self
+                        ),
+                        xRateLimitLimitDay: try converter.getOptionalHeaderFieldAsURI(
+                            in: response.headerFields,
+                            name: "X-RateLimit-Limit-Day",
+                            as: Swift.Int.self
+                        ),
+                        xRateLimitRemainingDay: try converter.getOptionalHeaderFieldAsURI(
+                            in: response.headerFields,
+                            name: "X-RateLimit-Remaining-Day",
+                            as: Swift.Int.self
+                        ),
+                        xRateLimitResetDay: try converter.getOptionalHeaderFieldAsURI(
+                            in: response.headerFields,
+                            name: "X-RateLimit-Reset-Day",
+                            as: Swift.Int.self
+                        )
+                    )
+                    let contentType = converter.extractContentTypeIfPresent(in: response.headerFields)
+                    let body: Operations.GetSessionById.Output.UnprocessableContent.Body
+                    let chosenContentType = try converter.bestContentType(
+                        received: contentType,
+                        options: [
+                            "application/json"
+                        ]
+                    )
+                    switch chosenContentType {
+                    case "application/json":
+                        body = try await converter.getResponseBodyAsJSON(
+                            Components.Schemas.ErrorResponse.self,
+                            from: responseBody,
+                            transforming: { value in
+                                .json(value)
+                            }
+                        )
+                    default:
+                        preconditionFailure("bestContentType chose an invalid content type.")
+                    }
+                    return .unprocessableContent(.init(
+                        headers: headers,
+                        body: body
+                    ))
+                case 426:
+                    let headers: Operations.GetSessionById.Output.UpgradeRequired.Headers = .init(
+                        xRequestID: try converter.getOptionalHeaderFieldAsURI(
+                            in: response.headerFields,
+                            name: "X-Request-ID",
+                            as: Swift.String.self
+                        ),
+                        xRateLimitLimitMinute: try converter.getOptionalHeaderFieldAsURI(
+                            in: response.headerFields,
+                            name: "X-RateLimit-Limit-Minute",
+                            as: Swift.Int.self
+                        ),
+                        xRateLimitRemainingMinute: try converter.getOptionalHeaderFieldAsURI(
+                            in: response.headerFields,
+                            name: "X-RateLimit-Remaining-Minute",
+                            as: Swift.Int.self
+                        ),
+                        xRateLimitResetMinute: try converter.getOptionalHeaderFieldAsURI(
+                            in: response.headerFields,
+                            name: "X-RateLimit-Reset-Minute",
+                            as: Swift.Int.self
+                        ),
+                        xRateLimitLimitDay: try converter.getOptionalHeaderFieldAsURI(
+                            in: response.headerFields,
+                            name: "X-RateLimit-Limit-Day",
+                            as: Swift.Int.self
+                        ),
+                        xRateLimitRemainingDay: try converter.getOptionalHeaderFieldAsURI(
+                            in: response.headerFields,
+                            name: "X-RateLimit-Remaining-Day",
+                            as: Swift.Int.self
+                        ),
+                        xRateLimitResetDay: try converter.getOptionalHeaderFieldAsURI(
+                            in: response.headerFields,
+                            name: "X-RateLimit-Reset-Day",
+                            as: Swift.Int.self
+                        )
+                    )
+                    let contentType = converter.extractContentTypeIfPresent(in: response.headerFields)
+                    let body: Operations.GetSessionById.Output.UpgradeRequired.Body
+                    let chosenContentType = try converter.bestContentType(
+                        received: contentType,
+                        options: [
+                            "application/json"
+                        ]
+                    )
+                    switch chosenContentType {
+                    case "application/json":
+                        body = try await converter.getResponseBodyAsJSON(
+                            Components.Schemas.UpgradeRequiredResponse.self,
+                            from: responseBody,
+                            transforming: { value in
+                                .json(value)
+                            }
+                        )
+                    default:
+                        preconditionFailure("bestContentType chose an invalid content type.")
+                    }
+                    return .upgradeRequired(.init(
+                        headers: headers,
+                        body: body
+                    ))
+                case 429:
+                    let headers: Operations.GetSessionById.Output.TooManyRequests.Headers = .init(
+                        xRequestID: try converter.getOptionalHeaderFieldAsURI(
+                            in: response.headerFields,
+                            name: "X-Request-ID",
+                            as: Swift.String.self
+                        ),
+                        xRateLimitLimitMinute: try converter.getOptionalHeaderFieldAsURI(
+                            in: response.headerFields,
+                            name: "X-RateLimit-Limit-Minute",
+                            as: Swift.Int.self
+                        ),
+                        xRateLimitRemainingMinute: try converter.getOptionalHeaderFieldAsURI(
+                            in: response.headerFields,
+                            name: "X-RateLimit-Remaining-Minute",
+                            as: Swift.Int.self
+                        ),
+                        xRateLimitResetMinute: try converter.getOptionalHeaderFieldAsURI(
+                            in: response.headerFields,
+                            name: "X-RateLimit-Reset-Minute",
+                            as: Swift.Int.self
+                        ),
+                        xRateLimitLimitDay: try converter.getOptionalHeaderFieldAsURI(
+                            in: response.headerFields,
+                            name: "X-RateLimit-Limit-Day",
+                            as: Swift.Int.self
+                        ),
+                        xRateLimitRemainingDay: try converter.getOptionalHeaderFieldAsURI(
+                            in: response.headerFields,
+                            name: "X-RateLimit-Remaining-Day",
+                            as: Swift.Int.self
+                        ),
+                        xRateLimitResetDay: try converter.getOptionalHeaderFieldAsURI(
+                            in: response.headerFields,
+                            name: "X-RateLimit-Reset-Day",
+                            as: Swift.Int.self
+                        )
+                    )
+                    let contentType = converter.extractContentTypeIfPresent(in: response.headerFields)
+                    let body: Operations.GetSessionById.Output.TooManyRequests.Body
                     let chosenContentType = try converter.bestContentType(
                         received: contentType,
                         options: [

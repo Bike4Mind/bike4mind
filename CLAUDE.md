@@ -26,13 +26,15 @@ GitHub only links a commit to your account when the email is verified there, and
 
 | Task | Command (cached) | Uncached fallback |
 |------|------------------|-------------------|
-| Type check all | `pnpm turbo:typecheck` | `pnpm -r typecheck` |
+| **Verify a branch (default)** | `pnpm verify` | see below |
+| Type check all (what CI gates: tsgo, tsc fallback) | `pnpm turbo:typecheck:fast` | `pnpm -w typecheck:fast && pnpm -r typecheck:fast` |
+| Type check all, pure tsc (nightly baseline) | `pnpm turbo:typecheck` | `pnpm -r typecheck` |
 | Test all | `pnpm turbo:test` | `pnpm -r test` |
 | Lint (CI parity) | `pnpm lint:check` | — |
 | Build core packages | `pnpm turbo:core:build` | `pnpm core:build` |
 | Test one package | `pnpm --filter <pkg> test` | e.g. `pnpm --filter @bike4mind/agents test` |
 
-Verify before pushing: `pnpm turbo:typecheck && pnpm turbo:test && pnpm lint:check`.
+Verify before pushing: `pnpm verify`. It runs `typecheck:fast` and `test` only for the packages your branch changed against `origin/main` (`TURBO_SCM_BASE` overrides), their dependents, and any package whose turbo.json inputs read a changed file (e.g. `workers` for an `apps/client` change), then lints only the changed files. Root config and lockfile changes widen it to the full graph; root `package.json`, lockfile and lint config changes also run the full lint. Extra flags go to turbo: `pnpm verify --concurrency=4` on a busy machine; `--no-lint`, `--tasks typecheck:fast` narrow it. CI still runs everything; reach for the full-repo commands above only when a change is cross-cutting.
 
 ## Project structure
 
@@ -49,6 +51,8 @@ Verify before pushing: `pnpm turbo:typecheck && pnpm turbo:test && pnpm lint:che
 
 Turbo gives cached, topologically-ordered builds; the `pnpm` commands still work as fallback.
 
+- **Many worktrees on one machine:** turbo's local cache defaults to `.turbo/cache` inside each worktree, so a fresh worktree misses on everything. Task hashes are content-based, not path-based, so worktrees can share one store: `export TURBO_CACHE_DIR="$HOME/.cache/turbo-b4m"` in your shell profile (the pre-push hook defaults to it). Prune it occasionally, e.g. `find "${TURBO_CACHE_DIR:-$HOME/.cache/turbo-b4m}" -type f -mtime +14 -delete`.
+- **Pre-push concurrency:** the pre-push hook caps turbo at `--concurrency=25%` of cores, since each typecheck task is itself multi-threaded. Override with `TURBO_CONCURRENCY` (this hook's own variable, not one turbo reads), e.g. `TURBO_CONCURRENCY=4 git push`.
 - Repeat runs are near-instant on a cache hit. `turbo:core:build` builds packages in dependency order (common → utils → agents → services → …).
 - **Do not run `turbo build` unfiltered** — it would try to `next build` the SPA outside its deploy context. Use `pnpm turbo:core:build` / `pnpm turbo:build`.
 - If builds seem stale after a big change, add `--force`.

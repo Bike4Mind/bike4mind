@@ -4,6 +4,8 @@ import { DEFAULT_LAMBDA_ENVIRONMENT, SINGLE_RECORD_BATCH } from './constants';
 import { lambdaVpc } from './vpc';
 import { eventBus } from './bus';
 import { appUrlForLambdaEnv } from './router';
+import { appFilesBucket } from './buckets';
+import { mailBodyEnvironment, mailBodyPutPermission } from './mailBodyOffload';
 
 /**
  * Email Marketing Infrastructure
@@ -34,10 +36,12 @@ export const emailBatchQueueSubscription = emailBatchQueue.subscribe(
     vpc: lambdaVpc,
     link: [...allSecrets, websocketApi, eventBus],
     environment: {
+      ...mailBodyEnvironment(appFilesBucket),
       ...DEFAULT_LAMBDA_ENVIRONMENT,
       // APP_URL is needed for tracking links in emails
       APP_URL: $dev ? 'http://localhost:3000' : appUrlForLambdaEnv(),
     },
+    permissions: [mailBodyPutPermission(appFilesBucket)],
   },
   {
     // Handler already loops event.Records; report per-record failures instead of

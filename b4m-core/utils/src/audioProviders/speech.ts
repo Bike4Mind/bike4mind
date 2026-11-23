@@ -49,10 +49,12 @@ export const createSpeechProvider = (vendor: VoiceGenerationVendor): SpeechProvi
         similarityBoost: request.similarityBoost,
         language: request.languageCode,
         signal: ctx.signal,
+        withTimestamps: true,
       });
       return {
         status: 'succeeded',
         output: { kind: 'inline', base64: result.audio.toString('base64'), contentType: result.contentType },
+        ...(result.wordTimings && { wordTimings: result.wordTimings }),
       };
     } catch (error) {
       return toAudioProviderResult(error, `${vendor}_speech`);

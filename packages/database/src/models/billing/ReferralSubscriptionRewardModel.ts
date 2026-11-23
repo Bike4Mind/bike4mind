@@ -8,7 +8,7 @@ export type ReferralRewardStep = (typeof REFERRAL_REWARD_STEPS)[number];
 export const REFERRAL_REWARD_STATUSES = ['pending', 'released', 'cancelled', 'taken_back'] as const;
 export type ReferralRewardStatus = (typeof REFERRAL_REWARD_STATUSES)[number];
 
-export type ReferralRewardCloseReason = 'refunded' | 'disputed' | 'inviter_blocked' | 'payer_blocked';
+export type ReferralRewardCloseReason = 'refunded' | 'disputed' | 'inviter_blocked' | 'payer_blocked' | 'expired';
 
 /**
  * An inviter's reward for one paid Professional invoice of the friend they invited. The credits are only

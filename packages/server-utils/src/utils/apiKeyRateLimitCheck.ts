@@ -2,6 +2,8 @@ import { cacheRepository } from '@bike4mind/database';
 import { userApiKeyRepository } from '@bike4mind/database/auth';
 import { createHash } from 'node:crypto';
 import {
+  API_KEY_DAILY_LIMIT_EXCEEDED_ERROR_CODE,
+  API_KEY_RATE_LIMIT_EXCEEDED_ERROR_CODE,
   UserApiKeyEvents,
   IUserApiKeyRateLimit,
   type ApiKeyRateLimitHeader,
@@ -20,8 +22,21 @@ export interface RateLimitResult {
   error?: string;
   retryAfter?: number;
   limitType?: 'minute' | 'day';
+  /** The ceiling that was hit, for the refusal body. */
+  limit?: number;
   currentCount?: number;
   headers: Record<ApiKeyRateLimitHeader, number>;
+}
+
+/** `errorCode`, `limit` and `windowSeconds` for the 429 body of a refused {@link RateLimitResult}. */
+export function rateLimitRefusalInfo(result: RateLimitResult): Record<string, unknown> {
+  if (!result.limitType) return {};
+  return {
+    errorCode:
+      result.limitType === 'day' ? API_KEY_DAILY_LIMIT_EXCEEDED_ERROR_CODE : API_KEY_RATE_LIMIT_EXCEEDED_ERROR_CODE,
+    limit: result.limit,
+    windowSeconds: result.limitType === 'day' ? DAY_IN_MS / 1000 : MINUTE_IN_MS / 1000,
+  };
 }
 
 export interface RateLimitContext {
@@ -432,6 +447,7 @@ export async function checkApiKeyRateLimit(
         error: `Rate limit exceeded: ${requestsPerMinute} requests per minute. Try again in ${minuteResetSeconds} seconds.`,
         retryAfter: minuteResetSeconds,
         limitType: 'minute',
+        limit: requestsPerMinute,
         currentCount: minuteResult.count,
         headers: buildHeaders({
           minuteLimit: requestsPerMinute,
@@ -484,6 +500,7 @@ export async function checkApiKeyRateLimit(
         error: `Rate limit exceeded: ${requestsPerDay} requests per day. Try again in ${dayResetSeconds} seconds.`,
         retryAfter: dayResetSeconds,
         limitType: 'day',
+        limit: requestsPerDay,
         currentCount: dayResult.count,
         headers: buildHeaders({
           minuteLimit: requestsPerMinute,

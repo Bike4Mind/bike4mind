@@ -1,6 +1,6 @@
 import { userApiKeyService } from '@bike4mind/services';
 import { userRepository } from '@bike4mind/database/auth';
-import mailer from '@bike4mind/server-utils/utils/mailer/index';
+import { queuedMailer } from '@bike4mind/server-utils/utils/mailer/queuedMailer';
 
 /**
  * Thin wrapper that assembles the db/mailer adapters and calls the service-layer
@@ -14,7 +14,7 @@ export async function notifyApiKeyRotationReown(
 ): Promise<void> {
   await userApiKeyService.notifyApiKeyReowned(
     { previousOwnerUserId, keyName },
-    { db: { users: userRepository }, mailer, logger }
+    { db: { users: userRepository }, mailer: queuedMailer, logger }
   );
 }
 
@@ -27,6 +27,6 @@ export async function notifyApiKeyOrgRevoke(
 ): Promise<void> {
   await userApiKeyService.notifyApiKeyRevokedByOrg(
     { holderUserId, keyName, organizationName },
-    { db: { users: userRepository }, mailer, logger }
+    { db: { users: userRepository }, mailer: queuedMailer, logger }
   );
 }

@@ -20,7 +20,12 @@ import {
   mcpConnectionRepository,
   oauthGrantRepository,
 } from '@bike4mind/database';
-import { ACCOUNT_DELETION_GRACE_DAYS, ACCOUNT_DELETION_ORG_OWNER_CODE, ApiKeyStatus } from '@bike4mind/common';
+import {
+  ACCOUNT_DELETION_GRACE_DAYS,
+  ACCOUNT_DELETION_ORG_OWNER_CODE,
+  ApiKeyStatus,
+  PLATFORM_MCP_OWNER,
+} from '@bike4mind/common';
 
 const h = vi.hoisted(() => ({
   cancelSubscriptions: vi.fn(),
@@ -191,6 +196,30 @@ describe('requestAccountDeletion', () => {
     expect(await McpConnectionModel.countDocuments({ ownerType: 'user', ownerKey: userId })).toBe(0);
   });
 
+  it('keeps a platform MCP connector the leaving admin set up', async () => {
+    const userId = await seedAccount();
+    const shared = await mcpConnectionRepository.create({
+      ...PLATFORM_MCP_OWNER,
+      userId,
+      slug: 'docs',
+      displayName: 'Docs',
+      urlEnc: 'enc:url',
+      displayUrl: 'https://mcp.example.com/mcp',
+      urlHost: 'mcp.example.com',
+      transport: 'auto',
+      auth: { kind: 'none' },
+      status: 'connected',
+      tools: [],
+      enabled: true,
+    });
+
+    await requestAccountDeletion(requestFor(userId));
+
+    expect(await McpConnectionModel.countDocuments({ ownerType: 'user', ownerKey: userId })).toBe(0);
+    expect((await mcpConnectionRepository.listPlatform()).map(connection => connection.id)).toEqual([shared.id]);
+    await McpConnectionModel.deleteOne({ _id: shared.id });
+  });
+
   it('rolls the whole lockdown back when one revoke fails, and fails the request', async () => {
     const userId = await seedAccount();
     const revoke = vi.spyOn(oauthGrantRepository, 'revoke').mockRejectedValueOnce(new Error('revoke failed'));
@@ -266,6 +295,18 @@ describe('requestAccountDeletion', () => {
       userId,
       personal: false,
       adminUserIds: [new mongoose.Types.ObjectId().toString()],
+    });
+
+    await expect(requestAccountDeletion(requestFor(userId))).rejects.toMatchObject({ statusCode: 409 });
+  });
+
+  it('refuses an owner whose only other person is a billing manager without a member row', async () => {
+    const userId = await seedAccount();
+    await Organization.create({
+      name: 'Billed',
+      userId,
+      personal: false,
+      billingManagerUserIds: [new mongoose.Types.ObjectId().toString()],
     });
 
     await expect(requestAccountDeletion(requestFor(userId))).rejects.toMatchObject({ statusCode: 409 });

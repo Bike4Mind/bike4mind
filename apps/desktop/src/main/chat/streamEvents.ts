@@ -21,6 +21,7 @@ const usageSchema = z
     outputTokens: z.number().optional(),
     cacheReadInputTokens: z.number().optional(),
     cacheCreationInputTokens: z.number().optional(),
+    reasoningTokens: z.number().optional(),
   })
   .partial();
 
@@ -144,6 +145,8 @@ const USAGE_FIELDS = [
   'outputTokens',
   'cacheReadInputTokens',
   'cacheCreationInputTokens',
+  'reasoningTokens',
+  'cachedPromptTokens',
   'creditsUsed',
   'usdCost',
 ] as const satisfies readonly (keyof ChatUsage)[];

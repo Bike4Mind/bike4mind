@@ -48,6 +48,7 @@ describe('toViewSnapshot', () => {
       id: 'd1',
       question: 'Which database?',
       options: ['Postgres (Recommended)', 'Mongo'],
+      oneClick: true,
     });
     const multi = { ...decision, question: { ...decision.question, multiSelect: true } };
     const many = toViewSnapshot('root', [agentFixture('a', 'needs-you', { decision: multi })], {});
@@ -84,6 +85,20 @@ it('lists quick approvals only for the root and agents on the roster', () => {
 });
 
 describe('acceptViewAction', () => {
+  it('opens PRs only for listed agents with PR metadata', async () => {
+    const snapshot = toViewSnapshot(
+      'root',
+      [agentFixture('a', 'done', { pr: { number: 42, state: 'open' } }), agentFixture('b')],
+      {}
+    );
+    const action = { kind: 'open-pr', agentId: 'a' } as const;
+    expect(acceptViewAction(snapshot, action)).toEqual(action);
+    expect(acceptViewAction(snapshot, { kind: 'open-pr', agentId: 'b' })).toBeUndefined();
+    expect(acceptViewAction(snapshot, { kind: 'open-pr', agentId: 'root' })).toBeUndefined();
+    const openPr = vi.fn();
+    await runViewAction(action, { openAgent: vi.fn(), openRoot: vi.fn(), openPr });
+    expect(openPr).toHaveBeenCalledWith('a');
+  });
   const snapshot = toViewSnapshot(
     'root',
     [

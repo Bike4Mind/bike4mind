@@ -57,6 +57,7 @@ vi.mock('@bike4mind/database', () => ({
   // personal/JWT cases but must exist or the mocked-module export getter throws.
   organizationRepository: { findById: vi.fn().mockResolvedValue(null) },
   cacheRepository: {},
+  spendFreezeRepository: { findActiveForSubject: vi.fn().mockResolvedValue(null) },
 }));
 
 // executeCompletion - the route's LLM execution seam. Mock so tests drive its onChunk
@@ -110,7 +111,7 @@ const mockAuth = vi.hoisted(() => ({
 }));
 vi.mock('@bike4mind/server-utils/cli/auth', () => mockAuth);
 // The real quota module reaches the subscription models, which the @bike4mind/database mock lacks.
-vi.mock('@server/utils/untrustedCompletionQuota', () => ({
+vi.mock('@bike4mind/server-utils/utils/untrustedCompletionQuota', () => ({
   admitApiKeyCompletion: vi.fn().mockResolvedValue({ release: () => Promise.resolve() }),
   NO_COMPLETION_QUOTA: { release: () => Promise.resolve() },
 }));
@@ -134,9 +135,12 @@ vi.mock('@bike4mind/utils', async importOriginal => ({
   ...(await importOriginal<typeof import('@bike4mind/utils')>()),
   registerProcessErrorHandlers: vi.fn(),
 }));
-vi.mock('@bike4mind/server-utils/utils/config', () => ({
-  Config: { MONGODB_URI: 'mongodb://x/%STAGE%', STAGE: 'test' },
+const mockConfig = vi.hoisted(() => ({
+  MONGODB_URI: 'mongodb://x/%STAGE%',
+  STAGE: 'test',
+  JWT_SECRET: 'test-jwt-secret',
 }));
+vi.mock('@bike4mind/server-utils/utils/config', () => ({ Config: mockConfig }));
 
 const ipGate = vi.hoisted(() => ({ blocked: false, options: [] as unknown[] }));
 vi.mock('@server/middlewares/checkBlockedIP', () => ({
@@ -147,7 +151,13 @@ vi.mock('@server/middlewares/checkBlockedIP', () => ({
   },
 }));
 
-import { checkModelCatalogWired, createApp, drainInFlight, DRAIN_TIMEOUT_MS } from './server';
+import {
+  assertBootSecretsConfigured,
+  checkModelCatalogWired,
+  createApp,
+  drainInFlight,
+  DRAIN_TIMEOUT_MS,
+} from './server';
 import { GENERIC_PROCESSING_FAILURE_REPLY } from './internal/route';
 
 const VALID_BODY = { questId: 'q1', sessionId: 's1', userId: 'u1', message: 'hello' };
@@ -159,7 +169,7 @@ let baseUrl: string;
 beforeAll(async () => {
   const app = createApp();
   await new Promise<void>(resolve => {
-    server = app.listen(0, () => {
+    server = app.listen(0, '127.0.0.1', () => {
       const { port } = server.address() as AddressInfo;
       baseUrl = `http://127.0.0.1:${port}`;
       resolve();
@@ -193,6 +203,18 @@ describe('ChatCompletion /process', () => {
     const res = await post(VALID_BODY, { authorization: 'Bearer nope' });
     expect(res.status).toBe(401);
     expect(mockProcessQuest).not.toHaveBeenCalled();
+  });
+
+  it('returns 401 to every caller while the internal secret is a placeholder, even one presenting it', async () => {
+    const configured = mockResource.CHAT_COMPLETION_INTERNAL_SECRET.value;
+    mockResource.CHAT_COMPLETION_INTERNAL_SECRET.value = 'my-secret-placeholder-value';
+    try {
+      const res = await post(VALID_BODY, { authorization: 'Bearer my-secret-placeholder-value' });
+      expect(res.status).toBe(401);
+      expect(mockProcessQuest).not.toHaveBeenCalled();
+    } finally {
+      mockResource.CHAT_COMPLETION_INTERNAL_SECRET.value = configured;
+    }
   });
 
   it('returns 400 on a malformed payload (and does not process)', async () => {
@@ -458,6 +480,27 @@ describe('ChatCompletion Dockerfile PID 1', () => {
     expect(cmd).toContain('tsx');
     // An ENTRYPOINT would become PID 1 instead of the CMD, hiding a wrapper.
     expect(dockerfileSource).not.toMatch(/^ENTRYPOINT\b/m);
+  });
+});
+
+describe('assertBootSecretsConfigured', () => {
+  afterEach(() => {
+    mockResource.CHAT_COMPLETION_INTERNAL_SECRET.value = 'test-shared-secret';
+    mockConfig.JWT_SECRET = 'test-jwt-secret';
+  });
+
+  it('passes when both secrets are configured', () => {
+    expect(() => assertBootSecretsConfigured()).not.toThrow();
+  });
+
+  it('refuses to start on a placeholder internal secret, naming only the secret', () => {
+    mockResource.CHAT_COMPLETION_INTERNAL_SECRET.value = 'change-me-openssl-rand-hex-32';
+    expect(() => assertBootSecretsConfigured()).toThrow(/^CHAT_COMPLETION_INTERNAL_SECRET is not configured/);
+  });
+
+  it('refuses to start on an empty JWT secret', () => {
+    mockConfig.JWT_SECRET = '';
+    expect(() => assertBootSecretsConfigured()).toThrow(/^JWT_SECRET is not configured/);
   });
 });
 

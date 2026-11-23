@@ -54,7 +54,8 @@ export const GROWTH_PRICING_SECTIONS: ReadonlyArray<{
   {
     id: 'credits',
     title: 'Credits and pricing',
-    description: 'How usage is metered and what credits cost.',
+    description:
+      'How usage is metered and what credits cost. Bill Operational Usage extends background model and embedding charges to paid accounts and organization pools; free accounts are billed whenever credits are enforced.',
     keys: ['enforceCredits', 'billOperationalUsage', 'pricePerCredit', 'lowCreditsThreshold'],
   },
   {
@@ -121,7 +122,7 @@ export const GROWTH_PRICING_LINKS = [
     id: 'invite-center-rewards',
     title: 'Referral rewards for inviters',
     description:
-      'What an inviter earns when an invited friend becomes active or subscribes, plus the hold, starting-invite and alert settings. Edited in the Invite Center.',
+      'What an inviter earns when an invited friend becomes active or subscribes, plus the hold, starting-invite, share-link limit and alert settings. Edited in the Invite Center.',
     linkLabel: 'Open Invite Center rewards',
   },
 ] as const;

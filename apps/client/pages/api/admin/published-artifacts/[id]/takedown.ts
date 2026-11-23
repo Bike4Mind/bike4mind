@@ -143,7 +143,7 @@ const handler = adminApi({
     } catch (err) {
       if ((err as { code?: number }).code === 11000) {
         return res.status(409).json({
-          error: 'Cannot restore — another page now occupies this URL. The slug was re-published while it was down.',
+          error: 'Cannot restore - another page now occupies this URL or this artifact API page.',
         });
       }
       throw err;

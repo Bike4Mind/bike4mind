@@ -623,14 +623,6 @@ export interface ICreditTransactionRepository extends IBaseRepository<ICreditTra
 
   /** One filtered, paginated page of an owner's ledger, newest first, with a total count. */
   queryLedgerPage(ownerId: string, ownerType: CreditHolderType, options: ILedgerQueryOptions): Promise<ILedgerPage>;
-
-  /**
-   * One page of admin credit adjustments across ALL users, newest first, with a
-   * total count. Cross-owner (not scoped to one holder): the generic_add /
-   * generic_deduct rows written by `adminUpdateUser` (reason `admin_adjustment`).
-   */
-  queryAdminAdjustmentsPage(options: { days?: number; limit: number; skip: number }): Promise<ILedgerPage>;
-
   /** An owner's net credit delta per UTC day in [from, to], oldest first; days without rows are omitted. */
   dailyNetCreditsForOwner(
     ownerId: string,

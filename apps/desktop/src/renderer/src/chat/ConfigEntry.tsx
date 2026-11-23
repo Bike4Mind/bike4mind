@@ -61,7 +61,7 @@ export function EntrySection({ entry }: { entry: ConfigEntry }) {
         )}
         {/* An entry with no control of its own keeps the button it used to have in the list. */}
         {!entry.control && entry.onOpen && (
-          <Button size="sm" variant="soft" color="neutral" onClick={entry.onOpen} data-testid="config-entry-btn">
+          <Button size="sm" variant="outlined" color="neutral" onClick={entry.onOpen} data-testid="config-entry-btn">
             Open
           </Button>
         )}

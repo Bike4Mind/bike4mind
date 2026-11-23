@@ -17,6 +17,8 @@ import {
   LEGACY_REQUEST_ID_HEADER,
   isAgentOwnedByEmbedKey,
   reasoningChannelOf,
+  CreditHolderType,
+  isSpendFrozenError,
   type IMessage,
   type ModelInfo,
   readOrgModelPolicy,
@@ -24,6 +26,8 @@ import {
 } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 import { assertOwnerHasCredits, assertKeySpendWithinCap, apiKeyService } from '@bike4mind/services';
+import { assertSpendNotFrozen } from '@bike4mind/services/creditService';
+import { spendFreezeSubjectForRequest } from '@bike4mind/server-utils/billing/spendFreezeSubject';
 import { executeCompletion, resolveOpenAiBareModelAlias } from '@bike4mind/services/cliCompletions';
 import { applyOrgToolPolicy } from '@bike4mind/services/llm/orgToolPolicy';
 import {
@@ -61,6 +65,7 @@ import {
   lakeAccessEventRepository,
   scopedSettingsRepository,
   embedConversationRepository,
+  spendFreezeRepository,
 } from '@bike4mind/database';
 import { verifyEmbedApiKey, type ApiKeyInfo } from '@bike4mind/server-utils/cli/auth';
 import { isAuthInfraFailure, setAuthInfraFailureHeaders } from '@bike4mind/server-utils/auth/apiKeyAuthFailure';
@@ -525,6 +530,27 @@ export function registerEmbedRoutes(app: Express, track: (p: Promise<void>) => v
       }
       const actorUserId = ctx.endUserId ?? ctx.userId;
 
+      // Spend freeze first, on the same subject executeCompletion would check, and before any stream bytes
+      // so it can 403. An anonymous visitor spends the owner org's money under the key's own user.
+      const embedBillingOwnerType = ctx.endUserId ? undefined : CreditHolderType.Organization;
+      try {
+        await assertSpendNotFrozen(
+          spendFreezeSubjectForRequest(
+            { user: { id: actorUserId }, apiKeyInfo: { keyId: ctx.keyId } },
+            ctx.endUserId ? null : ctx.organizationId
+          ),
+          { db: { spendFreezes: spendFreezeRepository } }
+        );
+      } catch (freezeErr) {
+        if (!isSpendFrozenError(freezeErr)) throw freezeErr;
+        return res.status(403).json({
+          error: 'spend_frozen',
+          error_description: freezeErr.message,
+          code: resolveQuestErrorCode(freezeErr),
+          ...freezeErr.additionalInfo,
+        });
+      }
+
       // Unconditional pre-flight balance check against whoever pays: the owner org for an
       // anonymous visitor, the identified user's own balance otherwise. A broke identified
       // user is refused - never silently billed to the org pool instead. Runs even when
@@ -691,6 +717,7 @@ export function registerEmbedRoutes(app: Express, track: (p: Promise<void>) => v
             organizations: organizationRepository,
             cache: cacheRepository,
             recordLimitEvent: recordUserLimitEvent,
+            spendFreezes: spendFreezeRepository,
             // Per-key spend metering (spend-cap enforcement), org-paid turns only. NOT the
             // provider-LLM key repo above (apiKeys) - this one holds the embed UserApiKey docs.
             ...(ctx.endUserId ? {} : { userApiKeys: userApiKeyRepository }),
@@ -703,6 +730,8 @@ export function registerEmbedRoutes(app: Express, track: (p: Promise<void>) => v
           ...(ctx.endUserId
             ? { governingOrgModelPolicy: org?.modelPolicy }
             : { billingOrganizationId: ctx.organizationId }),
+          apiKeyBillingOwnerType: embedBillingOwnerType,
+          spendFreezeChecked: true,
           // Meter usage even on a stage with enforceCredits off.
           alwaysRecordUsage: true,
           // Server-side tool execution (KB scoped to the agent's project; see

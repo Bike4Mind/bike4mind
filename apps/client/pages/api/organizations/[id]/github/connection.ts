@@ -19,8 +19,9 @@
 import { z } from 'zod';
 import { baseApi } from '@server/middlewares/baseApi';
 import { orgGitHubConnectionRepository } from '@bike4mind/database';
-import { encryptSecret, isEncrypted, decryptSecret } from '@bike4mind/server-utils/security/secretEncryption';
-import { verifyOrgOwner } from '@bike4mind/server-utils/utils/orgAccess';
+import { encryptSecret, isEncrypted } from '@bike4mind/server-utils/security/secretEncryption';
+import { decryptStoredSecret } from '@bike4mind/server-utils/security/tokenEncryption';
+import { verifyOrgPermission } from '@bike4mind/server-utils/utils/orgAccess';
 import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 import { Config } from '@bike4mind/server-utils/utils/config';
 import { BadRequestError, InternalServerError, NotFoundError } from '@bike4mind/utils';
@@ -161,7 +162,7 @@ const handler = baseApi()
     const user = req.user!;
 
     // owner or platform admin only
-    const org = await verifyOrgOwner(user, orgId);
+    const org = await verifyOrgPermission(user, orgId, 'manageIntegrations');
 
     const parseResult = ConnectSchema.safeParse(req.body);
     if (!parseResult.success) {
@@ -265,7 +266,7 @@ const handler = baseApi()
     const orgId = req.query.id as string;
     const user = req.user!;
 
-    await verifyOrgOwner(user, orgId);
+    await verifyOrgPermission(user, orgId, 'manageIntegrations');
 
     // findByOrganizationIdAny so the owner can also see disabled connections
     const connection = await orgGitHubConnectionRepository.findByOrganizationIdAny(orgId);
@@ -283,12 +284,12 @@ const handler = baseApi()
         if (connection.connectionType === 'github_app') {
           const connWithCreds = await orgGitHubConnectionRepository.findByOrganizationIdAnyWithCredentials(orgId);
           if (connWithCreds?.privateKey && isEncrypted(connWithCreds.privateKey)) {
-            decryptedPrivateKey = decryptSecret(connWithCreds.privateKey, encryptionKey);
+            decryptedPrivateKey = decryptStoredSecret(connWithCreds.privateKey);
           }
         } else if (connection.connectionType === 'service_account') {
           const connWithCreds = await orgGitHubConnectionRepository.findByOrganizationIdAnyWithCredentials(orgId);
           if (connWithCreds?.accessToken && isEncrypted(connWithCreds.accessToken)) {
-            decryptedAccessToken = decryptSecret(connWithCreds.accessToken, encryptionKey);
+            decryptedAccessToken = decryptStoredSecret(connWithCreds.accessToken);
           }
         }
       } catch (error) {
@@ -312,7 +313,7 @@ const handler = baseApi()
     const orgId = req.query.id as string;
     const user = req.user!;
 
-    const org = await verifyOrgOwner(user, orgId);
+    const org = await verifyOrgPermission(user, orgId, 'manageIntegrations');
 
     const parseResult = UpdateSchema.safeParse(req.body);
     if (!parseResult.success) {
@@ -404,13 +405,13 @@ const handler = baseApi()
           connWithCreds.privateKey &&
           isEncrypted(connWithCreds.privateKey)
         ) {
-          decryptedPrivateKey = decryptSecret(connWithCreds.privateKey, encryptionKey);
+          decryptedPrivateKey = decryptStoredSecret(connWithCreds.privateKey);
         } else if (
           connWithCreds?.connectionType === 'service_account' &&
           connWithCreds.accessToken &&
           isEncrypted(connWithCreds.accessToken)
         ) {
-          decryptedAccessToken = decryptSecret(connWithCreds.accessToken, encryptionKey);
+          decryptedAccessToken = decryptStoredSecret(connWithCreds.accessToken);
         }
       } catch (error) {
         logger.error('[Org] Failed to decrypt credentials for masking', {
@@ -433,7 +434,7 @@ const handler = baseApi()
     const orgId = req.query.id as string;
     const user = req.user!;
 
-    const org = await verifyOrgOwner(user, orgId);
+    const org = await verifyOrgPermission(user, orgId, 'manageIntegrations');
 
     // findByOrganizationIdAny so disabled connections can be deleted too
     const connection = await orgGitHubConnectionRepository.findByOrganizationIdAny(orgId);

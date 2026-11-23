@@ -9,9 +9,10 @@ import {
 import { FallbackInfoSchema } from './llm';
 import { TurnTimingSchema } from './turnTiming';
 import { StudioJobCompletionSchema } from './studioJobCompleted';
+import { SessionHandoffAction } from './sessionHandoff';
 import { LOW_CONFIDENCE_COMPLETION_MODES } from './settings';
 import { supportedChatModels } from '../models';
-import { shareableDocumentSchema, QUEST_ERROR_CODES, CHAT_HISTORY_ITEM_TYPES } from '../types';
+import { shareableDocumentSchema, QUEST_OUTCOME_ERROR_CODES, CHAT_HISTORY_ITEM_TYPES } from '../types';
 import { AGENT_EXECUTION_STATUSES, type AgentExecutionStatus } from '../constants/agentExecutionStatus';
 import { PERSISTED_SESSION_SUMMARY_TRIGGERS } from '../constants/sessionSummary';
 import {
@@ -377,8 +378,8 @@ export const StreamedChatCompletionAction = z.object({
       status: z.enum(['stopped', 'running', 'done']).optional(),
       // Machine-readable classifier for `type: 'error'` quests so the client can render a
       // targeted error state (e.g. the inline "Add Credits" CTA) rather than raw `reply` text.
-      // Values derive from QUEST_ERROR_CODES so this enum can't drift from the TS union.
-      errorCode: z.enum(QUEST_ERROR_CODES).optional(),
+      // Values derive from QUEST_OUTCOME_ERROR_CODES so this enum can't drift from the TS union.
+      errorCode: z.enum(QUEST_OUTCOME_ERROR_CODES).optional(),
       questMasterReply: z.string().nullable().optional(),
       questMasterPlanId: z.string().optional(),
       creditsUsed: z.number().optional(),
@@ -1584,6 +1585,7 @@ export const OptiHashiRunUpdatedAction = z.object({
 export type IOptiHashiRunUpdatedAction = z.infer<typeof OptiHashiRunUpdatedAction>;
 
 export const MessageDataToClient = z.discriminatedUnion('action', [
+  SessionHandoffAction,
   GenerationJobUpdatedAction,
   StudioJobCompletedAction,
   DataSubscriptionUpdateAction,

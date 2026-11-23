@@ -1,4 +1,4 @@
-import { CreditHolderType } from '@bike4mind/common';
+import { CreditHolderType, isSpendFrozenError, type ISpendFreeze } from '@bike4mind/common';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const {
@@ -13,6 +13,7 @@ const {
   markSettled,
   findSettlement,
   withTransaction,
+  findActiveFreeze,
 } = vi.hoisted(() => ({
   deductCredits: vi.fn(),
   userFindById: vi.fn(),
@@ -25,6 +26,7 @@ const {
   markSettled: vi.fn(),
   findSettlement: vi.fn(),
   withTransaction: vi.fn(async <T>(fn: () => Promise<T>): Promise<T> => fn()),
+  findActiveFreeze: vi.fn(),
 }));
 
 vi.mock('../utils/errors', () => ({
@@ -44,6 +46,7 @@ vi.mock('@bike4mind/database', () => ({
   userRepository: { findById: userFindById, incrementCredits: userIncrement },
   pendingCreditHoldRepository: { record: recordHold, claim: claimHold, markSettled, findSettlement },
   usageEventRepository: {},
+  spendFreezeRepository: { findActiveForSubject: findActiveFreeze },
   withTransaction,
   warmExchangeAttribution: async () => undefined,
   // No samples and no settings rows: the spend cap reads defaults and never refuses here.
@@ -171,6 +174,105 @@ describe('reserveRequestCredits', () => {
       expect(recordHold).not.toHaveBeenCalled();
     }
   );
+
+  describe('spend freeze', () => {
+    const freeze = (scopeType: ISpendFreeze['scopeType']) =>
+      ({ scopeType, frozenAt: new Date('2026-11-16T00:00:00Z') }) as ISpendFreeze;
+    const reserve = (req: ReturnType<typeof userReq>, enforceCredits: boolean, billingOrganizationId?: string | null) =>
+      reserveRequestCredits({
+        req,
+        requiredCredits: 5,
+        enforceCredits,
+        featureLabel: 'embeddings',
+        billingOrganizationId,
+      });
+
+    it.each([true, false])('refuses a frozen user with spend_frozen (enforceCredits %s)', async enforceCredits => {
+      findActiveFreeze.mockResolvedValueOnce(freeze('User'));
+      const error = await reserve(userReq(), enforceCredits).catch((err: unknown) => err);
+      expect(isSpendFrozenError(error)).toBe(true);
+      expect(findActiveFreeze).toHaveBeenCalledWith({ userId: 'u1', organizationId: null, apiKeyId: null });
+      expect(userIncrement).not.toHaveBeenCalled();
+      expect(recordHold).not.toHaveBeenCalled();
+    });
+
+    it('refuses a frozen organization', async () => {
+      findActiveFreeze.mockResolvedValueOnce(freeze('Organization'));
+      const error = await reserve(userReq(), false, 'org1').catch((err: unknown) => err);
+      expect(isSpendFrozenError(error)).toBe(true);
+      expect(findActiveFreeze).toHaveBeenCalledWith({ userId: 'u1', organizationId: 'org1', apiKeyId: null });
+    });
+
+    it('refuses a frozen API key', async () => {
+      findActiveFreeze.mockResolvedValueOnce(freeze('apiKey'));
+      const req = userReq({ keyId: 'key1', billingOwnerType: CreditHolderType.User });
+      const error = await reserve(req, false).catch((err: unknown) => err);
+      expect(isSpendFrozenError(error)).toBe(true);
+      expect(findActiveFreeze).toHaveBeenCalledWith({ userId: 'u1', organizationId: null, apiKeyId: 'key1' });
+    });
+
+    it('refuses a frozen key named only for the freeze, and still bills the user', async () => {
+      findActiveFreeze.mockResolvedValueOnce(freeze('apiKey'));
+      const error = await reserveRequestCredits({
+        req: userReq(),
+        requiredCredits: 5,
+        enforceCredits: true,
+        featureLabel: 'transcription',
+        billingOrganizationId: null,
+        spendFreezeApiKey: { keyId: 'key1' },
+      }).catch((err: unknown) => err);
+      expect(isSpendFrozenError(error)).toBe(true);
+      expect(findActiveFreeze).toHaveBeenCalledWith({ userId: 'u1', organizationId: null, apiKeyId: 'key1' });
+      expect(userIncrement).not.toHaveBeenCalled();
+    });
+
+    it('checks an org-billed key with its acting user, so a frozen user cannot spend through it', async () => {
+      orgFindById.mockResolvedValue({ id: 'org1', currentCredits: 100, userDetails: [], users: [{ userId: 'u1' }] });
+      orgIncrement.mockResolvedValue({ currentCredits: 95 });
+      const req = userReq({ keyId: 'key1', billingOwnerType: CreditHolderType.Organization, organizationId: 'org1' });
+      await reserve(req, true);
+      expect(findActiveFreeze).toHaveBeenCalledTimes(1);
+      expect(findActiveFreeze).toHaveBeenCalledWith({ userId: 'u1', organizationId: 'org1', apiKeyId: 'key1' });
+    });
+
+    it('checks the owner of a user-billed key as the user', async () => {
+      findActiveFreeze.mockResolvedValueOnce(freeze('User'));
+      const req = userReq({ keyId: 'key1', billingOwnerType: CreditHolderType.User });
+      const error = await reserve(req, true).catch((err: unknown) => err);
+      expect(isSpendFrozenError(error)).toBe(true);
+    });
+
+    it('refuses before the free-tier daily cap is consulted', async () => {
+      findActiveFreeze.mockResolvedValueOnce(freeze('User'));
+      await reserve(userReq(), true).catch(() => undefined);
+      expect(checkDailyCap).not.toHaveBeenCalled();
+    });
+
+    it('is checked after the AI access gate', async () => {
+      const req = { ...userReq(), user: { id: 'u1', organizationId: null, isModerated: true } } as ReturnType<
+        typeof userReq
+      >;
+      await reserve(req, true).catch(() => undefined);
+      expect(findActiveFreeze).not.toHaveBeenCalled();
+    });
+
+    it('looks the freeze up once per reservation, not again inside the hold', async () => {
+      await reserve(userReq(), true);
+      expect(findActiveFreeze).toHaveBeenCalledTimes(1);
+    });
+
+    it('settles a reservation while the subject is frozen', async () => {
+      const reservation = await reserve(userReq(), true);
+      findActiveFreeze.mockResolvedValue(freeze('User'));
+      expect(await reservation.settle(3, ledger)).toBe(3);
+    });
+
+    it('propagates a freeze read failure rather than allowing the spend', async () => {
+      findActiveFreeze.mockRejectedValueOnce(new Error('mongo down'));
+      await expect(reserve(userReq(), true)).rejects.toThrow('mongo down');
+      expect(userIncrement).not.toHaveBeenCalled();
+    });
+  });
 
   it('reserves nothing and touches no balance when credits are not enforced', async () => {
     const reservation = await reserveRequestCredits({

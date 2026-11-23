@@ -11,6 +11,7 @@ export * from './ItemRuleService';
 export * from './researchConfigs';
 export * from './researchLevers';
 export * from './researchSchedule';
+export * from './resolveSearchRedirect';
 export * from './selectFeedCandidates';
 export * from './sourceFilter';
 export * from './startResearchRun';

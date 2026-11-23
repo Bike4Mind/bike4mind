@@ -3,7 +3,7 @@ import { accountDeletionNoticeRepository, mongoose } from '@bike4mind/database';
 import type { MongoMemoryReplSet } from 'mongodb-memory-server';
 // Registered outside the `@bike4mind/database` barrel, so they register only when imported.
 import '@bike4mind/server-utils/models/Subscription';
-import '@server/models/UserSubscription';
+import '@bike4mind/server-utils/models/UserSubscription';
 import {
   createMongoReplSet,
   settleAutoIndexBuilds,
@@ -11,6 +11,8 @@ import {
 } from '../../../../packages/database/src/__test__/createMongoServer';
 import { SubjectErasurePlan } from './subjectErasurePlan';
 import { SubjectRecordExport, assertEveryModelClassified } from './subjectRecordExport';
+import { SubjectErasureExecutor } from './subjectErasureExecutor';
+import { DATA_HOLDER_REGISTRY } from './registry';
 
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
 
@@ -28,6 +30,38 @@ afterAll(async () => {
 });
 
 describe('SubjectRecordExport over the real registry', () => {
+  it('exports only the subject reservations and retains their accounting and retry bindings on erasure', async () => {
+    const userId = new mongoose.Types.ObjectId().toString();
+    const otherUserId = new mongoose.Types.ObjectId().toString();
+    const reservations = [userId, otherUserId].map((id, index) => ({
+      userId: id,
+      requestId: `request-${index}`,
+      reserved: 30,
+      charged: index === 0 ? 10 : 0,
+      createdAt: new Date('2026-11-01T00:00:00Z'),
+      state: index === 0 ? 'settled' : 'reserved',
+    }));
+    const model = mongoose.model('SpokeBudget');
+    await model.create({ _id: 'export-client', revision: 2, reservations });
+    try {
+      const records = [];
+      for await (const record of new SubjectRecordExport({ userId, email: null }).records('SpokeBudget')) {
+        records.push(record);
+      }
+      expect(records).toEqual([{ _id: 'export-client', reservations: [reservations[0]] }]);
+      expect(JSON.stringify(records)).not.toContain(otherUserId);
+
+      const before = await model.findById('export-client').lean();
+      const result = await new SubjectErasureExecutor({ userId, email: null }, async () => {}, {
+        SpokeBudget: DATA_HOLDER_REGISTRY.SpokeBudget,
+      }).run();
+      expect(result).toEqual([expect.objectContaining({ model: 'SpokeBudget', retained: 1, deleted: 0 })]);
+      expect(await model.findById('export-client').lean()).toEqual(before);
+    } finally {
+      await model.deleteOne({ _id: 'export-client' });
+    }
+  });
+
   it('withholds the live deletion-notice lease token from the recipient export', async () => {
     const userId = new mongoose.Types.ObjectId().toString();
     const email = 'notice-export@example.com';

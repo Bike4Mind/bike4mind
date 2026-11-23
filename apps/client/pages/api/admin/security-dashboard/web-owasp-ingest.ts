@@ -6,12 +6,14 @@ import {
   type SecurityDashboardStatus,
 } from '@bike4mind/database';
 import { Resource } from 'sst';
+import { isUnconfiguredSecret } from '@bike4mind/common';
 import { SQSClient, SendMessageCommand } from '@aws-sdk/client-sqs';
-import { verifyIngestToken } from '@server/security/ingestToken';
+import { verifyIngestToken } from '@bike4mind/server-utils/security/ingestToken';
 import {
   computeDeterministicStatus,
   computeWebsiteScore,
 } from '@bike4mind/server-utils/security/securityDashboardScoring';
+import { resolveCheckedAt } from '@bike4mind/server-utils/security/resolveCheckedAt';
 import { getSourceQueueUrl } from '@bike4mind/server-utils/utils/dlqRegistry';
 import { Logger } from '@bike4mind/observability';
 
@@ -89,7 +91,7 @@ const handler = baseApi<Request, Response>({ auth: false }).post(async (req: Req
   const ingestToken =
     // Prefer SST Resource binding in deployed environments
     Resource.SECOPS_ZAP_INGEST_TOKEN?.value || process.env.SECOPS_ZAP_INGEST_TOKEN;
-  if (!ingestToken) {
+  if (isUnconfiguredSecret(ingestToken)) {
     return res.status(500).json({ error: 'Security ingest token is not configured.' });
   }
 
@@ -124,8 +126,7 @@ const handler = baseApi<Request, Response>({ auth: false }).post(async (req: Req
     documentationUrl: alert.documentationUrl,
   }));
 
-  const checkedAt =
-    (finishedAt && !Number.isNaN(Date.parse(finishedAt)) && new Date(finishedAt)) || new Date(startedAt || Date.now());
+  const checkedAt = resolveCheckedAt(finishedAt, startedAt);
 
   const snapshot = await securityDashboardSnapshotRepository.create({
     stage,

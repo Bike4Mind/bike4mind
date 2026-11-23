@@ -9,8 +9,9 @@
   "scripts": {
     "typecheck": "tsc --noEmit",
     "typecheck:native": "tsgo --noEmit",
-    "typecheck:fast": "tsgo --noEmit || tsc --noEmit",
+    "typecheck:fast": "tsgo --noEmit",
     "test": "vitest run",
+    "test:repo": "REPO_TEST_LANE=repo vitest run",
     "test:integration": "SERVER_UTILS_TEST_LANE=integration vitest run"
   },
   "dependencies": {
@@ -19,6 +20,7 @@
     "@aws-sdk/client-cloudfront": "^3.1150.0",
     "@aws-sdk/client-cloudtrail": "^3.1150.0",
     "@aws-sdk/client-cloudwatch": "^3.1150.0",
+    "@aws-sdk/client-cloudwatch-logs": "^3.1150.0",
     "@aws-sdk/client-ec2": "^3.1150.0",
     "@aws-sdk/client-eventbridge": "^3.1150.0",
     "@aws-sdk/client-iam": "^3.1150.0",
@@ -54,6 +56,7 @@
     "axios-retry": "^4.5.0",
     "cheerio": "1.2.0",
     "dayjs": "^1.11.23",
+    "escape-string-regexp": "^5.0.0",
     "file-type": "^22.1.0",
     "handlebars": "^4.7.10",
     "jsonrepair": "^3.15.0",

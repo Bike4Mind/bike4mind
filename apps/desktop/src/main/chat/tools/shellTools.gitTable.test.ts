@@ -13,6 +13,7 @@ import type { ToolContext } from './types';
 
 vi.mock('./userPath', async importOriginal => ({
   ...(await importOriginal<typeof import('./userPath')>()),
+  resolveLoginShellVariables: async () => ({}),
   resolveUserPath: vi.fn(async () => process.env.PATH ?? ''),
 }));
 
@@ -206,11 +207,11 @@ const ROWS: [string, string, string][] = [
   ['git fetch && git status', '', 'rrrr'],
   ["git add -A && git commit -m 'x' && git push", '', 'rrrr'],
   ['git ls-tree --name-only $(git merge-base origin/main HEAD)', '', 'rrrr'],
-  ['git rev-list --count $(git merge-base origin/main HEAD)..HEAD', '', 'rrrr'],
+  ['git rev-list --count $(git merge-base origin/main HEAD)..HEAD', '', 'aaaa'],
   ['git diff $(git merge-base origin/main HEAD)..HEAD', '', 'rrrr'],
-  ['git log --oneline "$(cat msg.txt)"', '', 'rrrr'],
-  ['git log --$X', '', 'rrrr'],
-  ['git branch -D "$(cat msg.txt)"', '', 'rrrr'],
+  ['git log --oneline "$(cat msg.txt)"', '', 'aaaa'],
+  ['git log --$X', '', 'aaaa'],
+  ['git branch -D "$(cat msg.txt)"', '', 'aaaa'],
   ['git filter-branch --tree-filter true HEAD', '', 'aaaa'],
   ['git filter-repo --path src', '', 'aaaa'],
   ['git instaweb --httpd=./x.sh', '', 'aaaa'],
@@ -332,6 +333,24 @@ describe('shell approval of common agent git commands', () => {
   it.each(ROWS)('decides %s (in proj/%s) as %s', async (command, folder, expected) => {
     expect(await cells(command, folder)).toBe(expected);
   });
+
+  it.each(['git branch -D -- "$(cat msg.txt)"', 'git branch --merged | xargs git branch -d --'])(
+    'does not classify data after the option boundary as a signing selector: %s',
+    async command => {
+      const prompt = await shellApproval(
+        'bash_execute',
+        { command, cwd: proj },
+        {
+          roots: [proj],
+          workingDirectory: proj,
+          signal: new AbortController().signal,
+          protectedPaths: [userData],
+          uncoverablePaths: roots,
+        }
+      );
+      expect(prompt.allowOnce).not.toBe(true);
+    }
+  );
 
   it.each([
     'git frobnicate',

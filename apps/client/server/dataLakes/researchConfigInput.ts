@@ -52,4 +52,5 @@ export type ResearchLeversInputShape = z.infer<typeof ResearchLeversInput>;
 export const ResearchScheduleInput = z.object({
   cadence: z.enum(RESEARCH_SCHEDULE_CADENCES).optional(),
   reviewBacklogLimit: z.number().optional(),
+  schedulePaused: z.boolean().optional(),
 });

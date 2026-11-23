@@ -1,6 +1,6 @@
 import '@bike4mind/server-utils/lib/settings/registerContributedSettings';
 import { GoneException } from '@aws-sdk/client-apigatewaymanagementapi';
-import { DataSubscribeRequestAction, Permission, isOrgOwnerOrCurrentAdmin } from '@bike4mind/common';
+import { DataSubscribeRequestAction, Permission, canViewOrgMemberCredits } from '@bike4mind/common';
 import { z } from 'zod';
 import {
   AdminSettings,
@@ -30,7 +30,7 @@ import {
   questMasterPlanSubscriptionScope,
 } from '@server/websocket/subscriptionScopes';
 import { sendToConnection, withWebSocketContext } from '@bike4mind/server-utils/websocket/utils';
-import { verifyWsAccessToken } from '@server/websocket/verifyWsAccessToken';
+import { verifyWsSubscriberToken } from '@server/websocket/verifyWsAccessToken';
 import { closeConnection } from '@bike4mind/server-utils/websocket/closeConnection';
 import { BadRequestError, UnauthorizedError } from '@bike4mind/server-utils/utils/errors';
 import crypto from 'crypto';
@@ -111,7 +111,7 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
     initialDataAfterSubscribe,
   } = parsedRequest;
 
-  const user = await verifyWsAccessToken(accessToken);
+  const user = await verifyWsSubscriberToken(accessToken);
 
   // A subscriber must hang off a live Connection row of the same user: a revoke marks the row ended
   // (realtimeConnectionRepository.endConnections), and that must not be undone by re-subscribing
@@ -148,7 +148,7 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
     typeof requestedOrgId === 'string' && mongoose.isValidObjectId(requestedOrgId)
       ? await Organization.findById(requestedOrgId)
       : null;
-  const isPrivilegedOrgSubscriber = !!subscribedOrg && isOrgOwnerOrCurrentAdmin(user, subscribedOrg);
+  const isPrivilegedOrgSubscriber = !!subscribedOrg && canViewOrgMemberCredits(user, subscribedOrg);
 
   // 'scope' limits the scope of the query, to only things you're allowed to see.
   // mostly it uses the accessibleBy function from the casl/mongoose package.  There

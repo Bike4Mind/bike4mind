@@ -5,6 +5,7 @@ import {
   ConflictError,
   ForbiddenError,
   INTEGRATION_CATALOG,
+  MCP_CONNECTION_LIMITS,
   McpConnectionCapError,
   McpConnectionSlugConflictError,
   NotFoundError,
@@ -13,11 +14,13 @@ import {
   isValidMcpConnectionSlug,
   toMcpApiKeyLast4,
   toMcpConnectionPublic,
+  toMcpPlatformConnectionMemberView,
   type IMcpConnectionAuth,
   type IMcpConnectionDocument,
   type IMcpConnectionPublic,
   type IMcpConnectionSummary,
   type McpConnectionLastErrorInput,
+  type McpConnectionListEntry,
   type McpConnectionOwner,
   type McpToolSettingsUpdate,
 } from '@bike4mind/common';
@@ -36,6 +39,8 @@ import {
   resolveCustomMcpContext,
   type CustomMcpContext,
 } from '@bike4mind/server-utils/mcpConnections/customMcpAccess';
+import { policyPresetHost } from '@bike4mind/server-utils/mcpConnections/policyPresetHost';
+import { cleanMcpToolText } from '@bike4mind/server-utils/mcpConnections/toolDiscovery';
 import { discoverConnectionTools, type DiscoveryOutcome } from './discovery';
 import { revokeConnectionGrant } from './oauth/revoke';
 import {
@@ -46,9 +51,10 @@ import {
 } from '@bike4mind/server-utils/mcpConnections/invokeRemoteMcp';
 
 /**
- * The custom MCP connection operations behind pages/api/mcp-connections/**. Every operation is
- * owner-scoped to the calling user (user connections only; org definitions come with the org
- * admin work): another user's id reads as not found.
+ * The custom MCP connection operations behind pages/api/mcp-connections/** and
+ * pages/api/admin/mcp-connections/**. Every operation is owner-scoped. The user routes pass the
+ * calling user, so another user's id, or a platform connector's, reads as not found; the admin
+ * routes pass `PLATFORM_MCP_OWNER`, and the actor is then the acting admin.
  */
 
 export interface ConnectionActor {
@@ -66,7 +72,8 @@ export function audit(
   actor: ConnectionActor,
   action: string,
   // A refused create has no id or slug yet.
-  connection: Pick<IMcpConnectionDocument, 'urlHost'> & Partial<Pick<IMcpConnectionDocument, 'id' | 'slug'>>,
+  connection: Pick<IMcpConnectionDocument, 'urlHost'> &
+    Partial<Pick<IMcpConnectionDocument, 'id' | 'slug' | 'ownerType'>>,
   extra: Record<string, unknown> = {}
 ): IntegrationAuditLogger {
   return IntegrationAuditLogger.create({
@@ -75,7 +82,22 @@ export function audit(
     action,
     requestId: randomUUID().split('-')[0]!,
     userId: actor.id,
-    metadata: { connectionId: connection.id, host: connection.urlHost, slug: connection.slug, ...extra },
+    metadata: {
+      connectionId: connection.id,
+      host: connection.urlHost,
+      slug: connection.slug,
+      ownerType: connection.ownerType,
+      ...extra,
+    },
+  });
+}
+
+function policyVerdictFor(context: CustomMcpContext, connection: IMcpConnectionDocument | IMcpConnectionSummary) {
+  return evaluateConnectionPolicy(context, {
+    urlHost: connection.urlHost,
+    authKind: connection.auth?.kind ?? 'none',
+    presetRemoteHost: policyPresetHost(connection),
+    url: connection.displayUrl,
   });
 }
 
@@ -84,15 +106,7 @@ export function toPublicView(
   context: CustomMcpContext,
   connection: IMcpConnectionDocument | IMcpConnectionSummary
 ): IMcpConnectionPublic {
-  return toMcpConnectionPublic(
-    connection,
-    evaluateConnectionPolicy(context, {
-      urlHost: connection.urlHost,
-      authKind: connection.auth?.kind ?? 'none',
-      presetRemoteHost: getMcpPresetHost(connection.presetId),
-      url: connection.displayUrl,
-    })
-  );
+  return toMcpConnectionPublic(connection, policyVerdictFor(context, connection));
 }
 
 const SLUG_MAX = 20;
@@ -121,6 +135,10 @@ export function deriveMcpConnectionSlug(displayName: string, urlHost: string): s
   }
   return 'connector';
 }
+
+/** The tool-text cleaning (control and invisible characters, markup, whitespace runs); empty means none. */
+const cleanConnectionDescription = (raw: string): string =>
+  cleanMcpToolText(raw, MCP_CONNECTION_LIMITS.descriptionLength);
 
 function buildAuth(body: McpConnectionCreateBody['auth']): IMcpConnectionAuth {
   if (body.kind === 'none') return { kind: 'none' };
@@ -179,6 +197,7 @@ function operationalProbeFailure(
  * real code in the audit. Only programmer errors are rethrown.
  */
 async function probe(
+  owner: McpConnectionOwner,
   actor: ConnectionActor,
   connection: IMcpConnectionDocument,
   options: InvokeRemoteMcpOptions,
@@ -186,7 +205,7 @@ async function probe(
 ): Promise<void> {
   const probeAudit = audit(actor, 'probe_result', connection);
   try {
-    const outcome = await discoverConnectionTools(connection.id, actor.id, options);
+    const outcome = await discoverConnectionTools(connection.id, actor.id, options, owner);
     probeAudit.success({ toolCount: outcome.connection.tools.length });
   } catch (error) {
     if (error instanceof RemoteMcpError) {
@@ -216,7 +235,7 @@ export function assertPolicyAllows(
   actor: ConnectionActor,
   context: CustomMcpContext,
   connection: Pick<IMcpConnectionDocument, 'urlHost'> &
-    Partial<Pick<IMcpConnectionDocument, 'id' | 'slug' | 'presetId'>>,
+    Partial<Pick<IMcpConnectionDocument, 'id' | 'slug' | 'presetId' | 'ownerType'>>,
   authKind: IMcpConnectionAuth['kind'],
   url: string,
   action: string
@@ -225,7 +244,7 @@ export function assertPolicyAllows(
   const verdict = evaluateConnectionPolicy(context, {
     urlHost: connection.urlHost,
     authKind,
-    presetRemoteHost: getMcpPresetHost(connection.presetId),
+    presetRemoteHost: policyPresetHost(connection),
     url,
   });
   if (verdict.allowed) return;
@@ -234,11 +253,12 @@ export function assertPolicyAllows(
 }
 
 /**
- * Validates, policy-checks and stores a connection within the user's cap, then probes it: a 200 is
- * `connected` with its tools pending review, a 401 on an unauthenticated connection is
+ * Validates, policy-checks and stores a connection (a user's within their cap), then probes it: a
+ * 200 is `connected` with its tools pending review, a 401 on an unauthenticated connection is
  * `pending_auth` with the challenge kept for OAuth, anything else is `error` with a readable reason.
  */
-export async function createUserConnection(
+export async function createConnection(
+  owner: McpConnectionOwner,
   actor: ConnectionActor,
   context: CustomMcpContext,
   body: McpConnectionCreateBody,
@@ -263,22 +283,24 @@ export async function createUserConnection(
   assertPolicyAllows(
     actor,
     context,
-    { urlHost: prepared.urlHost, presetId: body.presetId },
+    { urlHost: prepared.urlHost, presetId: body.presetId, ownerType: owner.ownerType },
     body.auth.kind,
     prepared.url,
     'connection_created'
   );
 
+  const forUser = owner.ownerType === 'user';
   // String() first: the membership ids are strings, so an ObjectId pointer never matched them.
-  const selectedOrgId = actor.organizationId ? String(actor.organizationId) : undefined;
+  const selectedOrgId = forUser && actor.organizationId ? String(actor.organizationId) : undefined;
   const organizationId = selectedOrgId && context.organizationIds.includes(selectedOrgId) ? selectedOrgId : undefined;
+  const description = cleanConnectionDescription(body.description ?? '');
   const base = {
-    ownerType: 'user' as const,
-    ownerKey: actor.id,
+    ...owner,
     userId: actor.id,
     ...(organizationId ? { organizationId } : {}),
     ...(body.presetId ? { presetId: body.presetId } : {}),
     displayName: body.displayName,
+    ...(description ? { description } : {}),
     urlEnc: prepared.urlEnc,
     displayUrl: prepared.displayUrl,
     urlHost: prepared.urlHost,
@@ -291,13 +313,20 @@ export async function createUserConnection(
 
   // An explicit slug is the user's choice and conflicts with a 409; a derived one takes a suffix.
   const derived = deriveMcpConnectionSlug(body.displayName, prepared.urlHost);
+  // A user connection sharing a platform connector's slug would hide that connector from its owner.
+  const reserved = new Set(forUser ? await mcpConnectionRepository.listPlatformSlugs() : []);
+  if (body.slug && reserved.has(body.slug)) throw new McpConnectionSlugConflictError(body.slug);
   const candidates = body.slug
     ? [body.slug]
-    : [derived, ...Array.from({ length: SLUG_SUFFIX_ATTEMPTS - 1 }, (_, i) => `${derived}_${i + 2}`)];
+    : [derived, ...Array.from({ length: SLUG_SUFFIX_ATTEMPTS - 1 }, (_, i) => `${derived}_${i + 2}`)].filter(
+        slug => !reserved.has(slug)
+      );
   let created: IMcpConnectionDocument | undefined;
   for (const slug of candidates) {
     try {
-      created = await mcpConnectionRepository.createWithinUserCap({ ...base, slug }, context.maxConnectionsPerUser);
+      created = forUser
+        ? await mcpConnectionRepository.createWithinUserCap({ ...base, slug }, context.maxConnectionsPerUser)
+        : await mcpConnectionRepository.create({ ...base, slug });
       break;
     } catch (error) {
       if (error instanceof McpConnectionCapError) {
@@ -309,43 +338,75 @@ export async function createUserConnection(
   if (!created) throw new ConflictError('Could not pick a free slug', { code: 'slug_conflict' });
 
   audit(actor, 'connection_created', created, { authKind: body.auth.kind }).success();
-  await probe(actor, created, { ...options, context }, base.auth.apiKey?.valueEnc);
-  const reloaded = await mcpConnectionRepository.findByIdForOwner(created.id, userOwner(actor.id));
+  await probe(owner, actor, created, { ...options, context }, base.auth.apiKey?.valueEnc);
+  const reloaded = await mcpConnectionRepository.findByIdForOwner(created.id, owner);
   if (!reloaded) throw new NotFoundError('Connection not found');
   return toPublicView(context, reloaded);
 }
 
+export const createUserConnection = (
+  actor: ConnectionActor,
+  context: CustomMcpContext,
+  body: McpConnectionCreateBody,
+  options: InvokeRemoteMcpOptions = {}
+): Promise<IMcpConnectionPublic> => createConnection(userOwner(actor.id), actor, context, body, options);
+
+/**
+ * The user's own connections in full, then each switched-on platform connector as its member view.
+ * A platform connector whose slug the user holds is left out, as it is when tools are built.
+ */
 export async function listUserConnections(
   actor: ConnectionActor,
   context: CustomMcpContext
-): Promise<IMcpConnectionPublic[]> {
-  const connections = await mcpConnectionRepository.listAllForUser(actor.id);
+): Promise<McpConnectionListEntry[]> {
+  const [connections, platform] = await Promise.all([
+    mcpConnectionRepository.listAllForUser(actor.id),
+    mcpConnectionRepository.listPlatform(),
+  ]);
+  const held = new Set(connections.map(connection => connection.slug));
+  return [
+    ...connections.map(connection => toPublicView(context, connection)),
+    ...platform
+      .filter(connection => connection.enabled && !held.has(connection.slug))
+      .map(connection => toMcpPlatformConnectionMemberView(connection, policyVerdictFor(context, connection))),
+  ];
+}
+
+/** Every platform connector in full, for the admin routes. */
+export async function listPlatformConnections(context: CustomMcpContext): Promise<IMcpConnectionPublic[]> {
+  const connections = await mcpConnectionRepository.listPlatform();
   return connections.map(connection => toPublicView(context, connection));
 }
 
-export async function getUserConnection(
-  actor: ConnectionActor,
+export async function getConnection(
+  owner: McpConnectionOwner,
   context: CustomMcpContext,
   id: string
 ): Promise<IMcpConnectionPublic> {
-  const connection = await mcpConnectionRepository.findByIdForOwner(id, userOwner(actor.id));
+  const connection = await mcpConnectionRepository.findByIdForOwner(id, owner);
   if (!connection) throw new NotFoundError('Connection not found');
   return toPublicView(context, connection);
 }
 
+export const getUserConnection = (
+  actor: ConnectionActor,
+  context: CustomMcpContext,
+  id: string
+): Promise<IMcpConnectionPublic> => getConnection(userOwner(actor.id), context, id);
+
 /**
- * Rename, enable or disable, and save a tool review, in one write. Enabling a tool that is pending
- * review counts as reviewing it (it becomes `active`) unless the entry says otherwise. Each tool
- * entry names the `versionHash` it reviewed: an unknown tool is a 400 and a tool that changed
- * since is a 409, and either way nothing is written.
+ * Rename, describe, enable or disable, and save a tool review, in one write. Enabling a tool that
+ * is pending review counts as reviewing it (it becomes `active`) unless the entry says otherwise.
+ * Each tool entry names the `versionHash` it reviewed: an unknown tool is a 400 and a tool that
+ * changed since is a 409, and either way nothing is written. The description never touches a tool.
  */
-export async function updateUserConnection(
+export async function updateConnection(
+  owner: McpConnectionOwner,
   actor: ConnectionActor,
   context: CustomMcpContext,
   id: string,
   body: McpConnectionPatchBody
 ): Promise<IMcpConnectionPublic> {
-  const owner = userOwner(actor.id);
   const current = await mcpConnectionRepository.findByIdForOwner(id, owner);
   if (!current) throw new NotFoundError('Connection not found');
 
@@ -363,12 +424,17 @@ export async function updateUserConnection(
     );
   }
 
+  const description = body.description === undefined ? undefined : cleanConnectionDescription(body.description);
   const connection = await mcpConnectionRepository.updateSettings(id, owner, {
     ...(body.displayName !== undefined ? { displayName: body.displayName } : {}),
+    ...(description !== undefined ? { description } : {}),
     ...(body.enabled !== undefined ? { enabled: body.enabled } : {}),
     ...(settings ? { tools: settings } : {}),
   });
   if (!connection) throw new NotFoundError('Connection not found');
+  if (description !== undefined && description !== (current.description ?? '')) {
+    audit(actor, 'description_changed', connection, { descriptionLength: description.length }).success();
+  }
   if (body.enabled !== undefined) {
     audit(actor, body.enabled ? 'connection_enabled' : 'connection_disabled', connection).success();
   }
@@ -376,23 +442,31 @@ export async function updateUserConnection(
   return toPublicView(context, connection);
 }
 
+export const updateUserConnection = (
+  actor: ConnectionActor,
+  context: CustomMcpContext,
+  id: string,
+  body: McpConnectionPatchBody
+): Promise<IMcpConnectionPublic> => updateConnection(userOwner(actor.id), actor, context, id, body);
+
 export interface RefreshResult {
   connection: IMcpConnectionPublic;
   discovery: { added: string[]; changed: string[]; removed: string[]; dropped: number };
 }
 
-export async function refreshUserConnectionTools(
+export async function refreshConnectionTools(
+  owner: McpConnectionOwner,
   actor: ConnectionActor,
   context: CustomMcpContext,
   id: string,
   options: InvokeRemoteMcpOptions = {}
 ): Promise<RefreshResult> {
-  const connection = await mcpConnectionRepository.findByIdForOwner(id, userOwner(actor.id));
+  const connection = await mcpConnectionRepository.findByIdForOwner(id, owner);
   if (!connection) throw new NotFoundError('Connection not found');
   assertPolicyAllows(actor, context, connection, connection.auth.kind, connection.displayUrl, 'tools_refresh');
   let outcome: DiscoveryOutcome;
   try {
-    outcome = await discoverConnectionTools(id, actor.id, { ...options, context });
+    outcome = await discoverConnectionTools(id, actor.id, { ...options, context }, owner);
   } catch (error) {
     // Already recorded on the connection; the caller re-reads it for the new status.
     if (error instanceof RemoteMcpError) {
@@ -404,15 +478,22 @@ export async function refreshUserConnectionTools(
   return { connection: toPublicView(context, outcome.connection), discovery: { added, changed, removed, dropped } };
 }
 
+export const refreshUserConnectionTools = (
+  actor: ConnectionActor,
+  context: CustomMcpContext,
+  id: string,
+  options: InvokeRemoteMcpOptions = {}
+): Promise<RefreshResult> => refreshConnectionTools(userOwner(actor.id), actor, context, id, options);
+
 /** Replaces the API key (write-only; only `last4` comes back), then re-probes with it. */
-export async function rotateUserConnectionApiKey(
+export async function rotateConnectionApiKey(
+  owner: McpConnectionOwner,
   actor: ConnectionActor,
   context: CustomMcpContext,
   id: string,
   body: McpConnectionApiKeyBody,
   options: InvokeRemoteMcpOptions = {}
 ): Promise<IMcpConnectionPublic> {
-  const owner = userOwner(actor.id);
   const connection = await mcpConnectionRepository.findByIdForOwner(id, owner);
   if (!connection) throw new NotFoundError('Connection not found');
   const current = connection.auth.apiKey;
@@ -431,20 +512,40 @@ export async function rotateUserConnectionApiKey(
   if (!rotated) throw new NotFoundError('Connection not found');
   audit(actor, 'api_key_rotated', rotated).success();
 
-  await probe(actor, rotated, { ...options, context }, valueEnc);
+  await probe(owner, actor, rotated, { ...options, context }, valueEnc);
   const reloaded = await mcpConnectionRepository.findByIdForOwner(id, owner);
   if (!reloaded) throw new NotFoundError('Connection not found');
   return toPublicView(context, reloaded);
 }
 
-/** Owner-scoped delete; open even with connectors switched off, so a user can always clean up. */
-export async function deleteUserConnection(actor: ConnectionActor, id: string): Promise<void> {
-  const owner = userOwner(actor.id);
+export const rotateUserConnectionApiKey = (
+  actor: ConnectionActor,
+  context: CustomMcpContext,
+  id: string,
+  body: McpConnectionApiKeyBody,
+  options: InvokeRemoteMcpOptions = {}
+): Promise<IMcpConnectionPublic> => rotateConnectionApiKey(userOwner(actor.id), actor, context, id, body, options);
+
+/**
+ * Owner-scoped delete; open even with connectors switched off, so a user can always clean up.
+ * Resolves what the deleted connection was called, for the caller's own audit entry.
+ */
+export async function deleteConnection(
+  owner: McpConnectionOwner,
+  actor: ConnectionActor,
+  id: string
+): Promise<Pick<IMcpConnectionDocument, 'id' | 'slug' | 'displayName' | 'urlHost'>> {
   const connection = await mcpConnectionRepository.findByIdWithCredentials(id, owner);
   if (!connection) throw new NotFoundError('Connection not found');
   await revokeRemoteGrant(actor, connection);
   if (!(await mcpConnectionRepository.deleteForOwner(id, owner))) throw new NotFoundError('Connection not found');
   audit(actor, 'disconnected', connection).success();
+  const { slug, displayName, urlHost } = connection;
+  return { id: connection.id, slug, displayName, urlHost };
+}
+
+export async function deleteUserConnection(actor: ConnectionActor, id: string): Promise<void> {
+  await deleteConnection(userOwner(actor.id), actor, id);
 }
 
 /**

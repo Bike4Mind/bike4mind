@@ -105,6 +105,7 @@ export const USAGE_EVENT_OPERATIONS = [
   'notebook_tagging',
   'context_summary',
   'memento',
+  'assistant_brief',
 ] as const;
 
 export type UsageEventOperation = (typeof USAGE_EVENT_OPERATIONS)[number];

@@ -21,6 +21,12 @@
 
 import type { PyodideWorkerMessage, PyodideWorkerResponse, ExecutionResult } from '@client/app/workers/pyodide/types';
 import {
+  FUNCTION_CONTRACT_LIMITS,
+  capFunctionProblems,
+  functionJsonBytes,
+  type FunctionContractProblem,
+} from '@bike4mind/common';
+import {
   SUPPORTED_PYTHON_PACKAGES,
   describePythonImportError,
   detectPythonPackages,
@@ -68,6 +74,100 @@ export type { ExecutionResult } from '@client/app/workers/pyodide/types';
 /** Default execution timeout in milliseconds (30 seconds) */
 const EXECUTION_TIMEOUT_MS = 30000;
 
+/** A function call read back from the sandbox. `contract` and `value` are parsed but not yet validated. */
+export interface PythonFunctionCall {
+  success: boolean;
+  contract?: unknown;
+  value?: unknown;
+  /** Output problems only Python could see, such as 3.0 for an integer; in the shape the contract validator uses. */
+  outputProblems?: FunctionContractProblem[];
+  output: string;
+  error?: string;
+  executionTime: number;
+}
+
+export const PYTHON_SCRIPT_BUSY = 'Another Python script is already running';
+
+// The sandbox wrapper in sandboxWorkerBody.ts applies the same caps before posting; these checks stay the authority.
+const MAX_FUNCTION_OUTPUT_CHARS = 100_000;
+const FUNCTION_CONTRACT_TOO_LARGE = `The function contract is larger than ${FUNCTION_CONTRACT_LIMITS.maxContractBytes / 1024} KB.`;
+export const FUNCTION_RESULT_TOO_LARGE = `The function returned a result larger than ${FUNCTION_CONTRACT_LIMITS.maxResultBytes / 1024} KB.`;
+export const FUNCTION_RESULT_UNREADABLE = 'The function returned a result that could not be read.';
+
+/**
+ * Every field of a `call-result` is guest data: types are checked, and each JSON text is size-capped
+ * before it is parsed.
+ */
+function readFunctionCallResult(raw: unknown): PythonFunctionCall {
+  const result: Record<string, unknown> = raw && typeof raw === 'object' ? (raw as Record<string, unknown>) : {};
+  const output = typeof result.output === 'string' ? result.output.slice(0, MAX_FUNCTION_OUTPUT_CHARS) : '';
+  const executionTime =
+    typeof result.executionTime === 'number' && Number.isFinite(result.executionTime) ? result.executionTime : 0;
+  const refuse = (error: string): PythonFunctionCall => ({ success: false, output, error, executionTime });
+
+  const parsed: { contract?: unknown; value?: unknown; outputProblems?: unknown } = {};
+  const fields = [
+    {
+      key: 'contract',
+      field: 'contractJson',
+      limit: FUNCTION_CONTRACT_LIMITS.maxContractBytes,
+      tooLarge: FUNCTION_CONTRACT_TOO_LARGE,
+    },
+    {
+      key: 'value',
+      field: 'valueJson',
+      limit: FUNCTION_CONTRACT_LIMITS.maxResultBytes,
+      tooLarge: FUNCTION_RESULT_TOO_LARGE,
+    },
+    {
+      key: 'outputProblems',
+      field: 'outputProblemsJson',
+      limit: FUNCTION_CONTRACT_LIMITS.maxResultBytes,
+      tooLarge: FUNCTION_RESULT_TOO_LARGE,
+    },
+  ] as const;
+  for (const { key, field, limit, tooLarge } of fields) {
+    const text = result[field];
+    if (text === undefined) continue;
+    if (typeof text !== 'string') return refuse(FUNCTION_RESULT_UNREADABLE);
+    // A UTF-8 encoding is never shorter than the UTF-16 length, so the cheap check runs first.
+    if (text.length > limit || functionJsonBytes(text) > limit) return refuse(tooLarge);
+    try {
+      parsed[key] = JSON.parse(text);
+    } catch {
+      return refuse(FUNCTION_RESULT_UNREADABLE);
+    }
+  }
+  const { outputProblems, ...values } = parsed;
+  if (outputProblems !== undefined && !isProblemList(outputProblems)) return refuse(FUNCTION_RESULT_UNREADABLE);
+
+  const error =
+    typeof result.error === 'string'
+      ? describePythonImportError(result.error.slice(0, MAX_FUNCTION_OUTPUT_CHARS))
+      : undefined;
+  return {
+    success: result.success === true && error === undefined,
+    ...values,
+    ...(outputProblems ? { outputProblems: capFunctionProblems(outputProblems) } : {}),
+    output,
+    error,
+    executionTime,
+  };
+}
+
+function isProblemList(value: unknown): value is FunctionContractProblem[] {
+  return (
+    Array.isArray(value) &&
+    value.every(
+      entry =>
+        entry !== null &&
+        typeof entry === 'object' &&
+        typeof (entry as Record<string, unknown>).path === 'string' &&
+        typeof (entry as Record<string, unknown>).message === 'string'
+    )
+  );
+}
+
 export interface PyodideManagerState {
   isLoading: boolean;
   loadProgress: number;
@@ -101,6 +201,8 @@ class PyodideManager {
   private baseUrl?: string;
   private executeResolver: ((result: ExecutionResult) => void) | null = null;
   private executeRejecter: ((error: Error) => void) | null = null;
+  private callResolver: ((result: PythonFunctionCall) => void) | null = null;
+  private callRejecter: ((error: Error) => void) | null = null;
   private initResolver: (() => void) | null = null;
   private initRejecter: ((error: Error) => void) | null = null;
   private initIdleTimer: ReturnType<typeof setTimeout> | null = null;
@@ -276,6 +378,16 @@ class PyodideManager {
         }
         break;
 
+      case 'call-result':
+        // Guest code can post this during an execute; only a pending call may end the running state.
+        if (this.callResolver) {
+          this.updateState({ isExecuting: false, executionStatus: null });
+          this.callResolver(readFunctionCallResult(msg.result));
+          this.callResolver = null;
+          this.callRejecter = null;
+        }
+        break;
+
       case 'error':
         this.clearInitWatchdog();
         this.updateState({
@@ -295,6 +407,11 @@ class PyodideManager {
           this.executeRejecter(new Error(msg.error));
           this.executeResolver = null;
           this.executeRejecter = null;
+        }
+        if (this.callRejecter) {
+          this.callRejecter(new Error(msg.error));
+          this.callResolver = null;
+          this.callRejecter = null;
         }
         break;
     }
@@ -366,8 +483,8 @@ class PyodideManager {
     }
     // One sandbox, one run: a second caller would replace the first one's resolver and leave
     // its promise unsettled forever.
-    if (this.executeResolver) {
-      throw new Error('Another Python script is already running');
+    if (this.executeResolver || this.callResolver) {
+      throw new Error(PYTHON_SCRIPT_BUSY);
     }
 
     return new Promise<ExecutionResult>((resolve, reject) => {
@@ -379,6 +496,34 @@ class PyodideManager {
       this.updateState({ isExecuting: true, streamingOutput: '' });
 
       this.postToSandbox({ type: 'execute', code, packages, timeoutMs });
+    });
+  }
+
+  /**
+   * Read the code's FUNCTION contract and, unless `params` is null, call `run(**params)`. Shares execute()'s
+   * single-run guard and is stopped the same way, by interrupt().
+   */
+  async callFunction(
+    code: string,
+    packages: string[] = [],
+    params: Record<string, unknown> | null = null,
+    timeoutMs = EXECUTION_TIMEOUT_MS
+  ): Promise<PythonFunctionCall> {
+    await this.initialize();
+
+    if (!this.frame) {
+      throw new Error('Python sandbox not available');
+    }
+    if (this.executeResolver || this.callResolver) {
+      throw new Error(PYTHON_SCRIPT_BUSY);
+    }
+
+    const paramsJson = params === null ? null : JSON.stringify(params);
+    return new Promise<PythonFunctionCall>((resolve, reject) => {
+      this.callResolver = resolve;
+      this.callRejecter = reject;
+      this.updateState({ isExecuting: true, streamingOutput: '' });
+      this.postToSandbox({ type: 'call', code, packages, paramsJson, timeoutMs });
     });
   }
 
@@ -422,6 +567,16 @@ class PyodideManager {
       });
       this.executeResolver = null;
       this.executeRejecter = null;
+    }
+    if (this.callResolver) {
+      this.callResolver({
+        success: false,
+        output: this.state.streamingOutput,
+        error: 'Execution interrupted',
+        executionTime: 0,
+      });
+      this.callResolver = null;
+      this.callRejecter = null;
     }
 
     // Re-initialize so the Run button becomes enabled again

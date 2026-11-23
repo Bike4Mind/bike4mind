@@ -1,4 +1,11 @@
-import type { ModelBuildReport, ModelLighting, ModelPose, ModelView, ModelViewState } from '@shared/model3d';
+import type {
+  ModelBuildReport,
+  ModelLighting,
+  ModelPose,
+  ModelVersion,
+  ModelView,
+  ModelViewState,
+} from '@shared/model3d';
 import type { SpawnOptions, TaskAction } from '@shared/orchestration';
 import type { CustomCommand } from '@bike4mind/cli/skills';
 import type { VideoModel } from '@bike4mind/common';
@@ -8,6 +15,7 @@ import type { LoopResult, LoopStart, LoopState } from '@shared/loop';
 import type { PrActionResult, PrBindOutcome } from '@shared/pullRequest';
 import type {
   ChatApprovalOption,
+  ChatArtifact,
   ChatDiff,
   ChatToolDetail,
   ChatMedia,
@@ -45,18 +53,12 @@ import type { WebSearchTurn } from './webSearchLimits';
 export interface MediaContext {
   client: MediaApiClient;
   store: MediaStore;
-  /** Base for generated-file URLs, from serverConfig. Relative on self-host, absolute on a CDN. */
-  cdnUrl: string;
-  /** Names the notebook the server creates for this conversation's first generation. */
-  notebookName: string;
   /** Image models this deployment offers. Lazy: a turn with no image generation never asks. */
   listImageModels(): Promise<string[]>;
   /** Video models this caller can use; cached, and read at turn start to decide whether to offer the tool. */
   listVideoModels(): Promise<VideoModel[]>;
   /** Records and follows a created video job. Absent where nothing can follow one. */
   videoJobs?: Pick<VideoJobScheduler, 'track'>;
-  getRemoteSessionId(): string | undefined;
-  setRemoteSessionId(remoteSessionId: string): Promise<void>;
 }
 
 /**
@@ -179,6 +181,8 @@ export interface BrowserProvider {
     keepScreenshot: (bytes: Buffer, caption: string) => Promise<ChatMedia | undefined>
   ): BrowserContext;
   closeSession(sessionId: string): Promise<void>;
+  /** Reload, in place, any of the conversation's tabs showing one of these artifacts at an older version. */
+  refreshArtifacts?(sessionId: string, artifacts: readonly ChatArtifact[]): void;
 }
 
 /** One of a conversation's tabs, as browser_tabs lists it. */
@@ -354,6 +358,8 @@ export interface ModelViewPort {
   /** An 8 s turntable clip of the current model, as WebM. */
   recordTurntable(lighting: ModelLighting): Promise<Uint8Array>;
   glbPath(): string | null;
+  /** This conversation's kept builds, oldest first (ModelVersionStore.ts). */
+  versions(): Promise<ModelVersion[]>;
 }
 
 export interface ModelContext {
@@ -393,6 +399,8 @@ export interface ToolContext {
    * the access token. A granted home folder would otherwise expose the vault to a shell command.
    */
   protectedPaths?: readonly string[];
+  /** Folders inside protectedPaths that request_directory may still share, such as chat attachments. */
+  shareableUnderProtected?: readonly string[];
   /** Protected folders not yet resolved: where a write lands relative to them is unknown, so every write is refused. */
   unresolvedProtectedPaths?: readonly string[];
   /**
@@ -500,6 +508,12 @@ export interface PullRequestContext {
  */
 export interface SkillContext {
   available(): Promise<readonly CustomCommand[]>;
+  /**
+   * True when `name` exists but is withheld from the model by `disable-model-invocation`, so a
+   * refusal can say the user has to start it rather than that it is missing. Optional: without it
+   * the tool reports a plain miss.
+   */
+  isUserOnly?(name: string): Promise<boolean>;
 }
 
 /** What one session looks like to the host-control tools. */
@@ -668,8 +682,11 @@ export interface QuestHost {
 export type QuestReadiness = { ready: false; reason: string } | { ready: true; note?: string };
 
 export interface DelegationHost {
-  /** Where a delegated child goes: the card's default choice, with the branch it would prefill. */
-  placement(title: string | undefined, prompt: string): Promise<SpawnPlacement>;
+  /**
+   * Where a delegated child goes: the parent's checkout, or with `isolate` a worktree of its own
+   * when the project is a repository.
+   */
+  placement(title: string | undefined, prompt: string, isolate: boolean): Promise<SpawnPlacement>;
 }
 
 export interface SpawnSuggestionTask {

@@ -1,10 +1,11 @@
 import Box from '@mui/joy/Box';
-import Chip from '@mui/joy/Chip';
 import Typography from '@mui/joy/Typography';
 import { useCallback, useEffect, useLayoutEffect, useRef } from 'react';
 import { useElementWidth } from '../sessionPanelState';
 import { agentNowText } from './activity';
 import { AgentStateChip } from './AgentStateChip';
+import { AgentPrIndicator } from './AgentPrIndicator';
+import { SKIN_CARD_VARIABLE } from './statePalette';
 import { prefersReducedMotion } from './motion';
 import type { OrchestratorViewProps } from './OrchestratorStage';
 import { formatAgentCost, spawnerName, type AgentState, type AgentView } from './roster';
@@ -159,6 +160,7 @@ function BoardCard({
   via,
   selected,
   onSelect,
+  onOpenPr,
   cardRef,
 }: {
   agent: AgentView;
@@ -166,6 +168,7 @@ function BoardCard({
   via?: string;
   selected: boolean;
   onSelect(id: string): void;
+  onOpenPr?(id: string): void;
   cardRef(node: HTMLElement | null): void;
 }) {
   const now = agentNowText(agent);
@@ -189,7 +192,7 @@ function BoardCard({
         borderRadius: 'sm',
         border: '1px solid',
         borderColor: selected ? 'primary.outlinedBorder' : 'divider',
-        bgcolor: 'background.surface',
+        bgcolor: `var(${SKIN_CARD_VARIABLE}, var(--joy-palette-background-surface))`,
         cursor: 'pointer',
         display: 'flex',
         flexDirection: 'column',
@@ -221,7 +224,7 @@ function BoardCard({
             {formatAgentCost(agent.usdCost, agent.credits)}
           </Typography>
         )}
-        {agent.pr && <Chip size="sm" variant="outlined">{`#${agent.pr.number} ${agent.pr.state}`}</Chip>}
+        <AgentPrIndicator pr={agent.pr} onOpen={() => onOpenPr?.(agent.id)} />
       </Box>
     </Box>
   );
@@ -231,7 +234,7 @@ function columnCards(agents: readonly AgentView[], states: readonly AgentState[]
   return agents.filter(agent => states.includes(agent.state));
 }
 
-export function BoardView({ agents, onSelect, selectedId }: OrchestratorViewProps) {
+export function BoardView({ agents, onSelect, onOpenPr, selectedId }: OrchestratorViewProps) {
   const [measureRef, boardWidth] = useElementWidth<HTMLDivElement>();
   const rows = packBoardRows(
     COLUMNS.map(column => {
@@ -316,6 +319,7 @@ export function BoardView({ agents, onSelect, selectedId }: OrchestratorViewProp
                     via={spawnerName(agent, agents)}
                     selected={agent.id === selectedId}
                     onSelect={onSelect}
+                    onOpenPr={onOpenPr}
                     cardRef={refFor(agent.id)}
                   />
                 ))}

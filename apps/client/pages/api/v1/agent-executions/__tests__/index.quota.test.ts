@@ -42,7 +42,7 @@ vi.mock('@bike4mind/server-utils/auth/assertAiAccessAllowed', () => ({ assertAiA
 vi.mock('@server/utils/startAgentExecution', () => ({
   startAgentExecution: (...a: unknown[]) => mockStartAgentExecution(...a),
 }));
-vi.mock('@server/utils/untrustedCompletionQuota', () => ({
+vi.mock('@bike4mind/server-utils/utils/untrustedCompletionQuota', () => ({
   admitRequestCompletion: (...a: unknown[]) => mockAdmitRequestCompletion(...a),
 }));
 

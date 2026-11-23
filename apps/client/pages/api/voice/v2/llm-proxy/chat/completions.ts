@@ -38,6 +38,7 @@ import {
 import { baseApi } from '@server/middlewares/baseApi';
 import { ownerWithheldUsers, withholdAdminRole } from '@bike4mind/server-utils/auth/apiKeyAdminScope';
 import { premiumLlmTools } from '@bike4mind/server-utils/premium-generated/premiumLlmTools.generated';
+import '@bike4mind/server-utils/navigation/registerContributedViews';
 import { getCreateVideoJobDeps, getVideoJobDeps } from '@bike4mind/server-utils/generationJobs/wiring';
 import { buildVideoToolConfig } from '@bike4mind/server-utils/videoGenerations/buildVideoToolConfig';
 import { buildAudioToolJobs } from '@bike4mind/server-utils/generationJobs/audioJobWiring';
@@ -169,6 +170,7 @@ async function runFullPipeline(
         sessionId: sessionCtx.sessionId,
         organizationId,
         apiKeyId: sessionCtx.apiKeyId,
+        apiKeyBillingOwnerType: sessionCtx.apiKeyBillingOwnerType,
       }),
     // Forward streamed reply updates to the SSE writer in the handler.
     onReplyStream,
@@ -228,6 +230,7 @@ async function runFullPipeline(
     userId: sessionCtx.userId,
     authOrigin: sessionCtx.authOrigin,
     apiKeyId: sessionCtx.apiKeyId,
+    apiKeyBillingOwnerType: sessionCtx.apiKeyBillingOwnerType,
   });
   if (!quest) throw new Error('Voice v2: failed to create quest');
   // Surface the quest id so the handler can stop it if the client disconnects.
@@ -244,6 +247,7 @@ async function runFullPipeline(
       // from this body only.
       authOrigin: sessionCtx.authOrigin,
       apiKeyId: sessionCtx.apiKeyId,
+      apiKeyBillingOwnerType: sessionCtx.apiKeyBillingOwnerType,
       embeddingModel,
       queryComplexity: 'simple',
       dashboardParams: undefined,

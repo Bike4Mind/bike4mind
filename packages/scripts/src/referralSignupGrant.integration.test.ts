@@ -111,10 +111,10 @@ describe('referral invitee signup grant', () => {
     expect(amounts(open)).toEqual({ currentCredits: 100, signupCredits: 100, unlockCredits: 0 });
   });
 
-  it('matches an open signup after a credit purchase unlocks the remainder', async () => {
+  it.each([0, 400])('matches an open signup after repeated purchase unlocks with drip cap %s', async dripCap => {
     await seedSettings({
       signupGrantInitialCredits: '100',
-      signupGrantDripCap: '400',
+      signupGrantDripCap: String(dripCap),
       signupUnlockPaymentHoldHours: '0',
     });
     const { referred, open } = await signUpReferredAndOpen();
@@ -123,11 +123,15 @@ describe('referral invitee signup grant', () => {
     >[2];
     for (const user of [referred, open]) {
       await withTransaction(() => userService.unlockSignupGrant(String(user._id), 'credit_purchase', unlockAdapters));
+      await withTransaction(() => userService.unlockSignupGrant(String(user._id), 'credit_purchase', unlockAdapters));
     }
 
     const after = async (id: unknown) => (await User.findById(id).lean())!;
     const [referredAfter, openAfter] = [await after(referred._id), await after(open._id)];
     expect(amounts(referredAfter)).toEqual(amounts(openAfter));
-    expect(openAfter.currentCredits).toBe(500);
+    expect(openAfter.currentCredits).toBe(100 + dripCap);
+    for (const user of [referredAfter, openAfter]) {
+      expect(user.signupGrant?.creditsReleased).toBe(100 + dripCap);
+    }
   });
 });

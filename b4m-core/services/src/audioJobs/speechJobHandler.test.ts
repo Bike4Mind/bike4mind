@@ -119,6 +119,21 @@ beforeEach(() => {
 });
 
 describe('speech job handler submit', () => {
+  it('keeps the word timings the provider reported on the payload', async () => {
+    const wordTimings = [{ text: 'hello', startMs: 0, endMs: 400 }];
+    const { provider } = providerReturning({ status: 'succeeded', output: testSpeechProviderOutput(), wordTimings });
+    const { handler } = setup({ providers: { openai: provider, elevenlabs: provider } });
+    const result = await handler.submit(makeJob(), stepContext());
+    expect(result).toMatchObject({ next: 'succeeded', payload: { wordTimings } });
+  });
+
+  it('records no word timings when the provider reported none', async () => {
+    const { handler } = setup();
+    const result = await handler.submit(makeJob(), stepContext());
+    if (result.next !== 'succeeded') throw new Error('expected success');
+    expect(result.payload).not.toHaveProperty('wordTimings');
+  });
+
   it('synthesizes, stores in Files and succeeds with the output and producedBy', async () => {
     const { handler, deps } = setup();
     const job = makeJob();
@@ -249,6 +264,55 @@ describe('speech job handler submit', () => {
       const { handler } = setup({ providers: { openai: openai.provider, elevenlabs: testSpeechProvider } });
       const result = await handler.submit(makeJob(fallbackPayload()), stepContext());
       expect(result).toMatchObject({ next: 'succeeded', payload: { producedBy: { provider: 'elevenlabs' } } });
+    });
+
+    describe('when a vendor is out of quota', () => {
+      const quotaExhausted = (vendor: string): ProviderTerminalResult => ({
+        status: 'failed',
+        retryable: false,
+        message: `${vendor}_speech_quota_exhausted`,
+        raw: { status: 401 },
+      });
+
+      it('falls through to the next candidate and logs at warn, not error', async () => {
+        const openai = providerReturning(quotaExhausted('openai'));
+        const logger = new Logger({ metadata: { test: 'speechJobHandler' } });
+        const warn = vi.spyOn(logger, 'warn');
+        const error = vi.spyOn(logger, 'error');
+        const { handler } = setup({ logger, providers: { openai: openai.provider, elevenlabs: testSpeechProvider } });
+
+        const result = await handler.submit(makeJob(fallbackPayload()), stepContext());
+
+        expect(openai.generate).toHaveBeenCalledTimes(1);
+        expect(result).toMatchObject({ next: 'succeeded', payload: { producedBy: { provider: 'elevenlabs' } } });
+        expect(warn).toHaveBeenCalledWith(
+          'speech provider quota exhausted',
+          expect.objectContaining({ vendor: 'openai' })
+        );
+        expect(error).not.toHaveBeenCalled();
+      });
+
+      it('reports the quota reason when every candidate fails, over a later rejected key', async () => {
+        const openai = providerReturning(quotaExhausted('openai'));
+        const elevenlabs = providerReturning({ ...rejectedKey, message: 'elevenlabs key bad' });
+        const { handler } = setup({ providers: { openai: openai.provider, elevenlabs: elevenlabs.provider } });
+
+        expect(await handler.submit(makeJob(fallbackPayload()), stepContext())).toMatchObject({
+          next: 'failed',
+          error: { code: 'provider_error', message: 'openai_speech_quota_exhausted', providerStatus: 401 },
+        });
+      });
+
+      it('reports the quota reason when the alternate then refuses the request', async () => {
+        const openai = providerReturning(quotaExhausted('openai'));
+        const elevenlabs = providerReturning({ status: 'failed', retryable: false, message: 'bad voice', raw: {} });
+        const { handler } = setup({ providers: { openai: openai.provider, elevenlabs: elevenlabs.provider } });
+
+        expect(await handler.submit(makeJob(fallbackPayload()), stepContext())).toMatchObject({
+          next: 'failed',
+          error: { message: 'openai_speech_quota_exhausted' },
+        });
+      });
     });
 
     it('skips a candidate whose provider is not registered', async () => {

@@ -46,6 +46,11 @@ describe('organizationService - update', () => {
       db: {
         organizations: {
           update: vi.fn().mockResolvedValue(undefined),
+          setStorageLimitOverride: vi.fn(async (_id: string, storageLimit: number | null) => ({
+            ...existingOrganization,
+            storageLimit,
+            storageLimitOverride: storageLimit,
+          })),
           findById: vi.fn().mockResolvedValue(existingOrganization),
         },
       },
@@ -253,7 +258,8 @@ describe('organizationService - update', () => {
     const result = await update(mockAdminUser as IUserDocument, { id: 'org1', storageLimit: 0.5 }, mockAdapters);
 
     expect(result.storageLimit).toBe(0.5);
-    expect(mockAdapters.db.organizations.update).toHaveBeenCalledWith({ id: 'org1', storageLimit: 0.5 });
+    expect(mockAdapters.db.organizations.setStorageLimitOverride).toHaveBeenCalledWith('org1', 0.5);
+    expect(mockAdapters.db.organizations.update).toHaveBeenCalledWith({ id: 'org1' });
   });
 
   it.each([-1, MAX_STORAGE_LIMIT_MB + 1])('rejects an out-of-range storage limit (%d)', async storageLimit => {
@@ -261,15 +267,14 @@ describe('organizationService - update', () => {
     expect(mockAdapters.db.organizations.update).not.toHaveBeenCalled();
   });
 
-  it('clears the storage limit to null so the org falls back to the default', async () => {
+  it('clears the override so the repository resolves the current plan or default atomically', async () => {
     const limitedOrg = { ...existingOrganization, storageLimit: 50 };
     mockAdapters.db.organizations.findById.mockResolvedValue(limitedOrg);
 
     const result = await update(mockAdminUser as IUserDocument, { id: 'org1', storageLimit: null }, mockAdapters);
 
     expect(result.storageLimit).toBeNull();
-    const persisted = mockAdapters.db.organizations.update.mock.calls[0][0];
-    expect(persisted.storageLimit).toBeNull();
+    expect(mockAdapters.db.organizations.setStorageLimitOverride).toHaveBeenCalledWith('org1', null);
   });
 
   it('ignores a storage limit change from a non-admin manager', async () => {
@@ -283,6 +288,7 @@ describe('organizationService - update', () => {
     );
 
     expect(result.storageLimit).toBe(50);
+    expect(mockAdapters.db.organizations.setStorageLimitOverride).not.toHaveBeenCalled();
     expect(mockAdapters.db.organizations.update).toHaveBeenCalledWith({ id: 'org1' });
   });
 
@@ -317,6 +323,34 @@ describe('organizationService - update', () => {
     });
     expect(persisted).not.toHaveProperty('currentCredits');
   });
+
+  describe('billingContact write gate', () => {
+    const run = (actor: Partial<IUserDocument>) =>
+      update(actor as IUserDocument, { id: 'org1', billingContact: 'new@example.com' }, mockAdapters);
+    const persisted = () => mockAdapters.db.organizations.update.mock.calls[0][0];
+
+    it('lets the owner change it', async () => {
+      await run(mockRegularUser);
+      expect(persisted().billingContact).toBe('new@example.com');
+    });
+
+    it('lets a platform admin change it', async () => {
+      await run(mockAdminUser);
+      expect(persisted().billingContact).toBe('new@example.com');
+    });
+
+    it('denies a manager', async () => {
+      const org = {
+        ...existingOrganization,
+        adminUserIds: ['mgr1'],
+        users: [{ userId: 'mgr1', permissions: ['read'] }],
+      };
+      mockAdapters.db.organizations.findById.mockResolvedValue(org);
+      await run({ id: 'mgr1', isAdmin: false });
+      expect(persisted()).not.toHaveProperty('billingContact');
+    });
+  });
+
   describe('team role gate', () => {
     const policy = { allowPublicLinks: false, allowExternalSharing: false, allowedDomains: [] };
     const manager = { id: 'manager1', isAdmin: false } as IUserDocument;

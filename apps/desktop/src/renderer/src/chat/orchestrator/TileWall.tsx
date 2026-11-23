@@ -1,15 +1,15 @@
 import Box from '@mui/joy/Box';
-import Chip from '@mui/joy/Chip';
 import Typography from '@mui/joy/Typography';
 import { keyframes } from '@mui/system';
 import { AGENT_STATE_LABEL, type AgentState } from '@shared/agentState';
 import type { ViewAction, ViewSnapshot } from '@shared/viewSnapshot';
-import { stateJoyColor } from './statePalette';
+import { SKIN_CARD_VARIABLE, stateJoyColor, stateSkinSx } from './statePalette';
+import { AgentPrIndicator } from './AgentPrIndicator';
 
 /*
- * Built on the view contract alone: this file may import only @shared/viewSnapshot, @shared/agentState, ./statePalette,
- * React and the UI kit (TileWall.test.tsx holds it to that), so it is the proof that a view needs nothing
- * from the stage. snapshotView.tsx hosts it.
+ * Built on the view contract alone: this file may import only @shared/viewSnapshot, @shared/agentState,
+ * ./statePalette, ./AgentPrIndicator, React and the UI kit (TileWall.test.tsx holds it to that), so it is
+ * the proof that a view needs nothing from the stage. snapshotView.tsx hosts it.
  */
 
 /** Needs-you first, quiet agents last; within a rank the snapshot's own urgency order holds. */
@@ -42,7 +42,7 @@ function tiles(snapshot: ViewSnapshot): Tile[] {
       state: agent.state,
       title: agent.title,
       line: agent.decision?.question ?? agent.now,
-      pr: agent.state === 'done' ? agent.pr : undefined,
+      pr: agent.pr,
       action: { kind: 'open-agent', agentId: agent.id },
     }));
   if (snapshot.root.state !== 'needs-you') return agentTiles;
@@ -111,8 +111,13 @@ export function TileWall({ snapshot, onAction }: { snapshot: ViewSnapshot; onAct
         return (
           <Box
             key={tile.key}
-            component="button"
-            type="button"
+            role="button"
+            tabIndex={0}
+            onKeyDown={event => {
+              if (event.target !== event.currentTarget || (event.key !== 'Enter' && event.key !== ' ')) return;
+              event.preventDefault();
+              onAction(tile.action);
+            }}
             onClick={() => onAction(tile.action)}
             aria-label={`${tile.title}: ${AGENT_STATE_LABEL[tile.state]}`}
             data-testid={`orchestrator-tile-${tile.key}`}
@@ -130,7 +135,7 @@ export function TileWall({ snapshot, onAction }: { snapshot: ViewSnapshot; onAct
               color: 'inherit',
               cursor: 'pointer',
               borderRadius: 'md',
-              bgcolor: 'background.surface',
+              bgcolor: `var(${SKIN_CARD_VARIABLE}, var(--joy-palette-background-surface))`,
               border: asking ? '2px solid' : '1px solid',
               borderColor: asking ? 'warning.outlinedBorder' : 'divider',
               opacity: DIMMED.has(tile.state) ? 0.55 : 1,
@@ -144,16 +149,23 @@ export function TileWall({ snapshot, onAction }: { snapshot: ViewSnapshot; onAct
                 aria-hidden
                 data-testid="orchestrator-tile-dot"
                 data-color={color}
-                sx={{ width: 8, height: 8, borderRadius: '50%', flexShrink: 0, bgcolor: `${color}.solidBg` }}
+                sx={{
+                  width: 8,
+                  height: 8,
+                  borderRadius: '50%',
+                  flexShrink: 0,
+                  bgcolor: `${color}.solidBg`,
+                  ...stateSkinSx(tile.state, 'solid'),
+                }}
               />
               <Typography level="title-sm" noWrap sx={{ flex: 1, minWidth: 0 }}>
                 {tile.title}
               </Typography>
-              {tile.pr && (
-                <Chip size="sm" variant="soft" color="success" data-testid="orchestrator-tile-pr">
-                  {`#${tile.pr.number} ${tile.pr.state}`}
-                </Chip>
-              )}
+              <AgentPrIndicator
+                pr={tile.pr}
+                onOpen={() => onAction({ kind: 'open-pr', agentId: tile.key })}
+                testId="orchestrator-tile-pr"
+              />
             </Box>
             {tile.line && (
               <Typography

@@ -61,6 +61,16 @@ describe('organization audit personal-data policy', () => {
   });
 });
 
+describe('organization role lists', () => {
+  it('pulls the user from billingManagerUserIds like the other role lists', () => {
+    const holder = DATA_HOLDER_REGISTRY.Organization;
+    if (holder.kind !== 'holder') throw new Error('Organization must be a holder');
+    const lists = holder.references.filter(reference => reference.path === 'billingManagerUserIds');
+    expect(lists).toHaveLength(1);
+    expect(lists[0]).toMatchObject({ matchBy: 'userId', action: 'pullFromArray' });
+  });
+});
+
 describe('findUnclassifiedModels', () => {
   it('returns the names the registry does not classify', () => {
     expect(findUnclassifiedModels(['User', 'NotARealModel'])).toEqual(['NotARealModel']);
@@ -120,6 +130,12 @@ describe('account purge reconciliation', () => {
     expect(matched('MemoryPrincipalKey', { ...key, dek: 'wrapped' })).toEqual(['deleteDocument', 'deleteDocument']);
     expect(matched('MemoryPrincipalKey', key)).toContain('retain');
     expect(matched('MemoryPrincipalKey', { ...key, dek: null })).toContain('retain');
+  });
+
+  it("deletes a person's own MCP connections and only anonymizes the creator of a shared one", () => {
+    expect(matched('McpConnection', { ownerType: 'user', ownerKey: userId, userId })).toEqual(['deleteDocument']);
+    expect(matched('McpConnection', { ownerType: 'org', ownerKey: 'org-1', userId })).toEqual(['anonymize']);
+    expect(matched('McpConnection', { ownerType: 'platform', ownerKey: 'platform', userId })).toEqual(['anonymize']);
   });
 
   it('deletes only a personal project and anonymizes the owner of an organization one', () => {

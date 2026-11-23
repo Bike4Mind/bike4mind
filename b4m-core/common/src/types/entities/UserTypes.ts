@@ -696,8 +696,15 @@ export interface IUser extends ICreditHolder {
 
   numReferralsAvailable: number;
   regInvites: Array<IRegInviteDocument['id']>;
-  /** Sender of the referral invite this account redeemed; unset for accounts that signed up without one. */
+  /**
+   * Who referred this account: the sender of a redeemed referral invite, or the owner of the share link
+   * it signed up through (then referredViaLinkAt is set too). Unset for accounts nobody referred.
+   */
   referredByUserId?: string | null;
+  /** When a share link credited this account to referredByUserId; null for invite referrals and the unreferred. */
+  referredViaLinkAt?: Date | null;
+  /** This account's own share-link code (`/r/<code>`), minted the first time it asks for its link. */
+  referralCode?: string | null;
   /** The invite this account signed up through; absent for uninvited and pre-existing accounts. */
   signupInvite?: SignupInvite;
 

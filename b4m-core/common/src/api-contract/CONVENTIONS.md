@@ -164,13 +164,17 @@ re-deciding per endpoint:
 | The model's provider is not configured on this deployment, or the self-hosted model server that lists it (Ollama, local image) is unreachable | `503` | `provider_not_configured` |
 | Insufficient credits | `422` | `insufficient_credits` |
 | Spend cap exceeded | `422` | `spend_cap_exceeded` |
+| An admin paused spending for the account, organization or API key | `403` | `spend_frozen` (the body carries `frozenScope`: `user`, `organization` or `api_key`, and `frozenAt`; never the reason; not retryable) |
 | A reasoning model spent the caller's own `max_tokens` thinking and produced no answer (a server-chosen budget is a plain `502`) | `422` | `output_budget_exhausted` |
 | Free-tier daily credit allowance used up (`Retry-After` is the next UTC midnight) | `429` | `daily_free_limit_reached` |
 | Per-user active API key cap reached | `400` | `api_key_user_cap` |
 | Per-tier agent cap reached | `400` | `agent_limit_reached` |
+| Standing assistant instruction cap reached | `400` | `instruction_limit_reached` |
 | User storage quota exceeded | `400` | `storage_limit_exceeded` |
 | Organization per-file storage ceiling exceeded | `400` | `org_storage_limit_exceeded` |
 | Per-file size cap exceeded | `400` | `file_too_large` |
+| Key requests-per-minute allowance used up (`Retry-After`; body carries `limit`, `windowSeconds`) | `429` | `api_key_rate_limit_exceeded` |
+| Key requests-per-day allowance used up (`Retry-After`; body carries `limit`, `windowSeconds`) | `429` | `api_key_daily_limit_exceeded` |
 | Rate limit exceeded | `429` | - |
 | Account tokens-per-minute allowance used up (`Retry-After`) | `429` | `token_rate_limit_exceeded` |
 | Account already has its allowed number of completions in flight | `429` | `concurrency_limit_exceeded` |
@@ -180,6 +184,8 @@ re-deciding per endpoint:
 | Generated payload exceeds the platform ceiling and could not be offloaded | `413` | - |
 | Referenced resource does not exist | `404` | - |
 | A completion's `run`, or the run whose usage is read, does not exist or was minted by another user or billing owner (indistinguishable on purpose) | `404` | `run_not_found` (mint one with `POST /api/v1/completion-runs`) |
+| A completion's `run` was minted with a budget that cannot spare even a short answer (its settled charges plus in-flight claims leave too little) | `422` | `run_budget_exhausted` (retry once the run's in-flight requests settle and release their unused claims, or raise the run budget with `POST /api/v1/completion-runs/{runId}/budget`; buying credits does not raise it) |
+| A run budget change that does not raise it: the new budget is not above the current one, or the run was minted without a budget | `409` | `run_budget_not_raised` |
 | Malformed path/query resource id | `404` | - |
 | Concurrent write lost to another request on the same resource | `409` | - (the loser undoes any side effect, such as refunding a credit reserve; callers retry) |
 | Free-tier account calls a model that needs a paid plan (admin-set free-tier allowlist) | `403` | `model_requires_subscription` (upgrade, or choose a free-tier model from `GET /api/v1/models`) |

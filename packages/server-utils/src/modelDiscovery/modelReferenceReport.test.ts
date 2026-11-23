@@ -99,6 +99,36 @@ describe('modelReferenceReport', () => {
     ]);
   });
 
+  it('audits the model references a contributed setting declares, under its own key', async () => {
+    const { makeContributedStringSetting, registerContributedSettings, resetContributedSettings } =
+      await import('@bike4mind/common');
+    registerContributedSettings([
+      {
+        ...makeContributedStringSetting({
+          key: 'extensionModel',
+          name: 'Extension model',
+          description: 'x',
+          defaultValue: undefined,
+        }),
+        modelReferences: value => ({ pinned: String(value) }),
+      },
+    ]);
+    try {
+      mocks.getSettingsValue.mockImplementation(async (key: string) => {
+        if (key === 'orchestrationDefaults') {
+          return { fallbackModels: [], intentClassifier: { enabled: false, primaryModel: 'live', fallbackModels: [] } };
+        }
+        return key === 'extensionModel' ? 'missing' : '';
+      });
+      const report = await modelReferenceReport();
+      expect(report.filter(reference => reference.surface === 'configured-model')).toEqual([
+        { surface: 'configured-model', key: 'extensionModel.pinned', referencedId: 'missing', problem: 'unknown' },
+      ]);
+    } finally {
+      resetContributedSettings();
+    }
+  });
+
   it('does not audit the voice transcription model against the completion model list', async () => {
     mocks.getSettingsValue.mockImplementation(async (key: string) => {
       if (key === 'orchestrationDefaults') {

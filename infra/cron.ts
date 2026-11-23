@@ -20,6 +20,7 @@ import {
   generationCallbackQueue,
   generationJobQueue,
   riskEvidenceQueue,
+  secopsTriageQueue,
 } from './queues';
 import { lambdaVpc } from './vpc';
 import { BLOCK_ALL_PUBLIC_ACCESS, encryptBucketAtRest } from './bucketSecurity';
@@ -39,12 +40,15 @@ import { revenueSnapshotDeadLetter } from './revenueSnapshotDeadLetter';
 import { subscriptionReconciliationDeadLetter } from './subscriptionReconciliationDeadLetter';
 import { accountDeletionSweepDeadLetter } from './accountDeletionSweepDeadLetter';
 import './businessMetricAlerts';
+import './sideAppHealthAlerts';
 import './imageModerationReviewSweep';
 import './adminMorningBrief';
 import './organizationRetention';
 import { secrets } from './secrets';
 import { dlqTriageSweepDeadLetter } from './dlqTriageSweepDeadLetter';
-import { dlqTriagePermissions } from './dlqTriagePermissions';
+import { dlqTriageEvidencePermissions, dlqTriagePermissions, dlqTriageRoleNames } from './dlqTriagePermissions';
+import { cloudSecurityScanDeadLetter } from './cloudScanDeadLetter';
+import { mailBodyEnvironment, mailBodyPutPermission } from './mailBodyOffload';
 
 if (runsScheduledJobs && dlqTriageSweepDeadLetter) {
   const deadLetter = dlqTriageSweepDeadLetter;
@@ -62,12 +66,14 @@ if (runsScheduledJobs && dlqTriageSweepDeadLetter) {
         deadLetter.sendPermission,
         { actions: ['cloudwatch:DescribeAlarms'], resources: ['*'] },
         dlqTriagePermissions(),
+        ...dlqTriageEvidencePermissions(),
       ],
       transform: deadLetter.functionTarget,
     },
     transform: { target: { ...deadLetter.ruleTarget.target, input: undefined } },
   });
   deadLetter.allowRules([$util.output(sweep)]);
+  dlqTriageRoleNames.push(sweep.nodes.function.nodes.role.name);
 }
 
 const scheduleTaskCron = new sst.aws.Cron('scheduleTaskCron', {
@@ -593,7 +599,7 @@ const creditLotSweepCron = runsScheduledJobs
         handler: 'apps/workers/src/cron/creditLotSweep.handler',
         runtime: 'nodejs24.x',
         timeout: '10 minutes',
-        link: [...allSecrets],
+        link: [...allSecrets, eventBus],
         environment: { ...DEFAULT_LAMBDA_ENVIRONMENT },
       },
     })
@@ -780,53 +786,55 @@ const integrationHealthCheckCron = runsScheduledJobs
     })
   : undefined;
 
-// Cloud Security Scan - runs daily to evaluate baseline AWS configuration
+// Manual invokes also need this worker in stages without scheduled jobs.
+const cloudSecurityScanFunction = new sst.aws.Function('cloudSecurityScanFunction', {
+  vpc: lambdaVpc,
+  handler: 'apps/workers/src/security/cloudScan.handler',
+  runtime: 'nodejs24.x',
+  timeout: '5 minutes',
+  link: [...allSecrets, secopsTriageQueue],
+  environment: {
+    ...DEFAULT_LAMBDA_ENVIRONMENT,
+  },
+  transform: cloudSecurityScanDeadLetter.functionTarget,
+  permissions: [
+    cloudSecurityScanDeadLetter.sendPermission,
+    {
+      actions: ['iam:GetAccountSummary'],
+      resources: ['*'],
+    },
+    {
+      actions: ['s3:ListAllMyBuckets', 's3:GetBucketPublicAccessBlock', 's3:GetEncryptionConfiguration'],
+      resources: ['*'],
+    },
+    {
+      actions: ['cloudtrail:DescribeTrails', 'cloudtrail:GetTrailStatus'],
+      resources: ['*'],
+    },
+    {
+      actions: ['ec2:DescribeSecurityGroups'],
+      resources: ['*'],
+    },
+    {
+      actions: ['iam:GenerateCredentialReport', 'iam:GetCredentialReport', 'iam:ListPolicies', 'iam:GetPolicyVersion'],
+      resources: ['*'],
+    },
+    {
+      actions: ['secretsmanager:ListSecrets'],
+      resources: ['*'],
+    },
+  ],
+});
+
 const cloudSecurityScanCron = runsScheduledJobs
   ? new sst.aws.Cron('CloudSecurityScan', {
       schedule: 'rate(1 day)',
-      function: {
-        vpc: lambdaVpc,
-        handler: 'apps/workers/src/security/cloudScan.handler',
-        runtime: 'nodejs24.x',
-        timeout: '5 minutes',
-        link: [...allSecrets],
-        environment: {
-          ...DEFAULT_LAMBDA_ENVIRONMENT,
-        },
-        permissions: [
-          {
-            actions: ['iam:GetAccountSummary'],
-            resources: ['*'],
-          },
-          {
-            actions: ['s3:ListAllMyBuckets', 's3:GetBucketPublicAccessBlock', 's3:GetEncryptionConfiguration'],
-            resources: ['*'],
-          },
-          {
-            actions: ['cloudtrail:DescribeTrails', 'cloudtrail:GetTrailStatus'],
-            resources: ['*'],
-          },
-          {
-            actions: ['ec2:DescribeSecurityGroups'],
-            resources: ['*'],
-          },
-          {
-            actions: [
-              'iam:GenerateCredentialReport',
-              'iam:GetCredentialReport',
-              'iam:ListPolicies',
-              'iam:GetPolicyVersion',
-            ],
-            resources: ['*'],
-          },
-          {
-            actions: ['secretsmanager:ListSecrets'],
-            resources: ['*'],
-          },
-        ],
-      },
+      job: cloudSecurityScanFunction.arn,
+      transform: { target: cloudSecurityScanDeadLetter.ruleTarget.target },
     })
   : undefined;
+
+if (cloudSecurityScanCron) cloudSecurityScanDeadLetter.allowRules([$util.output(cloudSecurityScanCron)]);
 
 /**
  * Security Scan Scheduler
@@ -1092,12 +1100,15 @@ const dataLakeBatchReconcileCron = runsScheduledJobs
         // enqueue and, on a rate-limited batch, Resource.websocket.managementEndpoint to push the
         // live status update. fabFileChunkQueue: the un-chunked rescue sweep re-enqueues
         // complete-but-never-chunked files for chunking. fabFileBucket: the moderation rescue sweep
-        // downloads stranded files to re-run the image scan.
-        link: [...allSecrets, dataLakeTaxonomyQueue, websocketApi, fabFileChunkQueue, fabFileBucket],
+        // downloads stranded files to re-run the image scan. eventBus: an incident that rescan records
+        // queues its reviewer alert as an email.send event.
+        link: [...allSecrets, dataLakeTaxonomyQueue, websocketApi, fabFileChunkQueue, fabFileBucket, eventBus],
         environment: {
+          ...mailBodyEnvironment(appFilesBucket),
           ...DEFAULT_LAMBDA_ENVIRONMENT,
         },
         permissions: [
+          mailBodyPutPermission(appFilesBucket),
           {
             actions: ['cloudwatch:PutMetricData'],
             resources: ['*'],
@@ -1711,6 +1722,7 @@ export {
   emailCampaignSchedulerCron,
   liveopsTriageDispatcherCron,
   cloudSecurityScanCron,
+  cloudSecurityScanFunction,
   integrationHealthCheckCron,
   securityScanSchedulerCron,
   deepAgentWakeCron,

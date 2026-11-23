@@ -128,6 +128,37 @@ describe('POST /api/publish/gate/passphrase - projection safety (regression: Mon
     expect(res._getStatusCode()).toBe(403);
   });
 
+  it('names the offending field on a 400 so a wrong field name is diagnosable', async () => {
+    const { res, promise } = run({ pathname: '/p/u/scope/slug', passphrase: 'hunter2secret' });
+    await promise;
+
+    expect(res._getStatusCode()).toBe(400);
+    const body = res._getJSONData() as { error: string; details: { path: (string | number)[] }[] };
+    expect(body.error).toBe('Invalid request');
+    expect(body.details.map(d => d.path)).toEqual([['path']]);
+    expect(mocks.findOne).not.toHaveBeenCalled();
+  });
+
+  it('never echoes the submitted passphrase in a 400', async () => {
+    const secret = 'sup3r-secret-passphrase';
+    const { res, promise } = run({ path: 1, passphrase: secret });
+    await promise;
+
+    expect(res._getStatusCode()).toBe(400);
+    expect(res._getData()).not.toContain(secret);
+  });
+
+  it('never echoes an over-long passphrase when its own field fails validation', async () => {
+    const secret = 'x'.repeat(129);
+    const { res, promise } = run({ path: '/p/u/scope/slug', passphrase: secret });
+    await promise;
+
+    expect(res._getStatusCode()).toBe(400);
+    const body = res._getJSONData() as { details: { path: (string | number)[] }[] };
+    expect(body.details.map(d => d.path)).toEqual([['passphrase']]);
+    expect(res._getData()).not.toContain(secret);
+  });
+
   it('resolves a share link through the shared shareTokenFilter', async () => {
     mocks.parse.mockReturnValue({ kind: 'share', shareToken: 'tok123', assetPath: null });
     gated();

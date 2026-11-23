@@ -35,12 +35,8 @@ class AuthorizationRequest(
 
     /** Null when [callbackUri] is not this request's redirect (another link, or a stale attempt's state). */
     fun result(callbackUri: String): AuthorizationResult? {
-        val callback = runCatching { URI(callbackUri) }.getOrNull() ?: return null
-        val expected = URI(configuration.redirectUri)
-        val sameTarget = callback.scheme.equals(expected.scheme, ignoreCase = true) &&
-            callback.host.equals(expected.host, ignoreCase = true) &&
-            callback.path.orEmpty().trimEnd('/') == expected.path.orEmpty().trimEnd('/')
-        if (!sameTarget) return null
+        if (!configuration.isRedirect(callbackUri)) return null
+        val callback = URI(callbackUri)
         val query = parseQuery(callback.rawQuery)
         if (query["state"] != state) return null
         query["error"]?.let { error ->

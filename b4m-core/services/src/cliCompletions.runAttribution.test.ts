@@ -17,6 +17,8 @@ const complete = vi.hoisted(() => vi.fn());
 vi.mock('@bike4mind/llm-adapters', () => ({
   buildApiKeyTable: (keys: object) => keys,
   reasonsWithinOutputBudget: vi.fn(() => false),
+  usesGeminiThinkingOutputCap: vi.fn(() => false),
+  geminiThinkingOutputCap: vi.fn(),
   isAdaptiveThinkingByDefault: vi.fn(() => false),
   resolveOutputMaxTokens: vi.fn(
     ({ requested, fallback }: { requested?: number; fallback: number }) => requested ?? fallback
@@ -66,6 +68,7 @@ function buildDb() {
       findById: vi.fn().mockResolvedValue(user),
     } as never,
     usageEvents: usageEvents as never,
+    spendFreezes: { findActiveForSubject: vi.fn().mockResolvedValue(null) },
   };
   return { db, usageEvents };
 }

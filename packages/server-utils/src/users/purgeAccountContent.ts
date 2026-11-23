@@ -50,6 +50,7 @@ type PurgeRecord = {
   users?: { userId?: string; sessionId?: string }[];
   sessionIds?: string[];
   adminUserIds?: string[];
+  billingManagerUserIds?: string[];
   userDetails?: { id: string }[];
   listingIds?: string[];
   tags?: { name: string }[];
@@ -366,6 +367,7 @@ export async function purgePersonalLakeById(
       'LakeMembershipRemoval',
       'LakeMembershipChangeEvent',
       'LakeConfigChangeEvent',
+      'LakeConfigSnapshot',
       'LakeSkippedFile',
       'LakeAccessEvent',
       'LakeAccessQueryText',

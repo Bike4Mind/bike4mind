@@ -44,7 +44,12 @@ vi.mock('@bike4mind/utils', async importOriginal => ({
   aiImageService: () => ({ generate: m.generate }),
 }));
 vi.mock('@bike4mind/services', () => ({
-  creditService: { holdCredits: m.hold, releaseCreditHold: m.release, settleCreditHold: m.settleHold },
+  creditService: {
+    holdCredits: m.hold,
+    releaseCreditHold: m.release,
+    settleCreditHold: m.settleHold,
+    assertSpendNotFrozen: async () => undefined,
+  },
   organizationService: {},
   apiKeyService: { getEffectiveLLMApiKeys: async () => ({ openai: 'sk-test' }) },
   latchUsage: () => undefined,

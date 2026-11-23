@@ -8,6 +8,7 @@ const {
   mockDownload,
   mockUpdateOne,
   mockUserFindById,
+  mockUserExists,
   mockStarterCredits,
   mockGetSignedUrl,
   mockBrowserSigningOrigin,
@@ -19,6 +20,7 @@ const {
   mockUpdateOne: vi.fn(() => Promise.resolve()),
   // Domain access gates look the viewer's verified email up through User (checkVisibility).
   mockUserFindById: vi.fn(),
+  mockUserExists: vi.fn().mockResolvedValue(null),
   mockStarterCredits: vi.fn(() => Promise.resolve(0)),
   mockGetSignedUrl: vi.fn(),
   mockBrowserSigningOrigin: vi.fn(),
@@ -89,6 +91,7 @@ vi.mock('@bike4mind/database', () => ({
     findOne: (...a: unknown[]) => ({ select: () => ({ lean: () => Promise.resolve(mockProjectFindOne(...a)) }) }),
   },
   User: {
+    exists: (...a: unknown[]) => mockUserExists(...a),
     findById: (...a: unknown[]) => ({ select: () => ({ lean: () => Promise.resolve(mockUserFindById(...a)) }) }),
   },
 }));
@@ -2236,6 +2239,20 @@ describe('GET /api/publish/serve - external view counting (Published gear feed)'
     expect(mockUpdateOne).toHaveBeenCalledWith({ publicId: 'pub1' }, { $inc: { viewCount: 1, externalViewCount: 1 } });
   });
 
+  it('records reward evidence for an admitted verified non-owner', async () => {
+    mockArtifactFindOne.mockReturnValue(renderedReply());
+    mockUserExists.mockResolvedValueOnce({ _id: 'someone-else' });
+    const { promise } = run(['r', 'pub1'], { user: { id: 'someone-else' } });
+    await promise;
+    await vi.waitFor(() =>
+      expect(mockUpdateOne).toHaveBeenCalledWith(
+        { publicId: 'pub1', ownerId: 'owner1', deletedAt: null },
+        { $inc: { verifiedExternalViewCount: 1 } },
+        { runValidators: true }
+      )
+    );
+  });
+
   it('an ANONYMOUS view does NOT count as external - the serve route cannot tell the owner from a stranger without a credential (self-grant bypass)', async () => {
     mockArtifactFindOne.mockReturnValue(renderedReply());
     const { promise } = run(['r', 'pub1'], { userAgent: 'Mozilla/5.0 (Macintosh) Safari/605.1' });
@@ -2282,8 +2299,16 @@ describe('GET /api/publish/serve - external view counting (Published gear feed)'
       expect((res._getData() as string).match(WIDGET_TAG)?.[1]).toBe(' data-b4m-count-view');
     });
 
-    it('drops the marker once an external view has landed, so readers stop exchanging tokens', async () => {
-      mockArtifactFindOne.mockReturnValue(bundle({ externalViewCount: 1 }));
+    it('continues requesting verified evidence on a page with historical external views', async () => {
+      mockArtifactFindOne.mockReturnValue(bundle({ externalViewCount: 5 }));
+      mockDownload.mockResolvedValue(bundleHtml);
+      const { res, promise } = run(['u', 'scope123', 'my-slug']);
+      await promise;
+      expect((res._getData() as string).match(WIDGET_TAG)?.[1]).toBe(' data-b4m-count-view');
+    });
+
+    it('drops the marker once a verified view has landed, so readers stop exchanging tokens', async () => {
+      mockArtifactFindOne.mockReturnValue(bundle({ verifiedExternalViewCount: 1 }));
       mockDownload.mockResolvedValue(bundleHtml);
       const { res, promise } = run(['u', 'scope123', 'my-slug']);
       await promise;
@@ -4181,4 +4206,68 @@ describe('GET /api/publish/serve - owner-only thumbnails never reach a served pa
     expect(res._getStatusCode()).not.toBe(200);
     expect(mockDownload).not.toHaveBeenCalledWith(THUMB_KEY);
   });
+});
+
+describe('GET /api/publish/serve - immutable current index', () => {
+  const indexObjectPath = 'revisions/11111111-1111-4111-8111-111111111111/index.html';
+  it('serves the committed payload instead of a legacy canonical object', async () => {
+    mockArtifactFindOne.mockReturnValue(bundle({ indexObjectPath }));
+    mockDownload.mockImplementation(async (key: string) => {
+      if (key !== `user/scope123/my-slug/${indexObjectPath}`) throw new Error('Wrong live payload');
+      return Buffer.from('<html><head></head><body>COMMITTED_PAYLOAD</body></html>');
+    });
+    const { res, promise } = run(['u', 'scope123', 'my-slug'], { uc: 'pub1' });
+    await promise;
+    expect(res._getStatusCode()).toBe(200);
+    expect(res._getData()).toContain('COMMITTED_PAYLOAD');
+    expect(mockDownload).toHaveBeenCalledWith(`user/scope123/my-slug/${indexObjectPath}`);
+  });
+  it('keeps an archived version separate from the current payload', async () => {
+    const oldSha = 'a'.repeat(64);
+    mockArtifactFindOne.mockReturnValue(
+      bundle({ indexObjectPath, sha256Index: 'b'.repeat(64), versions: [{ sha256Index: oldSha }] })
+    );
+    mockDownload.mockResolvedValue(Buffer.from('<html><head></head><body>ARCHIVED_PAYLOAD</body></html>'));
+    const { res, promise } = run(['u', 'scope123', 'my-slug'], { uc: 'pub1', v: oldSha });
+    await promise;
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockDownload).toHaveBeenCalledWith(`user/scope123/my-slug/versions/${oldSha}.html`);
+    expect(mockDownload).not.toHaveBeenCalledWith(`user/scope123/my-slug/${indexObjectPath}`);
+  });
+});
+
+it('downloads the committed index payload even when a losing publisher left different canonical bytes', async () => {
+  const indexObjectPath = 'revisions/11111111-1111-4111-8111-111111111111/index.html';
+  mockArtifactFindOne.mockReturnValue(bundle({ indexObjectPath }));
+  mockDownload.mockImplementation(async (key: string) =>
+    Buffer.from(key.endsWith(indexObjectPath) ? 'WINNER_BYTES' : 'LOSER_BYTES')
+  );
+  const { res, promise } = run(['u', 'scope123', 'my-slug', 'index.html'], { download: true });
+  await promise;
+  expect(res._getStatusCode()).toBe(200);
+  expect(Buffer.from(res._getData()).toString()).toBe('WINNER_BYTES');
+  expect(res.getHeader('Content-Disposition')).toBe('attachment');
+  expect(res.getHeader('Cache-Control')).toBe('private, no-store, must-revalidate');
+});
+
+it('signs the committed revision for an explicitly downloaded index', async () => {
+  const indexObjectPath = 'revisions/11111111-1111-4111-8111-111111111111/index.html';
+  const origin = 'https://objects.example.test';
+  signing.enabled = true;
+  mockBrowserSigningOrigin.mockResolvedValue(origin);
+  mockGetSignedUrl.mockImplementation(async (key: string) => `${origin}/${key}?sig=test`);
+  mockArtifactFindOne.mockReturnValue(bundle({ indexObjectPath }));
+  try {
+    const { res, promise } = run(['u', 'scope123', 'my-slug', 'index.html'], { download: true, sign: true });
+    await promise;
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockGetSignedUrl).toHaveBeenCalledWith(
+      `user/scope123/my-slug/${indexObjectPath}`,
+      'get',
+      expect.any(Object)
+    );
+    expect(res._getJSONData().url).toContain(indexObjectPath);
+  } finally {
+    signing.enabled = false;
+  }
 });

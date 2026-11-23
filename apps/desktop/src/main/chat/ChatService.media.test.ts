@@ -18,6 +18,28 @@ function frame(payload: unknown): string {
   return `data: ${typeof payload === 'string' ? payload : JSON.stringify(payload)}\n\n`;
 }
 
+const IMAGE_JOB = {
+  id: 'job1',
+  object: 'image_generation',
+  state: 'succeeded',
+  model: 'gpt-image-1-mini',
+  mode: 'generate',
+  prompt: 'a bicycle',
+  group_id: 'grp1',
+  source: 'agent',
+  error: null,
+  output: {
+    availability: 'ready',
+    url: '/api/app-files/serve/generated/a.png',
+    expires_at: null,
+    content_type: 'image/png',
+    file_id: null,
+  },
+  credits: { reserved: null, settled: null },
+  created_at: 'x',
+  updated_at: 'x',
+};
+
 describe('ChatService generation tools', () => {
   let service: ChatService;
   let events: ChatStreamEvent[];
@@ -53,7 +75,7 @@ describe('ChatService generation tools', () => {
     axiosGet = vi.fn().mockResolvedValue({ data: Buffer.from('png'), headers: { 'content-type': 'image/png' } });
     // The self-host shape: a relative file-proxy base, so a download goes back through the
     // authenticated client rather than out to a CDN.
-    apiGet = vi.fn().mockResolvedValue({ cdnUrl: '/api/app-files/serve' });
+    apiGet = vi.fn().mockResolvedValue({});
     apiPost = vi.fn();
 
     const logger = { debug: vi.fn(), warn: vi.fn() };
@@ -105,6 +127,7 @@ describe('ChatService generation tools', () => {
     await vi.waitUntil(() => streams.length === 1, { timeout: 3000, interval: 5 });
 
     expect(declaredTools()).toEqual([
+      'todo_write',
       'generate_image',
       'generate_speech',
       'generate_sound_effect',
@@ -120,9 +143,7 @@ describe('ChatService generation tools', () => {
   it('declares generate_video only when the server lists a video model this caller can use', async () => {
     await build({ media: true, roots: [] });
     apiGet.mockImplementation(async (path: string) =>
-      path === '/api/v1/video-models'
-        ? { models: [publicVideoModel('gemini-omni-1.1-flash')] }
-        : { cdnUrl: '/api/app-files/serve' }
+      path === '/api/v1/video-models' ? { models: [publicVideoModel('gemini-omni-1.1-flash')] } : {}
     );
     const { id } = await service.createSession();
     await service.send(id, 'make me a clip');
@@ -137,7 +158,7 @@ describe('ChatService generation tools', () => {
     await service.send(id, 'hi');
     await vi.waitUntil(() => streams.length === 1, { timeout: 3000, interval: 5 });
 
-    expect(declaredTools()).toEqual(['web_search', 'web_fetch', 'ask_user', 'request_directory', 'loop']);
+    expect(declaredTools()).toEqual(['todo_write', 'web_search', 'web_fetch', 'ask_user', 'request_directory', 'loop']);
   });
 
   it('tells the model the output goes to the user and that it costs them', async () => {
@@ -164,21 +185,14 @@ describe('ChatService generation tools', () => {
         else emit({ type: 'content', text: 'Here it is.', stopReason: 'end_turn' });
       });
       await build({ media: true, roots: [], ...(useLocal ? { local } : {}) });
-      // A quest that has already finished, so the poll settles on its first read.
+      // A job that has already finished, so the poll settles on its first read.
       apiGet.mockImplementation((url: string) => {
-        if (url.includes('/api/quests/')) {
-          return Promise.resolve({
-            id: 'q1',
-            status: 'done',
-            sessionId: 'nb1',
-            files: [{ name: 'a.png', url: '/api/app-files/serve/generated/a.png', isImage: true, isAudio: false }],
-          });
-        }
+        if (url.includes('/api/v1/image-jobs/')) return Promise.resolve(IMAGE_JOB);
         if (url.includes('/api/models'))
           return Promise.resolve({ models: [{ id: 'gpt-image-1-mini', type: 'image' }] });
-        return Promise.resolve({ cdnUrl: '/api/app-files/serve' });
+        return Promise.resolve({});
       });
-      apiPost.mockResolvedValue({ quest: { id: 'q1' }, session: { id: 'nb1' } });
+      apiPost.mockResolvedValue({ group_id: 'grp1', data: [IMAGE_JOB] });
 
       const { id } = await service.createSession();
       await service.renameSession(id, 'User chosen title');
@@ -208,7 +222,6 @@ describe('ChatService generation tools', () => {
       // Reopening the conversation must still show the image, so it lives on the persisted call.
       const persisted = (await service.getSession(id))?.messages[1];
       expect(persisted?.toolCalls?.[0].media?.[0].url).toMatch(/^b4m-media:\/\//);
-      expect((await service.getSession(id))?.remoteSessionId).toBe('nb1');
       if (useLocal) {
         expect(axiosPost).not.toHaveBeenCalled();
         expect(local).toHaveBeenCalledTimes(2);
@@ -221,11 +234,7 @@ describe('ChatService generation tools', () => {
     const approvals = new ApprovalGate();
     await build({ media: true, roots: [], approvals });
     apiGet.mockImplementation((url: string) =>
-      Promise.resolve(
-        url.includes('/api/models')
-          ? { models: [{ id: 'gpt-image-1-mini', type: 'image' }] }
-          : { cdnUrl: '/api/app-files/serve' }
-      )
+      Promise.resolve(url.includes('/api/models') ? { models: [{ id: 'gpt-image-1-mini', type: 'image' }] } : {})
     );
     const { id } = await service.createSession();
     await service.setApprovalMode(id, 'ask');
@@ -266,9 +275,7 @@ describe('ChatService generation tools', () => {
     });
     await build({ media: true, roots: [], local });
     apiGet.mockImplementation(async (path: string) =>
-      path === '/api/v1/video-models'
-        ? { models: [publicVideoModel('gemini-omni-1.1-flash')] }
-        : { cdnUrl: '/api/app-files/serve' }
+      path === '/api/v1/video-models' ? { models: [publicVideoModel('gemini-omni-1.1-flash')] } : {}
     );
     const { id } = await service.createSession();
     apiGet.mockClear();
@@ -276,21 +283,19 @@ describe('ChatService generation tools', () => {
     await vi.waitUntil(() => events.some(event => event.type === 'done'));
     const request = local.mock.calls.find(([request]) => request.tools?.length)?.[0];
     expect(request?.tools?.map(entry => (entry.toolSchema as { name: string }).name)).toEqual([
+      'todo_write',
       'generate_image',
       'generate_speech',
       'generate_sound_effect',
       'generate_music',
       'web_search',
       'web_fetch',
+      'generate_video',
       'ask_user',
       'request_directory',
       'loop',
-      'generate_video',
     ]);
-    expect(apiGet.mock.calls).toEqual([
-      ['/api/settings/serverConfig', { timeout: 5_000 }],
-      ['/api/v1/video-models', { timeout: 5_000 }],
-    ]);
+    expect(apiGet.mock.calls).toEqual([['/api/v1/video-models', { timeout: 5_000 }]]);
     expect(apiPost).not.toHaveBeenCalled();
     expect(axiosPost).not.toHaveBeenCalled();
   });
@@ -395,7 +400,7 @@ describe('ChatService generation tools', () => {
                   },
                 ],
               }
-            : { cdnUrl: '/api/app-files/serve' }
+            : {}
     );
     const { id } = await service.createSession();
     await service.renameSession(id, 'User chosen title');

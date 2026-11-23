@@ -99,6 +99,7 @@ function buildDb(overrides: { org?: any } = {}) {
       creditTransactions: {} as any,
       users: users as any,
       usageEvents: usageEvents as any,
+      spendFreezes: { findActiveForSubject: vi.fn().mockResolvedValue(null) },
       organizations: organizations as any,
     },
     users,
@@ -365,7 +366,8 @@ describe('executeCompletion durable credit lifecycle', () => {
           userId: 'user1',
           reservedCredits: 10,
         }),
-        expect.any(Function)
+        expect.any(Function),
+        undefined
       );
       expect(creditHolds.settle).toHaveBeenCalledWith(10, expect.any(Function));
       expect(mockSubtractCredits).toHaveBeenCalledTimes(1);

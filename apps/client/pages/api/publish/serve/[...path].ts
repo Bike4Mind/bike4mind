@@ -1,3 +1,8 @@
+import { recordVerifiedView } from '@server/services/publish/recordVerifiedView';
+import {
+  currentPublishedIndexKey,
+  downloadPublishedIndex,
+} from '@bike4mind/server-utils/services/publish/currentIndex';
 import { baseApi } from '@server/middlewares/baseApi';
 import { apiKeyAuth } from '@server/middlewares/apiKeyAuth';
 import { optionalJwtAuth } from '@server/middlewares/optionalJwtAuth';
@@ -426,7 +431,7 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
   }
 
   const storage = getPublishedArtifactsStorage();
-  const signFile = makeFileSigner(storage, artifact.storageKeyPrefix, req);
+  const signFile = makeFileSigner(storage, artifact, req);
 
   // A `public` artifact with an access gate must NOT serve like open-public:
   // no CDN caching, no isolated public origin, and bundles inline their assets
@@ -827,7 +832,9 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
       }
     }
     try {
-      const buf = await storage.download(`${artifact.storageKeyPrefix}${assetPath}`);
+      const buf = await (assetPath === 'index.html'
+        ? downloadPublishedIndex(artifact, storage)
+        : storage.download(`${artifact.storageKeyPrefix}${assetPath}`));
       // The edge adapter text-converts any body whose type it does not list as binary.
       res.setHeader('Content-Type', bufferedContentType(fileEntry.mimeType));
       // Publishers control MIME metadata; every asset navigation must download, even with an unknown type.
@@ -874,11 +881,17 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
     !!requestedVersion && requestedVersion !== currentSha && versionsList.some(v => v.sha256Index === requestedVersion);
   const indexKey = isKnownOlderVersion
     ? `${artifact.storageKeyPrefix}versions/${requestedVersion}.html`
-    : `${artifact.storageKeyPrefix}${pagePath}`;
+    : pagePath === 'index.html'
+      ? currentPublishedIndexKey(artifact)
+      : `${artifact.storageKeyPrefix}${pagePath}`;
 
   let indexHtml: string;
   try {
-    indexHtml = (await storage.download(indexKey)).toString('utf-8');
+    indexHtml = (
+      await (pagePath === 'index.html' && !isKnownOlderVersion
+        ? downloadPublishedIndex(artifact, storage)
+        : storage.download(indexKey))
+    ).toString('utf-8');
   } catch {
     return res.status(isKnownOlderVersion ? 404 : 500).json({
       error: isKnownOlderVersion ? 'Version not found' : 'Artifact index.html missing from storage',
@@ -1291,9 +1304,9 @@ function renderBundleWrapper(
   // Emitted for every non-embed render, not just commented ones: it also binds "Save as
   // PDF" (the mount node above stays conditional, and the widget no-ops without it).
   // `data-b4m-count-view` asks the widget to report a signed-in viewer to /api/publish/view,
-  // which this navigation cannot identify. Only until one external view lands: the Published
+  // which this navigation cannot identify. Only until one verified view lands: the Published
   // gear needs just one, and each report costs the viewer a refresh-token exchange.
-  const countView = (artifact.externalViewCount ?? 0) === 0 ? ' data-b4m-count-view' : '';
+  const countView = (artifact.verifiedExternalViewCount ?? 0) === 0 ? ' data-b4m-count-view' : '';
   const widgetScript = embed ? '' : `\n<script src="/api/publish/widget"${countView} defer></script>`;
   // Abuse-report affordance: a plain anchor floats over the iframe. It is a
   // top-level navigation (not blocked by the wrapper's script-src/form-action CSP) to
@@ -1585,6 +1598,7 @@ interface PublishedArtifactLean {
   discoverable?: boolean;
   ownerId: string;
   storageKeyPrefix: string;
+  indexObjectPath?: string | null;
   manifest: Array<{ path: string; mimeType: string; size?: number }>;
   renderedBody?: string;
   /** Snapshot of the source reply's citables, so a `b4m_map` fence in `renderedBody` resolves
@@ -1598,6 +1612,7 @@ interface PublishedArtifactLean {
   sha256Index?: string;
   versions?: Array<{ sha256Index: string }>;
   externalViewCount?: number;
+  verifiedExternalViewCount?: number;
 }
 
 // -- Helpers -----------------------------------------------------------------
@@ -1634,28 +1649,13 @@ function cacheControlFor(visibility: PublishVisibility): string {
 const CRAWLER_UA_RE =
   /slackbot|discordbot|twitterbot|facebookexternalhit|linkedinbot|whatsapp|telegrambot|skypeuripreview|googlebot|bingbot|applebot|duckduckbot|yandex|baiduspider|petalbot|bot\b|crawler|spider|preview/i;
 
-/**
- * Best-effort, non-authoritative view counters. Never blocks the response.
- *
- * `viewCount` counts everything. `externalViewCount` feeds the Published gear
- * ("someone else saw your page") and MUST resist self-granting: a top-level
- * browser navigation to /p/... carries no Authorization header, so the serve
- * route cannot tell the owner apart from a stranger on an anonymous request -
- * counting anonymous views as external let every publisher pay themselves the
- * 5,000-credit reward by opening their own freshly-published link (verified
- * gate-bypass, PR #390 review). So externalViewCount increments ONLY for an
- * AUTHENTICATED, non-owner, non-crawler viewer - a request that actually
- * carries a credential we can attribute to a different user. Domain-gated
- * views satisfy this (the loader shell re-fetches with the viewer's Bearer);
- * purely-anonymous public views no longer count, and stronger proof-of-human
- * is tracked as strategy P1 (b4m-strategy#93).
- *
- * A browser navigation never carries that credential on an open-public page or an open share
- * link, so for bundles the wrapper widget reports a signed-in viewer separately through
- * /api/publish/view (see `data-b4m-count-view` in renderBundleWrapper).
+/** Record view analytics and verified reward evidence after page admission.
+ * Writes are best-effort so analytics failures do not interrupt serving a page.
+ * Bundle browser navigations also report their authenticated view via /api/publish/view.
+ * Anonymous views never count as external: without a credential the owner cannot be told apart.
  */
 function bumpViewCount(
-  artifact: { publicId: string; ownerId: string },
+  artifact: { publicId: string; ownerId: string; verifiedExternalViewCount?: number },
   viewer: { id?: string } | undefined,
   userAgent?: string,
   opts: {
@@ -1673,6 +1673,7 @@ function bumpViewCount(
   const isOwner = isAuthed && String(viewer!.id) === String(artifact.ownerId);
   const isCrawler = !!userAgent && CRAWLER_UA_RE.test(userAgent);
   const countsAsExternal = isAuthed && !isOwner && !isCrawler;
+  if (countsAsExternal) void recordVerifiedView(artifact, String(viewer!.id)).catch(() => undefined);
   const inc = countsAsExternal ? { viewCount: 1, externalViewCount: 1 } : { viewCount: 1 };
   // The per-link counter needs its own definition, NOT externalViewCount's: a share link exists
   // so the viewer does NOT sign in, so requiring authentication would leave it at zero forever.
@@ -2203,7 +2204,7 @@ type FileSigner = ((path: string, wantsDownload: boolean, ttlSeconds: number) =>
  */
 function makeFileSigner(
   storage: ReturnType<typeof getPublishedArtifactsStorage>,
-  storageKeyPrefix: string,
+  page: { storageKeyPrefix: string; indexObjectPath?: string | null },
   req: Request
 ): FileSigner {
   const docOrigin = resolveDocOrigin(req.headers.host, req.headers['x-forwarded-proto']);
@@ -2222,7 +2223,8 @@ function makeFileSigner(
     const allowed = await originOnce();
     if (!allowed) return null;
     try {
-      const url = await storage.getSignedUrl(`${storageKeyPrefix}${path}`, 'get', {
+      const key = path === 'index.html' ? currentPublishedIndexKey(page) : `${page.storageKeyPrefix}${path}`;
+      const url = await storage.getSignedUrl(key, 'get', {
         audience: 'browser',
         expiresIn: ttlSeconds,
         ...signedResponseFor(path, wantsDownload),

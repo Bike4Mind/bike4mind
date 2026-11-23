@@ -55,11 +55,16 @@ public final class AppNavigator {
   }
 
   /// Opens the voice conversation over the current screen. A request from the drawer lands on home first so
-  /// a new conversation has somewhere to go when it ends.
-  public func startVoiceConversation(_ target: ChatSendRequest.Target) {
+  /// a new conversation has somewhere to go when it ends; one about a brief lands on that brief instead, so
+  /// closing voice returns to it.
+  public func startVoiceConversation(_ target: ChatSendRequest.Target, briefID: String? = nil) {
     isDrawerOpen = false
-    if target == .newConversation, !isShowing(.home) { sessionPath = [] }
-    voiceRequest = VoiceRequest(target: target)
+    if let briefID {
+      if !isShowing(.brief(id: briefID)) { apply(.brief(id: briefID)) }
+    } else if target == .newConversation, !isShowing(.home) {
+      sessionPath = []
+    }
+    voiceRequest = VoiceRequest(target: target, briefID: briefID)
   }
 
   /// Closes the voice conversation. One that started a new session continues in that session's screen.
@@ -101,6 +106,8 @@ public final class AppNavigator {
       }
     case .media:
       sessionPath = [.studio]
+    case .brief(let id):
+      sessionPath = [.brief(id: id)]
     case .lakes:
       externalURL = Self.webURLForLakes
     case .lake(let id):
@@ -108,6 +115,19 @@ public final class AppNavigator {
     case .web(let url):
       externalURL = url
     }
+  }
+
+  /// Opens the latest brief (the drawer row), which has no id to route by.
+  public func openLatestBrief() {
+    isDrawerOpen = false
+    sessionPath = [.brief(id: nil)]
+  }
+
+  /// Pushes a conversation above the current screen (the brief's approval), so Back returns to that screen.
+  public func pushSession(id: String) {
+    isDrawerOpen = false
+    guard sessionPath.last?.sessionID != id else { return }
+    sessionPath.append(.session(.placeholder(id: id)))
   }
 
   /// Pushes a session whose summary is already known (a drawer row), so it is titled at once.
@@ -163,6 +183,7 @@ public final class AppNavigator {
     case .settings: return sessionPath.last == .settings
     case .session(let id): return sessionPath.last?.sessionID == id
     case .media: return sessionPath.last == .studio
+    case .brief(let id): return sessionPath.last == .brief(id: id)
     case .lakes, .lake, .web, .compose: return false
     }
   }
@@ -176,6 +197,8 @@ public enum SessionsDestination: Hashable, Sendable {
   case settings
   /// The Studio gallery (`Route.media`).
   case studio
+  /// A brief by id; a `nil` id is the latest brief (the drawer row).
+  case brief(id: String?)
 
   public var sessionID: String? {
     guard case .session(let session) = self else { return nil }
@@ -195,8 +218,11 @@ extension SessionSummary {
 public struct VoiceRequest: Identifiable, Hashable, Sendable {
   public let id = UUID()
   public let target: ChatSendRequest.Target
+  /// The brief to read aloud when the conversation opens, if it was started from one.
+  public let briefID: String?
 
-  public init(target: ChatSendRequest.Target) {
+  public init(target: ChatSendRequest.Target, briefID: String? = nil) {
     self.target = target
+    self.briefID = briefID
   }
 }

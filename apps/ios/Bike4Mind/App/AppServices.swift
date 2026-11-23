@@ -41,12 +41,26 @@ final class AppServices {
   let agentRuns: any AgentRunStarting
   /// Answers an agent's pending approval, on whichever server the app points at.
   let pendingActions: any PendingActionAPI
+  /// The server-composed assistant brief, on whichever server the app currently points at.
+  let briefs: any BriefAPI
+  /// The standing instructions the brief composer follows, on whichever server the app points at.
+  let instructions: any InstructionAPI
   /// Answers an approval from a notification button.
   let approvalNotifications: ApprovalNotificationHandler
+  /// Answers a brief's single decision from a notification button.
+  let briefNotifications: BriefNotificationHandler
   /// Whether the signed-in account is waiting to be deleted; `RootView` shows the restore screen then.
   let accountStatus = AccountStatus()
   /// Whether the server has refused this build (HTTP 426); `RootView` shows the update screen then.
   let clientUpgrade: ClientUpgradeStatus
+  /// The signed-in account's profile, kept for the session; cleared when the session ends (`RootView.endSession`).
+  let accountProfiles: AccountProfileStore
+  let credits: CreditsViewModel
+  /// The Studio model lists, kept for the session; cleared when the session ends (`RootView.endSession`).
+  let studioModels: StudioModelCatalog
+  /// The deployment's premium voices and this device's pick; empty or unavailable means on-device speech.
+  let voiceCatalog: VoiceCatalogModel
+  let voiceAPI: any VoiceAPI
 
   init(auth: AuthController) {
     self.auth = auth
@@ -67,6 +81,15 @@ final class AppServices {
     #endif
     widgets = WidgetSnapshotRecorder(
       store: FileWidgetSnapshotStore.appGroup(), reloader: SystemWidgetTimelineReloader())
+    let widgets = widgets
+    credits = CreditsViewModel(
+      fetch: {
+        #if DEBUG
+          if FixtureServices.isEnabled { return try await FixtureServices.api.creditBalance() }
+        #endif
+        return try await APIClient(baseURL: auth.environment.baseURL, tokens: auth).creditBalance()
+      },
+      onBalance: { await widgets.recordCredits($0) })
     push = PushRegistrationCoordinator(center: SystemNotificationCenter(), remote: registrar, makeAPI: makeAPI)
 
     let activities = QuestActivityManager(host: ActivityKitHost(), makeTokenAPI: makeAPI)
@@ -92,7 +115,65 @@ final class AppServices {
       return PendingActionClient(baseURL: auth.environment.baseURL, tokens: auth)
     }
     pendingActions = pendingActionAPI
+    let voiceAPI = ForwardingVoiceAPI { VoiceClient(baseURL: auth.environment.baseURL, tokens: auth) }
+    self.voiceAPI = voiceAPI
+    voiceCatalog = VoiceCatalogModel(
+      wire: voiceAPI,
+      store: UserDefaultsVoiceSelectionStore()
+    ) {
+      guard let userID = await auth.userID() else { return nil }
+      return VoiceAccount(userID: userID, baseURL: auth.environment.baseURL)
+    }
+    let briefAPI = ForwardingBriefAPI {
+      #if DEBUG
+        if FixtureServices.isEnabled { return FixtureServices.briefAPI }
+      #endif
+      return BriefClient(baseURL: auth.environment.baseURL, tokens: auth)
+    }
+    briefs = briefAPI
+    instructions = ForwardingInstructionAPI {
+      #if DEBUG
+        if FixtureServices.isEnabled { return FixtureServices.instructionAPI }
+      #endif
+      return InstructionClient(baseURL: auth.environment.baseURL, tokens: auth)
+    }
     approvalNotifications = ApprovalNotificationHandler(api: pendingActionAPI, feedback: SystemApprovalFeedback())
+    accountProfiles = AccountProfileStore(
+      resolveScope: {
+        #if DEBUG
+          if FixtureServices.isEnabled {
+            return AccountProfileStore.Scope(userID: "fixture", environment: auth.environment)
+          }
+        #endif
+        guard let userID = await auth.userID() else { return nil }
+        return AccountProfileStore.Scope(userID: userID, environment: auth.environment)
+      },
+      fetch: { scope in
+        #if DEBUG
+          if FixtureServices.isEnabled {
+            return AccountProfile(firstName: "Alex", displayName: "Alex Rivera", email: "alex@example.com")
+          }
+        #endif
+        let client = AccountClient(baseURL: scope.environment.baseURL, tokens: auth)
+        return try? await client.profile(userID: scope.userID)
+      })
+    briefNotifications = BriefNotificationHandler(
+      briefs: briefAPI, pendingActions: pendingActionAPI, feedback: SystemApprovalFeedback())
+
+    studioModels = StudioModelCatalog(
+      currentEnvironment: { auth.environment },
+      resolveUserID: {
+        #if DEBUG
+          if FixtureServices.isEnabled { return "fixture" }
+        #endif
+        return await auth.userID()
+      },
+      fetch: { kind in
+        #if DEBUG
+          if FixtureServices.isEnabled { return try await FixtureServices.studio.models(for: kind) }
+        #endif
+        return try await StudioClient(baseURL: auth.environment.baseURL, tokens: auth).models(for: kind)
+      })
 
     #if DEBUG
       if FixtureServices.isEnabled, FixtureServices.accountScenario == .pending {
@@ -129,16 +210,15 @@ final class AppServices {
     return current.account
   }
 
-  /// The signed-in account's profile for the greeting, avatar and Settings header, fetched from the server; `nil`
-  /// when it cannot be loaded. Fixture runs have no session, so they get a stand-in.
-  func accountProfile() async -> AccountProfile? {
-    #if DEBUG
-      if FixtureServices.isEnabled {
-        return AccountProfile(firstName: "Alex", displayName: "Alex Rivera", email: "alex@example.com")
-      }
-    #endif
-    guard let userID = await auth.userID() else { return nil }
-    return try? await account.profile(userID: userID)
+  /// The profile for the greeting, avatar and Settings header, available on the first frame once it has loaded in
+  /// this session; `nil` before that, and after the session ends or the server changes.
+  var cachedAccountProfile: AccountProfile? {
+    accountProfiles.profile(in: auth.environment)
+  }
+
+  /// Loads the profile in the background unless a fresh one is stored; views render `cachedAccountProfile`.
+  func refreshAccountProfile() async {
+    await accountProfiles.refresh()
   }
 
   var stepUp: any StepUpAPI {
@@ -160,6 +240,9 @@ final class AppServices {
   }
 
   var sessionListCache: any SessionListCache { current.cache }
+  var sessionHandoff: SessionHandoffClient {
+    SessionHandoffClient(baseURL: auth.environment.baseURL, tokens: auth)
+  }
 
   var media: any MediaAPI {
     #if DEBUG
@@ -210,6 +293,25 @@ final class AppServices {
     return tracker
   }
 
+  @ObservationIgnored private var mediaFirstPagesState: (environment: ServerEnvironment, store: MediaFirstPageStore)?
+
+  /// Page 1 of the media list for the gallery and the "Morph into" picker. One per server, so it survives
+  /// leaving Studio and re-opening it; emptied by `RootView.endSession()`.
+  var mediaFirstPages: MediaFirstPageStore {
+    let environment = auth.environment
+    if let mediaFirstPagesState, mediaFirstPagesState.environment == environment {
+      return mediaFirstPagesState.store
+    }
+    var cache: any MediaListCache = FileMediaListCache(
+      directory: FileSessionListCache.defaultDirectory(), environment: environment)
+    #if DEBUG
+      if FixtureServices.isEnabled { cache = InMemoryMediaListCache() }
+    #endif
+    let store = MediaFirstPageStore(api: media, cache: cache)
+    mediaFirstPagesState = (environment, store)
+    return store
+  }
+
   /// Called when the gallery learns of a newer generated image; keeps the "Latest generation" widget current.
   var latestGeneration: @Sendable (MediaItem) async -> Void {
     let publisher = LatestGenerationPublisher(recorder: widgets)
@@ -222,19 +324,10 @@ final class AppServices {
     Task { await widgets.recordTurns(sessionID: sessionID, sessionTitle: title, turns: turns) }
   }
 
-  /// Re-reads the balance for the Credits widget: after a chat turn settles (it spends credits) and when
-  /// the app comes to the foreground.
+  /// Re-reads the shared balance after a settled turn and on foreground, regardless of the Settings TTL.
   func refreshWidgetCredits() {
-    let api = api
-    let widgets = widgets
-    Task {
-      do {
-        await widgets.recordCredits(try await api.creditBalance())
-      } catch {
-        // The widget keeps its last balance; the next foreground or settled turn tries again.
-        AppServices.logger.error("Credits widget refresh failed: \(String(describing: error), privacy: .public)")
-      }
-    }
+    let credits = credits
+    Task { await credits.load(force: true) }
   }
 
   nonisolated static let logger = Logger(subsystem: "com.bike4mind.app", category: "app")
@@ -321,11 +414,60 @@ struct ForwardingAgentRunAPI: AgentRunAPI {
   }
 }
 
+/// Routes voice calls to whichever server the app currently points at.
+struct ForwardingVoiceAPI: VoiceAPI {
+  let provider: @MainActor @Sendable () -> any VoiceAPI
+
+  func voiceSessionsEnabled() async throws -> Bool { try await provider().voiceSessionsEnabled() }
+  func listVoices() async throws -> [VoiceOption] { try await provider().listVoices() }
+  func synthesizeSpeech(text: String, voiceID: String) async throws -> Data {
+    try await provider().synthesizeSpeech(text: text, voiceID: voiceID)
+  }
+}
+
 /// Routes approval answers to whichever server the app currently points at (it can change in debug builds).
 struct ForwardingPendingActionAPI: PendingActionAPI {
   let provider: @MainActor @Sendable () -> any PendingActionAPI
 
   func respond(to target: PendingActionTarget, decision: PendingActionDecision) async throws -> PendingActionResult {
     try await provider().respond(to: target, decision: decision)
+  }
+}
+
+/// Routes brief calls to whichever server the app currently points at (it can change in debug builds).
+struct ForwardingBriefAPI: BriefAPI {
+  let provider: @MainActor @Sendable () -> any BriefAPI
+
+  func compose() async throws -> Brief {
+    try await provider().compose()
+  }
+
+  func list() async throws -> [Brief] {
+    try await provider().list()
+  }
+
+  func brief(id: String) async throws -> Brief {
+    try await provider().brief(id: id)
+  }
+
+  func reply(briefID: String, decisionID: String, text: String, choiceIndex: Int?) async throws -> BriefReplyResult {
+    try await provider().reply(briefID: briefID, decisionID: decisionID, text: text, choiceIndex: choiceIndex)
+  }
+}
+
+/// Routes instruction calls to whichever server the app currently points at (it can change in debug builds).
+struct ForwardingInstructionAPI: InstructionAPI {
+  let provider: @MainActor @Sendable () -> any InstructionAPI
+
+  func list() async throws -> [AssistantInstruction] {
+    try await provider().list()
+  }
+
+  func add(text: String) async throws -> AssistantInstruction {
+    try await provider().add(text: text)
+  }
+
+  func remove(id: String) async throws {
+    try await provider().remove(id: id)
   }
 }

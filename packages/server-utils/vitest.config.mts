@@ -11,7 +11,11 @@ export default defineConfig({
     ...sharedTest,
     environment: 'node',
     setupFiles: ['./vitest.setup.ts'],
-    ...(INTEGRATION_LANE ? { include: ['**/*.e2e.test.ts'] } : { exclude: ['**/node_modules/**', '**/*.e2e.test.ts'] }),
+    ...(process.env.REPO_TEST_LANE === 'repo'
+      ? { include: ['**/*.repo.test.ts'] }
+      : INTEGRATION_LANE
+        ? { include: ['**/*.e2e.test.ts'], exclude: ['**/node_modules/**', '**/*.repo.test.ts'] }
+        : { exclude: ['**/node_modules/**', '**/*.e2e.test.ts', '**/*.repo.test.ts'] }),
     // Integration-lane only, as in apps/workers: unset in the unit lane, where a retry would mask
     // a real bug. Guarded by vitest.config.test.ts.
     ...(INTEGRATION_LANE ? { retry: 2 } : {}),

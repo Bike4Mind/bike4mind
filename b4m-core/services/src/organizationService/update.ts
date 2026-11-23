@@ -1,12 +1,11 @@
 import {
+  ForbiddenError,
+  hasOrgPermission,
   IOrganizationRepository,
   IUserDocument,
   MAX_STORAGE_LIMIT_MB,
   OrganizationSharingPolicySchema,
-  ForbiddenError,
-  canAdministerOrganization,
   isOrgMember,
-  isOrgOwnerOrPlatformAdmin,
 } from '@bike4mind/common';
 import { secureParameters } from '@bike4mind/utils';
 import { NotFoundError } from '@bike4mind/utils';
@@ -21,7 +20,7 @@ const updateSchema = z.object({
   redactPushContent: z.boolean().optional(),
   sharingPolicy: OrganizationSharingPolicySchema.optional(),
   maxCreditsPerMember: z.number().int().positive().nullable().optional(),
-  /** Decimal MB; null clears the override back to DEFAULT_ORGANIZATION_STORAGE_LIMIT_MB. */
+  /** Decimal MB; null clears the override back to the plan or default. */
   storageLimit: z.number().min(0).max(MAX_STORAGE_LIMIT_MB).nullable().optional(),
 });
 
@@ -47,7 +46,7 @@ export const update = async (user: IUserDocument, params: UpdateParameters, adap
   ) as NonNullable<typeof organization>;
 
   // Every field here is org-wide, so the gate is the team role, never a sharing-ACL row.
-  if (!canAdministerOrganization(user, plain)) {
+  if (!hasOrgPermission(user, plain, 'managePolicies')) {
     if (!isOrgMember(user, plain)) throw new NotFoundError('Organization not found');
     throw new ForbiddenError('Only organization owners and managers can change organization settings.');
   }
@@ -58,8 +57,7 @@ export const update = async (user: IUserDocument, params: UpdateParameters, adap
   const update: Partial<typeof plain> & { id: string } = { id };
   if (rest.name !== undefined) update.name = rest.name;
   if (rest.description !== undefined) update.description = rest.description;
-  // Owner or platform admin only; a manager's value is ignored, matching the client, which never sends it.
-  if (rest.billingContact !== undefined && isOrgOwnerOrPlatformAdmin(user, plain)) {
+  if (rest.billingContact !== undefined && hasOrgPermission(user, plain, 'manageBilling')) {
     update.billingContact = rest.billingContact;
   }
   if (rest.systemPrompt !== undefined) update.systemPrompt = rest.systemPrompt;
@@ -75,14 +73,15 @@ export const update = async (user: IUserDocument, params: UpdateParameters, adap
     update.maxCreditsPerMember = rest.maxCreditsPerMember ?? null;
   }
 
-  // Platform-admin only: a manager must not raise their own org's quota. Same null-not-undefined
-  // rule as maxCreditsPerMember, so a cleared limit falls back to the default. Lowering it below
-  // current usage deletes nothing; checkStorageLimit just refuses new uploads.
-  if (user.isAdmin && rest.storageLimit !== undefined) {
-    update.storageLimit = rest.storageLimit ?? null;
-  }
-
   const updated = await adapters.db.organizations.update(update);
+
+  // Platform admin only, so a manager cannot raise their own org's quota. Lowering below usage deletes
+  // nothing; uploads are just refused.
+  if (user.isAdmin && rest.storageLimit !== undefined) {
+    const limited = await adapters.db.organizations.setStorageLimitOverride(id, rest.storageLimit);
+    if (!limited) throw new NotFoundError('Organization not found');
+    return limited;
+  }
 
   return updated ?? ({ ...plain, ...update } as typeof plain);
 };

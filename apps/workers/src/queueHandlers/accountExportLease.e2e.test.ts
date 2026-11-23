@@ -86,6 +86,7 @@ const complete = (userId: string) =>
   completeAccountDeletion(userId, {
     logger,
     erasureRegistry: {
+      assertReady: () => {},
       scope: async () => [],
       erase: async () => {},
       audit: async () => ({ remaining: [], unclassified: [] }),

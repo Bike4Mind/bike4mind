@@ -38,6 +38,11 @@ export interface IOrganization extends ICreditHolder, IModelConfig {
    * and need not appear here.
    */
   adminUserIds: string[];
+  /**
+   * User ids holding the Billing manager role (constants/orgRoles.ts): billing and usage, no roster
+   * control. Like `adminUserIds`, an entry counts only with a `users[]` row; Manager wins on overlap.
+   */
+  billingManagerUserIds?: string[];
   description: string;
   billingContact: string;
   seats: number;
@@ -52,8 +57,10 @@ export interface IOrganization extends ICreditHolder, IModelConfig {
   logo?: IAppFileDocument | null;
   stripeCustomerId?: string | null;
 
-  /** Cumulative storage ceiling in decimal MB; unset or null means DEFAULT_ORGANIZATION_STORAGE_LIMIT_MB. */
+  /** Effective flat-pool storage ceiling in decimal MB, mirrored for legacy consumers. */
   storageLimit?: number | null;
+  storageLimitOverride?: number | null;
+  planStorageLimit?: number | null;
 
   /**
    * Bytes held by files this org OWNS (FabFile.organizationId), whoever uploaded them. Unset reads
@@ -164,6 +171,9 @@ export interface IOrganizationRepository
   /** Seat counts keyed by Stripe customer id, in one query. */
   findSeatsByStripeCustomerIds(stripeCustomerIds: string[]): Promise<Map<string, number>>;
 
+  setPlanStorageLimit(organizationId: string, limitMb: number): Promise<boolean>;
+  setStorageLimitOverride(organizationId: string, limitMb: number | null): Promise<IOrganizationDocument | null>;
+
   /**
    * Atomically add `bytes` (negative to refund) to the org's storage counter, floored at 0.
    * Same contract as IUserRepository.incrementCurrentStorage.
@@ -270,7 +280,7 @@ export interface IOrganizationRepository
    */
   ensureUserDetails(organizationId: string, member: { id: string; email: string; name: string }): Promise<void>;
 
-  /** Remove a member from users/userDetails/adminUserIds (one targeted, idempotent update). */
+  /** Remove a member from users/userDetails and every role list (one targeted, idempotent update). */
   removeMember(organizationId: string, userId: string): Promise<void>;
 
   /**

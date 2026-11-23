@@ -78,7 +78,11 @@
     "slack_notification_default": "Referral sent by user USER_NAME:USER_ID to FRIEND_EMAIL",
     "reward_first_answer": "You earn <strong>{{credits}} credits</strong> when your friend verifies their email and gets their first answer.",
     "reward_first_payment": "You earn <strong>{{credits}} credits</strong> on your friend's first full-price Professional subscription payment, usable after a hold.",
-    "reward_second_payment": "You earn <strong>{{credits}} credits</strong> on your friend's second full-price Professional subscription payment, usable after a hold."
+    "reward_second_payment": "You earn <strong>{{credits}} credits</strong> on your friend's second full-price Professional subscription payment, usable after a hold.",
+    "share_link_label": "Your share link",
+    "share_link_copy": "Copy",
+    "share_link_copied": "Copied",
+    "share_link_hint": "Anyone who signs up through this link counts as your referral."
   },
   "activateVoice": "Activate this voice",
   "liveVoice": "Live voice",
@@ -206,6 +210,27 @@
     },
     "api_keys": {
       "member_keys": "Member API keys"
+    },
+    "access_notice": {
+      "owner_only": "Owner only",
+      "denied_owner": "Only the team owner can open {{tab}}. Ask the owner if you need it.",
+      "denied_managers": "Only the team owner and managers can open {{tab}}. Ask the owner if you need it.",
+      "billing_locked": "Changing the plan, seats and payment details",
+      "billing_locked_description": "Credits and seats for this team, read-only.",
+      "billing_summary": "What you can see from here",
+      "credits_remaining": "Credits remaining",
+      "seats_used": "Seats used",
+      "seats_value": "{{current}} of {{max}}",
+      "integrations_locked": "Setting up Slack, GitHub and webhooks",
+      "owner_only_label": "Owner only:",
+      "owner_only_detail": "{{what}}. Ask the team owner; the Members tab shows who that is.",
+      "settings_locked": "Exporting team data, transferring ownership and deleting the team",
+      "no_seats_ask_owner": "No seats available. Ask the team owner to add seats.",
+      "seat_limit_add_seats": "All seats are in use. <addSeats>Add seats</addSeats>.",
+      "seat_limit_ask_owner": "All seats are in use. Ask the team owner to add seats.",
+      "add_limit_ask_owner": "You can only add up to {{available}} more members. Ask the team owner to add seats.",
+      "seat_limit_upgrade": "You've reached your seat limit. Upgrade your plan to add more members.",
+      "add_limit_upgrade": "You can only add up to {{available}} more members with your current plan"
     }
   },
   "session": {
@@ -300,7 +325,6 @@
     "password": "Password",
     "confirmPassword": "Confirm Password",
     "fullName": "Full Name",
-    "inviteCode": "Invite Code",
     "needCode": "Need Code?",
     "noAccount": "No Account?",
     "registerNow": "Register now",
@@ -334,6 +358,9 @@
     "registrationClosed": "Sign-ups are invite-only right now. Join the waitlist to request an invite.",
     "joinWaitlist": "Join the waitlist",
     "noInviteCode": "No invite code?",
+    "inviteCodeLabel": "Invite code",
+    "inviteCodeOptionalLabel": "Invite code (optional)",
+    "inviteCodeOptionalHint": "Have a code from a friend? Add it here.",
     "back": "Back",
     "redirectingToProvider": "Redirecting to your organization's login...",
     "email": "Email",
@@ -348,6 +375,8 @@
     "justAMoment": "Just a moment...",
     "signInToContinueTo": "Sign in to continue to {{product}}",
     "signUpToContinueTo": "Create an account to continue to {{product}}",
+    "signInProductReads": "Sign in and {{product}} reads {{site}}",
+    "signUpProductReads": "Create an account and {{product}} reads {{site}}",
     "fieldErrors": {
       "invalidUsername": "Invalid username",
       "invalidEmail": "Invalid email",

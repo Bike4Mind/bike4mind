@@ -16,6 +16,7 @@ import {
   mementoRepository,
   mongoose,
   organizationRepository,
+  spendFreezeRepository,
   projectRepository,
   promptRepository,
   questMasterPlanRepository,
@@ -32,6 +33,7 @@ import {
   dataLakeRepository,
   fallbackLakeSettingsRepository,
 } from '@bike4mind/database';
+import { userApiKeyRepository } from '@bike4mind/database/auth';
 import { newAccountSpendCapAdaptersWithAlert } from '../billing/newAccountSpendCapWithAlert';
 import { recordUserLimitEvent } from '../billing/userLimitEvents';
 import { lakeWriteToolDb } from '../dataLakes/lakeWriteToolDb';
@@ -56,6 +58,7 @@ import { accessibleBy } from '@casl/mongoose';
 import { runDecisionTool } from '../decisions/runDecisionTool';
 import { operationalBillingAdapters } from '../billing/operationalBilling';
 import { logEvent } from './analyticsLog';
+import { signingKey } from '../security/signingKeys';
 import { recallMementosV2 } from '../memory/recallMementosV2';
 import { recallLakeMemoryForSession } from '../memory/lakeMemoryRecall';
 import { loadSystemPromptById } from './sessionSystemPromptResolver';
@@ -156,6 +159,8 @@ export const getDefaultChatCompletionOptions = (): DefaultChatCompletionOptions 
       mementos: mementoRepository,
       projects: projectRepository,
       organizations: organizationRepository,
+      spendFreezes: spendFreezeRepository,
+      userApiKeys: userApiKeyRepository,
       mcpServers: mcpServerRepository,
       newAccountSpendCap: newAccountSpendCapAdaptersWithAlert,
       recordLimitEvent: recordUserLimitEvent,
@@ -303,7 +308,8 @@ export const getDefaultChatCompletionOptions = (): DefaultChatCompletionOptions 
     logEvent: logEvent,
     cacheRepository: cacheRepository,
     publishTelemetryAlert: publishTelemetryAlertCallback,
-    telemetryHmacSecret: Resource.SECRET_ENCRYPTION_KEY.value,
+    telemetryHmacSecret: signingKey('telemetry-salt'),
+    imageUrlSigningSecret: signingKey('search-image-url'),
   };
   return _defaultChatCompletionOptions;
 };

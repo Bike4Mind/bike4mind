@@ -6,7 +6,7 @@ import { PlatformUsageDashboard } from './components/PlatformUsageDashboard';
 import { SideAppsDashboard } from './components/SideAppsDashboard';
 import { CreditHolderType } from '@bike4mind/common';
 import { TransactionLedger } from './components/TransactionLedger';
-import { CreditAdjustmentsLog } from './components/CreditAdjustmentsLog';
+import { CreditAdjustmentsAuditLink } from './components/CreditAdjustmentsAuditLink';
 import { UserCreditsManager } from './components/UserCreditsManager';
 import ContextHelpButton from '@client/app/components/help/ContextHelpButton';
 import { useCreditAnalysisStore, type CreditAnalysisTab } from './store';
@@ -97,7 +97,7 @@ export const CreditAnalyticsTab: React.FC = () => {
         </TabPanel>
 
         <TabPanel value="adjustments" sx={{ p: 0 }}>
-          <CreditAdjustmentsLog />
+          <CreditAdjustmentsAuditLink />
         </TabPanel>
       </Tabs>
     </Stack>

@@ -202,6 +202,8 @@ const UserPreferencesSchema = new Schema(
           chat_completed: { type: Boolean },
           generation_ready: { type: Boolean },
           agent_message: { type: Boolean },
+          session_handoff: { type: Boolean },
+          brief_ready: { type: Boolean },
         },
         { _id: false }
       ),
@@ -1898,6 +1900,9 @@ export const UserSchema = new Schema<IUserDocument, IUserModel>(
     numReferralsAvailable: { type: Number, default: 0 },
     regInvites: [{ type: Schema.Types.ObjectId, ref: 'User' }],
     referredByUserId: { type: Schema.Types.ObjectId, ref: 'User', default: null },
+    referredViaLinkAt: { type: Date, default: null },
+    // No default: the unique index below only covers string values, so accounts without a code never collide.
+    referralCode: { type: String },
     signupInvite: {
       type: new Schema(
         {
@@ -2380,6 +2385,12 @@ UserSchema.index(
 );
 // Serves the inviter's referral counts (invited, active). Built by the ensure-referral-inviter-indexes migration.
 UserSchema.index({ referredByUserId: 1 }, { name: 'user_referredByUserId' });
+// Resolves a share-link visit to its owner and keeps two accounts from minting the same code. Built by the
+// ensure-referral-code-index migration.
+UserSchema.index(
+  { referralCode: 1 },
+  { unique: true, partialFilterExpression: { referralCode: { $type: 'string' } }, name: 'user_referralCode' }
+);
 // Serves the account deletion purge job's scan for grace periods that have ended.
 UserSchema.index(
   { 'deletion.scheduledFor': 1 },

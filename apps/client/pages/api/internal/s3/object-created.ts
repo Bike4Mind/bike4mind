@@ -1,4 +1,5 @@
 import { asyncHandler } from '@server/middlewares/asyncHandler';
+import { isUnconfiguredSecret } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
 import { FabFile, User, adminSettingsRepository, withTransaction } from '@bike4mind/database';
 import { decodeS3Key, findWithRetry } from '@bike4mind/server-utils/s3/utils';
@@ -61,7 +62,7 @@ const selfHostLambdaContext = (functionName: string) =>
 
 const secretOk = (authorizationHeader: string | string[] | undefined): boolean => {
   const expected = process.env.INTERNAL_S3_WEBHOOK_SECRET;
-  if (!expected) return false;
+  if (!expected || isUnconfiguredSecret(expected)) return false;
   const raw = Array.isArray(authorizationHeader) ? '' : (authorizationHeader ?? '');
   // MinIO sends the auth_token verbatim as the Authorization value; tolerate a Bearer prefix.
   const provided = raw.startsWith('Bearer ') ? raw.slice(7) : raw;

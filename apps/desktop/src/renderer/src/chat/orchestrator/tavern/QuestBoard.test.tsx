@@ -9,6 +9,7 @@ import { QUEST_BOARD } from './scene';
 import { TavernView } from './TavernView';
 
 const onSelect = vi.fn();
+const onOpenPr = vi.fn();
 const themed = createThemedMount();
 
 const renderTavern = (agents: AgentView[], selectedId: string | null = null) =>
@@ -16,6 +17,7 @@ const renderTavern = (agents: AgentView[], selectedId: string | null = null) =>
     <TavernView
       agents={agents}
       onSelect={onSelect}
+      onOpenPr={onOpenPr}
       selectedId={selectedId}
       introPlaying={false}
       personas={assignPersonas(agents)}
@@ -24,13 +26,19 @@ const renderTavern = (agents: AgentView[], selectedId: string | null = null) =>
 
 const notes = () => [
   ...el('orchestrator-tavern-quest-board').querySelectorAll<HTMLElement>(
-    'button[data-testid^="orchestrator-tavern-quest-"]:not([data-testid="orchestrator-tavern-quest-more"])'
+    '[role="button"][data-testid^="orchestrator-tavern-quest-"]'
   ),
 ];
 
 // A needs-you agent's speech bubble loads its session to find what it waits on.
 beforeEach(() => {
-  (window as unknown as { b4m: unknown }).b4m = { chat: { getSession: vi.fn().mockResolvedValue(null) } };
+  (window as unknown as { b4m: unknown }).b4m = {
+    chat: {
+      getSession: vi.fn().mockResolvedValue(null),
+      onStreamEvent: vi.fn(() => () => undefined),
+      onQueueChanged: vi.fn(() => () => undefined),
+    },
+  };
 });
 
 afterEach(() => {
@@ -82,6 +90,33 @@ describe('QuestBoard', () => {
     });
     expect(query('orchestrator-tavern-quest-a')).toBeNull();
     expect(query('orchestrator-tavern-quest-b')).not.toBeNull();
+  });
+
+  it('opens a pinned quest PR separately from its agent, including keyboard activation', async () => {
+    await renderTavern([agentFixture('a', 'working', { pr: { number: 611, state: 'open' } })]);
+    const note = el('orchestrator-tavern-quest-a');
+    const badge = note.querySelector<HTMLButtonElement>('[data-testid="orchestrator-pr-indicator"]')!;
+    expect(badge.closest('button')?.parentElement?.closest('button')).toBeNull();
+    await act(async () => {
+      badge.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+      badge.click();
+    });
+    expect(onOpenPr).toHaveBeenCalledWith('a');
+    expect(onSelect).not.toHaveBeenCalled();
+    await act(async () => note.dispatchEvent(new KeyboardEvent('keydown', { key: ' ', bubbles: true })));
+    expect(onSelect).toHaveBeenCalledWith('a');
+  });
+
+  it('shows PRs in overflow quest notes without selecting the agent', async () => {
+    const agents = Array.from({ length: QUEST_BOARD.notes + 2 }, (_, index) =>
+      agentFixture(`a${index}`, 'working', { pr: { number: 611 + index, state: 'closed' } })
+    );
+    await renderTavern(agents);
+    await act(async () => el('orchestrator-tavern-quest-more').click());
+    const item = el(`orchestrator-tavern-quest-more-item-a${agents.length - 1}`);
+    await act(async () => item.querySelector<HTMLButtonElement>('[data-testid="orchestrator-pr-indicator"]')!.click());
+    expect(onOpenPr).toHaveBeenCalledWith(`a${agents.length - 1}`);
+    expect(onSelect).not.toHaveBeenCalled();
   });
 
   it('checks a quest off even when its agent reads idle on the way to done', async () => {

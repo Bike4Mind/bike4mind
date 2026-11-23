@@ -6,6 +6,9 @@ import { isProviderKeyFailure } from '../auth/providerKeyFailure.js';
 import type { ConfigStore } from '../storage/ConfigStore.js';
 import {
   type ArtifactResource,
+  CreateImageJobResponseSchema,
+  ImageJobSchema,
+  type PublicImageJob,
   generatedAudioResponseSchema,
   type GeneratedAudioResponse,
   type BatchPresignedUrlRequestInputType,
@@ -18,13 +21,11 @@ import {
   type ChatHistoryItemType,
   type CommentPolicy,
   type GeneratedFile,
-  type GenerateImageResponse,
-  type ImagePromptResolution,
   type PromptBatchQueryType,
   type PublishResult,
   type PublishScopeTier,
   type PublishVisibility,
-  type QuestErrorCode,
+  type QuestOutcomeErrorCode,
   type SessionDeleteResponse,
   type TTSRequest,
   type UploadUrlRequest,
@@ -177,9 +178,9 @@ export interface QuestResponse {
   replies?: string[];
   // A failed turn still finishes `status: 'done'` with the explanation in the reply text, so
   // `type: 'error'` is the only reliable failure signal; `errorCode` names the reason only for the
-  // billing failures that have one and its absence never means success.
+  // failures that have one (billing, a moderation refusal) and its absence never means success.
   type?: ChatHistoryItemType;
-  errorCode?: QuestErrorCode;
+  errorCode?: QuestOutcomeErrorCode;
   // Generated-file basenames, and `files` resolves each to a short-lived presigned URL (valid for
   // about an hour).
   images?: string[];
@@ -232,17 +233,15 @@ export interface RawDataLake {
   built_in?: boolean;
   status?: string;
   file_count?: number;
+  can_manage?: boolean;
   [key: string]: unknown;
 }
 
-/** Arguments for POST /api/v1/image-generations; a subset of `GenerateImageRequestBodySchema`. */
+/** Arguments for POST /api/v1/image-jobs (always `mode: 'generate'`, one image); a subset of `CreateImageJobBody`. */
 export interface GenerateImageArgs {
   prompt: string;
   model: string;
   size?: string;
-  notebookId?: string;
-  projectId?: string;
-  promptResolution?: ImagePromptResolution;
 }
 
 export interface RawProject {
@@ -316,6 +315,13 @@ export type RawBriefcasePrompt = Pick<IBriefcasePrompt, 'name' | 'description'> 
   id: string;
   promptText?: string;
 };
+
+interface Page {
+  limit: number;
+  cursor?: string;
+}
+
+const pageQuery = ({ limit, cursor }: Page) => ({ limit, ...(cursor ? { cursor } : {}) });
 
 /**
  * Typed wrapper over {@link ApiClient} exposing exactly the Bike4Mind REST
@@ -399,6 +405,69 @@ export class B4mApiClient {
       query: { limit: args.limit, ...(args.cursor ? { cursor: args.cursor } : {}) },
     });
     return { data: result.data ?? [], nextCursor: result.next_cursor ?? null };
+  }
+
+  async listResearchConfigs(lakeId: string, page: Page) {
+    const result = await this.sdk.call('listDataLakeResearchConfigs', {
+      params: { id: lakeId },
+      query: pageQuery(page),
+    });
+    return { data: result.data ?? [], nextCursor: result.next_cursor ?? null };
+  }
+
+  async getResearchConfig(lakeId: string, configId: string) {
+    return (await this.sdk.call('getDataLakeResearchConfig', { params: { id: lakeId, config_id: configId } })).data;
+  }
+
+  async createResearchConfig(lakeId: string, body: JsonBody<'createDataLakeResearchConfig'>) {
+    return (await this.sdk.call('createDataLakeResearchConfig', { params: { id: lakeId }, body })).data;
+  }
+
+  async updateResearchConfig(lakeId: string, configId: string, body: JsonBody<'updateDataLakeResearchConfig'>) {
+    return (await this.sdk.call('updateDataLakeResearchConfig', { params: { id: lakeId, config_id: configId }, body }))
+      .data;
+  }
+
+  async deleteResearchConfig(lakeId: string, configId: string): Promise<void> {
+    await this.sdk.call('deleteDataLakeResearchConfig', {
+      params: { id: lakeId, config_id: configId },
+      redirect: 'manual',
+    });
+  }
+
+  async startResearchRun(lakeId: string, configId: string) {
+    return (await this.sdk.call('startDataLakeResearchRun', { params: { id: lakeId }, body: { config_id: configId } }))
+      .data;
+  }
+
+  async getResearchRun(lakeId: string, runId: string) {
+    return (await this.sdk.call('getDataLakeResearchRun', { params: { id: lakeId, run_id: runId } })).data;
+  }
+
+  async listResearchRuns(lakeId: string, page: Page) {
+    const result = await this.sdk.call('listDataLakeResearchRuns', { params: { id: lakeId }, query: pageQuery(page) });
+    return { data: result.data ?? [], nextCursor: result.next_cursor ?? null };
+  }
+
+  async listProposals(lakeId: string, args: Page & { status?: 'pending' | 'approved' | 'declined' }) {
+    const result = await this.sdk.call('listDataLakeProposals', {
+      params: { id: lakeId },
+      query: { ...pageQuery(args), ...(args.status ? { status: args.status } : {}) },
+    });
+    return { data: result.data ?? [], nextCursor: result.next_cursor ?? null };
+  }
+
+  async decideProposal(lakeId: string, proposalId: string, body: JsonBody<'decideDataLakeProposal'>) {
+    return this.sdk.call('decideDataLakeProposal', { params: { id: lakeId, proposal_id: proposalId }, body });
+  }
+
+  async getConfigHistory(lakeId: string, limit?: number, includeFiles?: boolean) {
+    return (
+      await this.sdk.call('getDataLakeConfigHistory', {
+        params: { id: lakeId },
+        query: { ...(limit === undefined ? {} : { limit }), ...(includeFiles ? { include: 'files' as const } : {}) },
+      })
+    ).data;
   }
 
   async sendChat(args: {
@@ -523,16 +592,28 @@ export class B4mApiClient {
     };
   }
 
-  async generateImage(args: GenerateImageArgs): Promise<GenerateImageResponse> {
+  /** Start one image job. `idempotencyKey` makes a retried submit return the same job, not a second bill. */
+  async createImageJob(args: GenerateImageArgs, idempotencyKey: string): Promise<PublicImageJob> {
     const body = {
-      prompt: args.prompt,
       model: args.model,
+      mode: 'generate',
+      prompt: args.prompt,
+      count: 1,
       ...(args.size ? { size: args.size } : {}),
-      ...(args.notebookId ? { sessionId: args.notebookId } : {}),
-      ...(args.projectId ? { projectId: args.projectId } : {}),
-      ...(args.promptResolution ? { prompt_resolution: args.promptResolution } : {}),
-    } as JsonBody<'generateImage'>;
-    return (await this.sdk.call('generateImage', { body })) as GenerateImageResponse;
+    } as JsonBody<'createImageJob'>;
+    const response = await this.sdk.call('createImageJob', { body, headers: { 'Idempotency-Key': idempotencyKey } });
+    const [job] = CreateImageJobResponseSchema.parse(response).data;
+    if (!job) throw new Error('the server accepted the image request but returned no job');
+    return job;
+  }
+
+  async getImageJob(jobId: string): Promise<PublicImageJob> {
+    return ImageJobSchema.parse(await this.sdk.call('getImageJob', { params: { id: jobId } }));
+  }
+
+  /** Ask the server to cancel a job. A running job refuses (409) and finishes, so callers treat this as best effort. */
+  async cancelImageJob(jobId: string): Promise<PublicImageJob> {
+    return ImageJobSchema.parse(await this.sdk.call('cancelImageJob', { params: { id: jobId } }));
   }
 
   async listProjects(args: {
@@ -847,6 +928,18 @@ export function mapApiError(error: unknown, baseURL: string, scope?: string): st
     // The match is wording-based: must stay in sync with the ForbiddenError messages in
     // apps/client/server/middlewares/csrfProtection.ts.
     const serverMessage = extractServerMessage(data);
+    // A route that classifies its refusal with an errorCode says why; the key-scope guess below would misdirect.
+    if (serverMessage && typeof (data as { errorCode?: unknown } | undefined)?.errorCode === 'string') {
+      return serverMessage;
+    }
+    // Data lake routes answer a scope refusal with required_scopes; any other 403 there is an authorization
+    // refusal (manage rights, lake owner state) whose own message is the useful part.
+    const scopeRefusal = Array.isArray((data as { required_scopes?: unknown } | undefined)?.required_scopes);
+    if (scope?.startsWith('datalake:') && !scopeRefusal && serverMessage) {
+      return /\bmanage\b|review proposals/i.test(serverMessage)
+        ? `${serverMessage} (the key's owner needs manage rights on this lake; a different scope does not help)`
+        : serverMessage;
+    }
     if (serverMessage && /CSRF|request origin/i.test(serverMessage)) return serverMessage;
     // Must stay in sync with the ForbiddenError text in
     // apps/client/server/services/publish/checkScopePermission.ts.

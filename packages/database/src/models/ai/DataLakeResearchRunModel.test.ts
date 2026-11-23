@@ -93,6 +93,33 @@ describe('DataLakeResearchRunRepository', () => {
     });
   });
 
+  it('round-trips the drop buckets, and reads unlistedDropped as undefined when it was never saved', async () => {
+    const created = await repo.createRun(input());
+    await repo.settleRun(created.id, {
+      status: 'completed',
+      completedAt: new Date(),
+      spentMicroUsd: 1,
+      totals: { ...emptyResearchRunTotals(), filteredBySource: 3, unresolvedRedirect: 2, unlistedDropped: 4 },
+    });
+    expect((await repo.findByIdInLake(created.id, LAKE))?.totals).toMatchObject({
+      filteredBySource: 3,
+      unresolvedRedirect: 2,
+      unlistedDropped: 4,
+    });
+
+    const legacy = await repo.createRun(input());
+    const { unlistedDropped: _omitted, ...legacyTotals } = emptyResearchRunTotals();
+    await mongoose
+      .model('DataLakeResearchRun')
+      .collection.updateOne(
+        { _id: new mongoose.Types.ObjectId(legacy.id) },
+        { $set: { totals: { ...legacyTotals, filteredBySource: 5 } } }
+      );
+    const reread = await repo.findByIdInLake(legacy.id, LAKE);
+    expect(reread?.totals.filteredBySource).toBe(5);
+    expect(reread?.totals.unlistedDropped).toBeUndefined();
+  });
+
   it('lists one lake newest first, honoring a limit, and never another lake', async () => {
     // Spaced out: `createdAt` has millisecond resolution, and three inserts inside one millisecond
     // would make the sort this test is about unordered.
@@ -105,6 +132,28 @@ describe('DataLakeResearchRunRepository', () => {
 
     expect((await repo.listByLake(LAKE)).map(r => r.configId)).toEqual(['newest', 'middle', 'oldest']);
     expect((await repo.listByLake(LAKE, { limit: 2 })).map(r => r.configId)).toEqual(['newest', 'middle']);
+  });
+
+  it('pages by keyset without skipping or repeating rows that share a createdAt', async () => {
+    const ids: string[] = [];
+    for (const configId of ['a', 'b', 'c', 'd', 'e']) ids.push((await repo.createRun(input({ configId }))).id);
+    const same = new Date('2026-01-01T00:00:00.000Z');
+    await mongoose
+      .model('DataLakeResearchRun')
+      .collection.updateMany({ dataLakeId: LAKE }, { $set: { createdAt: same } });
+
+    const seen: string[] = [];
+    let after: { createdAt: Date; id: string } | undefined;
+    for (let page = 0; page < 5; page++) {
+      const rows = await repo.listByLake(LAKE, { limit: 2, after });
+      seen.push(...rows.map(r => r.id));
+      if (rows.length < 2) break;
+      after = { createdAt: rows[rows.length - 1].createdAt, id: rows[rows.length - 1].id };
+    }
+
+    expect(seen).toHaveLength(5);
+    expect(new Set(seen)).toEqual(new Set(ids));
+    expect(seen).toEqual([...ids].sort().reverse());
   });
 
   it('will not read a run through another lake id', async () => {

@@ -38,6 +38,8 @@ export const DEFAULT_MANIFEST = {
   GITHUB_ZAP_REF: { kind: 'secret', optional: true },
   GOOGLE_CLIENT_ID: { kind: 'secret', optional: true },
   GOOGLE_CLIENT_SECRET: { kind: 'secret', optional: true },
+  HMAC_SIGNING_SECRET: { kind: 'secret', optional: true },
+  HMAC_SIGNING_SECRET_PREVIOUS: { kind: 'secret', optional: true },
   JWT_SECRET: { kind: 'secret' },
   MAIL_FROM: { kind: 'secret', optional: true },
   MAIL_HOST: { kind: 'secret', optional: true },
@@ -110,7 +112,7 @@ export const DEFAULT_MANIFEST = {
   // unregistered key here left a folder reading "Connected" that could never sync, with the
   // claim released only by hand. Not optional: the self-host worker consumes it
   // (apps/workers/src/selfhost/main.ts), and the route has no degrade path - it throws AFTER
-  // taking a global, cross-org claim, unlike webhookDeliveryQueue's sites (see manifestCoverage.test.ts).
+  // taking a global, cross-org claim, unlike webhookDeliveryQueue's sites (see manifestCoverage.repo.test.ts).
   driveLakeIngestQueue: { kind: 'queue' },
   // Read by the Drive disconnect route (via sourceQueueUrls) and by its consumer's own slice
   // re-enqueue. Optional so an install that upgraded without the env var keeps the worker up; the
@@ -163,6 +165,9 @@ export const DEFAULT_MANIFEST = {
   dataLakeCleanupQueue: { kind: 'queue', optional: true },
   // Leftovers of a notebook or message delete's media purge; with no URL they are logged and dropped.
   generatedMediaPurgeQueue: { kind: 'queue', optional: true },
+  // Studio render jobs; drained by the optional render-worker compose profile (apps/workers/src/render/main.ts).
+  // With no URL the render submit step throws instead of queueing work nothing consumes.
+  renderJobQueue: { kind: 'queue', optional: true },
   researchEngineQueue: { kind: 'queue' },
   // Queue name -> URL map read by getSourceQueueUrl (dlqRegistry). Hosted links this as a
   // Linkable to the frontend Lambda instead of the individual queues; the shim computes it

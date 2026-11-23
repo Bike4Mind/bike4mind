@@ -6,12 +6,16 @@ import SwiftUI
 /// also the VoiceOver reading order, since the user may never look at it.
 struct VoiceConversationView: View {
   @Environment(AppServices.self) private var services
+  @Environment(AuthController.self) private var auth
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
   @Environment(\.openURL) private var openURL
+  @Environment(\.scenePhase) private var scenePhase
   @ScaledMetric(relativeTo: .largeTitle) private var orbSize: CGFloat = 132
 
   let request: VoiceRequest
   @State private var model: VoiceConversationModel?
+  /// The prompt is raised by itself once per lock; a cancelled one is not raised again until Unlock is tapped.
+  @State private var promptedUnlock = false
 
   var body: some View {
     VStack(spacing: Tokens.Spacing.l) {
@@ -24,11 +28,29 @@ struct VoiceConversationView: View {
       }
       Spacer(minLength: 0)
       if let model { controls(for: model) }
+      if auth.state == .locked {
+        Button("Unlock") { Task { await auth.unlock() } }
+          .buttonStyle(.borderedProminent)
+          .controlSize(.large)
+          .accessibilityIdentifier("voice-conversation-unlock-btn")
+      }
     }
     .padding(Tokens.Spacing.m)
     .frame(maxWidth: .infinity, maxHeight: .infinity)
     .background(Tokens.Palette.background)
-    .task { await run() }
+    // Nothing is loaded, read out or listened for until signed in with App Lock lifted (Listen can arrive from a notification).
+    .task(id: auth.state == .signedIn) {
+      if auth.state == .signedIn { await run() }
+    }
+    // This cover sits above LockedView, whose own unlock prompt ran while the app was still in the background.
+    .task(id: scenePhase) {
+      guard scenePhase == .active, auth.state == .locked, !promptedUnlock else { return }
+      promptedUnlock = true
+      await auth.unlock()
+    }
+    .onChange(of: auth.state) { _, state in
+      if state != .locked { promptedUnlock = false }
+    }
     .onDisappear { Task { await model?.stop() } }
     .onChange(of: model?.phase) { _, phase in announce(phase) }
   }
@@ -171,11 +193,38 @@ struct VoiceConversationView: View {
 
   // MARK: - Behavior
 
+  /// Runs in the view's task, which is cancelled when the screen goes away: a brief still loading then never
+  /// gets a model, and one dismissed while starting is stopped again.
   private func run() async {
     guard model == nil else { return }
-    let model = Self.makeModel(request: request, services: services)
+    var opening: [String] = []
+    var context: String?
+    var session: BriefVoiceSession?
+    if let briefID = request.briefID {
+      let auth = auth
+      let made = BriefVoiceSession(
+        briefID: briefID, api: services.briefs, pendingActions: services.pendingActions,
+        canAnswer: { auth.state == .signedIn && UIApplication.shared.applicationState == .active })
+      session = made
+      (opening, context) = await made.prepare()
+    }
+    let voiceID = await services.voiceCatalog.premiumVoice()
+    // Done may have been tapped during the lookup; onDisappear then had no model to stop.
+    guard !Task.isCancelled, model == nil else { return }
+    var handler: VoiceConversationModel.UtteranceHandler?
+    if let session {
+      handler = { utterance in await session.handle(utterance) }
+    }
+    let model = Self.makeModel(
+      request: request, services: services, voiceID: voiceID, opening: opening, context: context,
+      bargeInWords: session == nil ? [] : BriefVoiceSession.bargeInWords, answerPhrases: session?.answerPhrases ?? [],
+      handler: handler)
     self.model = model
     await model.start()
+    if Task.isCancelled {
+      await model.stop()
+      self.model = nil
+    }
   }
 
   private func end() {
@@ -202,20 +251,39 @@ struct VoiceConversationView: View {
     }
   }
 
-  private static func makeModel(request: VoiceRequest, services: AppServices) -> VoiceConversationModel {
+  private static func makeModel(
+    request: VoiceRequest, services: AppServices, voiceID: String?, opening: [String], context: String?,
+    bargeInWords: Set<String>, answerPhrases: Set<String>, handler: VoiceConversationModel.UtteranceHandler?
+  ) -> VoiceConversationModel {
     let model: VoiceConversationModel
     #if DEBUG
       // The Simulator has no usable speech input: B4M_VOICE_SCRIPTED_SPEECH=1 scripts the utterance while the
-      // send and the streamed reply still go through the real API and socket.
-      if FixtureServices.isEnabled || ProcessInfo.processInfo.environment["B4M_VOICE_SCRIPTED_SPEECH"] == "1" {
-        model = VoiceFixtures.makeModel(target: request.target, api: services.api, realtime: services.realtime)
+      // send and the streamed reply still go through the real API and socket. B4M_VOICE_SCRIPT="approve|yes"
+      // replaces the scripted utterances, one per turn.
+      let environment = ProcessInfo.processInfo.environment
+      if FixtureServices.isEnabled || environment["B4M_VOICE_SCRIPTED_SPEECH"] == "1" {
+        let script = environment["B4M_VOICE_SCRIPT"].map { $0.split(separator: "|").map(String.init) }
+        model = VoiceFixtures.makeModel(
+          target: request.target, api: services.api, realtime: services.realtime, bargeInWords: bargeInWords,
+          answerPhrases: answerPhrases, opening: opening,
+          firstTurnContext: context, utteranceHandler: handler,
+          script: script ?? ["What can you help me with today"])
         return model
       }
     #endif
     model = VoiceConversationModel(
       target: request.target, api: services.api, realtime: services.realtime, listener: SFSpeechListener(),
-      speaker: AVSpeechSpeaker(), audioSession: AVVoiceAudioSession())
+      speaker: makeSpeaker(services: services, voiceID: voiceID), audioSession: AVVoiceAudioSession(),
+      bargeInWords: bargeInWords, answerPhrases: answerPhrases, opening: opening, firstTurnContext: context,
+      utteranceHandler: handler)
     return model
+  }
+
+  /// The picked premium voice when there is one, else on-device speech; the premium one falls back on its own.
+  private static func makeSpeaker(services: AppServices, voiceID: String?) -> any SpeechSpeaking {
+    guard let voiceID else { return AVSpeechSpeaker() }
+    return ServerSpeechSpeaker(
+      wire: services.voiceAPI, voiceID: voiceID, fallback: AVSpeechSpeaker(), player: AVAudioClipPlayer())
   }
 
   private static func label(for phase: VoiceConversationModel.Phase) -> String {

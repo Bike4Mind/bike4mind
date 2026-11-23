@@ -3,6 +3,24 @@
 Everything below needs a physical iPhone, a signed build, or a deployed backend, so none of it runs in the simulator or in
 CI. Work through it before the first TestFlight build and again before each release. Mark each item with the build and date.
 
+## Personal device with a free Apple ID
+
+A free personal team signs none of Push, Associated Domains, App Groups or Keychain Sharing, and its bundle ids must be
+unique. Set that up once in a gitignored file; no tracked file changes, so `git pull` never conflicts with it:
+
+```bash
+cp Config/Local.xcconfig.example Config/Local.xcconfig
+```
+
+In `Config/Local.xcconfig`, set `DEVELOPMENT_TEAM` (your personal team id) and `B4M_APP_BUNDLE_ID` (a unique id; the
+widgets and share extension ids derive from it), and leave the three `*_ENTITLEMENTS` lines pointing at
+`Config/Entitlements/*.personal.entitlements` (empty variants). Then build and run the `Bike4Mind` scheme on your phone.
+
+What to expect: the app keeps its refresh token in an app-private keychain item, the share extension reports it is signed out,
+widgets show placeholders, and universal links and push do not work. Production sign-in needs the signed Associated Domains
+capability, so point a personal build at a non-production server (see the README "Sign-in callback" table). With no
+`Local.xcconfig` the defaults are the team/CI values, unchanged.
+
 ## Prerequisites (Apple Developer portal and backend)
 
 - [ ] Apple Developer team id configured (`IOS_TEAM_ID` / `DEVELOPMENT_TEAM`) on a paid team, automatic signing on for the app and both extensions.
@@ -12,7 +30,9 @@ CI. Work through it before the first TestFlight build and again before each rele
       bundle ids, or the extension cannot reach the session.
 - [ ] `apple-app-site-association` published at `https://app.bike4mind.com/.well-known/apple-app-site-association` listing
       `/sessions/*` and `/notebooks/*` under `applinks`, and the app id under `webcredentials.apps` (the entitlement declares
-      both `applinks:` and `webcredentials:app.bike4mind.com`).
+      both `applinks:` and `webcredentials:app.bike4mind.com`). The backend serves it; set the **iOS App Team ID**
+      admin setting (`iosAppTeamId`, under API Clients) in production, then check
+      `curl -i https://app.bike4mind.com/.well-known/apple-app-site-association` lists `<TEAMID>.com.bike4mind.app`.
 - [ ] APNs auth key uploaded to the backend; Live Activity push (`liveactivity` push type) enabled for it.
 - [ ] The `b4m-ios-app` OAuth client lists only `https://app.bike4mind.com/ios/auth-callback`, and production has no
       `b4m-ios-app-dev` client (see the README "Sign-in callback" table).
@@ -196,7 +216,7 @@ Run on the first TestFlight build and every release candidate:
 - [ ] Live Activity: start, update, end.
 - [ ] App Lock (Face ID), sign out, sign in again.
 - [ ] Dynamic Type at the largest accessibility size on the Chat home, Notebooks, chat and Settings; VoiceOver through sign-in, a chat turn and Settings.
-- [ ] Icon and launch screen show (the shipped icon is a placeholder, see the README).
+- [ ] Home-screen icon, launch screen, sign-in header and the Chat home greeting mark show the official brand mark.
 
 ## Things worth watching that are not in a feature list
 

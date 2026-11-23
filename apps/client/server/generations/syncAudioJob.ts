@@ -11,6 +11,7 @@ import {
   type StorageLimitErrorInfo,
 } from '@bike4mind/common';
 import { fabFileRepository, generationJobRepository } from '@bike4mind/database';
+import { isQuotaExhaustedReason } from '@bike4mind/utils';
 import type { SaveGeneratedAssetResult } from '@bike4mind/services';
 import type { CreateAudioJobResult } from '@bike4mind/services/audioJobs';
 import type { CancelRequestOutcome, RunJobInlineOptions } from '@bike4mind/services/generationJobs';
@@ -159,11 +160,28 @@ export async function savedCopyOf(
 export const providerStatusOf = (job: IGenerationJobDocument): number | undefined => job.error?.providerStatus;
 
 /**
+ * A job the provider refused because the account behind our key is out of quota or credits (the handlers record the
+ * provider's `*_quota_exhausted` reason as the error message). It can arrive as a 401 or 429, so it is checked
+ * before those are read as a rejected key or a rate limit.
+ */
+export const isQuotaExhaustedFailure = (job: IGenerationJobDocument): boolean =>
+  job.state === 'failed' && job.error?.code === 'provider_error' && isQuotaExhaustedReason(job.error.message);
+
+/**
  * A job the provider rate limited or that found no free capacity slot. The handlers fail it at once instead of
  * retrying, so the caller is told to come back rather than the job billing after the inline wait gave up.
  */
 export const isRateLimitedFailure = (job: IGenerationJobDocument): boolean =>
-  job.state === 'failed' && providerStatusOf(job) === 429;
+  job.state === 'failed' && providerStatusOf(job) === 429 && !isQuotaExhaustedFailure(job);
+
+/**
+ * The level a route logs a failed job at. A submit our own step deadline cut off and an exhausted provider quota are
+ * expected, handled outcomes (no audio, hold refunded), so they are warnings; every other failure stays an error.
+ */
+export const failureLogLevelOf = (job: IGenerationJobDocument): 'warn' | 'error' => {
+  if (isQuotaExhaustedFailure(job)) return 'warn';
+  return job.error?.code === 'orphaned_submit' && job.error.cutOffByStepDeadline ? 'warn' : 'error';
+};
 
 // For a rate-limited failure recorded without a hint of its own.
 const DEFAULT_RETRY_AFTER_SECONDS = 30;

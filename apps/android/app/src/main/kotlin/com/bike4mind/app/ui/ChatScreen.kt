@@ -24,24 +24,35 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.unit.dp
+import androidx.compose.ui.res.stringResource
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.bike4mind.app.AppGraph
+import com.bike4mind.app.R
+import com.bike4mind.kit.approvals.PendingActionDecision
+import com.bike4mind.kit.capture.readyFileIds
 import com.bike4mind.kit.chat.ChatError
+import com.bike4mind.kit.chat.ChatState
+import com.bike4mind.kit.sessions.PendingAction
 import com.bike4mind.kit.sessions.Quest
 
 class ChatViewModel(graph: AppGraph, sessionId: String?) : ViewModel() {
     val controller = graph.chat(sessionId, viewModelScope).also { it.start() }
+    val attachments = graph.composerAttachments(viewModelScope)
+    val dictation = graph.dictation(viewModelScope)
 
     override fun onCleared() {
         controller.stop()
+        dictation.cancel()
+        attachments.clear()
     }
 }
 
@@ -51,18 +62,30 @@ fun ChatScreen(graph: AppGraph, sessionId: String?, onBack: () -> Unit) {
     // Scoped by AppRoot's ScreenScope: cleared (and the controller stopped) when this chat closes.
     val model = viewModel { ChatViewModel(graph, sessionId) }
     val state by model.controller.state.collectAsStateWithLifecycle()
+    val attachments by model.attachments.state.collectAsStateWithLifecycle()
+    val dictation by model.dictation.state.collectAsStateWithLifecycle()
     var draft by rememberSaveable { mutableStateOf("") }
+    var problem by remember { mutableStateOf<String?>(null) }
     val list = rememberLazyListState()
+    val fileIds = attachments.readyFileIds()
+    val attachedMessage = stringResource(R.string.capture_attached_message, attachments.joinToString(", ") { it.name })
 
     LaunchedEffect(state.turns.size) {
         if (state.turns.isNotEmpty()) list.animateScrollToItem(state.turns.lastIndex)
     }
 
+    DictationDialog(
+        state = dictation,
+        onDone = { model.dictation.finish { text -> draft = if (draft.isBlank()) text else "$draft $text" } },
+        onCancel = model.dictation::cancel,
+        onDismissFailure = model.dictation::dismissFailure,
+    )
+
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text(if (sessionId == null && state.sessionId == null) "New chat" else "Chat") },
-                navigationIcon = { TextButton(onClick = onBack) { Text("Back") } },
+                title = { Text(stringResource(if (sessionId == null && state.sessionId == null) R.string.chat_title_new else R.string.chat_title)) },
+                navigationIcon = { TextButton(onClick = onBack) { Text(stringResource(R.string.action_back)) } },
             )
         },
     ) { padding ->
@@ -71,38 +94,60 @@ fun ChatScreen(graph: AppGraph, sessionId: String?, onBack: () -> Unit) {
             LazyColumn(
                 state = list,
                 modifier = Modifier.weight(1f).fillMaxWidth(),
-                verticalArrangement = Arrangement.spacedBy(12.dp),
+                verticalArrangement = Arrangement.spacedBy(Spacing.m),
             ) {
-                items(state.turns, key = { it.id }) { turn -> Turn(turn) }
+                items(state.turns, key = { it.id }) { turn ->
+                    Turn(turn, state) { action, decision -> model.controller.respond(turn.id, action, decision) }
+                }
             }
             state.statusMessage?.let {
-                Text(it, style = MaterialTheme.typography.labelMedium, modifier = Modifier.padding(horizontal = 16.dp))
+                Text(it, style = MaterialTheme.typography.labelMedium, modifier = Modifier.padding(horizontal = Spacing.m))
             }
             state.error?.let { error ->
                 Text(
                     text = when (error) {
-                        is ChatError.Refused -> error.message ?: "The message was refused (${error.errorCode ?: "unknown"})"
+                        is ChatError.Refused -> error.message ?: stringResource(R.string.chat_refused, error.errorCode ?: stringResource(R.string.chat_refused_unknown))
                         is ChatError.Failed -> error.message
                     },
                     color = MaterialTheme.colorScheme.error,
-                    modifier = Modifier.padding(horizontal = 16.dp),
+                    modifier = Modifier.padding(horizontal = Spacing.m),
                 )
             }
+            problem?.let {
+                Text(it, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(horizontal = Spacing.m))
+            }
+            AttachmentList(attachments, onRemove = model.attachments::remove, onRetry = model.attachments::retry)
             Row(
-                modifier = Modifier.fillMaxWidth().padding(12.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier.fillMaxWidth().padding(Spacing.m),
+                horizontalArrangement = Arrangement.spacedBy(Spacing.s),
+                verticalAlignment = Alignment.CenterVertically,
             ) {
+                AttachMenu(
+                    onPicked = { picked ->
+                        problem = null
+                        model.attachments.add(picked.file, picked.name, picked.mimeType)
+                    },
+                    onDictate = {
+                        problem = null
+                        model.dictation.start()
+                    },
+                    onProblem = { problem = it },
+                    enabled = !state.sending,
+                )
                 OutlinedTextField(
                     value = draft,
                     onValueChange = { draft = it },
                     modifier = Modifier.weight(1f).testTag("chat-composer-field"),
-                    placeholder = { Text("Message") },
+                    placeholder = { Text(stringResource(R.string.chat_message_placeholder)) },
                 )
-                Button(modifier = Modifier.testTag("chat-composer-send"), enabled = draft.isNotBlank() && !state.sending, onClick = {
-                    model.controller.send(draft)
+                val canSend = !state.sending && fileIds != null && (draft.isNotBlank() || attachments.isNotEmpty())
+                Button(modifier = Modifier.testTag("chat-composer-send"), enabled = canSend, onClick = {
+                    // A turn needs words; files sent on their own go out named.
+                    val message = draft.ifBlank { attachedMessage }
+                    model.controller.send(message, fileIds.orEmpty()) { model.attachments.clear() }
                     draft = ""
                 }) {
-                    Text("Send")
+                    Text(stringResource(R.string.chat_send))
                 }
             }
         }
@@ -110,16 +155,19 @@ fun ChatScreen(graph: AppGraph, sessionId: String?, onBack: () -> Unit) {
 }
 
 @Composable
-private fun Turn(turn: Quest) {
-    Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+private fun Turn(turn: Quest, chat: ChatState, onRespond: (PendingAction, PendingActionDecision) -> Unit) {
+    Column(modifier = Modifier.fillMaxWidth().padding(horizontal = Spacing.m), verticalArrangement = Arrangement.spacedBy(Spacing.s)) {
         turn.prompt?.let { prompt ->
-            Card(modifier = Modifier.testTag("message-user")) { Text(prompt, modifier = Modifier.padding(12.dp)) }
+            Card(modifier = Modifier.testTag("message-user")) { Text(prompt, modifier = Modifier.padding(Spacing.m)) }
         }
         val reply = turn.reply
         when {
-            turn.failed -> Text("The reply failed${turn.errorCode?.let { " ($it)" } ?: ""}.", color = MaterialTheme.colorScheme.error)
-            reply.isNullOrEmpty() && !turn.status.isTerminal -> Text("...", style = MaterialTheme.typography.bodyLarge)
+            turn.failed -> Text(turn.errorCode?.let { stringResource(R.string.chat_reply_failed_code, it) } ?: stringResource(R.string.chat_reply_failed), color = MaterialTheme.colorScheme.error)
+            reply.isNullOrEmpty() && !turn.status.isTerminal -> Text(stringResource(R.string.chat_reply_pending), style = MaterialTheme.typography.bodyLarge)
             reply != null -> Text(reply, style = MaterialTheme.typography.bodyLarge, modifier = Modifier.testTag("message-assistant"))
+        }
+        turn.pendingAction?.let { action ->
+            ApprovalCard(action, chat.approval(turn.id, action)) { decision -> onRespond(action, decision) }
         }
     }
 }

@@ -127,8 +127,14 @@ it('shows disproven assumptions and denies an upgrade without starting another a
       },
     },
   });
-  await themed.render(<TaskDecisionPanel agent={agent} />);
+  await themed.render(<TaskDecisionPanel agent={agent} compact />);
   expect(document.body.textContent).toContain('Observed the incompatible signature');
+  const details = el('agent-task-details') as HTMLDetailsElement;
+  expect(details.open).toBe(false);
+  expect(document.querySelector('[data-testid="agent-task-state"]')).toBeNull();
+  for (const id of ['agent-task-upgrade-btn', 'agent-task-deny-btn', 'agent-task-cancel-btn']) {
+    expect(details.contains(el(id))).toBe(false);
+  }
   await act(async () => el('agent-task-deny-btn').click());
   expect(taskAction).toHaveBeenCalledTimes(1);
   expect(taskAction).toHaveBeenLastCalledWith('child', {
@@ -136,7 +142,8 @@ it('shows disproven assumptions and denies an upgrade without starting another a
     decisionId: 'decision-one',
     reason: 'User declined the model upgrade.',
   });
-  expect(el('agent-task-state').textContent).toContain('blocked');
+  expect(document.body.textContent).toContain('User declined the model upgrade.');
+  expect(document.querySelector('[data-testid="agent-task-upgrade-btn"]')).toBeNull();
 });
 
 it.each(['blocked', 'escalation-requested', 'completed'] as const)(

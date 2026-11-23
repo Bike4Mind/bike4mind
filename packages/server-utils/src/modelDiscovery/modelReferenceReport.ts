@@ -13,6 +13,9 @@ import {
 import { apiKeyService } from '@bike4mind/services';
 import { builtInAgentModelReferences } from '@bike4mind/services/llm/agents/ServerAgentStore';
 import { DEFAULT_FALLBACK_CHAIN, FALLBACK_PREFERENCES, getSettingsByNames } from '@bike4mind/utils';
+import { allSettingDefinitions, type SettingKey } from '@bike4mind/common';
+// The audit cron enters here without baseApi, so load the contributed definitions for it too.
+import '../lib/settings/registerContributedSettings';
 
 // voiceSessionTranscriptionModel is deliberately absent: it goes straight to the
 // OpenAI Realtime API (pages/api/ai/voice-sessions), never through the merged
@@ -38,9 +41,14 @@ export async function configuredModelReferences(): Promise<Record<string, string
       references[`orchestrationDefaults.intentClassifier.fallbackModels.${index}`] = model;
     }
   }
-  const sreConfig = await adminSettingsRepository.getSettingsValue('sreAgentConfig');
-  for (const [index, repo] of (sreConfig?.repos ?? []).entries()) {
-    if (repo.enabled) references[`sreAgentConfig.repos.${index}.modelId`] = repo.modelId;
+  for (const definition of allSettingDefinitions()) {
+    if (!definition.modelReferences) continue;
+    // getSettingsValue resolves a contributed key as well; only its type is limited to core keys.
+    const value: unknown = await adminSettingsRepository.getSettingsValue(definition.key as SettingKey);
+    if (!value) continue;
+    for (const [path, model] of Object.entries(definition.modelReferences(value))) {
+      references[`${definition.key}.${path}`] = model;
+    }
   }
   return references;
 }

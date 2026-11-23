@@ -1,7 +1,7 @@
 // GET/PUT/DELETE /api/organizations/:id/custom-mcp/policy
 // The org's custom MCP connector policy (mode, including the `off` kill switch, host lists,
 // requireApprovalForAll and the rest of CustomMcpPolicySchema). Owner, current manager or platform
-// admin (verifyOrgAccess). DELETE drops the override so the org inherits the platform value.
+// admin (managePolicies). DELETE drops the override so the org inherits the platform value.
 
 import { CustomMcpPolicySchema } from '@bike4mind/common';
 import { parseOrBadRequest } from '@bike4mind/server-utils/utils/errors';
@@ -14,7 +14,7 @@ import {
   setOrgCustomMcpPolicy,
 } from '@server/mcpConnections/orgPolicy';
 import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
-import { verifyOrgAccess } from '@bike4mind/server-utils/utils/orgAccess';
+import { verifyOrgPermission } from '@bike4mind/server-utils/utils/orgAccess';
 import type { Request } from 'express';
 
 type OrgRequest = Request<{}, unknown, unknown, { id?: string }>;
@@ -57,13 +57,13 @@ const normalizeStored = (stored: string | null): string | null => {
 const handler = baseApi({ auth: 'jwtOnly' })
   .get(
     asyncHandler<{}, unknown, unknown, { id?: string }>(async (req, res) => {
-      const org = await verifyOrgAccess(req.user!, orgIdOf(req));
+      const org = await verifyOrgPermission(req.user!, orgIdOf(req), 'managePolicies');
       return res.json(await getOrgCustomMcpPolicy(org.id));
     })
   )
   .put(
     asyncHandler<{}, unknown, unknown, { id?: string }>(async (req, res) => {
-      const org = await verifyOrgAccess(req.user!, orgIdOf(req));
+      const org = await verifyOrgPermission(req.user!, orgIdOf(req), 'managePolicies');
       const policy = parseOrBadRequest(CustomMcpPolicySchema.strict(), req.body);
       const before = await readOrgCustomMcpPolicyOverride(org.id);
       const after = await setOrgCustomMcpPolicy(org.id, policy);
@@ -75,7 +75,7 @@ const handler = baseApi({ auth: 'jwtOnly' })
   )
   .delete(
     asyncHandler<{}, unknown, unknown, { id?: string }>(async (req, res) => {
-      const org = await verifyOrgAccess(req.user!, orgIdOf(req));
+      const org = await verifyOrgPermission(req.user!, orgIdOf(req), 'managePolicies');
       const before = await readOrgCustomMcpPolicyOverride(org.id);
       await resetOrgCustomMcpPolicy(org.id);
       // Resetting an org that has no override changes nothing, so it is not an admin change.

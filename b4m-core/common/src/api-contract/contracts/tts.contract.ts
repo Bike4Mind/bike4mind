@@ -22,6 +22,7 @@ import {
   BILLING_ORGANIZATION_FORBIDDEN_DESCRIPTION,
   BILLING_ORGANIZATION_STALE_KEY_DESCRIPTION,
 } from '../../schemas/billingOrganization';
+import { SPEND_FROZEN_FORBIDDEN_NOTE } from '../../schemas/chat';
 
 const exampleOutlastedJob = {
   id: EXAMPLE_RESOURCE_ID,
@@ -105,7 +106,7 @@ export const synthesizeSpeechContract = defineEndpoint({
     403: {
       description:
         'The API key lacks the `ai:generate` scope (`required_scopes` names it), or ' +
-        `${BILLING_ORGANIZATION_FORBIDDEN_DESCRIPTION}`,
+        `${BILLING_ORGANIZATION_FORBIDDEN_DESCRIPTION} ${SPEND_FROZEN_FORBIDDEN_NOTE}`,
       schema: ttsForbiddenResponseSchema,
     },
     404: {
@@ -126,6 +127,10 @@ export const synthesizeSpeechContract = defineEndpoint({
       description:
         'The provider failed to generate speech. When the clip was generated but could not be read back, the body ' +
         'carries `jobId`, also sent as `X-B4M-Generation-Job-Id`.',
+      schema: ttsErrorResponseSchema,
+    },
+    503: {
+      description: 'Every candidate provider is out of quota, so speech is temporarily unavailable.',
       schema: ttsErrorResponseSchema,
     },
     504: unretrievableAudioResponse({ noun: 'speech', schema: ttsErrorResponseSchema }),

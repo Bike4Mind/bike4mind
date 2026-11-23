@@ -212,6 +212,7 @@ const OrgCustomMcpPolicySection: FC<{ organization: IOrganizationDocument }> = (
             onChange={event => update({ enabled: event.target.checked })}
             slotProps={{ input: { 'aria-label': 'Custom connectors enabled' } }}
             data-testid="org-custom-mcp-enabled-switch"
+            sx={{ flexShrink: 0 }}
           />
         </Stack>
       </Card>

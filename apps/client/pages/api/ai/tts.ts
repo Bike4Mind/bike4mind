@@ -22,6 +22,8 @@ import {
   createAudioJobKeepingAudioOnFullQuota,
   dailyLimitError,
   GENERATION_JOB_ID_HEADER,
+  failureLogLevelOf,
+  isQuotaExhaustedFailure,
   isRateLimitedFailure,
   prefersRespondAsync,
   providerStatusOf,
@@ -182,8 +184,12 @@ const handler = nextRouteForContract(synthesizeSpeechContract).post(async (req, 
       return res.status(422).json({ error: `TTS request rejected by the ${vendor} provider`, provider: vendor });
     case 'failed': {
       const failure = failedResponse(job, vendor);
-      if (failure.status === 502) {
-        req.logger.error('TTS synthesis failed', { jobId: job.id, error: job.error, provider: vendor });
+      if (failure.status === 502 || failure.status === 503) {
+        req.logger[failureLogLevelOf(job)]('TTS synthesis failed', {
+          jobId: job.id,
+          error: job.error,
+          provider: vendor,
+        });
       }
       if (failure.status === 429) res.setHeader('Retry-After', String(retryAfterSecondsOf(job)));
       return res.status(failure.status).json(failure.body);
@@ -247,13 +253,21 @@ function formatUsed(
 
 /**
  * Folds a failed job onto a status tts.contract.ts documents, with a generic body so the provider's raw error text
- * never leaks: a credential rejection (401 or 403) is a 401, a provider rate limit stays a 429, any other rejection
- * of the request (bad voice, bad parameter) is a 422, and anything else is an upstream 502.
+ * never leaks: an exhausted provider quota is a 503, a credential rejection (401 or 403) is a 401, a provider rate
+ * limit stays a 429, any other rejection of the request (bad voice, bad parameter) is a 422, and anything else is an
+ * upstream 502.
  */
 function failedResponse(
   job: IGenerationJobDocumentOf<'speech'>,
   vendor: VoiceGenerationVendor
-): { status: 401 | 422 | 429 | 502; body: Record<string, unknown> } {
+): { status: 401 | 422 | 429 | 502 | 503; body: Record<string, unknown> } {
+  // Every candidate was tried before this, so no other vendor could cover for the empty account.
+  if (isQuotaExhaustedFailure(job)) {
+    return {
+      status: 503,
+      body: { error: 'Text-to-speech is temporarily unavailable. Please try again later.', provider: vendor },
+    };
+  }
   const rejected = { error: `TTS request rejected by the ${vendor} provider`, provider: vendor };
   const status = providerStatusOf(job);
   if (isRateLimitedFailure(job)) return { status: 429, body: rejected };

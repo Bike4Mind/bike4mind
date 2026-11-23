@@ -1,10 +1,10 @@
-import { mkdtemp } from 'node:fs/promises';
+import { mkdtemp, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
 import type { AuthenticatedApiClient } from '@bike4mind/client-auth';
 import type { ChatAttachment, ChatModelOption, ChatStreamEvent } from '@shared/chat';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
 import { AttachmentStore } from './AttachmentStore';
 import { ChatService } from './ChatService';
 import { makePdf } from './pdfFixtures';
@@ -50,6 +50,7 @@ describe('ChatService attachments', () => {
   /** One stream per request: a turn now puts two out, the reply and the session's title. */
   let streams: PassThrough[];
   let post: ReturnType<typeof vi.fn>;
+  let composerDrafts: { forget: Mock<(sessionId: string) => Promise<void>> };
   let cachedModels: ChatModelOption[];
 
   beforeEach(async () => {
@@ -69,9 +70,11 @@ describe('ChatService attachments', () => {
     post = boundPost;
     cachedModels = [{ id: 'vision-model', name: 'Vision Model', supportsVision: true }];
 
+    composerDrafts = { forget: vi.fn<(sessionId: string) => Promise<void>>().mockResolvedValue(undefined) };
     service = new ChatService({
       store,
       attachments,
+      composerDrafts,
       access: { list: async () => [] } as unknown as AccessStore,
       models: { cached: () => cachedModels, list: async () => ({ models: cachedModels }) } as unknown as ModelCatalog,
       preferredModel: 'vision-model',
@@ -115,7 +118,14 @@ describe('ChatService attachments', () => {
       type: 'image',
       source: { type: 'base64', media_type: 'image/png', data: Buffer.from([1, 2, 3]).toString('base64') },
     });
-    expect(content[1]).toEqual({ type: 'text', text: 'what is wrong here?' });
+    expect(content[1]).toMatchObject({
+      type: 'text',
+      text: expect.stringMatching(
+        /^<attached-image-file name="bug\.png" media-type="image\/png" path="[^"]+" \/>\n\nwhat is wrong here\?$/
+      ),
+    });
+    const storedPath = /path="([^"]+)"/.exec((content[1] as { text: string }).text)?.[1] ?? '';
+    expect([...(await readFile(storedPath))]).toEqual([1, 2, 3]);
   });
 
   it('inlines a text file ahead of the prompt, tagged with its name', async () => {
@@ -300,5 +310,21 @@ describe('ChatService attachments', () => {
     await service.deleteSession(id);
 
     expect(await attachments.read(id, image.id)).toBeNull();
+  });
+
+  it('forgets the unsent draft only after the stored conversation is deleted', async () => {
+    const { id } = await service.createSession();
+    const order: string[] = [];
+    const deleteStored = store.delete.bind(store);
+    vi.spyOn(store, 'delete').mockImplementation(async (...args) => {
+      await deleteStored(...args);
+      order.push('store.delete');
+    });
+    composerDrafts.forget.mockImplementation(async () => void order.push('forget'));
+
+    await service.deleteSession(id);
+
+    expect(composerDrafts.forget).toHaveBeenCalledWith(id);
+    expect(order).toEqual(['store.delete', 'forget']);
   });
 });

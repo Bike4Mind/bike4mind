@@ -1,4 +1,4 @@
-import { ForbiddenError } from '@bike4mind/utils';
+import { ForbiddenError, ProviderQuotaExhaustedError } from '@bike4mind/utils';
 import { createModelAdmission } from '@bike4mind/server-utils/billing/meterPlatformCompletion';
 vi.mock('@bike4mind/server-utils/billing/meterPlatformCompletion', () => ({
   createModelAdmission: vi.fn(async () => ({
@@ -93,6 +93,7 @@ vi.mock('@bike4mind/server-utils/utils/errors', () => ({
   },
 }));
 vi.mock('@bike4mind/database', () => ({
+  spendFreezeRepository: { findActiveForSubject: async () => null },
   warmExchangeAttribution: async () => undefined,
   apiKeyRepository: {},
   cacheRepository: { sentinel: 'cacheRepository' },
@@ -195,12 +196,13 @@ const run = (
   headers: Record<string, string> = {}
 ) => {
   const { req, res } = createMocks({ method: 'POST', body, headers });
+  const logger = { error: vi.fn(), warn: vi.fn() };
   Object.assign(req, {
     user: { id: 'u1', organizationId: userOrganizationId ?? null },
     apiKeyInfo,
-    logger: { error: vi.fn(), warn: vi.fn() },
+    logger,
   });
-  return { res, promise: (handler as Handler)(req, res) };
+  return { res, logger, promise: (handler as Handler)(req, res) };
 };
 
 beforeEach(() => {
@@ -578,6 +580,29 @@ describe('POST /api/ai/music', () => {
     expect(res._getStatusCode()).toBe(502);
     expect(userIncrement).toHaveBeenNthCalledWith(2, 'u1', 150);
     expect(recordUsage).toHaveBeenCalledWith(expect.objectContaining({ status: 'error' }));
+  });
+
+  it('answers an exhausted provider quota with 503 temporarily unavailable, at warn, and refunds', async () => {
+    getSettingsValue.mockReturnValue(true);
+    estimateMusicCredits.mockReturnValue({ requiredCredits: 150, usdCost: 0.075, billedSeconds: 30 });
+    generate.mockRejectedValue(
+      new ProviderQuotaExhaustedError('elevenlabs', 401, '{"detail":{"status":"quota_exceeded"}}', 'quota exhausted')
+    );
+
+    const { res, logger, promise } = run({ prompt: 'thunder score', lengthMs: 30000 });
+    await promise;
+
+    expect(res._getStatusCode()).toBe(503);
+    expect(res._getJSONData()).toEqual({
+      error: 'Music generation is temporarily unavailable. Please try again later.',
+    });
+    expect(logger.warn).toHaveBeenCalledWith(
+      'Music generation unavailable: provider quota exhausted',
+      expect.objectContaining({ status: 401 })
+    );
+    expect(logger.error).not.toHaveBeenCalled();
+    expect(userIncrement).toHaveBeenNthCalledWith(2, 'u1', 150);
+    expect(deductCredits).not.toHaveBeenCalled();
   });
 
   it('maps an upstream provider failure to 502 and refunds the reservation', async () => {

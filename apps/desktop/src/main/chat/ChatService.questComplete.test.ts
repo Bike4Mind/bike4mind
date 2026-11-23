@@ -14,6 +14,7 @@ import { BackgroundProcessRegistry } from './tools/BackgroundProcessRegistry';
 // The user's login-shell PATH is slow to resolve and irrelevant to what is under test.
 vi.mock('./tools/userPath', async importOriginal => ({
   ...(await importOriginal<typeof import('./tools/userPath')>()),
+  resolveLoginShellVariables: async () => ({}),
   resolveUserPath: vi.fn(async () => process.env.PATH ?? ''),
 }));
 

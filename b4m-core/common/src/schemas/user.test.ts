@@ -33,6 +33,11 @@ describe('canAccessTavern', () => {
     expect(canAccessTavern({ tags: ['Tavern'] })).toBe(true);
   });
 
+  it('grants developer-tagged users', () => {
+    expect(canAccessTavern({ isAdmin: false, tags: ['Developer'] })).toBe(true);
+    expect(canAccessTavern({ tags: ['dev'] })).toBe(true);
+  });
+
   it('denies non-admins without the tavern tag', () => {
     expect(canAccessTavern({ isAdmin: false, tags: [] })).toBe(false);
     expect(canAccessTavern({ isAdmin: false, tags: ['Analyst'] })).toBe(false);

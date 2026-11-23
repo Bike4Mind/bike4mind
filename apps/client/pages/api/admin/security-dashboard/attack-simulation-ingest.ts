@@ -8,11 +8,12 @@ import {
   type SecurityFindingSeverity,
 } from '@bike4mind/database';
 import { Resource } from 'sst';
-import { isPlaceholderValue } from '@bike4mind/common';
-import { verifyIngestToken } from '@server/security/ingestToken';
+import { isUnconfiguredSecret } from '@bike4mind/common';
+import { verifyIngestToken } from '@bike4mind/server-utils/security/ingestToken';
 import { resolveStage } from '@bike4mind/server-utils/security/resolveStage';
 import { Logger } from '@bike4mind/observability';
 import { SQSClient, SendMessageCommand } from '@aws-sdk/client-sqs';
+import { resolveCheckedAt } from '@bike4mind/server-utils/security/resolveCheckedAt';
 import { getSourceQueueUrl } from '@bike4mind/server-utils/utils/dlqRegistry';
 import type {
   AttackSimulationFinding,
@@ -94,7 +95,7 @@ const handler = baseApi<Request, Response>({ auth: false }).post(async (req: Req
   const ingestToken =
     Resource.SECOPS_ATTACK_SIMULATION_INGEST_TOKEN?.value || process.env.SECOPS_ATTACK_SIMULATION_INGEST_TOKEN;
 
-  if (!ingestToken || isPlaceholderValue(ingestToken)) {
+  if (isUnconfiguredSecret(ingestToken)) {
     return res.status(500).json({ error: 'Attack simulation ingest token is not configured.' });
   }
 
@@ -147,8 +148,8 @@ const handler = baseApi<Request, Response>({ auth: false }).post(async (req: Req
   const stage = rawStageValue;
 
   const now = new Date();
-  const lastSeenAt = finishedAt && !Number.isNaN(Date.parse(finishedAt)) ? new Date(finishedAt) : now;
-  const runStartedAt = startedAt && !Number.isNaN(Date.parse(startedAt)) ? new Date(startedAt) : now;
+  const lastSeenAt = resolveCheckedAt(finishedAt, undefined, now);
+  const runStartedAt = resolveCheckedAt(startedAt, undefined, now);
 
   // Bulk upsert collapses N sequential round-trips into a single bulkWrite + a follow-up
   // fetch. The fetched documents are what we publish to secopsTriageQueue below - the
