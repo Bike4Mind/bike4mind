@@ -48,7 +48,7 @@ export const CALLABLE_FUNCTIONS_STATUS_QUERY_KEY = ['callable-functions', 'statu
 
 /**
  * Prefix of the query keys for the current user's saved functions
- * Used by useArtifactCallableFunction() - returns ICallableFunctionPublic[]
+ * Used by useArtifactCallableFunction() - returns ICallableFunctionPublic | null
  * Invalidated by every callable function mutation
  */
 export const CALLABLE_FUNCTIONS_LIST_QUERY_KEY = ['callable-functions', 'list'] as const;
