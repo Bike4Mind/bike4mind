@@ -51,6 +51,7 @@ export const AGENT_FIELD_REDACTION = {
   plan: 'drop',
   pr: 'drop',
   branch: 'drop',
+  background: 'drop',
   redacted: 'replace',
 } as const satisfies Record<keyof AgentView, FieldRedaction>;
 

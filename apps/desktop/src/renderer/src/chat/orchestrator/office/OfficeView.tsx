@@ -1,6 +1,7 @@
 import { useMemo } from 'react';
 import { Box, Button, Typography } from '@mui/joy';
 import { keyframes } from '@mui/system';
+import type { AgentState } from '@shared/agentState';
 import type { AgentView } from '../roster';
 import type { OrchestratorViewProps } from '../OrchestratorStage';
 import { AgentPrIndicator } from '../AgentPrIndicator';
@@ -43,12 +44,14 @@ function placeAgents(rooms: ReadonlyMap<OfficeRoom, readonly AgentView[]>): Plac
 
 const STATE_COLOR = {
   working: '#e7bc55',
+  waiting: '#6fa8dc',
   'needs-you': '#ffe778',
   done: '#96c780',
   failed: '#ee8c75',
   idle: '#c4c5b1',
   stopped: '#c4c5b1',
-};
+  paused: '#c9b27a',
+} satisfies Record<AgentState, string>;
 
 export function OfficeView({
   agents,
