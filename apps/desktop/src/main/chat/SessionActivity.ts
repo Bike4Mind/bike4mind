@@ -10,9 +10,8 @@ import type { ChatSessionStatus, ChatSessionStatusEvent, SessionSetupStep } from
  * already parked at the approval gate has seen no events for it at all, and would draw the one
  * session that needs the user as the one session that is idle.
  *
- * Nothing here is persisted, and that is correct rather than a shortcut: every state it tracks
- * is anchored to an in-memory AbortController or an unresolved promise, so after a restart no
- * session is processing and none is waiting for an answer.
+ * Live activity and unread replies are in memory. Pending task decisions are restored from the
+ * session store after a restart; unread reply attention lasts for the current app run.
  */
 export class SessionActivity {
   private readonly replying = new Set<string>();
