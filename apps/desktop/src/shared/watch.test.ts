@@ -77,14 +77,14 @@ describe('buildWatchSnapshot', () => {
     expect(snapshot.needsYouCount).toBe(1);
   });
 
-  it('counts a decision-waiting worker task as needs-you with nothing pending or waiting since', () => {
+  it('does not turn an idle task result into attention absent from its sidebar row', () => {
     const waiting = session('a', 'root', {
       workerTask: { state: { status: 'completed', accepted: false } },
     } as Partial<ChatSessionSummary>);
     const base = input({ sessions: [session('root', null), waiting, session('b', 'root')] });
     const snapshot = buildWatchSnapshot(base);
-    expect(snapshot.overall).toBe('needs-you');
-    expect(snapshot.needsYouCount).toBe(1);
+    expect(snapshot.overall).toBe('idle');
+    expect(snapshot.needsYouCount).toBe(0);
     expect(snapshot.needsYouCount).toBe(needsYouCount(new Map(), base.sessions));
     expect(snapshot.pending).toEqual([]);
   });
