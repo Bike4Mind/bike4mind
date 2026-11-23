@@ -13,6 +13,9 @@ on:
     inputs:
       stage:              { type: string,  required: false, default: 'dev' }
       pr_number:          { type: string,  required: false, default: '' }
+      checkout_ref:       { type: string, required: false, default: '' }
+      preview_deploy_id:  { type: string, required: false, default: '' }
+      pr_eligible_only:   { type: boolean, required: false, default: false }
       e2e_test_id:        { type: string,  required: false, default: '' }
       gate_run:           { type: string,  required: false, default: 'false' }
       playwright_args:    { type: string,  required: true }
@@ -46,6 +49,7 @@ jobs:
       outcome: ${{ steps.results.outputs.outcome }}
     permissions:
       contents: read
+      pull-requests: read
       id-token: write
       statuses: write
     concurrency:
@@ -85,8 +89,10 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v6
         with:
+          ref: ${{ inputs.checkout_ref || github.sha }}
           submodules: false
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Setup Node.js
         uses: actions/setup-node@v6
@@ -114,6 +120,7 @@ jobs:
         run: pnpm core:build
 
       - name: Configure AWS credentials
+        if: inputs.pr_number == ''
         uses: aws-actions/configure-aws-credentials@v6
         with:
           role-to-assume: ${{ secrets.AWS_DEV_ROLE_ARN }}
@@ -211,6 +218,27 @@ jobs:
           echo "Deployment did not become healthy within 300s"
           exit 1
 
+      - name: Verify immutable preview readiness before testing
+        if: inputs.pr_number != '' && inputs.preview_deploy_id != ''
+        uses: actions/github-script@v8
+        env:
+          PR_NUMBER: ${{ inputs.pr_number }}
+          HEAD_SHA: ${{ inputs.checkout_ref }}
+          DEPLOY_ID: ${{ inputs.preview_deploy_id }}
+        with:
+          script: |
+            const { data: pr } = await github.rest.pulls.get({ ...context.repo, pull_number: Number(process.env.PR_NUMBER) });
+            const statuses = await github.paginate(github.rest.repos.listCommitStatusesForRef, {
+              ...context.repo, ref: pr.head.sha, per_page: 100,
+            });
+            const status = statuses.find(s => s.context === 'preview/deploy');
+            if (pr.state !== 'open' || pr.head.sha !== process.env.HEAD_SHA ||
+                status?.state !== 'success' || String(status.id) !== process.env.DEPLOY_ID ||
+                status.creator?.login !== 'bike4mind-release-bot[bot]' ||
+                !pr.labels.some(l => l.name === 'preview-deployed') || pr.labels.some(l => l.name === 'preview-stale')) {
+              throw new Error('Preview no longer matches the intended PR head; no tests started.');
+            }
+
       - name: Resolve E2E test ID
         id: testid
         env:
@@ -262,6 +290,7 @@ jobs:
           PW_GLOBAL_TIMEOUT_MINUTES: ${{ inputs.global_timeout_minutes }}
           CI: 'true'
           PLAYWRIGHT_ARGS: ${{ inputs.playwright_args }}
+          PR_E2E: ${{ inputs.pr_eligible_only && 'true' || 'false' }}
           PR_NUMBER: ${{ inputs.pr_number }}
           SST_STAGE: ${{ steps.config.outputs.stage }}
         run: |
@@ -333,7 +362,7 @@ jobs:
           QA_ENV: ${{ steps.config.outputs.env_label }}
           QA_BRANCH: ${{ inputs.pr_number && format('pr-{0}', inputs.pr_number) || github.ref_name }}
           QA_TRIGGER: ${{ inputs.trigger_label }}
-          QA_SHA: ${{ steps.tested_sha.outputs.sha || github.sha }}
+          QA_SHA: ${{ inputs.checkout_ref || steps.tested_sha.outputs.sha || github.sha }}
           SHOW_CREDITS: ${{ inputs.show_credits }}
         run: |
           args=(--results apps/client/pw-results.json --report-dir apps/client/playwright-report --counts-out qa-counts.json)
@@ -498,7 +527,7 @@ jobs:
           QA_ENV: ${{ steps.config.outputs.env_label }}
           QA_BRANCH: ${{ inputs.pr_number && format('pr-{0}', inputs.pr_number) || github.ref_name }}
           QA_TRIGGER: ${{ inputs.trigger_label }}
-          QA_SHA: ${{ steps.tested_sha.outputs.sha || github.sha }}
+          QA_SHA: ${{ inputs.checkout_ref || steps.tested_sha.outputs.sha || github.sha }}
           SHOW_CREDITS: ${{ inputs.show_credits }}
         run: |
           args=(--results apps/client/pw-results.json --report-dir apps/client/playwright-report)

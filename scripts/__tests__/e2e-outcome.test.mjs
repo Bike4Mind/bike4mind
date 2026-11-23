@@ -117,7 +117,7 @@ test('CLI emits real outputs for passing, failing, and no-run commands', () => {
 
 test('workflow and reusable callers preserve execution failure and always report', () => {
   const read = name => fs.readFileSync(path.join(root, '.github/workflows', name), 'utf8');
-  for (const name of ['e2e-run.yml', 'e2e-on-label.yml']) {
+  for (const name of ['e2e-run.yml']) {
     const text = read(name);
     const execution = text.split('      - name: Run E2E tests')[1].split('      - name: ')[0];
     assert.doesNotMatch(execution, /continue-on-error/);
@@ -136,4 +136,5 @@ test('workflow and reusable callers preserve execution failure and always report
   }
   assert.match(read('e2e-run.yml'), /value: \$\{\{ jobs.e2e-run.outputs.outcome \}\}/);
   assert.match(read('e2e-run.yml'), /outcome: \$\{\{ steps.results.outputs.outcome \}\}/);
+  assert.match(read('e2e-on-label.yml'), /uses: \.\/\.github\/workflows\/e2e-core.yml/);
 });

@@ -61,7 +61,20 @@ on:
         required: false
 
 jobs:
+  preview:
+    if: inputs.pr_number != ''
+    permissions:
+      contents: read
+      pull-requests: write
+      statuses: write
+      id-token: write
+    uses: ./.github/workflows/e2e-core.yml
+    secrets: inherit
+    with:
+      pr_number: ${{ inputs.pr_number }}
+
   prep:
+    if: github.event_name == 'schedule' || inputs.pr_number == ''
     runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
     outputs:
       playwright_args:    ${{ steps.resolve.outputs.playwright_args }}
@@ -154,6 +167,7 @@ jobs:
 
   run:
     needs: prep
+    if: github.event_name == 'schedule' || inputs.pr_number == ''
     # Grant the reusable workflow the token scopes it needs: id-token for OIDC AWS
     # auth and statuses for the e2e/smoke commit status. A called workflow's
     # permissions can only be downgraded from the caller's, and this repo's default
@@ -161,6 +175,7 @@ jobs:
     # tests run) and can't stamp e2e/smoke.
     permissions:
       contents: read
+      pull-requests: read
       id-token: write
       statuses: write
     uses: ./.github/workflows/e2e-run.yml
