@@ -865,6 +865,13 @@ describe('shellApproval with a literal variable assignment', () => {
   it('does not bind HOME, so a rebound home stays unread', async () => {
     expect(runsCheckedInAuto(await approval(`HOME=${root}; cat $HOME/sub/a.txt`))).toBe(false);
   });
+
+  it.each(['BASH_COMMAND', 'DIRSTACK', 'FUNCNAME', 'RANDOM'])(
+    'does not bind %s, whose value bash keeps itself',
+    async name => {
+      expect(runsCheckedInAuto(await approval(`${name}=sub; cat $${name}/a.txt`))).toBe(false);
+    }
+  );
 });
 
 describe('shellApproval for folders a command only reads', () => {
