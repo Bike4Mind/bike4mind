@@ -116,7 +116,7 @@ function featureColumns(params: {
       id: 'requests',
       label: 'Requests',
       numeric: true,
-      width: '6rem',
+      width: '7rem',
       render: row => formatCount(row.requests),
       sortValue: row => row.requests,
     },
@@ -136,7 +136,7 @@ function featureColumns(params: {
       id: 'credits',
       label: 'Credits',
       numeric: true,
-      width: '7rem',
+      width: '6.5rem',
       render: row => formatCount(row.creditsCharged),
       sortValue: row => row.creditsCharged,
     },
@@ -144,7 +144,7 @@ function featureColumns(params: {
       id: 'units',
       label: 'Units',
       numeric: true,
-      width: '9rem',
+      width: '8.5rem',
       render: row => formatUnits(row.units, row.unitLabel),
     },
     {
@@ -152,7 +152,7 @@ function featureColumns(params: {
       label: 'Failed',
       help: 'Requests that errored or timed out. They are left out of cost, credits and units.',
       numeric: true,
-      width: '5rem',
+      width: '6.5rem',
       render: row => formatCount(row.failedRequests),
       sortValue: row => row.failedRequests,
     },
@@ -167,7 +167,7 @@ function featureColumns(params: {
       label: 'Last day (USD)',
       help: lastDayHelp(params.spikeMultiple),
       numeric: true,
-      width: '8rem',
+      width: '10rem',
       render: row => `${formatUsd(row.lastDayUsd)} / ${formatUsd(row.trailingAvgUsd)}`,
       sortValue: row => row.lastDayUsd,
     }
@@ -215,7 +215,7 @@ function FeatureTable({
         empty={<Typography level="body-sm">No recorded usage in this range.</Typography>}
         pagination={false}
         framed={false}
-        minWidth={withUsers ? '68rem' : '63rem'}
+        minWidth={withUsers ? '75rem' : '70rem'}
       />
     </>
   );
@@ -256,15 +256,21 @@ function FeatureUsersPanel({
       },
       { id: 'cost', label: 'Cost (USD)', numeric: true, width: '7rem', render: row => formatUsd(row.costUsd) },
       { id: 'share', label: 'Share', numeric: true, width: '5rem', render: row => formatShare(row.share) },
-      { id: 'requests', label: 'Requests', numeric: true, width: '6rem', render: row => formatCount(row.requests) },
-      { id: 'credits', label: 'Credits', numeric: true, width: '7rem', render: row => formatCount(row.creditsCharged) },
-      { id: 'units', label: 'Units', numeric: true, width: '9rem', render: row => formatUnits(row.units, unitLabel) },
-      { id: 'failed', label: 'Failed', numeric: true, width: '5rem', render: row => formatCount(row.failedRequests) },
+      { id: 'requests', label: 'Requests', numeric: true, width: '7rem', render: row => formatCount(row.requests) },
+      {
+        id: 'credits',
+        label: 'Credits',
+        numeric: true,
+        width: '6.5rem',
+        render: row => formatCount(row.creditsCharged),
+      },
+      { id: 'units', label: 'Units', numeric: true, width: '8.5rem', render: row => formatUnits(row.units, unitLabel) },
+      { id: 'failed', label: 'Failed', numeric: true, width: '6.5rem', render: row => formatCount(row.failedRequests) },
       {
         id: 'lastDay',
         label: 'Last day (USD)',
         numeric: true,
-        width: '8rem',
+        width: '10rem',
         help: lastDayHelp(data?.spikeMultiple),
         render: row => `${formatUsd(row.lastDayUsd)} / ${formatUsd(row.trailingAvgUsd)}`,
       },
@@ -307,7 +313,7 @@ function FeatureUsersPanel({
           },
         }}
         framed={false}
-        minWidth="56rem"
+        minWidth="63rem"
       />
     </SectionCard>
   );
