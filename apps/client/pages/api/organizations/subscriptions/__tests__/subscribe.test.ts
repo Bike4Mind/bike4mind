@@ -51,6 +51,13 @@ vi.mock('@bike4mind/server-utils/utils/orgAccess', () => ({
   verifyOrgPermission: (...args: unknown[]) => mockVerifyOrgPermission(...args),
 }));
 
+// The role matrix below runs the REAL verifyOrgPermission (via importActual) against this stub of the
+// /infra entry; the rest of the file keeps the mocked gate above.
+const mockOrgFindById = vi.hoisted(() => vi.fn());
+vi.mock('@bike4mind/database/infra', () => ({
+  organizationRepository: { findById: (...args: unknown[]) => mockOrgFindById(...args) },
+}));
+
 const mockFindNonTerminalSubscriptionsByOwner = vi.fn();
 const mockFindByPriceIdAndOwner = vi.fn(() => {
   throw new Error('the org guard must read non-terminal rows; active-only lets a past_due org double-subscribe');
@@ -534,6 +541,86 @@ describe('POST /api/organizations/subscriptions/subscribe - organization owner g
 
     expect(mockVerifyOrgPermission).not.toHaveBeenCalled();
     expect(res.statusCode).toBe(200);
+  });
+});
+
+describe('POST /api/organizations/subscriptions/subscribe - manageBilling role matrix (real gate)', () => {
+  const ORG = '650000000000000000000abc';
+  const MISSING_ORG = '650000000000000000000999';
+  const OWNER = '650000000000000000000111';
+  const BILLING_MANAGER = '650000000000000000000222';
+  const MANAGER = '650000000000000000000333';
+  const MEMBER = '650000000000000000000444';
+  const OUTSIDER = '650000000000000000000555';
+
+  const org = {
+    id: ORG,
+    name: 'Org One',
+    billingContact: 'billing@example.com',
+    userId: OWNER,
+    adminUserIds: [MANAGER],
+    billingManagerUserIds: [BILLING_MANAGER],
+    users: [{ userId: MANAGER }, { userId: BILLING_MANAGER }, { userId: MEMBER }],
+  };
+
+  const callAs = async (user: Record<string, unknown>, organizationId: string) => {
+    const { req, res } = createMocks({ method: 'POST' });
+    (req as Record<string, unknown>).body = {
+      priceId: ORGANIZATION_SUBSCRIPTION_PRICE_ID,
+      quantity: ORGANIZATION_SUBSCRIPTION_MIN_SEATS,
+      organizationId,
+      callbackUrl: CALLBACK_URL,
+    };
+    (req as Record<string, unknown>).user = { email: 'buyer@example.com', name: 'Buyer', ...user };
+    return (handler as HandlerFn)(req, res).then(
+      () => ({ res, error: undefined }),
+      (error: unknown) => ({ res, error })
+    );
+  };
+
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    mockGetSettingsValue.mockResolvedValue(true);
+    mockIsAllowedCallbackOrigin.mockReturnValue(true);
+    mockFindNonTerminalSubscriptionsByOwner.mockResolvedValue([]);
+    mockCreateCustomer.mockResolvedValue({ id: 'cus_new' });
+    mockAttachOrgStripeCustomer.mockResolvedValue('cus_org');
+    mockSessionsCreate.mockResolvedValue({ url: 'https://checkout.stripe/session' });
+    mockOrgFindById.mockImplementation(async (id: string) => (id === ORG ? org : null));
+    const actual = await vi.importActual<typeof import('@bike4mind/server-utils/utils/orgAccess')>(
+      '@bike4mind/server-utils/utils/orgAccess'
+    );
+    mockVerifyOrgPermission.mockImplementation(actual.verifyOrgPermission);
+  });
+
+  it.each([
+    ['the owner', { id: OWNER, isAdmin: false }],
+    ['a billing manager', { id: BILLING_MANAGER, isAdmin: false }],
+    ['a platform admin who is not a member', { id: OUTSIDER, isAdmin: true }],
+  ])('admits %s to the org checkout', async (_label, user) => {
+    const { res, error } = await callAs(user, ORG);
+
+    expect(error).toBeUndefined();
+    expect(res.statusCode).toBe(200);
+    expect(mockSessionsCreate).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    ['a plain member', { id: MEMBER, isAdmin: false }, ORG],
+    ['a manager', { id: MANAGER, isAdmin: false }, ORG],
+    ['an outsider', { id: OUTSIDER, isAdmin: false }, ORG],
+    ['a nonexistent org', { id: OWNER, isAdmin: false }, MISSING_ORG],
+  ])('answers %s with the same 404 as a missing org and no Stripe side effect', async (_label, user, orgId) => {
+    const { error: missing } = await callAs({ id: OWNER, isAdmin: false }, MISSING_ORG);
+    const { error } = await callAs(user, orgId);
+
+    expect(error).toBeInstanceOf(NotFoundError);
+    expect(error).toMatchObject({ statusCode: HttpStatus.NotFound, message: 'Organization not found' });
+    expect(error).toEqual(missing);
+    expect(mockFindNonTerminalSubscriptionsByOwner).not.toHaveBeenCalled();
+    expect(mockAttachOrgStripeCustomer).not.toHaveBeenCalled();
+    expect(mockCreateCustomer).not.toHaveBeenCalled();
+    expect(mockSessionsCreate).not.toHaveBeenCalled();
   });
 });
 
