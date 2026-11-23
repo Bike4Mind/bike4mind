@@ -35,13 +35,8 @@ import { createRegInvites } from '@client/app/utils/regInviteAPICalls';
 import { createPartnerSignupRule } from '@client/app/utils/partnerSignupRuleAPICalls';
 import { getErrorMessage } from '@client/app/utils/error';
 import { OptionalDateInput } from '@client/app/components/common/OptionalDateInput';
-import {
-  GrantPackageCodesSection,
-  dayOf,
-  expiresAtFromDay,
-  todayUtc,
-  type QueuedCode,
-} from './GrantPackageCodesSection';
+import { todayUtc } from '@client/app/utils/dateUtils';
+import { GrantPackageCodesSection, dayOf, expiresAtFromDay, type QueuedCode } from './GrantPackageCodesSection';
 import { GrantPackageDomainsSection, domainRuleInput, type QueuedDomain } from './GrantPackageDomainsSection';
 
 type Props = {

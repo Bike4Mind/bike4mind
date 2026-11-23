@@ -3,9 +3,8 @@ import { Button, Option, Select, Stack, Typography } from '@mui/joy';
 import { API_COMPLETION_OUTCOME_LABELS, API_REQUEST_LOG_COVERAGE, type IUserApiKeyDocument } from '@bike4mind/common';
 import { useUserTimeline } from '@client/app/hooks/data/adminUserTimeline';
 import { OptionalDateInput } from '@client/app/components/common/OptionalDateInput';
+import { todayUtc } from '@client/app/utils/dateUtils';
 import { DataTable, RelativeTime, SectionCard, StatusChip } from '../../../../shared';
-
-const todayUtc = () => new Date().toISOString().slice(0, 10);
 
 export const ApiRequestsSection: React.FC<{ userId: string; apiKeys: readonly IUserApiKeyDocument[] }> = ({
   userId,

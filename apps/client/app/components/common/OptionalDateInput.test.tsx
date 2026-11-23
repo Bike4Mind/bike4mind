@@ -7,7 +7,7 @@ import { OptionalDateInput } from './OptionalDateInput';
 
 const appTheme = extendTheme({ ...getThemeConfig() });
 
-const Harness = ({ initial }: { initial: string }) => {
+const Harness = ({ initial, min, max }: { initial: string; min?: string; max?: string }) => {
   const [value, setValue] = useState(initial);
   return (
     <CssVarsProvider theme={appTheme}>
@@ -18,6 +18,8 @@ const Harness = ({ initial }: { initial: string }) => {
         setLabel="Set expiry date"
         clearLabel="Remove expiry date"
         initialDate={() => '2030-01-15'}
+        min={min}
+        max={max}
         testId="expiry"
       />
       <output data-testid="value">{value}</output>
@@ -67,5 +69,11 @@ describe('OptionalDateInput', () => {
     act(() => input.focus());
     act(() => input.blur());
     expect(screen.getByTestId('expiry-empty')).toBeInTheDocument();
+  });
+
+  it('passes min and max through to the native input', () => {
+    render(<Harness initial="2031-02-03" min="2031-01-01" max="2031-12-31" />);
+    expect(screen.getByTestId('expiry')).toHaveAttribute('min', '2031-01-01');
+    expect(screen.getByTestId('expiry')).toHaveAttribute('max', '2031-12-31');
   });
 });

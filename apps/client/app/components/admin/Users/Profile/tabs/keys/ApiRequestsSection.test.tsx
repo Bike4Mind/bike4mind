@@ -113,6 +113,26 @@ describe('ApiRequestsSection', () => {
     );
   });
 
+  it('starts a new start date on the end date when the end date is in the past', async () => {
+    mocks.get.mockResolvedValue({ data: { entries: [], nextCursor: null } });
+    show();
+    await screen.findByText('No retained requests match this key filter.');
+    fireEvent.click(screen.getByTestId('user-api-requests-to-set-btn'));
+    fireEvent.change(screen.getByTestId('user-api-requests-to'), { target: { value: '2020-01-15' } });
+    fireEvent.click(screen.getByTestId('user-api-requests-from-set-btn'));
+    expect(screen.getByTestId('user-api-requests-from')).toHaveValue('2020-01-15');
+  });
+
+  it('starts a new end date on the start date when the start date is in the future', async () => {
+    mocks.get.mockResolvedValue({ data: { entries: [], nextCursor: null } });
+    show();
+    await screen.findByText('No retained requests match this key filter.');
+    fireEvent.click(screen.getByTestId('user-api-requests-from-set-btn'));
+    fireEvent.change(screen.getByTestId('user-api-requests-from'), { target: { value: '2999-06-01' } });
+    fireEvent.click(screen.getByTestId('user-api-requests-to-set-btn'));
+    expect(screen.getByTestId('user-api-requests-to')).toHaveValue('2999-06-01');
+  });
+
   it('shows a failed read as an error with retry, not as no activity', async () => {
     mocks.get.mockRejectedValue(new Error('read failed'));
     show();

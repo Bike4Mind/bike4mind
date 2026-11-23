@@ -15,6 +15,7 @@ import {
 import { createRegInvites, updateRegInvite } from '@client/app/utils/regInviteAPICalls';
 import { getErrorMessage } from '@client/app/utils/error';
 import { OptionalDateInput } from '@client/app/components/common/OptionalDateInput';
+import { todayUtc } from '@client/app/utils/dateUtils';
 import { useUser } from '@client/app/contexts/UserContext';
 import {
   ADMIN_REASON_PRESETS,
@@ -56,8 +57,6 @@ type CodeEdit = {
 
 export const dayOf = (date: Date | string | null | undefined) =>
   date ? new Date(date).toISOString().slice(0, 10) : '';
-
-export const todayUtc = () => dayOf(new Date());
 
 /** The chosen day stays redeemable through its end in UTC, the same day boundary as a package's daily cap. */
 export const expiresAtFromDay = (day: string): Date | null => (day === '' ? null : new Date(`${day}T23:59:59.999Z`));
