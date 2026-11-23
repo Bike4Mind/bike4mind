@@ -1414,6 +1414,12 @@ interface ChatSessionMeta {
    * overwrites a title it did not put there; nothing in the renderer draws it.
    */
   titleLocked?: boolean;
+  /**
+   * Who put a locked title there: 'user' for a hand rename, 'agent' for session_rename. Absent on
+   * a title locked at creation (a spawn naming its child) and on files written before this field
+   * existed; see agentMayRetitle in SessionStore for how each case is read.
+   */
+  titleSource?: 'user' | 'agent';
   model: string;
   createdAt: string;
   updatedAt: string;
