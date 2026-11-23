@@ -1,8 +1,21 @@
 # Bike4Mind iOS
 
 Native iPhone app (SwiftUI, Swift 6). `make build`, `make test`, `make format`, `make lint` (see the Makefile).
-Simulator-only until an Apple Developer team id is configured (`IOS_TEAM_ID`); see [DEVICE_TESTING.md](DEVICE_TESTING.md) for everything that
-needs a device or signing.
+`make device` builds, installs and launches on a connected iPhone (see below). The other targets run on the simulator; see
+[DEVICE_TESTING.md](DEVICE_TESTING.md) for everything that needs a device or signing.
+
+### Run on a connected iPhone
+
+```sh
+make device                       # the single connected, paired iPhone
+make device DEVICE="My iPhone"    # a device name or UDID, when several are connected
+```
+
+It builds the Debug configuration with automatic signing, installs over any existing copy (the app stays signed in) and
+launches it. It needs the personal signing config from [DEVICE_TESTING.md](DEVICE_TESTING.md) (`Config/Local.xcconfig` with
+`DEVELOPMENT_TEAM`), and exits with a message when no team is set or when zero or several devices are connected. What it cannot
+automate: Developer Mode on (Settings > Privacy & Security), the phone unlocked and trusted, and on the first launch trusting the
+developer certificate (Settings > General > VPN & Device Management).
 
 ## Feature map
 
