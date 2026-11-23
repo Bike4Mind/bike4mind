@@ -1,4 +1,4 @@
-import { useId, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import Box from '@mui/joy/Box';
 import Button from '@mui/joy/Button';
 import { ChevronIcon } from './icons';
@@ -15,18 +15,25 @@ export function ClippedBlock({
   maxHeight,
   measureKey,
   testId,
+  revealKey = 0,
   children,
 }: {
   /** In px. */
   maxHeight: number;
   measureKey: string;
   testId: string;
+  /** Each new non-zero value expands the block: find landing on a match inside it. */
+  revealKey?: number;
   children: ReactNode;
 }) {
   const ref = useRef<HTMLDivElement>(null);
   const id = useId();
   const [expanded, setExpanded] = useState(false);
   const [overflows, setOverflows] = useState(false);
+
+  useEffect(() => {
+    if (revealKey !== 0) setExpanded(true);
+  }, [revealKey]);
 
   useLayoutEffect(() => {
     const element = ref.current;

@@ -60,6 +60,15 @@ export function ChevronIcon({ open }: { open: boolean }) {
   );
 }
 
+/** A find step: up to the previous match, or down to the next. */
+export function FindStepIcon({ direction }: { direction: 'up' | 'down' }) {
+  return (
+    <Glyph>
+      <path d={direction === 'up' ? 'M4 10l4-4 4 4' : 'M4 6l4 4 4-4'} />
+    </Glyph>
+  );
+}
+
 /** A pager step: back to the previous item, or on to the next. */
 export function PagerIcon({ direction }: { direction: 'previous' | 'next' }) {
   return (
