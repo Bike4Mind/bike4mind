@@ -252,6 +252,7 @@ describe('runBriefScheduleReconcile', () => {
             periodEnd: brief.periodEnd,
             runs: [{ id: 'r1', query: 'q', status: 'completed', finishedAt: undefined, errorMessage: undefined }],
             approvals: [],
+            questions: [],
             emails: [],
           }),
           canCompose: async () => 'ok',
