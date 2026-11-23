@@ -1004,7 +1004,14 @@ export function ChatShell({
     else if (alertableSessions(sessions, 'agents').has(rootId)) setDockOpen(true);
   };
   // Only the conversation screen shows the session asking; Artifacts, Models and the rest hide it.
-  useNeedsYouAlerts(sessions, statuses, statusesLoaded, openNotice, screen === 'conversation' ? activeId : null);
+  useNeedsYouAlerts(
+    sessions,
+    statuses,
+    statusesLoaded,
+    openNotice,
+    screen === 'conversation' ? activeId : null,
+    unreadReplies
+  );
   const clearNoticeFocus = useCallback(() => setNoticeFocus(null), []);
   const pickExampleQuest = useCallback(
     (prompt: string) => {
