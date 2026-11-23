@@ -147,6 +147,7 @@ struct RootView: View {
     services.studioModels.invalidate()
     // Decoded images are account content too, and this runs for server-forced sign-outs as well as user-initiated ones.
     ThumbnailCache.shared.removeAll()
+    ThumbnailCache.fullSize.removeAll()
     // Cached rows belong to the account that fetched them.
     let realtime = services.realtime
     Task { await realtime.stop() }
