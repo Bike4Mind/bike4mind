@@ -88,6 +88,18 @@ export function needsYouCount(
   ).length;
 }
 
+/**
+ * The dock badge: every session waiting on the user, whatever the notify scope. The scope decides
+ * who may interrupt (notices, the chime); the badge answers whether anything is waiting at all, so a
+ * plain session parked on an approval must show on it too. Archived and deleted sessions still never count.
+ */
+export function needsYouBadgeCount(
+  statuses: ReadonlyMap<string, ChatSessionStatus>,
+  sessions: readonly ChatSessionSummary[]
+): number {
+  return needsYouCount(statuses, sessions, 'all');
+}
+
 /** The top of `sessionId`'s spawn chain among the listed sessions; itself when it was not spawned. */
 export function rootSessionOf(sessions: readonly ChatSessionSummary[], sessionId: string): string {
   const byId = new Map(sessions.map(session => [session.id, session]));

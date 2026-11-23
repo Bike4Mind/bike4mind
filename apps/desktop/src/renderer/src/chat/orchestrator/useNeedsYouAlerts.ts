@@ -7,8 +7,8 @@ import { readPresenter } from './orchestratorPrefs';
 import {
   alertableSessions,
   enteredNeedsYou,
+  needsYouBadgeCount,
   needsYouBody,
-  needsYouCount,
   needsYouTitle,
   rootSessionOf,
 } from '@shared/needsYou';
@@ -16,7 +16,8 @@ import {
 /**
  * Tells the user when an alertable session (an agent or a parent; any session when the notify scope
  * is `all`) starts needing them: a chime if the sound setting is on, an OS notice while the window is
- * not focused, and the dock badge kept at the number of sessions waiting. One notice per needs-action
+ * not focused, and the dock badge kept at the number of sessions waiting (every session, whatever the
+ * scope; see needsYouBadgeCount). One notice per needs-action
  * entry. A clicked notice comes back on `onOpen`. A plain session the user is looking at (`viewingId`)
  * in a focused window is not announced: they can already see it asking.
  *
@@ -74,7 +75,7 @@ export function useNeedsYouAlerts(
     void announce(announced, latestSessions.current);
   }, [statuses, loaded]);
 
-  const count = needsYouCount(statuses, sessions, scope);
+  const count = needsYouBadgeCount(statuses, sessions);
   useEffect(() => {
     void window.b4m.attention.setBadgeCount(count);
   }, [count]);

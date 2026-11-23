@@ -4,6 +4,7 @@ import type { ChatMessage, ChatSessionStatus, ChatSessionSummary } from './chat'
 import {
   alertableSessions,
   enteredNeedsYou,
+  needsYouBadgeCount,
   needsYouBody,
   needsYouCount,
   needsYouTitle,
@@ -106,6 +107,21 @@ describe('needsYouCount', () => {
     expect(needsYouCount(statuses({ chat: 'needs-action' }), sessions, 'all')).toBe(1);
     expect(needsYouCount(statuses({ chat: 'needs-action' }), sessions, 'agents')).toBe(0);
     expect(needsYouCount(statuses({ chat: 'processing' }), sessions, 'all')).toBe(0);
+  });
+});
+
+describe('needsYouBadgeCount', () => {
+  it('counts a waiting plain session that the default notify scope leaves out', () => {
+    const sessions = [session('chat'), session('root'), session('agent', 'root')];
+    const waiting = statuses({ chat: 'needs-action', agent: 'needs-action' });
+    expect(needsYouCount(waiting, sessions)).toBe(1);
+    expect(needsYouBadgeCount(waiting, sessions)).toBe(2);
+  });
+
+  it('leaves archived and deleted sessions out', () => {
+    const sessions = [{ ...session('shelved'), archived: true }, session('live')];
+    const waiting = statuses({ shelved: 'needs-action', live: 'needs-action', gone: 'needs-action' });
+    expect(needsYouBadgeCount(waiting, sessions)).toBe(1);
   });
 });
 

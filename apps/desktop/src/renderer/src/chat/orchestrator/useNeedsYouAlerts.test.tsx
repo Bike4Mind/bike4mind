@@ -128,6 +128,16 @@ describe('useNeedsYouAlerts', () => {
     expect(notify).not.toHaveBeenCalled();
   });
 
+  it('still counts a waiting plain session on the dock badge under the agents scope', async () => {
+    sessions = [...DEFAULT_SESSIONS, { ...DEFAULT_SESSIONS[0], id: 'plain', title: 'Plain' }];
+    await render({ plain: 'processing' });
+    await render({ plain: 'needs-action' });
+    expect(chime.playChime).not.toHaveBeenCalled();
+    expect(setBadgeCount).toHaveBeenLastCalledWith(1);
+    await render({ plain: 'done' });
+    expect(setBadgeCount).toHaveBeenLastCalledWith(0);
+  });
+
   describe('with the all scope', () => {
     const PLAIN = { ...DEFAULT_SESSIONS[0], id: 'plain', title: 'Plain' };
 
