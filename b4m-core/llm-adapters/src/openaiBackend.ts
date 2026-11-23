@@ -16,6 +16,7 @@ import {
 } from '@bike4mind/common';
 import { stripToolDependentMessages } from './toolPairingUtils';
 import { assertEvaluationTextWire, assertEvaluationWireBound } from './evaluationTextWire';
+import { reconcileAfterDispatch } from './evaluationReconcile';
 import { appendCacheInclusiveTurn, cachedTokensFromUsage, splitCacheInclusiveInput } from './cacheInclusiveUsage';
 import { addReasoningTokens, reasoningTokensField, reasoningTokensFromUsage } from './reasoningTokens';
 import OpenAI from 'openai';
@@ -1321,19 +1322,25 @@ export class OpenAIBackend implements ICompletionBackend {
 
     if (!(response instanceof Stream)) {
       if (evaluation) {
-        if (!response.usage || response.model !== model)
-          throw new Error('Evaluation provider identity or usage missing');
-        if (
-          response.usage.prompt_tokens_details?.cached_tokens === undefined ||
-          response.usage.completion_tokens_details?.reasoning_tokens === undefined
-        )
-          throw new Error('Evaluation cache or reasoning usage missing');
-        await evaluation.reconcile({
-          inputTokens: response.usage.prompt_tokens,
-          outputTokens: response.usage.completion_tokens,
-          cacheReadTokens: response.usage.prompt_tokens_details.cached_tokens,
-          reasoningTokens: response.usage.completion_tokens_details.reasoning_tokens,
-        });
+        const answered = response;
+        await reconcileAfterDispatch(
+          evaluation,
+          () => {
+            const usage = answered.usage;
+            if (!usage || answered.model !== model) throw new Error('Evaluation provider identity or usage missing');
+            const cachedTokens = usage.prompt_tokens_details?.cached_tokens;
+            const reasoningTokens = usage.completion_tokens_details?.reasoning_tokens;
+            if (cachedTokens === undefined || reasoningTokens === undefined)
+              throw new Error('Evaluation cache or reasoning usage missing');
+            return {
+              inputTokens: usage.prompt_tokens,
+              outputTokens: usage.completion_tokens,
+              cacheReadTokens: cachedTokens,
+              reasoningTokens,
+            };
+          },
+          this.logger
+        );
       }
       const streamedText: string[] = [];
       const turnCacheReadTokens = cachedTokensFromUsage(
@@ -2410,19 +2417,25 @@ export class OpenAIBackend implements ICompletionBackend {
     }
 
     if (evaluation) {
-      if (!finalResponse.usage || finalResponse.model !== model)
-        throw new Error('Evaluation provider identity or usage missing');
-      if (
-        finalResponse.usage.input_tokens_details?.cached_tokens === undefined ||
-        finalResponse.usage.output_tokens_details?.reasoning_tokens === undefined
-      )
-        throw new Error('Evaluation cache or reasoning usage missing');
-      await evaluation.reconcile({
-        inputTokens: finalResponse.usage.input_tokens,
-        outputTokens: finalResponse.usage.output_tokens,
-        cacheReadTokens: finalResponse.usage.input_tokens_details.cached_tokens,
-        reasoningTokens: finalResponse.usage.output_tokens_details.reasoning_tokens,
-      });
+      const answered = finalResponse;
+      await reconcileAfterDispatch(
+        evaluation,
+        () => {
+          const usage = answered.usage;
+          if (!usage || answered.model !== model) throw new Error('Evaluation provider identity or usage missing');
+          const cachedTokens = usage.input_tokens_details?.cached_tokens;
+          const reasoningTokens = usage.output_tokens_details?.reasoning_tokens;
+          if (cachedTokens === undefined || reasoningTokens === undefined)
+            throw new Error('Evaluation cache or reasoning usage missing');
+          return {
+            inputTokens: usage.input_tokens,
+            outputTokens: usage.output_tokens,
+            cacheReadTokens: cachedTokens,
+            reasoningTokens,
+          };
+        },
+        this.logger
+      );
     }
     inputTokens = finalResponse.usage?.input_tokens ?? 0;
     outputTokens = finalResponse.usage?.output_tokens ?? 0;

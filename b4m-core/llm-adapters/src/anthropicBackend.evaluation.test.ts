@@ -127,14 +127,24 @@ describe('Anthropic evaluation transport', () => {
     expect(create).toHaveBeenCalledOnce();
     expect(evaluation.reconcile).not.toHaveBeenCalled();
   });
-  it('never reconciles an alias response or incomplete usage', async () => {
+  it('never reconciles an alias response, and leaves its receipt unknown instead of failing the billed call', async () => {
     const { backend, create, evaluation } = setup();
     create.mockResolvedValueOnce({ model: 'alias', stop_reason: 'end_turn', content: [], usage });
     const options = { maxTokens: 100, executeTools: false, _internal: { evaluation } };
-    await expect(backend.complete(modelId, [{ role: 'user', content: 'hi' }], options, async () => {})).rejects.toThrow(
-      'identity'
-    );
+    await expect(
+      backend.complete(modelId, [{ role: 'user', content: 'hi' }], options, async () => {})
+    ).resolves.not.toThrow();
     expect(evaluation.reconcile).not.toHaveBeenCalled();
+    expect(evaluation.unknown).toHaveBeenCalledOnce();
+  });
+  it('leaves the receipt unknown when reconcile itself fails after dispatch', async () => {
+    const { backend, evaluation } = setup();
+    evaluation.reconcile.mockRejectedValueOnce(new Error('write failed'));
+    const options = { maxTokens: 100, executeTools: false, _internal: { evaluation } };
+    await expect(
+      backend.complete(modelId, [{ role: 'user', content: 'hi' }], options, async () => {})
+    ).resolves.not.toThrow();
+    expect(evaluation.unknown).toHaveBeenCalledOnce();
   });
   it('supports deferred regex/BM25 tools but fails closed on other provider tools and media', () => {
     for (const type of ['tool_search_tool_regex_20251119', 'tool_search_tool_bm25_20251119'])

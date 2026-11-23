@@ -1,6 +1,7 @@
 import { Anthropic, RateLimitError } from '@anthropic-ai/sdk';
 import { providerFetchOptions } from './providerDispatcher';
 import { assertAnthropicEvaluationWire, anthropicEvaluationUsage } from './anthropicEvaluation';
+import { reconcileAfterDispatch } from './evaluationReconcile';
 import type {
   MessageCreateParamsBase,
   ContentBlock,
@@ -2869,7 +2870,14 @@ export class AnthropicBackend implements ICompletionBackend {
             }
           ).then(r => r.result);
           requestAccepted = true;
-          if (evaluation) await evaluation.reconcile(anthropicEvaluationUsage(response, apiParams.model));
+          if (evaluation) {
+            const answered = response;
+            await reconcileAfterDispatch(
+              evaluation,
+              () => anthropicEvaluationUsage(answered, apiParams.model),
+              this.logger
+            );
+          }
         } finally {
           release?.();
         }
