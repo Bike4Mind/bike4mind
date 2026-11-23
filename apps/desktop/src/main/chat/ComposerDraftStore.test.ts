@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { mkdtemp, readFile, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -227,11 +228,37 @@ describe('ComposerDraftStore', () => {
       await store.load();
       void store.set('s1', 'typing');
       vi.advanceTimersByTime(COMPOSER_DRAFT_SAVE_DELAY_MS - 1);
-      expect(await onDiskSoon(path, { s1: 'typing' })).toEqual({});
+      expect(await new ComposerDraftStore(path).load()).toEqual({});
       vi.advanceTimersByTime(1);
-      expect(await onDiskSoon(path, { s1: 'typing' })).toEqual({ s1: 'typing' });
+      await store.flush();
+      expect(await new ComposerDraftStore(path).load()).toEqual({ s1: 'typing' });
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it('writes at quit while an async save of the latest text is still in flight', async () => {
+    const path = await fileIn();
+    const store = new ComposerDraftStore(path, () => 1000);
+    await store.load();
+    void store.set('s1', 'latest text');
+    void store.flush();
+    store.flushSync();
+    expect(JSON.parse(readFileSync(path, 'utf8'))).toEqual({
+      drafts: { s1: { text: 'latest text', updatedAt: 1000 } },
+    });
+    await store.flush();
+    expect(await stored(path)).toEqual({ drafts: { s1: { text: 'latest text', updatedAt: 1000 } } });
+  });
+
+  it('keeps a sent draft off the disk when quit arrives while its clearing is still being written', async () => {
+    const path = await fileIn();
+    const store = new ComposerDraftStore(path, () => 1000);
+    await store.load();
+    await store.set('s1', 'about to send');
+    await store.flush();
+    void store.forget('s1');
+    store.flushSync();
+    expect(JSON.parse(readFileSync(path, 'utf8'))).toEqual({ drafts: {} });
   });
 });

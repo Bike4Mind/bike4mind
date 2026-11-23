@@ -35,6 +35,8 @@ export class ComposerDraftStore {
   private loaded = false;
   // True while memory differs from the file, so a quit with no edits leaves the file untouched.
   private dirty = false;
+  // Async writes started but not yet renamed into place: a quit during one must still write.
+  private inFlight = 0;
   // Serialised so a burst of saves lands in order and never interleaves two renames.
   private writes: Promise<void> = Promise.resolve();
   private pendingSave: ReturnType<typeof setTimeout> | undefined;
@@ -122,7 +124,7 @@ export class ComposerDraftStore {
   /** For `will-quit`, which cannot await: writes what is in memory now, synchronously. */
   flushSync(): void {
     this.cancelPendingSave();
-    if (!this.loaded || !this.dirty) return;
+    if (!this.loaded || (!this.dirty && this.inFlight === 0)) return;
     try {
       mkdirSync(dirname(this.filePath), { recursive: true });
       const temporary = this.temporaryPath();
@@ -164,11 +166,15 @@ export class ComposerDraftStore {
     this.cancelPendingSave();
     if (!this.loaded) return this.writes;
     this.dirty = false;
+    this.inFlight += 1;
     const snapshot = this.serialize();
     this.writes = this.writes
       .then(() => this.write(snapshot))
       .catch((error: unknown) => {
         console.warn(`DRAFTS: could not save composer drafts: ${String(error)}`);
+      })
+      .finally(() => {
+        this.inFlight -= 1;
       });
     return this.writes;
   }
