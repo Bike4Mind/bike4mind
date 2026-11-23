@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { Button, Chip, ListDivider, MenuItem, Option, Select, Stack, Tooltip, Typography } from '@mui/joy';
+import { Button, Chip, ChipDelete, ListDivider, MenuItem, Option, Select, Stack, Tooltip, Typography } from '@mui/joy';
 import DownloadIcon from '@mui/icons-material/Download';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import Papa from 'papaparse';
@@ -271,6 +271,7 @@ const FeedbackTab: React.FC = () => {
     setSearchTerm,
     setStatusFilters,
     setSelectedOrganizations,
+    setUserId,
     setSubject,
     setResolution,
     setTypes,
@@ -480,7 +481,8 @@ const FeedbackTab: React.FC = () => {
     filters.received !== undefined ||
     customRangeSet ||
     filters.comment !== undefined ||
-    filters.selectedOrganizations.length > 0;
+    filters.selectedOrganizations.length > 0 ||
+    filters.userId !== undefined;
   const clearFilters = () => showOnly({ statusFilters: toStatusFilters(FEEDBACK_STATUS_ORDER) });
 
   // `loading` also covers a refetch with rows on screen (keepPreviousData): those rows stay, under a bar.
@@ -656,6 +658,22 @@ const FeedbackTab: React.FC = () => {
             onChange={setSelectedOrganizations}
           />
         )}
+        {filters.userId && (
+          <Chip
+            variant="soft"
+            color="primary"
+            data-testid="feedback-filter-reporter-chip"
+            endDecorator={
+              <ChipDelete
+                aria-label="Show every reporter"
+                data-testid="feedback-filter-reporter-clear"
+                onDelete={() => setUserId(undefined)}
+              />
+            }
+          >
+            Reporter: {currentFeedback.find(row => row.userId === filters.userId)?.username || filters.userId}
+          </Chip>
+        )}
       </Stack>
 
       <Stack
@@ -766,6 +784,11 @@ const FeedbackTab: React.FC = () => {
         onNext={detailNavigation.onNext}
         onClose={closeFeedback}
         onStatusChange={handleStatusChange}
+        onShowReporterReports={userId => {
+          // Every status, so the list matches the drawer's earlier-report count.
+          showOnly({ userId, statusFilters: toStatusFilters(FEEDBACK_STATUS_ORDER) });
+          closeFeedback();
+        }}
       />
       {feedbackToClose && (
         <FeedbackCloseDialog feedbackId={feedbackToClose.id} onClose={cancelClose} onConfirm={confirmClose} />
