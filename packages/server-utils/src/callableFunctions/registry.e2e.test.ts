@@ -187,6 +187,13 @@ describe('createCallableFunction', () => {
     expect(await CallableFunction.countDocuments({})).toBe(0);
   });
 
+  it('answers 404 when the head version has no stored content and writes nothing', async () => {
+    await ArtifactContent.deleteMany({ artifactId: 'artifact-1' });
+
+    await expect(save()).rejects.toMatchObject({ statusCode: 404 });
+    expect(await CallableFunction.countDocuments({})).toBe(0);
+  });
+
   it('refuses a stale expected version (version_changed) and names the head', async () => {
     await addVersion('artifact-1', code('# edited\n'));
     await expect(save()).rejects.toMatchObject({
