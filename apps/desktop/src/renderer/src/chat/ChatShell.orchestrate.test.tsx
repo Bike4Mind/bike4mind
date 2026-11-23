@@ -29,6 +29,7 @@ vi.mock('./BrowserPane', () => ({
     <div data-testid="test-browser-pane" data-session-id={sessionId} />
   ),
 }));
+vi.mock('./ArtifactLibraryPanel', () => ({ ArtifactLibraryPanel: () => null }));
 
 const threadMounts = vi.hoisted(() => ({ count: 0 }));
 // The real thread, counting its mounts.
@@ -248,6 +249,11 @@ async function clickSessionRow(title: string) {
   await act(async () => undefined);
 }
 
+const highlightedTitle = () =>
+  document
+    .querySelector('[data-testid="chat-session-item"][aria-current="true"]')
+    ?.querySelector('[data-testid="chat-session-title-text"]')?.textContent;
+
 async function openParent(title: string = PARENT.title, mode: 'chat' | 'code' = 'chat') {
   host = document.createElement('div');
   document.body.appendChild(host);
@@ -341,6 +347,150 @@ describe('orchestrate mode in the chat shell', () => {
     expect(el('chat-orchestrate-count').textContent).toBe('1');
     expect(query('orchestrator-stage')).toBeNull();
     expect(query('chat-thread-empty-host')).not.toBeNull();
+  });
+
+  it('keeps the active Office scene and parent conversation when the sidebar selects an agent repeatedly', async () => {
+    window.localStorage.setItem(INTRO_SEEN_KEY, '1');
+    window.localStorage.setItem(`b4m.orchestrator.view.${PARENT.id}`, 'office');
+    await openParent();
+    await enterOrchestrate();
+    const stage = el('orchestrator-stage');
+    const office = el('orchestrator-office');
+    const thread = el('orchestrator-dock').querySelector('[data-testid="chat-thread-empty-host"]');
+    const layout = window.localStorage.getItem(`b4m.orchestrator.layout.${PARENT.id}`);
+
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      await clickSessionRow(CHILD.title);
+      expect(el('orchestrator-stage')).toBe(stage);
+      expect(el('orchestrator-office')).toBe(office);
+      expect(el('orchestrator-dock-hidden').querySelector('[data-testid="chat-thread-empty-host"]')).toBe(thread);
+      expect(el('chat-session-title').textContent).toBe(PARENT.title);
+      expect(highlightedTitle()).toBe(CHILD.title);
+      expect(el('orchestrator-peek-drawer').textContent).toContain(CHILD.title);
+      await clickSessionRow(CHILD.title);
+      expect(el('orchestrator-peek-drawer').textContent).toContain(CHILD.title);
+      expect(window.localStorage.getItem(`b4m.orchestrator.view.${PARENT.id}`)).toBe('office');
+      expect(window.localStorage.getItem(`b4m.orchestrator.layout.${PARENT.id}`)).toBe(layout);
+      await act(async () => el('orchestrator-peek-close-btn').click());
+      expect(query('orchestrator-peek-drawer')).toBeNull();
+      expect(highlightedTitle()).toBe(PARENT.title);
+    }
+  });
+
+  it('keeps split panes and their sizes while sidebar and scene selections share the drawer', async () => {
+    window.localStorage.setItem(INTRO_SEEN_KEY, '1');
+    const layout = JSON.stringify({
+      split: 'row',
+      panes: [
+        { view: 'office', size: 0.65 },
+        { view: 'table', size: 0.35 },
+      ],
+    });
+    window.localStorage.setItem(`b4m.orchestrator.layout.${PARENT.id}`, layout);
+    await openParent();
+    await enterOrchestrate();
+    const office = el('orchestrator-office');
+    const tableRow = el(`orchestrator-table-row-${CHILD.id}`);
+    await clickSessionRow(CHILD.title);
+    expect(highlightedTitle()).toBe(CHILD.title);
+    expect(el('orchestrator-peek-drawer').textContent).toContain(CHILD.title);
+    await act(async () => el('orchestrator-peek-close-btn').click());
+    await act(async () => tableRow.click());
+    expect(highlightedTitle()).toBe(CHILD.title);
+    expect(el('orchestrator-office')).toBe(office);
+    expect(el(`orchestrator-table-row-${CHILD.id}`)).toBe(tableRow);
+    expect(window.localStorage.getItem(`b4m.orchestrator.layout.${PARENT.id}`)).toBe(layout);
+  });
+
+  it.each([
+    ['office', `office-agent-${CHILD.id}`],
+    ['tavern', `orchestrator-tavern-agent-${CHILD.id}`],
+    ['aquarium', `orchestrator-fish-${CHILD.id}`],
+    ['table', `orchestrator-table-row-${CHILD.id}`],
+  ])('syncs %s scene selection to the sidebar and clears it with Escape', async (view, agentTestId) => {
+    window.localStorage.setItem(INTRO_SEEN_KEY, '1');
+    window.localStorage.setItem(`b4m.orchestrator.view.${PARENT.id}`, view);
+    await openParent();
+    await enterOrchestrate();
+    const stage = el('orchestrator-stage');
+    await act(async () => el(agentTestId).click());
+    expect(highlightedTitle()).toBe(CHILD.title);
+    expect(el('chat-session-title').textContent).toBe(PARENT.title);
+    await act(async () =>
+      document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }))
+    );
+    expect(highlightedTitle()).toBe(PARENT.title);
+    expect(query('orchestrator-peek-drawer')).toBeNull();
+    expect(el('orchestrator-stage')).toBe(stage);
+  });
+
+  it('focuses a nested descendant through the sidebar keyboard shortcut without replacing the viewer', async () => {
+    window.localStorage.setItem(INTRO_SEEN_KEY, '1');
+    window.localStorage.setItem(`b4m.orchestrator.view.${PARENT.id}`, 'office');
+    const nested = {
+      ...CHILD,
+      id: 'nested-agent',
+      title: 'Nested agent',
+      origin: { parentSessionId: CHILD.id, seedPrompt: 'nested work' },
+    } as ChatSessionSummary;
+    listed = [...SESSIONS, nested];
+    await openParent();
+    await enterOrchestrate();
+    await clickSessionRow(CHILD.title);
+    const rows = Array.from(document.querySelectorAll<HTMLElement>('[data-testid="chat-session-item"]'));
+    const index = rows.findIndex(row => row.textContent?.includes(nested.title));
+    expect(index).toBeGreaterThanOrEqual(0);
+    await act(async () =>
+      window.dispatchEvent(
+        new KeyboardEvent('keydown', {
+          key: String(index + 1),
+          code: `Digit${index + 1}`,
+          metaKey: true,
+          bubbles: true,
+        })
+      )
+    );
+    expect(el('chat-session-title').textContent).toBe(PARENT.title);
+    expect(query('orchestrator-office')).not.toBeNull();
+    expect(el('orchestrator-peek-drawer').textContent).toContain(nested.title);
+    expect(highlightedTitle()).toBe(nested.title);
+    await act(async () => el('orchestrator-peek-open-btn').click());
+    expect(el('chat-session-title').textContent).toBe(nested.title);
+    expect(query('orchestrator-stage')).toBeNull();
+  });
+
+  it('navigates normally to another roster or root while Show agents is visible', async () => {
+    window.localStorage.setItem(INTRO_SEEN_KEY, '1');
+    await openParent();
+    await enterOrchestrate();
+    await clickSessionRow(CHILD_B.title);
+    expect(el('chat-session-title').textContent).toBe(CHILD_B.title);
+    expect(query('orchestrator-stage')).toBeNull();
+    await clickSessionRow(PARENT.title);
+    expect(query('orchestrator-stage')).not.toBeNull();
+    await clickSessionRow(PARENT_B.title);
+    expect(el('chat-session-title').textContent).toBe(PARENT_B.title);
+    expect(query('orchestrator-stage')).toBeNull();
+  });
+
+  it('navigates to descendants normally after Show agents is closed', async () => {
+    window.localStorage.setItem(INTRO_SEEN_KEY, '1');
+    await openParent();
+    await enterOrchestrate();
+    await act(async () => el('chat-surface-toggle-chat').click());
+    await clickSessionRow(CHILD.title);
+    expect(el('chat-session-title').textContent).toBe(CHILD.title);
+    expect(query('orchestrator-stage')).toBeNull();
+  });
+
+  it('navigates from another screen even when the parent has a remembered agents surface', async () => {
+    window.localStorage.setItem(INTRO_SEEN_KEY, '1');
+    await openParent();
+    await enterOrchestrate();
+    await act(async () => el('chat-artifacts-btn').click());
+    await clickSessionRow(CHILD.title);
+    expect(el('chat-session-title').textContent).toBe(CHILD.title);
+    expect(query('orchestrator-stage')).toBeNull();
   });
 
   it.each(['tavern', 'aquarium'] as const)(

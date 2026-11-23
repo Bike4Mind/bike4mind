@@ -730,6 +730,7 @@ const SessionRow = memo(function SessionRow({
     >
       <ListItemButton
         selected={selected}
+        aria-current={selected ? 'true' : undefined}
         onClick={editing ? undefined : () => actions.select(session.id)}
         aria-expanded={subCount > 0 ? !subFolded : undefined}
         onKeyDown={event => {

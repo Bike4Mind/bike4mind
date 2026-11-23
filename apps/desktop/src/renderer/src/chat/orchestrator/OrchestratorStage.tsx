@@ -3,7 +3,7 @@ import Button from '@mui/joy/Button';
 import Chip from '@mui/joy/Chip';
 import Typography from '@mui/joy/Typography';
 import { keyframes } from '@mui/system';
-import { useEffect, useMemo, useRef, type ReactNode, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, type ReactNode, useState } from 'react';
 import { AgentPeekDrawer } from './AgentPeekDrawer';
 import { AgentPrDialog } from './AgentPrDialog';
 import { playSoundEvent } from './chime';
@@ -99,6 +99,7 @@ export interface StageAmbient {
 
 export interface OrchestratorStageProps {
   agents: readonly AgentView[];
+  selection?: { id: string | null; onChange(id: string | null): void };
   parent?: ParentView;
   /** Bring the parent's own conversation forward for an attention action. */
   onParentFocus?(): void;
@@ -154,6 +155,7 @@ const pulse = keyframes`
 
 export function OrchestratorStage({
   agents: rosterAgents,
+  selection,
   parent: rosterParent = NO_PARENT,
   onParentFocus,
   onParentToggle,
@@ -175,8 +177,14 @@ export function OrchestratorStage({
   conversationRequest,
   presenter,
 }: OrchestratorStageProps) {
-  const [selectedId, setSelectedId] = useState<string | null>(null);
   const [prAgentId, setPrAgentId] = useState<string | null>(null);
+  const [localSelectedId, setLocalSelectedId] = useState<string | null>(null);
+  const selectedId = selection ? selection.id : localSelectedId;
+  const onSelectionChange = selection?.onChange;
+  const setSelectedId = useCallback(
+    (id: string | null) => (onSelectionChange ? onSelectionChange(id) : setLocalSelectedId(id)),
+    [onSelectionChange]
+  );
   const focused = focus?.on === true && rootId !== undefined && rosterAgents.length > 0;
   const rosterApprovals = useQuickApprovals(focused, rootId, rosterAgents, rosterParent);
 
@@ -220,23 +228,25 @@ export function OrchestratorStage({
     if (!hasSelection || settled) return;
     const onClick = (event: MouseEvent) => {
       if (handledDetailsClicks.current.has(event)) return;
+      // Sidebar selections share this drawer and must not be dismissed by the same click.
+      if (event.target instanceof Element && event.target.closest('[data-testid="chat-session-item"]')) return;
       if (event.target instanceof Element && event.target.closest('[role="menu"], [role="listbox"], [role="dialog"]'))
         return;
       setSelectedId(null);
     };
     window.addEventListener('click', onClick);
     return () => window.removeEventListener('click', onClick);
-  }, [hasSelection, settled]);
+  }, [hasSelection, settled, setSelectedId]);
 
   useEffect(() => {
     if (conversationRequest) setSelectedId(null);
-  }, [conversationRequest]);
+  }, [conversationRequest, setSelectedId]);
 
   useEffect(() => {
     if (!focusAgent) return;
     setSelectedId(focusAgent);
     onFocusAgentConsumed?.();
-  }, [focusAgent]);
+  }, [focusAgent, setSelectedId]);
 
   useEffect(() => {
     if (!hasSelection || settled) return;
@@ -249,7 +259,7 @@ export function OrchestratorStage({
     };
     document.addEventListener('keydown', onKeyDown);
     return () => document.removeEventListener('keydown', onKeyDown);
-  }, [hasSelection, settled]);
+  }, [hasSelection, settled, setSelectedId]);
 
   // The parent waiting on an approval counts too, as it does on the app badge.
   const rosterSummary = summarizeRoster(agents, parent);
