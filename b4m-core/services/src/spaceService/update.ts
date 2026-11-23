@@ -6,7 +6,7 @@ import {
   IUserDocument,
   SPACE_DESCRIPTION_MAX,
   SPACE_NAME_MAX,
-  canAdministerOrganization,
+  hasOrgPermission,
   isSpaceManager,
 } from '@bike4mind/common';
 import { NotFoundError, secureParameters } from '@bike4mind/utils';
@@ -43,7 +43,7 @@ export async function update(
 
   if (details.parentOrganizationId) {
     const organization = await db.organizations.findById(details.parentOrganizationId);
-    if (!organization || !canAdministerOrganization(user, organization)) {
+    if (!organization || !hasOrgPermission(user, organization, 'manageContent')) {
       throw new NotFoundError('Organization not found');
     }
   }

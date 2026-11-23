@@ -56,6 +56,7 @@ export const create = async (user: IUserDocument, params: CreateParameters, adap
     // Org-groups (#1172): a new org starts with no group types and no appointed admins (fail-closed).
     allowedGroupTypes: [],
     adminUserIds: [],
+    billingManagerUserIds: [],
     users: [],
     seats: validatedParams.seats,
     // Records the acting caller's email (the human who issued the create), deliberately NOT the
