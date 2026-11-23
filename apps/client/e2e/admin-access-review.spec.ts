@@ -10,7 +10,9 @@ import { AdminPage } from './pages/AdminPage';
  */
 
 const baseURL = process.env.API_URL || 'http://localhost:3000';
-const auth = (token: string) => ({ Authorization: `Bearer ${token}` });
+// The admin project's storage state puts a session cookie on `request`, so csrfProtection routes
+// need a same-origin Origin header; without it they 403 before reaching the handler.
+const auth = (token: string) => ({ Authorization: `Bearer ${token}`, Origin: new URL(baseURL).origin });
 const PASSWORD = 'E2eAccessReviewPass123!';
 
 type ReportRow = { userId: string; fullAdmin: boolean; permissions: string[]; dormant: boolean; noMfa: boolean };
@@ -62,12 +64,12 @@ test.describe('Admin access review', () => {
       headers: auth(adminA.accessToken),
       data: { before: [], adminPermissions: ['users:read'], reason: 'access review e2e setup' },
     });
-    expect(grant.ok(), `delegate grant failed: ${grant.status()}`).toBe(true);
+    expect(grant.ok(), `delegate grant failed: ${grant.status()} ${await grant.text()}`).toBe(true);
     const created = await request.post(`${baseURL}/api/admin/admin-roles`, {
       headers: auth(adminA.accessToken),
       data: { name: `access-review-role-${test.info().retry}-${getTestRunId()}`, permissions: ['support:read'] },
     });
-    expect(created.ok(), `role create failed: ${created.status()}`).toBe(true);
+    expect(created.ok(), `role create failed: ${created.status()} ${await created.text()}`).toBe(true);
     role = (await created.json()) as { id: string; name: string };
   });
 
