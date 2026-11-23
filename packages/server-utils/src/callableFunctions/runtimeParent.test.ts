@@ -172,7 +172,9 @@ describe('runCallableFunctionInChild', () => {
   it('returns a guest exception as its class, never its message, with printed output apart', async () => {
     const traceback =
       'Traceback (most recent call last):\n  File "function.py", line 3, in run\nZeroDivisionError: secret text';
-    const result = await run(call(reply({ error: traceback, printed: 'before the error\n' })));
+    const result = await run(
+      call(reply({ error: traceback, errorClass: 'ZeroDivisionError', printed: 'before the error\n' }))
+    );
     expect(result).toMatchObject({ outcome: 'error', errorClass: 'ZeroDivisionError', printed: 'before the error\n' });
     expect(JSON.stringify(result)).not.toContain('secret text');
   });
@@ -187,7 +189,9 @@ describe('runCallableFunctionInChild', () => {
       outcome: 'output_too_large',
       reason: 'result_too_large',
     });
-    expect(await run(call(reply({ error: 'Traceback (most recent call last):\nMemoryError' })))).toMatchObject({
+    expect(
+      await run(call(reply({ error: 'Traceback (most recent call last):\nMemoryError', errorClass: 'MemoryError' })))
+    ).toMatchObject({
       outcome: 'memory',
       errorClass: 'MemoryError',
     });
@@ -337,11 +341,14 @@ describe('runCallableFunctionInChild', () => {
     expect(CALLABLE_FUNCTION_LAMBDA_TIMEOUT_SECONDS).toBeLessThanOrEqual(900);
   });
 
-  it('kills a child over the memory cap', async () => {
-    const result = await run(call({ mode: 'memory' }), { memoryMb: 200 });
-    expect(result.outcome).toBe('memory');
-    expect(processGone(lastChild().pid)).toBe(true);
-  });
+  it.runIf(process.platform === 'linux' || process.platform === 'darwin')(
+    'kills a child over the memory cap',
+    async () => {
+      const result = await run(call({ mode: 'memory' }), { memoryMb: 200 });
+      expect(result.outcome).toBe('memory');
+      expect(processGone(lastChild().pid)).toBe(true);
+    }
+  );
 
   it('returns error with no_reply when the child exits without replying', async () => {
     expect(await run(call({ mode: 'exit' }))).toMatchObject({ outcome: 'error', reason: 'no_reply' });
@@ -507,16 +514,84 @@ describe('Lambda payload limits', () => {
 });
 
 describe('classifyGuestError', () => {
-  it('takes the class from the last traceback line and falls back when it is not one', () => {
-    expect(classifyGuestError('Traceback (most recent call last):\njson.decoder.JSONDecodeError: x')).toEqual({
+  const TRACEBACK = 'Traceback (most recent call last):\n  File "x", line 1\nValueError: bad\nMemoryError';
+
+  it('takes the class from the reported type, never from the traceback text, and falls back when it is not a name', () => {
+    expect(classifyGuestError(TRACEBACK, 'json.decoder.JSONDecodeError')).toEqual({
       errorClass: 'json.decoder.JSONDecodeError',
     });
-    expect(classifyGuestError('Traceback (most recent call last):\n  File "x", line 1\n<truncated')).toEqual({
-      errorClass: 'Exception',
-    });
+    expect(classifyGuestError(TRACEBACK, 'ValueError')).toEqual({ errorClass: 'ValueError' });
+    for (const bad of [undefined, '', 'not a name', 'ValueError\nMemoryError', 'x'.repeat(101)]) {
+      expect(classifyGuestError(TRACEBACK, bad)).toEqual({ errorClass: 'Exception' });
+    }
     expect(classifyGuestError('FUNCTION is not defined')).toEqual({
       errorClass: 'FunctionCallError',
       reason: 'contract_missing',
     });
+  });
+});
+
+describe('error paths of the child reply', () => {
+  const READ_CONTRACT = (spec: object) => ({ op: 'read_contract', code: JSON.stringify(spec) });
+
+  it('returns output_invalid for a contract that is not JSON', async () => {
+    expect(await run(call(reply({ contractJson: 'nope' })))).toMatchObject({
+      outcome: 'output_invalid',
+      reason: 'contract_not_json',
+    });
+  });
+
+  it('returns output_invalid for a contract that is JSON but not a contract', async () => {
+    const result = await run(READ_CONTRACT(reply({ contractJson: '{"name":"x"}' })));
+    expect(result).toMatchObject({ outcome: 'output_invalid', reason: 'contract_invalid' });
+    expect(result.problems?.length).toBeGreaterThan(0);
+  });
+
+  it('returns output_invalid for an output that is not JSON', async () => {
+    expect(await run(call(reply({ outputsJson: '{bad' })))).toMatchObject({
+      outcome: 'output_invalid',
+      reason: 'result_not_json',
+    });
+  });
+
+  it('accepts the pinned contract written in a different key order', async () => {
+    const { name, description, inputs, outputs } = CONTRACT;
+    const reordered = JSON.stringify({ outputs, inputs, description, name });
+    expect(await run(call(reply({ contractJson: reordered, outputsJson: '{"deflection": 1}' })))).toMatchObject({
+      outcome: 'ok',
+    });
+  });
+
+  it('maps a child start failure of request to payload_invalid and of load to runtime_unavailable', async () => {
+    const failure = (kind: string) => call({ mode: 'reply', skipStart: true, reply: { ok: false, failure: kind } });
+    expect(await run(failure('request'))).toMatchObject({ outcome: 'refused', reason: 'payload_invalid' });
+    expect(await run(failure('load'))).toMatchObject({ outcome: 'refused', reason: 'runtime_unavailable' });
+  });
+
+  it('keeps the pid of a group that still answers after the kill, and the sweep kills it', async () => {
+    let childPid: number | undefined;
+    const realKill = process.kill.bind(process);
+    // A signal-0 probe of the group keeps succeeding, as if a member outlived the child; kills are real.
+    const kill = vi
+      .spyOn(process, 'kill')
+      .mockImplementation((pid: number, signal?: string | number) =>
+        childPid !== undefined && pid === -childPid && signal === 0 ? true : realKill(pid, signal)
+      );
+    const { spawn: actualSpawn } = await vi.importActual<typeof import('node:child_process')>('node:child_process');
+    vi.mocked(spawn).mockImplementationOnce(((...args: Parameters<typeof actualSpawn>) => {
+      const child = actualSpawn(...args);
+      childPid = child.pid;
+      return child;
+    }) as typeof spawn);
+    try {
+      const result = await run(call(reply({ outputsJson: '{"deflection": 1}' })));
+      expect(result.outcome).toBe('ok');
+      expect(liveCallableFunctionChildren()).toEqual([childPid]);
+      expect(sweepCallableFunctionChildren()).toBe(1);
+      expect(liveCallableFunctionChildren()).toEqual([]);
+      expect(kill).toHaveBeenCalledWith(-(childPid as number), 'SIGKILL');
+    } finally {
+      kill.mockRestore();
+    }
   });
 });

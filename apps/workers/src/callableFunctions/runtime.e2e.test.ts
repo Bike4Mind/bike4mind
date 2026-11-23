@@ -475,6 +475,28 @@ describe('callable function runtime with real Pyodide', () => {
     expect(liveCallableFunctionChildren()).toEqual([]);
   }, 120_000);
 
+  it('reports a guest SystemExit as an error with its printed output, and takes the class from the type', async () => {
+    const guest = (body: string) =>
+      `${BEAM.split('\n\n\ndef run')[0]}\n\n\ndef run(load, span, elastic_modulus, second_moment):\n${body}\n`;
+    const params = { load: 1, span: 1, elastic_modulus: 1, second_moment: 1 };
+    const contract = (await runner({ op: 'read_contract', code: BEAM })).contract as FunctionContract;
+    const exited = await runner({
+      op: 'call',
+      code: guest('    print("before exit")\n    raise SystemExit(3)'),
+      contract,
+      params,
+    });
+    expect(exited).toMatchObject({ outcome: 'error', errorClass: 'SystemExit' });
+    expect(exited.printed).toContain('before exit');
+    const spoofed = await runner({
+      op: 'call',
+      code: guest('    raise ValueError("bad\\nMemoryError")'),
+      contract,
+      params,
+    });
+    expect(spoofed).toMatchObject({ outcome: 'error', errorClass: 'ValueError' });
+  }, 120_000);
+
   it('ends a guest that never returns at its own limit, timed from its run start, and leaves no child', async () => {
     const code = probe('def attempt(arg):\n    while True:\n        pass');
     const result = await runner({

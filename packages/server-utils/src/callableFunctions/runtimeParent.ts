@@ -1,6 +1,7 @@
-import { spawn } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
 import { readFile } from 'node:fs/promises';
 import { realpathSync } from 'node:fs';
+import { isDeepStrictEqual, promisify } from 'node:util';
 import {
   FUNCTION_CONTRACT_LIMITS,
   FUNCTION_RESULT_TOO_LARGE_PREFIX,
@@ -151,6 +152,8 @@ export type CallableFunctionChildReply =
       outputProblemsJson?: string;
       printed: string;
       error?: string;
+      /** The exception's class name from its type, not parsed out of the traceback text. */
+      errorClass?: string;
     }
   | { ok: false; failure: 'request' | 'load' | 'version' };
 
@@ -237,11 +240,21 @@ interface ChildRun {
   startMs?: number;
 }
 
+const execFileAsync = promisify(execFile);
+
+// /proc where it exists; `ps` elsewhere (macOS), which also covers the in-process runner in development.
 async function residentMb(pid: number): Promise<number | null> {
   try {
     const status = await readFile(`/proc/${pid}/status`, 'utf8');
     const match = /^VmRSS:\s+(\d+)\s+kB/m.exec(status);
     return match ? Number(match[1]) / 1024 : null;
+  } catch {
+    // Fall through to ps.
+  }
+  try {
+    const { stdout } = await execFileAsync('ps', ['-o', 'rss=', '-p', String(pid)]);
+    const kb = Number(stdout.trim());
+    return Number.isFinite(kb) && kb > 0 ? kb / 1024 : null;
   } catch {
     return null;
   }
@@ -382,6 +395,7 @@ function parseReply(raw: unknown): CallableFunctionChildReply | null {
     outputProblemsJson: optionalString(raw.outputProblemsJson),
     printed: raw.printed,
     error: optionalString(raw.error),
+    errorClass: optionalString(raw.errorClass),
   };
 }
 
@@ -402,17 +416,18 @@ const GLUE_REFUSALS: ReadonlyArray<[string, CallableFunctionReason]> = [
   [FUNCTION_RESULT_TOO_LARGE_PREFIX, 'result_too_large'],
 ];
 
-const ERROR_CLASS = /^([A-Za-z_][A-Za-z0-9_.]{0,99})(?::|$)/;
+const ERROR_CLASS = /^[A-Za-z_][A-Za-z0-9_.]{0,99}$/;
 
 /** Reduces guest error text to a class name and, for the glue's own refusals, a fixed reason. */
-export function classifyGuestError(error: string): { errorClass: string; reason?: CallableFunctionReason } {
+export function classifyGuestError(
+  error: string,
+  errorClass?: string
+): { errorClass: string; reason?: CallableFunctionReason } {
   if (!error.startsWith('Traceback (most recent call last):')) {
     const refusal = GLUE_REFUSALS.find(([prefix]) => error.startsWith(prefix));
     return { errorClass: 'FunctionCallError', reason: refusal?.[1] };
   }
-  const lines = error.trimEnd().split('\n');
-  const match = ERROR_CLASS.exec(lines[lines.length - 1] ?? '');
-  return { errorClass: match ? match[1] : 'Exception' };
+  return { errorClass: errorClass !== undefined && ERROR_CLASS.test(errorClass) ? errorClass : 'Exception' };
 }
 
 const PROBLEM_PATH = /^[A-Za-z0-9_.]{0,200}$/;
@@ -537,7 +552,7 @@ export async function runCallableFunctionInChild(
 
   const after = { initMs: reply.initMs, printed: reply.printed.slice(0, limits.printedChars) };
   if (reply.error !== undefined) {
-    const { errorClass, reason } = classifyGuestError(reply.error);
+    const { errorClass, reason } = classifyGuestError(reply.error, reply.errorClass);
     if (reason === 'result_too_large') return finish({ ...after, outcome: 'output_too_large', reason });
     if (errorClass === 'MemoryError') return finish({ ...after, outcome: 'memory', errorClass });
     return finish({ ...after, outcome: 'error', errorClass, reason });
@@ -555,7 +570,7 @@ export async function runCallableFunctionInChild(
       ? finish({ ...after, outcome: 'ok', contract: read.contract })
       : finish({ ...after, outcome: 'output_invalid', reason: 'contract_invalid', problems: safePaths(read.problems) });
   }
-  if (!pinned || !read.ok || JSON.stringify(read.contract) !== JSON.stringify(pinned)) {
+  if (!pinned || !read.ok || !isDeepStrictEqual(read.contract, pinned)) {
     return refused('contract_changed');
   }
 

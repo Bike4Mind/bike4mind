@@ -378,9 +378,10 @@ async function runRequest(
       outputProblemsJson: text(fields.output_problems_json),
       printed: (text(fields.stdout) ?? '') + (text(fields.stderr) ?? ''),
       error: text(fields.error),
+      errorClass: text(fields.error_class),
     };
   } catch (error) {
-    // A BaseException such as SystemExit gets past the glue's `except Exception`.
+    // Only a failure outside the glue's own handling lands here.
     const message = error instanceof Error ? error.message : 'Traceback (most recent call last):\nException';
     return { ok: true, initMs, printed: '', error: message.slice(0, MAX_ERROR_CHARS) };
   } finally {
