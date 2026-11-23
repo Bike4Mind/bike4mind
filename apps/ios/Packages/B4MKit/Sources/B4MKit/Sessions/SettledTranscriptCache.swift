@@ -37,6 +37,11 @@ public final class SettledTranscriptCache {
     return snapshot
   }
 
+  /// Drops a session's entries so the next open fetches it; for sends made outside a transcript view model.
+  public func remove(sessionID: String) {
+    remove(sessionID: sessionID, generation: generation)
+  }
+
   func remove(sessionID: String, generation: UUID) {
     guard generation == self.generation else { return }
     entries = entries.filter { $0.key.sessionID != sessionID }
@@ -48,7 +53,10 @@ public final class SettledTranscriptCache {
     var settled: [Page<QuestTurn>] = []
     var revalidate = false
     for page in pages.prefix(maxPages) {
-      guard page.items.count <= pageSize else { return }
+      guard page.items.count <= pageSize else {
+        remove(sessionID: sessionID, generation: generation)
+        return
+      }
       let prefix = page.items.prefix {
         $0.status?.isTerminal
           ?? ($0.kind == .error || !($0.reply?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true))

@@ -273,6 +273,7 @@ struct VoiceConversationView: View {
       target: request.target, api: services.api, realtime: services.realtime, listener: SFSpeechListener(),
       speaker: AVSpeechSpeaker(), audioSession: AVVoiceAudioSession(), bargeInWords: bargeInWords,
       answerPhrases: answerPhrases, opening: opening, firstTurnContext: context, utteranceHandler: handler)
+    model.onTurnSent = { [transcriptCache = services.transcriptCache] id in transcriptCache.remove(sessionID: id) }
     return model
   }
 
