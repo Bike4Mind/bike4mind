@@ -106,34 +106,21 @@ describe('e2e skip rendering', () => {
    * flag. Asserted per-surface rather than as one grep of the file so that adding a second
    * verdict surface without a skip branch is not covered by the first one's match.
    */
-  it('branches the Slack status on the skip before pass/fail', () => {
+  it('uses the classified outcome for the Slack status', () => {
     const contents = read('e2e-run.yml');
     const statusExpressions = [...contents.matchAll(/"text": "\*Status\*[^"]*"/g)].map(m => m[0]);
     expect(statusExpressions).toHaveLength(1);
 
-    for (const expression of [
-      ...statusExpressions,
-      ...[...contents.matchAll(/"text": "Playwright E2E[^\n]*Passed[^\n]*/g)].map(m => m[0]),
-    ]) {
-      const skipAt = expression.indexOf("steps.e2e.outputs.preview_skipped == 'true'");
-      const passAt = expression.indexOf(':white_check_mark: Passed');
-      expect(skipAt).toBeGreaterThanOrEqual(0);
-      // GitHub expressions short-circuit left to right, so a skip branch placed after the pass
-      // branch would never be reached.
-      expect(passAt).toBeGreaterThan(skipAt);
-    }
+    expect(statusExpressions[0]).toContain('steps.results.outputs.label');
+    expect(contents).toContain('E2E_PREVIEW_SKIPPED: ${{ steps.e2e.outputs.preview_skipped }}');
+    expect(contents).toContain('run: node scripts/e2e-outcome.mjs');
   });
 
-  // A skip parses zero results, so the zero-total early return is what keeps the promotion
-  // status missing instead of posting a red one. Preview runs are never promotable anyway
-  // (both callers tie `stamp_promotable` to an empty `pr_number`), so this is the backstop
-  // rather than the primary defence - but it is the only one that would survive a caller
-  // deciding to stamp a preview.
-  it('leaves the promotion commit status unset when no results were parsed', () => {
+  // No-result runs must not leave a previous successful status looking current.
+  it('uses the classified state rather than leaving a stale status on no results', () => {
     const contents = read('e2e-run.yml');
-    expect(contents).toMatch(
-      /const total = Number\(process\.env\.TOTAL \|\| '0'\);\n\s*(\/\/[^\n]*\n\s*)*if \(total === 0\) \{/
-    );
+    expect(contents).toContain("process.env.E2E_STATE || 'error'");
+    expect(contents).toContain('E2E_STATE: ${{ steps.results.outputs.state }}');
   });
 
   it('renders the PR comment as Skipped rather than Passed', () => {

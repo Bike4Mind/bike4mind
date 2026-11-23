@@ -16,7 +16,6 @@ jobs:
     runs-on: ${{ vars.RUNNER_LABEL_MEDIUM || 'ubuntu-latest-m' }}
     name: E2E Tests
     timeout-minutes: 20
-    continue-on-error: true
     concurrency:
       group: e2e-label-${{ github.event.number }}
       cancel-in-progress: true
@@ -105,17 +104,23 @@ jobs:
         run: |
           set -o pipefail
           . .github/scripts/derive-preview-e2e-secret.sh "$STAGE"
-          # An unset secret means the suite cannot start at all. Report that as a labeled
-          # skip rather than `exit 1`: a red job here is indistinguishable from a real test
-          # failure, so the PR comment below would tell a reviewer e2e broke when nothing
-          # ever ran. That comment branches on `preview_skipped` ahead of pass/fail for the same
-          # reason - a skip must never render as either.
+          # A missing preview seed is an explicit skip, not evidence of passing tests.
           if [ -z "${E2E_CLEANUP_SECRET:-}" ]; then
             echo "::warning::preview e2e unavailable: E2E_CLEANUP_SECRET_PREVIEW repo secret is not configured; skipping (0 tests run)"
             echo "preview_skipped=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
           pnpm --filter client exec playwright test 2>&1 | tee apps/client/playwright-output.txt
+
+      - name: Classify E2E outcome
+        id: results
+        if: always()
+        env:
+          E2E_OUTCOME: ${{ steps.e2e.outcome }}
+          E2E_PREVIEW_SKIPPED: ${{ steps.e2e.outputs.preview_skipped }}
+          E2E_CANCELLED: ${{ job.status == 'cancelled' }}
+          E2E_JOB_STATUS: ${{ job.status }}
+        run: node scripts/e2e-outcome.mjs
 
       - name: Scrub E2E secrets from test output
         id: scrub
@@ -137,7 +142,10 @@ jobs:
         uses: actions/upload-artifact@v6
         with:
           name: playwright-report-${{ steps.config.outputs.stage }}-label
-          path: apps/client/playwright-report/
+          path: |
+            apps/client/playwright-report/
+            apps/client/pw-results.json
+            e2e-outcome.json
           retention-days: 7
 
       - name: Comment PR with E2E results
@@ -146,23 +154,13 @@ jobs:
         with:
           script: |
             const fs = require('fs');
-            let output = '';
-            try {
-              output = fs.readFileSync('apps/client/playwright-output.txt', 'utf8');
-            } catch { }
-
-            const summaryMatch = output.match(/\d+ (?:passed|failed|skipped|flaky)[\s\S]*?(?=\n|$)/);
-
-            // Three states, not two: a run that could not start is neither. Checked first,
-            // because a skip exits 0 and would otherwise report as a green "Passed" on a PR
-            // where zero tests ran.
+            let result = { label: process.env.E2E_CANCELLED === 'true' ? 'Cancelled' : 'Setup/deployment failed', summary: 'No test results available' };
+            try { result = JSON.parse(fs.readFileSync('e2e-outcome.json', 'utf8')); } catch { }
+            if (process.env.E2E_CANCELLED === 'true') result = { ...result, outcome: 'cancelled', label: 'Cancelled' };
             const skipped = process.env.E2E_PREVIEW_SKIPPED === 'true';
-            const passed = process.env.E2E_OUTCOME === 'success';
-            const icon = skipped ? '⏭️' : passed ? '✅' : '❌';
-            const status = skipped ? 'Skipped' : passed ? 'Passed' : 'Failed';
-            const summary = skipped
-              ? 'Preview e2e is unavailable: the `E2E_CLEANUP_SECRET_PREVIEW` repo secret is not configured, so no tests ran.'
-              : (summaryMatch ? summaryMatch[0].trim() : 'See report for details');
+            const icon = skipped ? 'Skipped:' : result.outcome === 'passed' ? 'PASS:' : 'E2E:';
+            const status = skipped ? 'Skipped' : result.label;
+            const summary = result.summary;
             const runUrl = `${process.env.GITHUB_SERVER_URL}/${process.env.GITHUB_REPOSITORY}/actions/runs/${process.env.GITHUB_RUN_ID}`;
             // The report upload is gated off on a skip, so offering a download would point at
             // an artifact list with no Playwright report in it. Link the run itself instead -
@@ -204,4 +202,8 @@ jobs:
         env:
           API_URL: ${{ steps.config.outputs.api_url }}
           E2E_PREVIEW_SKIPPED: ${{ steps.e2e.outputs.preview_skipped }}
-          E2E_OUTCOME: ${{ steps.e2e.outcome }}
+          E2E_CANCELLED: ${{ job.status == 'cancelled' }}
+
+      - name: Enforce E2E outcome
+        if: ${{ !cancelled() && steps.results.outputs.outcome != 'passed' && steps.results.outputs.outcome != 'skipped' }}
+        run: exit 1
