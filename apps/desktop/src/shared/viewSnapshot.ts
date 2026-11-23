@@ -14,11 +14,14 @@ import { QUICK_SUMMARY_MAX } from './watch';
 
 export const VIEW_SNAPSHOT_CONTRACT = 2;
 
+// Additive: 'waiting' and 'paused' joined without a contract bump, since only built-in views consume it today.
 const AGENT_STATES = [
   'needs-you',
   'working',
+  'waiting',
   'done',
   'failed',
+  'paused',
   'stopped',
   'idle',
 ] as const satisfies readonly AgentState[];

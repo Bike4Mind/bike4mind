@@ -14,8 +14,8 @@ type ColumnId = 'needs-you' | 'working' | 'done' | 'failed';
 
 const COLUMNS: ReadonlyArray<{ id: ColumnId; label: string; states: readonly AgentState[] }> = [
   { id: 'needs-you', label: 'Needs you', states: ['needs-you'] },
-  { id: 'working', label: 'Working', states: ['working'] },
-  { id: 'done', label: 'Done', states: ['done', 'stopped', 'idle'] },
+  { id: 'working', label: 'Working', states: ['working', 'waiting'] },
+  { id: 'done', label: 'Done', states: ['done', 'paused', 'stopped', 'idle'] },
   { id: 'failed', label: 'Failed', states: ['failed'] },
 ];
 
