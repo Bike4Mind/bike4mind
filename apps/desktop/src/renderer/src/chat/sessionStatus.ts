@@ -8,6 +8,14 @@ export const STATUS_LABEL: Record<ChatSessionStatus, string> = {
 };
 
 /**
+ * The working spinner's colour, shared with the rail elbow into a working child (SessionList railSx)
+ * so a busy branch reads as one colour from rail to badge. plainColor, not solidBg: solidBg is a fill
+ * colour and sits at about 3:1 on the dark sidebar, while plainColor is tuned for contrast in both modes.
+ */
+export const WORKING_COLOR = 'primary.plainColor';
+export const WORKING_COLOR_VAR = 'var(--joy-palette-primary-plainColor)';
+
+/**
  * Fold status pushes from main into the map the sidebar reads.
  *
  * 'done' is stored as ABSENCE rather than as a value, so the map holds one entry per busy
