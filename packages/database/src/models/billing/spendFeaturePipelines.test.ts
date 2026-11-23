@@ -3,7 +3,7 @@ import mongoose from 'mongoose';
 import type { MongoMemoryServer } from 'mongodb-memory-server';
 import { createMongoServer } from '../../__test__/createMongoServer';
 import { UsageEvent, usageEventRepository } from './UsageEventModel';
-import { CreditHolderType, SPEND_FAILED_STATUSES, type UsageEventStatus } from '@bike4mind/common';
+import { CreditHolderType, type UsageEventStatus } from '@bike4mind/common';
 
 let mongod: MongoMemoryServer;
 
@@ -54,8 +54,11 @@ async function seed(events: Seed[]) {
 const DAY_MS = 24 * 60 * 60 * 1000;
 const FROM = new Date('2026-03-08T00:00:00Z');
 const TO = new Date('2026-03-15T00:00:00Z');
-const LAST_DAY = new Date(TO.getTime() - DAY_MS);
+// The range's last day is today and still in progress, so spikes compare the day before it.
+const SPIKE_END = new Date(TO.getTime() - DAY_MS);
+const LAST_DAY = new Date(SPIKE_END.getTime() - DAY_MS);
 const TRAILING_FROM = new Date(LAST_DAY.getTime() - 7 * DAY_MS);
+const WINDOW = { from: FROM, to: TO, spikeEnd: SPIKE_END };
 
 // A deterministic spread: three features, four users, every status, events before the range
 // (trailing window only), on the range edges, and after it.
@@ -81,9 +84,13 @@ function sampleEvents(): Seed[] {
   return events;
 }
 
-/** The same numbers computed the obvious way, row by row, as the reference. */
+/**
+ * The same numbers computed the obvious way, row by row, as the reference. The status rules are
+ * spelled out here rather than imported, so a misclassification in the shared constants fails.
+ */
 function directAggregate(events: Seed[], feature?: string) {
-  const failed = (event: Seed) => (SPEND_FAILED_STATUSES as readonly string[]).includes(event.status ?? 'ok');
+  const failed = (event: Seed) => event.status === 'error' || event.status === 'timeout';
+  const counted = (event: Seed) => event.status !== 'error';
   const time = (event: Seed) => new Date(event.at).getTime();
   const byFeature = new Map<
     string,
@@ -117,14 +124,14 @@ function directAggregate(events: Seed[], feature?: string) {
       acc.requests += 1;
       acc.users.add(event.userId);
       if (failed(event)) acc.failedRequests += 1;
-      else {
+      if (counted(event)) {
         acc.costUsd += event.costUsd;
         acc.creditsCharged += event.creditsCharged ?? 0;
         acc.units += event.units ?? 0;
       }
     }
-    if (!failed(event) && t >= LAST_DAY.getTime()) acc.lastDayUsd += event.costUsd;
-    if (!failed(event) && t >= TRAILING_FROM.getTime() && t < LAST_DAY.getTime()) acc.trailingUsd += event.costUsd;
+    if (counted(event) && t >= LAST_DAY.getTime() && t < SPIKE_END.getTime()) acc.lastDayUsd += event.costUsd;
+    if (counted(event) && t >= TRAILING_FROM.getTime() && t < LAST_DAY.getTime()) acc.trailingUsd += event.costUsd;
     byFeature.set(key, acc);
   }
   return byFeature;
@@ -135,7 +142,7 @@ describe('spendFeatures', () => {
     const events = sampleEvents();
     await seed(events);
 
-    const rows = await usageEventRepository.spendFeatures({ from: FROM, to: TO });
+    const rows = await usageEventRepository.spendFeatures(WINDOW);
     const expected = directAggregate(events);
 
     expect(rows.map(r => r.feature).sort()).toEqual([...expected.keys()].sort());
@@ -154,6 +161,21 @@ describe('spendFeatures', () => {
     }
   });
 
+  it("totals the same cost as the explorer's breakdown, timeouts included", async () => {
+    const events = sampleEvents().filter(event => event.status !== 'error');
+    events.push({ at: '2026-03-10T00:00:00Z', userId: 'u1', feature: 'chat', costUsd: 0.4, status: 'timeout' });
+    await seed(events);
+
+    const rows = await usageEventRepository.spendFeatures(WINDOW);
+    const breakdown = await usageEventRepository.spendBreakdown({
+      from: FROM,
+      to: TO,
+      limit: 10,
+      segmentIds: { internal: [], partner: [] },
+    });
+    expect(rows.reduce((sum, row) => sum + row.costUsd, 0)).toBeCloseTo(breakdown.totalCostUsd, 9);
+  });
+
   it('narrows to one acting user and to an audience', async () => {
     await seed([
       { at: '2026-03-10T00:00:00Z', userId: 'staff', feature: 'music_generation', costUsd: 5 },
@@ -162,20 +184,18 @@ describe('spendFeatures', () => {
     ]);
 
     const [onlyStaff] = await usageEventRepository.spendFeatures({
-      from: FROM,
-      to: TO,
+      ...WINDOW,
       userFilter: { mode: 'include', userIds: ['staff'] },
     });
     expect(onlyStaff).toMatchObject({ feature: 'music_generation', costUsd: 5, distinctUsers: 1 });
 
     const external = await usageEventRepository.spendFeatures({
-      from: FROM,
-      to: TO,
+      ...WINDOW,
       userFilter: { mode: 'exclude', userIds: ['staff'] },
     });
     expect(external.find(r => r.feature === 'music_generation')?.costUsd).toBe(2);
 
-    const customer = await usageEventRepository.spendFeatures({ from: FROM, to: TO, actorUserId: 'customer' });
+    const customer = await usageEventRepository.spendFeatures({ ...WINDOW, actorUserId: 'customer' });
     expect(customer.map(r => r.feature).sort()).toEqual(['chat', 'music_generation']);
   });
 });
@@ -190,15 +210,13 @@ describe('spendFeatureUsers', () => {
       .sort((a, b) => b[1].costUsd - a[1].costUsd || a[0].localeCompare(b[0]));
 
     const first = await usageEventRepository.spendFeatureUsers({
-      from: FROM,
-      to: TO,
+      ...WINDOW,
       feature: 'music_generation',
       limit: 2,
       offset: 0,
     });
     const second = await usageEventRepository.spendFeatureUsers({
-      from: FROM,
-      to: TO,
+      ...WINDOW,
       feature: 'music_generation',
       limit: 2,
       offset: 2,
@@ -230,9 +248,9 @@ describe('spendActorIds', () => {
       { at: TRAILING_FROM.toISOString(), userId: 'b', feature: 'music_generation', costUsd: 1 },
       { at: TO.toISOString(), userId: 'c', feature: 'chat', costUsd: 1 },
     ]);
-    const ids = await usageEventRepository.spendActorIds({ from: FROM, to: TO });
+    const ids = await usageEventRepository.spendActorIds(WINDOW);
     expect(ids.sort()).toEqual(['a', 'b']);
-    const musicIds = await usageEventRepository.spendActorIds({ from: FROM, to: TO, feature: 'music_generation' });
+    const musicIds = await usageEventRepository.spendActorIds({ ...WINDOW, feature: 'music_generation' });
     expect(musicIds).toEqual(['b']);
   });
 });

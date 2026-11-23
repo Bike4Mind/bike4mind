@@ -1,5 +1,6 @@
 import {
   SPEND_AUDIENCES,
+  SPEND_FEATURE_ID_PATTERN,
   SPEND_SPLIT_DIMENSIONS,
   type SpendAudience,
   type SpendSplitDimension,
@@ -50,8 +51,14 @@ export type SpendExplorerView = {
 const isAudience = (value: unknown): value is SpendAudience =>
   typeof value === 'string' && (SPEND_AUDIENCES as readonly string[]).includes(value);
 
-const idOrNull = (value: unknown): string | null =>
-  typeof value === 'string' && /^[A-Za-z0-9_-]{1,64}$/.test(value) ? value : null;
+const matchOrNull =
+  (pattern: RegExp) =>
+  (value: unknown): string | null =>
+    typeof value === 'string' && pattern.test(value) ? value : null;
+
+const userIdOrNull = matchOrNull(/^[A-Za-z0-9_-]{1,64}$/);
+// The server's own rule, so a hand-edited link falls back to the feature list rather than an error.
+const featureOrNull = matchOrNull(SPEND_FEATURE_ID_PATTERN);
 
 const isSplit = (value: unknown): value is SpendSplitDimension =>
   typeof value === 'string' && (SPEND_SPLIT_DIMENSIONS as readonly string[]).includes(value);
@@ -69,8 +76,8 @@ export function readSpendExplorerSearch(search: SpendExplorerSearch, now: Date =
   const audienceRaw = search[keys.audience];
   const featureView = {
     audience: isAudience(audienceRaw) ? audienceRaw : 'all',
-    feature: idOrNull(search[keys.feature]),
-    user: idOrNull(search[keys.user]),
+    feature: featureOrNull(search[keys.feature]),
+    user: userIdOrNull(search[keys.user]),
   } as const;
 
   const fromRaw = search[keys.from];

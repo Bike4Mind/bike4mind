@@ -76,7 +76,13 @@ beforeEach(() => {
 describe('AccountSpendPanel', () => {
   it("shows the acting user's feature mix over the same range", () => {
     renderPanel();
-    expect(h.userFeatures).toHaveBeenCalledWith({ range: RANGE, userId: 'user-1', userName: 'User One' });
+    expect(h.userFeatures).toHaveBeenCalledWith({
+      range: RANGE,
+      userId: 'user-1',
+      userName: 'User One',
+      showProfileLink: false,
+      testId: 'account-spend-features',
+    });
   });
 
   it("requests the user's spend split by model over the drill range", () => {

@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import {
   ApiKeyScope,
   type SpendFeatureAggregate,
@@ -128,6 +128,7 @@ describe('GET /api/admin/spend-explorer/features', () => {
     expect(m.spendFeatures).toHaveBeenCalledWith({
       from: new Date('2026-03-08T00:00:00Z'),
       to: new Date('2026-03-11T00:00:00Z'),
+      spikeEnd: new Date('2026-03-11T00:00:00Z'),
       actorUserId: undefined,
       userFilter: undefined,
     });
@@ -139,6 +140,32 @@ describe('GET /api/admin/spend-explorer/features', () => {
     expect(music).toMatchObject({ share: 0.75, unitLabel: 'seconds', trailingAvgUsd: 1, isSpike: true });
     expect(chat).toMatchObject({ share: 0.25, unitLabel: null, trailingAvgUsd: 2, isSpike: false });
     expect(chat.dailyUsd).toEqual([0, 20, 0]);
+  });
+
+  describe('while the range ends today', () => {
+    afterEach(() => vi.useRealTimers());
+
+    it('compares the last complete day, not the partial day in progress', async () => {
+      vi.useFakeTimers({ toFake: ['Date'] });
+      vi.setSystemTime(new Date('2026-03-10T06:00:00Z'));
+      m.spendFeatures.mockResolvedValue([]);
+
+      const { body } = await runGet<SpendFeaturesResponse>(featuresHandler, RANGE);
+
+      expect(m.spendFeatures.mock.calls[0][0]).toMatchObject({
+        to: new Date('2026-03-11T00:00:00Z'),
+        spikeEnd: new Date('2026-03-10T00:00:00Z'),
+      });
+      expect(body!.lastDayStart).toBe('2026-03-09T00:00:00.000Z');
+      expect(body!.days).toHaveLength(3);
+    });
+  });
+
+  it('falls back to the default spike multiple while the setting is unsaved', async () => {
+    m.getSettingsValue.mockResolvedValue(undefined);
+    m.spendFeatures.mockResolvedValue([]);
+    const { body } = await runGet<SpendFeaturesResponse>(featuresHandler, RANGE);
+    expect(body!.spikeMultiple).toBe(3);
   });
 
   it('classifies internal users with the Analytics rule for each audience', async () => {

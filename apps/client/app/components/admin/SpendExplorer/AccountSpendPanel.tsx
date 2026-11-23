@@ -130,7 +130,14 @@ export function AccountSpendPanel({ account, range, onClose }: AccountSpendPanel
           </Stack>
         </SectionCard>
       </Box2Columns>
-      <UserFeaturesPanel range={range} userId={account.accountId} userName={account.name} />
+      <UserFeaturesPanel
+        range={range}
+        userId={account.accountId}
+        userName={account.name}
+        // The panel header already links to the user.
+        showProfileLink={false}
+        testId="account-spend-features"
+      />
     </Stack>
   );
 }

@@ -15,6 +15,7 @@ import {
   SegmentedControl,
   StatSparkline,
   StatusChip,
+  UpdatingBar,
   type DataColumn,
 } from '../shared';
 import { seriesLabel } from './seriesLabels';
@@ -28,6 +29,9 @@ const AUDIENCE_OPTIONS: ReadonlyArray<{ value: SpendAudience; label: string }> =
 ];
 
 const DEFAULT_PAGE_SIZE = 25;
+// About what a 128px sparkline cell can draw: past this, days fold into multi-day bars.
+const MAX_TREND_BARS = 31;
+const DAY_MS = 24 * 60 * 60 * 1000;
 const numberFormat = new Intl.NumberFormat('en-US', { maximumFractionDigits: 0 });
 const formatCount = (value: number) => numberFormat.format(value);
 const featureLabel = (feature: string) => seriesLabel('feature', feature);
@@ -52,15 +56,30 @@ function formatUnits(units: number, unitLabel: string | null): string {
   return unitLabel === null ? '-' : `${formatCount(units)} ${unitLabel}`;
 }
 
+/** Folds a daily series into at most `maxBars` sums of `daysPerBar` consecutive days. */
+export function foldDailySeries(values: number[], maxBars: number): { bars: number[]; daysPerBar: number } {
+  const daysPerBar = Math.max(1, Math.ceil(values.length / maxBars));
+  const bars: number[] = [];
+  for (let i = 0; i < values.length; i += daysPerBar) {
+    bars.push(values.slice(i, i + daysPerBar).reduce((sum, value) => sum + value, 0));
+  }
+  return { bars, daysPerBar };
+}
+
+function TrendCell({ values, feature }: { values: number[]; feature: string }) {
+  const { bars, daysPerBar } = foldDailySeries(values, MAX_TREND_BARS);
+  const per = daysPerBar === 1 ? 'day' : `${daysPerBar} days`;
+  return <StatSparkline values={bars} label={`${featureLabel(feature)} cost per ${per} over ${values.length} days`} />;
+}
+
 function lastDayHelp(spikeMultiple: number | undefined): string {
-  const base = `Cost on the last day of the range / the average day of the ${FEATURE_SPIKE_TRAILING_DAYS} days before it.`;
+  const base = `Cost on the last complete UTC day of the range / the average day of the ${FEATURE_SPIKE_TRAILING_DAYS} days before it.`;
   return spikeMultiple === undefined ? base : `${base} A spike is a last day above ${spikeMultiple}x that average.`;
 }
 
 /** Columns both feature tables share: the whole platform's, and one user's mix. */
 function featureColumns(params: {
   withUsers: boolean;
-  days: number;
   spikeMultiple: number | undefined;
 }): DataColumn<SpendFeatureRow>[] {
   const columns: DataColumn<SpendFeatureRow>[] = [
@@ -141,12 +160,7 @@ function featureColumns(params: {
       id: 'trend',
       label: 'Daily cost',
       width: '8rem',
-      render: row => (
-        <StatSparkline
-          values={row.dailyUsd}
-          label={`${featureLabel(row.feature)} cost per day over ${params.days} days`}
-        />
-      ),
+      render: row => <TrendCell values={row.dailyUsd} feature={row.feature} />,
     },
     {
       id: 'lastDay',
@@ -166,6 +180,7 @@ function FeatureTable({
   label,
   data,
   isLoading,
+  isUpdating,
   error,
   onRetry,
   withUsers,
@@ -175,31 +190,34 @@ function FeatureTable({
   label: string;
   data: SpendFeaturesResponse | undefined;
   isLoading: boolean;
+  isUpdating: boolean;
   error: string | undefined;
   onRetry: () => void;
   withUsers: boolean;
   onSelect?: (row: SpendFeatureRow) => void;
 }) {
-  const days = data?.days.length ?? 0;
   const spikeMultiple = data?.spikeMultiple;
-  const columns = useMemo(() => featureColumns({ withUsers, days, spikeMultiple }), [withUsers, days, spikeMultiple]);
+  const columns = useMemo(() => featureColumns({ withUsers, spikeMultiple }), [withUsers, spikeMultiple]);
   return (
-    <DataTable
-      label={label}
-      testId={testId}
-      rows={data?.features ?? []}
-      columns={columns}
-      getRowId={row => row.feature}
-      rowTestId={row => `${testId}-row-${row.feature}`}
-      onRowActivate={onSelect}
-      loading={isLoading && !data}
-      error={error}
-      onRetry={onRetry}
-      empty={<Typography level="body-sm">No recorded usage in this range.</Typography>}
-      pagination={false}
-      framed={false}
-      minWidth={withUsers ? '68rem' : '63rem'}
-    />
+    <>
+      <UpdatingBar active={isUpdating} testId={`${testId}-updating`} />
+      <DataTable
+        label={label}
+        testId={testId}
+        rows={data?.features ?? []}
+        columns={columns}
+        getRowId={row => row.feature}
+        rowTestId={row => `${testId}-row-${row.feature}`}
+        onRowActivate={onSelect}
+        loading={isLoading && !data}
+        error={error}
+        onRetry={onRetry}
+        empty={<Typography level="body-sm">No recorded usage in this range.</Typography>}
+        pagination={false}
+        framed={false}
+        minWidth={withUsers ? '68rem' : '63rem'}
+      />
+    </>
   );
 }
 
@@ -265,6 +283,7 @@ function FeatureUsersPanel({
         </Button>
       }
     >
+      <UpdatingBar active={users.isFetching && data !== undefined} testId="spend-feature-users-updating" />
       <DataTable
         label={`Top users of ${featureLabel(feature)}`}
         testId="spend-feature-users-table"
@@ -294,50 +313,77 @@ function FeatureUsersPanel({
   );
 }
 
-/** One user's feature mix over the range. `onBack` adds a Back button; without it the profile link stands alone. */
+const isDayAligned = (date: Date) => date.getTime() % DAY_MS === 0;
+
+/** The whole UTC days the server widens a sub-day range to, as `YYYY-MM-DD to YYYY-MM-DD`. */
+function wholeDaysLabel(range: SpendRange): string {
+  const first = Math.floor(range.from.getTime() / DAY_MS) * DAY_MS;
+  const last = Math.ceil(range.to.getTime() / DAY_MS) * DAY_MS - DAY_MS;
+  const day = (ms: number) => new Date(ms).toISOString().slice(0, 10);
+  return first === last ? day(first) : `${day(first)} to ${day(last)}`;
+}
+
+/**
+ * One user's feature mix over the range. `onBack` adds a Back button. Where the page already
+ * links to the user, `showProfileLink={false}` drops this panel's own link, and `testId`
+ * keeps two panels on one page apart.
+ */
 export function UserFeaturesPanel({
   range,
   userId,
   userName,
   onBack,
+  showProfileLink = true,
+  testId = 'spend-user-features',
 }: {
   range: SpendRange;
   userId: string;
   userName: string | null;
   onBack?: () => void;
+  showProfileLink?: boolean;
+  testId?: string;
 }) {
   // Audience does not apply to one named user: their whole mix is shown.
   const features = useSpendFeatures({ range, audience: 'all', userId });
+  const widened = !isDayAligned(range.from) || !isDayAligned(range.to);
   return (
     <SectionCard
       title={`${userName ?? userId}: features used`}
       body="custom"
-      data-testid="spend-user-features-panel"
+      data-testid={`${testId}-panel`}
       action={
         <Stack direction="row" gap={1} alignItems="center">
-          <RouterLink
-            to="/admin/users/$userId"
-            params={{ userId }}
-            data-testid="spend-user-features-profile-link"
-            style={{ textDecoration: 'none' }}
-          >
-            <Typography level="body-sm" sx={{ color: 'admin.link' }}>
-              Open user
-            </Typography>
-          </RouterLink>
+          {showProfileLink && (
+            <RouterLink
+              to="/admin/users/$userId"
+              params={{ userId }}
+              data-testid={`${testId}-profile-link`}
+              style={{ textDecoration: 'none' }}
+            >
+              <Typography level="body-sm" sx={{ color: 'admin.link' }}>
+                Open user
+              </Typography>
+            </RouterLink>
+          )}
           {onBack && (
-            <Button size="sm" variant="plain" onClick={onBack} data-testid="spend-user-features-back-btn">
+            <Button size="sm" variant="plain" onClick={onBack} data-testid={`${testId}-back-btn`}>
               Back
             </Button>
           )}
         </Stack>
       }
     >
+      {widened && (
+        <Typography level="body-xs" sx={{ color: 'admin.inkMuted' }} data-testid={`${testId}-days-note`}>
+          {`Whole UTC days, ${wholeDaysLabel(range)}: feature cost is counted by day, not by hour.`}
+        </Typography>
+      )}
       <FeatureTable
-        testId="spend-user-features-table"
+        testId={`${testId}-table`}
         label={`Features used by ${userName ?? userId}`}
         data={features.data}
         isLoading={features.isLoading}
+        isUpdating={features.isFetching && features.data !== undefined}
         error={features.isError ? `Could not load features: ${errorMessage(features.error)}` : undefined}
         onRetry={() => void features.refetch()}
         withUsers={false}
@@ -353,7 +399,8 @@ export function UserFeaturesPanel({
 export function FeatureCostSection({ range, rangeLabel, selection, onChange }: FeatureCostSectionProps) {
   const { audience, feature, user } = selection;
   // The clicked row's name, so the user panel need not look it up again; a pasted link shows the id.
-  const [userName, setUserName] = useState<string | null>(null);
+  const [picked, setPicked] = useState<{ userId: string; name: string } | null>(null);
+  const userName = picked && picked.userId === user ? picked.name : null;
   const features = useSpendFeatures({ range, audience });
 
   const body = user ? (
@@ -366,7 +413,7 @@ export function FeatureCostSection({ range, rangeLabel, selection, onChange }: F
       audience={audience}
       feature={feature}
       onSelectUser={row => {
-        setUserName(row.name);
+        setPicked({ userId: row.userId, name: row.name });
         onChange({ user: row.userId });
       }}
       onBack={() => onChange({ feature: null })}
@@ -378,6 +425,7 @@ export function FeatureCostSection({ range, rangeLabel, selection, onChange }: F
         label="Cost by feature"
         data={features.data}
         isLoading={features.isLoading}
+        isUpdating={features.isFetching && features.data !== undefined}
         error={features.isError ? `Could not load features: ${errorMessage(features.error)}` : undefined}
         onRetry={() => void features.refetch()}
         withUsers
@@ -392,14 +440,17 @@ export function FeatureCostSection({ range, rangeLabel, selection, onChange }: F
         level="section"
         title="Cost by feature"
         description="Recorded cost per product feature. Failed requests are not counted as spend."
+        // One named user's mix ignores the audience, so the control is offered only where it applies.
         actions={
-          <SegmentedControl<SpendAudience>
-            aria-label="Accounts"
-            data-testid="spend-features-audience"
-            options={AUDIENCE_OPTIONS}
-            value={audience}
-            onChange={value => onChange({ audience: value })}
-          />
+          !user && (
+            <SegmentedControl<SpendAudience>
+              aria-label="Accounts"
+              data-testid="spend-features-audience"
+              options={AUDIENCE_OPTIONS}
+              value={audience}
+              onChange={value => onChange({ audience: value })}
+            />
+          )
         }
       />
       {body}

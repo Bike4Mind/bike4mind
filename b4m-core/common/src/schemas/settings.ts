@@ -6095,7 +6095,7 @@ export const settingsMap = {
     int: false,
     min: 1,
     description:
-      'Ratio. The Spend explorer flags a feature, or a user of a feature, as a spike when its cost on the last day of the range is above this multiple of its average daily cost over the 7 days before. Display only; nothing alerts on it. Minimum 1.',
+      'Ratio. The Spend explorer flags a feature, or a user of a feature, as a spike when its cost on the last complete UTC day of the range is above this multiple of its average daily cost over the 7 days before. Display only; nothing alerts on it. Changes show within 5 minutes (the explorer caches its results). Minimum 1.',
     group: API_SERVICE_GROUPS.CREDITS.id,
     category: 'SecOps',
   }),

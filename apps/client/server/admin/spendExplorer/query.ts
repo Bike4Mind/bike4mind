@@ -3,7 +3,9 @@ import {
   SPEND_BUCKET_SIZES,
   SPEND_EXPLORER_MAX_ACCOUNTS,
   SPEND_EXPLORER_MAX_RANGE_DAYS,
+  SPEND_FEATURE_ID_PATTERN,
   SPEND_FEATURE_USERS_MAX_LIMIT,
+  SPEND_FEATURE_USERS_MAX_OFFSET,
   SPEND_SPLIT_DIMENSIONS,
   SpendAudienceSchema,
   type SpendBucketSize,
@@ -89,7 +91,7 @@ export const AccountsQuerySchema = z
     path: ['compareTo'],
   });
 
-// The feature view works in whole UTC days: its daily trend and last-day spike need complete days.
+// The feature view works in whole UTC days: its daily trend buckets and spike window are days.
 const featureRangeFields = {
   from: isoDate,
   to: isoDate,
@@ -119,13 +121,9 @@ export const FeatureUsersQuerySchema = withFeatureRangeChecks(
   z.object({
     ...featureRangeFields,
     // UsageEvent.feature values, legacy ones included, so not the current enum.
-    feature: z
-      .string()
-      .min(1)
-      .max(64)
-      .regex(/^[a-z0-9_]+$/, 'invalid feature'),
+    feature: z.string().regex(SPEND_FEATURE_ID_PATTERN, 'invalid feature'),
     limit: z.coerce.number().int().min(1).max(SPEND_FEATURE_USERS_MAX_LIMIT).default(20),
-    offset: z.coerce.number().int().min(0).max(10_000).default(0),
+    offset: z.coerce.number().int().min(0).max(SPEND_FEATURE_USERS_MAX_OFFSET).default(0),
   })
 ).transform(snapToDays);
 

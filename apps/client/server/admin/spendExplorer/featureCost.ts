@@ -1,8 +1,10 @@
 import { adminSettingsRepository, usageEventRepository } from '@bike4mind/database';
 import {
   CreditHolderType,
+  DEFAULT_FEATURE_SPIKE_MULTIPLE,
   FEATURE_SPIKE_TRAILING_DAYS,
   FEATURE_UNIT_LABELS,
+  featureSpikeEnd,
   isFeatureSpendSpike,
   type SpendActorScanParams,
   type SpendAudience,
@@ -20,8 +22,8 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 
 /**
  * The userId filter for an audience. Internal is decided per acting user by the Analytics
- * tab's `isCountedUser` (the rule #6802's adoption numbers use), over the users active in
- * the scan window, so the internal set stays small enough to inline into $in / $nin.
+ * tab's `isCountedUser`, so both pages split accounts the same way. It runs over the users
+ * active in the scan window, so the internal set stays small enough to inline into $in / $nin.
  */
 export async function loadAudienceFilter(
   audience: SpendAudience,
@@ -34,8 +36,10 @@ export async function loadAudienceFilter(
   return { mode: audience === 'internal' ? 'include' : 'exclude', userIds: internalIds };
 }
 
+/** The admin setting, or its default while it has never been saved. */
 export async function loadSpikeMultiple(): Promise<number> {
-  return adminSettingsRepository.getSettingsValue('spendExplorerFeatureSpikeMultiple');
+  const saved = await adminSettingsRepository.getSettingsValue('spendExplorerFeatureSpikeMultiple');
+  return saved ?? DEFAULT_FEATURE_SPIKE_MULTIPLE;
 }
 
 /** Every UTC day in [from, to), as `YYYY-MM-DD`. `from` and `to` sit on day boundaries. */
@@ -49,8 +53,8 @@ const trailingAvg = (trailingUsd: number) => trailingUsd / FEATURE_SPIKE_TRAILIN
 
 /**
  * Aggregates into table rows: share, unit label, spike flag and a dense daily series; largest cost first.
- * Cost is the recorded `UsageEvent.costUsd`. A per-vendor plan-credit conversion (#8247) belongs
- * here as an extra per-row field keyed by feature and units, not as a replacement for costUsd.
+ * Cost is the recorded `UsageEvent.costUsd`. A per-vendor plan-credit conversion belongs here
+ * as an extra per-row field keyed by feature and units, not as a replacement for costUsd.
  */
 export function shapeFeatureRows(
   aggregates: SpendFeatureAggregate[],
@@ -80,18 +84,19 @@ export type FeaturesQuery = { from: Date; to: Date; audience: SpendAudience; act
 /** `from`/`to` must already sit on UTC day boundaries. */
 export async function buildFeatures(query: FeaturesQuery): Promise<SpendFeaturesResponse> {
   const { from, to, audience, actorUserId } = query;
+  const spikeEnd = featureSpikeEnd(to, new Date());
   const [userFilter, spikeMultiple] = await Promise.all([
-    loadAudienceFilter(audience, { from, to }),
+    loadAudienceFilter(audience, { from, to, spikeEnd }),
     loadSpikeMultiple(),
   ]);
-  const aggregates = await usageEventRepository.spendFeatures({ from, to, actorUserId, userFilter });
+  const aggregates = await usageEventRepository.spendFeatures({ from, to, spikeEnd, actorUserId, userFilter });
   const days = daysOf(from, to);
   const { totalCostUsd, features } = shapeFeatureRows(aggregates, { days, spikeMultiple });
   return {
     audience,
     totalCostUsd,
     spikeMultiple,
-    lastDayStart: new Date(to.getTime() - DAY_MS).toISOString(),
+    lastDayStart: new Date(spikeEnd.getTime() - DAY_MS).toISOString(),
     days,
     features,
   };
@@ -108,11 +113,20 @@ export type FeatureUsersQuery = {
 
 export async function buildFeatureUsers(query: FeatureUsersQuery): Promise<SpendFeatureUsersResponse> {
   const { from, to, audience, feature, limit, offset } = query;
+  const spikeEnd = featureSpikeEnd(to, new Date());
   const [userFilter, spikeMultiple] = await Promise.all([
-    loadAudienceFilter(audience, { from, to, feature }),
+    loadAudienceFilter(audience, { from, to, spikeEnd, feature }),
     loadSpikeMultiple(),
   ]);
-  const page = await usageEventRepository.spendFeatureUsers({ from, to, feature, limit, offset, userFilter });
+  const page = await usageEventRepository.spendFeatureUsers({
+    from,
+    to,
+    spikeEnd,
+    feature,
+    limit,
+    offset,
+    userFilter,
+  });
   const info = await resolveAccountInfo(page.users.map(user => ({ id: user.userId, type: CreditHolderType.User })));
   return {
     feature,

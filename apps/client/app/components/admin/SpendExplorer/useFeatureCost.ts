@@ -23,16 +23,16 @@ export function useSpendFeatures(params: { range: SpendRange; audience: SpendAud
   });
 }
 
-/** One page of a feature's users; `page` is 1-based. Idle until a feature is picked. */
+/** One page of a feature's users; `page` is 1-based. */
 export function useSpendFeatureUsers(params: {
   range: SpendRange;
   audience: SpendAudience;
-  feature: string | null;
+  feature: string;
   page: number;
   pageSize: number;
 }) {
   const query = rangeParams(params.range, params.audience);
-  query.set('feature', params.feature ?? '');
+  query.set('feature', params.feature);
   query.set('limit', String(params.pageSize));
   query.set('offset', String((params.page - 1) * params.pageSize));
   const queryString = query.toString();
@@ -40,7 +40,6 @@ export function useSpendFeatureUsers(params: {
     queryKey: ['admin-spend-explorer', 'feature-users', queryString],
     queryFn: async () =>
       (await api.get<SpendFeatureUsersResponse>(`/api/admin/spend-explorer/feature-users?${queryString}`)).data,
-    enabled: params.feature !== null,
     staleTime: STALE_MS,
     placeholderData: keepPreviousData,
   });

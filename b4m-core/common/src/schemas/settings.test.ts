@@ -1543,6 +1543,7 @@ describe('spend monitor settings', () => {
     spendMonitorAutoPauseStandardMinCredits: 10_000,
     spendMonitorAutoPausePaidMinCredits: 0,
     spendMonitorAutoPauseTrustedMinCredits: 0,
+    spendExplorerFeatureSpikeMultiple: 3,
   } as const;
 
   it.each(Object.entries(expectedDefaults))('%s defaults to %s and belongs to the CREDITS group', (key, expected) => {

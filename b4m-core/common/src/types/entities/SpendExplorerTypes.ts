@@ -165,8 +165,8 @@ export type SpendAccountsResponse = {
 
 /*
  * Feature cost: the Spend explorer's per-feature view (GET /api/admin/spend-explorer/features
- * and /feature-users). Failed rows (SPEND_FAILED_STATUSES) are left out of cost, credits and
- * units and counted on their own as a reliability signal.
+ * and /feature-users). Error rows (SPEND_EXCLUDED_STATUSES) are left out of cost, credits and
+ * units; error and timeout rows (SPEND_FAILED_STATUSES) are counted on their own as a reliability signal.
  */
 
 /**
@@ -178,11 +178,39 @@ export const SPEND_AUDIENCES = ['all', 'external', 'internal'] as const;
 export const SpendAudienceSchema = z.enum(SPEND_AUDIENCES);
 export type SpendAudience = z.infer<typeof SpendAudienceSchema>;
 
-/** Statuses whose rows are failures: excluded from spend, counted under `failedRequests`. */
+/** Statuses counted under `failedRequests`. */
 export const SPEND_FAILED_STATUSES = ['error', 'timeout'] as const;
+
+/**
+ * Statuses left out of cost, credits and units. Timeouts stay in: a timed-out attempt records
+ * the provider cost it absorbed (see timedOutAttemptUsage), so dropping it would hide real spend
+ * and disagree with the explorer's timeline and breakdown, which count every row.
+ */
+export const SPEND_EXCLUDED_STATUSES = ['error'] as const;
+
+/**
+ * Largest `offset` the feature-users endpoint accepts. Only a sanity bound, set past any real
+ * user count so every page the pager offers loads: grouping every user costs more than $skip.
+ */
+export const SPEND_FEATURE_USERS_MAX_OFFSET = 1_000_000;
+
+/** A `UsageEvent.feature` id as the feature endpoints accept it. */
+export const SPEND_FEATURE_ID_PATTERN = /^[a-z0-9_]{1,64}$/;
 
 /** Days before the last day that a feature's or user's trailing average covers. */
 export const FEATURE_SPIKE_TRAILING_DAYS = 7;
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * End of the last complete UTC day a spike compares: `to`, or the start of today when `to` is
+ * later. A preset range ends at tomorrow's midnight, and today's partial cost against full-day
+ * averages would almost never flag. `to` must sit on a UTC day boundary.
+ */
+export function featureSpikeEnd(to: Date, now: Date): Date {
+  const startOfToday = Math.floor(now.getTime() / DAY_MS) * DAY_MS;
+  return new Date(Math.min(to.getTime(), startOfToday));
+}
 
 /** Default for the `spendExplorerFeatureSpikeMultiple` admin setting. */
 export const DEFAULT_FEATURE_SPIKE_MULTIPLE = 3;
@@ -214,14 +242,14 @@ export function isFeatureSpendSpike({ lastDayUsd, trailingAvgUsd }: FeatureSpike
   return lastDayUsd >= SPEND_SPIKE_MIN_USD && lastDayUsd > trailingAvgUsd * multiple;
 }
 
-/** Sums the feature aggregations produce per group; failures carry no cost. */
+/** Sums the feature aggregations produce per group; error rows carry no cost. */
 export type SpendFeatureTotals = {
   requests: number;
   failedRequests: number;
   costUsd: number;
   creditsCharged: number;
   units: number;
-  /** Cost in the range's last UTC day, [to - 1d, to). */
+  /** Cost in the last complete UTC day, [spikeEnd - 1d, spikeEnd). */
   lastDayUsd: number;
   /** Cost over the FEATURE_SPIKE_TRAILING_DAYS days before the last day, which may start before `from`. */
   trailingUsd: number;
@@ -230,6 +258,8 @@ export type SpendFeatureTotals = {
 export type SpendFeaturesParams = {
   from: Date;
   to: Date;
+  /** End of the last day the spike flags compare; at most `to` (see featureSpikeEnd). */
+  spikeEnd: Date;
   /** Narrow to one acting user (UsageEvent.userId). */
   actorUserId?: string;
   /** Keep only these acting users (internal audience), or drop them (external). */
@@ -259,7 +289,7 @@ export type SpendFeatureUsersPage = {
 };
 
 /** The window (and optionally one feature) whose distinct acting users an audience filter classifies. */
-export type SpendActorScanParams = { from: Date; to: Date; feature?: string };
+export type SpendActorScanParams = { from: Date; to: Date; spikeEnd: Date; feature?: string };
 
 export type SpendFeatureRow = Omit<SpendFeatureAggregate, 'trailingUsd' | 'daily'> & {
   /** Share of the view's total cost. */

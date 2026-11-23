@@ -17,7 +17,12 @@ vi.mock('./useFeatureCost', () => ({
   useSpendFeatureUsers: (...args: unknown[]) => h.useSpendFeatureUsers(...args),
 }));
 
-import { FeatureCostSection, type FeatureCostSelection } from './FeatureCostSection';
+import {
+  FeatureCostSection,
+  foldDailySeries,
+  UserFeaturesPanel,
+  type FeatureCostSelection,
+} from './FeatureCostSection';
 
 const theme = extendTheme({ ...getThemeConfig() });
 const TestWrapper = ({ children }: { children: ReactNode }) => (
@@ -90,7 +95,14 @@ const USERS: SpendFeatureUsersResponse = {
   ],
 };
 
-const ok = <T,>(data: T) => ({ data, isLoading: false, isError: false, error: null, refetch: vi.fn() });
+const ok = <T,>(data: T) => ({
+  data,
+  isLoading: false,
+  isFetching: false,
+  isError: false,
+  error: null,
+  refetch: vi.fn(),
+});
 
 function renderSection(selection: Partial<FeatureCostSelection> = {}) {
   const onChange = vi.fn();
@@ -156,16 +168,68 @@ describe('FeatureCostSection', () => {
     expect(onChange).toHaveBeenCalledWith({ feature: null });
   });
 
+  it('goes back to page 1 when the page size changes', () => {
+    renderSection({ feature: 'music_generation' });
+    fireEvent.click(screen.getByTestId('admin-table-next-btn'));
+    expect(h.useSpendFeatureUsers).toHaveBeenLastCalledWith(expect.objectContaining({ page: 2, pageSize: 25 }));
+
+    fireEvent.mouseDown(screen.getByTestId('admin-table-page-size'));
+    fireEvent.click(screen.getByTestId('admin-table-page-size-50'));
+    expect(h.useSpendFeatureUsers).toHaveBeenLastCalledWith(expect.objectContaining({ page: 1, pageSize: 50 }));
+  });
+
+  it('shows an updating bar while a refetch keeps the old rows on screen', () => {
+    h.useSpendFeatures.mockReturnValue({ ...ok(FEATURES), isFetching: true });
+    renderSection();
+    expect(screen.getByTestId('spend-features-table-updating')).toBeTruthy();
+  });
+
   it("shows one user's whole feature mix with a link to their admin page", () => {
     const { onChange } = renderSection({ feature: 'music_generation', user: USER_ID, audience: 'internal' });
 
-    // A named user's mix ignores the audience filter.
+    // A named user's mix ignores the audience filter, so the control is not offered.
     expect(h.useSpendFeatures).toHaveBeenCalledWith({ range: RANGE, audience: 'all', userId: USER_ID });
+    expect(screen.queryByTestId('spend-features-audience')).toBeNull();
     expect(screen.getByTestId('spend-user-features-profile-link')).toBeTruthy();
     expect(screen.getByTestId('spend-user-features-table-row-music_generation')).toBeTruthy();
 
     fireEvent.click(screen.getByTestId('spend-user-features-back-btn'));
     expect(onChange).toHaveBeenCalledWith({ user: null });
+  });
+
+  it('names a user picked from the table, but not a different user opened later', () => {
+    const { rerender } = render(
+      <FeatureCostSection
+        range={RANGE}
+        rangeLabel="8 Mar to 10 Mar"
+        selection={{ audience: 'all', feature: 'music_generation', user: null }}
+        onChange={vi.fn()}
+      />,
+      { wrapper: TestWrapper }
+    );
+    fireEvent.click(screen.getByTestId(`spend-feature-users-row-${USER_ID}`));
+    const openUser = (user: string) =>
+      rerender(
+        <FeatureCostSection
+          range={RANGE}
+          rangeLabel="8 Mar to 10 Mar"
+          selection={{ audience: 'all', feature: 'music_generation', user }}
+          onChange={vi.fn()}
+        />
+      );
+    openUser(USER_ID);
+    expect(screen.getByText('Heavy User: features used')).toBeTruthy();
+    openUser('b'.repeat(24));
+    expect(screen.getByText(`${'b'.repeat(24)}: features used`)).toBeTruthy();
+  });
+
+  it('says when a sub-day range is widened to whole UTC days', () => {
+    const hour = { from: new Date('2026-03-09T05:00:00Z'), to: new Date('2026-03-09T06:00:00Z') };
+    render(<UserFeaturesPanel range={hour} userId={USER_ID} userName="Heavy User" testId="account-spend-features" />, {
+      wrapper: TestWrapper,
+    });
+    expect(screen.getByTestId('account-spend-features-days-note').textContent).toContain('2026-03-09');
+    expect(screen.getByTestId('account-spend-features-profile-link')).toBeTruthy();
   });
 
   it('shows a retryable error when the features fail to load', () => {
@@ -179,5 +243,20 @@ describe('FeatureCostSection', () => {
     });
     renderSection();
     expect(screen.getByText(/Could not load features: boom/)).toBeTruthy();
+  });
+});
+
+describe('foldDailySeries', () => {
+  it('keeps a short series as one bar per day', () => {
+    expect(foldDailySeries([1, 2, 3], 31)).toEqual({ bars: [1, 2, 3], daysPerBar: 1 });
+  });
+
+  it('folds a long series into multi-day sums that keep the total', () => {
+    const days = Array.from({ length: 90 }, (_, i) => i + 1);
+    const { bars, daysPerBar } = foldDailySeries(days, 31);
+    expect(daysPerBar).toBe(3);
+    expect(bars).toHaveLength(30);
+    expect(bars[0]).toBe(1 + 2 + 3);
+    expect(bars.reduce((sum, bar) => sum + bar, 0)).toBe(days.reduce((sum, day) => sum + day, 0));
   });
 });

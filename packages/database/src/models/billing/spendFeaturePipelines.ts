@@ -1,6 +1,7 @@
 import type { PipelineStage } from 'mongoose';
 import {
   FEATURE_SPIKE_TRAILING_DAYS,
+  SPEND_EXCLUDED_STATUSES,
   SPEND_FAILED_STATUSES,
   type SpendFeaturesParams,
   type SpendFeatureUsersParams,
@@ -9,31 +10,32 @@ import {
 /**
  * Aggregation pipelines behind the Spend explorer's feature view
  * (UsageEventRepository.spendFeatures / spendFeatureUsers / spendActorIds).
- * Failed rows count as requests and failures only; cost, credits and units come from the rest.
+ * Error rows count as requests and failures only; cost, credits and units come from the rest.
+ * Timeouts count as failures and still carry the provider cost they absorbed.
  */
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
-/** The spike window: the range's last UTC day and the trailing days before it. */
-export function spikeWindow(to: Date): { lastDayStart: Date; trailingFrom: Date } {
-  const lastDayStart = new Date(to.getTime() - DAY_MS);
+/** The spike window: the last complete UTC day before `spikeEnd` and the trailing days before it. */
+export function spikeWindow(spikeEnd: Date): { lastDayStart: Date; trailingFrom: Date } {
+  const lastDayStart = new Date(spikeEnd.getTime() - DAY_MS);
   return { lastDayStart, trailingFrom: new Date(lastDayStart.getTime() - FEATURE_SPIKE_TRAILING_DAYS * DAY_MS) };
 }
 
 /** Earliest event any feature pipeline reads: the range, widened to cover the trailing window. */
-export function scanStart(from: Date, to: Date): Date {
-  const { trailingFrom } = spikeWindow(to);
+export function scanStart(from: Date, spikeEnd: Date): Date {
+  const { trailingFrom } = spikeWindow(spikeEnd);
   return trailingFrom < from ? trailingFrom : from;
 }
 
-export type SpendScanParams = Pick<SpendFeaturesParams, 'from' | 'to' | 'actorUserId' | 'userFilter'> & {
+export type SpendScanParams = Pick<SpendFeaturesParams, 'from' | 'to' | 'spikeEnd' | 'actorUserId' | 'userFilter'> & {
   feature?: string;
 };
 
 function scanMatch(params: SpendScanParams): PipelineStage.Match {
   // Half-open [start, to), like the rest of the explorer, so adjacent windows never double count.
   const clauses: Record<string, unknown>[] = [
-    { createdAt: { $gte: scanStart(params.from, params.to), $lt: params.to } },
+    { createdAt: { $gte: scanStart(params.from, params.spikeEnd), $lt: params.to } },
   ];
   if (params.feature) clauses.push({ feature: params.feature });
   if (params.actorUserId) clauses.push({ userId: params.actorUserId });
@@ -44,25 +46,24 @@ function scanMatch(params: SpendScanParams): PipelineStage.Match {
   return { $match: clauses.length === 1 ? clauses[0] : { $and: clauses } };
 }
 
-const succeeded = { $not: [{ $in: ['$status', [...SPEND_FAILED_STATUSES]] }] };
+const counted = { $not: [{ $in: ['$status', [...SPEND_EXCLUDED_STATUSES]] }] };
+const failed = { $in: ['$status', [...SPEND_FAILED_STATUSES]] };
 
 /** Per-group sums shared by both pipelines; SpendFeatureTotals says what each one means. */
-function totalsAccumulators(params: { from: Date; to: Date }) {
-  const { lastDayStart, trailingFrom } = spikeWindow(params.to);
+function totalsAccumulators(params: { from: Date; spikeEnd: Date }) {
+  const { lastDayStart, trailingFrom } = spikeWindow(params.spikeEnd);
   const inRange = { $gte: ['$createdAt', params.from] };
-  const okInRange = { $and: [inRange, succeeded] };
+  const countedInRange = { $and: [inRange, counted] };
+  const between = (start: Date, end: Date) => [{ $gte: ['$createdAt', start] }, { $lt: ['$createdAt', end] }];
   const sumIf = (condition: unknown, value: unknown) => ({ $sum: { $cond: [condition, value, 0] } });
   return {
     requests: sumIf(inRange, 1),
-    failedRequests: sumIf({ $and: [inRange, { $not: [succeeded] }] }, 1),
-    costUsd: sumIf(okInRange, '$costUsd'),
-    creditsCharged: sumIf(okInRange, '$creditsCharged'),
-    units: sumIf(okInRange, { $ifNull: ['$units', 0] }),
-    lastDayUsd: sumIf({ $and: [{ $gte: ['$createdAt', lastDayStart] }, succeeded] }, '$costUsd'),
-    trailingUsd: sumIf(
-      { $and: [{ $gte: ['$createdAt', trailingFrom] }, { $lt: ['$createdAt', lastDayStart] }, succeeded] },
-      '$costUsd'
-    ),
+    failedRequests: sumIf({ $and: [inRange, failed] }, 1),
+    costUsd: sumIf(countedInRange, '$costUsd'),
+    creditsCharged: sumIf(countedInRange, '$creditsCharged'),
+    units: sumIf(countedInRange, { $ifNull: ['$units', 0] }),
+    lastDayUsd: sumIf({ $and: [...between(lastDayStart, params.spikeEnd), counted] }, '$costUsd'),
+    trailingUsd: sumIf({ $and: [...between(trailingFrom, lastDayStart), counted] }, '$costUsd'),
   };
 }
 
@@ -101,7 +102,7 @@ export function spendFeaturesPipeline(params: SpendFeaturesParams): PipelineStag
           { $project: { _id: 0, feature: '$_id', distinctUsers: 1, ...keepFields } },
         ],
         daily: [
-          { $match: { $expr: { $and: [{ $gte: ['$createdAt', params.from] }, succeeded] } } },
+          { $match: { $expr: { $and: [{ $gte: ['$createdAt', params.from] }, counted] } } },
           {
             $group: {
               _id: {
