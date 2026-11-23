@@ -21,6 +21,10 @@ const HTML_COMMENT = /<!--[\s\S]*?-->/g;
 // The `admin` scope is mostly the operator admin panel (apps/client/app/components/admin), which customers never see.
 // An author's customer note keeps mixed customer UI changes eligible for worker audience triage.
 const OPERATOR_ONLY_SCOPES = new Set(['admin']);
+// The native iOS/Android apps are not distributed yet, so their PRs must not be announced. Remove this set when
+// they ship publicly. This step runs in CI with no DB access, so it is hardcoded rather than read from
+// `releaseNotesConfig`. A customer note keeps a PR eligible, as with the admin scope.
+const UNRELEASED_PLATFORM_SCOPES = new Set(['ios', 'android', 'mobile']);
 const CUSTOMER_NOTE_HEADING = /^##\s+customer note\s*$/im;
 const PLACEHOLDER_NOTE = /^(n\/?a|none|-+)$/i;
 
@@ -37,15 +41,22 @@ export function parseCustomerNote(body: string): string | undefined {
   return note && !PLACEHOLDER_NOTE.test(note) ? note.slice(0, CUSTOMER_NOTE_CHARS) : undefined;
 }
 
-/**
- * True when every scope in a Conventional Commits title is operator-only, e.g. `feat(admin): ...`. A title that
- * also names another scope (`feat(admin,chat): ...`) may reach customers, so it is kept.
- */
-export function isOperatorOnlyTitle(title: string): boolean {
-  const scopes = parseConventionalCommit(title.trim())
+/** True when the title has scopes and every one is in `scopes`; a title that also names another scope is kept. */
+function hasOnlyScopes(title: string, scopes: ReadonlySet<string>): boolean {
+  const titleScopes = parseConventionalCommit(title.trim())
     .scope?.split(',')
     .map(scope => scope.trim().toLowerCase());
-  return !!scopes?.length && scopes.every(scope => OPERATOR_ONLY_SCOPES.has(scope));
+  return !!titleScopes?.length && titleScopes.every(scope => scopes.has(scope));
+}
+
+/** True when every scope is operator-only, e.g. `feat(admin): ...`; `feat(admin,chat): ...` may reach customers. */
+export function isOperatorOnlyTitle(title: string): boolean {
+  return hasOnlyScopes(title, OPERATOR_ONLY_SCOPES);
+}
+
+/** True when every scope is an unreleased native platform, e.g. `feat(ios): ...`; `feat(ios,client): ...` is kept. */
+export function isUnreleasedPlatformTitle(title: string): boolean {
+  return hasOnlyScopes(title, UNRELEASED_PLATFORM_SCOPES);
 }
 
 /** PR description with template comments stripped and whitespace collapsed, cut to `maxChars`. */
@@ -105,7 +116,7 @@ export async function buildReleaseNotesPayload(
     if (!pr) continue;
     const customerNote = parseCustomerNote(pr.body);
     // Dropped before the LLM, which would otherwise reword an operator tool as "Organizations can now ...".
-    if (isOperatorOnlyTitle(pr.title) && !customerNote) {
+    if ((isOperatorOnlyTitle(pr.title) || isUnreleasedPlatformTitle(pr.title)) && !customerNote) {
       excluded.push(number);
       continue;
     }
@@ -118,7 +129,8 @@ export async function buildReleaseNotesPayload(
     });
   }
 
-  if (excluded.length) console.log(`Excluded operator-only PR(s): ${excluded.map(n => `#${n}`).join(', ')}`);
+  if (excluded.length)
+    console.log(`Excluded operator-only or unreleased-platform PR(s): ${excluded.map(n => `#${n}`).join(', ')}`);
 
   // Releases created in the GitHub UI carry the target branch name, not a sha.
   const deployedSha = /^[0-9a-f]{40}$/i.test(release.target_commitish)
