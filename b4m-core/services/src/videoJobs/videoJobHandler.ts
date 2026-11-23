@@ -37,10 +37,24 @@ const FEATURE_LABEL = 'video generation';
 type VideoJob = IGenerationJobDocumentOf<'video'>;
 type VideoStepResult = StepResult<'video'>;
 
+const MAX_RAW_PROVIDER_BYTES = 16 * 1024;
+
+// The raw payload rides on the job document and into logs, and a provider can echo the request (a base64 image) into it.
+const boundRawPayload = (raw: unknown): unknown => {
+  let json: string | undefined;
+  try {
+    json = JSON.stringify(raw);
+  } catch {
+    return '[raw provider payload not serializable]';
+  }
+  if (json === undefined || json.length <= MAX_RAW_PROVIDER_BYTES) return raw;
+  return `${json.slice(0, MAX_RAW_PROVIDER_BYTES)}...[truncated, ${json.length} chars total]`;
+};
+
 const fail = (code: GenerationJobErrorCode, message: string, rawProviderError?: unknown): VideoStepResult => ({
   next: 'failed',
   error: { code, message },
-  rawProviderError,
+  rawProviderError: boundRawPayload(rawProviderError),
 });
 
 const noApiKey = (job: VideoJob) => fail('provider_error', `No API key configured for ${job.payload.providerId}`);
@@ -184,7 +198,12 @@ export function createVideoJobHandler(deps: VideoJobDeps): GenerationJobHandler<
         // the same request cannot help (ProviderSubmitError.retryable). See GenerationJobHandler.submit.
         if (!(error instanceof ProviderSubmitError) || !error.definitive) throw error;
         if (!error.retryable) {
-          deps.logger.warn('video provider rejected the submit for good', { jobId: job.id, message: error.message });
+          // rawProviderError is select: false and never read back, so the provider's own reason must be logged here.
+          deps.logger.warn('video provider rejected the submit for good', {
+            jobId: job.id,
+            message: error.message,
+            raw: boundRawPayload(error.raw),
+          });
           return fail('provider_error', error.message, error.raw);
         }
         deps.logger.warn('video provider rejected the submit; retrying', { jobId: job.id, message: error.message });
@@ -220,13 +239,17 @@ export function createVideoJobHandler(deps: VideoJobDeps): GenerationJobHandler<
           return {
             next: 'blocked',
             error: { code: 'content_blocked', message: 'The provider declined this request under its content policy' },
-            rawProviderError: result.raw,
+            rawProviderError: boundRawPayload(result.raw),
             ...(result.billed && { payload: { ...job.payload, billedBlock: true } }),
           };
         case 'failed':
-          return result.retryable
-            ? { next: 'retry', reason: result.message }
-            : fail('provider_error', result.message, result.raw);
+          if (result.retryable) return { next: 'retry', reason: result.message };
+          deps.logger.warn('video provider failed the job', {
+            jobId: job.id,
+            message: result.message,
+            raw: boundRawPayload(result.raw),
+          });
+          return fail('provider_error', result.message, result.raw);
       }
     },
 
