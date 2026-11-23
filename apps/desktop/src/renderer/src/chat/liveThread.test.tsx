@@ -311,6 +311,7 @@ describe('the live thread, driven by stream events', () => {
       expect(container.querySelector('[data-waiting="true"]')).not.toBeNull();
 
       await act(async () => root.render(<TurnStatus turn={turn} activity={describeActivity([], false)} />));
+      expect(statusText()).toContain('1m 5s');
       await act(async () => vi.advanceTimersByTime(5_000));
       expect(statusText()).toContain('1m 10s');
       expect(container.querySelector('[data-waiting="true"]')).toBeNull();
