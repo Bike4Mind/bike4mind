@@ -493,4 +493,38 @@ describe('ChatService approval record', () => {
       expect(summarizeApprovals([entry]).reasons).toContainEqual({ reason: 'full access stop', count: 1 });
     });
   });
+
+  /** Every card Approve for me or Ask shows names why in the log, so no ask reads as unexplained. */
+  describe('names the reason for every ask outside Full access', () => {
+    async function loggedAsk(id: string): Promise<ApprovalLogEntry> {
+      const card = await awaitCall(id, 'awaiting-approval');
+      approvals.resolve(card.approvalId!, { decision: 'deny' });
+      await awaitCall(id, 'denied');
+      return vi.waitUntil(() => logged.find(each => each.approval.asked), { timeout: 5000, interval: 5 });
+    }
+
+    it("records the tool's own check that stopped Approve for me", async () => {
+      await run('auto', 'cp notes.txt .claude/settings.json');
+      const entry = await loggedAsk('c1');
+      expect(entry.approval.askedBecause).toContain('Asked in Approve for me because:');
+      expect(entry.approval.askedBecause).toContain('Reaches a location Desktop protects');
+      expect(entry.approval.askedBecause).not.toContain('Full access');
+      expect(summarizeApprovals([entry]).reasons).toContainEqual({ reason: 'tool check', count: 1 });
+    });
+
+    it('records why a command Desktop could not read was asked in Approve for me', async () => {
+      vi.spyOn(shellScanner, 'scanShell').mockResolvedValue(null);
+      await run('auto', 'ls notes.txt');
+      const entry = await loggedAsk('c1');
+      expect(entry.approval.askedBecause).toContain('Asked in Approve for me because:');
+      expect(entry.approval.askedBecause).toContain('Could not read this command');
+    });
+
+    it('records Ask mode as the reason for a call nothing else stopped', async () => {
+      await run('ask', 'touch made.txt');
+      const entry = await loggedAsk('c1');
+      expect(entry.approval.askedBecause).toContain('Ask mode');
+      expect(summarizeApprovals([entry]).reasons).toContainEqual({ reason: 'ask mode', count: 1 });
+    });
+  });
 });

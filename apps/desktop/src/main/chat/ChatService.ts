@@ -7861,9 +7861,11 @@ export class ChatService {
       prompt.askInFull && !prompt.irreversible && prompt.reasons?.length
         ? `This tool asks in every mode. Tool checks: ${fullAccessExplanation}`
         : fullAccessExplanation;
+    const modeStop = modeAskReason(mode, prompt, asked.prompt, askedReasons.length);
     const askedBecause =
       [
         ...askedReasons,
+        ...(modeStop ? [modeStop] : []),
         ...(fullAccessStops.length > 0 ? [`${FULL_ACCESS_ASK_PREFIX} ${loggedFullAccessExplanation}`] : []),
       ].join(' ') || undefined;
     // The tool's reasons plus this gate's own, so no reason to ask leaves the call looking quick.
@@ -9761,6 +9763,35 @@ const LOOP_ASK_REASON = `Asked because the same call was repeated ${LOOP_THRESHO
 
 /** Leads `askedBecause` for a card Full access showed; approvalSummary's reasonLabel matches on it. */
 const FULL_ACCESS_ASK_PREFIX = 'Asked in Full access because:';
+
+/** Leads `askedBecause` for a card Approve for me showed for the tool's own check; approvalSummary's reasonLabel matches on it. */
+const AUTO_ASK_PREFIX = 'Asked in Approve for me because:';
+
+const ASK_MODE_REASON = 'Asked because the conversation is in Ask mode, which asks before every call.';
+
+/**
+ * Why 'auto' or 'ask' showed a card beyond the gate's own reasons, so every recorded ask names one.
+ * 'auto' names the tool's checks whenever the tool stopped the mode; with no gate reason and no tool
+ * flag it still names what is left (a part the mode does not cover). Null in Full access, which
+ * `fullAccessStopReasons` explains.
+ */
+function modeAskReason(
+  mode: ChatApprovalMode,
+  prompt: ApprovalPrompt,
+  shown: ApprovalPrompt,
+  gateReasons: number
+): string | null {
+  if (mode === 'full') return null;
+  if (mode === 'ask') return gateReasons > 0 ? null : ASK_MODE_REASON;
+  const toolStopped = prompt.irreversible || prompt.askInFull || prompt.askInAuto;
+  if (!toolStopped && gateReasons > 0) return null;
+  const reasons = shown.reasons?.length ? shown.reasons : (prompt.reasons ?? []);
+  if (reasons.length > 0) return `${AUTO_ASK_PREFIX} ${reasons.join(' ')}`;
+  if (prompt.irreversible) return `${AUTO_ASK_PREFIX} It cannot be undone, so it is asked every time.`;
+  return toolStopped
+    ? `${AUTO_ASK_PREFIX} this tool asks before each run in this mode.`
+    : `${AUTO_ASK_PREFIX} a part of this call needs a decision of its own.`;
+}
 
 /**
  * Why Full access stops for a call it would otherwise run: the same two flags `autoApproves`
