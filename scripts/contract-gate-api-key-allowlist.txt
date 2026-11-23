@@ -88,12 +88,6 @@ apps/client/pages/api/admin/integration-audit-logs/index.ts
 apps/client/pages/api/admin/integration-health-dashboard.ts
 apps/client/pages/api/admin/integrations/demand/[integrationId]/requesters.ts
 apps/client/pages/api/admin/integrations/demand/index.ts
-apps/client/pages/api/admin/liveops-triage-configs/[id].ts
-apps/client/pages/api/admin/liveops-triage-configs/[id]/health.ts
-apps/client/pages/api/admin/liveops-triage-configs/[id]/trigger.ts
-apps/client/pages/api/admin/liveops-triage-configs/index.ts
-apps/client/pages/api/admin/liveops-triage-configs/runs.ts
-apps/client/pages/api/admin/liveops-triage-env.ts
 apps/client/pages/api/admin/llm-models/configurations.ts
 apps/client/pages/api/admin/mementos/reembed-ledger.ts
 apps/client/pages/api/admin/mementos/reembed.ts

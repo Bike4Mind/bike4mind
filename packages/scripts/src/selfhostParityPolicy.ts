@@ -671,16 +671,6 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
     'queue:infra/queues.ts:libreoncologyAudioRenderQueueDLQ',
     '2ee2385d94d02b314ad0029cadb2c26a937f5a674ff43eb5a82816c228b00b6c'
   ),
-  gapBecause(
-    'queue:infra/queues.ts:liveOpsTriageQueue',
-    '3175abe05a4ee7afd9983e57d988509958e3ffd679ab4ad391bbe258ef94fd7e',
-    'The admin live-ops trigger route enqueues here and no self-host consumer drains it. The hosted handler uses the CloudWatch client, so wiring needs a local metrics decision first.',
-    ['cloudwatch:PutMetricData', 'import:@aws-sdk/client-cloudwatch']
-  ),
-  broker(
-    'queue:infra/queues.ts:liveOpsTriageQueueDLQ',
-    '396277d7176e9e4839b55c3f4f43ba8107c46a9262e8cfa5859bff0b50bba37b'
-  ),
   wired(
     'queue:infra/queues.ts:notebookCurationQueue',
     '00962b583c879f1b66672f336702870770812a7ccd1aef5ec79932529d02e11c',
@@ -1080,12 +1070,6 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
       symbol: 'registerLakeInconsistencySweep',
       fingerprint: 'd1e27a485506840b87ec42b02a47573e744ca7e02c5a28316506a2d57dcdf816',
     },
-    ['cloudwatch:PutMetricData', 'import:@aws-sdk/client-cloudwatch']
-  ),
-  hostedOnly(
-    'schedule:infra/cron.ts:liveopsTriageDispatcherCron',
-    'cfb18bf1e22bd2165c628676842996f8c0c41d134814fef9cd3abaedb3ecc6a6',
-    'Hosted error triage and auto-fix dispatch; not applicable to a portable deployment.',
     ['cloudwatch:PutMetricData', 'import:@aws-sdk/client-cloudwatch']
   ),
   wired(

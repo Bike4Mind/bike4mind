@@ -80,7 +80,7 @@ interface DrainLogger {
  * Wait for the tracked in-flight work to settle, bounded by `drainTimeoutMs`. Exported
  * so a test can drive the cut-off branch without booting the service. Returns whether the
  * work drained or the window won; on the cut-off branch it emits an error naming the count
- * so LiveOps triage sees the quests a deploy/scale-in is about to SIGKILL (the WARN/INFO
+ * so LiveOps sees the quests a deploy/scale-in is about to SIGKILL (the WARN/INFO
  * line this replaces was invisible to the ERROR-level log subscription).
  */
 export async function drainInFlight({

@@ -2230,7 +2230,7 @@ export const CONTEXT_TELEMETRY_VALIDATION_LIMITS = {
   criticalThreshold: { min: 0, max: 100, default: 50 },
   dedupWindowMinutes: { min: 1, max: 60, default: 5 },
 
-  // Issue Deduplication & Regression (aligned with LiveOps)
+  // Issue Deduplication & Regression
   regressionLookbackDays: { min: 7, max: 180, default: 30 },
   regressionGracePeriodHours: { min: 1, max: 168, default: 48 }, // 1 hour to 1 week, default 48 hours
   duplicateAlertCooldownHours: { min: 1, max: 168, default: 24 }, // Hours before re-alerting for same fingerprint
@@ -2252,20 +2252,19 @@ export const CONTEXT_TELEMETRY_VALIDATION_LIMITS = {
 } as const;
 
 // Context Telemetry Alert Configuration Schema
-// Aligned with LiveOps Triage pattern for Slack/GitHub/LLM integrations
 const CT = CONTEXT_TELEMETRY_VALIDATION_LIMITS; // Shorthand for readability
 
 export const ContextTelemetryAlertsSchema = z.object({
   /** Whether telemetry alerts are enabled */
   enabled: z.boolean().default(false),
 
-  // Slack Integration (OAuth-based like LiveOps Triage)
+  // Slack Integration (OAuth-based)
   /** MongoDB ObjectId of the Slack workspace to use */
   slackWorkspaceId: z.string().optional(),
   /** Slack channel ID for posting anomaly alerts */
   slackChannelId: z.string().optional(),
 
-  // GitHub Integration (uses GitHubService like LiveOps Triage)
+  // GitHub Integration (uses GitHubService)
   /** GitHub repository owner (user or organization) */
   githubOwner: z.string().optional(),
   /** GitHub repository name */
@@ -2307,7 +2306,7 @@ export const ContextTelemetryAlertsSchema = z.object({
     .max(CT.dedupWindowMinutes.max)
     .default(CT.dedupWindowMinutes.default),
 
-  // Issue Deduplication & Regression (aligned with LiveOps)
+  // Issue Deduplication & Regression
   /** Days to look back for closed issues when checking for regressions (default: 30) */
   regressionLookbackDays: z
     .number()

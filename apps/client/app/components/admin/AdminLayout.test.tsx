@@ -36,7 +36,6 @@ vi.mock('@client/app/hooks/data/entitlements', () => ({
 vi.mock('@client/app/contexts/ProviderBundle', () => ({
   ProviderBundle: ({ children }: { children: React.ReactNode }) => <>{children}</>,
 }));
-vi.mock('@client/app/hooks/data/admin', () => ({ useLiveOpsTriageEnv: () => ({ data: { showTab: false } }) }));
 const mockActionCounts = vi.hoisted(() =>
   vi.fn((_opts: { enabled: boolean }): { data: Record<string, number> | undefined } => ({ data: undefined }))
 );

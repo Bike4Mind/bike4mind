@@ -214,9 +214,8 @@ id with a `400` today and have **not** been converged - most inherit it from one
 shared access helpers (`server/utils/orgAccess.ts`, `sessionAccess.ts`,
 `questMasterPlanAccess.ts`), the rest are their own guards, concentrated in
 `business-links/*`, `sre/*`, `users/[id]/slack-settings.ts`, `fabfiles/[id]/*`,
-`admin/liveops-triage-configs/*`, `[type]/[id]/index.ts` and
-`data-lakes/[id]/files/[fabFileId]/purge.ts`. Enumerate the current set rather than trusting this
-paragraph to stay current:
+`[type]/[id]/index.ts` and `data-lakes/[id]/files/[fabFileId]/purge.ts`. Enumerate the current
+set rather than trusting this paragraph to stay current:
 
 ```
 grep -rn --include='*.ts' -A3 'isValidObjectId\|isObjectIdOrHexString\|ObjectId.isValid' \

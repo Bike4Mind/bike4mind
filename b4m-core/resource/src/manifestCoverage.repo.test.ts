@@ -179,7 +179,6 @@ const REGISTERED_WITHOUT_CONSUMER: Record<string, string> = {
   agentProactiveMessageQueue: 'trigger-proactive-messages route enqueues; open-core handler, candidate to wire',
   deepAgentWakeQueue: 'deep agent enrollment enqueues wakes; open-core handler, candidate to wire',
   lakeInconsistencyModelQueue: 'optional, behind an off-by-default flag; the route refuses the run with no URL',
-  liveOpsTriageQueue: 'admin live-ops trigger route enqueues; handler uses the CloudWatch client',
   sreFixQueue: 'SRE Slack approval path enqueues; decide together with sreJobQueue',
   generatedMediaPurgeQueue:
     'optional; notebook and message deletes hand it purge leftovers, logged and dropped with no URL',

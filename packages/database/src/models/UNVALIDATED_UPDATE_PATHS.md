@@ -189,10 +189,6 @@ The table below remains the literal-update inventory, not proof that all databas
 | LakeConnectorClaim | `kind` | enum | `infra/integrations/LakeConnectorClaimModel.ts#LakeConnectorClaimRepository.takeOver` | route-schema | `packages/server-utils/src/dataLakes/assertLakeConnectorFree.ts#withLakeConnectorClaim` | Callers of withLakeConnectorClaim pass the literals 'googleDrive' or 'github' |
 | LakeMembershipDecision | `decision` | enum | `ai/LakeMembershipDecisionModel.ts#LakeMembershipDecisionRepository.upsertDecision` | schema | `runValidators` | update call passes runValidators |
 | LakeMembershipDecision | `source` | enum | `ai/LakeMembershipDecisionModel.ts#LakeMembershipDecisionRepository.upsertDecision` | schema | `runValidators` | update call passes runValidators |
-| LiveopsTriageRun | `progress` | min,max | `infra/ops/LiveopsTriageRunModel.ts#LiveopsTriageRunRepository.markStarted` | repository-check | `literal` | writes 5 |
-| LiveopsTriageRun | `progress` | min,max | `infra/ops/LiveopsTriageRunModel.ts#LiveopsTriageRunRepository.updateProgress` | repository-check | `packages/database/src/models/infra/ops/LiveopsTriageRunModel.ts#updateProgress` | Writer clamps with Math.min(Math.max(progress,0),100) |
-| LiveopsTriageRun | `status` | enum | `infra/ops/LiveopsTriageRunModel.ts#LiveopsTriageRunRepository.markFailed` | repository-check | `literal` | writes "failed" |
-| LiveopsTriageRun | `status` | enum | `infra/ops/LiveopsTriageRunModel.ts#LiveopsTriageRunRepository.markStarted` | repository-check | `literal` | writes "processing" |
 | McpConnection | `auth.apiKey.scheme` | enum | `ai/McpConnectionModel.ts#McpConnectionRepository.setApiKey` | schema | `runValidators` | update call passes runValidators |
 | McpConnection | `authChallenge.resourceMetadataUrl` | maxlength | `ai/McpConnectionModel.ts#McpConnectionRepository.setPendingAuth` | schema | `runValidators` | update call passes runValidators |
 | McpConnection | `authChallenge.scope` | maxlength | `ai/McpConnectionModel.ts#McpConnectionRepository.setPendingAuth` | schema | `runValidators` | update call passes runValidators |

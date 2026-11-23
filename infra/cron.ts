@@ -10,7 +10,6 @@ import { eventBus } from './bus';
 import {
   researchEngineQueue,
   agentProactiveMessageQueue,
-  liveOpsTriageQueue,
   deepAgentWakeQueue,
   dataLakeTaxonomyQueue,
   fabFileChunkQueue,
@@ -447,45 +446,6 @@ const emailCampaignSchedulerCron = new sst.aws.Cron('emailCampaignScheduler', {
     },
   },
 });
-
-/**
- * LiveOps Triage Dispatcher (Multi-Config)
- * Dispatches triage jobs to SQS for each enabled LiveOpsTriageConfig.
- *
- * Schedule: Every 6 hours at 2am, 8am, 2pm, 8pm CST (8, 14, 20, 2 UTC)
- * For each enabled config where shouldRunAtCurrentHour(config.runIntervalHours) is true:
- * - Publishes SQS message with { configId, dispatchedAt }
- *
- * Workers process jobs independently via SQS fan-out pattern.
- * Only enabled in production environment.
- */
-const liveopsTriageDispatcherCron = runsScheduledJobs
-  ? new sst.aws.Cron('liveopsTriageDispatcherCron', {
-      schedule: 'cron(0 2,8,14,20 * * ? *)', // Every 6 hours UTC
-      function: {
-        handler: 'apps/workers/src/cron/liveopsTriageDispatcher.handler',
-        vpc: lambdaVpc,
-        link: [...allSecrets, liveOpsTriageQueue],
-        timeout: '2 minutes',
-        runtime: 'nodejs24.x',
-        environment: {
-          ...DEFAULT_LAMBDA_ENVIRONMENT,
-        },
-        permissions: [
-          {
-            actions: ['cloudwatch:PutMetricData'],
-            resources: ['*'],
-          },
-          {
-            actions: ['sqs:SendMessage'],
-            resources: [liveOpsTriageQueue.arn],
-          },
-        ],
-      },
-      // Only enabled in production
-      enabled: $app.stage === 'production',
-    })
-  : undefined;
 
 // Telemetry TTL Cleanup — GDPR Article 5(1)(e) storage limitation
 // Removes contextTelemetry from Quest documents older than 90 days
@@ -1752,7 +1712,6 @@ export {
   abuseAssessmentSweep,
   agentProactiveMessageCron,
   emailCampaignSchedulerCron,
-  liveopsTriageDispatcherCron,
   cloudSecurityScanCron,
   cloudSecurityScanFunction,
   integrationHealthCheckCron,

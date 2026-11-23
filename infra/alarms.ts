@@ -1,7 +1,7 @@
 /**
  * CloudWatch Alarms for Application Health Monitoring
  *
- * Monitors operational health for What's New generation, LiveOps triage,
+ * Monitors operational health for What's New generation,
  * webhook delivery, integration health probes, and API rate limits.
  *
  * DLQ-specific alarms are defined separately in dlqAlarms.ts.
@@ -353,133 +353,6 @@ if (isMonitoredStage) {
     tags: {
       Application: 'LLMStreaming',
       Severity: 'High',
-    },
-  });
-
-  /**
-   * Alarm: LiveOps Triage Failure
-   *
-   * Triggers when triage run fails.
-   * Indicates issues with Slack/GitHub integration or LLM processing.
-   */
-  new aws.cloudwatch.MetricAlarm('liveopsTriageFailure', {
-    name: `${$app.name}-${$app.stage}-liveops-triage-failure`,
-    alarmDescription: 'LiveOps Triage run failed',
-    comparisonOperator: 'GreaterThanThreshold',
-    evaluationPeriods: 1,
-    metricName: 'TriageRunFailure',
-    namespace: 'Lumina5/LiveOpsTriage',
-    period: 86400, // 24 hours (matches daily schedule)
-    statistic: 'Sum',
-    threshold: 0, // Alert on any failure
-    treatMissingData: 'notBreaching',
-    alarmActions: [dlqAlarmTopic.arn],
-    tags: {
-      Application: 'LiveOpsTriage',
-      Severity: 'High',
-    },
-  });
-
-  /**
-   * Alarm: High Error Volume
-   *
-   * Triggers when more than 50 errors are processed in a single run.
-   * Indicates a potential incident requiring immediate attention.
-   */
-  new aws.cloudwatch.MetricAlarm('liveopsHighErrorVolume', {
-    name: `${$app.name}-${$app.stage}-liveops-high-error-volume`,
-    alarmDescription: 'LiveOps Triage detected high error volume (potential incident)',
-    comparisonOperator: 'GreaterThanThreshold',
-    evaluationPeriods: 1,
-    metricName: 'ErrorsProcessed',
-    namespace: 'Lumina5/LiveOpsTriage',
-    period: 86400, // 24 hours
-    statistic: 'Maximum',
-    threshold: 50, // More than 50 errors
-    treatMissingData: 'notBreaching',
-    alarmActions: [dlqAlarmTopic.arn],
-    tags: {
-      Application: 'LiveOpsTriage',
-      Severity: 'Critical',
-    },
-  });
-
-  /**
-   * Alarm: P0 Issues Created
-   *
-   * Triggers when any P0 (blocker) issues are created.
-   * P0 issues require immediate attention.
-   */
-  new aws.cloudwatch.MetricAlarm('liveopsP0Issues', {
-    name: `${$app.name}-${$app.stage}-liveops-p0-issues`,
-    alarmDescription: 'LiveOps Triage created P0 (blocker) issues - immediate attention required',
-    comparisonOperator: 'GreaterThanThreshold',
-    evaluationPeriods: 1,
-    metricName: 'IssuesCreated',
-    namespace: 'Lumina5/LiveOpsTriage',
-    period: 86400, // 24 hours
-    statistic: 'Maximum',
-    threshold: 0, // Alert on any P0 issues
-    treatMissingData: 'notBreaching',
-    dimensions: {
-      Priority: 'P0',
-    },
-    alarmActions: [dlqAlarmTopic.arn],
-    tags: {
-      Application: 'LiveOpsTriage',
-      Severity: 'Critical',
-    },
-  });
-
-  /**
-   * Alarm: P1 Issues Created
-   *
-   * Triggers when any P1 (critical) issues are created.
-   * P1 issues indicate major features broken or significant user impact.
-   */
-  new aws.cloudwatch.MetricAlarm('liveopsP1Issues', {
-    name: `${$app.name}-${$app.stage}-liveops-p1-issues`,
-    alarmDescription: 'LiveOps Triage created P1 (critical) issues - major feature broken, significant user impact',
-    comparisonOperator: 'GreaterThanThreshold',
-    evaluationPeriods: 1,
-    metricName: 'IssuesCreated',
-    namespace: 'Lumina5/LiveOpsTriage',
-    period: 86400, // 24 hours
-    statistic: 'Maximum',
-    threshold: 0, // Alert on any P1 issues
-    treatMissingData: 'notBreaching',
-    dimensions: {
-      Priority: 'P1',
-    },
-    alarmActions: [dlqAlarmTopic.arn],
-    tags: {
-      Application: 'LiveOpsTriage',
-      Severity: 'High',
-    },
-  });
-
-  /**
-   * Alarm: Consecutive Triage Failures
-   *
-   * Triggers when triage fails 2 or more times in a 48-hour period.
-   * Indicates systematic issues that require investigation (token expiration,
-   * API changes, configuration drift).
-   */
-  new aws.cloudwatch.MetricAlarm('liveopsConsecutiveFailures', {
-    name: `${$app.name}-${$app.stage}-liveops-consecutive-failures`,
-    alarmDescription: 'LiveOps Triage has failed 2+ times in 48hrs - systematic issue detected',
-    comparisonOperator: 'GreaterThanOrEqualToThreshold',
-    evaluationPeriods: 1,
-    metricName: 'TriageRunFailure',
-    namespace: 'Lumina5/LiveOpsTriage',
-    period: 172800, // 48 hours
-    statistic: 'Sum',
-    threshold: 2, // 2 or more failures in 48 hours
-    treatMissingData: 'notBreaching',
-    alarmActions: [dlqAlarmTopic.arn],
-    tags: {
-      Application: 'LiveOpsTriage',
-      Severity: 'Critical',
     },
   });
 

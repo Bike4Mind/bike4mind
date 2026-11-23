@@ -642,17 +642,6 @@ export const VIEW_REGISTRY: NavigableView[] = [
     requiresAdmin: true,
   },
   {
-    id: 'admin.liveops_triage',
-    section: 'admin',
-    label: 'LiveOps Triage',
-    description:
-      'Triage configs that turn Slack error alerts into GitHub or Jira issues: dry run, run now, run history',
-    navigationType: 'tab',
-    target: '35', // AdminTab.LiveOpsTriage
-    keywords: ['liveops', 'triage', 'errors', 'incidents', 'production issues', 'monitoring'],
-    requiresAdmin: true,
-  },
-  {
     id: 'admin.dashboard',
     section: 'admin',
     label: 'Dashboard',
