@@ -439,9 +439,8 @@ void app.whenReady().then(async () => {
   // Restoring runs alongside the window opening rather than gating it: the renderer starts in
   // the `initializing` state and is pushed the outcome, so a slow or unreachable backend
   // delays the auth card, not the whole app.
-  void auth
-    .initialize()
-    .then(() =>
+  void auth.initialize().then(
+    () =>
       runLiveEvaluation(
         auth,
         join(app.getPath('userData'), 'controlled-evaluation'),
@@ -457,9 +456,9 @@ void app.whenReady().then(async () => {
             .find(argument => argument.startsWith('--controlled-cost-evaluation-recover-run='))
             ?.split('=')[1],
         }
-      )
-    )
-    .catch(() => console.warn('EVALUATION: stopped; inspect the local evaluation report.'));
+      ).catch((error: unknown) => console.warn('EVALUATION: stopped; inspect the local evaluation report.', error)),
+    (error: unknown) => console.error('Auth restore failed at startup', error)
+  );
 
   app.on('activate', () => {
     if (appWindows().length === 0) createWindow();
