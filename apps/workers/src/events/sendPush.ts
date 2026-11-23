@@ -621,10 +621,12 @@ function approvalActionsFor(event: PushNotificationEvent) {
 
 // Must stay in sync with BriefNotificationCategory in apps/ios B4MKit Briefs/BriefNotificationAction.swift.
 const BRIEF_ACTION_CATEGORIES = { approval: 'brief_ready_approval', question: 'brief_ready_reply' } as const;
+const BRIEF_LISTEN_CATEGORY = 'brief_ready_listen';
 
+// A brief with no single answerable decision still gets the Listen button; older app builds ignore the category.
 function briefCategoryFor(event: PushNotificationEvent): string | undefined {
-  if (event.category !== 'brief_ready' || !event.briefId || !event.briefAction) return undefined;
-  return BRIEF_ACTION_CATEGORIES[event.briefAction];
+  if (event.category !== 'brief_ready' || !event.briefId) return undefined;
+  return event.briefAction ? BRIEF_ACTION_CATEGORIES[event.briefAction] : BRIEF_LISTEN_CATEGORY;
 }
 
 function resolveDeepLink(deepLink: string, appUrl: string | undefined): string {

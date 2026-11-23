@@ -52,7 +52,7 @@ sealed interface ChatError {
 interface ChatBackend {
     suspend fun transcript(sessionId: String): List<Quest>
     suspend fun quest(id: String): Quest
-    suspend fun send(message: String, sessionId: String?): ChatReceipt
+    suspend fun send(message: String, sessionId: String?, fileIds: List<String>): ChatReceipt
     suspend fun respond(target: PendingActionTarget, decision: PendingActionDecision): PendingActionOutcome
 
     /** One socket's worth of frames; completes when the socket closes. */
@@ -67,7 +67,8 @@ class LiveChatBackend(
 ) : ChatBackend {
     override suspend fun transcript(sessionId: String) = sessions.quests(sessionId)
     override suspend fun quest(id: String) = sessions.quest(id)
-    override suspend fun send(message: String, sessionId: String?) = wire.send(message, sessionId)
+    override suspend fun send(message: String, sessionId: String?, fileIds: List<String>) =
+        wire.send(message, sessionId, fileIds)
     override fun completions() = realtime.completions()
     override suspend fun respond(target: PendingActionTarget, decision: PendingActionDecision) =
         pendingActions.respond(target, decision)
@@ -112,19 +113,25 @@ class ChatController(
         mutableState.update { it.copy(sendsAsAgentRun = on && canStartAgentRun(it)) }
     }
 
-    fun send(message: String) {
+    /** [onAccepted] runs once the server took the turn, e.g. to let go of the composer's attachments. */
+    fun send(message: String, fileIds: List<String> = emptyList(), onAccepted: () -> Unit = {}) {
         val text = message.trim()
         if (text.isEmpty() || mutableState.value.sending) return
         val runSessionId = mutableState.value.takeIf { it.sendsAsAgentRun }?.sessionId
-        if (agentRuns != null && runSessionId != null) return startAgentRun(agentRuns, runSessionId, text)
+        if (agentRuns != null && runSessionId != null) {
+            // The agent-executions route takes no files, so a run with attachments is refused rather than sent without them.
+            if (fileIds.isNotEmpty()) return mutableState.update { it.copy(error = ChatError.Failed(AGENT_RUN_ATTACHMENTS_UNSUPPORTED)) }
+            return startAgentRun(agentRuns, runSessionId, text)
+        }
         mutableState.update { it.copy(sending = true, error = null) }
         scope.launch {
             try {
-                when (val receipt = backend.send(text, mutableState.value.sessionId)) {
+                when (val receipt = backend.send(text, mutableState.value.sessionId, fileIds)) {
                     is ChatReceipt.Refused -> mutableState.update {
                         it.copy(sending = false, error = ChatError.Refused(receipt.errorCode, receipt.message))
                     }
                     is ChatReceipt.Accepted -> {
+                        onAccepted()
                         lastHeard[receipt.questId] = now()
                         mutableState.update { state ->
                             state.copy(
@@ -293,5 +300,6 @@ class ChatController(
 
     companion object {
         const val UNTRACKED_RUN_REPLY = "The agent run started. Its progress shows in its notification rather than in this conversation."
+        const val AGENT_RUN_ATTACHMENTS_UNSUPPORTED = "An agent run cannot take attachments. Remove them, or turn off Agent."
     }
 }

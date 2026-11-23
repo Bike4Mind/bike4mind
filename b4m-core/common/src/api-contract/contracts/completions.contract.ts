@@ -6,7 +6,7 @@ import { CompletionRequestSchema, CompletionStreamEventSchema } from '../../sche
 import {
   ApiErrorSchema,
   ModelPolicyForbiddenErrorSchema,
-  InsufficientCreditsErrorSchema,
+  CompletionsUnprocessableErrorSchema,
   ProviderNotConfiguredErrorSchema,
   CompletionsBadRequestErrorSchema,
   RunNotFoundErrorSchema,
@@ -72,7 +72,7 @@ export const createCompletionContract = defineEndpoint({
     'a real HTTP status, before any stream opens: an empty `messages` array, a conversation with no non-empty user or assistant message (system-only, or only blank content), a malformed request, or an unknown `model` `400` (`errorCode: "unknown_model"` for an unknown model), a bad ' +
     'credential `401`, a key without a required scope `403` (with `required_scopes`), a free-tier account calling a model outside the free-tier allowlist `403` with `errorCode: "model_requires_subscription"` (upgrade the plan or pick a free-tier model), a model the caller\'s organization policy does not allow `403` with `errorCode: "org_model_not_allowed"`, paused spending `403` with `errorCode: "spend_frozen"`, a body over 25 MB ' +
     '`413`, any other body that fails schema validation `422`, insufficient credits `422` with ' +
-    '`errorCode: "insufficient_credits"` (personal or org balance, or an org per-member credit cap), a rate limit `429` with `Retry-After`, a `run` that does not exist or that another user or billing owner minted `404` with `errorCode: "run_not_found"`, and a catalogued model ' +
+    '`errorCode: "insufficient_credits"` (personal or org balance, or an org per-member credit cap), a `run` minted with a budget that has too little left for even a short answer `422` with `errorCode: "run_budget_exhausted"` (retry once in-flight requests on the run settle, or raise the run budget; buying credits does not), a rate limit `429` with `Retry-After`, a `run` that does not exist or that another user or billing owner minted `404` with `errorCode: "run_not_found"`, and a catalogued model ' +
     'whose provider is not configured on this deployment, or a model that could only come from a self-hosted model server (Ollama, local image) that is currently unreachable, `503` with `errorCode: "provider_not_configured"` (retryable). ' +
     'A provider rejection of caller input that happens before the stream opens is also a JSON `400`, with ' +
     '`errorCode: "invalid_request"` (do not retry it unchanged). ' +
@@ -138,8 +138,9 @@ export const createCompletionContract = defineEndpoint({
     422: {
       description:
         'The body failed schema validation, or the caller cannot afford the request ' +
-        '(`errorCode: "insufficient_credits"`: personal or org balance, or an org per-member credit cap).',
-      schema: InsufficientCreditsErrorSchema,
+        '(`errorCode: "insufficient_credits"`: personal or org balance, or an org per-member credit cap), ' +
+        'or the `run` budget has too little left (`errorCode: "run_budget_exhausted"`).',
+      schema: CompletionsUnprocessableErrorSchema,
     },
     429: {
       description: 'Rate limit exceeded.',

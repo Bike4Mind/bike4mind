@@ -44,6 +44,7 @@
     <string name="chat_reply_pending" translatable="false">...</string>
     <string name="chat_agent_toggle">Agent</string>
     <string name="chat_agent_placeholder">Describe a task for the agent</string>
+    <string name="chat_agent_no_attachments">An agent run cannot take attachments. Remove them, or turn off Agent.</string>
 
     <!-- Chat approval card -->
     <string name="approval_approve">Approve</string>
@@ -165,6 +166,74 @@
     <string name="restore_scheduled">It will be permanently deleted at the end of the %1$d-day grace period unless you restore it.</string>
     <string name="restore_body">Restoring your account brings back your conversations and files. It does not reinstate subscriptions that were canceled; you will need to subscribe again.</string>
     <string name="restore_action">Restore my account</string>
+
+    <!-- Capture: composer attachments and dictation -->
+    <string name="capture_attach">Attach</string>
+    <string name="capture_take_photo">Take photo</string>
+    <string name="capture_scan_document">Scan document</string>
+    <string name="capture_choose_file">Choose file</string>
+    <string name="capture_dictate">Dictate</string>
+    <string name="capture_photo_name">Photo %1$s.jpg</string>
+    <string name="capture_scan_name">Scan %1$s.pdf</string>
+    <string name="capture_attached_message">Attached %1$s</string>
+    <string name="capture_uploading">Uploading</string>
+    <string name="capture_ready">Ready</string>
+    <string name="capture_remove">Remove</string>
+    <string name="capture_retry">Retry</string>
+    <string name="capture_no_camera">No camera app is available.</string>
+    <string name="capture_scanner_unavailable">Document scanning isn\'t available on this device.</string>
+    <string name="capture_read_failed">That file couldn\'t be read.</string>
+    <string name="capture_failure_offline">No connection.</string>
+    <string name="capture_failure_blocked">The file was blocked by the server\'s scan.</string>
+    <string name="capture_failure_still_scanning">The file is still being scanned.</string>
+    <string name="capture_failure_upgrade">Update Bike4Mind to keep sending.</string>
+    <string name="capture_failure_signed_out">Sign in to Bike4Mind to finish this.</string>
+    <string name="capture_failure_payload_missing">The file is no longer on this device.</string>
+    <string name="capture_failure_destination_gone">That chat no longer exists, or you can\'t post to it.</string>
+    <string name="capture_failure_delivery_unknown">This may already be in the chat. Retry to send it again.</string>
+    <string name="capture_failure_rejected">The server couldn\'t accept this.</string>
+    <string name="capture_failure_generic">Something went wrong.</string>
+    <string name="dictation_title">Dictate</string>
+    <string name="dictation_listening">Listening. Tap Done when you finish speaking.</string>
+    <string name="dictation_transcribing">Transcribing\u2026</string>
+    <string name="dictation_done">Done</string>
+    <string name="dictation_cancel">Cancel</string>
+    <string name="dictation_ok">OK</string>
+    <string name="dictation_failed_microphone">The microphone couldn\'t be opened.</string>
+    <string name="dictation_failed_permission">Bike4Mind needs microphone access to dictate. Allow it in Settings.</string>
+    <string name="dictation_failed_nothing_heard">Nothing was heard. Try again a little closer to the microphone.</string>
+    <string name="dictation_failed_unavailable">Dictation isn\'t available on this server.</string>
+    <string name="dictation_failed_credits">You\'re out of credits for dictation.</string>
+    <string name="dictation_failed_offline">No connection. Try again when you\'re online.</string>
+    <string name="dictation_failed_other">Dictation failed. Try a shorter note.</string>
+
+    <!-- Share to Bike4Mind -->
+    <string name="share_target_label">Bike4Mind</string>
+    <string name="share_title">Share to Bike4Mind</string>
+    <string name="share_cancel">Cancel</string>
+    <string name="share_send">Send</string>
+    <string name="share_note_label">Add a message</string>
+    <string name="share_destination">Send to</string>
+    <string name="share_new_chat">New chat</string>
+    <string name="share_chats_failed">Your chats couldn\'t be loaded. You can still start a new chat.</string>
+    <string name="share_nothing">There\'s nothing here Bike4Mind can use.</string>
+    <string name="share_signed_out">Sign in to Bike4Mind first, then share again.</string>
+    <string name="share_open_app">Open Bike4Mind</string>
+    <string name="share_sending">Sending to Bike4Mind</string>
+    <string name="share_read_failed">The shared content couldn\'t be read.</string>
+    <plurals name="share_files">
+        <item quantity="one">%d file</item>
+        <item quantity="other">%d files</item>
+    </plurals>
+
+    <!-- Pending shares on the chats list -->
+    <plurals name="shares_sending">
+        <item quantity="one">Sending %d share</item>
+        <item quantity="other">Sending %d shares</item>
+    </plurals>
+    <string name="share_failed_to">Couldn\'t send to %1$s: %2$s</string>
+    <string name="share_discard">Discard</string>
+    <string name="share_retry">Retry</string>
 
     <!-- Notifications -->
     <string name="notification_channel_default">@string/app_name</string>

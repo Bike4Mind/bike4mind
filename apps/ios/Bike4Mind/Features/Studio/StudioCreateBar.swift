@@ -14,7 +14,7 @@ struct StudioCreateBar: View {
     VStack(alignment: .leading, spacing: Tokens.Spacing.s) {
       HStack(spacing: Tokens.Spacing.s) {
         Picker("Create", selection: $model.kind) {
-          ForEach(GenerationKind.allCases, id: \.self) { kind in Text(kind.title).tag(kind) }
+          ForEach(GenerationKind.promptable, id: \.self) { kind in Text(kind.title).tag(kind) }
         }
         .pickerStyle(.segmented)
         .frame(maxWidth: 260)
@@ -148,6 +148,7 @@ struct StudioCreateBar: View {
     case .image: "Describe an image"
     case .video: "Describe a video"
     case .music: "Describe a song"
+    case .scene: ""
     }
   }
 

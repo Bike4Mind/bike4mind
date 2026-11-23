@@ -222,7 +222,6 @@ final class AppServices {
     await questActivities.sessionWillEnd()
     studioTrackerState?.tracker.reset()
     studioTrackerState = nil
-    ThumbnailCache.shared.removeAll()
     await agentRunMonitor.stopAll()
     await push.unregisterBeforeSignOut()
     await auth.signOut(reason: reason)
@@ -280,6 +279,25 @@ final class AppServices {
     tracker.resume()
     studioTrackerState = (environment, tracker)
     return tracker
+  }
+
+  @ObservationIgnored private var mediaFirstPagesState: (environment: ServerEnvironment, store: MediaFirstPageStore)?
+
+  /// Page 1 of the media list for the gallery and the "Morph into" picker. One per server, so it survives
+  /// leaving Studio and re-opening it; emptied by `RootView.endSession()`.
+  var mediaFirstPages: MediaFirstPageStore {
+    let environment = auth.environment
+    if let mediaFirstPagesState, mediaFirstPagesState.environment == environment {
+      return mediaFirstPagesState.store
+    }
+    var cache: any MediaListCache = FileMediaListCache(
+      directory: FileSessionListCache.defaultDirectory(), environment: environment)
+    #if DEBUG
+      if FixtureServices.isEnabled { cache = InMemoryMediaListCache() }
+    #endif
+    let store = MediaFirstPageStore(api: media, cache: cache)
+    mediaFirstPagesState = (environment, store)
+    return store
   }
 
   /// Called when the gallery learns of a newer generated image; keeps the "Latest generation" widget current.

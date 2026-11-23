@@ -50,7 +50,7 @@ class ChatControllerTest {
             polls++
             return polled ?: error("not polled in this test")
         }
-        override suspend fun send(message: String, sessionId: String?): ChatReceipt {
+        override suspend fun send(message: String, sessionId: String?, fileIds: List<String>): ChatReceipt {
             sent += message to sessionId
             return receipt
         }
@@ -185,6 +185,24 @@ class ChatControllerTest {
         runCurrent()
         assertEquals("Audited", chat.state.value.turns.single().reply)
         assertEquals(QuestStatus.DONE, chat.state.value.turns.single().status)
+    }
+
+    @Test
+    fun anAgentRunWithAttachmentsIsRefusedNotSentWithoutThem() = runTest {
+        val backend = FakeBackend()
+        val runs = FakeRuns()
+        val chat = agentController(backend, runs, "s1")
+        var accepted = false
+
+        chat.setSendsAsAgentRun(true)
+        chat.send("Read this", listOf("f1")) { accepted = true }
+        runCurrent()
+
+        assertTrue(runs.started.isEmpty())
+        assertTrue(backend.sent.isEmpty())
+        assertFalse(accepted, "the composer keeps its attachments")
+        assertEquals(ChatError.Failed(ChatController.AGENT_RUN_ATTACHMENTS_UNSUPPORTED), chat.state.value.error)
+        assertTrue(chat.state.value.sendsAsAgentRun)
     }
 
     @Test

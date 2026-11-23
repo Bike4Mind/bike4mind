@@ -28,7 +28,19 @@ private struct BriefScreen: View {
       .task { await model.load() }
       .onDisappear { model.cancel() }
       .refreshable { await model.refresh() }
+      // Voice triage answers through its own view model, so the cards refetch once voice mode closes.
+      .onChange(of: services.navigator.voiceRequest) { old, new in
+        if old != nil, new == nil { Task { await model.refresh() } }
+      }
       .toolbar {
+        if let brief = model.brief, brief.status == .ready {
+          ToolbarItem(placement: .topBarTrailing) {
+            Button("Listen", systemImage: "waveform") {
+              services.navigator.startVoiceConversation(.newConversation, briefID: brief.id)
+            }
+            .accessibilityIdentifier("brief-listen-btn")
+          }
+        }
         if let brief = model.brief, brief.status == .ready, !brief.isEmpty {
           ToolbarItem(placement: .topBarTrailing) {
             Button("New brief", systemImage: "arrow.clockwise") { model.startCompose() }

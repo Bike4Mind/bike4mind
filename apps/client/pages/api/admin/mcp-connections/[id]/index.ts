@@ -23,12 +23,18 @@ const handler = adminApi({
     const id = connectionId(req.query);
     const before = await getConnection(PLATFORM_MCP_OWNER, context, id);
     const connection = await updateConnection(PLATFORM_MCP_OWNER, req.user, context, id, body);
+    // The description's length goes to the audit log, never its text.
+    const description = connection.description ?? '';
+    const details = {
+      ...(body.tools ? { reviewedTools: body.tools.length } : {}),
+      ...(description !== (before.description ?? '') ? { descriptionLength: description.length } : {}),
+    };
     await recordPlatformConnectorAction(req, 'settings.mcp_connector.updated', connection, 'updated', {
       changes: [
         { field: 'displayName', before: before.displayName, after: connection.displayName },
         { field: 'enabled', before: before.enabled, after: connection.enabled },
       ].filter(change => change.before !== change.after),
-      ...(body.tools ? { details: { reviewedTools: body.tools.length } } : {}),
+      ...(Object.keys(details).length > 0 ? { details } : {}),
     });
     res.json(connection);
   })

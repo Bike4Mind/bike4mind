@@ -42,6 +42,8 @@ export const DELEGATED_ADMIN_TAB_PERMISSIONS: Readonly<Partial<Record<AdminTab, 
   [AdminTab.SpendExplorer]: 'support:read',
   [AdminTab.ApiKeyScopePreflight]: 'support:read',
   [AdminTab.LegacyApiKeys]: 'support:read',
+  // Its overview and freeze-list GETs accept support:read; freezing and lifting need credits:adjust.
+  [AdminTab.SpendMonitor]: 'support:read',
   [AdminTab.IntegrationDemand]: 'support:read',
   [AdminTab.AuditLog]: 'support:read',
   [AdminTab.Approvals]: 'support:read',

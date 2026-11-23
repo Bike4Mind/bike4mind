@@ -55,11 +55,16 @@ public final class AppNavigator {
   }
 
   /// Opens the voice conversation over the current screen. A request from the drawer lands on home first so
-  /// a new conversation has somewhere to go when it ends.
-  public func startVoiceConversation(_ target: ChatSendRequest.Target) {
+  /// a new conversation has somewhere to go when it ends; one about a brief lands on that brief instead, so
+  /// closing voice returns to it.
+  public func startVoiceConversation(_ target: ChatSendRequest.Target, briefID: String? = nil) {
     isDrawerOpen = false
-    if target == .newConversation, !isShowing(.home) { sessionPath = [] }
-    voiceRequest = VoiceRequest(target: target)
+    if let briefID {
+      if !isShowing(.brief(id: briefID)) { apply(.brief(id: briefID)) }
+    } else if target == .newConversation, !isShowing(.home) {
+      sessionPath = []
+    }
+    voiceRequest = VoiceRequest(target: target, briefID: briefID)
   }
 
   /// Closes the voice conversation. One that started a new session continues in that session's screen.
@@ -213,8 +218,11 @@ extension SessionSummary {
 public struct VoiceRequest: Identifiable, Hashable, Sendable {
   public let id = UUID()
   public let target: ChatSendRequest.Target
+  /// The brief to read aloud when the conversation opens, if it was started from one.
+  public let briefID: String?
 
-  public init(target: ChatSendRequest.Target) {
+  public init(target: ChatSendRequest.Target, briefID: String? = nil) {
     self.target = target
+    self.briefID = briefID
   }
 }

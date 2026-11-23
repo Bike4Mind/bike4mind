@@ -14,7 +14,7 @@ export const WEBHOOK_REPO_PARAM = 'webhookRepo';
 export const WEBHOOK_EVENT_PARAM = 'webhookEvent';
 export const WEBHOOK_STATUS_PARAM = 'webhookStatus';
 export const WEBHOOK_SOURCE_PARAM = 'webhookSource';
-/** The delivery open in the detail drawer. */
+/** The delivery open in the detail dialog. */
 export const WEBHOOK_DELIVERY_ID_PARAM = 'webhookDeliveryId';
 
 export const WEBHOOK_AUDIT_LOGS_TAB_PARAMS = [

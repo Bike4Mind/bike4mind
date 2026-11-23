@@ -89,6 +89,7 @@ import type { ShareDirectoryResult } from './directoryRequest';
 import type { PrActionResult, PrBarState, PrOption, PrSummaryEvent } from './pullRequest';
 import type { LocalContextFit, LocalContextSetting } from './localContextSetting';
 import type { SidebarSectionsState } from './sidebarSections';
+import type { ComposerDrafts } from './composerDrafts';
 import type { WorkspaceChanges } from './workspaceChanges';
 import type { SkillsScope, SkillsState } from './skills';
 import type { PermissionMutationResult, PermissionRuleLists, PermissionScope, PermissionsState } from './permissions';
@@ -579,6 +580,9 @@ export const IPC_CHANNELS = {
   sidebarRenameSection: 'sidebar:rename-section',
   sidebarDeleteSection: 'sidebar:delete-section',
   sidebarMoveSession: 'sidebar:move-session',
+  /** Unsent composer text per conversation; see @shared/composerDrafts. */
+  composerDraftsList: 'drafts:list',
+  composerDraftsSave: 'drafts:save',
   /**
    * The user's terminals; see @shared/terminal. Input and resize are one-way sends rather than
    * invokes: a keystroke has nothing to wait for, and a round trip each would be felt.
@@ -1406,6 +1410,12 @@ export interface DesktopApi {
     deleteSection(sectionId: string): Promise<SidebarSectionsState>;
     /** Null takes the session out of its section. */
     moveSession(sessionId: string, sectionId: string | null): Promise<SidebarSectionsState>;
+  };
+  /** Unsent composer text per conversation; see @shared/composerDrafts. */
+  composerDrafts: {
+    list(): Promise<ComposerDrafts>;
+    /** Blank text clears the conversation's draft. Unknown conversations are ignored. */
+    save(sessionId: string, text: string): Promise<void>;
   };
   tools: {
     getAccess(): Promise<ToolAccessState>;

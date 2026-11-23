@@ -1,6 +1,11 @@
 import { createMocks } from 'node-mocks-http';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { ApiKeyScope, CompletionRunSchema, CreditHolderType } from '@bike4mind/common';
+import {
+  ApiKeyScope,
+  CompletionRunSchema,
+  CreateCompletionRunRequestSchema,
+  CreditHolderType,
+} from '@bike4mind/common';
 
 const { contracts, completionRunRepository } = vi.hoisted(() => ({
   contracts: [] as { operationId: string; auth: string; scopes?: readonly string[] }[],
@@ -93,5 +98,29 @@ describe('POST /api/v1/completion-runs', () => {
     const res = await call({});
 
     expect(res._getJSONData()).not.toHaveProperty('rootSessionId');
+  });
+
+  it('mints a budgeted run and returns its budget', async () => {
+    completionRunRepository.create.mockImplementation(async (input: Record<string, unknown>) => ({
+      ...input,
+      committedCredits: 0,
+      runId: '0b6f3c2e-7d4a-4f51-9a8e-2c1d5e6f7a80',
+      createdAt: CREATED_AT,
+    }));
+
+    const res = await call({ validated: { budgetCredits: 5000 } });
+
+    expect(completionRunRepository.create).toHaveBeenCalledWith(expect.objectContaining({ budgetCredits: 5000 }));
+    expect(CompletionRunSchema.parse(res._getJSONData())).toEqual({
+      runId: '0b6f3c2e-7d4a-4f51-9a8e-2c1d5e6f7a80',
+      budgetCredits: 5000,
+      createdAt: CREATED_AT.toISOString(),
+    });
+  });
+
+  it('rejects a budget that is not a positive whole number of credits', () => {
+    for (const budgetCredits of [0, -5, 12.5]) {
+      expect(CreateCompletionRunRequestSchema.safeParse({ budgetCredits }).success).toBe(false);
+    }
   });
 });

@@ -6,6 +6,7 @@ import {
   ISpendAlertRepository,
   SPEND_ROLLUP_SCOPE_TYPES,
   SPEND_RULE_IDS,
+  SpendAlertAutoPause,
   SpendAlertRecord,
   SpendAlertStatus,
 } from '@bike4mind/common';
@@ -34,6 +35,19 @@ const SpendAlertSchema = new Schema<ISpendAlertDocument>(
     resolvedAt: { type: Date },
     lastEvaluatedWindowEnd: { type: Date },
     context: { type: Schema.Types.Mixed, required: true, default: {} },
+    autoPause: {
+      type: new Schema(
+        {
+          mode: { type: String, required: true, enum: ['shadow', 'enforce'] },
+          decidedAt: { type: Date, required: true },
+          tier: { type: String, required: true },
+          thresholdCredits: { type: Number, required: true },
+          valueCredits: { type: Number, required: true },
+          freezeId: { type: String },
+        },
+        { _id: false }
+      ),
+    },
   },
   { timestamps: true, toJSON: { virtuals: true }, toObject: { virtuals: true } }
 );
@@ -73,6 +87,18 @@ export class SpendAlertRepository extends BaseRepository<ISpendAlertDocument> im
         $set: fields,
         ...(unset.length > 0 ? { $unset: Object.fromEntries(unset.map(field => [field, 1])) } : {}),
       }
+    );
+    return result.matchedCount === 1;
+  }
+
+  async recordAutoPause(id: string, autoPause: SpendAlertAutoPause): Promise<boolean> {
+    // An enforce decision may replace a shadow one (the mode changed while the incident was open).
+    const undecided =
+      autoPause.mode === 'enforce' ? { 'autoPause.mode': { $ne: 'enforce' } } : { autoPause: { $exists: false } };
+    const result = await this.model.updateOne(
+      { _id: id, status: { $in: ACTIVE_STATUSES }, ...undecided },
+      { $set: { autoPause } },
+      { runValidators: true }
     );
     return result.matchedCount === 1;
   }

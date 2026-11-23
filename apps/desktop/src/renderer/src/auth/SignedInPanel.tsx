@@ -11,7 +11,15 @@ import Typography from '@mui/joy/Typography';
 import { useNavigate } from '@tanstack/react-router';
 import type { AuthState } from '@shared/auth';
 import { updateAttention } from '@shared/update';
-import { BillingIcon, ChevronIcon, ConversationIcon, GearIcon, SignOutIcon, UserIcon } from '../chat/icons';
+import {
+  BillingIcon,
+  ChevronIcon,
+  ConversationIcon,
+  ExternalLinkIcon,
+  GearIcon,
+  SignOutIcon,
+  UserIcon,
+} from '../chat/icons';
 import { NavItem } from '../chat/SessionList';
 import type { AppUpdateController } from '../chat/useAppUpdate';
 import { RuntimeInfo } from '../components/RuntimeInfo';
@@ -240,6 +248,13 @@ export function AccountMenu({
           testId="account-feedback-btn"
         />
       )}
+
+      <NavItem
+        icon={<ExternalLinkIcon />}
+        label="Open web conversations"
+        onClick={() => void window.b4m.attention.openServerSessions()}
+        testId="account-web-conversations-btn"
+      />
 
       <Divider sx={{ my: 0.5 }} />
 

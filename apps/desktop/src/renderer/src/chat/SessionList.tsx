@@ -39,6 +39,7 @@ import {
   type ChatSessionStatus,
   type ChatSessionSummary,
 } from '@shared/chat';
+import { useHasComposerDraft } from './composerDrafts';
 import { useLocalHistory } from './localHistory';
 import { refLabel } from '@shared/githubRefs';
 import { findSessionsByRef } from './sessionRefSearch';
@@ -571,6 +572,8 @@ const SessionRow = memo(function SessionRow({
   // Main pushes the project once the worktree exists, which is what ends this.
   const preparing = status === 'processing' && awaitsWorktree(session.project);
   const { ref: titleRef, clipped } = useTitleClipped(session.title, editing);
+  // The open conversation's draft is in the composer in front of the user; only others are marked.
+  const showDraft = useHasComposerDraft(session.id) && !selected && !editing;
 
   const onRenameDone = (next: string | null) => {
     setEditing(false);
@@ -730,6 +733,7 @@ const SessionRow = memo(function SessionRow({
     >
       <ListItemButton
         selected={selected}
+        aria-current={selected ? 'true' : undefined}
         onClick={editing ? undefined : () => actions.select(session.id)}
         aria-expanded={subCount > 0 ? !subFolded : undefined}
         onKeyDown={event => {
@@ -790,6 +794,18 @@ const SessionRow = memo(function SessionRow({
               data-testid="chat-session-title-text"
             >
               {session.title}
+            </Typography>
+          )}
+          {showDraft && (
+            <Typography
+              level="body-xs"
+              noWrap
+              textColor="text.tertiary"
+              sx={{ flexShrink: 0, fontSize: '0.6875rem', fontStyle: 'italic' }}
+              title="Unsent text in the composer"
+              data-testid="chat-session-draft-marker"
+            >
+              Draft
             </Typography>
           )}
           {!editing && hintTitle && (

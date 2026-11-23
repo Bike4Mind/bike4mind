@@ -1,5 +1,6 @@
 import { hkdfSync } from 'crypto';
 import { mintFileContentSig } from '@bike4mind/utils';
+import type { fabFilesService } from '@bike4mind/services';
 import { Config } from '../utils/config';
 import { getFilesStorage } from '../utils/storage/index';
 
@@ -25,9 +26,20 @@ export const fileContentUrl = ({ id, filePath }: { id: string; filePath: string 
   return `${appOrigin()}/api/files/${encodeURIComponent(id)}/content?exp=${exp}&sig=${sig}`;
 };
 
+export type FabFileSignOptions = fabFilesService.FabFileSignOptions;
+
+/** Raw S3 GET for a FabFile; `options` carries the disposition overrides fabFileService computes per file. */
+export const signFabFileGet = (path: string, expiresIn: number, options: FabFileSignOptions = {}) =>
+  getFilesStorage().getSignedUrl(path, 'get', {
+    expiresIn,
+    audience: 'browser',
+    signingDate: options.signingDate,
+    ResponseContentDisposition: options.ResponseContentDisposition,
+    ResponseContentType: options.ResponseContentType,
+  });
+
 /** Storage adapter for fabFileService reads whose response goes to the browser (see generateSignedUrl). */
 export const browserFileStorage = () => ({
-  generateSignedUrl: (path: string, expiresIn: number, options?: { signingDate?: Date }) =>
-    getFilesStorage().getSignedUrl(path, 'get', { expiresIn, audience: 'browser', signingDate: options?.signingDate }),
+  generateSignedUrl: signFabFileGet,
   contentUrl: fileContentUrl,
 });

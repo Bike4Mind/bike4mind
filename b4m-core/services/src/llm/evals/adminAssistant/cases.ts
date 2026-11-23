@@ -138,6 +138,12 @@ export const ADMIN_EVAL_CASES: readonly AdminEvalCase[] = [
     expectViewIds: ['admin.credit_analytics', 'admin.users'],
   },
   {
+    id: 'howto-stop-burning-credits',
+    category: 'how-to',
+    question: 'How do I stop an account that is burning credits right now?',
+    expectViewIds: ['admin.spend_monitor'],
+  },
+  {
     id: 'howto-release-grants',
     category: 'how-to',
     question: 'How do I release held signup credits in bulk?',

@@ -70,4 +70,6 @@ export const TIMEOUTS = {
   AUDIO_SRC: 45_000,
   /** Browser-side wait for audio metadata before reporting a duration. */
   AUDIO_METADATA: 5_000,
+  /** An admin delete erases the account from a queue; the purge has taken about two minutes on staging. */
+  ACCOUNT_ERASURE: 240_000,
 } as const;

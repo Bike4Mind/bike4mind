@@ -1,5 +1,6 @@
 import { requireEnv } from '@bike4mind/common';
 import { getFilesStorage } from '@bike4mind/server-utils/utils/storage/index';
+import { storageReadOverrides } from '@bike4mind/utils/contentDisposition';
 
 export const MODAL_IMAGE_PREFIX = 'modal-images/';
 export const MODAL_IMAGE_URL_EXPIRY_SECONDS = 60 * 60;
@@ -30,6 +31,7 @@ export async function resolveModalImageUrl<T extends string | null | undefined>(
   return getFilesStorage().getSignedUrl(key, 'get', {
     audience: 'browser',
     expiresIn: MODAL_IMAGE_URL_EXPIRY_SECONDS,
+    ...storageReadOverrides({ key }),
   });
 }
 

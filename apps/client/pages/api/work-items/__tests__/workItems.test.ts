@@ -45,8 +45,8 @@ const repo = vi.hoisted(() => ({
 }));
 vi.mock('@bike4mind/database', () => ({ workItemRepository: repo }));
 
-const verifyOrgAccess = vi.hoisted(() => vi.fn());
-vi.mock('@bike4mind/server-utils/utils/orgAccess', () => ({ verifyOrgAccess }));
+const verifyOrgPermission = vi.hoisted(() => vi.fn());
+vi.mock('@bike4mind/server-utils/utils/orgAccess', () => ({ verifyOrgPermission }));
 
 currentModule.name = 'collection';
 await import('@pages/api/work-items/index');
@@ -77,7 +77,7 @@ const item = (overrides: Record<string, unknown> = {}) => ({
 
 beforeEach(() => {
   vi.clearAllMocks();
-  verifyOrgAccess.mockResolvedValue(undefined);
+  verifyOrgPermission.mockResolvedValue(undefined);
 });
 
 describe('GET /api/work-items', () => {
@@ -131,7 +131,7 @@ describe('GET /api/work-items', () => {
   it('filters by organization without an org-access check', async () => {
     await call('collection', 'get', { query: { organizationId: 'org1' } }).result;
 
-    expect(verifyOrgAccess).not.toHaveBeenCalled();
+    expect(verifyOrgPermission).not.toHaveBeenCalled();
     expect(repo.listForUser).toHaveBeenCalledWith(
       'u1',
       { organizationId: 'org1' },
@@ -159,6 +159,22 @@ describe('POST /api/work-items', () => {
       dependencies: [],
     });
     expect(res._getStatusCode()).toBe(201);
+  });
+
+  it('gates org-scoped creation on the manageContent permission', async () => {
+    await call('collection', 'post', { body: { title: 'Ship it', organizationId: 'org1' } }).result;
+
+    expect(verifyOrgPermission).toHaveBeenCalledWith(expect.objectContaining({ id: 'u1' }), 'org1', 'manageContent');
+  });
+
+  it('does not create an org-scoped item when manageContent is refused', async () => {
+    const denied = new Error('Organization not found');
+    verifyOrgPermission.mockRejectedValueOnce(denied);
+
+    await expect(
+      call('collection', 'post', { body: { title: 'Ship it', organizationId: 'org1' } }).result
+    ).rejects.toBe(denied);
+    expect(repo.create).not.toHaveBeenCalled();
   });
 
   it('requires a title', async () => {
@@ -265,6 +281,26 @@ describe('PATCH /api/work-items/:id', () => {
     await call('item', 'patch', { query: { id: OID_A }, body: { title: 'Renamed' } }).result;
 
     expect(repo.updateForUser).toHaveBeenCalledWith(OID_A, 'u1', { title: 'Renamed' });
+  });
+
+  it('gates a supplied organizationId on manageContent before updating', async () => {
+    await call('item', 'patch', { query: { id: OID_A }, body: { organizationId: 'org1' } }).result;
+
+    expect(verifyOrgPermission).toHaveBeenCalledWith({ id: 'u1', isAdmin: false }, 'org1', 'manageContent');
+    expect(repo.updateForUser).toHaveBeenCalledWith(OID_A, 'u1', { organizationId: 'org1' });
+  });
+
+  it('does not update when manageContent on the supplied organizationId is refused', async () => {
+    const denied = new Error('Organization not found');
+    verifyOrgPermission.mockRejectedValueOnce(denied);
+
+    await expect(
+      call('item', 'patch', {
+        query: { id: OID_A },
+        body: { organizationId: 'org1', title: 'Renamed' },
+      }).result
+    ).rejects.toBe(denied);
+    expect(repo.updateForUser).not.toHaveBeenCalled();
   });
 
   // '' and null are the clearing signal; the repository turns a null into $unset.

@@ -23,7 +23,7 @@ import HTTPTypes
 /// 2. Make a first call: `GET /api/v1/me` with `Authorization: Bearer b4m_live_<key>`. It needs only the `me:read` scope, spends no credits, and returns your identity, plan tier and credit balance.
 /// 3. Read the rest of this page for the behaviour shared across endpoints: rate limits, credits, errors and async jobs.
 ///
-/// Endpoints are grouped by tag: **AI** (chat, completions, embeddings, agent runs, tools, quest polling), **Images**, **Audio**, **Videos**, **Music**, **Transcriptions**, **Sessions**, **Artifacts**, **Files**, **Projects**, **Agents**, **Data Lakes**, **Skills** and **Account**.
+/// Endpoints are grouped by tag: **AI** (chat, completions, embeddings, agent runs, tools, quest polling), **Images**, **Audio**, **Videos**, **Music**, **Transcriptions**, **Sessions**, **Artifacts**, **Files**, **Projects**, **Agents**, **Data Lakes**, **Data Lake Research**, **Skills** and **Account**.
 ///
 /// ## Authentication
 /// Send an API key as `Authorization: Bearer b4m_live_<key>` (canonical), `x-api-key: b4m_live_<key>` (legacy), or `Authorization: ApiKey b4m_live_<key>`. A JWT access token is also accepted in the `Authorization: Bearer` header.
@@ -92,6 +92,7 @@ import HTTPTypes
 /// - **Scene composition** (`POST /api/v1/scene-compositions`) returns `202`. Poll `GET /api/v1/scene-compositions/{id}` until `state` is `succeeded`, `failed`, `blocked` or `cancelled`.
 /// - **Briefs** (`POST /api/v1/briefs`) return `202`. Poll `GET /api/v1/briefs/{id}` until `status` is `ready` or `failed`.
 /// - **Brief replies** (`POST /api/v1/briefs/{id}/decisions/{decisionId}/reply`) return `202` with the `executionId` of the agent run your reply started. Poll `GET /api/v1/agent-executions/{id}` with it.
+/// - **Research runs** (`POST /api/v1/data-lakes/{id}/research/runs`) return `202`. Poll `GET /api/v1/data-lakes/{id}/research/runs/{run_id}` until `status` is `completed` or `failed`.
 /// - **File uploads** (`POST /api/v1/files`) return a presigned `upload_url`; after the `PUT`, poll `GET /api/v1/files/{id}` until `moderation_status` is `clean` before passing the id elsewhere.
 /// - **Audio** endpoints are synchronous and return the result directly. A text-to-speech (`POST /api/ai/tts`) or sound-effect (`POST /api/ai/sound-effects`) clip that outlasts the request answers `202` with its job resource instead; it cannot be polled yet, and unless `preview` was set the clip is saved to the file browser when it finishes.
 /// - **Transcriptions** (`POST /api/v1/transcriptions`) are synchronous too: after the upload, one call returns the text. Long audio can outlast the request timeout and fail with a `504`; see that endpoint for the limit.

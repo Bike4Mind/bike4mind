@@ -22,6 +22,7 @@ import {
   Database,
   FileText,
   Fingerprint,
+  ChartCandlestick,
   Gauge,
   GraduationCap,
   Gavel,
@@ -155,6 +156,7 @@ export enum AdminTab {
   Roles = 80,
   AccessReview = 81,
   SpendExplorer = 82,
+  SpendMonitor = 83,
 }
 
 /**
@@ -297,6 +299,7 @@ export const SIDEBAR_SECTIONS: SidebarSection[] = [
         label: 'Spend explorer',
         testid: 'admin-spend-explorer-btn',
       },
+      { Icon: ChartCandlestick, tab: AdminTab.SpendMonitor, label: 'Spend monitor', testid: 'admin-spend-monitor-btn' },
       { Icon: CreditCard, tab: AdminTab.Subscriptions, label: 'Subscriptions', badge: 'newSubscriptions' },
       { Icon: Tag, tab: AdminTab.GrowthPricing, label: 'Pricing', testid: 'admin-growth-pricing-btn' },
     ],
@@ -393,8 +396,13 @@ export const SIDEBAR_SECTIONS: SidebarSection[] = [
       },
       { Icon: Gauge, tab: AdminTab.RateLimits, label: 'Rate limits', testid: 'admin-rate-limits-btn' },
       { Icon: Hash, tab: AdminTab.SlackWorkspaces, label: 'Slack workspaces' },
-      { Icon: GitBranch, tab: AdminTab.GitHubConnection, label: 'GitHub', testid: 'admin-github-connection-btn' },
-      { Icon: Webhook, tab: AdminTab.WebhookAuditLogs, label: 'Webhook logs' },
+      {
+        Icon: GitBranch,
+        tab: AdminTab.GitHubConnection,
+        label: 'GitHub connection',
+        testid: 'admin-github-connection-btn',
+      },
+      { Icon: Webhook, tab: AdminTab.WebhookAuditLogs, label: 'Webhook audit logs', aliases: ['Webhook logs'] },
       { Icon: MessagesSquare, tab: AdminTab.SlackMetrics, label: 'Slack metrics' },
       {
         Icon: TrendingUp,

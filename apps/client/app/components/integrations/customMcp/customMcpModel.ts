@@ -1,9 +1,10 @@
-import type {
-  IMcpConnectionPublic,
-  IntegrationId,
-  McpConnectionEffectiveStatus,
-  McpConnectionListEntry,
-  McpToolApprovalMode,
+import {
+  isReadOnlyMcpConnectionTool,
+  type IMcpConnectionPublic,
+  type IntegrationId,
+  type McpConnectionEffectiveStatus,
+  type McpConnectionListEntry,
+  type McpToolApprovalMode,
 } from '@bike4mind/common';
 import type { McpToolReviewEntry } from '@client/app/hooks/data/mcpConnections';
 import type { ConnectionState } from '../galleryModel';
@@ -36,9 +37,62 @@ export const connectionChip = (connection: IMcpConnectionPublic) =>
 export const pendingReviewCount = (connection: Pick<IMcpConnectionPublic, 'tools'>): number =>
   connection.tools.filter(tool => tool.state === 'pending_review').length;
 
+const isOfferedTool = (tool: Pick<McpConnectionTool, 'enabled' | 'state'>) => tool.enabled && tool.state === 'active';
+
 /** Tools the model is offered: enabled and reviewed. */
 export const offeredToolCount = (connection: Pick<IMcpConnectionPublic, 'tools'>): number =>
-  connection.tools.filter(tool => tool.enabled && tool.state === 'active').length;
+  connection.tools.filter(isOfferedTool).length;
+
+/**
+ * What a connector's tool list shows its user: the tools offered to them, and for their own
+ * connector how many others it has (switched off or waiting for review). A platform connector's
+ * member view carries only what it offers, so it is listed as served.
+ */
+export const connectorToolsOffered = (
+  connection: Pick<McpConnectionListEntry, 'ownerType' | 'tools'>
+): { tools: McpConnectionTool[]; otherCount: number } => {
+  if (connection.ownerType === 'platform') return { tools: connection.tools, otherCount: 0 };
+  const tools = connection.tools.filter(isOfferedTool);
+  return { tools, otherCount: connection.tools.length - tools.length };
+};
+
+/** The tool's display title, when the server gave one. */
+export const toolTitle = (tool: Pick<McpConnectionTool, 'title' | 'annotations'>): string | undefined =>
+  tool.title || tool.annotations?.title || undefined;
+
+/**
+ * The server's hints as short labels. Read and Write follow the tool review (same rule, same
+ * words); the other hints show only when declared true, and on a read-only tool only open world.
+ * Every label is the server's own claim, and the wording says so where it asserts safety.
+ */
+export const toolHintLabels = (
+  tool: Pick<McpConnectionTool, 'annotations'>
+): { label: string; color: 'neutral' | 'warning' }[] => {
+  const hints = tool.annotations ?? {};
+  const readOnly = isReadOnlyMcpConnectionTool(tool);
+  return [
+    readOnly ? { label: 'Read', color: 'neutral' as const } : { label: 'Write', color: 'warning' as const },
+    ...(!readOnly && hints.destructiveHint === true
+      ? [{ label: 'May delete or overwrite', color: 'neutral' as const }]
+      : []),
+    ...(!readOnly && hints.idempotentHint === true
+      ? [{ label: 'Server says it is safe to repeat', color: 'neutral' as const }]
+      : []),
+    ...(hints.openWorldHint === true ? [{ label: 'May reach other services', color: 'neutral' as const }] : []),
+  ];
+};
+
+/** A connector's tool list gets a filter field only past this many tools. */
+export const TOOL_FILTER_THRESHOLD = 10;
+
+/** Tools whose title, name or description contains the query, ignoring case. */
+export const filterConnectorTools = (tools: readonly McpConnectionTool[], query: string): McpConnectionTool[] => {
+  const needle = query.trim().toLowerCase();
+  if (!needle) return [...tools];
+  return tools.filter(tool =>
+    [toolTitle(tool), tool.name, tool.description].some(text => text?.toLowerCase().includes(needle))
+  );
+};
 
 /**
  * Connectors the composer can switch per chat: connected, switched on (in Integrations, or by an
@@ -47,6 +101,40 @@ export const offeredToolCount = (connection: Pick<IMcpConnectionPublic, 'tools'>
  */
 export const composerConnections = (connections: readonly McpConnectionListEntry[]): McpConnectionListEntry[] =>
   connections.filter(c => c.status === 'connected' && c.enabled && offeredToolCount(c) > 0);
+
+/**
+ * What a Tools-menu row reads under the connector's name: the description with a host line under
+ * it, else the host line alone. The host stays visible either way.
+ */
+export const connectionMenuText = (
+  connection: Pick<McpConnectionListEntry, 'ownerType' | 'urlHost' | 'description'>
+): { description: string; detail?: string } => {
+  const platform = connection.ownerType === 'platform';
+  if (!connection.description) {
+    return {
+      description: platform
+        ? `Connector set up by an admin on ${connection.urlHost}`
+        : `Custom connector on ${connection.urlHost}`,
+    };
+  }
+  return {
+    description: connection.description,
+    detail: platform ? `Set up by an admin on ${connection.urlHost}` : `Custom connector on ${connection.urlHost}`,
+  };
+};
+
+/** The trimmed fields an Edit details save changes; an emptied description is sent as '' to clear it. */
+export const connectionDetailsPatch = (
+  connection: Pick<IMcpConnectionPublic, 'displayName' | 'description'>,
+  draft: { displayName: string; description: string }
+): { displayName?: string; description?: string } => {
+  const displayName = draft.displayName.trim();
+  const description = draft.description.trim();
+  return {
+    ...(displayName !== connection.displayName ? { displayName } : {}),
+    ...(description !== (connection.description ?? '') ? { description } : {}),
+  };
+};
 
 /** The Tools-menu choices that decide which connectors a chat is offered (see LLMContext). */
 export interface ComposerConnectionChoices {

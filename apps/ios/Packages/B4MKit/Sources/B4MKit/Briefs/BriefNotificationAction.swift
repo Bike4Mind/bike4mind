@@ -1,18 +1,21 @@
 import Foundation
 import UserNotifications
 
-/// The notification categories the server selects with `aps.category` on a `brief_ready` push whose brief holds
-/// exactly one decision. Identifiers must stay in sync with BRIEF_ACTION_CATEGORIES in
-/// apps/workers/src/events/sendPush.ts.
+/// The notification categories the server selects with `aps.category` on a `brief_ready` push: approve/deny or
+/// reply when the brief holds exactly one decision, Listen alone otherwise. Identifiers must stay in sync with
+/// BRIEF_ACTION_CATEGORIES and BRIEF_LISTEN_CATEGORY in apps/workers/src/events/sendPush.ts.
 public enum BriefNotificationCategory {
   public static let approvalIdentifier = "brief_ready_approval"
   public static let replyIdentifier = "brief_ready_reply"
+  /// Sent for a brief with no single answerable decision, so the Listen button is still offered.
+  public static let listenIdentifier = "brief_ready_listen"
 
   /// Distinct from the `approval_needed` buttons, so ApprovalNotificationHandler never claims a brief action.
   public enum Action: String, Sendable {
     case approve = "brief_approve"
     case deny = "brief_deny"
     case reply = "brief_reply"
+    case listen = "brief_listen"
   }
 
   /// Same unlock rules as ApprovalNotificationCategory: approve and reply spend tools and credits, deny only stops.
@@ -23,10 +26,13 @@ public enum BriefNotificationCategory {
     let reply = UNTextInputNotificationAction(
       identifier: Action.reply.rawValue, title: "Reply", options: [.authenticationRequired],
       textInputButtonTitle: "Send", textInputPlaceholder: "Your reply")
+    let listen = UNNotificationAction(identifier: Action.listen.rawValue, title: "Listen", options: [.foreground])
     return [
       UNNotificationCategory(
-        identifier: approvalIdentifier, actions: [approve, deny], intentIdentifiers: [], options: []),
-      UNNotificationCategory(identifier: replyIdentifier, actions: [reply], intentIdentifiers: [], options: []),
+        identifier: approvalIdentifier, actions: [approve, deny, listen], intentIdentifiers: [], options: []),
+      UNNotificationCategory(
+        identifier: replyIdentifier, actions: [reply, listen], intentIdentifiers: [], options: []),
+      UNNotificationCategory(identifier: listenIdentifier, actions: [listen], intentIdentifiers: [], options: []),
     ]
   }
 }
@@ -38,11 +44,13 @@ public enum BriefNotificationOutcome: Equatable, Sendable {
   case handled
   /// Nothing could be answered from the notification; the caller should open the brief.
   case openBrief
+  /// The user asked to hear the brief; the caller opens voice mode reading it.
+  case listen(briefID: String)
 }
 
-/// Answers a brief's single decision from a notification button. The push only names the brief: the handler
-/// re-fetches it with the user's token and acts only when exactly one decision is still pending, so a stale
-/// notification never answers something that moved on.
+/// Handles a brief notification's buttons. Listen only names the brief for voice mode, with no fetch. The
+/// others answer the brief's single decision: the handler re-fetches it with the user's token and acts only
+/// when exactly one decision is still pending, so a stale notification never answers something that moved on.
 @MainActor
 public final class BriefNotificationHandler {
   private let briefs: any BriefAPI
@@ -62,6 +70,9 @@ public final class BriefNotificationHandler {
     -> BriefNotificationOutcome
   {
     guard let action = BriefNotificationCategory.Action(rawValue: actionIdentifier) else { return .notHandled }
+    if action == .listen {
+      return payload.briefID.map { .listen(briefID: $0) } ?? .openBrief
+    }
     guard let briefID = payload.briefID else {
       await feedback.post(title: Self.failureTitle(for: action), body: PendingActionFailure.unavailable.message)
       return .handled
@@ -83,6 +94,8 @@ public final class BriefNotificationHandler {
     case .reply:
       guard let question = decision.question else { return .openBrief }
       return await reply(question, briefID: brief.id, decisionID: decision.id, text: replyText ?? "")
+    case .listen:
+      return .listen(briefID: brief.id)
     }
   }
 
@@ -138,6 +151,7 @@ public final class BriefNotificationHandler {
     case .approve: ApprovalNotificationHandler.failureTitle(for: .approve)
     case .deny: ApprovalNotificationHandler.failureTitle(for: .deny)
     case .reply: "Couldn't send your reply"
+    case .listen: "Couldn't open your brief"
     }
   }
 
