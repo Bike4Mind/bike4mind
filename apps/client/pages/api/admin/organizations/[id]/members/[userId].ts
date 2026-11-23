@@ -1,10 +1,11 @@
 import type { Request } from 'express';
 import { z } from 'zod';
 import {
+  ASSIGNABLE_ORG_ROLES,
   BadRequestError,
   NotFoundError,
   OrganizationEvents,
-  orgAclRowConfersMembership,
+  orgHoldsMemberRow,
   organizationMemberRole,
 } from '@bike4mind/common';
 import {
@@ -29,7 +30,13 @@ import { reportAndNotifyKeptPersonalLakeShares } from '@server/utils/keptPersona
 import { refreshSeatEntitlements } from '@server/organizations/refreshSeatEntitlements';
 import { assertFullAdminForMembership } from '@server/organizations/adminMembership';
 
-const RoleSchema = z.object({ role: z.enum(['manager', 'member']) });
+const ROLE_LABELS: Record<(typeof ASSIGNABLE_ORG_ROLES)[number], string> = {
+  manager: 'manager',
+  billingManager: 'billing manager',
+  member: 'member',
+};
+
+const RoleSchema = z.object({ role: z.enum(ASSIGNABLE_ORG_ROLES) });
 
 const readParams = (req: Request) => {
   const { id, userId } = req.query;
@@ -47,7 +54,7 @@ const loadMembership = async (organizationId: string, userId: string) => {
   return { organization, role };
 };
 
-/** Removes a member, or changes them between member and manager, from the admin user profile. */
+/** Removes a member, or changes their role (manager, billing manager, member), from the admin user profile. */
 const handler = adminApi({
   auth: 'jwtOnly',
   adminPermissions: { DELETE: 'users:moderate', PATCH: 'users:moderate' },
@@ -107,26 +114,22 @@ const handler = adminApi({
     assertFullAdminForMembership(req.user);
     const { organizationId, userId } = readParams(req);
     const parsed = RoleSchema.safeParse(req.body);
-    if (!parsed.success) throw new BadRequestError('Role must be manager or member');
+    if (!parsed.success) throw new BadRequestError('Role must be manager, billingManager or member');
     const { role: next } = parsed.data;
     const reason = parseAdminActionReason((req.body as { reason?: unknown }).reason);
 
     await withTransaction(async () => {
       const { organization, role } = await loadMembership(organizationId, userId);
       if (role === 'owner') throw new BadRequestError("The owner's role can't be changed.");
-      if (role === next) throw new BadRequestError(`They are already a ${next} of ${organization.name}.`);
-      // Same appointment rule as organizations/[id]/admins.ts: a manager needs a row that confers membership.
-      const row = organization.users.find(member => member.userId === userId);
-      if (next === 'manager' && !(row && orgAclRowConfersMembership(row))) {
-        throw new BadRequestError('Only a member with read access can be made a manager.');
+      if (role === next) throw new BadRequestError(`They are already a ${ROLE_LABELS[next]} of ${organization.name}.`);
+      if (next !== 'member' && !orgHoldsMemberRow(organization, userId)) {
+        throw new BadRequestError('Only a member with read access can be given that role.');
       }
 
-      const adminUserIds =
-        next === 'manager'
-          ? [...(organization.adminUserIds ?? []), userId]
-          : (organization.adminUserIds ?? []).filter(id => id !== userId);
-      const billingManagerUserIds = (organization.billingManagerUserIds ?? []).filter(id => id !== userId);
-      await organizationRepository.update({ id: organizationId, adminUserIds, billingManagerUserIds });
+      // setMemberRole keeps the role lists disjoint; it joins this transaction through mongoose's ALS.
+      if (!(await organizationRepository.setMemberRole(organizationId, userId, next))) {
+        throw new BadRequestError('Only a member with read access can be given that role.');
+      }
       await recordAdminActionFromRequest(req, {
         action: 'org.member.role_changed',
         target: await userAuditTarget(userId),
