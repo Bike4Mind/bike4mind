@@ -148,6 +148,11 @@ async function loadIdempotentGrant(
   return { creditHolder, creditTransactionId: undefined };
 }
 
+/**
+ * Add credits to a User, Organization or Agent and write the matching CreditTransaction row in one
+ * transaction: the caller's when one is open, else its own. Returns the holder and the id of the row
+ * it wrote (undefined on an idempotent replay).
+ */
 export async function addCreditsWithLedgerRow(
   parameters: AddCreditsParameters,
   adapters: AddCreditsAdapters
