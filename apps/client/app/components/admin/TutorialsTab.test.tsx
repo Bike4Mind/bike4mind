@@ -102,7 +102,7 @@ describe('TutorialsTab', () => {
     renderTab();
     expect(screen.getByTestId('tutorials-core-section')).toBeInTheDocument();
     expect(screen.getByTestId('tutorials-owners-error')).toHaveTextContent('Could not load');
-    fireEvent.click(screen.getByTestId('tutorials-owners-retry'));
+    fireEvent.click(screen.getByTestId('admin-error-retry-btn'));
     expect(refetch).toHaveBeenCalledTimes(1);
   });
 });

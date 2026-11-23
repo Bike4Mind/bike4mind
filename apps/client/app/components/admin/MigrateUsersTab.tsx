@@ -21,6 +21,8 @@ import React, { ReactNode, useMemo, useState } from 'react';
 import { toast } from 'sonner';
 import { buildMigratedUsersCsv } from '@client/app/utils/migratedUsersCsv';
 import ContextHelpButton from '@client/app/components/help/ContextHelpButton';
+import { AdminPageHeader } from './shared/AdminPageHeader';
+import { ADMIN_REGION_GAP } from './shared/adminStyles';
 import SingleOrganizationSelector from '../common/SingleOrganizationSelector';
 
 const MigrateUsersTab: React.FC = () => {
@@ -118,12 +120,13 @@ const MigrateUsersTab: React.FC = () => {
   const secondOption = false;
 
   return (
-    <Sheet sx={{ overflow: 'hidden', width: '100%' }}>
+    <Stack spacing={ADMIN_REGION_GAP}>
+      <AdminPageHeader
+        title="Migration"
+        description="Create accounts in bulk from a list of names and emails, optionally into an organization."
+        actions={<ContextHelpButton helpId="admin/user-migration" tooltipText="User migration help" />}
+      />
       <Stack spacing={2}>
-        <Stack direction="row" alignItems="center" spacing={1}>
-          <Typography level="h1">Migrate Users</Typography>
-          <ContextHelpButton helpId="admin/user-migration" tooltipText="User Migration Help" />
-        </Stack>
         <FormControl>
           <Checkbox
             label="Send Welcome Email to Users"
@@ -275,7 +278,7 @@ const MigrateUsersTab: React.FC = () => {
           </Stack>
         </Sheet>
       </Modal>
-    </Sheet>
+    </Stack>
   );
 };
 

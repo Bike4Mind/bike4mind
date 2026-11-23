@@ -5,8 +5,9 @@ import { CORE_TUTORIALS_API_BASE } from '@client/app/components/tutorial/Tutoria
 import TutorialDraftsCard from '@client/app/components/tutorial/admin/TutorialDraftsCard';
 import TutorialModulesCard from '@client/app/components/tutorial/admin/TutorialModulesCard';
 import TutorialsSwitchCard from '@client/app/components/tutorial/admin/TutorialsSwitchCard';
-import { SectionCard } from './shared';
+import { AdminPageHeader, ErrorState, LoadingState, SectionCard } from './shared';
 import { useTutorialOwners, useTutorialOwnerSummary } from '@client/app/hooks/tutorials/useTutorialOwners';
+import { ADMIN_REGION_GAP } from './shared/adminStyles';
 
 const CORE_OWNER = 'core';
 
@@ -76,7 +77,11 @@ export const TutorialsTab: React.FC = () => {
   const owners = useTutorialOwners();
 
   return (
-    <Stack gap={3} data-testid="tutorials-tab">
+    <Stack gap={ADMIN_REGION_GAP} data-testid="tutorials-tab">
+      <AdminPageHeader
+        title="Tutorials"
+        description="Turn tutorials on or off, and see the tutorials each installed feature adds."
+      />
       <Stack gap={1.5} data-testid="tutorials-core-section">
         <Typography level="title-lg">Core</Typography>
         <TutorialsSwitchCard apiBase={CORE_TUTORIALS_API_BASE} />
@@ -84,21 +89,15 @@ export const TutorialsTab: React.FC = () => {
         <TutorialDraftsCard apiBase={CORE_TUTORIALS_API_BASE} owner={CORE_OWNER} />
       </Stack>
       {owners.isLoading ? (
-        <CircularProgress size="sm" />
+        <LoadingState label="Loading tutorials from installed features" testId="tutorials-owners-loading" />
       ) : owners.isError ? (
-        <Stack direction="row" gap={1} alignItems="center" data-testid="tutorials-owners-error">
-          <Typography level="body-sm" color="danger">
-            Could not load
-          </Typography>
-          <Button
-            size="sm"
-            variant="outlined"
-            onClick={() => void owners.refetch()}
-            data-testid="tutorials-owners-retry"
-          >
-            Retry
-          </Button>
-        </Stack>
+        <Box data-testid="tutorials-owners-error">
+          <ErrorState
+            message="Could not load the tutorials from installed features."
+            onRetry={() => void owners.refetch()}
+            retrying={owners.isFetching}
+          />
+        </Box>
       ) : (
         (owners.data ?? []).map(owner => <TutorialOwnerSection key={owner.owner} owner={owner} />)
       )}

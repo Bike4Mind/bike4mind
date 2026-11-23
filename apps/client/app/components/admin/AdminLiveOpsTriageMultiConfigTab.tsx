@@ -77,6 +77,10 @@ import ContextHelpButton from '@client/app/components/help/ContextHelpButton';
 
 // Template variable docs
 import { TEMPLATE_VARIABLE_DOCS } from '@bike4mind/server-utils/services/liveopsTriagePrompt';
+import { AdminPageHeader } from './shared/AdminPageHeader';
+import { ErrorState } from './shared/ErrorState';
+import { LoadingState } from './shared/LoadingState';
+import { ADMIN_REGION_GAP } from './shared/adminStyles';
 
 // Types
 interface LiveopsTriageConfig {
@@ -275,6 +279,8 @@ export const AdminLiveOpsTriageMultiConfigTab: React.FC = () => {
     data: configs,
     isLoading: configsLoading,
     error: configsError,
+    refetch: refetchConfigs,
+    isFetching: configsFetching,
   } = useQuery({
     queryKey: ['liveopsTriageConfigs'],
     queryFn: async () => {
@@ -587,24 +593,38 @@ export const AdminLiveOpsTriageMultiConfigTab: React.FC = () => {
   const activeRuns = runsData?.runs.filter(r => r.status === 'queued' || r.status === 'processing') || [];
   const recentRuns = runsData?.runs.filter(r => r.status === 'complete' || r.status === 'failed').slice(0, 5) || [];
 
+  const header = (
+    <AdminPageHeader
+      title="LiveOps triage"
+      description="Triage production alerts from Slack channels into GitHub or Jira issues, one configuration per channel."
+    />
+  );
+
   if (configsLoading) {
     return (
-      <Box sx={{ display: 'flex', justifyContent: 'center' }}>
-        <CircularProgress />
+      <Box sx={{ display: 'flex', flexDirection: 'column', gap: ADMIN_REGION_GAP }}>
+        {header}
+        <LoadingState label="Loading configurations" />
       </Box>
     );
   }
 
   if (configsError) {
     return (
-      <Alert color="danger" variant="outlined">
-        Failed to load configurations. Please try again.
-      </Alert>
+      <Box sx={{ display: 'flex', flexDirection: 'column', gap: ADMIN_REGION_GAP }}>
+        {header}
+        <ErrorState
+          message="The triage configurations failed to load."
+          onRetry={() => void refetchConfigs()}
+          retrying={configsFetching}
+        />
+      </Box>
     );
   }
 
   return (
-    <Box sx={{ display: 'flex', flexDirection: 'column', height: '100%', gap: 2 }}>
+    <Box sx={{ display: 'flex', flexDirection: 'column', height: '100%', gap: ADMIN_REGION_GAP }}>
+      {header}
       {/* Active Runs Panel */}
       <Card variant="outlined" sx={{ p: 2 }}>
         <Box
