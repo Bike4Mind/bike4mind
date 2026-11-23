@@ -319,6 +319,37 @@ describe('the composer command menu', () => {
   });
 });
 
+describe('IME composition', () => {
+  function pressComposing(key: string): void {
+    act(() => {
+      input().dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true, isComposing: true }));
+    });
+  }
+
+  // Enter while an IME is composing confirms the candidate word; it must not send the draft.
+  it('does not send on an Enter that confirms a composition', () => {
+    const send = vi.fn();
+    mount({ onSend: send });
+    type('konnichiwa');
+    pressComposing('Enter');
+
+    expect(send).not.toHaveBeenCalled();
+    expect(input().value).toBe('konnichiwa');
+
+    press('Enter');
+    expect(send).toHaveBeenCalledWith('konnichiwa');
+  });
+
+  it('does not stop a live turn on an Escape that cancels a composition', () => {
+    const stop = vi.fn();
+    mount({ onStop: stop, streaming: true });
+    type('kanji');
+    pressComposing('Escape');
+
+    expect(stop).not.toHaveBeenCalled();
+  });
+});
+
 describe('skills mid-sentence', () => {
   const skills = {
     skills: [

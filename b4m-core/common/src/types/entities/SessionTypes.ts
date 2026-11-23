@@ -315,6 +315,9 @@ export interface IChatHistoryItem {
   /** Agent-mode sound effects this run has claimed; the per-run cap's counter (QuestRepository.claimAgentGenerationSlot). */
   agentSoundEffectsClaimed?: number;
 
+  /** save_content_to_data_lake saves this turn has claimed; the per-turn cap's counter (QuestRepository.claimLakeSaveSlot). */
+  lakeSaveCount?: number;
+
   /** TODO unclear purpose: Possibly out-of-band data such as link to website? */
   oob?: string;
   promptMeta?: PromptMeta;
