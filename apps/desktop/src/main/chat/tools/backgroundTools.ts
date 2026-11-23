@@ -1,6 +1,6 @@
 import type { BackgroundProcessInfo } from '@shared/chat';
 import { shellCommandRan } from './sessionScripts';
-import { doubleWrapRefusal, refusalReason, resolveCwd, shellApproval } from './shellTools';
+import { doubleWrapRefusal, refusalReason, resolveCwd, shellApproval, SHELL_DESCRIPTION_HINT } from './shellTools';
 import {
   capOutput,
   optionalNumber,
@@ -124,6 +124,7 @@ export const bashBackground: ToolDefinition = {
             'more likely to interrupt the user for approval.',
           ].join(' '),
         },
+        description: { type: 'string', description: SHELL_DESCRIPTION_HINT },
       },
       required: ['command'],
       additionalProperties: false,
