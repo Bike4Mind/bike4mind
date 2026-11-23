@@ -156,9 +156,9 @@ function closedAfter(text: string, from: number, ticks: number): boolean {
  * span. The `/` and `@` menus stay shut there, since a path or a decorator in code is not a
  * request for a skill or a session.
  */
-export function caretInCode(text: string, caret: number): boolean {
+export function caretInCode(text: string, caret: number, ranges: CodeRange[] = codeRanges(text)): boolean {
   if (caretInFencedBlock(text, caret)) return true;
-  return codeRanges(text).some(range => range.kind === 'inline' && range.start < caret && caret < range.end);
+  return ranges.some(range => range.kind === 'inline' && range.start < caret && caret < range.end);
 }
 
 /** Replace `start..end` with `insert`, then select `selectionStart..selectionEnd`. */
@@ -261,7 +261,7 @@ export function fenceKeyAction(event: KeyInput, draft: DraftInput, tabReleased: 
 
   if (event.key === 'Enter') {
     if (event.metaKey || event.ctrlKey) return { kind: 'submit' };
-    if (event.shiftKey || event.altKey) return { kind: 'default' };
+    if (event.shiftKey) return { kind: 'default' };
     return { kind: 'edit', edit: enterInFence(draft, open) };
   }
 

@@ -440,9 +440,9 @@ export function Composer({
   const [mentions, setMentions] = useState<RecordedMention[]>([]);
 
   // A `/path` or an `@decorator` in code is code, not a request for a skill or a session.
-  const inCode = caretInCode(text, caret);
-  const inBlock = caretInFencedBlock(text, caret);
   const code = useMemo(() => codeRanges(text), [text]);
+  const inCode = caretInCode(text, caret, code);
+  const inBlock = caretInFencedBlock(text, caret);
   const token = (skills || onRunCommand) && !disabled && !inCode ? skillQuery(text, caret) : null;
   const query = token?.query ?? null;
   const offerCommands = !!onRunCommand && !!token?.wholeDraft;
@@ -598,7 +598,8 @@ export function Composer({
     if (event.nativeEvent.isComposing) return;
     // Escape then Tab leaves a fenced block, where Tab otherwise indents; see fenceKeyAction.
     const tabReleased = escapedLast.current;
-    escapedLast.current = event.key === 'Escape';
+    // A modifier keydown (the Shift before Shift+Tab) must not cancel the Escape-then-Tab release.
+    if (!['Shift', 'Control', 'Alt', 'Meta'].includes(event.key)) escapedLast.current = event.key === 'Escape';
 
     if (event.key === 'Escape') {
       const escape = composerEscapeAction({ pickerOpen: pickerOpen || mentionOpen, streaming });
@@ -839,7 +840,7 @@ export function Composer({
             data-testid="composer-code-hint"
             sx={{ position: 'absolute', bottom: '100%', right: 0, pointerEvents: 'none' }}
           >
-            {isMac()
+            {isMac
               ? '\u2318Enter to send \u00b7 Esc then Tab to leave'
               : 'Ctrl+Enter to send \u00b7 Esc then Tab to leave'}
           </Typography>

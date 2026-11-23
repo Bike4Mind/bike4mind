@@ -409,6 +409,50 @@ describe('markdown code in the composer', () => {
     expect(host?.querySelector('[data-code-kind="inline"]')?.textContent).toBe('`ls`');
   });
 
+  it('indents on Tab inside a block and outdents on Shift+Tab', () => {
+    mount();
+    type('```\nfoo');
+    pressWith('Tab', {});
+    expect(input().value).toBe('```\nfoo  ');
+    type('```\n  foo');
+    pressWith('Tab', { shiftKey: true });
+    expect(input().value).toBe('```\nfoo');
+  });
+
+  it('leaves the block on Escape then Shift+Tab, even with the Shift keydown between', () => {
+    mount();
+    type('```\n  foo');
+    pressWith('Escape', {});
+    pressWith('Shift', { shiftKey: true });
+    const tab = new KeyboardEvent('keydown', { key: 'Tab', shiftKey: true, bubbles: true, cancelable: true });
+    act(() => {
+      input().dispatchEvent(tab);
+    });
+
+    expect(tab.defaultPrevented).toBe(false);
+    expect(input().value).toBe('```\n  foo');
+  });
+
+  it('does not swallow Tab outside a block', () => {
+    mount();
+    type('plain');
+    const tab = new KeyboardEvent('keydown', { key: 'Tab', bubbles: true, cancelable: true });
+    act(() => {
+      input().dispatchEvent(tab);
+    });
+
+    expect(tab.defaultPrevented).toBe(false);
+  });
+
+  it('does not send on Alt+Enter inside an open block', () => {
+    const send = vi.fn();
+    mount({ onSend: send });
+    type('```\nfoo');
+    pressWith('Enter', { altKey: true });
+
+    expect(send).not.toHaveBeenCalled();
+  });
+
   it('keeps the command menu shut for a slash inside code', () => {
     mount({ onRunCommand: () => {} });
     type('```\n/');
