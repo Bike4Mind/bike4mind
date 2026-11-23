@@ -2,7 +2,7 @@ import { randomInt } from 'crypto';
 import type { Request } from 'express';
 import { z } from 'zod';
 import { inboxAliasKey, requireEnv, settingsMap } from '@bike4mind/common';
-import { adminSettingsRepository, User } from '@bike4mind/database';
+import { adminSettingsRepository, User, withTransaction } from '@bike4mind/database';
 import { Logger } from '@bike4mind/observability';
 import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import {
@@ -107,6 +107,10 @@ export async function getOrCreateReferralCode(userId: string): Promise<string> {
       if (!isDuplicateKeyError(error)) throw error;
     }
   }
+  // The final attempt has no next loop iteration to read a successful or concurrent winner.
+  const winner = await User.findById(userId).select('referralCode').lean<{ referralCode?: string | null }>();
+  if (!winner) throw new Error('User not found');
+  if (winner.referralCode) return winner.referralCode;
   throw new Error('Could not mint a unique referral code');
 }
 
@@ -149,33 +153,50 @@ async function decide(code: string, userId: string, now: Date): Promise<ShareLin
   );
   if (!(cap > 0)) return 'disabled';
 
-  const [referrer, account] = await Promise.all([
-    User.findOne({ referralCode: code }).select(REFERRER_FIELDS).lean<Referrer>(),
-    User.findById(userId).select('email signupMeta.ip referredByUserId').lean<NewAccount>(),
-  ]);
-  if (!referrer || !account) return 'unknown_code';
-  const referrerId = referrer._id.toString();
-  if (referrerId === userId) return 'own_account';
-  if (account.referredByUserId) return 'already_referred';
+  return withTransaction<ShareLinkOutcome>(async session => {
+    const referrer = await User.findOne({ referralCode: code })
+      .select(REFERRER_FIELDS)
+      .session(session)
+      .lean<Referrer>();
+    const account = await User.findById(userId)
+      .select('email signupMeta.ip referredByUserId')
+      .session(session)
+      .lean<NewAccount>();
+    if (!referrer || !account) return 'unknown_code';
+    const referrerId = referrer._id.toString();
+    if (referrerId === userId) return 'own_account';
+    if (account.referredByUserId) return 'already_referred';
 
-  // The bar the email-invite flow sets for senders (pages/api/reg-invites/refer.ts), plus the reward gate.
-  const referrerVerified = referrer.emailVerified === true || (referrer.authProviders?.length ?? 0) > 0;
-  if (!referrerVerified || isBlockedInviter(referrer)) return 'referrer_ineligible';
-  if (sameInbox(account.email, referrer.email)) return 'own_account';
-  if (sharesReferrerNetwork(account, referrer)) return 'shared_network';
+    // The bar the email-invite flow sets for senders (pages/api/reg-invites/refer.ts), plus the reward gate.
+    const referrerVerified = referrer.emailVerified === true || (referrer.authProviders?.length ?? 0) > 0;
+    if (!referrerVerified || isBlockedInviter(referrer)) return 'referrer_ineligible';
+    if (sameInbox(account.email, referrer.email)) return 'own_account';
+    if (sharesReferrerNetwork(account, referrer)) return 'shared_network';
 
-  const recent = await User.countDocuments({
-    referredByUserId: referrerId,
-    referredViaLinkAt: { $gte: new Date(now.getTime() - CAP_WINDOW_DAYS * DAY_MS) },
+    // Serialize the rolling count and attribution across different new-account documents.
+    // A retry re-reads eligibility and the count; the revision write must actually change the parent.
+    const locked = await User.updateOne(
+      { _id: referrerId, 'deletion.purgeStartedAt': null },
+      { $inc: { __v: 1 } },
+      { session, timestamps: false, runValidators: true }
+    );
+    if (locked.matchedCount !== 1) return 'referrer_ineligible';
+    const recent = await User.countDocuments(
+      {
+        referredByUserId: referrerId,
+        referredViaLinkAt: { $gte: new Date(now.getTime() - CAP_WINDOW_DAYS * DAY_MS) },
+      },
+      { session }
+    );
+    if (recent >= cap) return 'monthly_cap';
+
+    const write = await User.updateOne(
+      { _id: userId, referredByUserId: null },
+      { $set: { referredByUserId: referrerId, referredViaLinkAt: now } },
+      { runValidators: true, session }
+    );
+    return write.modifiedCount === 1 ? 'credited' : 'already_referred';
   });
-  if (recent >= cap) return 'monthly_cap';
-
-  const write = await User.updateOne(
-    { _id: userId, referredByUserId: null },
-    { $set: { referredByUserId: referrerId, referredViaLinkAt: now } },
-    { runValidators: true }
-  );
-  return write.modifiedCount === 1 ? 'credited' : 'already_referred';
 }
 
 /**
@@ -185,6 +206,7 @@ async function decide(code: string, userId: string, now: Date): Promise<ShareLin
  */
 export async function creditShareLinkSignup(input: {
   req: Pick<Request, 'headers'>;
+  res: CookieResponse;
   userId: string;
   method: string;
   /** Test personas are still credited but stay out of product analytics. */
@@ -195,6 +217,8 @@ export async function creditShareLinkSignup(input: {
   if (!code) return null;
   let outcome: ShareLinkOutcome;
   try {
+    // This completed signup consumes its valid cookie even if attribution cannot be stored.
+    clearReferralCookie(input.res);
     outcome = await decide(code, input.userId, input.now ?? new Date());
   } catch (error) {
     Logger.warn('[referral] share link signup was not credited', {

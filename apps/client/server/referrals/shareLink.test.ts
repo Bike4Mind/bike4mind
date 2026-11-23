@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { createResponse } from 'node-mocks-http';
 
 const m = vi.hoisted(() => ({
   findById: vi.fn(),
@@ -7,10 +8,12 @@ const m = vi.hoisted(() => ({
   countDocuments: vi.fn(),
   getSettingsMap: vi.fn(),
   emit: vi.fn(),
+  session: { kind: 'test-session' },
 }));
 
 vi.mock('@bike4mind/database', () => ({
   adminSettingsRepository: {},
+  withTransaction: async <T>(write: (session: unknown) => Promise<T>) => write(m.session),
   User: { findById: m.findById, findOne: m.findOne, updateOne: m.updateOne, countDocuments: m.countDocuments },
 }));
 vi.mock('@bike4mind/utils', () => ({
@@ -42,8 +45,9 @@ const REFERRER = '64b000000000000000000002';
 
 /** A Mongoose query chain whose `.lean()` resolves to `doc`. */
 const query = (doc: unknown) => {
-  const chain = { select: vi.fn(), lean: vi.fn() };
+  const chain = { select: vi.fn(), session: vi.fn(), lean: vi.fn() };
   chain.select.mockReturnValue(chain);
+  chain.session.mockReturnValue(chain);
   chain.lean.mockResolvedValue(doc);
   return chain;
 };
@@ -67,9 +71,12 @@ const newAccount = (overrides: Record<string, unknown> = {}) => ({
   ...overrides,
 });
 
+let response = createResponse();
+
 const credit = (overrides: Partial<Parameters<typeof creditShareLinkSignup>[0]> = {}) =>
   creditShareLinkSignup({
     req: reqWithCode(CODE),
+    res: response,
     userId: NEW_USER,
     method: 'otc',
     isSynthetic: false,
@@ -80,11 +87,12 @@ const credit = (overrides: Partial<Parameters<typeof creditShareLinkSignup>[0]> 
 beforeEach(() => {
   vi.restoreAllMocks();
   vi.clearAllMocks();
+  response = createResponse();
   m.getSettingsMap.mockResolvedValue({});
   m.findOne.mockReturnValue(query(referrer()));
   m.findById.mockReturnValue(query(newAccount()));
   m.countDocuments.mockResolvedValue(0);
-  m.updateOne.mockResolvedValue({ modifiedCount: 1 });
+  m.updateOne.mockResolvedValue({ matchedCount: 1, modifiedCount: 1 });
   m.emit.mockResolvedValue(undefined);
 });
 
@@ -159,6 +167,16 @@ describe('getOrCreateReferralCode', () => {
     expect(m.updateOne).toHaveBeenCalledTimes(2);
   });
 
+  it('returns the persisted code when the fifth mint is the first successful write', async () => {
+    for (let attempt = 0; attempt < 5; attempt++) m.findById.mockReturnValueOnce(query({ referralCode: null }));
+    m.findById.mockReturnValueOnce(query({ referralCode: CODE }));
+    for (let attempt = 0; attempt < 4; attempt++) m.updateOne.mockRejectedValueOnce({ code: 11000 });
+    m.updateOne.mockResolvedValueOnce({ modifiedCount: 1 });
+
+    await expect(getOrCreateReferralCode(REFERRER)).resolves.toBe(CODE);
+    expect(m.updateOne).toHaveBeenCalledTimes(5);
+  });
+
   it('gives up after repeated collisions rather than looping', async () => {
     m.findById.mockReturnValue(query({ referralCode: null }));
     m.updateOne.mockRejectedValue({ code: 11000 });
@@ -186,7 +204,7 @@ describe('creditShareLinkSignup', () => {
     expect(m.updateOne).toHaveBeenCalledWith(
       { _id: NEW_USER, referredByUserId: null },
       { $set: { referredByUserId: REFERRER, referredViaLinkAt: NOW } },
-      { runValidators: true }
+      { runValidators: true, session: m.session }
     );
     expect(m.emit).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -217,7 +235,9 @@ describe('creditShareLinkSignup', () => {
   });
 
   it('reports the invite as the winner when it lands between the read and the write', async () => {
-    m.updateOne.mockResolvedValue({ modifiedCount: 0 });
+    m.updateOne
+      .mockResolvedValueOnce({ matchedCount: 1, modifiedCount: 1 })
+      .mockResolvedValueOnce({ matchedCount: 0, modifiedCount: 0 });
     await expect(credit()).resolves.toBe('already_referred');
   });
 
@@ -255,11 +275,19 @@ describe('creditShareLinkSignup', () => {
     m.getSettingsMap.mockResolvedValue({ ReferralLinkSignupsPerMonth: 3 });
     m.countDocuments.mockResolvedValue(3);
     await expect(credit()).resolves.toBe('monthly_cap');
-    expect(m.countDocuments).toHaveBeenCalledWith({
-      referredByUserId: REFERRER,
-      referredViaLinkAt: { $gte: new Date(NOW.getTime() - 30 * DAY_MS) },
-    });
-    expect(m.updateOne).not.toHaveBeenCalled();
+    expect(m.countDocuments).toHaveBeenCalledWith(
+      {
+        referredByUserId: REFERRER,
+        referredViaLinkAt: { $gte: new Date(NOW.getTime() - 30 * DAY_MS) },
+      },
+      { session: m.session }
+    );
+    expect(m.updateOne).toHaveBeenCalledTimes(1);
+    expect(m.updateOne).toHaveBeenCalledWith(
+      { _id: REFERRER, 'deletion.purgeStartedAt': null },
+      { $inc: { __v: 1 } },
+      { session: m.session, timestamps: false, runValidators: true }
+    );
   });
 
   it('still credits one under the limit', async () => {
@@ -271,6 +299,27 @@ describe('creditShareLinkSignup', () => {
   it('credits a test persona without reporting it', async () => {
     await expect(credit({ isSynthetic: true })).resolves.toBe('credited');
     expect(m.emit).not.toHaveBeenCalled();
+  });
+
+  it('consumes a valid referral cookie even when attribution storage fails, preserving session cookies', async () => {
+    response.setHeader('Set-Cookie', ['session=existing; HttpOnly']);
+    m.findOne.mockImplementation(() => {
+      throw new Error('db down');
+    });
+    vi.spyOn(Logger, 'warn').mockImplementation(() => undefined);
+
+    await expect(credit()).resolves.toBeNull();
+
+    expect(response.getHeader('Set-Cookie')).toEqual([
+      'session=existing; HttpOnly',
+      `${referralCookieName()}=; Path=/; Max-Age=0; HttpOnly; SameSite=Lax`,
+    ]);
+  });
+
+  it('leaves response cookies alone when no referral code is present', async () => {
+    response.setHeader('Set-Cookie', 'session=existing; HttpOnly');
+    await expect(credit({ req: reqWithCode(null) })).resolves.toBeNull();
+    expect(response.getHeader('Set-Cookie')).toBe('session=existing; HttpOnly');
   });
 
   it('never fails the signup when a read throws', async () => {

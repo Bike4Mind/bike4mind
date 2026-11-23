@@ -353,7 +353,7 @@ to a third party, and is used only to credit the signup it leads to.
 | Pending referral | App cookie `b4m_ref`                                      | 30 days, cleared by the signup that reads it | Credit a signup to the link's owner        |
 | Link referral    | MongoDB `User.referredByUserId`, `User.referredViaLinkAt` | Account lifetime                             | Referral rewards and the inviter's summary |
 
-Two product events go to the host product in Overwatch. `referral_link_visit` is
+Two product events go to host analytics. `referral_link_visit` is
 sent without a user and carries only `known`, whether the code belongs to an
 account. `referral_link_signup` is sent under the new account's pseudonym and
 carries `outcome` (whether the signup was credited, and if not, which rule
