@@ -31,6 +31,10 @@ async function prepare({ github, context, core }) {
   if (!Number.isSafeInteger(number) || number <= 0) return;
   const { data: pr } = await github.rest.pulls.get({ ...repo, pull_number: number });
   if (pr.state !== 'open' || pr.head.repo?.full_name !== `${repo.owner}/${repo.repo}`) return;
+  if (pr.mergeable === false) {
+    core.notice('PR conflicts with its base; resolve conflicts to run preview E2E.');
+    return;
+  }
   // Completion posts the status before settling labels; execution rechecks both after setup.
   const status = await previewStatus(github, repo, pr, context.eventName !== 'status');
   if (!status) {

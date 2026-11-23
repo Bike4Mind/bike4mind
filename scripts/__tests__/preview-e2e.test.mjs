@@ -10,11 +10,12 @@ const { prepare, report } = require('../../.github/scripts/preview-e2e.cjs');
 const root = new URL('../../', import.meta.url);
 const sha = 'a'.repeat(40);
 function fixture({ eventName = 'status', labels = ['preview-deployed'], state = 'success',
-  creator = 'bike4mind-release-bot[bot]', head = sha, statusId = 42 } = {}) {
+  creator = 'bike4mind-release-bot[bot]', head = sha, statusId = 42, mergeable = true } = {}) {
   const outputs = {};
   const writes = [];
+  const notices = [];
   const pr = { number: 1, state: 'open', head: { sha: head, repo: { full_name: 'Bike4Mind/bike4mind' } },
-    base: { sha: 'b'.repeat(40) }, labels: labels.map(name => ({ name })) };
+    base: { sha: 'b'.repeat(40) }, mergeable, labels: labels.map(name => ({ name })) };
   const status = { id: statusId, context: 'preview/deploy', state, creator: { login: creator } };
   const context = { repo: { owner: 'Bike4Mind', repo: 'bike4mind' }, eventName,
     payload: { ...status, sha, sender: { login: creator } } };
@@ -23,8 +24,8 @@ function fixture({ eventName = 'status', labels = ['preview-deployed'], state = 
     createCommitStatus: async value => writes.push(value),
   }, issues: { listComments: 'comments', createComment: async value => writes.push(value) } },
   paginate: async method => method === 'statuses' ? [status] : method === 'prs' ? [pr] : [] };
-  const core = { setOutput: (key, value) => { outputs[key] = value; }, notice() {}, warning() {} };
-  return { github, context, core, outputs, writes };
+  const core = { setOutput: (key, value) => { outputs[key] = value; }, notice: message => notices.push(message), warning() {} };
+  return { github, context, core, outputs, writes, notices };
 }
 
 test('current-head App status starts selection even before labels settle', async () => {
@@ -35,6 +36,17 @@ test('current-head App status starts selection even before labels settle', async
     assert.equal(f.outputs.head_sha, sha);
     assert.equal(f.outputs.deploy_id, '42');
   }
+});
+
+test('conflicted PRs are skipped with a notice and uncomputed mergeability still runs', async () => {
+  const conflicted = fixture({ mergeable: false });
+  await prepare(conflicted);
+  assert.equal(conflicted.outputs.ready, undefined);
+  assert.equal(conflicted.notices.length, 1);
+  assert.match(conflicted.notices[0], /conflicts with its base/);
+  const pending = fixture({ mergeable: null });
+  await prepare(pending);
+  assert.equal(pending.outputs.ready, 'true');
 });
 
 test('manual label requests require readiness and status events reject stale or untrusted signals', async () => {
@@ -96,6 +108,10 @@ test('preview workflows use base-integrated merge trees and retain deployed-head
   assert.match(core, /ref: refs\/pull\/\$\{\{ needs.prepare-preview.outputs.pr_number \}\}\/merge/);
   assert.match(core, /preview_head_sha: \$\{\{ needs.prepare-preview.outputs.head_sha \}\}/);
   assert.match(read('e2e-run.yml'), /HEAD_SHA: \$\{\{ inputs.preview_head_sha \|\| inputs.checkout_ref \}\}/);
+  for (const wf of [core, read('e2e-run.yml')]) {
+    assert.match(wf, /PREVIEW_HEAD_SHA: \$\{\{ (needs.prepare-preview.outputs.head_sha|inputs.preview_head_sha) \}\}/);
+    assert.match(wf, /git rev-parse HEAD\^2\)" != "\$PREVIEW_HEAD_SHA"/);
+  }
   assert.match(core, /execution_timeout_minutes: 17/);
   assert.match(read('e2e-run.yml'), /timeout-minutes: \$\{\{ inputs.execution_timeout_minutes \}\}/);
   assert.match(core, /stamp_promotable: false/);

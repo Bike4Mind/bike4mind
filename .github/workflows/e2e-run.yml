@@ -96,6 +96,13 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
+      - name: Verify merge ref head
+        if: inputs.preview_head_sha != ''
+        env:
+          PREVIEW_HEAD_SHA: ${{ inputs.preview_head_sha }}
+        run: |
+          if [ "$(git rev-parse HEAD^2)" != "$PREVIEW_HEAD_SHA" ]; then echo "::error::Merge ref was not built from the deployed head $PREVIEW_HEAD_SHA"; exit 1; fi
+
       - name: Setup Node.js
         uses: actions/setup-node@v6
         with:
