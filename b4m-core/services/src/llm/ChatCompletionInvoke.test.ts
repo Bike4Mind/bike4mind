@@ -405,7 +405,7 @@ describe('ChatCompletionInvoke.invoke - session access', () => {
       mockedGetAvailableModels.mockResolvedValue([
         { id: 'gpt-4', type: 'text', name: 'GPT-4', max_tokens: 100, contextWindow: 1000, pricing: {} },
       ] as never);
-      const priorQuest = { id: 'quest-1', sessionId: 'session-1', status: 'error' };
+      const priorQuest = { id: 'quest-1', sessionId: 'session-1', status: 'error', prompt: body.message };
       mockDb.quests.findById.mockResolvedValue(priorQuest);
       mockDb.adminSettings.getSettingsValue.mockResolvedValue('text-embedding-ada-002');
       await makeInvoke({ id: OWNER_ID, signupGrant: enrolledGrant }).invoke({
