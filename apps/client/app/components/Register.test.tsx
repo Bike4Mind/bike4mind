@@ -525,6 +525,15 @@ describe('Register - product hint from redirectTo', () => {
     expect(screen.getByTestId('auth-redirect-product-hint')).toHaveTextContent('auth.signUpToContinueTo');
   });
 
+  // The hint already reads "Create an account to continue to <product>"; the generic line repeats it.
+  it('shows one headline line, the product hint, on the form step', () => {
+    premiumNav.items = [{ path: '/product', label: 'Product' }];
+    window.history.replaceState(null, '', '/register?redirectTo=%2Fproduct');
+    const { container } = renderRegister();
+    expect(screen.queryByText('auth.createAccountDesc')).toBeNull();
+    expect(container.querySelector('.register-subtitle')).toBeNull();
+  });
+
   it('hides the hint once the code step is reached', async () => {
     vi.clearAllMocks();
     mocks.allowOpenRegistration = true;
@@ -541,6 +550,8 @@ describe('Register - product hint from redirectTo', () => {
     await user.click(screen.getByTestId('register-submit-btn'));
     await screen.findByTestId('register-otc-input');
     expect(screen.queryByTestId('auth-redirect-product-hint')).toBeNull();
+    // The code step keeps its "code sent to" line; only the form step drops the generic headline.
+    expect(screen.getByText('auth.codeSentTo')).toBeInTheDocument();
   });
 
   it('shows nothing without a product redirect', () => {
@@ -548,5 +559,14 @@ describe('Register - product hint from redirectTo', () => {
     window.history.replaceState(null, '', '/register');
     renderRegister();
     expect(screen.queryByTestId('auth-redirect-product-hint')).toBeNull();
+    expect(screen.getByText('auth.createAccountDesc')).toBeInTheDocument();
+  });
+
+  it('keeps the generic headline for a redirect that is not a product', () => {
+    premiumNav.items = [{ path: '/product', label: 'Product' }];
+    window.history.replaceState(null, '', '/register?redirectTo=%2Fnew');
+    renderRegister();
+    expect(screen.queryByTestId('auth-redirect-product-hint')).toBeNull();
+    expect(screen.getByText('auth.createAccountDesc')).toBeInTheDocument();
   });
 });
