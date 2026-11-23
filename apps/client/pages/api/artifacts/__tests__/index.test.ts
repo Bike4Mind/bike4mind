@@ -309,6 +309,20 @@ describe('POST /api/artifacts API key scope posture', () => {
     expect(mockRefs.createArgs).toBeDefined();
   });
 
+  // A key holding a confined scope is never grandfathered, which is how a non-legacy key is
+  // shaped while the legacy window has no cutoff.
+  it('refuses a non-legacy key holding only notebooks:read and creates nothing', async () => {
+    const { req, res } = postWithKey({ scopes: ['notebooks:read', 'embed:chat'] });
+    await expect(Promise.resolve(mockRefs.postHandler!(req, res))).rejects.toMatchObject({ statusCode: 403 });
+    expect(mockRefs.createArgs).toBeUndefined();
+  });
+
+  it('creates the artifact for a non-legacy key holding notebooks:write', async () => {
+    const { req, res } = postWithKey({ scopes: ['notebooks:write', 'embed:chat'] });
+    await mockRefs.postHandler!(req, res);
+    expect(mockRefs.createArgs).toBeDefined();
+  });
+
   it.each([
     ['an exchange key holding notebooks:read', { scopes: ['notebooks:read'], oauthExchangeClientId: 'client-1' }],
   ])('refuses %s and creates nothing', async (_label, apiKeyInfo) => {

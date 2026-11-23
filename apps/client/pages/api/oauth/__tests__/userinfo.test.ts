@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { createMocks } from 'node-mocks-http';
+import { ApiKeyScope } from '@bike4mind/common';
 
 /**
  * GET /api/oauth/userinfo claim projection. A relying-party OAuth token releases only the claims
@@ -8,8 +9,11 @@ import { createMocks } from 'node-mocks-http';
  * before scoped OAuth (the "first-party unchanged" contract).
  */
 
+const mockRefs = vi.hoisted(() => ({ options: null as unknown }));
+
 vi.mock('@server/middlewares/baseApi', () => ({
-  baseApi: () => {
+  baseApi: (options: unknown) => {
+    mockRefs.options = options;
     const h: Record<string, (req: unknown, res: unknown) => unknown> = {};
     const chain = Object.assign(
       (req: unknown, res: unknown) => h[(req as { method?: string }).method ?? 'GET']?.(req, res),
@@ -40,6 +44,13 @@ const fullUser = {
 };
 
 describe('GET /api/oauth/userinfo', () => {
+  it('declares me:read or admin and grandfathers legacy keys', () => {
+    expect(mockRefs.options).toMatchObject({
+      requiredScopes: [ApiKeyScope.ME_READ, ApiKeyScope.ADMIN],
+      grandfatherLegacyKeys: true,
+    });
+  });
+
   it('401s when there is no authenticated user', async () => {
     const { res, promise } = run(undefined);
     await promise;
