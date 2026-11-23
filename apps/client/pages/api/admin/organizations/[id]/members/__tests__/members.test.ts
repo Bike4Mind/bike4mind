@@ -382,6 +382,14 @@ describe('PATCH /api/admin/organizations/[id]/members/[userId]', () => {
     expect(res._getJSONData()).toEqual({ organizationId: ORG, userId: USER, role: 'billingManager' });
   });
 
+  it('refuses and does not audit when the member row vanished before the write', async () => {
+    mocks.setMemberRole.mockResolvedValueOnce(false);
+    await expect(call('DELETE,PATCH', 'PATCH', { role: 'manager', reason: 'Team lead changed' })).rejects.toMatchObject(
+      { statusCode: 400 }
+    );
+    expect(mocks.audit).not.toHaveBeenCalled();
+  });
+
   it('refuses owner as a role', async () => {
     await expect(call('DELETE,PATCH', 'PATCH', { role: 'owner', reason: 'Team lead changed' })).rejects.toMatchObject({
       statusCode: 400,
