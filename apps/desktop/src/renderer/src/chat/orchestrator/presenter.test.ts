@@ -208,6 +208,7 @@ const SNAPSHOT_AGENT_FIELDS = {
   // Derived from activity and the last reply, both dropped; only a setup step's fixed label could remain.
   now: 'drop',
   decision: 'replace',
+  plan: 'drop',
   pr: 'drop',
   usdCost: 'drop',
   credits: 'drop',

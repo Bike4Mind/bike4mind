@@ -3,11 +3,12 @@ import CircularProgress from '@mui/joy/CircularProgress';
 import Typography from '@mui/joy/Typography';
 import { AGENT_STATE_LABEL } from '@shared/agentState';
 import type { ViewAction, ViewSnapshot } from '@shared/viewSnapshot';
+import { AgentPrIndicator } from './AgentPrIndicator';
 import { stateJoyColor } from './statePalette';
 
 /*
  * Built on the view contract alone, as Swimlanes is: it may import only @shared/viewSnapshot, @shared/agentState,
- * ./statePalette, React and the UI kit. snapshotView.tsx hosts it.
+ * ./statePalette, ./AgentPrIndicator, React and the UI kit. snapshotView.tsx hosts it.
  */
 
 const INDENT_STEP = 16;
@@ -45,80 +46,85 @@ function PlanRow({ agent, onAction }: { agent: SnapshotAgent; onAction(action: V
     .filter(Boolean)
     .join(', ');
   return (
-    <Box
-      component="button"
-      type="button"
-      onClick={() => onAction({ kind: 'open-agent', agentId: agent.id })}
-      aria-label={label}
-      data-testid={`plan-view-row-${agent.id}`}
-      data-state={agent.state}
-      sx={{
-        display: 'grid',
-        gridTemplateColumns: 'auto minmax(0, 1fr) minmax(0, 1fr)',
-        gridTemplateAreas: '"ring title next" "ring current next"',
-        columnGap: 1.5,
-        rowGap: 0.25,
-        alignItems: 'center',
-        py: 1,
-        pr: 1.5,
-        pl: `${12 + Math.min(Math.max(agent.depth - 1, 0), MAX_INDENT_LEVELS) * INDENT_STEP}px`,
-        textAlign: 'left',
-        font: 'inherit',
-        color: 'inherit',
-        cursor: 'pointer',
-        borderRadius: 'md',
-        bgcolor: 'background.surface',
-        border: agent.state === 'needs-you' ? '2px solid' : '1px solid',
-        borderColor: agent.state === 'needs-you' ? 'warning.outlinedBorder' : 'divider',
-        '&:hover': { bgcolor: 'background.level1' },
-        '&:focus-visible': { outline: '2px solid', outlineColor: 'focusVisible', outlineOffset: 2 },
-        [`@container (max-width: ${NARROW_PX}px)`]: {
-          gridTemplateColumns: 'auto minmax(0, 1fr)',
-          gridTemplateAreas: '"ring title" "ring current" "ring next"',
-        },
-      }}
-    >
-      <CircularProgress
-        determinate
-        size="md"
-        value={hasPlan ? (plan.done / plan.total) * 100 : 0}
-        color={stateJoyColor(agent.state)}
-        data-testid="plan-view-ring"
-        sx={{ gridArea: 'ring', '--CircularProgress-size': '40px' }}
+    <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75, minWidth: 0 }}>
+      <Box
+        component="button"
+        type="button"
+        onClick={() => onAction({ kind: 'open-agent', agentId: agent.id })}
+        aria-label={label}
+        data-testid={`plan-view-row-${agent.id}`}
+        data-state={agent.state}
+        sx={{
+          flex: 1,
+          minWidth: 0,
+          display: 'grid',
+          gridTemplateColumns: 'auto minmax(0, 1fr) minmax(0, 1fr)',
+          gridTemplateAreas: '"ring title next" "ring current next"',
+          columnGap: 1.5,
+          rowGap: 0.25,
+          alignItems: 'center',
+          py: 1,
+          pr: 1.5,
+          pl: `${12 + Math.min(Math.max(agent.depth - 1, 0), MAX_INDENT_LEVELS) * INDENT_STEP}px`,
+          textAlign: 'left',
+          font: 'inherit',
+          color: 'inherit',
+          cursor: 'pointer',
+          borderRadius: 'md',
+          bgcolor: 'background.surface',
+          border: agent.state === 'needs-you' ? '2px solid' : '1px solid',
+          borderColor: agent.state === 'needs-you' ? 'warning.outlinedBorder' : 'divider',
+          '&:hover': { bgcolor: 'background.level1' },
+          '&:focus-visible': { outline: '2px solid', outlineColor: 'focusVisible', outlineOffset: 2 },
+          [`@container (max-width: ${NARROW_PX}px)`]: {
+            gridTemplateColumns: 'auto minmax(0, 1fr)',
+            gridTemplateAreas: '"ring title" "ring current" "ring next"',
+          },
+        }}
       >
-        <Typography level="body-xs">{hasPlan ? `${plan.done}/${plan.total}` : '-'}</Typography>
-      </CircularProgress>
-      <Typography level="title-sm" sx={{ gridArea: 'title', ...clamp }}>
-        {agent.title}
-      </Typography>
-      <Box sx={{ gridArea: 'current', minWidth: 0 }}>
-        {current ? (
-          <Typography
-            level="body-sm"
-            color={agent.state === 'needs-you' ? 'warning' : undefined}
-            data-testid={current.testId}
-            sx={clamp}
-          >
-            {current.text}
-          </Typography>
-        ) : (
-          !hasPlan && (
-            <Typography level="body-sm" textColor="text.tertiary" data-testid="plan-view-empty-plan" sx={clamp}>
-              No plan yet
+        <CircularProgress
+          determinate
+          size="md"
+          value={hasPlan ? (plan.done / plan.total) * 100 : 0}
+          color={stateJoyColor(agent.state)}
+          data-testid="plan-view-ring"
+          sx={{ gridArea: 'ring', '--CircularProgress-size': '40px' }}
+        >
+          <Typography level="body-xs">{hasPlan ? `${plan.done}/${plan.total}` : '-'}</Typography>
+        </CircularProgress>
+        <Typography level="title-sm" sx={{ gridArea: 'title', ...clamp }}>
+          {agent.title}
+        </Typography>
+        <Box sx={{ gridArea: 'current', minWidth: 0 }}>
+          {current ? (
+            <Typography
+              level="body-sm"
+              color={agent.state === 'needs-you' ? 'warning' : undefined}
+              data-testid={current.testId}
+              sx={clamp}
+            >
+              {current.text}
             </Typography>
-          )
+          ) : (
+            !hasPlan && (
+              <Typography level="body-sm" textColor="text.tertiary" data-testid="plan-view-empty-plan" sx={clamp}>
+                No plan yet
+              </Typography>
+            )
+          )}
+        </Box>
+        {next && (
+          <Typography
+            level="body-xs"
+            textColor="text.tertiary"
+            data-testid="plan-view-next"
+            sx={{ gridArea: 'next', ...clamp }}
+          >
+            {`Next: ${next}`}
+          </Typography>
         )}
       </Box>
-      {next && (
-        <Typography
-          level="body-xs"
-          textColor="text.tertiary"
-          data-testid="plan-view-next"
-          sx={{ gridArea: 'next', ...clamp }}
-        >
-          {`Next: ${next}`}
-        </Typography>
-      )}
+      <AgentPrIndicator pr={agent.pr} onOpen={() => onAction({ kind: 'open-pr', agentId: agent.id })} />
     </Box>
   );
 }
