@@ -1,10 +1,12 @@
 package com.bike4mind.app
 
 import android.app.Application
+import com.bike4mind.app.capture.CaptureWorker
 import com.bike4mind.app.push.FcmClient
 import com.bike4mind.app.push.PushNotifications
 import com.bike4mind.app.storage.EnvironmentStore
 import com.bike4mind.app.storage.OnboardingStore
+import com.bike4mind.kit.capture.CaptureStage
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -28,6 +30,10 @@ class B4MApplication : Application() {
         PushNotifications.createChannel(this)
         FcmClient.initialize(this)
         mutableGraph.value = AppGraph(this, environments.current())
+        // A share the system stopped (an update, a reboot) carries on once the app runs again.
+        if (mutableGraph.value?.capture?.jobs?.value.orEmpty().any { it.stage == CaptureStage.PENDING }) {
+            CaptureWorker.schedule(this)
+        }
     }
 
     /** Debug only: points the app at another server. Tokens are per server, so the old ones are dropped. */
