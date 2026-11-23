@@ -7,7 +7,7 @@ import {
 } from '@bike4mind/common';
 import type { ToolContext, ToolDefinition } from '../../base/types';
 import { buildUnavailableTool, toToolParameters } from '../generationJobTool';
-import { isProductionToolConfig } from './config';
+import { isProductionToolConfig, type ProductionToolConfig } from './config';
 import {
   DEFAULT_SHOT_DURATION_MS,
   DIRECTOR_TRACK_IDS,
@@ -234,10 +234,27 @@ function reordersKeptShots(current: readonly StudioShot[], sources: readonly (St
 }
 
 /**
- * Runs that already moved shots, keyed by the run's config (built once per run). A director that loses track of
- * its own storyboard call repeats it, and repeating a swap undoes it, so a second reorder in one run is refused.
+ * Runs that already moved shots. A director that loses track of its own storyboard call repeats it, and repeating
+ * a swap undoes it, so a second reorder in one run is refused. Keyed by `runId` because every tool approval
+ * resumes the run with a new config; in memory, so a resume on another container forgets it (best effort).
  */
-const reorderedRuns = new WeakMap<object, true>();
+const REORDERED_RUNS_MAX = 500;
+const reorderedRunIds = new Set<string>();
+const reorderedConfigs = new WeakMap<object, true>();
+
+const hasReordered = (config: ProductionToolConfig): boolean =>
+  config.runId ? reorderedRunIds.has(config.runId) : reorderedConfigs.has(config);
+
+const markReordered = (config: ProductionToolConfig): void => {
+  if (!config.runId) {
+    reorderedConfigs.set(config, true);
+    return;
+  }
+  reorderedRunIds.add(config.runId);
+  // Sets iterate in insertion order, so this drops the oldest run.
+  const oldest = reorderedRunIds.values().next();
+  if (reorderedRunIds.size > REORDERED_RUNS_MAX && !oldest.done) reorderedRunIds.delete(oldest.value);
+};
 
 export const productionStoryboardTool: ToolDefinition = {
   name: 'production_storyboard',
@@ -256,7 +273,7 @@ export const productionStoryboardTool: ToolDefinition = {
             current.shots,
             resolved.map(({ source }) => source)
           );
-          if (reorders && reorderedRuns.has(config)) {
+          if (reorders && hasReordered(config)) {
             throw new ProductionToolError(
               'this run already moved the shots with production_storyboard, so they are now in this order: ' +
                 `${current.shots.map(shot => `${shot.id} "${shot.title}"`).join(', ')}. Calling it again with the ` +
@@ -354,7 +371,7 @@ export const productionStoryboardTool: ToolDefinition = {
                 },
               }),
           });
-          if (reorders) reorderedRuns.set(config, true);
+          if (reorders) markReordered(config);
           const linesRemoved = args.rewriteLines
             ? linesDropped(
                 current.shots,

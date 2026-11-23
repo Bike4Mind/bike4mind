@@ -714,6 +714,16 @@ describe('production director tools', () => {
     ).toMatch(/^Error: "Spring is here." is the voice line of more than one shot/);
   });
 
+  it('remembers a reorder across a resume that rebuilds the config for the same run', async () => {
+    await run(productionStoryboardTool, harness, STORYBOARD);
+    const swap = { compositionId: COMPOSITION_ID, shots: [{ keep: 'shot-1' }, { keep: 'shot-3' }, { keep: 'shot-2' }] };
+    const firstLeg = { ...harness, config: { ...harness.config, runId: 'quest-resumed' } };
+    const resumedLeg = { ...harness, config: { ...harness.config, runId: 'quest-resumed' } };
+
+    expect(await run(productionStoryboardTool, firstLeg, swap)).not.toMatch(/^Error/);
+    expect(await run(productionStoryboardTool, resumedLeg, swap)).toMatch(/^Error: this run already moved the shots/);
+  });
+
   it('refuses a second reorder in one run, so a repeated swap does not undo the first', async () => {
     await run(productionStoryboardTool, harness, STORYBOARD);
     const swap = { compositionId: COMPOSITION_ID, shots: [{ keep: 'shot-1' }, { keep: 'shot-3' }, { keep: 'shot-2' }] };

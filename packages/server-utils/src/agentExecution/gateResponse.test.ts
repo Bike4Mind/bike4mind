@@ -88,6 +88,13 @@ describe('container confidence resume', () => {
         )
       ).rejects.toThrow('401');
       expect(mockRestoreRejectedResume).toHaveBeenCalledWith('exec-1', { status: 'paused', pendingGate });
+      // A Proceed is a click, so it must not spend the executor's runaway handoff budget.
+      const [, init] = vi.mocked(fetch).mock.calls[0];
+      expect(JSON.parse(String(init?.body))).toEqual({
+        executionId: 'exec-1',
+        connectionId: 'conn-1',
+        resumedBy: 'user',
+      });
     } finally {
       vi.unstubAllEnvs();
       vi.unstubAllGlobals();

@@ -645,6 +645,7 @@ export const handler = async (event: Record<string, unknown> | SQSEvent, context
   let executionId: string;
   let connectionId: string;
   let isNewExecution: boolean;
+  let resumedByUser = false;
   let startPayload: StartExecutionPayload | undefined;
 
   if (isSqsEvent) {
@@ -727,9 +728,10 @@ export const handler = async (event: Record<string, unknown> | SQSEvent, context
     executionId = continuation.executionId;
     connectionId = continuation.connectionId;
     isNewExecution = false;
+    resumedByUser = continuation.resumedBy === 'user';
   }
 
-  await processExecution(executionId, connectionId, isNewExecution, startPayload, context, logger);
+  await processExecution(executionId, connectionId, isNewExecution, startPayload, context, logger, 0, resumedByUser);
 };
 
 // ---------------------------------------------------------------------------
@@ -1039,7 +1041,8 @@ async function processExecution(
   startPayload: StartExecutionPayload | undefined,
   context: Context,
   logger: Logger,
-  checkpointDepth: number = 0
+  checkpointDepth: number = 0,
+  resumedByUser = false
 ): Promise<void> {
   logger.updateMetadata({ executionId });
   // Every terminal frame of a top-level run also publishes its push, and progress frames feed its live
@@ -1054,7 +1057,8 @@ async function processExecution(
       startPayload,
       context,
       logger,
-      checkpointDepth
+      checkpointDepth,
+      resumedByUser
     );
   } finally {
     // An invocation can exit without a terminal frame (checkpoint self-dispatch); its last throttled
@@ -1071,7 +1075,8 @@ async function runExecution(
   startPayload: StartExecutionPayload | undefined,
   context: Context,
   logger: Logger,
-  checkpointDepth: number
+  checkpointDepth: number,
+  resumedByUser: boolean
 ): Promise<void> {
   // Depth guard: refuse to process if this execution has self-dispatched too many times.
   // A runaway agent (infinite tool loop, stuck abort signal) would otherwise chain Lambdas
@@ -1225,6 +1230,9 @@ async function runExecution(
           return;
         }
         await sendWs('resumed', { executionId, reason: 'subagent_handoff', subagentHandoffCount });
+      } else if (resumedByUser) {
+        // Each approval or gate Proceed is a click, not a loop; timeouts after it still count below.
+        await sendWs('resumed', { executionId, reason: 'user_resume' });
       } else {
         const invocationCount = await agentExecutionRepository.incrementLambdaInvocationCount(executionId);
         if (invocationCount > MAX_LAMBDA_HANDOFFS) {

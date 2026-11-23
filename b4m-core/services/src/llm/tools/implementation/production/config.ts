@@ -67,6 +67,11 @@ export type ProductionToolConfig = {
   audio: ProductionAudioSettings | null;
   /** The run user's jobs among `ids`; others are left out. */
   findJobs(ids: readonly string[]): Promise<ProductionJobView[]>;
+  /**
+   * Stable across the run's Lambda handoffs (the host rebuilds this object on every resume), so per-run guards key
+   * by it; without it they fall back to this object.
+   */
+  runId?: string;
   /** How long one tool call waits for its jobs before handing back what is still running. */
   waitTimeoutMs?: number;
   pollIntervalMs?: number;

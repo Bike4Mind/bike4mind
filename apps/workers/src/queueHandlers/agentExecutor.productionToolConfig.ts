@@ -132,6 +132,7 @@ export async function buildAgentProductionToolConfig(
       video: input.video,
       music: input.music,
       audio: input.audioJobs ? { ...input.audioSettings, jobs: input.audioJobs } : null,
+      runId: input.questId,
       findJobs: async ids => {
         const jobs = await Promise.all(ids.map(id => deps.findJob(id)));
         return jobs.filter((job): job is ProductionJobRecord => job?.requestedBy === user.id).map(toJobView);

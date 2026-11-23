@@ -600,6 +600,36 @@ describe('processExecution tool deps', () => {
 
   // Every iteration settles with an unconditional debit, so admission must require one whole
   // iteration's worth of credits, not merely a positive balance.
+  describe('Lambda handoff budget', () => {
+    async function resumeWith(payload: Record<string, unknown>) {
+      const { agentExecutionRepository } = await import('@bike4mind/database');
+      vi.mocked(agentExecutionRepository.incrementLambdaInvocationCount).mockClear();
+      vi.mocked(agentExecutionRepository.incrementLambdaInvocationCount).mockResolvedValueOnce(6 as never);
+      vi.mocked(agentExecutionRepository.markFailed).mockClear();
+      const { handler } = await import('./agentExecutor');
+      await handler({ executionId: 'exec-1', connectionId: 'conn-1', ...payload } as never, lambdaContext).catch(
+        () => undefined
+      );
+      return {
+        increment: vi.mocked(agentExecutionRepository.incrementLambdaInvocationCount),
+        markFailed: vi.mocked(agentExecutionRepository.markFailed),
+      };
+    }
+    const overBudget = { message: 'Execution exceeded maximum Lambda handoffs (5)' };
+
+    it('does not spend the budget on a resume the user clicked (a tool approval or a gate Proceed)', async () => {
+      const { increment, markFailed } = await resumeWith({ resumedBy: 'user' });
+      expect(increment).not.toHaveBeenCalled();
+      expect(markFailed).not.toHaveBeenCalledWith('exec-1', overBudget);
+    });
+
+    it('still fails a self-dispatched continuation past the budget', async () => {
+      const { increment, markFailed } = await resumeWith({});
+      expect(increment).toHaveBeenCalledWith('exec-1');
+      expect(markFailed).toHaveBeenCalledWith('exec-1', overBudget);
+    });
+  });
+
   describe('credit admission', () => {
     const pricedModel = {
       id: 'claude-sonnet-5',

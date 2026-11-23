@@ -30,8 +30,21 @@ const productLines = (picked: IFabFileDocument | null, brandProducts: readonly s
   return onFile ? [`Product photo: already in the brand kit (${onFile}); every shot uses it.`] : [];
 };
 
+const sameBrief = (a: string, b: string): boolean => a.trim().toLowerCase() === b.trim().toLowerCase();
+
+// A Direct launch on a production that already has shots is the user asking for a new ad; without saying so the
+// storyboard tool refuses the new lines and the director reads the brief as a follow-up that keeps every shot.
+const redirectLines = (shotCount: number, brief: string, savedBrief: string | undefined): string[] =>
+  shotCount > 0 && !sameBrief(brief, savedBrief ?? '')
+    ? [
+        `It already has ${shotCount} shot${shotCount === 1 ? '' : 's'} from an earlier brief. This brief replaces ` +
+          'that ad: write a new storyboard for it with production_storyboard, passing rewriteLines: true and ' +
+          'replace: true and no keep.',
+      ]
+    : [];
+
 type DirectDialogProps = {
-  composition: Pick<StudioCompositionResponse, 'id' | 'brief' | 'brandKit'>;
+  composition: Pick<StudioCompositionResponse, 'id' | 'brief' | 'brandKit' | 'shots'>;
   open: boolean;
   onClose: () => void;
 };
@@ -60,6 +73,7 @@ export const DirectDialog = ({ composition, open, onClose }: DirectDialogProps) 
         `Production id: ${composition.id}`,
         'On every turn, change it only through the production tools, and report only what their results show.',
         ...productLines(product, composition.brandKit?.productFileIds ?? []),
+        ...redirectLines(composition.shots?.length ?? 0, trimmedBrief, composition.brief?.summary),
       ].join('\n');
       const dispatch: IResolvedPromptDispatch = {
         promptId: 'production-direct',

@@ -110,6 +110,38 @@ describe('DirectButton', () => {
     );
   });
 
+  const redirect = (summary: string, typed?: string) => {
+    render(
+      wrap(
+        <DirectButton
+          composition={{ id: 'comp123', brief: { summary }, shots: [{ id: 'shot-1' }, { id: 'shot-2' }] } as never}
+          blocked={false}
+        />
+      )
+    );
+    fireEvent.click(screen.getByTestId('production-direct-btn'));
+    if (typed !== undefined) {
+      fireEvent.change(screen.getByTestId('production-direct-brief-input'), { target: { value: typed } });
+    }
+    fireEvent.click(screen.getByTestId('production-direct-submit-btn'));
+  };
+
+  it('says a new brief replaces the current ad when the production already has shots', async () => {
+    redirect('A running shoe ad', 'A bright gym ad for a water bottle');
+
+    await waitFor(() => expect(setProgrammaticLaunch).toHaveBeenCalledTimes(1));
+    expect(setProgrammaticLaunch.mock.calls[0][0].promptContent).toContain(
+      'It already has 2 shots from an earlier brief. This brief replaces that ad'
+    );
+  });
+
+  it('does not ask for a new ad when the brief is the saved one', async () => {
+    redirect('A running shoe ad');
+
+    await waitFor(() => expect(setProgrammaticLaunch).toHaveBeenCalledTimes(1));
+    expect(setProgrammaticLaunch.mock.calls[0][0].promptContent).not.toContain('replaces that ad');
+  });
+
   it('requires a brief', () => {
     render(wrap(<DirectButton composition={{ id: 'comp123', brief: {} } as never} blocked={false} />));
     fireEvent.click(screen.getByTestId('production-direct-btn'));
