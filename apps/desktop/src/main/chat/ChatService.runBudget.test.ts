@@ -575,16 +575,9 @@ describe('orchestration run budget', () => {
     await idle(root.id);
   });
 
-  it('pauses the run when the image quest settles as run_budget_exhausted', async () => {
+  it('pauses the run when the image job is refused for the budget at create', async () => {
     const root = await budgeted(500);
-    paid.mockResolvedValue({ quest: { id: 'q1' } });
-    paidGet.mockResolvedValue({
-      id: 'q1',
-      status: 'done',
-      type: 'error',
-      errorCode: 'run_budget_exhausted',
-      reply: 'Run budget used up.',
-    });
+    paid.mockRejectedValue(paidRefusal());
 
     await service.send(root.id, 'Draw a bicycle');
     await waitStream(0);
@@ -592,6 +585,12 @@ describe('orchestration run budget', () => {
     streams[0].write(frame('[DONE]'));
     await idle(root.id);
 
+    expect(paid).toHaveBeenCalledWith(
+      '/api/v1/image-jobs',
+      expect.objectContaining({ run: expect.objectContaining({ runId: RUN_A, role: 'root', purpose: 'tool' }) }),
+      expect.anything()
+    );
+    expect(paidGet).not.toHaveBeenCalledWith(expect.stringContaining('/api/v1/image-jobs/'), expect.anything());
     expect(completions).toHaveBeenCalledTimes(1);
     const reply = await lastReply(root.id);
     expect(reply?.stopReason).toBe(RUN_BUDGET_STOP);
