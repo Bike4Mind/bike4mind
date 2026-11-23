@@ -200,7 +200,7 @@ describe('related CI workflow guard', () => {
   // reads the required Run Tests / CI Complete checks from it alone, so any label
   // run that skips or renames them leaves an approved PR blocked on "Expected".
   it('does not run on label events', () => {
-    const types = ci.match(/^  pull_request:\n\s+types: \[(.*)\]$/m)?.[1];
+    const types = ci.match(/^ {2}pull_request:\n\s+types: \[(.*)\]$/m)?.[1];
     expect(types).toBeDefined();
     const events = types.split(',').map(t => t.trim());
     expect(events).toContain('synchronize');
