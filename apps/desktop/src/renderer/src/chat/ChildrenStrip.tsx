@@ -91,10 +91,14 @@ const STATE_LABEL: Record<ChildChipState, string> = {
   failed: 'Did not finish',
 };
 
-/** Hover text: the last reply's excerpt, with a note when it was cut short. */
-export function chipHint(chip: Pick<ChildChip, 'snippet' | 'cutShort'>): string | undefined {
-  if (chip.cutShort) return chip.snippet ? `${chip.snippet} (cut short)` : '(cut short)';
-  return chip.snippet;
+/**
+ * Hover text: the full branch (the chip truncates it), then the last reply's excerpt, with a note
+ * when it was cut short.
+ */
+export function chipHint(chip: Pick<ChildChip, 'snippet' | 'cutShort' | 'branch'>): string | undefined {
+  const excerpt = chip.cutShort ? (chip.snippet ? `${chip.snippet} (cut short)` : '(cut short)') : chip.snippet;
+  const lines = [chip.branch ? `Branch: ${chip.branch}` : undefined, excerpt].filter(Boolean);
+  return lines.length > 0 ? lines.join('\n') : undefined;
 }
 
 function ChipIcon({ state }: { state: ChildChipState }) {

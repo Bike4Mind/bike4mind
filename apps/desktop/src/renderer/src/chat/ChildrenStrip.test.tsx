@@ -137,6 +137,13 @@ describe('chipHint', () => {
     expect(chipHint({ cutShort: true })).toBe('(cut short)');
     expect(chipHint({})).toBeUndefined();
   });
+
+  it('leads with the full branch, which the chip itself truncates', () => {
+    expect(chipHint({ branch: 'agent/a-very-long-branch-name' })).toBe('Branch: agent/a-very-long-branch-name');
+    expect(chipHint({ branch: 'agent/x', snippet: 'Wrote it', cutShort: true })).toBe(
+      'Branch: agent/x\nWrote it (cut short)'
+    );
+  });
 });
 
 describe('stripLayout', () => {
