@@ -7,6 +7,7 @@ import { ApiKeyScope } from '@bike4mind/common';
 /** For each scope, every core route a key holding only that scope gets through. */
 export const DERIVED_API_KEY_SCOPE_ENDPOINTS: Readonly<Partial<Record<ApiKeyScope, readonly string[]>>> = {
   [ApiKeyScope.READ_NOTEBOOKS]: [
+    'GET /api/artifacts',
     'GET /api/artifacts/:id/versions',
     'GET /api/artifacts/search',
     'GET /api/artifacts/types',
@@ -30,6 +31,7 @@ export const DERIVED_API_KEY_SCOPE_ENDPOINTS: Readonly<Partial<Record<ApiKeyScop
     'POST /api/v1/sessions/semantic-search',
   ],
   [ApiKeyScope.WRITE_NOTEBOOKS]: [
+    'GET|POST /api/artifacts',
     'GET|POST /api/artifacts/:id/versions',
     'GET /api/artifacts/search',
     'GET /api/artifacts/types',
@@ -107,6 +109,8 @@ export const DERIVED_API_KEY_SCOPE_ENDPOINTS: Readonly<Partial<Record<ApiKeyScop
     'POST /api/tools/weather',
     'POST /api/tools/web-fetch',
     'POST /api/tools/web-search',
+    'POST /api/transforms/batch',
+    'GET /api/transforms/batch/:id',
     'POST /api/user-api-keys/:id/callback-secret',
     'POST /api/v1/agent-executions',
     'GET /api/v1/agent-executions/:id',
@@ -238,6 +242,7 @@ export const DERIVED_API_KEY_SCOPE_ENDPOINTS: Readonly<Partial<Record<ApiKeyScop
     'GET /api/gears/status',
     'GET /api/identify',
     'GET /api/models',
+    'GET /api/oauth/userinfo',
     'GET /api/users/:id',
     'GET /api/v1/client-config',
     'GET /api/v1/credits',
@@ -466,6 +471,10 @@ export const DERIVED_API_KEY_SCOPE_ENDPOINTS: Readonly<Partial<Record<ApiKeyScop
     'GET /api/user-api-keys/billing-organizations',
   ],
   [ApiKeyScope.ARTIFACTS_PUBLISH]: [
+    'POST /api/publish/artifact/finalize',
+    'POST /api/publish/artifact/upload-url',
+    'GET /api/publish/artifacts',
+    'GET|PATCH|DELETE /api/publish/artifacts/:id',
     'POST|DELETE /api/v1/artifacts/:id/publish',
     'POST /api/v1/artifacts/:id/republish',
   ],

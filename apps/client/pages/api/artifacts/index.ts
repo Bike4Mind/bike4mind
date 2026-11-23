@@ -1,4 +1,5 @@
 import {
+  ApiKeyScope,
   ARTIFACTS_DISABLED_ERROR,
   ArtifactTypeSchema,
   queryBool,
@@ -13,6 +14,7 @@ import {
 } from '@bike4mind/database';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
+import { assertApiKeyScope } from '@bike4mind/server-utils/middlewares/apiKeyScopeGate';
 import { resolveUserArtifactGate } from '@bike4mind/server-utils/utils/artifactGate';
 import { createArtifactSourceRefsGuard } from '@bike4mind/server-utils/utils/artifactSourceRefsGuards';
 import { resolveActiveOrg } from '@bike4mind/server-utils/utils/resolveActiveOrg';
@@ -99,7 +101,10 @@ async function areUserArtifactsEnabled(user: Express.User): Promise<boolean> {
   });
 }
 
-const handler = baseApi()
+const handler = baseApi({
+  requiredScopes: [ApiKeyScope.READ_NOTEBOOKS, ApiKeyScope.WRITE_NOTEBOOKS, ApiKeyScope.ADMIN],
+  grandfatherLegacyKeys: true,
+})
   /**
    * GET /api/artifacts
    * List artifacts with filtering and pagination
@@ -129,6 +134,13 @@ const handler = baseApi()
    */
   .post(
     asyncHandler(async (req, res) => {
+      // Gated per verb: the route-level scopes above admit read keys for the GET.
+      assertApiKeyScope(
+        req,
+        [ApiKeyScope.WRITE_NOTEBOOKS, ApiKeyScope.ADMIN],
+        'This API key is read-only for notebooks; notebooks:write is required',
+        { grandfatherLegacyKeys: true }
+      );
       const user = req.user;
       const userId = user?.id;
       if (!user || !userId) {
