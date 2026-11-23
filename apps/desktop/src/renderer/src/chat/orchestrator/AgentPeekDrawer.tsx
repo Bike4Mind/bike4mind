@@ -385,6 +385,7 @@ export function AgentPeekDrawer({ agent, onClose, actions, skin, visible = true 
           state={agent.state}
           preparing={agent.preparing !== undefined}
           deciding={agent.decision !== undefined}
+          backgroundJobs={agent.background?.running}
         />
         <IconButton
           size="sm"

@@ -133,7 +133,14 @@ function bubbleText(agent: AgentView, needsYou: number): string | undefined {
   }
   if (agent.state === 'working' && agent.preparing) return `${SESSION_SETUP_LABEL[agent.preparing]}\u2026`;
   if (agent.state === 'working' && agent.activity) return truncate(activityLabel(agent.activity), BUBBLE_MAX);
+  if (agent.state === 'waiting' && agent.background) return truncate(waitingLabel(agent.background), BUBBLE_MAX);
+  if (agent.state === 'paused') return 'Paused: turn budget';
   return undefined;
+}
+
+/** "Waiting: pnpm test" for one background job, "Waiting: 3 jobs" for several. */
+export function waitingLabel(jobs: { running: number; label: string }): string {
+  return jobs.running === 1 ? `Waiting: ${jobs.label}` : `Waiting: ${jobs.running} jobs`;
 }
 
 function sparkKind(agent: AgentView): ToolKind {

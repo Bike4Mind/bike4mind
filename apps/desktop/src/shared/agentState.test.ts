@@ -38,6 +38,38 @@ const states: [string, WorkerTask['state'], boolean][] = [
   ],
 ];
 
+describe('waiting on background jobs', () => {
+  const jobs = { running: 2, label: 'pnpm test' };
+
+  it('shows a plain agent whose turn ended with running jobs as waiting, not done', () => {
+    expect(deriveTaskAgentState({ lastOutcome: 'finished' }, 'done', jobs)).toBe('waiting');
+    expect(deriveTaskAgentState({ lastOutcome: 'finished' }, undefined, jobs)).toBe('waiting');
+    expect(deriveTaskAgentState({ lastOutcome: 'finished' }, 'done')).toBe('done');
+  });
+
+  it('shows a turn-budget stop as paused once its jobs are gone', () => {
+    expect(deriveTaskAgentState({ lastOutcome: 'turn-budget' }, 'done')).toBe('paused');
+    expect(deriveTaskAgentState({ lastOutcome: 'turn-budget' }, 'done', jobs)).toBe('waiting');
+  });
+
+  it('keeps an accepted worker task waiting while its jobs run', () => {
+    const workerTask = { state: completed(true), attentionViewed: true } as WorkerTask;
+    expect(deriveTaskAgentState({ workerTask, lastOutcome: 'finished' }, 'done', jobs)).toBe('waiting');
+    expect(deriveTaskAgentState({ workerTask, lastOutcome: 'finished' }, 'done')).toBe('done');
+  });
+
+  // The dock badge counts needs-you by this rule, so background work must never hide a decision.
+  it('lets a decision the user owes outrank running jobs', () => {
+    const workerTask = { state: completed(false), attentionViewed: false } as WorkerTask;
+    expect(deriveTaskAgentState({ workerTask, lastOutcome: 'finished' }, 'done', jobs)).toBe('needs-you');
+    expect(deriveTaskAgentState({ workerTask, lastOutcome: 'finished' }, 'needs-action', jobs)).toBe('needs-you');
+  });
+
+  it('lets a live turn outrank running jobs', () => {
+    expect(deriveTaskAgentState({ lastOutcome: 'finished' }, 'processing', jobs)).toBe('working');
+  });
+});
+
 describe.each(states)('%s attention', (_label, state, updateOnly) => {
   it.each([true, false, undefined])('preserves required decisions when attentionViewed=%s', attentionViewed => {
     const workerTask = { state, attentionViewed } as WorkerTask;

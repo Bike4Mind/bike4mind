@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import type { ChatSessionStatus, SessionSetupStep } from '@shared/chat';
-import { applyPreparingEvents, applyStatusEvents, applyUnreadReplyEvents, STATUS_LABEL } from './sessionStatus';
+import type { ChatSessionStatus, SessionBackgroundJobs, SessionSetupStep } from '@shared/chat';
+import {
+  applyBackgroundEvents,
+  applyPreparingEvents,
+  applyStatusEvents,
+  applyUnreadReplyEvents,
+  STATUS_LABEL,
+} from './sessionStatus';
 
 const empty: ReadonlyMap<string, ChatSessionStatus> = new Map();
 
@@ -103,5 +109,32 @@ describe('applyPreparingEvents', () => {
       preparing
     );
     expect(applyPreparingEvents(none, [{ sessionId: 'b', status: 'done' }])).toBe(none);
+  });
+});
+
+describe('applyBackgroundEvents', () => {
+  const none: ReadonlyMap<string, SessionBackgroundJobs> = new Map();
+  const jobs = { running: 1, label: 'pnpm test' };
+
+  it('records jobs on a done session and clears them on an event without any', () => {
+    const waiting = applyBackgroundEvents(none, [{ sessionId: 'a', status: 'done', background: jobs }]);
+    expect(waiting.get('a')).toEqual(jobs);
+
+    const cleared = applyBackgroundEvents(waiting, [{ sessionId: 'a', status: 'done' }]);
+    expect(cleared.has('a')).toBe(false);
+  });
+
+  it('returns the same map when nothing changed', () => {
+    const waiting = applyBackgroundEvents(none, [{ sessionId: 'a', status: 'done', background: jobs }]);
+    expect(applyBackgroundEvents(waiting, [{ sessionId: 'a', status: 'done', background: { ...jobs } }])).toBe(waiting);
+    expect(applyBackgroundEvents(none, [{ sessionId: 'b', status: 'processing' }])).toBe(none);
+  });
+
+  it('updates the count and label as jobs start and end', () => {
+    const one = applyBackgroundEvents(none, [{ sessionId: 'a', status: 'done', background: jobs }]);
+    const two = applyBackgroundEvents(one, [
+      { sessionId: 'a', status: 'done', background: { running: 2, label: 'pnpm build' } },
+    ]);
+    expect(two.get('a')).toEqual({ running: 2, label: 'pnpm build' });
   });
 });
