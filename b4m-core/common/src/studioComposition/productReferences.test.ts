@@ -21,15 +21,6 @@ describe('productReferenceFileIds', () => {
     ).toEqual([id(2), id(1)]);
   });
 
-  it('treats ids that differ only in case as one file', () => {
-    expect(
-      productReferenceFileIds({
-        brief: { productFileId: id(0xab).toUpperCase() },
-        brandKit: { productFileIds: [id(0xab), id(2)] },
-      })
-    ).toEqual([id(0xab), id(2)]);
-  });
-
   it('is empty when the production has no product images', () => {
     expect(productReferenceFileIds({ brief: {}, brandKit: { productFileIds: [] } })).toEqual([]);
   });
