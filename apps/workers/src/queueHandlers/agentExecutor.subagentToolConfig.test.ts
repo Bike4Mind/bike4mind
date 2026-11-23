@@ -1,6 +1,11 @@
 import { describe, it, expect, vi } from 'vitest';
 import type { ApiKeyTable } from '@bike4mind/llm-adapters';
-import type { AudioToolJobs, MusicToolConfig, VideoToolConfig } from '@bike4mind/services/llm/tools';
+import type {
+  AudioToolJobs,
+  MusicToolConfig,
+  ProductionToolConfig,
+  VideoToolConfig,
+} from '@bike4mind/services/llm/tools';
 import { buildSubagentToolConfig } from './agentExecutor.subagentToolConfig';
 
 describe('buildSubagentToolConfig', () => {
@@ -97,6 +102,28 @@ describe('buildSubagentToolConfig', () => {
   it('omits music_generation when there is no music config, so the tool is not offered', () => {
     expect(buildSubagentToolConfig({ musicConfig: null }).music_generation).toBeUndefined();
     expect(buildSubagentToolConfig({}).music_generation).toBeUndefined();
+  });
+
+  it('hands all four production tools the same productionConfig instance', () => {
+    const productionConfig = { createJobs: vi.fn() } as unknown as ProductionToolConfig;
+    const result = buildSubagentToolConfig({ model: 'claude-sonnet-4-6', productionConfig });
+    for (const name of [
+      'production_storyboard',
+      'production_generate_shot',
+      'production_add_audio',
+      'production_assemble',
+    ]) {
+      expect(result[name]).toBe(productionConfig);
+    }
+  });
+
+  it('omits the production tools when there is no production config, so they are not offered', () => {
+    for (const config of [buildSubagentToolConfig({ productionConfig: null }), buildSubagentToolConfig({})]) {
+      expect(config.production_storyboard).toBeUndefined();
+      expect(config.production_generate_shot).toBeUndefined();
+      expect(config.production_add_audio).toBeUndefined();
+      expect(config.production_assemble).toBeUndefined();
+    }
   });
 
   it('threads imageUrlSigningSecret into web_search config so subagent web_search cards can verify', () => {

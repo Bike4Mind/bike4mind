@@ -141,3 +141,24 @@ describe('composition references', () => {
     ]);
   });
 });
+
+describe('shot picks', () => {
+  const withShot = (shot: Record<string, unknown>) =>
+    StudioCompositionContentSchema.parse({
+      title: 'Picks',
+      shots: [{ id: 's1', title: 'One', ...shot }],
+      timeline: defaultStudioTimeline('blank'),
+    });
+
+  it('accepts a pick and a clip drawn from the shot files', () => {
+    const content = withShot({ fileIds: [FILE_A, FILE_B], chosenFileId: FILE_A, clipFileId: FILE_B });
+    expect(validateStudioComposition(content)).toEqual([]);
+  });
+
+  it('refuses a pick outside the shot takes; a clip is its own file, not a take', () => {
+    const content = withShot({ fileIds: [FILE_A], chosenFileId: FILE_B, clipFileId: FILE_C });
+    expect(validateStudioComposition(content).map(issue => [issue.code, issue.path.join('.')])).toEqual([
+      ['unknown_take', 'shots.0.chosenFileId'],
+    ]);
+  });
+});

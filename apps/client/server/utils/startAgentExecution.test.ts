@@ -19,8 +19,14 @@ const {
   mockUserFindById,
   mockPinFiles,
   mockAdmitApiKeyCompletion,
+  mockSessionUpdate,
+  mockFindOwnedComposition,
+  mockIsStudioFeatureEnabled,
 } = vi.hoisted(() => ({
   mockAdmitApiKeyCompletion: vi.fn(),
+  mockSessionUpdate: vi.fn(),
+  mockFindOwnedComposition: vi.fn(),
+  mockIsStudioFeatureEnabled: vi.fn(),
   mockUserFindById: vi.fn(),
   mockPinFiles: vi.fn(),
   mockSend: vi.fn(),
@@ -47,7 +53,8 @@ vi.mock('@aws-sdk/client-lambda', () => ({
 }));
 
 vi.mock('@bike4mind/database', () => ({
-  sessionRepository: { findById: mockSessionFindById },
+  sessionRepository: { findById: mockSessionFindById, update: mockSessionUpdate },
+  studioCompositionRepository: { findOwned: mockFindOwnedComposition },
   organizationRepository: { findById: mockOrgFindById },
   agentExecutionRepository: {
     cleanupStaleActive: mockCleanupStaleActive,
@@ -58,6 +65,10 @@ vi.mock('@bike4mind/database', () => ({
   Quest: { create: mockQuestCreate, deleteOne: mockQuestDeleteOne },
   sessionToolApprovalRepository: { findByUserAndSession: mockFindRememberedApprovals },
   userRepository: { findById: mockUserFindById },
+}));
+
+vi.mock('@bike4mind/server-utils/middlewares/studioFeatureFlag', () => ({
+  isStudioFeatureEnabled: mockIsStudioFeatureEnabled,
 }));
 
 vi.mock('@bike4mind/server-utils/utils/untrustedCompletionQuota', () => ({
@@ -126,6 +137,9 @@ beforeEach(() => {
   mockUserFindById.mockImplementation(async (id: string) => ({ id }));
   mockPinFiles.mockResolvedValue(undefined);
   mockAdmitApiKeyCompletion.mockResolvedValue({ release: vi.fn() });
+  mockSessionUpdate.mockResolvedValue(null);
+  mockFindOwnedComposition.mockImplementation(async (id: string, userId: string) => ({ id, userId }));
+  mockIsStudioFeatureEnabled.mockResolvedValue(true);
 });
 
 describe('startAgentExecution', () => {
@@ -664,6 +678,80 @@ describe('startAgentExecution', () => {
     expect(mockCreateExecution.mock.calls[0][0]).not.toHaveProperty('systemContext');
     expect(mockQuestCreate.mock.calls[0][0]).not.toHaveProperty('systemContext');
     expect(mockQuestCreate.mock.calls[0][0].prompt).not.toContain('Extra instructions');
+  });
+
+  describe('productionCompositionId (a Studio Direct launch)', () => {
+    const compositionId = '64b7f0c2a1b2c3d4e5f60718';
+
+    it('marks the session before dispatch when Productions is open and the caller owns the composition', async () => {
+      mockSend.mockImplementationOnce(async () => {
+        // The executor's first run must already read the marker.
+        expect(mockSessionUpdate).toHaveBeenCalledWith({ id: 's1', productionCompositionId: compositionId });
+      });
+      const result = await startAgentExecution(
+        input({ userId: 'directed-run', productionCompositionId: compositionId }),
+        logger
+      );
+
+      expect(result.ok).toBe(true);
+      expect(mockIsStudioFeatureEnabled).toHaveBeenCalledWith('productions', { user: { id: 'directed-run' } });
+      expect(mockFindOwnedComposition).toHaveBeenCalledWith(compositionId, 'directed-run');
+      expect(mockSend).toHaveBeenCalledTimes(1);
+      expect(dispatchedPayload()).not.toHaveProperty('productionCompositionId');
+    });
+
+    it('ignores the id, without refusing the run, when Productions is closed to the caller', async () => {
+      mockIsStudioFeatureEnabled.mockResolvedValueOnce(false);
+      const result = await startAgentExecution(
+        input({ userId: 'directed-closed', productionCompositionId: compositionId }),
+        logger
+      );
+
+      expect(result.ok).toBe(true);
+      expect(mockFindOwnedComposition).not.toHaveBeenCalled();
+      expect(mockSessionUpdate).not.toHaveBeenCalled();
+    });
+
+    it("ignores another user's composition", async () => {
+      mockFindOwnedComposition.mockResolvedValueOnce(null);
+      const result = await startAgentExecution(
+        input({ userId: 'directed-foreign', productionCompositionId: compositionId }),
+        logger
+      );
+
+      expect(result.ok).toBe(true);
+      expect(mockSessionUpdate).not.toHaveBeenCalled();
+    });
+
+    it('never marks a session from an API-key run', async () => {
+      await startAgentExecution(
+        input({
+          userId: 'directed-key',
+          productionCompositionId: compositionId,
+          apiKeyInfo: {
+            keyId: 'k1',
+            scopes: [ApiKeyScope.AI_CHAT],
+            ownerUntrusted: false,
+            billingOwnerType: CreditHolderType.User,
+          },
+        }),
+        logger
+      );
+
+      expect(mockIsStudioFeatureEnabled).not.toHaveBeenCalled();
+      expect(mockSessionUpdate).not.toHaveBeenCalled();
+    });
+
+    it('still dispatches when the mark fails', async () => {
+      mockSessionUpdate.mockRejectedValueOnce(new Error('write failed'));
+      const result = await startAgentExecution(
+        input({ userId: 'directed-write-fails', productionCompositionId: compositionId }),
+        logger
+      );
+
+      expect(result.ok).toBe(true);
+      expect(mockSend).toHaveBeenCalledTimes(1);
+    });
   });
 
   it('omits systemContext from the start payload when the caller sends none', async () => {

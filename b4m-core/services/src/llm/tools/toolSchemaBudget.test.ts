@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { ToolBuilder, type ToolBuilderConfig, type BuildToolsArgs } from './ToolBuilder';
-import { b4mTools } from './index';
+import { PRODUCTION_TOOL_NAMES, b4mTools } from './index';
 import { AUTO_ADDED_TOOL_NAMES, resolveEnabledTools } from '../ChatCompletionProcess';
 import { createTokenizer } from '@bike4mind/utils';
 import { MUSIC_MODEL_IDS, VIDEO_MODEL_IDS } from '@bike4mind/common';
@@ -41,11 +41,12 @@ const UNLISTED_TOOL_CEILING = 600;
 const AUTO_ADDED_CEILING = 1650;
 const AUTO_ADDED_PLUS_KNOWLEDGE_CEILING = 2450;
 /**
- * Headroom for a few new tools, so legitimate growth does not force a ceiling bump. Raised once,
- * for `decide`, whose nested question schema is structure rather than prose: the per-tool ceiling
- * below is what keeps a single description honest.
+ * Headroom for a few new tools, so legitimate growth does not force a ceiling bump. Raised for
+ * `decide`, whose nested question schema is structure rather than prose, and for the four
+ * `production_*` tools, which are built only for a run with a production config (an admin with
+ * Productions on, in agent mode). The per-tool ceiling below is what keeps a single description honest.
  */
-const WHOLE_REGISTRY_CEILING = 11400;
+const WHOLE_REGISTRY_CEILING = 12800;
 
 /**
  * Derived, never hand-copied: the knowledge offer drags its companions along via addPairedTool
@@ -74,6 +75,16 @@ const REPRESENTATIVE_AUDIO_CONFIG = {
   },
 };
 
+const REPRESENTATIVE_PRODUCTION_CONFIG = {
+  compositions: { get: vi.fn(), update: vi.fn() },
+  image: {},
+  imageModels: [],
+  video: REPRESENTATIVE_VIDEO_CONFIG,
+  music: REPRESENTATIVE_MUSIC_CONFIG,
+  audio: REPRESENTATIVE_AUDIO_CONFIG,
+  findJobs: vi.fn(),
+};
+
 function buildSchemas(enabledTools: string[]) {
   const builder = new ToolBuilder({
     user: { id: 'budget-probe' },
@@ -98,6 +109,7 @@ function buildSchemas(enabledTools: string[]) {
         video_generation: REPRESENTATIVE_VIDEO_CONFIG,
         music_generation: REPRESENTATIVE_MUSIC_CONFIG,
         audio_generation: REPRESENTATIVE_AUDIO_CONFIG,
+        ...Object.fromEntries(PRODUCTION_TOOL_NAMES.map(name => [name, REPRESENTATIVE_PRODUCTION_CONFIG])),
       },
     } as unknown as BuildToolsArgs) ?? []
   );
