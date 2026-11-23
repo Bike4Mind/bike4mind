@@ -11,7 +11,7 @@ import type { RootPolicy, ModelSelection, WorkerTask } from './orchestration';
  */
 
 import type { GithubRef } from './githubRefs';
-import type { GenerationJobState, PromptCacheTtl, ValidationViolation } from '@bike4mind/common';
+import type { GenerationJobState, PlanProgress, PromptCacheTtl, ValidationViolation } from '@bike4mind/common';
 import type { ReasoningEffortSetting } from '@bike4mind/local-models/model-settings';
 import type { ChildOutcome } from './agentOutcome';
 import type { ChatImportOrigin } from './claudeImport';
@@ -1542,6 +1542,8 @@ export interface ChatSessionSummary extends ChatSessionMeta {
   totalCredits?: number;
   /** Issue and PR refs the transcript mentions, first seen first; absent when none. See githubRefs.ts. */
   githubRefs?: GithubRef[];
+  /** Progress of the thread's latest plan; absent when it has none. See todos.ts. */
+  plan?: PlanProgress;
 }
 
 export interface ChatSession extends ChatSessionMeta {

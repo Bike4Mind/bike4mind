@@ -1,3 +1,4 @@
+import type { PlanProgress } from '@bike4mind/common';
 import {
   pendingDecisionOf,
   type ModelSelection,
@@ -51,6 +52,7 @@ export interface AgentView {
   lastSnippet?: string;
   usdCost?: number;
   credits?: number;
+  plan?: PlanProgress;
   pr?: PrSummary;
   branch?: string;
   /**
@@ -138,6 +140,7 @@ export function buildRoster(input: {
       lastSnippet: session.lastSnippet,
       usdCost: session.totalUsdCost,
       credits: session.totalCredits,
+      plan: session.plan,
       pr: prSummaries.get(session.id),
       branch: session.project?.workspaceBranch ?? session.project?.branch,
     });

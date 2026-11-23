@@ -35,6 +35,7 @@ import {
   COMPLETION_RUN_MAX_BUDGET_CREDITS,
   DEFAULT_PROMPT_CACHE_TTL,
   type CompletionRunAttribution,
+  type PlanProgress,
   type PromptCacheTtl,
 } from '@bike4mind/common';
 import { localRunSettlement, type RunSpend } from '@shared/runSpend';
@@ -143,7 +144,7 @@ import {
   type McpServerRequestOutcome,
   type McpServerState,
 } from '@shared/mcp';
-import { activeTodos, TODO_TOOL_NAME } from '@shared/todos';
+import { activeTodos, latestTodos, TODO_TOOL_NAME, todoProgress } from '@shared/todos';
 import { autoFixToolRefusal } from '../pr/autoFix';
 import type { PrMonitor } from '../pr/PrMonitor';
 import type { ArtifactPublisher } from './artifacts/ArtifactPublisher';
@@ -1001,6 +1002,13 @@ export class ChatService {
     }
   }
 
+  /**
+   * The plan progress of each session with a turn in flight, `null` once its thread has no plan.
+   * A reply is stored only when it settles, so a stored summary lags a plan the model updates
+   * mid-turn; every summary pushed, listed or returned by a setter or folder grant goes through withLivePlan, which lays this over it.
+   */
+  private readonly livePlans = new Map<string, PlanProgress | null>();
+
   /** The events of each reply in flight since its 'start'; see getSession. */
   private readonly live = new Map<string, { messageId: string; startedAt: number; events: ChatStreamEvent[] }>();
 
@@ -1192,8 +1200,8 @@ export class ChatService {
     this.skillsPrompt = deps.skills ? new SkillsPromptCache(deps.skills) : undefined;
   }
 
-  listSessions(): Promise<ChatSessionSummary[]> {
-    return this.deps.store.list();
+  async listSessions(): Promise<ChatSessionSummary[]> {
+    return (await this.deps.store.list()).map(summary => this.withLivePlan(summary));
   }
 
   /** Every session that is busy right now, for a renderer that has just mounted. */
@@ -1343,7 +1351,7 @@ export class ChatService {
       this.dropHeldFrom(sessionId);
       await this.announceSuggestions(sessionId);
     }
-    return updated;
+    return this.liveSummary(updated);
   }
 
   childArchiveStatus(session: Pick<ChatSessionSummary, 'id' | 'workerTask'>): 'finished' | 'running' | 'waiting' {
@@ -1377,7 +1385,7 @@ export class ChatService {
       for (const entry of this.heldRelaysFor(id)) await this.resolveHeldRelay(id, entry.id, true);
       this.dropHeldFrom(id);
       await this.announceSuggestions(id);
-      this.deps.summaryChanged?.(updated);
+      this.emitSummary(updated);
     }
   }
 
@@ -1427,8 +1435,8 @@ export class ChatService {
           throw error;
         }
       }
-      if (summary && isCurrentOperation()) this.deps.summaryChanged?.(summary);
-      return summary;
+      if (summary && isCurrentOperation()) this.emitSummary(summary);
+      return this.liveSummary(summary);
     } finally {
       if (isCurrentOperation()) this.historySettings.delete(key);
     }
@@ -1808,7 +1816,7 @@ export class ChatService {
       );
       if (!summary) return { error: 'That conversation no longer exists.' };
       // The sidebar row says "Preparing worktree..." off this project until it hears otherwise.
-      this.deps.summaryChanged?.(summary);
+      this.emitSummary(summary);
       // A folder shared while the worktree was being cut lives in the store, not in `project`.
       session.project = summary.project;
       this.startDependencyInstall(session.id, resolved.workingDirectory, resolved.outcome);
@@ -1985,8 +1993,8 @@ export class ChatService {
       const updated = await this.deps.store.setWorkerModel(sessionId, model, scope);
       if (updated) this.markTaskDecisionMutation(sessionId, scope);
       this.syncTaskDecision(updated, scope);
-      if (updated) this.deps.summaryChanged?.(updated);
-      return updated;
+      if (updated) this.emitSummary(updated);
+      return this.liveSummary(updated);
     }
     const updated = await this.deps.store.setModel(sessionId, model);
     if (updated) {
@@ -1995,25 +2003,25 @@ export class ChatService {
         this.deps.logger.warn(`CHAT: could not remember the model pick: ${err instanceof Error ? err.message : err}`);
       });
     }
-    return updated;
+    return this.liveSummary(updated);
   }
 
   /** Reasoning effort, or thinking On/Off for an Ollama model with a thinking switch. */
   setSessionReasoningEffort(sessionId: string, effort: ReasoningEffortSetting): Promise<ChatSessionSummary | null> {
-    return this.deps.store.setReasoningEffort(sessionId, effort);
+    return this.liveSummary(this.deps.store.setReasoningEffort(sessionId, effort));
   }
 
   setSessionPromptCacheTtl(sessionId: string, ttl: PromptCacheTtl): Promise<ChatSessionSummary | null> {
-    return this.deps.store.setPromptCacheTtl(sessionId, ttl);
+    return this.liveSummary(this.deps.store.setPromptCacheTtl(sessionId, ttl));
   }
 
   /** Replaces this conversation's overrides; an empty set clears them. */
   setSessionGeneration(sessionId: string, generation: GenerationSettings): Promise<ChatSessionSummary | null> {
-    return this.deps.store.setGeneration(sessionId, generation);
+    return this.liveSummary(this.deps.store.setGeneration(sessionId, generation));
   }
 
   setSessionPinned(sessionId: string, pinned: boolean): Promise<ChatSessionSummary | null> {
-    return this.deps.store.setPinned(sessionId, pinned);
+    return this.liveSummary(this.deps.store.setPinned(sessionId, pinned));
   }
 
   /** Read at the start of each turn, so a change applies from the next one. */
@@ -2039,7 +2047,7 @@ export class ChatService {
     }
     if (!orchestrate && !session.origin) await this.deps.store.setOrchestrationPolicy(sessionId, undefined, scope);
     if (this.deps.store.scopeKey() !== scope) return null;
-    return this.deps.store.setOrchestrate(sessionId, orchestrate);
+    return this.liveSummary(this.deps.store.setOrchestrate(sessionId, orchestrate));
   }
 
   /**
@@ -2582,7 +2590,7 @@ export class ChatService {
         scope
       );
       if (!updated) throw new Error('Account or task changed. Reopen the conversation.');
-      this.deps.summaryChanged?.(updated);
+      this.emitSummary(updated);
       if (!parentId) return;
       if (skipped) {
         const latest = (await this.deps.store.get(sessionId)) ?? child;
@@ -2667,7 +2675,7 @@ export class ChatService {
           action.report.status === 'escalation-requested' &&
           task.resolvedDecisions.includes(action.report.decisionId)
         )
-          return summarizeSession(child);
+          return this.withLivePlan(summarizeSession(child));
         if (action.report.status === 'completed') assertReportCoversCriteria(task.contract, action.report);
         next = { ...task, state: reportedState(action.report) };
       } else if (action.kind === 'accept') {
@@ -2703,7 +2711,7 @@ export class ChatService {
             );
             if (!updated) throw new Error('Account or task changed. Reload agent details.');
             if (this.deps.store.scopeKey() !== scope) throw new Error('Account changed. Reopen the conversation.');
-            this.deps.summaryChanged?.(updated);
+            this.emitSummary(updated);
             const canceled = await this.deps.store.get(sessionId);
             if (this.deps.store.scopeKey() !== scope) throw new Error('Account changed. Reopen the conversation.');
             if (!canceled) throw new Error('No structured task exists.');
@@ -2717,7 +2725,7 @@ export class ChatService {
         }
         next = { ...task, state: { status: 'canceled', reason: action.reason } };
       } else if (action.kind === 'deny' || action.kind === 'upgrade') {
-        if (task.resolvedDecisions.includes(action.decisionId)) return summarizeSession(child);
+        if (task.resolvedDecisions.includes(action.decisionId)) return this.withLivePlan(summarizeSession(child));
         if (task.state.status !== 'escalation-requested' || task.state.decisionId !== action.decisionId)
           throw new Error('This decision is no longer pending.');
         if (action.kind === 'deny')
@@ -2820,8 +2828,8 @@ export class ChatService {
       }
       const latest = await this.deps.store.get(sessionId);
       const summary = latest ? summarizeSession(latest) : updated;
-      this.deps.summaryChanged?.(summary);
-      return summary;
+      this.emitSummary(summary);
+      return this.withLivePlan(summary);
     } finally {
       if (action.kind !== 'report') this.taskDecisions.delete(key);
     }
@@ -2836,7 +2844,7 @@ export class ChatService {
    * access to the machine, which is the one escalation this whole feature has to not have.
    */
   setApprovalMode(sessionId: string, mode: ChatApprovalMode): Promise<ChatSessionSummary | null> {
-    return this.deps.store.setApprovalMode(sessionId, mode);
+    return this.liveSummary(this.deps.store.setApprovalMode(sessionId, mode));
   }
 
   /** The folders this session's tools may read, for links to files a reply names; null for an unknown session. */
@@ -2875,7 +2883,7 @@ export class ChatService {
     return {
       status: 'added',
       path: inspection.path,
-      session: granted.session,
+      session: this.withLivePlan(granted.session),
       ...(inspection.warning ? { warning: inspection.warning } : {}),
     };
   }
@@ -2904,7 +2912,7 @@ export class ChatService {
           )
           .catch(error => this.deps.logger.warn(`CAPABILITIES: could not audit folder revocation: ${String(error)}`));
     }
-    return updated;
+    return updated && this.withLivePlan(updated);
   }
 
   refreshAccessScopes(): void {
@@ -2999,7 +3007,7 @@ export class ChatService {
         if (!isUpdateOnlyTask(current.state)) return current;
         return { ...current, attentionViewed: true };
       });
-      if (updated) this.deps.summaryChanged?.(updated);
+      if (updated) this.emitSummary(updated);
       session = await this.deps.store.get(sessionId);
     }
     const preparing = this.preparing.get(sessionId);
@@ -3016,6 +3024,48 @@ export class ChatService {
     return { ...session, messages, replyInFlight: { messageId: live.messageId, startedAt: live.startedAt } };
   }
 
+  private withLivePlan(summary: ChatSessionSummary): ChatSessionSummary {
+    if (!this.livePlans.has(summary.id)) return summary;
+    const { plan: _stored, ...rest } = summary;
+    const live = this.livePlans.get(summary.id);
+    return live ? { ...rest, plan: live } : rest;
+  }
+
+  /** For the summaries a setter hands back over IPC: the renderer swaps them into the row, so they carry the live plan too. */
+  private async liveSummary(summary: ChatSessionSummary | null | Promise<ChatSessionSummary | null>) {
+    const resolved = await summary;
+    return resolved && this.withLivePlan(resolved);
+  }
+
+  private emitSummary(summary: ChatSessionSummary): void {
+    this.deps.summaryChanged?.(this.withLivePlan(summary));
+  }
+
+  /** Records the plan the turn's calls so far leave, and pushes the session's summary when it moved. */
+  private async publishLivePlan(sessionId: string, history: readonly ChatMessage[]): Promise<void> {
+    const items = latestTodos(history);
+    const progress = items && todoProgress(items);
+    const next = progress?.total ? progress : null;
+    const known = this.livePlans.has(sessionId);
+    const prev = this.livePlans.get(sessionId) ?? null;
+    if (JSON.stringify(prev) === JSON.stringify(next)) {
+      if (!known) this.livePlans.set(sessionId, next);
+      return;
+    }
+    this.livePlans.set(sessionId, next);
+    await this.pushStoredSummary(sessionId);
+  }
+
+  /** A failed read must not abort the turn: the push is display-only. */
+  private async pushStoredSummary(sessionId: string): Promise<void> {
+    try {
+      const stored = await this.deps.store.get(sessionId);
+      if (stored) this.emitSummary(summarizeSession(stored));
+    } catch (error) {
+      this.deps.logger.debug(`CHAT: could not push summary for ${sessionId}: ${String(error)}`);
+    }
+  }
+
   private emit(event: ChatStreamEvent): void {
     this.trackLive(event);
     this.deps.emit(event);
@@ -3023,8 +3073,14 @@ export class ChatService {
 
   private trackLive(event: ChatStreamEvent): void {
     if (event.type === 'start') {
+      this.livePlans.delete(event.sessionId);
       this.live.set(event.sessionId, { messageId: event.messageId, startedAt: Date.now(), events: [event] });
       return;
+    }
+    // settleReply has usually dropped `live` before 'done', so the overlay is cleared first.
+    // The reply is stored by now, so one push hands the renderer the stored plan.
+    if ((event.type === 'done' || event.type === 'error') && this.livePlans.delete(event.sessionId)) {
+      void this.pushStoredSummary(event.sessionId);
     }
     const events = this.live.get(event.sessionId)?.events;
     if (!events) return;
@@ -3051,7 +3107,7 @@ export class ChatService {
   }
 
   renameSession(sessionId: string, title: string): Promise<ChatSessionSummary | null> {
-    return this.deps.store.rename(sessionId, title);
+    return this.liveSummary(this.deps.store.rename(sessionId, title));
   }
 
   /**
@@ -3222,6 +3278,7 @@ export class ChatService {
     const decisionScope = expectedScope;
     this.deps.approvals?.forgetSession(sessionId);
     this.deps.history?.removeSession(sessionId, historyScope);
+    this.livePlans.delete(sessionId);
     // Ahead of stop(), so a spawn still preparing reads this as the delete it is.
     if (this.launching.has(sessionId)) this.launchInterrupts.set(sessionId, 'deleted');
     this.stop(sessionId);
@@ -3591,7 +3648,7 @@ export class ChatService {
       taskClosed = updated.workerTask?.state.status === 'canceled';
       if (taskClosed && !userFollowUp) return { ok: false, error: CANCELED_TASK_REFUSAL };
       if (!taskClosed) {
-        this.deps.summaryChanged?.(updated);
+        this.emitSummary(updated);
         if (reconciled.origin) this.spawnWatch.set(sessionId, { parentSessionId: reconciled.origin.parentSessionId });
       }
     }
@@ -4149,6 +4206,8 @@ export class ChatService {
         this.active.delete(sessionId);
         this.autoFixTurns.delete(sessionId);
         this.attendedTurns.delete(sessionId);
+        // Backstop for a turn that ended without a 'done'/'error' (its own bookkeeping threw).
+        if (this.livePlans.delete(sessionId)) void this.pushStoredSummary(sessionId);
         this.deps.activity?.replyEnded(sessionId, outcome === 'completed' && finalReply.content.trim().length > 0);
         // All three need the session to be idle, and this is the moment it becomes so: a
         // spawned run gives its concurrency slot back and reports to its parent, and a parent
@@ -4253,7 +4312,7 @@ export class ChatService {
     if (!session) return null;
     const settled = await this.settleDeviceLocal(session, (await this.deps.models?.listLocal?.()) ?? []);
     if ('error' in settled || !settled.summary) return null;
-    return { session: settled.summary, ...(settled.notice ? { notice: settled.notice } : {}) };
+    return { session: this.withLivePlan(settled.summary), ...(settled.notice ? { notice: settled.notice } : {}) };
   }
 
   /**
@@ -5201,6 +5260,8 @@ export class ChatService {
         roundsSincePlanUpdate = settled.some(call => call.name === TODO_TOOL_NAME && call.status === 'done')
           ? 0
           : roundsSincePlanUpdate + 1;
+        // The whole thread, as summarizeSession reads it, so live and stored agree after a boundary.
+        await this.publishLivePlan(sessionId, [...session.messages, replySoFar(toolCalls)]);
         // Appended HERE and nowhere else. toolResultContent is also what the two history
         // rebuilds send, so folding this into it would rewrite the text of already-sent
         // messages and break the prompt-cache prefix on every later turn (see contextPruning).
@@ -7755,7 +7816,7 @@ export class ChatService {
         );
         child = (await this.deps.store.get(sessionId)) ?? child;
       }
-      this.deps.summaryChanged?.(summarizeSession(child));
+      this.emitSummary(summarizeSession(child));
       // Waiting on the user is not settled: the parent hears once they answer and the task resumes, or skip.
       if (!pendingDecisionOf(child.workerTask)) await this.reportSettledAgent(parentId, child, localOnly);
     } finally {
@@ -9005,7 +9066,7 @@ export class ChatService {
       if (!title) return;
 
       const summary = await this.deps.store.applyGeneratedTitle(session.id, title);
-      if (summary) this.deps.summaryChanged?.(summary);
+      if (summary) this.emitSummary(summary);
     } catch (err) {
       this.deps.logger.debug(`CHAT: could not name ${session.id}: ${err instanceof Error ? err.message : 'unknown'}`);
     } finally {

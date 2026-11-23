@@ -13,6 +13,7 @@ import {
   CaretDownIcon,
   CheckIcon,
   ConstellationIcon,
+  PlanIcon,
   SwimlanesIcon,
   TableIcon,
   TavernIcon,
@@ -95,6 +96,13 @@ export const ORCHESTRATOR_VIEW_INFO: Record<OrchestratorViewId, ViewInfo> = {
     description: 'Every agent in sortable rows',
     group: 'layout',
     icon: <TableIcon />,
+    ambient: false,
+  },
+  plan: {
+    label: 'Plan',
+    description: 'Done, working on and next for every agent',
+    group: 'layout',
+    icon: <PlanIcon />,
     ambient: false,
   },
   'tile-wall': {
