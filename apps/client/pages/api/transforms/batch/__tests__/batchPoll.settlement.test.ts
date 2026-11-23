@@ -384,6 +384,9 @@ describe('GET /api/transforms/batch/:id settlement', () => {
 
     expect(m.markSettled).toHaveBeenCalledWith('row1');
     expect(m.record).toHaveBeenCalledWith(expect.objectContaining({ creditsCharged: 0 }));
+    // The provider still billed the batch, so its spend line is written even though nothing was charged.
+    expect(m.usageLine).toHaveBeenCalledOnce();
+    expect(m.usageLine).toHaveBeenCalledWith(expect.objectContaining({ model: 'm1', usd: expect.closeTo(0.11, 6) }));
   });
 
   it('still settles and returns the results when the results write fails', async () => {
