@@ -54,6 +54,7 @@
     "mongoose": "^8.24.7",
     "p-limit": "^7.3.2",
     "playwright-core": "1.64.0",
+    "pyodide": "0.25.1",
     "sharp": "^0.35.5",
     "sst": "4.17.1",
     "stripe": "^22.6.2",

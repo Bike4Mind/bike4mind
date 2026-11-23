@@ -359,6 +359,15 @@ def _output_type_problems(field, value, path, problems):
             if isinstance(name, str) and name in field['properties']:
                 _output_type_problems(field['properties'][name], item, path + '.' + name if path else name, problems)
 
+# The class name as traceback prints it, taken from the exception's type so a message cannot change it.
+def _error_class(e):
+    try:
+        kind = type(e)
+        name = kind.__qualname__ if kind.__module__ in ('builtins', '__main__') else kind.__module__ + '.' + kind.__qualname__
+        return str(name)[:100]
+    except Exception:
+        return 'Exception'
+
 def _b4m_call_function(code, params_json):
     stdout = StringIO()
     stderr = StringIO()
@@ -370,6 +379,7 @@ def _b4m_call_function(code, params_json):
     value_json = None
     output_problems = []
     error = None
+    error_class = None
     try:
         namespace = {'__name__': 'b4m_function'}
         exec(compile(code, 'function.py', 'exec'), namespace)
@@ -402,8 +412,9 @@ def _b4m_call_function(code, params_json):
             _output_type_problems(contract.get('outputs'), value, '', output_problems)
     except _FunctionCallError as e:
         error = str(e)
-    except Exception:
+    except BaseException as e:
         error = traceback.format_exc()
+        error_class = _error_class(e)
     finally:
         sys.stdout = original_stdout
         sys.stderr = original_stderr
@@ -414,6 +425,7 @@ def _b4m_call_function(code, params_json):
         'stdout': stdout.getvalue()[:_MAX_OUTPUT_CHARS],
         'stderr': stderr.getvalue()[:_MAX_OUTPUT_CHARS],
         'error': None if error is None else error[:_MAX_OUTPUT_CHARS],
+        'error_class': error_class,
     }
 
 _b4m_call_function(_fn_code, _fn_params_json)

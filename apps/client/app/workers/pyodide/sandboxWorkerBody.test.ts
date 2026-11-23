@@ -4,7 +4,13 @@ import path from 'path';
 import { pyodideSandboxWorkerBody } from './sandboxWorkerBody';
 import type { PyodideWorkerMessage, PyodideWorkerResponse } from './types';
 import { DEFAULT_PYODIDE_BASE_URL } from '@client/app/utils/pyodideDistribution';
-import { FUNCTION_CONTRACT_GLOBAL, FUNCTION_CONTRACT_LIMITS, FUNCTION_ENTRY_POINT } from '@bike4mind/common';
+import {
+  FUNCTION_CALL_GLUE_PY,
+  FUNCTION_CONTRACT_GLOBAL,
+  FUNCTION_CONTRACT_LIMITS,
+  FUNCTION_ENTRY_POINT,
+  PYODIDE_VERSION,
+} from '@bike4mind/common';
 
 /**
  * The worker body is shipped by serializing it, so its correctness depends on properties the
@@ -43,6 +49,11 @@ describe('pyodideSandboxWorkerBody serialization', () => {
     // The body cannot import the constant (see above), so the copies are checked in lockstep.
     // A drift means Pyodide fetches from an origin connect-src does not name, and fails closed.
     expect(source).toContain(DEFAULT_PYODIDE_BASE_URL);
+  });
+
+  it('runs the call glue and the Pyodide release the server runtime shares', () => {
+    expect(source).toContain(FUNCTION_CALL_GLUE_PY);
+    expect(DEFAULT_PYODIDE_BASE_URL).toContain(`/v${PYODIDE_VERSION}/`);
   });
 
   it('loads function code as a module other than __main__ and refuses NaN in JSON', () => {
