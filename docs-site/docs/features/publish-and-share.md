@@ -121,8 +121,8 @@ The URL is absolute, for example `https://app.example.com/p/u/<userId>/<slug>`. 
 ### The `artifacts:publish` scope
 
 - API keys created before this scope existed need `artifacts:publish` added. Creating a key with **Full access** includes it.
-- The scope covers only the three v1 routes above. The web app's `/api/publish` routes are unchanged and are not affected by it.
-- The scope does not let a key read artifacts. Add a read scope as well if the same key also lists or fetches artifacts.
+- The scope covers the three v1 routes above. It also applies when you call these web app routes with an API key: `POST /api/publish/artifact/upload-url`, `POST /api/publish/artifact/finalize`, `GET /api/publish/artifacts` and `/api/publish/artifacts/<id>`. Existing keys keep working on those routes for now; add `artifacts:publish` to any key you publish with.
+- The scope does not let a key read your stored artifacts. Add `notebooks:read` as well if the same key also lists or fetches artifacts through `/api/v1/artifacts`.
 
 ### What gets published
 
