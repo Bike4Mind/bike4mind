@@ -134,6 +134,7 @@ const makeGatedDeps = (over: GatedOver = {}) => {
       releaseBriefStart: vi.fn().mockResolvedValue(true),
     },
     hasRunsSince: vi.fn().mockResolvedValue(over.hasRuns ?? true),
+    hasPendingEmails: vi.fn().mockResolvedValue(false),
   };
 };
 const asDeps = (deps: ReturnType<typeof makeGatedDeps>) => deps as unknown as ScheduledBriefDeps;

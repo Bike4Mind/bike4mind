@@ -6,6 +6,8 @@ import {
   User,
   agentExecutionRepository,
   assistantBriefRepository,
+  emailTriageItemRepository,
+  EMAIL_TRIAGE_KINDS,
   userRepository,
 } from '@bike4mind/database';
 import { createMongoServer, MONGO_TEST_TIMEOUT_MS } from '../../../database/src/__test__/createMongoServer';
@@ -65,6 +67,10 @@ const makeDeps = () => {
     hasRunsSince: async (userId, since) =>
       (await agentExecutionRepository.findByUserIdPaginated(userId, { fromDate: since }, { limit: 1 })).items.length >
       0,
+    hasPendingEmails: async (userId, end) =>
+      (
+        await Promise.all(EMAIL_TRIAGE_KINDS.map(kind => emailTriageItemRepository.listPending(userId, end, 1, kind)))
+      ).some(items => items.length > 0),
     publishCompose,
     now: () => now,
   };
