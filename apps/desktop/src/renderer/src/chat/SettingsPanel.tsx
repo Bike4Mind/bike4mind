@@ -46,6 +46,7 @@ import {
   SubSessionsIcon,
 } from './icons';
 import { nestedSessionsSummary, useNestedSessions } from './nestedSessions';
+import { prAttentionSortSummary, usePrAttentionSort } from './prAttentionSort';
 import { useMenuBarSetting } from './menuBarSetting';
 import type { NotifyScope } from '@shared/attention';
 import { notifyScopeSummary, useNotifyScope } from './notifyScopeSetting';
@@ -212,6 +213,27 @@ function nestedSessionsEntry(enabled: boolean, toggle: () => void): ConfigEntry 
         onChange={toggle}
         slotProps={{
           input: { 'aria-label': 'Nest sub-sessions', 'data-testid': 'settings-nested-sessions-switch' },
+        }}
+      />
+    ),
+  };
+}
+
+function prAttentionSortEntry(enabled: boolean, setEnabled: (enabled: boolean) => void): ConfigEntry {
+  return {
+    id: 'pr-attention-sort',
+    icon: <PullRequestIcon />,
+    label: 'Sort by pull request attention',
+    summary: prAttentionSortSummary(enabled),
+    description:
+      'Within each sidebar group, list sessions whose pull request has conflicts, failing CI or requested changes first.',
+    control: (
+      <Switch
+        size="sm"
+        checked={enabled}
+        onChange={event => setEnabled(event.target.checked)}
+        slotProps={{
+          input: { 'aria-label': 'Sort by pull request attention', 'data-testid': 'settings-pr-attention-sort-switch' },
         }}
       />
     ),
@@ -672,6 +694,8 @@ function useSettingsEntries(
   const [claudeImport, setClaudeImport, importError, retryImport] = useClaudeImport();
   const [worktreeDefault, toggleWorktreeDefault] = useWorktreeByDefault();
   const [nestedSessions, toggleNestedSessions] = useNestedSessions();
+  const sortByAttention = usePrAttentionSort(state => state.sortByAttention);
+  const setSortByAttention = usePrAttentionSort(state => state.setSortByAttention);
   const [orchestratorSound, toggleOrchestratorSound] = useOrchestratorSound();
   const [autoFixAttempts, setAutoFixAttempts, autoFixAttemptsError] = useAutoFixAttempts();
   const [menuBar, toggleMenuBar] = useMenuBarSetting();
@@ -689,6 +713,7 @@ function useSettingsEntries(
       spawnLocationEntry(spawnLocation, setSpawnLocation),
       autoFixAttemptsEntry(autoFixAttempts, next => void setAutoFixAttempts(next), autoFixAttemptsError),
       nestedSessionsEntry(nestedSessions, toggleNestedSessions),
+      prAttentionSortEntry(sortByAttention, setSortByAttention),
       orchestratorSoundEntry(orchestratorSound, toggleOrchestratorSound),
       orchestratorSoundMixEntry(),
       notifyScopeEntry(notifyScope, setNotifyScope),
@@ -762,6 +787,7 @@ const GENERAL_GROUPS = [
       'notify-scope',
       'menu-bar',
       'nested-sessions',
+      'pr-attention-sort',
     ],
   },
   {

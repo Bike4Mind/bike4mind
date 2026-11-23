@@ -5,7 +5,7 @@ import type { ChildOutcome } from '@shared/agentOutcome';
 import { AGENT_STATE_LABEL, deriveAgentState } from '@shared/agentState';
 import type { ChatSessionStatus } from '@shared/chat';
 import type { PrSummary } from '@shared/pullRequest';
-import { PR_STATE_LABEL, PrStateIcon } from './prStateStyle';
+import { PrStateIcon, prIconLabel } from './prStateStyle';
 import { STATUS_LABEL, WORKING_COLOR } from './sessionStatus';
 
 const sweep = keyframes({ from: { transform: 'rotate(0deg)' }, to: { transform: 'rotate(360deg)' } });
@@ -55,7 +55,7 @@ export function SessionBadge({
   const marker = badgeMarker(status, outcome, pr !== undefined);
   const label =
     marker === 'pr' && pr
-      ? `PR #${pr.number} - ${PR_STATE_LABEL[pr.state]}`
+      ? prIconLabel(pr.number, pr)
       : marker === 'needs-you' && deciding
         ? 'Needs your decision'
         : marker === 'failed' || marker === 'stopped'
@@ -70,6 +70,7 @@ export function SessionBadge({
       data-status={status}
       data-state={marker}
       data-pr-state={marker === 'pr' && pr ? pr.state : undefined}
+      data-pr-attention={marker === 'pr' && pr && pr.state === 'open' ? pr.attention : undefined}
       sx={{
         position: 'relative',
         width: BADGE_SIZE,
@@ -133,7 +134,7 @@ export function SessionBadge({
         </Box>
       )}
 
-      {marker === 'pr' && pr && <PrStateIcon state={pr.state} size={BADGE_SIZE} />}
+      {marker === 'pr' && pr && <PrStateIcon status={pr} size={BADGE_SIZE} />}
 
       {marker === 'stopped' && <Box sx={{ width: 7, height: 7, borderRadius: '2px', bgcolor: 'text.secondary' }} />}
 
