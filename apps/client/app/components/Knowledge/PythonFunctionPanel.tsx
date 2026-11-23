@@ -428,6 +428,8 @@ const failureToast = (title: string) => (error: unknown) => {
   toast.error(title, reason ? { description: reason } : undefined);
 };
 
+const DELETE_TITLE = 'Delete this tool?';
+
 /** Turn off or Turn on, and Delete, for one tool; `testIdPrefix` keeps the named tool's ids apart from the others'. */
 function ToolControls({
   tool,
@@ -457,6 +459,7 @@ function ToolControls({
           variant="outlined"
           color="neutral"
           loading={setEnabled.isPending}
+          aria-label={`${tool.enabled ? 'Turn off' : 'Turn on'} ${tool.slug}`}
           data-testid={`${testIdPrefix}-enable-btn`}
           onClick={() =>
             setEnabled.mutate(
@@ -475,6 +478,7 @@ function ToolControls({
         size="sm"
         variant="outlined"
         color="danger"
+        aria-label={`Delete ${tool.slug}`}
         data-testid={`${testIdPrefix}-delete-btn`}
         onClick={() => onDelete(tool)}
       >
@@ -611,7 +615,7 @@ function FunctionSaveSection({ save, contract }: { save: PythonFunctionSave; con
               Update to version {saved.latestVersion}
             </Button>
           )}
-          <ToolControls tool={saved} testIdPrefix="python-function" onDelete={setDeleting} />
+          <ToolControls key={saved.id} tool={saved} testIdPrefix="python-function" onDelete={setDeleting} />
         </Stack>
       </Stack>
     );
@@ -641,11 +645,12 @@ function FunctionSaveSection({ save, contract }: { save: PythonFunctionSave; con
           <ModalDialog
             variant="outlined"
             role="alertdialog"
+            aria-label={DELETE_TITLE}
             data-testid="python-function-delete-dialog"
             sx={{ maxWidth: 500 }}
           >
             <ModalClose disabled={remove.isPending} />
-            <Typography level="h4">Delete this tool?</Typography>
+            <Typography level="h4">{DELETE_TITLE}</Typography>
             <Divider sx={{ my: 2 }} />
             <Typography level="body-md">
               This deletes the tool <code>{deleting.slug}</code>. The artifact is not changed.

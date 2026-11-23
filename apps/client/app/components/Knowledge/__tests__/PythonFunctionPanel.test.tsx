@@ -668,6 +668,17 @@ describe('PythonFunctionPanel save controls', () => {
     );
   });
 
+  it('the delete confirm is an alert dialog named by its title', async () => {
+    fns.saved = { data: savedView(), isLoading: false };
+    await renderReady(TARGET);
+
+    fireEvent.click(screen.getByTestId('python-function-delete-btn'));
+
+    expect(screen.getByRole('alertdialog', { name: 'Delete this tool?' })).toBe(
+      screen.getByTestId('python-function-delete-dialog')
+    );
+  });
+
   it('Cancel in the delete dialog deletes nothing', async () => {
     fns.saved = { data: savedView(), isLoading: false };
     await renderReady(TARGET);
@@ -929,6 +940,31 @@ describe('PythonFunctionPanel save controls', () => {
 
       expect(screen.queryByTestId('python-function-other-tools')).toBeNull();
       await waitFor(() => expect(document.activeElement).toBe(screen.getByTestId('python-function-save-btn')));
+    });
+
+    it('names each tool on its Turn off and Delete buttons, and deletes the tool whose button was clicked', async () => {
+      fns.saved = { data: savedView(), isLoading: false };
+      fns.others = [savedView({ id: 'fn-2', slug: 'beam_midspan_deflection_v2' })];
+      await renderReady(TARGET);
+
+      expect(screen.getByRole('button', { name: 'Turn off beam_midspan_deflection' })).toBeTruthy();
+      expect(screen.getByRole('button', { name: 'Turn off beam_midspan_deflection_v2' })).toBeTruthy();
+      expect(screen.getByRole('button', { name: 'Delete beam_midspan_deflection' })).toBeTruthy();
+
+      fireEvent.click(screen.getByRole('button', { name: 'Delete beam_midspan_deflection_v2' }));
+      const dialog = screen.getByRole('alertdialog');
+      expect(dialog.textContent).toContain('This deletes the tool beam_midspan_deflection_v2.');
+      fireEvent.click(within(dialog).getByTestId('python-function-delete-confirm-btn'));
+
+      expect(fns.remove.mutate).toHaveBeenCalledTimes(1);
+      expect(fns.remove.mutate.mock.calls[0][0]).toBe('fn-2');
+    });
+
+    it('names a turned-off tool on its Turn on button', async () => {
+      fns.others = [savedView({ enabled: false, status: 'disabled' })];
+      await renderRenamed();
+
+      expect(screen.getByRole('button', { name: 'Turn on beam_midspan_deflection' })).toBeTruthy();
     });
 
     it('shows none when the artifact has no other tools', async () => {
