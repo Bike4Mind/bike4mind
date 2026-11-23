@@ -498,6 +498,7 @@ describe('device-local conversation boundary', () => {
       await vi.waitUntil(() => events.some(event => event.type === 'message' && event.sessionId === parentId));
       const report = (await store.get(parentId))?.messages.at(-1);
       expect(report?.content).toBe('A device-local child session finished. Open that conversation to read its report.');
+      expect(report?.childReport).toBeUndefined();
       expect(JSON.stringify(report)).not.toContain('private local failure details');
       expect(JSON.stringify(report)).not.toContain('Private task title');
     }

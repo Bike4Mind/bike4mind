@@ -101,6 +101,7 @@ import { HeldRelayCard } from './HeldRelayCard';
 import { SessionOpenerContext } from './SessionLink';
 import { clampQuote, quotedMessage } from './quotedReply';
 import { SpawnSuggestionTray } from './SpawnSuggestionTray';
+import { ChildrenStrip } from './ChildrenStrip';
 import { useHeldRelays } from './useHeldRelays';
 import { TaskDecisionCards, decisionsFor, useTaskDecisions } from './TaskDecisionCards';
 import { pendingDecisionOf } from '@shared/orchestration';
@@ -2169,6 +2170,13 @@ export function ChatShell({
                     suggestions={spawnSuggestions.suggestions}
                     onStart={onStartSuggestion}
                     onDismiss={spawnSuggestions.dismiss}
+                  />
+
+                  <ChildrenStrip
+                    sessions={sessions}
+                    statuses={statuses}
+                    parentId={persistedId}
+                    onOpenSession={selectSession}
                   />
                 </>
               )}
