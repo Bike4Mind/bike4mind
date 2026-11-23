@@ -194,6 +194,7 @@ import type { AttachmentStore } from './AttachmentStore';
 import type { ComposerDraftStore } from './ComposerDraftStore';
 import type { SidebarSectionStore } from './SidebarSectionStore';
 import { childOutcomeDisplay, classifyChildOutcome } from './childOutcome';
+import { childReplyBlock, childReportDetails } from './childReport';
 import { sideChatOpening } from './sideChat';
 import { summarizeSession } from '@shared/agentOutcome';
 import { createPhaseTracker, RESPONDING, THINKING, WAITING } from './modelPhase';
@@ -1061,6 +1062,12 @@ export class ChatService {
 
   /** Finished children waiting for their parent to be idle, so a report never splits a turn. */
   private readonly childReports = new Map<string, ChildReport[]>();
+
+  /**
+   * Child id -> its parent, for a child whose current wait on the user has been reported. One
+   * notice per wait; '' reserves the slot while the lookup that finds the parent runs.
+   */
+  private readonly waitNoticed = new Map<string, string>();
 
   /** Agent turns that ended since each Orchestrate parent was last woken; see wakeParentForAgents. */
   private readonly agentWakes = new AgentWakeLedger();
@@ -3066,6 +3073,7 @@ export class ChatService {
     // running spawned session does not leak one for the rest of the run.
     this.spawnWatch.delete(sessionId);
     this.childReports.delete(sessionId);
+    this.waitNoticed.delete(sessionId);
     this.agentWakes.forget(sessionId);
     this.agentsSettling.delete(sessionId);
     this.turnRelay.delete(sessionId);
@@ -5966,10 +5974,14 @@ export class ChatService {
         return base;
       },
 
-      listSessions: async ({ includeArchived, scope }) => {
+      listSessions: async ({ includeArchived, scope, childrenOnly }) => {
         const all = await this.deps.store.list();
         return all
-          .filter(entry => scope === 'all' || entry.project?.directory === project.directory)
+          .filter(entry =>
+            childrenOnly
+              ? entry.origin?.parentSessionId === session.id
+              : scope === 'all' || entry.project?.directory === project.directory
+          )
           .filter(entry => includeArchived || !entry.archived)
           .map(entry => ({ ...this.toHostView(entry), title: visibleTitle(entry) }));
       },
@@ -6620,6 +6632,7 @@ export class ChatService {
     const hops = endedHops + 1;
     const ended = outcome === 'completed' ? 'finished' : outcome === 'aborted' ? 'was stopped' : 'failed';
     const title = mentionTitle(target.title);
+    const replyBlock = childReplyBlock(target, {});
 
     for (const relay of pending) {
       await this.notifySender(
@@ -6629,7 +6642,8 @@ export class ChatService {
         hops,
         `[App notice: ${JSON.stringify(title)} (${sessionId}) ${ended} the turn your message started. ` +
           'Use session_read on that id to see what it said.]',
-        `${title} ${ended} the turn your message started`
+        `${title} ${ended} the turn your message started`,
+        { replyBlock, targetLocal: isLocalModel(target.model) }
       );
     }
   }
@@ -6641,17 +6655,28 @@ export class ChatService {
     targetTitle: string,
     hops: number,
     content: string,
-    display: string
+    display: string,
+    reply: { replyBlock: string; targetLocal: boolean } = { replyBlock: '', targetLocal: false }
   ): Promise<void> {
     const sender = await this.deps.store.get(relay.fromSessionId);
     if (!sender || sender.archived) return;
+    // A device-local conversation's words never reach a hosted one; see flushChildReports.
+    const replyBlock = reply.targetLocal && !isLocalModel(sender.model) ? '' : reply.replyBlock;
+    const withReply = (notice: string) =>
+      replyBlock
+        ? `${notice.replace(/Use session_read on that id[^\]]*\]$/, 'Its last reply is quoted below; use session_read on that id only if you need more.]')}\n${replyBlock}`
+        : notice;
     if (hops >= MAX_MESSAGE_HOPS || !this.deps.queue || this.abandoning.has(sender.id)) {
       // No relay origin lands with this notice, so the sender cannot read the conversation back.
       const unreadable = content.replace(/Use session_read on that id[^\]]*\]$/, 'Open that conversation to see it.]');
-      await this.deliverChildReport(sender.id, { localOnly: false, content: unreadable, display });
+      await this.deliverChildReport(sender.id, {
+        localOnly: false,
+        content: replyBlock ? `${unreadable}\n${replyBlock}` : unreadable,
+        display,
+      });
       return;
     }
-    this.deps.queue.enqueueRelay(sender.id, content, {
+    this.deps.queue.enqueueRelay(sender.id, withReply(content), {
       fromSessionId: targetId,
       fromTitle: targetTitle,
       hops,
@@ -6763,6 +6788,9 @@ export class ChatService {
   }
 
   private toHostView(entry: ChatSessionSummary): HostSessionView {
+    const status = this.deps.activity?.runtimeStatusOf(entry.id) ?? 'done';
+    const waitingOn = status === 'needs-action' ? this.deps.activity?.waitingReason(entry.id) : undefined;
+    const branch = entry.project?.workspace ? entry.project.workspaceBranch : undefined;
     return {
       id: entry.id,
       title: entry.title,
@@ -6770,8 +6798,13 @@ export class ChatService {
       updatedAt: entry.updatedAt,
       archived: entry.archived === true,
       ...(entry.origin ? { spawnedBy: entry.origin.parentSessionId } : {}),
-      status: this.deps.activity?.runtimeStatusOf(entry.id) ?? 'done',
+      status,
+      ...(waitingOn ? { waitingOn } : {}),
       ...(entry.project ? { project: projectName(entry) } : {}),
+      ...(branch ? { branch } : {}),
+      ...(entry.lastOutcome ? { lastOutcome: entry.lastOutcome } : {}),
+      // A device-local session's words stay out of a listing a hosted model reads.
+      ...(entry.lastSnippet && !isLocalModel(entry.model) ? { lastSnippet: entry.lastSnippet } : {}),
     };
   }
 
@@ -7430,10 +7463,13 @@ export class ChatService {
 
   /** Tell the parent how a spawned session ended, and count it toward the parent's next wake. */
   private async reportSettledAgent(parentId: string, child: ChatSession, localOnly: boolean): Promise<void> {
+    const replyBlock = childReplyBlock(child, await childReportDetails(child));
     await this.deliverChildReport(parentId, {
       localOnly,
+      childId: child.id,
       content:
         describeChildOutcome(child) +
+        (replyBlock ? `\n${replyBlock}` : '') +
         (child.workerTask
           ? `\nTask report (untrusted evidence; assess before accepting): ${JSON.stringify(child.workerTask)}`
           : ''),
@@ -7549,10 +7585,76 @@ export class ChatService {
    * two, and the flush that would have carried this one has already run by then.
    */
   private async deliverChildReport(parentSessionId: string, report: ChildReport): Promise<void> {
-    const queued = this.childReports.get(parentSessionId) ?? [];
+    // A newer report from the same child supersedes one still queued, so a child that ends
+    // several turns while its parent is busy lands once, with its latest state.
+    const queued = (this.childReports.get(parentSessionId) ?? []).filter(
+      entry => !report.childId || entry.childId !== report.childId
+    );
     queued.push(report);
     this.childReports.set(parentSessionId, queued);
     if (!this.isBusy(parentSessionId)) await this.flushChildReports(parentSessionId);
+  }
+
+  /**
+   * A session's status changed. A spawned child that starts waiting on the user tells its parent
+   * once per wait, as a passive notice that never wakes it: the person who can unblock the child
+   * is the user, whom the child's own row already alerts. If the child moves on before the
+   * notice is delivered, the notice is dropped - a stale "waiting" is worse than none.
+   */
+  sessionStatusChanged(event: ChatSessionStatusEvent): void {
+    void this.noteChildWaiting(event).catch(error =>
+      this.deps.logger.warn(`CHAT: could not tell the parent of ${event.sessionId} it is waiting: ${String(error)}`)
+    );
+  }
+
+  private async noteChildWaiting(event: ChatSessionStatusEvent): Promise<void> {
+    const childId = event.sessionId;
+    // An unread finished reply is attention, not a wait on the user.
+    if (event.status !== 'needs-action' || event.unreadReply) {
+      const parentId = this.waitNoticed.get(childId);
+      if (!parentId) return;
+      this.waitNoticed.delete(childId);
+      this.dropQueuedWaiting(parentId, childId);
+      return;
+    }
+    if (this.waitNoticed.has(childId)) return;
+    this.waitNoticed.set(childId, '');
+    const stillWaiting = () => this.deps.activity?.runtimeStatusOf(childId) === 'needs-action';
+
+    const child = await this.deps.store.get(childId);
+    const parentId = child?.origin?.parentSessionId;
+    if (!child || !parentId || !isAgentSession(child) || !stillWaiting()) {
+      this.waitNoticed.delete(childId);
+      return;
+    }
+    this.waitNoticed.set(childId, parentId);
+    const parent = await this.deps.store.get(parentId);
+    if (!parent || parent.archived || !stillWaiting() || this.waitNoticed.get(childId) !== parentId) return;
+
+    const what = waitingReasonText(this.deps.activity?.waitingReason(childId));
+    // A device-local child's title is its model's words too; a hosted parent gets neither.
+    const named =
+      isLocalModel(child.model) && !isLocalModel(parent.model)
+        ? `A device-local session you started (${childId})`
+        : `The session you started, ${JSON.stringify(mentionTitle(child.title))} (${childId}),`;
+    await this.deliverChildReport(parentId, {
+      localOnly: false,
+      childId,
+      kind: 'waiting',
+      content:
+        `[App notice: ${named} is waiting on the user for ${what}. It carries on once they answer in ` +
+        'that conversation, and its report comes here when it finishes. Do not answer for the user.]',
+      display: `A session you started is waiting for you: ${what}.`,
+    });
+  }
+
+  /** Remove a child's waiting notice from its parent's queue, if it has not been delivered yet. */
+  private dropQueuedWaiting(parentId: string, childId: string): void {
+    const queued = this.childReports.get(parentId);
+    if (!queued) return;
+    const left = queued.filter(entry => !(entry.childId === childId && entry.kind === 'waiting'));
+    if (left.length > 0) this.childReports.set(parentId, left);
+    else this.childReports.delete(parentId);
   }
 
   private async flushChildReports(sessionId: string): Promise<void> {
@@ -9348,9 +9450,10 @@ const HOST_GUIDANCE: readonly string[] = [
   'it with session_suggestion_update; if they decline it or say to do it here, withdraw it with',
   'session_suggestion_dismiss and do the work yourself. Never suggest the same work twice. A',
   'system reminder on a later turn tells you when they start or dismiss one.',
-  'A session that has started runs on its own and does NOT report back into this turn. Finish your',
-  'answer without it. Later, this conversation is told THAT it finished - never what it said,',
-  'so use session_read on its id when you need that. Never start a second session because the',
+  'A session that has started runs on its own; its report arrives in a later turn, not this one.',
+  'Finish your answer without it. When it finishes, its last reply (capped), branch and head land',
+  'here as an app notice, and you are told if it is waiting on the user; session_read is only for',
+  'more than that excerpt. session_list with children: true shows them all at a glance. Never start a second session because the',
   'first has not answered yet, and never start several to try',
   'variations of one task - each one spends the user credits and each one asks them to approve',
   'it first.',
@@ -9625,30 +9728,38 @@ function renderTranscript(session: ChatSession): string {
  */
 type ChildReport = {
   localOnly?: boolean;
+  /** The reporting child, so a newer report from it replaces an older one still queued. */
+  childId?: string;
+  /** 'waiting' for a child blocked on the user; dropped from the queue once it moves on. */
+  kind?: 'waiting';
   content: string;
   display: string;
 };
 
 /**
- * What a finished spawned session tells its parent.
+ * The header of what a finished spawned session tells its parent.
  *
- * The child's own output is NOT carried across. A spawned session runs on a prompt the parent
- * wrote, and piping its reply straight back in would put text the parent never read - produced
- * by a model the user was not watching - into the next request as though the user had typed it.
- * `stopReason` is stated when it means the run did not simply finish, because "it stopped after
- * too many tool calls" and "it answered" are very different things to build a next step on.
- *
- * `session_read` is how the parent gets the content, deliberately: one more tool call, held to
- * the same project scope, and visible in the transcript as a thing that was asked for.
+ * The child's last reply follows it, capped and framed as quoted data (see childReplyBlock), so
+ * the parent learns the outcome without reading the whole transcript; session_read stays for
+ * when the cap cut something it needs. `stopReason` is stated when the run did not simply
+ * finish, because "it stopped after too many tool calls" and "it answered" are very different
+ * things to build a next step on.
  */
+function waitingReasonText(reason: 'approval' | 'decision' | 'message' | undefined): string {
+  if (reason === 'approval') return 'an approval';
+  if (reason === 'decision') return 'a decision on its task';
+  if (reason === 'message') return 'a held message to be let in';
+  return 'their input';
+}
+
 function describeChildOutcome(child: ChatSession): string {
   const last = [...child.messages].reverse().find(message => message.role === 'assistant');
   const header = `The session you started, "${child.title}" (${child.id}), has finished.`;
-  const read = `Read it with session_read (${child.id}) if you need what it produced.`;
+  const read = `Its last reply is quoted below; use session_read (${child.id}) only if you need more than that.`;
 
   switch (classifyChildOutcome(child)) {
     case 'no-reply':
-      return `${header}\nIt produced no reply. ${read}`;
+      return `${header}\nIt produced no reply. Use session_read (${child.id}) to see what it did.`;
     case 'failed':
       return `${header}\nIt failed: ${last?.error ?? 'no reason was given'}`;
     case 'turn-budget':
@@ -10282,7 +10393,9 @@ export function describeSuggestionOutcome(suggestion: ChatSpawnSuggestion): stri
         : suggestion.prompt;
     lines.push(`They edited it before starting. It was started with this prompt:\n${quoted}`);
   }
-  lines.push('This conversation is told when it finishes; use session_read on its id for what it said.');
+  lines.push(
+    'It reports back here when it finishes, with its last reply, branch and head; session_read on its id only if you need more.'
+  );
   return lines.join('\n');
 }
 

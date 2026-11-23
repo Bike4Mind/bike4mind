@@ -46,6 +46,14 @@ export class SessionActivity {
     return this.replying.has(sessionId) || this.preparing.has(sessionId) ? 'processing' : 'done';
   }
 
+  /** What a 'needs-action' session is waiting on, for the notice its parent gets; undefined when it waits on nothing. */
+  waitingReason(sessionId: string): 'approval' | 'decision' | 'message' | undefined {
+    if ((this.awaiting.get(sessionId) ?? 0) > 0) return 'approval';
+    if (this.deciding.has(sessionId)) return 'decision';
+    if (this.held.has(sessionId)) return 'message';
+    return undefined;
+  }
+
   /**
    * Every session not currently idle.
    *

@@ -704,6 +704,8 @@ export function registerChat(
     hooks.observeSessionStatus?.(event);
     // Only reached once a turn has run, long after pullRequests below exists.
     if (event.status === 'done' || event.unreadReply) pullRequests.turnSettled(event.sessionId);
+    // Same: a session changes status only once `service` below exists.
+    service.sessionStatusChanged(event);
   });
 
   // Typed-ahead messages, on their own channel: this is per-session state that outlives any

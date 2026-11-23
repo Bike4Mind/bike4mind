@@ -528,8 +528,15 @@ export interface HostSessionView {
   spawnedBy?: string;
   /** Present-tense state, the same one the sidebar row draws. */
   status: 'processing' | 'needs-action' | 'done';
+  /** What a 'needs-action' session waits on; absent otherwise. */
+  waitingOn?: 'approval' | 'decision' | 'message';
   /** The project folder's name; absent for a conversation with no project. */
   project?: string;
+  /** The branch of a session in a worktree of its own. */
+  branch?: string;
+  /** How its last assistant turn ended, and a one-line excerpt of it; see summarizeSession. */
+  lastOutcome?: string;
+  lastSnippet?: string;
 }
 
 /** A spawn that did not happen, and which of the caps or preconditions stopped it. */
@@ -628,7 +635,12 @@ export interface HostContext {
    * Sessions newest first, flagging archived ones. 'project' is this one's project; 'all' is every
    * conversation of the signed-in account, which is as far as the session store reaches.
    */
-  listSessions(options: { includeArchived: boolean; scope: 'project' | 'all' }): Promise<HostSessionView[]>;
+  listSessions(options: {
+    includeArchived: boolean;
+    scope: 'project' | 'all';
+    /** Only the sessions the calling conversation started, in any project. */
+    childrenOnly?: boolean;
+  }): Promise<HostSessionView[]>;
   /**
    * One session's transcript as plain text. `ref` is an id, a unique id prefix or an exact title.
    * Outside this project only for a session the user mentioned here or that messaged this one:
