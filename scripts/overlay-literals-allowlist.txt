@@ -109,7 +109,7 @@ b4m-core/common/src/types/entities/UserApiKeyTypes.ts
 b4m-core/infra/CHANGELOG.md
 b4m-core/llm-adapters/src/openaiBackend.responsesRouting.test.ts
 b4m-core/resource/src/manifest.ts
-b4m-core/resource/src/manifestCoverage.test.ts
+b4m-core/resource/src/manifestCoverage.repo.test.ts
 b4m-core/services/src/dataLakeService/dataLakeService.test.ts
 b4m-core/services/src/llm/evals/groundedNoInvention/cases.ts
 b4m-core/services/src/llm/evals/groundedNoInvention/README.md

@@ -7,7 +7,7 @@ export interface CoreTutorial {
   enabled: boolean;
 }
 
-// Server-only: the client must never import this file (see registry.clientImports.test.ts).
+// Server-only: the client must never import this file (see registry.clientImports.repo.test.ts).
 export const CORE_TUTORIALS: readonly CoreTutorial[] = [];
 
 /** Resolves only core's own tutorials, so an owner's module id never reaches a core route. */

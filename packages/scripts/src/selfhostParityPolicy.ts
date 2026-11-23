@@ -31,7 +31,7 @@ const gap = (id: string, fingerprint: string, signals: string[] = []): ParityPol
   reviewed(id, fingerprint, 'pending', signals);
 // A gap whose reason is specific to the entry: who reaches it on self-host and what wiring it needs.
 // The registered-but-unconsumed ones must stay in sync with REGISTERED_WITHOUT_CONSUMER in
-// b4m-core/resource/src/manifestCoverage.test.ts.
+// b4m-core/resource/src/manifestCoverage.repo.test.ts.
 const gapBecause = (id: string, fingerprint: string, reason: string, signals: string[] = []): ParityPolicyEntry => ({
   ...reviewed(id, fingerprint, 'pending', signals),
   reason,
