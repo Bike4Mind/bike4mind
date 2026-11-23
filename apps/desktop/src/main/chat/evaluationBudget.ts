@@ -28,6 +28,7 @@ export function assertEvaluationTool(name: string): void {
 export class EvaluationBudget {
   private readonly db: DatabaseSync;
   private active = false;
+  private closing = false;
 
   constructor(path: string) {
     this.db = new DatabaseSync(path);
@@ -50,6 +51,7 @@ export class EvaluationBudget {
   }
 
   reserve(id: string, request: CompletionRequest, model: ChatModelOption): () => void {
+    if (this.closing) throw new Error('Evaluation is closing.');
     if (this.active) throw new Error('Evaluation concurrency is limited to one.');
     if (request.maxTokens !== undefined && (!Number.isSafeInteger(request.maxTokens) || request.maxTokens <= 0)) {
       throw new Error('Evaluation requires a finite positive output bound.');
@@ -118,6 +120,7 @@ export class EvaluationBudget {
     request.maxTokens = Math.min(request.maxTokens ?? EVALUATION_LIMITS.outputTokens, EVALUATION_LIMITS.outputTokens);
     return () => {
       this.active = false;
+      if (this.closing) this.db.close();
     };
   }
 
@@ -144,23 +147,21 @@ export class EvaluationBudget {
       usage!.inputTokens! <= EVALUATION_LIMITS.inputTokens &&
       usage!.outputTokens! <= EVALUATION_LIMITS.outputTokens;
     // Holds are never released from client-side usage: hidden retries and cache billing remain unverified.
-    this.db
-      .prepare('UPDATE attempts SET status=?, usage=?, platform_usd=?, platform_credits=? WHERE id=?')
-      .run(
-        complete ? 'usage-reported-charge-unverified' : failed ? 'failed-unknown-charge' : 'unknown',
-        usage
-          ? JSON.stringify({
-              inputTokens: usage.inputTokens,
-              outputTokens: usage.outputTokens,
-              cacheReadInputTokens: usage.cacheReadInputTokens,
-              cacheCreationInputTokens: usage.cacheCreationInputTokens,
-              reasoningTokens: usage.reasoningTokens,
-            })
-          : null,
-        matching && valid(settlement?.usdCost) ? settlement!.usdCost! : null,
-        matching && valid(settlement?.creditsCharged) ? settlement!.creditsCharged : null,
-        id
-      );
+    this.db.prepare('UPDATE attempts SET status=?, usage=?, platform_usd=?, platform_credits=? WHERE id=?').run(
+      complete ? 'usage-reported-charge-unverified' : failed ? 'failed-unknown-charge' : 'unknown',
+      usage
+        ? JSON.stringify({
+            inputTokens: usage.inputTokens,
+            outputTokens: usage.outputTokens,
+            cacheReadInputTokens: usage.cacheReadInputTokens,
+            cacheCreationInputTokens: usage.cacheCreationInputTokens,
+            reasoningTokens: usage.reasoningTokens,
+          })
+        : null,
+      matching && valid(settlement?.usdCost) ? settlement!.usdCost! : null,
+      matching && valid(settlement?.creditsCharged) ? settlement!.creditsCharged : null,
+      id
+    );
   }
 
   report(): unknown[] {
@@ -172,6 +173,8 @@ export class EvaluationBudget {
   }
 
   close(): void {
-    this.db.close();
+    if (this.closing) return;
+    this.closing = true;
+    if (!this.active) this.db.close();
   }
 }

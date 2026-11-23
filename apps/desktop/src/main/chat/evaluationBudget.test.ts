@@ -52,6 +52,18 @@ describe('durable evaluation admission', () => {
     expect(restarted.report()).toEqual(budget.report());
   });
 
+  it('keeps an active ledger writable through teardown without admitting more requests', async () => {
+    const { budget, path } = await setup();
+    const release = budget.reserve('first', request(), model);
+    budget.close();
+    expect(() => budget.reserve('second', request(), model)).toThrow('closing');
+    budget.record('first', [], true);
+    release();
+    const reopened = new EvaluationBudget(path);
+    budgets.push(reopened);
+    expect(reopened.report()).toMatchObject([{ status: 'failed-unknown-charge' }]);
+  });
+
   it('folds request usage by replacement and keeps provider pricing distinct from settlement', async () => {
     const { budget } = await setup();
     budget.reserve('first', request(), model)();
