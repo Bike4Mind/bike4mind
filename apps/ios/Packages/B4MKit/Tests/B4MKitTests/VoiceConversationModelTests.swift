@@ -16,27 +16,27 @@ final class VoiceConversationModelTests: XCTestCase {
     target: ChatSendRequest.Target = .session("s1"), silenceTimeout: Duration = .seconds(30),
     stallTimeout: Duration = .seconds(30), bargeInWords: Set<String> = [], answerPhrases: Set<String> = [],
     opening: [String] = [], firstTurnContext: String? = nil,
-    utteranceHandler: VoiceConversationModel.UtteranceHandler? = nil,
+    utteranceHandler: VoiceConversationModel.UtteranceHandler? = nil, echoWindow: Duration = .milliseconds(1500),
     sleep: @escaping @Sendable (Duration) async throws -> Void = { try await Task.sleep(for: $0) }
   ) -> VoiceConversationModel {
     VoiceConversationModel(
       target: target, api: api, realtime: realtime, listener: listener, speaker: speaker, audioSession: audio,
       silenceTimeout: silenceTimeout, stallTimeout: stallTimeout, bargeInWords: bargeInWords,
       answerPhrases: answerPhrases, opening: opening, firstTurnContext: firstTurnContext,
-      utteranceHandler: utteranceHandler, sleep: sleep)
+      utteranceHandler: utteranceHandler, echoWindow: echoWindow, sleep: sleep)
   }
 
   private func startedModel(
     target: ChatSendRequest.Target = .session("s1"), silenceTimeout: Duration = .seconds(30),
     stallTimeout: Duration = .seconds(30), bargeInWords: Set<String> = [], answerPhrases: Set<String> = [],
     opening: [String] = [], firstTurnContext: String? = nil,
-    utteranceHandler: VoiceConversationModel.UtteranceHandler? = nil,
+    utteranceHandler: VoiceConversationModel.UtteranceHandler? = nil, echoWindow: Duration = .milliseconds(1500),
     sleep: @escaping @Sendable (Duration) async throws -> Void = { try await Task.sleep(for: $0) }
   ) async -> VoiceConversationModel {
     let model = makeModel(
       target: target, silenceTimeout: silenceTimeout, stallTimeout: stallTimeout, bargeInWords: bargeInWords,
       answerPhrases: answerPhrases, opening: opening, firstTurnContext: firstTurnContext,
-      utteranceHandler: utteranceHandler, sleep: sleep)
+      utteranceHandler: utteranceHandler, echoWindow: echoWindow, sleep: sleep)
     await model.start()
     await until { await realtime.listenerCount == 1 }
     // An opening that finishes speaking restarts the recognizer, so the count may already be past 1.
@@ -814,6 +814,18 @@ final class VoiceConversationModelTests: XCTestCase {
     XCTAssertEqual(message.components(separatedBy: "</brief>").count, 2)
     XCTAssertFalse(message.lowercased().replacingOccurrences(of: " ", with: "").contains("</brief>/brief"))
     XCTAssertTrue(message.hasSuffix("</brief>\n\nhi"))
+  }
+
+  func testTheOpeningsOwnWordsSaidAfterTheEchoWindowAreTheUsers() async throws {
+    let handled = HandledUtterances()
+    let model = await startedModel(
+      opening: ["Here is what happened today."], utteranceHandler: { await handled.record($0) },
+      echoWindow: .milliseconds(50))
+    await until { await listener.startCount == 2 }
+    try await Task.sleep(for: .milliseconds(150))
+    await say("what happened")
+    await until { await handled.all == ["what happened"] }
+    await model.stop()
   }
 
   func testALoneWordAfterThePromptEndsIsStillHeardAsTheAnswer() async throws {

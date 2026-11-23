@@ -81,6 +81,8 @@ public final class VoiceConversationModel {
   /// Answers the app reads out itself (a question's options), normalized: one heard after the prompt is the
   /// user choosing it, not the prompt's echo.
   private let answerPhrases: Set<String>
+  /// How long after the app stops speaking its own words still count as echo; past it they are the user's.
+  private let echoWindow: Duration
   private let sleep: @Sendable (Duration) async throws -> Void
 
   private var target: ChatSendRequest.Target
@@ -92,7 +94,7 @@ public final class VoiceConversationModel {
   /// Gets each utterance before it is sent; a non-nil answer is spoken instead and nothing reaches the chat.
   private let utteranceHandler: UtteranceHandler?
   /// What the app itself is saying or just said (the opening, a handled utterance's answer), so the mic
-  /// picking it back up is not taken for the user. Cleared once an utterance is committed.
+  /// picking it back up is not taken for the user. Cleared once an utterance is committed or `echoWindow` passes.
   private var localSpeech: [String] = []
 
   private var audioTask: Task<Void, Never>?
@@ -102,6 +104,7 @@ public final class VoiceConversationModel {
   private var silenceTask: Task<Void, Never>?
   private var speakTask: Task<Void, Never>?
   private var watchdogTask: Task<Void, Never>?
+  private var echoExpiryTask: Task<Void, Never>?
   private var listenGeneration = 0
   private var fruitlessRestarts = 0
 
@@ -123,6 +126,7 @@ public final class VoiceConversationModel {
     silenceTimeout: Duration = .milliseconds(1400), stallTimeout: Duration = .seconds(20),
     bargeInMinimumWords: Int = 2, bargeInWords: Set<String> = [], answerPhrases: Set<String> = [],
     opening: [String] = [], firstTurnContext: String? = nil, utteranceHandler: UtteranceHandler? = nil,
+    echoWindow: Duration = .milliseconds(1500),
     sleep: @escaping @Sendable (Duration) async throws -> Void = { try await Task.sleep(for: $0) }
   ) {
     self.target = target
@@ -140,6 +144,7 @@ public final class VoiceConversationModel {
     self.bargeInMinimumWords = bargeInMinimumWords
     self.bargeInWords = bargeInWords
     self.answerPhrases = Set(answerPhrases.map { SpokenWords.normalized($0).joined(separator: " ") })
+    self.echoWindow = echoWindow
     self.sleep = sleep
   }
 
@@ -179,7 +184,10 @@ public final class VoiceConversationModel {
   private func tearDown(to final: Phase) async {
     turnToken += 1
     listenGeneration += 1
-    for task in [audioTask, framesTask, listenTask, silenceTask, speakTask, watchdogTask, turnTask] { task?.cancel() }
+    for task in [audioTask, framesTask, listenTask, silenceTask, speakTask, watchdogTask, turnTask, echoExpiryTask] {
+      task?.cancel()
+    }
+    echoExpiryTask = nil
     audioTask = nil
     framesTask = nil
     listenTask = nil
@@ -328,6 +336,7 @@ public final class VoiceConversationModel {
   private func commit(_ text: String) async {
     guard phase == .listening, !text.isEmpty else { return }
     silenceTask?.cancel()
+    echoExpiryTask?.cancel()
     localSpeech = []
     liveTranscript = ""
     echoSpoken = []
@@ -462,6 +471,14 @@ public final class VoiceConversationModel {
     }
     // The recognizer heard the whole reply; a fresh one keeps that transcript out of the next utterance.
     dropTranscript()
+    if !localSpeech.isEmpty {
+      echoExpiryTask?.cancel()
+      echoExpiryTask = Task { [weak self, sleep, echoWindow] in
+        do { try await sleep(echoWindow) } catch { return }
+        guard let self, self.turnIsCurrent(token) else { return }
+        self.localSpeech = []
+      }
+    }
     Task { [weak self] in
       guard let self, self.turnIsCurrent(token), self.phase == .listening else { return }
       await self.listener.stop()
@@ -487,6 +504,7 @@ public final class VoiceConversationModel {
 
   /// Speaks text that did not come from a quest (the opening, a handled utterance), then returns to listening like any reply.
   private func speakLocal(_ sections: [String], token: Int) {
+    echoExpiryTask?.cancel()
     localSpeech = sections.flatMap(SpokenWords.normalized)
     replyFinished = true
     phase = .speaking
