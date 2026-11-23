@@ -144,6 +144,14 @@ export const NOT_COVERED: readonly { shape: string; reason: string }[] = [
   { shape: 'aws.sns.TopicPolicy', reason: 'IAM grant for an inventoried topic.' },
   { shape: 'aws.iam.Policy', reason: 'IAM grant for a covered web surface, no compute.' },
   { shape: 'aws.iam.RolePolicyAttachment', reason: 'Attaches an aws.iam.Policy to a role, no compute.' },
+  { shape: 'aws.iam.Role', reason: 'Execution role for the not-covered aws.lambda.Function, no compute.' },
+  { shape: 'aws.iam.RolePolicy', reason: 'Inline IAM grant on an aws.iam.Role, no compute.' },
+  {
+    shape: 'aws.lambda.Function',
+    reason:
+      'Callable function runtime, invoked request/response (createLambdaCallableFunctionRunner), not a background ' +
+      'trigger; self-host spawns the same child on its own host instead (createInProcessCallableFunctionRunner).',
+  },
   { shape: 'aws.lambda.Invocation', reason: 'Deploy-time one-shot invoke; the invoked Function is inventoried.' },
   { shape: 'aws.ses.ReceiptRuleSet', reason: 'Container for the inventoried aws.ses.ReceiptRule.' },
   { shape: 'aws.ses.ActiveReceiptRuleSet', reason: 'Activation of the inventoried receipt rule set.' },
@@ -157,6 +165,10 @@ export const NOT_COVERED: readonly { shape: string; reason: string }[] = [
   { shape: 'sst.aws.Vpc', reason: 'Network plumbing.' },
   { shape: 'sst.aws.Cluster', reason: 'Container host for inventoried sst.aws.Service declarations.' },
   { shape: 'aws.ec2.SecurityGroup', reason: 'Network plumbing.' },
+  { shape: 'aws.ec2.Vpc', reason: 'Network plumbing.' },
+  { shape: 'aws.ec2.Subnet', reason: 'Network plumbing.' },
+  { shape: 'aws.ec2.RouteTable', reason: 'Network plumbing.' },
+  { shape: 'aws.ec2.RouteTableAssociation', reason: 'Network plumbing.' },
   { shape: 'aws.ec2.SecurityGroupRule', reason: 'Network plumbing.' },
   { shape: 'aws.ec2.VpcEndpoint', reason: 'Network plumbing.' },
   { shape: 'aws.acm.Certificate', reason: 'TLS certificate for a hosted load balancer listener, no compute.' },
