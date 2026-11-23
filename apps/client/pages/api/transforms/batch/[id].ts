@@ -173,14 +173,15 @@ const handler = baseApi({
       costUsd += itemCostUsd;
       const executedId = mappings.get(r.customId)?.executedModel;
       if (executedId) substituted = true;
-      executed.add(executedId ?? modelInfo.id);
-      const line = ran.get(executedId ?? modelInfo.id) ?? { usd: 0, input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
+      const ranModel = executedId ?? modelInfo.id;
+      executed.add(ranModel);
+      const line = ran.get(ranModel) ?? { usd: 0, input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
       line.usd += itemCostUsd;
       line.input += u.inputTokens;
       line.output += u.outputTokens;
       line.cacheRead += u.cacheReadInputTokens ?? 0;
       line.cacheWrite += u.cacheCreationInputTokens ?? 0;
-      ran.set(executedId ?? modelInfo.id, line);
+      ran.set(ranModel, line);
       inputTokens += u.inputTokens;
       outputTokens += u.outputTokens;
       cacheReadTokens += u.cacheReadInputTokens ?? 0;
