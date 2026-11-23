@@ -101,7 +101,9 @@ describe('ApiRequestsSection', () => {
         params: { types: 'api_request', limit: '30', apiKeyId: keyId },
       })
     );
-    fireEvent.change(screen.getByTestId('user-api-requests-from').querySelector('input')!, {
+    expect(screen.getByTestId('user-api-requests-from-empty')).toHaveTextContent('From any date');
+    fireEvent.click(screen.getByTestId('user-api-requests-from-set-btn'));
+    fireEvent.change(screen.getByTestId('user-api-requests-from'), {
       target: { value: '2026-11-01' },
     });
     await waitFor(() =>

@@ -34,7 +34,14 @@ import { createGrantPackage, updateGrantPackage } from '@client/app/utils/grantP
 import { createRegInvites } from '@client/app/utils/regInviteAPICalls';
 import { createPartnerSignupRule } from '@client/app/utils/partnerSignupRuleAPICalls';
 import { getErrorMessage } from '@client/app/utils/error';
-import { GrantPackageCodesSection, dayOf, expiresAtFromDay, type QueuedCode } from './GrantPackageCodesSection';
+import { OptionalDateInput } from '@client/app/components/common/OptionalDateInput';
+import {
+  GrantPackageCodesSection,
+  dayOf,
+  expiresAtFromDay,
+  todayUtc,
+  type QueuedCode,
+} from './GrantPackageCodesSection';
 import { GrantPackageDomainsSection, domainRuleInput, type QueuedDomain } from './GrantPackageDomainsSection';
 
 type Props = {
@@ -231,14 +238,18 @@ export function GrantPackageFormModal({ open, onClose, onSaved, editing, reasonP
           <FormHelperText>Leave a cap empty for no limit. Daily caps reset at midnight UTC.</FormHelperText>
           <FormControl error={expiryInvalid}>
             <FormLabel>Expires on</FormLabel>
-            <Input
-              type="date"
+            <OptionalDateInput
               value={draft.expiresOn}
-              onChange={e => set({ expiresOn: e.target.value })}
-              slotProps={{ input: { 'data-testid': 'grant-package-expires-input' } }}
+              onChange={expiresOn => set({ expiresOn })}
+              emptyLabel="No expiry"
+              setLabel="Set an expiry date"
+              clearLabel="Remove expiry date"
+              initialDate={todayUtc}
+              aria-label="Expires on"
+              testId="grant-package-expires-input"
             />
             <FormHelperText>
-              Redeemable through the end of this day (UTC). Leave empty and the package never expires.
+              Redeemable through the end of this day (UTC). Without a date the package never expires.
             </FormHelperText>
           </FormControl>
           {current && (

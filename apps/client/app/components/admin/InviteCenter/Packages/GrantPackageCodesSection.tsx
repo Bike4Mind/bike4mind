@@ -1,16 +1,5 @@
 import { useState } from 'react';
-import {
-  Alert,
-  Button,
-  Chip,
-  FormControl,
-  FormHelperText,
-  FormLabel,
-  Input,
-  Stack,
-  Switch,
-  Typography,
-} from '@mui/joy';
+import { Alert, Button, Chip, FormControl, FormHelperText, FormLabel, Stack, Switch, Typography } from '@mui/joy';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   isGrantPackageExpired,
@@ -25,6 +14,7 @@ import {
 } from '@client/app/utils/grantPackageAPICalls';
 import { createRegInvites, updateRegInvite } from '@client/app/utils/regInviteAPICalls';
 import { getErrorMessage } from '@client/app/utils/error';
+import { OptionalDateInput } from '@client/app/components/common/OptionalDateInput';
 import { useUser } from '@client/app/contexts/UserContext';
 import {
   ADMIN_REASON_PRESETS,
@@ -66,6 +56,8 @@ type CodeEdit = {
 
 export const dayOf = (date: Date | string | null | undefined) =>
   date ? new Date(date).toISOString().slice(0, 10) : '';
+
+export const todayUtc = () => dayOf(new Date());
 
 /** The chosen day stays redeemable through its end in UTC, the same day boundary as a package's daily cap. */
 export const expiresAtFromDay = (day: string): Date | null => (day === '' ? null : new Date(`${day}T23:59:59.999Z`));
@@ -252,17 +244,21 @@ function CodesManager({ pkg, queued, onQueuedChange }: Props) {
             </FormControl>
             <FormControl orientation="horizontal" sx={{ gap: 1 }} error={editInvalid}>
               <FormLabel>Expires on</FormLabel>
-              <Input
-                type="date"
+              <OptionalDateInput
                 size="sm"
                 value={editing.expiresOn}
-                onChange={e => setEditing({ ...editing, expiresOn: e.target.value })}
-                slotProps={{ input: { 'data-testid': 'grant-package-code-edit-expires-input' } }}
+                onChange={expiresOn => setEditing({ ...editing, expiresOn })}
+                emptyLabel="No expiry"
+                setLabel="Set an expiry date"
+                clearLabel="Remove expiry date"
+                initialDate={todayUtc}
+                aria-label="Expires on"
+                testId="grant-package-code-edit-expires-input"
               />
             </FormControl>
           </Stack>
           <FormHelperText>
-            Redeemable through the end of this day (UTC). Leave empty and the code never expires.
+            Redeemable through the end of this day (UTC). Without a date the code never expires.
           </FormHelperText>
           {editWidens && (
             <ReasonPicker
