@@ -61,7 +61,26 @@ on:
         required: false
 
 jobs:
+  preview:
+    if: inputs.pr_number != '' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: write
+    steps:
+      - uses: actions/github-script@v8
+        env:
+          PR_NUMBER: ${{ inputs.pr_number }}
+        with:
+          script: |
+            if (!/^[1-9][0-9]*$/.test(process.env.PR_NUMBER)) throw new Error('Invalid PR number');
+            await github.rest.actions.createWorkflowDispatch({
+              ...context.repo, workflow_id: 'e2e-core.yml', ref: 'main',
+              inputs: { pr_number: process.env.PR_NUMBER },
+            });
+
   prep:
+    if: github.event_name == 'schedule' || inputs.pr_number == ''
     runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
     outputs:
       playwright_args:    ${{ steps.resolve.outputs.playwright_args }}
@@ -154,6 +173,7 @@ jobs:
 
   run:
     needs: prep
+    if: github.event_name == 'schedule' || inputs.pr_number == ''
     # Grant the reusable workflow the token scopes it needs: id-token for OIDC AWS
     # auth and statuses for the e2e/smoke commit status. A called workflow's
     # permissions can only be downgraded from the caller's, and this repo's default
@@ -161,6 +181,7 @@ jobs:
     # tests run) and can't stamp e2e/smoke.
     permissions:
       contents: read
+      pull-requests: read
       id-token: write
       statuses: write
     uses: ./.github/workflows/e2e-run.yml
@@ -177,8 +198,9 @@ jobs:
       # The full suite needs more than 30 min. Setup (browser install, deploy wait, health
       # probe, build) and teardown can take 30 min, so the job cap must exceed the Playwright
       # cap by that much or the report and Slack steps get killed.
-      timeout_minutes:    80
+      timeout_minutes:    85
       global_timeout_minutes: 50
+      execution_timeout_minutes: 52
       stamp_promotable:   ${{ needs.prep.outputs.stamp_promotable == 'true' }}
       wait_for_deploy:    ${{ github.event_name == 'schedule' || inputs.pr_number == '' }}
       show_credits:       ${{ needs.prep.outputs.show_credits == 'true' }}

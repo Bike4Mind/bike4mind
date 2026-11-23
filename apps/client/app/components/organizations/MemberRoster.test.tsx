@@ -94,7 +94,6 @@ const renderRoster = (props: Props = {}) => {
       canRevokeMembers
       canRevokeMember={id => id !== 'mgr'}
       canManageCreditBudgets
-      canManageManagers={false}
       showEmails
       {...props}
     />,

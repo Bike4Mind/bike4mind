@@ -13,6 +13,7 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
@@ -116,6 +117,15 @@ fun ChatScreen(graph: AppGraph, sessionId: String?, onBack: () -> Unit) {
             problem?.let {
                 Text(it, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(horizontal = Spacing.m))
             }
+            // The agent-executions route takes no files (ChatController refuses the same send).
+            val agentRunWithFiles = state.sendsAsAgentRun && attachments.isNotEmpty()
+            if (agentRunWithFiles) {
+                Text(
+                    stringResource(R.string.chat_agent_no_attachments),
+                    color = MaterialTheme.colorScheme.error,
+                    modifier = Modifier.padding(horizontal = Spacing.m).testTag("chat-composer-agent-no-attachments"),
+                )
+            }
             AttachmentList(attachments, onRemove = model.attachments::remove, onRetry = model.attachments::retry)
             Row(
                 modifier = Modifier.fillMaxWidth().padding(Spacing.m),
@@ -134,13 +144,22 @@ fun ChatScreen(graph: AppGraph, sessionId: String?, onBack: () -> Unit) {
                     onProblem = { problem = it },
                     enabled = !state.sending,
                 )
+                // An agent run reports progress in its notification (push/AgentRunNotifications.kt), not here.
+                if (model.controller.canStartAgentRun(state)) {
+                    FilterChip(
+                        selected = state.sendsAsAgentRun,
+                        onClick = { model.controller.setSendsAsAgentRun(!state.sendsAsAgentRun) },
+                        label = { Text(stringResource(R.string.chat_agent_toggle)) },
+                        modifier = Modifier.testTag("chat-composer-agent-toggle"),
+                    )
+                }
                 OutlinedTextField(
                     value = draft,
                     onValueChange = { draft = it },
                     modifier = Modifier.weight(1f).testTag("chat-composer-field"),
-                    placeholder = { Text(stringResource(R.string.chat_message_placeholder)) },
+                    placeholder = { Text(stringResource(if (state.sendsAsAgentRun) R.string.chat_agent_placeholder else R.string.chat_message_placeholder)) },
                 )
-                val canSend = !state.sending && fileIds != null && (draft.isNotBlank() || attachments.isNotEmpty())
+                val canSend = !state.sending && !agentRunWithFiles && fileIds != null && (draft.isNotBlank() || attachments.isNotEmpty())
                 Button(modifier = Modifier.testTag("chat-composer-send"), enabled = canSend, onClick = {
                     // A turn needs words; files sent on their own go out named.
                     val message = draft.ifBlank { attachedMessage }

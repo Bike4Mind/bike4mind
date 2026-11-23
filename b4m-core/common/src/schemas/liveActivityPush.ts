@@ -17,6 +17,11 @@ export const LiveActivityContentStateSchema = z.object({
   /** Fraction complete, 0..1; omitted when the run has no measurable total. */
   progress: z.number().min(0).max(1).optional(),
   errored: z.boolean().optional(),
+  /**
+   * With `approval_needed`: the `ts` of the pending action shown, so the activity's approve and deny buttons
+   * answer exactly that action (`POST /api/v1/pending-actions/{questId}/approve|deny`).
+   */
+  pendingActionTs: z.number().int().positive().optional(),
 });
 
 export type LiveActivityContentState = z.infer<typeof LiveActivityContentStateSchema>;

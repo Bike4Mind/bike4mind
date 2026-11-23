@@ -25,9 +25,15 @@ private struct BriefScreen: View {
       .background(Tokens.Palette.background)
       .navigationTitle("Brief")
       .navigationBarTitleDisplayMode(.inline)
-      .task { await model.load() }
+      .task {
+        await model.load()
+        services.refreshWidgetPendingDecisions()
+      }
       .onDisappear { model.cancel() }
-      .refreshable { await model.refresh() }
+      .refreshable {
+        await model.refresh()
+        services.refreshWidgetPendingDecisions()
+      }
       // Voice triage answers through its own view model, so the cards refetch once voice mode closes.
       .onChange(of: services.navigator.voiceRequest) { old, new in
         if old != nil, new == nil { Task { await model.refresh() } }

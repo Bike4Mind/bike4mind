@@ -138,6 +138,11 @@ describe('account purge reconciliation', () => {
     expect(matched('McpConnection', { ownerType: 'platform', ownerKey: 'platform', userId })).toEqual(['anonymize']);
   });
 
+  it("deletes a person's saved functions and leaves another person's alone", () => {
+    expect(matched('CallableFunction', { ownerType: 'user', ownerKey: userId, userId })).toEqual(['deleteDocument']);
+    expect(matched('CallableFunction', { ownerType: 'user', ownerKey: 'other', userId: 'other' })).toEqual([]);
+  });
+
   it('deletes only a personal project and anonymizes the owner of an organization one', () => {
     const holder = DATA_HOLDER_REGISTRY.Project;
     if (holder.kind !== 'holder') throw new Error('Project must be a holder');

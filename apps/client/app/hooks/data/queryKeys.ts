@@ -45,3 +45,10 @@ export const SCOPED_SETTING_OVERRIDES_QUERY_KEY = ['scopedSettingOverrides'] as 
  * Used by useCallableFunctionsEnabled() - returns CallableFunctionsStatus
  */
 export const CALLABLE_FUNCTIONS_STATUS_QUERY_KEY = ['callable-functions', 'status'] as const;
+
+/**
+ * Prefix of the query keys for the current user's saved functions
+ * Used by useArtifactCallableFunction() - returns ICallableFunctionPublic | null
+ * Invalidated by every callable function mutation
+ */
+export const CALLABLE_FUNCTIONS_LIST_QUERY_KEY = ['callable-functions', 'list'] as const;

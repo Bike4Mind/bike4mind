@@ -13,19 +13,20 @@ const m = vi.hoisted(() => ({
   slack: vi.fn(),
   settings: vi.fn(),
   erasureState: vi.fn(),
+  stepUp: vi.fn(),
 }));
 
 const route = vi.hoisted(() => ({
   options: null as null | Record<string, unknown>,
-  guard: null as null | ((req: unknown, res: unknown, next: () => void) => void),
+  guards: [] as ((req: unknown, res: unknown, next: () => void) => void)[],
 }));
-// adminApi stays real: the permission guard it installs is part of what is under test.
+// adminApi and csrfProtection stay real: the guards they install are part of what is under test.
 vi.mock('@server/middlewares/baseApi', () => ({
   baseApi: (options: Record<string, unknown>) => {
     route.options = options;
     const chain = {
       use: (guard: (req: unknown, res: unknown, next: () => void) => void) => {
-        route.guard = guard;
+        route.guards.push(guard);
         return chain;
       },
       delete: (fn: (req: unknown, res: unknown) => unknown) => fn,
@@ -33,6 +34,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
     return chain;
   },
 }));
+vi.mock('@server/auth/stepUp', () => ({ requireStepUp: (...a: unknown[]) => m.stepUp(...a) }));
 vi.mock('@server/middlewares/asyncHandler', () => ({
   asyncHandler: (fn: (req: unknown, res: unknown) => unknown) => fn,
 }));
@@ -67,26 +69,36 @@ vi.mock('@bike4mind/server-utils/utils/adminAudit', async importOriginal => {
   };
 });
 
-import { USER_SECRET_FIELDS, ForbiddenError } from '@bike4mind/common';
+import { ApiKeyScope, STEP_UP_REQUIRED_CODE, USER_SECRET_FIELDS, ForbiddenError } from '@bike4mind/common';
 import handler from '../delete';
 import { executeApprovedAdminDelete } from '@server/admin/deleteUserAsAdmin';
 
 type Actor = { id: string; isAdmin: boolean; adminPermissions?: string[] };
 const NO_SUBS = { canceled: [], failed: [] };
 
-async function run(options: { user?: Actor; storedActor?: Actor | null; body?: unknown; id?: string } = {}) {
+async function run(
+  options: {
+    user?: Actor;
+    storedActor?: Actor | null;
+    body?: unknown;
+    id?: string;
+    headers?: Record<string, string>;
+  } = {}
+) {
   const user = options.user ?? { id: 'admin1', isAdmin: true };
   if ('storedActor' in options) m.users[user.id] = options.storedActor;
   else m.users[user.id] ??= user;
   const { req, res } = createMocks({
     method: 'DELETE',
     query: { id: options.id ?? 'u1' },
+    // A first-party bearer JWT with no session cookie passes CSRF; the CSRF test overrides it.
+    headers: options.headers ?? { authorization: 'Bearer a.b.c' },
   });
   req.body = 'body' in options ? options.body : { reason: 'Confirmed duplicate account' };
   const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
   Object.assign(req, { user, logger });
   const call = (async () => {
-    route.guard!(req, res, () => {});
+    for (const guard of route.guards) guard(req, res, () => {});
     return (handler as unknown as (req: unknown, res: unknown) => Promise<unknown>)(req, res);
   })();
   return { res, call, logger };
@@ -101,6 +113,7 @@ beforeEach(() => {
   m.record.mockResolvedValue(null);
   m.sendToQueue.mockResolvedValue(undefined);
   m.settings.mockResolvedValue([false, false]);
+  m.stepUp.mockResolvedValue(undefined);
   // Stands in for the stamp transaction: runs the hook, as lockDownAccount does, then answers.
   m.requestErasure.mockImplementation(
     async (_req: unknown, _id: string, _now: Date, opts: { recordInTransaction: () => Promise<void> }) => {
@@ -271,8 +284,42 @@ describe('DELETE /api/users/[id]/delete', () => {
   });
 
   describe('access', () => {
-    it('is gated on users:delete for the DELETE method', () => {
-      expect(route.options).toMatchObject({ allowedMethods: ['DELETE'] });
+    it('is gated on users:delete for the DELETE method, JWT only with the admin scope, like erasure', () => {
+      expect(route.options).toMatchObject({
+        allowedMethods: ['DELETE'],
+        auth: 'jwtOnly',
+        requiredScopes: [ApiKeyScope.ADMIN],
+      });
+    });
+
+    it('rejects an API key without the admin scope with 403 before any write', async () => {
+      const { req, res } = createMocks({ method: 'DELETE', query: { id: 'u1' } });
+      Object.assign(req, { user: { id: 'admin1', isAdmin: true }, apiKeyInfo: { scopes: ['chat'] } });
+
+      expect(() => route.guards.forEach(guard => guard(req, res, () => {}))).toThrow(
+        expect.objectContaining({ statusCode: 403 })
+      );
+      expect(m.requestErasure).not.toHaveBeenCalled();
+    });
+
+    it('rejects a cross-site request with 403 before any write', async () => {
+      const { call } = await run({ headers: { 'sec-fetch-site': 'cross-site' } });
+
+      await expect(call).rejects.toMatchObject({ statusCode: 403 });
+      expect(m.stepUp).not.toHaveBeenCalled();
+      expect(m.requestErasure).not.toHaveBeenCalled();
+    });
+
+    it('rejects without a recent step-up before reading, auditing or erasing anything', async () => {
+      m.stepUp.mockRejectedValue(new ForbiddenError('Recent verification required', { code: STEP_UP_REQUIRED_CODE }));
+      const { call } = await run();
+
+      await expect(call).rejects.toMatchObject({ statusCode: 403, additionalInfo: { code: STEP_UP_REQUIRED_CODE } });
+      expect(m.deny).not.toHaveBeenCalled();
+      expect(m.requestApproval).not.toHaveBeenCalled();
+      expect(m.requestErasure).not.toHaveBeenCalled();
+      expect(m.record).not.toHaveBeenCalled();
+      expect(m.sendToQueue).not.toHaveBeenCalled();
     });
 
     it('rejects a non-admin with 403 before any write', async () => {

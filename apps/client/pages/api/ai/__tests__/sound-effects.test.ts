@@ -323,6 +323,25 @@ describe('POST /api/ai/sound-effects', () => {
     expect(logger[other]).not.toHaveBeenCalledWith('Sound-effects generation failed', expect.anything());
   });
 
+  it.each([401, 402, 429])(
+    'answers an exhausted provider quota (as a %i) with 503 temporarily unavailable, logged at warn',
+    async providerStatus => {
+      const error = { code: 'provider_error', message: 'elevenlabs_sound_effect_quota_exhausted', providerStatus };
+      mocks.runAudioJobInline.mockResolvedValue(soundJob({ state: 'failed', error }));
+      const { res, logger, promise } = run({ text: 'door creak' });
+      await promise;
+      expect(res._getStatusCode()).toBe(503);
+      expect(res._getJSONData()).toEqual({
+        error: 'Sound effects are temporarily unavailable. Please try again later.',
+      });
+      expect(logger.warn).toHaveBeenCalledWith(
+        'Sound-effects generation unavailable: provider quota exhausted',
+        expect.objectContaining({ error })
+      );
+      expect(logger.error).not.toHaveBeenCalled();
+    }
+  );
+
   it('maps a rate-limited job to the provider-busy 429 with the Retry-After the job recorded', async () => {
     mocks.runAudioJobInline.mockResolvedValue(
       soundJob({

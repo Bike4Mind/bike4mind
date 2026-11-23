@@ -168,10 +168,6 @@ const OrganizationMembersView: FC<OrganizationMembersProps> = ({ organization })
   const canManageMfa =
     !!currentUser && !organization.personal && hasOrgPermission(currentUser, organization, 'managePolicies');
 
-  // Mirrors the owner-only gate on the manager route (organizationService.setOrganizationManager).
-  const canManageManagers =
-    !!currentUser && !organization.personal && isOrgOwnerOrPlatformAdmin(currentUser, organization);
-
   // Owner ID, falling back to the current user.
   const ownerId = useMemo(() => {
     return organization.userId || currentUser?.id || '';
@@ -411,7 +407,6 @@ const OrganizationMembersView: FC<OrganizationMembersProps> = ({ organization })
         canRevokeMembers={canRevokeMembers}
         canRevokeMember={userId => !!currentUser && canRevokeOrgMember(currentUser, organization, userId)}
         canManageCreditBudgets={canManageCreditBudgets}
-        canManageManagers={canManageManagers}
         showEmails={canSeeMemberEmails}
       />
 

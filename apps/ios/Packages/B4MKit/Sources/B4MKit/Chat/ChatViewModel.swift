@@ -65,7 +65,8 @@ public final class ChatViewModel {
     activities: (any QuestActivityTracking)? = nil,
     agentRuns: (any AgentRunStarting)? = nil,
     pendingActions: (any PendingActionAPI)? = nil,
-    firstTurn: QuestTurn? = nil
+    firstTurn: QuestTurn? = nil,
+    transcriptCache: SettledTranscriptCache? = nil
   ) {
     self.sessionID = sessionID
     self.title = title
@@ -77,7 +78,7 @@ public final class ChatViewModel {
     self.polling = polling
     self.sleep = sleep
     self.now = now
-    transcript = TranscriptViewModel(sessionID: sessionID, api: api)
+    transcript = TranscriptViewModel(sessionID: sessionID, api: api, cache: transcriptCache)
     // A conversation this device just started: its prompt shows at once, not after the transcript round trip.
     if let firstTurn { liveTurns = [firstTurn] }
   }
@@ -110,6 +111,7 @@ public final class ChatViewModel {
   /// Call from the screen's `.task`. The first appearance loads the transcript. A reappearance after `stop()`
   /// must not leave a turn stuck on "working": agent runs send no frames, so only polling ever settles them.
   public func load() async {
+    if !liveTurns.isEmpty { transcript.invalidateCache() }
     let hasUnsettledTurns = liveTurns.contains { !($0.status?.isTerminal ?? false) }
     if hasUnsettledTurns, case .loaded = transcript.state {
       await refresh()
@@ -186,6 +188,7 @@ public final class ChatViewModel {
   public func send() async {
     let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !text.isEmpty, !isSending else { return }
+    transcript.invalidateCache()
     draft = ""
     let localID = "local-" + UUID().uuidString
     liveTurns.append(
@@ -298,6 +301,7 @@ public final class ChatViewModel {
 
   /// Applies one frame for this session. Internal so tests can drive it without a socket.
   func apply(_ frame: ChatQuestFrame) {
+    transcript.invalidateCache()
     applyFrame(frame)
     if frame.status?.isTerminal ?? false { settle(frame.questID) }
   }
@@ -432,6 +436,7 @@ public final class ChatViewModel {
   }
 
   private func applyPolled(_ polled: QuestTurn) {
+    transcript.invalidateCache()
     guard let index = liveTurns.firstIndex(where: { $0.id == polled.id }) else { return }
     let old = liveTurns[index]
     if old.status?.isTerminal ?? false { return }

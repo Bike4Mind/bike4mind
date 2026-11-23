@@ -4,7 +4,7 @@ import { useSendOTC, useSignupBotFields, useStartOAuthSignIn, useVerifyOTC } fro
 import { formatCountdown, useOtcRateLimit } from '@client/app/hooks/useOtcRateLimit';
 import OtcRateLimitNotice from './OtcRateLimitNotice';
 import OtcNoCodeHint from './OtcNoCodeHint';
-import RedirectProductHint from './RedirectProductHint';
+import RedirectProductHint, { useRedirectProduct } from './RedirectProductHint';
 import { useAccessToken } from '@client/app/hooks/useAccessToken';
 import { useMfaChallenge } from '@client/app/hooks/useMfaChallenge';
 import MFAModal from './common/MFAModal';
@@ -77,6 +77,7 @@ const Register: React.FC = () => {
   const router = useRouter();
   const theme = useTheme();
   const { t } = useTranslation();
+  const redirectProduct = useRedirectProduct();
   const startOAuthSignIn = useStartOAuthSignIn();
   const { mutate: logEvent } = useLogEvent();
 
@@ -434,22 +435,26 @@ const Register: React.FC = () => {
             >
               {currentStep === 'form' ? t('welcome', { name: theme.branding.name }) : t('auth.checkYourEmail')}
             </Typography>
-            {currentStep === 'form' && <RedirectProductHint mode="signUp" />}
-            <Typography
-              className="register-subtitle"
-              variant="plain"
-              sx={{ textAlign: 'center', color: 'text.tertiary', fontSize: '14px', mt: '4px' }}
-            >
-              {currentStep === 'form' ? (
-                t('auth.createAccountDesc')
-              ) : (
-                <Trans
-                  i18nKey="auth.codeSentTo"
-                  values={{ email: submittedData?.email }}
-                  components={{ email: <Box component="span" sx={{ color: 'text.primary', fontWeight: 600 }} /> }}
-                />
-              )}
-            </Typography>
+            {currentStep === 'form' && <RedirectProductHint mode="signUp" item={redirectProduct} />}
+            {/* On the form, the product hint already says "Create an account to continue to <product>",
+                so the generic line would say it twice. */}
+            {(currentStep !== 'form' || !redirectProduct) && (
+              <Typography
+                className="register-subtitle"
+                variant="plain"
+                sx={{ textAlign: 'center', color: 'text.tertiary', fontSize: '14px', mt: '4px' }}
+              >
+                {currentStep === 'form' ? (
+                  t('auth.createAccountDesc')
+                ) : (
+                  <Trans
+                    i18nKey="auth.codeSentTo"
+                    values={{ email: submittedData?.email }}
+                    components={{ email: <Box component="span" sx={{ color: 'text.primary', fontWeight: 600 }} /> }}
+                  />
+                )}
+              </Typography>
+            )}
           </Box>
 
           {currentStep === 'form' && (

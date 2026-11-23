@@ -30,12 +30,13 @@ public struct CaptureStack: Sendable {
   public static func live(
     baseURL: URL, tokens: any AccessTokenProviding, ownIdentifier: String,
     directory: URL = SharedContainer.directory(),
-    destinationStore: any DestinationStore = UserDefaultsDestinationStore()
+    destinationStore: any DestinationStore = UserDefaultsDestinationStore(),
+    didSendToSession: (@Sendable (String) async -> Void)? = nil
   ) -> CaptureStack {
     let capture = CaptureClient(baseURL: baseURL, tokens: tokens)
     let engine = CaptureEngine(
       store: FileUploadJobStore(directory: directory), api: capture, ownIdentifier: ownIdentifier,
-      makeUploader: { URLSessionBackgroundUploader(identifier: $0) })
+      makeUploader: { URLSessionBackgroundUploader(identifier: $0) }, didSendToSession: didSendToSession)
     return CaptureStack(
       engine: engine,
       destinations: RemoteDestinationSource(capture: capture, api: APIClient(baseURL: baseURL, tokens: tokens)),
