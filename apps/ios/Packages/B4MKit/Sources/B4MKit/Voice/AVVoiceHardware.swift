@@ -44,6 +44,116 @@
     }
   }
 
+  /// `AudioClipPlaying` over `AVAudioPlayer`, playing through the session `AVVoiceAudioSession` activated.
+  @MainActor
+  public final class AVAudioClipPlayer: NSObject, AudioClipPlaying, @preconcurrency AVAudioPlayerDelegate {
+    public struct UnplayableClip: Error {}
+
+    private var player: AVAudioPlayer?
+    private var finished: CheckedContinuation<Void, any Error>?
+
+    public override init() {
+      super.init()
+    }
+
+    public func play(_ clip: Data) async throws {
+      complete(nil)
+      let player = try AVAudioPlayer(data: clip)
+      player.delegate = self
+      guard player.play() else { throw UnplayableClip() }
+      self.player = player
+      try await withCheckedThrowingContinuation { finished = $0 }
+    }
+
+    public func stop() async {
+      player?.stop()
+      complete(nil)
+    }
+
+    public func audioPlayerDidFinishPlaying(_ player: AVAudioPlayer, successfully flag: Bool) {
+      complete(flag ? nil : UnplayableClip())
+    }
+
+    public func audioPlayerDecodeErrorDidOccur(_ player: AVAudioPlayer, error: (any Error)?) {
+      complete(UnplayableClip())
+    }
+
+    private func complete(_ error: (any Error)?) {
+      player = nil
+      if let error { finished?.resume(throwing: error) } else { finished?.resume() }
+      finished = nil
+    }
+  }
+
+  /// `VoiceSamplePlaying` over `AVPlayer`. Holds a `.playback` session only while a sample plays; voice mode
+  /// owns the session otherwise, and Settings is not reachable during it.
+  @MainActor
+  public final class AVVoiceSamplePlayer: VoiceSamplePlaying {
+    public struct SampleFailed: Error {}
+
+    private var player: AVPlayer?
+    private var finished: CheckedContinuation<Void, any Error>?
+    private var observers: [NSObjectProtocol] = []
+    private var status: NSKeyValueObservation?
+    /// Bumped per `play`, so only the latest sample releases the session.
+    private var plays = 0
+
+    public init() {}
+
+    public func play(_ url: URL) async throws {
+      finish(nil)
+      plays += 1
+      let started = plays
+      let session = AVAudioSession.sharedInstance()
+      defer {
+        if started == plays { try? session.setActive(false, options: .notifyOthersOnDeactivation) }
+      }
+      try session.setCategory(.playback, mode: .default)
+      try session.setActive(true)
+      let item = AVPlayerItem(url: url)
+      let player = AVPlayer(playerItem: item)
+      self.player = player
+      try await withCheckedThrowingContinuation { continuation in
+        finished = continuation
+        let center = NotificationCenter.default
+        observers = [
+          center.addObserver(forName: AVPlayerItem.didPlayToEndTimeNotification, object: item, queue: .main) {
+            [weak self] _ in MainActor.assumeIsolated { self?.finish(nil, for: started) }
+          },
+          center.addObserver(forName: AVPlayerItem.failedToPlayToEndTimeNotification, object: item, queue: .main) {
+            [weak self] _ in MainActor.assumeIsolated { self?.finish(SampleFailed(), for: started) }
+          },
+        ]
+        status = item.observe(\.status) { [weak self] item, _ in
+          guard item.status == .failed else { return }
+          Task { @MainActor in self?.finish(SampleFailed(), for: started) }
+        }
+        player.play()
+      }
+    }
+
+    public func stop() async {
+      finish(nil)
+    }
+
+    private func finish(_ error: (any Error)?, for started: Int) {
+      guard started == plays else { return }
+      finish(error)
+    }
+
+    private func finish(_ error: (any Error)?) {
+      player?.pause()
+      player = nil
+      observers.forEach(NotificationCenter.default.removeObserver)
+      observers = []
+      status?.invalidate()
+      status = nil
+      guard let finished else { return }
+      self.finished = nil
+      if let error { finished.resume(throwing: error) } else { finished.resume() }
+    }
+  }
+
   /// `SpeechListening` over `SFSpeechRecognizer` fed by an `AVAudioEngine` input tap. Recognition stays on
   /// the device when the locale supports it, so nothing is sent to Apple unless it has to be.
   public final class SFSpeechListener: SpeechListening, @unchecked Sendable {

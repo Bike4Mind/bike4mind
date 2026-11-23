@@ -96,6 +96,11 @@ const {
 
 vi.mock('@bike4mind/server-utils/mcpConnections/customMcpToolHost', () => ({ customMcpToolHost: fakeCustomMcpHost }));
 
+const mockResolveCallableFunctions = vi.hoisted(() => vi.fn(async (_user: unknown) => true));
+vi.mock('@bike4mind/server-utils/callableFunctions/access', () => ({
+  resolveCallableFunctionsEnabled: mockResolveCallableFunctions,
+}));
+
 vi.mock('@server/utils/waitTurnDeadline', async orig => ({
   ...(await orig<Record<string, unknown>>()),
   get WAIT_TURN_BUDGET_MS() {
@@ -526,6 +531,19 @@ describe('POST /api/chat (integration — scope enforcement via real middleware 
       expect(((await users.findById('user-1')) as { isAdmin?: boolean }).isAdmin).toBe(expected);
     }
   );
+
+  it('hands a wait=true process() a resolver that asks whether callable functions are on for the caller', async () => {
+    validateWithScopes([ApiKeyScope.AI_CHAT]);
+    const { req, res } = fire({ body: { message: 'hello', sessionId: 'sess-1', wait: true } });
+    await handler(req, res);
+    const { callableFunctionsResolver } = mockProcess.mock.calls[0][0] as {
+      callableFunctionsResolver: () => Promise<boolean>;
+    };
+
+    await expect(callableFunctionsResolver()).resolves.toBe(true);
+    expect(processCtorOptions.value?.user).toMatchObject({ id: 'user-1' });
+    expect(mockResolveCallableFunctions).toHaveBeenCalledWith(processCtorOptions.value?.user);
+  });
 
   describe.each([
     {

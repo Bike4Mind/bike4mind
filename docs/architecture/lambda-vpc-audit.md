@@ -146,6 +146,7 @@ The four handlers declared in `infra/queues.ts` whose source is generated outsid
 | `apps/workers/src/cron/telemetryCleanup.handler` | `infra/cron.ts` | MongoDB; linked: `allSecrets` | Yes | Connects to MongoDB. |
 | `apps/workers/src/cron/usagePatternSignals.handler` | `infra/cron.ts` | MongoDB; linked: `allSecrets` | Yes | Connects to MongoDB. |
 | `apps/workers/src/cron/userActivityReport.handler` | `infra/cron.ts` | MongoDB; linked: `allSecrets` | Yes | Connects to MongoDB. |
+| `apps/workers/src/cron/briefScheduleReconcile.handler` | `infra/cron.ts` | MongoDB, EventBridge; linked: `allSecrets`, `eventBus` | Yes | Connects to MongoDB. |
 | `apps/workers/src/cron/voiceHoldSweep.handler` | `infra/cron.ts` | MongoDB; linked: `allSecrets` | Yes | Connects to MongoDB. |
 | `apps/workers/src/cron/youngAccountSpendAlert.handler` | `infra/youngAccountSpendAlert.ts` | MongoDB; linked: `allSecrets` | Yes | Connects to MongoDB. |
 | `apps/workers/src/database/dropPreviewDatabase.handler` | `infra/database.ts` | MongoDB; linked: `secrets.MONGODB_URI` | Yes | Connects to MongoDB. |

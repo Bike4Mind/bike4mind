@@ -175,7 +175,7 @@ jobs:
           # can't `sst shell` into, so for pr<N> runs we derive it per stage from this seed
           # secret (matching what the deployer sets on preview stages), and
           # leave it unset for dev so SST wins. It is the ONLY SST value the suite needs.
-          # Same pattern as e2e-run.yml / e2e-on-label.yml.
+          # Same pattern as e2e-run.yml.
           E2E_PREVIEW_SEED: ${{ startsWith(steps.config.outputs.stage, 'pr') && secrets.E2E_CLEANUP_SECRET_PREVIEW || '' }}
           # Sanitized upstream (pr<digits> or the `dev` choice input); safe to branch on.
           STAGE: ${{ steps.config.outputs.stage }}
@@ -440,7 +440,7 @@ jobs:
           # can't `sst shell` into, so for pr<N> runs we derive it per stage from this seed
           # secret (matching what the deployer sets on preview stages), and
           # leave it unset for dev so SST wins. It is the ONLY SST value the suite needs.
-          # Same pattern as e2e-run.yml / e2e-on-label.yml.
+          # Same pattern as e2e-run.yml.
           E2E_PREVIEW_SEED: ${{ startsWith(steps.config.outputs.stage, 'pr') && secrets.E2E_CLEANUP_SECRET_PREVIEW || '' }}
           # Sanitized upstream (pr<digits> or the `dev` choice input); safe to branch on.
           STAGE: ${{ steps.config.outputs.stage }}

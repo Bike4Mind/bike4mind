@@ -1,5 +1,6 @@
 import { DEFAULT_MUSIC_LENGTH_MS, DEFAULT_MUSIC_MODEL_ID, elevenLabsContentTypeForFormat } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
+import { isQuotaExhaustedResponse, ProviderQuotaExhaustedError } from '../providerQuota';
 import { parseRetryAfterMs, ProviderRateLimitError } from '../providerRateLimitError';
 import { GeneratedMusic, MusicGenerationOptions, MusicGenerator } from './types';
 
@@ -80,6 +81,19 @@ export class ElevenLabsMusicGenerator implements MusicGenerator {
 
     if (!res.ok) {
       const detail = await res.text().catch(() => '');
+      if (isQuotaExhaustedResponse(res.status, detail)) {
+        // The account behind the key is out of credits: an operational state that needs a top-up, not a fault.
+        this.logger.warn('ElevenLabs music generation unavailable: provider quota exhausted', {
+          status: res.status,
+          detail,
+        });
+        throw new ProviderQuotaExhaustedError(
+          'elevenlabs',
+          res.status,
+          detail,
+          `ElevenLabs music generation quota exhausted: ${res.status} ${detail}`
+        );
+      }
       if (res.status === 429) {
         // The plan's concurrency/rate cap, not a fault: warn only, the caller decides whether to retry.
         this.logger.warn('ElevenLabs music generation rate-limited', { detail });

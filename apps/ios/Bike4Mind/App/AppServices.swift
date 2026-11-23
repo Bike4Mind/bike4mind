@@ -47,6 +47,8 @@ final class AppServices {
   let instructions: any InstructionAPI
   /// Answers an approval from a notification button.
   let approvalNotifications: ApprovalNotificationHandler
+  /// Reads and saves when the server composes the user's brief.
+  let briefSchedule: any BriefScheduleAPI
   /// Answers a brief's single decision from a notification button.
   let briefNotifications: BriefNotificationHandler
   /// Whether the signed-in account is waiting to be deleted; `RootView` shows the restore screen then.
@@ -58,6 +60,9 @@ final class AppServices {
   let credits: CreditsViewModel
   /// The Studio model lists, kept for the session; cleared when the session ends (`RootView.endSession`).
   let studioModels: StudioModelCatalog
+  /// The deployment's premium voices and this device's pick; empty or unavailable means on-device speech.
+  let voiceCatalog: VoiceCatalogModel
+  let voiceAPI: any VoiceAPI
 
   init(auth: AuthController) {
     self.auth = auth
@@ -112,6 +117,15 @@ final class AppServices {
       return PendingActionClient(baseURL: auth.environment.baseURL, tokens: auth)
     }
     pendingActions = pendingActionAPI
+    let voiceAPI = ForwardingVoiceAPI { VoiceClient(baseURL: auth.environment.baseURL, tokens: auth) }
+    self.voiceAPI = voiceAPI
+    voiceCatalog = VoiceCatalogModel(
+      wire: voiceAPI,
+      store: UserDefaultsVoiceSelectionStore()
+    ) {
+      guard let userID = await auth.userID() else { return nil }
+      return VoiceAccount(userID: userID, baseURL: auth.environment.baseURL)
+    }
     let briefAPI = ForwardingBriefAPI {
       #if DEBUG
         if FixtureServices.isEnabled { return FixtureServices.briefAPI }
@@ -126,6 +140,12 @@ final class AppServices {
       return InstructionClient(baseURL: auth.environment.baseURL, tokens: auth)
     }
     approvalNotifications = ApprovalNotificationHandler(api: pendingActionAPI, feedback: SystemApprovalFeedback())
+    briefSchedule = ForwardingBriefScheduleAPI {
+      #if DEBUG
+        if FixtureServices.isEnabled { return FixtureServices.briefSchedule }
+      #endif
+      return BriefScheduleClient(baseURL: auth.environment.baseURL, tokens: auth)
+    }
     accountProfiles = AccountProfileStore(
       resolveScope: {
         #if DEBUG
@@ -402,12 +422,35 @@ struct ForwardingAgentRunAPI: AgentRunAPI {
   }
 }
 
+/// Routes voice calls to whichever server the app currently points at.
+struct ForwardingVoiceAPI: VoiceAPI {
+  let provider: @MainActor @Sendable () -> any VoiceAPI
+
+  func voiceSessionsEnabled() async throws -> Bool { try await provider().voiceSessionsEnabled() }
+  func listVoices() async throws -> [VoiceOption] { try await provider().listVoices() }
+  func synthesizeSpeech(text: String, voiceID: String) async throws -> Data {
+    try await provider().synthesizeSpeech(text: text, voiceID: voiceID)
+  }
+}
+
 /// Routes approval answers to whichever server the app currently points at (it can change in debug builds).
 struct ForwardingPendingActionAPI: PendingActionAPI {
   let provider: @MainActor @Sendable () -> any PendingActionAPI
 
   func respond(to target: PendingActionTarget, decision: PendingActionDecision) async throws -> PendingActionResult {
     try await provider().respond(to: target, decision: decision)
+  }
+}
+
+struct ForwardingBriefScheduleAPI: BriefScheduleAPI {
+  let provider: @MainActor @Sendable () -> any BriefScheduleAPI
+
+  func schedule() async throws -> BriefSchedule? {
+    try await provider().schedule()
+  }
+
+  func save(_ schedule: BriefSchedule) async throws -> BriefSchedule {
+    try await provider().save(schedule)
   }
 }
 

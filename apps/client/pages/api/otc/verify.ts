@@ -55,6 +55,7 @@ import { logSignInSuccess, resolveSecondFactor } from '@server/auth/signInSecond
 import { setRefreshCookie } from '@bike4mind/server-utils/auth/refreshCookie';
 import { buildSessionDevice } from '@server/auth/sessionDevice';
 import { readNetworkMeta, recordSignupNetwork } from '@server/auth/networkMeta';
+import { creditShareLinkSignup } from '@server/referrals/shareLink';
 import { assertSignupNetworkWithinLimits } from '@bike4mind/server-utils/auth/signupNetworkLimits';
 import { createSignupGrantRiskCollector } from '@bike4mind/server-utils/auth/signupGrantRisk';
 import { Config } from '@bike4mind/server-utils/utils/config';
@@ -672,6 +673,14 @@ const handler = baseApi({ auth: false })
     // stages stay joinable to the door, then report the stages OTC completes in one step - the
     // code proved the email, and registerViaOTC plus the domain grant above seeded the credits.
     const signupFunnel = await recordSignupAcquisition({ req, user: newUser, method: 'otc' });
+    // After recordSignupNetwork: the share-link checks compare the stored signup IP with the referrer's.
+    await creditShareLinkSignup({
+      req,
+      res,
+      userId: newUser.id,
+      method: 'otc',
+      isSynthetic: signupFunnel.isSynthetic,
+    });
     // Credit the signup to the product the visitor came through, if any, and only with consent
     // - see readConsentedAcquisitionTouches. Never throws. Synthetic accounts are detected
     // above so they never reach a signup conversion.

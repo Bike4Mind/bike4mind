@@ -8,7 +8,7 @@
  * ChatCompletionProcess and the whole tool registry into its bundle, since
  * @vercel/nft follows files rather than used bindings.
  * Re-exported from ChatCompletionFeatures.ts, so the public surface is unchanged.
- * See services/src/index.closure.test.ts.
+ * See services/src/index.closure.repo.test.ts.
  */
 import { z } from 'zod';
 import {

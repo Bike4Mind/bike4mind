@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 
 // infra/buckets.ts names `apps/workers/src/s3/notebookImportComplete.dispatch`; the handler-string
-// guard in checkWorkersMovedDirs.test.ts cannot see whether the export is really there.
+// guard in checkWorkersMovedDirs.repo.test.ts cannot see whether the export is really there.
 const dispatch = vi.hoisted(() => vi.fn());
 vi.mock('@bike4mind/server-utils/s3/notebookImportComplete', () => ({ dispatch }));
 

@@ -338,6 +338,48 @@ describe('MFAEnforcementWrapper - the server refuses an enrollment-owing session
   });
 });
 
+describe('MFAEnforcementWrapper - a team MFA policy, with enforceMFA off', () => {
+  beforeEach(() => {
+    post.mockReset();
+    get.mockReset();
+    interceptorUse.mockClear();
+    get.mockResolvedValue({ data: { enabled: false, required: true } });
+    post.mockRejectedValue(new Error('setup failed'));
+    adminSettings.enforceMFA = 'false';
+  });
+
+  afterEach(() => {
+    adminSettings.enforceMFA = 'true';
+    vi.clearAllMocks();
+  });
+
+  it('starts enrollment when the status requires it even though deployment enforcement is off', async () => {
+    renderWrapper();
+
+    await screen.findByTestId('mfa-enforcement-required-screen');
+    expect(screen.queryByTestId('app-content')).toBeNull();
+    expect(get).toHaveBeenCalledWith('/api/auth/mfa/status', expect.anything());
+    await waitFor(() => expect(mfaSetupCalls()).toBe(1));
+  });
+
+  it('renders the enrollment flow once the server refuses a call for enrollment', async () => {
+    get.mockResolvedValueOnce({ data: { enabled: false, required: false } });
+    const { queryClient } = renderWrapper();
+    await waitFor(() => expect(queryClient.getQueryState(['mfa', 'status'])?.status).toBe('success'));
+    await screen.findByTestId('app-content');
+
+    const onRejected = await registeredRefusalHandler();
+    await act(async () => {
+      await onRejected(enrollmentRefusal()).catch(() => undefined);
+    });
+
+    await screen.findByTestId('mfa-enforcement-required-screen');
+    expect(screen.queryByTestId('app-content')).toBeNull();
+    expect(mfaStatusCalls()).toBe(2);
+    await waitFor(() => expect(mfaSetupCalls()).toBe(1));
+  });
+});
+
 describe('MFAEnforcementWrapper - failed setup verification', () => {
   beforeEach(() => {
     post.mockReset();
