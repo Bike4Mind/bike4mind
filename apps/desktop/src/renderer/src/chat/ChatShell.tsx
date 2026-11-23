@@ -2289,7 +2289,7 @@ export function ChatShell({
                         policy={conversation.session?.orchestrationPolicy}
                         planner={conversation.session?.model}
                         models={catalog.models}
-                        onChange={on => void setOrchestrate(on)}
+                        onChange={(on, budgetCredits) => void setOrchestrate(on, budgetCredits)}
                       />
                     )}
                   </>

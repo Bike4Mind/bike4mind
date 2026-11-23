@@ -1578,7 +1578,7 @@ export type ModelPhase =
   { kind: 'waiting' } | { kind: 'thinking' } | { kind: 'responding' } | { kind: 'writing-tool'; name: string };
 
 /** A newer context notice of the same kind replaces the older one for a conversation. */
-export type ContextNoticeKind = 'context-size' | 'no-tools';
+export type ContextNoticeKind = 'context-size' | 'no-tools' | 'run-budget';
 
 export type ChatStreamEvent =
   | {
@@ -1664,6 +1664,8 @@ export type ChatStreamEvent =
   | { type: 'context-trimmed'; sessionId: string; dropped: number }
   /** Auto changed a local model's context mid-turn in a way that affects its replies (slower, or smaller). */
   | { type: 'context-notice'; sessionId: string; message: string; kind?: ContextNoticeKind }
+  /** Withdraws the notice of `kind` that no longer holds, such as a budget warning after a raise. */
+  | { type: 'context-notice-cleared'; sessionId: string; kind: ContextNoticeKind }
   /**
    * A first turn is cutting the session's worktree before it goes out
    * (ChatService.ensureWorkspace). `branch` arrives once it has been chosen; `running: false`
@@ -2233,10 +2235,20 @@ export const SESSION_EXPIRED_STOP = 'session_expired';
 export const SERVER_CREDENTIALS_STOP = 'server_credentials';
 
 /**
+ * The stop reason of a turn the server refused because its orchestration run's credit budget is
+ * used up. Resumable: refused before the provider ran, so the transcript ends on a request
+ * boundary, and raising the budget continues every session the run paused.
+ */
+export const RUN_BUDGET_STOP = 'run_budget_exhausted';
+
+/** What raising a run budget did: how many paused sessions it continued, or why it was refused. */
+export type RaiseRunBudgetResult = { ok: true; resumed: number } | { ok: false; error: string };
+
+/**
  * Whether Continue can carry the turn on in place. A turn cut by an expired session stopped at
  * a request boundary - before any of that request streamed - so its transcript ends where a
  * budget-stopped one does, or on the user's own prompt.
  */
 export function isResumableStop(reason?: string): boolean {
-  return isTurnBudgetStop(reason) || reason === SESSION_EXPIRED_STOP;
+  return isTurnBudgetStop(reason) || reason === SESSION_EXPIRED_STOP || reason === RUN_BUDGET_STOP;
 }

@@ -64,6 +64,7 @@ import type {
   ChatSessionStatusEvent,
   ChatSessionExportResult,
   ChatSessionSummary,
+  RaiseRunBudgetResult,
   ChatStreamEvent,
   ChatVideoJob,
   ChatVideoLinkResult,
@@ -233,6 +234,7 @@ export const IPC_CHANNELS = {
   chatGetModelLoadOffer: 'chat:get-model-load-offer',
   chatSetSessionPinned: 'chat:set-session-pinned',
   chatSetSessionOrchestrate: 'chat:set-session-orchestrate',
+  chatRaiseRunBudget: 'chat:raise-run-budget',
   chatGetRolePolicy: 'chat:get-role-policy',
   chatSetRolePolicy: 'chat:set-role-policy',
   chatTaskAction: 'chat:task-action',
@@ -982,7 +984,14 @@ export interface DesktopApi {
     getModelLoadOffer(modelId: string, draftTokens?: number): Promise<ModelLoadOffer | null>;
     /** Pin a conversation to the top of the sidebar. Null when the session is gone. */
     setSessionPinned(sessionId: string, pinned: boolean): Promise<ChatSessionSummary | null>;
-    setSessionOrchestrate(sessionId: string, orchestrate: boolean): Promise<ChatSessionSummary | null>;
+    /** `budgetCredits` caps the run Orchestrate starts; only read when it turns on. */
+    setSessionOrchestrate(
+      sessionId: string,
+      orchestrate: boolean,
+      budgetCredits?: number
+    ): Promise<ChatSessionSummary | null>;
+    /** Set or raise the credit budget of the session's orchestration run; a raise resumes a paused run. */
+    raiseRunBudget(sessionId: string, budgetCredits: number): Promise<RaiseRunBudgetResult>;
     getRolePolicy(): Promise<RolePolicy>;
     setRolePolicy(policy: RolePolicy): Promise<RolePolicy>;
     taskAction(sessionId: string, action: TaskAction): Promise<ChatSessionSummary>;
