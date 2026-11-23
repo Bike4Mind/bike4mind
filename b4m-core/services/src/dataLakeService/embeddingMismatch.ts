@@ -217,7 +217,7 @@ export interface EmbeddingLabeledFile {
  *
  * The first two retrieval sites are deliberately STRICTER than this predicate (they count an
  * unlabeled file as unreachable where this one scores it), and their own comments explain why they
- * must not be consolidated onto it. packages/scripts/src/checkEmbeddingModelComparisonSites.test.ts
+ * must not be consolidated onto it. packages/scripts/src/checkEmbeddingModelComparisonSites.repo.test.ts
  * fails when a site appears that is on neither list, so keep the two in step.
  */
 export function isForeignEmbeddingModel(parentModel: string | null | undefined, queryModel: string): boolean {

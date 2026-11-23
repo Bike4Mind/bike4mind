@@ -3,8 +3,9 @@ import Button from '@mui/joy/Button';
 import Chip from '@mui/joy/Chip';
 import Typography from '@mui/joy/Typography';
 import { keyframes } from '@mui/system';
-import { useEffect, useMemo, useRef, type ReactNode, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, type ReactNode, useState } from 'react';
 import { AgentPeekDrawer } from './AgentPeekDrawer';
+import { AgentPrDialog } from './AgentPrDialog';
 import { playSoundEvent } from './chime';
 import { useAgentSoundEvents } from './soundEvents';
 import { activeSoundPack, resolveEventSound } from './soundPacks';
@@ -39,6 +40,7 @@ export interface OrchestratorViewProps {
   /** The orchestrating session, for a view built on the snapshot (snapshotView.tsx). */
   rootId?: string;
   onSelect(id: string): void;
+  onOpenPr?(id: string): void;
   selectedId: string | null;
   introPlaying: boolean;
   personas: ReadonlyMap<string, AgentPersona>;
@@ -97,6 +99,7 @@ export interface StageAmbient {
 
 export interface OrchestratorStageProps {
   agents: readonly AgentView[];
+  selection?: { id: string | null; onChange(id: string | null): void };
   parent?: ParentView;
   /** Bring the parent's own conversation forward for an attention action. */
   onParentFocus?(): void;
@@ -116,6 +119,7 @@ export interface OrchestratorStageProps {
   layout: OrchestratorLayout;
   onLayoutChange(layout: OrchestratorLayout): void;
   actions: AgentActions;
+  onOpenPrLink?(sessionId: string, url: string): void;
   introPlaying: boolean;
   /**
    * Lets the Board and Tavern views register without the stage importing them; Table is the fallback for every
@@ -151,6 +155,7 @@ const pulse = keyframes`
 
 export function OrchestratorStage({
   agents: rosterAgents,
+  selection,
   parent: rosterParent = NO_PARENT,
   onParentFocus,
   onParentToggle,
@@ -162,6 +167,7 @@ export function OrchestratorStage({
   layout,
   onLayoutChange,
   actions,
+  onOpenPrLink,
   introPlaying,
   renderView,
   dockControl,
@@ -171,7 +177,14 @@ export function OrchestratorStage({
   conversationRequest,
   presenter,
 }: OrchestratorStageProps) {
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [prAgentId, setPrAgentId] = useState<string | null>(null);
+  const [localSelectedId, setLocalSelectedId] = useState<string | null>(null);
+  const selectedId = selection ? selection.id : localSelectedId;
+  const onSelectionChange = selection?.onChange;
+  const setSelectedId = useCallback(
+    (id: string | null) => (onSelectionChange ? onSelectionChange(id) : setLocalSelectedId(id)),
+    [onSelectionChange]
+  );
   const focused = focus?.on === true && rootId !== undefined && rosterAgents.length > 0;
   const rosterApprovals = useQuickApprovals(focused, rootId, rosterAgents, rosterParent);
 
@@ -184,6 +197,14 @@ export function OrchestratorStage({
     return presenting ? redactForPresenter(real, presenterNumbers) : real;
   }, [presenting, presenterNumbers, rosterAgents, rosterParent, rosterApprovals, rosterDesk]);
   const { agents, parent, approvals, desk } = shown;
+  const prAgent = !presenting && agents.find(agent => agent.id === prAgentId && agent.pr);
+  useEffect(() => {
+    if (!prAgent) setPrAgentId(null);
+  }, [prAgent]);
+  useEffect(() => setPrAgentId(null), [rootId]);
+  const openPr = (id: string) => {
+    if (!presenting && agents.some(agent => agent.id === id && agent.pr)) setPrAgentId(id);
+  };
   const restoreAction = presenting ? (action: ViewAction) => restorePresentedAction(action, rosterAgents) : undefined;
 
   // Scene-only extras (a banner or agent details placed in the artwork, the Innkeeper's empty stage) belong to
@@ -207,23 +228,25 @@ export function OrchestratorStage({
     if (!hasSelection || settled) return;
     const onClick = (event: MouseEvent) => {
       if (handledDetailsClicks.current.has(event)) return;
+      // Sidebar selections share this drawer and must not be dismissed by the same click.
+      if (event.target instanceof Element && event.target.closest('[data-testid="chat-session-item"]')) return;
       if (event.target instanceof Element && event.target.closest('[role="menu"], [role="listbox"], [role="dialog"]'))
         return;
       setSelectedId(null);
     };
     window.addEventListener('click', onClick);
     return () => window.removeEventListener('click', onClick);
-  }, [hasSelection, settled]);
+  }, [hasSelection, settled, setSelectedId]);
 
   useEffect(() => {
     if (conversationRequest) setSelectedId(null);
-  }, [conversationRequest]);
+  }, [conversationRequest, setSelectedId]);
 
   useEffect(() => {
     if (!focusAgent) return;
     setSelectedId(focusAgent);
     onFocusAgentConsumed?.();
-  }, [focusAgent]);
+  }, [focusAgent, setSelectedId]);
 
   useEffect(() => {
     if (!hasSelection || settled) return;
@@ -236,7 +259,7 @@ export function OrchestratorStage({
     };
     document.addEventListener('keydown', onKeyDown);
     return () => document.removeEventListener('keydown', onKeyDown);
-  }, [hasSelection, settled]);
+  }, [hasSelection, settled, setSelectedId]);
 
   // The parent waiting on an approval counts too, as it does on the app badge.
   const rosterSummary = summarizeRoster(agents, parent);
@@ -339,6 +362,7 @@ export function OrchestratorStage({
     agents,
     rootId,
     onSelect: setSelectedId,
+    onOpenPr: openPr,
     selectedId,
     introPlaying,
     personas,
@@ -362,6 +386,7 @@ export function OrchestratorStage({
     if (!accepted) return;
     await runViewAction(restoreAction ? restoreAction(accepted) : accepted, {
       openAgent: setSelectedId,
+      openPr,
       openRoot: () => onParentFocus?.(),
       stop: actions.stop,
     });
@@ -397,6 +422,7 @@ export function OrchestratorStage({
         if (!hasSelection || settled || !(event.target instanceof Element)) return;
         if (!event.currentTarget.contains(event.target)) return;
         if (event.target.closest('[data-agent-details-panel]')) return;
+        if (event.target.closest('[data-pr-number], [role="dialog"]')) return;
         setSelectedId(null);
       }}
       data-skin={skin.id ?? 'default'}
@@ -507,6 +533,15 @@ export function OrchestratorStage({
         </Box>
         {!detailsInScene && detailsOverlay}
       </Box>
+      {prAgent && (
+        <AgentPrDialog
+          key={prAgent.id}
+          sessionId={prAgent.id}
+          title={prAgent.title}
+          onClose={() => setPrAgentId(null)}
+          onOpenLink={onOpenPrLink && (url => onOpenPrLink(prAgent.id, url))}
+        />
+      )}
     </Box>
   );
 }

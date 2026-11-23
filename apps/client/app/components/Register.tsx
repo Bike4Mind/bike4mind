@@ -15,6 +15,7 @@ import {
   Button,
   Container,
   FormControl,
+  FormHelperText,
   FormLabel,
   Input,
   Stack,
@@ -630,7 +631,9 @@ const Register: React.FC = () => {
                     </Stack>
 
                     <FormControl size="sm" required={registrationClosed} sx={{ mt: '16px' }}>
-                      <FormLabel htmlFor="register-invite-code">Invite code</FormLabel>
+                      <FormLabel htmlFor="register-invite-code">
+                        {registrationClosed ? t('auth.inviteCodeLabel') : t('auth.inviteCodeOptionalLabel')}
+                      </FormLabel>
                       <Input
                         data-testid="register-invite-input"
                         slotProps={{ input: { id: 'register-invite-code' } }}
@@ -638,6 +641,14 @@ const Register: React.FC = () => {
                         onChange={e => setInviteCode(e.target.value)}
                         sx={inputStyles}
                       />
+                      {!registrationClosed && (
+                        <FormHelperText
+                          data-testid="register-invite-optional-hint"
+                          sx={{ mt: '6px', color: 'text.tertiary' }}
+                        >
+                          {t('auth.inviteCodeOptionalHint')}
+                        </FormHelperText>
+                      )}
                       {registrationClosed && (
                         <Typography level="body-xs" sx={{ mt: '6px', color: 'text.tertiary' }}>
                           {t('auth.noInviteCode')}{' '}

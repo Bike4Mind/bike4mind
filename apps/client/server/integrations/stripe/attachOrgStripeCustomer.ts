@@ -23,7 +23,7 @@ type OrgStripeCustomerTarget = {
  * `deletedAt: null` in the filter follows this model's own convention (`OrganizationModel.ts:247`):
  * a delete landing between the gate's read and this write must not stamp a customer onto a dead
  * tenant. `softDeletePlugin`'s update hook adds the same filter; this one is redundant but explicit.
- * `verifyOrgOwner` already rejects a soft-deleted org (its `findById` is hooked), so this only
+ * `verifyOrgPermission` already rejects a soft-deleted org (its `findById` is hooked), so this only
  * covers that race - and when it fires, the reload below misses too and the caller gets the
  * BadRequestError rather than a checkout session against an organization that no longer exists.
  *

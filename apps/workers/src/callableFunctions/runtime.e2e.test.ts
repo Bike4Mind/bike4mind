@@ -497,6 +497,30 @@ describe('callable function runtime with real Pyodide', () => {
     expect(spoofed).toMatchObject({ outcome: 'error', errorClass: 'ValueError' });
   }, 120_000);
 
+  it('takes the class of an exception that escapes the glue from its type', async () => {
+    const contract = (await runner({ op: 'read_contract', code: BEAM })).contract as FunctionContract;
+    // The glue formats a guest error with traceback.format_exc, so a MemoryError raised there escapes the glue.
+    const code = `${BEAM.split('\n\n\ndef run')[0]}
+
+
+def run(load, span, elastic_modulus, second_moment):
+    import traceback
+
+    def fail(*args, **kwargs):
+        raise MemoryError()
+
+    traceback.format_exc = fail
+    raise ValueError("bad")
+`;
+    const result = await runner({
+      op: 'call',
+      code,
+      contract,
+      params: { load: 1, span: 1, elastic_modulus: 1, second_moment: 1 },
+    });
+    expect(result).toMatchObject({ outcome: 'memory', errorClass: 'MemoryError' });
+  }, 120_000);
+
   it('ends a guest that never returns at its own limit, timed from its run start, and leaves no child', async () => {
     const code = probe('def attempt(arg):\n    while True:\n        pass');
     const result = await runner({

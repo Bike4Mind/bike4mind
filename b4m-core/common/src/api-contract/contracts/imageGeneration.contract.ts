@@ -16,6 +16,16 @@ import {
   GENERATION_CALLBACK_REJECTED_DESCRIPTION,
 } from '../../schemas/generationCallback';
 
+/**
+ * Shared by generateImage and editImage. Both run on the quest image path, which the image job resource
+ * (imageJob.contract.ts) replaces; they are served until the sunset, then removed with that path.
+ */
+export const IMAGE_QUEST_ROUTES_DEPRECATION = {
+  since: '2026-11-17',
+  sunset: '2027-02-17',
+  successor: '/api/v1/image-jobs',
+} as const;
+
 /** Shared by generateImage and editImage: both hand off to the same quest poll. */
 export const imageQuestPollResult = {
   schema: ImageQuestSchema,
@@ -74,6 +84,7 @@ export const generateImageContract = defineEndpoint({
     'is a legacy alias of this endpoint. Authenticate with an API key (`b4m_live_`) or a JWT.\n\n' +
     GENERATION_CALLBACK_DESCRIPTION,
   tags: ['Images'],
+  deprecated: IMAGE_QUEST_ROUTES_DEPRECATION,
   auth: 'apiKeyOrJwt',
   scopes: [ApiKeyScope.AI_GENERATE],
   request: GenerateImageRequestBodySchema,

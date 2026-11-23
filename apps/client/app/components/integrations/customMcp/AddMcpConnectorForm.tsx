@@ -33,6 +33,7 @@ import {
   type McpConnectionAuthInput,
   type McpConnectionScope,
 } from '@client/app/hooks/data/mcpConnections';
+import { McpDescriptionField } from './McpConnectionDetailsFields';
 
 type AuthChoice = McpConnectionAuthInput['kind'];
 
@@ -76,6 +77,7 @@ const AddMcpConnectorForm = ({
   const authChoices = platform ? PLATFORM_AUTH_CHOICES : (Object.keys(AUTH_LABELS) as AuthChoice[]);
   const [url, setUrl] = useState(presetUrl ?? '');
   const [displayName, setDisplayName] = useState(presetName ?? '');
+  const [description, setDescription] = useState('');
   const [auth, setAuth] = useState<AuthChoice>(presetUrl || platform ? 'api_key' : 'oauth');
   const [apiKey, setApiKey] = useState('');
   const [showAdvanced, setShowAdvanced] = useState(false);
@@ -105,6 +107,7 @@ const AddMcpConnectorForm = ({
         ...(presetId && !platform ? { presetId } : {}),
         url: url.trim(),
         displayName: displayName.trim(),
+        ...(description.trim() ? { description: description.trim() } : {}),
         ...(slug ? { slug } : {}),
         transport,
         auth: authInput,
@@ -152,6 +155,12 @@ const AddMcpConnectorForm = ({
           slotProps={{ input: { maxLength: 100, 'data-testid': 'custom-mcp-add-name-input' } }}
         />
       </FormControl>
+      <McpDescriptionField
+        value={description}
+        onChange={setDescription}
+        scope={scope}
+        testId="custom-mcp-add-description-input"
+      />
       <FormControl required>
         <FormLabel>Server URL</FormLabel>
         <Input

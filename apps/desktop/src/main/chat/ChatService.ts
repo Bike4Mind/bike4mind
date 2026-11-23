@@ -191,6 +191,7 @@ import {
 } from './agentWake';
 import type { PdfPromptText } from './pdfText';
 import type { AttachmentStore } from './AttachmentStore';
+import type { ComposerDraftStore } from './ComposerDraftStore';
 import type { SidebarSectionStore } from './SidebarSectionStore';
 import { childOutcomeDisplay, classifyChildOutcome } from './childOutcome';
 import { sideChatOpening } from './sideChat';
@@ -344,14 +345,11 @@ import { importedHistoryNeedsCompaction, importedTurnAsText, isImportedToolTurn 
 /** The fields this client reads from `GET /api/settings/serverConfig`. */
 interface ServerTransportConfig {
   sseCompletionsUrl?: string;
-  /** Base for generated-file URLs. A relative path on self-host, an absolute CDN URL on hosted. */
-  cdnUrl?: string;
 }
 
-/** What one serverConfig lookup yields, cached together because it is one round trip. */
+/** What one serverConfig lookup yields. */
 interface ResolvedServerConfig {
   endpoint: string;
-  cdnUrl: string;
 }
 
 /**
@@ -523,9 +521,6 @@ const SUGGESTION_TIMEOUT_MS = 5_000;
  */
 const LOCAL_SUGGESTION_TIMEOUT_MS = 30_000;
 
-/** A local turn has no network dependency otherwise, so its config lookup must not stall inference. */
-const LOCAL_SERVER_CONFIG_TIMEOUT_MS = 5_000;
-
 /**
  * How long a compaction may take before it is abandoned.
  *
@@ -588,6 +583,8 @@ export interface ChatServiceDeps {
   access: AccessStore;
   /** Owns attachment bytes. Absent in tests that never attach anything. */
   attachments?: AttachmentStore;
+  /** Unsent composer text; a deleted conversation's draft goes with it. Absent in tests. */
+  composerDrafts?: Pick<ComposerDraftStore, 'forget'>;
   logger: ChatServiceLogger;
   /**
    * Deferred tool loading on supported Claude models (chat/deferredTools.ts). Absent keeps today's
@@ -1080,6 +1077,8 @@ export class ChatService {
    * built from the store once per scope, for decisions asked before a restart.
    */
   private readonly decisionIndex = new Map<string, PendingTaskDecision & { parentId: string; scope: string | null }>();
+  /** Worker tasks parked on the user (a decision, an upgrade approval or a budget pause), by scope. */
+  private readonly waitingTasks = new Map<string, string | null>();
   private decisionIndexLoad: TaskDecisionIndexLoad | null = null;
 
   /**
@@ -1315,7 +1314,7 @@ export class ChatService {
   }
 
   childArchiveStatus(session: Pick<ChatSessionSummary, 'id' | 'workerTask'>): 'finished' | 'running' | 'waiting' {
-    const status = this.deps.activity?.statusOf(session.id);
+    const status = this.deps.activity?.runtimeStatusOf(session.id);
     if (status === 'needs-action' || pendingDecisionOf(session.workerTask)) return 'waiting';
     if (
       status === 'processing' ||
@@ -2216,9 +2215,15 @@ export class ChatService {
   /** Index (or drop) the decision `session` waits on; a no-op when nothing changed. */
   private syncTaskDecision(session: ChatSessionSummary | null, scope: string | null): void {
     if (!session || this.deps.store.scopeKey() !== scope) return;
+    const status = session.workerTask?.state.status;
     const decision = pendingDecisionOf(session.workerTask);
     const known = this.decisionIndex.get(session.id);
     const parentId = session.origin?.parentSessionId;
+    this.setTaskWaiting(
+      session.id,
+      (!!decision && !!parentId) || status === 'escalation-requested' || status === 'budget-paused',
+      scope
+    );
     if (decision && parentId) {
       const title = session.title.trim() || 'Untitled agent';
       if (known?.decision.id === decision.id && known.title === title) return;
@@ -2230,13 +2235,18 @@ export class ChatService {
         decision,
         scope,
       });
-      if (!known) this.deps.activity?.decisionChanged(session.id, true);
     } else {
       if (!known) return;
       this.decisionIndex.delete(session.id);
-      this.deps.activity?.decisionChanged(session.id, false);
     }
     this.announceTaskDecisions();
+  }
+
+  private setTaskWaiting(sessionId: string, waiting: boolean, scope: string | null): void {
+    if (waiting === this.waitingTasks.has(sessionId)) return;
+    if (waiting) this.waitingTasks.set(sessionId, scope);
+    else this.waitingTasks.delete(sessionId);
+    this.deps.activity?.decisionChanged(sessionId, waiting);
   }
 
   private currentTaskDecisions(): PendingTaskDecision[] {
@@ -2260,7 +2270,9 @@ export class ChatService {
       for (const [sessionId, entry] of this.decisionIndex) {
         if (entry.scope === scope) continue;
         this.decisionIndex.delete(sessionId);
-        this.deps.activity?.decisionChanged(sessionId, false);
+      }
+      for (const [sessionId, entryScope] of this.waitingTasks) {
+        if (entryScope !== scope) this.setTaskWaiting(sessionId, false, entryScope);
       }
       // Install before reading: task writes/deletes can finish while list captures its snapshots.
       const load: TaskDecisionIndexLoad = { scope, touched: new Set<string>(), ready: Promise.resolve() };
@@ -2767,6 +2779,7 @@ export class ChatService {
    * next event to extend, and shows the prompt alone until the turn ends.
    */
   async getSession(sessionId: string, viewed = false): Promise<ChatSession | null> {
+    if (viewed) this.deps.activity?.viewed(sessionId);
     let session = await this.deps.store.get(sessionId);
     const task = session?.workerTask;
     if (viewed && task && !task.attentionViewed && isUpdateOnlyTask(task.state)) {
@@ -3032,11 +3045,13 @@ export class ChatService {
       await this.deps.store.delete(sessionId, decisionScope);
       this.markTaskDecisionMutation(sessionId, decisionScope);
     }
+    await this.deps.composerDrafts?.forget(sessionId);
     if (parentId) this.bumpScope(parentId);
     // The stopped reply can settle and reindex while process/browser cleanup is awaiting I/O.
     // Once the serialized delete has finished, no later append can resurrect the session.
     this.deps.history?.removeSession(sessionId, historyScope);
     this.deps.activity?.forget(sessionId);
+    this.waitingTasks.delete(sessionId);
     if (this.decisionIndex.delete(sessionId)) this.announceTaskDecisions();
     this.deps.queue?.forget(sessionId);
     await this.deps.sidebarSections?.forgetSession(sessionId).catch((err: unknown) => {
@@ -3653,10 +3668,8 @@ export class ChatService {
    *
    * No round trip, so it is instant - that is the whole difference from `/compact`, which is the
    * same insertion with a summary in the marker. Everything else about the conversation is
-   * untouched: its id, project, branch, approval mode and `remoteSessionId` all live on the
-   * session rather than on its messages, and nothing here writes to them. The notebook binding
-   * matters most of the three (see ChatSession.remoteSessionId): dropping it would strand every
-   * image this conversation has generated.
+   * untouched: its id, project, branch and approval mode all live on the
+   * session rather than on its messages, and nothing here writes to them.
    */
   async clearContext(sessionId: string): Promise<ContextBoundaryResult> {
     if (!isValidSessionId(sessionId)) return { ok: false, error: 'That conversation no longer exists.' };
@@ -3923,7 +3936,7 @@ export class ChatService {
         this.active.delete(sessionId);
         this.autoFixTurns.delete(sessionId);
         this.attendedTurns.delete(sessionId);
-        this.deps.activity?.replyEnded(sessionId);
+        this.deps.activity?.replyEnded(sessionId, outcome === 'completed' && finalReply.content.trim().length > 0);
         // All three need the session to be idle, and this is the moment it becomes so: a
         // spawned run gives its concurrency slot back and reports to its parent, and a parent
         // that was mid-turn takes delivery of anything that finished while it was busy.
@@ -4189,10 +4202,8 @@ export class ChatService {
       let scopeVersion = this.scopeVersion(sessionId);
       const localTurn = isLocalModel(session.model);
       if (!api && !localTurn) throw new Error('Sign in to send a message.');
-      const serverConfig =
-        api && (!localTurn || this.deps.media)
-          ? await this.resolveServerConfig(api, localTurn ? LOCAL_SERVER_CONFIG_TIMEOUT_MS : undefined)
-          : { endpoint: '', cdnUrl: '' };
+      // A local turn posts nowhere, so it needs no completions endpoint.
+      const serverConfig = api && !localTurn ? await this.resolveServerConfig(api) : { endpoint: '' };
       // Once per turn: a worker's attempt cannot change mid-turn. Cleared when the server refuses it.
       let run = api && !localTurn ? await this.runAttribution(session) : undefined;
       const dropRun = async (): Promise<void> => {
@@ -4208,7 +4219,7 @@ export class ChatService {
       // One reading for the tool list, the prompt and the host (buildHostContext), so none disagree.
       const orchestrating = orchestratesAgents(session);
       let { roots, listedRoots, workingDirectory } = await this.resolveToolScope(session);
-      const media = api ? this.buildMediaContext(session, api, serverConfig.cdnUrl) : undefined;
+      const media = api ? this.buildMediaContext(api) : undefined;
       // A wrapper over the client and nothing more: a turn that never searches makes no request.
       const web = api
         ? webContextFor(api, {
@@ -6725,7 +6736,7 @@ export class ChatService {
       agent =>
         this.hasTurnInFlight(agent.id) ||
         this.launching.has(agent.id) ||
-        (this.deps.activity?.statusOf(agent.id) ?? 'done') !== 'done'
+        (this.deps.activity?.runtimeStatusOf(agent.id) ?? 'done') !== 'done'
     );
     if (working.length > 0) {
       reasons.push(`Still working or waiting on approval: ${working.map(agent => `"${agent.title}"`).join(', ')}.`);
@@ -6759,7 +6770,7 @@ export class ChatService {
       updatedAt: entry.updatedAt,
       archived: entry.archived === true,
       ...(entry.origin ? { spawnedBy: entry.origin.parentSessionId } : {}),
-      status: this.deps.activity?.statusOf(entry.id) ?? 'done',
+      status: this.deps.activity?.runtimeStatusOf(entry.id) ?? 'done',
       ...(entry.project ? { project: projectName(entry) } : {}),
     };
   }
@@ -7576,33 +7587,19 @@ export class ChatService {
   /**
    * What the generation tools need for this turn, or undefined when nothing can be generated.
    *
-   * Built per turn rather than per app, because it closes over the conversation: the b4m
-   * notebook the generations are filed under belongs to this conversation, and the local
-   * session id decides which media folder the bytes land in.
+   * Built per turn so the client is the one for this turn's signed-in session.
    */
-  private buildMediaContext(
-    session: ChatSession,
-    api: AuthenticatedApiClient,
-    cdnUrl: string
-  ): MediaContext | undefined {
+  private buildMediaContext(api: AuthenticatedApiClient): MediaContext | undefined {
     const store = this.deps.media;
     const models = this.deps.models;
     if (!store) return undefined;
 
-    let remoteSessionId = session.remoteSessionId;
     return {
       client: new MediaApiClient(api),
       store,
-      cdnUrl,
-      notebookName: session.title,
       listImageModels: () => models?.listImageModels() ?? Promise.resolve([]),
       listVideoModels: async () => (await models?.listVideoModels()) ?? [],
       ...(this.deps.videoJobs ? { videoJobs: this.deps.videoJobs } : {}),
-      getRemoteSessionId: () => remoteSessionId,
-      setRemoteSessionId: async value => {
-        remoteSessionId = value;
-        await this.deps.store.setRemoteSessionId(session.id, value);
-      },
     };
   }
 
@@ -8699,27 +8696,21 @@ export class ChatService {
   }
 
   /**
-   * Where to POST completions, and where generated files are served from.
+   * Where to POST completions.
    *
    * Hosted deploys route the same-origin completions path to the ChatCompletion service, but a
    * self-host stack has no CDN doing that and advertises the service's own origin as
-   * `sseCompletionsUrl` instead. `cdnUrl` is the sibling question for generated media: absolute
-   * on a hosted CDN, and the relative local file-proxy path on self-host. A failed lookup is
-   * non-fatal - the same-origin path is the right guess for deploys that omit the field, and an
-   * empty `cdnUrl` only means image generation falls back to the URLs the quest itself carries.
+   * `sseCompletionsUrl` instead. A failed lookup is non-fatal - the same-origin path is the right
+   * guess for deploys that omit the field.
    */
-  private async resolveServerConfig(api: AuthenticatedApiClient, timeout?: number): Promise<ResolvedServerConfig> {
+  private async resolveServerConfig(api: AuthenticatedApiClient): Promise<ResolvedServerConfig> {
     const environmentUrl = this.deps.getEnvironmentUrl();
     if (this.serverConfigCache?.environmentUrl === environmentUrl) return this.serverConfigCache.config;
 
-    const config: ResolvedServerConfig = { endpoint: DEFAULT_COMPLETIONS_PATH, cdnUrl: '' };
+    const config: ResolvedServerConfig = { endpoint: DEFAULT_COMPLETIONS_PATH };
     try {
-      const served =
-        timeout === undefined
-          ? await api.get<ServerTransportConfig>('/api/settings/serverConfig')
-          : await api.get<ServerTransportConfig>('/api/settings/serverConfig', { timeout });
+      const served = await api.get<ServerTransportConfig>('/api/settings/serverConfig');
       if (served?.sseCompletionsUrl) config.endpoint = served.sseCompletionsUrl;
-      if (served?.cdnUrl) config.cdnUrl = served.cdnUrl;
     } catch (err) {
       this.deps.logger.debug(
         `CHAT: serverConfig lookup failed, using ${DEFAULT_COMPLETIONS_PATH}: ${

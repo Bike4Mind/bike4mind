@@ -5,6 +5,7 @@ import LanguageIcon from '@mui/icons-material/Language';
 import DateTimeIcon from '@mui/icons-material/Schedule';
 import DiceIcon from '@mui/icons-material/Casino';
 import HubOutlinedIcon from '@mui/icons-material/HubOutlined';
+import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined';
 import ImageIcon from '@mui/icons-material/Image';
 import MusicIcon from '@mui/icons-material/MusicNote';
 import AudioIcon from '@mui/icons-material/GraphicEq';
@@ -60,9 +61,11 @@ import {
 import { useMcpServers } from '@client/app/hooks/data/mcpServers';
 import { useComposerMcpConnections } from '@client/app/hooks/useComposerMcpConnections';
 import {
+  connectionMenuText,
   isComposerConnectionOn,
   toggleComposerConnection,
 } from '@client/app/components/integrations/customMcp/customMcpModel';
+import McpConnectorToolsDialog from '@client/app/components/integrations/customMcp/McpConnectorToolsDialog';
 import { useConfig } from '@client/app/hooks/data/settings';
 import { AGENT_ONLY_MCP_SERVERS } from '@client/app/components/common/ToolIndicators';
 import { IMAGE_TOOL_PRICE_TOOLTIP, useImageToolPrice } from './useImageToolPrice';
@@ -200,6 +203,8 @@ const ToolContainer = ({ children, sx, toolId }: ToolContainerProps) => {
 interface ToolLabelProps {
   name: string;
   description: string;
+  // Hover text for a description the two-line clamp may cut; screen readers get the whole text anyway.
+  descriptionTitle?: string;
   dim?: boolean;
   // Blue accent line under the description, e.g. to flag an agent-only integration.
   agentOnlyNote?: string;
@@ -209,7 +214,7 @@ interface ToolLabelProps {
 
 // Two-line label (name + inline description) used in place of the old
 // name-plus-(i)-tooltip pattern, so users can read what a tool does without hovering.
-const ToolLabel = ({ name, description, dim = false, agentOnlyNote, detail }: ToolLabelProps) => (
+const ToolLabel = ({ name, description, descriptionTitle, dim = false, agentOnlyNote, detail }: ToolLabelProps) => (
   <Box sx={{ display: 'flex', flexDirection: 'column', minWidth: 0, flex: 1 }}>
     <Typography
       level="body-sm"
@@ -224,6 +229,7 @@ const ToolLabel = ({ name, description, dim = false, agentOnlyNote, detail }: To
     </Typography>
     <Typography
       level="body-xs"
+      title={descriptionTitle}
       sx={{
         color: 'text.primary50', // match the agent tags color
         fontSize: '0.7rem',
@@ -365,6 +371,11 @@ const ToolsSection = ({
 
   const [deepResearchConfigOpen, setDeepResearchConfigOpen] = useState(false);
   const [imageGenModelSelectionOpen, setImageGenModelSelectionOpen] = useState(false);
+  // Looked up live, so a refetch updates the open view and a connector that drops out of the menu
+  // closes it for good (reset during render, React's pattern), rather than reopening if it returns.
+  const [toolsViewId, setToolsViewId] = useState<string | null>(null);
+  const toolsViewConnection = customConnections.find(c => c.id === toolsViewId) ?? null;
+  if (toolsViewId !== null && !toolsViewConnection) setToolsViewId(null);
   const imageModel = useLLM(state => state.imageModel);
   const imageToolPrice = useImageToolPrice(imageModel);
 
@@ -379,9 +390,10 @@ const ToolsSection = ({
   }, [updatePreferences, userSettings.showFunTools]);
 
   // Notify parent when modal opens/closes
+  const toolsViewOpen = toolsViewConnection !== null;
   useEffect(() => {
-    onModalOpenChange?.(deepResearchConfigOpen || imageGenModelSelectionOpen);
-  }, [deepResearchConfigOpen, imageGenModelSelectionOpen, onModalOpenChange]);
+    onModalOpenChange?.(deepResearchConfigOpen || imageGenModelSelectionOpen || toolsViewOpen);
+  }, [deepResearchConfigOpen, imageGenModelSelectionOpen, toolsViewOpen, onModalOpenChange]);
 
   // Check if the current model supports thinking
   const modelSupportsThinking = useMemo(() => {
@@ -963,33 +975,51 @@ const ToolsSection = ({
               </ToolContainer>
             </Grid>
           ))}
-          {customConnections.map(connection => (
-            <Grid xs={12} key={connection.id} className={`tool-item tool-item-mcp-connection-${connection.slug}`}>
-              <ToolContainer sx={toolContainerSx}>
-                <Box
-                  className="tool-content"
-                  sx={{ display: 'flex', alignItems: 'center', gap: '16px', flex: 1, minWidth: 0 }}
-                >
-                  <HubOutlinedIcon
-                    sx={{ color: theme => `${theme.palette.text.primary}80`, fontSize: '1.25rem', flexShrink: 0 }}
-                  />
-                  <ToolLabel
-                    name={connection.displayName}
-                    description={
-                      connection.ownerType === 'platform'
-                        ? `Connector set up by an admin on ${connection.urlHost}`
-                        : `Custom connector on ${connection.urlHost}`
-                    }
-                  />
-                </Box>
-                <SquareSlideToggle
-                  data-testid={`tool-toggle-mcp-connection-${connection.slug}`}
-                  onChange={() => toggleConnection(connection)}
-                  checked={isConnectionOn(connection)}
-                />
-              </ToolContainer>
-            </Grid>
-          ))}
+          {customConnections.map(connection => {
+            const text = connectionMenuText(connection);
+            return (
+              <Grid xs={12} key={connection.id} className={`tool-item tool-item-mcp-connection-${connection.slug}`}>
+                <ToolContainer sx={toolContainerSx}>
+                  <Box
+                    className="tool-content"
+                    sx={{ display: 'flex', alignItems: 'center', gap: '16px', flex: 1, minWidth: 0 }}
+                  >
+                    <HubOutlinedIcon
+                      sx={{ color: theme => `${theme.palette.text.primary}80`, fontSize: '1.25rem', flexShrink: 0 }}
+                    />
+                    <ToolLabel
+                      name={connection.displayName}
+                      description={text.description}
+                      descriptionTitle={text.detail ? text.description : undefined}
+                      detail={text.detail}
+                    />
+                  </Box>
+                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                    <Tooltip title="View tools">
+                      <IconButton
+                        size="sm"
+                        variant="plain"
+                        color="neutral"
+                        aria-label={`View tools for ${connection.displayName}`}
+                        data-testid={`tool-info-mcp-connection-${connection.slug}`}
+                        onClick={() => setToolsViewId(connection.id)}
+                        sx={{ '--IconButton-size': '28px' }}
+                      >
+                        <InfoOutlinedIcon
+                          sx={{ fontSize: '20px', color: theme => `${theme.palette.text.primary}80` }}
+                        />
+                      </IconButton>
+                    </Tooltip>
+                    <SquareSlideToggle
+                      data-testid={`tool-toggle-mcp-connection-${connection.slug}`}
+                      onChange={() => toggleConnection(connection)}
+                      checked={isConnectionOn(connection)}
+                    />
+                  </Box>
+                </ToolContainer>
+              </Grid>
+            );
+          })}
           {/* Prompt Enhancement */}
           <Grid xs={12} className="tool-item tool-item-prompt-enhancement">
             <ToolContainer sx={toolContainerSx} toolId="prompt_enhancement">
@@ -1822,6 +1852,8 @@ const ToolsSection = ({
         open={imageGenModelSelectionOpen}
         onClose={() => setImageGenModelSelectionOpen(false)}
       />
+
+      <McpConnectorToolsDialog connection={toolsViewConnection} onClose={() => setToolsViewId(null)} />
     </DeniedToolsContext.Provider>
   );
 };

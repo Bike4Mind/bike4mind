@@ -32,6 +32,22 @@ class ChatSendWireTest {
     }
 
     @Test
+    fun fileIdsRideAlongOnlyWhenThereAreSome() = runTest {
+        val bodies = mutableListOf<String>()
+        val engine = MockEngine { request ->
+            bodies += request.body.toByteArray().decodeToString()
+            respond("""{"id":"q1","sessionId":"s1"}""", HttpStatusCode.OK, json)
+        }
+        val wire = ChatSendWire(environment, HttpClient(engine))
+
+        wire.send("Hi", "s1", listOf("f1"))
+        wire.send("Hi", "s1", emptyList())
+
+        assertEquals("""{"message":"Hi","sessionId":"s1","stream":true,"fileIds":["f1"]}""", bodies[0])
+        assertEquals("""{"message":"Hi","sessionId":"s1","stream":true}""", bodies[1])
+    }
+
+    @Test
     fun anErrorTypeIsARefusal() = runTest {
         val engine = MockEngine {
             respond("""{"type":"error","errorCode":"spend_cap_exceeded","message":"Cap reached"}""", HttpStatusCode.OK, json)

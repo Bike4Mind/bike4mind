@@ -213,6 +213,8 @@ const SELF_VIEW_PASSTHROUGH_FIELDS = {
   numReferralsAvailable: true,
   regInvites: true,
   referredByUserId: true,
+  referredViaLinkAt: true,
+  referralCode: true,
   signupInvite: true,
   organizationId: true,
   lastActiveAt: true,
@@ -244,6 +246,7 @@ const SELF_VIEW_PASSTHROUGH_FIELDS = {
   apiKeyTrustApproved: true,
   newAccountSpendCapLifted: true,
   deletion: true,
+  nextBriefAt: true,
   suspensionReasonCategory: true,
 } as const satisfies Record<SelfViewPassthroughField, true>;
 

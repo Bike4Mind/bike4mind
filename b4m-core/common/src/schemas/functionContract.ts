@@ -94,6 +94,11 @@ const ALLOWED_KEYS: Record<(typeof FIELD_TYPES)[number], readonly string[]> = {
 const COMMON_KEYS = ['type', 'description'];
 const CONTRACT_KEYS = ['name', 'description', 'inputs', 'outputs'];
 
+/** Every keyword a contract field may use, across all field types. */
+export const FUNCTION_FIELD_KEYWORDS: readonly string[] = [
+  ...new Set([...COMMON_KEYS, ...Object.values(ALLOWED_KEYS).flat()]),
+];
+
 /** UTF-8 size of a JSON text, the unit every size limit in this file is stated in. */
 export function functionJsonBytes(text: string): number {
   return new TextEncoder().encode(text).length;
@@ -170,6 +175,17 @@ function checkDescription(record: Record<string, unknown>, path: string, problem
   }
 }
 
+export interface FunctionBound {
+  value: number;
+  exclusive: boolean;
+}
+
+/** An integer field's bounds are rounded inward to the whole numbers they allow. */
+export const lowestWhole = ({ value, exclusive }: FunctionBound) =>
+  exclusive ? Math.floor(value) + 1 : Math.ceil(value);
+export const highestWhole = ({ value, exclusive }: FunctionBound) =>
+  exclusive ? Math.ceil(value) - 1 : Math.floor(value);
+
 function checkNumberField(record: Record<string, unknown>, path: string, problems: FunctionContractProblem[]): void {
   const unit = own(record, 'unit');
   if (unit === undefined) {
@@ -195,11 +211,6 @@ function checkNumberField(record: Record<string, unknown>, path: string, problem
   const finite = (value: unknown, exclusive: boolean) => (isFiniteNumber(value) ? [{ value, exclusive }] : []);
   const lowers = [...finite(own(record, 'minimum'), false), ...finite(own(record, 'exclusiveMinimum'), true)];
   const uppers = [...finite(own(record, 'maximum'), false), ...finite(own(record, 'exclusiveMaximum'), true)];
-  // An integer field's bounds are rounded inward to the whole numbers they allow.
-  const lowestWhole = ({ value, exclusive }: { value: number; exclusive: boolean }) =>
-    exclusive ? Math.floor(value) + 1 : Math.ceil(value);
-  const highestWhole = ({ value, exclusive }: { value: number; exclusive: boolean }) =>
-    exclusive ? Math.ceil(value) - 1 : Math.floor(value);
   const empty = lowers.some(lower =>
     uppers.some(upper => {
       if (whole) return lowestWhole(lower) > highestWhole(upper);

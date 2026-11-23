@@ -221,6 +221,14 @@ export function ViewSwitcher({
     // Capture phase and stopped: the composer's and peek drawer's Escape handlers would otherwise
     // take the chord first (stopping a turn, closing the drawer) and the reset would never run.
     const onResetKeyDown = (event: KeyboardEvent) => {
+      // The focus toggle rides the capture phase too, so it is handled ahead of the sidebar's own
+      // Mod+Shift+F (focus its search), which yields to a chord already handled.
+      const { focus: currentFocus } = latest.current;
+      if (currentFocus && isFocusToggle(event)) {
+        event.preventDefault();
+        currentFocus.onToggle(!currentFocus.on);
+        return;
+      }
       if (!isViewReset(event)) return;
       event.preventDefault();
       event.stopPropagation();
@@ -232,12 +240,7 @@ export function ViewSwitcher({
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.defaultPrevented) return;
-      const { focus: currentFocus, layout: currentLayout, onLayoutChange: changeLayout } = latest.current;
-      if (currentFocus && isFocusToggle(event)) {
-        event.preventDefault();
-        currentFocus.onToggle(!currentFocus.on);
-        return;
-      }
+      const { layout: currentLayout, onLayoutChange: changeLayout } = latest.current;
       const step = viewStepFor(event);
       if (step === null) return;
       event.preventDefault();

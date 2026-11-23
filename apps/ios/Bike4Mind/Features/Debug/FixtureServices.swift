@@ -24,6 +24,7 @@
     static let account: any AccountAPI = FixtureAccountAPI()
     static let pendingActionAPI: any PendingActionAPI = FixturePendingActionAPI()
     static let stepUp: any StepUpAPI = FixtureStepUpAPI()
+    static let briefSchedule: any BriefScheduleAPI = FixtureBriefScheduleAPI()
     static let briefAPI: any BriefAPI = FixtureBriefAPI()
     static let instructionAPI: any InstructionAPI = FixtureInstructionAPI()
     /// The first fixture session's turn that starts out working and settles a few seconds after it is opened.
@@ -109,7 +110,7 @@
           // The first open (by the link's id) finds it composing; the polls by its own id then fail.
           if id == Self.stuck.id { throw APIError.offline }
           return Self.stuck
-        default: return Self.brief
+        default: return FixtureAnswers.applied(to: Self.brief)
         }
       }
 
@@ -117,6 +118,7 @@
         briefID: String, decisionID: String, text: String, choiceIndex: Int?
       ) async throws -> BriefReplyResult {
         try await Task.sleep(for: .seconds(1))
+        FixtureAnswers.recordReply(decisionID: decisionID)
         return BriefReplyResult(executionID: "fixture-run", sessionID: "fixture-3")
       }
     }
@@ -156,8 +158,52 @@
         case "expired": throw PendingActionFailure.expired
         case "resolved": throw PendingActionFailure.alreadyResolved
         case "offline": throw PendingActionFailure.api(.offline)
-        default: return PendingActionResult(decision: decision)
+        default:
+          FixtureAnswers.record(decision, questID: target.questID)
+          return PendingActionResult(decision: decision)
         }
+      }
+    }
+
+    /// What the fixture approval and reply calls answered, so the next brief fetch reports it the way the server's
+    /// live decision states do.
+    private enum FixtureAnswers {
+      private static let lock = NSLock()
+      nonisolated(unsafe) private static var approvals: [String: PendingActionDecision] = [:]
+      nonisolated(unsafe) private static var replied: Set<String> = []
+
+      static func record(_ decision: PendingActionDecision, questID: String) {
+        lock.withLock { approvals[questID] = decision }
+      }
+
+      static func recordReply(decisionID: String) {
+        lock.withLock { _ = replied.insert(decisionID) }
+      }
+
+      static func applied(to brief: Brief) -> Brief {
+        let answered: [String: PendingActionDecision] = lock.withLock { approvals }
+        let repliedIDs: Set<String> = lock.withLock { replied }
+        guard !answered.isEmpty || !repliedIDs.isEmpty else { return brief }
+        let decisions = brief.decisions.map { decision -> BriefDecision in
+          if let approval = decision.approval, approval.state == .pending, let answer = answered[approval.questID] {
+            return BriefDecision(
+              id: decision.id, text: decision.text,
+              approval: BriefApprovalRef(
+                questID: approval.questID, sessionID: approval.sessionID, pendingActionTs: approval.pendingActionTs,
+                state: answer == .approve ? .approved : .denied))
+          }
+          if let question = decision.question, question.state == .open, repliedIDs.contains(decision.id) {
+            return BriefDecision(
+              id: decision.id, text: decision.text,
+              question: BriefQuestionRef(
+                questID: question.questID, sessionID: question.sessionID, options: question.options, state: .answered))
+          }
+          return decision
+        }
+        return Brief(
+          id: brief.id, status: brief.status, createdAt: brief.createdAt, composedAt: brief.composedAt,
+          periodStart: brief.periodStart, periodEnd: brief.periodEnd, headline: brief.headline,
+          happened: brief.happened, handled: brief.handled, decisions: decisions)
       }
     }
 
@@ -282,6 +328,18 @@
       }
       func sendEmailCode() async throws -> String { "fixture-pending-token" }
       func verify(_ proof: StepUpProof) async throws -> Date { Date().addingTimeInterval(300) }
+    }
+
+    /// Keeps the last saved schedule for the run, so Settings shows what was just picked.
+    private actor FixtureBriefScheduleAPI: BriefScheduleAPI {
+      private var stored: BriefSchedule?
+
+      func schedule() async throws -> BriefSchedule? { stored }
+
+      func save(_ schedule: BriefSchedule) async throws -> BriefSchedule {
+        stored = schedule
+        return schedule
+      }
     }
 
     private struct NoopPushTokenAPI: PushTokenAPI {

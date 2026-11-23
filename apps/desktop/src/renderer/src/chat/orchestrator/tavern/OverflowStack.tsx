@@ -6,6 +6,7 @@ import MenuButton from '@mui/joy/MenuButton';
 import MenuItem from '@mui/joy/MenuItem';
 import { useLayoutEffect, useRef } from 'react';
 import { AGENT_STATE_LABEL, type AgentView } from '../roster';
+import { AgentPrIndicator } from '../AgentPrIndicator';
 import { poseFor, type SlotPoint, type TavernZone } from './scene';
 import { stateLampColor } from '../statePalette';
 import { characterSprite, type CharacterId } from './tavernArt';
@@ -35,12 +36,14 @@ export function OverflowStack({
   stacked,
   selectedId,
   onSelect,
+  onOpenPr,
 }: {
   zone: TavernZone;
   point: SlotPoint;
   stacked: readonly StackedAgent[];
   selectedId: string | null;
   onSelect(id: string): void;
+  onOpenPr?(id: string): void;
 }) {
   const needing = stacked.filter(({ agent }) => agent.state === 'needs-you').length;
   const urgent = needing > 0;
@@ -172,6 +175,7 @@ export function OverflowStack({
               />
             </ListItemDecorator>
             <Box sx={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 260 }}>{name}</Box>
+            <AgentPrIndicator pr={agent.pr} onOpen={() => onOpenPr?.(agent.id)} compact />
           </MenuItem>
         ))}
       </Menu>

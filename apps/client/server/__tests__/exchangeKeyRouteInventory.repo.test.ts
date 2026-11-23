@@ -50,6 +50,10 @@ const ALLOWED_CONTRACTS = new Set([
   'listModels',
   'generateImage',
   'editImage',
+  'createImageJob',
+  'listImageJobs',
+  'getImageJob',
+  'cancelImageJob',
   'createEmbeddings',
   'listEmbeddingModels',
   'createTextRefinement',
@@ -92,7 +96,9 @@ const ALLOWED_ENDPOINTS = [
   'GET /api/generated-content/:ref',
   'GET /api/identify',
   'GET /api/models',
+  'GET /api/oauth/userinfo',
   'GET /api/quests/:id/files',
+  'GET /api/transforms/batch/:id',
   'GET /api/v1/agent-executions/:id',
   'GET /api/v1/client-config',
   'GET /api/v1/completion-runs/:runId/usage',
@@ -101,6 +107,7 @@ const ALLOWED_ENDPOINTS = [
   'GET /api/v1/completion-runs/:runId/usage',
   'GET /api/v1/decision-models',
   'GET /api/v1/embedding-models',
+  'GET /api/v1/image-jobs/:id',
   'GET /api/v1/image-models',
   'GET /api/v1/me',
   'GET /api/v1/models',
@@ -114,6 +121,7 @@ const ALLOWED_ENDPOINTS = [
   'GET /api/users/:id',
   'GET /api/v1/voice/voices',
   'GET /api/voice/v2/agents',
+  'GET|POST /api/v1/image-jobs',
   'GET|POST /api/v1/music-generations',
   'GET|POST /api/v1/scene-compositions',
   'GET|POST /api/v1/video-generations',
@@ -128,6 +136,7 @@ const ALLOWED_ENDPOINTS = [
   'POST /api/tools/weather',
   'POST /api/tools/web-fetch',
   'POST /api/tools/web-search',
+  'POST /api/transforms/batch',
   'POST /api/user-api-keys/:id/callback-secret',
   'POST /api/v1/agent-executions',
   'POST /api/v1/completion-runs',
@@ -136,6 +145,7 @@ const ALLOWED_ENDPOINTS = [
   'POST /api/v1/embeddings',
   'POST /api/v1/image-edits',
   'POST /api/v1/image-generations',
+  'POST /api/v1/image-jobs/:id/cancel',
   'POST /api/v1/music-generations/:id/cancel',
   'POST /api/v1/scene-compositions/:id/cancel',
   'POST /api/v1/sessions',
@@ -159,7 +169,14 @@ const UNRESOLVABLE_DOOR_ALLOWLIST: Record<string, string> = {};
 
 // Scoped routes an exchange key may not use (credential management, other users' profiles,
 // gamification): each refuses an exchange key in its handler.
-const REFUSING_ROUTES = ['gears/status.ts', 'user-api-keys/[id]/callback-secret.ts', 'users/[id]/index.ts'];
+const REFUSING_ROUTES = [
+  'gears/status.ts',
+  'oauth/userinfo.ts',
+  'transforms/batch.ts',
+  'transforms/batch/[id].ts',
+  'user-api-keys/[id]/callback-secret.ts',
+  'users/[id]/index.ts',
+];
 
 // Scope-less credential and account routes. They stay closed only while they declare no exchange scope.
 const SCOPE_LESS_CREDENTIAL_ROUTES = [
@@ -246,7 +263,9 @@ describe('keys minted for a connected app reach only their scoped routes', () =>
   });
 
   it.each(REFUSING_ROUTES)('%s refuses an exchange key in its handler', route => {
-    expect(routeSource(route)).toMatch(/if \(req\.apiKeyInfo\?\.oauthExchangeClientId\)/);
+    expect(routeSource(route)).toMatch(
+      /if \(req\.apiKeyInfo\?\.oauthExchangeClientId\)|if \(refuseExchangeKey\(req, res\)\) return;/
+    );
   });
 
   it.each(SCOPE_LESS_CREDENTIAL_ROUTES)('%s declares no scope an exchange key holds', route => {

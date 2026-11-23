@@ -102,6 +102,7 @@ const viewAnswerSchema = z.discriminatedUnion('status', [
 /** What a view may ask for. The host checks every id against the snapshot it handed out (acceptViewAction). */
 export const viewActionSchema = z.discriminatedUnion('kind', [
   z.strictObject({ kind: z.literal('open-agent'), agentId: id }),
+  z.strictObject({ kind: z.literal('open-pr'), agentId: id }),
   z.strictObject({ kind: z.literal('open-root') }),
   z.strictObject({ kind: z.literal('answer'), agentId: id, decisionId: id, answer: viewAnswerSchema }),
   /** Never 'always': a standing rule is only ever set from the full card. */
@@ -132,6 +133,8 @@ function fitsSnapshot(snapshot: ViewSnapshot, action: ViewAction): boolean {
       return true;
     case 'open-agent':
       return snapshot.agents.some(agent => agent.id === action.agentId);
+    case 'open-pr':
+      return snapshot.agents.some(agent => agent.id === action.agentId && agent.pr !== undefined);
     case 'stop':
       return snapshot.agents.some(agent => agent.id === action.agentId && isStoppableState(agent.state));
     case 'approve':

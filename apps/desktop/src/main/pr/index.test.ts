@@ -1,8 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { PrChatHooks } from './PrMonitor';
 import { registerPullRequests } from './index';
+import { IPC_CHANNELS } from '@shared/ipc';
+import { ipcMain } from 'electron';
 
-const captured = vi.hoisted(() => ({ chat: null as PrChatHooks | null }));
+const captured = vi.hoisted(() => ({ chat: null as PrChatHooks | null, getState: vi.fn() }));
 
 vi.mock('electron', () => ({ ipcMain: { handle: vi.fn() } }));
 vi.mock('../chat/project/git', () => ({ currentBranch: vi.fn() }));
@@ -12,6 +14,7 @@ vi.mock('./PrMonitor', () => ({
       captured.chat = options.chat;
     }
     start = async () => undefined;
+    getState = captured.getState;
   },
 }));
 
@@ -42,6 +45,18 @@ function codeSession(workspaceBranch?: string): StoredSession {
 }
 
 describe('registerPullRequests project hook', () => {
+  it('validates the selected-session read without registering a watch', async () => {
+    vi.mocked(ipcMain.handle).mockClear();
+    register(null);
+    const handler = vi.mocked(ipcMain.handle).mock.calls.find(([channel]) => channel === IPC_CHANNELS.prGetState)?.[1];
+    expect(handler).toBeDefined();
+    captured.getState.mockResolvedValue(null);
+    expect(await handler!({} as never, undefined)).toBeNull();
+    expect(await handler!({} as never, { sessionId: 'agent' })).toBeNull();
+    expect(captured.getState).not.toHaveBeenCalled();
+    await handler!({} as never, 'agent');
+    expect(captured.getState).toHaveBeenCalledWith('agent');
+  });
   beforeEach(() => {
     captured.chat = null;
     vi.mocked(currentBranch).mockReset();

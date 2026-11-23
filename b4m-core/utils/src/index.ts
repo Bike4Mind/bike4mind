@@ -75,6 +75,7 @@ export * from './voiceGeneration';
 export * from './soundGeneration';
 export * from './musicGeneration';
 export * from './providerRateLimitError';
+export * from './providerQuota';
 export * from './analytics';
 export * from './user';
 export * from './pricing';
