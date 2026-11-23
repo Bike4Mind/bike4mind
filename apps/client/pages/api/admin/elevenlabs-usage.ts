@@ -20,7 +20,7 @@ const PLAN_SETTINGS = [
 type PlanSetting = (typeof PLAN_SETTINGS)[number];
 
 const planSetting = (key: PlanSetting, settings: Record<string, string>): number => {
-  const value = getSettingsValue(key, settings, settingsMap[key].defaultValue);
+  const value = getSettingsValue(key, settings) ?? settingsMap[key].defaultValue;
   if (value === undefined) throw new Error(`Setting ${key} has no value and no default`);
   return value;
 };
