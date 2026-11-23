@@ -106,6 +106,7 @@ export const ORGANIZATION_ADMINISTRATOR_ONLY_FIELDS = [
   'isGlobalRead',
   'isGlobalWrite',
   'groups',
+  'loopsGreenCiMergeDisabled',
 ] as const satisfies readonly OrganizationField[];
 
 // Fails to compile when an organization field is added without deciding who may read it.

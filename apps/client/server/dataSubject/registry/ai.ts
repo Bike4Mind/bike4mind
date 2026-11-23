@@ -214,6 +214,38 @@ export const aiHolders = {
     // A list of attribute names to group by, not people.
     unrelatedPaths: ['views.views.config.grouping.groupBy'],
   },
+  Loop: {
+    kind: 'holder',
+    references: [{ path: 'userId', matchBy: 'userId', action: 'deleteDocument' }],
+  },
+  LoopDirective: {
+    kind: 'holder',
+    references: [
+      { path: 'userId', matchBy: 'userId', action: 'deleteDocument' },
+      { path: 'replies.userId', matchBy: 'userId', action: 'anonymize' },
+    ],
+    // Which side replied: 'worker' or 'owner', not a person.
+    unrelatedPaths: ['replies.by'],
+  },
+  LoopEvent: {
+    kind: 'holder',
+    references: [
+      { path: 'userId', matchBy: 'userId', action: 'deleteDocument' },
+      // Whoever answered the unsure or asked event.
+      { path: 'resolution.by', matchBy: 'userId', action: 'anonymize' },
+    ],
+    // Who handed the ticket off: 'run' or 'owner', not a person. Who changed the settings: 'owner', 'coach',
+    // 'trial' or 'undo'; `config.undoneBy` is the id of the undo event.
+    unrelatedPaths: ['handoff.by', 'config.by', 'config.undoneBy'],
+  },
+  LoopMirror: {
+    kind: 'holder',
+    references: [{ path: 'userId', matchBy: 'userId', action: 'deleteDocument' }],
+  },
+  LoopRunnerPresence: {
+    kind: 'holder',
+    references: [{ path: 'userId', matchBy: 'userId', action: 'deleteDocument' }],
+  },
   McpConnection: {
     kind: 'holder',
     references: [
@@ -418,5 +450,7 @@ export const aiHolders = {
       { path: 'userId', matchBy: 'userId', action: 'deleteDocument', scope: 'personal' },
       { path: 'userId', matchBy: 'userId', action: 'anonymize' },
     ],
+    // Who last set the priority, who handed it off and who moved it between stages: roles ('owner', 'run', ...), not people.
+    unrelatedPaths: ['prioritySetBy', 'handoffs.by', 'stageHistory.by'],
   },
 } satisfies DataHolderRegistry;

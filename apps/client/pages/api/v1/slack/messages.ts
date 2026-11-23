@@ -16,11 +16,7 @@
 
 import {
   BadGatewayError,
-  ConflictError,
   ForbiddenError,
-  TooManyRequestsError,
-  UnauthorizedError,
-  UnprocessableEntityError,
   escapeSlackLine,
   postSlackMessageContract,
   SLACK_CHANNEL_ID_PATTERN,
@@ -28,16 +24,18 @@ import {
   neutralizeSlackBroadcastMentions,
   neutralizeSlackBroadcastMentionsDeep,
 } from '@bike4mind/common';
-import {
-  organizationRepository,
-  orgSlackWorkspaceRepository,
-  slackChannelConfigRepository,
-} from '@bike4mind/database/infra';
 import { userApiKeyRepository } from '@bike4mind/database/auth';
 import { decryptToken } from '@bike4mind/server-utils/security/tokenEncryption';
 import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
-import { ErrorCode, WebClient, type KnownBlock } from '@slack/web-api';
+import {
+  authorizeOrgChannelPost,
+  postOrgSlackMessage,
+  SLACK_MESSAGES_POST_BUCKET,
+  SLACK_POSTS_PER_CHANNEL_PER_MINUTE,
+  toCallerError,
+} from '@bike4mind/server-utils/integrations/slack/orgChannelPost';
+import type { KnownBlock } from '@slack/web-api';
 import type { RequestHandler } from 'express';
 
 const SLACK_POSTS_PER_MINUTE = 30;
@@ -47,42 +45,11 @@ const NOT_ENABLED_MESSAGE =
   'This channel is not enabled for API posting by an organization you belong to, or not for this API key. ' +
   'An organization owner can enable it under the organization Slack integration.';
 
-const BOT_NOT_IN_CHANNEL_MESSAGE =
-  'The Bike4Mind bot is not a member of this channel. Invite it with /invite @<bot name>, then retry.';
-
-/** Slack errors that mean the bot cannot see the channel; a private channel answers channel_not_found. */
-const NOT_IN_CHANNEL_ERRORS = new Set(['not_in_channel', 'channel_not_found']);
-/** Slack's refusals of the message itself, which the caller can fix. */
-const INVALID_MESSAGE_ERRORS = new Set([
-  'invalid_blocks',
-  'invalid_blocks_format',
-  'msg_too_long',
-  'no_text',
-  'thread_not_found',
-  'invalid_thread_ts',
-]);
-/** The channel's posting restrictions (announcement-only, thread-only) refused the bot. */
-const RESTRICTED_CHANNEL_ERRORS = new Set([
-  'restricted_action',
-  'restricted_action_read_only_channel',
-  'restricted_action_thread_only_channel',
-  'restricted_action_non_threadable_channel',
-]);
-/** Slack refused the workspace's bot credentials. */
-const REJECTED_CREDENTIAL_ERRORS = new Set([
-  'invalid_auth',
-  'not_authed',
-  'account_inactive',
-  'token_revoked',
-  'token_expired',
-]);
-
 type LimitedRequest = Parameters<RequestHandler>[0];
 
-const SLACK_POSTS_PER_CHANNEL_PER_MINUTE = 60;
 const MINUTE_MS = 60 * 1000;
 const DAY_MS = 24 * 60 * 60 * 1000;
-const BUCKET = 'POST /api/v1/slack/messages';
+const BUCKET = SLACK_MESSAGES_POST_BUCKET;
 
 const perKey = (req: LimitedRequest) => (req.apiKeyInfo ? `api-key:${req.apiKeyInfo.keyId}` : undefined);
 const perUser = (req: LimitedRequest) => (req.user?.id ? `user:${req.user.id}` : undefined);
@@ -143,57 +110,6 @@ function attributionBlock(userName: string, keyName: string): KnownBlock {
   };
 }
 
-type SlackCallError = { code?: string; data?: { error?: string }; retryAfter?: number };
-
-/** Maps a failed chat.postMessage to the error the caller sees, plus the outcome label we log. */
-function toCallerError(error: unknown): { outcome: string; error: Error; retryAfter?: number } {
-  const { code, data, retryAfter } = (error ?? {}) as SlackCallError;
-  if (code === ErrorCode.RateLimitedError) {
-    return {
-      outcome: 'slack_rate_limited',
-      error: new TooManyRequestsError('Slack is rate limiting the bot. Retry after the Retry-After interval.'),
-      retryAfter,
-    };
-  }
-  const slackError = code === ErrorCode.PlatformError ? data?.error : undefined;
-  if (!slackError)
-    return { outcome: 'slack_unreachable', error: new BadGatewayError('Slack did not accept the message.') };
-  if (NOT_IN_CHANNEL_ERRORS.has(slackError)) {
-    return {
-      outcome: slackError,
-      error: new ConflictError(BOT_NOT_IN_CHANNEL_MESSAGE, { errorCode: 'slack_bot_not_in_channel' }),
-    };
-  }
-  if (slackError === 'is_archived') {
-    return {
-      outcome: slackError,
-      error: new ConflictError('This channel is archived.', { errorCode: 'slack_channel_archived' }),
-    };
-  }
-  if (RESTRICTED_CHANNEL_ERRORS.has(slackError)) {
-    return {
-      outcome: slackError,
-      error: new ConflictError(
-        'This channel restricts posting (for example announcement-only or thread-only) and refused the message.',
-        { errorCode: 'slack_channel_restricted' }
-      ),
-    };
-  }
-  if (INVALID_MESSAGE_ERRORS.has(slackError)) {
-    return { outcome: slackError, error: new UnprocessableEntityError(`Slack rejected the message: ${slackError}.`) };
-  }
-  if (REJECTED_CREDENTIAL_ERRORS.has(slackError)) {
-    return {
-      outcome: slackError,
-      error: new UnauthorizedError(
-        "Slack refused this organization's workspace connection. An organization owner must reconnect Slack.",
-        { errorCode: 'provider_rejected' }
-      ),
-    };
-  }
-  return { outcome: slackError, error: new BadGatewayError(`Slack did not accept the message: ${slackError}.`) };
-}
-
 const handler = nextRouteForContract(postSlackMessageContract, {
   // 3,000 characters of text plus 40,000 of blocks, with room for JSON escaping.
   maxBodySize: 128 * 1024,
@@ -212,26 +128,18 @@ const handler = nextRouteForContract(postSlackMessageContract, {
     throw new ForbiddenError(NOT_ENABLED_MESSAGE);
   };
 
-  const config = await slackChannelConfigRepository.findByChannelId(channelId);
-  if (!config?.apiPostEnabled) return deny('channel_not_enabled');
-  const allowedKeyIds = config.apiPostAllowedKeyIds ?? [];
-  if (allowedKeyIds.length > 0 && !allowedKeyIds.includes(keyId)) return deny('key_not_allowlisted');
-
-  const workspace = await orgSlackWorkspaceRepository.findBySlackTeamIdWithToken(config.slackTeamId);
-  if (!workspace) return deny('workspace_not_connected');
-  const { organizationId } = workspace;
-  // The opt-in must have been granted by the organization the workspace is connected to now.
-  if (config.apiPostOrganizationId !== organizationId) return deny('opt_in_from_other_org', organizationId);
-
-  const keyOrgId = req.apiKeyInfo.organizationId;
-  if (keyOrgId && keyOrgId !== organizationId) return deny('key_bills_other_org', organizationId);
-  // Membership, not platform-admin reach: no admin bypass, so a key only ever posts as its owner's own org.
-  const memberOrgIds = await organizationRepository.findMembershipOrgIds(req.user.id);
-  if (!memberOrgIds.includes(organizationId)) return deny('not_org_member', organizationId);
+  const authorization = await authorizeOrgChannelPost({
+    channelId,
+    userId: req.user.id,
+    keyId,
+    keyOrgId: req.apiKeyInfo.organizationId,
+  });
+  if (!authorization.ok) return deny(authorization.reason, authorization.organizationId);
+  const { organizationId } = authorization;
 
   await spendChannelBudget(req, res);
 
-  const botToken = decryptToken(workspace.slackBotToken);
+  const botToken = decryptToken(authorization.encryptedBotToken);
   if (!botToken) {
     req.logger.error('[slack-post] workspace has no bot token', { ...logContext, organizationId });
     throw new BadGatewayError(
@@ -246,14 +154,8 @@ const handler = nextRouteForContract(postSlackMessageContract, {
     ? (neutralizeSlackBroadcastMentionsDeep(blocks) as KnownBlock[])
     : [{ type: 'section', text: { type: 'mrkdwn', text: postedText } }];
 
-  // No SDK retries: a Lambda request must not sit out Slack's back-off, and the caller can retry.
-  const client = new WebClient(botToken, {
-    retryConfig: { retries: 0 },
-    rejectRateLimitedCalls: true,
-    timeout: 10_000,
-  });
   try {
-    const result = await client.chat.postMessage({
+    const result = await postOrgSlackMessage(botToken, {
       channel: channelId,
       text: postedText,
       blocks: [...callerBlocks, attributionBlock(req.user.name || 'unknown user', keyName)],

@@ -14,6 +14,7 @@ const {
   mockQuestDeleteOne,
   mockSettleStrandedQuests,
   mockPersistLinkedQuestId,
+  mockMarkFailed,
   mockResolveExecutorName,
   mockFindRememberedApprovals,
   mockUserFindById,
@@ -33,6 +34,7 @@ const {
   mockQuestDeleteOne: vi.fn(),
   mockSettleStrandedQuests: vi.fn(),
   mockPersistLinkedQuestId: vi.fn(),
+  mockMarkFailed: vi.fn(async () => undefined),
   mockResolveExecutorName: vi.fn(),
   mockFindRememberedApprovals: vi.fn(),
 }));
@@ -54,6 +56,7 @@ vi.mock('@bike4mind/database', () => ({
     countActiveByUserId: mockCountActive,
     create: mockCreateExecution,
     persistLinkedQuestId: mockPersistLinkedQuestId,
+    markFailed: mockMarkFailed,
   },
   Quest: { create: mockQuestCreate, deleteOne: mockQuestDeleteOne },
   sessionToolApprovalRepository: { findByUserAndSession: mockFindRememberedApprovals },
@@ -182,6 +185,18 @@ describe('startAgentExecution', () => {
     await startAgentExecution(input({ userId: 'signed-in-quota' }), logger);
     expect(mockAdmitApiKeyCompletion).not.toHaveBeenCalled();
     expect(mockSend).toHaveBeenCalledOnce();
+  });
+
+  it('fails the execution and drops its Quest when beforeDispatch throws, without dispatching', async () => {
+    const beforeDispatch = vi.fn(async () => {
+      throw new Error('db down');
+    });
+    await expect(
+      startAgentExecution({ ...input({ userId: 'before-throws' }), beforeDispatch }, logger)
+    ).rejects.toThrow('db down');
+    expect(mockMarkFailed).toHaveBeenCalledWith('exec1', expect.objectContaining({ failureReason: 'abandoned' }));
+    expect(mockQuestDeleteOne).toHaveBeenCalledWith({ _id: 'quest1' });
+    expect(mockSend).not.toHaveBeenCalled();
   });
 
   it('creates the execution, persists the prompt Quest, and dispatches the Lambda', async () => {
@@ -628,6 +643,30 @@ describe('startAgentExecution', () => {
 
     expect(mockCreateExecution).toHaveBeenCalledWith(
       expect.objectContaining({ approvedTools: ['web_search', 'current_datetime'] })
+    );
+  });
+
+  it("persists a loop run's loopId and pre-approves the loop tools the executor adds for it", async () => {
+    await startAgentExecution(input({ userId: 'loop-run', enabledTools: ['web_search'], loopId: 'loop1' }), logger);
+
+    expect(mockCreateExecution).toHaveBeenCalledWith(
+      expect.objectContaining({
+        loopId: 'loop1',
+        approvedTools: [
+          'web_search',
+          'loop_ticket_list',
+          'loop_ticket_create',
+          'loop_ticket_update',
+          'loop_ticket_unsure',
+          'loop_ticket_split',
+          'loop_ticket_handoff',
+          'loop_directive_respond',
+          'loop_oversee_status',
+          'loop_directive_issue',
+          'loop_run_now',
+          'loop_resume',
+        ],
+      })
     );
   });
 

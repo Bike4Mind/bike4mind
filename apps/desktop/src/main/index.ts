@@ -16,6 +16,8 @@ import { closeBrowsersOnScopeChange } from './chat/browser/browserScope';
 import { resolveUserPath } from './chat/tools/userPath';
 import { attachDevLogShortcut, closeDevLogWindow, registerDevLog } from './devlog';
 import { registerFleet } from './fleet';
+import { registerLoopRunner } from './loops';
+import { registerLocalLoops } from './loops/local';
 import { registerModels } from './models';
 import { registerArtifactScheme } from './chat/artifacts/sandboxProtocol';
 import { registerModelScheme } from './chat/model3d/engineProtocol';
@@ -221,7 +223,19 @@ void app.whenReady().then(async () => {
     releaseSessionTerminals: sessionId => terminals.acquireSessionCleanup(sessionId),
     observeStream: event => {
       fleet.observe(event);
+      loops.runner.observe(event);
       watch.observeStream(event);
+      localLoops?.scheduler.observe(event);
+    },
+    loopUnattended: sessionId =>
+      chat.isLocalLoopRun(sessionId) ? localLoops?.scheduler.unattended(sessionId) : loops.runner.unattended(sessionId),
+    loopMerge: (sessionId, prUrl) =>
+      chat.isLocalLoopRun(sessionId)
+        ? (localLoops?.scheduler.merge(sessionId, prUrl) ?? Promise.reject(new Error('Loops are unavailable.')))
+        : loops.runner.merge(sessionId, prUrl),
+    localLoopTickets: async (sessionId, tool, input) => {
+      if (!localLoops) throw new Error('Loops are unavailable.');
+      return localLoops.scheduler.ticketTool(sessionId, tool, input);
     },
     observeSessionStatus: event => {
       needsYou.observe(event);
@@ -232,6 +246,8 @@ void app.whenReady().then(async () => {
     catalogSampling: ({ name, modelBlob, parameters, hasAdapter }) =>
       models.catalogSampling(name, modelBlob, parameters, hasAdapter),
   });
+  const loops = registerLoopRunner(auth, chat, background, () => localLoops?.scheduler.busy ?? 0);
+  const localLoops = registerLocalLoops(auth, chat, background, loops.runner, loops.store);
   const models = registerModels(
     modelServers,
     { localContext: () => localContext.read(), modelSettings: modelId => modelSettings.get(modelId) },
@@ -240,7 +256,9 @@ void app.whenReady().then(async () => {
   const needsYou = attention.watchNeedsYou({
     listSessions: () => chat.listSessions(),
     sessionMessages: async sessionId => (await chat.getSession(sessionId))?.messages ?? [],
+    extraCount: () => localLoops?.needsYouCount() ?? 0,
   });
+  localLoops?.onChanged(() => needsYou.recount());
   // The menu-bar item and the mini Tavern: the same status feed and approval gate as above.
   const watch = registerWatch({
     sources: {
@@ -300,6 +318,8 @@ void app.whenReady().then(async () => {
   const prepareQuit = async () => {
     quitState = 'cleaning-up';
     const results = await Promise.allSettled([
+      loops.runner.releaseAll(),
+      localLoops?.scheduler.releaseAll(true),
       background.shutdown(),
       mcp.shutdown(),
       terminals.shutdown(),
@@ -381,6 +401,8 @@ void app.whenReady().then(async () => {
     composerDrafts.flushSync();
     auth.dispose();
     fleet.dispose();
+    loops.runner.dispose();
+    localLoops?.dispose();
     models.dispose();
     chat.dispose();
     stopModelServers();
@@ -415,6 +437,7 @@ void app.whenReady().then(async () => {
   claudeImport.start();
   app.on('browser-window-focus', () => claudeImport.onWindowFocus());
   onAuthStateChanged(closeBrowsersOnScopeChange(auth.getState(), () => browser.closeAll()));
+  onAuthStateChanged(() => void loops.sync());
   let importScope = sessionScopeKeyOf(auth.getState());
   onAuthStateChanged(state => {
     const next = sessionScopeKeyOf(state);

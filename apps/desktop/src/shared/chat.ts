@@ -305,7 +305,8 @@ export interface ChatToolCall {
 }
 
 /** Why a call settled without anyone deciding it: the card was closed out from under it. */
-export type ChatApprovalSystemReason = 'stopped' | 'conversation-deleted' | 'app-quit' | 'moved-on' | 'error';
+export type ChatApprovalSystemReason =
+  'stopped' | 'conversation-deleted' | 'app-quit' | 'moved-on' | 'unattended' | 'error';
 
 /**
  * Who decided a gated call. Only `user` means a person clicked the card for THIS call; every
@@ -719,6 +720,8 @@ export type ChatRelayHoldReason = 'other-project' | 'looser-mode';
  * 'auto-fix' runs on the user's standing instruction for a pull request (see main/pr/autoFix.ts),
  * and a guard holds it to the rules they agreed to (no force-push, no merge). 'background-exit'
  * tells the model a background command it started has ended (see main/chat/backgroundWake.ts).
+ * 'loop-runner' works one ticket of a loop stage that runs on this machine (see main/loops).
+ * 'local-loop' is a run of a loop Desktop owns, ticket or triage (see main/loops/local).
  * 'agents-settled' tells an Orchestrate parent that every agent it started has stopped running
  * (see main/chat/agentWake.ts).
  */
@@ -734,6 +737,24 @@ export type ChatAutomaticOrigin =
       kind: 'background-exit';
       processIds: string[];
       /** One line for the thread's collapsed row, e.g. "[a1b2c3d4] exited 0". */
+      summary: string;
+    }
+  | {
+      kind: 'loop-runner';
+      loopId: string;
+      ticketId: string;
+      /** The server's run id; tagged on this session's completion requests for credit attribution. */
+      runId: string;
+      /** One line for the thread's collapsed row: the ticket's title. */
+      summary: string;
+    }
+  | {
+      kind: 'local-loop';
+      loopId: string;
+      /** Absent on a triage run. */
+      ticketId?: string;
+      /** A local run id: never sent to the server, which knows nothing of Desktop loops. */
+      runId: string;
       summary: string;
     }
   | {
@@ -1313,8 +1334,9 @@ export type ChatSessionMode = 'chat' | 'code';
  *           irreversible actions and opening a signed-in site still ask. Chosen per conversation,
  *           never inherited by a spawned one, and reset to 'ask' on relaunch.
  *
- * Changed by the user in the renderer and nowhere else. No tool, no MCP server and no model
- * output can raise it; see ChatService.setApprovalMode and HostContext.
+ * Changed by the user in the renderer, and by the loop runner for the session it starts (reset to
+ * 'ask' when the run ends). No tool, no MCP server and no model output can raise it; see
+ * ChatService.setApprovalMode and HostContext.
  */
 export type ChatApprovalMode = 'ask' | 'auto' | 'full';
 
@@ -2221,6 +2243,9 @@ export const SESSION_EXPIRED_STOP = 'session_expired';
 
 /** The stop reason of a turn a model server refused with 401 or 403; the thread offers to enter new credentials. */
 export const SERVER_CREDENTIALS_STOP = 'server_credentials';
+
+/** The stop reason of a turn that could not open a connection to the Bike4Mind server; a local loop requeues it. */
+export const SERVER_UNREACHABLE_STOP = 'server_unreachable';
 
 /**
  * Whether Continue can carry the turn on in place. A turn cut by an expired session stopped at

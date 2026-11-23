@@ -33,7 +33,9 @@ export function useNeedsYouAlerts(
   loaded: boolean,
   onOpen: (event: AttentionOpenEvent) => void,
   viewingId: string | null,
-  unreadReplies: ReadonlySet<string> = NO_UNREAD
+  unreadReplies: ReadonlySet<string> = NO_UNREAD,
+  /** Other waits added to the dock badge: Desktop loop tickets waiting on the user (loopNeedsYouCount). */
+  extraCount = 0
 ): void {
   const [scope] = useNotifyScope();
   const latestScope = useRef(scope);
@@ -74,7 +76,7 @@ export function useNeedsYouAlerts(
     void announce(announced, latestSessions.current);
   }, [statuses, loaded]);
 
-  const count = needsYouCount(statuses, sessions, scope);
+  const count = needsYouCount(statuses, sessions, scope) + extraCount;
   useEffect(() => {
     void window.b4m.attention.setBadgeCount(count);
   }, [count]);

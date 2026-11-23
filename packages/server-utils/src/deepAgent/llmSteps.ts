@@ -21,6 +21,7 @@ import {
 import { createSmallLLMService, type SmallLLMService } from '@bike4mind/services/llm/SmallLLMService';
 import type { SmallLLMAdapters } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
+import { completeReflection, ReflectCoreOutputSchema } from '../reflection/reflectCore';
 import { buildGroomPrompt, buildOrientPrompt, buildReflectPrompt } from './prompts';
 
 /**
@@ -46,10 +47,8 @@ const logger = new Logger({ metadata: { component: 'deepAgent.llmSteps' } });
 // type, out of range) the field falls back instead of failing the whole parse.
 // Small models emit explicit `null`s and odd shapes; a wake must survive all of
 // it. Required strings get non-empty placeholders (Mongo requires non-empty).
-const ReflectOutputSchema = z.object({
-  reflection: z.string().min(1).catch('(no reflection produced)'),
+const ReflectOutputSchema = ReflectCoreOutputSchema.extend({
   summary: z.string().min(1).catch('(no summary)'),
-  nextIntendedAction: z.string().min(1).catch('(next action undecided)'),
   nextWakeIntervalMs: z.number().nullish().catch(undefined),
   scopeLocks: z.array(z.string()).catch([]),
   drivesAfter: z.record(z.string(), z.number()).catch({}),
@@ -191,9 +190,7 @@ export class LlmWakeSteps implements WakeSteps {
   }
 
   async reflect(ctx: ReflectContext): Promise<ReflectResult> {
-    const { data } = await this.llm.completeJSON(buildReflectPrompt(ctx), ReflectOutputSchema, {
-      taskType: 'extraction',
-      temperature: 0,
+    const data = await completeReflection(this.llm, buildReflectPrompt(ctx), ReflectOutputSchema, {
       timeoutMs: this.timeoutMs,
       // Reflect output is large (drives + memory + subgoals + scope locks);
       // a small ceiling truncates the JSON and breaks parsing.

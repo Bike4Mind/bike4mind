@@ -22,14 +22,16 @@ import { recordOrganizationRead } from '@server/utils/orgReadAudit';
 import { endKeyRealtimeConnections } from '@server/utils/adminApiKeyActions';
 import { creditService, organizationService } from '@bike4mind/services';
 import {
+  canAdministerOrganization,
   CreditHolderType,
+  isOrgMember,
   MAX_STORAGE_LIMIT_MB,
   resolveOrganizationStorageLimit,
   toSafeOrganization,
   OrganizationSharingPolicySchema,
   orgDomainPathIdSchema,
 } from '@bike4mind/common';
-import { BadRequestError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
+import { BadRequestError, ForbiddenError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { parseAdminActionReason, recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 import { Request } from 'express';
 import { subscriptionRepository } from '@bike4mind/server-utils/models/Subscription';
@@ -50,6 +52,7 @@ const updateOrgBodySchema = z.object({
   sharingPolicy: OrganizationSharingPolicySchema.optional(),
   maxCreditsPerMember: z.number().int().positive().nullable().optional(),
   storageLimit: z.number().min(0).max(MAX_STORAGE_LIMIT_MB).nullable().optional(),
+  loopsGreenCiMergeDisabled: z.boolean().optional(),
 });
 
 /**
@@ -104,6 +107,7 @@ const AUDITED_SETTINGS_FIELDS = [
   'systemPrompt',
   'redactPushContent',
   'maxCreditsPerMember',
+  'loopsGreenCiMergeDisabled',
 ] as const;
 
 // The system prompt can run to 10,000 characters, so the entry records its length, not its text.
@@ -144,7 +148,17 @@ const handler = baseApi()
         throw new BadRequestError('Invalid organization id');
       }
 
-      const { currentCredits, ...profile } = updateOrgBodySchema.parse(req.body);
+      const { currentCredits, loopsGreenCiMergeDisabled, ...profile } = updateOrgBodySchema.parse(req.body);
+      // Org admins only, checked here: organizationService.update admits write-ACL members and 404s
+      // appointed admins (see findUpdateAccessById).
+      if (loopsGreenCiMergeDisabled !== undefined) {
+        const org = await organizationRepository.findById(orgId);
+        // A non-member gets the same 404 as for a missing org.
+        if (!org || !isOrgMember(req.user!, org)) throw new NotFoundError('Organization not found');
+        if (!canAdministerOrganization(req.user!, org)) {
+          throw new ForbiddenError('Only an organization admin can change its loop merge setting');
+        }
+      }
       // Non-admins cannot move credits here; their value is ignored, as before.
       const updateProfile = () =>
         organizationService.update(
@@ -157,13 +171,19 @@ const handler = baseApi()
           }
         );
 
-      const auditedFields = AUDITED_SETTINGS_FIELDS.filter(field => profile[field] !== undefined);
+      const sent = { ...profile, loopsGreenCiMergeDisabled };
+      const auditedFields = AUDITED_SETTINGS_FIELDS.filter(field => sent[field] !== undefined);
       const auditsStorageOverride = req.user!.isAdmin && profile.storageLimit !== undefined;
       const before =
         auditedFields.length > 0 || auditsStorageOverride ? await organizationRepository.findById(orgId) : null;
 
-      const updatedOrganization =
-        profile.sharingPolicy !== undefined || (req.user!.isAdmin && currentCredits !== undefined)
+      const profileSent =
+        loopsGreenCiMergeDisabled === undefined ||
+        currentCredits !== undefined ||
+        Object.values(profile).some(value => value !== undefined);
+      let updatedOrganization = !profileSent
+        ? null
+        : profile.sharingPolicy !== undefined || (req.user!.isAdmin && currentCredits !== undefined)
           ? await withTransaction(async () => {
               if (req.user!.isAdmin && currentCredits !== undefined)
                 await applyAdminCreditEdit(req, orgId, currentCredits);
@@ -178,6 +198,11 @@ const handler = baseApi()
               return updated;
             })
           : await updateProfile();
+      if (loopsGreenCiMergeDisabled !== undefined) {
+        await organizationRepository.update({ id: orgId, loopsGreenCiMergeDisabled });
+        updatedOrganization = await organizationRepository.findById(orgId);
+      }
+      if (!updatedOrganization) throw new NotFoundError('Organization not found');
 
       const changes: { field: string; before: unknown; after: unknown }[] = before
         ? auditedFields

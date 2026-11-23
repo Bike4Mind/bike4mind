@@ -105,6 +105,7 @@ import {
   parseLocalModelId,
   pickLocalModel,
   SERVER_CREDENTIALS_STOP,
+  SERVER_UNREACHABLE_STOP,
   SESSION_EXPIRED_STOP,
 } from '@shared/chat';
 import { AUTO_COMPACT_PERCENT, inputSide, occupiedTokens, shouldAutoCompact } from '@shared/contextLimit';
@@ -137,6 +138,7 @@ import {
 } from '@shared/mcp';
 import { activeTodos, TODO_TOOL_NAME } from '@shared/todos';
 import { autoFixToolRefusal } from '../pr/autoFix';
+import { loopRunnerToolRefusal } from '../loops/guards';
 import type { PrMonitor } from '../pr/PrMonitor';
 import type { ArtifactPublisher } from './artifacts/ArtifactPublisher';
 import type { CapabilityLedger } from './capabilities/CapabilityLedger';
@@ -203,6 +205,7 @@ import { devLog } from '../devlog/DevLogSink';
 import { CHAT_STREAM_TAG } from './devLogTag';
 import {
   DEFAULT_COMPLETIONS_PATH,
+  Bike4MindUnreachableError,
   streamCompletion,
   supportsPromptCache,
   withCacheBreakpoints,
@@ -605,6 +608,10 @@ export interface ChatServiceDeps {
   modelMemory?: ModelMemory;
   /** Absent in tests that exercise tools needing no consent; a gated tool then never runs. */
   approvals?: ApprovalGate;
+  /** Merges for loop_merge_pr; see main/loops. Absent in tests and builds without the runner. */
+  loopMerge?: (sessionId: string, prUrl: string) => Promise<string>;
+  /** The loop_ticket_* tools of a Desktop loop run; see main/loops/local. Absent in tests and builds without it. */
+  localLoopTickets?: (sessionId: string, tool: string, input: Record<string, unknown>) => Promise<string>;
   /**
    * Standing allow, ask and deny rules - the desktop's and Claude Code's. Read here, and written
    * only by the approval card's "Always allow"; no tool can reach it.
@@ -1099,6 +1106,16 @@ export class ChatService {
 
   /** Sessions whose running turn auto-fix started; their tool calls go through autoFixToolRefusal. */
   private readonly autoFixTurns = new Set<string>();
+  /**
+   * Loop runner sessions, and every session they spawned, to the run id they work for. Unlike
+   * autoFixTurns it lasts the session's life. It alone decides the runner-only behaviour: the
+   * loopRunnerToolRefusal guard, loop_merge_pr, low process priority, the credit tag on
+   * completions and unattended approval cards. A `local` run (a Desktop-owned loop) gets all of it but the credit
+   * tag: its id means nothing to the server.
+   */
+  private readonly loopRuns = new Map<string, { runId: string; local?: true }>();
+  /** The mode setLoopRunApprovalMode gave a run's session, reset to 'ask' when the run ends unless the user changed it. */
+  private readonly loopRunApprovalModes = new Map<string, ChatApprovalMode>();
 
   /**
    * Spawned sessions whose running turn the user typed, so someone is there to answer a card.
@@ -1963,6 +1980,18 @@ export class ChatService {
       });
     }
     return updated;
+  }
+
+  /** A loop run's approval mode, from its loop. Unlike setApprovalMode it is not remembered as the user's pick. */
+  async setLoopRunApprovalMode(sessionId: string, mode: ChatApprovalMode): Promise<ChatSessionSummary | null> {
+    const updated = await this.deps.store.setLoopRunApprovalMode(sessionId, mode);
+    if (updated) this.loopRunApprovalModes.set(sessionId, mode);
+    return updated;
+  }
+
+  /** A loop run's model, from its claim. Unlike setSessionModel it is not remembered as the user's pick. */
+  setLoopRunModel(sessionId: string, model: string): Promise<ChatSessionSummary | null> {
+    return this.deps.store.setModel(sessionId, model);
   }
 
   /** Reasoning effort, or thinking On/Off for an Ollama model with a thinking switch. */
@@ -3009,6 +3038,8 @@ export class ChatService {
     const scopeKey = this.deps.store.scopeKey() ?? 'local';
     const decisionScope = expectedScope;
     this.deps.approvals?.forgetSession(sessionId);
+    this.loopRuns.delete(sessionId);
+    this.loopRunApprovalModes.delete(sessionId);
     this.deps.history?.removeSession(sessionId, historyScope);
     // Ahead of stop(), so a spawn still preparing reads this as the delete it is.
     if (this.launching.has(sessionId)) this.launchInterrupts.set(sessionId, 'deleted');
@@ -3091,6 +3122,41 @@ export class ChatService {
       this.launchInterrupts.set(sessionId, 'stopped');
     }
     this.active.get(sessionId)?.abort();
+  }
+
+  private markLoopRun(sessionId: string, run: { runId: string; local?: true }): void {
+    this.loopRuns.set(sessionId, run);
+    this.deps.approvals?.setUnattended(sessionId, true);
+  }
+
+  /** The loop run a session works for, its own or the one of the runner session that spawned it. */
+  loopRunOf(sessionId: string): string | undefined {
+    return this.loopRuns.get(sessionId)?.runId;
+  }
+
+  /** Whether the session works for a Desktop-owned loop's run. */
+  isLocalLoopRun(sessionId: string): boolean {
+    return this.loopRuns.get(sessionId)?.local === true;
+  }
+
+  /** Every session working for this run: the runner's own and any it spawned, at any depth. */
+  loopRunSessions(runId: string): string[] {
+    return [...this.loopRuns].filter(([, run]) => run.runId === runId).map(([sessionId]) => sessionId);
+  }
+
+  /**
+   * The run is over. Its sessions, which the runner keeps while their PR is open, become ordinary
+   * conversations the user can pick up: no runner guard, priority, credit tag or unattended cards.
+   */
+  endLoopRun(runId: string): void {
+    for (const sessionId of this.loopRunSessions(runId)) {
+      this.loopRuns.delete(sessionId);
+      this.deps.approvals?.setUnattended(sessionId, false);
+      // The runner set auto or full for the run; a later wake must not inherit it.
+      const loopMode = this.loopRunApprovalModes.get(sessionId);
+      this.loopRunApprovalModes.delete(sessionId);
+      if (loopMode) void this.deps.store.setLoopRunApprovalMode(sessionId, 'ask', loopMode).catch(() => undefined);
+    }
   }
 
   dispose(): void {
@@ -3457,6 +3523,9 @@ export class ChatService {
 
     if (released?.automatic?.kind === 'auto-fix') this.autoFixTurns.add(sessionId);
     else this.autoFixTurns.delete(sessionId);
+    if (released?.automatic?.kind === 'loop-runner') this.markLoopRun(sessionId, { runId: released.automatic.runId });
+    if (released?.automatic?.kind === 'local-loop')
+      this.markLoopRun(sessionId, { runId: released.automatic.runId, local: true });
     // A relay, an automatic turn and a spawn's seed prompt all start a turn nobody typed here.
     if (!released?.relay && !released?.automatic && !options.loop && seedHops === undefined) {
       this.attendedTurns.add(sessionId);
@@ -4304,6 +4373,9 @@ export class ChatService {
             keepScreenshot: (bytes, caption) => this.keepScreenshot(sessionId, bytes, caption),
           }
         : undefined;
+      const loopRun = this.loopRuns.get(sessionId);
+      // The server's run id only: it tags explore and completion calls for the run's credits (X-B4M-Loop-Run).
+      const loopRunId = loopRun && !loopRun.local ? loopRun.runId : undefined;
       const simulatorDeps = this.deps.simulator;
       const simulator: SimulatorContext | undefined = simulatorDeps
         ? {
@@ -4333,6 +4405,7 @@ export class ChatService {
               endpoint: serverConfig.endpoint,
               models: catalog?.models ?? [],
               sessionModel: session.model,
+              ...(loopRunId ? { loopRunId } : {}),
               run: () => (run ? { ...run, purpose: 'explore' } : undefined),
               onRunRejected: dropRun,
               onUsage: spent => {
@@ -4393,6 +4466,8 @@ export class ChatService {
               mcp: mcpTools.map(binding => binding.definition.schema),
               mcpServers: !!this.deps.mcp,
               pullRequest: session.mode === 'code' && !!this.deps.pullRequests,
+              loopMerge: !!loopRun && !!this.deps.loopMerge,
+              localLoopTickets: !!loopRun?.local && !!this.deps.localLoopTickets,
             });
       const toolsFor = (granted: readonly string[]) =>
         modelOption?.supportsTools === false ? [] : offeredTools(granted);
@@ -4784,6 +4859,7 @@ export class ChatService {
                           // Ties the turn's ledger row to this session. See CompletionRequest.sessionId.
                           sessionId,
                           ...(attribution ? { run: attribution } : {}),
+                          ...(loopRunId ? { loopRunId } : {}),
                           ...effortField,
                           ...generationField,
                           ...cacheTtlField,
@@ -5125,7 +5201,9 @@ export class ChatService {
         ? { stopReason: SESSION_EXPIRED_STOP }
         : err instanceof ServerCredentialsError
           ? { stopReason: SERVER_CREDENTIALS_STOP }
-          : {};
+          : err instanceof Bike4MindUnreachableError
+            ? { stopReason: SERVER_UNREACHABLE_STOP }
+            : {};
 
       if (segmentSettled) {
         // settleSegment already stored this reply whole, rounds and artifacts included; a
@@ -5655,6 +5733,9 @@ export class ChatService {
       attended,
     } = scope;
     const pullRequests = this.deps.pullRequests;
+    const loopRun = this.loopRuns.get(sessionId);
+    const loopMerge = this.deps.loopMerge;
+    const localLoopTickets = this.deps.localLoopTickets;
     return Promise.all(
       requested.map(async request => {
         const call: ChatToolCall = {
@@ -5706,7 +5787,11 @@ export class ChatService {
           return unknown;
         }
 
-        const refusal = this.autoFixTurns.has(sessionId) ? autoFixToolRefusal(request.name, call.input) : null;
+        const refusal = this.autoFixTurns.has(sessionId)
+          ? autoFixToolRefusal(request.name, call.input)
+          : this.loopRuns.has(sessionId)
+            ? loopRunnerToolRefusal(request.name, call.input)
+            : null;
         if (refusal) {
           const refused: ChatToolCall = { ...call, status: 'denied', error: refusal };
           this.emit({ type: 'tool-start', sessionId, messageId, call });
@@ -5806,6 +5891,15 @@ export class ChatService {
           ...(skills ? { skills } : {}),
           ...(web ? { web } : {}),
           ...(this.deps.mcp ? { mcp: this.deps.mcp } : {}),
+          ...(loopRun ? { lowPriority: true } : {}),
+          ...(loopRun && loopMerge ? { loopMerge: { merge: (url: string) => loopMerge(sessionId, url) } } : {}),
+          ...(loopRun?.local && localLoopTickets
+            ? {
+                localLoopTickets: {
+                  call: (tool: string, input: Record<string, unknown>) => localLoopTickets(sessionId, tool, input),
+                },
+              }
+            : {}),
           // Not on the declaration alone: an undeclared tool still resolves by name, and in a turn
           // the user did not type nobody can have asked for the change.
           ...(pullRequests && attended
@@ -6990,6 +7084,8 @@ export class ChatService {
       // Registered before anything is sent: `send` resolves once the turn is accepted, and the
       // reply can finish - and look for its watch entry - before launchSpawned sees it return.
       this.spawnWatch.set(child.id, { parentSessionId: parent.id });
+      const loopRun = this.loopRuns.get(parent.id);
+      if (loopRun) this.markLoopRun(child.id, loopRun);
       const seedHops = this.turnRelay.get(parent.id)?.hops ?? 0;
       lease.launched = true;
       void this.launchSpawned(parent.id, project.directory, child, brief, worktree, {
@@ -9954,6 +10050,8 @@ function deniedMessage(decidedBy: ChatApprovalDecidedBy): string {
       return 'Not run: the app quit before this was approved.';
     case 'moved-on':
       return 'Not run: the user moved on before this was approved.';
+    case 'unattended':
+      return 'Not run: nobody is present to approve it. The ticket is handed back to the user; stop here.';
     case 'error':
       return `Not run: ${decidedBy.detail ?? 'the approval could not be completed'}.`;
   }
@@ -10336,6 +10434,10 @@ function automaticDisplay(automatic: ChatAutomaticOrigin): string {
       return `Background command finished: ${automatic.summary}`;
     case 'agents-settled':
       return `Agents finished: ${automatic.summary}`;
+    case 'loop-runner':
+      return `Loop ticket: ${automatic.summary}`;
+    case 'local-loop':
+      return `Loop: ${automatic.summary}`;
     case 'auto-fix':
       return `Auto-fix: ${automatic.summary}`;
   }

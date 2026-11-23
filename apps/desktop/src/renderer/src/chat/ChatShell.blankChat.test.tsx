@@ -99,6 +99,7 @@ function stubBridge({
       }),
       ...(loadedState ? { models: quietBridge({ getLoadedState: async () => loadedState }) } : {}),
       sidebar: quietBridge({ getSections: async () => EMPTY_SIDEBAR_SECTIONS }),
+      localLoops: quietBridge({ enabled: async () => ({ ok: true, value: true }) }),
       // A Code session's chips shorten paths against the home directory.
       getAppInfo: async () => ({ homeDirectory: '/home/test' }),
     },
@@ -354,5 +355,15 @@ describe('the context ring cold dot', () => {
     stubBridge({ tools: [], model: LOCAL, messages: [user, reply, compact], loadedState: { kind: 'unloaded' } });
     await openBlankSession();
     expect(dot()).toBeNull();
+  });
+});
+
+describe('the Loops screen', () => {
+  it('opens from the sidebar in place of the conversation', async () => {
+    stubBridge({ tools: [] });
+    await openBlankSession();
+    await act(async () => document.querySelector<HTMLElement>('[data-testid="chat-loops-btn"]')?.click());
+    expect(document.querySelector('[data-testid="loops-screen"]')).not.toBeNull();
+    expect(composer()).toBeNull();
   });
 });

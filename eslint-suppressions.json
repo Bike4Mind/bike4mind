@@ -155,7 +155,11 @@
   "packages/database/src/models/ai/SkillListingVersionModel.ts": { "b4m/require-update-validators": { "count": 2 } },
   "packages/database/src/models/ai/ToolDefinitionOverrideModel.ts": { "b4m/require-update-validators": { "count": 3 } },
   "packages/database/src/models/ai/TransformBatchModel.ts": { "b4m/require-update-validators": { "count": 3 } },
-  "packages/database/src/models/ai/WorkItemModel.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/database/src/models/ai/LoopDirectiveModel.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/database/src/models/ai/LoopEventModel.ts": { "b4m/require-update-validators": { "count": 7 } },
+  "packages/database/src/models/ai/LoopMirrorModel.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/database/src/models/ai/LoopRunnerPresenceModel.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/database/src/models/ai/WorkItemModel.ts": { "b4m/require-update-validators": { "count": 13 } },
   "packages/database/src/models/analytics/AnalyticsDailyModel.ts": { "b4m/require-update-validators": { "count": 1 } },
   "packages/database/src/models/analytics/AnalyticsHopModel.ts": { "b4m/require-update-validators": { "count": 2 } },
   "packages/database/src/models/auth/AccountDeletionNoticeModel.ts": { "b4m/require-update-validators": { "count": 3 } },
@@ -3227,11 +3231,6 @@
       "count": 1
     }
   },
-  "apps/client/pages/api/work-items/__tests__/workItems.test.ts": {
-    "@typescript-eslint/no-explicit-any": {
-      "count": 5
-    }
-  },
   "apps/client/scripts/test-slack-search.ts": {
     "@typescript-eslint/no-explicit-any": {
       "count": 7
@@ -3562,6 +3561,36 @@
       "count": 1
     }
   },
+  "apps/workers/src/cron/loopNotices.e2e.test.ts": {
+    "b4m/no-workers-server-bridge": {
+      "count": 1
+    }
+  },
+  "apps/workers/src/cron/loopScheduler.e2e.test.ts": {
+    "b4m/no-workers-server-bridge": {
+      "count": 6
+    }
+  },
+  "apps/workers/src/cron/loopScheduler.pacing.test.ts": {
+    "b4m/no-workers-server-bridge": {
+      "count": 1
+    }
+  },
+  "apps/workers/src/cron/loopScheduler.ts": {
+    "b4m/no-workers-server-bridge": {
+      "count": 13
+    }
+  },
+  "apps/workers/src/events/dlqTriage.test.ts": {
+    "b4m/no-workers-server-bridge": {
+      "count": 1
+    }
+  },
+  "apps/workers/src/events/dlqTriage.ts": {
+    "b4m/no-workers-server-bridge": {
+      "count": 1
+    }
+  },
   "apps/workers/src/events/sessionSummarization.ts": {
     "@typescript-eslint/no-explicit-any": {
       "count": 1
@@ -3640,7 +3669,62 @@
       "count": 1
     }
   },
+  "apps/workers/src/queueHandlers/agentExecutor.confidenceGate.e2e.test.ts": {
+    "b4m/no-workers-server-bridge": {
+      "count": 1
+    }
+  },
+  "apps/workers/src/queueHandlers/agentExecutor.creditCap.e2e.test.ts": {
+    "b4m/no-workers-server-bridge": {
+      "count": 2
+    }
+  },
+  "apps/workers/src/queueHandlers/agentExecutor.loopDirectiveTools.test.ts": {
+    "b4m/no-workers-server-bridge": {
+      "count": 1
+    }
+  },
+  "apps/workers/src/queueHandlers/agentExecutor.loopDirectiveTools.ts": {
+    "b4m/no-workers-server-bridge": {
+      "count": 2
+    }
+  },
+  "apps/workers/src/queueHandlers/agentExecutor.loopDispatch.test.ts": {
+    "b4m/no-workers-server-bridge": {
+      "count": 3
+    }
+  },
+  "apps/workers/src/queueHandlers/agentExecutor.loopSpend.e2e.test.ts": {
+    "b4m/no-workers-server-bridge": {
+      "count": 1
+    }
+  },
+  "apps/workers/src/queueHandlers/agentExecutor.loopTicketTools.test.ts": {
+    "b4m/no-workers-server-bridge": {
+      "count": 1
+    }
+  },
+  "apps/workers/src/queueHandlers/agentExecutor.loopTicketTools.ts": {
+    "b4m/no-workers-server-bridge": {
+      "count": 5
+    }
+  },
+  "apps/workers/src/queueHandlers/agentExecutor.loopToolFailures.e2e.test.ts": {
+    "b4m/no-workers-server-bridge": {
+      "count": 3
+    }
+  },
+  "apps/workers/src/queueHandlers/agentExecutor.processExecutionToolDeps.test.ts": {
+    "b4m/no-workers-server-bridge": {
+      "count": 3
+    }
+  },
   "apps/workers/src/queueHandlers/agentExecutor.ts": {
+    "b4m/no-workers-server-bridge": {
+      "count": 2
+    }
+  },
+  "apps/workers/src/queueHandlers/agentExecutor.viewers.test.ts": {
     "b4m/no-workers-server-bridge": {
       "count": 1
     }

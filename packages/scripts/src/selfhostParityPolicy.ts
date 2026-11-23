@@ -298,7 +298,7 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   ),
   gap(
     'function:infra/agentExecutor.ts:AgentExecutor',
-    '89b4bbd52fd1f8726e61167217f9272dda0d5c46a3ba6e1566fdd31d6c5b4523',
+    '248a4df334f41883a5dfabfbbeedf5be4159115d6268c6eda30e69ff0ad5b670',
     ['bedrock:InvokeModel', 'bedrock:InvokeModelWithResponseStream', 'cloudwatch:PutMetricData', 'events:PutEvents']
   ),
   gap('function:infra/database.ts:DatabaseCleaner', 'e52f8c2f59b621e25176f06917724c82cd678c213de7325e2d9ad064c2971b70'),
@@ -414,9 +414,13 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
     'queue:infra/eventBus.ts:telemetryAlertRuleDLQ',
     '65f5b9e522854e4e0dc8eab7245b7e37acfc5ad1be8139a52be0d75d981b46a0'
   ),
+  broker(
+    'queue:infra/loopSchedulerDeadLetter.ts:loopSchedulerDlq',
+    '5b85259ddd18160448733c9a2bd2ef7c29d0e10e07bf4e7f251839b86ff91994'
+  ),
   gap(
     'queue:infra/queues.ts:agentContinuationQueue',
-    '58c4b31086617bc476b3f315e3b8d6b44e295380f6153eedb92308f0c40fca3c',
+    '456710894bea0544a5a0da866cc3363ef196da2876d8416e8ba90195bb5d70ec',
     ['bedrock:InvokeModel', 'bedrock:InvokeModelWithResponseStream', 'cloudwatch:PutMetricData', 'events:PutEvents']
   ),
   broker(
@@ -671,6 +675,16 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   broker(
     'queue:infra/queues.ts:liveOpsTriageQueueDLQ',
     '396277d7176e9e4839b55c3f4f43ba8107c46a9262e8cfa5859bff0b50bba37b'
+  ),
+  gapBecause(
+    'queue:infra/queues.ts:loopDispatchQueue',
+    '195ec405ab3d0b821b2883a67df9e7f0a8e3093c7bcd88f8d254d68ec7defcdc',
+    'Loop routes and the agent executor request an immediate loop dispatch here. Self-host runs neither this consumer nor the loop scheduler it complements (loopSchedulerCron), and the request skips quietly without a queue URL, so it is not registered in the self-host manifest. Wire both together.',
+    ['execute-api:ManageConnections', 'lambda:InvokeFunction']
+  ),
+  broker(
+    'queue:infra/queues.ts:loopDispatchQueueDLQ',
+    '0ebdf7d8c466377b782c34b6a97e71824fc03db0ddcd74183d27791d363342d6'
   ),
   wired(
     'queue:infra/queues.ts:notebookCurationQueue',
@@ -1079,6 +1093,10 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
     'Hosted error triage and auto-fix dispatch; not applicable to a portable deployment.',
     ['cloudwatch:PutMetricData', 'import:@aws-sdk/client-cloudwatch']
   ),
+  gap('schedule:infra/cron.ts:loopSchedulerCron', '57e9eded369745195cc287e4feb502902376be869c961eb1f76de00c361d242e', [
+    'execute-api:ManageConnections',
+    'lambda:InvokeFunction',
+  ]),
   wired(
     'schedule:infra/cron.ts:modelDiscoveryCron',
     '7f54c87d76d28adbb51b23f078e98f3a064f2d7fca9c4017ced0b640f4c018bf',
@@ -1198,7 +1216,7 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   ),
   hostedOnly(
     'schedule:infra/apiProbeDetector.ts:apiProbeDetector',
-    'a1ce4a578e7e46c5a53e3e9bbceafcc7e2c76e93a435a1b28e8da355d0303abd',
+    'a1174212d813f578e3aaa75eef06a26a4d37ee8731c95d14c5898e8093c3c345',
     'Queries the hosted server function CloudWatch log group; a portable deployment has none.',
     [
       'bedrock:*',

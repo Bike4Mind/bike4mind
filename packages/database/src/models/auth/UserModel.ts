@@ -427,6 +427,15 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
     super(model);
   }
 
+  /** Sets the user's own all-loops daily credit cap; null clears it. */
+  async setLoopsDailyCredits(userId: string, credits: number | null): Promise<void> {
+    await this.model.updateOne(
+      { _id: userId },
+      credits === null ? { $unset: { loopsDailyCredits: '' } } : { $set: { loopsDailyCredits: credits } },
+      { runValidators: true }
+    );
+  }
+
   async claimFreeQuestStart(userId: string, startId: string): Promise<boolean> {
     const result = await this.model.updateOne(
       { _id: userId, $or: [{ freeQuestStartId: null }, { freeQuestStartId: startId }] },
@@ -1845,6 +1854,7 @@ export const UserSchema = new Schema<IUserDocument, IUserModel>(
     adminRoleIds: { type: [Schema.Types.ObjectId], ref: 'AdminRole', default: [] },
     storageLimit: { type: Number, default: 1000 }, // Decimal MB
     storageLimitOverride: { type: Number },
+    loopsDailyCredits: { type: Number },
     planStorageLimit: { type: Number },
     currentStorageSize: { type: Number, default: 0 }, // Bytes
     currentCredits: { type: Number, default: 0 },

@@ -156,6 +156,9 @@ import { prefersReducedMotion } from './orchestrator/motion';
 import { ThreadDock, type ThreadDockMode } from './orchestrator/ThreadDock';
 import { useOrchestratorPrefs } from './orchestrator/useOrchestrator';
 import { useNeedsYouAlerts } from './orchestrator/useNeedsYouAlerts';
+import { loopNeedsYouCount } from '@shared/needsYou';
+import { LoopsScreen } from '../localLoops/LoopsScreen';
+import { useLocalLoopList, useLocalLoopsEnabled } from '../localLoops/useLocalLoops';
 import { SidebarSyncHints } from './SyncHints';
 import { useNewChatRequests } from '../appMenu/newChatRequests';
 import type { ClaudeImportKind } from '@shared/claudeImport';
@@ -220,7 +223,7 @@ function SessionHeader({ title, onRename }: { title: string; onRename: (title: s
  * What the main pane is showing. One value rather than a flag per screen, so the screens
  * cannot both be up and nothing has to remember to shut the other one.
  */
-type ChatScreen = 'conversation' | 'artifacts' | 'customize' | 'skill-market' | 'models';
+type ChatScreen = 'conversation' | 'artifacts' | 'customize' | 'skill-market' | 'models' | 'loops';
 
 /**
  * The sidebar's account strip, given the dot that says whether a reply is running.
@@ -1028,6 +1031,9 @@ export function ChatShell({
     // The dock is a global preference, so a plain session's notice must not reopen one the user hid.
     else if (alertableSessions(sessions, 'agents').has(rootId)) setDockOpen(true);
   };
+  const localLoops = useLocalLoopList();
+  const loopsEnabled = useLocalLoopsEnabled();
+  const loopsNeedYou = loopNeedsYouCount(localLoops.summaries);
   // Only the conversation screen shows the session asking; Artifacts, Models and the rest hide it.
   useNeedsYouAlerts(
     sessions,
@@ -1035,7 +1041,8 @@ export function ChatShell({
     statusesLoaded,
     openNotice,
     screen === 'conversation' ? activeId : null,
-    unreadReplies
+    unreadReplies,
+    loopsNeedYou
   );
   const clearAgentFocus = useCallback(() => setAgentFocus(null), []);
   const pickExampleQuest = useCallback(
@@ -1679,6 +1686,8 @@ export function ChatShell({
         onDismissSectionError={dismissSectionError}
         customize={<CustomizeNavItem onOpen={() => setScreen('customize')} />}
         onOpenModels={() => setScreen('models')}
+        onOpenLoops={loopsEnabled ? () => setScreen('loops') : undefined}
+        loopsNeedYou={loopsNeedYou}
         syncHints={
           onOpenImportSettings
             ? (empty, fallback) => (
@@ -1694,6 +1703,13 @@ export function ChatShell({
       {screen !== 'conversation' && updateNotice}
       {screen === 'artifacts' ? (
         <ArtifactLibraryPanel onClose={() => setScreen('conversation')} />
+      ) : screen === 'loops' ? (
+        <LoopsScreen
+          list={localLoops}
+          models={catalog.models}
+          onClose={() => setScreen('conversation')}
+          onOpenSession={selectSession}
+        />
       ) : screen === 'models' ? (
         <ModelsScreen
           onClose={() => {

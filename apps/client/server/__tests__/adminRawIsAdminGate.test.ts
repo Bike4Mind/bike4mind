@@ -91,6 +91,7 @@ const OWNER_OR_ADMIN = new Map<string, string>([
   ['image-templates/index.ts', 'owner lists/creates templates; isAdmin forwarded to service'],
   ['inbox/[id]/delete.ts', 'receiver deletes own inbox item; admin may delete any'],
   ['inbox/read.ts', 'receiver marks own inbox read; admin may mark any'],
+  ['loops/index.ts', 'owner creates a loop; an org loop needs org access, which verifyOrgAccess lets an admin through'],
   ['memory/[kind]/[id].ts', 'lake owner deletes lake memory; admin override in canShredLakeMemory'],
   ['oauth/federated-admin.ts', "reports target user's isAdmin as data to a relying party; no caller admin gate"],
   [

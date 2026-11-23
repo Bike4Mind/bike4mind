@@ -72,4 +72,21 @@ describe('GET /api/agent-executions/[id]', () => {
 
     expect(res._getJSONData().error).toBeNull();
   });
+
+  it('returns the failure reason of a blocked runner run, which is stored as completed', async () => {
+    mockLoadTrace.mockResolvedValue({
+      status: 'completed',
+      answer: null,
+      error: null,
+      steps: [],
+      totalIterations: 1,
+      failureReason: 'blocked',
+    });
+    const { req, res } = get('exec1');
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await (handler as any)(req, res);
+
+    expect(res._getJSONData()).toMatchObject({ status: 'completed', failureReason: 'blocked' });
+  });
 });

@@ -70,6 +70,28 @@ describe('SessionStore approval mode', () => {
     expect((await relaunch().create()).approvalMode).toBe('auto');
   });
 
+  it('does not remember a loop run mode, or its reset, as the next conversation default', async () => {
+    const picked = await store.create();
+    await store.setApprovalMode(picked.id, 'ask');
+    const run = await store.create();
+    await store.setLoopRunApprovalMode(run.id, 'auto');
+    expect(await store.approvalMode(run.id)).toBe('auto');
+    expect((await store.create()).approvalMode).toBe('ask');
+
+    await store.setApprovalMode(picked.id, 'auto');
+    await store.setLoopRunApprovalMode(run.id, 'ask', 'auto');
+    expect(await store.approvalMode(run.id)).toBe('ask');
+    expect((await store.create()).approvalMode).toBe('auto');
+  });
+
+  it('leaves a loop run mode the user has since changed', async () => {
+    const run = await store.create();
+    await store.setLoopRunApprovalMode(run.id, 'full');
+    await store.setApprovalMode(run.id, 'auto');
+    await store.setLoopRunApprovalMode(run.id, 'ask', 'full');
+    expect(await store.approvalMode(run.id)).toBe('auto');
+  });
+
   it('leaves a conversation already on disk at the mode it was given', async () => {
     const existing = await store.create();
     await store.setApprovalMode(existing.id, 'auto');

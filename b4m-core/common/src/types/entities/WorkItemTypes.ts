@@ -16,6 +16,81 @@ export type WorkItemStatus = 'open' | 'in_progress' | 'blocked' | 'closed';
 
 export const WORK_ITEM_STATUSES: readonly WorkItemStatus[] = ['open', 'in_progress', 'blocked', 'closed'];
 
+/** A loop ticket's priority, p0 most urgent. The values sort lexically in priority order. */
+export const WORK_ITEM_PRIORITIES = ['p0', 'p1', 'p2', 'p3'] as const;
+export type WorkItemPriority = (typeof WORK_ITEM_PRIORITIES)[number];
+/** What a loop ticket without a `priority` reads as. The create paths and the scheduler's query share it. */
+export const DEFAULT_WORK_ITEM_PRIORITY: WorkItemPriority = 'p2';
+
+/** Sort key for a priority; a missing one ranks as the default. */
+export const workItemPriorityRank = (priority?: WorkItemPriority): number =>
+  WORK_ITEM_PRIORITIES.indexOf(priority ?? DEFAULT_WORK_ITEM_PRIORITY);
+
+/**
+ * Who last set a loop ticket's priority. Only an `owner` priority is sticky: the scheduler's p2 cap may demote an
+ * agent-set p2 to p3 (`demote`), never an owner-set one.
+ */
+export const WORK_ITEM_PRIORITY_SETTERS = ['owner', 'agent', 'demote'] as const;
+export type WorkItemPrioritySetter = (typeof WORK_ITEM_PRIORITY_SETTERS)[number];
+
+/** Conditions the loop scheduler can test, so a ticket blocked on one reopens on its own once it holds. */
+export const WORK_ITEM_BLOCKERS = ['dependencies'] as const;
+export type WorkItemBlocker = (typeof WORK_ITEM_BLOCKERS)[number];
+
+/** One move of a ticket between loops (`handoffTicket`, apps/client/server/utils/loopHandoff.ts). Names are copied. */
+export interface IWorkItemHandoff {
+  fromLoopId: string;
+  fromLoopName: string;
+  toLoopId: string;
+  toLoopName: string;
+  stage: string;
+  by: 'run' | 'owner';
+  executionId?: string;
+  note?: string;
+  at: Date;
+}
+
+/** Set on a ticket a stage trigger filed: the ticket in `loopId` that reached `stage`. */
+export interface IWorkItemOrigin {
+  loopId: string;
+  loopName: string;
+  ticketId: string;
+  stage: string;
+  kind: 'trigger';
+  /** 1 for a copy of a hand-filed ticket; one more per trigger in the chain. */
+  depth: number;
+}
+
+/** Who moved a ticket into a stage: a loop run's tools, its owner, the scheduler's fold, or a hand-off between loops. */
+export const WORK_ITEM_STAGE_BY = ['run', 'owner', 'scheduler', 'handoff'] as const;
+/** Stage history kept per ticket; older entries are dropped by the `$push` `$slice`. */
+export const WORK_ITEM_STAGE_HISTORY_MAX = 50;
+export type WorkItemStageBy = (typeof WORK_ITEM_STAGE_BY)[number];
+
+/**
+ * One entry of a ticket's stage history. A hand-off keeps the ticket and changes its `loopId`, so its history in
+ * the current loop is the entries from its last `handoff` entry on.
+ */
+export interface IWorkItemStageEntry {
+  stage: string;
+  at: Date;
+  by: WorkItemStageBy;
+}
+
+/** The owner's verdict on a closed loop ticket: the loop's only quality signal. */
+export interface IWorkItemOwnerRating {
+  value: 'up' | 'down';
+  note?: string;
+  at: Date;
+}
+
+export interface IWorkItemHandedTo {
+  loopId: string;
+  loopName: string;
+  ticketId: string;
+  at: Date;
+}
+
 export interface IWorkItem {
   id: string;
   userId: string;
@@ -30,6 +105,42 @@ export interface IWorkItem {
   status: WorkItemStatus;
   /** Ids of WorkItems that must be closed before this one is actionable. */
   dependencies: string[];
+  /** The loop this item is a ticket of. Loop tickets are hidden from plain listings unless filtered by loop. */
+  loopId?: string;
+  /** One of the loop's `stages`; the last stage means closed. Only set on loop tickets. */
+  stage?: string;
+  /** The loop run currently or last working this ticket. */
+  executionId?: string;
+  /** Why the ticket is `blocked`; cleared when it leaves `blocked`. */
+  statusReason?: string;
+  /** Loop runs that claimed this ticket since its owner last moved it; the scheduler blocks it at its limit. */
+  runCount?: number;
+  /**
+   * Loop tickets only. Absent means untriaged: the scheduler never picks such a ticket and a triage run sets
+   * it. Display-only callers rank a missing one as DEFAULT_WORK_ITEM_PRIORITY.
+   */
+  priority?: WorkItemPriority;
+  /** Set with every `priority` write (`priorityPatch` in apps/client/server/utils/loopTickets.ts); starts the service-level clock. */
+  prioritySetAt?: Date;
+  prioritySetBy?: WorkItemPrioritySetter;
+  /** Split into child tickets (its `dependencies`); parked on them and closed by the scheduler once they all close. */
+  epic?: boolean;
+  /**
+   * Set only while `blocked` on a condition the scheduler tests each tick; it reopens the ticket once the
+   * condition holds. A block without it is a human one and is never reopened automatically.
+   */
+  blockedOn?: WorkItemBlocker;
+  /** Moves between loops, oldest first (last 20). */
+  handoffs?: IWorkItemHandoff[];
+  /** Run hand-offs since its owner last moved it; a run hand-off over the cap blocks it instead. */
+  handoffCount?: number;
+  origin?: IWorkItemOrigin;
+  /** Copies stage triggers filed from this ticket into other loops. */
+  handedTo?: IWorkItemHandedTo[];
+  /** Loop tickets: every stage it entered, oldest first (last 50). Absent on tickets older than the history. */
+  stageHistory?: IWorkItemStageEntry[];
+  /** Closed loop tickets only. */
+  ownerRating?: IWorkItemOwnerRating;
 
   createdAt: Date;
   updatedAt: Date;
@@ -49,11 +160,28 @@ export interface IWorkItem {
 export type WorkItemPatch = Partial<Pick<IWorkItem, 'title' | 'status' | 'dependencies' | 'organizationId'>> & {
   description?: string | null;
   closedAt?: Date | null;
+  loopId?: string | null;
+  stage?: string | null;
+  statusReason?: string | null;
+  executionId?: string | null;
+  priority?: WorkItemPriority | null;
+  prioritySetAt?: Date | null;
+  prioritySetBy?: WorkItemPrioritySetter | null;
+  epic?: boolean | null;
+  blockedOn?: WorkItemBlocker | null;
+  runCount?: number;
+  handoffs?: IWorkItemHandoff[];
+  handoffCount?: number;
+  /** Pushed onto `stageHistory` by the same write as the stage change; never `$set`. */
+  stageHistoryEntry?: IWorkItemStageEntry;
+  ownerRating?: IWorkItemOwnerRating | null;
 };
 
 export interface IWorkItemFilters {
   status?: WorkItemStatus[];
   organizationId?: string;
+  /** Lists that loop's tickets. Without it, loop tickets are excluded. */
+  loopId?: string;
   /** Case-insensitive substring match against title and description. */
   search?: string;
 }
@@ -114,16 +242,141 @@ export interface IWorkItemRepository extends IBaseRepository<IWorkItem> {
    * Items with status `open` whose every dependency is closed or no longer
    * exists. `in_progress` (already picked up) and `blocked` (held back
    * deliberately) are excluded, so this answers "what can I start now".
+   * Plain items only, unless `loopId` asks for that loop's tickets instead.
    */
-  listReadyForUser(userId: string): Promise<IWorkItemReadyResult>;
+  listReadyForUser(userId: string, loopId?: string): Promise<IWorkItemReadyResult>;
 
   buildGraphForUser(userId: string): Promise<IWorkItemGraph>;
 
-  /** Scoped update - returns null when the item is missing or owned by someone else. */
-  updateForUser(id: string, userId: string, patch: WorkItemPatch): Promise<IWorkItem | null>;
+  /**
+   * Scoped update - returns null when the item is missing or owned by someone else. With `expectedStatus`
+   * it only applies while the item still has that status, so a loop's fold landing mid-request is not overwritten.
+   * `guard` narrows that further to an exact `statusReason`, `loopId` and/or `executionId` (null: has none).
+   */
+  updateForUser(
+    id: string,
+    userId: string,
+    patch: WorkItemPatch,
+    expectedStatus?: WorkItemStatus,
+    guard?: { statusReason?: string; loopId?: string; executionId?: string | null }
+  ): Promise<IWorkItem | null>;
+
+  /** Appends to `handedTo`, keeping the last 20. */
+  pushHandedTo(id: string, entry: IWorkItemHandedTo): Promise<void>;
 
   /** Soft delete. Returns false when nothing matched. */
   softDeleteForUser(id: string, userId: string): Promise<boolean>;
+
+  /**
+   * The first of `listReadyForLoop`: the ticket the loop scheduler works next.
+   */
+  findNextReadyForLoop(
+    userId: string,
+    loopId: string,
+    stages: string[],
+    skipStages?: string[]
+  ): Promise<IWorkItem | null>;
+
+  /**
+   * The loop's `open` tickets outside its last stage and `skipStages` (desktop stages) whose dependencies
+   * are all closed or gone: highest priority first, then furthest stage, then oldest.
+   */
+  listReadyForLoop(
+    userId: string,
+    loopId: string,
+    stages: string[],
+    skipStages?: string[],
+    opts?: { onlyPriorities?: WorkItemPriority[] }
+  ): Promise<IWorkItem[]>;
+
+  /** The loop's open, non-epic tickets with no priority (any stage), oldest first: what a triage run sets. */
+  listUntriagedForLoop(userId: string, loopId: string, limit: number): Promise<IWorkItem[]>;
+
+  /**
+   * Sets p2 (agent-set) on those of `ids` still untriaged: what a triage run was shown but left, so one ticket the
+   * triage model skips (or cannot set) does not hold every later dispatch on triage. Returns how many changed.
+   */
+  defaultUntriaged(ids: string[], now: Date): Promise<number>;
+
+  /** Sets a p2 that its owner did not set to p3 (`prioritySetBy: 'demote'`); false when it no longer matched. */
+  demoteIfAgentSet(id: string, now: Date): Promise<boolean>;
+
+  /** Live p0/p1 loop tickets that are open, in progress or blocked, across all users: the service-level sweep. */
+  listUrgentForLoops(limit: number): Promise<IWorkItem[]>;
+
+  /** `open -> in_progress`, conditional on still being `open`; null when another tick won the claim. */
+  claimForRun(id: string, loopId: string): Promise<IWorkItem | null>;
+
+  /** `listReadyForLoop`'s order, over the loop's tickets in `inStages` only (desktop stages); never its last stage. */
+  listReadyInStages(userId: string, loopId: string, stages: string[], inStages: string[]): Promise<IWorkItem[]>;
+
+  /**
+   * A desktop runner's claim: `open -> in_progress` under `executionId` (its run) in one write, conditional
+   * on the ticket still being `open` in one of `inStages`; null when another claim won or the stage moved.
+   */
+  claimForRunner(
+    id: string,
+    userId: string,
+    loopId: string,
+    inStages: string[],
+    executionId: string
+  ): Promise<IWorkItem | null>;
+
+  /** Count of the loop's tickets created or updated in [from, to]. */
+  countTouchedForLoop(userId: string, loopId: string, from: Date, to: Date): Promise<number>;
+
+  setExecution(id: string, executionId: string): Promise<void>;
+
+  /** Undoes `claimForRun` (its `runCount` increment too) when the run could not be started. */
+  releaseClaim(id: string): Promise<void>;
+
+  findByExecutionId(executionId: string): Promise<IWorkItem | null>;
+
+  /** Loop tickets `in_progress` across all users, least recently updated first. */
+  listInProgressForLoops(limit: number): Promise<IWorkItem[]>;
+
+  /**
+   * Reopens a stranded loop ticket (uncounted, like `releaseClaim`), conditional on it still being `in_progress`
+   * under `executionId` (or under none when undefined). False when it was not.
+   */
+  releaseStranded(id: string, executionId?: string): Promise<boolean>;
+
+  /**
+   * Applies a finished run's outcome, conditional on the ticket still being `in_progress` under that
+   * run - so a run that set its own ticket's status is respected and a second fold is a no-op.
+   * `uncount` takes back the claim's `runCount` increment, for a run stopped by credits, not by the ticket.
+   */
+  foldTicketRun(id: string, executionId: string, patch: WorkItemPatch, uncount?: boolean): Promise<boolean>;
+
+  /** Moves a ticket blocked under `executionId` back to `in_progress`, for a run its owner resumed. */
+  resumeBlockedRun(id: string, executionId: string): Promise<boolean>;
+
+  /** Sets or (`null`) clears a closed loop ticket's owner rating; null when it is missing or not closed. */
+  setOwnerRating(
+    id: string,
+    userId: string,
+    loopId: string,
+    rating: IWorkItemOwnerRating | null
+  ): Promise<IWorkItem | null>;
+
+  /** The loop's tickets the stats read: every non-closed one plus those closed or updated since `since`. */
+  listForLoopStats(userId: string, loopId: string, since: Date): Promise<{ items: IWorkItem[]; truncated: boolean }>;
+
+  /** A loop's live tickets: every non-closed one plus the `closedLimit` most recently closed. */
+  listForLoop(userId: string, loopId: string, closedLimit: number): Promise<IWorkItem[]>;
+
+  softDeleteByLoop(userId: string, loopId: string): Promise<number>;
+
+  /**
+   * Reopens up to `limit` tickets (across all users) parked with `blockedOn: 'dependencies'` whose dependencies
+   * are all closed or gone. Only status, statusReason and blockedOn change; runCount and executionId are kept.
+   * An `epic` is closed in its loop's last stage instead (a deleted loop keeps it parked).
+   * Returns the reopened and closed tickets.
+   */
+  reopenSatisfiedBlocks(limit: number): Promise<IWorkItem[]>;
+
+  /** Live blocked tickets per loop id, minus those parked on a `blockedOn` condition; loops with none are absent. */
+  countBlockedByLoop(userId: string, loopIds: string[]): Promise<Record<string, number>>;
 
   /**
    * True when pointing `itemId` at `dependencies` would close a cycle. `itemId`

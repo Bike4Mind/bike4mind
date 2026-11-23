@@ -91,6 +91,21 @@ describe('ReasoningDisclosure failed runs', () => {
     expect(useAgentExecutionStore.getState().executions['replay-exec-ok'].status).toBe('completed');
   });
 
+  it('keeps a blocked loop run labelled blocked, not plain completed', () => {
+    mocks.trace = {
+      data: { ...failedTrace, status: 'completed', error: null, failureReason: 'blocked' },
+      isLoading: false,
+      isError: false,
+    };
+    render(<ReasoningDisclosure agentExecutionId="exec-blocked" sessionId="s1" defaultExpanded />, {
+      wrapper: Wrapper,
+    });
+    expect(useAgentExecutionStore.getState().executions['replay-exec-blocked']).toMatchObject({
+      status: 'completed',
+      failureReason: 'blocked',
+    });
+  });
+
   it('hydrates an aborted run as aborted, not as completed', () => {
     mocks.trace = { data: { ...failedTrace, status: 'aborted', error: null }, isLoading: false, isError: false };
     render(<ReasoningDisclosure agentExecutionId="exec-stop" sessionId="s1" defaultExpanded />, { wrapper: Wrapper });

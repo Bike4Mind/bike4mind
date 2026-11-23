@@ -165,6 +165,7 @@ const OrganizationSchema = new Schema<IOrganizationDocument>(
       default: 0,
       required: false,
     },
+    loopsGreenCiMergeDisabled: { type: Boolean },
     lastCreditsPurchasedAt: {
       type: Date,
       default: null,
