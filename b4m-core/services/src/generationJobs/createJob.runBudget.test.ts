@@ -13,7 +13,7 @@ vi.mock('../creditService/creditHold', () => ({
 import { holdCredits, releaseCreditHold } from '../creditService/creditHold';
 
 const logger = new Logger({ metadata: { test: 'createJob.runBudget' } });
-const credits = {} as CreditHoldAdapters;
+const credits = { spendFreezes: { findActiveForSubject: vi.fn(async () => null) } } as unknown as CreditHoldAdapters;
 const user = { id: 'u1', organizationId: null };
 const run: CompletionRunAttribution = { runId: 'run-1', role: 'worker', purpose: 'tool' };
 
