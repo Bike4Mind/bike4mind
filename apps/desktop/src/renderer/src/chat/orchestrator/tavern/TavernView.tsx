@@ -126,7 +126,7 @@ const twinkle = keyframes`
 
 const truncate = (text: string, max: number) => (text.length > max ? `${text.slice(0, max - 1)}\u2026` : text);
 
-function bubbleText(agent: AgentView, needsYou: number): string | undefined {
+export function bubbleText(agent: AgentView, needsYou: number): string | undefined {
   if (agent.state === 'needs-you') {
     if (needsYou === 0) return undefined;
     return needsYou === 1 ? 'Needs you!' : `Needs you! \u00d7${needsYou}`;
@@ -134,7 +134,10 @@ function bubbleText(agent: AgentView, needsYou: number): string | undefined {
   if (agent.state === 'working' && agent.preparing) return `${SESSION_SETUP_LABEL[agent.preparing]}\u2026`;
   if (agent.state === 'working' && agent.activity) return truncate(activityLabel(agent.activity), BUBBLE_MAX);
   if (agent.state === 'waiting' && agent.background) return truncate(waitingLabel(agent.background), BUBBLE_MAX);
-  if (agent.state === 'paused') return 'Paused: turn budget';
+  // A settled agent keeps what it last said, so "state blocked: ..." is visible instead of a bare mug.
+  if (agent.state === 'paused')
+    return truncate(agent.lastSnippet ? `Paused: ${agent.lastSnippet}` : 'Paused: turn budget', BUBBLE_MAX);
+  if (agent.state === 'idle' && agent.lastSnippet) return truncate(agent.lastSnippet, BUBBLE_MAX);
   return undefined;
 }
 
