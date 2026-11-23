@@ -1,6 +1,6 @@
 import Foundation
 
-/// Account-scoped, memory-only history. Live turns never enter this cache.
+/// Memory-only history, cleared on sign-out by RootView. Live turns never enter this cache.
 @MainActor
 public final class SettledTranscriptCache {
   struct Snapshot {
@@ -37,13 +37,26 @@ public final class SettledTranscriptCache {
     return snapshot
   }
 
+  func remove(sessionID: String, generation: UUID) {
+    guard generation == self.generation else { return }
+    entries = entries.filter { $0.key.sessionID != sessionID }
+    recency.removeAll { $0.sessionID == sessionID }
+  }
+
   func save(sessionID: String, pageSize: Int, pages: [Page<QuestTurn>], generation: UUID) {
     guard generation == self.generation, pageSize > 0, pageSize <= 50 else { return }
     var settled: [Page<QuestTurn>] = []
     var revalidate = false
     for page in pages.prefix(maxPages) {
       guard page.items.count <= pageSize else { return }
-      let prefix = page.items.prefix { $0.status?.isTerminal ?? true }
+      let prefix = page.items.prefix {
+        $0.status?.isTerminal
+          ?? ($0.kind == .error || !($0.reply?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true))
+      }
+      if settled.isEmpty, prefix.isEmpty, !page.items.isEmpty {
+        remove(sessionID: sessionID, generation: generation)
+        return
+      }
       settled.append(Page(items: Array(prefix), nextCursor: page.nextCursor))
       if prefix.count != page.items.count {
         revalidate = true

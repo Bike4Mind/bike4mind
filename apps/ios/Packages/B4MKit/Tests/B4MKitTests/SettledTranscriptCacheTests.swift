@@ -4,6 +4,77 @@ import XCTest
 
 @MainActor
 final class SettledTranscriptCacheTests: XCTestCase {
+  func testSendSettleReopenFetchesTheNewExchange() async {
+    let api = FakeAPI()
+    let cache = SettledTranscriptCache()
+    await api.setQuestPages([nil: Page(items: [Samples.quest("old")], nextCursor: nil)])
+    let chat = ChatViewModel(
+      sessionID: "s", api: api, realtime: nil,
+      sleep: { _ in try await Task.sleep(for: .milliseconds(1)) }, transcriptCache: cache)
+    await chat.load()
+    chat.draft = "new prompt"
+    await chat.send()
+    let completed = Samples.quest("quest-1", prompt: "new prompt", reply: "final")
+    await api.setPolledQuests([completed])
+    await eventually { await MainActor.run { chat.liveTurns.last?.status == .done } }
+    await api.setQuestPages([nil: Page(items: [Samples.quest("old"), completed], nextCursor: nil)])
+    XCTAssertNil(cache.load(sessionID: "s", pageSize: 50), "stale held pages must not repopulate an evicted entry")
+    chat.stop()
+    let reopened = ChatViewModel(sessionID: "s", api: api, realtime: nil, transcriptCache: cache)
+    await reopened.load()
+    XCTAssertEqual(reopened.turns.map(\.id), ["old", "quest-1"])
+    XCTAssertEqual(reopened.turns.last?.reply, "final")
+    reopened.stop()
+  }
+
+  func testUnsettledFirstTurnDoesNotSeedAnEmptyLoadedChat() async {
+    let api = FakeAPI()
+    let cache = SettledTranscriptCache()
+    for status: QuestTurn.Status? in [.running, nil] {
+      await api.setQuestPages([nil: Page(items: [Samples.quest("image", reply: nil, status: status)], nextCursor: nil)])
+      await TranscriptViewModel(sessionID: "s", api: api, cache: cache).load()
+      XCTAssertNil(cache.load(sessionID: "s", pageSize: 50))
+      let reopened = TranscriptViewModel(sessionID: "s", api: api, cache: cache)
+      XCTAssertEqual(reopened.state, .idle)
+    }
+  }
+
+  func testNilStatusWithoutVisibleReplyRevalidatesTheTail() async {
+    let api = FakeAPI()
+    let cache = SettledTranscriptCache()
+    await api.setQuestPages([
+      nil: Page(items: [Samples.quest("old"), Samples.quest("image", reply: nil, status: nil)], nextCursor: "next")
+    ])
+    await TranscriptViewModel(sessionID: "s", api: api, pageSize: 2, cache: cache).load()
+    XCTAssertEqual(cache.load(sessionID: "s", pageSize: 2)?.pages.first?.items.map(\.id), ["old"])
+    await api.setQuestPages([
+      nil: Page(
+        items: [Samples.quest("old"), Samples.quest("image", reply: "![image](https://example.com/image)")],
+        nextCursor: "next")
+    ])
+    let reopened = TranscriptViewModel(sessionID: "s", api: api, pageSize: 2, cache: cache)
+    await reopened.load()
+    XCTAssertEqual(reopened.turns.count, 2)
+    let cursors = await api.questCursors
+    XCTAssertEqual(cursors, [nil, nil])
+  }
+
+  func testCacheRejectsOversizedPagesAndPageSizes() {
+    let cache = SettledTranscriptCache()
+    cache.save(
+      sessionID: "s", pageSize: 51, pages: [Page(items: [Samples.quest("1")], nextCursor: nil)],
+      generation: cache.generation)
+    XCTAssertNil(cache.load(sessionID: "s", pageSize: 51))
+    cache.save(
+      sessionID: "s", pageSize: 1, pages: [Page(items: [Samples.quest("1"), Samples.quest("2")], nextCursor: nil)],
+      generation: cache.generation)
+    XCTAssertNil(cache.load(sessionID: "s", pageSize: 1))
+    let error = QuestTurn(id: "error", prompt: "p", reply: nil, kind: .error, createdAt: Samples.date)
+    cache.save(
+      sessionID: "s", pageSize: 1, pages: [Page(items: [error], nextCursor: nil)], generation: cache.generation)
+    XCTAssertEqual(cache.load(sessionID: "s", pageSize: 1)?.pages.first?.items, [error])
+  }
+
   func testReopenRendersImmediatelyWithoutPageOneAndRefreshDiscoversNewTurn() async {
     let api = FakeAPI()
     let cache = SettledTranscriptCache()
@@ -13,8 +84,9 @@ final class SettledTranscriptCacheTests: XCTestCase {
     first.stop()
 
     let reopened = ChatViewModel(sessionID: "s", api: api, realtime: nil, transcriptCache: cache)
-    XCTAssertEqual(reopened.turns.map(\.id), ["1"])
+    XCTAssertTrue(reopened.turns.isEmpty, "constructing discarded view state must not seed the cache")
     await reopened.load()
+    XCTAssertEqual(reopened.turns.map(\.id), ["1"])
     let beforeRefresh = await api.questCursors
     XCTAssertEqual(beforeRefresh.count, 1)
 
@@ -32,7 +104,7 @@ final class SettledTranscriptCacheTests: XCTestCase {
     let api = FakeAPI()
     let cache = SettledTranscriptCache()
     await api.setQuestPages([
-      nil: Page(items: [Samples.quest("1", status: nil)], nextCursor: "tail"),
+      nil: Page(items: [Samples.quest("0", status: nil), Samples.quest("1")], nextCursor: "tail"),
       "tail": Page(items: [Samples.quest("2"), Samples.quest("3", status: .running)], nextCursor: nil),
     ])
     let first = TranscriptViewModel(sessionID: "s", api: api, pageSize: 2, cache: cache)
@@ -40,15 +112,19 @@ final class SettledTranscriptCacheTests: XCTestCase {
     await first.loadMore()
 
     let reopened = TranscriptViewModel(sessionID: "s", api: api, pageSize: 2, cache: cache)
-    XCTAssertEqual(reopened.turns.map(\.id), ["1", "2"])
+    await api.setFailure(.offline)
+    await reopened.load()
+    XCTAssertEqual(reopened.turns.map(\.id), ["0", "1", "2"])
+    XCTAssertEqual(reopened.state, .failed(.offline))
+    await api.setFailure(nil)
     await api.setQuestPages([
       "tail": Page(items: [Samples.quest("2"), Samples.quest("3", reply: "finished")], nextCursor: nil)
     ])
-    await reopened.load()
-    XCTAssertEqual(reopened.turns.map(\.id), ["1", "2", "3"])
+    await reopened.loadMore()
+    XCTAssertEqual(reopened.turns.map(\.id), ["0", "1", "2", "3"])
     XCTAssertEqual(reopened.turns.last?.reply, "finished")
     let cursors = await api.questCursors
-    XCTAssertEqual(cursors, [nil, "tail", "tail"])
+    XCTAssertEqual(cursors, [nil, "tail", "tail", "tail"])
   }
 
   func testLiveOpeningTurnIsNeverCachedOrReplacedByHistory() async {
@@ -58,9 +134,10 @@ final class SettledTranscriptCacheTests: XCTestCase {
     await TranscriptViewModel(sessionID: "s", api: api, cache: cache).load()
     let live = Samples.quest("live", reply: "stream", status: .running)
     let chat = ChatViewModel(sessionID: "s", api: api, realtime: nil, firstTurn: live, transcriptCache: cache)
+    await chat.load()
     XCTAssertEqual(chat.turns.map(\.id), ["1", "live"])
     XCTAssertEqual(chat.liveTurns, [live])
-    XCTAssertEqual(TranscriptViewModel(sessionID: "s", api: api, cache: cache).turns.map(\.id), ["1"])
+    XCTAssertNil(cache.load(sessionID: "s", pageSize: 50))
     chat.stop()
   }
 
@@ -131,6 +208,7 @@ final class SettledTranscriptCacheTests: XCTestCase {
     await first.load()
     await first.loadMore()
     let reopened = TranscriptViewModel(sessionID: "s", api: api, pageSize: 1, cache: cache)
+    await reopened.load()
     XCTAssertEqual(reopened.turns.map(\.id), ["1"])
     XCTAssertTrue(reopened.hasMore)
     await reopened.loadMore()

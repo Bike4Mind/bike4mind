@@ -23,6 +23,7 @@ public final class TranscriptViewModel {
   @ObservationIgnored private let cacheGeneration: UUID?
   @ObservationIgnored private var loadedPages: [Page<QuestTurn>] = []
   @ObservationIgnored private var revalidateLastPage = false
+  @ObservationIgnored private var canCache = true
 
   public init(sessionID: String, api: any B4MAPI, pageSize: Int = 50, cache: SettledTranscriptCache? = nil) {
     self.sessionID = sessionID
@@ -30,6 +31,10 @@ public final class TranscriptViewModel {
     self.pageSize = pageSize
     self.cache = cache
     cacheGeneration = cache?.generation
+  }
+
+  private func seedCacheIfNeeded() {
+    guard !pages.hasLoadedFirstPage, canCache, cacheGeneration == cache?.generation else { return }
     if let snapshot = cache?.load(sessionID: sessionID, pageSize: pageSize) {
       loadedPages = snapshot.pages
       loadedPageCount = loadedPages.count
@@ -44,12 +49,18 @@ public final class TranscriptViewModel {
   public var hasMore: Bool { pages.hasMore }
 
   public func load() async {
+    seedCacheIfNeeded()
     if revalidateLastPage {
       await reloadCachedTail()
       return
     }
     guard !pages.hasLoadedFirstPage else { return }
     await refresh()
+  }
+
+  func invalidateCache() {
+    canCache = false
+    if let cacheGeneration { cache?.remove(sessionID: sessionID, generation: cacheGeneration) }
   }
 
   private func reloadCachedTail() async {
@@ -73,7 +84,7 @@ public final class TranscriptViewModel {
   private func publish() {
     turns = pages.items
     messages = TranscriptMapper.messages(from: turns)
-    if let cacheGeneration {
+    if canCache, let cacheGeneration {
       cache?.save(sessionID: sessionID, pageSize: pageSize, pages: loadedPages, generation: cacheGeneration)
     }
   }
@@ -117,6 +128,7 @@ public final class TranscriptViewModel {
   }
 
   public func loadMore() async {
+    seedCacheIfNeeded()
     if revalidateLastPage {
       await reloadCachedTail()
       return
