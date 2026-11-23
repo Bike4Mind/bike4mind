@@ -561,4 +561,12 @@ describe('Register - product hint from redirectTo', () => {
     expect(screen.queryByTestId('auth-redirect-product-hint')).toBeNull();
     expect(screen.getByText('auth.createAccountDesc')).toBeInTheDocument();
   });
+
+  it('keeps the generic headline for a redirect that is not a product', () => {
+    premiumNav.items = [{ path: '/product', label: 'Product' }];
+    window.history.replaceState(null, '', '/register?redirectTo=%2Fnew');
+    renderRegister();
+    expect(screen.queryByTestId('auth-redirect-product-hint')).toBeNull();
+    expect(screen.getByText('auth.createAccountDesc')).toBeInTheDocument();
+  });
 });
