@@ -1,7 +1,7 @@
 import { test, type APIRequestContext, type APIResponse } from '@playwright/test';
 import { Resource } from 'sst';
 import crypto from 'crypto';
-import type { DataLakeOrigin } from '@bike4mind/common';
+import { generateRequestId, type DataLakeOrigin } from '@bike4mind/common';
 import { getE2ETestId, getTestRunId } from './test-users';
 import { wafBypassHeaders } from './waf-bypass';
 import { enrollMfa } from './mfa';
@@ -127,7 +127,7 @@ export async function apiCreateTestUser(
     throw new Error('E2E_CLEANUP_SECRET must be set in .env.e2e');
   }
   const { mfa = 'enrolled', ...body } = params;
-  const requestId = crypto.randomUUID();
+  const requestId = generateRequestId();
   const response = await request.post(`${baseURL}/api/test/create-user`, {
     data: body,
     headers: { 'x-e2e-cleanup-secret': secret, 'X-Request-ID': requestId },
