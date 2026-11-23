@@ -7,14 +7,16 @@ import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { orgApiKeyOptions } from '@server/organizations/orgApiKeys';
 import { verifyOrgPermission } from '@bike4mind/server-utils/utils/orgAccess';
+import { recordOrganizationRead } from '@server/utils/orgReadAudit';
 
 const handler = baseApi({ auth: 'jwtOnly' }).get(
-  asyncHandler<{}, Awaited<ReturnType<typeof orgApiKeyOptions>>, unknown, { id?: string }>(async (req, res) => {
+  asyncHandler<{}, unknown, unknown, { id?: string }>(async (req, res) => {
     const org = await verifyOrgPermission(
       req.user!,
       typeof req.query.id === 'string' ? req.query.id : '',
       'manageKeys'
     );
+    await recordOrganizationRead(req, [org], { view: 'api_key_options' });
     return res.json(await orgApiKeyOptions(org.id));
   })
 );
