@@ -8,6 +8,7 @@ import {
   API_KEY_TRUST_REQUIRED_ERROR_CODE,
   type ApiKeyRateLimitUsage,
   type AdminApiKeyAccess,
+  type AdminApiKeyModerationException,
   type AdminApiKeyRequestCounts,
 } from '@bike4mind/common';
 import type { ApiKeyEligibilityResponse } from '@client/pages/api/user-api-keys/eligibility';
@@ -274,6 +275,8 @@ export interface AdminUserApiKeysResponse {
   requests: Record<string, AdminApiKeyRequestCounts>;
   /** Where the user stands with the API key subscription gate. */
   access: AdminApiKeyAccess;
+  /** Keys with a moderation exception, by key id; absent keys have none. */
+  moderationExceptions?: Record<string, AdminApiKeyModerationException>;
 }
 
 export function useAdminGetUserApiKeys(userId: string | undefined, options?: { refetchInterval?: number }) {
