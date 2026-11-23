@@ -19,7 +19,7 @@ interface OptionalDateInputProps {
   max?: string;
   size?: 'sm' | 'md';
   'aria-label'?: string;
-  /** Goes on the native date input; the set and clear buttons get `-set-btn` and `-clear-btn` suffixes. */
+  /** Goes on the native date input; the empty label and the buttons get `-empty`, `-set-btn` and `-clear-btn` suffixes. */
   testId: string;
 }
 
