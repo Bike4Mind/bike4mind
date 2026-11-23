@@ -166,11 +166,12 @@ export const sessionSpawn: ToolDefinition = {
     name: SESSION_SPAWN_TOOL_NAME,
     description:
       'Hand a self-contained piece of work to a NEW conversation in this project. With the user ' +
-      'present this only SUGGESTS it: a card appears beside their composer where they can edit ' +
-      'the prompt, title and branch, then start it or dismiss it. Nothing has started when this ' +
-      'returns and the call does not wait for them - carry on or end your turn, and say you ' +
-      'suggested the task, not that it is running. You are told on a later turn if they start or ' +
-      'dismiss it. If they ask in chat to change the task, use session_suggestion_update on the ' +
+      'present this either starts it at once, when their Settings allow that (the result then ' +
+      'names the started session), or only SUGGESTS it: a card appears beside their composer where ' +
+      'they can edit the prompt, title and branch, then start it or dismiss it. Read the result: ' +
+      'when it says nothing has started, the call does not wait for them - carry on or end your ' +
+      'turn, and say you suggested the task, not that it is running. You are told on a later turn ' +
+      'if they start or dismiss it. If they ask in chat to change the task, use session_suggestion_update on the ' +
       'same id instead of suggesting it again; if they decline it or say to do it here, use ' +
       'session_suggestion_dismiss and do the work yourself. In a session that was itself started ' +
       'by another one, this requests the start directly instead, and the call waits. ' +
@@ -269,6 +270,20 @@ export const sessionSpawn: ToolDefinition = {
         ...(title ? { title } : {}),
         ...(summary ? { summary } : {}),
       });
+      const auto = suggestion.status === 'started' ? suggestion.started : undefined;
+      if (auto && auto.placement !== 'here') {
+        context.report?.label(`Started a session: ${auto.title}`);
+        return [
+          `Started session ${auto.sessionId} ("${auto.title}") from suggestion ${suggestion.id}; the user's`,
+          'Settings start suggested sessions without asking.',
+          auto.placement === 'worktree'
+            ? `It has its own worktree on ${auto.branch ?? ''}, cut from ${suggestion.base}, so it is NOT editing the files here and its dependencies are installing there now.`
+            : 'It shares this working directory, so it is editing the same files you are.',
+          'It is running now. You will be told in this conversation WHEN it finishes, but not what',
+          'it said - read it with session_read then, or use session_send to give it more detail.',
+          'Do not wait for it in this turn, and do not start another one for the same work.',
+        ].join('\n');
+      }
       context.report?.label(`Suggested a task: ${suggestion.title}`);
       return [
         `Suggested task ${suggestion.id} ("${suggestion.title}"). Nothing has started.`,

@@ -89,6 +89,7 @@ import type { DevLogRecord, DevLogSnapshot } from './devLog';
 import type { ShareDirectoryResult } from './directoryRequest';
 import type { PrActionResult, PrBarState, PrOption, PrSummaryEvent } from './pullRequest';
 import type { LocalContextFit, LocalContextSetting } from './localContextSetting';
+import type { SpawnLocation } from './spawnLocation';
 import type { SidebarSectionsState } from './sidebarSections';
 import type { ComposerDrafts } from './composerDrafts';
 import type { WorkspaceChanges } from './workspaceChanges';
@@ -211,6 +212,10 @@ export const IPC_CHANNELS = {
   chatGetLocalContext: 'chat:get-local-context',
   chatSetLocalContext: 'chat:set-local-context',
   chatGetLocalContextFit: 'chat:get-local-context-fit',
+  /** Where a suggested session starts (SpawnLocation); main pushes `chatSpawnLocation` when it changes. */
+  chatGetSpawnLocation: 'chat:get-spawn-location',
+  chatSetSpawnLocation: 'chat:set-spawn-location',
+  chatSpawnLocation: 'chat:spawn-location',
   chatListCreationTools: 'chat:list-creation-tools',
   chatSetSessionModel: 'chat:set-session-model',
   chatSettleLocalModel: 'chat:settle-local-model',
@@ -943,6 +948,10 @@ export interface DesktopApi {
     setLocalContext(setting: LocalContextSetting): Promise<LocalContextSetting>;
     /** Which local models each fixed size may not fit, by the memory estimate. */
     getLocalContextFit(): Promise<LocalContextFit>;
+    /** Where a suggested session starts; see @shared/spawnLocation. */
+    getSpawnLocation(): Promise<SpawnLocation>;
+    setSpawnLocation(location: SpawnLocation): Promise<SpawnLocation>;
+    onSpawnLocation(listener: (location: SpawnLocation) => void): () => void;
     /** The generation tools a Chat turn on `model` would be offered now; empty when signed out, local or unsupported. */
     listCreationTools(model: string): Promise<CreationTool[]>;
     /** Pin a conversation to a model. Null when the session is gone. */

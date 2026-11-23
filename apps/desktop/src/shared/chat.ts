@@ -2042,6 +2042,8 @@ export interface ChatSpawnSuggestion {
   dismissedBy?: 'user' | 'assistant';
   /** A user outcome the model has not been told yet; cleared when the next turn carries it. */
   unreported?: boolean;
+  /** Why the automatic start Settings asked for did not happen; the card shows it and waits. */
+  autoStartError?: string;
 }
 
 /** 'here' runs the task as the user's own next message in the suggesting conversation. */
@@ -2059,6 +2061,8 @@ interface SpawnSuggestionStartBase {
   title: string;
   /** The user changed the prompt or title before starting. */
   edited: boolean;
+  /** Started by the Settings location with no card; the model heard it in the tool result. */
+  auto?: boolean;
 }
 
 export type ChatSpawnSuggestionStart =
