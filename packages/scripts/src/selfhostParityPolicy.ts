@@ -280,19 +280,19 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   ),
   hostedOnly(
     'eventRule:infra/providerSpend.ts:ProviderAdminKeyChangeRule',
-    '010acb373b11052609e99fc37aeabc317d999e82e76f70bbddf984af22e54b3f',
+    '4ad2a9c06c430743b7ea5dfd109510fd24fa948cfce64597f74096b5127e62cd',
     'Records access to the provider admin key store, which exists only on hosted stages that run scheduled jobs; self-host reads the keys from its own configuration.',
     ['cloudwatch:PutMetricData']
   ),
   hostedOnly(
     'eventRule:infra/providerSpend.ts:ProviderAdminKeyKmsChangeRule',
-    '7eedf24bd67a72237d112a9b37f58cc772c38164af7ef0b3db6cb8ec2ce94d24',
+    'ea7836c85a2e65eaef391a4ff35cde8708bcc7ba1edff3f35077801fba7f36ca',
     'Records access to the provider admin key store, which exists only on hosted stages that run scheduled jobs; self-host reads the keys from its own configuration.',
     ['cloudwatch:PutMetricData']
   ),
   hostedOnly(
     'eventRule:infra/providerSpend.ts:ProviderAdminKeyReadRule',
-    '4b2696a1e72b34fc676d0bc764d02cb7ed429ee59bc5d1683426894023e2a9db',
+    'a8d4ca3aacaa82b9fc18b4b0b1c246a6d09000acc10144e1a7031c5880fd9043',
     'Records access to the provider admin key store, which exists only on hosted stages that run scheduled jobs; self-host reads the keys from its own configuration.',
     ['cloudwatch:PutMetricData']
   ),
@@ -1110,9 +1110,9 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   ),
   hostedOnly(
     'schedule:infra/cron.ts:providerUsagePoll',
-    'cf9858cd4ac206f993b34bf8e0c940d4f5c441daf7ef4f66dc5c21b823be76da',
+    '245d08b5ccee4a98d3261e769cb8f0c409bfd1d6ada0fc1cde7b87eacaeeb5c7',
     'Publishes provider-reported spend to hosted CloudWatch alarms on monitored stages; no local metric or alarm destination is configured.',
-    ['cloudwatch:PutMetricData', 'import:@aws-sdk/client-cloudwatch']
+    ['cloudwatch:PutMetricData', 'import:@aws-sdk/client-cloudwatch', 'ssm:GetParameter']
   ),
   wired(
     'schedule:infra/cron.ts:questTimeoutSweep',
@@ -1178,13 +1178,13 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   ),
   wired(
     'schedule:infra/cron.ts:spendReconciliation',
-    '6a96103f82cb2ef45a2792808a671cb33a37194c6f804478a5e902400ceffd60',
+    '56a292793783e8a4c1463f31d9606391eee1e6a999ce1fcc5f7f55bc483a521d',
     {
       source: 'apps/workers/src/selfhost/spendReconciliation.ts',
       symbol: 'registerSpendReconciliation',
       fingerprint: 'ca9cbea76249daab2f0359e7faecad3f4dcd80c3269a0481a74e9a69a41a6d8b',
     },
-    ['cloudwatch:PutMetricData', 'import:@aws-sdk/client-cloudwatch']
+    ['cloudwatch:PutMetricData', 'import:@aws-sdk/client-cloudwatch', 'ssm:GetParameter']
   ),
   wired(
     'schedule:infra/cron.ts:storageReconciliation',

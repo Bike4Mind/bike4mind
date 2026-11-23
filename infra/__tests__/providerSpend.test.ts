@@ -100,7 +100,7 @@ const spendAlarm = (provider: string, threshold: number) => ({
   alarmDescription: expect.any(String),
   comparisonOperator: 'GreaterThanOrEqualToThreshold',
   evaluationPeriods: 1,
-  metricName: 'ProviderReportedUsd',
+  metricName: 'ProviderReportedOrgUsd',
   namespace: 'test-app/production/LLMSpend',
   dimensions: { Provider: provider },
   period: 3600,
@@ -375,6 +375,8 @@ describe('provider spend dashboard', () => {
     expect(widgets[0].properties.metrics).toEqual([
       ['test-app/production/LLMSpend', 'ProviderReportedUsd', 'Provider', 'anthropic', expect.any(Object)],
       ['test-app/production/LLMSpend', 'ProviderReportedUsd', 'Provider', 'openai', expect.any(Object)],
+      ['test-app/production/LLMSpend', 'ProviderReportedOrgUsd', 'Provider', 'anthropic', expect.any(Object)],
+      ['test-app/production/LLMSpend', 'ProviderReportedOrgUsd', 'Provider', 'openai', expect.any(Object)],
     ]);
   });
 });
