@@ -6,6 +6,7 @@ import {
   type FunctionContractChange,
   type FunctionContractDiff,
   type FunctionField,
+  validateFunctionValue,
 } from './functionContract';
 
 const sentence = (change: FunctionContractChange) => {
@@ -144,8 +145,54 @@ describe('diffFunctionContracts', () => {
       },
       'no_longer_required outputs.deflection',
     ],
+    [
+      'an optional output added',
+      c => {
+        c.outputs.properties.stress = { type: 'number', unit: 'Pa' };
+      },
+      'added outputs.stress',
+    ],
+    [
+      'a required output added',
+      c => {
+        c.outputs.properties.stress = { type: 'number', unit: 'Pa' };
+        c.outputs.required = ['deflection', 'stress'];
+      },
+      'added outputs.stress',
+    ],
   ])('%s is breaking', (_name, mutate, expected) => {
     expect(summary(diffAfter(mutate))).toEqual({ breaking: [expected], compatible: [] });
+  });
+
+  it('refuses an added output because a result using it fails the old closed outputs', () => {
+    const previous = baseContract();
+    const next = baseContract();
+    next.outputs.properties.stress = { type: 'number', unit: 'Pa' };
+    const result = { deflection: 1, stress: 2 };
+
+    expect(validateFunctionValue(next.outputs, result)).toEqual([]);
+    expect(validateFunctionValue(previous.outputs, result)).toEqual([
+      expect.objectContaining({ path: 'stress', message: 'is not part of the contract' }),
+    ]);
+    expect(diffFunctionContracts(previous, next)?.breaking.map(change => change.path)).toEqual(['outputs.stress']);
+  });
+
+  it('refuses a key added to a nested output object', () => {
+    const withSupport = (properties: Record<string, FunctionField>): FunctionContract => {
+      const contract = baseContract();
+      contract.outputs.properties.support = { type: 'object', additionalProperties: false, properties };
+      return contract;
+    };
+    const previous = withSupport({ x: { type: 'number', unit: 'N' } });
+    const next = withSupport({ x: { type: 'number', unit: 'N' }, y: { type: 'number', unit: 'N' } });
+    const result = { deflection: 1, support: { x: 1, y: 2 } };
+
+    expect(validateFunctionValue(next.outputs, result)).toEqual([]);
+    expect(validateFunctionValue(previous.outputs, result)).not.toEqual([]);
+    expect(summary(diffFunctionContracts(previous, next)!)).toEqual({
+      breaking: ['added outputs.support.y'],
+      compatible: [],
+    });
   });
 
   // Compatible kinds the plan names.
@@ -156,13 +203,6 @@ describe('diffFunctionContracts', () => {
         c.inputs.properties.depth = { type: 'number', unit: 'm' };
       },
       'added inputs.depth',
-    ],
-    [
-      'an output added',
-      c => {
-        c.outputs.properties.stress = { type: 'number', unit: 'Pa' };
-      },
-      'added outputs.stress',
     ],
     [
       'a field description changed',

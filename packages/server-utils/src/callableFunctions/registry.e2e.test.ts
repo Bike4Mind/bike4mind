@@ -419,6 +419,7 @@ describe('repinCallableFunction', () => {
         changes: [
           { path: 'inputs.load.unit', kind: 'unit_changed', before: 'N/m', after: 'kN/m' },
           { path: 'outputs.deflection', kind: 'removed' },
+          { path: 'outputs.peak', kind: 'added' },
         ],
       },
     });
@@ -444,16 +445,31 @@ describe('repinCallableFunction', () => {
     expect(await stored(view.id)).toEqual(before);
   });
 
-  it('repins a contract that only adds an optional input and an output', async () => {
+  it('repins a contract that only adds an optional input', async () => {
     const view = await save();
     const version = await addVersion('artifact-1', code('# extended\n'));
     const next = contract();
     Object.assign(next.inputs.properties, { depth: { type: 'number', unit: 'm' } });
-    Object.assign(next.outputs.properties, { peak: { type: 'number', unit: 'm' } });
 
     const repinned = await repinCallableFunction(OWNER, view.id, { expectedVersion: version, contract: next });
     expect(repinned.pin).toMatchObject({ version: 2, contentHash: sha256(code('# extended\n')) });
     expect(Object.keys((await stored(view.id))!.contract.inputs.properties)).toEqual(['load', 'span', 'depth']);
+  });
+
+  it('refuses a contract that adds an output (breaking_change) and changes nothing', async () => {
+    const view = await save();
+    const before = await stored(view.id);
+    const version = await addVersion('artifact-1', code('# extended\n'));
+    const next = contract();
+    Object.assign(next.outputs.properties, { peak: { type: 'number', unit: 'm' } });
+
+    await expect(
+      repinCallableFunction(OWNER, view.id, { expectedVersion: version, contract: next })
+    ).rejects.toMatchObject({
+      statusCode: 409,
+      additionalInfo: { code: 'breaking_change', changes: [{ path: 'outputs.peak', kind: 'added' }] },
+    });
+    expect(await stored(view.id)).toEqual(before);
   });
 
   it('answers 404 once the artifact is deleted or belongs to someone else, and keeps the pin', async () => {

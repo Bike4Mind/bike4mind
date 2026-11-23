@@ -837,7 +837,9 @@ function diffObjectField(ctx: DiffContext, prev: FunctionObjectField, next: Func
     if (own(prev.properties, name) !== undefined) continue;
     const field = prefix ? `${prefix}.${name}` : name;
     const required = inputs && isRequired.has(name);
-    addChange(ctx, field, '', required ? 'added_required' : 'added', required);
+    // Objects are closed (additionalProperties: false), so a caller checking a result against the old outputs
+    // refuses any new key, optional or not.
+    addChange(ctx, field, '', required ? 'added_required' : 'added', required || !inputs);
   }
 }
 
