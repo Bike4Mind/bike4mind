@@ -61,8 +61,6 @@ class MediaImageLoader(private val http: HttpClient, directory: File, environmen
         withContext(Dispatchers.IO) { directory.parentFile?.deleteRecursively() }
     }
 
-    fun close() = http.close()
-
     private suspend fun download(url: String): ByteArray {
         val response = http.get(url)
         if (!response.status.isSuccess()) throw IOException("Storage answered HTTP ${response.status.value}")

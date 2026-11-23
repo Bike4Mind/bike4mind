@@ -191,6 +191,7 @@ import {
 } from './agentWake';
 import type { PdfPromptText } from './pdfText';
 import type { AttachmentStore } from './AttachmentStore';
+import type { ComposerDraftStore } from './ComposerDraftStore';
 import type { SidebarSectionStore } from './SidebarSectionStore';
 import { childOutcomeDisplay, classifyChildOutcome } from './childOutcome';
 import { sideChatOpening } from './sideChat';
@@ -588,6 +589,8 @@ export interface ChatServiceDeps {
   access: AccessStore;
   /** Owns attachment bytes. Absent in tests that never attach anything. */
   attachments?: AttachmentStore;
+  /** Unsent composer text; a deleted conversation's draft goes with it. Absent in tests. */
+  composerDrafts?: Pick<ComposerDraftStore, 'forget'>;
   logger: ChatServiceLogger;
   /**
    * Deferred tool loading on supported Claude models (chat/deferredTools.ts). Absent keeps today's
@@ -3032,6 +3035,7 @@ export class ChatService {
       await this.deps.store.delete(sessionId, decisionScope);
       this.markTaskDecisionMutation(sessionId, decisionScope);
     }
+    await this.deps.composerDrafts?.forget(sessionId);
     if (parentId) this.bumpScope(parentId);
     // The stopped reply can settle and reindex while process/browser cleanup is awaiting I/O.
     // Once the serialized delete has finished, no later append can resurrect the session.

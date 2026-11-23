@@ -48,6 +48,12 @@ fun AppRoot(
         restored = true
     }
 
+    // Shares belong to the account that made them, so a session that ends (a refresh refused, a sign-out
+    // elsewhere) drops whatever was still queued.
+    LaunchedEffect(graph, restored, signedIn) {
+        if (restored && !signedIn) graph.capture.discardAll()
+    }
+
     // Push registration follows the session; [onSignedIn] is where the host asks for the notification permission.
     LaunchedEffect(graph, signedIn) {
         if (signedIn) {

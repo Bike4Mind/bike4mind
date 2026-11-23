@@ -553,4 +553,34 @@ final class AuthControllerTests: XCTestCase {
     XCTAssertFalse(unlocked)
     XCTAssertEqual(auth.state, .locked)
   }
+
+  func testUnlockCallsThatOverlapShareOnePrompt() async throws {
+    try store.setRefreshToken("sid.0")
+    let gate = CountingBiometricGate()
+    let auth = AuthController(
+      environment: .production, tokenStore: store, transport: transport,
+      biometricGate: gate, preferences: Fixtures.isolatedDefaults())
+    auth.restore()
+    auth.isAppLockEnabled = true
+    auth.lockIfNeeded()
+
+    async let first = auth.unlock()
+    async let second = auth.unlock()
+    let results = await [first, second]
+    XCTAssertEqual(results, [true, true])
+    XCTAssertEqual(gate.prompts, 1)
+    XCTAssertEqual(auth.state, .signedIn)
+  }
+}
+
+private final class CountingBiometricGate: BiometricGate, @unchecked Sendable {
+  private let lock = NSLock()
+  private var count = 0
+  var prompts: Int { lock.withLock { count } }
+  func canEvaluate() -> Bool { true }
+  func evaluate(reason: String) async -> Bool {
+    lock.withLock { count += 1 }
+    try? await Task.sleep(for: .milliseconds(50))
+    return true
+  }
 }

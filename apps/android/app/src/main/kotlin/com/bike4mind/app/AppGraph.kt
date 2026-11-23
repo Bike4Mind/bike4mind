@@ -4,6 +4,8 @@ import android.content.Context
 import android.os.Build
 import android.util.Log
 import androidx.core.app.NotificationManagerCompat
+import androidx.core.net.toUri
+import com.bike4mind.app.capture.MediaAudioRecorder
 import com.bike4mind.app.push.FcmClient
 import com.bike4mind.app.media.MediaImageLoader
 import com.bike4mind.app.push.SharedPreferencesPushTokenMemory
@@ -21,6 +23,13 @@ import com.bike4mind.kit.account.SettingsController
 import com.bike4mind.kit.account.StepUpController
 import com.bike4mind.kit.account.StepUpWire
 import com.bike4mind.kit.approvals.PendingActionWire
+import com.bike4mind.kit.capture.CaptureEngine
+import com.bike4mind.kit.capture.CaptureJobStore
+import com.bike4mind.kit.capture.CaptureWire
+import com.bike4mind.kit.capture.ComposerAttachments
+import com.bike4mind.kit.capture.TranscriptionWire
+import com.bike4mind.kit.capture.TurnSender
+import com.bike4mind.kit.capture.VoiceDictation
 import com.bike4mind.kit.auth.AuthApi
 import com.bike4mind.kit.auth.AuthSession
 import com.bike4mind.kit.auth.AuthorizationRequest
@@ -50,6 +59,7 @@ import com.bike4mind.kit.sessions.SessionsRepository
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.okhttp.OkHttp
 import io.ktor.client.plugins.websocket.WebSockets
+import java.io.File
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 
@@ -93,20 +103,29 @@ class AppGraph(context: Context, val environment: ServerEnvironment) {
         media,
         FileMediaListCache(java.io.File(context.cacheDir, "media"), environment) { message, failure -> Log.w("B4MMedia", message, failure) },
     )
-
-    /** Gallery tiles and full images. Its own bearer-free client: presigned storage URLs must never carry a token. */
-    val mediaImages = MediaImageLoader(
-        HttpClient(engine),
-        java.io.File(context.cacheDir, "media-thumbnails"),
-        environment,
-    )
     private val account = AccountWire(environment, http) { session.accessToken()?.let(AccountProfile::userId) }
     private val stepUp = StepUpWire(environment, http)
+    private val chatSend = ChatSendWire(environment, http)
     private val chatBackend = LiveChatBackend(
         sessions,
-        ChatSendWire(environment, http),
+        chatSend,
         RealtimeConnection(environment, http),
         PendingActionWire(environment, http),
+    )
+
+    // Presigned storage URLs carry their own signature; a bearer token or the identity headers would break it.
+    private val storageHttp = HttpClient(engine)
+
+    /** Gallery tiles and full images, fetched from presigned storage URLs through [storageHttp]. */
+    val mediaImages = MediaImageLoader(storageHttp, java.io.File(context.cacheDir, "media-thumbnails"), environment)
+    private val captureWire = CaptureWire(environment, http, storageHttp)
+    private val transcription = TranscriptionWire(environment, http, storageHttp)
+
+    /** Shares from other apps, run by app/capture/CaptureWorker. One queue per server, like the tokens. */
+    val capture = CaptureEngine(
+        CaptureJobStore(File(context.filesDir, "capture/" + environment.baseUrl.toUri().host.orEmpty())),
+        captureWire,
+        TurnSender { message, sessionId, fileIds -> chatSend.send(message, sessionId, fileIds) },
     )
 
     /** Registers this install's FCM token with the server while signed in and notifications are allowed. */
@@ -120,6 +139,11 @@ class AppGraph(context: Context, val environment: ServerEnvironment) {
     private val pendingSignIn = PendingSignInStore(context)
 
     fun chat(sessionId: String?, scope: CoroutineScope) = ChatController(sessionId, chatBackend, scope)
+
+    fun composerAttachments(scope: CoroutineScope) = ComposerAttachments(captureWire, scope)
+
+    fun dictation(scope: CoroutineScope) =
+        VoiceDictation(MediaAudioRecorder(appContext), transcription, scope) { message, failure -> Log.w("B4MCapture", message, failure) }
 
     /** [briefId] null shows the latest brief. */
     fun brief(briefId: String?, scope: CoroutineScope) = BriefController(briefs, briefId, scope)
@@ -211,6 +235,7 @@ class AppGraph(context: Context, val environment: ServerEnvironment) {
 
     suspend fun signOutLocally() {
         tokenStore.clear()
+        capture.discardAll()
     }
 
     /** Signs out on this device only, for a session the server has already ended. */
@@ -230,7 +255,7 @@ class AppGraph(context: Context, val environment: ServerEnvironment) {
     fun close() {
         authHttp.close()
         http.close()
-        mediaImages.close()
+        storageHttp.close()
         engine.close()
     }
 }
