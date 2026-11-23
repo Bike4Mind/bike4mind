@@ -3,15 +3,13 @@ import Box from '@mui/joy/Box';
 import IconButton from '@mui/joy/IconButton';
 import Sheet from '@mui/joy/Sheet';
 import Typography from '@mui/joy/Typography';
-import type { ChildOutcome } from '@shared/agentOutcome';
+import { isUnfinishedOutcome } from '@shared/agentOutcome';
 import type { ChatChildReport, ChatMessage } from '@shared/chat';
 import { LinkifiedText } from './ExternalLink';
 import { BranchIcon, ChevronIcon } from './icons';
 import { displayText } from './relayRows';
 import { SessionLink } from './SessionLink';
 import { messageScope } from './threadFind';
-
-const FAILED_OUTCOMES: ReadonlySet<ChildOutcome> = new Set(['failed', 'aborted', 'turn-budget', 'context-limit']);
 
 /** Where the child's work lives: "branch @ sha", either half alone, or null for a shared folder. */
 export function workspaceLine(report: Pick<ChatChildReport, 'branch' | 'headSha'>): string | null {
@@ -26,7 +24,7 @@ export function workspaceLine(report: Pick<ChatChildReport, 'branch' | 'headSha'
  */
 export function ChildReportCard({ message, report }: { message: ChatMessage; report: ChatChildReport }) {
   const [expanded, setExpanded] = useState(false);
-  const failed = FAILED_OUTCOMES.has(report.outcome);
+  const failed = isUnfinishedOutcome(report.outcome);
   const where = workspaceLine(report);
 
   return (

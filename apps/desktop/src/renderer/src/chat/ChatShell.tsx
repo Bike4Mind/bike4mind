@@ -578,6 +578,11 @@ export function ChatShell({
     [activeId, showBrowserPane]
   );
   const artifactsInSession = useMemo(() => sessionArtifacts(conversation.messages), [conversation.messages]);
+  const reportedChildIds = useMemo(
+    () =>
+      new Set(conversation.messages.flatMap(message => (message.childReport ? [message.childReport.sessionId] : []))),
+    [conversation.messages]
+  );
   const openSessionArtifact = useCallback(
     ({ key, artifact }: SessionArtifact) =>
       openArtifactInSessionBrowser(
@@ -2176,6 +2181,7 @@ export function ChatShell({
                     sessions={sessions}
                     statuses={statuses}
                     parentId={persistedId}
+                    reportedIds={reportedChildIds}
                     onOpenSession={selectSession}
                   />
                 </>

@@ -5,7 +5,7 @@ import { CssVarsProvider } from '@mui/joy/styles';
 import type { ChatSessionStatus, ChatSessionSummary } from '@shared/chat';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { desktopTheme } from '../theme';
-import { ChildrenStrip, MAX_VISIBLE_CHILDREN, childChipState, childChips } from './ChildrenStrip';
+import { ChildrenStrip, chipHint, childChipState, childChips, stripLayout, type ChildChip } from './ChildrenStrip';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -28,7 +28,11 @@ afterEach(() => {
   host?.remove();
   root = null;
   host = null;
+  document.body.innerHTML = '';
 });
+
+type Origin = ChatSessionSummary['origin'];
+type Project = ChatSessionSummary['project'];
 
 function summary(overrides: Partial<ChatSessionSummary> & { id: string }): ChatSessionSummary {
   return {
@@ -44,21 +48,32 @@ function summary(overrides: Partial<ChatSessionSummary> & { id: string }): ChatS
 function render(
   sessions: ChatSessionSummary[],
   statuses: ReadonlyMap<string, ChatSessionStatus>,
-  onOpenSession: (id: string) => void = () => {}
+  options: { onOpenSession?: (id: string) => void; reportedIds?: ReadonlySet<string> } = {}
 ): void {
   host ??= document.body.appendChild(document.createElement('div'));
   root ??= createRoot(host);
   act(() => {
     root?.render(
       <CssVarsProvider theme={desktopTheme}>
-        <ChildrenStrip sessions={sessions} statuses={statuses} parentId="parent" onOpenSession={onOpenSession} />
+        <ChildrenStrip
+          sessions={sessions}
+          statuses={statuses}
+          parentId="parent"
+          reportedIds={options.reportedIds ?? new Set()}
+          onOpenSession={options.onOpenSession ?? (() => {})}
+        />
       </CssVarsProvider>
     );
   });
 }
 
+// Menus portal to document.body, so query the whole document rather than the host.
 function all(id: string): HTMLElement[] {
-  return Array.from(host?.querySelectorAll<HTMLElement>(`[data-testid="${id}"]`) ?? []);
+  return Array.from(document.querySelectorAll<HTMLElement>(`[data-testid="${id}"]`));
+}
+
+function chip(overrides: Partial<ChildChip> & { id: string; state: ChildChip['state'] }): ChildChip {
+  return { title: overrides.id, ...overrides };
 }
 
 describe('childChipState', () => {
@@ -81,38 +96,33 @@ describe('childChips', () => {
       summary({ id: 'done-new', lastOutcome: 'finished', createdAt: '2026-01-02T00:00:00.000Z' }),
       summary({ id: 'waiting' }),
       summary({ id: 'archived', archived: true }),
-      summary({
-        id: 'side',
-        origin: { kind: 'side-chat', parentSessionId: 'parent' } as unknown as ChatSessionSummary['origin'],
-      }),
-      summary({
-        id: 'grandchild',
-        origin: { kind: 'spawned', parentSessionId: 'done-old' } as unknown as ChatSessionSummary['origin'],
-      }),
+      summary({ id: 'side', origin: { kind: 'side-chat', parentSessionId: 'parent' } as unknown as Origin }),
+      summary({ id: 'grandchild', origin: { kind: 'spawned', parentSessionId: 'done-old' } as unknown as Origin }),
       summary({ id: 'top-level', origin: undefined }),
     ];
     const chips = childChips(sessions, new Map([['waiting', 'needs-action']]), 'parent');
-    expect(chips.map(chip => chip.id)).toEqual(['waiting', 'done-new', 'done-old']);
+    expect(chips.map(entry => entry.id)).toEqual(['waiting', 'done-new', 'done-old']);
   });
 
   it('carries the branch only for a child in its own worktree', () => {
     const sessions = [
       summary({
         id: 'own',
-        project: {
-          workingDirectory: '/w',
-          workspace: true,
-          workspaceBranch: 'agent/own',
-        } as ChatSessionSummary['project'],
+        project: { workingDirectory: '/w', workspace: true, workspaceBranch: 'agent/own' } as Project,
       }),
       summary({
         id: 'shared',
-        project: { workingDirectory: '/w', workspace: false, workspaceBranch: 'main' } as ChatSessionSummary['project'],
+        project: { workingDirectory: '/w', workspace: false, workspaceBranch: 'main' } as Project,
       }),
     ];
     const chips = childChips(sessions, new Map(), 'parent');
-    expect(chips.find(chip => chip.id === 'own')?.branch).toBe('agent/own');
-    expect(chips.find(chip => chip.id === 'shared')?.branch).toBeUndefined();
+    expect(chips.find(entry => entry.id === 'own')?.branch).toBe('agent/own');
+    expect(chips.find(entry => entry.id === 'shared')?.branch).toBeUndefined();
+  });
+
+  it('marks a finished child whose reply hit the length limit as cut short', () => {
+    const chips = childChips([summary({ id: 'long', lastOutcome: 'max-tokens' })], new Map(), 'parent');
+    expect(chips[0]).toMatchObject({ state: 'finished', cutShort: true });
   });
 
   it('returns nothing without an open conversation', () => {
@@ -120,14 +130,52 @@ describe('childChips', () => {
   });
 });
 
+describe('chipHint', () => {
+  it('appends a cut-short note to the snippet', () => {
+    expect(chipHint({ snippet: 'Wrote it' })).toBe('Wrote it');
+    expect(chipHint({ snippet: 'Wrote it', cutShort: true })).toBe('Wrote it (cut short)');
+    expect(chipHint({ cutShort: true })).toBe('(cut short)');
+    expect(chipHint({})).toBeUndefined();
+  });
+});
+
+describe('stripLayout', () => {
+  it('gives live and failed children chips and folds finished ones away', () => {
+    const layout = stripLayout(
+      [
+        chip({ id: 'w', state: 'needs-action' }),
+        chip({ id: 'f', state: 'failed' }),
+        chip({ id: 'd', state: 'finished' }),
+      ],
+      new Set()
+    );
+    expect(layout.active.map(entry => entry.id)).toEqual(['w', 'f']);
+    expect(layout.done.map(entry => entry.id)).toEqual(['d']);
+    expect(layout.hidden).toBe(false);
+  });
+
+  it('hides once nothing is live and every child has reported into the thread', () => {
+    const settled = [chip({ id: 'f', state: 'failed' }), chip({ id: 'd', state: 'finished' })];
+    expect(stripLayout(settled, new Set(['f', 'd'])).hidden).toBe(true);
+    expect(stripLayout(settled, new Set(['d'])).hidden).toBe(false);
+    expect(stripLayout([chip({ id: 'r', state: 'processing' })], new Set(['r'])).hidden).toBe(false);
+    expect(stripLayout([], new Set()).hidden).toBe(true);
+  });
+});
+
 describe('ChildrenStrip', () => {
   it('is not drawn when the conversation has no children', () => {
     render([summary({ id: 'other', origin: undefined })], new Map());
-    expect(host?.querySelector('[data-testid="children-strip"]')).toBeNull();
+    expect(all('children-strip')).toHaveLength(0);
   });
 
-  it('draws one chip per child with its state, title and branch, and opens it on click', () => {
-    const onOpen = vi.fn();
+  it('is not drawn once every child has settled and reported', () => {
+    render([summary({ id: 'a', lastOutcome: 'finished' })], new Map(), { reportedIds: new Set(['a']) });
+    expect(all('children-strip')).toHaveLength(0);
+  });
+
+  it('draws a chip per active child with its state, title and branch, and opens it on click', () => {
+    const onOpenSession = vi.fn();
     render(
       [
         summary({ id: 'run', title: 'Running child' }),
@@ -135,34 +183,40 @@ describe('ChildrenStrip', () => {
           id: 'fail',
           title: 'Failed child',
           lastOutcome: 'failed',
-          project: {
-            workingDirectory: '/w',
-            workspace: true,
-            workspaceBranch: 'agent/fail',
-          } as ChatSessionSummary['project'],
+          project: { workingDirectory: '/w', workspace: true, workspaceBranch: 'agent/fail' } as Project,
         }),
       ],
       new Map([['run', 'processing']]),
-      onOpen
+      { onOpenSession }
     );
     const chips = all('children-strip-chip-btn');
-    expect(chips.map(chip => chip.dataset.state)).toEqual(['processing', 'failed']);
+    expect(chips.map(entry => entry.dataset.state)).toEqual(['processing', 'failed']);
     expect(all('children-strip-chip-title').map(title => title.textContent)).toEqual(['Running child', 'Failed child']);
     expect(all('children-strip-chip-branch').map(branch => branch.textContent)).toEqual(['agent/fail']);
+    expect(all('children-strip-done-btn')).toHaveLength(0);
     act(() => chips[1].click());
-    expect(onOpen).toHaveBeenCalledWith('fail');
+    expect(onOpenSession).toHaveBeenCalledWith('fail');
   });
 
-  it(`collapses past ${MAX_VISIBLE_CHILDREN} children into +N, and expands on click`, () => {
-    const sessions = Array.from({ length: MAX_VISIBLE_CHILDREN + 2 }, (_, index) =>
-      summary({ id: `c${index}`, createdAt: `2026-01-0${index + 1}T00:00:00.000Z` })
+  it('folds finished children into one "N done" menu that opens each', () => {
+    const onOpenSession = vi.fn();
+    render(
+      [
+        summary({ id: 'run' }),
+        summary({ id: 'd1', title: 'First done', lastOutcome: 'finished', createdAt: '2026-01-02T00:00:00.000Z' }),
+        summary({ id: 'd2', title: 'Second done', lastOutcome: 'max-tokens' }),
+      ],
+      new Map([['run', 'processing']]),
+      { onOpenSession }
     );
-    render(sessions, new Map());
-    expect(all('children-strip-chip-btn')).toHaveLength(MAX_VISIBLE_CHILDREN);
-    const more = all('children-strip-more-btn')[0];
-    expect(more.textContent).toBe('+2');
-    act(() => more.click());
-    expect(all('children-strip-chip-btn')).toHaveLength(MAX_VISIBLE_CHILDREN + 2);
-    expect(more.getAttribute('aria-expanded')).toBe('true');
+    expect(all('children-strip-chip-btn')).toHaveLength(1);
+    const done = all('children-strip-done-btn')[0];
+    expect(done.textContent).toContain('2 done');
+    act(() => done.click());
+    const items = all('children-strip-done-item');
+    expect(items.map(item => item.textContent)).toEqual(['First done', 'Second done']);
+    expect(items[1].getAttribute('title')).toBe('(cut short)');
+    act(() => items[1].click());
+    expect(onOpenSession).toHaveBeenCalledWith('d2');
   });
 });
