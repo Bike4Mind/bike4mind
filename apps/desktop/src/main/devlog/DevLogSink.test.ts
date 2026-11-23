@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 // The window's own filter, reached across the layer boundary on purpose: the seam test below
 // is only worth anything if it runs the code the window runs.
-import { visibleRecords } from '../../renderer/src/devlog/devLogView';
+import { formatForCopy, visibleRecords } from '../../renderer/src/devlog/devLogView';
 import { DevLogSink, MAX_CHARS, MAX_MESSAGE_CHARS, MAX_RECORDS } from './DevLogSink';
 
 function watching(sink: DevLogSink) {
@@ -145,5 +145,75 @@ describe('DevLogSink', () => {
     expect(visibleRecords(records, new Set(['auth']))[0].message).toBe('token refreshed');
     expect(visibleRecords(records, new Set(['auth', 'chat-stream']))).toHaveLength(2);
     expect(visibleRecords(records, new Set())).toHaveLength(2);
+  });
+
+  describe('publishError', () => {
+    it('retains an error with no window attached and arms no timer', () => {
+      vi.useFakeTimers();
+      try {
+        const sink = new DevLogSink();
+        sink.publishError(() => ({ tags: ['chat-stream', 'errors'], message: 'boom' }));
+        expect(sink.snapshot().records.map(record => record.message)).toEqual(['boom']);
+        expect(vi.getTimerCount()).toBe(0);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('pushes to a watcher when there is one', () => {
+      const sink = new DevLogSink();
+      const { batches } = watching(sink);
+      sink.publishError(() => ({ tags: ['x'], message: 'boom' }));
+      sink.flush();
+      expect(batches).toHaveLength(1);
+    });
+
+    it('honours the caps while unwatched', () => {
+      const sink = new DevLogSink();
+      for (let index = 0; index < MAX_RECORDS + 5; index++) {
+        sink.publishError(() => ({ tags: ['x'], message: `e${index}` }));
+      }
+      const { records, dropped } = sink.snapshot();
+      expect(records).toHaveLength(MAX_RECORDS);
+      expect(dropped).toBe(5);
+      expect(records[0].message).toBe('e5');
+
+      sink.publishError(() => ({ tags: ['x'], message: 'z'.repeat(MAX_MESSAGE_CHARS * 3) }));
+      const last = sink.snapshot().records.at(-1)!;
+      expect(last.message.length).toBeLessThanOrEqual(MAX_MESSAGE_CHARS + 3);
+    });
+
+    it('redacts the message and fields', () => {
+      const sink = new DevLogSink();
+      sink.publishError(() => ({
+        tags: ['x'],
+        message: 'failed with Authorization: Bearer abcdefghijklmnop1234567890',
+        fields: { detail: 'api_key=sk-abcdefghijklmnop1234567890' },
+      }));
+      const [record] = sink.snapshot().records;
+      expect(record.message).not.toContain('abcdefghijklmnop');
+      expect(record.fields?.detail).not.toContain('abcdefghijklmnop');
+    });
+
+    it('always carries the errors tag, once', () => {
+      const sink = new DevLogSink();
+      sink.publishError(() => ({ tags: ['x'], message: 'a' }));
+      sink.publishError(() => ({ tags: ['x', 'errors'], message: 'b' }));
+      expect(sink.snapshot().records.map(record => record.tags)).toEqual([
+        ['x', 'errors'],
+        ['x', 'errors'],
+      ]);
+    });
+
+    it('is selected by the errors filter across sources and copied when visible', () => {
+      const sink = new DevLogSink();
+      watching(sink);
+      sink.publish(() => ({ tags: ['chat-stream'], message: 'upstream content' }));
+      sink.publishError(() => ({ tags: ['chat-stream'], message: 'provider down', fields: { status: 502 } }));
+      sink.publishError(() => ({ tags: ['renderer'], message: 'TypeError' }));
+      const shown = visibleRecords(sink.snapshot().records, new Set(['errors']));
+      expect(shown.map(record => record.message)).toEqual(['provider down', 'TypeError']);
+      expect(formatForCopy(shown)).toContain('status=502');
+    });
   });
 });

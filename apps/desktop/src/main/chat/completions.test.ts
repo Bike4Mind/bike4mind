@@ -26,6 +26,7 @@ import {
   withRunFallback,
   RunBudgetExhaustedError,
 } from './completions';
+import { devLog } from '../devlog/DevLogSink';
 import type { CompletionStreamEvent } from './streamEvents';
 
 /** One SSE frame. The blank-line terminator is what the parser splits on. */
@@ -824,5 +825,82 @@ describe('supportsPromptCache', () => {
     expect(supportsPromptCache(models, 'c')).toBe(false);
     expect(supportsPromptCache(models, 'missing')).toBe(false);
     expect(supportsPromptCache([], 'a')).toBe(false);
+  });
+});
+
+describe('streamCompletion error records', () => {
+  const REQ = { ...REQUEST, sessionId: 'sess-1' };
+  const errors = () => devLog.snapshot().records.filter(record => record.tags.includes('errors'));
+
+  function rejects(status: number, data: string) {
+    return vi
+      .fn()
+      .mockRejectedValue(
+        Object.assign(new Error('Request failed'), { isAxiosError: true, response: { status, data } })
+      );
+  }
+
+  it('logs a failed response with status, error code and the sent request id, with no window open', async () => {
+    devLog.clear();
+    const post = rejects(400, JSON.stringify({ message: 'Too long', errorCode: 'context_length_exceeded' }));
+    const err = (await streamCompletion({ post } as unknown as AxiosInstance, '/c', REQ, () => {}).catch(
+      (caught: Error) => caught
+    )) as Error;
+
+    const [record, ...rest] = errors();
+    expect(rest).toHaveLength(0);
+    expect(record.tags).toEqual(['chat-stream', 'errors']);
+    expect(record.message).toBe(err.message);
+    expect(record.fields).toMatchObject({
+      source: 'request',
+      operation: 'completion',
+      status: 400,
+      errorCode: 'context_length_exceeded',
+      requestId: post.mock.calls[0][2].headers['X-Request-ID'],
+      model: 'm',
+      session: 'sess-1',
+    });
+  });
+
+  it('bounds and redacts a non-JSON error body instead of storing it whole', async () => {
+    devLog.clear();
+    const page = `<html>Bearer abcdefghijklmnop1234567890 ${'x'.repeat(5000)}</html>`;
+    const post = rejects(502, page);
+    await streamCompletion({ post } as unknown as AxiosInstance, '/c', REQ, () => {}).catch(() => undefined);
+    const [record] = errors();
+    expect(record.fields?.status).toBe(502);
+    expect(record.message.length).toBeLessThan(400);
+    expect(record.message).not.toContain('abcdefghijklmnop');
+  });
+
+  it('logs a provider error delivered inside a 200 stream', async () => {
+    devLog.clear();
+    const stream = new PassThrough();
+    const { instance } = fakeAxios(stream);
+    const done = streamCompletion(instance, '/c', REQ, () => {}).catch(() => undefined);
+    stream.write(frame({ type: 'error', message: 'Model provider returned an error (upstream 502)' }));
+    await done;
+
+    const [record] = errors();
+    expect(record.tags).toEqual(['chat-stream', 'errors']);
+    expect(record.message).toContain('Model provider returned an error (upstream 502)');
+    expect(record.fields).toMatchObject({ source: 'stream', session: 'sess-1' });
+    expect(record.fields?.requestId).toEqual(expect.any(String));
+  });
+
+  it('logs an idle timeout as a transport error', async () => {
+    devLog.clear();
+    const { instance } = fakeAxios(new PassThrough());
+    await streamCompletion(instance, '/c', REQ, () => {}, undefined, { idleTimeoutMs: 30 }).catch(() => undefined);
+    expect(errors().map(record => record.fields?.source)).toContain('transport');
+  });
+
+  it('does not log a user abort', async () => {
+    devLog.clear();
+    const controller = new AbortController();
+    controller.abort();
+    const { instance } = fakeAxios(new PassThrough());
+    await streamCompletion(instance, '/c', REQ, () => {}, controller.signal);
+    expect(errors()).toHaveLength(0);
   });
 });

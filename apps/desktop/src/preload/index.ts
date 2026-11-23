@@ -680,6 +680,7 @@ const api: DesktopApi = {
     getSnapshot: () => ipcRenderer.invoke(IPC_CHANNELS.devLogGetSnapshot),
     clear: () => ipcRenderer.invoke(IPC_CHANNELS.devLogClear),
     copy: (text: string) => ipcRenderer.invoke(IPC_CHANNELS.devLogCopy, text),
+    reportError: report => ipcRenderer.send(IPC_CHANNELS.devLogReportError, report),
     onRecords: listener => {
       const handler = (_event: unknown, records: DevLogRecord[]) => listener(records);
       ipcRenderer.on(IPC_CHANNELS.devLogRecords, handler);

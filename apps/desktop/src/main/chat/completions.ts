@@ -13,6 +13,7 @@ import {
 import type { ChatModelOption, ChatRole } from '@shared/chat';
 import type { GenerationSettings } from '@shared/generation';
 import { devLog } from '../devlog/DevLogSink';
+import { ERRORS_TAG } from '../devlog/tags';
 import { CHAT_STREAM_TAG } from './devLogTag';
 import { parseStreamEvent, type CompletionStreamEvent } from './streamEvents';
 
@@ -242,6 +243,15 @@ async function streamOnce(
 ): Promise<void> {
   if (signal?.aborted) return;
 
+  // Fresh per HTTP request, never reused: the server keys the request's ledger charge on it,
+  // so a resend under the same id would read as the same charge.
+  const context: StreamContext = {
+    model: request.model,
+    sessionId: request.sessionId,
+    idleTimeoutMs: options.idleTimeoutMs ?? STREAM_IDLE_TIMEOUT_MS,
+    requestId: randomUUID(),
+  };
+
   let response: AxiosResponse;
   try {
     response = await axiosInstance.post(
@@ -276,9 +286,7 @@ async function streamOnce(
         responseType: 'stream',
         signal,
         timeout: COMPLETION_HEADER_TIMEOUT_MS,
-        // Fresh per HTTP request, never reused: the server keys the request's ledger charge on it,
-        // so a resend under the same id would read as the same charge.
-        headers: { 'X-Request-ID': randomUUID() },
+        headers: { 'X-Request-ID': context.requestId },
       }
     );
   } catch (err) {
@@ -286,15 +294,17 @@ async function streamOnce(
     const body = await readErrorBody(err);
     if (isRunNotFound(err, body)) throw new RunNotFoundError(body?.message);
     if (isRunBudgetExhausted(err, body)) throw new RunBudgetExhaustedError(body?.message);
-    throw toRequestError(err, body?.message);
+    const failure = toRequestError(err, body?.message);
+    logError(failure, 'request', context, {
+      ...(isAxiosError(err) && err.response?.status ? { status: err.response.status } : {}),
+      ...(isAxiosError(err) && !err.response?.status && err.code ? { code: err.code } : {}),
+      ...(body?.errorCode ? { errorCode: body.errorCode } : {}),
+    });
+    throw failure;
   }
 
   releaseRequestTimeout(response);
-  await readSseStream(response, onEvent, signal, {
-    model: request.model,
-    sessionId: request.sessionId,
-    idleTimeoutMs: options.idleTimeoutMs ?? STREAM_IDLE_TIMEOUT_MS,
-  });
+  await readSseStream(response, onEvent, signal, context);
 }
 
 /**
@@ -321,6 +331,34 @@ interface StreamContext {
   sessionId?: string;
   /** See STREAM_IDLE_TIMEOUT_MS. In ms. */
   idleTimeoutMs: number;
+  /** The X-Request-ID sent with the POST; the key the server's own logs use. */
+  requestId: string;
+}
+
+/**
+ * Publish one failure to the developer log, retained even with the window closed.
+ *
+ * `message` is the text the user sees (never a response body: readErrorBody already reduced that
+ * to `message` and `errorCode`). `extra` is named by the caller, never spread from a response.
+ */
+function logError(
+  error: Error,
+  source: 'request' | 'stream' | 'transport',
+  context: StreamContext,
+  extra: Readonly<Record<string, string | number>> = {}
+): void {
+  devLog.publishError(() => ({
+    tags: [CHAT_STREAM_TAG, ERRORS_TAG],
+    message: error.message,
+    fields: {
+      source,
+      operation: 'completion',
+      ...extra,
+      requestId: context.requestId,
+      model: context.model,
+      ...(context.sessionId ? { session: context.sessionId } : {}),
+    },
+  }));
 }
 
 /**
@@ -334,7 +372,9 @@ interface StreamContext {
  * truncated one.
  */
 function logUpstream(event: CompletionStreamEvent, context: StreamContext): void {
-  devLog.publish(() => {
+  // A provider failure delivered inside a 200 stream: kept even with the window closed.
+  const publish = event.type === 'error' ? devLog.publishError.bind(devLog) : devLog.publish.bind(devLog);
+  publish(() => {
     const text = 'text' in event ? (event.text ?? '') : '';
     const detail =
       event.type === 'tool_use'
@@ -343,10 +383,12 @@ function logUpstream(event: CompletionStreamEvent, context: StreamContext): void
           ? (event.message ?? 'no message')
           : text;
     return {
-      tags: [CHAT_STREAM_TAG],
+      tags: event.type === 'error' ? [CHAT_STREAM_TAG, ERRORS_TAG] : [CHAT_STREAM_TAG],
       message: `upstream ${event.type}${detail ? `: ${detail}` : ''}`,
       fields: {
         model: context.model,
+        requestId: context.requestId,
+        ...(event.type === 'error' ? { source: 'stream', operation: 'completion' } : {}),
         ...(text ? { chars: text.length } : {}),
         ...(context.sessionId ? { session: context.sessionId } : {}),
         ...('stopReason' in event && event.stopReason ? { stopReason: event.stopReason } : {}),
@@ -378,7 +420,7 @@ function readSseStream(
           setImmediate(() => {
             if (settled) return;
             const quiet = Date.now() - lastByteAt;
-            if (quiet >= context.idleTimeoutMs) fail(new StreamIdleError(quiet));
+            if (quiet >= context.idleTimeoutMs) failTransport(new StreamIdleError(quiet));
             else armIdle(context.idleTimeoutMs - quiet);
           }),
         delay
@@ -404,6 +446,11 @@ function readSseStream(
       cleanup();
       stream.destroy();
       reject(error);
+    };
+
+    const failTransport = (error: Error) => {
+      if (!settled) logError(error, 'transport', context);
+      fail(error);
     };
 
     const parser = createParser({
@@ -441,7 +488,7 @@ function readSseStream(
     // Ending without [DONE] is still an end: the caller keeps whatever text arrived.
     const onEnd = () => finish();
     // A socket error caused by our own abort is benign; anything else is a real failure.
-    const onError = (error: Error) => (signal?.aborted ? finish() : fail(error));
+    const onError = (error: Error) => (signal?.aborted ? finish() : failTransport(error));
     const onAbort = () => finish();
 
     stream.on('data', onData);
