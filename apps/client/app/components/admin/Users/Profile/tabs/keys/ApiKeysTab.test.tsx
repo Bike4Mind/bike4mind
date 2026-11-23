@@ -81,12 +81,12 @@ describe('ApiKeysTab', () => {
   it('resets request filters when switching to another cached user', () => {
     respond();
     const view = renderTab();
-    const fromDate = () =>
-      within(screen.getByTestId('user-api-requests-from')).getByLabelText('Requests from UTC date');
-    fireEvent.change(fromDate(), { target: { value: '2026-11-01' } });
-    expect(fromDate()).toHaveValue('2026-11-01');
+    fireEvent.click(screen.getByTestId('user-api-requests-from-set-btn'));
+    fireEvent.change(screen.getByLabelText('Requests from UTC date'), { target: { value: '2026-11-01' } });
+    expect(screen.getByLabelText('Requests from UTC date')).toHaveValue('2026-11-01');
     view.rerender(<ApiKeysTab user={buildProfile({ id: 'another-user' })} />);
-    expect(fromDate()).toHaveValue('');
+    expect(screen.queryByLabelText('Requests from UTC date')).not.toBeInTheDocument();
+    expect(screen.getByTestId('user-api-requests-from-empty')).toBeInTheDocument();
   });
   beforeEach(() => {
     vi.clearAllMocks();

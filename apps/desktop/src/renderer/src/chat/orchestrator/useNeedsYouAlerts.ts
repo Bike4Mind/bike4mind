@@ -25,18 +25,23 @@ import {
  * While no window is open main announces instead (main/attention/needsYouMonitor.ts), by the same
  * rules; a notice of its that reopened this window is handed to `onOpen` once its session is listed.
  */
+const NO_UNREAD: ReadonlySet<string> = new Set();
+
 export function useNeedsYouAlerts(
   sessions: readonly ChatSessionSummary[],
   statuses: ReadonlyMap<string, ChatSessionStatus>,
   loaded: boolean,
   onOpen: (event: AttentionOpenEvent) => void,
-  viewingId: string | null
+  viewingId: string | null,
+  unreadReplies: ReadonlySet<string> = NO_UNREAD
 ): void {
   const [scope] = useNotifyScope();
   const latestScope = useRef(scope);
   latestScope.current = scope;
   const latestViewingId = useRef(viewingId);
   latestViewingId.current = viewingId;
+  const latestUnread = useRef(unreadReplies);
+  latestUnread.current = unreadReplies;
   const previous = useRef<ReadonlyMap<string, ChatSessionStatus> | null>(null);
   // Refs, so a session-list change between status pushes never re-announces anything.
   const latestSessions = useRef(sessions);
@@ -50,8 +55,13 @@ export function useNeedsYouAlerts(
     // Agent alerts keep firing for the viewed session, as they always have; only the wider scope skips it.
     const agentTree = alertableSessions(latestSessions.current, 'agents');
     const inView = (id: string) => id === latestViewingId.current && !agentTree.has(id) && document.hasFocus();
-    const entered = previous.current ? enteredNeedsYou(previous.current, statuses).filter(id => alertable.has(id)) : [];
-    previous.current = statuses;
+    // An unread finished reply badges but never alerts, so it reads as 'done' here and a request
+    // arriving on top of it still counts as an entry.
+    const asking = new Map(
+      [...statuses].map(([id, status]) => [id, latestUnread.current.has(id) ? 'done' : status] as const)
+    );
+    const entered = previous.current ? enteredNeedsYou(previous.current, asking).filter(id => alertable.has(id)) : [];
+    previous.current = asking;
     const viewed = entered.filter(inView);
     // Claimed without announcing, so another open window does not announce what this one shows.
     if (viewed.length > 0) {
@@ -123,7 +133,12 @@ export const PRESENTER_NOTICE_BODY = 'Presenter mode is on';
 async function notify(sessionId: string, sessions: readonly ChatSessionSummary[]): Promise<void> {
   const rootId = rootSessionOf(sessions, sessionId);
   if (readPresenter()) {
-    await window.b4m.attention.notify({ sessionId, rootId, title: PRESENTER_NOTICE_TITLE, body: PRESENTER_NOTICE_BODY });
+    await window.b4m.attention.notify({
+      sessionId,
+      rootId,
+      title: PRESENTER_NOTICE_TITLE,
+      body: PRESENTER_NOTICE_BODY,
+    });
     return;
   }
   const title = needsYouTitle(sessions, sessionId, rootId);

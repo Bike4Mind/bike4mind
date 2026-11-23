@@ -6,6 +6,9 @@ import { isProviderKeyFailure } from '../auth/providerKeyFailure.js';
 import type { ConfigStore } from '../storage/ConfigStore.js';
 import {
   type ArtifactResource,
+  CreateImageJobResponseSchema,
+  ImageJobSchema,
+  type PublicImageJob,
   generatedAudioResponseSchema,
   type GeneratedAudioResponse,
   type BatchPresignedUrlRequestInputType,
@@ -18,8 +21,6 @@ import {
   type ChatHistoryItemType,
   type CommentPolicy,
   type GeneratedFile,
-  type GenerateImageResponse,
-  type ImagePromptResolution,
   type PromptBatchQueryType,
   type PublishResult,
   type PublishScopeTier,
@@ -236,14 +237,11 @@ export interface RawDataLake {
   [key: string]: unknown;
 }
 
-/** Arguments for POST /api/v1/image-generations; a subset of `GenerateImageRequestBodySchema`. */
+/** Arguments for POST /api/v1/image-jobs (always `mode: 'generate'`, one image); a subset of `CreateImageJobBody`. */
 export interface GenerateImageArgs {
   prompt: string;
   model: string;
   size?: string;
-  notebookId?: string;
-  projectId?: string;
-  promptResolution?: ImagePromptResolution;
 }
 
 export interface RawProject {
@@ -594,16 +592,28 @@ export class B4mApiClient {
     };
   }
 
-  async generateImage(args: GenerateImageArgs): Promise<GenerateImageResponse> {
+  /** Start one image job. `idempotencyKey` makes a retried submit return the same job, not a second bill. */
+  async createImageJob(args: GenerateImageArgs, idempotencyKey: string): Promise<PublicImageJob> {
     const body = {
-      prompt: args.prompt,
       model: args.model,
+      mode: 'generate',
+      prompt: args.prompt,
+      count: 1,
       ...(args.size ? { size: args.size } : {}),
-      ...(args.notebookId ? { sessionId: args.notebookId } : {}),
-      ...(args.projectId ? { projectId: args.projectId } : {}),
-      ...(args.promptResolution ? { prompt_resolution: args.promptResolution } : {}),
-    } as JsonBody<'generateImage'>;
-    return (await this.sdk.call('generateImage', { body })) as GenerateImageResponse;
+    } as JsonBody<'createImageJob'>;
+    const response = await this.sdk.call('createImageJob', { body, headers: { 'Idempotency-Key': idempotencyKey } });
+    const [job] = CreateImageJobResponseSchema.parse(response).data;
+    if (!job) throw new Error('the server accepted the image request but returned no job');
+    return job;
+  }
+
+  async getImageJob(jobId: string): Promise<PublicImageJob> {
+    return ImageJobSchema.parse(await this.sdk.call('getImageJob', { params: { id: jobId } }));
+  }
+
+  /** Ask the server to cancel a job. A running job refuses (409) and finishes, so callers treat this as best effort. */
+  async cancelImageJob(jobId: string): Promise<PublicImageJob> {
+    return ImageJobSchema.parse(await this.sdk.call('cancelImageJob', { params: { id: jobId } }));
   }
 
   async listProjects(args: {

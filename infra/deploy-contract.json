@@ -4,7 +4,8 @@
     {
       "name": "chat-completion",
       "dockerfile": "apps/client/Dockerfile.chatcompletion",
-      "env": "CHAT_COMPLETION_IMAGE"
+      "env": "CHAT_COMPLETION_IMAGE",
+      "retentionDays": 21
     },
     {
       "name": "searxng",
@@ -15,7 +16,8 @@
     {
       "name": "render-worker",
       "dockerfile": "apps/workers/Dockerfile.renderworker",
-      "env": "RENDER_WORKER_IMAGE"
+      "env": "RENDER_WORKER_IMAGE",
+      "retentionDays": 21
     }
   ],
   "externalImages": [

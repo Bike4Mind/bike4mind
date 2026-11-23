@@ -98,6 +98,7 @@ import {
 } from '@bike4mind/server-utils/generationJobs/wiring';
 import { createImageJobs } from '@bike4mind/services/imageJobs';
 import { resolveImageJobFiles } from '@server/generations/resolveImageJobFiles';
+import { resolveCallableFunctionsEnabled } from '@bike4mind/server-utils/callableFunctions/access';
 import { getMcpClientAdapter } from '@bike4mind/server-utils/utils/getMcpClientAdapter';
 import { createCompletionMeter } from '@bike4mind/server-utils/billing/meterPlatformCompletion';
 import { customMcpToolHost } from '@bike4mind/server-utils/mcpConnections/customMcpToolHost';
@@ -492,6 +493,7 @@ export async function processQuest(params: z.infer<typeof QuestStartBodySchema>,
       musicToolConfigResolver: getMusicToolConfigResolver(params.apiKeyId, user.id),
       imageJobsResolver: getImageJobsResolver(params.apiKeyId),
       imageJobFilesResolver: resolveImageJobFiles,
+      callableFunctionsResolver: () => resolveCallableFunctionsEnabled(user),
     });
   } catch (error) {
     await liveActivity.end('failed');

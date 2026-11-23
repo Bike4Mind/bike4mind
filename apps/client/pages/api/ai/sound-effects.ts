@@ -19,6 +19,7 @@ import {
   dailyLimitError,
   GENERATION_JOB_ID_HEADER,
   failureLogLevelOf,
+  isQuotaExhaustedFailure,
   isRateLimitedFailure,
   prefersRespondAsync,
   retryAfterSecondsOf,
@@ -33,6 +34,7 @@ import { mapperDeps } from '@server/generations/routeDeps';
 import { SOUND_EFFECT_GENERATION_PROJECTION, toPublicGenerationJob } from '@server/generations/toPublicGenerationJob';
 
 const GENERATION_FAILED = { error: 'Sound generation failed' };
+const TEMPORARILY_UNAVAILABLE = { error: 'Sound effects are temporarily unavailable. Please try again later.' };
 
 // Provider-agnostic sound-effects generation, run as a sound-effect job (createSoundEffectJob) stepped in this
 // request: the job holds the duration-driven cost, settles it on success and returns it otherwise, records usage and
@@ -140,6 +142,14 @@ const handler = nextRouteForContract(generateSoundEffectContract).post(async (re
   const { job } = waited;
 
   if (job.state !== 'succeeded') {
+    if (isQuotaExhaustedFailure(job)) {
+      req.logger.warn('Sound-effects generation unavailable: provider quota exhausted', {
+        jobId: job.id,
+        provider,
+        error: job.error,
+      });
+      return res.status(503).json(TEMPORARILY_UNAVAILABLE);
+    }
     if (isRateLimitedFailure(job)) {
       req.logger.warn('Sound-effects generation deferred: provider at capacity', { jobId: job.id, provider });
       throw providerBusyHttpError(new ProviderBusyError(provider, 'upstream_rate_limited', retryAfterSecondsOf(job)));

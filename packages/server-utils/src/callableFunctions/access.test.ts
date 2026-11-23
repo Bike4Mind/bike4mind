@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { ForbiddenError } from '@bike4mind/common';
+import { ARTIFACT_EMISSION_PROMPT, ForbiddenError, withCallableFunctions } from '@bike4mind/common';
 
 type Scope = { organizationId?: string; owner: { id: string; type: string } };
 
@@ -44,6 +44,7 @@ vi.mock('@bike4mind/services', () => ({
 }));
 
 const { assertCallableFunctionsEnabled, resolveCallableFunctionsEnabled } = await import('./access');
+const { resolveAgentArtifactEmissionPrompt } = await import('../utils/artifactGate');
 
 const user = { id: 'user-1' };
 
@@ -137,5 +138,29 @@ describe('assertCallableFunctionsEnabled', () => {
     await expect(assertCallableFunctionsEnabled(user)).rejects.toBeInstanceOf(ForbiddenError);
     state.platformValue = true;
     await expect(assertCallableFunctionsEnabled(user)).resolves.toBeUndefined();
+  });
+});
+
+describe('the artifact prompt follows resolveCallableFunctionsEnabled', () => {
+  const prompt = () =>
+    resolveAgentArtifactEmissionPrompt({
+      artifactsEnabled: true,
+      readPromptSetting: async () => ARTIFACT_EMISSION_PROMPT,
+      readCallableFunctionsEnabled: () => resolveCallableFunctionsEnabled(user),
+    });
+
+  it('leaves the note out when the setting is off', async () => {
+    await expect(prompt()).resolves.toBe(ARTIFACT_EMISSION_PROMPT);
+  });
+
+  it('appends the note when the setting is on', async () => {
+    state.platformValue = true;
+    await expect(prompt()).resolves.toBe(withCallableFunctions(ARTIFACT_EMISSION_PROMPT, true));
+  });
+
+  it("appends the note when an organization's override is on while the platform value is off", async () => {
+    state.orgIds = ['org-a'];
+    state.orgOverrides = { 'org-a': true };
+    await expect(prompt()).resolves.toBe(withCallableFunctions(ARTIFACT_EMISSION_PROMPT, true));
   });
 });

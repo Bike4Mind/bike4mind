@@ -148,6 +148,7 @@ import {
   resolveAgentArtifactEmissionPrompt,
   resolveAgentArtifactGate,
 } from '@bike4mind/server-utils/utils/artifactGate';
+import { agentArtifactPromptReaders } from './agentExecutor.artifactPrompt';
 import { resolveExecutionQuestId } from './agentExecutor.resolveQuestId';
 import {
   shouldWithholdToolCall,
@@ -2586,8 +2587,7 @@ async function runExecution(
     const artifactEmissionPrompt = await resolveAgentArtifactEmissionPrompt({
       artifactsEnabled: enableArtifacts,
       isNewExecution,
-      readPromptSetting: () => adminSettingsRepository.getSettingsValue('ArtifactEmissionPrompt'),
-      readDataOriginsSetting: () => adminSettingsRepository.getSettingsValue('pythonArtifactDataOrigins'),
+      ...agentArtifactPromptReaders(user, logger),
     });
 
     // Each agent round's output is capped at what the payer can afford; the loop below turns the
@@ -5101,8 +5101,7 @@ async function processSubagentDispatch(
     });
     const childArtifactEmissionPrompt = await resolveAgentArtifactEmissionPrompt({
       artifactsEnabled: childArtifactsEnabled,
-      readPromptSetting: () => adminSettingsRepository.getSettingsValue('ArtifactEmissionPrompt'),
-      readDataOriginsSetting: () => adminSettingsRepository.getSettingsValue('pythonArtifactDataOrigins'),
+      ...agentArtifactPromptReaders(user, logger),
     });
 
     logger.info('[AgentExecutor][MCP] dispatched subagent tool pool', {

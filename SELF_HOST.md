@@ -1448,7 +1448,7 @@ listed fails the guard.
 Run the focused guard with:
 
 ```bash
-pnpm --filter @bike4mind/scripts exec vitest run src/selfhostParityInventory.test.ts
+pnpm --filter @bike4mind/scripts test:repo src/selfhostParityInventory.repo.test.ts
 ```
 
 A failing guard reports the declaration identity, current declaration/local fingerprint

@@ -8,7 +8,7 @@ type PresignOptions = Parameters<typeof GetSignedUrl>[2];
  * Re-signs a PUT with the real AWS SDK, from the exact command input and presign options a door
  * handed to its (mocked) getSignedUrl, so a test can read what the URL actually binds. The door
  * tests mock the SDK; this bypasses those mocks with importActual. Mirrors createS3Client's config, which
- * it cannot call (the mocked client-s3 would reach it); allowlisted in checkNoRawS3Client.test.ts.
+ * it cannot call (the mocked client-s3 would reach it); allowlisted in checkNoRawS3Client.repo.test.ts.
  */
 export async function presignPutForReal(input: PutObjectCommandInput, options: PresignOptions): Promise<URL> {
   const { S3Client, PutObjectCommand } =
