@@ -866,41 +866,70 @@ describe('streamCompletion error records', () => {
     devLog.clear();
     const page = `<html>Bearer abcdefghijklmnop1234567890 ${'x'.repeat(5000)}</html>`;
     const post = rejects(502, page);
-    await streamCompletion({ post } as unknown as AxiosInstance, '/c', REQ, () => {}).catch(() => undefined);
+    const err = (await streamCompletion({ post } as unknown as AxiosInstance, '/c', REQ, () => {}).catch(
+      (caught: Error) => caught
+    )) as Error;
     const [record] = errors();
     expect(record.fields?.status).toBe(502);
-    expect(record.message.length).toBeLessThan(400);
+    expect(err.message).toContain('abcdefghijklmnop');
+    expect(record.message.startsWith('<html>Bearer [redacted]')).toBe(true);
     expect(record.message).not.toContain('abcdefghijklmnop');
   });
 
   it('logs a provider error delivered inside a 200 stream', async () => {
     devLog.clear();
     const stream = new PassThrough();
-    const { instance } = fakeAxios(stream);
+    const { instance, post } = fakeAxios(stream);
     const done = streamCompletion(instance, '/c', REQ, () => {}).catch(() => undefined);
     stream.write(frame({ type: 'error', message: 'Model provider returned an error (upstream 502)' }));
     await done;
 
+    expect(errors()).toHaveLength(1);
     const [record] = errors();
     expect(record.tags).toEqual(['chat-stream', 'errors']);
     expect(record.message).toContain('Model provider returned an error (upstream 502)');
     expect(record.fields).toMatchObject({ source: 'stream', session: 'sess-1' });
-    expect(record.fields?.requestId).toEqual(expect.any(String));
+    expect(record.fields?.requestId).toBe(post.mock.calls[0][2].headers['X-Request-ID']);
   });
 
   it('logs an idle timeout as a transport error', async () => {
     devLog.clear();
-    const { instance } = fakeAxios(new PassThrough());
-    await streamCompletion(instance, '/c', REQ, () => {}, undefined, { idleTimeoutMs: 30 }).catch(() => undefined);
-    expect(errors().map(record => record.fields?.source)).toContain('transport');
+    const { instance, post } = fakeAxios(new PassThrough());
+    const err = (await streamCompletion(instance, '/c', REQ, () => {}, undefined, { idleTimeoutMs: 30 }).catch(
+      (caught: Error) => caught
+    )) as Error;
+    const [record, ...rest] = errors();
+    expect(rest).toHaveLength(0);
+    expect(record.tags).toEqual(['chat-stream', 'errors']);
+    expect(record.fields?.source).toBe('transport');
+    expect(record.message).toBe('no data for 0s');
+    expect(err.message).toContain('no data for 0s');
+    expect(record.fields?.requestId).toBe(post.mock.calls[0][2].headers['X-Request-ID']);
   });
 
-  it('does not log a user abort', async () => {
+  it('does not log a user abort mid-stream', async () => {
     devLog.clear();
     const controller = new AbortController();
+    const stream = new PassThrough();
+    const { instance } = fakeAxios(stream);
+    const done = streamCompletion(instance, '/c', REQ, () => {}, controller.signal).catch(() => undefined);
+    stream.write(frame({ type: 'content', text: 'hi' }));
+    await new Promise(resolve => setTimeout(resolve, 0));
     controller.abort();
-    const { instance } = fakeAxios(new PassThrough());
-    await streamCompletion(instance, '/c', REQ, () => {}, controller.signal);
+    await done;
+    expect(errors()).toHaveLength(0);
+  });
+
+  it('does not log a request cancelled in flight', async () => {
+    devLog.clear();
+    const controller = new AbortController();
+    const post = vi.fn().mockImplementation(async () => {
+      controller.abort();
+      throw Object.assign(new Error('canceled'), { isAxiosError: true, code: 'ERR_CANCELED' });
+    });
+    await streamCompletion({ post } as unknown as AxiosInstance, '/c', REQ, () => {}, controller.signal).catch(
+      () => undefined
+    );
     expect(errors()).toHaveLength(0);
   });
 });

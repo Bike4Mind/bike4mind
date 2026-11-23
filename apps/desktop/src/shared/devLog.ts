@@ -32,7 +32,7 @@ export interface DevLogSnapshot {
  * What the renderer reports when it catches its own failure. Untrusted on arrival: main
  * re-validates and clips every field (main/devlog/rendererErrors.ts) before it is logged.
  */
-export interface RendererErrorReport {
+export interface DevLogErrorReport {
   kind: 'error' | 'unhandledrejection';
   message: string;
   name?: string;

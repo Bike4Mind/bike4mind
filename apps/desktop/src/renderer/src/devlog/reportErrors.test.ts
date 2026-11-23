@@ -31,12 +31,31 @@ describe('installErrorReporting', () => {
     expect(report).toHaveBeenNthCalledWith(3, { kind: 'unhandledrejection', message: 'plain' });
   });
 
-  it('swallows a throwing reporter and is a no-op without one', () => {
-    const target = new EventTarget();
+  it('swallows a throwing reporter', () => {
+    const listeners = new Map<string, (event: Event) => void>();
+    const target = {
+      addEventListener: (type: string, listener: (event: Event) => void) => listeners.set(type, listener),
+    };
     installErrorReporting(target as unknown as Window, () => {
       throw new Error('ipc down');
     });
-    expect(() => target.dispatchEvent(Object.assign(new Event('error'), { message: 'x' }))).not.toThrow();
+    expect(() => listeners.get('error')?.(Object.assign(new Event('error'), { message: 'x' }))).not.toThrow();
+  });
+
+  it('is a no-op without a reporter', () => {
     expect(() => installErrorReporting(new EventTarget() as unknown as Window, undefined)).not.toThrow();
+  });
+
+  it('reports a rejection whose reason cannot be stringified', () => {
+    const listeners = new Map<string, (event: Event) => void>();
+    const target = {
+      addEventListener: (type: string, listener: (event: Event) => void) => listeners.set(type, listener),
+    };
+    const report = vi.fn();
+    installErrorReporting(target as unknown as Window, report);
+    const reason = Object.create(null);
+    expect(() =>
+      listeners.get('unhandledrejection')?.(Object.assign(new Event('unhandledrejection'), { reason }))
+    ).not.toThrow();
   });
 });

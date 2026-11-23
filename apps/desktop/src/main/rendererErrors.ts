@@ -1,6 +1,7 @@
 import { ipcMain } from 'electron';
 import { rendererErrorReportSchema } from '@shared/appShell';
 import { IPC_CHANNELS } from '@shared/ipc';
+import { rendererErrorLog } from './devlog/rendererErrors';
 
 /**
  * Log what the renderer's top-level error boundary caught. Main's console is persisted to the
@@ -13,6 +14,7 @@ export function registerRendererErrorLog(): void {
       console.warn('RENDERER: dropped a malformed error report');
       return;
     }
+    rendererErrorLog.render(report.data);
     const { message, stack, componentStack, route } = report.data;
     console.error(
       `RENDERER: render error${route ? ` on ${route}` : ''}: ${message}`,

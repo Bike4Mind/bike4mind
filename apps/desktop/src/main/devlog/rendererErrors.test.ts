@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { DevLogSink, MAX_MESSAGE_CHARS } from './DevLogSink';
 import { RATE_LIMIT, RATE_WINDOW_MS, createRendererErrorHandler, parseRendererErrorReport } from './rendererErrors';
 
@@ -15,12 +15,16 @@ describe('parseRendererErrorReport', () => {
     expect(report?.message.length).toBe(2000);
     expect(report).not.toHaveProperty('name');
   });
+
+  it('gives an empty message a fallback', () => {
+    expect(parseRendererErrorReport({ kind: 'error', message: '' })?.message).toBe('(no message)');
+  });
 });
 
 describe('createRendererErrorHandler', () => {
   it('stores a redacted, clipped record tagged renderer + errors with only the route', () => {
     const sink = new DevLogSink();
-    const handle = createRendererErrorHandler(sink);
+    const handle = createRendererErrorHandler(sink).report;
     handle(
       {
         kind: 'unhandledrejection',
@@ -33,25 +37,72 @@ describe('createRendererErrorHandler', () => {
     expect(record.tags).toEqual(['renderer', 'errors']);
     expect(record.message).not.toContain('abcdefghijklmnop');
     expect(record.message.length).toBeLessThanOrEqual(MAX_MESSAGE_CHARS + 3);
-    expect(record.fields).toMatchObject({ kind: 'unhandledrejection', name: 'TypeError', route: '#/chat/abc' });
+    expect(record.fields).toEqual({
+      source: 'renderer',
+      kind: 'unhandledrejection',
+      name: 'TypeError',
+      route: '#/chat/abc',
+    });
   });
 
   it('ignores invalid input', () => {
     const sink = new DevLogSink();
-    createRendererErrorHandler(sink)({ kind: 'nope' });
+    createRendererErrorHandler(sink).report({ kind: 'nope' });
     expect(sink.snapshot().records).toHaveLength(0);
   });
 
   it('drops reports over the limit and summarises them when the window rolls over', () => {
     const sink = new DevLogSink();
     let time = 1_000_000;
-    const handle = createRendererErrorHandler(sink, () => time);
+    const handle = createRendererErrorHandler(sink, () => time).report;
     for (let index = 0; index <= RATE_LIMIT; index++) handle({ kind: 'error', message: `e${index}` });
     expect(sink.snapshot().records).toHaveLength(RATE_LIMIT);
     time += RATE_WINDOW_MS;
     handle({ kind: 'error', message: 'next' });
     const messages = sink.snapshot().records.map(record => record.message);
-    expect(messages.at(-2)).toContain('1 renderer error reports dropped');
+    expect(messages.at(-2)).toBe('1 renderer error reports dropped (rate limit)');
     expect(messages.at(-1)).toBe('next');
+  });
+
+  describe('with fake timers', () => {
+    afterEach(() => vi.useRealTimers());
+
+    it('summarises the drops when the window ends, with no further report', () => {
+      vi.useFakeTimers();
+      const sink = new DevLogSink();
+      const handle = createRendererErrorHandler(sink);
+      for (let index = 0; index < RATE_LIMIT + 5; index++) handle.report({ kind: 'error', message: `e${index}` });
+      expect(sink.snapshot().records).toHaveLength(RATE_LIMIT);
+      vi.advanceTimersByTime(RATE_WINDOW_MS);
+      const records = sink.snapshot().records;
+      expect(records).toHaveLength(RATE_LIMIT + 1);
+      expect(records.at(-1)?.message).toBe('5 renderer error reports dropped (rate limit)');
+      expect(records.at(-1)?.fields).toEqual({ source: 'renderer', dropped: 5 });
+    });
+  });
+
+  describe('render', () => {
+    it('stores one errors record with the route and without the stacks', () => {
+      const sink = new DevLogSink();
+      createRendererErrorHandler(sink).render({
+        message: 'boom',
+        stack: 'Error: boom\n    at Sidebar',
+        componentStack: '\n    at Sidebar',
+        route: '#/settings?tab=1',
+      });
+      const records = sink.snapshot().records;
+      expect(records).toHaveLength(1);
+      expect(records[0].tags).toEqual(['renderer', 'errors']);
+      expect(records[0].message).toBe('boom');
+      expect(records[0].fields).toEqual({ source: 'renderer', kind: 'render', route: '#/settings' });
+    });
+
+    it('shares the rate limit with report', () => {
+      const sink = new DevLogSink();
+      const handle = createRendererErrorHandler(sink, () => 1_000_000);
+      for (let index = 0; index < RATE_LIMIT; index++) handle.report({ kind: 'error', message: `e${index}` });
+      handle.render({ message: 'over' });
+      expect(sink.snapshot().records.map(record => record.message)).not.toContain('over');
+    });
   });
 });

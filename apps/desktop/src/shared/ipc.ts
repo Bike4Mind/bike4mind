@@ -86,7 +86,7 @@ import type {
 } from './chat';
 import type { GenerationSettings } from './generation';
 import type { ModelLoadOffer, ModelSettings, UnsupportedModelSetting } from './modelSettings';
-import type { DevLogRecord, DevLogSnapshot, RendererErrorReport } from './devLog';
+import type { DevLogErrorReport, DevLogRecord, DevLogSnapshot } from './devLog';
 import type { ShareDirectoryResult } from './directoryRequest';
 import type { PrActionResult, PrBarState, PrOption, PrSummaryEvent } from './pullRequest';
 import type { LocalContextFit, LocalContextSetting } from './localContextSetting';
@@ -1595,6 +1595,6 @@ export interface DesktopApi {
     /** Subscribe to batches of newly captured records; returns the unsubscribe. */
     onRecords(listener: (records: DevLogRecord[]) => void): () => void;
     /** Report a renderer failure to the log. Fire-and-forget, so it cannot reject into a handler. */
-    reportError(report: RendererErrorReport): void;
+    reportError(report: DevLogErrorReport): void;
   };
 }

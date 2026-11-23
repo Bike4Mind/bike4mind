@@ -1,6 +1,6 @@
-import type { RendererErrorReport } from '@shared/devLog';
+import type { DevLogErrorReport } from '@shared/devLog';
 
-type Report = (report: RendererErrorReport) => void;
+type Report = (report: DevLogErrorReport) => void;
 
 /**
  * Forward uncaught renderer errors and unhandled promise rejections to the developer log.
@@ -13,9 +13,10 @@ export function installErrorReporting(
   report: Report | undefined = window.b4m?.devLog?.reportError
 ): void {
   if (!report) return;
-  const send = (payload: RendererErrorReport) => {
+  // The payload is built inside the guard: String(reason) can itself throw.
+  const send = (build: () => DevLogErrorReport) => {
     try {
-      report(payload);
+      report(build());
     } catch {
       // Nothing useful to do; see above.
     }
@@ -23,20 +24,20 @@ export function installErrorReporting(
 
   target.addEventListener('error', event => {
     const { message, error, filename, lineno, colno } = event as ErrorEvent;
-    send({
+    send(() => ({
       kind: 'error',
       message: error instanceof Error ? error.message || message : message || 'Uncaught error',
       ...(error instanceof Error && error.name ? { name: error.name } : {}),
       ...(filename ? { location: `${filename}:${lineno}:${colno}` } : {}),
-    });
+    }));
   });
 
   target.addEventListener('unhandledrejection', event => {
     const { reason } = event as PromiseRejectionEvent;
-    send({
+    send(() => ({
       kind: 'unhandledrejection',
       message: reason instanceof Error ? reason.message || reason.name : String(reason),
       ...(reason instanceof Error ? { name: reason.name } : {}),
-    });
+    }));
   });
 }
