@@ -68,7 +68,7 @@ export async function resolveAgentArtifactEmissionPrompt(args: {
   readPromptSetting: () => Promise<string | undefined>;
   /** The `pythonArtifactDataOrigins` setting; when it lists origins the prompt names them, as on chat. */
   readDataOriginsSetting?: () => Promise<unknown>;
-  /** Whether callable functions are on for the requester; when true the prompt says how to write one, as on chat. */
+  /** Whether callable functions are on for the requester; when true the prompt says how to write one, as on chat. Must not throw: wrap the read in `resolveCallableFunctionsSafely`. */
   readCallableFunctionsEnabled?: () => Promise<boolean>;
 }): Promise<string | undefined> {
   const { artifactsEnabled, isNewExecution = true, readPromptSetting, readDataOriginsSetting } = args;
