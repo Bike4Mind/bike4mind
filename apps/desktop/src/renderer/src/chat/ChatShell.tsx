@@ -974,6 +974,8 @@ export function ChatShell({
     }),
     [parentReply, wakeAmbient, readParentReport, dockVisible]
   );
+  // The agent a clicked needs-you notice asked for; handed to its parent's stage once that is open.
+  // Distinct from selectedAgentId below, which is the standing selection the stage and sidebar share.
   const [agentFocus, setAgentFocus] = useState<{ rootId: string; agentId: string } | null>(null);
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
   const rosterIds = useMemo(() => descendantIds(sessions, activeId), [sessions, activeId]);
