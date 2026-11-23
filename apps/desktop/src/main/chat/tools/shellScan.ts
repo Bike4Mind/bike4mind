@@ -856,8 +856,26 @@ interface WordScope {
   bindings: ReadonlyMap<string, readonly string[]>;
   /** What `$(git rev-parse --show-toplevel)` prints here, or null when the scan cannot tell. */
   toplevel: string | null;
+  /** Variables a plain top-level `NAME=literal` set earlier in the script, which bash expands to that text. */
+  assigned?: ReadonlyMap<string, string>;
   homeUsed(): void;
 }
+
+/** `$NAME` or `${NAME}` alone, the one expansion form `WordScope.assigned` fills in. */
+const ASSIGNED_VARIABLE = /^\$(?:\{([A-Za-z_]\w*)\}|([A-Za-z_]\w*))$/;
+
+/** A value word bash leaves as written: no quotes, expansion, glob, space or tilde, and no leading `-` an option parse would read. */
+const LITERAL_VALUE = /^(?!-)[\w./+@-]+$/;
+
+/**
+ * Names a binding must not model: those whose value changes how bash expands words or folders, and those bash keeps
+ * itself, where an assignment is ignored, refused or overwritten (`$BASH_COMMAND` is the running command's text).
+ */
+const UNBOUND_NAMES =
+  /^(HOME|PWD|OLDPWD|CDPATH|IFS|BASH\w*|DIRSTACK|FUNCNAME|GROUPS|UID|EUID|PPID|SHELLOPTS|LINENO|SECONDS|S?RANDOM|EPOCH\w+|HISTCMD|COMP_\w+)$/;
+
+/** Script text that may unset, rebind or reinterpret a variable the walk cannot see: `unset`, `eval`, sourcing, IFS. */
+const MAY_UNBIND = /(^|[^\w-])(unset|eval|source|trap|alias|IFS)\b|(^|[\s;&|(])\.\s/;
 
 /** The one command substitution the scan fills in, as `cd "$(git rev-parse --show-toplevel)"` is common. */
 const TOPLEVEL = /^\$\(\s*git\s+rev-parse\s+--show-toplevel\s*\)$/;
@@ -1321,6 +1339,12 @@ function resolveWord(pieces: readonly WordPiece[], scope: WordScope): OperandWor
       text += piece.char;
       glob.push(piece.active && '*?['.includes(piece.char));
       active.push(piece.active);
+      continue;
+    }
+    const named = ASSIGNED_VARIABLE.exec(piece.expansion);
+    const assignedValue = named ? scope.assigned?.get(named[1] ?? named[2] ?? '') : undefined;
+    if (assignedValue !== undefined) {
+      literal(assignedValue);
       continue;
     }
     const known = KNOWN_VARIABLE.exec(piece.expansion);
@@ -6752,6 +6776,8 @@ export async function scanShell(
     const rebound = anyName || REBINDS_HOME.test(gateText);
     const user = loginName();
     const loopBindings = new Map<string, readonly string[]>();
+    // Plain top-level `NAME=literal` assignments, bound in walk order so only later words see them.
+    const literalBindings = new Map<string, string>();
     // git settings the script or this process may hand git, so what it reports from a folder is not what the scan asks.
     const gitEnvironment =
       anyName ||
@@ -6919,6 +6945,7 @@ export async function scanShell(
         rebound,
         user,
         bindings: loopBindings,
+        assigned: literalBindings,
         toplevel: state.lost ? null : (toplevels.get(state.cwd) ?? null),
         homeUsed: () => {
           if (!homeKnown) homeGuessed = true;
@@ -9429,6 +9456,26 @@ export async function scanShell(
       await check(target.text, state.cwd);
     };
 
+    /**
+     * Binds a top-level `NAME=literal` the script sets nowhere else, so a later `$NAME/x` reads as the path bash
+     * builds. A set the scan cannot pin (quoted or expanded value, a second or conditional set, a subshell or list,
+     * unset, eval, sourcing, IFS) stays unbound, so a word using it stays unread.
+     */
+    const bindLiteral = (node: Node): void => {
+      if (node.type !== 'variable_assignment' || node.parent?.type !== 'program') return;
+      if (branching > 0 || sourced || state.lost || MAY_UNBIND.test(gateText)) return;
+      // `NAME=x &` sets it in a subshell, so later words see the variable unset.
+      if (backgrounded || node.nextSibling?.type === '&') return;
+      if (node.children.some(child => child?.type === '+=')) return;
+      const name = node.childForFieldName('name');
+      const value = node.childForFieldName('value');
+      if (name?.type !== 'variable_name' || UNBOUND_NAMES.test(name.text)) return;
+      if (!value || !LITERAL_VALUE.test(value.text)) return;
+      const sets = variables.set.filter(each => each.name.replace(/\[[^]*$/, '') === name.text);
+      if (sets.length !== 1 || sets[0]?.uncertainOrder || sets[0]?.prefixOf !== undefined) return;
+      literalBindings.set(name.text, value.text);
+    };
+
     const visitNode = async (node: Node): Promise<void> => {
       if (!state.lost) visited.add(state.cwd);
       if (node.type === 'command') return run(node);
@@ -9444,6 +9491,7 @@ export async function scanShell(
         potentialOutbound = true;
         setsEnvironment = true;
         for (const child of node.children) if (child) await visit(child);
+        bindLiteral(node);
         return;
       }
       // `select` parses as a for_statement too; its header rebinds a variable that may be
