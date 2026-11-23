@@ -40,6 +40,38 @@ import { initialSpawnChoice } from './spawnLocationSetting';
 /** Long enough to be noticed beside a streaming reply, short enough not to linger. */
 const UPDATE_HIGHLIGHT_MS = 1600;
 
+/** How long a session that started without a card stays announced in the tray, in ms. */
+export const AUTO_START_NOTICE_MS = 10_000;
+
+interface AutoStartNotice {
+  id: string;
+  title: string;
+  sessionId: string;
+  placement: 'worktree' | 'local';
+  branch?: string;
+  shownUntil: number;
+}
+
+/**
+ * A suggestion the Settings location started with no card, while it is still fresh. Timed from
+ * `createdAt` because an automatic start happens inside the same session_spawn call, so reopening
+ * a conversation later never replays old notices.
+ */
+function autoStartNotice(suggestion: ChatSpawnSuggestion, now: number): AutoStartNotice | null {
+  const started = suggestion.started;
+  if (suggestion.status !== 'started' || !started?.auto || started.placement === 'here') return null;
+  const shownUntil = Date.parse(suggestion.createdAt) + AUTO_START_NOTICE_MS;
+  if (!(shownUntil > now)) return null;
+  return {
+    id: suggestion.id,
+    title: started.title,
+    sessionId: started.sessionId,
+    placement: started.placement,
+    ...(started.branch ? { branch: started.branch } : {}),
+    shownUntil,
+  };
+}
+
 type StartFn = (request: Omit<StartSpawnSuggestionRequest, 'sessionId'>) => Promise<SpawnSuggestionResult>;
 
 const CHOICES: readonly SpawnSuggestionPlacement[] = ['worktree', 'local', 'here'];
@@ -66,30 +98,94 @@ function forgetRememberedChoice(): void {
  * answers "also make it do X", and that is exactly when it needs to be in view. The turn is never
  * held on it, so the composer below stays fully usable.
  *
- * Only pending suggestions are drawn: once one starts, its session in the sidebar is the record,
- * or, for one run here, the user message it sent.
+ * Pending suggestions are drawn as cards. A started one is otherwise recorded by its session in the
+ * sidebar (or, run here, by the user message it sent); only one the Settings location started with
+ * no card gets a short notice here, since nothing else on screen said it happened.
  */
 export function SpawnSuggestionTray({
   suggestions,
   onStart,
   onDismiss,
+  onOpenSession,
   location = DEFAULT_SPAWN_LOCATION,
 }: {
   suggestions: readonly ChatSpawnSuggestion[];
   onStart: StartFn;
   onDismiss: (suggestionId: string) => Promise<SpawnSuggestionResult>;
+  /** Opens a session an automatic start created; the notice has no Open link without it. */
+  onOpenSession?: (sessionId: string) => void;
   /** The Settings location, which decides each card's first choice. */
   location?: SpawnLocation;
 }) {
   useEffect(forgetRememberedChoice, []);
+  const [now, setNow] = useState(() => Date.now());
+  const [hidden, setHidden] = useState<ReadonlySet<string>>(() => new Set());
+  const notices = suggestions
+    .map(suggestion => autoStartNotice(suggestion, now))
+    .filter((notice): notice is AutoStartNotice => notice !== null && !hidden.has(notice.id));
+  const nextExpiry = notices.length > 0 ? Math.min(...notices.map(notice => notice.shownUntil)) : null;
+
+  useEffect(() => {
+    if (nextExpiry === null) return;
+    const timer = setTimeout(() => setNow(Date.now()), Math.max(0, nextExpiry - Date.now()));
+    return () => clearTimeout(timer);
+  }, [nextExpiry]);
+
+  const hide = (id: string) => setHidden(current => new Set(current).add(id));
+
   const pending = suggestions.filter(suggestion => suggestion.status === 'pending');
-  if (pending.length === 0) return null;
+  if (pending.length === 0 && notices.length === 0) return null;
   return (
     <Stack
       spacing={0.75}
       sx={{ ...contentColumnSx, pt: 1.5, maxHeight: '45vh', overflowY: 'auto' }}
       data-testid="spawn-suggestion-tray"
     >
+      {notices.map(notice => (
+        <Sheet
+          key={notice.id}
+          variant="soft"
+          color="success"
+          sx={{ borderRadius: 'sm', px: 1.5, py: 0.75 }}
+          data-testid="spawn-suggestion-auto-notice"
+        >
+          <Stack direction="row" alignItems="center" spacing={1}>
+            <Typography level="body-sm" sx={{ flex: 1, minWidth: 0, overflowWrap: 'anywhere' }}>
+              Started <strong>{notice.title}</strong>{' '}
+              {notice.placement === 'worktree' ? (
+                <>
+                  in worktree <code>{notice.branch ?? ''}</code>
+                </>
+              ) : (
+                'in this folder'
+              )}
+            </Typography>
+            {onOpenSession && (
+              <Button
+                size="sm"
+                variant="plain"
+                color="success"
+                onClick={() => {
+                  hide(notice.id);
+                  onOpenSession(notice.sessionId);
+                }}
+                data-testid="spawn-suggestion-auto-notice-open-btn"
+              >
+                Open
+              </Button>
+            )}
+            <Button
+              size="sm"
+              variant="plain"
+              color="neutral"
+              onClick={() => hide(notice.id)}
+              data-testid="spawn-suggestion-auto-notice-hide-btn"
+            >
+              Hide
+            </Button>
+          </Stack>
+        </Sheet>
+      ))}
       {pending.map(suggestion => (
         <SpawnSuggestionCard
           key={suggestion.id}

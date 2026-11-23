@@ -69,6 +69,7 @@ interface Handlers {
   onStart: Mock<StartFn>;
   onDismiss: Mock<(suggestionId: string) => Promise<SpawnSuggestionResult>>;
   onSend: Mock<(text: string) => void>;
+  onOpenSession: Mock<(sessionId: string) => void>;
 }
 
 function handlers(): Handlers {
@@ -76,6 +77,7 @@ function handlers(): Handlers {
     onStart: vi.fn<StartFn>(async () => ok(BASE)),
     onDismiss: vi.fn(async (_suggestionId: string) => ok(BASE)),
     onSend: vi.fn<(text: string) => void>(),
+    onOpenSession: vi.fn<(sessionId: string) => void>(),
   };
 }
 
@@ -94,6 +96,7 @@ function render(
           suggestions={suggestions}
           onStart={on.onStart}
           onDismiss={on.onDismiss}
+          onOpenSession={on.onOpenSession}
           location={location}
         />
         <Composer
@@ -283,6 +286,51 @@ describe('SpawnSuggestionTray', () => {
 
     await choose('here');
     expect(window.localStorage.getItem(SPAWN_CHOICE_STORAGE_KEY)).toBeNull();
+  });
+
+  describe('a session the Settings location started with no card', () => {
+    const autoStarted = (createdAt: string): ChatSpawnSuggestion => ({
+      ...BASE,
+      createdAt,
+      status: 'started',
+      started: {
+        placement: 'worktree',
+        sessionId: 'child-1',
+        title: 'Tidy imports',
+        branch: 'agent/tidy-imports-2',
+        edited: false,
+        auto: true,
+      },
+    });
+
+    it('is announced with its branch, and Open goes to the new session', async () => {
+      const on = handlers();
+      render([autoStarted(new Date().toISOString())], on);
+      expect(byTestId('spawn-suggestion-auto-notice').textContent).toContain('agent/tidy-imports-2');
+      expect(host?.querySelector('[data-testid="spawn-suggestion-card"]')).toBeNull();
+
+      await click('spawn-suggestion-auto-notice-open-btn');
+      expect(on.onOpenSession).toHaveBeenCalledWith('child-1');
+      expect(host?.querySelector('[data-testid="spawn-suggestion-auto-notice"]')).toBeNull();
+    });
+
+    it('hides on request', async () => {
+      render([autoStarted(new Date().toISOString())], handlers());
+      await click('spawn-suggestion-auto-notice-hide-btn');
+      expect(host?.querySelector('[data-testid="spawn-suggestion-auto-notice"]')).toBeNull();
+    });
+
+    it('is not replayed when an old conversation is reopened', () => {
+      render([autoStarted('2026-10-14T00:00:00.000Z')], handlers());
+      expect(host?.querySelector('[data-testid="spawn-suggestion-auto-notice"]')).toBeNull();
+    });
+
+    it('is not shown for a start the user made from the card', () => {
+      const fromCard = autoStarted(new Date().toISOString());
+      if (fromCard.started?.placement === 'worktree') delete fromCard.started.auto;
+      render([fromCard], handlers());
+      expect(host?.querySelector('[data-testid="spawn-suggestion-auto-notice"]')).toBeNull();
+    });
   });
 
   it('says why an automatic start did not happen, and still starts with one click', async () => {

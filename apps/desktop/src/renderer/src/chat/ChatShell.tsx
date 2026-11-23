@@ -2171,6 +2171,7 @@ export function ChatShell({
                     suggestions={spawnSuggestions.suggestions}
                     onStart={onStartSuggestion}
                     onDismiss={spawnSuggestions.dismiss}
+                    onOpenSession={selectSession}
                     location={spawnLocation}
                   />
                 </>
