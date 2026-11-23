@@ -5,6 +5,7 @@ import com.bike4mind.app.push.AgentRunNotifications
 import com.bike4mind.app.push.FcmClient
 import com.bike4mind.app.push.PushNotifications
 import com.bike4mind.app.storage.EnvironmentStore
+import com.bike4mind.app.storage.OnboardingStore
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -17,9 +18,14 @@ class B4MApplication : Application() {
     lateinit var environments: EnvironmentStore
         private set
 
+    /** Per install, so a debug server switch does not bring the welcome back. */
+    lateinit var onboarding: OnboardingStore
+        private set
+
     override fun onCreate() {
         super.onCreate()
         environments = EnvironmentStore(this)
+        onboarding = OnboardingStore(this)
         PushNotifications.createChannel(this)
         AgentRunNotifications.createChannel(this)
         FcmClient.initialize(this)

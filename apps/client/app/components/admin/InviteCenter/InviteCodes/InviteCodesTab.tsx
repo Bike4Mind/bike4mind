@@ -1,6 +1,6 @@
 import { useEffect } from 'react';
-import RegistrationInvitesTab from '../../RegistrationInvites';
-import { useRegistrationInvitesStore } from '../../RegistrationInvites/store';
+import InviteCodesSection from './InviteCodesSection';
+import { useRegistrationInvitesStore } from './store';
 
 interface InviteCodesTabProps {
   quickAction: string | null;
@@ -15,7 +15,7 @@ const InviteCodesTab = ({ quickAction }: InviteCodesTabProps) => {
     }
   }, [quickAction, setOpenCreate]);
 
-  return <RegistrationInvitesTab />;
+  return <InviteCodesSection />;
 };
 
 export default InviteCodesTab;

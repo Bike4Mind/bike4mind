@@ -1,4 +1,4 @@
-import type { SkinSummary } from './mods';
+import type { SkinSummary, SoundPackSummary } from './mods';
 import type { NewSessionDefaults } from './sessionDefaults';
 import type { StudioApi } from './studioIpc';
 import type { PendingTaskDecision, RolePolicy, TaskAction, TaskDecisionAnswer } from './orchestration';
@@ -71,6 +71,7 @@ import type {
   RecentFolder,
   ContextBoundaryResult,
   ReasoningEffortSetting,
+  EditMessageRequest,
   SendMessageRequest,
   SendMessageResult,
   SpawnSuggestionResult,
@@ -140,7 +141,7 @@ import type {
   ModelRuntimeStatus,
   LoadedModelState,
 } from './models';
-import type { AccountUsageResult, UsageWindowId } from './usage';
+import type { AccountUsageResult, LocalUsageResult, UsageWindowId } from './usage';
 import type { FleetState } from './fleet';
 import type {
   ModelBuildReport,
@@ -194,6 +195,7 @@ export const IPC_CHANNELS = {
   accountPurchaseCredits: 'account:purchase-credits',
   accountSendFeedback: 'account:send-feedback',
   usageGetHistory: 'usage:get-history',
+  usageGetLocal: 'usage:get-local',
   fleetGetState: 'fleet:get-state',
   fleetRefresh: 'fleet:refresh',
   fleetSetConsent: 'fleet:set-consent',
@@ -265,6 +267,8 @@ export const IPC_CHANNELS = {
   chatLoopChanged: 'chat:loop-changed',
   chatStopReply: 'chat:stop-reply',
   chatContinueReply: 'chat:continue-reply',
+  chatEditMessage: 'chat:edit-message',
+  chatRegenerateReply: 'chat:regenerate-reply',
   /**
    * The two context commands. Renderer -> main only, and deliberately NOT reachable from a
    * tool: see the renderer's commands.ts for why a slash command is not a model capability.
@@ -593,6 +597,7 @@ export const IPC_CHANNELS = {
   terminalsChanged: 'terminal:changed',
   /** A session needs the user while the app is in the background; see @shared/attention. */
   attentionNotify: 'attention:notify',
+  handoffOpenServerSessions: 'handoff:open-server-sessions',
   attentionClaim: 'attention:claim',
   attentionSetBadge: 'attention:set-badge',
   /** main -> renderer push: the user clicked a notice. */
@@ -619,6 +624,10 @@ export const IPC_CHANNELS = {
   skinsList: 'skins:list',
   /** main -> renderer push after the mods folder changed on disk. */
   skinsChanged: 'skins:changed',
+  /** Rescan userData/mods and return every sound pack, valid or broken (main/mods). */
+  soundPacksList: 'soundpacks:list',
+  /** Pushed with the fresh list when the mods folder changes. */
+  soundPacksChanged: 'soundpacks:changed',
 } as const;
 
 export type IpcChannel = (typeof IPC_CHANNELS)[keyof typeof IPC_CHANNELS];
@@ -784,6 +793,11 @@ export interface DesktopApi {
     list(): Promise<SkinSummary[]>;
     onChanged(listener: (skins: SkinSummary[]) => void): () => void;
   };
+  /** Data-only sound packs for the Orchestrate events; validated in main, like skins. */
+  soundPacks: {
+    list(): Promise<SoundPackSummary[]>;
+    onChanged(listener: (packs: SoundPackSummary[]) => void): () => void;
+  };
   setTheme(mode: 'light' | 'dark' | 'system', backgroundColor: string): Promise<void>;
   update: {
     getState(): Promise<UpdateState>;
@@ -877,6 +891,11 @@ export interface DesktopApi {
      * the cache after a turn has just spent.
      */
     getHistory(window: UsageWindowId, force?: boolean): Promise<AccountUsageResult>;
+    /**
+     * Self-hosted model usage in the current conversation scope, signed in or not. Computed in
+     * main from the sessions stored on this device; nothing is requested from any server.
+     */
+    getLocal(window: UsageWindowId, force?: boolean): Promise<LocalUsageResult>;
   };
   fleet: {
     getState(): Promise<FleetState>;
@@ -1011,6 +1030,10 @@ export interface DesktopApi {
      * message, so the events are indistinguishable from the turn never having stopped.
      */
     continueReply(sessionId: string): Promise<SendMessageResult>;
+    /** Replace a sent prompt and drop every turn after it, then send the edit; ChatService.editMessage. */
+    editMessage(request: EditMessageRequest): Promise<SendMessageResult>;
+    /** Drop the last reply and run its prompt again; ChatService.regenerateReply. */
+    regenerateReply(sessionId: string): Promise<SendMessageResult>;
     /**
      * `/clear`: insert a context boundary, carrying nothing across. Instant - no model involved.
      * Nothing is deleted; the transcript keeps every message and folds the earlier ones away.
@@ -1483,6 +1506,7 @@ export interface DesktopApi {
   };
   /** OS notices for sessions that need the user while the app is not focused. */
   attention: {
+    openServerSessions(): Promise<void>;
     /**
      * Of `sessionIds`, the ones this window may announce. Every open window sees the same entry into
      * needs-action, so main hands each entry to the first window that asks and the rest get nothing.

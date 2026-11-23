@@ -15,13 +15,13 @@ import { publishPushNotification, briefDeepLink } from '@bike4mind/server-utils/
 import { aiAccessDeniedMessage } from '@bike4mind/services/userService/accountState';
 import type { CompletionInfo } from '@bike4mind/llm-adapters';
 import type { Logger } from '@bike4mind/observability';
-import type { PushNotificationEvent } from '@bike4mind/common';
+import { PENDING_ACTION_TTL_MS, type PushNotificationEvent } from '@bike4mind/common';
 import { recordSessionOperationalUsage } from '@workers/events/recordSessionOperationalUsage';
 import { payerCanFundSessionOperation } from '@workers/events/sessionOperationalCreditGate';
 import {
   assembleBrief,
   briefedEmailIds,
-  briefPushBody,
+  briefPushContent,
   buildBriefPrompt,
   emptyBrief,
   hasActivity,
@@ -34,14 +34,14 @@ import {
  * row and publishes the event), stores it and pushes `brief_ready`.
  *
  * Composition is one pass of the platform's operations model over the user's recent agent runs, the
- * approvals still waiting on them and counts of their triaged email; there is no tool loop. Failures settle the row as `failed` so a
+ * approvals and questions still waiting on them and counts of their triaged email; there is no tool loop. Failures settle the row as `failed` so a
  * polling client stops waiting, and are never rethrown: a retry cannot fix a refused balance or a
  * malformed reply, and the user can simply compose again.
  */
 
-const APPROVAL_TTL_MS = 15 * 60 * 1000; // Mirrors the pending-action lifecycle (pendingActions.contract.ts).
 const MAX_RUNS = 30;
 const MAX_APPROVALS = 12;
+const MAX_QUESTIONS = 12;
 const MODEL_MAX_TOKENS = 1500;
 const APPROVAL_SUMMARY_LIMIT = 600;
 
@@ -119,14 +119,16 @@ export async function composeBrief(deps: BriefComposeDeps, input: { briefId: str
 
     await settleBriefedEmails(deps, input.userId, briefedEmailIds(composed), composedAt);
 
+    const { body, briefAction } = briefPushContent(composed, activity);
     await deps.push({
       userId: input.userId,
       category: 'brief_ready',
       title: 'Your brief is ready',
-      body: briefPushBody(composed),
+      body,
       deepLink: briefDeepLink(input.briefId),
       collapseId: `brief_ready:${input.briefId}`,
       briefId: input.briefId,
+      ...(briefAction && { briefAction }),
     });
   } catch (error) {
     logger.error('[Brief] composition failed', { briefId: input.briefId, error });
@@ -165,9 +167,10 @@ async function loadActivity(brief: IAssistantBrief, now: Date): Promise<BriefAct
   const sessionIds = [...new Set(items.map(item => item.sessionId))];
   const pending = await questRepository.findPendingActionsBySessionIds(
     sessionIds,
-    now.getTime() - APPROVAL_TTL_MS,
+    now.getTime() - PENDING_ACTION_TTL_MS,
     MAX_APPROVALS
   );
+  const questions = await questRepository.findOpenQuestionsBySessionIds(sessionIds, brief.periodStart, MAX_QUESTIONS);
   // Pending rather than windowed: an item a failed brief or a section cap left out is carried to the next brief.
   const emails = await loadPendingBriefEmails(brief.userId, brief.periodEnd);
 
@@ -188,6 +191,7 @@ async function loadActivity(brief: IAssistantBrief, now: Date): Promise<BriefAct
       tool: action.tool,
       summary: JSON.stringify(action.params ?? {}).slice(0, APPROVAL_SUMMARY_LIMIT),
     })),
+    questions,
     emails: emails.map(item => ({
       emailId: item.emailId,
       kind: item.kind,

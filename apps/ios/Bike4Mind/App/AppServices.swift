@@ -47,12 +47,17 @@ final class AppServices {
   let instructions: any InstructionAPI
   /// Answers an approval from a notification button.
   let approvalNotifications: ApprovalNotificationHandler
+  /// Answers a brief's single decision from a notification button.
+  let briefNotifications: BriefNotificationHandler
   /// Whether the signed-in account is waiting to be deleted; `RootView` shows the restore screen then.
   let accountStatus = AccountStatus()
   /// Whether the server has refused this build (HTTP 426); `RootView` shows the update screen then.
   let clientUpgrade: ClientUpgradeStatus
   /// The signed-in account's profile, kept for the session; cleared when the session ends (`RootView.endSession`).
   let accountProfiles: AccountProfileStore
+  let credits: CreditsViewModel
+  /// The Studio model lists, kept for the session; cleared when the session ends (`RootView.endSession`).
+  let studioModels: StudioModelCatalog
 
   init(auth: AuthController) {
     self.auth = auth
@@ -73,6 +78,15 @@ final class AppServices {
     #endif
     widgets = WidgetSnapshotRecorder(
       store: FileWidgetSnapshotStore.appGroup(), reloader: SystemWidgetTimelineReloader())
+    let widgets = widgets
+    credits = CreditsViewModel(
+      fetch: {
+        #if DEBUG
+          if FixtureServices.isEnabled { return try await FixtureServices.api.creditBalance() }
+        #endif
+        return try await APIClient(baseURL: auth.environment.baseURL, tokens: auth).creditBalance()
+      },
+      onBalance: { await widgets.recordCredits($0) })
     push = PushRegistrationCoordinator(center: SystemNotificationCenter(), remote: registrar, makeAPI: makeAPI)
 
     let activities = QuestActivityManager(host: ActivityKitHost(), makeTokenAPI: makeAPI)
@@ -98,12 +112,13 @@ final class AppServices {
       return PendingActionClient(baseURL: auth.environment.baseURL, tokens: auth)
     }
     pendingActions = pendingActionAPI
-    briefs = ForwardingBriefAPI {
+    let briefAPI = ForwardingBriefAPI {
       #if DEBUG
         if FixtureServices.isEnabled { return FixtureServices.briefAPI }
       #endif
       return BriefClient(baseURL: auth.environment.baseURL, tokens: auth)
     }
+    briefs = briefAPI
     instructions = ForwardingInstructionAPI {
       #if DEBUG
         if FixtureServices.isEnabled { return FixtureServices.instructionAPI }
@@ -129,6 +144,23 @@ final class AppServices {
         #endif
         let client = AccountClient(baseURL: scope.environment.baseURL, tokens: auth)
         return try? await client.profile(userID: scope.userID)
+      })
+    briefNotifications = BriefNotificationHandler(
+      briefs: briefAPI, pendingActions: pendingActionAPI, feedback: SystemApprovalFeedback())
+
+    studioModels = StudioModelCatalog(
+      currentEnvironment: { auth.environment },
+      resolveUserID: {
+        #if DEBUG
+          if FixtureServices.isEnabled { return "fixture" }
+        #endif
+        return await auth.userID()
+      },
+      fetch: { kind in
+        #if DEBUG
+          if FixtureServices.isEnabled { return try await FixtureServices.studio.models(for: kind) }
+        #endif
+        return try await StudioClient(baseURL: auth.environment.baseURL, tokens: auth).models(for: kind)
       })
 
     #if DEBUG
@@ -197,6 +229,9 @@ final class AppServices {
   }
 
   var sessionListCache: any SessionListCache { current.cache }
+  var sessionHandoff: SessionHandoffClient {
+    SessionHandoffClient(baseURL: auth.environment.baseURL, tokens: auth)
+  }
 
   var media: any MediaAPI {
     #if DEBUG
@@ -259,19 +294,10 @@ final class AppServices {
     Task { await widgets.recordTurns(sessionID: sessionID, sessionTitle: title, turns: turns) }
   }
 
-  /// Re-reads the balance for the Credits widget: after a chat turn settles (it spends credits) and when
-  /// the app comes to the foreground.
+  /// Re-reads the shared balance after a settled turn and on foreground, regardless of the Settings TTL.
   func refreshWidgetCredits() {
-    let api = api
-    let widgets = widgets
-    Task {
-      do {
-        await widgets.recordCredits(try await api.creditBalance())
-      } catch {
-        // The widget keeps its last balance; the next foreground or settled turn tries again.
-        AppServices.logger.error("Credits widget refresh failed: \(String(describing: error), privacy: .public)")
-      }
-    }
+    let credits = credits
+    Task { await credits.load(force: true) }
   }
 
   nonisolated static let logger = Logger(subsystem: "com.bike4mind.app", category: "app")
@@ -381,6 +407,10 @@ struct ForwardingBriefAPI: BriefAPI {
 
   func brief(id: String) async throws -> Brief {
     try await provider().brief(id: id)
+  }
+
+  func reply(briefID: String, decisionID: String, text: String, choiceIndex: Int?) async throws -> BriefReplyResult {
+    try await provider().reply(briefID: briefID, decisionID: decisionID, text: text, choiceIndex: choiceIndex)
   }
 }
 

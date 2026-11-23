@@ -126,7 +126,7 @@ use to build a typed client). They are deliberately not repeated here, so the tw
 
 - Chat and quests: \`/api/chat\`, \`/api/v1/quests/{id}\`, \`/api/v1/quests/{id}/files\`,
   \`/api/v1/agent-executions[/{id}]\`
-- Sessions: \`/api/v1/sessions\`, \`/api/sessions/{id}\`, \`/api/v1/sessions/{id}/clone\`,
+- Sessions: \`/api/v1/sessions\`, \`/api/v1/sessions/{id}\`, \`/api/sessions/{id}\`, \`/api/v1/sessions/{id}/clone\`,
   \`/api/v1/sessions/{id}/files\`, \`/api/v1/sessions/semantic-search\`,
   \`/api/v1/sessions/{id}/messages/{messageId}\`
 - Artifacts: \`/api/v1/artifacts\` (list, create), \`/api/v1/artifacts/{id}\` (get, update, delete),

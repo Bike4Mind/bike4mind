@@ -24,6 +24,7 @@ import { ORCHESTRATOR_VIEWS, type OrchestratorViewId } from './orchestratorPrefs
 import { AMBIENT_IDLE_MS } from './ambient';
 import type { AgentDetailsSkin } from './AgentPeekDrawer';
 import { SkinMenuSection } from './SkinMenuSection';
+import { SoundPackMenuSection } from './SoundPackMenuSection';
 
 type ViewGroup = 'scene' | 'layout';
 
@@ -67,6 +68,11 @@ export const ORCHESTRATOR_VIEW_INFO: Record<OrchestratorViewId, ViewInfo> = {
     group: 'scene',
     icon: <BoardIcon />,
     ambient: true,
+    detailsSkin: {
+      light: { background: '#eef0e6', border: '#aebbab' },
+      dark: { background: '#222d2a', border: '#4c5f58' },
+      radius: '2px',
+    },
   },
   board: {
     label: 'Board',
@@ -159,6 +165,7 @@ export function ViewSwitcher({
   onViewChange,
   ambient,
   focus,
+  presenter,
 }: {
   view: OrchestratorViewId;
   onViewChange(view: OrchestratorViewId): void;
@@ -166,6 +173,8 @@ export function ViewSwitcher({
   ambient?: Toggle;
   /** Focus mode, on top of whichever view is chosen; also toggled with Mod+Shift+F. */
   focus?: Toggle;
+  /** Presenter mode (presenter.ts), on top of whichever view is chosen; Reset leaves it as it is. */
+  presenter?: Toggle;
 }) {
   const current = ORCHESTRATOR_VIEW_INFO[view];
 
@@ -280,6 +289,25 @@ export function ViewSwitcher({
             </MenuItem>
           </>
         )}
+        {presenter && (
+          <>
+            <ListDivider />
+            <MenuItem
+              role="menuitemcheckbox"
+              aria-checked={presenter.on}
+              onClick={() => presenter.onToggle(!presenter.on)}
+              data-testid="orchestrator-presenter-toggle"
+            >
+              <Box sx={{ flex: 1, minWidth: 0 }}>
+                <Typography level="body-sm">Presenter mode</Typography>
+                <Typography level="body-xs" textColor="text.tertiary">
+                  Hide titles, activity, questions, PRs and costs for screen sharing
+                </Typography>
+              </Box>
+              {presenter.on && <CheckIcon />}
+            </MenuItem>
+          </>
+        )}
         {ambient && current.ambient && (
           <>
             <ListDivider />
@@ -300,6 +328,7 @@ export function ViewSwitcher({
           </>
         )}
         <SkinMenuSection />
+        <SoundPackMenuSection />
         <ListDivider />
         <Typography level="body-xs" textColor="text.tertiary" sx={{ px: 1.5, py: 0.5 }}>
           {`${SHORTCUT_HINT} to switch views`}

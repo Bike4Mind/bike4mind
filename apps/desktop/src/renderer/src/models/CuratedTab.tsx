@@ -636,7 +636,8 @@ export function CuratedTab({
         {list.source.check !== 'off' && (
           <Button
             size="sm"
-            variant="plain"
+            variant="outlined"
+            color="neutral"
             loading={list.source.check === 'checking'}
             onClick={() => void window.b4m.models.checkCuratedList().catch(() => undefined)}
             data-testid="curated-check-now-btn"

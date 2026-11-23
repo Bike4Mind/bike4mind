@@ -28,6 +28,8 @@ const QUEUED_NOTE = 'Queued - it will send when this agent finishes its current 
 export interface AgentDetailsSkin {
   light: { background: string; border: string };
   dark: { background: string; border: string };
+  /** The window's corner radius, for a scene whose own chrome is square. */
+  radius?: string;
 }
 
 interface AgentPeekDrawerProps {
@@ -46,15 +48,18 @@ function errorText(error: unknown): string {
 /**
  * The session's messages, refetched whenever `refreshKey` changes. getSession includes the reply in
  * flight, so a call parked at the approval gate is in here with its `approvalId`.
+ * `viewed` marks the session read; `enabled` false skips the fetch.
  */
 export function useSessionMessages(
   agentId: string,
   refreshKey: string,
-  viewed = false
+  viewed = false,
+  enabled = true
 ): { messages: ChatMessage[]; loadError: string | null } {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [loadError, setLoadError] = useState<string | null>(null);
   useEffect(() => {
+    if (!enabled) return;
     let stale = false;
     let loading = false;
     let dirty = false;
@@ -99,7 +104,7 @@ export function useSessionMessages(
       unsubscribe();
       unsubscribeQueue();
     };
-  }, [agentId, refreshKey]);
+  }, [agentId, refreshKey, enabled]);
   useEffect(() => {
     if (viewed) markSessionViewed(agentId);
   }, [agentId, viewed]);
@@ -240,7 +245,8 @@ function ReplyBox({ agentId, actionButton, onSent }: { agentId: string; actionBu
           <Box sx={{ display: 'flex', gap: 1 }}>
             <Button
               size="sm"
-              variant="plain"
+              variant="outlined"
+              color="neutral"
               data-testid="orchestrator-peek-queued-cancel-btn"
               onClick={() => void settleQueued('cancelQueuedMessage')}
             >
@@ -248,7 +254,8 @@ function ReplyBox({ agentId, actionButton, onSent }: { agentId: string; actionBu
             </Button>
             <Button
               size="sm"
-              variant="plain"
+              variant="outlined"
+              color="neutral"
               data-testid="orchestrator-peek-queued-send-now-btn"
               onClick={() => void settleQueued('sendQueuedMessageNow')}
             >
@@ -334,7 +341,7 @@ export function AgentPeekDrawer({ agent, onClose, actions, skin, visible = true 
         gap: 1,
         p: 1.25,
         border: '1px solid',
-        borderRadius: 'md',
+        borderRadius: skin?.radius ?? 'md',
         borderColor: palette?.border ?? 'divider',
         bgcolor: palette?.background ?? 'background.surface',
         boxShadow: 'md',

@@ -66,8 +66,9 @@ export const DELEGATED_ADMIN_TAB_PERMISSIONS: Readonly<Partial<Record<AdminTab, 
 
   // Subscriptions: writes need credits:adjust and its GET routes declare the same CREDITS_PAGE_READ.
   [AdminTab.Subscriptions]: CREDITS_PAGE_READ,
-  // Its list, release and revoke routes all declare credits:adjust.
-  [AdminTab.HeldSignupGrants]: 'credits:adjust',
+  // A delegate sees only the held-grant actions, whose list, release and revoke routes declare credits:adjust;
+  // the rest of Invite Center is full-admin only and relies on the guard in InviteCenterShell.
+  [AdminTab.Waitlist]: 'credits:adjust',
   // Pages whose writes need users:moderate; their GET routes declare the same MODERATION_PAGE_READ.
   [AdminTab.EmailVerification]: MODERATION_PAGE_READ,
   [AdminTab.SignupDomainHolds]: MODERATION_PAGE_READ,

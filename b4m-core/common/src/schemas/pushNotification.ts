@@ -12,6 +12,7 @@ export const PUSH_NOTIFICATION_CATEGORIES = [
   'chat_completed',
   'generation_ready',
   'agent_message',
+  'session_handoff',
   'brief_ready',
 ] as const;
 
@@ -29,6 +30,8 @@ export const PushNotificationEventSchema = z.object({
   collapseId: z.string().optional(),
   questId: z.string().optional(),
   sessionId: z.string().optional(),
+  destinationId: z.string().optional(),
+  destinationSid: z.string().optional(),
   /** `brief_ready` only: the brief to open. A pointer; the client fetches it with its own credentials. */
   briefId: z.string().optional(),
   /**
@@ -36,6 +39,11 @@ export const PushNotificationEventSchema = z.object({
    * approve/deny action identifiers so a client can answer from the notification itself.
    */
   pendingActionTs: z.number().int().positive().optional(),
+  /**
+   * `brief_ready` only, set when the brief holds exactly one decision: its kind, so the push selects a
+   * notification category with approve/deny or reply actions. The client re-fetches the brief before acting.
+   */
+  briefAction: z.enum(['approval', 'question']).optional(),
 });
 
 export type PushNotificationEvent = z.infer<typeof PushNotificationEventSchema>;
@@ -51,6 +59,7 @@ export const PushNotificationPreferencesSchema = z.object({
   chat_completed: z.boolean().optional(),
   generation_ready: z.boolean().optional(),
   agent_message: z.boolean().optional(),
+  session_handoff: z.boolean().optional(),
   brief_ready: z.boolean().optional(),
 });
 

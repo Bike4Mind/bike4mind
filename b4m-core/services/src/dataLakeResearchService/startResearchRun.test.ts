@@ -163,6 +163,17 @@ describe('startResearchRun', () => {
     expect(runs.createRun).not.toHaveBeenCalled();
   });
 
+  it('refuses a periodic start on a paused config, but still runs it on demand', async () => {
+    const { adapters, runs } = makeAdapters({ config: storedConfig({ schedulePaused: true }) });
+
+    await expect(startResearchRun('config-1', lake(), { trigger: 'periodic' }, adapters)).rejects.toMatchObject({
+      reason: 'schedule_paused',
+    });
+    expect(runs.createRun).not.toHaveBeenCalled();
+
+    await expect(startResearchRun('config-1', lake(), onDemand(), adapters)).resolves.toMatchObject({ id: 'run-1' });
+  });
+
   it('refuses a second concurrent run for the same lake', async () => {
     const { adapters, runs } = makeAdapters({ active: 1 });
     await expect(startResearchRun('config-1', lake(), onDemand(), adapters)).rejects.toThrow(/already in progress/);

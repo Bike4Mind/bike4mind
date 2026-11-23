@@ -31,6 +31,16 @@ server whose `FCM_SERVICE_ACCOUNT` secret belongs to the same Firebase project.
 - [ ] Uninstalling the app and sending a push prunes the row (FCM answers `UNREGISTERED`).
 - [ ] A build without the `b4m.fcm.*` properties runs normally and registers no token.
 
+## First-launch welcome
+
+- [ ] A fresh install opens on the two-page welcome; swipe and "Next" both advance, back returns a page, "Continue"
+      lands on sign-in.
+- [ ] Relaunching after "Continue" goes straight to sign-in; so does signing out later.
+- [ ] Uninstall and reinstall: the welcome shows again.
+- [ ] Installing a newer build over one that predates the welcome (`adb install -r`, signed in or not) skips it.
+- [ ] The notification permission is still asked at the first signed-in moment, not on the welcome.
+- [ ] Rotating or font scale 200% keeps the page readable (the page scrolls) and keeps the current page.
+
 ## Server picker (debug builds)
 
 - [ ] A fresh debug install points at the build's `-Pb4m.serverUrl` (default staging); the sign-in screen shows it.

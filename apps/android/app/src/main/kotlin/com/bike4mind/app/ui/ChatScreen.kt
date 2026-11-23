@@ -37,7 +37,10 @@ import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.bike4mind.app.AppGraph
 import com.bike4mind.app.R
+import com.bike4mind.kit.approvals.PendingActionDecision
 import com.bike4mind.kit.chat.ChatError
+import com.bike4mind.kit.chat.ChatState
+import com.bike4mind.kit.sessions.PendingAction
 import com.bike4mind.kit.sessions.Quest
 
 class ChatViewModel(graph: AppGraph, sessionId: String?) : ViewModel() {
@@ -76,7 +79,9 @@ fun ChatScreen(graph: AppGraph, sessionId: String?, onBack: () -> Unit) {
                 modifier = Modifier.weight(1f).fillMaxWidth(),
                 verticalArrangement = Arrangement.spacedBy(Spacing.m),
             ) {
-                items(state.turns, key = { it.id }) { turn -> Turn(turn) }
+                items(state.turns, key = { it.id }) { turn ->
+                    Turn(turn, state) { action, decision -> model.controller.respond(turn.id, action, decision) }
+                }
             }
             state.statusMessage?.let {
                 Text(it, style = MaterialTheme.typography.labelMedium, modifier = Modifier.padding(horizontal = Spacing.m))
@@ -123,7 +128,7 @@ fun ChatScreen(graph: AppGraph, sessionId: String?, onBack: () -> Unit) {
 }
 
 @Composable
-private fun Turn(turn: Quest) {
+private fun Turn(turn: Quest, chat: ChatState, onRespond: (PendingAction, PendingActionDecision) -> Unit) {
     Column(modifier = Modifier.fillMaxWidth().padding(horizontal = Spacing.m), verticalArrangement = Arrangement.spacedBy(Spacing.s)) {
         turn.prompt?.let { prompt ->
             Card(modifier = Modifier.testTag("message-user")) { Text(prompt, modifier = Modifier.padding(Spacing.m)) }
@@ -133,6 +138,9 @@ private fun Turn(turn: Quest) {
             turn.failed -> Text(turn.errorCode?.let { stringResource(R.string.chat_reply_failed_code, it) } ?: stringResource(R.string.chat_reply_failed), color = MaterialTheme.colorScheme.error)
             reply.isNullOrEmpty() && !turn.status.isTerminal -> Text(stringResource(R.string.chat_reply_pending), style = MaterialTheme.typography.bodyLarge)
             reply != null -> Text(reply, style = MaterialTheme.typography.bodyLarge, modifier = Modifier.testTag("message-assistant"))
+        }
+        turn.pendingAction?.let { action ->
+            ApprovalCard(action, chat.approval(turn.id, action)) { decision -> onRespond(action, decision) }
         }
     }
 }

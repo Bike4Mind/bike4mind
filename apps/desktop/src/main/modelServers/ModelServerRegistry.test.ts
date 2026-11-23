@@ -1746,7 +1746,11 @@ function openAIAnswer(server: FakeOpenAI, path: string, headers: Record<string, 
   }
   if (path === '/v1/chat/completions') {
     const chunk = (content: string) => `data: ${JSON.stringify({ choices: [{ delta: { content } }] })}\n\n`;
-    const done = { choices: [{ delta: {}, finish_reason: 'stop' }] };
+    const timings = { prompt_n: 4, prompt_ms: 20, predicted_n: 2, predicted_ms: 80 };
+    const done = {
+      choices: [{ delta: {}, finish_reason: 'stop' }],
+      ...(server.owner === 'llamacpp' ? { timings } : {}),
+    };
     return new Response(`${chunk('Hello')}${chunk(' over SSH')}data: ${JSON.stringify(done)}\n\ndata: [DONE]\n\n`, {
       headers: { 'content-type': 'text/event-stream' },
     });
@@ -2124,6 +2128,8 @@ describe('ModelServerRegistry SSH servers', () => {
       );
     expect(JSON.stringify(events)).toContain('Hello');
     expect(JSON.stringify(events)).toContain(' over SSH');
+    // llama-server reports no load, so the reply stats derive its wait from these timings.
+    expect(events.at(-1)).toMatchObject({ rate: { evalTokens: 2, evalMs: 80, promptMs: 20, loadReported: false } });
     const chat = sent.filter(request => request.path === '/v1/chat/completions');
     expect(chat.length).toBeGreaterThan(0);
     expect(chat.every(request => request.port === 8080 && request.authorization === `Bearer ${TOKEN}`)).toBe(true);

@@ -23,6 +23,7 @@ import com.bike4mind.kit.account.StepUpWire
 import com.bike4mind.kit.agents.AgentRunMonitor
 import com.bike4mind.kit.agents.AgentRunService
 import com.bike4mind.kit.agents.AgentRunWire
+import com.bike4mind.kit.approvals.PendingActionWire
 import com.bike4mind.kit.auth.AuthApi
 import com.bike4mind.kit.auth.AuthSession
 import com.bike4mind.kit.auth.AuthorizationRequest
@@ -87,7 +88,12 @@ class AppGraph(context: Context, val environment: ServerEnvironment) {
     private val briefs = BriefWire(environment, http)
     private val account = AccountWire(environment, http) { session.accessToken()?.let(AccountProfile::userId) }
     private val stepUp = StepUpWire(environment, http)
-    private val chatBackend = LiveChatBackend(sessions, ChatSendWire(environment, http), RealtimeConnection(environment, http))
+    private val chatBackend = LiveChatBackend(
+        sessions,
+        ChatSendWire(environment, http),
+        RealtimeConnection(environment, http),
+        PendingActionWire(environment, http),
+    )
 
     // Agent runs outlive the chat that started them, so they are followed from this scope, not a screen's.
     private val agentRunScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)

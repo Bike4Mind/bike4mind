@@ -25,6 +25,7 @@ final class NotificationSettingsTests: XCTestCase {
       Set(NotificationCategory.allCases.map(\.rawValue)),
       [
         "agent_completed", "agent_failed", "approval_needed", "chat_completed", "generation_ready", "agent_message",
+        "session_handoff",
         "brief_ready",
       ])
   }

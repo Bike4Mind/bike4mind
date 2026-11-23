@@ -15,8 +15,14 @@ import { generateSoundEffectContract } from './soundEffects.contract';
 import { getMeContract } from './me.contract';
 import { getClientConfigContract, getPublicClientConfigContract } from './clientConfig.contract';
 import { approvePendingActionContract, denyPendingActionContract } from './pendingActions.contract';
-import { composeBriefContract, listBriefsContract, getBriefContract } from './briefs.contract';
+import {
+  composeBriefContract,
+  listBriefsContract,
+  getBriefContract,
+  replyToBriefDecisionContract,
+} from './briefs.contract';
 import { registerPushTokenContract, unregisterPushTokenContract } from './pushTokens.contract';
+import { listHandoffDevicesContract, sendSessionHandoffContract } from './sessionHandoff.contract';
 import {
   listAssistantInstructionsContract,
   createAssistantInstructionContract,
@@ -62,6 +68,7 @@ import {
 import { createTranscriptionUploadContract, createTranscriptionContract } from './transcription.contract';
 import { createSessionContract } from './sessionCreate.contract';
 import { listSessionsContract } from './sessionList.contract';
+import { getSessionByIdContract } from './sessionGetById.contract';
 import { listSessionQuestsContract } from './sessionQuests.contract';
 import { listSessionFilesContract } from './sessionFiles.contract';
 import { searchSessionsContract } from './sessionSemanticSearch.contract';
@@ -80,6 +87,19 @@ import {
   removeDataLakeFileContract,
   searchDataLakeContract,
 } from './dataLakes.contract';
+import {
+  listDataLakeResearchConfigsContract,
+  createDataLakeResearchConfigContract,
+  getDataLakeResearchConfigContract,
+  updateDataLakeResearchConfigContract,
+  deleteDataLakeResearchConfigContract,
+  startDataLakeResearchRunContract,
+  listDataLakeResearchRunsContract,
+  getDataLakeResearchRunContract,
+  listDataLakeProposalsContract,
+  decideDataLakeProposalContract,
+  getDataLakeConfigHistoryContract,
+} from './dataLakeResearch.contract';
 import { listImageModelsContract } from './imageModels.contract';
 import {
   cancelVideoGenerationContract,
@@ -191,8 +211,11 @@ export const CONTRACTS: readonly EndpointContract[] = [
   listAssistantInstructionsContract,
   createAssistantInstructionContract,
   deleteAssistantInstructionContract,
+  replyToBriefDecisionContract,
   registerPushTokenContract,
   unregisterPushTokenContract,
+  listHandoffDevicesContract,
+  sendSessionHandoffContract,
   getCreditBalanceContract,
   listModelsContract,
   generateImageContract,
@@ -216,6 +239,7 @@ export const CONTRACTS: readonly EndpointContract[] = [
   listQuestFilesContract,
   createSessionContract,
   listSessionsContract,
+  getSessionByIdContract,
   listSessionQuestsContract,
   listSessionFilesContract,
   searchSessionsContract,
@@ -229,6 +253,17 @@ export const CONTRACTS: readonly EndpointContract[] = [
   addDataLakeFileContract,
   removeDataLakeFileContract,
   searchDataLakeContract,
+  listDataLakeResearchConfigsContract,
+  createDataLakeResearchConfigContract,
+  getDataLakeResearchConfigContract,
+  updateDataLakeResearchConfigContract,
+  deleteDataLakeResearchConfigContract,
+  startDataLakeResearchRunContract,
+  listDataLakeResearchRunsContract,
+  getDataLakeResearchRunContract,
+  listDataLakeProposalsContract,
+  decideDataLakeProposalContract,
+  getDataLakeConfigHistoryContract,
   listImageModelsContract,
   cancelVideoGenerationContract,
   createVideoGenerationContract,
