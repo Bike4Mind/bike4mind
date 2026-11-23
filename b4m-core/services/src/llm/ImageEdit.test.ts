@@ -639,6 +639,59 @@ describe('ImageEditService.process model dispatch', () => {
       expect(quest.creditHolds.settle).not.toHaveBeenCalled();
     });
 
+    describe('on a redelivered message', () => {
+      const deliver = (service: ImageEditService) =>
+        service.process({
+          body: {
+            sessionId: 'session1',
+            questId: 'quest1',
+            userId: 'user1',
+            prompt: 'make it blue',
+            model: ImageModels.GPT_IMAGE_1_5,
+            image: 'https://example.invalid/source.png',
+            fabFileIds: ['mask1'],
+          } as never,
+          logger: silentLogger,
+        });
+      const makeBilledService = (reused: boolean) => {
+        const built = makeService({ creditTransactions: { create: vi.fn() } });
+        if (reused) {
+          const firstDeliveryHold = built.creditHolds.hold.getMockImplementation()!;
+          built.creditHolds.hold.mockImplementationOnce(async params => ({
+            ...(await firstDeliveryHold(params)),
+            reused: true as const,
+          }));
+        }
+        return built;
+      };
+
+      it('keys the hold on the quest id', async () => {
+        const { service, creditHolds } = makeBilledService(false);
+
+        await deliver(service);
+
+        expect(creditHolds.hold).toHaveBeenCalledWith(expect.objectContaining({ holdKey: 'image_edit:quest1' }));
+      });
+
+      it('leaves a reused hold for its first delivery when the render fails', async () => {
+        const { service, creditHolds } = makeBilledService(true);
+        editSpy.mockRejectedValueOnce(new Error('provider down'));
+
+        await deliver(service);
+
+        expect(creditHolds.release).not.toHaveBeenCalled();
+      });
+
+      it('still settles a reused hold when the render succeeds', async () => {
+        const { service, creditHolds } = makeBilledService(true);
+        editSpy.mockResolvedValueOnce({ type: 'success', dataUrl: 'https://example.invalid/edited.png' });
+
+        await deliver(service);
+
+        expect(creditHolds.settle).toHaveBeenCalledOnce();
+      });
+    });
+
     it('does not offer the provider an image count it would render and we would discard', async () => {
       await runBilled({ n: 5 });
 

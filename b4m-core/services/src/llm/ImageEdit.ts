@@ -600,6 +600,10 @@ export class ImageEditService {
     let stopHeartbeat: (() => void) | undefined;
     // Cleared once settled; the finally returns a hold still set (a failure or an early return).
     let creditHold: PersistedCreditHold | undefined;
+    // A redelivery that found this request's hold already taken: settling it is safe (settlement
+    // claims the row once), but releasing it could refund a hold the first delivery is still rendering
+    // under, so a failure leaves it to that delivery or the expired-hold sweep.
+    let holdReused = false;
 
     try {
       stopHeartbeat = await startQuestHeartbeat(this.db, quest, logger, 'image-edit-heartbeat');
@@ -705,7 +709,7 @@ export class ImageEditService {
           inputImageCount: 1 + new Set(referenceImageFabFileIds ?? []).size,
         });
         // An atomic decrement, not a balance read: concurrent runs cannot all pass on one balance.
-        creditHold = await this.creditHolds.hold({
+        const held = await this.creditHolds.hold({
           userId,
           organizationId: organization ? organization.id : null,
           requiredCredits,
@@ -714,7 +718,11 @@ export class ImageEditService {
           apiKeyId,
           apiKeyBillingOwnerType,
           ...(run && { run }),
+          holdKey: `image_edit:${questId}`,
         });
+        creditHold = held;
+        holdReused = held.reused === true;
+        if (holdReused) logger.warn('Image edit reusing the credit hold of an earlier delivery', { questId });
         quest.creditsUsed = requiredCredits;
         usageCostUsd = usdCost;
       } else {
@@ -1141,7 +1149,8 @@ export class ImageEditService {
       // Always stop the running-status heartbeat, on success or error. The terminal write above
       // owns the final status.
       stopHeartbeat?.();
-      if (creditHold) await this.creditHolds.release(creditHold, { featureLabel: IMAGE_EDIT_FEATURE_LABEL, logger });
+      if (creditHold && !holdReused)
+        await this.creditHolds.release(creditHold, { featureLabel: IMAGE_EDIT_FEATURE_LABEL, logger });
       // Clean up the mask fab files in finally block to ensure they're always deleted.
       // Awaited, not fire-and-forget: this runs in a queue Lambda, which freezes as soon as process()
       // resolves, so a dropped delete never finishes and the mask stays in the user's files.
