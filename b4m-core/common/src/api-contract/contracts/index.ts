@@ -23,6 +23,8 @@ import {
   composeBriefContract,
   listBriefsContract,
   getBriefContract,
+  getBriefScheduleContract,
+  putBriefScheduleContract,
   replyToBriefDecisionContract,
 } from './briefs.contract';
 import { registerPushTokenContract, unregisterPushTokenContract } from './pushTokens.contract';
@@ -219,6 +221,8 @@ export const CONTRACTS: readonly EndpointContract[] = [
   composeBriefContract,
   listBriefsContract,
   getBriefContract,
+  getBriefScheduleContract,
+  putBriefScheduleContract,
   listAssistantInstructionsContract,
   createAssistantInstructionContract,
   deleteAssistantInstructionContract,

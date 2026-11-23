@@ -44,6 +44,12 @@ vi.mock('@server/websocket/realtimeSession', () => ({
   assertRealtimeSessionActive: (...args: unknown[]) => mockAssertSessionActive(...args),
 }));
 
+const mockIsMfaEnrollmentOwed = vi.fn();
+vi.mock('@bike4mind/server-utils/auth/mfaEnforcement', () => ({
+  isMfaEnrollmentOwed: (...args: unknown[]) => mockIsMfaEnrollmentOwed(...args),
+  MFA_ENROLLMENT_REQUIRED_MESSAGE: 'MFA enrollment required.',
+}));
+
 const mockIpBlockRefusal = vi.fn();
 vi.mock('@server/middlewares/checkBlockedIP', () => ({
   ipBlockRefusal: (...args: unknown[]) => mockIpBlockRefusal(...args),
@@ -57,7 +63,7 @@ vi.mock('@bike4mind/server-utils/websocket/utils', () => ({
 
 import { func } from './connect';
 import { toApiKeyAuthError } from '@bike4mind/server-utils/auth/apiKeyAuthFailure';
-import { UnauthorizedError } from '@bike4mind/server-utils/utils/errors';
+import { ForbiddenError, UnauthorizedError } from '@bike4mind/server-utils/utils/errors';
 import { ACCOUNT_DELETION_PENDING_CODE } from '@bike4mind/common';
 
 const PENDING_DELETION = {
@@ -85,6 +91,7 @@ describe('websocket connect - token gates', () => {
     mockAssertAccountStateUsable.mockReturnValue(undefined);
     mockAssertSessionActive.mockResolvedValue(undefined);
     mockIpBlockRefusal.mockResolvedValue(null);
+    mockIsMfaEnrollmentOwed.mockResolvedValue(false);
   });
 
   it('marks the user online without stamping lastActiveAt: connecting is not an action', async () => {
@@ -200,6 +207,30 @@ describe('websocket connect - token gates', () => {
 
     await expect(connect()).rejects.toThrow('blocked');
     expect(mockConnectionCreate).not.toHaveBeenCalled();
+  });
+
+  it('refuses a CLI JWT whose user owes MFA enrollment, before registering the connection', async () => {
+    mockIsMfaEnrollmentOwed.mockResolvedValue(true);
+
+    const refusal = connect();
+
+    await expect(refusal).rejects.toBeInstanceOf(ForbiddenError);
+    await expect(refusal).rejects.toThrow('MFA enrollment required.');
+    expect(mockIsMfaEnrollmentOwed).toHaveBeenCalledWith(expect.objectContaining({ id: 'user-1' }));
+    expect(mockConnectionCreate).not.toHaveBeenCalled();
+  });
+
+  it('does not apply the enrollment gate to an API-key connection', async () => {
+    mockVerifyToken.mockImplementation(() => {
+      throw new Error('not a jwt');
+    });
+    mockVerifyApiKey.mockResolvedValue({ userId: 'user-1', scopes: ['ai:chat'], keyId: 'key-1' });
+    mockIsMfaEnrollmentOwed.mockResolvedValue(true);
+
+    await connect('b4m_live_key');
+
+    expect(mockIsMfaEnrollmentOwed).not.toHaveBeenCalled();
+    expect(mockConnectionCreate).toHaveBeenCalled();
   });
 
   it('refuses a deletion-pending account before registering the connection', async () => {

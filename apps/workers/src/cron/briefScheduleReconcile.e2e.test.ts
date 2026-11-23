@@ -1,0 +1,327 @@
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { PutEventsCommand, PutEventsCommandOutput } from '@aws-sdk/client-eventbridge';
+import type { SendMessageCommand, SendMessageCommandOutput } from '@aws-sdk/client-sqs';
+import mongoose from 'mongoose';
+import {
+  AgentExecutionModel,
+  AssistantBriefModel,
+  EMAIL_TRIAGE_KINDS,
+  User,
+  agentExecutionRepository,
+  assistantBriefRepository,
+  emailTriageItemRepository,
+  userRepository,
+} from '@bike4mind/database';
+import {
+  startBriefComposition,
+  startScheduledBrief,
+  type ScheduledBriefDeps,
+} from '@bike4mind/server-utils/briefs/startBriefComposition';
+import { BriefComposeRejectedError, publishBriefCompose } from '@bike4mind/server-utils/briefs/publishBriefCompose';
+import { BriefEvents } from '@bike4mind/server-utils/utils/eventBus';
+import { composeBrief } from '../events/briefCompose';
+// createMongoServer is not exported from the package barrel / dist; deep-import the source.
+import { createMongoServer, MONGO_TEST_TIMEOUT_MS } from '../../../../packages/database/src/__test__/createMongoServer';
+import { RETRY_WINDOW_MS, runBriefScheduleReconcile } from './briefScheduleReconcile';
+
+vi.mock('@bike4mind/server-utils/utils/config', () => ({ Config: { MONGODB_URI: 'mongodb://host/%STAGE%' } }));
+vi.mock('sst', () => ({ Resource: { App: { stage: 'test', name: 'test' }, AppEventBus: { name: 'test' } } }));
+const network = vi.hoisted(() => ({
+  events: vi.fn<(command: PutEventsCommand) => Promise<PutEventsCommandOutput>>(),
+  queue: vi.fn<(command: SendMessageCommand) => Promise<SendMessageCommandOutput>>(),
+}));
+vi.mock('@aws-sdk/client-eventbridge', async importOriginal => ({
+  ...(await importOriginal<typeof import('@aws-sdk/client-eventbridge')>()),
+  EventBridgeClient: class {
+    send = network.events;
+  },
+}));
+vi.mock('@aws-sdk/client-sqs', async importOriginal => ({
+  ...(await importOriginal<typeof import('@aws-sdk/client-sqs')>()),
+  SQSClient: class {
+    send = network.queue;
+  },
+}));
+vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
+
+// Real clock: the composer stamps createdAt itself and its in-flight check compares against it.
+const now = new Date();
+const minutesAgo = (m: number) => new Date(now.getTime() - m * 60_000);
+const schedule = { enabled: true, timeOfDay: '08:00', days: [0, 1, 2, 3, 4, 5, 6], timeZone: 'America/Los_Angeles' };
+let server: Awaited<ReturnType<typeof createMongoServer>>;
+const publishCompose = vi.fn().mockResolvedValue(undefined);
+
+beforeAll(async () => {
+  server = await createMongoServer();
+  await mongoose.connect(server.getUri());
+});
+afterAll(async () => {
+  await mongoose.disconnect();
+  await server.stop();
+});
+beforeEach(async () => {
+  publishCompose.mockClear();
+  network.events.mockReset().mockResolvedValue({ $metadata: {}, FailedEntryCount: 0, Entries: [{ EventId: 'e1' }] });
+  network.queue.mockReset().mockResolvedValue({ $metadata: {}, MessageId: 'm1' });
+  vi.stubEnv('B4M_SELF_HOST', 'false');
+  await Promise.all([
+    User.collection.deleteMany({}),
+    AssistantBriefModel.collection.deleteMany({}),
+    AgentExecutionModel.collection.deleteMany({}),
+  ]);
+});
+afterEach(() => vi.unstubAllEnvs());
+
+const insertUser = async (fields: Record<string, unknown>) =>
+  (await User.collection.insertOne({ username: 'u', email: 'u@example.com', ...fields })).insertedId.toString();
+const insertRun = (userId: string) =>
+  AgentExecutionModel.collection.insertOne({
+    userId,
+    sessionId: 's1',
+    query: 'q',
+    status: 'completed',
+    createdAt: minutesAgo(60),
+  });
+const nextBriefAtOf = async (userId: string) => (await userRepository.getBriefSchedule(userId)).nextBriefAt;
+
+const run = (publisher: ScheduledBriefDeps['publishCompose'] = publishCompose) =>
+  runBriefScheduleReconcile(
+    {
+      users: userRepository,
+      startScheduledBrief: userId =>
+        startScheduledBrief(userId, {
+          briefs: assistantBriefRepository,
+          users: userRepository,
+          hasRunsSince: async (id, since) =>
+            (await agentExecutionRepository.findByUserIdPaginated(id, { fromDate: since }, { limit: 1 })).items.length >
+            0,
+          hasPendingEmails: async (id, end) =>
+            (
+              await Promise.all(EMAIL_TRIAGE_KINDS.map(kind => emailTriageItemRepository.listPending(id, end, 1, kind)))
+            ).some(items => items.length > 0),
+          publishCompose: publisher,
+          now: () => new Date(),
+        }),
+      outOfTime: () => false,
+    },
+    now
+  );
+
+describe('runBriefScheduleReconcile', () => {
+  it('starts one brief for a due user with activity across two concurrent runs, and advances the slot', async () => {
+    const userId = await insertUser({ preferences: { briefSchedule: schedule }, nextBriefAt: minutesAgo(2) });
+    await insertRun(userId);
+
+    const [a, b] = await Promise.all([run(), run()]);
+
+    expect(a.enqueued + b.enqueued).toBe(1);
+    expect(await AssistantBriefModel.countDocuments({ userId })).toBe(1);
+    expect(publishCompose).toHaveBeenCalledTimes(1);
+    expect(publishCompose).toHaveBeenCalledWith(expect.objectContaining({ userId, scheduled: true }));
+    expect((await nextBriefAtOf(userId))!.getTime()).toBeGreaterThan(now.getTime());
+  });
+
+  it('writes no row for a due user with no activity but still advances the slot', async () => {
+    const userId = await insertUser({ preferences: { briefSchedule: schedule }, nextBriefAt: minutesAgo(2) });
+
+    expect((await run()).no_activity).toBe(1);
+    expect(await AssistantBriefModel.countDocuments({ userId })).toBe(0);
+    expect((await nextBriefAtOf(userId))!.getTime()).toBeGreaterThan(now.getTime());
+  });
+
+  it('skips a due user with brief pushes off', async () => {
+    const userId = await insertUser({
+      preferences: { briefSchedule: schedule, pushNotifications: { brief_ready: false } },
+      nextBriefAt: minutesAgo(2),
+    });
+    await insertRun(userId);
+
+    expect((await run()).push_off).toBe(1);
+    expect(await AssistantBriefModel.countDocuments({ userId })).toBe(0);
+  });
+
+  it('leaves a user whose slot is still ahead untouched', async () => {
+    const future = new Date(now.getTime() + 60 * 60_000);
+    const userId = await insertUser({ preferences: { briefSchedule: schedule }, nextBriefAt: future });
+    await insertRun(userId);
+
+    expect((await run()).due).toBe(0);
+    expect(await nextBriefAtOf(userId)).toEqual(future);
+  });
+
+  it('clears the due time of a disabled schedule without starting a brief', async () => {
+    const userId = await insertUser({
+      preferences: { briefSchedule: { ...schedule, enabled: false } },
+      nextBriefAt: minutesAgo(2),
+    });
+
+    expect((await run()).unscheduled).toBe(1);
+    expect(await nextBriefAtOf(userId)).toBeNull();
+    expect(publishCompose).not.toHaveBeenCalled();
+  });
+
+  it('hands a slot back when the start throws, so the next run starts it', async () => {
+    const due = minutesAgo(2);
+    const userId = await insertUser({ preferences: { briefSchedule: schedule }, nextBriefAt: due });
+    await insertRun(userId);
+    publishCompose.mockRejectedValueOnce(new BriefComposeRejectedError());
+
+    expect((await run()).failed).toBe(1);
+    expect(await nextBriefAtOf(userId)).toEqual(due);
+
+    // The failed attempt leaves no composing row behind to read as in flight, so the very next run starts it.
+    expect(await AssistantBriefModel.countDocuments({ userId })).toBe(0);
+    const retried = await run();
+    expect(retried.enqueued).toBe(1);
+    expect((await nextBriefAtOf(userId))!.getTime()).toBeGreaterThan(now.getTime());
+  });
+
+  it.each(['missing_queue', 'failed_entry'] as const)(
+    'retries definitive %s rejection through the actual event publisher',
+    async failure => {
+      const due = minutesAgo(2);
+      const userId = await insertUser({ preferences: { briefSchedule: schedule }, nextBriefAt: due });
+      await insertRun(userId);
+      if (failure === 'missing_queue') {
+        vi.stubEnv('B4M_SELF_HOST', 'true');
+        vi.stubEnv('SELF_HOST_EVENT_QUEUE', undefined);
+      } else {
+        network.events.mockResolvedValueOnce({
+          $metadata: {},
+          FailedEntryCount: 1,
+          Entries: [{ ErrorCode: 'InternalFailure' }],
+        });
+      }
+      expect((await run(publishBriefCompose)).failed).toBe(1);
+      expect(await nextBriefAtOf(userId)).toEqual(due);
+      expect(await AssistantBriefModel.countDocuments({ userId })).toBe(0);
+      if (failure === 'missing_queue') {
+        expect(network.queue).not.toHaveBeenCalled();
+        vi.stubEnv('SELF_HOST_EVENT_QUEUE', 'https://queue.example.test/events');
+      }
+      expect((await run(publishBriefCompose)).enqueued).toBe(1);
+      expect(await AssistantBriefModel.countDocuments({ userId })).toBe(1);
+      expect((await nextBriefAtOf(userId))!.getTime()).toBeGreaterThan(now.getTime());
+      const sent =
+        failure === 'missing_queue'
+          ? network.queue.mock.calls[0][0].input.MessageBody
+          : network.events.mock.calls[1][0].input.Entries?.[0].Detail;
+      expect(sent).toContain(userId);
+    }
+  );
+
+  it('retains a slot and row when the configured self-host queue throws with unknown acceptance', async () => {
+    const userId = await insertUser({ preferences: { briefSchedule: schedule }, nextBriefAt: minutesAgo(2) });
+    await insertRun(userId);
+    vi.stubEnv('B4M_SELF_HOST', 'true');
+    vi.stubEnv('SELF_HOST_EVENT_QUEUE', 'https://queue.example.test/events');
+    network.queue.mockRejectedValueOnce(new Error('response unavailable'));
+    expect((await run(publishBriefCompose)).failed).toBe(1);
+    expect(await AssistantBriefModel.countDocuments({ userId, status: 'composing' })).toBe(1);
+    expect((await nextBriefAtOf(userId))!.getTime()).toBeGreaterThan(now.getTime());
+    expect((await run(publishBriefCompose)).due).toBe(0);
+    expect(network.queue).toHaveBeenCalledTimes(1);
+  });
+
+  it('preserves accepted work through a lost response and an immediate manual retry', async () => {
+    const userId = await insertUser({ preferences: { briefSchedule: schedule }, nextBriefAt: minutesAgo(2) });
+    await insertRun(userId);
+    let releaseModel: (reply: string) => void = () => {
+      throw new Error('model was not started');
+    };
+    const reply = new Promise<string>(resolve => {
+      releaseModel = resolve;
+    });
+    let modelStarted: () => void = () => {
+      throw new Error('model latch missing');
+    };
+    const started = new Promise<void>(resolve => {
+      modelStarted = resolve;
+    });
+    const complete = vi.fn(async () => {
+      modelStarted();
+      return reply;
+    });
+    const push = vi.fn().mockResolvedValue(undefined);
+    let worker: Promise<void> | undefined;
+    network.events.mockImplementationOnce(async command => {
+      const event = BriefEvents.Compose.schema.parse(JSON.parse(command.input.Entries![0].Detail!));
+      worker = composeBrief(
+        {
+          now: () => new Date(),
+          users: userRepository,
+          briefs: assistantBriefRepository,
+          emails: emailTriageItemRepository,
+          loadActivity: async brief => ({
+            periodStart: brief.periodStart,
+            periodEnd: brief.periodEnd,
+            runs: [{ id: 'r1', query: 'q', status: 'completed', finishedAt: undefined, errorMessage: undefined }],
+            approvals: [],
+            questions: [],
+            emails: [],
+          }),
+          canCompose: async () => 'ok',
+          loadInstructions: async () => [],
+          complete,
+          push,
+          logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+        },
+        event
+      );
+      await Promise.race([
+        started,
+        worker.then(() => {
+          throw new Error('composer settled before reaching the model');
+        }),
+      ]);
+      throw new Error('accepted event response lost');
+    });
+    try {
+      expect((await run(publishBriefCompose)).failed).toBe(1);
+      const retained = await AssistantBriefModel.findOne({ userId, status: 'composing' });
+      expect(retained).not.toBeNull();
+      expect((await nextBriefAtOf(userId))!.getTime()).toBeGreaterThan(now.getTime());
+      const retried = await startBriefComposition(userId);
+      expect(retried._id.toString()).toBe(retained!._id.toString());
+      expect(await AssistantBriefModel.countDocuments({ userId })).toBe(1);
+      expect(network.events).toHaveBeenCalledTimes(1);
+      expect(complete).toHaveBeenCalledTimes(1);
+    } finally {
+      releaseModel(JSON.stringify({ headline: 'Done.', handled: ['Handled the run.'] }));
+      await worker;
+    }
+    expect(await AssistantBriefModel.countDocuments({ userId, status: 'ready' })).toBe(1);
+    expect(push).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps the advanced slot when a start throws past the retry window', async () => {
+    const due = new Date(now.getTime() - RETRY_WINDOW_MS - 60_000);
+    const userId = await insertUser({ preferences: { briefSchedule: schedule }, nextBriefAt: due });
+
+    const result = await runBriefScheduleReconcile(
+      {
+        users: userRepository,
+        startScheduledBrief: async () => {
+          throw new Error('event bus unavailable');
+        },
+        outOfTime: () => false,
+      },
+      now
+    );
+
+    expect(result.failed).toBe(1);
+    expect((await nextBriefAtOf(userId))!.getTime()).toBeGreaterThan(now.getTime());
+  });
+
+  it('clears the due time of a stored schedule whose zone cannot be computed, so it stops blocking the batch', async () => {
+    const userId = await insertUser({
+      preferences: { briefSchedule: { ...schedule, timeZone: 'Not/AZone' } },
+      nextBriefAt: minutesAgo(2),
+    });
+
+    expect((await run()).failed).toBe(1);
+    expect(await nextBriefAtOf(userId)).toBeNull();
+    expect((await run()).due).toBe(0);
+    expect(publishCompose).not.toHaveBeenCalled();
+  });
+});
