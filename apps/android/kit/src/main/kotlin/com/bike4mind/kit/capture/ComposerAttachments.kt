@@ -44,6 +44,9 @@ class ComposerAttachments(
     val state: StateFlow<List<ComposerAttachment>> = mutableState.asStateFlow()
 
     private val sources = mutableMapOf<String, Source>()
+
+    /** Files whose PUT landed: a retry after a scan timeout resumes the poll rather than uploading again. */
+    private val uploaded = mutableMapOf<String, String>()
     private val uploads = mutableMapOf<String, Job>()
 
     fun add(file: File, name: String, mimeType: String) {
@@ -61,6 +64,7 @@ class ComposerAttachments(
 
     fun remove(id: String) {
         uploads.remove(id)?.cancel()
+        uploaded.remove(id)
         sources.remove(id)?.file?.delete()
         mutableState.update { list -> list.filterNot { it.id == id } }
     }
@@ -74,7 +78,7 @@ class ComposerAttachments(
         val source = sources[id] ?: return
         uploads[id] = scope.launch {
             val phase = try {
-                ComposerAttachment.Phase.Ready(upload(source))
+                ComposerAttachment.Phase.Ready(upload(id, source))
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (error: Exception) {
@@ -85,12 +89,15 @@ class ComposerAttachments(
         }
     }
 
-    private suspend fun upload(source: Source): String {
-        val ticket = api.createUpload(source.name, source.mimeType, source.file.length())
-        api.upload(ticket, source.file, source.mimeType)
+    private suspend fun upload(id: String, source: Source): String {
+        val fileId = uploaded[id] ?: run {
+            val ticket = api.createUpload(source.name, source.mimeType, source.file.length())
+            api.upload(ticket, source.file, source.mimeType)
+            ticket.fileId.also { uploaded[id] = it }
+        }
         repeat(maxPolls) { poll ->
-            when (api.fileStatus(ticket.fileId)) {
-                RemoteFileStatus.CLEAN, RemoteFileStatus.UNSCANNED -> return ticket.fileId
+            when (api.fileStatus(fileId)) {
+                RemoteFileStatus.CLEAN, RemoteFileStatus.UNSCANNED -> return fileId
                 RemoteFileStatus.BLOCKED -> throw BlockedException()
                 RemoteFileStatus.PENDING, RemoteFileStatus.SCANNING -> if (poll < maxPolls - 1) delay(pollIntervalMs)
             }

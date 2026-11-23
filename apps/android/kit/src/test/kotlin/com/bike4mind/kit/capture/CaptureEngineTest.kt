@@ -13,8 +13,15 @@ import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.async
+import kotlinx.coroutines.test.TestScope
+import kotlinx.coroutines.test.UnconfinedTestDispatcher
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 
+@OptIn(ExperimentalCoroutinesApi::class)
 class CaptureEngineTest {
     private val root: File = createTempDirectory("capture-engine").toFile()
     private val store = CaptureJobStore(root)
@@ -33,6 +40,9 @@ class CaptureEngineTest {
         var createFailure: Exception? = null
         var status: RemoteFileStatus = RemoteFileStatus.CLEAN
         var lookup: SentTurnLookup = SentTurnLookup.NotFound
+
+        /** When set, a scan poll waits on it, which holds a run in the middle of its network work. */
+        var scanGate: CompletableDeferred<Unit>? = null
         private var counter = 0
 
         override suspend fun createUpload(fileName: String, mimeType: String, byteCount: Long): UploadTicket {
@@ -49,6 +59,7 @@ class CaptureEngineTest {
 
         override suspend fun fileStatus(fileId: String): RemoteFileStatus {
             calls += "status:$fileId"
+            scanGate?.await()
             return status
         }
 
@@ -71,8 +82,16 @@ class CaptureEngineTest {
         }
     }
 
-    private fun engine(maxFailures: Int = 10, maxPolls: Int = 2, dir: CaptureJobStore = store) =
-        CaptureEngine(dir, api, sender, now = { clock++ }, pollIntervalMs = 0, maxPollsPerPass = maxPolls, maxFailures = maxFailures)
+    private fun TestScope.engine(maxFailures: Int = 10, maxPolls: Int = 2, dir: CaptureJobStore = store) = CaptureEngine(
+        dir,
+        api,
+        sender,
+        now = { clock++ },
+        pollIntervalMs = 0,
+        maxPollsPerPass = maxPolls,
+        maxFailures = maxFailures,
+        io = UnconfinedTestDispatcher(testScheduler),
+    )
 
     private fun incoming(name: String, bytes: ByteArray, mime: String = "image/png") =
         IncomingFile(name, mime) { ByteArrayInputStream(bytes) }
@@ -316,11 +335,39 @@ class CaptureEngineTest {
     }
 
     @Test
+    fun enqueueAndDiscardDoNotWaitForARunThatIsMidScan() = runTest {
+        val engine = engine()
+        val first = engine.enqueueOne()
+        val gate = CompletableDeferred<Unit>()
+        api.scanGate = gate
+        val run = async { engine.runPending() }
+        runCurrent()
+        assertEquals("status:file-1", api.calls.last())
+
+        // Both return while the run is still waiting on the scan.
+        val second = engine.enqueue(session, "second", listOf(incoming("b.png", byteArrayOf(4))))
+        engine.discard(first.id)
+        assertEquals(listOf(second.id), engine.jobs.value.map { it.id })
+
+        api.scanGate = null
+        gate.complete(Unit)
+        assertEquals(CaptureEngine.RunResult.SETTLED, run.await())
+
+        // The discarded job is not written back, and the one queued mid-run went out in the same run.
+        assertEquals(listOf("second"), sender.sent.map { it.message })
+        assertEquals(listOf(second.id), engine.jobs.value.map { it.id })
+        assertEquals(CaptureStage.DONE, engine.onlyJob().stage)
+        assertNull(store.load(first.id))
+    }
+
+    @Test
     fun aFreshEngineSeesTheSavedJobs() = runTest {
         val first = engine()
         val job = first.enqueueOne()
 
         val second = engine()
+        assertTrue(second.jobs.value.isEmpty())
+        second.load()
 
         assertEquals(listOf(job), second.jobs.value)
         assertEquals(CaptureEngine.RunResult.SETTLED, second.runPending())

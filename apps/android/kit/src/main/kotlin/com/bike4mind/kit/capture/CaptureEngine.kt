@@ -7,12 +7,15 @@ import java.io.IOException
 import java.io.InputStream
 import java.util.UUID
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 
 /** A file handed over by another app, read once while this process still holds the grant to it. */
 class IncomingFile(val name: String, val mimeType: String, val open: () -> InputStream)
@@ -39,66 +42,92 @@ class CaptureEngine(
     /** Transient failures tolerated before a job fails. */
     private val maxFailures: Int = 10,
     private val doneRetentionMs: Long = 24 * 60 * 60 * 1000L,
+    /** Where the store's file work runs; tests pass their own. */
+    private val io: CoroutineDispatcher = Dispatchers.IO,
 ) {
     enum class RunResult { SETTLED, RETRY_LATER }
 
-    private val lock = Mutex()
-    private val mutableJobs = MutableStateFlow(store.loadAll())
+    // Two locks: [passLock] keeps two runs from overlapping and is held across the network calls; [storeLock]
+    // guards each store read or write and is held only for that, so enqueue, retry, discard and sign-out never
+    // wait behind an upload, a scan or a send.
+    private val passLock = Mutex()
+    private val storeLock = Mutex()
+    private val mutableJobs = MutableStateFlow<List<CaptureJob>>(emptyList())
+
+    /** Empty until [load], a run, or any change. */
     val jobs: StateFlow<List<CaptureJob>> = mutableJobs.asStateFlow()
 
+    /** Reads the saved jobs, e.g. at launch. */
+    suspend fun load() = stored { refresh() }
+
     /** Copies [files] into a new job; nothing leaves the device until [runPending]. */
-    suspend fun enqueue(destination: CaptureDestination, message: String, files: List<IncomingFile>): CaptureJob = lock.withLock {
+    suspend fun enqueue(destination: CaptureDestination, message: String, files: List<IncomingFile>): CaptureJob {
+        // A fresh id: nothing else touches this payload directory, so the copy needs no lock.
         val id = UUID.randomUUID().toString()
-        val names = mutableSetOf<String>()
-        val staged = try {
-            files.map { incoming ->
-                val name = uniqueName(safeName(incoming.name), names)
-                val target = store.payloadFile(id, name)
-                target.parentFile.mkdirs()
-                val bytes = incoming.open().use { input -> target.outputStream().use { input.copyTo(it) } }
-                CaptureFile(name, incoming.mimeType, bytes)
+        val staged = withContext(io) {
+            val names = mutableSetOf<String>()
+            try {
+                files.map { incoming ->
+                    val name = uniqueName(safeName(incoming.name), names)
+                    val target = store.payloadFile(id, name)
+                    target.parentFile.mkdirs()
+                    val bytes = incoming.open().use { input -> target.outputStream().use { input.copyTo(it) } }
+                    CaptureFile(name, incoming.mimeType, bytes)
+                }
+            } catch (error: Exception) {
+                store.discardPayload(id)
+                throw error
             }
-        } catch (error: Exception) {
-            store.discardPayload(id)
-            throw error
         }
         val job = CaptureJob(id, destination, message.trim(), staged, createdAtMs = now(), updatedAtMs = now())
-        store.save(job)
-        refresh()
-        job
+        stored {
+            store.save(job)
+            refresh()
+        }
+        return job
     }
 
-    /** Pushes every pending job as far as it goes. [RunResult.RETRY_LATER] while any is still pending. */
-    suspend fun runPending(): RunResult = lock.withLock {
-        prune()
-        for (job in store.loadAll()) {
-            if (job.stage == CaptureStage.PENDING) advance(job)
+    /**
+     * Pushes every pending job as far as it goes, including jobs queued while the run is under way.
+     * [RunResult.RETRY_LATER] while any is still pending.
+     */
+    suspend fun runPending(): RunResult = passLock.withLock {
+        stored { prune() }
+        val attempted = mutableSetOf<String>()
+        while (true) {
+            val next = stored { store.loadAll() }.firstOrNull { it.stage == CaptureStage.PENDING && it.id !in attempted } ?: break
+            attempted += next.id
+            advance(next)
         }
-        refresh()
-        if (store.loadAll().any { it.stage == CaptureStage.PENDING }) RunResult.RETRY_LATER else RunResult.SETTLED
+        stored {
+            refresh()
+            if (store.loadAll().any { it.stage == CaptureStage.PENDING }) RunResult.RETRY_LATER else RunResult.SETTLED
+        }
     }
 
     /** A failed job goes back in the queue. The user's retry is also the go-ahead to resend an unsure turn. */
-    suspend fun retry(id: String) = lock.withLock {
-        val job = store.load(id)?.takeIf { it.stage == CaptureStage.FAILED } ?: return@withLock
+    suspend fun retry(id: String) = stored {
+        val job = store.load(id)?.takeIf { it.stage == CaptureStage.FAILED } ?: return@stored
         val resend = job.lastFailure == CaptureFailure.DeliveryUnknown
-        save(
+        store.save(
             job.copy(
                 stage = CaptureStage.PENDING,
                 failures = 0,
                 lastFailure = null,
                 sendAttemptedAtMs = if (resend) null else job.sendAttemptedAtMs,
+                updatedAtMs = now(),
             ),
         )
+        refresh()
     }
 
-    suspend fun discard(id: String) = lock.withLock {
+    suspend fun discard(id: String) = stored {
         store.remove(id)
         refresh()
     }
 
     /** Sign-out: shares belong to the account that made them. */
-    suspend fun discardAll() = lock.withLock {
+    suspend fun discardAll() = stored {
         store.removeAll()
         refresh()
     }
@@ -109,9 +138,11 @@ class CaptureEngine(
             job = upload(job)
             job = awaitClean(job) ?: return
             job = sendTurn(job)
-            store.discardPayload(job.id)
+            stored { store.discardPayload(job.id) }
         } catch (cancelled: CancellationException) {
             throw cancelled
+        } catch (discarded: DiscardedException) {
+            return
         } catch (error: Exception) {
             fail(job, error)
         }
@@ -122,7 +153,7 @@ class CaptureEngine(
         for ((index, file) in job.files.withIndex()) {
             if (file.uploaded) continue
             val payload = store.payloadFile(job.id, file.name)
-            if (!payload.exists()) throw PermanentFailure(CaptureFailure.PayloadMissing)
+            if (!stored { payload.exists() }) throw PermanentFailure(CaptureFailure.PayloadMissing)
             // A ticket is never reused: it expires in minutes, and the PUT it signs is create-only.
             val ticket = api.createUpload(file.name, file.mimeType, file.byteCount)
             api.upload(ticket, payload, file.mimeType)
@@ -179,21 +210,24 @@ class CaptureEngine(
         }
     }
 
-    private fun fail(stale: CaptureJob, error: Exception) {
+    private suspend fun fail(stale: CaptureJob, error: Exception) = stored {
         // The saved record, not the caller's copy: a send recorded just before the error must not be forgotten.
-        val job = store.load(stale.id) ?: stale
+        // No record means the job was discarded meanwhile, and it stays gone.
+        val job = store.load(stale.id) ?: return@stored
         val permanent = error as? PermanentFailure
         val failure = permanent?.failure ?: ComposerAttachments.describe(error)
         val failures = job.failures + 1
         val stage = if (permanent != null || !isTransient(error) || failures >= maxFailures) CaptureStage.FAILED else CaptureStage.PENDING
-        save(
+        store.save(
             job.copy(
                 stage = stage,
                 failures = failures,
                 lastFailure = failure,
                 sendAttemptedAtMs = if (permanent?.clearSend == true) null else job.sendAttemptedAtMs,
+                updatedAtMs = now(),
             ),
         )
+        refresh()
     }
 
     private fun prune() {
@@ -201,19 +235,26 @@ class CaptureEngine(
         store.loadAll().filter { it.stage == CaptureStage.DONE && it.updatedAtMs < cutoff }.forEach { store.remove(it.id) }
     }
 
-    private fun save(job: CaptureJob): CaptureJob {
+    /** Saves a step of a run, unless the job was discarded since the run picked it up. */
+    private suspend fun save(job: CaptureJob): CaptureJob = stored {
+        if (store.load(job.id) == null) throw DiscardedException()
         val stamped = job.copy(updatedAtMs = now())
         store.save(stamped)
         refresh()
-        return stamped
+        stamped
     }
 
+    /** Callers hold [storeLock]. */
     private fun refresh() {
         mutableJobs.value = store.loadAll()
     }
 
+    private suspend fun <T> stored(block: () -> T): T = withContext(io) { storeLock.withLock { block() } }
+
     private fun CaptureJob.withFile(index: Int, file: CaptureFile) =
         copy(files = files.toMutableList().also { it[index] = file })
+
+    private class DiscardedException : Exception("The job was discarded during the run")
 
     private class PermanentFailure(val failure: CaptureFailure, val clearSend: Boolean = false) : Exception(failure.toString())
 

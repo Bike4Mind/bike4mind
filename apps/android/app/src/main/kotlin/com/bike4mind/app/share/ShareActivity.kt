@@ -1,5 +1,6 @@
 package com.bike4mind.app.share
 
+import android.content.ContentResolver
 import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
@@ -21,6 +22,7 @@ import com.bike4mind.app.capture.CaptureFiles
 import com.bike4mind.app.capture.CaptureWorker
 import com.bike4mind.app.ui.B4MTheme
 import com.bike4mind.kit.capture.IncomingFile
+import kotlinx.coroutines.launch
 
 /** What another app handed over: text (often a link) and any number of files. */
 class SharedContent(val text: String?, val files: List<IncomingFile>) {
@@ -47,7 +49,7 @@ class ShareActivity : ComponentActivity() {
                         app = app,
                         content = content,
                         onSent = {
-                            CaptureWorker.schedule(this)
+                            app.scope.launch { CaptureWorker.schedule(app) }
                             Toast.makeText(this, R.string.share_sending, Toast.LENGTH_SHORT).show()
                             finish()
                         },
@@ -70,12 +72,23 @@ class ShareActivity : ComponentActivity() {
                 IntentCompat.getParcelableArrayListExtra(intent, Intent.EXTRA_STREAM, Uri::class.java).orEmpty()
             else -> emptyList()
         }
-        val files = uris.map { uri ->
+        val files = uris.filter(::isForeignContent).map { uri ->
             val type = CaptureFiles.mimeType(contentResolver, uri, intent.type)
             IncomingFile(CaptureFiles.fileName(contentResolver, uri, type), type) {
                 contentResolver.openInputStream(uri) ?: error("Nothing to read at the shared URI")
             }
         }
         return SharedContent(text, files)
+    }
+
+    /**
+     * Only another app's content: this activity is exported and reads with this app's identity, so a file:// path
+     * or a URI from one of this app's own providers would hand its private files to whoever sent the intent.
+     */
+    private fun isForeignContent(uri: Uri): Boolean {
+        if (uri.scheme != ContentResolver.SCHEME_CONTENT) return false
+        val authority = uri.authority ?: return false
+        val owner = packageManager.resolveContentProvider(authority, 0)?.packageName ?: return false
+        return owner != packageName
     }
 }

@@ -29,6 +29,7 @@ class ComposerAttachmentsTest {
         var createFailure: Exception? = null
         var status: RemoteFileStatus = RemoteFileStatus.CLEAN
         var created = 0
+        val polled = mutableListOf<String>()
 
         override suspend fun createUpload(fileName: String, mimeType: String, byteCount: Long): UploadTicket {
             createFailure?.let { throw it }
@@ -37,7 +38,10 @@ class ComposerAttachmentsTest {
         }
 
         override suspend fun upload(ticket: UploadTicket, file: File, mimeType: String) = Unit
-        override suspend fun fileStatus(fileId: String) = status
+        override suspend fun fileStatus(fileId: String): RemoteFileStatus {
+            polled += fileId
+            return status
+        }
         override suspend fun findSentTurn(sessionId: String, message: String): SentTurnLookup = SentTurnLookup.NotFound
     }
 
@@ -68,6 +72,23 @@ class ComposerAttachmentsTest {
         advanceUntilIdle()
 
         assertEquals(ComposerAttachment.Phase.Failed(CaptureFailure.Blocked), attachments.state.value.single().phase)
+    }
+
+    @Test
+    fun retryAfterAScanTimeoutResumesThePollInsteadOfUploadingAgain() = runTest {
+        val api = FakeApi().apply { status = RemoteFileStatus.SCANNING }
+        val attachments = attachments(api)
+        attachments.add(file("a.png"), "a.png", "image/png")
+        advanceUntilIdle()
+        assertEquals(ComposerAttachment.Phase.Failed(CaptureFailure.StillScanning), attachments.state.value.single().phase)
+
+        api.status = RemoteFileStatus.CLEAN
+        attachments.retry(attachments.state.value.single().id)
+        advanceUntilIdle()
+
+        assertEquals(ComposerAttachment.Phase.Ready("file-1"), attachments.state.value.single().phase)
+        assertEquals(1, api.created)
+        assertTrue(api.polled.all { it == "file-1" })
     }
 
     @Test

@@ -7,14 +7,21 @@ import com.bike4mind.app.push.PushNotifications
 import com.bike4mind.app.storage.EnvironmentStore
 import com.bike4mind.app.storage.OnboardingStore
 import com.bike4mind.kit.capture.CaptureStage
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.launch
 
 /** Owns the [AppGraph]. A debug build that switches servers gets a fresh graph (and a signed-out session). */
 class B4MApplication : Application() {
     private val mutableGraph = MutableStateFlow<AppGraph?>(null)
     val graph: StateFlow<AppGraph?> = mutableGraph.asStateFlow()
+
+    /** Work that outlives any screen, such as scheduling a share's upload after the share screen closed. */
+    val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
     lateinit var environments: EnvironmentStore
         private set
@@ -31,8 +38,11 @@ class B4MApplication : Application() {
         FcmClient.initialize(this)
         mutableGraph.value = AppGraph(this, environments.current())
         // A share the system stopped (an update, a reboot) carries on once the app runs again.
-        if (mutableGraph.value?.capture?.jobs?.value.orEmpty().any { it.stage == CaptureStage.PENDING }) {
-            CaptureWorker.schedule(this)
+        val graph = mutableGraph.value
+        scope.launch {
+            val capture = graph?.capture ?: return@launch
+            capture.load()
+            if (capture.jobs.value.any { it.stage == CaptureStage.PENDING }) CaptureWorker.schedule(this@B4MApplication)
         }
     }
 

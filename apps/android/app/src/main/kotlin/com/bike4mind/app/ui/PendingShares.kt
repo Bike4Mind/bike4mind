@@ -10,6 +10,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Modifier
@@ -32,6 +33,7 @@ fun PendingShares(graph: AppGraph) {
     val jobs by graph.capture.jobs.collectAsStateWithLifecycle()
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
+    LaunchedEffect(graph) { graph.capture.load() }
     val pending = jobs.count { it.stage == CaptureStage.PENDING }
     val failed = jobs.filter { it.stage == CaptureStage.FAILED }
     if (pending == 0 && failed.isEmpty()) return
