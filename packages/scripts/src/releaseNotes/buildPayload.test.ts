@@ -7,6 +7,7 @@ import {
   enqueueReleaseNotes,
   excerptDescription,
   isOperatorOnlyTitle,
+  isUnreleasedPlatformTitle,
   parseCustomerNote,
   selectBackfillPairs,
 } from './buildPayload';
@@ -66,6 +67,17 @@ describe('isOperatorOnlyTitle', () => {
     'Revert "feat(admin): group signups"',
     'feat(admin) group signups',
   ])('keeps %s', title => expect(isOperatorOnlyTitle(title)).toBe(false));
+});
+
+describe('isUnreleasedPlatformTitle', () => {
+  it.each(['feat(ios): widgets', 'fix(Android)!: crash', ' feat( ios , MOBILE ): sync'])('flags %s', title =>
+    expect(isUnreleasedPlatformTitle(title)).toBe(true)
+  );
+
+  it.each(['feat(ios,client): shared', 'feat(iosx): nope', 'feat: ios polish', 'feat(chat): pinned'])(
+    'keeps %s',
+    title => expect(isUnreleasedPlatformTitle(title)).toBe(false)
+  );
 });
 
 describe('excerptDescription', () => {
@@ -174,6 +186,37 @@ describe('buildReleaseNotesPayload', () => {
     });
 
     expect(payload.prs.map(pr => pr.number)).toEqual([4, 5]);
+  });
+
+  it('drops unreleased-platform PRs unless they carry a customer note or a mixed scope', async () => {
+    const titles: Record<number, string> = {
+      3: 'feat(ios): widgets',
+      4: 'feat(android): sync',
+      5: 'feat(ios): widgets with note',
+      6: 'feat(ios,client): shared change',
+    };
+    const getCommitRange = vi.fn(async () =>
+      Object.entries(titles).map(([n, title]) => ({
+        sha: n,
+        message: `${title} (#${n})`,
+        author: '',
+        authorEmail: '',
+        date: '',
+      }))
+    );
+    const getPRSummary = vi.fn(async (n: number) => ({
+      number: n,
+      title: titles[n],
+      labels: [],
+      body: n === 5 ? '## Customer note\nSomething new.' : 'Mobile work.',
+    }));
+
+    const payload = await buildReleaseNotesPayload(release('v1.0.0.2', '2026-01-02T00:00:00Z'), 'v1.0.0.1', {
+      getCommitRange,
+      getPRSummary,
+    });
+
+    expect(payload.prs.map(pr => pr.number)).toEqual([5, 6]);
   });
 
   it('builds an empty PR list when every PR is operator-only', async () => {

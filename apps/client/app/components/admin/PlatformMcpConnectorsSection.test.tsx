@@ -202,6 +202,7 @@ describe('PlatformMcpConnectorsSection', () => {
       const menu = await openMenu();
       expect(menuItems(menu)).toEqual([
         'Review tools',
+        'Edit details',
         'Refresh tools',
         'Replace API key',
         'Turn off for all users',
@@ -266,7 +267,7 @@ describe('PlatformMcpConnectorsSection', () => {
         'Remove it and add it again with an API key.'
       );
       const menu = await openMenu();
-      expect(menuItems(menu)).toEqual(['Refresh tools', 'Turn off for all users', 'Remove']);
+      expect(menuItems(menu)).toEqual(['Edit details', 'Refresh tools', 'Turn off for all users', 'Remove']);
       expect(document.body.textContent).not.toMatch(/Sign in|Reconnect/);
 
       await userEvent.click(within(menu).getByTestId('platform-mcp-refresh-p1'));
@@ -281,7 +282,7 @@ describe('PlatformMcpConnectorsSection', () => {
       renderSection();
 
       const menu = await openMenu();
-      expect(menuItems(menu)).toEqual(['Turn off for all users', 'Remove']);
+      expect(menuItems(menu)).toEqual(['Edit details', 'Turn off for all users', 'Remove']);
     });
   });
 
@@ -332,7 +333,7 @@ describe('PlatformMcpConnectorsSection', () => {
       expect(reasonOn(add)).toBe(MISSING);
 
       const menu = await openMenu();
-      for (const action of ['refresh', 'api-key', 'toggle', 'remove']) {
+      for (const action of ['edit', 'refresh', 'api-key', 'toggle', 'remove']) {
         const item = within(menu).getByTestId(`platform-mcp-${action}-p1`);
         expect(item).toHaveAttribute('aria-disabled', 'true');
         expect(reasonOn(item)).toBe(MISSING);
@@ -358,6 +359,7 @@ describe('PlatformMcpConnectorsSection', () => {
       expect(sentAnything()).toBe(false);
       expect(screen.queryByTestId('platform-mcp-api-key-dialog')).not.toBeInTheDocument();
       expect(screen.queryByTestId('platform-mcp-remove-dialog')).not.toBeInTheDocument();
+      expect(screen.queryByTestId('platform-mcp-details-dialog')).not.toBeInTheDocument();
     });
   });
 
@@ -427,6 +429,99 @@ describe('PlatformMcpConnectorsSection', () => {
 
       expect(await screen.findByTestId('custom-mcp-add-error')).toHaveTextContent(RATE_LIMITED.error);
       expect(screen.getByTestId('custom-mcp-add-form')).toBeInTheDocument();
+    });
+
+    it('sends the description written on the add form, trimmed', async () => {
+      listReturns([]);
+      vi.mocked(api.post).mockResolvedValueOnce({ data: connection({ description: 'Searches the team handbook.' }) });
+      renderSection();
+
+      await userEvent.click(await screen.findByTestId('platform-mcp-add-btn'));
+      expect(screen.getByTestId('platform-mcp-add')).toHaveTextContent(
+        'Users offered this connector see it under the name in their Tools menu. One paragraph of plain text: line breaks and <tags> are removed. 0/300'
+      );
+      await userEvent.type(screen.getByTestId('custom-mcp-add-description-input'), '  Searches the team handbook.  ');
+      await userEvent.type(screen.getByTestId('custom-mcp-add-name-input'), 'Example connector');
+      await userEvent.type(screen.getByTestId('custom-mcp-add-url-input'), 'https://mcp.example.com/mcp');
+      await userEvent.type(screen.getByTestId('custom-mcp-add-api-key-input'), 'example-key-0123456789');
+      await userEvent.click(screen.getByTestId('custom-mcp-add-submit-btn'));
+
+      expect(api.post).toHaveBeenCalledWith(
+        LIST_URL,
+        expect.objectContaining({ displayName: 'Example connector', description: 'Searches the team handbook.' })
+      );
+    });
+  });
+
+  describe('editing details', () => {
+    const DESCRIBED = connection({ description: 'Searches the team handbook.' });
+
+    it('edits the name and description together in a dialog and sends only what changed', async () => {
+      listReturns([DESCRIBED]);
+      vi.mocked(api.patch).mockResolvedValueOnce({ data: { ...DESCRIBED, description: 'Reads the handbook.' } });
+      renderSection();
+
+      await pick('edit');
+      const dialog = await screen.findByTestId('platform-mcp-details-dialog');
+      expect(within(dialog).getByTestId('platform-mcp-details-name-input')).toHaveValue('Example connector');
+      const field = within(dialog).getByTestId('platform-mcp-details-description-input');
+      expect(field).toHaveValue('Searches the team handbook.');
+      expect(field).toHaveAttribute('maxlength', '300');
+      await userEvent.clear(field);
+      await userEvent.type(field, 'Reads the handbook.');
+      await userEvent.click(within(dialog).getByTestId('platform-mcp-details-save-btn'));
+
+      expect(api.patch).toHaveBeenCalledWith(`${LIST_URL}/p1`, { description: 'Reads the handbook.' });
+      await waitFor(() => expect(screen.queryByTestId('platform-mcp-details-dialog')).not.toBeInTheDocument());
+      expect(toast.success).toHaveBeenCalledWith('Details saved.');
+      await waitFor(() => expect(screen.getByTestId('platform-mcp-row-actions-p1')).toHaveFocus());
+    });
+
+    it('clears the description by sending an empty one, and sends nothing when nothing changed', async () => {
+      listReturns([DESCRIBED]);
+      vi.mocked(api.patch).mockResolvedValueOnce({ data: { ...DESCRIBED, description: undefined } });
+      renderSection();
+
+      await pick('edit');
+      await userEvent.click(await screen.findByTestId('platform-mcp-details-save-btn'));
+      expect(api.patch).not.toHaveBeenCalled();
+      expect(screen.queryByTestId('platform-mcp-details-dialog')).not.toBeInTheDocument();
+
+      await pick('edit');
+      await userEvent.clear(await screen.findByTestId('platform-mcp-details-description-input'));
+      await userEvent.click(screen.getByTestId('platform-mcp-details-save-btn'));
+      expect(api.patch).toHaveBeenCalledWith(`${LIST_URL}/p1`, { description: '' });
+    });
+
+    it('shows a failed save as the error state in the dialog, keeps the text, and saves again on Try again', async () => {
+      listReturns([DESCRIBED]);
+      vi.mocked(api.patch)
+        .mockRejectedValueOnce(
+          httpError(400, {
+            error: 'Invalid request body',
+            issues: [{ path: 'description', message: 'Description must be at most 300 characters' }],
+          })
+        )
+        .mockResolvedValueOnce({ data: { ...DESCRIBED, description: 'Reads the handbook.' } });
+      renderSection();
+
+      await pick('edit');
+      const field = await screen.findByTestId('platform-mcp-details-description-input');
+      await userEvent.clear(field);
+      await userEvent.type(field, 'Reads the handbook.');
+      await userEvent.click(screen.getByTestId('platform-mcp-details-save-btn'));
+
+      const error = await screen.findByTestId('admin-error-state');
+      expect(error).toHaveAttribute('role', 'alert');
+      expect(error).toHaveTextContent('Description must be at most 300 characters');
+      expect(within(screen.getByTestId('platform-mcp-details-dialog')).getByTestId('admin-error-state')).toBe(error);
+      expect(field).toHaveValue('Reads the handbook.');
+      expect(toast.success).not.toHaveBeenCalled();
+
+      await userEvent.click(within(error).getByTestId('admin-error-retry-btn'));
+      expect(api.patch).toHaveBeenCalledTimes(2);
+      expect(api.patch).toHaveBeenLastCalledWith(`${LIST_URL}/p1`, { description: 'Reads the handbook.' });
+      await waitFor(() => expect(screen.queryByTestId('platform-mcp-details-dialog')).not.toBeInTheDocument());
     });
   });
 

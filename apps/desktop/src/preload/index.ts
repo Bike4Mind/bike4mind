@@ -508,6 +508,10 @@ const api: DesktopApi = {
     moveSession: (sessionId: string, sectionId: string | null) =>
       ipcRenderer.invoke(IPC_CHANNELS.sidebarMoveSession, sessionId, sectionId),
   },
+  composerDrafts: {
+    list: () => ipcRenderer.invoke(IPC_CHANNELS.composerDraftsList),
+    save: (sessionId: string, text: string) => ipcRenderer.invoke(IPC_CHANNELS.composerDraftsSave, sessionId, text),
+  },
   mcp: {
     getServers: () => ipcRenderer.invoke(IPC_CHANNELS.mcpGetServers),
     addServer: (input: McpServerInput) => ipcRenderer.invoke(IPC_CHANNELS.mcpAddServer, input),
@@ -578,6 +582,7 @@ const api: DesktopApi = {
   },
   pullRequests: {
     watch: (sessionId: string | null) => ipcRenderer.invoke(IPC_CHANNELS.prWatch, sessionId),
+    getState: (sessionId: string) => ipcRenderer.invoke(IPC_CHANNELS.prGetState, sessionId),
     bind: (sessionId: string, url: string) => ipcRenderer.invoke(IPC_CHANNELS.prBind, sessionId, url),
     dismiss: (sessionId: string) => ipcRenderer.invoke(IPC_CHANNELS.prDismiss, sessionId),
     refresh: (sessionId: string) => ipcRenderer.invoke(IPC_CHANNELS.prRefresh, sessionId),

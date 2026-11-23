@@ -39,8 +39,8 @@ export interface RotateCallbackSigningSecretResult {
  * minting a secret so holder and owner never split, and minting here without re-owning would split
  * them. An org-owned key is the exception: its holder is always the org's service account, which the
  * org route (pages/api/organizations/[id]/api-keys/[keyId]/callback-secret.ts) passes here after
- * verifyOrgAccess. Replacing it takes effect on the next delivery attempt, including retries of callbacks
- * already queued.
+ * verifyOrgPermission (`manageKeys`). Replacing it takes effect on the next delivery attempt,
+ * including retries of callbacks already queued.
  */
 export const rotateCallbackSigningSecret = async (
   userId: string,

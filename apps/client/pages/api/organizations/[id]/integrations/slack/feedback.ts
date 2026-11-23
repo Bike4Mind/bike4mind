@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { slackFeedbackConfiguredChannelIdSchema } from '@client/app/utils/slackFeedbackIds';
 import { WebClient } from '@slack/web-api';
 import { orgSlackWorkspaceRepository, SlackFeedbackChannel, slackAuditLogRepository } from '@bike4mind/database/infra';
-import { verifyOrgOwner } from '@bike4mind/server-utils/utils/orgAccess';
+import { verifyOrgPermission } from '@bike4mind/server-utils/utils/orgAccess';
 import { decryptToken } from '@bike4mind/server-utils/security/tokenEncryption';
 import { parseOrBadRequest } from '@bike4mind/server-utils/utils/errors';
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';
@@ -31,7 +31,7 @@ const updateSchema = z.strictObject({
 
 const handler = baseApi({ auth: 'jwtOnly' })
   .get(async (req, res) => {
-    const org = await verifyOrgOwner(req.user!, String(req.query.id));
+    const org = await verifyOrgPermission(req.user!, String(req.query.id), 'manageIntegrations');
     const workspace = await orgSlackWorkspaceRepository.findByOrganizationId(org.id);
     if (!workspace) throw new NotFoundError('No Slack workspace connected');
     const channels = await SlackFeedbackChannel.find({
@@ -49,7 +49,7 @@ const handler = baseApi({ auth: 'jwtOnly' })
     });
   })
   .put(async (req, res) => {
-    const org = await verifyOrgOwner(req.user!, String(req.query.id));
+    const org = await verifyOrgPermission(req.user!, String(req.query.id), 'manageIntegrations');
     const update = parseOrBadRequest(updateSchema, req.body);
     const workspace = update.enabled
       ? await orgSlackWorkspaceRepository.findByOrganizationIdWithToken(org.id)

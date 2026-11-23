@@ -26,7 +26,7 @@ vi.mock('@bike4mind/database', () => ({
   cacheRepository: { incrementCounterConditional: vi.fn(async () => ({ success: true })) },
 }));
 vi.mock('@bike4mind/server-utils/utils/orgAccess', () => ({
-  verifyOrgOwner: vi.fn(async () => ({ id: 'org-1', name: 'Acme' })),
+  verifyOrgPermission: vi.fn(async () => ({ id: 'org-1', name: 'Acme' })),
 }));
 vi.mock('@bike4mind/server-utils/utils/ssrfProtection', () => ({
   validateTargetUrl: vi.fn(async () => ({ valid: true })),

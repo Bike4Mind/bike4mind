@@ -41,6 +41,7 @@ export interface CreateMcpConnectionInput {
   presetId?: McpPresetId;
   url: string;
   displayName: string;
+  description?: string;
   slug?: string;
   transport?: McpConnectionTransport;
   auth: McpConnectionAuthInput;
@@ -58,6 +59,8 @@ export interface McpToolReviewEntry {
 export interface UpdateMcpConnectionInput {
   id: string;
   displayName?: string;
+  /** An empty string clears it. */
+  description?: string;
   enabled?: boolean;
   tools?: McpToolReviewEntry[];
 }

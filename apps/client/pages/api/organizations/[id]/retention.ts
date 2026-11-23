@@ -1,6 +1,6 @@
 import { z } from 'zod';
-import { foreverRetention, retentionPolicySchema, canAdministerOrganization } from '@bike4mind/common';
-import { verifyOrgAccess, verifyOrgMemberOrManager } from '@bike4mind/server-utils/utils/orgAccess';
+import { foreverRetention, retentionPolicySchema, hasOrgPermission } from '@bike4mind/common';
+import { verifyOrgMemberOrManager, verifyOrgPermission } from '@bike4mind/server-utils/utils/orgAccess';
 import { createRetentionEstimate, saveRetentionPolicy } from '@bike4mind/server-utils/organizations/retentionPolicy';
 import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 import { baseApi } from '@server/middlewares/baseApi';
@@ -33,7 +33,7 @@ const handler = baseApi({ auth: 'jwtOnly' })
   .post(
     asyncHandler<{}, unknown, unknown, { id?: string }>(async (req, res) => {
       const id = organizationIdOf(req.query.id);
-      const org = await verifyOrgAccess(req.user!, id);
+      const org = await verifyOrgPermission(req.user!, id, 'managePolicies');
       const { policy } = bodySchema.parse(req.body);
       if (org.personal) throw new BadRequestError('Retention requires a team organization');
       return res.json(await createRetentionEstimate(org.id, req.user!.id, org.retentionVersion ?? 0, policy));
@@ -42,12 +42,12 @@ const handler = baseApi({ auth: 'jwtOnly' })
   .put(
     asyncHandler<{}, unknown, unknown, { id?: string }>(async (req, res) => {
       const id = organizationIdOf(req.query.id);
-      const org = await verifyOrgAccess(req.user!, id);
+      const org = await verifyOrgPermission(req.user!, id, 'managePolicies');
       const { policy, version, confirmationToken } = bodySchema.parse(req.body);
       return res.json(
         await saveRetentionPolicy(org.id, req.user!.id, policy, version, confirmationToken, undefined, {
           auditActorUserId: req.user!.impersonatedBy ?? req.user!.id,
-          canAdminister: currentOrganization => canAdministerOrganization(req.user!, currentOrganization),
+          canAdminister: currentOrganization => hasOrgPermission(req.user!, currentOrganization, 'managePolicies'),
         })
       );
     })
