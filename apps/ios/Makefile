@@ -23,9 +23,9 @@ build:
 # The team comes from Config/Local.xcconfig (DEVELOPMENT_TEAM) or `make device DEVELOPMENT_TEAM=<id>`.
 # Installing over an existing copy keeps its data, so the app stays signed in.
 device:
-	@if [ -z "$(DEVELOPMENT_TEAM)" ] && ! grep -Eq '^[[:space:]]*DEVELOPMENT_TEAM[[:space:]]*=[[:space:]]*[A-Z0-9]{10}[[:space:]]*$$' Config/Local.xcconfig 2>/dev/null; then \
+	@if [ -z "$(DEVELOPMENT_TEAM)" ] && { ! grep -Eq '^[[:space:]]*DEVELOPMENT_TEAM[[:space:]]*=[[:space:]]*[A-Z0-9]{10}[[:space:]]*$$' Config/Local.xcconfig 2>/dev/null || grep -q YOURTEAMID Config/Local.xcconfig 2>/dev/null; }; then \
 		echo "error: no signing team configured. Copy Config/Local.xcconfig.example to Config/Local.xcconfig and set DEVELOPMENT_TEAM (see DEVICE_TESTING.md)." >&2; exit 1; fi
-	@set -e; udid=$$(Tools/select-device.sh '$(DEVICE)'); \
+	@set -e; udid=$$(Tools/select-device.sh "$$DEVICE"); \
 	echo "Building for device $$udid"; \
 	xcodebuild -project $(PROJECT) -scheme $(SCHEME) -configuration Debug -destination "id=$$udid" -derivedDataPath $(DERIVED_DATA) -allowProvisioningUpdates $(if $(DEVELOPMENT_TEAM),DEVELOPMENT_TEAM=$(DEVELOPMENT_TEAM)) build; \
 	app="$(DERIVED_DATA)/Build/Products/Debug-iphoneos/$(SCHEME).app"; \

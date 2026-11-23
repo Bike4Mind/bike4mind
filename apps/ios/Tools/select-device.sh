@@ -10,7 +10,9 @@ if ! listing="$(xcrun devicectl list devices --quiet --json-output /dev/stdout 2
   exit 1
 fi
 
-# Tab-separated "udid<TAB>name<TAB>model" for physical iOS devices that are paired and not disconnected.
+# A reachable phone reports tunnelState "disconnected" until something opens the tunnel on demand (xcodebuild and devicectl do),
+# so only "unavailable" (remembered, not reachable) is skipped.
+# Tab-separated "udid<TAB>name<TAB>model" for physical iOS devices that are paired and not unavailable.
 available="$(python3 -I -c '
 import json, sys
 for d in json.load(sys.stdin)["result"]["devices"]:
@@ -18,7 +20,7 @@ for d in json.load(sys.stdin)["result"]["devices"]:
     connection = d.get("connectionProperties", {})
     if hardware.get("reality") != "physical" or hardware.get("platform") != "iOS":
         continue
-    if connection.get("pairingState") != "paired" or connection.get("tunnelState") == "disconnected":
+    if connection.get("pairingState") != "paired" or connection.get("tunnelState") == "unavailable":
         continue
     name = d.get("deviceProperties", {}).get("name", "?")
     print("\t".join([hardware.get("udid") or d["identifier"], name, hardware.get("marketingName", "?")]))
