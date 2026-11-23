@@ -551,6 +551,7 @@ describe('CompletionSseErrorEventSchema', () => {
       'spend_cap_exceeded',
       'spend_frozen',
       'free_quest_limit_reached',
+      'run_budget_exhausted',
     ]);
     expect([...COMPLETION_SSE_ERROR_CODES]).toEqual([
       ...QUEST_ERROR_CODES,

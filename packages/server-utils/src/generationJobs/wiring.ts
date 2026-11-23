@@ -34,15 +34,18 @@ import {
   studioCompositionRepository,
   usageEventRepository,
   userRepository,
+  withTransaction,
 } from '@bike4mind/database';
 import { newAccountSpendCapAdaptersWithAlert } from '../billing/newAccountSpendCapWithAlert';
 import { recordInsufficientCredits } from '../billing/userLimitEvents';
+import { claimPaidCallRunBudget, releaseRunBudgetClaim } from '../billing/runBudgetClaim';
 import { Logger } from '@bike4mind/observability';
 import { modelDiscoveryService } from '@bike4mind/services';
 import {
   GenerationJobEngine,
   announceGroupCompletion,
   studioCompletionSubscriber,
+  type RunBudgetAdapters,
 } from '@bike4mind/services/generationJobs';
 import { StudioEvents } from '../utils/eventBus';
 import { aiAccessDeniedMessage } from '@bike4mind/services/userService/accountState';
@@ -611,6 +614,13 @@ const announceCompletion = async (job: IGenerationJobDocument): Promise<void> =>
   });
 };
 
+// A job's share of its completion run's budget: claimed in the hold's transaction, released at settlement.
+export const runBudget: RunBudgetAdapters = {
+  claim: claimPaidCallRunBudget,
+  release: releaseRunBudgetClaim,
+  transact: work => withTransaction(() => work()),
+};
+
 let videoJobDeps: VideoJobDeps | undefined;
 export const getVideoJobDeps = (): VideoJobDeps => {
   videoJobDeps ??= {
@@ -629,6 +639,7 @@ export const getVideoJobDeps = (): VideoJobDeps => {
       spendFreezes: spendFreezeRepository,
       onInsufficientCredits: recordInsufficientCredits,
     },
+    runBudget,
     enqueue: enqueueGenerationJob,
     recordUsage,
     now: () => new Date(),
@@ -660,6 +671,7 @@ export const getMusicJobDeps = (): MusicJobDeps => {
       spendFreezes: spendFreezeRepository,
       onInsufficientCredits: recordInsufficientCredits,
     },
+    runBudget,
     enqueue: enqueueGenerationJob,
     recordUsage: recordMusicUsage,
     now: () => new Date(),

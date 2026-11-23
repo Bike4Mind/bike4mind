@@ -1,5 +1,7 @@
-import { getQuestErrorCode } from '@bike4mind/common';
+import { CreditHolderType, getQuestErrorCode, type CompletionRunAttribution } from '@bike4mind/common';
 import {
+  CompletionRunModel,
+  completionRunRepository,
   CreditTransaction,
   Organization,
   PendingCreditHoldModel,
@@ -34,6 +36,7 @@ beforeAll(async () => {
     Organization.createCollection(),
     PendingCreditHoldModel.createCollection(),
     CreditTransaction.createCollection(),
+    CompletionRunModel.createCollection(),
   ]);
 });
 
@@ -45,6 +48,7 @@ afterEach(async () => {
     Organization.collection.deleteMany({}),
     PendingCreditHoldModel.collection.deleteMany({}),
     CreditTransaction.collection.deleteMany({}),
+    CompletionRunModel.collection.deleteMany({}),
   ]);
 });
 
@@ -138,5 +142,104 @@ describe('image credit holds against a replica set', () => {
     expect(charged).toBe(37);
     expect(await balance()).toBe(63);
     expect(await CreditTransaction.countDocuments({ type: 'image_generation_usage' })).toBe(1);
+  });
+});
+
+describe('image credit holds against a budgeted completion run', () => {
+  async function budgetedRun(userId: string, budgetCredits: number) {
+    const created = await completionRunRepository.create({
+      userId,
+      ownerType: CreditHolderType.User,
+      ownerId: userId,
+      budgetCredits,
+    });
+    const run: CompletionRunAttribution = { runId: created.runId, role: 'worker', purpose: 'tool' };
+    return {
+      run,
+      committed: async () => (await completionRunRepository.findById(created.runId))?.committedCredits,
+    };
+  }
+
+  it('claims the whole hold against the run and records the claim on the pending row', async () => {
+    const { userId, balance } = await userWith(100);
+    const { run, committed } = await budgetedRun(userId, 50);
+
+    const hold = await imageCreditHolds.hold({ userId, organizationId: null, requiredCredits: 40, run, ...context });
+
+    expect(hold.runClaim).toEqual({ runId: run.runId, credits: 40 });
+    expect(await committed()).toBe(40);
+    expect(await balance()).toBe(60);
+    const pending = await pendingCreditHoldRepository.claim(hold.pendingHoldId!);
+    expect(pending?.runClaim).toEqual({ runId: run.runId, credits: 40 });
+  });
+
+  it('refuses a hold the run cannot fit whole and moves nothing', async () => {
+    const { userId, balance } = await userWith(100);
+    const { run, committed } = await budgetedRun(userId, 30);
+
+    const refusal = await imageCreditHolds
+      .hold({ userId, organizationId: null, requiredCredits: 40, run, ...context })
+      .catch((error: unknown) => error);
+
+    expect((refusal as { additionalInfo?: { errorCode?: string } }).additionalInfo?.errorCode).toBe(
+      'run_budget_exhausted'
+    );
+    expect(getQuestErrorCode(refusal)).toBe('run_budget_exhausted');
+    expect(await balance()).toBe(100);
+    expect(await committed()).toBe(0);
+    expect(await PendingCreditHoldModel.countDocuments()).toBe(0);
+  });
+
+  it('rolls the run claim back when the balance hold is refused', async () => {
+    const { userId, balance } = await userWith(10);
+    const { run, committed } = await budgetedRun(userId, 50);
+
+    const refusal = await imageCreditHolds
+      .hold({ userId, organizationId: null, requiredCredits: 40, run, ...context })
+      .catch((error: unknown) => error);
+
+    expect(getQuestErrorCode(refusal)).toBe('insufficient_credits');
+    expect(await balance()).toBe(10);
+    expect(await committed()).toBe(0);
+    expect(await PendingCreditHoldModel.countDocuments({ userId })).toBe(0);
+  });
+
+  it('settle releases the claim down to the charge and the ledger row carries the run', async () => {
+    const { userId, balance } = await userWith(100);
+    const { run, committed } = await budgetedRun(userId, 50);
+    const hold = await imageCreditHolds.hold({ userId, organizationId: null, requiredCredits: 40, run, ...context });
+
+    const charged = await imageCreditHolds.settle(hold, 37, { ...entry, run }, context);
+    await imageCreditHolds.release(hold, context);
+
+    expect(charged).toBe(37);
+    expect(await balance()).toBe(63);
+    expect(await committed()).toBe(37);
+    const row = await CreditTransaction.collection.findOne({ type: 'image_generation_usage' });
+    expect(row?.metadata?.run).toEqual(expect.objectContaining({ runId: run.runId, purpose: 'tool' }));
+  });
+
+  it('release returns the whole claim to the run, once', async () => {
+    const { userId, balance } = await userWith(100);
+    const { run, committed } = await budgetedRun(userId, 50);
+    const hold = await imageCreditHolds.hold({ userId, organizationId: null, requiredCredits: 40, run, ...context });
+
+    await imageCreditHolds.release(hold, context);
+    await imageCreditHolds.release(hold, context);
+
+    expect(await balance()).toBe(100);
+    expect(await committed()).toBe(0);
+    expect(await PendingCreditHoldModel.countDocuments()).toBe(0);
+  });
+
+  it('records no claim without a run', async () => {
+    const { userId } = await userWith(100);
+    const { committed } = await budgetedRun(userId, 50);
+
+    const hold = await imageCreditHolds.hold({ userId, organizationId: null, requiredCredits: 40, ...context });
+
+    expect(hold.runClaim).toBeUndefined();
+    expect(await committed()).toBe(0);
+    expect((await PendingCreditHoldModel.findById(hold.pendingHoldId).lean())?.runClaim).toBeUndefined();
   });
 });
