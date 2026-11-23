@@ -136,7 +136,8 @@ final class WidgetEntryMapperTests: XCTestCase {
 
   func testNextRefreshTakesTheEarliestDeadline() {
     var snapshot = running(observedAt: referenceDate)
-    snapshot.pendingDecisions = .init(approvals: 1, briefDecisions: 0, observedAt: referenceDate.addingTimeInterval(-600))
+    snapshot.pendingDecisions = .init(
+      approvals: 1, briefDecisions: 0, observedAt: referenceDate.addingTimeInterval(-600))
     XCTAssertEqual(
       mapper(snapshot, at: 60).nextRefresh(), referenceDate.addingTimeInterval(PendingAction.lifetime - 600 + 1))
   }
