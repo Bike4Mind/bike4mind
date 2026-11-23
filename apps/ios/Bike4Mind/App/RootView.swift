@@ -143,6 +143,7 @@ struct RootView: View {
     services.credits.invalidate()
     // The profile belongs to the account that fetched it; the next sign-in must not see it.
     services.accountProfiles.invalidate()
+    services.transcriptCache.invalidate()
     // The model lists depend on the account's plan, so they go with it.
     services.studioModels.invalidate()
     // Decoded images are account content too, and this runs for server-forced sign-outs as well as user-initiated ones.

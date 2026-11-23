@@ -16,6 +16,7 @@ final class AppServices {
     let api: APIClient
     let realtime: WSClient
     let cache: FileSessionListCache
+    let transcriptCache: SettledTranscriptCache
     let media: MediaClient
     let studio: StudioClient
     let capture: CaptureStack
@@ -248,6 +249,7 @@ final class AppServices {
   }
 
   var sessionListCache: any SessionListCache { current.cache }
+  var transcriptCache: SettledTranscriptCache { current.transcriptCache }
   var sessionHandoff: SessionHandoffClient {
     SessionHandoffClient(baseURL: auth.environment.baseURL, tokens: auth)
   }
@@ -381,6 +383,7 @@ final class AppServices {
     }
     let environment = auth.environment
     let auth = self.auth
+    let transcriptCache = SettledTranscriptCache()
     // The share extension reads the server from the App Group, so it always follows the app's choice.
     SharedServerEnvironment.store().save(environment)
     let fresh = Graph(
@@ -390,9 +393,12 @@ final class AppServices {
         handshake: RealtimeHandshake(baseURL: environment.baseURL, tokens: auth),
         tokenRotations: { await auth.accessTokenRotations() }),
       cache: FileSessionListCache(directory: FileSessionListCache.defaultDirectory(), environment: environment),
+      transcriptCache: transcriptCache,
       media: MediaClient(baseURL: environment.baseURL, tokens: auth),
       studio: StudioClient(baseURL: environment.baseURL, tokens: auth),
-      capture: .live(baseURL: environment.baseURL, tokens: auth, ownIdentifier: BackgroundSessionIdentifier.app),
+      capture: .live(
+        baseURL: environment.baseURL, tokens: auth, ownIdentifier: BackgroundSessionIdentifier.app,
+        didSendToSession: { id in await transcriptCache.remove(sessionID: id) }),
       account: AccountClient(baseURL: environment.baseURL, tokens: auth),
       stepUp: StepUpClient(baseURL: environment.baseURL, tokens: auth)
     )

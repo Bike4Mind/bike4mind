@@ -12,7 +12,7 @@ struct SessionDetailView: View {
     ChatScreen(
       session: session, api: services.api, realtime: services.realtime, activities: services.questActivities,
       agentRuns: services.agentRuns, pendingActions: services.pendingActions,
-      firstTurn: services.navigator.takeOpeningTurn(forSession: session.id)
+      firstTurn: services.navigator.takeOpeningTurn(forSession: session.id), transcriptCache: services.transcriptCache
     )
     .toolbar {
       ToolbarItem(placement: .topBarTrailing) {
@@ -39,14 +39,15 @@ private struct ChatScreen: View {
 
   init(
     session: SessionSummary, api: any B4MAPI, realtime: any RealtimeClient, activities: any QuestActivityTracking,
-    agentRuns: any AgentRunStarting, pendingActions: any PendingActionAPI, firstTurn: QuestTurn?
+    agentRuns: any AgentRunStarting, pendingActions: any PendingActionAPI, firstTurn: QuestTurn?,
+    transcriptCache: SettledTranscriptCache
   ) {
     self.session = session
     _title = State(initialValue: session.name)
     _model = State(
       initialValue: ChatViewModel(
         sessionID: session.id, api: api, realtime: realtime, title: session.name, activities: activities,
-        agentRuns: agentRuns, pendingActions: pendingActions, firstTurn: firstTurn))
+        agentRuns: agentRuns, pendingActions: pendingActions, firstTurn: firstTurn, transcriptCache: transcriptCache))
   }
 
   var body: some View {
