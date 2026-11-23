@@ -101,6 +101,15 @@ describe('NeedsYouMonitor with no window open', () => {
     expect(notices).toHaveLength(2);
   });
 
+  it('badges an unread finished reply without a notice, and still announces a request that lands on it', async () => {
+    monitor.observe({ sessionId: 'agent', status: 'needs-action', unreadReply: true });
+    await monitor.settled();
+    expect(notices).toEqual([]);
+    expect(setBadge).toHaveBeenLastCalledWith(1);
+    await enter('agent');
+    expect(notices).toHaveLength(1);
+  });
+
   it('names the parent by its title when the parent is the one waiting', async () => {
     await enter('root');
     expect(notices[0]).toMatchObject({ sessionId: 'root', rootId: 'root', title: 'Session root needs you' });

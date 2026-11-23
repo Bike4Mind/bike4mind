@@ -9,6 +9,7 @@ import {
   type PendingTaskDecision,
   type TaskContract,
   type TaskDecisionAnswer,
+  type WorkerTask,
 } from '@shared/orchestration';
 import type { ChatModelOption, ChatSessionSummary, ChatStreamEvent } from '@shared/chat';
 import { ChatService } from './ChatService';
@@ -403,6 +404,19 @@ describe('a worker decision that only the user can make', () => {
     } finally {
       restarted.dispose();
     }
+  });
+
+  it.each<WorkerTask['state']>([
+    { status: 'escalation-requested', reason: 'Need a stronger model', evidence: ['Proof'], decisionId: 'upgrade' },
+    { status: 'budget-paused', reason: 'Budget reached' },
+  ])('keeps a $status task needing the user after a restart and a view', async state => {
+    const { asker } = await ask();
+    await store.updateWorkerTask(asker.id, task => ({ ...task, state }));
+    restart();
+    await service.listTaskDecisions();
+    expect(activity.runtimeStatusOf(asker.id)).toBe('needs-action');
+    await service.getSession(asker.id, true);
+    expect(activity.statusOf(asker.id)).toBe('needs-action');
   });
 
   it.each(['skip', 'cancel', 'delete', 'model change'] as const)(
