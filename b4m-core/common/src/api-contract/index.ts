@@ -41,6 +41,12 @@ export { listModelsContract } from './contracts/models.contract';
 export { generateImageContract } from './contracts/imageGeneration.contract';
 export { editImageContract } from './contracts/imageEdit.contract';
 export {
+  cancelImageJobContract,
+  createImageJobContract,
+  getImageJobContract,
+  listImageJobsContract,
+} from './contracts/imageJob.contract';
+export {
   createFileUploadContract,
   getFileContract,
   listFilesContract,

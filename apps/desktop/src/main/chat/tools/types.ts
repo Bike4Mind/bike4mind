@@ -53,18 +53,12 @@ import type { WebSearchTurn } from './webSearchLimits';
 export interface MediaContext {
   client: MediaApiClient;
   store: MediaStore;
-  /** Base for generated-file URLs, from serverConfig. Relative on self-host, absolute on a CDN. */
-  cdnUrl: string;
-  /** Names the notebook the server creates for this conversation's first generation. */
-  notebookName: string;
   /** Image models this deployment offers. Lazy: a turn with no image generation never asks. */
   listImageModels(): Promise<string[]>;
   /** Video models this caller can use; cached, and read at turn start to decide whether to offer the tool. */
   listVideoModels(): Promise<VideoModel[]>;
   /** Records and follows a created video job. Absent where nothing can follow one. */
   videoJobs?: Pick<VideoJobScheduler, 'track'>;
-  getRemoteSessionId(): string | undefined;
-  setRemoteSessionId(remoteSessionId: string): Promise<void>;
 }
 
 /**

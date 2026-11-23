@@ -38,6 +38,12 @@ import { listModelsContract } from './models.contract';
 import { generateImageContract } from './imageGeneration.contract';
 import { editImageContract } from './imageEdit.contract';
 import {
+  cancelImageJobContract,
+  createImageJobContract,
+  getImageJobContract,
+  listImageJobsContract,
+} from './imageJob.contract';
+import {
   createFileUploadContract,
   getFileContract,
   listFilesContract,
@@ -225,6 +231,10 @@ export const CONTRACTS: readonly EndpointContract[] = [
   listModelsContract,
   generateImageContract,
   editImageContract,
+  createImageJobContract,
+  getImageJobContract,
+  listImageJobsContract,
+  cancelImageJobContract,
   createFileUploadContract,
   getFileContract,
   listFilesContract,
