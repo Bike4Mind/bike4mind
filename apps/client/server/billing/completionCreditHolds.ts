@@ -1,5 +1,6 @@
-import { CreditHolderType } from '@bike4mind/common';
+import { CreditHolderType, RUN_BUDGET_EXHAUSTED_ERROR_CODE, UnprocessableEntityError } from '@bike4mind/common';
 import {
+  completionRunRepository,
   pendingCreditHoldRepository,
   userRepository,
   warmExchangeAttribution,
@@ -16,12 +17,25 @@ import { observeCreditHold, recordSettlementAfterSweep } from '@bike4mind/server
 export const COMPLETION_CREDIT_HOLD_TTL_MS = 60 * 60_000;
 const SETTLEMENT_ATTEMPTS = 3;
 
-/** One instance per completion; inference always runs outside the billing transactions. */
+/** The deterministic refusal a client shows when a run has no headroom left; no model call writes it. */
+export function runBudgetExhaustedMessage(budgetCredits: number, committedCredits: number): string {
+  return (
+    `This run's credit budget is used up: ${committedCredits} of its ${budgetCredits} credits are spent or ` +
+    'reserved by requests still running. Retry once those requests finish, or raise the run budget.'
+  );
+}
+
+/**
+ * One instance per completion; inference always runs outside the billing transactions. A completion
+ * attributed to a budgeted run claims its run budget in the same transaction as its balance hold, tops
+ * that claim up before each tool round, and every terminal outcome of the hold (settle, refund,
+ * expired-hold sweep) releases that claim with it.
+ */
 export function createCompletionCreditHolds(logger: Logger, apiKeyId?: string): CompletionCreditHolds {
   let pending: PendingCreditHold | undefined;
 
   return {
-    async reserve(hold, debit) {
+    async reserve(hold, debit, runClaim) {
       if (hold.ownerType === CreditHolderType.User) {
         const user = await userRepository.findById(hold.userId);
         if (user) {
@@ -35,22 +49,27 @@ export function createCompletionCreditHolds(logger: Logger, apiKeyId?: string): 
         { ...hold, featureLabel: 'platform-key completion', lifecycle: 'completion' },
         () =>
           withTransaction(async () => {
+            const claimed = runClaim && (await claimRunBudget(runClaim));
             const holder = await debit();
             return pendingCreditHoldRepository.record(
               { ...hold, balanceAfterHold: holder.currentCredits },
               'platform-key completion',
-              new Date(Date.now() + COMPLETION_CREDIT_HOLD_TTL_MS)
+              new Date(Date.now() + COMPLETION_CREDIT_HOLD_TTL_MS),
+              claimed ? { runId: runClaim.runId, credits: claimed } : undefined
             );
           })
       );
+      return pending.runClaim?.credits;
     },
     async refund(refund) {
       if (!pending) return false;
       const holdId = pending.id;
       try {
         return await withTransaction(async () => {
-          if (!(await pendingCreditHoldRepository.claim(holdId))) return false;
+          const claimed = await pendingCreditHoldRepository.claim(holdId);
+          if (!claimed) return false;
           await refund();
+          if (claimed.runClaim) await completionRunRepository.releaseClaim(claimed.runClaim, 0);
           return true;
         });
       } catch (error) {
@@ -65,10 +84,13 @@ export function createCompletionCreditHolds(logger: Logger, apiKeyId?: string): 
       for (let attempt = 1; attempt <= SETTLEMENT_ATTEMPTS; attempt++) {
         try {
           const settled = await withTransaction(async () => {
-            if (!(await pendingCreditHoldRepository.markSettled(holdId, chargedCredits))) {
+            const settledHold = await pendingCreditHoldRepository.markSettledAndRead(holdId, chargedCredits);
+            if (!settledHold) {
               return (await pendingCreditHoldRepository.findSettlement(holdId)) !== null;
             }
-            await settle();
+            const recordedCredits = await settle({ runClaimCredits: settledHold.runClaim?.credits });
+            // The stored claim, not `pending`: a top-up can commit even when its acknowledgement was lost.
+            if (settledHold.runClaim) await completionRunRepository.releaseClaim(settledHold.runClaim, recordedCredits);
             return true;
           });
           if (!settled) {
@@ -93,5 +115,41 @@ export function createCompletionCreditHolds(logger: Logger, apiKeyId?: string): 
       }
       return false;
     },
+    async topUpRunClaim(claim) {
+      const runClaim = pending?.runClaim;
+      if (!pending || !runClaim) return 0;
+      const holdId = pending.id;
+      try {
+        const added = await withTransaction(async () => {
+          const outcome = await completionRunRepository.claimBudget(
+            runClaim.runId,
+            claim.wantedCredits,
+            claim.minimumCredits
+          );
+          if (outcome.kind !== 'claimed') return 0;
+          // A hold already settled, refunded or swept has released its claim, so a top-up must not outlive it.
+          if (!(await pendingCreditHoldRepository.addRunClaimCredits(holdId, outcome.credits))) {
+            await completionRunRepository.releaseClaim({ runId: runClaim.runId, credits: outcome.credits }, 0);
+            return 0;
+          }
+          return outcome.credits;
+        });
+        pending = { ...pending, runClaim: { ...runClaim, credits: runClaim.credits + added } };
+        return added;
+      } catch (error) {
+        logger.error('Completion run claim top-up failed', { holdId, error });
+        return 0;
+      }
+    },
   };
+}
+
+async function claimRunBudget(claim: { runId: string; wantedCredits: number; minimumCredits: number }) {
+  const outcome = await completionRunRepository.claimBudget(claim.runId, claim.wantedCredits, claim.minimumCredits);
+  if (outcome.kind === 'exhausted') {
+    throw new UnprocessableEntityError(runBudgetExhaustedMessage(outcome.budgetCredits, outcome.committedCredits), {
+      errorCode: RUN_BUDGET_EXHAUSTED_ERROR_CODE,
+    });
+  }
+  return outcome.kind === 'claimed' ? outcome.credits : undefined;
 }

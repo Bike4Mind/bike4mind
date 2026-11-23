@@ -202,6 +202,28 @@ export const billingHolders = {
     kind: 'noUserData',
     note: 'Monthly provider-versus-internal spend totals; no per-person rows.',
   },
+  SpokeBudget: {
+    kind: 'holder',
+    references: [
+      {
+        path: 'reservations.userId',
+        matchBy: 'userId',
+        action: 'retain',
+        reason: 'Reservation bindings and accounting totals kept to prevent repeated spending on request retries',
+        retention: {
+          expiresBy: 'condition',
+          until: 'the client is permanently retired and no reservation can be executed or retried',
+        },
+        identifies: [
+          'reservations.requestId',
+          'reservations.reserved',
+          'reservations.charged',
+          'reservations.createdAt',
+          'reservations.state',
+        ],
+      },
+    ],
+  },
   // A 5-minute spend bucket. Scopes other than 'User' (platform, org, agent, apiKey, model) are not a person.
   SpendRollup: {
     kind: 'holder',

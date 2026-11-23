@@ -46,8 +46,9 @@ import './adminMorningBrief';
 import './organizationRetention';
 import { secrets } from './secrets';
 import { dlqTriageSweepDeadLetter } from './dlqTriageSweepDeadLetter';
-import { dlqTriagePermissions } from './dlqTriagePermissions';
+import { dlqTriageEvidencePermissions, dlqTriagePermissions, dlqTriageRoleNames } from './dlqTriagePermissions';
 import { cloudSecurityScanDeadLetter } from './cloudScanDeadLetter';
+import { mailBodyEnvironment, mailBodyPutPermission } from './mailBodyOffload';
 
 if (runsScheduledJobs && dlqTriageSweepDeadLetter) {
   const deadLetter = dlqTriageSweepDeadLetter;
@@ -65,12 +66,14 @@ if (runsScheduledJobs && dlqTriageSweepDeadLetter) {
         deadLetter.sendPermission,
         { actions: ['cloudwatch:DescribeAlarms'], resources: ['*'] },
         dlqTriagePermissions(),
+        ...dlqTriageEvidencePermissions(),
       ],
       transform: deadLetter.functionTarget,
     },
     transform: { target: { ...deadLetter.ruleTarget.target, input: undefined } },
   });
   deadLetter.allowRules([$util.output(sweep)]);
+  dlqTriageRoleNames.push(sweep.nodes.function.nodes.role.name);
 }
 
 const scheduleTaskCron = new sst.aws.Cron('scheduleTaskCron', {
@@ -1101,9 +1104,11 @@ const dataLakeBatchReconcileCron = runsScheduledJobs
         // queues its reviewer alert as an email.send event.
         link: [...allSecrets, dataLakeTaxonomyQueue, websocketApi, fabFileChunkQueue, fabFileBucket, eventBus],
         environment: {
+          ...mailBodyEnvironment(appFilesBucket),
           ...DEFAULT_LAMBDA_ENVIRONMENT,
         },
         permissions: [
+          mailBodyPutPermission(appFilesBucket),
           {
             actions: ['cloudwatch:PutMetricData'],
             resources: ['*'],

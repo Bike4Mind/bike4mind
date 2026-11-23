@@ -335,6 +335,21 @@ export function incompleteResult(
 }
 
 /**
+ * Serializes the results summary with every string made well-formed UTF-16. A reply can quote text
+ * that was cut in the middle of an emoji; JSON.stringify writes the leftover half as a lone
+ * `\udXXX` escape, which Node reads back but jq rejects, and the notify job in
+ * .github/workflows/e2e-ai-latency.yml reads this file with jq to build the report table.
+ */
+export function serializeResults(output: unknown): string {
+  // With the u flag a surrogate pair is one code point, so this class matches only unpaired halves.
+  return JSON.stringify(
+    output,
+    (_key, value: unknown) => (typeof value === 'string' ? value.replace(/[\uD800-\uDFFF]/gu, '\uFFFD') : value),
+    2
+  );
+}
+
+/**
  * Folds `next` into `prior`, one row per (id, attempt). Rewriting the same attempt replaces it;
  * a new attempt sits beside the earlier ones, which are marked `retried`. A retry used to overwrite
  * its first attempt, so a slow attempt that was retried and then passed vanished from the gate.

@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 const mocks = vi.hoisted(() => ({
   send: vi.fn(),
   sendTestEmail: vi.fn(),
+  getMailBody: vi.fn(),
   recordOutcome: vi.fn(),
   logger: { updateMetadata: vi.fn(), info: vi.fn(), error: vi.fn() },
 }));
@@ -18,10 +19,11 @@ vi.mock('@bike4mind/server-utils/utils/eventBus', () => ({
 vi.mock('@bike4mind/server-utils/utils/mailer/index', () => ({
   default: { sendEmail: mocks.send, sendTestEmail: mocks.sendTestEmail, transport: { kind: 'ses' } },
 }));
+vi.mock('@bike4mind/server-utils/utils/mailer/mailBodyStore', () => ({ getMailBody: mocks.getMailBody }));
 vi.mock('@bike4mind/server-utils/utils/mailer/deliveryOutcome', () => ({
   recordEmailDeliveryOutcome: mocks.recordOutcome,
 }));
-import { handler } from './sendEmail';
+import { handler, MailBodyMissingError } from './sendEmail';
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -223,6 +225,66 @@ it('does not let an email.send event ask for the test path', async () => {
   expect(mocks.send.mock.calls[0][0]).toBe('test@example.org');
 });
 
+describe('an event whose body was offloaded', () => {
+  const key = 'queued-mail/0b6f2f3c-7d8e-4a51-9c3e-2f1d5e6a7b8c.json';
+  const s3Error = (name: string, httpStatusCode: number) =>
+    Object.assign(new Error(name), { name, $metadata: { httpStatusCode } });
+  const deliverRef = (to = 'test@example.org') => deliver({ to, subject: 'Test', bodyRef: { key } });
+
+  it('reads the body and text back from the store and sends them', async () => {
+    mocks.getMailBody.mockResolvedValue({ html: '<p>stored html</p>', text: 'stored text' });
+    await deliverRef();
+    expect(mocks.getMailBody).toHaveBeenCalledWith(key);
+    expect(mocks.send).toHaveBeenCalledWith(
+      'test@example.org',
+      { subject: 'Test', html: '<p>stored html</p>', text: 'stored text' },
+      { category: undefined }
+    );
+    expect(everyLoggedValue()).not.toContain('stored html');
+  });
+
+  it('leaves the text key off when the stored body has none', async () => {
+    mocks.getMailBody.mockResolvedValue({ html: '<p>stored html</p>' });
+    await deliverRef();
+    expect(mocks.send.mock.calls[0][1]).toEqual({ subject: 'Test', html: '<p>stored html</p>' });
+  });
+
+  it.each([
+    ['NoSuchKey', 404],
+    ['AccessDenied', 403],
+  ])('throws a clear error naming the expiry when S3 answers %s', async (name, status) => {
+    mocks.getMailBody.mockRejectedValue(s3Error(name, status));
+    const failure = deliverRef();
+    await expect(failure).rejects.toBeInstanceOf(MailBodyMissingError);
+    await expect(failure).rejects.toThrow(`mail body ${key} could not be read (S3 ${name}): it has expired`);
+    expect(mocks.send).not.toHaveBeenCalled();
+  });
+
+  it('rethrows any other store failure as is, so EventBridge retries it', async () => {
+    const throttled = s3Error('SlowDown', 503);
+    mocks.getMailBody.mockRejectedValue(throttled);
+    await expect(deliverRef()).rejects.toBe(throttled);
+    expect(mocks.send).not.toHaveBeenCalled();
+  });
+
+  it('never reads the store for a sink-domain recipient', async () => {
+    vi.stubEnv('MAIL_SINK_DOMAINS', 'test.com');
+    await deliverRef('alice-e2e@test.com');
+    expect(mocks.getMailBody).not.toHaveBeenCalled();
+    expect(mocks.send).not.toHaveBeenCalled();
+  });
+
+  it('is not read for an inline body', async () => {
+    await send();
+    expect(mocks.getMailBody).not.toHaveBeenCalled();
+    expect(mocks.send).toHaveBeenCalledWith(
+      'test@example.org',
+      { subject: 'Test', html: 'Body' },
+      { category: undefined }
+    );
+  });
+});
+
 describe('delivery outcome write-back', () => {
   const ref = { kind: 'emailAttempt', attemptId: 'attempt-1' };
   const sendWithRef = (to = 'test@example.org') => deliver({ to, subject: 'Test', body: 'Body', ref });
@@ -245,6 +307,27 @@ describe('delivery outcome write-back', () => {
     expect(mocks.recordOutcome).toHaveBeenCalledExactlyOnceWith(ref, {
       ok: false,
       error: 'Recipient domain is not delivered on this stage',
+    });
+  });
+
+  it.each([
+    [
+      'an expired body',
+      Object.assign(new Error('NoSuchKey'), { name: 'NoSuchKey', $metadata: { httpStatusCode: 404 } }),
+    ],
+    [
+      'a throttled read',
+      Object.assign(new Error('SlowDown'), { name: 'SlowDown', $metadata: { httpStatusCode: 503 } }),
+    ],
+  ])('records a failed send when the offloaded body cannot be read (%s) and still throws', async (_, s3Error) => {
+    mocks.getMailBody.mockRejectedValue(s3Error);
+    await expect(
+      deliver({ to: 'test@example.org', subject: 'Test', bodyRef: { key: 'queued-mail/x.json' }, ref })
+    ).rejects.toThrow();
+    expect(mocks.send).not.toHaveBeenCalled();
+    expect(mocks.recordOutcome).toHaveBeenCalledExactlyOnceWith(ref, {
+      ok: false,
+      error: 'The queued message body could not be read',
     });
   });
 

@@ -188,6 +188,35 @@ export const USERS_AND_BILLING_GUIDE: readonly AdminGuideEntry[] = [
     keywords: ['credits', 'billing', 'usage', 'balance', 'transactions', 'credit ledger', 'adjustments log'],
   },
   {
+    id: 'spend-monitor',
+    title: 'Spend monitor',
+    summary:
+      'Live credit spend and the open spend incidents the spend monitor raised, with the accounts whose spending is frozen. Freezing stops new paid AI usage for a user, organization or API key until an admin lifts it.',
+    views: ['admin.spend_monitor'],
+    settings: [
+      'spendMonitorAutoPauseMode',
+      'spendMonitorAutoPauseStandardMinCredits',
+      'spendMonitorAutoPausePaidMinCredits',
+      'spendMonitorAutoPauseTrustedMinCredits',
+    ],
+    howTo: [
+      'The header tiles show platform credits in the last hour and 24 hours, open and critical incidents, frozen accounts and the automatic pause mode with its per-tier thresholds.',
+      'Open incidents list critical first. "Freeze spending" in a row\'s actions menu freezes that account; the "Freeze spending" button in the header freezes any user, organization or API key by id. Each needs a reason, and an Undo toast follows.',
+      'The Automatic pause column shows Paused or Frozen while the account is frozen, Would pause for a shadow decision, and Lifted once a pause was lifted.',
+      'Automatic pause runs in shadow mode by default; switch it to enforce and set per-tier thresholds (0 turns a tier off) on Admin settings.',
+      'Opening the tab needs support:read; freezing and lifting need credits:adjust.',
+    ],
+    keywords: [
+      'spend',
+      'spike',
+      'freeze spending',
+      'pause account',
+      'stop burning credits',
+      'spend incident',
+      'auto pause',
+    ],
+  },
+  {
     id: 'model-pricing-catalog',
     title: 'Model prices',
     summary:

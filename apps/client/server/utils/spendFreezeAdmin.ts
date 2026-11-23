@@ -4,7 +4,6 @@ import {
   BadRequestError,
   NotFoundError,
   SPEND_FREEZE_SCOPE_TYPES,
-  type ISpendFreeze,
   type SpendFreezeScope,
 } from '@bike4mind/common';
 import {
@@ -88,8 +87,11 @@ export const assertScopeExists = async (
   if (!(await organizationRepository.findById(scope.scopeId))) throw new NotFoundError('Organization not found');
 };
 
-/** Human label per freeze id: email, organization name or key prefix. Batched per scope type. */
-export const labelFreezes = async (freezes: ISpendFreeze[]): Promise<Map<string, string>> => {
+/**
+ * Human label per scope (see `labelKey`): email, organization name or key prefix. Batched per scope
+ * type. Takes any scoped records, so incidents label the same way freezes do.
+ */
+export const labelFreezes = async (freezes: readonly SpendFreezeScope[]): Promise<Map<string, string>> => {
   const idsOf = (scopeType: SpendFreezeScope['scopeType']) =>
     freezes.filter(freeze => freeze.scopeType === scopeType).map(freeze => freeze.scopeId);
   const [users, organizations, apiKeys] = await Promise.all([

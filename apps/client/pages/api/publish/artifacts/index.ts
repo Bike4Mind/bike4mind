@@ -1,3 +1,4 @@
+import { ApiKeyScope } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
 import { PublishedArtifact, Project } from '@bike4mind/database';
 import {
@@ -43,7 +44,10 @@ import { signOwnerThumbnailUrl } from '@server/services/publish/thumbnailUrl';
 const LEGACY_LIMIT = 200;
 const MAX_LIMIT = 200;
 
-const handler = baseApi().get(async (req, res) => {
+const handler = baseApi({
+  requiredScopes: [ApiKeyScope.ARTIFACTS_PUBLISH, ApiKeyScope.ADMIN],
+  grandfatherLegacyKeys: true,
+}).get(async (req, res) => {
   if (!req.user) {
     return res.status(401).json({ error: 'Authentication required' });
   }

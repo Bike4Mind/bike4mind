@@ -63,7 +63,6 @@
   "apps/client/pages/api/v1/sessions/index.ts": { "b4m/require-update-validators": { "count": 1 } },
   "apps/client/server/admin/adminRoles/adapters.ts": { "b4m/require-update-validators": { "count": 1 } },
   "apps/client/server/admin/ai/feedbackTriage.ts": { "b4m/require-update-validators": { "count": 1 } },
-  "apps/client/server/admin/ai/readiness.ts": { "b4m/require-update-validators": { "count": 1 } },
   "apps/client/server/admin/ai/runAdminAi.ts": { "b4m/require-update-validators": { "count": 1 } },
   "apps/client/server/admin/campaignWatches.ts": { "b4m/require-update-validators": { "count": 2 } },
   "apps/client/server/admin/stripeWrite/adminStripeWrite.ts": { "b4m/require-update-validators": { "count": 1 } },
@@ -197,7 +196,6 @@
   "packages/database/src/models/billing/HeldCreditRewardModel.ts": { "b4m/require-update-validators": { "count": 6 } },
   "packages/database/src/models/billing/PaymentAttemptModel.ts": { "b4m/require-update-validators": { "count": 3 } },
   "packages/database/src/models/billing/PaymentRiskActionModel.ts": { "b4m/require-update-validators": { "count": 3 } },
-  "packages/database/src/models/billing/PendingCreditHoldModel.ts": { "b4m/require-update-validators": { "count": 1 } },
   "packages/database/src/models/billing/ReferralSubscriptionRewardModel.ts": { "b4m/require-update-validators": { "count": 3 } },
   "packages/database/src/models/billing/SpendAlertModel.ts": { "b4m/require-update-validators": { "count": 1 } },
   "packages/database/src/models/billing/StripeDisputeModel.ts": { "b4m/require-update-validators": { "count": 8 } },
@@ -966,11 +964,6 @@
   "apps/client/app/components/admin/Users/CreateUserModal.tsx": {
     "@typescript-eslint/no-explicit-any": {
       "count": 4
-    }
-  },
-  "apps/client/app/components/admin/__tests__/SlackExportModal.test.tsx": {
-    "@typescript-eslint/no-explicit-any": {
-      "count": 1
     }
   },
   "apps/client/app/components/admin/email/EmailJobsPanel.tsx": {
@@ -3565,16 +3558,6 @@
     }
   },
   "apps/workers/src/cron/adminMorningBrief.ts": {
-    "b4m/no-workers-server-bridge": {
-      "count": 1
-    }
-  },
-  "apps/workers/src/events/dlqTriage.test.ts": {
-    "b4m/no-workers-server-bridge": {
-      "count": 1
-    }
-  },
-  "apps/workers/src/events/dlqTriage.ts": {
     "b4m/no-workers-server-bridge": {
       "count": 1
     }

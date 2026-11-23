@@ -42,4 +42,9 @@ describe('DLQ recommendation policy', () => {
       'private content'
     );
   });
+  it('does not suggest a bug is fixed even with a contradictory transient flag', () => {
+    expect(recommendDlqAction({ ...input, failure: failure({ category: 'bug', transientFailure: true }) }).action).toBe(
+      'investigate'
+    );
+  });
 });

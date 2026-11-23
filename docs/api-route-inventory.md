@@ -36,7 +36,7 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 
 ## Summary
 
-1256 routes: 125 contracted, 11 aliases of another route, 346 with no static caller in `apps/client/app`.
+1257 routes: 126 contracted, 11 aliases of another route, 347 with no static caller in `apps/client/app`.
 
 | Area | Routes | Contracted | jwt+key | jwt | optional | handler | No static caller |
 | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -154,7 +154,7 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | user | 2 | 0 | 1 | 1 | 0 | 0 | 0 |
 | user-api-keys | 8 | 0 | 7 | 1 | 0 | 0 | 1 |
 | users | 36 | 0 | 28 | 8 | 0 | 0 | 5 |
-| v1 | 123 | 119 | 106 | 10 | 0 | 7 | 109 |
+| v1 | 124 | 120 | 107 | 10 | 0 | 7 | 110 |
 | voice | 6 | 0 | 5 | 0 | 0 | 1 | 2 |
 | webhooks | 12 | 0 | 7 | 0 | 0 | 5 | 5 |
 | websocket | 1 | 0 | 0 | 1 | 0 | 0 | 0 |
@@ -661,7 +661,7 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 
 | Route | Methods | Auth | Scopes | Permissions | Contract | Alias of | Callers |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| `/api/artifacts` | GET, POST | jwt+key | - | - | no | - | 6: `components/Knowledge/KnowledgeViewer.tsx`, `components/artifacts/ArtifactCreator.tsx`, `components/artifacts/ArtifactGallery.tsx` +3 more |
+| `/api/artifacts` | GET, POST | jwt+key | `admin:*`, `notebooks:read`, `notebooks:write` | - | no | - | 6: `components/Knowledge/KnowledgeViewer.tsx`, `components/artifacts/ArtifactCreator.tsx`, `components/artifacts/ArtifactGallery.tsx` +3 more |
 | `/api/artifacts/[id]` | GET, PUT, DELETE | jwt+key | - | - | no | - | 6: `components/Knowledge/KnowledgeViewer.tsx`, `components/artifacts/ArtifactEditor.tsx`, `components/artifacts/ArtifactGallery.tsx` +3 more |
 | `/api/artifacts/[id]/versions` | GET, POST | jwt+key | `notebooks:read`, `notebooks:write` | - | no | - | 1: `hooks/data/artifacts.ts` |
 | `/api/artifacts/[id]/versions/[version]` | GET | jwt+key | - | - | no | - | 3: `components/Knowledge/PythonArtifactViewer.tsx`, `components/Knowledge/ReactArtifactViewer.tsx`, `hooks/data/artifacts.ts` |
@@ -1264,7 +1264,7 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | `/api/oauth/openid-configuration` | GET | handler | - | - | no | - | 0 |
 | `/api/oauth/refresh` | POST | handler | - | - | no | - | 0 |
 | `/api/oauth/token` | POST | handler | - | - | no | - | 0 |
-| `/api/oauth/userinfo` | GET | jwt+key | - | - | no | - | 0 |
+| `/api/oauth/userinfo` | GET | jwt+key | `admin:*`, `me:read` | - | no | - | 0 |
 
 ### ollama
 
@@ -1431,10 +1431,10 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | `/api/publish/annotations/[publicId]/[id]` | PATCH, DELETE | optional | - | - | no | - | 0 |
 | `/api/publish/annotations/[publicId]/can-comment` | GET | optional | - | - | no | - | 0 |
 | `/api/publish/artifact/draft-upload` | PUT | handler | - | - | no | - | 0 |
-| `/api/publish/artifact/finalize` | POST | jwt+key | - | - | no | - | 1: `utils/publishApi.ts` |
-| `/api/publish/artifact/upload-url` | POST | jwt+key | - | - | no | - | 1: `utils/publishApi.ts` |
-| `/api/publish/artifacts` | GET | jwt+key | - | - | no | - | 1: `utils/publishApi.ts` |
-| `/api/publish/artifacts/[id]` | GET, PATCH, DELETE | jwt+key | - | - | no | - | 1: `utils/publishApi.ts` |
+| `/api/publish/artifact/finalize` | POST | jwt+key | `admin:*`, `artifacts:publish` | - | no | - | 1: `utils/publishApi.ts` |
+| `/api/publish/artifact/upload-url` | POST | jwt+key | `admin:*`, `artifacts:publish` | - | no | - | 1: `utils/publishApi.ts` |
+| `/api/publish/artifacts` | GET | jwt+key | `admin:*`, `artifacts:publish` | - | no | - | 1: `utils/publishApi.ts` |
+| `/api/publish/artifacts/[id]` | GET, PATCH, DELETE | jwt+key | `admin:*`, `artifacts:publish` | - | no | - | 1: `utils/publishApi.ts` |
 | `/api/publish/artifacts/[id]/report` | POST | jwt+key | - | - | no | - | 1: `utils/publishApi.ts` |
 | `/api/publish/fabfile` | POST | jwt+key | - | - | no | - | 1: `utils/publishApi.ts` |
 | `/api/publish/gate/owner` | POST | optional | - | - | no | - | 0 |
@@ -1753,8 +1753,8 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 
 | Route | Methods | Auth | Scopes | Permissions | Contract | Alias of | Callers |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| `/api/transforms/batch` | POST | jwt+key | - | - | no | - | 0 |
-| `/api/transforms/batch/[id]` | GET | jwt+key | - | - | no | - | 0 |
+| `/api/transforms/batch` | POST | jwt+key | `admin:*`, `ai:generate` | - | no | - | 0 |
+| `/api/transforms/batch/[id]` | GET | jwt+key | `admin:*`, `ai:generate` | - | no | - | 0 |
 
 ### turnstile
 
@@ -1872,6 +1872,7 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | `/api/v1/client-config` | GET | jwt+key | `ai:chat`, `ai:generate`, `me:read` | - | yes | - | 0 |
 | `/api/v1/client-config/public` | GET | handler | - | - | yes | - | 0 |
 | `/api/v1/completion-runs` | POST | jwt+key | `ai:chat`, `ai:generate` | - | yes | - | 0 |
+| `/api/v1/completion-runs/[runId]/budget` | POST | jwt+key | `ai:chat`, `ai:generate` | - | yes | - | 0 |
 | `/api/v1/completion-runs/[runId]/usage` | GET | jwt+key | `ai:chat`, `ai:generate` | - | yes | - | 0 |
 | `/api/v1/credits` | GET | jwt+key | `ai:chat`, `ai:decide`, `ai:generate`, `me:read` | - | yes | - | 0 |
 | `/api/v1/credits/transactions` | GET | jwt+key | `me:read` | - | yes | - | 0 |
