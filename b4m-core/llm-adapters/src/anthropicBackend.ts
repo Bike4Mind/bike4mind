@@ -1,5 +1,6 @@
 import { Anthropic, RateLimitError } from '@anthropic-ai/sdk';
 import { providerFetchOptions } from './providerDispatcher';
+import { assertAnthropicEvaluationWire, anthropicEvaluationUsage } from './anthropicEvaluation';
 import type {
   MessageCreateParamsBase,
   ContentBlock,
@@ -981,6 +982,11 @@ export class AnthropicBackend implements ICompletionBackend {
     toolsUsed: Array<RecordableToolUse> = []
   ): Promise<void> {
     this.currentModel = model;
+    if (options._internal?.evaluation) {
+      if (options.executeTools !== false)
+        throw new BadRequestError('Evaluation cannot execute client tools on the server.');
+      options = { ...options, stream: false };
+    }
     options = {
       temperature: 0.9,
       ...options,
@@ -2837,14 +2843,22 @@ export class AnthropicBackend implements ICompletionBackend {
           roundStart = Date.now();
           options._internal?.turnTelemetry?.onSemaphoreWait(roundStart - slotRequestedAt);
           // Wrap with retry for transient network errors (TLS abort, fetch terminated)
+          const evaluation = options._internal?.evaluation;
+          if (evaluation) {
+            const info = this._dispatch.for(model);
+            if (!info) throw new BadRequestError('Evaluation model metadata missing.');
+            assertAnthropicEvaluationWire(apiParams, info.contextWindow);
+            await evaluation.admit(info, apiParams.model, apiParams.max_tokens);
+          }
           response = await withRetry(
             () =>
               this._api.messages.create(apiParams, {
                 signal: options.abortSignal,
+                ...(evaluation ? { maxRetries: 0 } : {}),
                 ...(requestExtraHeaders ? { headers: requestExtraHeaders } : {}),
               }),
             {
-              maxRetries: 3,
+              maxRetries: evaluation ? 0 : 3,
               initialDelayMs: 500,
               maxDelayMs: 10000,
               jitterFactor: 0.25,
@@ -2855,6 +2869,7 @@ export class AnthropicBackend implements ICompletionBackend {
             }
           ).then(r => r.result);
           requestAccepted = true;
+          if (evaluation) await evaluation.reconcile(anthropicEvaluationUsage(response, apiParams.model));
         } finally {
           release?.();
         }
@@ -3310,6 +3325,7 @@ export class AnthropicBackend implements ICompletionBackend {
         !!apiParams.output_config?.format || !!apiParams.tools?.some(tool => 'strict' in tool && tool.strict === true);
       if (
         toolCallCount === 0 &&
+        !options._internal?.evaluation &&
         !requestAccepted &&
         !options._internal?.strictSchemaRetried &&
         sentStrictSchema &&

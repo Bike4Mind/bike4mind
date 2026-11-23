@@ -62,6 +62,66 @@ describe('CompletionRunModel', () => {
   });
 
   describe('run budget', () => {
+    it('atomically persists evaluation updates across repository restarts', async () => {
+      const run = await completionRunRepository.create({
+        userId: 'u',
+        ownerType: CreditHolderType.User,
+        ownerId: 'u',
+        rootSessionId: 'root',
+        evaluation: {
+          version: 1,
+          revision: 0,
+          limits: { version: 1, maxProviderUsd: 150, maxTokens: 10000, maxRequests: 100, modelIds: ['model'] },
+          committedProviderUsd: 0,
+          committedTokens: 0,
+          committedRequests: 0,
+          receipts: [],
+        },
+      });
+      await Promise.all(
+        Array.from({ length: 20 }, () =>
+          completionRunRepository.updateEvaluation(run.runId, state => {
+            state.committedRequests++;
+            return state;
+          })
+        )
+      );
+      expect((await completionRunRepository.findById(run.runId))?.evaluation?.committedRequests).toBe(20);
+    });
+    it('mints the same evaluation atomically on concurrent retries and never resets its limits or spend', async () => {
+      const input = {
+        userId: 'u',
+        ownerType: CreditHolderType.User as const,
+        ownerId: 'u',
+        rootSessionId: 'recovery-root',
+        evaluation: {
+          version: 1 as const,
+          revision: 0,
+          limits: { version: 1 as const, maxProviderUsd: 150, maxTokens: 10000, maxRequests: 100, modelIds: ['model'] },
+          committedProviderUsd: 0,
+          committedTokens: 0,
+          committedRequests: 0,
+          receipts: [],
+        },
+      };
+      const runs = await Promise.all(Array.from({ length: 10 }, () => completionRunRepository.create(input)));
+      expect(new Set(runs.map(run => run.runId)).size).toBe(1);
+      await completionRunRepository.updateEvaluation(runs[0].runId, state => ({
+        ...state,
+        committedRequests: 1,
+        committedProviderUsd: 2,
+      }));
+      expect((await completionRunRepository.create(input)).evaluation).toMatchObject({
+        committedRequests: 1,
+        committedProviderUsd: 2,
+      });
+      await expect(
+        completionRunRepository.create({
+          ...input,
+          evaluation: { ...input.evaluation, limits: { ...input.evaluation.limits, maxProviderUsd: 149 } },
+        })
+      ).rejects.toThrow('different policy');
+    });
     const owner = { userId: 'user-1', ownerType: CreditHolderType.User, ownerId: 'user-1' } as const;
 
     it('records a budget with nothing committed, and no counter for a run without one', async () => {

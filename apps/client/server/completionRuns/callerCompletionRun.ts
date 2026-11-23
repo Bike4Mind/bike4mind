@@ -49,6 +49,7 @@ export async function findCallerCompletionRun(runId: string, caller: CompletionR
 export function toCompletionRunBody(run: ICompletionRun): CompletionRun {
   return {
     runId: run.runId,
+    ...(run.evaluation && { evaluation: run.evaluation }),
     ...(run.rootSessionId !== undefined && { rootSessionId: run.rootSessionId }),
     ...(run.budgetCredits !== undefined && { budgetCredits: run.budgetCredits }),
     createdAt: run.createdAt.toISOString(),

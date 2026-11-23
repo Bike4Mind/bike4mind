@@ -191,11 +191,6 @@ void app.whenReady().then(async () => {
   // After ready, not before: safeStorage is only usable once the app is ready, and the vault
   // asks it whether encryption is available on its first access.
   const auth = registerAuth();
-  void runLiveEvaluation(
-    auth,
-    join(app.getPath('userData'), 'controlled-evaluation'),
-    process.argv.includes('--controlled-cost-evaluation-live')
-  ).catch(() => console.warn('EVALUATION: stopped; inspect the local evaluation report.'));
   registerSessionHandoff(auth);
   const attention = registerAttention({
     openWindow: createWindow,
@@ -444,7 +439,27 @@ void app.whenReady().then(async () => {
   // Restoring runs alongside the window opening rather than gating it: the renderer starts in
   // the `initializing` state and is pushed the outcome, so a slow or unreachable backend
   // delays the auth card, not the whole app.
-  void auth.initialize();
+  void auth
+    .initialize()
+    .then(() =>
+      runLiveEvaluation(
+        auth,
+        join(app.getPath('userData'), 'controlled-evaluation'),
+        process.argv.includes('--controlled-cost-evaluation-live'),
+        process.argv
+          .find(argument => argument.startsWith('--controlled-cost-evaluation-config='))
+          ?.split('=')
+          .slice(1)
+          .join('='),
+        {
+          finalPhase: process.argv.includes('--controlled-cost-evaluation-final'),
+          recoverRunId: process.argv
+            .find(argument => argument.startsWith('--controlled-cost-evaluation-recover-run='))
+            ?.split('=')[1],
+        }
+      )
+    )
+    .catch(() => console.warn('EVALUATION: stopped; inspect the local evaluation report.'));
 
   app.on('activate', () => {
     if (appWindows().length === 0) createWindow();

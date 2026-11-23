@@ -198,7 +198,10 @@ export async function streamCompletion(
   options: StreamOptions = {}
 ): Promise<void> {
   try {
-    await streamOnce(axiosInstance, endpoint, request, onEvent, signal, options);
+    const evaluation = evaluationContext.getStore();
+    const send = () => streamOnce(axiosInstance, endpoint, request, onEvent, signal, options);
+    if (evaluation) await evaluation.serialize(send);
+    else await send();
   } catch (err) {
     if (!isConnectionDrop(err)) throw err;
     if (signal?.aborted) return;
@@ -254,10 +257,14 @@ async function streamOnce(
   };
   const requestId = context.requestId;
   const evaluation = evaluationContext.getStore();
+  evaluation?.assertTransportOpen();
+  await evaluation?.reconcile();
   const events: CompletionStreamEvent[] = [];
   const release = evaluation?.reserve(requestId, request, evaluationModel(axiosInstance, request.model));
   let failed = true;
   try {
+    const evaluationWire = evaluation?.wire(requestId);
+    evaluation?.measure(requestId, request);
     let response: AxiosResponse;
     try {
       response = await axiosInstance.post(
@@ -268,6 +275,17 @@ async function streamOnce(
           ...(request.maxTokens ? { max_tokens: request.maxTokens } : {}),
           ...(request.sessionId ? { sessionId: request.sessionId } : {}),
           ...(request.run ? { run: request.run } : {}),
+          ...(evaluationWire
+            ? {
+                evaluation: evaluationWire.evaluation,
+                run: {
+                  ...request.run,
+                  ...evaluationWire.run,
+                  role: request.run?.role ?? 'root',
+                  purpose: request.run?.purpose ?? 'turn',
+                },
+              }
+            : {}),
           // The tool loop on this endpoint belongs to the CALLER: the model emits tool_use and
           // this client executes it locally, then sends the result back as another turn.
           options: {
@@ -326,20 +344,23 @@ async function streamOnce(
   } finally {
     try {
       evaluation?.record(requestId, events, failed);
+      await evaluation?.reconcile();
     } finally {
       release?.();
     }
   }
 }
 
-const evaluationModels = new WeakMap<AxiosInstance, ChatModelOption>();
+const evaluationModels = new WeakMap<AxiosInstance, Map<string, ChatModelOption>>();
 
 export function bindEvaluationModel(axios: AxiosInstance, model: ChatModelOption): void {
-  evaluationModels.set(axios, model);
+  const models = evaluationModels.get(axios) ?? new Map<string, ChatModelOption>();
+  models.set(model.id, model);
+  evaluationModels.set(axios, models);
 }
 
 function evaluationModel(axios: AxiosInstance, id: string): ChatModelOption {
-  return evaluationModels.get(axios) ?? { id, name: id };
+  return evaluationModels.get(axios)?.get(id) ?? { id, name: id };
 }
 
 /**

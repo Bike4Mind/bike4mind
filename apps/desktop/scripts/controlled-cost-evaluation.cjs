@@ -1,14 +1,25 @@
 const { spawnSync } = require('node:child_process');
 const { resolve } = require('node:path');
 
-function main(args) {
+function main(args, spawn = spawnSync) {
+  const live = args[0] === '--live' && args[1] === '--accept-paid-requests';
+  const extra = args.slice(2);
+  if (live && extra.every(arg => arg === '--final' || arg.startsWith('--config=') || arg.startsWith('--recover-run=')) &&
+      new Set(extra.map(arg => arg.split('=')[0])).size === extra.length) {
+    const result = spawn('pnpm', ['exec', 'electron', '.', '--controlled-cost-evaluation-live',
+      ...extra.map(arg => arg === '--final' ? '--controlled-cost-evaluation-final' : arg.startsWith('--recover-run=')
+        ? `--controlled-cost-evaluation-recover-run=${arg.slice('--recover-run='.length)}`
+        : `--controlled-cost-evaluation-config=${resolve(arg.slice('--config='.length))}`)],
+      { cwd: resolve(__dirname, '..'), stdio: 'inherit', env: process.env });
+    return result.status ?? 1;
+  }
   if (args.length > 1 || (args.length === 1 && args[0] !== '--dry-run')) {
     console.error(
-      'Live evaluation unavailable: no dedicated-provider-key aggregate hard-cap verifier or isolated credential route is implemented. Refusing all non-dry-run arguments; no credentials are read and no provider calls are made.'
+      'Usage: --dry-run OR --live --accept-paid-requests [--config=path] [--final] [--recover-run=UUID]. Live requires separate server administrator authorization.'
     );
     return 2;
   }
-  const result = spawnSync(
+  const result = spawn(
     'pnpm',
     ['exec', 'vitest', 'run', 'src/main/chat/ChatService.controlledCost.test.ts', '--maxWorkers=1'],
     {

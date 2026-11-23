@@ -1,141 +1,177 @@
-# Guarded Desktop live evaluation
+# Opt-in Desktop live evaluation
 
-This is a blocked implementation path, not paid evaluation evidence. No provider
-calls were made during implementation. The existing offline harness remains intact.
+Implementation is not authorization or evidence of savings. No paid calls were
+made while implementing this evaluator. Run it only with explicit authorization
+for the signed-in account's evaluation budget.
 
-The Electron main process recognizes `--controlled-cost-evaluation-live`. Without
-that exact argument it does nothing. With it, the current build writes
-`controlled-evaluation/blocked.json` under Electron userData, before consulting
-auth or making network calls. There is deliberately no environment variable,
-JSON proof, CLI flag or local setting that clears either execution blocker:
+## Run
 
-- The issuer must amend the existing dedicated-key authorization to permit this
-  signed-in backend route. The coordinator owns that request.
-- The backend must expose a verifiable maximum billed-input/output/retry contract
-  for this route. The existing completion contract exposes an output request
-  ceiling, not proof that hidden tokens or server/provider retries share it.
+Build Desktop, launch it normally, sign in to the intended server/account, and
+quit it completely. The evaluator starts only after normal authentication restores.
+The server administrator must independently allow the account through
+`B4M_EVALUATION_USER_IDS` and the exact model ID through `B4M_EVALUATION_MODEL_IDS`
+after verifying its provider identity. Both deployment settings are required.
+A client flag cannot grant administrative permission.
 
-Do not remove these blockers just to run the fixture. Implementation is not
-authorization, and an application budget is not a global provider-key cap.
+From the repository root:
 
-## Implemented path
+```sh
+pnpm --filter @bike4mind/desktop build
+node apps/desktop/scripts/controlled-cost-evaluation.cjs --live --accept-paid-requests
+```
 
-After those gates are implemented and reviewed, the entry point uses
-`AuthService.getSessionBoundApiClient()`, the account's real ModelCatalog and real
-ChatService. It neither reads auth stores nor accepts provider keys. Only the
-exact available OpenAI-backed `gpt-6.1-sol` record is admitted; there is no Opus
-fallback. The catalog price map is recorded. Effective arms are selected before
-fixture creation: the unsupported zero deferred start set is reported as
-`duplicate-effective-arm-not-run` for this OpenAI model, with no second session,
-request or reservation. Only the reference runs; this is not a matched comparison
-or evidence for deferred-loading savings. Acceptance requires a
-successful file_read and the exact single-character answer, not just a success
-HTTP response. No other tools, workers or model upgrades are admitted.
+This launches the built Electron app with `--controlled-cost-evaluation-live`.
+The normal signed-in AuthService, ModelCatalog, ChatService, completion transport,
+and read-only local tools are used. No provider credentials or alternate provider
+route are accepted. The exact available OpenAI-backed `gpt-6.1-sol` catalog record
+and its pricing map are pinned on the first run. An absent/disabled model, changed
+pricing on resume, missing evaluation contract, or administrative refusal stops
+the run before further dispatch. There is no model fallback or automatic spend.
 
-An AsyncLocalStorage scope gates hosted `streamCompletion` requests, including
-auxiliary requests, retries and any continuations in that evaluator scope, without
-gating normal user chat. A SQLite WAL/FULL transaction reserves before POST, with
-one shared fixed ledger across arms and restarts, at most $150, 20 requests,
-131072 input tokens, 2048 output tokens, four rounds per fixture and zero workers.
-Input JSON has a stricter byte envelope; that envelope is not a verified provider
-tokenizer bound, which is one reason execution remains blocked. Reservations use
-the full input ceiling at the highest published rate (including 1h cache writes)
-plus the full output ceiling, never a cache-hit assumption. Concurrent admissions
-are refused. The transaction also refuses any unresolved previous attempt.
+The server creates one evaluation-enabled completion run. Every request, including
+compaction and auxiliary requests, carries that run and a unique evaluation
+request identity. The same run is recovered after restart. The fixed shared limits
+are $150 provider-priced USD, 2,000,000 input-plus-output tokens, and 200 requests;
+each request has a 2,048 output ceiling and each turn at most 24 rounds. Server
+admission remains authoritative and may reject a request sooner (for example,
+its full-context conservative reservation may exceed remaining tokens).
 
-Reservations are never refunded by client usage. Every failed, disconnected or
-unreconciled attempt retains its full hold on disk. Request-scoped SSE usage is
-folded by replacement, never by adding cumulative turn events. Matching settlement
-records platform USD and credits separately; it does not establish provider cost.
-Even a usage-reported settled request blocks further admission until provider
-billing is reconciled. Reports omit prompts, outputs, paths, session/request IDs,
-tool arguments, exception text and credentials; unknown costs remain null.
+The separate dry-run command remains free and uses scripted responses:
 
-## Remaining scope
+```sh
+node apps/desktop/scripts/controlled-cost-evaluation.cjs --dry-run
+```
 
-This is intentionally incomplete while authorization and billing bounds are
-pending: provider-priced reconciliation (including reasoning/cache semantics and
-hidden retry bounds), safe release of reservations, exact tokenizer validation,
-and a verified authorized execution gate. The matched fixture path has not run
-against a paid backend. Full cache-TTL waits, warm/restart/compaction acceptance,
-worker/wake cases and the larger quality/latency matrix are not implemented here.
-Worker coverage currently means admission is denied, not measured worker spend.
-There is no claim of savings or completion of the live-cost issue.
+## Independent controls
 
-## Backend follow-on edit points and required contract
+Supply a local JSON config using `--config=/absolute/path/config.json` after the
+two live opt-in arguments. Unknown keys, credentials, and model overrides are refused.
 
-These are existing source locations, not implemented guarantees. Keep the issuer
-amendment and backend-bound blockers closed until the following contract is
-implemented, tested and reviewed. Do not substitute a credit budget for provider USD.
+```json
+{
+  "version": 1,
+  "arms": ["reference", "deferred-zero", "ttl-only", "compaction-only"],
+  "warm": true,
+  "longLoop": true,
+  "loopDepth": 8,
+  "workers": false,
+  "toolChange": true,
+  "restart": false,
+  "pauseMs": 0
+}
+```
 
-| Layer | Existing edit points | Required addition for evaluation traffic |
-| --- | --- | --- |
-| Public contract | `b4m-core/common/src/api-contract/contracts/completions.contract.ts` (`createCompletionContract`); `b4m-core/common/src/schemas/cliCompletions.ts` (`CompletionRequestSchema`, settled event schema) | A versioned admission receipt identifying the authorized evaluation, exact resolved model/backend, immutable pricing revision, accepted input/output/attempt bounds and maximum provider USD. Unsupported or unpriced requests must fail before provider dispatch. Derive handler/schema/docs/client from this contract. |
-| Run identity and reads | `b4m-core/common/src/api-contract/contracts/completionRuns.contract.ts`; `apps/client/server/completionRuns/callerCompletionRun.ts` (`findCallerCompletionRun`); `apps/client/pages/api/v1/completion-runs/[runId]/usage.ts` | Ownership-bound durable evaluation identity shared by every root/auxiliary/worker request; restart-safe request-level reconciliation lookup, not just aggregate charged-credit totals. Preserve current account/billing-owner checks. |
-| Authenticated stream | `apps/client/server/chatCompletion/external/sseRoute.ts` (request ID, `verifyRunOwnership`, `executeCompletion`, `onSettled`, `buildSettledEvent`) | Require the evaluation admission on every request and carry its receipt to terminal settlement/error and recovery lookup. A missing run must never silently fall back to an unattributed paid request. A disconnect is not proof of no charge. |
-| Admission and settlement | `b4m-core/services/src/cliCompletions.ts` (`executeCompletion`, output sizing around 876, credit reserve around 1027-1190, `settledUsdCost` around 1262, settlement around 1497-1785) | Compute a conservative provider-USD maximum using final transformed messages/tools and effective output/reasoning bounds before dispatch. Atomically reserve against the evaluation-wide remaining USD. All internal attempts/rounds must consume that same admission or reserve more before they start. Persist ambiguous failures, never release them merely because client transport or credit settlement ended. |
-| Durable holds | `apps/client/server/billing/completionCreditHolds.ts` (`reserve`, `topUpRunClaim`, `refund`, `settle`); `packages/database/src/models/billing/CompletionRunModel.ts` (`claimBudget`, `releaseClaim`) | Reuse lifecycle boundaries, but provide a distinct provider-USD invariant and durable per-attempt holds. Existing claims are estimated credits; current refund/expiry semantics cannot establish provider cancellation. Require authoritative terminal evidence before releasing a provider hold. |
-| Provider transport | `b4m-core/llm-adapters/src/openaiBackend.ts` (`floorOutputBudget`, OpenAI parameter construction, `withRetry` call); `b4m-core/llm-adapters/src/transportRetry.ts` (`retryTransportErrors`) | Account for SDK and adapter retries, hidden attempts, minimum-output flooring, cached and reasoning tokens, and any route/model substitution. Either disable retries for this mode or admit each attempt under the shared bound. Refuse any transformation whose maximum bill cannot be established. Keep exact model pinning; no automatic Opus fallback. |
-| Price and usage provenance | `b4m-core/common/src/models.ts` (`resolveAppliedRates`, `getTextModelCost`, `getTurnsCost`); `b4m-core/services/src/cliCompletions.ts` (`finalTurnUsage`, price provenance, `chargedUsdCost`) | Publish request/attempt-scoped final usage and resolved provider rates separately from platform charged-model USD and credits. Include tier basis, input/cache-read/cache-write 5m/1h, billed output/reasoning semantics, actual resolved model/backend and pricing revision. Never label platform `usdCost` as actual provider invoice cost. |
+- `reference` uses ordinary loading, 5m policy, no explicit compaction.
+- `deferred-zero` uses the existing deferred loader with start-set threshold 0
+  only when the exact model supports it. The OpenAI sweep skips it as an effective
+  duplicate; it does not pretend this evaluates Anthropic deferred loading.
+- `ttl-only` changes only TTL policy to 1h when the model advertises support;
+  otherwise it is skipped, without creating another session or request.
+- `compaction-only` explicitly invokes ChatService compaction and then checks
+  that the task answer survives it. Its summarization attempts count in arm cost.
+- `warm` repeats the evidence-based sum in the same stored session.
+- `workers` launches one read-only child per arm through the normal ChatService
+  spawn/watch lifecycle and waits for its automatic parent wake. Child reads,
+  parent wake, and auxiliary requests share the same evaluation run. Requests are
+  serialized before admission; a pending/unknown receipt still stops all dispatch.
+- `longLoop` asks the model to follow a linked-file chain sequentially. Acceptance
+  requires the exact sum and at least `loopDepth` successful file reads, not merely
+  an HTTP success. Depth is independently bounded from 4 to 16.
+- `toolChange` withdraws glob/search between turns and then replays the history
+  through ChatService with file_read still callable. It does not change permissions.
+- `pauseMs` waits actual wall-clock time (up to 3,660,000 ms) before resuming.
+  Choose 310000 for just beyond 5m, or 3660000 for beyond 1h; run separately from
+  compaction if measuring TTL alone. Flags do not establish cache hits.
+- `restart` checkpoints at a process boundary and writes `restart-required`.
+  Quit the whole Electron process and launch with the identical command/config.
+  A new main-process identity is required before the post-restart turn can run.
+  This is a real process boundary, not service recreation counted as a restart.
 
-The reconciliation receipt must distinguish pending, complete, rejected-before-
-dispatch and unknown-charge outcomes; carry monotonic revision/finality and
-stable attempt identities so replacement/upsert cannot double-count replayed
-events. An absent receipt, missing usage class, mismatched identity, ambiguous
-retry or unknown pricing keeps the whole reservation and blocks more admission.
-Only a complete authoritative receipt can replace a hold with provider-priced
-usage; platform credits/USD are separate fields. Tests must cover concurrent
-admission, disconnect after dispatch, server restart, duplicate settlement,
-unknown retry charges, tokenizer/serialization expansion and pricing changes.
+Each arm gets the same generated project/user instructions, ledger-sum task, and
+linked-file task, isolated in its own project/session. The fixtures use synthetic
+data and explicit exact-answer/tool-use checks. No code writes or shell commands
+are authorized. Reading global user instructions is replaced by fixture-specific
+required instructions; existing tool path protections and session approvals remain.
 
-Existing `budgetCredits` explicitly uses estimated input and can overrun its
-claim by the estimation miss; a deployment that does not charge credits counts
-nothing against that budget. It is useful infrastructure, not the missing
-provider-USD ceiling. The current Desktop ledger therefore still blocks after
-the first unreconciled request, even if SSE reports a platform settlement.
+## Persistence, receipts, and recovery
 
-## Regression attribution for this partial delivery
+State lives in `controlled-evaluation/` under Electron userData. Do not remove or
+copy its database/checkpoint to reset spending. Normal completion-run ownership
+checks bind the remote run to the signed-in account and billing owner.
 
-The chat/shared run was repeated on the implementation, then all 15 failing
-files were run on the exact recorded fresh base in the same worktree with the
-same installed dependencies and `VITEST_MAX_WORKERS=25%`. No Git configuration
-was changed to make either result pass. The base was
-[01a2b43e41](https://github.com/Bike4Mind/bike4mind/commit/01a2b43e41ce1f606522faea953e8f6a8866c55e).
-The pre-revision implementation was
-[ca310bdc92](https://github.com/Bike4Mind/bike4mind/commit/ca310bdc92344599ef17b7c8a1e6442ea0563df1).
+- `budget-v2.sqlite`: durable local holds, server identity, authoritative receipt
+  revisions, sanitized request measurements, platform settlement separately.
+- `checkpoint.json`: private resumable fixture/session identifiers and stage state.
+- `report.json`: the exportable sanitized report, atomically replaced after a run.
+- `active.lock`: process exclusion. A dead process's lock is recovered; an active
+  process's lock is never silently stolen.
 
-All paths below are relative to `apps/desktop/src/main/chat/`. Counts are failed
-assertions, not skipped tests. The sorted full failed-test names match exactly
-between implementation and base in all 13 assertion-failing files.
+Complete server receipts with provider usage/rates replace holds with actual
+provider-priced usage; rejected-before-dispatch receipts settle at zero. Pending,
+unknown, missing, conflicting, or incomplete receipts retain holds and prevent the
+next request. SSE credits/USD never release a provider hold. Failed/disconnected
+attempts remain in reports. Restart first fetches remote receipts and does not
+automatically replay an interrupted paid turn. The interrupted stage is recorded
+as a failed result; the server's durable request ID prevents duplicate dispatch.
 
-| File | Implementation | Base |
-| --- | ---: | ---: |
-| `ChatService.approvalMode.test.ts` | 38 | 38 |
-| `ChatService.approvalRecord.test.ts` | 2 | 2 |
-| `ChatService.permissions.test.ts` | 6 | 6 |
-| `ChatService.project.test.ts` | 49 | 49 |
-| `ChatService.sessionScripts.test.ts` | 1 | 1 |
-| `ChatService.spawnPlacement.test.ts` | 34 | 34 |
-| `permissions/rules.test.ts` | 3 | 3 |
-| `project/workspace.test.ts` | 51 | 51 |
-| `tools/shellTools.gitTable.test.ts` | 62 | 62 |
-| `tools/shellTools.protected.test.ts` | 11 | 11 |
-| `tools/shellTools.review.test.ts` | 17 | 17 |
-| `tools/shellTools.signatureApproval.test.ts` | 4 | 4 |
-| `tools/shellTools.test.ts` | 2 | 2 |
-| `tools/shellTools.gitPrograms.test.ts` | setup failure | same setup failure |
-| `tools/shellTools.regressions.test.ts` | setup failure | same setup failure |
+An ambiguous run-creation response is held as `mint-pending`. On the next explicit
+launch the identical POST uses the persisted rootSessionId: server idempotency
+returns the same run and counters, never silently mints another budget. An explicit
+`--recover-run=<known-run-UUID>` may also import an ownership-checked existing run;
+it cannot replace a different acknowledged run or exceed the configured limits.
 
-Both setup failures were also reproduced individually on both revisions: Git
-configuration of the temporary bare fixtures fails with `not in a git directory`
-at `gitPrograms.test.ts:627` and `regressions.test.ts:341`. Other representative
-failures include the bare-repository safety restriction, missing signing-config
-text in approval prompts and the session-script timeout. They are baseline-
-reproduced, not declared unrelated from their messages. Total: 280 failed
-assertions and two failed setup suites on each revision. No implementation-only
-failed assertion was observed in this comparison; the broader suite remains red.
+Only `report.json` is intended for export. It omits raw prompts, answers, paths,
+session/request IDs, tool arguments, exceptions, credentials, and task contents.
+It includes failed attempts, acceptance/rejection by arm and stage, exact catalog
+pricing, receipt rate/provenance fields, provider-priced cost distinct from platform
+USD/credits, and cost per accepted result (null when spend remains unresolved).
+Per-request role-based source categories and lengths expose size changes without
+exporting text or content-derived hashes. These byte measurements are not tokenizer
+counts or causal cache attribution; stable-prefix and rewrite causes remain unknown.
 
-Reproduction: `pnpm --filter @bike4mind/desktop exec vitest run src/main/chat/
-src/shared/ --reporter=json --outputFile=<scratch-report>`; run the 15 files above
-on the base with the same command and compare each file's failed `fullName` set.
-The JSON reports are local scratch evidence, not committed logs with machine paths.
+## Explicit final Opus phase
+
+To prepare a final comparison, set `finalModelId` in the config to the exact
+available, priced direct-Anthropic Opus catalog ID before the first sweep. The
+initial budget then includes both exact model IDs, but the sweep's local dispatch
+gate permits only `gpt-6.1-sol`, including auxiliary requests. Merely listing Opus
+does not authorize its dispatch. After the sweep completes with at least one
+accepted fresh evidence-based result, a separate launch is
+required with the same config and this additional explicit opt-in:
+
+```sh
+node apps/desktop/scripts/controlled-cost-evaluation.cjs --live --accept-paid-requests --final --config=/absolute/path/config.json
+```
+
+The final phase uses the same server run, ledger, USD/token/request limits, and
+matched fixtures. It creates `checkpoint-final.json` and `report-final.json` and
+enables effective deferred-loading and 1h arms only when that exact model supports
+them. Both models must be administratively allowed. No automatic phase transition,
+fallback, model alias substitution, or second spending budget is created.
+
+## Real remaining constraints
+
+Provider response identities must exactly match the catalog-dispatched ID;
+provider aliases without a matching identity retain unknown holds. Tool-output
+shrink or orchestration default changes are not inferred from this harness.
+
+Provider-priced costs are catalog-rate calculations from authoritative provider
+usage, not provider invoices. OpenAI receipts explicitly report zero cache-write
+5m/1h counts; categories remain unknown when not supplied. Receipts include input
+and output admission bounds separately and platform charges where available.
+Prefix hashes alone cannot distinguish expired cache,
+new useful context, or a provider-specific rewrite cause. No optimization, live
+acceptance result, or savings claim follows from mock tests. Actual controlled
+live reports are still required before claiming the issue's measured-improvement
+acceptance criteria or changing rollout defaults.
+
+## Free verification
+
+```sh
+VITEST_MAX_WORKERS=25% pnpm --filter @bike4mind/desktop exec vitest run src/main/chat/liveEvaluation.test.ts src/main/chat/evaluationBudget.test.ts src/main/chat/completions.test.ts src/main/chat/ChatService.controlledCost.test.ts
+node --test apps/desktop/scripts/test_controlled_cost_evaluation.cjs
+pnpm --filter @bike4mind/desktop typecheck
+```
+
+The integration test drives actual ChatService local tool execution with mocked
+completion streams and authoritative receipt lookup. It makes no provider calls.

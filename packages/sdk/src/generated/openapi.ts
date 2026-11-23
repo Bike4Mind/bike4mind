@@ -239,6 +239,26 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  '/api/v1/completion-runs/{runId}/evaluation': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * Recover evaluation admission receipts
+     * @description Owner-scoped durable provider-priced reservations and receipts. Pending and unknown receipts retain their full bounds and block further admission. Provider-priced USD is distinct from platform credit charges. A complete receipt uses provider-reported usage and the immutable catalog rates captured at admission; it is not an invoice. Recovery never repeats a provider dispatch.
+     */
+    get: operations['getCompletionRunEvaluation'];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   '/api/v1/completion-runs/{runId}/usage': {
     parameters: {
       query?: never;
@@ -3861,6 +3881,12 @@ export interface components {
      *     }
      */
     createCompletionRequest: {
+      evaluation?: {
+        /** @enum {number} */
+        version: 1;
+        /** Format: uuid */
+        requestId: string;
+      };
       model: string;
       messages: {
         /** @enum {string} */
@@ -4155,6 +4181,59 @@ export interface components {
      *     }
      */
     createCompletionRunResponse201: {
+      evaluation?: {
+        /** @enum {number} */
+        version: 1;
+        limits: {
+          /** @enum {number} */
+          version: 1;
+          maxProviderUsd: number;
+          maxTokens: number;
+          maxRequests: number;
+          modelIds: string[];
+        };
+        revision: number;
+        committedProviderUsd: number;
+        committedTokens: number;
+        committedRequests: number;
+        receipts: {
+          /** @enum {number} */
+          version: 1;
+          /** Format: uuid */
+          requestId: string;
+          attemptId: string;
+          /** @enum {string} */
+          status: 'pending' | 'complete' | 'rejected-before-dispatch' | 'unknown';
+          revision: number;
+          modelId: string;
+          backend: string;
+          pricingRevision: string;
+          maxProviderUsd: number;
+          maxTokens: number;
+          maxInputTokens: number;
+          maxOutputTokens: number;
+          providerUsd?: number;
+          inputTokens?: number;
+          tierBasisTokens?: number;
+          outputTokens?: number;
+          cacheReadTokens?: number;
+          reasoningTokens?: number;
+          cacheWrite5mTokens?: number;
+          cacheWrite1hTokens?: number;
+          platformUsd?: number;
+          platformCredits?: number;
+          /** @enum {string} */
+          provenance?: 'provider-reported-usage/catalog-rates';
+          rates: {
+            tier: number;
+            input: number;
+            output: number;
+            cacheRead: number;
+            cacheWrite5m?: number;
+            cacheWrite1h?: number;
+          }[];
+        }[];
+      };
       /**
        * Format: uuid
        * @description A run id issued by `POST /api/v1/completion-runs`.
@@ -4173,10 +4252,82 @@ export interface components {
      *     }
      */
     createCompletionRunRequest: {
+      evaluation?: {
+        /** @enum {number} */
+        version: 1;
+        maxProviderUsd: number;
+        maxTokens: number;
+        maxRequests: number;
+        modelIds: string[];
+      };
       /** @description Your own id for the conversation that starts the run. A conversation can start many runs; each gets its own id. */
       rootSessionId?: string;
       /** @description Caps what its completions may claim, in credits; an estimate miss can take the run slightly over. Omit it and the run draws only on the account balance, as before. A budget can be raised later but never added to a run minted without one. */
       budgetCredits?: number;
+    };
+    getCompletionRunEvaluationResponse200: {
+      /** @enum {number} */
+      version: 1;
+      limits: {
+        /** @enum {number} */
+        version: 1;
+        maxProviderUsd: number;
+        maxTokens: number;
+        maxRequests: number;
+        modelIds: string[];
+      };
+      revision: number;
+      committedProviderUsd: number;
+      committedTokens: number;
+      committedRequests: number;
+      receipts: {
+        /** @enum {number} */
+        version: 1;
+        /** Format: uuid */
+        requestId: string;
+        attemptId: string;
+        /** @enum {string} */
+        status: 'pending' | 'complete' | 'rejected-before-dispatch' | 'unknown';
+        revision: number;
+        modelId: string;
+        backend: string;
+        pricingRevision: string;
+        maxProviderUsd: number;
+        maxTokens: number;
+        maxInputTokens: number;
+        maxOutputTokens: number;
+        providerUsd?: number;
+        inputTokens?: number;
+        tierBasisTokens?: number;
+        outputTokens?: number;
+        cacheReadTokens?: number;
+        reasoningTokens?: number;
+        cacheWrite5mTokens?: number;
+        cacheWrite1hTokens?: number;
+        platformUsd?: number;
+        platformCredits?: number;
+        /** @enum {string} */
+        provenance?: 'provider-reported-usage/catalog-rates';
+        rates: {
+          tier: number;
+          input: number;
+          output: number;
+          cacheRead: number;
+          cacheWrite5m?: number;
+          cacheWrite1h?: number;
+        }[];
+      }[];
+    };
+    getCompletionRunEvaluationResponse404: {
+      error: string;
+      request_id?: string;
+      /**
+       * @deprecated
+       * @description Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this.
+       */
+      name?: string;
+      /** @enum {string} */
+      errorCode: 'run_not_found';
     };
     /**
      * @example {
@@ -4351,6 +4502,59 @@ export interface components {
      *     }
      */
     raiseCompletionRunBudgetResponse200: {
+      evaluation?: {
+        /** @enum {number} */
+        version: 1;
+        limits: {
+          /** @enum {number} */
+          version: 1;
+          maxProviderUsd: number;
+          maxTokens: number;
+          maxRequests: number;
+          modelIds: string[];
+        };
+        revision: number;
+        committedProviderUsd: number;
+        committedTokens: number;
+        committedRequests: number;
+        receipts: {
+          /** @enum {number} */
+          version: 1;
+          /** Format: uuid */
+          requestId: string;
+          attemptId: string;
+          /** @enum {string} */
+          status: 'pending' | 'complete' | 'rejected-before-dispatch' | 'unknown';
+          revision: number;
+          modelId: string;
+          backend: string;
+          pricingRevision: string;
+          maxProviderUsd: number;
+          maxTokens: number;
+          maxInputTokens: number;
+          maxOutputTokens: number;
+          providerUsd?: number;
+          inputTokens?: number;
+          tierBasisTokens?: number;
+          outputTokens?: number;
+          cacheReadTokens?: number;
+          reasoningTokens?: number;
+          cacheWrite5mTokens?: number;
+          cacheWrite1hTokens?: number;
+          platformUsd?: number;
+          platformCredits?: number;
+          /** @enum {string} */
+          provenance?: 'provider-reported-usage/catalog-rates';
+          rates: {
+            tier: number;
+            input: number;
+            output: number;
+            cacheRead: number;
+            cacheWrite5m?: number;
+            cacheWrite1h?: number;
+          }[];
+        }[];
+      };
       /**
        * Format: uuid
        * @description A run id issued by `POST /api/v1/completion-runs`.
@@ -16518,6 +16722,17 @@ export interface operations {
           'application/json': components['schemas']['ErrorResponse'];
         };
       };
+      /** @description Evaluation receipt already exists or another evaluation request remains unresolved. Recover the owner-scoped run evaluation receipts before continuing. */
+      409: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
       /** @description Request body over 25 MB. */
       413: {
         headers: {
@@ -16601,7 +16816,7 @@ export interface operations {
       };
     };
     responses: {
-      /** @description The created run. */
+      /** @description The created run, or the existing evaluation for the same owner and rootSessionId. Evaluation mint retries preserve the original immutable limits and receipts. */
       201: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
@@ -16624,6 +16839,29 @@ export interface operations {
           'application/json': components['schemas']['createCompletionRunResponse201'];
         };
       };
+      /** @description Evaluation requires a stable rootSessionId. */
+      400: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
       /** @description Missing or invalid credentials. */
       401: {
         headers: {
@@ -16635,15 +16873,27 @@ export interface operations {
           'application/json': components['schemas']['ErrorResponse'];
         };
       };
-      /** @description The API key does not hold any of the required scopes, or the account is suspended (`errorCode: account_suspended`). */
+      /** @description Evaluation execution is not enabled for this account. */
       403: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
           'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
           [name: string]: unknown;
         };
         content: {
-          'application/json': components['schemas']['ScopeForbiddenResponse'];
+          'application/json': components['schemas']['ErrorResponse'];
         };
       };
       /** @description The path does not serve this HTTP method. */
@@ -16653,6 +16903,29 @@ export interface operations {
           'X-Request-ID'?: string;
           /** @description The methods this path serves. GET implies HEAD. */
           Allow?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The evaluation identity already exists with different limits or models. */
+      409: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
           [name: string]: unknown;
         };
         content: {
@@ -16722,6 +16995,110 @@ export interface operations {
           'X-RateLimit-Remaining-Day'?: number;
           /** @description Unix epoch (seconds) when the day window resets. */
           'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+    };
+  };
+  getCompletionRunEvaluation: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        /** @description A run id issued by `POST /api/v1/completion-runs`. */
+        runId: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Evaluation state and durable request receipts. */
+      200: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['getCompletionRunEvaluationResponse200'];
+        };
+      };
+      /** @description Missing or invalid credentials. */
+      401: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The API key does not hold any of the required scopes, or the account is suspended (`errorCode: account_suspended`). */
+      403: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ScopeForbiddenResponse'];
+        };
+      };
+      /** @description Evaluation run not found for this owner. */
+      404: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['getCompletionRunEvaluationResponse404'];
+        };
+      };
+      /** @description The path does not serve this HTTP method. */
+      405: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description The methods this path serves. GET implies HEAD. */
+          Allow?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Request failed validation. */
+      422: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The request declared a client build (`X-Client-Name` + `X-Client-Version`) older than the minimum this API still serves for that client. Upgrade to `minimum_version` or later. Never sent to a request that omits either header. */
+      426: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['UpgradeRequiredResponse'];
+        };
+      };
+      /** @description Rate limit exceeded. */
+      429: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
           [name: string]: unknown;
         };
         content: {

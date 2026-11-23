@@ -25,7 +25,7 @@ import {
   type WorkerTask,
 } from '@shared/orchestration';
 import { randomUUID } from 'node:crypto';
-import { assertEvaluationTool } from './evaluationBudget';
+import { assertEvaluationTool, evaluationContext, filterEvaluationTools } from './evaluationBudget';
 import { isUpdateOnlyTask, MISSING_TASK_RESULT_REASON } from '@shared/agentState';
 import { LOOP_HELP, parseLoop, type LoopResult, type LoopStart, type LoopState } from '@shared/loop';
 import { LoopScheduler, type LoopOutcome } from './LoopScheduler';
@@ -4674,7 +4674,7 @@ export class ChatService {
               pullRequest: session.mode === 'code' && !!this.deps.pullRequests,
             });
       const toolsFor = (granted: readonly string[]) =>
-        modelOption?.supportsTools === false ? [] : offeredTools(granted);
+        modelOption?.supportsTools === false ? [] : filterEvaluationTools(offeredTools(granted));
       let tools = toolsFor(roots);
       this.deps.approvals?.setParent(session.id, session.origin?.parentSessionId);
       const directoryTurn: DirectoryTurn = {
@@ -7219,6 +7219,16 @@ export class ChatService {
    * instead keeps its session for retry. The slot passes to `spawnWatch` before this returns,
    * which releases it when the seeded run ends.
    */
+  async startEvaluationWorker(parentId: string, prompt: string): Promise<string> {
+    if (!evaluationContext.getStore()) throw new Error('Evaluation context is required.');
+    assertEvaluationTool('session_spawn');
+    const parent = await this.deps.store.get(parentId);
+    if (!parent) throw new Error('Evaluation parent is unavailable.');
+    const result = await this.spawnSession(parent, prompt, 'Evaluation worker', { kind: 'local' });
+    if (!result.ok) throw new Error('Evaluation worker could not start.');
+    return result.session.id;
+  }
+
   private async spawnSession(
     parent: ChatSession,
     prompt: string,
