@@ -232,7 +232,7 @@ export function ChildrenStrip({
   sessions: readonly ChatSessionSummary[];
   statuses: ReadonlyMap<string, ChatSessionStatus>;
   parentId: string | null;
-  /** Children whose report card is already in the open thread (ChatMessage.childReport.sessionId). */
+  /** Children whose report is already in the open thread (ChatMessage.reportedChildId, set even when the card is withheld). */
   reportedIds: ReadonlySet<string>;
   onOpenSession: (sessionId: string) => void;
 }) {

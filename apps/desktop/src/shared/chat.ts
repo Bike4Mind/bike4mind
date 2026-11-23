@@ -753,7 +753,7 @@ export interface ChatChildReport {
   branch?: string;
   /** Short HEAD of that worktree; absent when git was slow, absent or the child has no worktree. */
   headSha?: string;
-  /** The child's last reply, capped (childReport.ts cappedReply). Untrusted text from another session. */
+  /** The child's last reply, cut by childReport.ts cutReply (see replyTruncated). Untrusted text from another session. */
   reply?: string;
   /** The reply was cut at the cap; the rest is in the child's own session. */
   replyTruncated?: boolean;
