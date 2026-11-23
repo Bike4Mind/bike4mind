@@ -4,7 +4,9 @@ import { render, screen } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 import type {
+  LakeConfigHistoryConfigEntry,
   LakeConfigHistoryEntry,
+  LakeConfigHistoryFileEntry,
   LakeConfigHistoryFingerprintChange,
   LakeConfigHistoryView,
 } from '@bike4mind/common';
@@ -20,7 +22,8 @@ const Wrapper = ({ children }: { children: ReactNode }) => (
   <CssVarsProvider theme={appTheme}>{children}</CssVarsProvider>
 );
 
-const entry = (over: Partial<LakeConfigHistoryEntry> = {}): LakeConfigHistoryEntry => ({
+const entry = (over: Partial<LakeConfigHistoryConfigEntry> = {}): LakeConfigHistoryEntry => ({
+  kind: 'config',
   eventId: 'evt-1',
   changedAt: new Date('2026-08-17T10:30:00Z'),
   principalKind: 'user',
@@ -490,5 +493,45 @@ describe('LakeConfigHistorySection', () => {
       renderSection();
       expect(screen.queryByTestId('datalake-config-history-truncated')).not.toBeInTheDocument();
     });
+  });
+});
+
+describe('file entries and the retention footnote', () => {
+  const fileEntry = (over: Partial<LakeConfigHistoryFileEntry> = {}): LakeConfigHistoryEntry => ({
+    kind: 'file',
+    eventId: 'file-1',
+    changedAt: new Date('2026-08-17T11:00:00Z'),
+    principalKind: 'user',
+    principalId: '000000000000000000000001',
+    principalName: 'Ada Lovelace',
+    action: 'file-added',
+    target: { kind: 'file', id: 'fab-123' },
+    origin: 'person',
+    ...over,
+  });
+
+  it('renders a file row beside a config row, without a rung chip', () => {
+    renderSection({ view: view({ entries: [fileEntry(), entry()] }) });
+    expect(screen.getAllByTestId('datalake-config-history-file-row')).toHaveLength(1);
+    expect(screen.getAllByTestId('datalake-config-history-row')).toHaveLength(1);
+    expect(screen.getByText('File added')).toBeTruthy();
+    expect(screen.getByText('fab-123')).toBeTruthy();
+  });
+
+  it('labels a removal', () => {
+    renderSection({ view: view({ entries: [fileEntry({ action: 'file-removed' })] }) });
+    expect(screen.getByText('File removed')).toBeTruthy();
+  });
+
+  it('says older file changes are not shown, with the retention window', () => {
+    renderSection();
+    expect(screen.getByTestId('datalake-config-history-file-footnote').textContent).toMatch(
+      /450 days.*Older file\s+changes are not shown/
+    );
+  });
+
+  it('still renders an old config row without target or leverChanges', () => {
+    renderSection({ view: view({ entries: [entry()] }) });
+    expect(screen.getByTestId('datalake-config-history-change')).toBeTruthy();
   });
 });

@@ -55,6 +55,7 @@ final class AppServices {
   let clientUpgrade: ClientUpgradeStatus
   /// The signed-in account's profile, kept for the session; cleared when the session ends (`RootView.endSession`).
   let accountProfiles: AccountProfileStore
+  let credits: CreditsViewModel
   /// The Studio model lists, kept for the session; cleared when the session ends (`RootView.endSession`).
   let studioModels: StudioModelCatalog
 
@@ -77,6 +78,15 @@ final class AppServices {
     #endif
     widgets = WidgetSnapshotRecorder(
       store: FileWidgetSnapshotStore.appGroup(), reloader: SystemWidgetTimelineReloader())
+    let widgets = widgets
+    credits = CreditsViewModel(
+      fetch: {
+        #if DEBUG
+          if FixtureServices.isEnabled { return try await FixtureServices.api.creditBalance() }
+        #endif
+        return try await APIClient(baseURL: auth.environment.baseURL, tokens: auth).creditBalance()
+      },
+      onBalance: { await widgets.recordCredits($0) })
     push = PushRegistrationCoordinator(center: SystemNotificationCenter(), remote: registrar, makeAPI: makeAPI)
 
     let activities = QuestActivityManager(host: ActivityKitHost(), makeTokenAPI: makeAPI)
@@ -212,7 +222,6 @@ final class AppServices {
     await questActivities.sessionWillEnd()
     studioTrackerState?.tracker.reset()
     studioTrackerState = nil
-    ThumbnailCache.shared.removeAll()
     await agentRunMonitor.stopAll()
     await push.unregisterBeforeSignOut()
     await auth.signOut(reason: reason)
@@ -272,6 +281,25 @@ final class AppServices {
     return tracker
   }
 
+  @ObservationIgnored private var mediaFirstPagesState: (environment: ServerEnvironment, store: MediaFirstPageStore)?
+
+  /// Page 1 of the media list for the gallery and the "Morph into" picker. One per server, so it survives
+  /// leaving Studio and re-opening it; emptied by `RootView.endSession()`.
+  var mediaFirstPages: MediaFirstPageStore {
+    let environment = auth.environment
+    if let mediaFirstPagesState, mediaFirstPagesState.environment == environment {
+      return mediaFirstPagesState.store
+    }
+    var cache: any MediaListCache = FileMediaListCache(
+      directory: FileSessionListCache.defaultDirectory(), environment: environment)
+    #if DEBUG
+      if FixtureServices.isEnabled { cache = InMemoryMediaListCache() }
+    #endif
+    let store = MediaFirstPageStore(api: media, cache: cache)
+    mediaFirstPagesState = (environment, store)
+    return store
+  }
+
   /// Called when the gallery learns of a newer generated image; keeps the "Latest generation" widget current.
   var latestGeneration: @Sendable (MediaItem) async -> Void {
     let publisher = LatestGenerationPublisher(recorder: widgets)
@@ -284,19 +312,10 @@ final class AppServices {
     Task { await widgets.recordTurns(sessionID: sessionID, sessionTitle: title, turns: turns) }
   }
 
-  /// Re-reads the balance for the Credits widget: after a chat turn settles (it spends credits) and when
-  /// the app comes to the foreground.
+  /// Re-reads the shared balance after a settled turn and on foreground, regardless of the Settings TTL.
   func refreshWidgetCredits() {
-    let api = api
-    let widgets = widgets
-    Task {
-      do {
-        await widgets.recordCredits(try await api.creditBalance())
-      } catch {
-        // The widget keeps its last balance; the next foreground or settled turn tries again.
-        AppServices.logger.error("Credits widget refresh failed: \(String(describing: error), privacy: .public)")
-      }
-    }
+    let credits = credits
+    Task { await credits.load(force: true) }
   }
 
   nonisolated static let logger = Logger(subsystem: "com.bike4mind.app", category: "app")

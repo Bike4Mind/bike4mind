@@ -260,6 +260,7 @@ export default defineConfig({
       dependencies: ['setup-core', 'unauthenticated'],
       testMatch: [
         /(?:^|\/)admin\.spec\.ts$/,
+        /(?:^|\/)signup-grants\.spec\.ts$/,
         /(?:^|\/)admin-settings-secrets\.spec\.ts$/,
         /(?:^|\/)admin-approvals\.spec\.ts$/,
         /(?:^|\/)admin-tutorials\.spec\.ts$/,

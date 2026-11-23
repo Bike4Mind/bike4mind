@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Alert, Button, Link, Stack } from '@mui/joy';
-import { useNavigate } from '@tanstack/react-router';
+import { useNavigate, useSearch } from '@tanstack/react-router';
 import type { AdminSignupGrantPendingRow } from '@bike4mind/common';
 import {
   useAdminSignupGrantPendingList,
@@ -9,6 +9,8 @@ import {
 } from '@client/app/hooks/data/adminSignupGrant';
 import { AdminTab } from '../../adminSidebarConfig';
 import {
+  INVITE_CENTER_HELD_GRANTS_PARAM,
+  INVITE_CENTER_SEARCH_PARSERS,
   PENDING_ACTIVE_DAYS,
   PENDING_HELD_REASONS,
   PENDING_INVITES,
@@ -17,6 +19,7 @@ import {
   PENDING_SOURCES,
   PENDING_STATUSES,
 } from '../../inviteCenterSearch';
+import type { AdminSearch } from '../../adminTabParams';
 import { useAdminModal } from '../../useAdminModal';
 import { BulkActionBar, type AdminSelection } from '../../shared/BulkActionBar';
 import { DataTable, type DataColumn } from '../../shared/DataTable';
@@ -28,6 +31,7 @@ import { StatusChip } from '../../shared/StatusChip';
 import { useAdminListUrlState } from '../../shared/useAdminListUrlState';
 import { PendingBulkDialog } from './PendingBulkDialog';
 import { MAX_PENDING_BULK, type PendingBulkKind } from './usePendingBulkActions';
+import HeldGrantActions from './HeldGrantActions';
 
 const CREDITS = new Intl.NumberFormat('en-US', { maximumFractionDigits: 0 });
 const credits = (value: number) => CREDITS.format(value);
@@ -82,10 +86,11 @@ const FILTERS: readonly AdminFilter[] = [
 const pick = <T extends string>(allowed: readonly T[], value: string): T | undefined =>
   (allowed as readonly string[]).includes(value) ? (value as T) : undefined;
 
+const parseHeldGrants = INVITE_CENTER_SEARCH_PARSERS[INVITE_CENTER_HELD_GRANTS_PARAM];
+
 const NO_SELECTION: AdminSelection = { mode: 'explicit', ids: [] };
 
 const SECTION_LINKS = [
-  { label: 'Open Held signup grants', tab: AdminTab.HeldSignupGrants, testId: 'invite-center-open-held-grants-btn' },
   { label: 'Open Signup domain holds', tab: AdminTab.SignupDomainHolds, testId: 'pending-open-domain-holds-btn' },
   { label: 'Open Risk review queue', tab: AdminTab.SignupRiskReview, testId: 'pending-open-risk-review-btn' },
 ] as const;
@@ -160,8 +165,23 @@ const StateChips = ({ row }: { row: AdminSignupGrantPendingRow }) => (
 );
 
 export function PendingSection() {
+  const search = useSearch({ strict: false }) as AdminSearch;
+  const heldActionsOpen = parseHeldGrants(search[INVITE_CENTER_HELD_GRANTS_PARAM]) === 'open';
+  const [heldActionsOpened, setHeldActionsOpened] = useState(false);
+  const heldActionsMounted = heldActionsOpened || heldActionsOpen;
   const setActiveTab = useAdminModal(state => state.setActiveTab);
   const navigate = useNavigate();
+  const toggleHeldActions = () => {
+    setHeldActionsOpened(true);
+    return navigate({
+      to: '/admin',
+      search: (previous: AdminSearch) => ({
+        ...previous,
+        [INVITE_CENTER_HELD_GRANTS_PARAM]: heldActionsOpen ? undefined : ('open' as const),
+      }),
+      replace: true,
+    });
+  };
   const [listState, setListState] = useAdminListUrlState(PENDING_SEARCH_KEYS);
   const filters: PendingListFilters = {
     status: pick(PENDING_STATUSES, listState.filters.status),
@@ -302,6 +322,16 @@ export function PendingSection() {
   return (
     <Stack gap={1.5} data-testid="pending-section">
       <Stack direction="row" gap={1} flexWrap="wrap" alignItems="center">
+        <Button
+          variant="outlined"
+          color="neutral"
+          size="sm"
+          data-testid="invite-center-open-held-grants-btn"
+          aria-expanded={heldActionsOpen}
+          onClick={() => void toggleHeldActions()}
+        >
+          {heldActionsOpen ? 'Hide held grant actions' : 'Held grant actions'}
+        </Button>
         {SECTION_LINKS.map(({ label, tab, testId }) => (
           <Button
             key={tab}
@@ -315,83 +345,90 @@ export function PendingSection() {
           </Button>
         ))}
       </Stack>
-      <PendingHeader activeDays={Number(filters.activeDays ?? DEFAULT_ACTIVE_DAYS)} />
-      <FilterBar state={listState} filters={FILTERS} onChange={updateList} search={false} />
-      {failed.length > 0 && (
-        <Alert color="warning" variant="soft" data-testid="pending-bulk-failed">
-          Could not change: {failed.map(id => emailOf.get(id) ?? id).join(', ')}
-        </Alert>
+      {heldActionsMounted && (
+        <div hidden={!heldActionsOpen}>
+          <HeldGrantActions />
+        </div>
       )}
-      {selectedIds.length > 0 && (
-        <BulkActionBar
-          selection={selection}
-          totalMatching={selectedIds.length}
-          onSelectAllMatching={() => undefined}
-          onClear={() => setSelection(NO_SELECTION)}
-        >
-          {overCap && <span data-testid="pending-bulk-over-cap">Select {MAX_PENDING_BULK} accounts or fewer.</span>}
-          {canRelease && (
+      <Stack gap={1.5} sx={{ display: heldActionsOpen ? 'none' : undefined }}>
+        <PendingHeader activeDays={Number(filters.activeDays ?? DEFAULT_ACTIVE_DAYS)} />
+        <FilterBar state={listState} filters={FILTERS} onChange={updateList} search={false} />
+        {failed.length > 0 && (
+          <Alert color="warning" variant="soft" data-testid="pending-bulk-failed">
+            Could not change: {failed.map(id => emailOf.get(id) ?? id).join(', ')}
+          </Alert>
+        )}
+        {selectedIds.length > 0 && (
+          <BulkActionBar
+            selection={selection}
+            totalMatching={selectedIds.length}
+            onSelectAllMatching={() => undefined}
+            onClear={() => setSelection(NO_SELECTION)}
+          >
+            {overCap && <span data-testid="pending-bulk-over-cap">Select {MAX_PENDING_BULK} accounts or fewer.</span>}
+            {canRelease && (
+              <Button
+                size="sm"
+                disabled={overCap}
+                data-testid="pending-bulk-release-btn"
+                onClick={() => setDialog('release')}
+              >
+                Release
+              </Button>
+            )}
             <Button
               size="sm"
+              color="danger"
+              variant="outlined"
               disabled={overCap}
-              data-testid="pending-bulk-release-btn"
-              onClick={() => setDialog('release')}
+              data-testid="pending-bulk-block-btn"
+              onClick={() => setDialog('block')}
             >
-              Release
+              Block
             </Button>
-          )}
-          <Button
-            size="sm"
-            color="danger"
-            variant="outlined"
-            disabled={overCap}
-            data-testid="pending-bulk-block-btn"
-            onClick={() => setDialog('block')}
-          >
-            Block
-          </Button>
-        </BulkActionBar>
-      )}
-      <DataTable
-        rows={rows}
-        columns={columns}
-        getRowId={row => row.id}
-        label="Pending signup grants"
-        loading={list.isPending}
-        error={list.isError ? 'Could not load pending signup grants.' : undefined}
-        onRetry={() => void list.refetch()}
-        empty={empty}
-        pagination={false}
-        selection={selection}
-        onSelectionChange={setSelection}
-        testId="pending-table"
-        rowTestId={row => `pending-row-${row.id}`}
-      />
-      {list.hasNextPage && (
-        <Stack direction="row" justifyContent="center">
-          <Button
-            variant="outlined"
-            color="neutral"
-            size="sm"
-            loading={list.isFetchingNextPage}
-            data-testid="pending-load-more-btn"
-            onClick={() => void list.fetchNextPage()}
-          >
-            Load more
-          </Button>
-        </Stack>
-      )}
-      {dialog && (
-        <PendingBulkDialog
-          kind={dialog}
-          userIds={selectedIds}
-          onClose={() => setDialog(null)}
-          onDone={outcome => {
-            setFailed(outcome.failedIds);
-            setSelection(NO_SELECTION);
-          }}
+          </BulkActionBar>
+        )}
+        <DataTable
+          rows={rows}
+          columns={columns}
+          getRowId={row => row.id}
+          label="Pending signup grants"
+          loading={list.isPending}
+          error={list.isError ? 'Could not load pending signup grants.' : undefined}
+          onRetry={() => void list.refetch()}
+          empty={empty}
+          pagination={false}
+          selection={selection}
+          onSelectionChange={setSelection}
+          testId="pending-table"
+          rowTestId={row => `pending-row-${row.id}`}
         />
-      )}
+        {list.hasNextPage && (
+          <Stack direction="row" justifyContent="center">
+            <Button
+              variant="outlined"
+              color="neutral"
+              size="sm"
+              loading={list.isFetchingNextPage}
+              data-testid="pending-load-more-btn"
+              onClick={() => void list.fetchNextPage()}
+            >
+              Load more
+            </Button>
+          </Stack>
+        )}
+        {dialog && (
+          <PendingBulkDialog
+            kind={dialog}
+            userIds={selectedIds}
+            onClose={() => setDialog(null)}
+            onDone={outcome => {
+              setFailed(outcome.failedIds);
+              setSelection(NO_SELECTION);
+            }}
+          />
+        )}
+      </Stack>
     </Stack>
   );
 }

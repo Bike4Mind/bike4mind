@@ -54,7 +54,9 @@ describe('email-send worker mail transport wiring', () => {
 
   it('hands the flag, the set and the grant to the email-send subscriber only', () => {
     expect(emailSendBlock).toContain('...mailTransportEnvironment,');
-    expect(emailSendBlock).toContain('permissions: [emailEventsDeadLetter.sendPermission, ...sesSendPermissions]');
+    expect(emailSendBlock).toContain(
+      'permissions: [emailEventsDeadLetter.sendPermission, ...sesSendPermissions, mailBodyGetPermission(appFilesBucket)],'
+    );
     expect(eventBus.split('...sesSendPermissions').length - 1).toBe(1);
     expect(eventBus.split('...mailTransportEnvironment').length - 1).toBe(1);
   });

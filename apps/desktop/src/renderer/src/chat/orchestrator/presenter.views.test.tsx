@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { act } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { singlePaneLayout } from './orchestratorLayout';
 import { OrchestratorStage } from './OrchestratorStage';
 import { ORCHESTRATOR_VIEWS, type OrchestratorViewId } from './orchestratorPrefs';
 import { presenterAgentTitle } from './presenter';
@@ -75,8 +76,8 @@ const renderStage = (view: OrchestratorViewId, { focus = false, settled = false,
       agents={agents}
       parent={{ status: 'processing', activity: { kind: 'tool', tool: 'bash', detail: `${SECRET} root command` } }}
       rootId="root"
-      view={view}
-      onViewChange={vi.fn()}
+      layout={singlePaneLayout(view)}
+      onLayoutChange={vi.fn()}
       actions={{ open: vi.fn(), stop: vi.fn(), archive: vi.fn() }}
       introPlaying={false}
       renderView={renderOrchestratorView}

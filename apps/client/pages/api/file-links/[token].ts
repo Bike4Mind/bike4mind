@@ -11,16 +11,12 @@ import { userCanAccessGeneratedImage } from '@bike4mind/server-utils/utils/gener
 import { getFilesStorage, getGeneratedImageStorage } from '@bike4mind/server-utils/utils/storage/index';
 import { SHARED_EMAIL_FILES_PREFIX } from '@server/utils/mailer/emailAttachments';
 import { baseApi } from '@server/middlewares/baseApi';
+import { buildContentDisposition } from '@bike4mind/utils/contentDisposition';
 
 type LinkUser = NonNullable<Awaited<ReturnType<typeof userRepository.findById>>>;
 type Resolved = { storage: 'files' | 'generated'; key: string; filename: string };
 
 const lastSegment = (key: string) => key.slice(key.lastIndexOf('/') + 1) || 'download';
-
-const contentDisposition = (filename: string) => {
-  const ascii = filename.replace(/[^\x20-\x7e]|["\\]/g, '_');
-  return `attachment; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(filename)}`;
-};
 
 async function resolveTarget(target: FileLinkTarget, user: LinkUser): Promise<Resolved | null> {
   if (target.kind === 'fabFile') {
@@ -67,7 +63,7 @@ const handler = baseApi({ auth: false, allowedMethods: ['GET'] })
     const url = await storage.getSignedUrl(resolved.key, 'get', {
       expiresIn: FILE_LINK_REDIRECT_TTL_SECONDS,
       audience: 'browser',
-      ResponseContentDisposition: contentDisposition(resolved.filename),
+      ResponseContentDisposition: buildContentDisposition(resolved.filename),
     });
     return res.redirect(302, url);
   });

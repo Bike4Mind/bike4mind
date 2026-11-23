@@ -1,8 +1,10 @@
 import {
   Fragment,
   memo,
+  useCallback,
   useEffect,
   useLayoutEffect,
+  useMemo,
   useRef,
   useState,
   type MouseEvent,
@@ -25,11 +27,20 @@ import {
   type ChatMessage,
 } from '@shared/chat';
 import { modelEditSummary } from '@shared/modelEdit';
+import {
+  editWarnings,
+  regenerableReply,
+  turnsChangedThings,
+  typedText,
+  type RewindWarning,
+} from '@shared/threadRewind';
 import { ArtifactList } from './ArtifactCard';
 import { presentReply } from './codeStream';
 import { CopyMessageButton, revealCopyButtonSx } from './CopyMessageButton';
 import { LinkifiedText } from './ExternalLink';
 import { ReasoningRow } from './ReasoningRow';
+import { EditMessageButton, PromptEditor, RegenerateButton } from './RewindControls';
+import { OPTIMISTIC_ID_PREFIX } from './arrivedMessage';
 import { AttachmentRow } from './Attachments';
 import { ChevronIcon } from './icons';
 import { contentColumnSx, scrollingColumnHostSx } from './layout';
@@ -165,7 +176,21 @@ function showMessageTime(event: MouseEvent<HTMLElement>, createdAt: string) {
  * Copy takes what the bubble shows: on a skill turn that is the invocation the user typed,
  * not the expanded body folded away under it.
  */
-const UserTurn = memo(function UserTurn({ message, sessionId }: { message: ChatMessage; sessionId: string | null }) {
+const UserTurn = memo(function UserTurn({
+  message,
+  sessionId,
+  editWarning,
+  editDisabled = false,
+  onEdit,
+}: {
+  message: ChatMessage;
+  sessionId: string | null;
+  /** Set on a prompt the user typed and main has stored; absent, there is no Edit. */
+  editWarning?: RewindWarning;
+  /** A turn is running; Edit waits for it. */
+  editDisabled?: boolean;
+  onEdit?: (messageId: string, text: string) => Promise<boolean>;
+}) {
   // A point-and-edit turn shows its parts as a chip; its close-up went to the model, not the bubble.
   const modelEdit = modelEditSummary(message.notes);
   const attachments = (message.attachments ?? []).filter(
@@ -173,10 +198,32 @@ const UserTurn = memo(function UserTurn({ message, sessionId }: { message: ChatM
   );
   const skill = message.skill;
   const [expanded, setExpanded] = useState(false);
-  const copyText = skill ? `/${skill.name}${skill.args ? ` ${skill.args}` : ''}` : message.content;
+  const copyText = typedText(message);
+  const [editing, setEditing] = useState(false);
+  const editable = editWarning !== undefined && onEdit !== undefined;
+
+  if (editable && editing) {
+    return (
+      <Stack direction="row" justifyContent="flex-end">
+        <PromptEditor
+          initialText={copyText}
+          warning={editWarning}
+          disabled={editDisabled}
+          onCancel={() => setEditing(false)}
+          onSend={async text => {
+            const sent = await onEdit(message.id, text);
+            // Sent, this turn is replaced and unmounts; refused, the editor stays with the text.
+            if (sent) setEditing(false);
+            return sent;
+          }}
+        />
+      </Stack>
+    );
+  }
 
   return (
     <Stack direction="row" justifyContent="flex-end" alignItems="flex-end" spacing={0.5} sx={revealCopyButtonSx}>
+      {editable && <EditMessageButton disabled={editDisabled} onClick={() => setEditing(true)} />}
       {copyText && <CopyMessageButton text={copyText} testId="chat-message-user-copy-btn" />}
       <Sheet
         variant="soft"
@@ -359,12 +406,18 @@ const AssistantTurn = memo(function AssistantTurn({
   onRespond,
   onMove,
   onContinue,
+  onRegenerate,
+  regenerateWarns = false,
   status,
   live = false,
   skipRounds = 0,
   rail = false,
 }: {
   message: ChatMessage;
+  /** Absent unless this is the last reply and nothing is running; see MessageThread. */
+  onRegenerate?: () => void;
+  /** The reply's tools changed things, so Regenerate asks first. */
+  regenerateWarns?: boolean;
   onRespond: RespondToApproval;
   /** Absent with no conversation open; the running-command control is then not drawn. */
   onMove?: MoveCallToBackground;
@@ -463,9 +516,12 @@ const AssistantTurn = memo(function AssistantTurn({
 
       {!rail && <ReplyCost message={message} />}
 
-      {!live && message.content.trim().length > 0 && (
-        <Box sx={{ position: 'absolute', top: '100%', left: 0 }}>
-          <CopyMessageButton text={message.content} testId="chat-message-assistant-copy-btn" />
+      {!live && (message.content.trim().length > 0 || onRegenerate) && (
+        <Box sx={{ position: 'absolute', top: '100%', left: 0, display: 'flex', alignItems: 'center', gap: 0.5 }}>
+          {message.content.trim().length > 0 && (
+            <CopyMessageButton text={message.content} testId="chat-message-assistant-copy-btn" />
+          )}
+          {onRegenerate && <RegenerateButton onRegenerate={onRegenerate} changes={regenerateWarns} />}
         </Box>
       )}
     </Box>
@@ -878,6 +934,8 @@ export function MessageThread({
   onSideChatFromSelection,
   statsRail = false,
   liveTurn = null,
+  onEditMessage,
+  onRegenerate,
 }: {
   messages: ChatMessage[];
   /** Needed to read attachment bytes back; they are stored per conversation. */
@@ -918,6 +976,10 @@ export function MessageThread({
   statsRail?: boolean;
   /** The turn in flight, for the live figures on the reply it is writing. */
   liveTurn?: TurnProgress | null;
+  /** Replace a sent prompt and drop the turns after it; absent, prompts have no Edit. */
+  onEditMessage?: (messageId: string, text: string) => Promise<boolean>;
+  /** Drop the last reply and run its prompt again; absent, there is no Regenerate. */
+  onRegenerate?: () => void;
 }) {
   const bottom = useRef<HTMLDivElement>(null);
   const host = useRef<HTMLDivElement>(null);
@@ -932,6 +994,16 @@ export function MessageThread({
   const boundary = lastBoundaryIndex(messages);
   // By id: a queued prompt or a relayed message can land after the reply while it is still written.
   const liveReplyId = streaming ? (liveTurn?.messageId ?? last?.id) : undefined;
+  const warnings = useMemo(() => editWarnings(messages), [messages]);
+  const regenerable = !streaming && onRegenerate ? regenerableReply(messages) : null;
+  const regenerateWarns = useMemo(() => (regenerable ? turnsChangedThings([regenerable]) : false), [regenerable]);
+  // Through a ref so UserTurn's memo holds: the callback changes with every thread update.
+  const editRef = useRef(onEditMessage);
+  editRef.current = onEditMessage;
+  const onEdit = useCallback(
+    (messageId: string, text: string) => editRef.current?.(messageId, text) ?? Promise.resolve(false),
+    []
+  );
 
   // One function for both sides of the divider, taking each message's index in the WHOLE thread,
   // so a turn drawn inside the disclosure is the same turn with the same Continue and status
@@ -941,7 +1013,18 @@ export function MessageThread({
     if (message.automatic) return <AutomaticTurn key={message.id} message={message} />;
     if (message.relay) return <RelayTurn key={message.id} message={message} />;
     if (message.system) return <SystemTurn key={message.id} message={message} />;
-    if (message.role === 'user') return <UserTurn key={message.id} message={message} sessionId={sessionId} />;
+    if (message.role === 'user') {
+      // An optimistic prompt has no stored id yet for main to rewind to.
+      const editWarning = message.id.startsWith(OPTIMISTIC_ID_PREFIX) ? undefined : warnings.get(message.id);
+      return (
+        <UserTurn
+          key={message.id}
+          message={message}
+          sessionId={sessionId}
+          {...(onEditMessage && editWarning ? { editWarning, editDisabled: streaming, onEdit } : {})}
+        />
+      );
+    }
     // One fragment whether or not the rail is drawn, so the reply keeps its state across the breakpoint.
     return (
       <Fragment key={message.id}>
@@ -959,6 +1042,7 @@ export function MessageThread({
           // Only the last turn, and only while nothing is running: resuming writes back
           // into its own message, so a Continue on an older one would edit history.
           {...(index === messages.length - 1 && !streaming ? { onContinue } : {})}
+          {...(regenerable?.id === message.id && onRegenerate ? { onRegenerate, regenerateWarns } : {})}
           {...(index === messages.length - 1 && streaming ? { status, live: true } : {})}
           {...(skipRounds > 0 ? { skipRounds } : {})}
           {...(statsRail ? { rail: true } : {})}

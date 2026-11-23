@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { NotFoundError } from '@bike4mind/common';
 import { mintFileContentSig } from '@bike4mind/utils';
+import { S3Storage } from '../../../../../../../b4m-core/fab-pipeline/src/storage/S3Storage';
 
 const h = vi.hoisted(() => ({
   findById: vi.fn(),
@@ -101,7 +102,11 @@ describe('GET /api/files/[id]/content', () => {
   it('redirects to a freshly signed S3 link with a bounded private cache', async () => {
     const { res, error } = await call(validQuery());
     expect(error).toBeUndefined();
-    expect(h.getSignedUrl).toHaveBeenCalledWith(filePath, 'get', { expiresIn: 3000, audience: 'browser' });
+    expect(h.getSignedUrl).toHaveBeenCalledWith(filePath, 'get', {
+      expiresIn: 3000,
+      audience: 'browser',
+      ResponseContentType: 'image/png',
+    });
     expect(res.redirect).toHaveBeenCalledWith(302, s3Url(3600));
     // Signed for the 3000s left until token exp 04:00 (now 03:10), not the full hour.
     // min(token exp 04:00, S3 04:10) - now 03:10 - 60s margin = 2940s, capped at 1800.
@@ -119,7 +124,11 @@ describe('GET /api/files/[id]/content', () => {
   it('caches no longer than the link token lives', async () => {
     vi.setSystemTime((exp - 600) * 1000);
     const { res } = await call(validQuery());
-    expect(h.getSignedUrl).toHaveBeenCalledWith(filePath, 'get', { expiresIn: 600, audience: 'browser' });
+    expect(h.getSignedUrl).toHaveBeenCalledWith(filePath, 'get', {
+      expiresIn: 600,
+      audience: 'browser',
+      ResponseContentType: 'image/png',
+    });
     expect(res.headers['Cache-Control']).toBe('private, max-age=540');
   });
 
@@ -159,5 +168,69 @@ describe('GET /api/files/[id]/content', () => {
   it('does not query by a malformed id', async () => {
     await call(validQuery({ id: { $ne: null } }));
     expect(h.findById).not.toHaveBeenCalled();
+  });
+});
+
+describe('GET /api/files/[id]/content - response disposition', () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ now });
+    h.getSignedUrl.mockReset().mockResolvedValue(s3Url(3600));
+  });
+  afterEach(() => vi.useRealTimers());
+
+  it.each(['text/html', 'image/svg+xml', 'text/plain', undefined])('signs %s as an attachment', async mimeType => {
+    h.findById.mockReset().mockResolvedValue(file({ mimeType, fileName: 'page.html' }));
+    const { error } = await call(validQuery());
+    expect(error).toBeUndefined();
+    const options = h.getSignedUrl.mock.calls[0][2];
+    expect(options.ResponseContentDisposition).toBe('attachment; filename="page.html"');
+    expect(options.ResponseContentType).toBeUndefined();
+  });
+
+  it.each(['image/png', 'application/pdf', 'video/mp4'])('signs %s inline with a pinned type', async mimeType => {
+    h.findById.mockReset().mockResolvedValue(file({ mimeType, fileName: 'media' }));
+    await call(validQuery());
+    const options = h.getSignedUrl.mock.calls[0][2];
+    expect(options.ResponseContentDisposition).toBeUndefined();
+    expect(options.ResponseContentType).toBe(mimeType);
+  });
+});
+
+describe('GET /api/files/[id]/content - signed redirect target', () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ now, toFake: ['Date'] });
+    vi.stubEnv('AWS_ACCESS_KEY_ID', 'fixture-access');
+    vi.stubEnv('AWS_SECRET_ACCESS_KEY', 'fixture-secret');
+    vi.stubEnv('AWS_SESSION_TOKEN', '');
+    const storage = new S3Storage('files-bucket', 'us-east-2');
+    h.getSignedUrl
+      .mockReset()
+      .mockImplementation((...args: Parameters<S3Storage['getSignedUrl']>) => storage.getSignedUrl(...args));
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllEnvs();
+  });
+
+  const location = async (mimeType: string | undefined) => {
+    h.findById.mockReset().mockResolvedValue(file({ mimeType, fileName: 'page.html' }));
+    const { res, error } = await call(validQuery());
+    expect(error).toBeUndefined();
+    return new URL(res.redirect.mock.calls[0][1]).searchParams;
+  };
+
+  it.each(['text/html', 'image/svg+xml', 'text/plain', undefined])(
+    'redirects %s to a link signed for attachment',
+    async mimeType => {
+      const params = await location(mimeType);
+      expect(params.get('response-content-disposition')).toBe('attachment; filename="page.html"');
+      expect(params.get('response-content-type')).toBeNull();
+    }
+  );
+
+  it.each(['image/png', 'application/pdf', 'video/mp4'])('redirects %s to an inline link', async mimeType => {
+    const params = await location(mimeType);
+    expect(params.get('response-content-disposition')).toBeNull();
+    expect(params.get('response-content-type')).toBe(mimeType);
   });
 });

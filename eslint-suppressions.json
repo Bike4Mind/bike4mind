@@ -197,7 +197,6 @@
   "packages/database/src/models/billing/HeldCreditRewardModel.ts": { "b4m/require-update-validators": { "count": 6 } },
   "packages/database/src/models/billing/PaymentAttemptModel.ts": { "b4m/require-update-validators": { "count": 3 } },
   "packages/database/src/models/billing/PaymentRiskActionModel.ts": { "b4m/require-update-validators": { "count": 3 } },
-  "packages/database/src/models/billing/PendingCreditHoldModel.ts": { "b4m/require-update-validators": { "count": 1 } },
   "packages/database/src/models/billing/ReferralSubscriptionRewardModel.ts": { "b4m/require-update-validators": { "count": 3 } },
   "packages/database/src/models/billing/SpendAlertModel.ts": { "b4m/require-update-validators": { "count": 1 } },
   "packages/database/src/models/billing/StripeDisputeModel.ts": { "b4m/require-update-validators": { "count": 8 } },

@@ -15,7 +15,7 @@ vi.mock('node:fs', () => ({ watch: vi.fn() }));
 vi.mock('node:fs/promises', () => ({ mkdir: vi.fn(async () => undefined) }));
 vi.mock('../windows', () => ({ appWindows: () => [] }));
 vi.mock('./skinProtocol', () => ({ registerSkinProtocol: vi.fn() }));
-vi.mock('./skinFolder', () => ({ loadSkins: harness.loadSkins }));
+vi.mock('./skinFolder', () => ({ loadSkins: harness.loadSkins, loadSoundPacks: vi.fn(async () => []) }));
 
 const rejected = (id: string): SkinLoadResult => ({ ok: false, id, error: 'bad' });
 
@@ -26,7 +26,24 @@ beforeEach(() => {
 });
 
 describe('registerSkins scan ordering', () => {
-  it('keeps the newest scan result when an older scan finishes last', async () => {
+  it('gives each overlapping list call its own scan, so neither caller gets a stale or empty answer', async () => {
+    const { registerSkins } = await import('./index');
+    registerSkins();
+    const listSkins = harness.handlers.get('skins:list')!;
+    const listPacks = harness.handlers.get('soundpacks:list')!;
+
+    let finishOlder!: (results: SkinLoadResult[]) => void;
+    harness.loadSkins.mockReturnValueOnce(new Promise(resolve => (finishOlder = resolve)));
+    harness.loadSkins.mockResolvedValueOnce([rejected('newer')]);
+
+    const older = listSkins();
+    const newer = listPacks();
+    await newer;
+    finishOlder([rejected('older')]);
+    expect(await older).toMatchObject([{ id: 'older' }]);
+  });
+
+  it('serves the newest scan when an older scan finishes last', async () => {
     const { registerSkins } = await import('./index');
     registerSkins();
     const list = [...harness.handlers.values()][0];
@@ -39,7 +56,7 @@ describe('registerSkins scan ordering', () => {
     const newer = list();
     expect(await newer).toMatchObject([{ id: 'newer' }]);
     finishOlder([rejected('older')]);
-    expect(await older).toMatchObject([{ id: 'newer' }]);
+    expect(await older).toMatchObject([{ id: 'older' }]);
   });
 });
 
@@ -123,6 +140,45 @@ describe('toSummary', () => {
     expect(summary).toMatchObject({
       status: 'ok',
       warnings: ['states.working is too close to the needs-you colour, so the default is used'],
+    });
+  });
+});
+
+describe('toSoundPackSummary', () => {
+  it('turns every sound path into an asset URL and carries no file paths', async () => {
+    const { toSoundPackSummary } = await import('./index');
+    const summary = toSoundPackSummary({
+      ok: true,
+      pack: {
+        manifest: {
+          manifest: 1,
+          id: 'chimes',
+          name: 'Chimes',
+          version: '1.0.0',
+          kind: 'sounds',
+          contract: 1,
+          sounds: { finale: 'sounds/finale.ogg', 'agent-done': 'sounds/done.ogg' },
+        },
+        assets: new Map(),
+      },
+    });
+
+    expect(summary).toEqual({
+      status: 'ok',
+      id: 'chimes',
+      name: 'Chimes',
+      version: '1.0.0',
+      sounds: { finale: 'b4m-skin://chimes/sounds/finale.ogg', 'agent-done': 'b4m-skin://chimes/sounds/done.ogg' },
+    });
+  });
+
+  it('reports a rejected pack as broken', async () => {
+    const { toSoundPackSummary } = await import('./index');
+    expect(toSoundPackSummary({ ok: false, id: 'bad', name: 'Bad', error: 'nope' })).toEqual({
+      status: 'broken',
+      id: 'bad',
+      name: 'Bad',
+      error: 'nope',
     });
   });
 });

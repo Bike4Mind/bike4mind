@@ -53,12 +53,19 @@ export type AccessReviewReport = {
   generatedAt: string;
   dormantDays: number;
   overdue: boolean;
+  /** When the current review became overdue; null while it is not. */
+  overdueSince: string | null;
   admins: AccessReviewRow[];
   roles: AccessReviewRole[];
   record: WireAccessReviewRecord | null;
 };
 
-export type AccessReviewStatus = { quarter: string; overdue: boolean; completedAt: string | null };
+export type AccessReviewStatus = {
+  quarter: string;
+  overdue: boolean;
+  overdueSince: string | null;
+  completedAt: string | null;
+};
 
 export type AccessReviewDecisionResult = {
   completed: boolean;

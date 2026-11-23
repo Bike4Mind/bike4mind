@@ -17,6 +17,7 @@ import {
   type SreFixRequest,
 } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
+import { MAIL_BODY_KEY_PATTERN } from './mailer/mailBodyStore';
 
 // Self-host has no EventBridge. email.send goes straight to the mailer, which logs a failed
 // delivery itself; everything else is queued to SELF_HOST_EVENT_QUEUE for the background worker
@@ -31,6 +32,8 @@ async function publishSelfHost(eventName: string, detail: unknown, requiredAccep
     const { to, subject, body, text, attachments, category, mirror, logRecipient, ref } = detail as z.infer<
       typeof EmailEvents.Send.schema
     >;
+    // queuedMailer sends self-host mail before it would offload, so a bodyRef never gets here.
+    if (body === undefined) throw new Error('email.send needs an inline body on self-host: bodyRef is hosted-only');
     const result = await mailer.sendEmail(
       to,
       {
@@ -135,32 +138,56 @@ export const EmailDeliveryRef = z.discriminatedUnion('kind', [
 ]);
 export type EmailDeliveryRef = z.infer<typeof EmailDeliveryRef>;
 
+const EmailSendSchema = z
+  .object({
+    to: z.string(),
+    subject: z.string(),
+    body: z.string().optional(),
+    /** Plain-text alternative to the HTML body. */
+    text: z.string().optional(),
+    /**
+     * A body too large for the event, stored by ./mailer/mailBodyStore.ts. Its object carries
+     * the text alternative too, so `text` is not set alongside it.
+     */
+    bodyRef: z.object({ key: z.string().regex(MAIL_BODY_KEY_PATTERN) }).optional(),
+    category: z.literal('otc').optional(),
+    /** SendEmailOptions of the mailer (./mailer/index); both default to true there. */
+    mirror: z.boolean().optional(),
+    logRecipient: z.boolean().optional(),
+    ref: EmailDeliveryRef.optional(),
+    attachments: z
+      .array(
+        z.object({
+          filename: z.string(),
+          content: z.string(), // base64 encoded
+          encoding: z.string().optional(),
+          contentType: z.string(),
+        })
+      )
+      .optional(),
+  })
+  .superRefine((mail, ctx) => {
+    // An empty string is a valid body, so presence is `!== undefined`, not truthiness.
+    if ((mail.body !== undefined) === (mail.bodyRef !== undefined)) {
+      ctx.addIssue({ code: 'custom', message: 'exactly one of body and bodyRef is required' });
+    }
+    if (mail.bodyRef !== undefined && mail.text !== undefined) {
+      ctx.addIssue({ code: 'custom', message: 'text travels in the stored body when bodyRef is set' });
+    }
+  });
+
+// publish does not parse, so the body-XOR-bodyRef rule the schema refines at parse time is also a type.
+export type EmailSendDetail = Omit<z.infer<typeof EmailSendSchema>, 'body' | 'text' | 'bodyRef'> &
+  ({ body: string; text?: string; bodyRef?: never } | { bodyRef: { key: string }; body?: never; text?: never });
+
+const emailSend = event('email.send', EmailSendSchema);
+
 export const EmailEvents = {
-  Send: event(
-    'email.send',
-    z.object({
-      to: z.string(),
-      subject: z.string(),
-      body: z.string(),
-      /** Plain-text alternative to the HTML body. */
-      text: z.string().optional(),
-      category: z.literal('otc').optional(),
-      /** SendEmailOptions of the mailer (./mailer/index); both default to true there. */
-      mirror: z.boolean().optional(),
-      logRecipient: z.boolean().optional(),
-      ref: EmailDeliveryRef.optional(),
-      attachments: z
-        .array(
-          z.object({
-            filename: z.string(),
-            content: z.string(), // base64 encoded
-            encoding: z.string().optional(),
-            contentType: z.string(),
-          })
-        )
-        .optional(),
-    })
-  ),
+  Send: {
+    schema: EmailSendSchema,
+    publish: (detail: EmailSendDetail, publishOptions?: { requireAcceptance?: boolean }) =>
+      emailSend.publish(detail, publishOptions),
+  },
 };
 
 /**

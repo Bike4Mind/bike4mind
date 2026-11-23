@@ -134,6 +134,28 @@ describe('DataLakeResearchRunRepository', () => {
     expect((await repo.listByLake(LAKE, { limit: 2 })).map(r => r.configId)).toEqual(['newest', 'middle']);
   });
 
+  it('pages by keyset without skipping or repeating rows that share a createdAt', async () => {
+    const ids: string[] = [];
+    for (const configId of ['a', 'b', 'c', 'd', 'e']) ids.push((await repo.createRun(input({ configId }))).id);
+    const same = new Date('2026-01-01T00:00:00.000Z');
+    await mongoose
+      .model('DataLakeResearchRun')
+      .collection.updateMany({ dataLakeId: LAKE }, { $set: { createdAt: same } });
+
+    const seen: string[] = [];
+    let after: { createdAt: Date; id: string } | undefined;
+    for (let page = 0; page < 5; page++) {
+      const rows = await repo.listByLake(LAKE, { limit: 2, after });
+      seen.push(...rows.map(r => r.id));
+      if (rows.length < 2) break;
+      after = { createdAt: rows[rows.length - 1].createdAt, id: rows[rows.length - 1].id };
+    }
+
+    expect(seen).toHaveLength(5);
+    expect(new Set(seen)).toEqual(new Set(ids));
+    expect(seen).toEqual([...ids].sort().reverse());
+  });
+
   it('will not read a run through another lake id', async () => {
     const created = await repo.createRun(input());
     expect(await repo.findByIdInLake(created.id, 'lake-2')).toBeNull();

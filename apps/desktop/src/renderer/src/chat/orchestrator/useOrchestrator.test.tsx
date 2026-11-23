@@ -5,6 +5,7 @@ import type { ChatStreamEvent } from '@shared/chat';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AgentActivity } from './activity';
 import { writeView } from './orchestratorPrefs';
+import { singlePaneLayout } from './orchestratorLayout';
 import { useAgentActivity, useOrchestratorPrefs, useOrchestratorRoster } from './useOrchestrator';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -224,7 +225,7 @@ describe('useOrchestratorPrefs', () => {
     };
     act(() => root.render(<Probe id="b" project="/p" />));
     expect(latest?.view).toBe('aquarium');
-    act(() => latest?.setView('board'));
+    act(() => latest?.setLayout(singlePaneLayout('board')));
     expect(window.localStorage.getItem('b4m.orchestrator.projectView./p')).toBe('board');
     act(() => root.render(<Probe id="b" project="/q" />));
     expect(latest?.view).toBe('board');
@@ -241,7 +242,7 @@ describe('useOrchestratorPrefs', () => {
     expect(latest?.view).toBe('tavern');
     act(() => root.render(<Probe project="/q" />));
     expect(latest?.view).toBe('table');
-    act(() => latest?.setView('board'));
+    act(() => latest?.setLayout(singlePaneLayout('board')));
     expect(window.localStorage.getItem('b4m.orchestrator.projectView./q')).toBe('board');
     expect(window.localStorage.getItem('b4m.orchestrator.projectView./p')).toBeNull();
   });
@@ -253,7 +254,7 @@ describe('useOrchestratorPrefs', () => {
       return null;
     };
     act(() => root.render(<Probe />));
-    act(() => latest?.setView('board'));
+    act(() => latest?.setLayout(singlePaneLayout('board')));
     expect(latest?.view).toBe('tavern');
     expect(window.localStorage.length).toBe(0);
   });
@@ -272,7 +273,7 @@ describe('useOrchestratorPrefs', () => {
     act(() => root.render(<Probe id="b" />));
     expect(latest?.view).toBe('board');
 
-    act(() => latest?.setView('table'));
+    act(() => latest?.setLayout(singlePaneLayout('table')));
     expect(latest?.view).toBe('table');
     expect(window.localStorage.getItem('b4m.orchestrator.view.b')).toBe('table');
 

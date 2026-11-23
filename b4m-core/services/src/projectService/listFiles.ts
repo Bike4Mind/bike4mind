@@ -9,6 +9,7 @@ import {
   FILE_URL_TTL_SECONDS,
 } from '@bike4mind/utils';
 import { z } from 'zod';
+import { storageReadOverrides } from '@bike4mind/utils/contentDisposition';
 import { signedUrlExpiresAt, type GetFabFileAdapter } from '../fabFileService/get';
 
 const listProjectFilesSchema = z.object({
@@ -68,6 +69,7 @@ export const listFiles = async (
             file.fileUrl = await adapters.storage!.getSignedUrl(file.filePath, 'get', {
               expiresIn: FILE_URL_TTL_SECONDS,
               signingDate: fileUrlSigningDate(),
+              ...storageReadOverrides({ mimeType: file.mimeType, fileName: file.fileName, key: file.filePath }),
             });
             file.fileUrlExpireAt = signedUrlExpiresAt(file.fileUrl, FILE_URL_TTL_SECONDS);
           } catch (error) {

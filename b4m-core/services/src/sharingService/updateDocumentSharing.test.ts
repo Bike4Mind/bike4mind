@@ -79,7 +79,10 @@ describe('sharingService - updateDocumentSharing', () => {
 
     expect(result.fileUrl).toBe('https://fresh.example.invalid/f1');
     expect(result.fileUrlExpireAt).toBeInstanceOf(Date);
-    expect(storage.generateSignedUrl).toHaveBeenCalledWith('owned/f1.png', 3600, { signingDate: expect.any(Date) });
+    expect(storage.generateSignedUrl).toHaveBeenCalledWith('owned/f1.png', 3600, {
+      signingDate: expect.any(Date),
+      ResponseContentType: 'image/png',
+    });
   });
 
   it('strips fileUrl from the response for a non-serveable file (targeted write never touches it)', async () => {

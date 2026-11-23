@@ -97,6 +97,7 @@ export const TRUST_AND_SAFETY_GUIDE: readonly AdminGuideEntry[] = [
     views: ['admin.held_signup_grants'],
     settings: ['signupGrantSignupPoolDaily', 'signupGrantTricklePoolDaily'],
     howTo: [
+      'Open Invite Center > Pending > Held grant actions.',
       'Tick the accounts to pay, then click Release selected. Use the reason select to narrow the list and Previous/Next to page.',
       "A release pays the original grant without drawing the daily budget. Grants held by the budget are also paid automatically when a new day's budget opens.",
       'After a release, a Revoke button appears on the result banner. It opens "Revoke this release?"; Revoke credits permanently debits the credits that release paid (balances already spent are skipped) and the account is not paid this grant again.',
@@ -180,6 +181,8 @@ export const TRUST_AND_SAFETY_GUIDE: readonly AdminGuideEntry[] = [
     howTo: [
       'Set the dormant threshold in days (90 by default) to change which admins are flagged as dormant.',
       'Confirm keeps an admin as they are. Revoke asks for a reason, removes their admin access through the audited permission change, then records the decision.',
+      'Filter by Pending, Confirmed or Revoked; pending admins are listed first with Confirm and Revoke buttons. A full admin who is dormant and has no MFA is marked "Suggested: revoke".',
+      'Select several admins and choose Revoke access to revoke them in one step; each revocation is still recorded and audited per admin.',
       'You cannot confirm or revoke your own row; another full admin has to review it. The review completes once every admin has a decision.',
       'Export CSV downloads the quarter with each admin and decision. An overdue banner shows in the admin console when the quarter passes its grace period with no completed review. Only full admins can open this tab.',
     ],
