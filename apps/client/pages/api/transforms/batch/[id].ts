@@ -6,6 +6,7 @@ import { NotFoundError, usdToCreditsStochastic } from '@bike4mind/utils';
 import { ApiKeyScope, type ModelInfo } from '@bike4mind/common';
 import { isUnpricedTextModel } from '@bike4mind/services/llm/modelAdmission';
 import { executedModelFields } from '@bike4mind/services/llm/shadowTier';
+import { logLlmUsageSettled } from '@bike4mind/services/llm/llmUsageSettledLog';
 import { anthropicBatchCost } from '@server/billing/anthropicBatchPricing';
 import { AnthropicBatchService, getAvailableModels } from '@bike4mind/llm-adapters';
 import { settleHeldCredits } from '@bike4mind/server-utils/billing/reserveRequestCredits';
@@ -157,16 +158,29 @@ const handler = baseApi({
     let cacheWriteTokens = 0;
     const models = new Set<string>();
     const executed = new Set<string>();
+    // Provider cost and tokens per model that ran, for the spend metrics.
+    const ran = new Map<
+      string,
+      { usd: number; input: number; output: number; cacheRead: number; cacheWrite: number }
+    >();
     let substituted = false;
     for (const r of status.results ?? []) {
       const modelInfo = billedModels.get(r.customId);
       if (r.status !== 'done' || !r.tokenUsage || !modelInfo) continue;
       const u = r.tokenUsage;
       usd += anthropicBatchCost(modelInfo, u);
-      costUsd += anthropicBatchCost(costModels.get(r.customId) ?? modelInfo, u);
+      const itemCostUsd = anthropicBatchCost(costModels.get(r.customId) ?? modelInfo, u);
+      costUsd += itemCostUsd;
       const executedId = mappings.get(r.customId)?.executedModel;
       if (executedId) substituted = true;
       executed.add(executedId ?? modelInfo.id);
+      const line = ran.get(executedId ?? modelInfo.id) ?? { usd: 0, input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
+      line.usd += itemCostUsd;
+      line.input += u.inputTokens;
+      line.output += u.outputTokens;
+      line.cacheRead += u.cacheReadInputTokens ?? 0;
+      line.cacheWrite += u.cacheCreationInputTokens ?? 0;
+      ran.set(executedId ?? modelInfo.id, line);
       inputTokens += u.inputTokens;
       outputTokens += u.outputTokens;
       cacheReadTokens += u.cacheReadInputTokens ?? 0;
@@ -196,6 +210,21 @@ const handler = baseApi({
     // must not count the same batch twice.
     const stamped = await transformBatchRepository.markCreditSettled(batch.id);
     if (stamped !== false) {
+      for (const [ranModel, line] of ran) {
+        logLlmUsageSettled({
+          backend: 'anthropic',
+          model: ranModel,
+          inputTokens: line.input,
+          outputTokens: line.output,
+          cacheReadTokens: line.cacheRead,
+          cacheWriteTokens: line.cacheWrite,
+          usd: line.usd,
+          source: claimed.usageSource ?? 'api',
+          // The owner check above makes the polling user the batch owner.
+          userId: claimed.ownerUserId,
+          accountCreatedAt: req.user.createdAt,
+        });
+      }
       await usageEventRepository
         .record({
           requestId: anthropicBatchId,

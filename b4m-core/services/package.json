@@ -350,6 +350,16 @@
         "default": "./dist/llm/shadowTier.cjs"
       }
     },
+    "./llm/llmUsageSettledLog": {
+      "import": {
+        "types": "./dist/llm/llmUsageSettledLog.d.mts",
+        "default": "./dist/llm/llmUsageSettledLog.mjs"
+      },
+      "require": {
+        "types": "./dist/llm/llmUsageSettledLog.d.cts",
+        "default": "./dist/llm/llmUsageSettledLog.cjs"
+      }
+    },
     "./llm/orgToolPolicy": {
       "import": {
         "types": "./dist/llm/orgToolPolicy.d.mts",
