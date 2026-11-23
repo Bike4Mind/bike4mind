@@ -8,7 +8,7 @@ import { sharedTest } from '../../vitest.shared';
 //   over every tracked file). CI runs that lane uncached on the misc leg;
 //   scripts/__tests__/turbo-test-cache.test.mjs requires the script wherever such files exist.
 const INTEGRATION_LANE = process.env.SERVER_UTILS_TEST_LANE === 'integration';
-const REPO_LANE = process.env.SERVER_UTILS_TEST_LANE === 'repo';
+const REPO_LANE = process.env.SERVER_UTILS_TEST_LANE === 'repo' || process.env.REPO_TEST_LANE === 'repo';
 // Every extension the guard's REPO_LANE_FILE accepts, so no file it treats as uncached runs in a
 // cached lane.
 const REPO_LANE_GLOB = '**/*.repo.test.?(c|m)[jt]s?(x)';
@@ -24,11 +24,7 @@ export default defineConfig({
     ...sharedTest,
     environment: 'node',
     setupFiles: ['./vitest.setup.ts'],
-    ...(process.env.REPO_TEST_LANE === 'repo'
-      ? { include: ['**/*.repo.test.ts'] }
-      : INTEGRATION_LANE
-        ? { include: ['**/*.e2e.test.ts'], exclude: ['**/node_modules/**', '**/*.repo.test.ts'] }
-        : { exclude: ['**/node_modules/**', '**/*.e2e.test.ts', '**/*.repo.test.ts'] }),
+    ...laneFiles,
     // Integration-lane only, as in apps/workers: unset in the unit lane, where a retry would mask
     // a real bug. Guarded by vitest.config.test.ts.
     ...(INTEGRATION_LANE ? { retry: 2 } : {}),
