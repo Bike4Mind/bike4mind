@@ -6,7 +6,7 @@ import {
   CALLABLE_FUNCTION_PARENT_MARGIN_MS,
 } from '../packages/server-utils/src/callableFunctions/runtimeLimits';
 import { callableFunctionRolePolicy, subnetNetworkFaults, type RouteTarget } from './callableFunctionNetwork';
-import { isPreviewStage, STAGE_LOG_RETENTION_DAYS } from './constants';
+import { PRODUCTION_STAGES, STAGE_LOG_RETENTION_DAYS } from './constants';
 import { dlqAlarmTopic } from './dlqAlarms';
 
 // Runs user-written Python (apps/workers/src/callableFunctions/handler.ts, image apps/workers/Dockerfile.callablefunction)
@@ -23,15 +23,18 @@ const namedSubnetIds = (process.env.CALLABLE_FUNCTION_SUBNET_IDS ?? '')
   .map(id => id.trim())
   .filter(Boolean);
 
-// A network per preview would exhaust the per-region VPC quota, so a preview runs the function only in named subnets.
-const skippedOnPreview = isPreviewStage && namedSubnetIds.length === 0;
-if (skippedOnPreview) {
+const longLivedStage = PRODUCTION_STAGES.includes($app.stage);
+
+// A network per stage would exhaust the per-region VPC quota, so only production and dev create one; any other stage
+// runs the function only in named subnets.
+const skippedWithoutNetwork = !longLivedStage && namedSubnetIds.length === 0;
+if (skippedWithoutNetwork) {
   console.warn(
-    'CALLABLE_FUNCTION_SUBNET_IDS is not set on this preview stage; skipping the callable function runtime.'
+    'CALLABLE_FUNCTION_SUBNET_IDS is not set and only production and dev create a network; skipping the callable function runtime on this stage.'
   );
 }
 
-const enabled = !$dev && !!runtimeImage && !skippedOnPreview;
+const enabled = !$dev && !!runtimeImage && !skippedWithoutNetwork;
 
 const NETWORK_NAME = `${$app.name}-${$app.stage}-callable-function`;
 
@@ -156,7 +159,8 @@ function createCallableFunctionRuntime() {
       timeout: CALLABLE_FUNCTION_LAMBDA_TIMEOUT_SECONDS,
       memorySize: CALLABLE_FUNCTION_LAMBDA_MEMORY_MB,
       ephemeralStorage: { size: CALLABLE_FUNCTION_LAMBDA_EPHEMERAL_STORAGE_MB },
-      reservedConcurrentExecutions: CALLABLE_FUNCTION_LAMBDA_RESERVED_CONCURRENCY,
+      // Lambda refuses a reservation that leaves the account under 100 unreserved, so only production and dev reserve.
+      reservedConcurrentExecutions: longLivedStage ? CALLABLE_FUNCTION_LAMBDA_RESERVED_CONCURRENCY : undefined,
       tenancyConfig: { tenantIsolationMode: 'PER_TENANT' },
       vpcConfig: {
         subnetIds: network.subnetIds,
@@ -224,5 +228,5 @@ const runtime = enabled ? createCallableFunctionRuntime() : undefined;
 
 export const callableFunctionRuntime = runtime?.fn;
 
-/** For the stack output: a preview stage in the same account runs the function in these subnets. */
+/** For the stack output: another stage in the same account runs the function in these subnets. */
 export const callableFunctionSubnetIds = runtime?.subnetIds.apply(ids => ids.join(','));

@@ -140,10 +140,26 @@ describe('callable function runtime isolation', () => {
     expect(routes).toMatch(/\.\.\.routes,/);
   });
 
-  it('creates nothing on a preview stage without named subnets, and says so on every deploy', () => {
-    expect(source).toMatch(/const skippedOnPreview = isPreviewStage && namedSubnetIds\.length === 0;/);
-    expect(source).toMatch(/if \(skippedOnPreview\) \{\s*console\.warn\(/);
-    expect(source).toMatch(/const enabled = !\$dev && !!runtimeImage && !skippedOnPreview;/);
+  it('creates the dedicated VPC only on the stages the repository treats as long-lived', () => {
+    expect(source).toMatch(/const longLivedStage = PRODUCTION_STAGES\.includes\(\$app\.stage\);/);
+    expect(source).toMatch(/import \{[^}]*\bPRODUCTION_STAGES\b[^}]*\} from '\.\/constants';/);
+    expect(source.match(/\bdedicatedNetwork\(\)/g)).toHaveLength(2);
+    expect(source).not.toMatch(/\bisPreviewStage\b/);
+  });
+
+  it('creates nothing on another stage without named subnets, and says so on every deploy', () => {
+    expect(source).toMatch(/const skippedWithoutNetwork = !longLivedStage && namedSubnetIds\.length === 0;/);
+    expect(source).toMatch(
+      /if \(skippedWithoutNetwork\) \{\s*console\.warn\(\s*'[^']*only production and dev[^']*'\s*\);/
+    );
+    expect(source).not.toMatch(/preview/i);
+    expect(source).toMatch(/const enabled = !\$dev && !!runtimeImage && !skippedWithoutNetwork;/);
+  });
+
+  it('reserves concurrency only on the long-lived stages', () => {
+    expect(fn).toMatch(
+      /reservedConcurrentExecutions:\s*longLivedStage \? CALLABLE_FUNCTION_LAMBDA_RESERVED_CONCURRENCY : undefined,/
+    );
   });
 
   it('times out at the exported constant, never above 900 s, and sizes memory and storage from constants', () => {
@@ -156,7 +172,6 @@ describe('callable function runtime isolation', () => {
   });
 
   it('caps its concurrency at the exported constant', () => {
-    expect(fn).toMatch(/reservedConcurrentExecutions:\s*CALLABLE_FUNCTION_LAMBDA_RESERVED_CONCURRENCY,/);
     expect(CALLABLE_FUNCTION_LAMBDA_RESERVED_CONCURRENCY).toBe(50);
   });
 
