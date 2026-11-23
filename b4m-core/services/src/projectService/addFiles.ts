@@ -15,6 +15,7 @@ import {
 } from '@bike4mind/common';
 import { z } from 'zod';
 import { distinctIdCount, mergeIds } from '../utils/objectIds';
+import { AttachableItem, assertCanAttachToProject } from './attachGate';
 
 const addFilesProjectSchema = z.object({
   projectId: z.string().nonempty(),
@@ -61,6 +62,8 @@ export const addFiles = async (
   // DEDUPED list, since the reader returns distinct rows and a file sent twice is not one that
   // could not be reached.
   if (files.length !== distinctIdCount(fileIds)) throw new BadRequestError('Some files are not accessible');
+  // Attaching shares the file (read) with every member, so a read-only holder may not attach it.
+  assertCanAttachToProject(files as unknown as AttachableItem[], user, project.fileIds, 'files');
 
   // The ids that RESOLVED, like addSessions: pushing the request list would store `ABC` alongside
   // an existing `abc` as if they were two different files. mergeIds, not uniq, because a row

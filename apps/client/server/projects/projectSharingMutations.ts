@@ -92,7 +92,9 @@ export async function removeProjectMember(
   return project;
 }
 
-const systemPromptAdapters = { db: { fabFiles: fabFileRepository, projects: projectRepository } };
+const systemPromptAdapters = {
+  db: { fabFiles: fabFileRepository, projects: projectRepository, users: userRepository, invites: inviteRepository },
+};
 
 export async function addProjectSystemPrompts(ctx: Ctx, projectId: string, fileIds: string[]) {
   const project = await withTransaction(() =>

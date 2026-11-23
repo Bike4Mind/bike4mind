@@ -1,5 +1,6 @@
 import { Logger } from '@bike4mind/observability';
 import { updateShareableFiles } from '../projectService';
+import { AttachableItem, canAttachToProject } from '../projectService/attachGate';
 import { canonicalId, mergeIds, usableSessionIds } from '../utils/objectIds';
 import {
   ICacheRepository,
@@ -272,9 +273,15 @@ const addFilesToProjects = async (
   );
 
   for (const project of projects) {
-    project.fileIds = uniq([...project.fileIds, ...fileIds]);
+    // Attaching shares a file with every member, so a file this caller can only read stays out of
+    // the project (attachGate.ts); it is still added to the session itself.
+    const attachable = files.filter(file =>
+      canAttachToProject(file as unknown as AttachableItem, user, project.fileIds)
+    );
+    if (attachable.length === 0) continue;
+    project.fileIds = uniq([...project.fileIds, ...attachable.map(file => file.id)]);
 
-    await updateShareableFiles(user, { project, files }, adapters);
+    await updateShareableFiles(user, { project, files: attachable }, adapters);
 
     await db.projects.update({ id: project.id, fileIds: project.fileIds });
   }
