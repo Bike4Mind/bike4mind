@@ -18,9 +18,17 @@ const hasLiveSession = (): boolean => !!useAccessToken.getState().accessToken &&
  * is HttpOnly, so the persisted `hasSession` flag (written by every tab on sign-in and cleared on
  * sign-out, expiry and mid-MFA) is the only hint; without it a signed-out visitor makes no refresh
  * call here. A sign-in error in the URL wins: the visitor came back to see it, not to be forwarded.
+ *
+ * A session already live in memory is left to MultiStepLogin's own redirect effect. Signing in
+ * remounts this page (TanStackRouterProvider swaps its wrapper once there is a user) while the
+ * router still matches /login, and that effect reads redirectTo in the same commit; an awaited
+ * resume here would read the address only after the sign-in's navigation, find no redirectTo,
+ * and replace it with /new.
  */
 const shouldResumeSession = (): boolean =>
-  useAccessToken.getState().hasSession && !new URLSearchParams(window.location.search).has('error');
+  useAccessToken.getState().hasSession &&
+  !hasLiveSession() &&
+  !new URLSearchParams(window.location.search).has('error');
 
 const storageSignalsSession = (newValue: string | null): boolean => {
   try {
