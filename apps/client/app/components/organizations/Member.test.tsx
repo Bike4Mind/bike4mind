@@ -829,15 +829,16 @@ describe('OrganizationMembers invite plumbing', () => {
     expect(mocks.toast.error).not.toHaveBeenCalled();
   });
 
-  it('points a platform admin who is not the owner at the owner, since only the owner can buy seats', () => {
+  it('sends a platform admin who is not the owner to Billing to add seats, like the owner', () => {
     mocks.viewer = { id: 'staff1', isAdmin: true };
     mocks.seats = { maxSeats: 1, currentSeats: 1, availableSeats: 0 };
+    mocks.navigate.mockReset();
     renderMembers(buildOrg({}));
-    expect(screen.getByTestId('organization-members-seats-limit')).toHaveTextContent(
-      'All seats are in use. Ask the team owner to add seats.'
-    );
     expect(screen.getByTestId('organization-members-add-no-seats-btn')).toBeDisabled();
-    expect(screen.queryByTestId('organization-members-add-seats-link')).toBeNull();
+    fireEvent.click(screen.getByTestId('organization-members-add-seats-link'));
+    expect(mocks.navigate).toHaveBeenCalledWith(
+      expect.objectContaining({ to: '/organizations/$id', params: { id: 'org1' }, search: { tab: 'billing' } })
+    );
     expect(mocks.toast.error).not.toHaveBeenCalled();
   });
 

@@ -329,6 +329,10 @@ export const operations = {
     method: 'GET',
     path: '/api/v1/music-generations/{id}',
   },
+  getPendingDecisionCount: {
+    method: 'GET',
+    path: '/api/v1/pending-decisions',
+  },
   getProject: {
     method: 'GET',
     path: '/api/v1/projects/{id}',

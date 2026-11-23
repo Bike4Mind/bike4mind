@@ -760,7 +760,6 @@ apps/client/pages/api/user/accept-policies.ts
 apps/client/pages/api/users/[id]/activities/index.ts
 apps/client/pages/api/users/[id]/agents.ts
 apps/client/pages/api/users/[id]/collections/index.ts
-apps/client/pages/api/users/[id]/delete.ts
 apps/client/pages/api/users/[id]/docx-template.ts
 apps/client/pages/api/users/[id]/email-settings.ts
 apps/client/pages/api/users/[id]/friend-requests.ts

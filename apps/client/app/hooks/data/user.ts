@@ -207,6 +207,7 @@ export function useDeleteUser() {
       queryClient.invalidateQueries({ queryKey: ['organizations'] });
     },
     onError: error => {
+      if (isStepUpCancelled(error)) return;
       const data = isAxiosError(error) ? (error.response?.data as ErrorResponse | undefined) : undefined;
       toast.error(data?.error ?? 'Failed to delete user');
     },

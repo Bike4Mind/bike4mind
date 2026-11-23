@@ -440,12 +440,12 @@ describe('organization detail page - what a manager cannot do', () => {
     );
   });
 
-  it('locks Billing for a platform admin who is not the owner or a manager', () => {
+  it('gives a platform admin who is not the owner the real Billing tab, not a locked entry', () => {
     user.current = { id: 'staff1', isAdmin: true };
 
     render(wrapper(<OrganizationPage />));
 
-    expect(screen.getByTestId('organization-tab-locked-billing')).toBeTruthy();
+    expect(screen.queryByTestId('organization-tab-locked-billing')).toBeNull();
   });
 
   it('does not show the owner a locked Billing entry or the Integrations note', () => {

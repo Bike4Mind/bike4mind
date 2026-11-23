@@ -139,6 +139,26 @@ final class QuestActivityManagerTests: XCTestCase {
     XCTAssertEqual(last?.progress, 0.3)
   }
 
+  func testAnApprovalFrameWithoutAPendingActionKeepsTheOneAlreadyShownForTheSameWait() async {
+    await activate()
+    start()
+    manager.questChanged(
+      questID: "q1", to: QuestActivityContentState(phase: .approvalNeeded, pendingActionTs: 1_700_000_000_000))
+    await manager.waitUntilIdle()
+    clock.advance(by: 5)
+    manager.questChanged(questID: "q1", to: QuestActivityContentState(phase: .approvalNeeded, stageLabel: "Waiting"))
+    await manager.waitUntilIdle()
+    XCTAssertEqual(host.handles.first?.updates.last?.state.pendingActionTs, 1_700_000_000_000)
+
+    clock.advance(by: 5)
+    manager.questChanged(questID: "q1", to: QuestActivityContentState(phase: .running, stageLabel: "Searching"))
+    await manager.waitUntilIdle()
+    clock.advance(by: 5)
+    manager.questChanged(questID: "q1", to: QuestActivityContentState(phase: .approvalNeeded, stageLabel: "Waiting"))
+    await manager.waitUntilIdle()
+    XCTAssertNil(host.handles.first?.updates.last?.state.pendingActionTs)
+  }
+
   func testUpdatesForAnUnknownQuestAreIgnored() async {
     await activate()
     manager.questChanged(questID: "ghost", to: QuestActivityContentState(phase: .running, stageLabel: "x"))
