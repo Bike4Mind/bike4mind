@@ -36,7 +36,17 @@ const findById = vi.hoisted(() => vi.fn());
 const update = vi.hoisted(() => vi.fn());
 vi.mock('@bike4mind/database/infra', () => ({ organizationRepository: { findById, update } }));
 vi.mock('@bike4mind/database/auth', () => ({ userRepository: {} }));
-vi.mock('@bike4mind/database', () => ({ withTransaction: <T>(fn: () => Promise<T>) => fn() }));
+const transaction = vi.hoisted(() => ({ depth: 0 }));
+vi.mock('@bike4mind/database', () => ({
+  withTransaction: async <T>(fn: () => Promise<T>) => {
+    transaction.depth += 1;
+    try {
+      return await fn();
+    } finally {
+      transaction.depth -= 1;
+    }
+  },
+}));
 vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({
   recordAdminActionFromRequest: vi.fn().mockResolvedValue(null),
 }));
@@ -74,16 +84,26 @@ describe('PUT /api/organizations/[id]/admins - appointee eligibility', () => {
   });
 
   it('moves an appointed billing manager off the billing list, keeping the others', async () => {
-    findById.mockResolvedValue({
-      ...org([
-        { userId: 'member1', permissions: ['read'] },
-        { userId: 'member2', permissions: ['read'] },
-      ]),
-      billingManagerUserIds: ['member1', 'member2'],
+    const depthAt = { read: -1, write: -1 };
+    findById.mockImplementation(async () => {
+      depthAt.read = transaction.depth;
+      return {
+        ...org([
+          { userId: 'member1', permissions: ['read'] },
+          { userId: 'member2', permissions: ['read'] },
+        ]),
+        billingManagerUserIds: ['member1', 'member2'],
+      };
+    });
+    update.mockImplementation(async ({ adminUserIds }: { adminUserIds: string[] }) => {
+      depthAt.write = transaction.depth;
+      return { adminUserIds };
     });
 
     const { run } = put(['member1']);
     await run();
+
+    expect(depthAt).toEqual({ read: 1, write: 1 });
 
     expect(update).toHaveBeenCalledWith({ id: 'org1', adminUserIds: ['member1'], billingManagerUserIds: ['member2'] });
     expect(recordAdminActionFromRequest).toHaveBeenCalledWith(

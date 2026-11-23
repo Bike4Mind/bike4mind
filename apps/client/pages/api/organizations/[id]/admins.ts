@@ -58,6 +58,7 @@ const handler = baseApi().put(
         throw new BadRequestError(`Not organization members with read access: ${notMembers.join(', ')}`);
       }
 
+      // Keep in sync with OrganizationRepository.setMemberRole, which also keeps the two role lists disjoint.
       // A user holds one role: appointing a billing manager as manager moves them off the billing list.
       const appointed = new Set(adminUserIds);
       const billingManagerUserIds = (organization.billingManagerUserIds ?? []).filter(userId => !appointed.has(userId));
