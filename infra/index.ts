@@ -51,6 +51,7 @@ export * from './wafPolicy';
 export * from './waf';
 
 export * from './webDlqFunctionLogs';
+export * from './dlqTriageFunctionLogs';
 
 // logMonitor must be last
 export * from './logMonitor';

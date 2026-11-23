@@ -154,6 +154,10 @@ const CUSTOMER_AUDIENCE_RULES = [
   'When customer impact is unclear, leave the change out. It is valid for a release to have no public items.',
 ];
 
+// Backstop for mobile PRs without a conventional scope; the scope gate lives in packages/scripts buildPayload.
+const RELEASED_SURFACES_RULE =
+  'The released product surfaces are the web app and the desktop app. Changes affecting only the native iOS or Android mobile apps are not customer-facing and must be excluded.';
+
 const TITLE_VS_NOTE_RULE = [
   'When a title and a note differ in scope, count or conditions, follow the narrower one: a change that',
   '"asks the assistant to rephrase once" does not "retry automatically". Other detail from the note that the',
@@ -163,6 +167,7 @@ const TITLE_VS_NOTE_RULE = [
 function buildTriagePrompt(prs: ReleaseNotesJobPr[]): string {
   return [
     'You triage merged pull requests for customer-facing release notes of a SaaS AI workspace product.',
+    RELEASED_SURFACES_RULE,
     'For each pull request decide whether a customer would notice the change. Security vulnerability fixes,',
     'internal refactors, CI, tests, dependency bumps, infrastructure and developer tooling are NOT customer-facing.',
     ...CUSTOMER_AUDIENCE_RULES,
@@ -181,6 +186,7 @@ function buildTriagePrompt(prs: ReleaseNotesJobPr[]): string {
 function buildEditorialPrompt(notes: { number: number; title: string; note: string }[], feedback: string[]): string {
   return [
     'You write the customer-facing release notes for a SaaS AI workspace product.',
+    RELEASED_SURFACES_RULE,
     'Group the changes below into items. Each item has "category" ("new" | "improved" | "fixed"),',
     `"text" (one plain-language sentence, at most ${MAX_ITEM_CHARS} characters), "importance"`,
     '(1 = headline-worthy, 2 = notable, 3 = minor) and "sourcePrs" (the numbers of the changes it covers;',

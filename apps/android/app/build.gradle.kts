@@ -103,6 +103,10 @@ dependencies {
     implementation(libs.androidx.lifecycle.runtime.compose)
     implementation(libs.androidx.browser)
     implementation(libs.androidx.core.ktx)
+    // Shares from other apps finish uploading after the app is gone.
+    implementation(libs.androidx.work.runtime)
+    // Document scanning UI, run by Google Play services, so the app ships no camera or edge-detection code.
+    implementation(libs.mlkit.document.scanner)
 
     // Firebase pulls an old fragment; the activity-result permission launcher needs 1.3.0 or later (lint-enforced).
     implementation(libs.androidx.fragment)

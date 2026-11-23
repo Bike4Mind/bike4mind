@@ -23,6 +23,7 @@ export async function discardDlqMessages(params: {
   sourceQueue: string;
   reason: string;
   adminUserId: string;
+  aiSuggestionId?: string;
   messages: readonly DlqDiscardTarget[];
   releaseUnretained: boolean;
 }): Promise<DlqDiscardOutcome[]> {
@@ -37,6 +38,7 @@ export async function discardDlqMessages(params: {
         messageBody: message.body,
         sourceQueue: params.sourceQueue,
         operation: 'discard',
+        ...(params.aiSuggestionId ? { aiSuggestionId: params.aiSuggestionId } : {}),
         status: 'pending',
         reason: params.reason,
         replayedBy: params.adminUserId,

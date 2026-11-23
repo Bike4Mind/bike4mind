@@ -89,6 +89,7 @@ import type { ShareDirectoryResult } from './directoryRequest';
 import type { PrActionResult, PrBarState, PrOption, PrSummaryEvent } from './pullRequest';
 import type { LocalContextFit, LocalContextSetting } from './localContextSetting';
 import type { SidebarSectionsState } from './sidebarSections';
+import type { ComposerDrafts } from './composerDrafts';
 import type { WorkspaceChanges } from './workspaceChanges';
 import type { SkillsScope, SkillsState } from './skills';
 import type { PermissionMutationResult, PermissionRuleLists, PermissionScope, PermissionsState } from './permissions';
@@ -560,6 +561,7 @@ export const IPC_CHANNELS = {
    * (auto-merge in particular) are switched on here and nowhere else.
    */
   prWatch: 'pr:watch',
+  prGetState: 'pr:get-state',
   prBind: 'pr:bind',
   prDismiss: 'pr:dismiss',
   prRefresh: 'pr:refresh',
@@ -579,6 +581,9 @@ export const IPC_CHANNELS = {
   sidebarRenameSection: 'sidebar:rename-section',
   sidebarDeleteSection: 'sidebar:delete-section',
   sidebarMoveSession: 'sidebar:move-session',
+  /** Unsent composer text per conversation; see @shared/composerDrafts. */
+  composerDraftsList: 'drafts:list',
+  composerDraftsSave: 'drafts:save',
   /**
    * The user's terminals; see @shared/terminal. Input and resize are one-way sends rather than
    * invokes: a keystroke has nothing to wait for, and a round trip each would be felt.
@@ -1407,6 +1412,12 @@ export interface DesktopApi {
     /** Null takes the session out of its section. */
     moveSession(sessionId: string, sectionId: string | null): Promise<SidebarSectionsState>;
   };
+  /** Unsent composer text per conversation; see @shared/composerDrafts. */
+  composerDrafts: {
+    list(): Promise<ComposerDrafts>;
+    /** Blank text clears the conversation's draft. Unknown conversations are ignored. */
+    save(sessionId: string, text: string): Promise<void>;
+  };
   tools: {
     getAccess(): Promise<ToolAccessState>;
     /** Opens the OS folder picker. Resolves unchanged if the user cancels. */
@@ -1456,6 +1467,8 @@ export interface DesktopApi {
      * when it has no PR; a read starts in main when the one in hand is missing or stale.
      */
     watch(sessionId: string | null): Promise<PrBarState | null>;
+    /** Read a selected agent's bar without replacing the conversation's watch. */
+    getState(sessionId: string): Promise<PrBarState | null>;
     /** Bind a pasted PR URL to the conversation. */
     bind(sessionId: string, url: string): Promise<PrActionResult>;
     dismiss(sessionId: string): Promise<PrActionResult>;

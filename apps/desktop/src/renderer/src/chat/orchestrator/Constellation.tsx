@@ -4,10 +4,11 @@ import { keyframes } from '@mui/system';
 import { AGENT_STATE_LABEL, type AgentState } from '@shared/agentState';
 import type { ViewAction, ViewAgent, ViewSnapshot } from '@shared/viewSnapshot';
 import { stateLampColor } from './statePalette';
+import { AgentPrIndicator } from './AgentPrIndicator';
 
 /*
  * Built on the view contract alone, as TileWall is: it may import only @shared/viewSnapshot, @shared/agentState,
- * ./statePalette, React and the UI kit. snapshotView.tsx hosts it.
+ * ./statePalette, ./AgentPrIndicator, React and the UI kit. snapshotView.tsx hosts it.
  */
 
 const SIZE = 640;
@@ -118,7 +119,9 @@ function Node({
   x,
   y,
   radius,
+  pr,
   onOpen,
+  onOpenPr,
 }: {
   testId: string;
   state: AgentState;
@@ -126,7 +129,9 @@ function Node({
   x: number;
   y: number;
   radius: number;
+  pr?: ViewAgent['pr'];
   onOpen(): void;
+  onOpenPr?(): void;
 }) {
   const color = stateLampColor(state);
   const asking = state === 'needs-you';
@@ -163,6 +168,13 @@ function Node({
       <text x={x} y={y + radius + 14} textAnchor="middle" fontSize={11} fill={LABEL_COLOR} pointerEvents="none">
         {truncate(title)}
       </text>
+      {pr && (
+        <foreignObject x={x - 55} y={y + radius + 18} width={110} height={24}>
+          <Box sx={{ display: 'flex', justifyContent: 'center' }}>
+            <AgentPrIndicator pr={pr} onOpen={onOpenPr} compact />
+          </Box>
+        </foreignObject>
+      )}
     </g>
   );
 }
@@ -215,10 +227,12 @@ export function Constellation({ snapshot, onAction }: { snapshot: ViewSnapshot; 
             testId={`orchestrator-constellation-node-${node.id}`}
             state={node.agent.state}
             title={node.agent.title}
+            pr={node.agent.pr}
             x={node.x}
             y={node.y}
             radius={nodeRadius(node.level)}
             onOpen={() => onAction({ kind: 'open-agent', agentId: node.id })}
+            onOpenPr={() => onAction({ kind: 'open-pr', agentId: node.id })}
           />
         ))}
         <Node

@@ -31,8 +31,8 @@ vi.mock('@server/middlewares/baseApi', () => ({
   },
 }));
 
-const verifyOrgAccess = vi.hoisted(() => vi.fn());
-vi.mock('@bike4mind/server-utils/utils/orgAccess', () => ({ verifyOrgAccess }));
+const verifyOrgPermission = vi.hoisted(() => vi.fn());
+vi.mock('@bike4mind/server-utils/utils/orgAccess', () => ({ verifyOrgPermission }));
 const recordAdminActionFromRequest = vi.hoisted(() => vi.fn().mockResolvedValue(null));
 vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({ recordAdminActionFromRequest }));
 
@@ -67,7 +67,7 @@ const call = async (route: string, method: string, body?: unknown) => {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  verifyOrgAccess.mockResolvedValue(ORG);
+  verifyOrgPermission.mockResolvedValue(ORG);
   orgPolicy.getOrgCustomMcpPolicy.mockResolvedValue(VIEW);
   orgPolicy.readOrgCustomMcpPolicyOverride.mockResolvedValue(null);
   orgPolicy.setOrgCustomMcpPolicy.mockImplementation(async (_id: string, policy: unknown) => JSON.stringify(policy));
@@ -85,10 +85,14 @@ describe('custom-mcp org routes', () => {
     ['policy', 'delete', undefined],
     ['connections', 'get', undefined],
   ])('%s %s is limited to owners and managers, and a refusal changes nothing', async (route, method, body) => {
-    verifyOrgAccess.mockRejectedValue(new NotFoundError('Organization not found'));
+    verifyOrgPermission.mockRejectedValue(new NotFoundError('Organization not found'));
     await expect(call(route, method, body)).rejects.toThrow('Organization not found');
 
-    expect(verifyOrgAccess).toHaveBeenCalledWith(expect.objectContaining({ id: 'manager1' }), 'org1');
+    expect(verifyOrgPermission).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'manager1' }),
+      'org1',
+      'managePolicies'
+    );
     expect(orgPolicy.setOrgCustomMcpPolicy).not.toHaveBeenCalled();
     expect(orgPolicy.resetOrgCustomMcpPolicy).not.toHaveBeenCalled();
     expect(orgPolicy.listOrgMemberConnections).not.toHaveBeenCalled();
@@ -151,7 +155,7 @@ describe('custom-mcp org routes', () => {
     );
 
     vi.clearAllMocks();
-    verifyOrgAccess.mockResolvedValue(ORG);
+    verifyOrgPermission.mockResolvedValue(ORG);
     orgPolicy.readOrgCustomMcpPolicyOverride.mockResolvedValue(null);
     await call('policy', 'delete');
     expect(recordAdminActionFromRequest).not.toHaveBeenCalled();

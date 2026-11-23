@@ -13,6 +13,7 @@ import '../index';
 const mockRefs = vi.hoisted(() => ({
   getHandler: null as null | ((req: any, res: any) => unknown),
   postHandler: null as null | ((req: any, res: any) => unknown),
+  baseApiOptions: undefined as Record<string, unknown> | undefined,
   listArgs: undefined as unknown[] | undefined,
   createArgs: undefined as unknown[] | undefined,
   settings: {} as Record<string, boolean | undefined>,
@@ -29,7 +30,12 @@ vi.mock('@server/middlewares/baseApi', () => {
       return chain;
     },
   };
-  return { baseApi: () => chain };
+  return {
+    baseApi: (options: Record<string, unknown>) => {
+      mockRefs.baseApiOptions = options;
+      return chain;
+    },
+  };
 });
 
 vi.mock('@bike4mind/database', () => ({
@@ -282,5 +288,59 @@ describe('POST /api/artifacts reference guard', () => {
     expect(guards.createArtifactSourceRefsGuard).toHaveBeenCalledWith((req as any).user);
     expect(adapters.assertSourceRefsAccessible).toBe((guards as any).sharedGuard);
     expect(guards.createOwnedArtifactSourceRefsGuard).not.toHaveBeenCalled();
+  });
+});
+
+describe('POST /api/artifacts API key scope posture', () => {
+  const postWithKey = (apiKeyInfo?: Record<string, unknown>) => {
+    const { req, res } = invokePost({ type: 'html', title: 'Page', content: '<html></html>' });
+    if (apiKeyInfo) Object.assign(req, { apiKeyInfo });
+    return { req, res };
+  };
+
+  beforeEach(() => {
+    mockRefs.createArgs = undefined;
+    mockRefs.settings = { EnableArtifacts: true, EnableArtifactsDefault: true };
+  });
+
+  // The legacy window has no cutoff yet, so every unconfined key is legacy and passes.
+  it.each([
+    ['a notebooks:write key', { scopes: ['notebooks:write'] }],
+    ['an admin key', { scopes: ['admin:*'] }],
+    ['a legacy read-only key', { scopes: ['notebooks:read'], createdAt: new Date('2024-01-01') }],
+    ['a JWT caller', undefined],
+  ])('creates the artifact for %s', async (_label, apiKeyInfo) => {
+    const { req, res } = postWithKey(apiKeyInfo);
+    await mockRefs.postHandler!(req, res);
+    expect(mockRefs.createArgs).toBeDefined();
+  });
+
+  it('declares the notebook scopes and legacy grandfathering on the door', () => {
+    expect(mockRefs.baseApiOptions).toMatchObject({
+      requiredScopes: ['notebooks:read', 'notebooks:write', 'admin:*'],
+      grandfatherLegacyKeys: true,
+    });
+  });
+
+  // Stand-in for a post-cutoff key: the legacy window has no cutoff yet, and a key holding a
+  // confined scope is never grandfathered.
+  it('refuses a non-legacy key holding only notebooks:read and creates nothing', async () => {
+    const { req, res } = postWithKey({ scopes: ['notebooks:read', 'embed:chat'] });
+    await expect(Promise.resolve(mockRefs.postHandler!(req, res))).rejects.toMatchObject({ statusCode: 403 });
+    expect(mockRefs.createArgs).toBeUndefined();
+  });
+
+  it('creates the artifact for a non-legacy key holding notebooks:write', async () => {
+    const { req, res } = postWithKey({ scopes: ['notebooks:write', 'embed:chat'] });
+    await mockRefs.postHandler!(req, res);
+    expect(mockRefs.createArgs).toBeDefined();
+  });
+
+  it.each([
+    ['an exchange key holding notebooks:read', { scopes: ['notebooks:read'], oauthExchangeClientId: 'client-1' }],
+  ])('refuses %s and creates nothing', async (_label, apiKeyInfo) => {
+    const { req, res } = postWithKey(apiKeyInfo);
+    await expect(Promise.resolve(mockRefs.postHandler!(req, res))).rejects.toMatchObject({ statusCode: 403 });
+    expect(mockRefs.createArgs).toBeUndefined();
   });
 });

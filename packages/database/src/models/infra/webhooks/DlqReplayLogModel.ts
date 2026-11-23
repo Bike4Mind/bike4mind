@@ -9,6 +9,7 @@ export interface IDlqReplayLog {
   sourceQueue: string;
   status: 'success' | 'failed' | 'skipped' | 'discarded' | 'pending';
   operation?: 'replay' | 'discard';
+  aiSuggestionId?: string;
   errorMessage?: string;
   reason?: string;
   replayedBy: string;
@@ -29,6 +30,7 @@ const DlqReplayLogSchema = new mongoose.Schema(
       required: true,
     },
     operation: { type: String, enum: ['replay', 'discard'] },
+    aiSuggestionId: { type: String },
     errorMessage: { type: String },
     reason: { type: String },
     replayedBy: { type: String, required: true },
@@ -107,6 +109,21 @@ class DlqReplayLogRepository extends BaseRepository<IDlqReplayLog> {
   async logReplay(data: Omit<IDlqReplayLog, 'id' | 'createdAt' | 'updatedAt'>): Promise<IDlqReplayLog> {
     const result = await this.model.create(data);
     return result.toObject();
+  }
+
+  async findSuggestionOutcome(aiSuggestionId: string, queueLabel: string, messageId: string) {
+    const row = await this.model
+      .findOne({ messageId, queueLabel, aiSuggestionId })
+      .select({ status: 1, operation: 1, errorMessage: 1, updatedAt: 1 })
+      .sort({ createdAt: -1, _id: -1 })
+      .lean();
+    if (!row) return null;
+    return {
+      status: row.status,
+      operation: row.operation ?? 'replay',
+      hasWarning: Boolean(row.errorMessage),
+      recordedAt: row.updatedAt.toISOString(),
+    };
   }
 
   /** Finalize only the pending discard created before the SQS deletion request. */

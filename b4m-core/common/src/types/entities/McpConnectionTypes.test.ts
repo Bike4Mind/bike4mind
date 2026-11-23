@@ -217,6 +217,19 @@ describe('toMcpPlatformConnectionMemberView', () => {
       expect(JSON.stringify(view)).not.toContain(hidden);
     }
   });
+
+  it('carries the description the admin wrote, and none when it is absent or empty', () => {
+    const described = { ...doc, description: 'Searches the team handbook.' };
+    expect(toMcpPlatformConnectionMemberView(described, { allowed: true }).description).toBe(
+      'Searches the team handbook.'
+    );
+    expect(toMcpConnectionPublic(described).description).toBe('Searches the team handbook.');
+    const serializedKeys = (view: object) => Object.keys(JSON.parse(JSON.stringify(view)) as object);
+    for (const source of [doc, { ...doc, description: '' }]) {
+      expect(serializedKeys(toMcpPlatformConnectionMemberView(source, { allowed: true }))).not.toContain('description');
+      expect(serializedKeys(toMcpConnectionPublic(source))).not.toContain('description');
+    }
+  });
 });
 
 describe('mcpConnectionOwnerProblem for a platform connection', () => {

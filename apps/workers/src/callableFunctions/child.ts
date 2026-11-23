@@ -383,7 +383,9 @@ async function runRequest(
   } catch (error) {
     // Only a failure outside the glue's own handling lands here.
     const message = error instanceof Error ? error.message : 'Traceback (most recent call last):\nException';
-    return { ok: true, initMs, printed: '', error: message.slice(0, MAX_ERROR_CHARS) };
+    // Pyodide's PythonError names the exception's type in `type`; the message is guest text.
+    const errorClass = text((error as { type?: unknown } | null)?.type);
+    return { ok: true, initMs, printed: '', error: message.slice(0, MAX_ERROR_CHARS), errorClass };
   } finally {
     pyodide.globals.delete('_fn_code');
     pyodide.globals.delete('_fn_params_json');

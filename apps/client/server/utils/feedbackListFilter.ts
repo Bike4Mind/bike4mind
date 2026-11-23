@@ -19,6 +19,9 @@ export async function buildFeedbackListFilter(
   for (const key of ['userId', 'sessionId', 'questId', 'organizationId', 'subject'] as const) {
     if (query[key]) clauses.push({ [key]: query[key] });
   }
+  // A userId from an unauthenticated request body is not this user's report. Must match the
+  // earlier-reports count in pages/api/admin/feedback/[id]/reporter.ts.
+  if (query.userId) clauses.push({ userIdVerified: { $ne: false } });
   if (query.area || query.severity) {
     if (!isAdmin || !(await feedbackAiVisible())) {
       clauses.push({ _id: { $in: [] } });
