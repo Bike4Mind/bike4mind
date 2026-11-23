@@ -74,10 +74,13 @@ describe('orchestration run budget', () => {
   let mint: ReturnType<typeof vi.fn<CompletionRunMinter>>;
   let events: ChatStreamEvent[];
   let budgetState: CompletionRunBudgetState;
+  let storeDirectory: string;
+  let deps: ConstructorParameters<typeof ChatService>[0];
 
   beforeEach(async () => {
     project = await realpath(await mkdtemp(join(tmpdir(), 'b4m-budget-project-')));
-    store = new SessionStore(await mkdtemp(join(tmpdir(), 'b4m-budget-store-')), 'planner');
+    storeDirectory = await mkdtemp(join(tmpdir(), 'b4m-budget-store-'));
+    store = new SessionStore(storeDirectory, 'planner');
     const models: ChatModelOption[] = [
       { id: 'planner', name: 'Planner', supportsTools: true },
       { id: 'worker', name: 'Worker', supportsTools: true },
@@ -100,7 +103,7 @@ describe('orchestration run budget', () => {
       url === USAGE_PATH ? Promise.resolve({ data: usage(budgetState) }) : Promise.reject(new Error(`no ${url}`))
     );
     mint = vi.fn<CompletionRunMinter>().mockResolvedValue({ runId: RUN_A, createdAt: '2026-11-10T00:00:00.000Z' });
-    service = new ChatService({
+    deps = {
       store,
       summaryChanged: vi.fn(),
       access: { list: async () => [] } as unknown as AccessStore,
@@ -114,7 +117,8 @@ describe('orchestration run budget', () => {
       getEnvironmentUrl: () => 'http://localhost:3000',
       emit: event => void events.push(event),
       mintCompletionRun: mint,
-    });
+    };
+    service = new ChatService(deps);
   });
   afterEach(() => {
     vi.restoreAllMocks();
@@ -219,6 +223,60 @@ describe('orchestration run budget', () => {
     expect(reply?.stopReason).not.toBe(RUN_BUDGET_STOP);
     expect(reply?.error).toBeUndefined();
     expect(reply?.content).toContain('Carried on');
+  });
+
+  it('keeps a paused run paused, and resumable, after the app relaunches', async () => {
+    const root = await budgeted(500);
+    completions.mockImplementationOnce(() => Promise.reject(exhausted()));
+    await service.send(root.id, 'Plan the work');
+    await idle(root.id);
+    const worker = await store.create('worker', {
+      origin: { parentSessionId: root.id, depth: 1, seedPrompt: 'Brief' },
+      orchestrationPolicy: (await policyOf(root.id))!,
+    });
+    service.dispose();
+
+    store = new SessionStore(storeDirectory, 'planner', 'relaunched');
+    service = new ChatService({ ...deps, store });
+    expect((await store.get(root.id))?.orchestrate).toBeUndefined();
+
+    await service.send(root.id, 'Try again after relaunch');
+    await idle(root.id);
+    await service.send(worker.id, 'Worker turn after relaunch');
+    await idle(worker.id);
+    expect(completions).toHaveBeenCalledTimes(1);
+    expect((await lastReply(root.id))?.stopReason).toBe(RUN_BUDGET_STOP);
+    expect((await lastReply(worker.id))?.stopReason).toBe(RUN_BUDGET_STOP);
+
+    await expect(service.raiseRunBudget(root.id, 1500)).resolves.toMatchObject({ ok: true });
+    await waitStream(0);
+    expect(wire(1).run?.runId).toBe(RUN_A);
+    expect(mint).toHaveBeenCalledTimes(1);
+  });
+
+  it('drops a usage read that a raise made stale, so the old budget is not warned about', async () => {
+    const root = await budgeted(500);
+    budgetState = { budgetCredits: 500, committedCredits: 450, reservedCredits: 0, remainingCredits: 50 };
+    let release: () => void = () => {};
+    get.mockImplementationOnce(
+      () =>
+        new Promise(resolve => {
+          release = () => resolve({ data: usage(budgetState) });
+        })
+    );
+
+    await service.send(root.id, 'Plan the work');
+    await waitStream(0);
+    finish(0);
+    await idle(root.id);
+    await vi.waitUntil(() => get.mock.calls.length >= 1, { timeout: 5000, interval: 5 });
+    await expect(service.raiseRunBudget(root.id, 2000)).resolves.toMatchObject({ ok: true });
+    release();
+    await vi.waitUntil(() => events.some(event => event.type === 'context-notice-cleared'), { timeout: 5000 });
+    await new Promise(resolve => setTimeout(resolve, 20));
+
+    expect(notices(root.id)).toHaveLength(0);
+    expect((await policyOf(root.id))?.budgetWarnedAt).toBeUndefined();
   });
 
   it('stays paused when the new budget is not a raise', async () => {

@@ -2197,11 +2197,16 @@ export class ChatService {
       const state = await fetchRunBudget(api.getAxiosInstance(), serverRunId);
       const warning = state ? runBudgetWarning(state) : undefined;
       if (!warning) return;
-      const recorded = await this.deps.store.setRunBudget(policy.rootSessionId, policy.rootRunId, {
-        budgetWarnedAt: budget,
-      });
+      // Recorded only while the budget is still the one read: a raise during the read makes it stale.
+      const recorded = await this.deps.store.setRunBudget(
+        policy.rootSessionId,
+        policy.rootRunId,
+        { budgetWarnedAt: budget },
+        undefined,
+        budget
+      );
       // Another round of the run may have shown it while this one read.
-      if (recorded?.orchestrationPolicy?.budgetWarnedAt !== budget) return;
+      if (!recorded || recorded.orchestrationPolicy?.budgetWarnedAt !== budget) return;
       for (const id of new Set([session.id, policy.rootSessionId])) {
         this.emit({ type: 'context-notice', sessionId: id, message: warning, kind: 'run-budget' });
       }
