@@ -17,8 +17,14 @@ export const COMPOSER_DRAFTS_TOTAL_MAX_LENGTH = 1_000_000;
 /** A draft nobody has touched for this long is dropped when the file is next loaded (ms). */
 export const COMPOSER_DRAFT_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
 
-/** Typing pause before main writes the file (ms). A crash of main loses at most this much. */
+/** Typing pause before main writes the file (ms). */
 export const COMPOSER_DRAFT_SAVE_DELAY_MS = 500;
+
+/**
+ * Longest main waits to write while typing goes on without a pause (ms), so a crash of main loses
+ * at most this much of a long draft.
+ */
+export const COMPOSER_DRAFT_SAVE_MAX_WAIT_MS = 2000;
 
 /** A draft is worth keeping only when it holds something other than whitespace. */
 export const isKeptDraft = (text: string): boolean => text.trim().length > 0;

@@ -7,6 +7,7 @@ import {
   COMPOSER_DRAFT_MAX_AGE_MS,
   COMPOSER_DRAFT_MAX_LENGTH,
   COMPOSER_DRAFT_SAVE_DELAY_MS,
+  COMPOSER_DRAFT_SAVE_MAX_WAIT_MS,
   COMPOSER_DRAFTS_TOTAL_MAX_LENGTH,
   isKeptDraft,
   type ComposerDrafts,
@@ -23,7 +24,7 @@ type Entry = { text: string; updatedAt: number };
  * WatchPreferencesStore writes its file: atomically, owner-only, served from memory after `load`.
  *
  * The renderer sends every keystroke to `set`, so memory is always current; the file write waits for
- * a pause in typing (`saveDelayMs`), and `flushSync` at quit writes whatever is still waiting. The
+ * a pause in typing (`saveDelayMs`), or `saveMaxWaitMs` into typing that never pauses, and `flushSync` at quit writes whatever is still waiting. The
  * file is bounded three ways: a deleted conversation's draft goes with it (ChatService.deleteSession), a
  * draft untouched for COMPOSER_DRAFT_MAX_AGE_MS is dropped on load, and past
  * COMPOSER_DRAFTS_TOTAL_MAX_LENGTH the least recently edited drafts are dropped first.
@@ -35,11 +36,14 @@ export class ComposerDraftStore {
   // Serialised so a burst of saves lands in order and never interleaves two renames.
   private writes: Promise<void> = Promise.resolve();
   private pendingSave: ReturnType<typeof setTimeout> | undefined;
+  // Started by the first unsaved change and never pushed back, unlike `pendingSave`.
+  private maxWaitSave: ReturnType<typeof setTimeout> | undefined;
 
   constructor(
     private readonly filePath: string,
     private readonly now: () => number = Date.now,
-    private readonly saveDelayMs: number = COMPOSER_DRAFT_SAVE_DELAY_MS
+    private readonly saveDelayMs: number = COMPOSER_DRAFT_SAVE_DELAY_MS,
+    private readonly saveMaxWaitMs: number = COMPOSER_DRAFT_SAVE_MAX_WAIT_MS
   ) {}
 
   async load(): Promise<ComposerDrafts> {
@@ -127,14 +131,16 @@ export class ComposerDraftStore {
   }
 
   private scheduleSave(): void {
-    this.cancelPendingSave();
+    if (this.pendingSave !== undefined) clearTimeout(this.pendingSave);
     this.pendingSave = setTimeout(() => void this.persist(), this.saveDelayMs);
+    this.maxWaitSave ??= setTimeout(() => void this.persist(), this.saveMaxWaitMs);
   }
 
   private cancelPendingSave(): void {
-    if (this.pendingSave === undefined) return;
-    clearTimeout(this.pendingSave);
+    if (this.pendingSave !== undefined) clearTimeout(this.pendingSave);
+    if (this.maxWaitSave !== undefined) clearTimeout(this.maxWaitSave);
     this.pendingSave = undefined;
+    this.maxWaitSave = undefined;
   }
 
   private persist(): Promise<void> {

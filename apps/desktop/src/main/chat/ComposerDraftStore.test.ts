@@ -13,6 +13,17 @@ async function fileIn(): Promise<string> {
   return join(await mkdtemp(join(tmpdir(), 'composer-drafts-')), 'composer-drafts.json');
 }
 
+/** Reads the file until it holds `expected` or the write had ample turns (setImmediate is not faked). */
+async function onDiskSoon(path: string, expected: Record<string, string>): Promise<unknown> {
+  let drafts: unknown = undefined;
+  for (let turn = 0; turn < 200; turn += 1) {
+    await new Promise(resolve => setImmediate(resolve));
+    drafts = await new ComposerDraftStore(path).load();
+    if (JSON.stringify(drafts) === JSON.stringify(expected)) break;
+  }
+  return drafts;
+}
+
 const stored = async (path: string): Promise<unknown> => JSON.parse(await readFile(path, 'utf8'));
 
 describe('ComposerDraftStore', () => {
@@ -53,6 +64,27 @@ describe('ComposerDraftStore', () => {
       vi.advanceTimersByTime(1);
       await store.flush();
       expect(await new ComposerDraftStore(path).load()).toEqual({ s1: 'he' });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('writes during typing that never pauses, at most the max wait after the first unsaved change', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      const path = await fileIn();
+      const store = new ComposerDraftStore(path, Date.now, 500, 2000);
+      await store.load();
+      for (let keystroke = 1; keystroke <= 4; keystroke += 1) {
+        void store.set('s1', 'x'.repeat(keystroke));
+        vi.advanceTimersByTime(400);
+      }
+      // 1600 ms in: every pause was shorter than the delay, so nothing is written yet.
+      expect(await new ComposerDraftStore(path).load()).toEqual({});
+      void store.set('s1', 'xxxxx');
+      // 2000 ms in, 400 ms after the last keystroke: only the max wait can have fired.
+      vi.advanceTimersByTime(400);
+      expect(await onDiskSoon(path, { s1: 'xxxxx' })).toEqual({ s1: 'xxxxx' });
     } finally {
       vi.useRealTimers();
     }
