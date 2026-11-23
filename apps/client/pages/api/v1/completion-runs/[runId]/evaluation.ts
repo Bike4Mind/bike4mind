@@ -2,10 +2,13 @@ import { getCompletionRunEvaluationContract, NotFoundError } from '@bike4mind/co
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
 import { perUserRateLimit } from '@server/middlewares/perUserRateLimit';
 import { findCallerCompletionRun } from '@server/completionRuns/callerCompletionRun';
+import { refuseExchangeKey } from '@server/auth/refuseExchangeKey';
 
 export default nextRouteForContract(getCompletionRunEvaluationContract, {
   rateLimit: perUserRateLimit('GET /api/v1/completion-runs/[runId]/evaluation'),
 }).get(async (req, res) => {
+  // Evaluation receipts are for the signed-in desktop app; no connected app needs them.
+  if (refuseExchangeKey(req, res)) return;
   const run = await findCallerCompletionRun(req.validatedParams.runId, {
     userId: req.user.id,
     billingOrganizationId: req.apiKeyInfo?.organizationId,
