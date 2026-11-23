@@ -220,7 +220,9 @@ export function QuestionCard({
                   variant="soft"
                   color="primary"
                   slotProps={{
-                    label: { sx: { overflow: 'visible', textOverflow: 'clip', whiteSpace: 'normal', overflowWrap: 'anywhere' } },
+                    label: {
+                      sx: { overflow: 'visible', textOverflow: 'clip', whiteSpace: 'normal', overflowWrap: 'anywhere' },
+                    },
                   }}
                   sx={{ maxWidth: '100%', fontWeight: 'lg', letterSpacing: '0.02em' }}
                   data-testid={`chat-question-header-${q}`}
@@ -292,7 +294,7 @@ export function QuestionCard({
         <Button size="md" disabled={!complete} onClick={submit} data-testid="chat-question-submit">
           Submit
         </Button>
-        <Button size="md" variant="plain" color="neutral" onClick={onSkip} data-testid="chat-question-skip">
+        <Button size="md" variant="outlined" color="neutral" onClick={onSkip} data-testid="chat-question-skip">
           Skip
         </Button>
         {!complete && picks.some(isAnswered) && (

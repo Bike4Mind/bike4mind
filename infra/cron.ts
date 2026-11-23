@@ -48,6 +48,7 @@ import { secrets } from './secrets';
 import { dlqTriageSweepDeadLetter } from './dlqTriageSweepDeadLetter';
 import { dlqTriagePermissions } from './dlqTriagePermissions';
 import { cloudSecurityScanDeadLetter } from './cloudScanDeadLetter';
+import { mailBodyEnvironment, mailBodyPutPermission } from './mailBodyOffload';
 
 if (runsScheduledJobs && dlqTriageSweepDeadLetter) {
   const deadLetter = dlqTriageSweepDeadLetter;
@@ -596,7 +597,7 @@ const creditLotSweepCron = runsScheduledJobs
         handler: 'apps/workers/src/cron/creditLotSweep.handler',
         runtime: 'nodejs24.x',
         timeout: '10 minutes',
-        link: [...allSecrets],
+        link: [...allSecrets, eventBus],
         environment: { ...DEFAULT_LAMBDA_ENVIRONMENT },
       },
     })
@@ -1101,9 +1102,11 @@ const dataLakeBatchReconcileCron = runsScheduledJobs
         // queues its reviewer alert as an email.send event.
         link: [...allSecrets, dataLakeTaxonomyQueue, websocketApi, fabFileChunkQueue, fabFileBucket, eventBus],
         environment: {
+          ...mailBodyEnvironment(appFilesBucket),
           ...DEFAULT_LAMBDA_ENVIRONMENT,
         },
         permissions: [
+          mailBodyPutPermission(appFilesBucket),
           {
             actions: ['cloudwatch:PutMetricData'],
             resources: ['*'],

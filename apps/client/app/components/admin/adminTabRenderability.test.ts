@@ -18,7 +18,14 @@ describe('canRenderAdminTab', () => {
   });
 
   it('rejects a retired tab id', () => {
-    for (const retired of [4, 11, 17]) {
+    for (const retired of [
+      4,
+      11,
+      17,
+      AdminTab.RegistrationInvites,
+      AdminTab.PartnerSignupRules,
+      AdminTab.HeldSignupGrants,
+    ]) {
       expect(canRenderAdminTab(retired as AdminTab, { user: admin })).toBe(false);
     }
   });

@@ -115,7 +115,7 @@ const SkillRow = memo(function SkillRow({
         {onUpload && skill.source !== 'account' && (
           <Button
             size="sm"
-            variant="plain"
+            variant="outlined"
             color="neutral"
             onClick={() => onUpload(skill)}
             data-testid="skill-row-upload-btn"

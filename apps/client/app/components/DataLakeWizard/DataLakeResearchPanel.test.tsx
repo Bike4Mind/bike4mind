@@ -154,10 +154,51 @@ describe('DataLakeResearchPanel', () => {
     expect(screen.getByTestId('datalake-research-config-limits').textContent).toMatch(/\$0\.05 ceiling/);
   });
 
+  describe('opening the form', () => {
+    let scrollIntoView: ReturnType<typeof vi.spyOn>;
+    beforeEach(() => {
+      scrollIntoView = vi.spyOn(Element.prototype, 'scrollIntoView');
+    });
+    afterEach(() => {
+      scrollIntoView.mockRestore();
+    });
+
+    it('scrolls the edit form into view and focuses its first field', () => {
+      renderPanel({ configs: [config()] });
+      expect(scrollIntoView).not.toHaveBeenCalled();
+
+      fireEvent.click(screen.getByTestId('datalake-research-edit-btn-config-1'));
+
+      expect(scrollIntoView).toHaveBeenCalledTimes(1);
+      expect(scrollIntoView.mock.contexts[0]).toBe(screen.getByTestId('datalake-research-form'));
+      expect(document.activeElement).toBe(screen.getByTestId('datalake-research-name-input'));
+    });
+
+    it('scrolls and focuses again when Edit is pressed on the config whose form is already open', () => {
+      renderPanel({ configs: [config()] });
+
+      fireEvent.click(screen.getByTestId('datalake-research-edit-btn-config-1'));
+      (document.activeElement as HTMLElement).blur();
+      fireEvent.click(screen.getByTestId('datalake-research-edit-btn-config-1'));
+
+      expect(scrollIntoView).toHaveBeenCalledTimes(2);
+      expect(document.activeElement).toBe(screen.getByTestId('datalake-research-name-input'));
+    });
+
+    it('does the same for a new configuration', () => {
+      renderPanel();
+
+      fireEvent.click(screen.getByTestId('datalake-research-new-btn'));
+
+      expect(scrollIntoView).toHaveBeenCalledTimes(1);
+      expect(document.activeElement).toBe(screen.getByTestId('datalake-research-name-input'));
+    });
+  });
+
   it('starts a run for the configuration whose button was pressed', () => {
     const spies = renderPanel({ configs: [config({ id: 'config-a' }), config({ id: 'config-b', name: 'Other' })] });
 
-    fireEvent.click(screen.getAllByTestId('datalake-research-run-btn')[1]);
+    fireEvent.click(screen.getByTestId('datalake-research-run-btn-config-b'));
 
     expect(spies.onStartRun).toHaveBeenCalledWith('config-b');
   });
@@ -167,14 +208,23 @@ describe('DataLakeResearchPanel', () => {
   it('disables Run while a run is still in flight', () => {
     renderPanel({ configs: [config()], runs: [run({ status: 'running', startedAt: new Date() })] });
 
-    const button = screen.getByTestId('datalake-research-run-btn') as HTMLButtonElement;
+    const button = screen.getByTestId('datalake-research-run-btn-config-1') as HTMLButtonElement;
     expect(button.disabled).toBe(true);
     expect(button.textContent).toMatch(/in progress/i);
   });
 
+  it('says which card owns the active run and marks the others as another run', () => {
+    renderPanel({
+      configs: [config({ id: 'config-a' }), config({ id: 'config-b', name: 'Other' })],
+      runs: [run({ configId: 'config-b', status: 'running', startedAt: new Date() })],
+    });
+    expect(screen.getByTestId('datalake-research-run-btn-config-b').textContent).toBe('Run in progress');
+    expect(screen.getByTestId('datalake-research-run-btn-config-a').textContent).toBe('Another run in progress');
+  });
+
   it('re-enables Run once every run has settled', () => {
     renderPanel({ configs: [config()], runs: [run({ status: 'completed' })] });
-    expect((screen.getByTestId('datalake-research-run-btn') as HTMLButtonElement).disabled).toBe(false);
+    expect((screen.getByTestId('datalake-research-run-btn-config-1') as HTMLButtonElement).disabled).toBe(false);
   });
 
   // The lockout this closes: a hard-killed run keeps `running` forever because its catch never ran.
@@ -188,7 +238,7 @@ describe('DataLakeResearchPanel', () => {
     });
     renderPanel({ configs: [config()], runs: [abandoned] });
 
-    const button = screen.getByTestId('datalake-research-run-btn') as HTMLButtonElement;
+    const button = screen.getByTestId('datalake-research-run-btn-config-1') as HTMLButtonElement;
     expect(button.disabled).toBe(false);
     expect(button.textContent).toMatch(/run now/i);
   });
@@ -287,7 +337,7 @@ describe('DataLakeResearchPanel', () => {
       const spies = renderPanel({
         configs: [config({ itemRules: [{ condition: 'it is a press release', action: 'block' }] })],
       });
-      fireEvent.click(screen.getByTestId('datalake-research-edit-btn'));
+      fireEvent.click(screen.getByTestId('datalake-research-edit-btn-config-1'));
       expect((screen.getByTestId('datalake-research-rule-condition-0') as HTMLInputElement).value).toBe(
         'it is a press release'
       );
@@ -451,7 +501,7 @@ describe('DataLakeResearchPanel', () => {
           configs: [config({ trustedDomains: ['example.com'], autoAdmitTrusted: true, maxAutoAdmits: 6 })],
         });
         expect(screen.getByTestId('datalake-research-config-auto-admit').textContent).toMatch(/up to 6 per run/);
-        fireEvent.click(screen.getByTestId('datalake-research-edit-btn'));
+        fireEvent.click(screen.getByTestId('datalake-research-edit-btn-config-1'));
         expect(screen.getByTestId('datalake-research-trusted-input')).toHaveValue('example.com');
         expect(screen.getByTestId('datalake-research-auto-admit-cap')).toHaveValue(6);
       });
@@ -469,7 +519,7 @@ describe('DataLakeResearchPanel', () => {
           configs: [config({ trustedDomains: ['example.com'], autoAdmitTrusted: true, maxAutoAdmits: 6 })],
           onUpdate,
         });
-        fireEvent.click(screen.getByTestId('datalake-research-edit-btn'));
+        fireEvent.click(screen.getByTestId('datalake-research-edit-btn-config-1'));
         fireEvent.click(screen.getByTestId('datalake-research-advanced-toggle'));
         fireEvent.click(toggle());
         fireEvent.click(screen.getByTestId('datalake-research-save-btn'));
@@ -482,7 +532,7 @@ describe('DataLakeResearchPanel', () => {
 
       it('tells the user a save that turned auto-admit on applies from the next run', async () => {
         renderPanel({ configs: [config({ trustedDomains: ['example.com'], autoAdmitTrusted: false })] });
-        fireEvent.click(screen.getByTestId('datalake-research-edit-btn'));
+        fireEvent.click(screen.getByTestId('datalake-research-edit-btn-config-1'));
         fireEvent.click(screen.getByTestId('datalake-research-advanced-toggle'));
         fireEvent.click(toggle());
         fireEvent.click(screen.getByTestId('datalake-research-save-btn'));
@@ -499,7 +549,7 @@ describe('DataLakeResearchPanel', () => {
           onUpdate = vi.fn().mockResolvedValue(undefined)
         ) => {
           renderPanel({ configs: [config(stored)], onUpdate });
-          fireEvent.click(screen.getByTestId('datalake-research-edit-btn'));
+          fireEvent.click(screen.getByTestId('datalake-research-edit-btn-config-1'));
           fireEvent.click(screen.getByTestId('datalake-research-advanced-toggle'));
           fireEvent.change(screen.getByTestId(field), { target: { value } });
           fireEvent.click(screen.getByTestId('datalake-research-save-btn'));
@@ -548,7 +598,7 @@ describe('DataLakeResearchPanel', () => {
       it('shows no timing notice when the save leaves auto-admit untouched', async () => {
         const onUpdate = vi.fn().mockResolvedValue(undefined);
         renderPanel({ configs: [config()], onUpdate });
-        fireEvent.click(screen.getByTestId('datalake-research-edit-btn'));
+        fireEvent.click(screen.getByTestId('datalake-research-edit-btn-config-1'));
         fireEvent.click(screen.getByTestId('datalake-research-save-btn'));
 
         await waitFor(() => expect(onUpdate).toHaveBeenCalled());
@@ -604,7 +654,7 @@ describe('DataLakeResearchPanel', () => {
 
     it('prefills a migrated config with the same restriction as before', () => {
       renderPanel({ configs: [config()] });
-      fireEvent.click(screen.getByTestId('datalake-research-edit-btn'));
+      fireEvent.click(screen.getByTestId('datalake-research-edit-btn-config-1'));
 
       expect((screen.getByTestId('datalake-research-review-input') as HTMLTextAreaElement).value).toBe('example.com');
       expect(screen.getByTestId('datalake-research-unlisted-select').textContent).toBe('Ignore');
@@ -618,7 +668,7 @@ describe('DataLakeResearchPanel', () => {
       delete legacy.reviewDomains;
       delete legacy.unlistedSources;
       renderPanel({ configs: [legacy as IDataLakeResearchConfigResponse] });
-      fireEvent.click(screen.getByTestId('datalake-research-edit-btn'));
+      fireEvent.click(screen.getByTestId('datalake-research-edit-btn-config-1'));
 
       expect((screen.getByTestId('datalake-research-review-input') as HTMLTextAreaElement).value).toBe(
         'example.com\ndocs.example.com'
@@ -632,7 +682,7 @@ describe('DataLakeResearchPanel', () => {
       delete legacy.reviewDomains;
       delete legacy.unlistedSources;
       renderPanel({ configs: [legacy as IDataLakeResearchConfigResponse] });
-      fireEvent.click(screen.getByTestId('datalake-research-edit-btn'));
+      fireEvent.click(screen.getByTestId('datalake-research-edit-btn-config-1'));
 
       expect(screen.getByTestId('datalake-research-unlisted-select').textContent).toBe('Send to review');
     });
@@ -640,7 +690,7 @@ describe('DataLakeResearchPanel', () => {
     it('loads the stored levers when editing, and routes the save to that configuration', () => {
       const spies = renderPanel({ configs: [config()] });
 
-      fireEvent.click(screen.getByTestId('datalake-research-edit-btn'));
+      fireEvent.click(screen.getByTestId('datalake-research-edit-btn-config-1'));
 
       expect((screen.getByTestId('datalake-research-query-input') as HTMLTextAreaElement).value).toBe(
         'coastal erosion in Cornwall'
@@ -665,7 +715,7 @@ describe('DataLakeResearchPanel', () => {
     it('round-trips a sub-cent cost ceiling through Edit and Save unchanged', () => {
       const spies = renderPanel({ configs: [config({ costCeilingMicroUsd: 4_000 })] });
 
-      fireEvent.click(screen.getByTestId('datalake-research-edit-btn'));
+      fireEvent.click(screen.getByTestId('datalake-research-edit-btn-config-1'));
       expect((screen.getByTestId('datalake-research-cost-ceiling-input') as HTMLInputElement).value).toBe('0.004');
       expect(screen.getByTestId('datalake-research-save-btn')).not.toBeDisabled();
 
@@ -677,7 +727,7 @@ describe('DataLakeResearchPanel', () => {
     it('sends null for a cleared recency, so clearing it actually clears it', () => {
       const spies = renderPanel({ configs: [config()] });
 
-      fireEvent.click(screen.getByTestId('datalake-research-edit-btn'));
+      fireEvent.click(screen.getByTestId('datalake-research-edit-btn-config-1'));
       fireEvent.change(screen.getByTestId('datalake-research-recency-input'), { target: { value: '' } });
       fireEvent.click(screen.getByTestId('datalake-research-save-btn'));
 
@@ -719,7 +769,7 @@ describe('DataLakeResearchPanel', () => {
     it('keeps edits on screen when the update is refused', async () => {
       const onUpdate = vi.fn().mockRejectedValue(new Error('forbidden'));
       renderPanel({ configs: [config()], onUpdate });
-      fireEvent.click(screen.getByTestId('datalake-research-edit-btn'));
+      fireEvent.click(screen.getByTestId('datalake-research-edit-btn-config-1'));
       fireEvent.change(screen.getByTestId('datalake-research-query-input'), { target: { value: 'dune erosion' } });
       fireEvent.change(screen.getByTestId('datalake-research-recency-input'), { target: { value: '7' } });
       fireEvent.click(screen.getByTestId('datalake-research-save-btn'));
@@ -741,7 +791,7 @@ describe('DataLakeResearchPanel', () => {
       fireEvent.change(screen.getByTestId('datalake-research-query-input'), { target: { value: 'erosion' } });
       fireEvent.click(screen.getByTestId('datalake-research-save-btn'));
       fireEvent.click(screen.getByTestId('datalake-research-cancel-btn'));
-      fireEvent.click(screen.getByTestId('datalake-research-edit-btn'));
+      fireEvent.click(screen.getByTestId('datalake-research-edit-btn-config-1'));
 
       resolveCreate();
       await waitFor(() => expect(onCreate).toHaveBeenCalledTimes(1));
@@ -774,10 +824,10 @@ describe('DataLakeResearchPanel', () => {
       let resolveUpdate: () => void = () => {};
       const onUpdate = vi.fn(() => new Promise<void>(resolve => (resolveUpdate = resolve)));
       renderPanel({ configs: [config()], onUpdate });
-      fireEvent.click(screen.getByTestId('datalake-research-edit-btn'));
+      fireEvent.click(screen.getByTestId('datalake-research-edit-btn-config-1'));
       fireEvent.click(screen.getByTestId('datalake-research-save-btn'));
       fireEvent.click(screen.getByTestId('datalake-research-cancel-btn'));
-      fireEvent.click(screen.getByTestId('datalake-research-edit-btn'));
+      fireEvent.click(screen.getByTestId('datalake-research-edit-btn-config-1'));
       fireEvent.change(screen.getByTestId('datalake-research-query-input'), { target: { value: 'dune erosion' } });
 
       resolveUpdate();
@@ -799,7 +849,7 @@ describe('DataLakeResearchPanel', () => {
 
   it('deletes the configuration whose button was pressed', () => {
     const spies = renderPanel({ configs: [config({ id: 'config-a' })] });
-    fireEvent.click(screen.getByTestId('datalake-research-delete-btn'));
+    fireEvent.click(screen.getByTestId('datalake-research-delete-btn-config-a'));
     expect(spies.onDelete).toHaveBeenCalledWith('config-a');
   });
 
@@ -901,8 +951,8 @@ describe('DataLakeResearchPanel', () => {
           }),
         ],
       });
-      expect(screen.getByTestId('datalake-research-run-stop-reason').textContent).toBe(
-        'Stopped: the relevance judge was unavailable'
+      expect(screen.getByTestId('datalake-research-run-stop-reason').textContent).toMatch(
+        /^Stopped because the relevance judge was unavailable\./
       );
       const summary = screen.getByTestId('datalake-research-run-totals').textContent ?? '';
       expect(summary).toMatch(/3 could not be judged/);
@@ -922,13 +972,46 @@ describe('DataLakeResearchPanel', () => {
       expect(screen.getByTestId('datalake-research-run-totals').textContent).toMatch(/2 could not be judged/);
     });
 
-    it('labels hits whose search link could not be resolved', () => {
+    it('labels hits whose search link could not be resolved as skipped', () => {
       renderPanel({
         runs: [run({ totals: { ...emptyResearchRunTotals(), searchHits: 4, unresolvedRedirect: 3, proposed: 1 } })],
       });
       expect(screen.getByTestId('datalake-research-run-totals').textContent).toMatch(
-        /3 search link could not be resolved/
+        /3 search link never revealed its site \(skipped; usually clears on the next run\)/
       );
+    });
+
+    it('labels the two source-rule drops apart on a run that stored both', () => {
+      renderPanel({
+        runs: [
+          run({ totals: { ...emptyResearchRunTotals(), searchHits: 6, filteredBySource: 2, unlistedDropped: 4 } }),
+        ],
+      });
+      const summary = screen.getByTestId('datalake-research-run-totals').textContent ?? '';
+      expect(summary).toMatch(/2 on your Never these sites list/);
+      expect(summary).toMatch(/4 from sites not on your lists \(Other sites: Ignore\)/);
+    });
+
+    it('keeps the combined label for a run stored before the split', () => {
+      const { unlistedDropped: _omitted, ...legacyTotals } = emptyResearchRunTotals();
+      renderPanel({
+        runs: [run({ totals: { ...legacyTotals, searchHits: 6, filteredBySource: 6 } })],
+      });
+      const summary = screen.getByTestId('datalake-research-run-totals').textContent ?? '';
+      expect(summary).toMatch(/6 blocked by your site lists/);
+      expect(summary).not.toMatch(/Never these sites/);
+    });
+
+    it('does not report a judge when a run only dropped hits by source', () => {
+      renderPanel({
+        runs: [
+          run({
+            judgeModel: 'gpt-4.1-mini',
+            totals: { ...emptyResearchRunTotals(), searchHits: 4, unlistedDropped: 4 },
+          }),
+        ],
+      });
+      expect(screen.queryByText(/judged by gpt-4\.1-mini/)).toBeNull();
     });
 
     it('names the model that judged a run', () => {
@@ -1016,7 +1099,7 @@ describe('DataLakeResearchPanel', () => {
 
     it('still says running for a run that started moments ago', () => {
       renderPanel({ runs: [run({ status: 'running', startedAt: new Date(), completedAt: null })] });
-      expect(screen.getByTestId('datalake-research-run-status').textContent).toBe('running');
+      expect(screen.getByTestId('datalake-research-run-status').textContent).toBe('Running');
     });
 
     // Nothing will ever settle this row, so reporting it as `running` promises work that is not
@@ -1031,7 +1114,7 @@ describe('DataLakeResearchPanel', () => {
           }),
         ],
       });
-      expect(screen.getByTestId('datalake-research-run-status').textContent).toBe('abandoned');
+      expect(screen.getByTestId('datalake-research-run-status').textContent).toBe('Did not finish');
     });
   });
 
@@ -1051,7 +1134,7 @@ describe('DataLakeResearchPanel', () => {
       ['max-results', '2.5'],
       ['max-proposals', '-3'],
       ['recency', '-7'],
-      ['min-relevance', '5'],
+      ['min-relevance', '101'],
       ['cost-ceiling', '99'],
       ['cost-ceiling', '0'],
     ])('disables Save when %s is %s', (field, value) => {
@@ -1076,7 +1159,7 @@ describe('DataLakeResearchPanel', () => {
       ['max-results', String(RESEARCH_MAX_RESULTS_LIMIT + 1), 'max-proposals'],
       ['max-proposals', '-3', 'max-results'],
       ['recency', '-7', 'max-results'],
-      ['min-relevance', '5', 'max-results'],
+      ['min-relevance', '101', 'max-results'],
       ['cost-ceiling', '99', 'max-results'],
     ])('marks %s as an error when it is %s, and leaves %s alone', (field, value, sibling) => {
       openFilledForm();
@@ -1139,7 +1222,7 @@ describe('DataLakeResearchPanel', () => {
     it('keeps a saved model the picker no longer lists visible as the selection', () => {
       renderPanel({ configs: [config({ model: 'o3-deep-research' })] });
       expect(screen.getByTestId('datalake-research-config-model').textContent).toBe('Model: o3-deep-research');
-      fireEvent.click(screen.getByTestId('datalake-research-edit-btn'));
+      fireEvent.click(screen.getByTestId('datalake-research-edit-btn-config-1'));
       expect(screen.getByTestId('datalake-research-model-select').textContent).toBe(
         'o3-deep-research (not offered for research)'
       );
@@ -1147,11 +1230,11 @@ describe('DataLakeResearchPanel', () => {
 
     it('will not run a config while its edit form holds unsaved changes', () => {
       const spies = renderPanel({ configs: [config()] });
-      fireEvent.click(screen.getByTestId('datalake-research-edit-btn'));
-      expect(screen.getByTestId('datalake-research-run-btn')).not.toBeDisabled();
+      fireEvent.click(screen.getByTestId('datalake-research-edit-btn-config-1'));
+      expect(screen.getByTestId('datalake-research-run-btn-config-1')).not.toBeDisabled();
 
       fireEvent.change(screen.getByTestId('datalake-research-query-input'), { target: { value: 'something else' } });
-      const runButton = screen.getByTestId('datalake-research-run-btn');
+      const runButton = screen.getByTestId('datalake-research-run-btn-config-1');
       expect(runButton).toBeDisabled();
       expect(runButton.textContent).toBe('Save changes to run');
       fireEvent.click(runButton);
@@ -1186,29 +1269,31 @@ describe('DataLakeResearchPanel', () => {
 
     it('shows no schedule line on the config card when the cadence is off', () => {
       renderPanel({ configs: [config()] });
-      expect(screen.queryByTestId('research-config-schedule')).toBeNull();
+      expect(screen.queryByTestId('datalake-research-schedule')).toBeNull();
     });
 
-    it('names the cadence, the next run time and the pause threshold on the config card', () => {
+    it('names the cadence, the next run time and the hold threshold on the config card', () => {
       renderPanel({
         configs: [
           config({ cadence: 'weekly', nextRunAt: new Date('2026-04-01T00:00:00.000Z'), reviewBacklogLimit: 7 }),
         ],
       });
-      const line = screen.getByTestId('research-config-schedule').textContent ?? '';
+      const line = screen.getByTestId('datalake-research-schedule').textContent ?? '';
       expect(line).toMatch(/Runs weekly/);
-      expect(line).toMatch(/next .*2026/);
-      expect(line).toMatch(/pauses at 7\b/);
+      expect(line).toMatch(/Next run: \w{3}.*\b(31|Apr)/);
+      expect(line).toMatch(/Held while 7 or more proposals are waiting\./);
     });
 
-    it('shows the paused line once pending proposals reach the limit, and not one below it', () => {
+    it('shows the held line once pending proposals reach the limit, and not one below it', () => {
       const scheduled = config({ cadence: 'daily', reviewBacklogLimit: 10 });
       const { unmount } = renderPanel({ configs: [scheduled], pendingProposals: 9 });
-      expect(screen.queryByTestId('research-config-schedule-paused')).toBeNull();
+      expect(screen.queryByTestId('datalake-research-schedule-held')).toBeNull();
       unmount();
 
       renderPanel({ configs: [scheduled], pendingProposals: 10 });
-      expect(screen.getByTestId('research-config-schedule-paused').textContent).toMatch(/10 pending \(pauses at 10\)/);
+      expect(screen.getByTestId('datalake-research-schedule-held').textContent).toMatch(
+        /^Held: 10 proposals are waiting\./
+      );
     });
 
     it('says why the last scheduled tick did not start a run', () => {
@@ -1216,7 +1301,7 @@ describe('DataLakeResearchPanel', () => {
       const { unmount } = renderPanel({
         configs: [config({ cadence: 'daily', lastScheduledOutcome: { outcome: 'skipped', at, reason: 'daily_cap' } })],
       });
-      expect(screen.getByTestId('research-config-schedule-outcome').textContent).toMatch(/daily run limit/);
+      expect(screen.getByTestId('datalake-research-schedule-outcome').textContent).toMatch(/daily run limit/);
       unmount();
 
       renderPanel({
@@ -1224,10 +1309,10 @@ describe('DataLakeResearchPanel', () => {
           config({ cadence: 'daily', lastScheduledOutcome: { outcome: 'failed', at, error: 'Could not start.' } }),
         ],
       });
-      expect(screen.getByTestId('research-config-schedule-outcome').textContent).toBe('Could not start.');
+      expect(screen.getByTestId('datalake-research-schedule-outcome').textContent).toBe('Could not start.');
     });
 
-    // The paused line already carries a backlog skip; a second line would say it twice.
+    // The held line already carries a backlog skip; a second line would say it twice.
     it('adds no outcome line for a backlog skip or a started run', () => {
       const at = new Date('2026-03-02T00:00:00Z');
       renderPanel({
@@ -1240,7 +1325,7 @@ describe('DataLakeResearchPanel', () => {
           config({ id: 'b', cadence: 'daily', lastScheduledOutcome: { outcome: 'started', at, runId: 'run-1' } }),
         ],
       });
-      expect(screen.queryByTestId('research-config-schedule-outcome')).toBeNull();
+      expect(screen.queryByTestId('datalake-research-schedule-outcome')).toBeNull();
     });
 
     it('counts the leading run of scheduled failures, newest first', () => {
@@ -1251,7 +1336,9 @@ describe('DataLakeResearchPanel', () => {
           run({ id: 'run-new', trigger: 'periodic', status: 'failed', startedAt: new Date('2026-03-02T00:00:00Z') }),
         ],
       });
-      expect(screen.getByTestId('research-config-schedule-failures').textContent).toBe('Last 2 scheduled runs failed');
+      expect(screen.getByTestId('datalake-research-schedule-failures').textContent).toBe(
+        'Last 2 scheduled runs failed'
+      );
     });
 
     // Run now is never blocked by the backlog limit - a person pressing it has decided to spend -
@@ -1262,7 +1349,73 @@ describe('DataLakeResearchPanel', () => {
       expect(screen.getByTestId('research-config-run-backlog-warning').textContent).toMatch(
         /already waiting for review/
       );
-      expect(screen.getByTestId('datalake-research-run-btn')).not.toBeDisabled();
+      expect(screen.getByTestId('datalake-research-run-btn-config-1')).not.toBeDisabled();
+    });
+
+    describe('pause and resume', () => {
+      const at = new Date('2026-03-02T00:00:00Z');
+      const pauseBtn = (id = 'config-1') => screen.getByTestId(`datalake-research-pause-btn-${id}`);
+
+      it('offers Pause on a scheduled config and sends only the flag', () => {
+        const spies = renderPanel({ configs: [config({ id: 'config-1', cadence: 'weekly' })] });
+        expect(pauseBtn().textContent).toBe('Pause schedule');
+        fireEvent.click(pauseBtn());
+        expect(spies.onUpdate).toHaveBeenCalledWith('config-1', { schedulePaused: true });
+      });
+
+      it('offers Resume on a paused config and sends schedulePaused false', () => {
+        const spies = renderPanel({ configs: [config({ id: 'config-1', cadence: 'weekly', schedulePaused: true })] });
+        expect(pauseBtn().textContent).toBe('Resume schedule');
+        fireEvent.click(pauseBtn());
+        expect(spies.onUpdate).toHaveBeenCalledWith('config-1', { schedulePaused: false });
+      });
+
+      it('has no pause button when the cadence is off', () => {
+        renderPanel({ configs: [config({ id: 'config-1' })] });
+        expect(screen.queryByTestId('datalake-research-pause-btn-config-1')).toBeNull();
+      });
+
+      it('shows the Paused line and hides the held and outcome lines', () => {
+        renderPanel({
+          configs: [
+            config({
+              cadence: 'weekly',
+              schedulePaused: true,
+              reviewBacklogLimit: 5,
+              lastScheduledOutcome: { outcome: 'skipped', at, reason: 'daily_cap' },
+            }),
+          ],
+          pendingProposals: 9,
+        });
+        expect(screen.getByTestId('datalake-research-schedule').textContent).toBe('Paused. Runs weekly when resumed.');
+        expect(screen.queryByTestId('datalake-research-schedule-held')).toBeNull();
+        expect(screen.queryByTestId('datalake-research-schedule-outcome')).toBeNull();
+      });
+
+      it('shows held, not paused, for an unpaused config at its limit', () => {
+        renderPanel({ configs: [config({ cadence: 'weekly', reviewBacklogLimit: 5 })], pendingProposals: 9 });
+        expect(screen.getByTestId('datalake-research-schedule').textContent).toMatch(/^Runs weekly/);
+        expect(screen.getByTestId('datalake-research-schedule-held')).toBeTruthy();
+      });
+
+      it('shows the normal line for an unpaused config under its limit', () => {
+        renderPanel({ configs: [config({ cadence: 'weekly', reviewBacklogLimit: 5 })], pendingProposals: 1 });
+        expect(screen.getByTestId('datalake-research-schedule').textContent).toMatch(/^Runs weekly/);
+        expect(screen.queryByTestId('datalake-research-schedule-held')).toBeNull();
+      });
+
+      it('adds no outcome line for a schedule_paused skip, and never prints undefined', () => {
+        renderPanel({
+          configs: [
+            config({
+              cadence: 'weekly',
+              lastScheduledOutcome: { outcome: 'skipped', at, reason: 'schedule_paused' },
+            }),
+          ],
+        });
+        expect(screen.queryByTestId('datalake-research-schedule-outcome')).toBeNull();
+        expect(screen.getByTestId('datalake-research-panel').textContent).not.toContain('undefined');
+      });
     });
 
     it('marks a periodic run as Scheduled in the run history', () => {
@@ -1406,7 +1559,7 @@ describe('DataLakeResearchPanel', () => {
           }),
         ],
       });
-      fireEvent.click(screen.getByTestId('datalake-research-edit-btn'));
+      fireEvent.click(screen.getByTestId('datalake-research-edit-btn-config-1'));
 
       expect(pressed('standard')).toBe('true');
       expect(advanced()).not.toBeVisible();
@@ -1414,7 +1567,7 @@ describe('DataLakeResearchPanel', () => {
 
     it('opens a saved configuration that matches no preset as Custom, with Advanced expanded', () => {
       renderPanel({ modelOptions: offered, configs: [config({ maxResults: 12 })] });
-      fireEvent.click(screen.getByTestId('datalake-research-edit-btn'));
+      fireEvent.click(screen.getByTestId('datalake-research-edit-btn-config-1'));
 
       expect(noPresetPressed()).toBe(true);
       expect(advanced()).toBeVisible();
@@ -1428,7 +1581,7 @@ describe('DataLakeResearchPanel', () => {
           config({ model: ChatModels.GPT4_1_MINI, maxResults: 10, maxProposals: 5, costCeilingMicroUsd: 50_000 }),
         ],
       });
-      fireEvent.click(screen.getByTestId('datalake-research-edit-btn'));
+      fireEvent.click(screen.getByTestId('datalake-research-edit-btn-config-1'));
 
       expect(pressed('quick')).toBe('true');
       expect(advanced()).toBeVisible();
@@ -1441,12 +1594,12 @@ describe('DataLakeResearchPanel', () => {
           config({ model: ChatModels.GPT4_1, maxResults: 50, maxProposals: 25, costCeilingMicroUsd: 1_000_000 }),
         ],
       });
-      fireEvent.click(screen.getByTestId('datalake-research-edit-btn'));
+      fireEvent.click(screen.getByTestId('datalake-research-edit-btn-config-1'));
       fireEvent.click(screen.getByTestId('datalake-research-preset-quick'));
-      expect(screen.getByTestId('datalake-research-run-btn').textContent).toBe('Save changes to run');
+      expect(screen.getByTestId('datalake-research-run-btn-config-1').textContent).toBe('Save changes to run');
 
       fireEvent.click(screen.getByTestId('datalake-research-preset-deep'));
-      expect(screen.getByTestId('datalake-research-run-btn').textContent).toBe('Run now');
+      expect(screen.getByTestId('datalake-research-run-btn-config-1').textContent).toBe('Run now');
     });
 
     it('keeps Deep on its own judge while the model catalog is still loading', () => {
@@ -1471,7 +1624,7 @@ describe('DataLakeResearchPanel', () => {
 
     it('shows Custom with Advanced open when the catalog loads without the saved model', () => {
       const { rerender } = renderPanel({ modelOptions: [], modelsLoading: true, configs: [deepConfig()] });
-      fireEvent.click(screen.getByTestId('datalake-research-edit-btn'));
+      fireEvent.click(screen.getByTestId('datalake-research-edit-btn-config-1'));
       expect(pressed('deep')).toBe('true');
       expect(advanced()).not.toBeVisible();
 
@@ -1513,7 +1666,7 @@ describe('DataLakeResearchPanel', () => {
           }),
         ],
       });
-      fireEvent.click(screen.getByTestId('datalake-research-edit-btn'));
+      fireEvent.click(screen.getByTestId('datalake-research-edit-btn-config-1'));
 
       expect(pressed('quick')).toBe('true');
       expect(advanced()).not.toBeVisible();
@@ -1521,12 +1674,12 @@ describe('DataLakeResearchPanel', () => {
 
     it('reads a default-judge config at Deep levers as Deep only when GPT-4.1 is not offered', () => {
       const { unmount } = renderPanel({ modelOptions: [offered[0]], configs: [deepConfig({ model: undefined })] });
-      fireEvent.click(screen.getByTestId('datalake-research-edit-btn'));
+      fireEvent.click(screen.getByTestId('datalake-research-edit-btn-config-1'));
       expect(pressed('deep')).toBe('true');
       unmount();
 
       renderPanel({ modelOptions: offered, configs: [deepConfig({ model: undefined })] });
-      fireEvent.click(screen.getByTestId('datalake-research-edit-btn'));
+      fireEvent.click(screen.getByTestId('datalake-research-edit-btn-config-1'));
       expect(noPresetPressed()).toBe(true);
     });
 
@@ -1606,7 +1759,7 @@ describe('DataLakeResearchPanel', () => {
 
     it('loads a stored feed config into the form on Edit', () => {
       renderPanel({ configs: [config({ source: 'feed', feedUrl: FEED })] });
-      fireEvent.click(screen.getByTestId('datalake-research-edit-btn'));
+      fireEvent.click(screen.getByTestId('datalake-research-edit-btn-config-1'));
       expect(screen.getByTestId('datalake-research-source-select').textContent).toBe('Feed');
       expect((screen.getByTestId('datalake-research-feed-url-input') as HTMLInputElement).value).toBe(FEED);
     });
@@ -1688,6 +1841,433 @@ describe('DataLakeResearchPanel', () => {
         runs: [run({ totals: { ...emptyResearchRunTotals(), searchHits: 4 } })],
       });
       expect(screen.getByTestId('datalake-research-run-totals').textContent).toContain('4 found');
+    });
+  });
+});
+
+describe('DataLakeResearchPanel run fix hints', () => {
+  const quickConfig = (overrides: Partial<IDataLakeResearchConfigResponse> = {}) =>
+    config({
+      model: undefined,
+      recencyDays: undefined,
+      trustedDomains: [],
+      reviewDomains: [],
+      unlistedSources: 'review',
+      allowedDomains: [],
+      blockedDomains: [],
+      proposedTags: [],
+      ...overrides,
+    });
+  const totalsWith = (overrides: Partial<ReturnType<typeof emptyResearchRunTotals>>) => ({
+    ...emptyResearchRunTotals(),
+    searchHits: 10,
+    ...overrides,
+  });
+
+  beforeEach(() => {
+    vi.spyOn(Element.prototype, 'scrollIntoView').mockImplementation(() => undefined);
+  });
+
+  it('opens the run config with Advanced expanded from Adjust settings', () => {
+    const configs = [quickConfig({ id: 'config-a', name: 'A' }), quickConfig({ id: 'config-b', name: 'B' })];
+    const first = renderPanel({ configs });
+    fireEvent.click(screen.getByTestId('datalake-research-edit-btn-config-b'));
+    expect(screen.getByTestId('datalake-research-advanced')).not.toBeVisible();
+    first.unmount();
+
+    renderPanel({ configs, runs: [run({ id: 'run-9', configId: 'config-b' })] });
+    fireEvent.click(screen.getByTestId('datalake-research-run-adjust-run-9'));
+    expect(screen.getByTestId('datalake-research-advanced')).toBeVisible();
+    expect((screen.getByTestId('datalake-research-name-input') as HTMLInputElement).value).toBe('B');
+  });
+
+  it.each([
+    ['belowRelevance', {}, 'datalake-research-min-relevance-input'],
+    ['filteredBySource', { blockedDomains: ['spam.net'] }, 'datalake-research-blocked-input'],
+    ['unlistedDropped', {}, 'datalake-research-unlisted-select'],
+    ['blockedByRule', {}, 'datalake-research-rule-add'],
+  ] as const)('focuses the field the %s hint names from Adjust settings', (bucket, levers, testId) => {
+    renderPanel({
+      configs: [quickConfig({ id: 'config-b', name: 'B' })],
+      runs: [
+        run({
+          id: 'run-9',
+          configId: 'config-b',
+          levers: { ...run().levers, ...levers },
+          totals: totalsWith({ filteredBySource: 1, unlistedDropped: 1, [bucket]: 6 }),
+        }),
+      ],
+    });
+    fireEvent.click(screen.getByTestId('datalake-research-run-adjust-run-9'));
+    expect(document.activeElement).toBe(screen.getByTestId(testId));
+  });
+
+  it.each([
+    ['cost_ceiling', 'datalake-research-cost-ceiling-input'],
+    ['proposal_limit', 'datalake-research-max-proposals-input'],
+  ] as const)('focuses the %s lever from Adjust settings when there is no hint', (stopReason, testId) => {
+    renderPanel({
+      configs: [quickConfig({ id: 'config-b', name: 'B' })],
+      runs: [run({ id: 'run-9', configId: 'config-b', stopReason })],
+    });
+    fireEvent.click(screen.getByTestId('datalake-research-run-adjust-run-9'));
+    expect(document.activeElement).toBe(screen.getByTestId(testId));
+  });
+
+  it('focuses the first rule from Adjust settings when Add rule is disabled at the cap', () => {
+    renderPanel({
+      configs: [
+        quickConfig({
+          id: 'config-b',
+          name: 'B',
+          itemRules: Array.from({ length: RESEARCH_ITEM_RULES_MAX }, (_, i) => ({
+            condition: `rule ${i}`,
+            action: 'review' as const,
+          })),
+        }),
+      ],
+      runs: [run({ id: 'run-9', configId: 'config-b', totals: totalsWith({ blockedByRule: 6 }) })],
+    });
+    fireEvent.click(screen.getByTestId('datalake-research-run-adjust-run-9'));
+    expect(screen.getByTestId('datalake-research-rule-add')).toBeDisabled();
+    expect(document.activeElement).not.toBe(document.body);
+    expect(document.activeElement).toBe(screen.getByTestId('datalake-research-rule-condition-0'));
+  });
+
+  it('focuses Name from Adjust settings when the run has no lever to point at', () => {
+    renderPanel({
+      configs: [quickConfig({ id: 'config-b', name: 'B' })],
+      runs: [run({ id: 'run-9', configId: 'config-b' })],
+    });
+    fireEvent.click(screen.getByTestId('datalake-research-run-adjust-run-9'));
+    expect(document.activeElement).toBe(screen.getByTestId('datalake-research-name-input'));
+  });
+
+  it('hides Adjust settings when the config was deleted', () => {
+    renderPanel({ configs: [quickConfig()], runs: [run({ id: 'run-9', configId: 'gone' })] });
+    expect(screen.queryByTestId('datalake-research-run-adjust-run-9')).toBeNull();
+  });
+
+  it.each([
+    [
+      'belowRelevance',
+      { minRelevance: 0.7 },
+      'The largest group scored below the minimum relevance. Lower Minimum relevance (70%) in Advanced settings to keep more.',
+    ],
+    [
+      'filteredBySource',
+      { blockedDomains: ['spam.net'] },
+      'The largest group came from sites on the never list, or had no usable web address. Check Never these sites in Advanced settings.',
+    ],
+    [
+      'unlistedDropped',
+      { unlistedSources: 'drop' },
+      'The largest group came from sites on none of your lists, which are ignored. Check Other sites (Ignore) in Advanced settings.',
+    ],
+    ['blockedByRule', {}, 'The largest group was blocked by an item rule. Check Item rules in Advanced settings.'],
+  ] as const)('renders a hint for the %s bucket from the run levers', (bucket, levers, expected) => {
+    renderPanel({
+      runs: [
+        run({
+          levers: { ...run().levers, ...levers },
+          totals: totalsWith({ filteredBySource: 1, unlistedDropped: 1, [bucket]: 6 }),
+        }),
+      ],
+    });
+    expect(screen.getByTestId('datalake-research-run-hint').textContent).toBe(expected);
+  });
+
+  it.each(['unresolvedRedirect', 'judgeFailed', 'fetchFailed', 'alreadyInLake', 'notJudged'] as const)(
+    'renders no hint when the largest bucket (%s) has no setting',
+    bucket => {
+      renderPanel({ runs: [run({ totals: totalsWith({ belowRelevance: 1, [bucket]: 6 }) })] });
+      expect(screen.queryByTestId('datalake-research-run-hint')).toBeNull();
+    }
+  );
+
+  it('renders no hint for a run with no drops', () => {
+    renderPanel({ runs: [run({ totals: totalsWith({ proposed: 4 }) })] });
+    expect(screen.queryByTestId('datalake-research-run-hint')).toBeNull();
+  });
+
+  it('renders no hint when the largest bucket is filteredBySource but the Never list is empty', () => {
+    renderPanel({
+      runs: [
+        run({
+          levers: { ...run().levers, blockedDomains: [] },
+          totals: totalsWith({ filteredBySource: 6, unlistedDropped: 1 }),
+        }),
+      ],
+    });
+    expect(screen.queryByTestId('datalake-research-run-hint')).toBeNull();
+  });
+
+  it('renders no hint on a judge-outage run even when source drops are the largest bucket', () => {
+    renderPanel({
+      runs: [
+        run({
+          status: 'failed',
+          stopReason: 'judge_unavailable',
+          levers: { ...run().levers, unlistedSources: 'drop' },
+          totals: totalsWith({ unlistedDropped: 7, judgeFailed: 3 }),
+        }),
+      ],
+    });
+    expect(screen.queryByTestId('datalake-research-run-hint')).toBeNull();
+  });
+
+  it.each([
+    ['saving', { savingConfigId: 'config-b' }],
+    ['deleting', { deletingConfigId: 'config-b' }],
+  ] as const)('disables Adjust settings while its config is %s', (_label, busyProps) => {
+    renderPanel({
+      configs: [quickConfig({ id: 'config-a', name: 'A' }), quickConfig({ id: 'config-b', name: 'B' })],
+      runs: [run({ id: 'run-9', configId: 'config-b' }), run({ id: 'run-8', configId: 'config-a' })],
+      ...busyProps,
+    });
+    expect((screen.getByTestId('datalake-research-run-adjust-run-9') as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByTestId('datalake-research-run-adjust-run-8') as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it('renders no hint when a run stored before the split cannot say which list dropped hits', () => {
+    const { unlistedDropped: _omitted, ...legacy } = totalsWith({ filteredBySource: 6 });
+    renderPanel({ runs: [run({ totals: legacy })] });
+    expect(screen.queryByTestId('datalake-research-run-hint')).toBeNull();
+  });
+
+  it.each([
+    ['cost_ceiling', /^Stopped at the cost ceiling for one run\. Raise Cost ceiling in Advanced settings/],
+    ['proposal_limit', /^Reached the proposals limit for one run\. Raise Proposals per run in Advanced settings/],
+    ['time_budget', /^Stopped at the time limit for one run\. The rest are checked next run\.$/],
+    ['judge_unavailable', /No setting applies/],
+  ] as const)('words the %s stop reason as a setting or as no setting', (stopReason, expected) => {
+    renderPanel({ runs: [run({ stopReason })] });
+    expect(screen.getByTestId('datalake-research-run-stop-reason').textContent).toMatch(expected);
+  });
+});
+
+describe('DataLakeResearchPanel usability copy', () => {
+  const editConfig = (id = 'config-1') => fireEvent.click(screen.getByTestId(`datalake-research-edit-btn-${id}`));
+  const saveEdit = () => fireEvent.click(screen.getByTestId('datalake-research-save-btn'));
+  const relevanceInput = () => screen.getByTestId('datalake-research-min-relevance-input') as HTMLInputElement;
+
+  describe('relevance as a percent', () => {
+    it('shows the stored value at one decimal of a percent', () => {
+      renderPanel({ configs: [config({ minRelevance: 0.637 })] });
+      editConfig();
+      expect(relevanceInput().value).toBe('63.7');
+    });
+
+    it('saves an unedited stored value unchanged', () => {
+      const spies = renderPanel({ configs: [config({ minRelevance: 0.123456 })] });
+      editConfig();
+      saveEdit();
+      expect(spies.onUpdate).toHaveBeenCalledWith('config-1', expect.objectContaining({ minRelevance: 0.123456 }));
+    });
+
+    it('saves an edited percent as a fraction', () => {
+      const spies = renderPanel({ configs: [config({ minRelevance: 0.637 })] });
+      editConfig();
+      fireEvent.change(relevanceInput(), { target: { value: '61.5' } });
+      saveEdit();
+      expect(spies.onUpdate).toHaveBeenCalledWith('config-1', expect.objectContaining({ minRelevance: 0.615 }));
+    });
+
+    it('rejects an old-scale fraction and tells the user what to type', () => {
+      const spies = renderPanel({ configs: [config()] });
+      editConfig();
+      fireEvent.change(relevanceInput(), { target: { value: '0.6' } });
+      expect(screen.getByText('Enter a percent, for example 60')).toBeTruthy();
+      expect(screen.getByTestId('datalake-research-save-btn')).toBeDisabled();
+      saveEdit();
+      expect(spies.onUpdate).not.toHaveBeenCalled();
+    });
+
+    it('accepts zero and rejects a value above 100', () => {
+      renderPanel({ configs: [config()] });
+      editConfig();
+      fireEvent.change(relevanceInput(), { target: { value: '0' } });
+      expect(screen.getByTestId('datalake-research-save-btn')).not.toBeDisabled();
+      fireEvent.change(relevanceInput(), { target: { value: '101' } });
+      expect(screen.getByText('Enter a percent from 0 to 100.')).toBeTruthy();
+    });
+  });
+
+  describe('schedule line', () => {
+    const at = new Date('2026-03-02T00:00:00Z');
+    const line = () => screen.getByTestId('datalake-research-schedule').textContent;
+
+    it('reads the normal state with the next day and the hold threshold', () => {
+      renderPanel({
+        configs: [config({ cadence: 'weekly', nextRunAt: new Date('2026-12-03T12:00:00Z'), reviewBacklogLimit: 25 })],
+        pendingProposals: 1,
+      });
+      expect(line()).toMatch(/^Runs weekly\. Next run: .*3.*\. Held while 25 or more proposals are waiting\.$/);
+      expect(screen.queryByTestId('datalake-research-review-proposals-link')).toBeNull();
+    });
+
+    it('says when the next run is not set yet', () => {
+      renderPanel({ configs: [config({ cadence: 'daily', nextRunAt: null })] });
+      expect(line()).toMatch(/^Runs daily\. Next run: when you save a schedule\./);
+    });
+
+    it('reads the held state with a link that opens the proposals', () => {
+      const onReviewProposals = vi.fn();
+      renderPanel({
+        configs: [config({ cadence: 'weekly', reviewBacklogLimit: 25 })],
+        pendingProposals: 30,
+        onReviewProposals,
+      });
+      expect(screen.getByTestId('datalake-research-schedule-held').textContent).toBe(
+        'Held: 30 proposals are waiting. Scheduled runs resume when fewer than 25 are waiting. Review proposals'
+      );
+      fireEvent.click(screen.getByTestId('datalake-research-review-proposals-link'));
+      expect(onReviewProposals).toHaveBeenCalledTimes(1);
+    });
+
+    it('shows no link when the host cannot open the proposals', () => {
+      renderPanel({ configs: [config({ cadence: 'weekly', reviewBacklogLimit: 5 })], pendingProposals: 9 });
+      expect(screen.getByTestId('datalake-research-schedule-held')).toBeTruthy();
+      expect(screen.queryByTestId('datalake-research-review-proposals-link')).toBeNull();
+    });
+
+    it('reads the paused state, which hides the held line and its link', () => {
+      renderPanel({
+        configs: [config({ cadence: 'weekly', schedulePaused: true, reviewBacklogLimit: 5 })],
+        pendingProposals: 9,
+        onReviewProposals: vi.fn(),
+      });
+      expect(line()).toBe('Paused. Runs weekly when resumed.');
+      expect(screen.queryByTestId('datalake-research-review-proposals-link')).toBeNull();
+    });
+
+    it('names the last failure reason of a scheduled run', () => {
+      renderPanel({
+        configs: [config({ cadence: 'daily', lastScheduledOutcome: { outcome: 'started', at, runId: 'run-1' } })],
+        runs: [
+          run({
+            id: 'a',
+            trigger: 'periodic',
+            status: 'failed',
+            error: 'Old reason',
+            startedAt: new Date('2026-03-01'),
+          }),
+          run({ id: 'b', trigger: 'periodic', status: 'failed', error: 'Feed was unreachable', startedAt: at }),
+        ],
+      });
+      expect(screen.getByTestId('datalake-research-schedule-failures').textContent).toBe(
+        'Last 2 scheduled runs failed. The latest: Feed was unreachable'
+      );
+    });
+
+    it('names the reason for a single failure and omits it when the run has none', () => {
+      const { unmount } = renderPanel({
+        configs: [config({ cadence: 'daily' })],
+        runs: [run({ trigger: 'periodic', status: 'failed', error: 'Feed was unreachable' })],
+      });
+      expect(screen.getByTestId('datalake-research-schedule-failures').textContent).toBe(
+        'Last scheduled run failed: Feed was unreachable'
+      );
+      unmount();
+      renderPanel({
+        configs: [config({ cadence: 'daily' })],
+        runs: [run({ trigger: 'periodic', status: 'failed', error: null })],
+      });
+      expect(screen.getByTestId('datalake-research-schedule-failures').textContent).toBe('Last scheduled run failed');
+    });
+  });
+
+  describe('run status chip', () => {
+    it.each([
+      ['a run that covered everything', { stopReason: 'exhausted' as const }, 'Finished'],
+      ['a run that hit its cost ceiling', { stopReason: 'cost_ceiling' as const }, 'Stopped early'],
+      ['a run that failed', { status: 'failed' as const }, 'Failed'],
+      ['a queued run', { status: 'queued' as const, startedAt: undefined, createdAt: new Date() }, 'Queued'],
+    ])('says %s in words', (_label, overrides, expected) => {
+      renderPanel({ runs: [run(overrides)] });
+      expect(screen.getByTestId('datalake-research-run-status').textContent).toBe(expected);
+    });
+  });
+
+  describe('cost helper', () => {
+    const openNew = () => {
+      renderPanel();
+      fireEvent.click(screen.getByTestId('datalake-research-new-btn'));
+    };
+
+    it('names who pays and that approving a proposal also costs indexing', () => {
+      openNew();
+      const text = screen
+        .getByTestId('datalake-research-cost-ceiling-input')
+        .closest('.MuiFormControl-root')?.textContent;
+      expect(text).toContain("paid from the lake owner's credits (their organization's pool if they belong to one)");
+      expect(text).toContain('Approving a proposal also costs indexing.');
+    });
+
+    it('shows no monthly figure without a schedule', () => {
+      openNew();
+      expect(screen.queryByTestId('datalake-research-monthly-cost')).toBeNull();
+    });
+
+    it.each([
+      ['Daily', '$7.75'],
+      ['Weekly', '$1.25'],
+      ['Monthly', '$0.25'],
+    ] as const)('shows roughly the most a %s schedule can cost in a month', (label, amount) => {
+      openNew();
+      fireEvent.change(screen.getByTestId('datalake-research-cost-ceiling-input'), { target: { value: '0.25' } });
+      fireEvent.click(screen.getByTestId('datalake-research-cadence-select'));
+      fireEvent.click(screen.getByRole('option', { name: label }));
+      expect(screen.getByTestId('datalake-research-monthly-cost').textContent).toBe(
+        `Roughly up to ${amount} a month at this schedule.`
+      );
+    });
+  });
+
+  describe('site lists', () => {
+    it('orders trusted sites, the auto-add switch, sites to review, never, then other sites in one group', () => {
+      renderPanel();
+      fireEvent.click(screen.getByTestId('datalake-research-new-btn'));
+      const group = screen.getByTestId('datalake-research-sites-group');
+      expect(within(group).getByText('Which sites to use')).toBeTruthy();
+      const order = [
+        'datalake-research-trusted-input',
+        'datalake-research-auto-admit-toggle',
+        'datalake-research-review-input',
+        'datalake-research-blocked-input',
+        'datalake-research-unlisted-select',
+      ].map(id => within(group).getByTestId(id));
+      order.slice(1).forEach((el, i) => {
+        expect(order[i].compareDocumentPosition(el) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+      });
+    });
+
+    it('says why the auto-add switch is disabled until a trusted site is listed', () => {
+      renderPanel();
+      fireEvent.click(screen.getByTestId('datalake-research-new-btn'));
+      expect(screen.getByTestId('datalake-research-auto-admit-toggle')).toBeDisabled();
+      expect(screen.getByTestId('datalake-research-auto-admit-disabled-reason').textContent).toBe(
+        'Add a trusted site above to turn this on.'
+      );
+      fireEvent.change(screen.getByTestId('datalake-research-trusted-input'), { target: { value: 'example.com' } });
+      expect(screen.queryByTestId('datalake-research-auto-admit-disabled-reason')).toBeNull();
+    });
+  });
+
+  describe('phone width and test ids', () => {
+    it('lets the item-rule row wrap', () => {
+      renderPanel();
+      fireEvent.click(screen.getByTestId('datalake-research-new-btn'));
+      fireEvent.click(screen.getByTestId('datalake-research-rule-add'));
+      expect(screen.getByTestId('datalake-research-rule-row-0')).toHaveStyle({ flexWrap: 'wrap' });
+    });
+
+    it('suffixes the card buttons with the config id so each card has its own', () => {
+      renderPanel({ configs: [config({ id: 'a' }), config({ id: 'b', name: 'Other' })] });
+      for (const kind of ['run', 'edit', 'delete']) {
+        expect(screen.getByTestId(`datalake-research-${kind}-btn-a`)).toBeTruthy();
+        expect(screen.getByTestId(`datalake-research-${kind}-btn-b`)).toBeTruthy();
+      }
     });
   });
 });

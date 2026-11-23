@@ -20,6 +20,8 @@ import {
   UPGRADE_REQUIRED_ERROR_CODE,
   ACCOUNT_SUSPENDED_ERROR_CODE,
   RUN_NOT_FOUND_ERROR_CODE,
+  RUN_BUDGET_EXHAUSTED_ERROR_CODE,
+  RUN_BUDGET_NOT_RAISED_ERROR_CODE,
 } from './apiErrorCodes';
 import { QUEST_ERROR_CODES } from './types/entities/SessionTypes';
 import { TTS_ERROR_CODES, ttsErrorResponseSchema } from './voiceGeneration';
@@ -35,6 +37,7 @@ import { DECISIONS_ERROR_CODES } from './schemas/decisions';
 import { STORAGE_ERROR_CODES } from './errors';
 import { SKILL_MARKET_IMPORT_ERROR_CODES } from './schemas/skillMarketPublic';
 import { PENDING_ACTION_ERROR_CODES } from './schemas/pendingActions';
+import { BRIEF_REPLY_ERROR_CODES } from './schemas/brief';
 import { SLACK_MESSAGE_ERROR_CODES } from './schemas/slackMessagesApi';
 
 /**
@@ -75,6 +78,7 @@ describe('API_ERROR_CODES', () => {
       SLACK_MESSAGE_ERROR_CODES,
       COMPLETION_SSE_ERROR_CODES,
       PENDING_ACTION_ERROR_CODES,
+      BRIEF_REPLY_ERROR_CODES,
     ];
     // API_KEY_USER_CAP_ERROR_CODE has no narrowing tuple; its emission is proven by userApiKeyService/__tests__/create.test.ts (the additionalInfo assertion).
     // AGENT_LIMIT_REACHED_ERROR_CODE likewise; proven by apps/client/server/agents/createAgent.test.ts.
@@ -95,6 +99,8 @@ describe('API_ERROR_CODES', () => {
     // RUN_NOT_FOUND_ERROR_CODE likewise; proven by apps/client/server/chatCompletion/external/sseRoute.test.ts.
     // ORG_MODEL_NOT_ALLOWED_ERROR_CODE likewise; proven by services/src/llm/modelAdmission.test.ts.
     // ORG_TOOL_NOT_ALLOWED_ERROR_CODE likewise; proven by the ChatCompletionInvoke org tool policy test.
+    // RUN_BUDGET_EXHAUSTED_ERROR_CODE likewise; proven by apps/client/server/billing/completionCreditHolds.test.ts.
+    // RUN_BUDGET_NOT_RAISED_ERROR_CODE likewise; proven by apps/client/pages/api/v1/completion-runs/[runId]/__tests__/budget.test.ts.
     // 'input_file_not_found' likewise; proven by services/src/sceneJobs/sceneJobHandler.test.ts.
     const emitted = new Set<string>([
       ...NARROWING_TUPLES.flat(),
@@ -118,6 +124,8 @@ describe('API_ERROR_CODES', () => {
       RUN_NOT_FOUND_ERROR_CODE,
       ORG_MODEL_NOT_ALLOWED_ERROR_CODE,
       ORG_TOOL_NOT_ALLOWED_ERROR_CODE,
+      RUN_BUDGET_EXHAUSTED_ERROR_CODE,
+      RUN_BUDGET_NOT_RAISED_ERROR_CODE,
       'input_file_not_found',
     ]);
     expect(API_ERROR_CODES.filter(code => !emitted.has(code))).toEqual([]);

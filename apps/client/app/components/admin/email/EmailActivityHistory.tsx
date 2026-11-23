@@ -35,6 +35,7 @@ const getStatusColor = (status: EmailSendStatus) => {
     case EmailSendStatus.PENDING:
       return 'warning';
     case EmailSendStatus.PROCESSING:
+    case EmailSendStatus.QUEUED:
       return 'primary';
     case EmailSendStatus.FAILED:
     case EmailSendStatus.BOUNCED:
@@ -117,6 +118,7 @@ export default function EmailActivityHistory({ jobId, onViewAttempt }: EmailActi
             <Option value={EmailSendStatus.SENT}>Sent</Option>
             <Option value={EmailSendStatus.PENDING}>Pending</Option>
             <Option value={EmailSendStatus.PROCESSING}>Processing</Option>
+            <Option value={EmailSendStatus.QUEUED}>Queued</Option>
             <Option value={EmailSendStatus.FAILED}>Failed</Option>
             <Option value={EmailSendStatus.CANCELLED}>Cancelled</Option>
             <Option value={EmailSendStatus.OPENED}>Opened</Option>

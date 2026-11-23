@@ -495,7 +495,14 @@ describe('WebsocketProvider - connect URL carries a single-use ticket, never the
     const getUrl = mountAndGetUrlGetter() as () => Promise<string>;
     const resolved = await getUrl();
     expect(h.apiPost).toHaveBeenCalledWith('/api/websocket/ticket', undefined, { timeout: 10_000 });
-    expect(resolved).toBe('wss://example/ws?ticket=ticket-abc');
+    const url = new URL(resolved);
+    expect(url.origin + url.pathname).toBe('wss://example/ws');
+    expect(Object.fromEntries(url.searchParams)).toEqual({
+      ticket: 'ticket-abc',
+      handoffPlatform: 'web',
+      handoffName: 'Web browser',
+      handoffClientId: expect.stringMatching(/^[a-f0-9]{8}$/),
+    });
     expect(resolved).not.toContain('token=');
   });
 });

@@ -1,11 +1,14 @@
 import type {
+  ILakeConfigEventTarget,
   ILakeConfigFingerprintChange,
+  ILakeConfigLeverChange,
   ILakeConfigLiteralChange,
   ILakeConfigTextFingerprint,
   LakeConfigChangeAction,
   LakeConfigChangePrincipalKind,
 } from './LakeConfigChangeEventTypes';
 import type { LakeManageRung } from './LakeConfigChangeEventTypes';
+import type { LakeMembershipChangeOrigin } from './LakeMembershipChangeEventTypes';
 
 // -- Lake Config History View ----------------------------------------------------------------
 //
@@ -59,15 +62,9 @@ export interface LakeConfigHistoryFingerprintChange extends Omit<
  */
 export type LakeConfigHistoryFieldChange = ILakeConfigLiteralChange | LakeConfigHistoryFingerprintChange;
 
-/**
- * One recorded config change, ready to render. Deliberately NOT aggregated per principal: a read is
- * an interchangeable repetition worth collapsing into a count, whereas each config change is a
- * distinct before -> after hop, and folding several into one row would destroy the chain an owner
- * reads the history FOR ("who moved it back?"). The access view (#1672) is expected to aggregate,
- * which is why this one states the choice explicitly.
- */
-export interface LakeConfigHistoryEntry {
-  /** The event's own id - a stable React key, and the handle a future per-event drill-in would use. */
+/** Fields every History row has, whichever stream it came from. */
+interface LakeConfigHistoryEntryBase {
+  /** The event's own id - a stable React key, and the handle a per-event action (undo) uses. */
   eventId: string;
   changedAt: Date;
   principalKind: LakeConfigChangePrincipalKind;
@@ -78,18 +75,55 @@ export interface LakeConfigHistoryEntry {
   principalName?: string;
   onBehalfOfUserId?: string;
   onBehalfOfName?: string;
+  /** The entity the row is about. Absent on old rows and on lake-level changes. */
+  target?: ILakeConfigEventTarget;
+}
+
+/**
+ * One recorded config change, ready to render. Deliberately NOT aggregated per principal: a read is
+ * an interchangeable repetition worth collapsing into a count, whereas each config change is a
+ * distinct before -> after hop, and folding several into one row would destroy the chain an owner
+ * reads the history FOR ("who moved it back?"). The access view (#1672) is expected to aggregate,
+ * which is why this one states the choice explicitly.
+ */
+export interface LakeConfigHistoryConfigEntry extends LakeConfigHistoryEntryBase {
+  kind: 'config';
   /** Which rung authorized the write - the field that makes a platform-admin edit visible AS SUCH. */
   manageRung: LakeManageRung;
   action: LakeConfigChangeAction;
   /** Only the fields that moved, in the producer's order. Never empty on a persisted event.
    *  Hash-free by type - see `LakeConfigHistoryFingerprint`. */
   changes: LakeConfigHistoryFieldChange[];
+  /** Structured lever moves, with a feed address in its redacted form. Absent on old rows. */
+  leverChanges?: ILakeConfigLeverChange[];
+  /** The file an approve or auto-approve admitted. */
+  admittedFabFileId?: string;
 }
+
+export const LAKE_CONFIG_HISTORY_FILE_ACTIONS = ['file-added', 'file-removed'] as const;
+export type LakeConfigHistoryFileAction = (typeof LAKE_CONFIG_HISTORY_FILE_ACTIONS)[number];
+
+/**
+ * A file joining or leaving the lake, merged in from the membership log at read time. It has no
+ * manage rung and no prose `changes`: the membership log records neither.
+ */
+export interface LakeConfigHistoryFileEntry extends LakeConfigHistoryEntryBase {
+  kind: 'file';
+  action: LakeConfigHistoryFileAction;
+  target: ILakeConfigEventTarget;
+  origin: LakeMembershipChangeOrigin;
+  /** This row reverses that event. */
+  undoesEventId?: string;
+  /** This row is a side effect of that event, so it has no Undo of its own. */
+  causedByEventId?: string;
+}
+
+export type LakeConfigHistoryEntry = LakeConfigHistoryConfigEntry | LakeConfigHistoryFileEntry;
 
 export interface LakeConfigHistoryView {
   lakeId: string;
   lakeName: string;
-  /** Newest first, matching `listByLake`'s own sort. */
+  /** Newest first across both streams, config events and file membership changes. */
   entries: LakeConfigHistoryEntry[];
   /**
    * True when the read hit its cap, so `entries` is a WINDOW rather than the whole history. A

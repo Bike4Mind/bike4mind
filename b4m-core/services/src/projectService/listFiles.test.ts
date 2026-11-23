@@ -98,6 +98,7 @@ describe('projectService - listFiles', () => {
     expect(mockStorage.getSignedUrl).toHaveBeenCalledWith('fab-files/clean.png', 'get', {
       expiresIn: 3600,
       signingDate: expect.any(Date),
+      ResponseContentType: 'image/png',
     });
     expect(mockFabFileRepo.update).not.toHaveBeenCalled();
   });
@@ -154,6 +155,27 @@ describe('projectService - listFiles', () => {
     expect(mockStorage.getSignedUrl).toHaveBeenCalledWith('fab-files/doc.pdf', 'get', {
       expiresIn: 3600,
       signingDate: expect.any(Date),
+      ResponseContentType: 'application/pdf',
+    });
+  });
+
+  it('signs a non-media file as an attachment', async () => {
+    (mockFabFileRepo.findAllByIds as Mock).mockResolvedValue([
+      {
+        id: 'file-html',
+        fileName: 'page.html',
+        filePath: 'fab-files/page.html',
+        mimeType: 'text/html',
+        moderationStatus: 'clean',
+      },
+    ]);
+
+    await listFiles(userId, { projectId }, adapters());
+
+    expect(mockStorage.getSignedUrl).toHaveBeenCalledWith('fab-files/page.html', 'get', {
+      expiresIn: 3600,
+      signingDate: expect.any(Date),
+      ResponseContentDisposition: 'attachment; filename="page.html"',
     });
   });
 

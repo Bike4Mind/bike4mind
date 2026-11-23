@@ -23,3 +23,17 @@ export async function installSampleSkin(root: string, id = 'nightglass'): Promis
   await writeFile(join(folder, 'sounds/alarm.ogg'), OGG_BYTES);
   return folder;
 }
+
+const PACK_FIXTURE = join(__dirname, '../../shared/__fixtures__/sound-packs/chimes');
+
+/** Copies the sample sound pack into mods/<id> and writes the silent audio files its manifest references. */
+export async function installSamplePack(root: string, id = 'chimes'): Promise<string> {
+  const folder = join(root, id);
+  await cp(PACK_FIXTURE, folder, { recursive: true });
+  await rm(join(folder, 'README.md'));
+  await mkdir(join(folder, 'sounds'));
+  for (const file of ['done', 'error', 'approval', 'finale']) {
+    await writeFile(join(folder, `sounds/${file}.ogg`), OGG_BYTES);
+  }
+  return folder;
+}

@@ -4,6 +4,7 @@ import type { z } from 'zod';
 import {
   MOD_ID_PATTERN,
   SKIN_CONTRACT,
+  SOUND_PACK_CONTRACT,
   SKIN_FILE_TYPES,
   SKIN_MAX_FILES,
   SKIN_MAX_TOTAL_BYTES,
@@ -12,6 +13,7 @@ import {
   type ModManifest,
   type SkinFileType,
   type SkinTokens,
+  type SoundPackManifest,
 } from '@shared/mods';
 
 /** A file a validated skin references, as skinProtocol.ts serves it. */
@@ -28,7 +30,21 @@ export interface LoadedSkin {
   assets: Map<string, SkinAsset>;
 }
 
+export interface LoadedSoundPack {
+  manifest: SoundPackManifest;
+  /** Keyed by the path mod.json uses (sounds/x.ogg); only referenced files are listed. */
+  assets: Map<string, SkinAsset>;
+}
+
 export type SkinLoadResult = { ok: true; skin: LoadedSkin } | { ok: false; id: string; name?: string; error: string };
+export type SoundPackLoadResult =
+  { ok: true; pack: LoadedSoundPack } | { ok: false; id: string; name?: string; error: string };
+
+/** The mod kinds this loader reads; any other kind belongs to a later tier's loader. */
+type DataModKind = 'skin' | 'sounds';
+
+const CONTRACT: Record<DataModKind, number> = { skin: SKIN_CONTRACT, sounds: SOUND_PACK_CONTRACT };
+const KIND_LABEL: Record<DataModKind, string> = { skin: 'skin', sounds: 'sound pack' };
 
 const MAX_DEPTH = 3;
 
@@ -39,73 +55,144 @@ class SkinRejected extends Error {}
  * kind of mod is skipped, not reported: it belongs to a later tier's loader. Sorted by id.
  */
 export async function loadSkins(modsRoot: string): Promise<SkinLoadResult[]> {
-  let names: string[];
-  try {
-    names = await readdir(modsRoot);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [];
-    throw error;
-  }
   const results: SkinLoadResult[] = [];
-  for (const name of names.filter(entry => !entry.startsWith('.')).sort()) {
+  for (const name of await modFolderNames(modsRoot)) {
     const result = await loadSkin(modsRoot, name);
     if (result !== 'not-a-skin') results.push(result);
   }
   return results;
 }
 
+/** The same scan, allow-list and caps as loadSkins, for the folders whose manifest says `kind: "sounds"`. */
+export async function loadSoundPacks(modsRoot: string): Promise<SoundPackLoadResult[]> {
+  const results: SoundPackLoadResult[] = [];
+  for (const name of await modFolderNames(modsRoot)) {
+    const result = await loadSoundPack(modsRoot, name);
+    if (result !== 'not-a-sound-pack') results.push(result);
+  }
+  return results;
+}
+
+async function modFolderNames(modsRoot: string): Promise<string[]> {
+  try {
+    return (await readdir(modsRoot)).filter(entry => !entry.startsWith('.')).sort();
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [];
+    throw error;
+  }
+}
+
+/** A folder that passed the checks every data mod shares: its manifest and the files it holds. */
+interface OpenedMod<K extends DataModKind> {
+  manifest: Extract<ModManifest, { kind: K }>;
+  root: string;
+  files: Map<string, SkinAsset>;
+}
+
 /**
- * Validates one `mods/<id>/` folder. Rejects (with a reason the picker shows) on: a bad id, a symlink
- * anywhere in the folder, a file type off SKIN_FILE_TYPES, a file over its cap or a folder over the
- * whole-folder caps, an invalid mod.json or tokens.json, a skin contract this app does not read, or a
- * referenced file that is missing, resolves outside the folder or is not the type its name says.
+ * Opens one `mods/<id>/` folder for `kind`. Rejects (with a reason the picker shows) on: a bad id, a
+ * symlink anywhere in the folder, a file type off SKIN_FILE_TYPES, a file over its cap or a folder over
+ * the whole-folder caps, an invalid mod.json, or a contract this app does not read. `'other'` is a folder
+ * for another kind (or, for a non-skin kind, one whose manifest cannot be read at all: the skin pass
+ * reports that, so a broken folder is listed once).
  */
+async function openMod<K extends DataModKind>(
+  modsRoot: string,
+  id: string,
+  kind: K,
+  onName: (name: string) => void
+): Promise<OpenedMod<K> | 'other'> {
+  const label = KIND_LABEL[kind];
+  const folder = join(modsRoot, id);
+  const stat = await lstat(folder);
+  if (stat.isSymbolicLink()) {
+    if (kind !== 'skin') return 'other';
+    throw new SkinRejected(`the ${label} folder is a symbolic link`);
+  }
+  if (!stat.isDirectory()) return 'other';
+  if (!MOD_ID_PATTERN.test(id)) {
+    if (kind !== 'skin') return 'other';
+    throw new SkinRejected('folder name is not a valid mod id');
+  }
+  const root = await realpath(folder);
+
+  // The manifest first: a folder holding another tier's mod is not this loader's to judge, files and all.
+  let manifestJson: unknown;
+  try {
+    manifestJson = await readJson(await manifestOf(root), 'mod.json');
+  } catch (error) {
+    if (kind !== 'skin' && error instanceof SkinRejected) return 'other';
+    throw error;
+  }
+  if (isObject(manifestJson) && manifestJson.kind !== undefined && manifestJson.kind !== kind) return 'other';
+  if (kind !== 'skin' && !(isObject(manifestJson) && manifestJson.kind === kind)) return 'other';
+
+  const manifest = parse(modManifestSchema, manifestJson, 'mod.json') as Extract<ModManifest, { kind: K }>;
+  onName(manifest.name);
+  const files = await walk(root);
+  if (manifest.id !== id) throw new SkinRejected(`mod.json id "${manifest.id}" does not match the folder name`);
+  if (manifest.contract !== CONTRACT[kind]) {
+    throw new SkinRejected(
+      `written for ${label} contract ${manifest.contract}; this app reads contract ${CONTRACT[kind]}`
+    );
+  }
+  return { manifest, root, files };
+}
+
+/** Checks each referenced file is present, contained and the type its name says; returns them by path. */
+async function collectAssets(
+  { root, files }: { root: string; files: Map<string, SkinAsset> },
+  paths: readonly string[]
+): Promise<Map<string, SkinAsset>> {
+  const assets = new Map<string, SkinAsset>();
+  for (const path of paths) {
+    const asset = files.get(path);
+    if (!asset) throw new SkinRejected(`${path} is missing`);
+    await assertContained(root, path);
+    await assertSignature(asset, path);
+    assets.set(path, asset);
+  }
+  return assets;
+}
+
+function rejection(id: string, name: string | undefined, error: unknown, label: string) {
+  const named = name ? { name } : {};
+  if (error instanceof SkinRejected) return { ok: false as const, id, ...named, error: error.message };
+  const code = (error as NodeJS.ErrnoException).code;
+  return {
+    ok: false as const,
+    id,
+    ...named,
+    error: `could not read the ${label} folder (${code ?? String(error)})`,
+  };
+}
+
+/** Validates one skin folder; adds a missing or invalid tokens.json and unreadable referenced files to openMod's checks. */
 export async function loadSkin(modsRoot: string, id: string): Promise<SkinLoadResult | 'not-a-skin'> {
   let name: string | undefined;
   try {
-    const folder = join(modsRoot, id);
-    const stat = await lstat(folder);
-    if (stat.isSymbolicLink()) throw new SkinRejected('the skin folder is a symbolic link');
-    if (!stat.isDirectory()) return 'not-a-skin';
-    if (!MOD_ID_PATTERN.test(id)) throw new SkinRejected('folder name is not a valid mod id');
-    const root = await realpath(folder);
-
-    // The manifest first: a folder holding another tier's mod is not this loader's to judge, files and all.
-    const manifestJson = await readJson(await manifestOf(root), 'mod.json');
-    if (isObject(manifestJson) && manifestJson.kind !== undefined && manifestJson.kind !== 'skin') return 'not-a-skin';
-
-    const manifest = parse(modManifestSchema, manifestJson, 'mod.json');
-    name = manifest.name;
-    const files = await walk(root);
-    if (manifest.id !== id) throw new SkinRejected(`mod.json id "${manifest.id}" does not match the folder name`);
-    if (manifest.contract !== SKIN_CONTRACT) {
-      throw new SkinRejected(
-        `written for skin contract ${manifest.contract}; this app reads contract ${SKIN_CONTRACT}`
-      );
-    }
-
-    const tokensFile = files.get('tokens.json');
+    const opened = await openMod(modsRoot, id, 'skin', found => (name = found));
+    if (opened === 'other') return 'not-a-skin';
+    const tokensFile = opened.files.get('tokens.json');
     if (!tokensFile) throw new SkinRejected('tokens.json is missing');
     const tokens = parse(skinTokensSchema, await readJson(tokensFile, 'tokens.json'), 'tokens.json');
-
-    const assets = new Map<string, SkinAsset>();
-    for (const path of referencedPaths(tokens)) {
-      const asset = files.get(path);
-      if (!asset) throw new SkinRejected(`${path} is missing`);
-      await assertContained(root, path);
-      await assertSignature(asset, path);
-      assets.set(path, asset);
-    }
-    return { ok: true, skin: { manifest, tokens, assets } };
+    const assets = await collectAssets(opened, referencedPaths(tokens));
+    return { ok: true, skin: { manifest: opened.manifest, tokens, assets } };
   } catch (error) {
-    if (error instanceof SkinRejected) return { ok: false, id, ...(name ? { name } : {}), error: error.message };
-    const code = (error as NodeJS.ErrnoException).code;
-    return {
-      ok: false,
-      id,
-      ...(name ? { name } : {}),
-      error: `could not read the skin folder (${code ?? String(error)})`,
-    };
+    return rejection(id, name, error, 'skin');
+  }
+}
+
+/** Validates one sound pack folder: the manifest's sounds map is the whole pack, so there is no tokens.json. */
+export async function loadSoundPack(modsRoot: string, id: string): Promise<SoundPackLoadResult | 'not-a-sound-pack'> {
+  let name: string | undefined;
+  try {
+    const opened = await openMod(modsRoot, id, 'sounds', found => (name = found));
+    if (opened === 'other') return 'not-a-sound-pack';
+    const assets = await collectAssets(opened, Object.values(opened.manifest.sounds));
+    return { ok: true, pack: { manifest: opened.manifest, assets } };
+  } catch (error) {
+    return rejection(id, name, error, 'sound pack');
   }
 }
 

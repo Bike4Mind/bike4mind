@@ -24,7 +24,7 @@ import type { FeedItem } from './parseFeed';
 import type { ItemRuleItem, ItemRuleResult } from './ItemRuleService';
 import type { RelevanceJudgement } from './RelevanceJudgeService';
 import { feedCursorMode, selectFeedCandidates } from './selectFeedCandidates';
-import { classifySource, isQueueableVerdict, matchSource, sourceHostname } from './sourceFilter';
+import { classifySource, isQueueableVerdict, matchSource, sourceHostname, type SourceVerdict } from './sourceFilter';
 
 /**
  * The run loop (#1682): search -> filter by source -> judge -> fetch -> propose, once per candidate,
@@ -180,6 +180,11 @@ export const SETTLED_PROPOSE_OUTCOMES = {
 
 type FeedItemState = 'settled' | 'transient';
 
+/** Which totals bucket a source-rule drop lands in: the Never list (or a non-web address) vs "Other sites: Ignore". */
+const dropBucketFor = (
+  verdict: Exclude<SourceVerdict, 'trusted' | 'review'>
+): 'filteredBySource' | 'unlistedDropped' => (verdict === 'unlisted_dropped' ? 'unlistedDropped' : 'filteredBySource');
+
 /**
  * The trusted-list entry that admits `url`, or null. Shared by the run and by the worker's live
  * re-check, so both apply the same host-coverage rule.
@@ -334,11 +339,19 @@ export async function executeResearchRun(
   totals.searchHits = candidates.length;
 
   for (const [index, candidate] of candidates.entries()) {
+    // A search link that never revealed its site has nothing a source rule or the judge could act on.
+    if (candidate.unresolvedRedirect) {
+      totals.unresolvedRedirect += 1;
+      markFeedItem(candidate, 'settled');
+      await ports.onProgress?.(spentMicroUsd, totals);
+      continue;
+    }
+
     // Rule 1: the free filter, before anything is spent.
     const verdict = classifySource(candidate.url, levers);
     if (!isQueueableVerdict(verdict)) {
-      if (candidate.unresolvedRedirect) totals.unresolvedRedirect += 1;
-      else totals.filteredBySource += 1;
+      const bucket = dropBucketFor(verdict);
+      totals[bucket] = (totals[bucket] ?? 0) + 1;
       markFeedItem(candidate, 'settled');
       continue;
     }
@@ -360,9 +373,14 @@ export async function executeResearchRun(
       // Only before the first score: once the judge has worked, a later failure is a blip, not an outage.
       if (scored === 0 && totals.judgeFailed >= JUDGE_BREAKER_FAILURES) {
         for (const unreached of candidates.slice(index + 1)) {
-          if (!isQueueableVerdict(classifySource(unreached.url, levers))) {
-            if (unreached.unresolvedRedirect) totals.unresolvedRedirect += 1;
-            else totals.filteredBySource += 1;
+          if (unreached.unresolvedRedirect) {
+            totals.unresolvedRedirect += 1;
+            continue;
+          }
+          const unreachedVerdict = classifySource(unreached.url, levers);
+          if (!isQueueableVerdict(unreachedVerdict)) {
+            const bucket = dropBucketFor(unreachedVerdict);
+            totals[bucket] = (totals[bucket] ?? 0) + 1;
           } else totals.notJudged += 1;
         }
         return settle('judge_unavailable');

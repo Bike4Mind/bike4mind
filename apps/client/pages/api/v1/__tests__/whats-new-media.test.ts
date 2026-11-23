@@ -127,10 +127,15 @@ beforeEach(() => {
 
 describe('GET /api/v1/whats-new/media/{id}/{asset}', () => {
   it('redirects an uploaded file to a signed browser URL, cached for less than the signature lives', async () => {
+    mockFindFile.mockResolvedValueOnce({ _id: 'f1', moderationStatus: 'clean', mimeType: 'video/mp4' });
     const res = await run();
     expect(res._getStatusCode()).toBe(303);
     expect(res._getRedirectUrl()).toBe(SIGNED);
-    expect(mockSign).toHaveBeenCalledWith('modals/wide.mp4', 'get', { expiresIn: 3600, audience: 'browser' });
+    expect(mockSign).toHaveBeenCalledWith('modals/wide.mp4', 'get', {
+      expiresIn: 3600,
+      audience: 'browser',
+      ResponseContentType: 'video/mp4',
+    });
     expect(res.getHeader('Cache-Control')).toBe('public, max-age=600, s-maxage=600');
     expect(mockFindFile).toHaveBeenCalledWith({ filePath: 'modals/wide.mp4' });
   });
@@ -142,7 +147,12 @@ describe('GET /api/v1/whats-new/media/{id}/{asset}', () => {
     ]) {
       const res = await run({ id: NOTE_ID, asset });
       expect(res._getStatusCode()).toBe(303);
-      expect(mockSign).toHaveBeenLastCalledWith(key, 'get', { expiresIn: 3600, audience: 'browser' });
+      // No stored type on the row, so the read downloads rather than trusting the object's own type.
+      expect(mockSign).toHaveBeenLastCalledWith(key, 'get', {
+        expiresIn: 3600,
+        audience: 'browser',
+        ResponseContentDisposition: `attachment; filename="${key.slice('modals/'.length)}"`,
+      });
     }
   });
 
@@ -209,7 +219,11 @@ describe('GET /api/v1/whats-new/media/{id}/{asset}', () => {
     mockFindFile.mockResolvedValueOnce(null);
     const res = await run();
     expect(res._getStatusCode()).toBe(303);
-    expect(mockSign).toHaveBeenCalledWith('modals/wide.mp4', 'get', { expiresIn: 3600, audience: 'browser' });
+    expect(mockSign).toHaveBeenCalledWith('modals/wide.mp4', 'get', {
+      expiresIn: 3600,
+      audience: 'browser',
+      ResponseContentDisposition: 'attachment; filename="wide.mp4"',
+    });
   });
 
   it('404s an upload that moderation holds or blocks', async () => {

@@ -1,3 +1,4 @@
+import { z } from 'zod';
 import { registerOrchestrationIpc } from './orchestrationIpc';
 import { createStudioDiagnostics } from './studio/StudioDiagnostics';
 import { registerStudio } from './studio/registerStudio';
@@ -175,6 +176,12 @@ import { registerClaudeImport } from '../claudeImport';
 import type { ClaudeImportService } from '../claudeImport/ClaudeImportService';
 import { rendererNotes } from './rendererNotes';
 
+const editMessageRequestSchema = z.object({
+  sessionId: z.string(),
+  messageId: z.string(),
+  text: z.string(),
+});
+
 const VERBOSE = process.env.B4M_DESKTOP_VERBOSE === '1';
 /** Diagnosis only; see apps/desktop/docs/model-wait-findings.md. */
 const TURN_TIMING = process.env.B4M_DESKTOP_TURN_TIMING === '1';
@@ -336,6 +343,8 @@ export interface RegisteredChat {
   capabilityLedger: CapabilityLedger;
   /** The one path that answers a tool approval; the menu bar and mini Tavern answer through it too. */
   respondToApproval(approvalId: string, answer: ChatApprovalAnswer): void;
+  /** The session store, which the profile screen's local usage is counted from. */
+  store: SessionStore;
 }
 
 /**
@@ -1234,6 +1243,16 @@ export function registerChat(
   );
   ipcMain.handle(IPC_CHANNELS.chatGetLoop, (_event, sessionId: string) => service.getLoop(sessionId));
   ipcMain.handle(IPC_CHANNELS.chatContinueReply, (_event, sessionId: string) => service.continueReply(sessionId));
+  ipcMain.handle(IPC_CHANNELS.chatEditMessage, (_event, request: unknown) => {
+    const parsed = editMessageRequestSchema.safeParse(request);
+    if (!parsed.success) return { ok: false, error: 'That edit could not be read.' };
+    return service.editMessage(parsed.data.sessionId, parsed.data.messageId, parsed.data.text);
+  });
+  ipcMain.handle(IPC_CHANNELS.chatRegenerateReply, (_event, sessionId: unknown) =>
+    typeof sessionId === 'string'
+      ? service.regenerateReply(sessionId)
+      : { ok: false, error: 'That conversation no longer exists.' }
+  );
   ipcMain.handle(IPC_CHANNELS.chatClearContext, (_event, sessionId: string) => service.clearContext(sessionId));
   ipcMain.handle(IPC_CHANNELS.chatCompactContext, (_event, sessionId: string, focus?: string) =>
     service.compactContext(sessionId, focus ?? '')
@@ -1638,6 +1657,7 @@ export function registerChat(
     modelSettings,
     capabilityLedger,
     respondToApproval,
+    store,
   };
 }
 

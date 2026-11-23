@@ -1,9 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { EmailSendDetail } from './eventBus';
 
-const { sendToQueueMock, sendEmailMock, hostedSend } = vi.hoisted(() => ({
+const { sendToQueueMock, sendEmailMock, hostedSend, recordOutcomeMock } = vi.hoisted(() => ({
   sendToQueueMock: vi.fn(),
   sendEmailMock: vi.fn(),
   hostedSend: vi.fn(),
+  recordOutcomeMock: vi.fn(),
 }));
 
 vi.mock('./sqs', () => ({ sendToQueue: sendToQueueMock }));
@@ -18,6 +20,7 @@ vi.mock('@aws-sdk/client-eventbridge', () => ({
 vi.mock('sst', () => ({ Resource: { App: { name: 'local' }, AppEventBus: { name: 'events' } } }));
 
 vi.mock('./mailer/index', () => ({ default: { sendEmail: sendEmailMock } }));
+vi.mock('./mailer/deliveryOutcome', () => ({ recordEmailDeliveryOutcome: recordOutcomeMock }));
 
 const { SessionEvents, EmailEvents, NotebookCurationEvents, StripeEvents } = await import('./eventBus');
 
@@ -38,10 +41,58 @@ describe('EmailEvents.Send schema', () => {
     expect(EmailEvents.Send.schema.parse(detail)).toEqual(detail);
   });
 
+  it('keeps an attempt or incident-alert delivery ref', () => {
+    const base = { to: 'a@b.com', subject: 'Hi', body: '<p>hello</p>' };
+    const attempt = { ...base, ref: { kind: 'emailAttempt' as const, attemptId: 'att-1' } };
+    const alert = {
+      ...base,
+      ref: { kind: 'incidentAlert' as const, incidentId: 'inc-1', alert: 'escalation' as const },
+    };
+
+    expect(EmailEvents.Send.schema.parse(attempt)).toEqual(attempt);
+    expect(EmailEvents.Send.schema.parse(alert)).toEqual(alert);
+  });
+
+  it.each([
+    ['an unknown kind', { kind: 'invoice', attemptId: 'att-1' }],
+    ['an empty attempt id', { kind: 'emailAttempt', attemptId: '' }],
+    ['an empty incident id', { kind: 'incidentAlert', incidentId: '', alert: 'review' }],
+    ['an unknown alert', { kind: 'incidentAlert', incidentId: 'inc-1', alert: 'digest' }],
+  ])('rejects a ref with %s', (_label, ref) => {
+    expect(EmailEvents.Send.schema.safeParse({ to: 'a@b.com', subject: 'Hi', body: 'x', ref }).success).toBe(false);
+  });
+
   it('does not require any of the optional fields', () => {
     const detail = { to: 'a@b.com', subject: 'Hi', body: '<p>hello</p>' };
 
     expect(EmailEvents.Send.schema.parse(detail)).toEqual(detail);
+  });
+
+  const bodyRef = { key: 'queued-mail/0b6f8a52-3c1e-4f7d-9a0b-2d4c6e8f1a3b.json' };
+  const accepts = (detail: object) => EmailEvents.Send.schema.safeParse(detail).success;
+
+  it('accepts a stored body reference in place of the body', () => {
+    expect(accepts({ to: 'a@b.com', subject: 'Hi', bodyRef })).toBe(true);
+  });
+
+  it('accepts an empty body', () => {
+    expect(accepts({ to: 'a@b.com', subject: 'Hi', body: '' })).toBe(true);
+  });
+
+  it('rejects mail with both a body and a reference, or with neither', () => {
+    expect(accepts({ to: 'a@b.com', subject: 'Hi', body: '<p>hello</p>', bodyRef })).toBe(false);
+    expect(accepts({ to: 'a@b.com', subject: 'Hi' })).toBe(false);
+  });
+
+  it('rejects a text alternative next to a reference, since the stored body carries it', () => {
+    expect(accepts({ to: 'a@b.com', subject: 'Hi', bodyRef, text: 'hello' })).toBe(false);
+  });
+
+  it('rejects a reference outside the mail body prefix', () => {
+    expect(accepts({ to: 'a@b.com', subject: 'Hi', bodyRef: { key: 'queued-mail/../profile-photos/x.json' } })).toBe(
+      false
+    );
+    expect(accepts({ to: 'a@b.com', subject: 'Hi', bodyRef: { key: 'transcripts/0b6f8a52.json' } })).toBe(false);
   });
 });
 
@@ -76,6 +127,30 @@ describe('eventBus publishSelfHost', () => {
     expect(sendToQueueMock).not.toHaveBeenCalled();
   });
 
+  it('types a publish with neither or both of body and bodyRef as an error, as the schema rejects them', () => {
+    const bodyRef = { key: 'queued-mail/0b6f8a52-3c1e-4f7d-9a0b-2d4c6e8f1a3b.json' };
+    // @ts-expect-error neither body nor bodyRef
+    const neither: EmailSendDetail = { to: 'a@b.com', subject: 'Hi' };
+    // @ts-expect-error both body and bodyRef
+    const both: EmailSendDetail = { to: 'a@b.com', subject: 'Hi', body: 'x', bodyRef };
+    // @ts-expect-error text travels in the stored body
+    const textWithRef: EmailSendDetail = { to: 'a@b.com', subject: 'Hi', text: 't', bodyRef };
+    for (const detail of [neither, both, textWithRef]) {
+      expect(EmailEvents.Send.schema.safeParse(detail).success).toBe(false);
+    }
+  });
+
+  it('refuses a stored body reference instead of mailing an empty body', async () => {
+    await expect(
+      EmailEvents.Send.publish({
+        to: 'a@b.com',
+        subject: 'Hi',
+        bodyRef: { key: 'queued-mail/0b6f8a52-3c1e-4f7d-9a0b-2d4c6e8f1a3b.json' },
+      })
+    ).rejects.toThrow('email.send needs an inline body on self-host: bodyRef is hosted-only');
+    expect(sendEmailMock).not.toHaveBeenCalled();
+  });
+
   it('passes the plain-text body and the send options through to the mailer', async () => {
     delete process.env.SELF_HOST_EVENT_QUEUE;
     await EmailEvents.Send.publish({
@@ -100,6 +175,23 @@ describe('eventBus publishSelfHost', () => {
       { category: 'otc', mirror: false, logRecipient: false }
     );
     expect(sendToQueueMock).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['sent', { messageId: 'smtp-1' }, { ok: true, at: expect.any(Date) }],
+    ['failed', false, { ok: false, error: expect.any(String) }],
+  ])('records a %s delivery against the ref of a direct publish', async (_label, mailResult, outcome) => {
+    sendEmailMock.mockResolvedValue(mailResult);
+    const ref = { kind: 'emailAttempt' as const, attemptId: 'att-1' };
+
+    await EmailEvents.Send.publish({ to: 'a@b.com', subject: 'Hi', body: 'x', ref });
+
+    expect(recordOutcomeMock).toHaveBeenCalledExactlyOnceWith(ref, outcome);
+  });
+
+  it('records nothing for a self-host email without a ref', async () => {
+    await EmailEvents.Send.publish({ to: 'a@b.com', subject: 'Hi', body: 'x' });
+    expect(recordOutcomeMock).not.toHaveBeenCalled();
   });
 
   it('enqueues a non-email event to SELF_HOST_EVENT_QUEUE as { detailType, detail }', async () => {

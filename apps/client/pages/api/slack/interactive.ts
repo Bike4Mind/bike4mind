@@ -52,6 +52,7 @@ import { JIRA_DELETE_ATTACHMENT, CONFLUENCE_DELETE_ATTACHMENT } from '@bike4mind
 import {
   executePendingAction,
   cancelPendingActionOnQuest,
+  claimPendingAction,
   isPendingActionRequester,
   MCP_DISABLED_MESSAGE,
 } from '@bike4mind/server-utils/utils/pendingActionExecutor';
@@ -1293,8 +1294,15 @@ async function handleImageModelSelection(
   const { prompt } = pendingImgParams;
   const modelDisplayName = getImageModelDisplayName(modelId);
 
-  // Clear pendingAction (image generation request consumed)
-  await Quest.findByIdAndUpdate(questId, { $unset: { pendingAction: 1 } });
+  // A double click reads the same request; only the claim winner may queue a generation.
+  if (!pendingAction || !(await claimPendingAction(questId, pendingAction.ts, 'approved'))) {
+    logger.info('[IMAGE-GEN] Request already claimed', { questId });
+    return {
+      text: 'This image generation request was already handled.',
+      replace_original: false,
+      response_type: 'ephemeral',
+    };
+  }
 
   // Get workspace info from the quest's session to find the workspace
   const { slackDevWorkspaceRepository } = await import('@bike4mind/database');

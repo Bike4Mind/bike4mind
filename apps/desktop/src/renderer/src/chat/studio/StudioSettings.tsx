@@ -144,7 +144,13 @@ export function StudioSettings({
         slotProps={{ input: { 'data-testid': `studio-setting-${key}` } }}
       />
       {s[key] !== undefined && (
-        <Button size="sm" variant="plain" disabled={disabled} onClick={() => update({ [key]: undefined })}>
+        <Button
+          size="sm"
+          variant="outlined"
+          color="neutral"
+          disabled={disabled}
+          onClick={() => update({ [key]: undefined })}
+        >
           Reset
         </Button>
       )}
@@ -346,7 +352,8 @@ export function StudioSettings({
               </Typography>
               <Button
                 size="sm"
-                variant="plain"
+                variant="outlined"
+                color="neutral"
                 disabled={disabled}
                 onClick={() => update({ references: s.references?.filter(item => item.fileId !== reference.fileId) })}
               >

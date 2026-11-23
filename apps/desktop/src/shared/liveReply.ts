@@ -8,10 +8,16 @@ import type { ChatMessage, ChatReplyRound, ChatStreamEvent } from './chat';
  * would be showing, and the two cannot drift apart.
  */
 
-/** Open the reply a 'start' names: a fresh message, or a resumed one keeping its text and rows. */
+/**
+ * Open the reply a 'start' names: a fresh message, or a resumed one keeping its text and rows.
+ * A resumed reply drops the error its stop left: with the stop gone, the thread would draw that
+ * stale error as a live failure until the run settles.
+ */
 export function startReply(messages: readonly ChatMessage[], messageId: string): ChatMessage[] {
   return messages.some(message => message.id === messageId)
-    ? messages.map(message => (message.id === messageId ? { ...message, stopReason: undefined } : message))
+    ? messages.map(message =>
+        message.id === messageId ? { ...message, stopReason: undefined, error: undefined } : message
+      )
     : [...messages, { id: messageId, role: 'assistant', content: '', createdAt: new Date().toISOString() }];
 }
 

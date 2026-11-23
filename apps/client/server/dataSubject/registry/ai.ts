@@ -175,6 +175,13 @@ export const aiHolders = {
       { path: 'onBehalfOfUserId', matchBy: 'userId', action: 'anonymize' },
     ],
   },
+  LakeConfigSnapshot: {
+    kind: 'holder',
+    references: [
+      { path: 'config.createdByUserId', matchBy: 'userId', action: 'anonymize' },
+      { path: 'config.lastUpdatedByUserId', matchBy: 'userId', action: 'anonymize' },
+    ],
+  },
   LakeMembershipChangeEvent: {
     kind: 'holder',
     references: [

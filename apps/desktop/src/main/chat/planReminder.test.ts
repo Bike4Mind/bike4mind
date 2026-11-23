@@ -1,11 +1,15 @@
 import { describe, expect, it } from 'vitest';
-import type { TodoItem } from '@shared/todos';
+import type { PlanItem } from '@shared/todos';
 import { PLAN_REMINDER_ROUNDS, stalePlanReminder, unfinishedPlanReminder } from './planReminder';
 
-const plan = (...statuses: TodoItem['status'][]): TodoItem[] =>
-  statuses.map((status, index) => ({ content: `step ${index + 1}`, status }));
+const plan = (...statuses: PlanItem['status'][]): PlanItem[] =>
+  statuses.map((status, index) => ({ id: `${index + 1}`, content: `step ${index + 1}`, status }));
 
 describe('stalePlanReminder', () => {
+  it('treats a plan of completed and cancelled items as finished', () => {
+    expect(stalePlanReminder(plan('completed', 'cancelled'), PLAN_REMINDER_ROUNDS)).toBeNull();
+  });
+
   it('fires once the threshold is reached', () => {
     const unfinished = plan('completed', 'in_progress');
     for (let rounds = 0; rounds < PLAN_REMINDER_ROUNDS; rounds += 1) {
@@ -41,8 +45,8 @@ describe('stalePlanReminder', () => {
 describe('unfinishedPlanReminder', () => {
   it('fires on an item left in progress, and names it', () => {
     const text = unfinishedPlanReminder([
-      { content: 'Run typecheck and lint', status: 'in_progress' },
-      { content: 'Open a PR', status: 'pending' },
+      { id: '1', content: 'Run typecheck and lint', status: 'in_progress' },
+      { id: '2', content: 'Open a PR', status: 'pending' },
     ]);
     expect(text).toMatch(/Run typecheck and lint/);
     expect(text).toMatch(/todo_write/);

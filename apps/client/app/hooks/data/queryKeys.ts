@@ -39,3 +39,9 @@ export const SERVER_CONFIG_QUERY_KEY = ['server-config'] as const;
  * Must be invalidated when an override is set or cleared
  */
 export const SCOPED_SETTING_OVERRIDES_QUERY_KEY = ['scopedSettingOverrides'] as const;
+
+/**
+ * Query key for whether callable functions are on for the current user
+ * Used by useCallableFunctionsEnabled() - returns CallableFunctionsStatus
+ */
+export const CALLABLE_FUNCTIONS_STATUS_QUERY_KEY = ['callable-functions', 'status'] as const;

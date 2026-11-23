@@ -1,4 +1,5 @@
 import '@bike4mind/server-utils/lib/settings/registerContributedSettings';
+import '@bike4mind/server-utils/navigation/registerContributedViews';
 import {
   connectDB,
   questRepository,

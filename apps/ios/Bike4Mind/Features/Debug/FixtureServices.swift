@@ -45,7 +45,7 @@
       AccountScenario(rawValue: ProcessInfo.processInfo.environment["B4M_UI_FIXTURE_ACCOUNT"] ?? "") ?? .success
     }
 
-    /// One ready brief with an approval decision; composing a new one "takes" a few seconds, then returns it.
+    /// One ready brief with pending, lapsed and replaced approvals and an open question; composing a new one "takes" a few seconds, then returns it.
     private struct FixtureBriefAPI: BriefAPI {
       private static let brief: Brief = {
         let now = Date()
@@ -65,8 +65,22 @@
             BriefDecision(
               id: "n1", text: "The release agent wants to open a pull request with the changelog update.",
               approval: BriefApprovalRef(
-                questID: "fixture-0-q4", sessionID: "fixture-0", pendingActionTs: 1_700_000_000_000)),
-            BriefDecision(id: "n2", text: "Decide whether to archive the three notebooks untouched for 90 days."),
+                questID: "fixture-0-q4", sessionID: "fixture-0", pendingActionTs: 1_700_000_000_000,
+                state: .pending)),
+            BriefDecision(
+              id: "n2", text: "The cleanup agent wanted to archive three notebooks untouched for 90 days.",
+              approval: BriefApprovalRef(
+                questID: "fixture-1-q2", sessionID: "fixture-1", pendingActionTs: 1_699_990_000_000,
+                state: .lapsed)),
+            BriefDecision(
+              id: "n3", text: "The calendar agent asked to send a meeting invite.",
+              approval: BriefApprovalRef(
+                questID: "fixture-2-q3", sessionID: "fixture-2", pendingActionTs: 1_699_980_000_000,
+                state: .replaced)),
+            BriefDecision(
+              id: "n4", text: "The research agent asked which topic to dig into next.",
+              question: BriefQuestionRef(
+                questID: "fixture-3-q1", sessionID: "fixture-3", options: ["Pricing", "Competitors"], state: .open)),
           ])
       }()
 
@@ -97,6 +111,13 @@
           return Self.stuck
         default: return Self.brief
         }
+      }
+
+      func reply(
+        briefID: String, decisionID: String, text: String, choiceIndex: Int?
+      ) async throws -> BriefReplyResult {
+        try await Task.sleep(for: .seconds(1))
+        return BriefReplyResult(executionID: "fixture-run", sessionID: "fixture-3")
       }
     }
 
@@ -140,7 +161,8 @@
       }
     }
 
-    /// Every generation runs for a few seconds, then succeeds. No outputs: the gallery fixtures stay as they are.
+    /// Every generation runs for a few seconds, then succeeds. No outputs: the gallery fixtures stay as they are,
+    /// except a Scene, which lands on `FixtureMediaAPI.sceneID` so its detail and "Made from" chips can be opened.
     private struct FixtureStudioAPI: StudioAPI {
       static let runTime: TimeInterval = 4
 
@@ -192,6 +214,8 @@
                   lyricsMaxChars: 10_000, duration: .adjustable(min: 30, max: 180, defaultSeconds: 120, exact: false),
                   pricing: MusicPricing(unit: .perSong, credits: 160))))
           ]
+        case .scene:
+          []
         }
       }
 
@@ -206,12 +230,17 @@
           kind: .image, id: "fixture-\(UUID().uuidString)", prompt: request.summaryPrompt, startedAt: Date())
       }
 
+      func composeScene(_ request: SceneRequest) async throws -> GenerationHandle {
+        GenerationHandle(kind: .scene, id: "fixture-\(UUID().uuidString)", prompt: request.label, startedAt: Date())
+      }
+
       func status(of handle: GenerationHandle) async throws -> GenerationStatus {
         let elapsed = Date().timeIntervalSince(handle.startedAt)
         guard elapsed >= Self.runTime else {
           return GenerationStatus(phase: .running(progress: elapsed / Self.runTime))
         }
-        return GenerationStatus(phase: .succeeded)
+        return GenerationStatus(
+          phase: .succeeded, resultFileID: handle.kind == .scene ? FixtureMediaAPI.sceneID : nil)
       }
 
       func cancel(_ handle: GenerationHandle) async throws {}
@@ -293,6 +322,12 @@
 
     private struct FixtureAPI: B4MAPI {
       private static let now = Date()
+
+      func session(id: String) async throws -> SessionSummary {
+        let page = try await listSessions(cursor: nil, limit: 50)
+        guard let session = page.items.first(where: { $0.id == id }) else { throw APIError.notFound }
+        return session
+      }
 
       func listSessions(cursor: String?, limit: Int) async throws -> Page<SessionSummary> {
         let names = ["Trip planning", "Quarterly metrics review", "Untitled", "Recipe ideas", "Contract summary"]
@@ -400,6 +435,8 @@
     /// players work offline.
     private struct FixtureMediaAPI: MediaAPI {
       private static let now = Date()
+      /// A video item that plays the part of a composed Scene: its trail is the picture, soundtrack and cover.
+      static let sceneID = "fixture-media-8"
 
       private static let all: [MediaItem] = (0..<24).map { index in
         let kind: MediaKind = index % 5 == 3 ? .video : (index % 5 == 4 ? .audio : .image)
@@ -452,6 +489,21 @@
           return FileLineage(
             fileID: id, ancestors: [node(image, generator: "image")], children: [node(video, generator: "video")],
             edges: [edge])
+        case Self.sceneID:
+          let scene = Self.all[8]
+          let song = Self.all[4]
+          return FileLineage(
+            fileID: id,
+            ancestors: [
+              node(scene, generator: "scene"), node(video, generator: "video"), node(song, generator: "music"),
+              node(image, generator: "image"),
+            ],
+            children: [],
+            edges: [
+              LineageEdge(parentID: video.id, childID: id, role: .sceneVideo),
+              LineageEdge(parentID: song.id, childID: id, role: .sceneAudio),
+              LineageEdge(parentID: image.id, childID: id, role: .sceneCover),
+            ])
         default:
           return FileLineage(fileID: id, ancestors: [], children: [], edges: [])
         }
