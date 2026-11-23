@@ -49,8 +49,12 @@ const DEFAULT_BASE_NAME = 'untitled';
 
 /** Byte cap for one save (1 MiB), far below the platform file-size limit and any single tool call's output. */
 export const MAX_SAVE_CONTENT_BYTES = 1024 * 1024;
+const MAX_SAVE_CONTENT_LABEL = `${MAX_SAVE_CONTENT_BYTES / (1024 * 1024)} MiB`;
 
-/** Saves one turn may make. A retry of the turn keeps its count, so files the first attempt saved still count. */
+/**
+ * Saves one turn may make. A plain retry keeps the turn's count, so files the first attempt saved still
+ * count; an edited prompt starts a fresh count (ChatCompletionInvoke's retry branch).
+ */
 export const MAX_LAKE_SAVES_PER_TURN = 5;
 
 const SAVE_LIMIT_MESSAGE =
@@ -148,7 +152,8 @@ function draftNote(lake: Pick<IDataLakeDocument, 'status'>): string {
 
 /**
  * Claims one of the turn's saves. With a quest the count lives on it, shared by every build of this
- * tool in the turn; without one (CLI, deep agent) it falls back to a count local to this build.
+ * tool in the turn. Without one (CLI, embed chat, deep agent, an agent run whose quest link was not
+ * resolved) it falls back to a count local to this build, which restarts with each agent continuation.
  */
 function makeSaveSlotClaimer(context: ToolContext): () => Promise<boolean> {
   const { questId } = context;
@@ -178,7 +183,7 @@ export const saveContentToDataLakeTool: ToolDefinition = {
         // Bytes, not string length: a multibyte character counts as one char but up to 4 bytes.
         const encoded = Buffer.from(content, 'utf8');
         if (encoded.length > MAX_SAVE_CONTENT_BYTES) {
-          return `Nothing was saved: content is ${encoded.length} bytes, over the 1 MiB limit for one save. Split it into smaller files.`;
+          return `Nothing was saved: content is ${encoded.length} bytes, over the ${MAX_SAVE_CONTENT_LABEL} limit for one save. Split it into smaller files.`;
         }
         const { fileName, mimeType } = resolveFileNameAndType(parsed.data.fileName, parsed.data.mimeType);
         await context.onStart?.(TOOL_NAME, { fileName, dataLakeId });
@@ -284,7 +289,7 @@ export const saveContentToDataLakeTool: ToolDefinition = {
         parameters: {
           type: 'object',
           properties: {
-            content: { type: 'string', description: 'The full text to save, at most 1 MiB' },
+            content: { type: 'string', description: `The full text to save, at most ${MAX_SAVE_CONTENT_LABEL}` },
             fileName: { type: 'string', description: 'e.g. "q3-summary.md"' },
             mimeType: { type: 'string', enum: SAVABLE_MIME_TYPES, description: 'Default text/markdown' },
             dataLakeId: { type: 'string', description: 'Target lake id' },

@@ -111,7 +111,8 @@ export interface ToolContext {
   sessionId?: string;
   /**
    * Quest (turn) id of the current chat, for lake-access audit rows (recordLakeAccessEvent) to
-   * join back to their turn - a diagnostic join key, never authorization data. Optional for the
+   * join back to their turn, and the key for save_content_to_data_lake's per-turn save count (a quota,
+   * not an access check) - never authorization data. Optional for the
    * same reason as `sessionId`, plus one agent-mode-specific case: an agent execution's real Quest
    * id is only known from the point `agentExecutor` resolves it (see the dispatch-time capture in
    * `agentExecute.ts` and its resume-path fallback) - a tool call before that point genuinely has
@@ -136,6 +137,8 @@ export interface ToolContext {
     /**
      * Owner lookup for generated-image keys (see resolveOwnedGeneratedImageUrl). Absent (or
      * `sessions.findAllByIds` absent) means every generated key is refused - fail closed.
+     * `claimLakeSaveSlot` holds save_content_to_data_lake's per-turn count on the quest; without it
+     * (or without `questId`) that tool counts per tool build instead.
      */
     quests?: Pick<IChatHistoryItemRepository, 'findSessionIdsByImage'> &
       Partial<Pick<IChatHistoryItemRepository, 'claimLakeSaveSlot'>>;
