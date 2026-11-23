@@ -19,6 +19,15 @@ import {
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const TEST_TASKS = ['test', 'test:integration'];
+const ISOLATED_DIRS = [
+  'packages/database',
+  'b4m-core/infra',
+  'b4m-core/resource',
+  'packages/scripts',
+  'packages/server-utils',
+  'b4m-core/services',
+  'apps/workers',
+];
 
 // turbo.json is JSONC; every comment in it is a whole line.
 function readTurboJson() {
@@ -69,6 +78,21 @@ const GIT_SCAN =
 // CI never caches (the "Run repo-scan tests" step), so they stay out of the `test` hash.
 const REPO_LANE_FILE = /\.repo\.test\.[cm]?[jt]sx?$/;
 const CLIMBING_LITERAL = /['"`](\.\.(?:\/[^'"`\s$]*)?)['"`]/g;
+
+function rootLiteralPaths(files) {
+  const targets = new Set();
+  for (const file of files) {
+    const source = fs.readFileSync(path.join(repoRoot, file), 'utf8');
+    if (!escapedPaths(path.dirname(file), [file]).includes('.')) continue;
+    for (const [, literal] of source.matchAll(/['"`]([^'"`\s$]+)['"`]/g)) {
+      if (literal.startsWith('.') && !literal.startsWith('.changeset/') && !literal.startsWith('.env.')) continue;
+      if (path.isAbsolute(literal) || literal.includes('*')) continue;
+      if (!literal.includes('/') && !literal.includes('.')) continue;
+      if (fs.existsSync(path.join(repoRoot, literal))) targets.add(literal.replace(/\/$/, ''));
+    }
+  }
+  return [...targets];
+}
 
 /** Repo-relative paths a package's test files name with a `..` literal that leaves the package. */
 function escapedPaths(dir, files) {
@@ -151,6 +175,10 @@ describe('turbo.json test tasks', () => {
     expect(entries.map(([name]) => name)).toEqual(expect.arrayContaining(TEST_TASKS));
   });
 
+  it('never caches repo scans, even when invoked through turbo', () => {
+    expect(turbo.tasks['test:repo'].cache).toBe(false);
+  });
+
   // --only drops the dependency tasks from the hash; the context file is what puts them back. A
   // package-specific entry REPLACES the generic one, so each must list it itself.
   it('lists the context file and depends on ^build in every test task', () => {
@@ -210,6 +238,41 @@ describe('test reads outside the package', () => {
     ).toBeDefined();
   });
 
+  it.each(ISOLATED_DIRS)(
+    '%s: discovers every repo scan exactly once and outside cached lanes',
+    dir => {
+      const manifest = JSON.parse(fs.readFileSync(path.join(repoRoot, dir, 'package.json'), 'utf8'));
+      expect(manifest.scripts['test:repo']).toBe('REPO_TEST_LANE=repo vitest run');
+      const discover = lane => {
+        const stdout = execFileSync('pnpm', ['exec', 'vitest', 'list', '--filesOnly', '--json'], {
+          cwd: path.join(repoRoot, dir),
+          env: {
+            ...process.env,
+            VITEST_MAX_WORKERS: '25%',
+            REPO_TEST_LANE: lane === 'repo' ? 'repo' : '',
+            WORKERS_TEST_LANE: lane,
+            SERVER_UTILS_TEST_LANE: lane,
+          },
+          encoding: 'utf8',
+          maxBuffer: 20 * 1024 * 1024,
+        });
+        return JSON.parse(stdout.slice(stdout.indexOf('['))).map(file =>
+          path.relative(repoRoot, path.resolve(repoRoot, dir, file.file))
+        );
+      };
+      const expected = testFiles(dir)
+        .filter(file => REPO_LANE_FILE.test(file))
+        .sort();
+      expect(expected.length).toBeGreaterThan(0);
+      expect(discover('repo').sort()).toEqual(expected);
+      expect(discover('unit').filter(file => REPO_LANE_FILE.test(file))).toEqual([]);
+      if (['apps/workers', 'packages/server-utils'].includes(dir)) {
+        expect(discover('integration').filter(file => REPO_LANE_FILE.test(file))).toEqual([]);
+      }
+    },
+    30000
+  );
+
   // Line-anchored, so a commented-out step, a disabled `if:` or the command left in a comment
   // all fail here instead of the repo lane silently running nowhere.
   it('runs every test:repo script in CI, once, on the misc leg', () => {
@@ -219,7 +282,8 @@ describe('test reads outside the package', () => {
     expect(start, 'the "Run repo-scan tests" step is missing from ci.yml').toBeGreaterThan(-1);
     const indent = lines[start].indexOf('-');
     const end = lines.findIndex(
-      (line, index) => index > start && line.trim() !== '' && line.search(/\S/) <= indent && !line.trim().startsWith('#')
+      (line, index) =>
+        index > start && line.trim() !== '' && line.search(/\S/) <= indent && !line.trim().startsWith('#')
     );
     const step = lines.slice(start + 1, end === -1 ? undefined : end).filter(line => !line.trim().startsWith('#'));
     expect(step).toContainEqual(expect.stringMatching(/^\s*run: pnpm --recursive --if-present run test:repo\s*$/));
@@ -245,7 +309,12 @@ describe('test reads outside the package', () => {
       // where the package's own entry already names files from the root.
       const rootCovered = ownInputs.some(glob => glob.startsWith('$TURBO_ROOT$/'));
       const cachedFiles = pkg.files.filter(file => !REPO_LANE_FILE.test(file));
-      const reads = [...escapedPaths(pkg.dir, cachedFiles), ...sourceOnlyDependencyReads(pkg.manifest, allPackages)];
+      const rootReads = ISOLATED_DIRS.includes(pkg.dir) ? rootLiteralPaths(cachedFiles) : [];
+      const reads = [
+        ...escapedPaths(pkg.dir, cachedFiles),
+        ...rootReads,
+        ...sourceOnlyDependencyReads(pkg.manifest, allPackages),
+      ];
       const uncovered = [...new Set(reads)].filter(
         target => !(target === '.' ? rootCovered : inputCovers(pkg.dir, inputs, target))
       );

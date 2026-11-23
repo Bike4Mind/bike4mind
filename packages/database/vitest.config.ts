@@ -4,6 +4,9 @@ import { sharedTest } from '../../vitest.shared';
 export default defineConfig({
   test: {
     ...sharedTest,
+    ...(process.env.REPO_TEST_LANE === 'repo'
+      ? { include: ['**/*.repo.test.ts'] }
+      : { exclude: ['**/node_modules/**', '**/*.repo.test.ts'] }),
     // Download MongoDB binary once before all tests to prevent race conditions
     globalSetup: './vitest.setup.ts',
     // Increase timeout to allow for MongoDB binary download and operations

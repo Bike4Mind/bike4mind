@@ -17,7 +17,7 @@ import path from 'node:path';
  */
 const ALLOWED = [
   'b4m-core/services/src/dataLakeService/applyCorpusAction.test.ts',
-  'b4m-core/services/src/dataLakeService/applyCorpusAction.guardrail.test.ts',
+  'b4m-core/services/src/dataLakeService/applyCorpusAction.guardrail.repo.test.ts',
   'b4m-core/services/src/dataLakeService/index.ts',
   'apps/client/pages/api/data-lakes/[id]/findings/[findingId]/corpus-action.ts',
 ];

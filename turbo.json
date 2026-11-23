@@ -156,7 +156,24 @@
       "inputs": [
         "$TURBO_DEFAULT$",
         ".turbo/test-context",
-        "$TURBO_ROOT$/packages/database/src/seeds/modelCatalog.seed.json"
+        "$TURBO_ROOT$/packages/database/src/seeds/modelCatalog.seed.json",
+        "$TURBO_ROOT$/infra/alarms.ts",
+        "$TURBO_ROOT$/infra/web.ts",
+        "$TURBO_ROOT$/infra/queues.ts"
+      ]
+    },
+    "@bike4mind/database#test": {
+      "dependsOn": ["^build"],
+      "inputs": ["$TURBO_DEFAULT$", ".turbo/test-context", "$TURBO_ROOT$/packages/server-utils/src/auth/ability.ts"]
+    },
+    "@bike4mind/resource#test": {
+      "dependsOn": ["^build"],
+      "inputs": [
+        "$TURBO_DEFAULT$",
+        ".turbo/test-context",
+        "$TURBO_ROOT$/elasticmq.conf",
+        "$TURBO_ROOT$/.env.selfhost.example",
+        "$TURBO_ROOT$/selfhost/env-additions.txt"
       ]
     },
     "@bike4mind/local-models#test": {
@@ -213,6 +230,16 @@
         "../client/**/*.ts",
         "../client/tsconfig.json",
         "$TURBO_ROOT$/infra/queues.ts",
+        "$TURBO_ROOT$/infra/analyticsRollup.ts",
+        "$TURBO_ROOT$/infra/cliToolHandler.ts",
+        "$TURBO_ROOT$/infra/database.ts",
+        "$TURBO_ROOT$/infra/web.ts",
+        "$TURBO_ROOT$/elasticmq.conf",
+        "$TURBO_ROOT$/b4m-core/services/src/notebookCurationService/**",
+        "$TURBO_ROOT$/packages/scripts/index.ts",
+        "$TURBO_ROOT$/packages/scripts/migrate/migrationManager.ts",
+        "$TURBO_ROOT$/docs-site/docs/**",
+        "$TURBO_ROOT$/catalog/model-hub/curated-v2.json",
         "../../packages/scripts/help/**/*.ts",
         "../../packages/server-utils/**",
         "!../../packages/server-utils/node_modules/**",
@@ -228,6 +255,16 @@
         "../client/**/*.ts",
         "../client/tsconfig.json",
         "$TURBO_ROOT$/infra/queues.ts",
+        "$TURBO_ROOT$/infra/analyticsRollup.ts",
+        "$TURBO_ROOT$/infra/cliToolHandler.ts",
+        "$TURBO_ROOT$/infra/database.ts",
+        "$TURBO_ROOT$/infra/web.ts",
+        "$TURBO_ROOT$/elasticmq.conf",
+        "$TURBO_ROOT$/b4m-core/services/src/notebookCurationService/**",
+        "$TURBO_ROOT$/packages/scripts/index.ts",
+        "$TURBO_ROOT$/packages/scripts/migrate/migrationManager.ts",
+        "$TURBO_ROOT$/docs-site/docs/**",
+        "$TURBO_ROOT$/catalog/model-hub/curated-v2.json",
         "../../packages/scripts/help/**/*.ts",
         "../../packages/server-utils/**",
         "!../../packages/server-utils/node_modules/**",
@@ -338,6 +375,7 @@
         "$TURBO_DEFAULT$",
         ".turbo/test-context",
         "src/premium-generated/**",
+        "$TURBO_ROOT$/catalog/model-hub/curated-v2.json",
         "../../apps/client/pages/**",
         "../../apps/client/server/**",
         "../../apps/workers/src/**",
@@ -354,6 +392,7 @@
         "$TURBO_DEFAULT$",
         ".turbo/test-context",
         "src/premium-generated/**",
+        "$TURBO_ROOT$/catalog/model-hub/curated-v2.json",
         "../../apps/client/pages/**",
         "../../apps/client/server/**",
         "../../apps/workers/src/**",
@@ -370,6 +409,12 @@
         "$TURBO_DEFAULT$",
         ".turbo/test-context",
         "$TURBO_ROOT$/turbo.json",
+        "$TURBO_ROOT$/infra/buckets.ts",
+        "$TURBO_ROOT$/apps/client/app/router.tsx",
+        "$TURBO_ROOT$/.changeset/changelog-github-retry.cjs",
+        "$TURBO_ROOT$/.changeset/config.json",
+        "$TURBO_ROOT$/package.json",
+        "$TURBO_ROOT$/pnpm-lock.yaml",
         "../../apps/client/pages/**",
         "../../apps/client/server/**",
         "../../apps/workers/src/**",
@@ -391,6 +436,9 @@
     "test:integration": {
       "dependsOn": ["^build"],
       "inputs": ["$TURBO_DEFAULT$", ".turbo/test-context"]
+    },
+    "test:repo": {
+      "cache": false
     },
     "openapi:generate": {
       "cache": false

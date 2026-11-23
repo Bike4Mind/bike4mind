@@ -9,6 +9,9 @@ export default defineConfig({
     globals: true,
     environment: 'node',
     include: ['**/*.test.ts'],
+    ...(process.env.REPO_TEST_LANE === 'repo'
+      ? { include: ['**/*.repo.test.ts'] }
+      : { exclude: ['**/node_modules/**', '**/*.repo.test.ts'] }),
     coverage: {
       provider: 'v8',
       reporter: ['text', 'json', 'html'],

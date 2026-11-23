@@ -3,5 +3,10 @@ import { sharedTest } from '../../vitest.shared';
 
 // Minimal config: applies the shared worker-pool budget (see vitest.shared.ts).
 export default defineConfig({
-  test: { ...sharedTest },
+  test: {
+    ...sharedTest,
+    ...(process.env.REPO_TEST_LANE === 'repo'
+      ? { include: ['**/*.repo.test.ts'] }
+      : { exclude: ['**/node_modules/**', '**/*.repo.test.ts'] }),
+  },
 });
