@@ -1,14 +1,14 @@
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
+import { fitBoundsToDisplays, type WindowBounds } from './windowBounds';
 
-vi.mock('electron', () => ({ BrowserWindow: class {}, screen: {}, shell: {} }));
-vi.mock('../windows', () => ({ markCompanionWindow: vi.fn() }));
-
-const { MINI_MIN_SIZE, restoreBounds } = await import('./miniWindow');
+const MINI_MIN_SIZE = { width: 220, height: 56 };
+const restoreBounds = (saved: WindowBounds | null, areas: readonly WindowBounds[]) =>
+  fitBoundsToDisplays(saved, areas, MINI_MIN_SIZE);
 
 const laptop = { x: 0, y: 25, width: 1440, height: 850 };
 const external = { x: 1440, y: 0, width: 1920, height: 1080 };
 
-describe('restoreBounds', () => {
+describe('fitBoundsToDisplays', () => {
   it('keeps bounds that already sit inside a screen', () => {
     const saved = { x: 100, y: 200, width: 420, height: 300 };
     expect(restoreBounds(saved, [laptop])).toEqual(saved);

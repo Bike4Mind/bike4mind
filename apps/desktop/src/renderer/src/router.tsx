@@ -9,6 +9,7 @@ import { Home } from './routes/Home';
 import { Profile } from './routes/Profile';
 import { Billing } from './routes/Billing';
 import { Settings } from './routes/Settings';
+import { OrchestrateMini } from './orchestrateMini/OrchestrateMini';
 import { MiniTavern } from './watch/MiniTavern';
 
 const rootRoute = createRootRoute({
@@ -72,6 +73,16 @@ const miniTavernRoute = createRoute({
   },
 });
 
+// The always-on-top Orchestrate mini window (main/orchestrateMini). Its preload exposes only
+// window.b4mOrchestrateMini, so nothing on this route may reach for window.b4m.
+const orchestrateMiniRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/orchestrate-mini',
+  component: function OrchestrateMiniRoute() {
+    return <OrchestrateMini />;
+  },
+});
+
 // A packaged build loads the renderer over file://, which has no origin for the History
 // API to push against. Hash history is the one mode that behaves the same there as it
 // does against the dev server.
@@ -83,6 +94,7 @@ export const router = createRouter({
     settingsRoute,
     devLogsRoute,
     miniTavernRoute,
+    orchestrateMiniRoute,
   ]),
   history: createHashHistory(),
   // Every route's render errors land here; main.tsx's AppErrorBoundary covers what sits outside.
