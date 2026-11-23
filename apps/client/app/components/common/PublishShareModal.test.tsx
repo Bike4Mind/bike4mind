@@ -160,6 +160,14 @@ describe('PublishShareModal - update helper text for content already in history'
     expect(helper).toHaveTextContent('If it matches the current version, no new version is added');
   });
 
+  it('conditions the update label on content being new to the page, not merely changed', async () => {
+    renderUpdate(1);
+    await screen.findByTestId('publish-share-update-helper');
+    expect(screen.getByText(/^Update "My artifact" - /)).toHaveTextContent(
+      'adds a new version if the content is new to this page'
+    );
+  });
+
   it('says known content switches the page to the existing version when there are several', async () => {
     renderUpdate(3);
     const helper = await screen.findByTestId('publish-share-update-helper');

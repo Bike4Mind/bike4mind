@@ -904,7 +904,7 @@ export function PublishShareModal({
                 value="update"
                 disabled={busy}
                 data-testid="publish-share-mode-update"
-                label={`Update "${existing.title}" - adds a new version if the content changed`}
+                label={`Update "${existing.title}" - adds a new version if the content is new to this page`}
               />
               <Radio
                 value="new"
