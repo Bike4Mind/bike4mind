@@ -7,6 +7,8 @@
  *
  * Value format (JSON), see b4m-core/services/src/spendReconciliation/providerSpendScope.ts:
  *   anthropic: {"workspaceIds": [...], "apiKeyIds": [...]}  ("default" names the default workspace)
+ *     The nightly cost report can only group by workspace, so apiKeyIds narrow the hourly poller
+ *     but not the nightly reconciliation: scope by workspace where the stage has its own.
  *   openai:    {"projectIds": [...], "apiKeyIds": [...]}
  *
  * Imports only constants so infra/cron.ts can import it without a cycle.
