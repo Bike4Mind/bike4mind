@@ -49,7 +49,7 @@ import { escapeRegex } from '../escapeRegex';
 import { signedUrlExpiresAt } from '../signedUrlExpiry';
 import { BadRequestError, CorruptedFileError } from '../errors';
 import { isAxiosError } from 'axios';
-import { createTokenizer, ITokenizer } from '../tokenCounting';
+import { ITokenizer, TiktokenTokenizer } from '../tokenCounting';
 import { getFileType } from '../file';
 const MAX_FILE_SIZE = 6000;
 /** Cap on generated images surfaced to the model for editing (keeps the context note small). */
@@ -500,7 +500,7 @@ function replayableToolCalls(functionCalls: RecordedFunctionCall[] | undefined):
 
 export type EmbeddingTokenCounter = (text: string) => Promise<number>;
 
-let embeddingTokenizer: ITokenizer | undefined;
+let embeddingTokenizer: TiktokenTokenizer | undefined;
 
 /**
  * Counts with tiktoken under the embedding model's id (unknown ids fall back to cl100k_base, the
@@ -512,8 +512,9 @@ const defaultEmbeddingTokenCounter =
   (model: string, logger: Logger): EmbeddingTokenCounter =>
   async text => {
     try {
-      embeddingTokenizer ??= createTokenizer({ logger });
-      return await embeddingTokenizer.countTokens(text, model);
+      embeddingTokenizer ??= new TiktokenTokenizer({ logger });
+      // The tokenizer is shared across requests; route its logs through this caller's logger.
+      return await embeddingTokenizer.countTokens(text, model, logger);
     } catch (error) {
       logger.warn(
         'Embedding token count fell back to UTF-8 byte length',
