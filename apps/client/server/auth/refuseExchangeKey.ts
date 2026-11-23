@@ -1,7 +1,6 @@
-import type { NextApiResponse } from 'next';
 import { recordSideAppRefusal } from '@bike4mind/server-utils/auth/sideAppRefusal';
 import { resolveRouteTemplate } from '@bike4mind/server-utils/utils/resolveRouteTemplate';
-import type { Request } from 'express';
+import type { Request, Response } from 'express';
 
 /**
  * Refuses a connected-app (OAuth exchange) key on a route outside its pinned inventory.
@@ -12,7 +11,7 @@ export function refuseExchangeKey(
     apiKeyInfo?: { keyId?: string; oauthExchangeClientId?: string };
     user?: { id?: unknown };
   },
-  res: NextApiResponse
+  res: Response
 ): boolean {
   const info = req.apiKeyInfo;
   if (!info?.oauthExchangeClientId) return false;

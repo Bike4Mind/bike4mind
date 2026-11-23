@@ -253,7 +253,9 @@ describe('keys minted for a connected app reach only their scoped routes', () =>
   });
 
   it.each(REFUSING_ROUTES)('%s refuses an exchange key in its handler', route => {
-    expect(routeSource(route)).toMatch(/if \(req\.apiKeyInfo\?\.oauthExchangeClientId\)/);
+    expect(routeSource(route)).toMatch(
+      /if \(req\.apiKeyInfo\?\.oauthExchangeClientId\)|if \(refuseExchangeKey\(req, res\)\) return;/
+    );
   });
 
   it.each(SCOPE_LESS_CREDENTIAL_ROUTES)('%s declares no scope an exchange key holds', route => {
