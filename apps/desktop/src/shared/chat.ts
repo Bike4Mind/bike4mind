@@ -755,6 +755,8 @@ export interface ChatChildReport {
   headSha?: string;
   /** The child's last reply, capped (childReport.ts cappedReply). Untrusted text from another session. */
   reply?: string;
+  /** The reply was cut at the cap; the rest is in the child's own session. */
+  replyTruncated?: boolean;
 }
 
 export interface ChatMessage {
@@ -860,6 +862,8 @@ export interface ChatMessage {
    * (flushChildReports). Absent on reports stored before this field existed, and on waiting notices.
    */
   childReport?: ChatChildReport;
+  /** The child this settled report is from. Set even when `childReport` is withheld from a hosted parent. */
+  reportedChildId?: string;
   /**
    * Artifacts parsed out of this reply. Their markup is NOT in `content`, which holds the prose
    * around them; the wire rebuilds it from here (restoreArtifactMarkup) so the model still sees

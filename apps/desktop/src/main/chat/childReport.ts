@@ -13,14 +13,26 @@ export type ChildReportDetails = {
   headSha?: string;
 };
 
-/** The child's last assistant message, cut to `cap` characters with a marker saying how much is left. */
-export function cappedReply(message: ChatMessage | undefined, cap: number = CHILD_REPLY_CAP): string | null {
+export function lastAssistantMessage(child: ChatSession): ChatMessage | undefined {
+  return [...child.messages].reverse().find(message => message.role === 'assistant');
+}
+
+/** The message's closing text cut to `cap` characters, and how many characters the cut dropped. */
+export function cutReply(
+  message: ChatMessage | undefined,
+  cap: number = CHILD_REPLY_CAP
+): { text: string; dropped: number } | null {
   if (!message) return null;
   const text = closingText(message).trim();
   if (!text) return null;
-  if (text.length <= cap) return text;
-  const rest = text.length - cap;
-  return `${text.slice(0, cap)}\n[... ${rest} more characters; session_read for the rest]`;
+  return text.length <= cap ? { text, dropped: 0 } : { text: text.slice(0, cap), dropped: text.length - cap };
+}
+
+/** The child's last assistant message, cut to `cap` characters with a marker saying how much is left. */
+export function cappedReply(message: ChatMessage | undefined, cap: number = CHILD_REPLY_CAP): string | null {
+  const cut = cutReply(message, cap);
+  if (!cut) return null;
+  return cut.dropped === 0 ? cut.text : `${cut.text}\n[... ${cut.dropped} more characters; session_read for the rest]`;
 }
 
 /**
@@ -31,7 +43,7 @@ export function cappedReply(message: ChatMessage | undefined, cap: number = CHIL
  * the same footing frameRelay gives a relayed message.
  */
 export function childReplyBlock(child: ChatSession, details: ChildReportDetails): string {
-  const last = [...child.messages].reverse().find(message => message.role === 'assistant');
+  const last = lastAssistantMessage(child);
   const lines: string[] = [];
   const where = [
     details.branch ? `branch ${details.branch}` : '',

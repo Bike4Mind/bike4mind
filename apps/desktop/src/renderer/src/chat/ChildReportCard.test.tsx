@@ -86,6 +86,13 @@ describe('ChildReportCard', () => {
     expect(host?.textContent).not.toContain('session_read');
   });
 
+  it('says the reply was cut short only when it was', () => {
+    render({ ...REPORT, replyTruncated: true });
+    act(() => byTestId('child-report-expand-btn')?.click());
+    expect(byTestId('child-report-truncated')).not.toBeNull();
+    expect(byTestId('child-report-reply')?.textContent).not.toContain('session_read');
+  });
+
   it('expands to the reply as plain text, with no markup injected', () => {
     render(REPORT);
     const toggle = byTestId('child-report-expand-btn');

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { ChatMessage, ChatSession } from '@shared/chat';
-import { CHILD_REPLY_CAP, cappedReply, childReplyBlock, childReportDetails } from './childReport';
+import { CHILD_REPLY_CAP, cappedReply, childReplyBlock, childReportDetails, cutReply } from './childReport';
 
 function assistant(content: string, extra: Partial<ChatMessage> = {}): ChatMessage {
   return { id: 'a1', role: 'assistant', content, createdAt: '2026-01-01T00:01:00.000Z', ...extra };
@@ -21,6 +21,17 @@ function child(messages: ChatMessage[], project?: ChatSession['project']): ChatS
     ...(project ? { project } : {}),
   } as ChatSession;
 }
+
+describe('cutReply', () => {
+  it('returns the plain text with nothing dropped under the cap', () => {
+    expect(cutReply(assistant('done'))).toEqual({ text: 'done', dropped: 0 });
+  });
+
+  it('cuts at the cap without a marker and counts what was dropped', () => {
+    const cut = cutReply(assistant('x'.repeat(CHILD_REPLY_CAP + 7)));
+    expect(cut).toEqual({ text: 'x'.repeat(CHILD_REPLY_CAP), dropped: 7 });
+  });
+});
 
 describe('cappedReply', () => {
   it('returns null with no message or no text', () => {

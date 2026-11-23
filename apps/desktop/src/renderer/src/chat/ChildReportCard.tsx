@@ -90,6 +90,11 @@ export function ChildReportCard({ message, report }: { message: ChatMessage; rep
           >
             <LinkifiedText text={report.reply} />
           </Typography>
+          {report.replyTruncated && (
+            <Typography level="body-xs" textColor="text.tertiary" sx={{ mt: 0.5 }} data-testid="child-report-truncated">
+              Cut short. Open the session for the rest.
+            </Typography>
+          )}
         </Sheet>
       )}
     </Sheet>

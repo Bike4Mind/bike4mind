@@ -580,7 +580,12 @@ export function ChatShell({
   const artifactsInSession = useMemo(() => sessionArtifacts(conversation.messages), [conversation.messages]);
   const reportedChildIds = useMemo(
     () =>
-      new Set(conversation.messages.flatMap(message => (message.childReport ? [message.childReport.sessionId] : []))),
+      new Set(
+        conversation.messages.flatMap(message => {
+          const id = message.reportedChildId ?? message.childReport?.sessionId;
+          return id ? [id] : [];
+        })
+      ),
     [conversation.messages]
   );
   const openSessionArtifact = useCallback(
