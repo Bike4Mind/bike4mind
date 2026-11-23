@@ -6218,9 +6218,10 @@ export class ChatService {
           : { kind: 'local' };
 
       const named = suggestion.derivedTitle && title === suggestion.title ? undefined : title;
-      const outcome = await this.spawnSession(parent, prompt, named, placement, async () => {
+      const outcome = await this.spawnSession(parent, prompt, named, placement, async message => {
         await markedStarted;
-        await this.reopenSuggestion(sessionId, suggestionId);
+        // An automatic start already told the model it started, so the failure has to reach it too.
+        await this.reopenSuggestion(sessionId, suggestionId, auto ? message : undefined);
       });
       if (!outcome.ok) return { ok: false, error: outcome.message };
 
@@ -6313,12 +6314,14 @@ export class ChatService {
   }
 
   /** Put a card whose session could not start back as it was, as the user edited it, to try again. */
-  private async reopenSuggestion(sessionId: string, suggestionId: string): Promise<void> {
+  private async reopenSuggestion(sessionId: string, suggestionId: string, autoStartError?: string): Promise<void> {
     const stored = await this.deps.store.changeSpawnSuggestions(sessionId, current =>
       current.map(entry => {
         if (entry.id !== suggestionId || entry.status !== 'started') return entry;
         const { started: _started, unreported: _unreported, ...rest } = entry;
-        return { ...rest, status: 'pending' };
+        return autoStartError
+          ? { ...rest, status: 'pending', autoStartError, unreported: true }
+          : { ...rest, status: 'pending' };
       })
     );
     if (stored) this.emitSuggestions(sessionId, stored);
@@ -10323,6 +10326,12 @@ export const RUN_HERE_PREAMBLE =
 /** The note the model gets about one suggestion the user acted on. See reportSuggestionOutcomes. */
 export function describeSuggestionOutcome(suggestion: ChatSpawnSuggestion): string {
   const name = `suggestion ${suggestion.id} ("${suggestion.title}")`;
+  if (suggestion.status === 'pending' && suggestion.autoStartError) {
+    return (
+      `The automatic start of ${name} failed after you were told it started: ${suggestion.autoStartError} ` +
+      'Nothing is running for it. It is back on the card for the user to start or dismiss; tell them.'
+    );
+  }
   const started = suggestion.started;
   if (suggestion.status !== 'started' || !started) {
     return `The user dismissed ${name}. Nothing was started; do not suggest it again unless they ask.`;
