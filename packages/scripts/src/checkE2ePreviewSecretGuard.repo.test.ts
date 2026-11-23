@@ -123,7 +123,7 @@ describe('e2e skip rendering', () => {
     expect(contents).toContain('E2E_STATE: ${{ steps.results.outputs.state }}');
   });
 
-  it('renders the PR comment as Skipped rather than Passed', () => {
+  it('preview reporter uses the shared stateFor and the dispatch receiver', () => {
     const contents = read('e2e-on-label.yml');
     expect(contents).toContain("workflow_id: 'e2e-core.yml', ref: 'main'");
     expect(read('e2e-core.yml')).toContain('OUTCOME: ${{ needs.preview.outputs.outcome }}');

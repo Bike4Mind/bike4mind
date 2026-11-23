@@ -104,7 +104,6 @@ jobs:
     secrets: inherit
     with:
       pr_number: ${{ needs.prepare-preview.outputs.pr_number }}
-      checkout_ref: ${{ github.sha }}
       preview_head_sha: ${{ needs.prepare-preview.outputs.head_sha }}
       preview_deploy_id: ${{ needs.prepare-preview.outputs.deploy_id }}
       pr_eligible_only: true
@@ -168,6 +167,7 @@ jobs:
       suite_name:         'Core'
       artifact_suffix:    'core'
       timeout_minutes:    60
+      execution_timeout_minutes: 28
       stamp_promotable:   ${{ inputs.pr_number == '' }}
       wait_for_deploy:    ${{ inputs.pr_number == '' }}
       show_credits:       false

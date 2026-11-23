@@ -42,7 +42,9 @@ a passing result. HTTP health alone does not establish revision identity.
 All installs, selector code, specs, configuration and reporting execute from the
 trusted main dispatch commit. PR refs are fetched only as Git objects for the
 path diff; they are never checked out or executed. New or modified PR specs are
-therefore not executed until they reach main. Selection failures widen to the
+therefore not executed until they reach main. The app under test is the PR's deployed head while
+specs come from main, so a PR behind main can fail main's newer specs; rebase
+and redeploy before reading a red result. Selection failures widen to the
 full PR-eligible configuration from main.
 
 The preview job has a 45-minute cap, a 15-minute Playwright timeout and a

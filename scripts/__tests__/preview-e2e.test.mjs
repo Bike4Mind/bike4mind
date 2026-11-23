@@ -2,13 +2,14 @@ import { test } from 'vitest';
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 import { execFileSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import { stateFor } from '../e2e-outcome.mjs';
 
 const require = createRequire(import.meta.url);
 const { prepare, report, verify } = require('../../.github/scripts/preview-e2e.cjs');
 const root = new URL('../../', import.meta.url);
 const sha = 'a'.repeat(40);
+const movedHead = { head: 'c'.repeat(40), description: `Preview deployed at ${'c'.repeat(7)}`, deployedSha: 'c'.repeat(40) };
 function fixture({ eventName = 'workflow_dispatch', ref = 'refs/heads/main', labels = ['preview-deployed'], state = 'success',
   creator = 'bike4mind-release-bot[bot]', head = sha, statusId = 42, mergeable = true,
   description = `Preview deployed at ${sha.slice(0, 7)}`, deployedSha = sha, kind = 'fresh', recordAuthor = creator } = {}) {
@@ -63,7 +64,7 @@ test('dispatch fails closed on stale, missing or untrusted deployment evidence',
       { eventName: 'status' }, { eventName: 'pull_request' }, { ref: 'refs/heads/feature' },
       { description: 'Preview is 1 commits behind (running aaaaaaa)' }, { description: '' },
       { kind: 'deploying' }, { deployedSha: 'c'.repeat(40) }, { recordAuthor: 'someone' },
-      { state: 'pending' }, { creator: 'github-actions[bot]' }, { head: 'c'.repeat(40) }]) {
+      { state: 'pending' }, { creator: 'attacker', recordAuthor: 'bike4mind-release-bot[bot]' }]) {
       const f = fixture(options);
       await prepare(f);
       assert.equal(f.outputs.ready, undefined, JSON.stringify(options));
@@ -76,7 +77,7 @@ test('execution revalidates the same full deployment evidence and status id', as
   try {
     Object.assign(process.env, { PR_NUMBER: '1', HEAD_SHA: sha, DEPLOY_ID: '42' });
     await verify(fixture());
-    for (const options of [{ statusId: 43 }, { head: 'c'.repeat(40) }, { deployedSha: 'c'.repeat(40) },
+    for (const options of [{ statusId: 43 }, movedHead, { deployedSha: 'c'.repeat(40) },
       { description: 'Preview is 1 commits behind (running aaaaaaa)' }, { kind: 'deploying' }]) {
       await assert.rejects(verify(fixture(options)), /no tests started/);
     }
@@ -94,7 +95,7 @@ test('report fallback never turns missing reusable outputs into a pass, and supp
       assert.match(f.writes[0].body, new RegExp(expected));
       assert.notEqual(f.writes[1].state, 'success');
     }
-    for (const options of [{ head: 'c'.repeat(40) }, { statusId: 43 }, { state: 'pending' }, { labels: [] }]) {
+    for (const options of [movedHead, { statusId: 43 }, { state: 'pending' }, { labels: [] }]) {
       const f = fixture(options);
       await report(f);
       assert.deepEqual(f.writes, []);
@@ -125,8 +126,8 @@ test('preview dispatch executes trusted main only, fetches diff data and preserv
   assert.match(core, /timeout_minutes: 45/);
   assert.match(core, /global_timeout_minutes: 15/);
   assert.match(core, /JOB_RESULT: \$\{\{ needs.preview.result \}\}/);
-  assert.match(core, /checkout_ref: \$\{\{ github.sha \}\}/);
-  assert.equal([...core.matchAll(/ref: \$\{\{ github.sha \}\}/g)].length, 4);
+  assert.doesNotMatch(core + read('e2e-run.yml'), new RegExp('checkout' + '_ref'));
+  assert.equal([...core.matchAll(/ref: \$\{\{ github.sha \}\}/g)].length, 3);
   assert.match(core, /git fetch --no-tags origin "\$E2E_BASE_SHA" "\$E2E_HEAD_SHA"/);
   assert.match(core, /pnpm --filter @bike4mind\/client exec tsx e2e\/select-projects.ts/);
   assert.doesNotMatch(core, /refs\/pull\/|ref: .*head_sha|ref: .*base_sha|\n\s+status:|\n\s+pull_request:|workflow_call:/);
@@ -134,9 +135,10 @@ test('preview dispatch executes trusted main only, fetches diff data and preserv
   assert.match(core, /core:\n\s+if: github.event_name == 'workflow_dispatch' && inputs.pr_number == ''/);
   assert.match(core, /playwright_args:\s+'--project=unauthenticated --project=notebook --project=prompts'/);
   assert.match(core, /preview_head_sha: \$\{\{ needs.prepare-preview.outputs.head_sha \}\}/);
-  assert.match(read('e2e-run.yml'), /HEAD_SHA: \$\{\{ inputs.preview_head_sha \|\| inputs.checkout_ref \}\}/);
+  assert.match(read('e2e-run.yml'), /HEAD_SHA: \$\{\{ inputs.preview_head_sha \}\}/);
   assert.doesNotMatch(core + read('e2e-run.yml'), /git rev-parse HEAD\^2/);
   assert.match(core, /execution_timeout_minutes: 17/);
+  assert.match(core, /timeout_minutes: {4}60\n\s+execution_timeout_minutes: 28/);
   assert.match(read('e2e-run.yml'), /timeout-minutes: \$\{\{ inputs.execution_timeout_minutes \}\}/);
   assert.match(core, /stamp_promotable: false/);
   assert.match(core, /preview:\n\s+needs: \[prepare-preview, select-preview\]\n\s+if: always\(\) && !cancelled\(\)/);
@@ -144,10 +146,32 @@ test('preview dispatch executes trusted main only, fetches diff data and preserv
   assert.doesNotMatch(read('e2e-on-label.yml'), /pull_request:|types: \[labeled\]/);
   assert.match(read('e2e-on-label.yml'), /workflow_dispatch:/);
   assert.match(read('e2e-on-label.yml'), /workflow_id: 'e2e-core.yml', ref: 'main'/);
-  assert.match(read('e2e-run.yml'), /inputs.pr_number != '' && github.sha \|\| inputs.checkout_ref \|\| github.sha/);
+  assert.match(read('e2e-run.yml'), /uses: actions\/checkout@[^\n]+\n\s+with:\n\s+ref: \$\{\{ github.sha \}\}/);
   assert.match(read('e2e-run.yml'), /TRUSTED_PREVIEW:.*github.ref == 'refs\/heads\/main'.*inputs.preview_deploy_id != ''.*inputs.preview_head_sha != ''/);
   assert.match(read('e2e-run.yml'), /\.verify\(\{ github, context \}\)/);
   assert.match(read('e2e-manual.yml'), /schedule:/);
   assert.match(read('e2e-manual.yml'), /""\|"All tests"\)\s+ARGS=""/);
-  assert.match(read('e2e-manual.yml'), /global_timeout_minutes: 50\n\s+execution_timeout_minutes: 52/);
+  assert.match(read('e2e-manual.yml'), /timeout_minutes: {4}85\n\s+global_timeout_minutes: 50\n\s+execution_timeout_minutes: 52/);
+});
+
+test('no e2e workflow checkout ref can come from inputs or PR refs', () => {
+  const dir = new URL('.github/workflows/', root);
+  const files = readdirSync(dir).filter(name => /^e2e.*\.yml$/.test(name));
+  let seen = 0;
+  for (const name of files) {
+    const lines = readFileSync(new URL(name, dir), 'utf8').split('\n');
+    lines.forEach((line, index) => {
+      if (!/uses: actions\/checkout@/.test(line)) return;
+      for (const next of lines.slice(index + 1)) {
+        if (/^\s*-\s/.test(next) && !/^\s+- uses/.test(next)) break;
+        const ref = next.match(/^\s+ref:\s*(.+)$/)?.[1];
+        if (ref === undefined) continue;
+        seen += 1;
+        assert.equal(ref.trim(), '${{ github.sha }}', `${name}: ${ref}`);
+        assert.doesNotMatch(ref, /inputs\.|head|pull|refs\/pull/, `${name}: ${ref}`);
+        break;
+      }
+    });
+  }
+  assert.ok(seen >= 4);
 });

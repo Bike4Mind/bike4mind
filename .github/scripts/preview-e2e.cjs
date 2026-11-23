@@ -70,7 +70,7 @@ async function report({ github, context, core }) {
   const outcome = result === 'cancelled' ? 'cancelled' :
     (process.env.OUTCOME || (result === 'failure' ? 'setup_failed' : 'not_run'));
   const runUrl = `${process.env.GITHUB_SERVER_URL}/${process.env.GITHUB_REPOSITORY}/actions/runs/${process.env.GITHUB_RUN_ID}`;
-  const body = `<!-- preview-e2e -->\n**Advisory preview E2E: ${outcome}**\n\nHead: \`${sha}\`\n\nProjects: ${process.env.PROJECTS || 'Full PR-eligible set (selector fallback)'}\n\n[Workflow run](${runUrl})\n\nThis is not a required check.`;
+  const body = `<!-- preview-e2e -->\n**Advisory preview E2E: ${outcome}**\n\nHead: \`${sha}\`\n\nProjects: ${process.env.PROJECTS || 'Full PR-eligible set (selector fallback)'}\n\n[Workflow run](${runUrl})\n\nThis is not a required check. Specs run from main; if this PR is behind main, rebase and redeploy before reading a failure.`;
   const comments = await github.paginate(github.rest.issues.listComments, {
     ...context.repo, issue_number: number, per_page: 100,
   });
