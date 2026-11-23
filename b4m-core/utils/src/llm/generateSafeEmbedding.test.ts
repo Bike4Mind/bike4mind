@@ -33,9 +33,13 @@ const strictModel = (countTokens: (text: string) => Promise<number>) => {
   return { model, embedded };
 };
 
-/** Deterministic CJK text: well under 3.5 chars per token, so the character estimate undercounts it. */
+/**
+ * Deterministic CJK text, well under 3.5 chars per token, so the character estimate undercounts it.
+ * Spaced into short words like real markup: one unbroken run is a single BPE pre-token, which tiktoken
+ * encodes in superlinear time.
+ */
 const denseText = (length: number): string =>
-  Array.from({ length }, (_, i) => String.fromCharCode(0x4e00 + ((i * 7919) % 20000))).join('');
+  Array.from({ length }, (_, i) => (i % 8 === 7 ? ' ' : String.fromCharCode(0x4e00 + ((i * 7919) % 20000)))).join('');
 
 describe('generateSafeEmbedding', () => {
   it('splits text the character estimate undercounts so every piece fits the provider limit', async () => {
