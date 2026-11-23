@@ -529,6 +529,10 @@ export const operations = {
     method: 'PUT',
     path: '/api/v1/briefs/schedule',
   },
+  raiseCompletionRunBudget: {
+    method: 'POST',
+    path: '/api/v1/completion-runs/{runId}/budget',
+  },
   registerPushToken: {
     method: 'POST',
     path: '/api/v1/push-tokens',
