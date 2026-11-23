@@ -245,6 +245,14 @@ export class PrMonitor {
     return this.state(sessionId, binding);
   }
 
+  /** Inspect a selected agent without changing the window's conversation watch. */
+  async getState(sessionId: string): Promise<PrBarState | null> {
+    const binding = await this.deps.store.get(sessionId);
+    if (!binding || binding.dismissed) return null;
+    if (this.wantsRead(sessionId, binding)) void this.read(sessionId);
+    return this.state(sessionId, binding);
+  }
+
   /** A window closed. */
   unwatch(viewer: number): void {
     const previous = this.onScreen.get(viewer);

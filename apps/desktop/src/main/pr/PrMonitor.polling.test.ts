@@ -76,6 +76,24 @@ function setup(initial = snapshot({ checks: [check('Build', 'pending')] }), stor
 }
 
 describe('PrMonitor polling', () => {
+  it('reads a selected agent without retargeting the root watch or looking up unknown sessions', async () => {
+    const { store, fake, clock, monitor } = setup();
+    await store.set(SESSION, { ...REF, source: 'shell', boundAt: '' });
+    await monitor.watch(1, SESSION);
+    await settle();
+    expect(await monitor.getState('unknown')).toBeNull();
+    await store.set('agent', { ...REF, number: 612, source: 'shell', boundAt: '' });
+    expect((await monitor.getState('agent'))?.sessionId).toBe('agent');
+    await settle();
+    expect(clock.delays()).toEqual([POLL_MS.onScreenActive]);
+    expect(fake.calls).toEqual(['snapshot', 'snapshot']);
+    await monitor.watch(1, null);
+    await settle();
+    expect(clock.delays()).toEqual([POLL_MS.openedActive]);
+    await store.set('dismissed', { ...REF, source: 'shell', boundAt: '', dismissed: true });
+    expect(await monitor.getState('dismissed')).toBeNull();
+    expect(fake.calls).toHaveLength(2);
+  });
   it('does no GitHub work at start, and arms only PRs with automation on', async () => {
     const { store, fake, clock, monitor } = setup();
     await store.set('armed', { ...REF, source: 'shell', boundAt: '', autoArchive: true, lastState: 'OPEN' });
