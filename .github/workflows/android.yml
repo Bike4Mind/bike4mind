@@ -39,7 +39,7 @@ jobs:
           java-version: '21'
 
       # Validates the committed wrapper jar's checksum and caches Gradle's dependency and build caches.
-      - uses: gradle/actions/setup-gradle@v6
+      - uses: gradle/actions/setup-gradle@8da46b539cd8fe6ab27ca75128919a18d757604c # v6
 
       - name: Test
         run: make test
