@@ -71,6 +71,28 @@ describe('organization role lists', () => {
   });
 });
 
+describe('core tutorial personal-data policy', () => {
+  it("deletes the person's own tutorial progress", () => {
+    expect(DATA_HOLDER_REGISTRY.CoreTutorialProgress).toEqual({
+      kind: 'holder',
+      references: [{ path: 'userId', matchBy: 'userId', action: 'deleteDocument' }],
+    });
+  });
+  it('keeps admin-written tutorial content and anonymizes its author', () => {
+    const authorPaths = {
+      CoreTutorialDraft: ['capturedBy', 'updatedBy'],
+      CoreTutorialOverride: ['updatedBy'],
+      CoreTutorialOverrideChange: ['actorId'],
+    };
+    for (const [model, paths] of Object.entries(authorPaths)) {
+      expect(DATA_HOLDER_REGISTRY[model], model).toEqual({
+        kind: 'holder',
+        references: paths.map(path => ({ path, matchBy: 'userId', action: 'anonymize' })),
+      });
+    }
+  });
+});
+
 describe('findUnclassifiedModels', () => {
   it('returns the names the registry does not classify', () => {
     expect(findUnclassifiedModels(['User', 'NotARealModel'])).toEqual(['NotARealModel']);

@@ -1,8 +1,5 @@
 import { describe, expect, it } from 'vitest';
 import { mongoose } from '@bike4mind/database';
-// Registered outside the `@bike4mind/database` barrel, so they register only when imported.
-import '@bike4mind/server-utils/models/Subscription';
-import '@bike4mind/server-utils/models/UserSubscription';
 import { DATA_HOLDER_REGISTRY, assertContributedRegistryValid, findUnclassifiedModels } from './registry';
 import {
   listSchemaLeaves,

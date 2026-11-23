@@ -1,3 +1,6 @@
+// Registered outside the `@bike4mind/database` barrel; importing them here means every walk of the
+// registry can load them, whatever else the process has imported.
+import '@bike4mind/server-utils/tutorials/coreModels';
 import type { DataHolderRegistry } from '../types';
 import { SAFETY_INCIDENT } from './retention';
 
@@ -56,6 +59,27 @@ export const contentHolders = {
     references: [{ path: 'userId', matchBy: 'userId', action: 'deleteDocument' }],
   },
   BriefcasePrompt: {
+    kind: 'holder',
+    references: [{ path: 'userId', matchBy: 'userId', action: 'deleteDocument' }],
+  },
+  // Drafts, overrides and their change log are platform tutorial content an admin wrote, so they
+  // stay with the author cleared.
+  CoreTutorialDraft: {
+    kind: 'holder',
+    references: [
+      { path: 'capturedBy', matchBy: 'userId', action: 'anonymize' },
+      { path: 'updatedBy', matchBy: 'userId', action: 'anonymize' },
+    ],
+  },
+  CoreTutorialOverride: {
+    kind: 'holder',
+    references: [{ path: 'updatedBy', matchBy: 'userId', action: 'anonymize' }],
+  },
+  CoreTutorialOverrideChange: {
+    kind: 'holder',
+    references: [{ path: 'actorId', matchBy: 'userId', action: 'anonymize' }],
+  },
+  CoreTutorialProgress: {
     kind: 'holder',
     references: [{ path: 'userId', matchBy: 'userId', action: 'deleteDocument' }],
   },

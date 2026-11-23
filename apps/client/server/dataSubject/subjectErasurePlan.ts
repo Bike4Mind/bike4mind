@@ -1,8 +1,5 @@
 import type { AdminErasureCollection } from '@bike4mind/common';
 import type { mongoose } from '@bike4mind/database';
-// The walk reads every registry model; these register outside the `@bike4mind/database` barrel.
-import '@bike4mind/server-utils/models/Subscription';
-import '@bike4mind/server-utils/models/UserSubscription';
 import { DATA_HOLDER_REGISTRY } from './registry';
 import { valuesAt } from './documentPaths';
 import {
