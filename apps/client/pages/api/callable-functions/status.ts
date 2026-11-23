@@ -1,3 +1,4 @@
+import { UnauthorizedError } from '@bike4mind/utils';
 import { baseApi } from '@server/middlewares/baseApi';
 import { perUserRateLimit } from '@server/middlewares/perUserRateLimit';
 import { resolveCallableFunctionsEnabled } from '@bike4mind/server-utils/callableFunctions/access';
@@ -8,7 +9,7 @@ export type CallableFunctionsStatus = { enabled: boolean };
 const handler = baseApi({ auth: 'jwtOnly' }).get(
   perUserRateLimit('GET /api/callable-functions/status'),
   async (req, res) => {
-    if (!req.user) return res.status(401).json({ error: 'Unauthorized' });
+    if (!req.user) throw new UnauthorizedError('Sign in to use callable functions.');
     const status: CallableFunctionsStatus = { enabled: await resolveCallableFunctionsEnabled(req.user) };
     res.json(status);
   }
