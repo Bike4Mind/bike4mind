@@ -82,7 +82,17 @@ describe('agent counts across surfaces', () => {
       1
     );
 
-    expect(stage).toEqual({ total: 10, 'needs-you': 2, working: 1, done: 5, failed: 1, stopped: 1, idle: 1 });
+    expect(stage).toEqual({
+      total: 10,
+      'needs-you': 2,
+      working: 1,
+      waiting: 0,
+      done: 5,
+      failed: 1,
+      paused: 0,
+      stopped: 1,
+      idle: 1,
+    });
     expect(toggle).toEqual(stage);
     expect(watched).toEqual(stage);
     expect(tavern).toBe('10 agents: 2 need you, 1 working, 1 failed, 1 stopped, 1 idle, 5 done');
