@@ -72,7 +72,7 @@ const NO_CONTRACT_ERROR = `${FUNCTION_CONTRACT_GLOBAL} is not defined`;
 
 type Described =
   | { status: 'reading' }
-  | { status: 'ready'; contract: FunctionContract }
+  | { status: 'ready'; contract: FunctionContract; code: string }
   | { status: 'invalid'; problems: FunctionContractProblem[] }
   | { status: 'failed'; error: string; output: string };
 
@@ -628,7 +628,7 @@ const PythonFunctionPanel: React.FC<PythonFunctionPanelProps> = ({ code, package
           return;
         }
         setValues(previous => initialValues(parsed.contract.inputs, previous));
-        setDescribed({ status: 'ready', contract: parsed.contract });
+        setDescribed({ status: 'ready', contract: parsed.contract, code: source });
       } catch (error) {
         if (request !== describeRequest.current) return;
         // The sandbox was busy or failed to start; read again once it is free.
@@ -716,7 +716,7 @@ const PythonFunctionPanel: React.FC<PythonFunctionPanelProps> = ({ code, package
               <Typography level="body-sm">{contract.description}</Typography>
             </Box>
             {/* The contract belongs to the code it was read from; saving waits until the new code is read. */}
-            {save && describedCode.current === code && (
+            {save && described.code === code && (
               <>
                 <FunctionSaveSection save={save} contract={contract} />
                 <Divider />

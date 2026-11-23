@@ -77,10 +77,10 @@ const renderPanel = (disabled = false, save: PythonFunctionSave | null = null) =
       <PythonFunctionPanel code={CODE} packages={[]} disabled={disabled} save={save} />
     </CssVarsProvider>
   );
-  const rerender = (nextDisabled: boolean) =>
+  const rerender = (nextDisabled: boolean, nextCode = CODE) =>
     view.rerender(
       <CssVarsProvider theme={appTheme}>
-        <PythonFunctionPanel code={CODE} packages={[]} disabled={nextDisabled} save={save} />
+        <PythonFunctionPanel code={nextCode} packages={[]} disabled={nextDisabled} save={save} />
       </CssVarsProvider>
     );
   return { rerender };
@@ -423,7 +423,10 @@ describe('PythonFunctionPanel save controls', () => {
     callFunction.mockResolvedValueOnce(described());
     const { rerender } = renderPanel(false, save);
     await screen.findByTestId('python-function-contract-inputs', {}, { timeout: 2000 });
-    return { rerender: () => rerender(false) };
+    return {
+      rerender: () => rerender(false),
+      rerenderCode: (code: string, disabled = false) => rerender(disabled, code),
+    };
   };
 
   const follows = (later: HTMLElement, earlier: HTMLElement) =>
@@ -478,6 +481,22 @@ describe('PythonFunctionPanel save controls', () => {
     expect(follows(result, screen.getByTestId('python-function-call-btn'))).toBe(true);
     expect(follows(result, save)).toBe(true);
   });
+
+  it.each([false, true])(
+    'hides the save controls once the code changes, until the new code is read (disabled: %s)',
+    async disabled => {
+      const { rerenderCode } = await renderReady(TARGET);
+      expect(screen.getByTestId('python-function-save-btn')).toBeTruthy();
+
+      callFunction.mockResolvedValueOnce(described());
+      rerenderCode(`${CODE}\n# edited`, disabled);
+
+      expect(screen.queryByTestId('python-function-save-btn')).toBeNull();
+      if (!disabled) {
+        await waitFor(() => expect(screen.getByTestId('python-function-save-btn')).toBeTruthy(), { timeout: 2000 });
+      }
+    }
+  );
 
   it('Make this a tool opens the save dialog with the artifact, the version shown, and the contract read', async () => {
     await renderReady(TARGET);
