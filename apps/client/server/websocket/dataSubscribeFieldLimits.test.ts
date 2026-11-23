@@ -43,6 +43,7 @@ describe('resolveFieldLimits', () => {
       apiKeyId: false,
       oauthClientId: false,
       pendingActionResolution: false,
+      lakeSaveCount: false,
     });
   });
 
@@ -187,6 +188,7 @@ describe('resolveFieldLimits', () => {
       apiKeyId: false,
       oauthClientId: false,
       pendingActionResolution: false,
+      lakeSaveCount: false,
     });
   });
 
