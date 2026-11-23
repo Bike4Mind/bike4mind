@@ -628,6 +628,7 @@ function addChange(
 /**
  * A caller of an input may now be refused when the accepted values narrow; a caller of an output may now receive a
  * value it was told it would not when the returned values widen.
+ * Removals and type changes skip this rule: both are breaking on either side by rule of thumb, not by variance.
  */
 function breaksCallers(ctx: DiffContext, narrows: boolean): boolean {
   return ctx.side === 'inputs' ? narrows : !narrows;
@@ -671,7 +672,8 @@ function numberBound(field: FunctionNumberField, direction: 1 | -1): NumberBound
     (best, next) => (tighterBound(next, best, direction) ? next : best),
     null
   );
-  if (bound && field.type === 'integer') {
+  // Past 2^53 whole numbers are not exact, so `Math.floor(v) + 1 === v`; there the exclusive tie-break decides.
+  if (bound && field.type === 'integer' && Math.abs(bound.value) < Number.MAX_SAFE_INTEGER) {
     bound = { value: direction === 1 ? lowestWhole(bound) : highestWhole(bound), exclusive: false };
   }
   return bound;
@@ -683,8 +685,12 @@ function boundText(bound: NumberBound | null, direction: 1 | -1): string {
   return `${bound.exclusive ? 'less than' : 'at most'} ${bound.value}`;
 }
 
+// Case stays significant: `kN` and `KN` are different units.
+const unitOf = (field: FunctionNumberField) => field.unit.replace(/\s+/g, ' ').trim();
+
 function diffNumberField(ctx: DiffContext, prev: FunctionNumberField, next: FunctionNumberField, field: string) {
-  if (prev.unit !== next.unit) addChange(ctx, field, 'unit', 'unit_changed', true, prev.unit, next.unit);
+  const [unitBefore, unitAfter] = [unitOf(prev), unitOf(next)];
+  if (unitBefore !== unitAfter) addChange(ctx, field, 'unit', 'unit_changed', true, unitBefore, unitAfter);
   for (const [direction, keyword] of [
     [1, 'minimum'],
     [-1, 'maximum'],
@@ -715,10 +721,10 @@ function diffEnum(
     else addChange(ctx, field, 'enum', 'enum_removed', breaksCallers(ctx, false), prev?.join(', '));
     return;
   }
-  // A removed value is breaking on either side by decision: callers written against a listed value are not
-  // expected to check whether it can still occur.
   for (const value of prev) {
-    if (!next.includes(value)) addChange(ctx, field, 'enum', 'enum_value_removed', true, String(value));
+    if (!next.includes(value)) {
+      addChange(ctx, field, 'enum', 'enum_value_removed', breaksCallers(ctx, true), String(value));
+    }
   }
   for (const value of next) {
     if (!prev.includes(value)) {
@@ -742,6 +748,8 @@ function diffCount(
   if (was === now) return;
   addRangeChange(ctx, field, keyword, direction * (now - was) > 0, text(before), text(after));
 }
+
+const plural = (count: number, word: string) => `${count} ${word}${count === 1 ? '' : 's'}`;
 
 const defaultOf = (field: FunctionField): unknown =>
   field.type === 'array' || field.type === 'object' ? undefined : field.default;
@@ -781,15 +789,23 @@ function diffField(ctx: DiffContext, prev: FunctionField, next: FunctionField, f
         prev.maxLength ?? max,
         nextString.maxLength ?? max,
         -1,
-        count => `at most ${count} characters`
+        count => `at most ${plural(count ?? 0, 'character')}`
       );
       return;
     }
     case 'array': {
       const nextArray = next as FunctionArrayField;
-      diffCount(ctx, field, 'minItems', prev.minItems, nextArray.minItems, 1, count => `at least ${count ?? 0} items`);
+      diffCount(
+        ctx,
+        field,
+        'minItems',
+        prev.minItems,
+        nextArray.minItems,
+        1,
+        count => `at least ${plural(count ?? 0, 'item')}`
+      );
       diffCount(ctx, field, 'maxItems', prev.maxItems, nextArray.maxItems, -1, count =>
-        count === undefined ? 'any number of items' : `at most ${count} items`
+        count === undefined ? 'any number of items' : `at most ${plural(count, 'item')}`
       );
       diffField(ctx, prev.items, nextArray.items, `${field}[]`);
       return;
@@ -836,9 +852,14 @@ function diffObjectField(ctx: DiffContext, prev: FunctionObjectField, next: Func
 
 /**
  * The changes from `previous` to `next`, split by whether a caller written against `previous` could now be refused
- * or receive a value it was told it would not. A renamed field reads as a removal and an addition.
+ * or receive a value it was told it would not. A renamed field reads as a removal and an addition. Null when either
+ * side does not parse (a stored contract from an older shape, say), so the two cannot be compared.
  */
-export function diffFunctionContracts(previous: FunctionContract, next: FunctionContract): FunctionContractDiff {
+export function diffFunctionContracts(rawPrevious: unknown, rawNext: unknown): FunctionContractDiff | null {
+  const parsedPrevious = parseFunctionContract(rawPrevious);
+  const parsedNext = parseFunctionContract(rawNext);
+  if (!parsedPrevious.ok || !parsedNext.ok) return null;
+  const [previous, next] = [parsedPrevious.contract, parsedNext.contract];
   const diff: FunctionContractDiff = { breaking: [], compatible: [] };
   if (previous.name !== next.name) {
     diff.breaking.push({
@@ -912,9 +933,4 @@ export function describeFunctionContractChange(change: FunctionContractChange): 
   const subject =
     change.side === null ? 'the function' : change.field ? change.side.slice(0, -1) : `the ${change.side}`;
   return { subject, field: change.field, words: changeWords(change) };
-}
-
-export function functionContractChangeSentence(change: FunctionContractChange): string {
-  const { subject, field, words } = describeFunctionContractChange(change);
-  return [subject, field, words].filter(Boolean).join(' ');
 }

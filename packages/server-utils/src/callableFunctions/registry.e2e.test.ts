@@ -425,6 +425,25 @@ describe('repinCallableFunction', () => {
     expect(await stored(view.id)).toEqual(before);
   });
 
+  it('refuses a repin against a stored contract that does not parse (contract_unreadable) and changes nothing', async () => {
+    const view = await save();
+    await CallableFunction.collection.updateOne(
+      { _id: new mongoose.Types.ObjectId(view.id) },
+      { $unset: { 'contract.outputs.properties': '' } }
+    );
+    const before = await stored(view.id);
+    const version = await addVersion('artifact-1', code('# reworked\n'));
+
+    await expect(
+      repinCallableFunction(OWNER, view.id, { expectedVersion: version, contract: contract() })
+    ).rejects.toMatchObject({
+      statusCode: 409,
+      message: 'The saved contract cannot be read; save this version as a new tool.',
+      additionalInfo: { code: 'contract_unreadable' },
+    });
+    expect(await stored(view.id)).toEqual(before);
+  });
+
   it('repins a contract that only adds an optional input and an output', async () => {
     const view = await save();
     const version = await addVersion('artifact-1', code('# extended\n'));

@@ -3,6 +3,7 @@ import {
   CALLABLE_FUNCTION_LIMITS,
   CALLABLE_FUNCTION_SLUG_PATTERN,
   CallableFunctionBreakingChangeError,
+  CallableFunctionContractUnreadableError,
   CallableFunctionSlugConflictError,
   ConflictError,
   NotFoundError,
@@ -217,8 +218,9 @@ export async function repinCallableFunction(
       { code: 'name_changed' }
     );
   }
-  const { breaking } = diffFunctionContracts(current.contract, contract);
-  if (breaking.length > 0) throw new CallableFunctionBreakingChangeError(breaking);
+  const diff = diffFunctionContracts(current.contract, contract);
+  if (!diff) throw new CallableFunctionContractUnreadableError();
+  if (diff.breaking.length > 0) throw new CallableFunctionBreakingChangeError(diff.breaking);
   const repinned = await callableFunctionRepository.repin(id, owner, current.pin.version, {
     pin,
     contract,

@@ -1,11 +1,17 @@
 import { describe, expect, it } from 'vitest';
 import {
+  describeFunctionContractChange,
   diffFunctionContracts,
-  functionContractChangeSentence,
   type FunctionContract,
+  type FunctionContractChange,
   type FunctionContractDiff,
   type FunctionField,
 } from './functionContract';
+
+const sentence = (change: FunctionContractChange) => {
+  const { subject, field, words } = describeFunctionContractChange(change);
+  return [subject, field, words].filter(Boolean).join(' ');
+};
 
 const baseContract = (): FunctionContract => ({
   name: 'beam_check',
@@ -57,7 +63,9 @@ const field = (contract: FunctionContract, side: Side, name: string) =>
 const diffAfter = (mutate: Mutation): FunctionContractDiff => {
   const next = baseContract();
   mutate(next);
-  return diffFunctionContracts(baseContract(), next);
+  const diff = diffFunctionContracts(baseContract(), next);
+  if (!diff) throw new Error('both contracts should parse');
+  return diff;
 };
 
 const summary = (diff: FunctionContractDiff) => ({
@@ -112,7 +120,6 @@ describe('diffFunctionContracts', () => {
     ['an input unit changed', set('inputs', 'load', 'unit', 'kN'), 'unit_changed inputs.load.unit'],
     ['an output unit changed', set('outputs', 'deflection', 'unit', 'mm'), 'unit_changed outputs.deflection.unit'],
     ['an input enum value removed', set('inputs', 'mode', 'enum', ['fast']), 'enum_value_removed inputs.mode.enum'],
-    ['an output enum value removed', set('outputs', 'grade', 'enum', ['A']), 'enum_value_removed outputs.grade.enum'],
     [
       'an input newly required',
       c => {
@@ -275,6 +282,7 @@ describe('diffFunctionContracts', () => {
       ],
       ['an enum removed from an input', set('inputs', 'mode', 'enum', undefined), 'enum_removed inputs.mode.enum'],
       ['an enum added to an output', set('outputs', 'notes', 'enum', ['ok']), 'enum_added outputs.notes.enum'],
+      ['an output enum value removed', set('outputs', 'grade', 'enum', ['A']), 'enum_value_removed outputs.grade.enum'],
     ])('%s is compatible', (_name, mutate, expected) => {
       expect(summary(diffAfter(mutate))).toEqual({ breaking: [], compatible: [expected] });
     });
@@ -294,6 +302,61 @@ describe('diffFunctionContracts', () => {
       expect(summary(diff)).toEqual({ breaking: [], compatible: [] });
     });
 
+    // Removals and type changes are refused by rule of thumb, though the variance rule calls these three compatible.
+    it.each<[string, Mutation, string]>([
+      [
+        'an optional output removed',
+        c => {
+          delete c.outputs.properties.notes;
+        },
+        'removed outputs.notes',
+      ],
+      [
+        'an input changed from integer to number',
+        set('inputs', 'count', 'type', 'number'),
+        'type_changed inputs.count.type',
+      ],
+      [
+        'an output changed from number to integer',
+        set('outputs', 'deflection', 'type', 'integer'),
+        'type_changed outputs.deflection.type',
+      ],
+    ])('%s is breaking on purpose', (_name, mutate, expected) => {
+      expect(summary(diffAfter(mutate))).toEqual({ breaking: [expected], compatible: [] });
+    });
+
+    const withLoad = (load: FunctionField) => {
+      const contract = baseContract();
+      contract.inputs.properties.load = load;
+      return contract;
+    };
+
+    it('reads an integer minimum of 1e20 made exclusive as narrowed', () => {
+      const before = withLoad({ type: 'integer', unit: 'N', minimum: 1e20 });
+      const after = withLoad({ type: 'integer', unit: 'N', exclusiveMinimum: 1e20 });
+      expect(summary(diffFunctionContracts(before, after)!)).toEqual({
+        breaking: ['bounds_narrowed inputs.load.minimum'],
+        compatible: [],
+      });
+    });
+
+    it('collapses whitespace in a unit before comparing but keeps its case', () => {
+      const spaced = withLoad({ type: 'number', unit: 'kN ', exclusiveMinimum: 0 });
+      const plain = withLoad({ type: 'number', unit: 'kN', exclusiveMinimum: 0 });
+      const upper = withLoad({ type: 'number', unit: 'KN', exclusiveMinimum: 0 });
+      expect(diffFunctionContracts(spaced, plain)).toEqual({ breaking: [], compatible: [] });
+      expect(diffFunctionContracts(spaced, upper)?.breaking).toEqual([
+        { path: 'inputs.load.unit', side: 'inputs', field: 'load', kind: 'unit_changed', before: 'kN', after: 'KN' },
+      ]);
+    });
+
+    it('cannot compare a stored contract that does not parse', () => {
+      const stored = baseContract() as unknown as { outputs: Record<string, unknown> };
+      delete stored.outputs.properties;
+      expect(diffFunctionContracts(stored, baseContract())).toBeNull();
+      expect(diffFunctionContracts(baseContract(), stored)).toBeNull();
+    });
+
     it('stops at a type change instead of also listing the old type keywords', () => {
       const diff = diffAfter(c => {
         c.inputs.properties.span = { type: 'string' };
@@ -310,11 +373,23 @@ describe('diffFunctionContracts', () => {
     const unit = diffAfter(set('inputs', 'load', 'unit', 'kN'));
     const bound = diffAfter(set('inputs', 'span', 'minimum', 2));
     const output = diffAfter(set('outputs', 'grade', 'enum', ['A', 'B', 'C']));
-    expect([removed, unit, bound, output].map(diff => functionContractChangeSentence(diff.breaking[0]))).toEqual([
+    expect([removed, unit, bound, output].map(diff => sentence(diff.breaking[0]))).toEqual([
       'output deflection was removed',
       'input load changed unit from N to kN',
       'input span narrowed from at least 1 to at least 2',
       'output grade can now return C',
+    ]);
+  });
+
+  it('says a count of one in the singular', () => {
+    const before = baseContract();
+    before.inputs.properties.tags = { type: 'array', items: { type: 'string' } };
+    const after = baseContract();
+    after.inputs.properties.tags = { type: 'array', minItems: 1, maxItems: 1, items: { type: 'string', maxLength: 1 } };
+    expect(diffFunctionContracts(before, after)?.breaking.map(sentence)).toEqual([
+      'input tags narrowed from at least 0 items to at least 1 item',
+      'input tags narrowed from any number of items to at most 1 item',
+      'input tags[] narrowed from at most 2000 characters to at most 1 character',
     ]);
   });
 });

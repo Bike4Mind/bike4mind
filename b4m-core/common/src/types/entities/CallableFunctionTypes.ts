@@ -195,6 +195,14 @@ export class CallableFunctionBreakingChangeError extends ConflictError {
   }
 }
 
+/** A repin refused because the stored contract does not parse, so it cannot be compared with the new one. */
+export class CallableFunctionContractUnreadableError extends ConflictError {
+  constructor() {
+    super('The saved contract cannot be read; save this version as a new tool.', { code: 'contract_unreadable' });
+    this.name = 'CallableFunctionContractUnreadableError';
+  }
+}
+
 export type CallableFunctionCreateInput = Omit<ICallableFunctionDocument, 'id' | 'createdAt' | 'updatedAt'>;
 
 export interface CallableFunctionRepin {
