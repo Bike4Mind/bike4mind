@@ -38,7 +38,7 @@ import { useSendOTC, useSignupBotFields, useStartOAuthSignIn, useVerifyOTC } fro
 import { formatCountdown, useOtcRateLimit } from '@client/app/hooks/useOtcRateLimit';
 import OtcRateLimitNotice from './OtcRateLimitNotice';
 import OtcNoCodeHint from './OtcNoCodeHint';
-import RedirectProductHint from './RedirectProductHint';
+import RedirectProductHint, { useRedirectProduct } from './RedirectProductHint';
 import SignupHoneypot from './SignupHoneypot';
 import { useAccessToken } from '@client/app/hooks/useAccessToken';
 import { useMfaChallenge } from '@client/app/hooks/useMfaChallenge';
@@ -132,6 +132,7 @@ const MultiStepLogin: React.FC<MultiStepLoginProps> = ({
   const [emailError, setEmailError] = useState<string | null>(null);
   const { mutateAsync: verifyOTC, isPending: isVerifying } = useVerifyOTC();
   const { data: publicConfig, isLoading: isPublicConfigLoading, isPending: isPublicConfigPending } = usePublicConfig();
+  const redirectProduct = useRedirectProduct();
   // Non-null once sign-in is refused for an admin suspension; the stored reason category ('' if unknown).
   const [suspendedCategory, setSuspendedCategory] = useState<string | null>(null);
   const mfaChallenge = useMfaChallenge({
@@ -583,7 +584,7 @@ const MultiStepLogin: React.FC<MultiStepLoginProps> = ({
                   : t('auth.checkYourEmail')}
           </Typography>
 
-          {currentStep === 'email' && <RedirectProductHint mode="signIn" />}
+          {currentStep === 'email' && <RedirectProductHint mode="signIn" item={redirectProduct} />}
 
           {currentStep === 'email' && (
             <Typography
@@ -845,13 +846,20 @@ const MultiStepLogin: React.FC<MultiStepLoginProps> = ({
                     neither: the caller's fallback reads as "registration closed" and flashed the
                     invite/waitlist line before "Register now" on open instances. isPending, not
                     isLoading: while the persisted cache restores, the query is pending but not yet
-                    fetching. The box keeps one line's height (14px at Joy body-md's 1.5 line height). */}
+                    fetching. The box keeps one line's height (14px at Joy body-md's 1.5 line height).
+                    From a product link with registration open, the email above already creates the
+                    account, so the line says so instead of offering /register as a second way in. */}
                 <Box
                   className="register-prompt-container"
                   data-testid="login-register-prompt"
                   sx={{ display: 'flex', justifyContent: 'center', mt: '20px', minHeight: '21px' }}
                 >
-                  {!isPublicConfigPending && (
+                  {!isPublicConfigPending && enableRegister && redirectProduct && (
+                    <Typography data-testid="login-new-here-text" sx={{ color: 'text.tertiary', fontSize: '14px' }}>
+                      {t('auth.newHereEmailCreates')}
+                    </Typography>
+                  )}
+                  {!isPublicConfigPending && !(enableRegister && redirectProduct) && (
                     <Typography sx={{ color: 'text.tertiary', fontSize: '14px' }}>
                       {t('auth.noAccount')}{' '}
                       <Link
