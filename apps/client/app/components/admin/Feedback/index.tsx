@@ -787,6 +787,7 @@ const FeedbackTab: React.FC = () => {
         onStatusChange={handleStatusChange}
         onShowReporterReports={userId => {
           // Every status, so no report the drawer counted is hidden; the list also holds this report and any later ones.
+          // The server drops unverified reports from a userId filter, as the count does.
           showOnly({ userId, statusFilters: toStatusFilters(FEEDBACK_STATUS_ORDER) });
           closeFeedback();
         }}
