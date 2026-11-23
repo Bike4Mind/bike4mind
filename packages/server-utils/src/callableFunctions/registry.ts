@@ -214,7 +214,7 @@ export async function repinCallableFunction(
   );
   if (contract.name !== current.slug) {
     throw new ConflictError(
-      `The function name in the code changed from ${current.slug} to ${contract.name}. Delete this tool and save it again to use the new name.`,
+      `The function name in the code changed from ${current.slug} to ${contract.name}. Save this version as a new tool under the new name.`,
       { code: 'name_changed' }
     );
   }

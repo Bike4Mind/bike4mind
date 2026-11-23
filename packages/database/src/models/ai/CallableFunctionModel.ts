@@ -79,7 +79,7 @@ CallableFunctionSchema.pre('validate', function () {
   if (this.ownerKey !== this.userId) throw new CallableFunctionOwnerError(OWNER_MISMATCH);
 });
 
-// Also serves the owner's list. One artifact may hold several tools, each under its own name.
+// Its owner prefix serves the owner's list. One artifact may hold several tools, each under its own name.
 CallableFunctionSchema.index({ ownerType: 1, ownerKey: 1, slug: 1 }, { unique: true, name: 'callablefn_owner_slug' });
 
 export interface ICallableFunctionModel extends Model<ICallableFunctionDocument & IMongoDocument> {}
