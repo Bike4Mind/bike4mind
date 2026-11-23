@@ -162,15 +162,6 @@ function enumMessage(values: readonly (string | number)[]): string {
   return listed.length > 200 ? `must be one of the ${values.length} allowed values` : `must be one of: ${listed}`;
 }
 
-interface NumberBound {
-  value: number;
-  exclusive: boolean;
-}
-
-// An integer field's bounds are rounded inward to the whole numbers they allow.
-const lowestWhole = ({ value, exclusive }: NumberBound) => (exclusive ? Math.floor(value) + 1 : Math.ceil(value));
-const highestWhole = ({ value, exclusive }: NumberBound) => (exclusive ? Math.ceil(value) - 1 : Math.floor(value));
-
 function refuseUnknownKeys(
   record: Record<string, unknown>,
   allowed: readonly string[],
@@ -653,7 +644,7 @@ function addRangeChange(
   );
 }
 
-function tighterBound(a: NumberBound | null, b: NumberBound | null, direction: 1 | -1): boolean {
+function tighterBound(a: FunctionBound | null, b: FunctionBound | null, direction: 1 | -1): boolean {
   if (a === null) return false;
   if (b === null) return true;
   if (a.value !== b.value) return direction * (a.value - b.value) > 0;
@@ -661,14 +652,14 @@ function tighterBound(a: NumberBound | null, b: NumberBound | null, direction: 1
 }
 
 /** The binding lower (`direction` 1) or upper (-1) bound of a number field; null when it has none. */
-function numberBound(field: FunctionNumberField, direction: 1 | -1): NumberBound | null {
+function numberBound(field: FunctionNumberField, direction: 1 | -1): FunctionBound | null {
   const [inclusive, exclusive] =
     direction === 1 ? [field.minimum, field.exclusiveMinimum] : [field.maximum, field.exclusiveMaximum];
-  const candidates: NumberBound[] = [
+  const candidates: FunctionBound[] = [
     ...(inclusive === undefined ? [] : [{ value: inclusive, exclusive: false }]),
     ...(exclusive === undefined ? [] : [{ value: exclusive, exclusive: true }]),
   ];
-  let bound = candidates.reduce<NumberBound | null>(
+  let bound = candidates.reduce<FunctionBound | null>(
     (best, next) => (tighterBound(next, best, direction) ? next : best),
     null
   );
@@ -679,7 +670,7 @@ function numberBound(field: FunctionNumberField, direction: 1 | -1): NumberBound
   return bound;
 }
 
-function boundText(bound: NumberBound | null, direction: 1 | -1): string {
+function boundText(bound: FunctionBound | null, direction: 1 | -1): string {
   if (bound === null) return direction === 1 ? 'no lower bound' : 'no upper bound';
   if (direction === 1) return `${bound.exclusive ? 'more than' : 'at least'} ${bound.value}`;
   return `${bound.exclusive ? 'less than' : 'at most'} ${bound.value}`;
