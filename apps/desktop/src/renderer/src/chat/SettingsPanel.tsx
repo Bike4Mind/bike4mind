@@ -767,7 +767,7 @@ const GENERAL_GROUPS = [
   {
     id: 'conversations',
     label: 'Conversations & code',
-    entries: ['prompt-suggestions', 'worktree-default', 'autofix-attempts', 'orchestration-policy'],
+    entries: ['prompt-suggestions', 'worktree-default', 'spawn-location', 'autofix-attempts', 'orchestration-policy'],
   },
   { id: 'models', label: 'Models', entries: ['local-context', 'reply-stats', 'curated-list'] },
   { id: 'data', label: 'Data & privacy', entries: ['local-history', 'local-data-export'] },

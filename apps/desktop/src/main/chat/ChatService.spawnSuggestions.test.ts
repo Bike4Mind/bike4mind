@@ -685,7 +685,7 @@ describe('ChatService spawn suggestions', () => {
       expect(started.started).toMatchObject({ placement: 'local', auto: true });
       // Already in the tool result, so no later turn reports it a second time.
       expect(started.unreported).toBeUndefined();
-      expect((await store.list()).some(session => session.origin?.sessionId === parent.id)).toBe(true);
+      expect((await store.list()).some(session => session.origin?.parentSessionId === parent.id)).toBe(true);
     });
 
     it('keeps the card in Ask mode', async () => {
