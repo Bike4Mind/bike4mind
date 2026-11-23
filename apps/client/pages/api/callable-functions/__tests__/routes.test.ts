@@ -12,6 +12,7 @@ import { BadRequestError, CallableFunctionSlugConflictError, ConflictError, NotF
 
 const h = vi.hoisted(() => ({
   enabled: true,
+  noUser: false,
   perUserBuckets: [] as string[],
   validateApiKey: vi.fn(),
   registry: {
@@ -71,7 +72,7 @@ vi.mock('@server/auth/auth', async orig => {
       next: () => void
     ) => {
       if (!req.headers?.authorization) return res.status(401).json({ error: 'Unauthorized' });
-      if (!req.user) req.user = JWT_USER;
+      if (!req.user && !h.noUser) req.user = JWT_USER;
       next();
     },
   };
@@ -141,6 +142,7 @@ const registryCalls = () => Object.values(h.registry).reduce((sum, fn) => sum + 
 
 beforeEach(() => {
   h.enabled = true;
+  h.noUser = false;
   h.validateApiKey.mockReset();
   for (const fn of Object.values(h.registry)) fn.mockReset();
   h.registry.listCallableFunctions.mockResolvedValue([VIEW]);
@@ -164,6 +166,17 @@ describe('session', () => {
       const res = await fire(call, { 'x-api-key': 'b4m_live_0123456789abcdef0123456789abcdef' });
       expect(res._getStatusCode()).toBe(401);
       expect(h.validateApiKey).not.toHaveBeenCalled();
+      expect(registryCalls()).toBe(0);
+    }
+  );
+
+  it.each(ALL.map(call => [call.name, call] as const))(
+    '%s answers 401 and calls no registry function when the session has no user',
+    async (_name, call) => {
+      h.noUser = true;
+      const res = await fire(call);
+      expect(res._getStatusCode()).toBe(401);
+      expect(res._getJSONData()).toMatchObject({ error: 'Sign in to use callable functions.' });
       expect(registryCalls()).toBe(0);
     }
   );
