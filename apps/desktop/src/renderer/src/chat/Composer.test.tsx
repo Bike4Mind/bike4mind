@@ -350,6 +350,72 @@ describe('IME composition', () => {
   });
 });
 
+describe('markdown code in the composer', () => {
+  function pressWith(key: string, init: KeyboardEventInit): void {
+    act(() => {
+      input().dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true, ...init }));
+    });
+  }
+
+  it('breaks the line instead of sending inside an open fenced block', () => {
+    const send = vi.fn();
+    mount({ onSend: send });
+    type('```ts\nconst a = 1');
+    press('Enter');
+
+    expect(send).not.toHaveBeenCalled();
+    expect(input().value).toBe('```ts\nconst a = 1\n');
+  });
+
+  it('closes a freshly opened fence on Enter', () => {
+    const send = vi.fn();
+    mount({ onSend: send });
+    type('```');
+    press('Enter');
+
+    expect(send).not.toHaveBeenCalled();
+    expect(input().value).toBe('```\n\n```');
+  });
+
+  it('sends the raw markdown on Cmd+Enter from inside a block', () => {
+    const send = vi.fn();
+    mount({ onSend: send });
+    type('```\nfoo');
+    pressWith('Enter', { metaKey: true });
+
+    expect(send).toHaveBeenCalledWith('```\nfoo');
+  });
+
+  it('still sends on Enter once the block is closed', () => {
+    const send = vi.fn();
+    mount({ onSend: send });
+    type('```\nfoo\n```');
+    press('Enter');
+
+    expect(send).toHaveBeenCalledWith('```\nfoo\n```');
+  });
+
+  it('shows the way-out hint only while the caret is in a block', () => {
+    mount();
+    type('plain');
+    expect(host?.querySelector('[data-testid="composer-code-hint"]')).toBeNull();
+    type('```\nfoo');
+    expect(host?.querySelector('[data-testid="composer-code-hint"]')).not.toBeNull();
+  });
+
+  it('paints a code background behind an inline span', () => {
+    mount();
+    type('run `ls` now');
+    expect(host?.querySelector('[data-code-kind="inline"]')?.textContent).toBe('`ls`');
+  });
+
+  it('keeps the command menu shut for a slash inside code', () => {
+    mount({ onRunCommand: () => {} });
+    type('```\n/');
+    expect(rows()).toHaveLength(0);
+  });
+});
+
 describe('skills mid-sentence', () => {
   const skills = {
     skills: [
