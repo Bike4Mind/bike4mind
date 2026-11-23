@@ -696,7 +696,7 @@ export function registerChat(
     send(IPC_CHANNELS.chatSessionStatus, event);
     hooks.observeSessionStatus?.(event);
     // Only reached once a turn has run, long after pullRequests below exists.
-    if (event.status === 'done') pullRequests.turnSettled(event.sessionId);
+    if (event.status === 'done' || event.unreadReply) pullRequests.turnSettled(event.sessionId);
   });
 
   // Typed-ahead messages, on their own channel: this is per-session state that outlives any

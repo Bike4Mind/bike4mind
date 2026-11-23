@@ -1315,7 +1315,7 @@ export class ChatService {
   }
 
   childArchiveStatus(session: Pick<ChatSessionSummary, 'id' | 'workerTask'>): 'finished' | 'running' | 'waiting' {
-    const status = this.deps.activity?.statusOf(session.id);
+    const status = this.deps.activity?.runtimeStatusOf(session.id);
     if (status === 'needs-action' || pendingDecisionOf(session.workerTask)) return 'waiting';
     if (
       status === 'processing' ||
@@ -2767,6 +2767,7 @@ export class ChatService {
    * next event to extend, and shows the prompt alone until the turn ends.
    */
   async getSession(sessionId: string, viewed = false): Promise<ChatSession | null> {
+    if (viewed) this.deps.activity?.viewed(sessionId);
     let session = await this.deps.store.get(sessionId);
     const task = session?.workerTask;
     if (viewed && task && !task.attentionViewed && isUpdateOnlyTask(task.state)) {
@@ -3923,7 +3924,7 @@ export class ChatService {
         this.active.delete(sessionId);
         this.autoFixTurns.delete(sessionId);
         this.attendedTurns.delete(sessionId);
-        this.deps.activity?.replyEnded(sessionId);
+        this.deps.activity?.replyEnded(sessionId, outcome === 'completed' && finalReply.content.trim().length > 0);
         // All three need the session to be idle, and this is the moment it becomes so: a
         // spawned run gives its concurrency slot back and reports to its parent, and a parent
         // that was mid-turn takes delivery of anything that finished while it was busy.
@@ -6725,7 +6726,7 @@ export class ChatService {
       agent =>
         this.hasTurnInFlight(agent.id) ||
         this.launching.has(agent.id) ||
-        (this.deps.activity?.statusOf(agent.id) ?? 'done') !== 'done'
+        (this.deps.activity?.runtimeStatusOf(agent.id) ?? 'done') !== 'done'
     );
     if (working.length > 0) {
       reasons.push(`Still working or waiting on approval: ${working.map(agent => `"${agent.title}"`).join(', ')}.`);

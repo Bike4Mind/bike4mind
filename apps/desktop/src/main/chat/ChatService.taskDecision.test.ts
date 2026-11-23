@@ -363,6 +363,9 @@ describe('a worker decision that only the user can make', () => {
     expect(task.state).not.toHaveProperty('decision');
     expect(task.decisions).toEqual([expect.objectContaining({ outcome: 'skipped' })]);
     expect(post.mock.calls.some((_call, index) => wireText(index).includes('The user answered'))).toBe(false);
+    expect(activity.runtimeStatusOf(asker.id)).toBe('done');
+    expect(activity.statusOf(asker.id)).toBe('needs-action');
+    await service.getSession(asker.id, true);
     expect(activity.statusOf(asker.id)).toBe('done');
     await vi.waitUntil(
       async () => (await stored(root.id)).messages.some(m => String(m.content).includes('The user skipped')),
@@ -529,6 +532,8 @@ describe('a worker decision that only the user can make', () => {
     expect((await stored(asker.id)).workerTask?.state).toEqual({ status: 'canceled', reason: 'Canceled by user' });
     expect(await service.listTaskDecisions()).toEqual([]);
     expect(decisionPushes.at(-1)).toEqual([]);
+    expect(activity.runtimeStatusOf(asker.id)).toBe('done');
+    await service.getSession(asker.id, true);
     expect(activity.statusOf(asker.id)).toBe('done');
     finish(wake);
     await idle(root.id);
