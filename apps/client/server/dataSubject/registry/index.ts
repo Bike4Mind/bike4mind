@@ -11,9 +11,9 @@ import { hearthHolders } from './hearth';
 import { infraHolders } from './infra';
 import { socialHolders } from './social';
 
-// One file per `@bike4mind/database` model domain. Models registered outside that package live
-// with their domain: `Subscription` and `UserSubscription` in `billing.ts`, the four CoreTutorial
-// models in `content.ts`. `dataHolderCoverage.test.ts` imports each one's registering module.
+// One file per `@bike4mind/database` model domain. A model registered outside that package is
+// classified with its domain, and that domain file imports the module that registers it:
+// `Subscription` and `UserSubscription` in `billing.ts`, the four CoreTutorial models in `content.ts`.
 const DOMAIN_REGISTRIES: readonly DataHolderRegistry[] = [
   aiHolders,
   analyticsHolders,

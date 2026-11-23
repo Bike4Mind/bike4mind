@@ -43,11 +43,6 @@ import {
   adminDataExportKey,
   isMissingObjectError,
 } from '@bike4mind/server-utils/utils/accountDataExport';
-// Registered outside the `@bike4mind/database` barrel: unregistered, the registry walk cannot query
-// them and the index would list them as omitted.
-import '@bike4mind/server-utils/models/Subscription';
-import '@bike4mind/server-utils/models/UserSubscription';
-import '@bike4mind/server-utils/tutorials/coreModels';
 import { SubjectRecordExport, assertEveryModelClassified } from '@server/dataSubject/subjectRecordExport';
 import { createKeyProvider } from '@bike4mind/server-utils/memory/factCipher';
 import { createLedgerMemoryStore } from '@bike4mind/server-utils/memory/ledgerMemoryStore';

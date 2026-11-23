@@ -1,3 +1,6 @@
+// Registered outside the `@bike4mind/database` barrel; importing them here means every walk of the
+// registry can load them, whatever else the process has imported.
+import '@bike4mind/server-utils/tutorials/coreModels';
 import type { DataHolderRegistry } from '../types';
 import { SAFETY_INCIDENT } from './retention';
 
@@ -59,9 +62,8 @@ export const contentHolders = {
     kind: 'holder',
     references: [{ path: 'userId', matchBy: 'userId', action: 'deleteDocument' }],
   },
-  // The four CoreTutorial models register outside `@bike4mind/database`, in
-  // `@bike4mind/server-utils/tutorials/coreModels`. Drafts, overrides and their change log are
-  // platform tutorial content an admin wrote, so they stay with the author cleared.
+  // Drafts, overrides and their change log are platform tutorial content an admin wrote, so they
+  // stay with the author cleared.
   CoreTutorialDraft: {
     kind: 'holder',
     references: [

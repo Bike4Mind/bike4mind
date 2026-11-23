@@ -1,3 +1,7 @@
+// Registered outside the `@bike4mind/database` barrel; importing them here means every walk of the
+// registry can load them, whatever else the process has imported.
+import '@bike4mind/server-utils/models/Subscription';
+import '@bike4mind/server-utils/models/UserSubscription';
 import type { DataHolderRegistry } from '../types';
 import { FINANCIAL_RECORD, PAYMENT_DISPUTE, SIGNUP_GRANT_CLAIM, expiresAfterTtl } from './retention';
 
