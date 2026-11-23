@@ -13,6 +13,8 @@ struct StudioEditContext {
   let currentInputs: @MainActor () -> [StudioInput]
   /// Hands a seed to the create bar and brings Studio to the front.
   let apply: @MainActor (StudioSeed) -> Void
+  /// Brings Studio to the front, where a just-started generation's progress tile shows.
+  let reveal: @MainActor () -> Void
 }
 
 extension EnvironmentValues {

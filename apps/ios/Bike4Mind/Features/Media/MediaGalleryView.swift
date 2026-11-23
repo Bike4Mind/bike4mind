@@ -19,6 +19,7 @@ private struct GalleryContent: View {
   /// path, so a `NavigationLink(value: MediaItem)` has nowhere to go and silently does nothing.
   @State private var openItem: MediaItem?
   @State private var turnInto: TurnIntoRequest?
+  @State private var openFailed = false
   @State private var exporter: MediaExportPresenter
   @Environment(AppServices.self) private var services
   private let tracker: GenerationTracker
@@ -41,7 +42,8 @@ private struct GalleryContent: View {
     content
       .safeAreaInset(edge: .bottom, spacing: 0) {
         VStack(spacing: 0) {
-          GenerationTilesView(tracker: tracker, settings: create, exporter: exporter)
+          GenerationTilesView(
+            tracker: tracker, settings: create, exporter: exporter, onOpen: { id in Task { await open(fileID: id) } })
           StudioCreateBar(model: create, photoContext: editContext)
         }
       }
@@ -57,8 +59,22 @@ private struct GalleryContent: View {
       }
       .turnIntoFlow(request: $turnInto, context: editContext)
       .mediaExport(exporter)
+      .alert("Couldn't open this file", isPresented: $openFailed) {
+        Button("OK", role: .cancel) {}
+      } message: {
+        Text("It may still be saving. Pull to refresh the gallery and open it from there.")
+      }
       .task { await model.load() }
       .refreshable { await model.refresh() }
+  }
+
+  /// A finished generation opens like a gallery cell; the detail fetch also signs a fresh URL.
+  private func open(fileID: String) async {
+    do {
+      openItem = try await services.media.media(id: fileID)
+    } catch {
+      openFailed = true
+    }
   }
 
   private var editContext: StudioEditContext {
@@ -69,7 +85,8 @@ private struct GalleryContent: View {
       apply: { seed in
         openItem = nil
         Task { await create.apply(seed) }
-      })
+      },
+      reveal: { openItem = nil })
   }
 
   private var filter: some View {
