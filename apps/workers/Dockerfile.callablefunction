@@ -18,7 +18,7 @@ COPY patches ./patches
 # No install scripts: nothing in the bundle is a native addon, so the build needs no compiler toolchain.
 RUN pnpm install --frozen-lockfile --ignore-scripts --filter @bike4mind/workers...
 
-# The bake reads only the installed pyodide package and this script, so the wheels download again only when one changes.
+# The bake reads only the installed pyodide package and this script; a dependency change re-runs it, a source change does not.
 FROM deps AS pyodide
 COPY apps/workers/src/callableFunctions/bakePyodide.mjs apps/workers/src/callableFunctions/
 RUN node apps/workers/src/callableFunctions/bakePyodide.mjs /out/pyodide
