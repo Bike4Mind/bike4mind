@@ -37,13 +37,19 @@ export function parseDiff(text) {
   return { files: [...new Set(files)].sort(), relatedSafe };
 }
 
-// Workspace helpers can hide reads behind built dist entrypoints, outside Vite's source graph.
 export function isUntraceableReader(source) {
-  return /['"`]@bike4mind\/|['"`](?:node:)?(?:fs(?:\/promises)?|child_process|module|glob|fast-glob|globby|fs-extra)['"`]|\b(?:require|import)\s*\(|import\.meta\.(?:glob|resolve)|\b(?:readFile|readFileSync|readdir|readdirSync|readJson|readJSON|createRequire)\b/.test(source);
+  return /['"`](?:node:)?(?:fs(?:\/promises)?|child_process|module|glob|fast-glob|globby|fs-extra)['"`]|\b(?:require|import)\s*\(\s*(?!['"`])|\b(?:require|import)\s*\(\s*`[^`]*\$\{|import\.meta\.(?:glob|resolve)|\b(?:readFile|readFileSync|readdir|readdirSync|readJson|readJSON|createRequire)\b/.test(source);
 }
 
 export function conservativeSeeds(files, readSource) {
-  return files.filter(file => SOURCE.test(file) && isUntraceableReader(readSource(file))).sort();
+  return files.filter(file => {
+    if (!SOURCE.test(file)) return false;
+    const source = readSource(file);
+    if (!isUntraceableReader(source)) return false;
+    // Seed guards and their helpers, not ordinary production I/O shared by most tests.
+    return TEST.test(file) || /(?:^|\/)(?:__tests__|tests?|__mocks__|mocks?|fixtures?|__fixtures__|test[^/]*|[^/]*[Tt]est[^/]*)(?:\/|$)/.test(file)
+      || /['"`][^'"`\n]*(?:\.[cm]?[jt]sx?\b|(?:apps\/client|b4m-core|packages)\/)/.test(source);
+  }).sort();
 }
 
 function git(args, root = repoRoot) {
@@ -73,14 +79,15 @@ export function listDiff(env = process.env, runGit = git) {
   }
 }
 
-export async function discoverRelated(vitest, changedFiles, readerSeeds) {
+export async function discoverRelated(vitest, changedFiles, readerSeeds, traceOtherLane = async () => false) {
   const all = await vitest.globTestSpecifications();
   if (!all.length) throw new Error('empty client suite');
   const allIds = new Set(all.map(spec => spec.moduleId));
   for (const file of changedFiles) {
-    if (TEST.test(file) && !allIds.has(file)) continue;
     vitest.config.related = [file];
-    if (!(await vitest.getRelevantTestSpecifications()).length) throw new Error(`untraceable changed source: ${file}`);
+    if (!(await vitest.getRelevantTestSpecifications()).length && !await traceOtherLane(file)) {
+      throw new Error(`untraceable changed source: ${file}`);
+    }
   }
   vitest.config.related = [...new Set([...changedFiles, ...readerSeeds])];
   const selected = await vitest.getRelevantTestSpecifications();
@@ -88,8 +95,6 @@ export async function discoverRelated(vitest, changedFiles, readerSeeds) {
   for (const file of changedFiles.filter(file => TEST.test(file))) {
     if (allIds.has(file) && !selectedIds.has(file)) throw new Error(`changed test not selected: ${file}`);
   }
-  // No graph edge for a changed source is ambiguous, not proof that no test is affected.
-  if (!selected.length) throw new Error('no related tests');
   return selected;
 }
 
@@ -114,7 +119,25 @@ export async function runRelated({ plan, script, shard = '', root = repoRoot, cr
       passWithNoTests: true,
       ...(shard ? { shard: shard.slice('--shard='.length) } : {}),
     });
-    selected = await discoverRelated(vitest, plan.files.map(file => resolve(root, file)), readers.map(file => resolve(root, file)));
+    let otherLane;
+    try {
+      selected = await discoverRelated(vitest, plan.files.map(file => resolve(root, file)), readers.map(file => resolve(root, file)), async file => {
+        if (!otherLane) {
+          if (script === 'test') process.env.CLIENT_TEST_LANE = 'integration';
+          else delete process.env.CLIENT_TEST_LANE;
+          try {
+            otherLane = await factory('test', { root: cwd, watch: false, passWithNoTests: true });
+          } finally {
+            if (script === 'test:integration') process.env.CLIENT_TEST_LANE = 'integration';
+            else delete process.env.CLIENT_TEST_LANE;
+          }
+        }
+        otherLane.config.related = [file];
+        return (await otherLane.getRelevantTestSpecifications()).length > 0;
+      });
+    } finally {
+      await otherLane?.close();
+    }
     if (selected.some(spec => !isAbsolute(spec.moduleId) || relative(cwd, spec.moduleId).startsWith('..'))) {
       throw new Error('test outside client');
     }
@@ -128,6 +151,7 @@ export async function runRelated({ plan, script, shard = '', root = repoRoot, cr
   }
   try {
     console.log(`Client ${script}: ${selected.length} related test specification(s), ${shard || 'unsharded'}; bypassing turbo cache.`);
+    if (!selected.length) return 0;
     await vitest.standalone();
     const result = await vitest.runTestSpecifications(selected, false);
     return result.unhandledErrors.length || result.testModules.some(test => !test.ok()) ? 1 : 0;

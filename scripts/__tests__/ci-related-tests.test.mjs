@@ -56,17 +56,27 @@ describe('non-import dependency backstop', () => {
     "import { readFile } from 'node:fs/promises'", "const fs = require('fs')", "import fs from 'fs-extra'",
     "import { readSource } from './helper'; readFileSync(path)", "import(variable)", "require(variable)",
     "import.meta.glob('./*.ts')", "import { execFileSync } from 'node:child_process'",
-    "import { readSource } from '@bike4mind/scripts'",
+    'import(`./${name}.ts`)',
   ])('seeds reader modules and dynamic dependencies: %s', text => expect(isUntraceableReader(text)).toBe(true));
+  it.each(["import { x } from '@bike4mind/common'", "import('./component')", "require('./component')"])(
+    'does not treat resolved imports as readers: %s', text => expect(isUntraceableReader(text)).toBe(false)
+  );
   it('includes helper modules, not just test files', () => {
-    expect(conservativeSeeds(['helper.ts', 'component.tsx', 'image.png'], file => file === 'helper.ts' ? "import fs from 'fs'" : '')).toEqual(['helper.ts']);
+    expect(conservativeSeeds(['test-utils/helper.ts', 'component.tsx', 'image.png'], file => file.endsWith('helper.ts') ? "import fs from 'fs'" : '')).toEqual(['test-utils/helper.ts']);
   });
-  it('scans external source helpers as well as client modules', () => {
+  it('scans external test helpers and explicit source readers without seeding production I/O', () => {
     const runner = readFileSync(resolve(root, 'scripts/ci-related-tests.mjs'), 'utf8');
     expect(runner).toContain("git(['ls-files', '-z'], root)");
-    expect(conservativeSeeds(['packages/server-utils/src/readSource.ts', source], file =>
-      file.startsWith('packages/') ? "import fs from 'node:fs'" : ''
-    )).toEqual(['packages/server-utils/src/readSource.ts']);
+    const sources = {
+      'packages/server-utils/test-utils/readSource.ts': "import fs from 'node:fs'",
+      'packages/server-utils/src/testHelpers.ts': "import fs from 'node:fs'",
+      'packages/server-utils/src/readSource.ts': "readFileSync(resolve(root, 'component.tsx'), 'utf8')",
+      'apps/client/server/storage.ts': "import fs from 'node:fs'; export const read = path => fs.readFileSync(path)",
+      [source]: "import { x } from '@bike4mind/common'",
+    };
+    expect(conservativeSeeds(Object.keys(sources), file => sources[file])).toEqual([
+      'packages/server-utils/src/readSource.ts', 'packages/server-utils/src/testHelpers.ts', 'packages/server-utils/test-utils/readSource.ts',
+    ]);
   });
 });
 
@@ -82,6 +92,13 @@ describe('related discovery', () => {
     const vitest = { config: {}, globTestSpecifications: async () => [test, reader], getRelevantTestSpecifications: async () => [] };
     await expect(discoverRelated(vitest, ['/client/unknown.ts'], [reader.moduleId])).rejects.toThrow('untraceable');
   });
+  it('allows zero lane matches only with positive coverage from the other lane', async () => {
+    const vitest = { config: {}, globTestSpecifications: async () => [test], getRelevantTestSpecifications: async () => [] };
+    const traceOtherLane = vi.fn(async () => true);
+    expect(await discoverRelated(vitest, ['/client/ui.tsx'], [], traceOtherLane)).toEqual([]);
+    expect(traceOtherLane).toHaveBeenCalledWith('/client/ui.tsx');
+    await expect(discoverRelated(vitest, ['/client/unknown.ts'], [], async () => false)).rejects.toThrow('untraceable');
+  });
   it('fails open if a changed test disappears from the related result', async () => {
     const vitest = { config: {}, globTestSpecifications: async () => [test, reader], getRelevantTestSpecifications: vi.fn().mockResolvedValueOnce([test]).mockResolvedValueOnce([reader]) };
     await expect(discoverRelated(vitest, [test.moduleId], [])).rejects.toThrow('changed test not selected');
@@ -93,6 +110,33 @@ describe('related discovery', () => {
   });
   it('rejects executable shard strings before invoking a command', async () => {
     await expect(runRelated({ script: 'test', shard: '--shard=1/3;echo bad' })).rejects.toThrow('invalid shard');
+  });
+  it('probes the opposite lane before skipping an empty selection and closes both contexts', async () => {
+    const file = 'apps/client/app/hooks/useDebouncedValue.ts';
+    const spec = { moduleId: resolve(root, 'apps/client/app/hooks/useDebouncedValue.test.ts') };
+    const close = vi.fn();
+    const run = vi.fn();
+    const execute = vi.fn();
+    const create = vi.fn(async () => {
+      const integration = process.env.CLIENT_TEST_LANE === 'integration';
+      return {
+        config: {}, close, runTestSpecifications: execute,
+        globTestSpecifications: async () => [spec],
+        getRelevantTestSpecifications: async () => integration ? [] : [spec],
+      };
+    });
+    const previous = process.env.CLIENT_TEST_LANE;
+    try {
+      expect(await runRelated({ plan: { mode: 'related', files: [file] }, script: 'test:integration', root, create, run })).toBe(0);
+      expect(create).toHaveBeenCalledTimes(2);
+      expect(close).toHaveBeenCalledTimes(2);
+      expect(process.env.CLIENT_TEST_LANE).toBe('integration');
+      expect(execute).not.toHaveBeenCalled();
+      expect(run).not.toHaveBeenCalled();
+    } finally {
+      if (previous === undefined) delete process.env.CLIENT_TEST_LANE;
+      else process.env.CLIENT_TEST_LANE = previous;
+    }
   });
   it.each([
     { testModules: [{ ok: () => false }], unhandledErrors: [] },
@@ -159,12 +203,12 @@ describe('installed Vitest related API', () => {
           root, config: false, watch: false, passWithNoTests: true,
           shard: index + '/3', maxWorkers: 1, reporters: [],
           projects: [
-            { test: { name: 'node', include: ['node.fixture.mjs', 'reader.fixture.mjs'] } },
+            { resolve: { alias: { '@fixture/source': resolve(root, 'source.fixture.mjs') } }, test: { name: 'node', include: ['node.fixture.mjs', 'reader.fixture.mjs'] } },
             { test: { name: 'jsdom', include: ['dom.fixture.mjs'] } },
           ],
         });
         try {
-          const specs = await discoverRelated(vitest, [resolve(root, 'source.fixture.mjs')], [resolve(root, 'reader.fixture.mjs')]);
+          const specs = await discoverRelated(vitest, [resolve(root, 'source.fixture.mjs')], [resolve(root, 'test-utils/readSource.mjs')]);
           if (specs.length !== 3 || new Set(specs.map(s => s.project.name)).size !== 2) throw new Error('lost project or reader');
           await vitest.standalone();
           const result = await vitest.runTestSpecifications(specs, false);

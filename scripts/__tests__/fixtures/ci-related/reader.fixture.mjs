@@ -1,6 +1,6 @@
 import { expect, it } from 'vitest';
-import { readFileSync } from 'node:fs';
+import { readSource } from './test-utils/readSource.mjs';
 
 it('reads source without importing it', () => {
-  expect(readFileSync(new URL('./source.fixture.mjs', import.meta.url), 'utf8')).toContain('42');
+  expect(readSource(new URL('./source.fixture.mjs', import.meta.url))).toContain('42');
 });
