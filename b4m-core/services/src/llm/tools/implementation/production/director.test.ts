@@ -683,6 +683,37 @@ describe('production director tools', () => {
     expect(harness.composition().shots).toEqual(before);
   });
 
+  it('keeps a voice line the user already repeated when a call leaves it alone', async () => {
+    await run(productionStoryboardTool, harness, STORYBOARD);
+    harness.composition().shots[2].voiceLine = 'Spring is here.';
+    const result = await run(productionStoryboardTool, harness, {
+      compositionId: COMPOSITION_ID,
+      shots: [{ keep: 'shot-1' }, { keep: 'shot-2', title: 'Product shot' }, { keep: 'shot-3' }],
+    });
+    expect(result).not.toMatch(/^Error/);
+    expect(harness.composition().shots.map(shot => shot.voiceLine)).toEqual([
+      'Spring is here.',
+      'Meet the bottle.',
+      'Spring is here.',
+    ]);
+  });
+
+  it('refuses a new shot that repeats a line a kept shot already says', async () => {
+    await run(productionStoryboardTool, harness, STORYBOARD);
+    harness.composition().shots[2].voiceLine = 'Spring is here.';
+    expect(
+      await run(productionStoryboardTool, harness, {
+        compositionId: COMPOSITION_ID,
+        shots: [
+          { keep: 'shot-1' },
+          { keep: 'shot-2' },
+          { keep: 'shot-3' },
+          { title: 'End', prompt: 'The bottle on a shelf', durationSeconds: 2, voiceLine: 'Spring is here.' },
+        ],
+      })
+    ).toMatch(/^Error: "Spring is here." is the voice line of more than one shot/);
+  });
+
   it('refuses a second reorder in one run, so a repeated swap does not undo the first', async () => {
     await run(productionStoryboardTool, harness, STORYBOARD);
     const swap = { compositionId: COMPOSITION_ID, shots: [{ keep: 'shot-1' }, { keep: 'shot-3' }, { keep: 'shot-2' }] };

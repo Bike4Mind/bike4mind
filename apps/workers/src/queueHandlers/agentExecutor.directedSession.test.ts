@@ -81,6 +81,12 @@ describe('directedFinalCheck', () => {
     expect(await directedFinalCheck(directed, 1)?.('final')).toBeNull();
   });
 
+  it('sends the check only once even if the final phase repeats', async () => {
+    const check = directedFinalCheck(directed, 0);
+    expect(await check?.('final')).toBe(DIRECTED_NO_TOOL_CHECK);
+    expect(await check?.('final')).toBeNull();
+  });
+
   it('is absent for an undirected run, an API-key run or one without the production tools', () => {
     expect(directedFinalCheck({ productionToolsReady: true }, 0)).toBeUndefined();
     expect(directedFinalCheck({ ...directed, apiKeyId: 'key1' }, 0)).toBeUndefined();

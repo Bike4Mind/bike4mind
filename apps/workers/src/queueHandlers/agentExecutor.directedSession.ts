@@ -58,5 +58,10 @@ export function directedFinalCheck(
   iterationIndex: number
 ): ((phase: 'turn' | 'final') => Promise<string | null>) | undefined {
   if (!directedCompositionId(input) || !input.productionToolsReady) return undefined;
-  return async phase => (phase === 'final' && iterationIndex === 0 ? DIRECTED_NO_TOOL_CHECK : null);
+  let sent = false;
+  return async phase => {
+    if (phase !== 'final' || iterationIndex !== 0 || sent) return null;
+    sent = true;
+    return DIRECTED_NO_TOOL_CHECK;
+  };
 }

@@ -213,14 +213,16 @@ function linesDropped(current: readonly StudioShot[], next: readonly ResolvedSho
   });
 }
 
-/** A voice line given to more than one shot, if any. */
-function repeatedLine(shots: readonly ResolvedShot[]): string | undefined {
-  const seen = new Set<string>();
-  for (const shot of shots) {
+/** A voice line this call gives to more than one shot; a repeat already in the composition is left alone. */
+function repeatedLine(resolved: readonly { shot: ResolvedShot; source?: StudioShot }[]): string | undefined {
+  const seen = new Map<string, { shot: ResolvedShot; fresh: boolean }>();
+  for (const { shot, source } of resolved) {
     const words = spokenWords(shot.voiceLine);
     if (!words) continue;
-    if (seen.has(words)) return shot.voiceLine;
-    seen.add(words);
+    const fresh = words !== spokenWords(source?.voiceLine);
+    const earlier = seen.get(words);
+    if (earlier && (fresh || earlier.fresh)) return shot.voiceLine;
+    if (!earlier) seen.set(words, { shot, fresh });
   }
   return undefined;
 }
@@ -261,7 +263,7 @@ export const productionStoryboardTool: ToolDefinition = {
                 'same moves would undo them. Do not move shots again this run; carry on from this order.'
             );
           }
-          const repeated = repeatedLine(resolved.map(({ shot }) => shot));
+          const repeated = repeatedLine(resolved);
           if (repeated) {
             throw new ProductionToolError(
               `"${repeated}" is the voice line of more than one shot, so it would be said twice. Give each shot its ` +
