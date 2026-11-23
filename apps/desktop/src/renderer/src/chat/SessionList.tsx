@@ -43,6 +43,7 @@ import { useHasComposerDraft } from './composerDrafts';
 import { useLocalHistory } from './localHistory';
 import { refLabel } from '@shared/githubRefs';
 import { findSessionsByRef } from './sessionRefSearch';
+import { prAttentionRank } from '@shared/prAttention';
 import type { PrSummary } from '@shared/pullRequest';
 import { pendingDecisionOf } from '@shared/orchestration';
 import { sectionOf, type SidebarSection, type SidebarSectionsState } from '@shared/sidebarSections';
@@ -57,6 +58,7 @@ import {
 } from './grouping';
 import { ImportedBadge } from './ImportedBadge';
 import { useImportedInline } from './importedInline';
+import { usePrAttentionSort } from './prAttentionSort';
 import { keepMenuOpen } from './keepMenuOpen';
 import { MessageSessionDialog } from './MessageSessionDialog';
 import {
@@ -1213,6 +1215,9 @@ export function SessionList({
   const [importedOpen, setImportedOpen] = useState(false);
   const [importedInline] = useImportedInline();
   const [nested] = useNestedSessions();
+  const sortByAttention = usePrAttentionSort(state => state.sortByAttention);
+  // Only a dependency while the sort is on, so PR updates do not regroup the default sidebar.
+  const rankedPrs = sortByAttention ? prSummaries : null;
   const foldedIds = useFoldedParents();
 
   // `section` is set when the right-click landed in a user section, which then offers a new session in
@@ -1230,10 +1235,13 @@ export function SessionList({
   const searching = query.trim() !== '';
   const sections = useMemo(() => {
     // A search lists matches flat: a tree would hide a match inside a parent that did not match.
-    const grouped = groupSessions(matching, mode, userSections, importedInline, nested && !searching);
+    const attentionRank = rankedPrs
+      ? (session: ChatSessionSummary) => prAttentionRank(rankedPrs.get(session.id))
+      : undefined;
+    const grouped = groupSessions(matching, mode, userSections, importedInline, nested && !searching, attentionRank);
     // An empty section under a search is only noise; with no query it stays so it can be found.
     return searching ? { ...grouped, custom: grouped.custom.filter(group => group.sessions.length > 0) } : grouped;
-  }, [matching, mode, userSections, searching, importedInline, nested]);
+  }, [matching, mode, userSections, searching, importedInline, nested, rankedPrs]);
 
   // Strings, not the hint objects, reach the memoised rows, so an unrelated session update leaves them be.
   // No hints with nesting off: the setting brings back the plain flat list.

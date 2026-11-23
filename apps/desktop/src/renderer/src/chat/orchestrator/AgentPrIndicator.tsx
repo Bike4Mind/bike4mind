@@ -74,7 +74,7 @@ export function AgentPrIndicator({
         '& svg': { width: '1em', height: '1em' },
       }}
     >
-      <PrStateIcon state={state ?? 'draft'} size={12} />
+      <PrStateIcon status={state ?? 'draft'} size={12} />
       {`#${pr.number}${compact ? '' : ` ${state ?? (pr.state || 'unknown')}`}`}
     </Box>
   );
