@@ -715,7 +715,8 @@ const PythonFunctionPanel: React.FC<PythonFunctionPanelProps> = ({ code, package
               </Typography>
               <Typography level="body-sm">{contract.description}</Typography>
             </Box>
-            {save && (
+            {/* The contract belongs to the code it was read from; saving waits until the new code is read. */}
+            {save && describedCode.current === code && (
               <>
                 <FunctionSaveSection save={save} contract={contract} />
                 <Divider />
