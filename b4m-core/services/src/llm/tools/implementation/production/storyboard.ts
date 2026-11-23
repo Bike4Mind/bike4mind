@@ -73,8 +73,8 @@ const schema = z.object({
     .boolean()
     .optional()
     .describe(
-      'Only when the user asked to reword or remove current voice lines. Without it every current line must ' +
-        'still be said word for word, though it may be split over shots.'
+      'Only when the user asked to reword or remove voice lines, incl. removing a shot or rewriting the ad. ' +
+        'Without it every current line must still be said word for word, though it may be split over shots.'
     ),
   replace: z
     .boolean()
@@ -197,6 +197,7 @@ function previousShot(
 const spokenWords = (line: string | undefined): string =>
   (line ?? '')
     .toLowerCase()
+    .replace(/[\u2018\u2019]/g, "'")
     .replace(/[^\p{L}\p{N}']+/gu, ' ')
     .trim();
 
@@ -259,7 +260,8 @@ export const productionStoryboardTool: ToolDefinition = {
               `this storyboard no longer says these current voice lines word for word: ${dropped
                 .map(line => `"${line}"`)
                 .join(', ')}. Keep every line the user did not ask to change, word for word (you may split one ` +
-                'over shots). If the user asked to reword or remove them, pass rewriteLines: true.'
+                'over shots). If the user asked to reword or remove them, or to drop a shot or rewrite the ad for a new brief, ' +
+                'pass rewriteLines: true.'
             );
           }
           const totalMs = resolved.reduce((sum, { shot }) => sum + shot.durationMs, 0);
@@ -373,7 +375,7 @@ export const productionStoryboardTool: ToolDefinition = {
                 : ''),
           });
         } catch (error) {
-          return describeProductionError(error);
+          return describeProductionError(error, context.logger, 'production_storyboard');
         }
       },
       toolSchema: { name: 'production_storyboard', description, parameters: toToolParameters(schema) },

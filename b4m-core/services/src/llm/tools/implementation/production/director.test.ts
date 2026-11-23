@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   IMAGE_MODEL_CATALOG,
+  insufficientCreditsError,
   NotFoundError,
   UnprocessableEntityError,
   defaultStudioTimeline,
@@ -22,7 +23,7 @@ import {
 } from './index';
 import { createProductionAudio } from './audio';
 import { DIRECTOR_TRACK_IDS, directorClips } from './layout';
-import { describeProductionError } from './shared';
+import { ProductionToolError, describeProductionError } from './shared';
 
 vi.mock('./audio', () => ({ createProductionAudio: vi.fn() }));
 
@@ -268,10 +269,34 @@ describe('production director tools', () => {
     expect(directorClips(timeline, 'captions')).toHaveLength(3);
   });
 
-  it('reports an unexpected failure to the director instead of ending the run', () => {
-    expect(describeProductionError(new Error('socket hang up'))).toMatch(
+  it('logs an unexpected failure and reports it to the director instead of ending the run', () => {
+    const error = new Error('socket hang up');
+    expect(describeProductionError(error, harness.context.logger, 'production_assemble')).toMatch(
       /^Error: this step failed unexpectedly \(socket hang up\)/
     );
+    expect(harness.context.logger.error).toHaveBeenCalledWith('[production_assemble] unexpected failure', error);
+  });
+
+  it('rethrows a terminal error and does not log a refusal the model can act on', () => {
+    const denied = insufficientCreditsError('out of credits');
+    expect(() => describeProductionError(denied, harness.context.logger, 'production_assemble')).toThrow(denied);
+    expect(describeProductionError(new ProductionToolError('no shots'), harness.context.logger, 'x')).toBe(
+      'Error: no shots'
+    );
+    expect(harness.context.logger.error).not.toHaveBeenCalled();
+  });
+
+  it('keeps a voice line typed with a curly apostrophe when the storyboard is re-sent with a straight one', async () => {
+    const [first, ...rest] = STORYBOARD.shots;
+    await run(productionStoryboardTool, harness, {
+      ...STORYBOARD,
+      shots: [{ ...first, voiceLine: 'Don\u2019t stop now.' }, ...rest],
+    });
+    const result = await run(productionStoryboardTool, harness, {
+      compositionId: COMPOSITION_ID,
+      shots: [{ keep: 'shot-1', voiceLine: "Don't stop now." }, { keep: 'shot-2' }, { keep: 'shot-3' }],
+    });
+    expect(result).not.toMatch(/^Error/);
   });
 
   it('feeds the product photo to every image job as a reference input and posts job cards', async () => {

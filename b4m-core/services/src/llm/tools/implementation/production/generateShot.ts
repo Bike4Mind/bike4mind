@@ -275,7 +275,7 @@ export const productionGenerateShotTool: ToolDefinition = {
               : 'Call production_add_audio, then production_assemble.',
           });
         } catch (error) {
-          return describeProductionError(error);
+          return describeProductionError(error, context.logger, 'production_generate_shot');
         }
       },
       toolSchema: { name: 'production_generate_shot', description, parameters: toToolParameters(schema) },

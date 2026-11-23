@@ -58,7 +58,7 @@ async function assemble(config: ProductionToolConfig, args: AssembleArgs): Promi
 
 export const productionAssembleTool: ToolDefinition = {
   name: 'production_assemble',
-  implementation: (_context: Omit<ToolContext, 'config'>, config: unknown) => {
+  implementation: (context: Omit<ToolContext, 'config'>, config: unknown) => {
     if (!isProductionToolConfig(config)) return buildUnavailableTool('production_assemble', 'Studio Productions');
     return {
       toolFn: async (parameters?: unknown) => {
@@ -66,7 +66,7 @@ export const productionAssembleTool: ToolDefinition = {
         try {
           return await assemble(config, args);
         } catch (error) {
-          return describeProductionError(error);
+          return describeProductionError(error, context.logger, 'production_assemble');
         }
       },
       toolSchema: { name: 'production_assemble', description, parameters: toToolParameters(schema) },

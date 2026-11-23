@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { isTerminalToolError } from '@bike4mind/llm-adapters';
 import type { StudioAudioClip, StudioShot } from '@bike4mind/common';
 import type { ToolContext, ToolDefinition } from '../../base/types';
 import { buildUnavailableTool, toToolParameters } from '../generationJobTool';
@@ -160,6 +161,8 @@ async function addAudio(context: Context, config: ProductionToolConfig, args: Ad
     try {
       await make();
     } catch (error) {
+      if (isTerminalToolError(error)) throw error;
+      if (!(error instanceof ProductionToolError)) context.logger.error(`[production_add_audio] ${part} failed`, error);
       notes.push(`${part} failed: ${error instanceof Error ? error.message : String(error)}`);
     }
   };
@@ -226,7 +229,7 @@ export const productionAddAudioTool: ToolDefinition = {
         try {
           return await addAudio(context, config, args);
         } catch (error) {
-          return describeProductionError(error);
+          return describeProductionError(error, context.logger, 'production_add_audio');
         }
       },
       toolSchema: { name: 'production_add_audio', description, parameters: toToolParameters(schema) },

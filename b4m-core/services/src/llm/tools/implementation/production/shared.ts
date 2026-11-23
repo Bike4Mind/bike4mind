@@ -1,11 +1,13 @@
 import { NotFoundError, StudioCompositionIdSchema, UnprocessableEntityError, type StudioShot } from '@bike4mind/common';
+import { isTerminalToolError } from '@bike4mind/llm-adapters';
+import type { ToolContext } from '../../base/types';
 import type { ProductionComposition, ProductionToolConfig } from './config';
 
 export const CompositionIdArg = StudioCompositionIdSchema.describe(
   'The production (composition) id, from the context that started this run.'
 );
 
-/** A tool failure the model can act on, as opposed to a bug, which is rethrown. */
+/** A tool failure the model can act on, as opposed to an unexpected one, which is logged. */
 export class ProductionToolError extends Error {}
 
 const issueList = (error: UnprocessableEntityError): string => {
@@ -20,8 +22,14 @@ const issueList = (error: UnprocessableEntityError): string => {
     .join('; ');
 };
 
-/** Maps the composition service's refusals to text for the model; anything else is a bug and is rethrown. */
-export function describeProductionError(error: unknown): string {
+/** Maps the composition service's refusals to text for the model; terminal errors are rethrown, anything else is logged and reported. */
+export function describeProductionError(
+  error: unknown,
+  logger: Pick<ToolContext['logger'], 'error'>,
+  toolName: string
+): string {
+  // Terminal errors (permission, credits) still end the turn.
+  if (isTerminalToolError(error)) throw error;
   if (error instanceof ProductionToolError) return `Error: ${error.message}`;
   if (error instanceof NotFoundError)
     return 'Error: that production was not found. Use the production id from this conversation (the Direct message names it), not a file id.';
@@ -29,8 +37,8 @@ export function describeProductionError(error: unknown): string {
     const issues = issueList(error);
     return `Error: the production was not saved (${error.message}${issues ? `: ${issues}` : ''}).`;
   }
-  // Any other failure is reported to the director rather than thrown: a throw ends the whole agent run with no
-  // reply, leaving the user with no word of what was saved.
+  // Anything else is logged and reported so the director can tell the user what failed.
+  logger.error(`[${toolName}] unexpected failure`, error);
   const message = error instanceof Error ? error.message : String(error);
   return `Error: this step failed unexpectedly (${message}). Tell the user what this step was and that it failed.`;
 }
