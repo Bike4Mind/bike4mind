@@ -3568,16 +3568,6 @@
       "count": 1
     }
   },
-  "apps/workers/src/events/dlqTriage.test.ts": {
-    "b4m/no-workers-server-bridge": {
-      "count": 1
-    }
-  },
-  "apps/workers/src/events/dlqTriage.ts": {
-    "b4m/no-workers-server-bridge": {
-      "count": 1
-    }
-  },
   "apps/workers/src/events/sessionSummarization.ts": {
     "@typescript-eslint/no-explicit-any": {
       "count": 1

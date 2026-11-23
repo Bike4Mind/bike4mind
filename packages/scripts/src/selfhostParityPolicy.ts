@@ -58,9 +58,14 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   ),
   hostedOnly(
     'schedule:infra/cron.ts:dlqTriageSweep',
-    '38acecc248ea7557053ca90c3f3623e71d8119281f5af6461b316749ce158107',
+    'cb1d65468e90c222fb45c7fca4c042f5b7592c809518cc9a1b3846033532e903',
     'Hosted CloudWatch alarm and SQS dead-letter sampling; portable deployments do not run the hosted alarm sweep.',
-    ['cloudwatch:DescribeAlarms', 'import:@aws-sdk/client-cloudwatch']
+    [
+      'cloudwatch:DescribeAlarms',
+      'import:@aws-sdk/client-cloudwatch',
+      'lambda:GetFunctionConfiguration',
+      'lambda:ListEventSourceMappings',
+    ]
   ),
   broker(
     'queue:infra/organizationRetention.ts:organizationRetentionDlq',
@@ -1314,8 +1319,14 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   ),
   gap(
     'snsSubscription:infra/dlqAlarms.ts:DlqAlarmTopic',
-    '88b055402e66c2942f661c8c6dce9385b5568ee29f63058aaa54ece2f69f8854',
-    ['cloudwatch:DescribeAlarms', 'cloudwatch:GetInsightRuleReport', 'ssm:GetParameter']
+    '7e97c4c7db81a4dccfd29be69c43ae7e5d7bfc987655f85689180d1120839b84',
+    [
+      'cloudwatch:DescribeAlarms',
+      'cloudwatch:GetInsightRuleReport',
+      'lambda:GetFunctionConfiguration',
+      'lambda:ListEventSourceMappings',
+      'ssm:GetParameter',
+    ]
   ),
   gap(
     'snsSubscription:infra/dlqAlarms.ts:OobAlarmTopicEmailSub',
