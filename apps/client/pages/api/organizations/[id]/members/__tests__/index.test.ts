@@ -94,6 +94,8 @@ vi.mock('@bike4mind/database', () => ({
   adminSettingsRepository: {},
 }));
 vi.mock('@bike4mind/database/infra', () => ({ organizationRepository: {} }));
+const recordOrganizationRead = vi.hoisted(() => vi.fn(async () => undefined));
+vi.mock('@server/utils/orgReadAudit', () => ({ recordOrganizationRead }));
 vi.mock('@bike4mind/database/auth', () => ({ userRepository: {}, userApiKeyRepository: {} }));
 vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEvent: vi.fn().mockResolvedValue(undefined) }));
 
@@ -251,5 +253,39 @@ describe('GET /api/organizations/[id]/members - roster visibility by role', () =
     expect(JSON.stringify(roster)).not.toContain('@acme.test');
     // The "Deactivated" chip still renders for members.
     expect(roster[2].isBanned).toBe(true);
+  });
+});
+
+describe('GET /api/organizations/[id]/members - staff read recording', () => {
+  beforeEach(() => recordOrganizationRead.mockClear());
+
+  const requestRoster = (user: { id: string; isAdmin?: boolean }) => {
+    const { req, res } = createMocks({ method: 'GET', query: { id: 'org1' } });
+    Object.assign(req, { user });
+    return { req, res };
+  };
+
+  it('records the roster read against the organization before responding', async () => {
+    const { req, res } = requestRoster({ id: 'staff1', isAdmin: true });
+    await mockRefs.getHandler!(req, res);
+    expect(recordOrganizationRead).toHaveBeenCalledWith(req, [expect.objectContaining({ id: 'org1' })], {
+      view: 'roster',
+    });
+    expect(res._getStatusCode()).toBe(200);
+  });
+
+  it('serves nothing when the read cannot be recorded', async () => {
+    recordOrganizationRead.mockRejectedValueOnce(new Error('audit down'));
+    const { req, res } = requestRoster({ id: 'staff1', isAdmin: true });
+    await expect(mockRefs.getHandler!(req, res)).rejects.toThrow('audit down');
+    expect(res._isEndCalled()).toBe(false);
+  });
+
+  it('records nothing when the roster read is refused for another organization', async () => {
+    getRoster.mockRejectedValueOnce(new Error('Organization with ID org1 not found'));
+    const { req, res } = requestRoster({ id: 'outsider' });
+    await expect(mockRefs.getHandler!(req, res)).rejects.toThrow('not found');
+    expect(recordOrganizationRead).not.toHaveBeenCalled();
+    expect(res._isEndCalled()).toBe(false);
   });
 });
