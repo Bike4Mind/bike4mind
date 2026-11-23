@@ -276,7 +276,7 @@ export function SpawnSuggestionCard({
           </Button>
           <Button
             size="sm"
-            variant="plain"
+            variant="outlined"
             color="neutral"
             onClick={() => setDraft(keepMine(suggestion, draft, name))}
             data-testid={`spawn-suggestion-keep-${name}-btn`}
@@ -338,7 +338,7 @@ export function SpawnSuggestionCard({
         </ButtonGroup>
         <Button
           size="sm"
-          variant="plain"
+          variant="outlined"
           color="neutral"
           disabled={busy}
           onClick={() => void dismiss()}

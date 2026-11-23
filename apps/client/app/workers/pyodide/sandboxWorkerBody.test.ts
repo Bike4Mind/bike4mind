@@ -4,6 +4,13 @@ import path from 'path';
 import { pyodideSandboxWorkerBody } from './sandboxWorkerBody';
 import type { PyodideWorkerMessage, PyodideWorkerResponse } from './types';
 import { DEFAULT_PYODIDE_BASE_URL } from '@client/app/utils/pyodideDistribution';
+import {
+  FUNCTION_CALL_GLUE_PY,
+  FUNCTION_CONTRACT_GLOBAL,
+  FUNCTION_CONTRACT_LIMITS,
+  FUNCTION_ENTRY_POINT,
+  PYODIDE_VERSION,
+} from '@bike4mind/common';
 
 /**
  * The worker body is shipped by serializing it, so its correctness depends on properties the
@@ -42,6 +49,61 @@ describe('pyodideSandboxWorkerBody serialization', () => {
     // The body cannot import the constant (see above), so the copies are checked in lockstep.
     // A drift means Pyodide fetches from an origin connect-src does not name, and fails closed.
     expect(source).toContain(DEFAULT_PYODIDE_BASE_URL);
+  });
+
+  it('runs the call glue and the Pyodide release the server runtime shares', () => {
+    expect(source).toContain(FUNCTION_CALL_GLUE_PY);
+    expect(DEFAULT_PYODIDE_BASE_URL).toContain(`/v${PYODIDE_VERSION}/`);
+  });
+
+  it('loads function code as a module other than __main__ and refuses NaN in JSON', () => {
+    // A script-style demo block must not run during a call, and NaN is not JSON.
+    expect(source).toContain("namespace = {'__name__': 'b4m_function'}");
+    expect(source).toContain("exec(compile(code, 'function.py', 'exec'), namespace)");
+    expect(source.match(/allow_nan=False/g)).toHaveLength(2);
+  });
+
+  // The wrapper is Python text inside a serialized function, so it cannot import the shared names or limits.
+  it('reads the contract and entry point under the shared names', () => {
+    expect(source).toContain(`namespace.get('${FUNCTION_CONTRACT_GLOBAL}')`);
+    expect(source).toContain(`_FunctionCallError('${FUNCTION_CONTRACT_GLOBAL} is not defined')`);
+    expect(source).toContain(`namespace.get('${FUNCTION_ENTRY_POINT}')`);
+  });
+
+  it('refuses an async run by name', () => {
+    expect(source).toContain('if inspect.iscoroutinefunction(run):');
+    expect(source).toContain("_FunctionCallError('run must be defined with def, not async def')");
+  });
+
+  it('caps printed output and the error text before posting them', () => {
+    expect(source).toContain('_MAX_OUTPUT_CHARS = 100000');
+    expect(source).toContain("'stdout': stdout.getvalue()[:_MAX_OUTPUT_CHARS]");
+    expect(source).toContain("'stderr': stderr.getvalue()[:_MAX_OUTPUT_CHARS]");
+    expect(source).toContain("'error': None if error is None else error[:_MAX_OUTPUT_CHARS]");
+  });
+
+  it('refuses an oversized contract before posting it', () => {
+    expect(source).toContain(`_MAX_CONTRACT_BYTES = ${FUNCTION_CONTRACT_LIMITS.maxContractBytes}`);
+    expect(source).toContain('if len(contract_text) > _MAX_CONTRACT_BYTES:');
+    expect(source).toContain("_FunctionCallError('The function contract is larger than 32 KB.')");
+  });
+
+  it('checks output number types in Python, where 3.0 and True are still distinct from 3 and 1', () => {
+    expect(source).toContain(
+      "if isinstance(value, bool) or not isinstance(value, (int, float)):\n            problems.append({'path': path, 'message': 'must be a number'})"
+    );
+    expect(source).toContain(
+      "elif kind == 'integer' and not isinstance(value, int):\n            problems.append({'path': path, 'message': 'must be a whole number'})"
+    );
+    expect(source).toContain("_output_type_problems(contract.get('outputs'), value, '', output_problems)");
+    expect(source).toContain("'output_problems_json': json.dumps(output_problems) if output_problems else None");
+    expect(source).toContain(`_MAX_PROBLEMS = ${FUNCTION_CONTRACT_LIMITS.maxProblems}`);
+  });
+
+  it('refuses an oversized result before posting it', () => {
+    expect(source).toContain(`_MAX_RESULT_BYTES = ${FUNCTION_CONTRACT_LIMITS.maxResultBytes}`);
+    expect(source).toContain('if len(value_text) > _MAX_RESULT_BYTES:');
+    expect(source).toContain("_FunctionCallError('The function returned a result larger than 256 KB.')");
   });
 
   it('never contains a closing script tag', () => {
@@ -173,5 +235,114 @@ describe('pyodideSandboxWorkerBody package loading', () => {
 
     expect(posted.at(-1)).toMatchObject({ type: 'result', result: { success: true } });
     warn.mockRestore();
+  });
+
+  it('describes a function through globals, never by putting the code into the Python source', async () => {
+    const { posted, pyodide, send } = startWorker();
+    await send({ type: 'initialize' });
+    pyodide.runPythonAsync.mockResolvedValueOnce({
+      toJs: () => ({
+        contract_json: '{"name": "f"}',
+        value_json: undefined,
+        stdout: 'hi\n',
+        stderr: '',
+        error: undefined,
+      }),
+    } as never);
+    const code = 'FUNCTION = {"name": "f"}\ndef run():\n    return {}';
+
+    await send({ type: 'call', code, packages: [], paramsJson: null, timeoutMs: 1000 });
+
+    expect(pyodide.globals.set).toHaveBeenCalledWith('_fn_code', code);
+    expect(pyodide.globals.set).toHaveBeenCalledWith('_fn_params_json', null);
+    const wrapper = String(pyodide.runPythonAsync.mock.calls.at(-1)?.[0]);
+    expect(wrapper).not.toContain(code);
+    expect(wrapper).toContain('_b4m_call_function(_fn_code, _fn_params_json)');
+    expect(pyodide.globals.delete).toHaveBeenCalledWith('_fn_code');
+    expect(pyodide.globals.delete).toHaveBeenCalledWith('_fn_params_json');
+    expect(posted.at(-1)).toEqual({
+      type: 'call-result',
+      result: {
+        success: true,
+        contractJson: '{"name": "f"}',
+        valueJson: undefined,
+        output: 'hi\n',
+        error: undefined,
+        executionTime: expect.any(Number),
+      },
+    });
+  });
+
+  it('passes params as JSON text and reports an error from the call', async () => {
+    const { posted, pyodide, send } = startWorker();
+    await send({ type: 'initialize' });
+    pyodide.runPythonAsync.mockResolvedValueOnce({
+      toJs: () => ({
+        contract_json: '{}',
+        value_json: undefined,
+        stdout: '',
+        stderr: '',
+        error: 'run must return a dict',
+      }),
+    } as never);
+
+    await send({ type: 'call', code: 'x = 1', packages: [], paramsJson: '{"span": 4}', timeoutMs: 1000 });
+
+    expect(pyodide.globals.set).toHaveBeenCalledWith('_fn_params_json', '{"span": 4}');
+    expect(posted.at(-1)).toMatchObject({
+      type: 'call-result',
+      result: { success: false, contractJson: '{}', error: 'run must return a dict' },
+    });
+  });
+
+  it('posts the output problems Python found as JSON text', async () => {
+    const { posted, pyodide, send } = startWorker();
+    await send({ type: 'initialize' });
+    const problemsJson = '[{"path": "count", "message": "must be a whole number"}]';
+    pyodide.runPythonAsync.mockResolvedValueOnce({
+      toJs: () => ({
+        contract_json: '{}',
+        value_json: '{"count": 3.0}',
+        output_problems_json: problemsJson,
+        stdout: '',
+        stderr: '',
+        error: undefined,
+      }),
+    } as never);
+
+    await send({ type: 'call', code: 'x = 1', packages: [], paramsJson: '{}', timeoutMs: 1000 });
+
+    expect(posted.at(-1)).toMatchObject({
+      type: 'call-result',
+      result: { success: true, valueJson: '{"count": 3.0}', outputProblemsJson: problemsJson },
+    });
+  });
+
+  it('passes only strings on from what Python returned', async () => {
+    const { posted, pyodide, send } = startWorker();
+    await send({ type: 'initialize' });
+    pyodide.runPythonAsync.mockResolvedValueOnce({
+      toJs: () => ({ contract_json: { name: 'f' }, value_json: 5, stdout: ['x'], stderr: '', error: undefined }),
+    } as never);
+
+    await send({ type: 'call', code: 'x = 1', packages: [], paramsJson: '{}', timeoutMs: 1000 });
+
+    expect(posted.at(-1)).toMatchObject({
+      type: 'call-result',
+      result: { success: true, contractJson: undefined, valueJson: undefined, output: '' },
+    });
+  });
+
+  it('reports a runtime failure during a call as a failed call-result', async () => {
+    const { posted, pyodide, send } = startWorker();
+    await send({ type: 'initialize' });
+    pyodide.runPythonAsync.mockRejectedValueOnce(new Error('PythonError: boom'));
+
+    await send({ type: 'call', code: 'x = 1', packages: [], paramsJson: null, timeoutMs: 1000 });
+
+    expect(posted.at(-1)).toMatchObject({
+      type: 'call-result',
+      result: { success: false, error: 'PythonError: boom' },
+    });
   });
 });

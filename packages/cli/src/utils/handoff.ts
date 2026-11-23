@@ -450,7 +450,7 @@ export function buildLocalHandoff(
     `${decisions.length} decisions, ${openBlockers.length} open blockers, ${openTodos.length} open todos.`,
   ];
   if (currentTask) {
-    parts.push(`Current task: ${currentTask.description}.`);
+    parts.push(`Current task: ${currentTask.content}.`);
   }
   if (decisions.length > 0) {
     parts.push(`Latest decision: ${decisions[decisions.length - 1].summary}.`);
@@ -460,7 +460,7 @@ export function buildLocalHandoff(
   return {
     summary: parts.join(' '),
     keyFindings: decisions.map(d => `${d.summary} (rationale: ${d.rationale})`),
-    nextSteps: [...openTodos.map(t => t.description), ...openBlockers.map(b => `Resolve blocker: ${b.description}`)],
+    nextSteps: [...openTodos.map(t => t.content), ...openBlockers.map(b => `Resolve blocker: ${b.description}`)],
     pendingDecisions: [],
     blockers: openBlockers.map(b => b.description),
     generatedAt: new Date().toISOString(),

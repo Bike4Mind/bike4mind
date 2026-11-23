@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
 import type { CreateDataLakeResearchConfigInput } from '@bike4mind/common';
 import type { ResearchFeedCursor } from '@bike4mind/common';
 import { RESEARCH_REVIEW_BACKLOG_LIMIT_DEFAULT } from '@bike4mind/common';
@@ -30,6 +30,7 @@ const input = (overrides: Partial<CreateDataLakeResearchConfigInput> = {}): Crea
   minRelevance: 0.6,
   costCeilingMicroUsd: 50_000,
   proposedTags: [],
+  itemRules: [],
   ...overrides,
 });
 
@@ -78,6 +79,26 @@ describe('DataLakeResearchConfigRepository', () => {
     const listed = await repo.listByLake(LAKE);
 
     expect(listed.map(c => c.name)).toEqual(['newer', 'older']);
+  });
+
+  it('pages by keyset without skipping or repeating rows that share a createdAt', async () => {
+    const ids: string[] = [];
+    for (const name of ['a', 'b', 'c', 'd', 'e']) ids.push((await repo.createConfig(input({ name }))).id);
+    await DataLakeResearchConfigModel.collection.updateMany(
+      { dataLakeId: LAKE },
+      { $set: { createdAt: new Date('2026-01-01T00:00:00.000Z') } }
+    );
+
+    const seen: string[] = [];
+    let after: { createdAt: Date; id: string } | undefined;
+    for (let page = 0; page < 5; page++) {
+      const rows = await repo.listByLake(LAKE, { limit: 2, after });
+      seen.push(...rows.map(r => r.id));
+      if (rows.length < 2) break;
+      after = { createdAt: rows[rows.length - 1].createdAt, id: rows[rows.length - 1].id };
+    }
+
+    expect(seen).toEqual([...ids].sort().reverse());
   });
 
   describe('lake scoping', () => {
@@ -181,6 +202,28 @@ describe('DataLakeResearchConfigRepository', () => {
       expect((await repo.findByIdInLake(due.id, LAKE))?.nextRunAt).toEqual(LEASE);
     });
 
+    it('does not claim a paused config, and still records an outcome for one paused mid-tick', async () => {
+      const paused = await scheduled(new Date('2026-03-10T09:00:00.000Z'), { schedulePaused: true });
+
+      expect(await repo.claimDueConfigs(NOW, LEASE, 10)).toHaveLength(0);
+
+      const next = new Date('2026-03-17T09:00:00.000Z');
+      await repo.recordScheduleOutcome(
+        paused.id,
+        'daily',
+        { outcome: 'skipped', at: NOW, reason: 'schedule_paused' },
+        next
+      );
+      const stored = await repo.findByIdInLake(paused.id, LAKE);
+      expect(stored?.nextRunAt).toEqual(next);
+      expect(stored?.lastScheduledOutcome).toMatchObject({ reason: 'schedule_paused' });
+    });
+
+    it('reads a config with no schedulePaused as not paused, and claims it', async () => {
+      await scheduled(new Date('2026-03-10T09:00:00.000Z'));
+      expect(await repo.claimDueConfigs(NOW, LEASE, 10)).toHaveLength(1);
+    });
+
     // The lease is what stops two overlapping ticks from both starting the same config.
     it('does not hand a claimed config to a second tick while its lease holds', async () => {
       await scheduled(new Date('2026-03-10T09:00:00.000Z'));
@@ -229,6 +272,36 @@ describe('DataLakeResearchConfigRepository', () => {
       const stored = await repo.findByIdInLake(config.id, LAKE);
       expect(stored?.nextRunAt).toBeNull();
       expect(stored?.lastScheduledOutcome).toBeNull();
+    });
+  });
+
+  describe('item rules', () => {
+    it('round-trips rules, and a document without the field reads as none', async () => {
+      const itemRules = [
+        { condition: 'Published by Acme', action: 'block' as const },
+        { condition: 'About sports', action: 'review' as const },
+      ];
+      const created = await repo.createConfig(input({ itemRules }));
+      expect((await repo.findByIdInLake(created.id, LAKE))?.itemRules).toEqual(itemRules);
+
+      const { insertedId } = await DataLakeResearchConfigModel.collection.insertOne({
+        dataLakeId: LAKE,
+        name: 'Old',
+        query: 'q',
+        maxResults: 10,
+        maxProposals: 5,
+        minRelevance: 0.6,
+        costCeilingMicroUsd: 50_000,
+        trigger: 'on_demand',
+        createdByUserId: 'user-1',
+      });
+      expect((await repo.findByIdInLake(String(insertedId), LAKE))?.itemRules).toEqual([]);
+    });
+
+    it('refuses an action other than block or review', async () => {
+      await expect(
+        repo.createConfig(input({ itemRules: [{ condition: 'c', action: 'allow' as never }] }))
+      ).rejects.toThrow();
     });
   });
 
@@ -382,6 +455,36 @@ describe('DataLakeResearchConfigRepository', () => {
       await repo.updateConfig(id, LAKE, { query: 'new topic' });
 
       expect((await repo.findByIdInLake(id, LAKE))?.feedCursor).toMatchObject({ fingerprint: 'fp-1' });
+    });
+  });
+
+  describe('error handling on by-id lookups', () => {
+    afterEach(() => {
+      vi.restoreAllMocks();
+    });
+
+    it('reads a malformed id as not found from find, update and delete', async () => {
+      expect(await repo.findByIdInLake('not-an-object-id', LAKE)).toBeNull();
+      expect(await repo.updateConfig('not-an-object-id', LAKE, { name: 'x' })).toBeNull();
+      expect(await repo.deleteConfig('not-an-object-id', LAKE)).toBe(false);
+    });
+
+    it('propagates a transient transaction error from find, update and delete', async () => {
+      const id = '507f1f77bcf86cd799439011';
+      const conflict = () =>
+        Object.assign(new Error('Write conflict during plan execution'), {
+          name: 'MongoServerError',
+          errorLabels: ['TransientTransactionError'],
+        });
+      vi.spyOn(DataLakeResearchConfigModel, 'findOne').mockImplementation((() => Promise.reject(conflict())) as never);
+      vi.spyOn(DataLakeResearchConfigModel, 'findOneAndUpdate').mockImplementation((() =>
+        Promise.reject(conflict())) as never);
+      vi.spyOn(DataLakeResearchConfigModel, 'deleteOne').mockImplementation((() =>
+        Promise.reject(conflict())) as never);
+
+      await expect(repo.findByIdInLake(id, LAKE)).rejects.toMatchObject({ name: 'MongoServerError' });
+      await expect(repo.updateConfig(id, LAKE, { name: 'x' })).rejects.toMatchObject({ name: 'MongoServerError' });
+      await expect(repo.deleteConfig(id, LAKE)).rejects.toMatchObject({ name: 'MongoServerError' });
     });
   });
 });

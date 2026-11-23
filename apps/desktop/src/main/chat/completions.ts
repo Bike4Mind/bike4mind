@@ -42,6 +42,12 @@ export interface CompletionMessage {
    * trimming never starts a turn here. Never sent: streamCompletion and OllamaLocal drop it.
    */
   continuesTurn?: boolean;
+  /**
+   * On a system prompt: where its per-session tail starts. withCacheBreakpoints sends the two
+   * halves as separately cached blocks, so sessions that differ only in the tail (sibling agents
+   * in their own worktrees) read the shared half from one cache entry. Never sent.
+   */
+  cacheSplitAt?: number;
 }
 
 /**
@@ -98,11 +104,33 @@ export function withCacheBreakpoints(messages: readonly CompletionMessage[]): Co
     rolling--;
   }
   const lookback = lookbackBreakpoint(messages, rolling);
-  return messages.map((message, index) =>
-    index === rolling || index === lookback || (message.role === 'system' && !isToolChangeMessage(message))
-      ? { ...message, cache: true }
-      : message
-  );
+  return messages.flatMap((message, index) => {
+    if (message.role === 'system' && !isToolChangeMessage(message)) return splitSystem(message);
+    return index === rolling || index === lookback ? [{ ...message, cache: true }] : [message];
+  });
+}
+
+/**
+ * A system prompt as one cached block, or two when it names where its per-session tail starts. The
+ * tail is left unmarked: the server marks the last system block itself and also marks the last
+ * tool, and a marker here would push that one past the provider's limit of four.
+ */
+function splitSystem({ cacheSplitAt, ...message }: CompletionMessage): CompletionMessage[] {
+  const { content } = message;
+  if (typeof content !== 'string' || !cacheSplitAt || cacheSplitAt >= content.length) {
+    return [{ ...message, cache: true }];
+  }
+  return [
+    { ...message, content: content.slice(0, cacheSplitAt), cache: true },
+    { ...message, content: content.slice(cacheSplitAt) },
+  ];
+}
+
+/** The messages as the server takes them, without the fields this client keeps for itself. */
+export function wireMessages<T extends Pick<CompletionMessage, 'continuesTurn' | 'cacheSplitAt'>>(
+  messages: readonly T[]
+): Omit<T, 'continuesTurn' | 'cacheSplitAt'>[] {
+  return messages.map(({ continuesTurn: _continuesTurn, cacheSplitAt: _cacheSplitAt, ...message }) => message);
 }
 
 export interface CompletionRequest {
@@ -219,7 +247,7 @@ async function streamOnce(
       endpoint,
       {
         model: request.model,
-        messages: request.messages.map(({ continuesTurn: _continuesTurn, ...message }) => message),
+        messages: wireMessages(request.messages),
         ...(request.maxTokens ? { max_tokens: request.maxTokens } : {}),
         ...(request.sessionId ? { sessionId: request.sessionId } : {}),
         ...(request.run ? { run: request.run } : {}),

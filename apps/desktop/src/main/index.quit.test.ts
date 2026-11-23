@@ -56,7 +56,7 @@ vi.mock('./auth', () => ({
 vi.mock('./attention', () => ({
   registerAttention: () => ({ watchNeedsYou: () => ({}) }),
 }));
-vi.mock('./usage', () => ({ registerUsage: vi.fn() }));
+vi.mock('./usage', () => ({ registerUsage: vi.fn(), registerLocalUsage: vi.fn() }));
 vi.mock('./fleet', () => ({
   registerFleet: () => ({ setDirectoryResolver: vi.fn(), setModelResolver: vi.fn() }),
 }));
@@ -76,6 +76,8 @@ vi.mock('./chat/tools/userPath', () => ({ resolveUserPath: vi.fn() }));
 vi.mock('./chat/artifacts/sandboxProtocol', () => ({ registerArtifactScheme: vi.fn() }));
 vi.mock('./chat/model3d/engineProtocol', () => ({ registerModelScheme: vi.fn() }));
 vi.mock('./chat/media/protocol', () => ({ registerMediaScheme: vi.fn() }));
+vi.mock('./mods/skinProtocol', () => ({ registerSkinScheme: vi.fn() }));
+vi.mock('./mods', () => ({ registerSkins: vi.fn() }));
 vi.mock('./chat', () => ({
   registerChat: () => ({
     service: { sessionStatuses: harness.sessionStatuses },

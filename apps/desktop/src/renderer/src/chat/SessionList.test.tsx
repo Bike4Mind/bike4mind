@@ -2,7 +2,7 @@
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { CssVarsProvider } from '@mui/joy/styles';
-import type { ChatSessionMode, ChatSessionSummary } from '@shared/chat';
+import type { ChatSessionMode, ChatSessionStatus, ChatSessionSummary } from '@shared/chat';
 import { EMPTY_SIDEBAR_SECTIONS } from '@shared/sidebarSections';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { desktopTheme } from '../theme';
@@ -53,6 +53,7 @@ const summary = (id: string, title: string, extra: Partial<ChatSessionSummary> =
 let root: Root | null = null;
 let host: HTMLElement | null = null;
 let onSelect = vi.fn<(id: string) => void>();
+let statuses = new Map<string, ChatSessionStatus>();
 let renameSession = vi.fn<(id: string, title: string) => Promise<ChatSessionSummary | null>>();
 
 /** The real sessions owner under the list, so a rename travels the same path it does in the app. */
@@ -65,7 +66,7 @@ function Harness({ activeId, mode }: { activeId: string | null; mode: ChatSessio
       onModeChange={() => {}}
       loading={loading}
       activeId={activeId}
-      statuses={new Map()}
+      statuses={statuses}
       prSummaries={new Map()}
       collapsed={false}
       onToggleCollapsed={() => {}}
@@ -164,6 +165,7 @@ const settle = () => act(async () => undefined);
 beforeEach(() => {
   badgeRenders.count = 0;
   onSelect = vi.fn();
+  statuses = new Map();
   renameSession = vi.fn(async (id: string, title: string) => summary(id, title));
 });
 
@@ -469,12 +471,56 @@ describe('sub-sessions an agent spawned', () => {
     setNestingEnabled(true);
   });
 
+  const hintOf = (title: string) =>
+    rowOf(title).closest('li')?.querySelector('[data-testid="chat-session-parent-hint"]')?.textContent ?? null;
+
   it('draw indented under their parent, which counts them on its fold pill', async () => {
     await mount(sessions());
     expect(titles()).toEqual(['Root', 'Kid A', 'Grandkid', 'Kid B']);
     expect([depthOf('Root'), depthOf('Kid A'), depthOf('Grandkid'), depthOf('Kid B')]).toEqual([null, '1', '2', '1']);
-    const pills = all('chat-session-fold-btn');
-    expect(pills.map(pill => pill.textContent)).toEqual(['3', '1']);
+    expect(all('chat-session-fold-btn').map(pill => pill.textContent)).toEqual(['3', '1']);
+    expect([hintOf('Kid A'), hintOf('Kid B'), hintOf('Grandkid')]).toEqual([null, null, null]);
+  });
+
+  it('caps the indent at three levels and labels deeper sessions', async () => {
+    const chain = [summary('s0', 'Level 1')];
+    for (let level = 1; level <= 4; level += 1) chain.push(spawned(`s${level}`, `Level ${level + 1}`, `s${level - 1}`));
+    await mount(chain);
+    expect(chain.map(entry => depthOf(entry.title))).toEqual([null, '1', '2', '3', '3']);
+    expect(rowOf('Level 4').closest('li')?.querySelector('[data-testid="chat-session-depth-chip"]')).toBeNull();
+    expect(rowOf('Level 5').closest('li')?.querySelector('[data-testid="chat-session-depth-chip"]')?.textContent).toBe(
+      'level 5'
+    );
+  });
+
+  it('keeps the level-3 rail running past a deeper row', async () => {
+    await mount([
+      summary('s0', 'Top'),
+      spawned('s1', 'L1', 's0'),
+      spawned('s2', 'L2', 's1'),
+      spawned('a', 'A', 's2'),
+      spawned('b', 'B', 's2'),
+      spawned('d', 'D', 'a'),
+    ]);
+    expect(depthOf('D')).toBe('3');
+    const guides = rowOf('D').closest('li')?.getAttribute('data-nest-guides') ?? '';
+    expect(guides).toHaveLength(3);
+    expect(guides.endsWith('1')).toBe(true);
+  });
+
+  it('lights the elbows on the path to a waiting or working descendant', async () => {
+    statuses = new Map([
+      ['grandkid', 'needs-action'],
+      ['kid-b', 'processing'],
+    ]);
+    await mount(sessions());
+    const heat = (title: string) => rowOf(title).closest('li')?.getAttribute('data-nest-heat') ?? null;
+    expect([heat('Root'), heat('Kid A'), heat('Grandkid'), heat('Kid B')]).toEqual([
+      null,
+      'needs-action',
+      'needs-action',
+      'processing',
+    ]);
   });
 
   it('fold away and come back from the pill, without opening the parent', async () => {
@@ -510,8 +556,10 @@ describe('sub-sessions an agent spawned', () => {
       setter?.call(input, 'Kid');
       input.dispatchEvent(new Event('input', { bubbles: true }));
     });
-    // The parent does not match, so its children stand on their own rows.
-    expect(titles()).toEqual(['Kid A', 'Grandkid', 'Kid B']);
+    // A search is a flat list: no tree, and each result says where it came from.
+    expect(titles()).toEqual(['Kid A', 'Kid B', 'Grandkid']);
+    expect([depthOf('Kid A'), depthOf('Grandkid')]).toEqual([null, null]);
+    expect([hintOf('Kid A'), hintOf('Grandkid')]).toEqual(['from Root', 'from Kid A']);
   });
 
   it('leave the pill inert under a search, where a fold could not show', async () => {
@@ -522,9 +570,9 @@ describe('sub-sessions an agent spawned', () => {
       setter?.call(input, 'Kid');
       input.dispatchEvent(new Event('input', { bubbles: true }));
     });
-    act(() => foldButton().click());
+    expect(query('chat-session-fold-btn')).toBeNull();
     expect(foldedParents().has('kid-a')).toBe(false);
-    expect(titles()).toEqual(['Kid A', 'Grandkid', 'Kid B']);
+    expect(titles()).toEqual(['Kid A', 'Kid B', 'Grandkid']);
   });
 
   it('unfold the branches holding the open session, and still fold on request', async () => {
@@ -541,6 +589,7 @@ describe('sub-sessions an agent spawned', () => {
     setNestingEnabled(false);
     await mount(sessions());
     expect(titles()).toEqual(['Root', 'Kid A', 'Kid B', 'Grandkid']);
+    expect(hintOf('Kid A')).toBeNull();
     expect(query('chat-session-fold-btn')).toBeNull();
   });
 });

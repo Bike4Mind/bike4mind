@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import type { IDataLakeDocument, IDataLakeResearchConfigDocument } from '@bike4mind/common';
+import type { IDataLakeDocument, IDataLakeResearchConfigDocument, ResearchKeysetPage } from '@bike4mind/common';
 import {
   RESEARCH_MAX_AUTO_ADMITS_DEFAULT,
   RESEARCH_MAX_AUTO_ADMITS_LIMIT,
@@ -15,6 +15,7 @@ import {
   createResearchConfig,
   deleteResearchConfig,
   listResearchConfigs,
+  setResearchSchedulePaused,
   updateResearchConfig,
   RESEARCH_CONFIGS_PER_LAKE_MAX,
   type ResearchConfigAdapters,
@@ -69,10 +70,16 @@ const makeAdapters = (overrides: Partial<ResearchConfigAdapters['db']['dataLakeR
     deleteConfig: vi.fn(async () => true),
     ...overrides,
   };
-  const record = vi.fn(async () => undefined);
+  const record = vi.fn(async (_input: unknown) => ({ id: 'evt-1' }));
+  const snapshotRecord = vi.fn(async (_input: unknown) => undefined);
   return {
+    snapshotRecord,
     adapters: {
-      db: { dataLakeResearchConfigs: repo, lakeConfigChangeEvents: { record } },
+      db: {
+        dataLakeResearchConfigs: repo,
+        lakeConfigChangeEvents: { record },
+        lakeConfigSnapshots: { record: snapshotRecord },
+      },
       now: () => NOW,
     } as unknown as ResearchConfigAdapters,
     repo,
@@ -232,7 +239,14 @@ describe('listResearchConfigs', () => {
   it('scopes the read to the lake', async () => {
     const { adapters, repo } = makeAdapters();
     await listResearchConfigs(LAKE_ID, adapters);
-    expect(repo.listByLake).toHaveBeenCalledWith(LAKE_ID);
+    expect(repo.listByLake).toHaveBeenCalledWith(LAKE_ID, undefined);
+  });
+
+  it('forwards a keyset page to the read', async () => {
+    const { adapters, repo } = makeAdapters();
+    const page: ResearchKeysetPage = { limit: 5, after: { createdAt: new Date('2026-01-01'), id: 'cfg-1' } };
+    await listResearchConfigs(LAKE_ID, adapters, page);
+    expect(repo.listByLake).toHaveBeenCalledWith(LAKE_ID, page);
   });
 });
 
@@ -362,7 +376,12 @@ describe('updateResearchConfig', () => {
     expect(record).toHaveBeenCalledWith(
       expect.objectContaining({
         action: 'update-research-config',
-        changes: [{ field: 'researchConfig', kind: 'literal', after: 'updated: Renamed sweep' }],
+        target: { kind: 'researchConfig', id: 'config-1' },
+        changes: [
+          { field: 'researchConfig', kind: 'literal', after: 'updated: Renamed sweep' },
+          { field: 'researchConfig', kind: 'literal', after: 'name Weekly sweep -> Renamed sweep: Renamed sweep' },
+        ],
+        leverChanges: [{ lever: 'name', before: 'Weekly sweep', after: 'Renamed sweep' }],
       })
     );
   });
@@ -845,7 +864,9 @@ describe('research config feed source', () => {
   it('adds no source entry when only another lever changes on a feed config', async () => {
     const { run, record } = update(storedConfig({ source: 'feed', feedUrl: FEED }), { minRelevance: 0.9 });
     await run();
-    expect(record.mock.calls[0][0].changes).toHaveLength(1);
+    const lines = record.mock.calls[0][0].changes.map((c: { after: string }) => c.after);
+    expect(lines).toHaveLength(2);
+    expect(lines.some((l: string) => l.startsWith('source:'))).toBe(false);
   });
 });
 
@@ -878,5 +899,445 @@ describe('deleteResearchConfig', () => {
         changes: [{ field: 'researchConfig', kind: 'literal', after: 'deleted: Weekly sweep' }],
       })
     );
+  });
+});
+
+describe('research config item rules', () => {
+  const rule = (condition: string, action: 'block' | 'review' = 'block') => ({ condition, action });
+  const stored = (overrides: Partial<IDataLakeResearchConfigDocument> = {}) => storedConfig(overrides);
+  const update = (existing: IDataLakeResearchConfigDocument, input: Parameters<typeof updateResearchConfig>[4]) => {
+    const made = makeAdapters({ findByIdInLake: vi.fn(async () => existing) });
+    return { ...made, run: () => updateResearchConfig('config-1', lake(), actor(), NO_GRANTS, input, made.adapters) };
+  };
+  const create = (itemRules: unknown[]) => {
+    const made = makeAdapters();
+    return {
+      ...made,
+      run: () =>
+        createResearchConfig(
+          lake(),
+          actor(),
+          NO_GRANTS,
+          { name: 'n', query: 'q', itemRules } as Parameters<typeof createResearchConfig>[3],
+          made.adapters
+        ),
+    };
+  };
+  const many = (count: number) => Array.from({ length: count }, (_, i) => rule(`rule ${i}`));
+  const ruleChanges = (calls: unknown[][]) =>
+    (calls[0]?.[0] as { changes: { after: string }[] } | undefined)?.changes.filter(change =>
+      change.after.startsWith('item rules')
+    ) ?? [];
+
+  it('stores trimmed rules on create', async () => {
+    const { run, repo } = create([rule('  Published by Acme  ', 'review')]);
+    await run();
+    expect(repo.createConfig.mock.calls[0][0].itemRules).toEqual([rule('Published by Acme', 'review')]);
+  });
+
+  it.each([
+    ['11 rules', many(11)],
+    ['a 301-character condition', [rule('x'.repeat(301))]],
+  ])('refuses %s on create and on update', async (_label, rules) => {
+    const created = create(rules);
+    await expect(created.run()).rejects.toThrow(/item rule/);
+    expect(created.repo.createConfig).not.toHaveBeenCalled();
+    const updated = update(stored(), { itemRules: rules as never });
+    await expect(updated.run()).rejects.toThrow(/item rule/);
+    expect(updated.repo.updateConfig).not.toHaveBeenCalled();
+  });
+
+  it('accepts 11 entries when one is a duplicate, and a 300-character condition', async () => {
+    const { run, repo } = create([...many(10), rule('RULE 0 ')]);
+    await run();
+    expect(repo.createConfig.mock.calls[0][0].itemRules).toHaveLength(10);
+    const long = create([rule('x'.repeat(300))]);
+    await expect(long.run()).resolves.toBeDefined();
+  });
+
+  it('counts and length-checks the cleaned conditions', async () => {
+    const { run, repo } = create([...many(10), rule('\u200B\u200B')]);
+    await run();
+    expect(repo.createConfig.mock.calls[0][0].itemRules).toHaveLength(10);
+    const padded = create([rule('x'.repeat(300) + '\u200B'.repeat(20))]);
+    await expect(padded.run()).resolves.toBeDefined();
+  });
+
+  it('treats a reordered or re-cased resubmit as a no-op with no history entry', async () => {
+    const { run, record, repo } = update(stored({ itemRules: [rule('A one'), rule('b two', 'review')] }), {
+      itemRules: [rule('B TWO', 'review'), rule(' a one ')],
+    });
+    await run();
+    expect(record).not.toHaveBeenCalled();
+    expect(repo.updateConfig).toHaveBeenCalled();
+  });
+
+  it('writes one entry with counts when rules are added and removed', async () => {
+    const { run, record } = update(stored({ itemRules: [rule('a'), rule('b')] }), {
+      itemRules: [rule('b'), rule('c'), rule('d', 'review')],
+    });
+    await run();
+    expect(ruleChanges(record.mock.calls)).toEqual([
+      { field: 'researchConfig', kind: 'literal', after: 'item rules 2 added, 1 removed: Weekly sweep' },
+    ]);
+  });
+
+  it('keeps stored rules when an edit does not mention them', async () => {
+    const { run, record, repo } = update(stored({ itemRules: [rule('a')] }), { query: 'other' });
+    await run();
+    expect(repo.updateConfig.mock.calls[0][2].itemRules).toEqual([rule('a')]);
+    expect(ruleChanges(record.mock.calls)).toEqual([]);
+  });
+
+  it('flipping an action alone is one removed and one added', async () => {
+    const { run, record } = update(stored({ itemRules: [rule('a', 'block')] }), { itemRules: [rule('a', 'review')] });
+    await run();
+    expect(ruleChanges(record.mock.calls)[0]).toMatchObject({
+      after: 'item rules 1 added, 1 removed: Weekly sweep',
+    });
+  });
+
+  it('records the count on create when there are rules, and nothing when there are none', async () => {
+    const withRules = create([rule('a'), rule('b'), rule('c', 'review')]);
+    await withRules.run();
+    expect(ruleChanges(withRules.record.mock.calls)).toEqual([
+      { field: 'researchConfig', kind: 'literal', after: 'item rules 3 added: n' },
+    ]);
+    const none = create([]);
+    await none.run();
+    expect(ruleChanges(none.record.mock.calls)).toEqual([]);
+  });
+});
+
+describe('research schedule pause', () => {
+  const ANCHOR = new Date('2026-03-08T12:00:00.000Z');
+  const weekly = (overrides: Partial<IDataLakeResearchConfigDocument> = {}) =>
+    storedConfig({
+      cadence: 'weekly',
+      trigger: 'periodic',
+      nextRunAt: ANCHOR,
+      scheduleAnchorAt: ANCHOR,
+      ...overrides,
+    });
+  const adaptersFor = (stored: IDataLakeResearchConfigDocument) =>
+    makeAdapters({ findByIdInLake: vi.fn(async () => stored) });
+  const setPaused = (stored: IDataLakeResearchConfigDocument, paused: boolean) => {
+    const made = adaptersFor(stored);
+    return {
+      ...made,
+      run: () => setResearchSchedulePaused('config-1', lake(), paused, actor(), NO_GRANTS, made.adapters),
+    };
+  };
+  const patchOf = (repo: ReturnType<typeof makeAdapters>['repo']) =>
+    repo.updateConfig.mock.calls[0][2] as Record<string, unknown>;
+  const historyEntries = (record: ReturnType<typeof makeAdapters>['record']) =>
+    (record.mock.calls as unknown as [{ changes: { after: string }[] }][]).flatMap(([event]) =>
+      event.changes.map(change => change.after)
+    );
+
+  describe('setResearchSchedulePaused', () => {
+    it('writes only the flag on pause, keeping cadence, next run and anchor, and records History', async () => {
+      const { run, repo, record } = setPaused(weekly(), true);
+      await run();
+      expect(patchOf(repo)).toEqual({ schedulePaused: true, lastUpdatedByUserId: ACTOR_ID });
+      expect(historyEntries(record)).toEqual(['research schedule paused: Weekly sweep']);
+    });
+
+    it('resumes before the first run on the anchor', async () => {
+      const { run, repo, record } = setPaused(weekly({ schedulePaused: true }), false);
+      await run();
+      expect(patchOf(repo)).toMatchObject({ schedulePaused: false, nextRunAt: ANCHOR });
+      expect(historyEntries(record)).toEqual(['research schedule resumed: Weekly sweep']);
+    });
+
+    it('keeps a pending one-hour retry across a pause and resume', async () => {
+      const retryAt = new Date('2026-03-01T12:40:00.000Z');
+      const stored = weekly({ nextRunAt: retryAt, scheduleAnchorAt: new Date('2026-02-22T09:00:00.000Z') });
+      const paused = setPaused(stored, true);
+      await paused.run();
+      expect(patchOf(paused.repo)).not.toHaveProperty('nextRunAt');
+
+      const resumed = setPaused({ ...stored, schedulePaused: true }, false);
+      await resumed.run();
+      expect(patchOf(resumed.repo).nextRunAt).toEqual(retryAt);
+    });
+
+    it('keeps a future next run left by a tick that claimed before the pause', async () => {
+      const lease = new Date('2026-03-01T12:10:00.000Z');
+      const { run, repo } = setPaused(weekly({ schedulePaused: true, nextRunAt: lease }), false);
+      await run();
+      expect(patchOf(repo).nextRunAt).toEqual(lease);
+    });
+
+    it('lands the next regular slot after a long pause, not an immediate run', async () => {
+      const stored = weekly({
+        cadence: 'daily',
+        schedulePaused: true,
+        nextRunAt: new Date('2026-02-01T09:00:00.000Z'),
+        scheduleAnchorAt: new Date('2026-01-01T09:00:00.000Z'),
+      });
+      const { run, repo } = setPaused(stored, false);
+      await run();
+      expect(patchOf(repo).nextRunAt).toEqual(new Date('2026-03-02T09:00:00.000Z'));
+    });
+
+    it('clears a schedule_paused outcome on resume, and only that one', async () => {
+      const at = new Date('2026-03-01T09:00:00.000Z');
+      const cleared = setPaused(
+        weekly({
+          schedulePaused: true,
+          lastScheduledOutcome: { outcome: 'skipped', at, reason: 'schedule_paused' },
+        }),
+        false
+      );
+      await cleared.run();
+      expect(patchOf(cleared.repo)).toMatchObject({ lastScheduledOutcome: null });
+
+      const kept = setPaused(
+        weekly({ schedulePaused: true, lastScheduledOutcome: { outcome: 'skipped', at, reason: 'daily_cap' } }),
+        false
+      );
+      await kept.run();
+      expect(patchOf(kept.repo)).not.toHaveProperty('lastScheduledOutcome');
+    });
+
+    it('can still pause a config whose levers would now fail validation', async () => {
+      const stale = weekly({ autoAdmitTrusted: true, trustedDomains: ['com'] });
+      const { adapters } = adaptersFor(stale);
+      await expect(
+        updateResearchConfig('config-1', lake(), actor(), NO_GRANTS, { query: 'same' }, adapters)
+      ).rejects.toThrow(/covers every site/);
+
+      const { run, repo } = setPaused(stale, true);
+      await run();
+      expect(patchOf(repo)).toMatchObject({ schedulePaused: true });
+    });
+
+    it('refuses to pause a config with no cadence', async () => {
+      const { run, repo } = setPaused(storedConfig(), true);
+      await expect(run()).rejects.toThrow(/needs a cadence/);
+      expect(repo.updateConfig).not.toHaveBeenCalled();
+    });
+
+    it('writes nothing when the flag already has the requested value', async () => {
+      const { run, repo, record } = setPaused(weekly({ schedulePaused: true }), true);
+      await run();
+      expect(repo.updateConfig).not.toHaveBeenCalled();
+      expect(record).not.toHaveBeenCalled();
+    });
+
+    it('404s on a config that is not in this lake', async () => {
+      const made = makeAdapters({ findByIdInLake: vi.fn(async () => null) });
+      await expect(
+        setResearchSchedulePaused('config-1', lake(), true, actor(), NO_GRANTS, made.adapters)
+      ).rejects.toThrow(/not found/);
+    });
+
+    it('lets a repository error other than not-found propagate, so a write conflict can retry', async () => {
+      const conflict = Object.assign(new Error('write conflict'), { code: 112 });
+      const made = makeAdapters({
+        findByIdInLake: vi.fn(async () => weekly()),
+        updateConfig: vi.fn(async () => {
+          throw conflict;
+        }),
+      });
+      await expect(setResearchSchedulePaused('config-1', lake(), true, actor(), NO_GRANTS, made.adapters)).rejects.toBe(
+        conflict
+      );
+    });
+  });
+
+  describe('updateResearchConfig', () => {
+    it('applies a lever change and the pause from one mixed body', async () => {
+      const { adapters, repo, record } = adaptersFor(weekly());
+      await updateResearchConfig(
+        'config-1',
+        lake(),
+        actor(),
+        NO_GRANTS,
+        { schedulePaused: true, query: 'new question' },
+        adapters
+      );
+      expect(patchOf(repo)).toMatchObject({ schedulePaused: true, query: 'new question' });
+      expect(historyEntries(record)).toEqual(
+        expect.arrayContaining(['updated: Weekly sweep', 'research schedule paused: Weekly sweep'])
+      );
+    });
+
+    it('records a pause-only change in History even though no lever moved', async () => {
+      const { adapters, record } = adaptersFor(weekly());
+      await updateResearchConfig('config-1', lake(), actor(), NO_GRANTS, { schedulePaused: true }, adapters);
+      expect(historyEntries(record)).toEqual(['research schedule paused: Weekly sweep']);
+    });
+
+    it('does not record the pause entry when the flag is unchanged', async () => {
+      const { adapters, record } = adaptersFor(weekly({ schedulePaused: true }));
+      await updateResearchConfig('config-1', lake(), actor(), NO_GRANTS, { schedulePaused: true }, adapters);
+      expect(record).not.toHaveBeenCalled();
+    });
+
+    it('records one History row naming the old and new cadence', async () => {
+      const toOff = adaptersFor(weekly());
+      await updateResearchConfig('config-1', lake(), actor(), NO_GRANTS, { cadence: 'off' }, toOff.adapters);
+      expect(historyEntries(toOff.record)).toEqual(['research schedule weekly -> off: Weekly sweep']);
+
+      const toDaily = adaptersFor(weekly({ cadence: 'off', trigger: 'manual' }));
+      await updateResearchConfig('config-1', lake(), actor(), NO_GRANTS, { cadence: 'daily' }, toDaily.adapters);
+      expect(historyEntries(toDaily.record)).toEqual(['research schedule off -> daily: Weekly sweep']);
+    });
+
+    it('records one History row naming the old and new review backlog limit', async () => {
+      const { adapters, record } = adaptersFor(weekly({ reviewBacklogLimit: 25 }));
+      await updateResearchConfig('config-1', lake(), actor(), NO_GRANTS, { reviewBacklogLimit: 40 }, adapters);
+      expect(historyEntries(record)).toEqual(['review backlog limit 25 -> 40: Weekly sweep']);
+    });
+
+    it('records nothing when cadence and backlog limit are resubmitted unchanged', async () => {
+      const { adapters, record } = adaptersFor(weekly({ reviewBacklogLimit: 40 }));
+      await updateResearchConfig(
+        'config-1',
+        lake(),
+        actor(),
+        NO_GRANTS,
+        { cadence: 'weekly', reviewBacklogLimit: 40 },
+        adapters
+      );
+      expect(record).not.toHaveBeenCalled();
+    });
+
+    it('resumes with the same next-run rule as the narrow write', async () => {
+      const retryAt = new Date('2026-03-01T12:40:00.000Z');
+      const { adapters, repo } = adaptersFor(weekly({ schedulePaused: true, nextRunAt: retryAt }));
+      await updateResearchConfig('config-1', lake(), actor(), NO_GRANTS, { schedulePaused: false }, adapters);
+      expect(patchOf(repo)).toMatchObject({ schedulePaused: false, nextRunAt: retryAt });
+    });
+
+    it('refuses schedulePaused true while the resulting cadence is off', async () => {
+      const { adapters, repo } = makeAdapters();
+      await expect(
+        updateResearchConfig('config-1', lake(), actor(), NO_GRANTS, { schedulePaused: true }, adapters)
+      ).rejects.toThrow(/needs a cadence/);
+      await expect(
+        updateResearchConfig(
+          'config-1',
+          lake(),
+          actor(),
+          NO_GRANTS,
+          { schedulePaused: true, cadence: 'off' },
+          adaptersFor(weekly()).adapters
+        )
+      ).rejects.toThrow(/needs a cadence/);
+      expect(repo.updateConfig).not.toHaveBeenCalled();
+    });
+
+    it('keeps the pause across a cadence change and clears it when the cadence goes off', async () => {
+      const changed = adaptersFor(weekly({ schedulePaused: true }));
+      await updateResearchConfig('config-1', lake(), actor(), NO_GRANTS, { cadence: 'daily' }, changed.adapters);
+      expect(patchOf(changed.repo)).toMatchObject({ cadence: 'daily', nextRunAt: expect.any(Date) });
+      expect(patchOf(changed.repo)).not.toHaveProperty('schedulePaused');
+
+      const off = adaptersFor(weekly({ schedulePaused: true }));
+      await updateResearchConfig('config-1', lake(), actor(), NO_GRANTS, { cadence: 'off' }, off.adapters);
+      expect(patchOf(off.repo)).toMatchObject({ cadence: 'off', schedulePaused: false });
+      expect(historyEntries(off.record).some(entry => entry.startsWith('research schedule resumed'))).toBe(false);
+    });
+  });
+
+  describe('createResearchConfig', () => {
+    it('persists a paused schedule', async () => {
+      const { adapters, repo } = makeAdapters();
+      await createResearchConfig(
+        lake(),
+        actor(),
+        NO_GRANTS,
+        { name: 'n', query: 'q', cadence: 'weekly', schedulePaused: true },
+        adapters
+      );
+      expect(repo.createConfig.mock.calls[0][0]).toMatchObject({ cadence: 'weekly', schedulePaused: true });
+    });
+
+    it('defaults to not paused, and refuses a paused config with no cadence', async () => {
+      const { adapters, repo } = makeAdapters();
+      await createResearchConfig(lake(), actor(), NO_GRANTS, { name: 'n', query: 'q' }, adapters);
+      expect(repo.createConfig.mock.calls[0][0]).toMatchObject({ schedulePaused: false });
+      await expect(
+        createResearchConfig(lake(), actor(), NO_GRANTS, { name: 'n', query: 'q', schedulePaused: true }, adapters)
+      ).rejects.toThrow(/needs a cadence/);
+    });
+  });
+});
+
+describe('structured History and config snapshots', () => {
+  const FEED_QS = 'https://example.com/feed.xml?token=secret-abc';
+
+  it('records target and a redacted lever snapshot on delete, plus the full config as a snapshot', async () => {
+    const stored = storedConfig({ source: 'feed', feedUrl: FEED_QS, cadence: 'daily' });
+    const { adapters, record, snapshotRecord } = makeAdapters({ findByIdInLake: vi.fn(async () => stored) });
+
+    await deleteResearchConfig('config-1', lake(), actor(), NO_GRANTS, adapters);
+
+    const input = record.mock.calls[0][0] as { target: unknown; leverChanges: { after: unknown }[] };
+    expect(input.target).toEqual({ kind: 'researchConfig', id: 'config-1' });
+    expect(input.leverChanges.every(c => c.after === null)).toBe(true);
+    expect(JSON.stringify(input)).not.toContain('secret-abc');
+    expect(snapshotRecord).toHaveBeenCalledWith(
+      expect.objectContaining({
+        dataLakeId: LAKE_ID,
+        eventId: 'evt-1',
+        kind: 'config-deleted',
+        config: expect.objectContaining({ feedUrl: FEED_QS }),
+      })
+    );
+  });
+
+  it('writes the full before and after feed address to a snapshot on a feed edit, never to History', async () => {
+    const stored = storedConfig({ source: 'feed', feedUrl: FEED_QS });
+    const next = 'https://example.com/other.xml?key=second';
+    const { adapters, record, snapshotRecord } = makeAdapters({ findByIdInLake: vi.fn(async () => stored) });
+
+    await updateResearchConfig('config-1', lake(), actor(), NO_GRANTS, { feedUrl: next }, adapters);
+
+    expect(snapshotRecord).toHaveBeenCalledWith(
+      expect.objectContaining({ eventId: 'evt-1', kind: 'feed-url-edited', feedUrlBefore: FEED_QS, feedUrlAfter: next })
+    );
+    const out = JSON.stringify(record.mock.calls[0][0]);
+    expect(out).not.toContain('secret-abc');
+    expect(out).not.toContain('second');
+  });
+
+  it('writes no snapshot when the feed address did not move', async () => {
+    const { adapters, snapshotRecord } = makeAdapters();
+    await updateResearchConfig('config-1', lake(), actor(), NO_GRANTS, { minRelevance: 0.9 }, adapters);
+    expect(snapshotRecord).not.toHaveBeenCalled();
+  });
+
+  it('survives a failing snapshot write', async () => {
+    const stored = storedConfig({ source: 'feed', feedUrl: FEED_QS });
+    const { adapters, snapshotRecord } = makeAdapters({ findByIdInLake: vi.fn(async () => stored) });
+    snapshotRecord.mockRejectedValueOnce(new Error('boom'));
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    await expect(
+      updateResearchConfig('config-1', lake(), actor(), NO_GRANTS, { feedUrl: 'https://example.com/b.xml' }, adapters)
+    ).resolves.toBeDefined();
+    expect(warn).toHaveBeenCalled();
+    warn.mockRestore();
+  });
+
+  it('records the schedulePaused flip when an edit sets cadence off', async () => {
+    const stored = storedConfig({ cadence: 'daily', schedulePaused: true });
+    const { adapters, record } = makeAdapters({ findByIdInLake: vi.fn(async () => stored) });
+
+    await updateResearchConfig('config-1', lake(), actor(), NO_GRANTS, { cadence: 'off' }, adapters);
+
+    const input = record.mock.calls[0][0] as { leverChanges: { lever: string; before: unknown; after: unknown }[] };
+    expect(input.leverChanges).toEqual(
+      expect.arrayContaining([{ lever: 'schedulePaused', before: true, after: false }])
+    );
+  });
+
+  it('records target on create', async () => {
+    const { adapters, record } = makeAdapters();
+    await createResearchConfig(lake(), actor(), NO_GRANTS, { name: 'Weekly', query: 'erosion' }, adapters);
+    expect(record).toHaveBeenCalledWith(expect.objectContaining({ target: { kind: 'researchConfig', id: 'new' } }));
   });
 });

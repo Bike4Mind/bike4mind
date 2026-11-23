@@ -6,6 +6,7 @@ import {
   type IDataLakeResearchRunDocument,
   type IDataLakeResearchRunRepository,
   type IOrganizationRepository,
+  type ISpendFreezeRepository,
   type IUserRepository,
   type ResearchScheduleSkipReason,
 } from '@bike4mind/common';
@@ -18,6 +19,7 @@ import {
   type LakeConfigAuditAdapters,
   type LakeConfigAuditLakeRef,
 } from '../dataLakeService/recordLakeConfigChange';
+import { assertSpendNotFrozen } from '../spendFreezeService/assertSpendNotFrozen';
 import { aiAccessDeniedMessage } from '../userService/accountState';
 import { normalizeResearchLevers } from './researchLevers';
 
@@ -36,7 +38,7 @@ export type ResearchRunStarter =
 
 type ResearchRunRefusalReason = Exclude<
   ResearchScheduleSkipReason,
-  'review_backlog' | 'lake_inactive' | 'insufficient_credits'
+  'review_backlog' | 'lake_inactive' | 'insufficient_credits' | 'spend_frozen'
 >;
 
 /**
@@ -49,7 +51,11 @@ type ResearchRunRefusalReason = Exclude<
  */
 export type ResearchRunRefusedError = BadRequestError & { reason: ResearchRunRefusalReason };
 
-const REFUSAL_REASONS: ReadonlySet<unknown> = new Set<ResearchRunRefusalReason>(['run_in_progress', 'daily_cap']);
+const REFUSAL_REASONS: ReadonlySet<unknown> = new Set<ResearchRunRefusalReason>([
+  'run_in_progress',
+  'daily_cap',
+  'schedule_paused',
+]);
 
 const researchRunRefused = (message: string, reason: ResearchRunRefusalReason): ResearchRunRefusedError =>
   Object.assign(new BadRequestError(message), { reason });
@@ -80,6 +86,8 @@ export interface StartResearchRunAdapters extends LakeConfigAuditAdapters {
     adminSettings: NonNullable<LakeConfigAuditAdapters['db']['adminSettings']>;
     users: Pick<IUserRepository, 'findById'>;
     organizations: Pick<IOrganizationRepository, 'findById'>;
+    // REQUIRED for the same reason as the two above: the owner's spend freeze is read here.
+    spendFreezes: Pick<ISpendFreezeRepository, 'findActiveForSubject'>;
   };
   now?: () => Date;
 }
@@ -162,6 +170,12 @@ export async function startResearchRun(
   const config = await db.dataLakeResearchConfigs.findByIdInLake(configId, dataLakeId);
   if (!config) throw new NotFoundError('Research configuration not found');
 
+  // The claim returns the pre-update snapshot, so a pause that landed after the claim is only
+  // visible on this fresh read.
+  if (starter.trigger === 'periodic' && config.schedulePaused === true) {
+    throw researchRunRefused('This research schedule is paused', 'schedule_paused');
+  }
+
   // One at a time per lake. Checked before the daily cap because it is the guard whose message is
   // the clearer of the two.
   //
@@ -201,6 +215,11 @@ export async function startResearchRun(
   // The owner pays, so a blocked owner refuses the run whoever starts it, and whether or not credits are enforced.
   if (owner && aiAccessDeniedMessage(owner)) {
     throw new ForbiddenError("This data lake's owner account cannot run research. Please contact support.");
+  }
+  // The owner pays, so it is the owner's freeze that counts, with credits enforced or not. A lake with
+  // no owner has nobody to freeze; the balance pre-flight below refuses it when credits are enforced.
+  if (owner) {
+    await assertSpendNotFrozen({ userId: owner.id, organizationId: owner.organizationId ?? null }, { db });
   }
   await assertResearchRunAffordable(owner, levers.costCeilingMicroUsd, { db });
 

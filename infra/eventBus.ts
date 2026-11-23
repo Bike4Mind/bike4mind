@@ -9,6 +9,7 @@ import { createEventBusDeadLetter } from './eventBusDeadLetter';
 import { otcEmailConfigurationSet } from './otcEmailMetrics';
 import { mailTransportEnvironment, sesSendPermissions } from './mailTransport';
 import { appUrlForLambdaEnv } from './router';
+import { mailBodyEnvironment, mailBodyGetPermission } from './mailBodyOffload';
 
 // Stripe events
 const billingEventsDLQ = new sst.aws.Queue('billingEventsDLQ', {
@@ -109,12 +110,13 @@ export const emailSendSubscription = eventBus.subscribe(
     link: [...allSecrets, websocketApi, eventBus],
     vpc: lambdaVpc,
     environment: {
+      ...mailBodyEnvironment(appFilesBucket),
       ...DEFAULT_LAMBDA_ENVIRONMENT,
       OTC_SES_CONFIGURATION_SET: otcEmailConfigurationSet?.name ?? '',
       ...mailTransportEnvironment,
       MAIL_SINK_DOMAINS: mailSinkDomains,
     },
-    permissions: [emailEventsDeadLetter.sendPermission, ...sesSendPermissions],
+    permissions: [emailEventsDeadLetter.sendPermission, ...sesSendPermissions, mailBodyGetPermission(appFilesBucket)],
     transform: emailEventsDeadLetter.functionTarget,
   },
   {
@@ -300,7 +302,36 @@ const sessionTaggingSubscription = eventBus.subscribe(
   }
 );
 
+const briefComposeSubscription = eventBus.subscribe(
+  'brief-compose',
+  {
+    handler: 'apps/workers/src/events/briefCompose.handler',
+    runtime: 'nodejs24.x',
+    link: [...allSecrets, fabFileBucket, generatedImagesBucket, appFilesBucket, eventBus],
+    vpc: lambdaVpc,
+    timeout: '2 minutes',
+    environment: {
+      ...DEFAULT_LAMBDA_ENVIRONMENT,
+    },
+    permissions: [
+      {
+        actions: ['bedrock:*'],
+        resources: ['*'],
+      },
+      sessionEnrichmentDeadLetter.sendPermission,
+    ],
+    transform: sessionEnrichmentDeadLetter.functionTarget,
+  },
+  {
+    pattern: {
+      detailType: ['brief.compose'],
+    },
+    transform: sessionEnrichmentDeadLetter.ruleTarget,
+  }
+);
+
 sessionEnrichmentDeadLetter.allowRules([
+  briefComposeSubscription,
   sessionAutoNamingSubscription,
   sessionSummarizationSubscription,
   sessionContextSummarizationSubscription,
@@ -527,6 +558,7 @@ export {
   sessionEnrichmentDeadLetter,
   sreFixDispatchSubscription,
   riskEvidenceCompletionSubscription,
+  briefComposeSubscription,
   sessionAutoNamingSubscription,
   sessionSummarizationSubscription,
   sessionContextSummarizationSubscription,

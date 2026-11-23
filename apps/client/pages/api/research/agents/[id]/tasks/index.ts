@@ -10,7 +10,7 @@ import {
 } from '@bike4mind/database';
 import { researchTaskJobs } from '@bike4mind/server-utils/utils/researchTasks';
 import { assertOwnerCanAfford } from '@bike4mind/server-utils/billing/meterPlatformCompletion';
-import { admitRequestCompletion } from '@server/utils/untrustedCompletionQuota';
+import { admitRequestCompletion } from '@bike4mind/server-utils/utils/untrustedCompletionQuota';
 import { ResearchTaskType, ResearchTaskExecutionType } from '@bike4mind/common';
 import * as z from 'zod';
 

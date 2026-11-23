@@ -10,6 +10,9 @@ import { z } from 'zod';
  * - Frames: a clip edge in ms lands on frame Math.round(ms * fps / 1000), at the start and at the end.
  * - Compositing: video tracks draw bottom to top over `backgroundColor`. Anything a clip leaves uncovered
  *   (letterbox bars from `fit: 'contain'`, a fade, a gap between clips) is transparent, so what is below shows.
+ * - Framing: a `cover` clip shows the largest region of the output's shape that fits inside its `crop` rect for
+ *   that output's aspect ratio, centred in the rect; with no rect the rect is the whole source, a centre crop.
+ *   `contain` ignores `crop`. One helper computes this for both consumers: ./crop.
  * - Media: a video track takes video or image files (an image ignores `trimStartMs` and has no audio); the
  *   voice, sfx and music tracks take audio or video files (a video contributes only its audio).
  * - Captions wrap at word boundaries to `maxWidthPct` of the output width and honor explicit line breaks.
@@ -100,6 +103,24 @@ const AudioShape = {
 /** How a source whose shape differs from an output's fills that frame: crop to fill, or letterbox to fit. */
 export const STUDIO_VIDEO_FIT_MODES = ['cover', 'contain'] as const;
 
+/** Rects narrower than this would upscale a 1080p source past usefulness. */
+export const STUDIO_CROP_MIN_EDGE = 0.05;
+// Rects are stored as floats, so an edge flush with the frame may sum a hair past 1.
+const CROP_EDGE_TOLERANCE = 1e-6;
+
+/** A region of the source frame, normalized 0..1 from its top-left; see the framing rule above. */
+export const StudioCropRectSchema = z
+  .object({
+    x: z.number().min(0).max(1),
+    y: z.number().min(0).max(1),
+    width: z.number().min(STUDIO_CROP_MIN_EDGE).max(1),
+    height: z.number().min(STUDIO_CROP_MIN_EDGE).max(1),
+  })
+  .refine(rect => rect.x + rect.width <= 1 + CROP_EDGE_TOLERANCE && rect.y + rect.height <= 1 + CROP_EDGE_TOLERANCE, {
+    message: 'A crop rect must lie inside the source frame',
+  });
+export type StudioCropRect = z.infer<typeof StudioCropRectSchema>;
+
 /**
  * On a video clip a fade ramps opacity from and to transparent (revealing what is below) and the clip's audio
  * gain with it, so a cross-fade is two overlapping clips on two video tracks.
@@ -108,6 +129,8 @@ export const StudioVideoClipSchema = z.object({
   ...MediaClipShape,
   ...AudioShape,
   fit: z.enum(STUDIO_VIDEO_FIT_MODES).default('cover'),
+  // Keyed by aspect ratio rather than output id, so a framing survives an output being toggled off and on.
+  crop: z.partialRecord(z.enum(STUDIO_OUTPUT_ASPECT_RATIOS), StudioCropRectSchema).optional(),
 });
 export type StudioVideoClip = z.infer<typeof StudioVideoClipSchema>;
 
@@ -134,6 +157,12 @@ export const StudioCaptionClipSchema = z.object({
   ...ClipTimingShape,
   text: z.string().trim().min(1).max(STUDIO_TIMELINE_LIMITS.maxCaptionLength),
   style: StudioCaptionStyleSchema.prefault({}),
+  /**
+   * The voice clip this caption was timed from. While set, the editor moves the caption with that clip's audio
+   * (see shiftSyncedCaptions); the renderer ignores it. It must name a clip on a voice track (validateStudioTimeline:
+   * unknown_sync_clip); the editor drops the link when that clip is removed.
+   */
+  syncedVoiceClipId: TimelineIdSchema.optional(),
 });
 export type StudioCaptionClip = z.infer<typeof StudioCaptionClipSchema>;
 

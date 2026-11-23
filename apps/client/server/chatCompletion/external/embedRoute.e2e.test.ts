@@ -266,7 +266,7 @@ async function seed(overrides: SeedOverrides = {}) {
   });
 
   auth.info = {
-    keyId: 'key-1',
+    keyId: new mongooseDirect.Types.ObjectId().toString(),
     userId: owner.id,
     scopes: ['embed:chat'],
     rateLimit: { requestsPerMinute: 10, requestsPerDay: 100 },

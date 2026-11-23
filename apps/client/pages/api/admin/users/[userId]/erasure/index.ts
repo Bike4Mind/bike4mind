@@ -41,7 +41,7 @@ const handler = adminApi({
     const current = await readAdminErasureState(user.id);
     if (current.state !== 'none') throw new ConflictError('This account already has a deletion pending.');
     if (current.ownedOrganizations.length > 0) {
-      throw new ConflictError('Transfer or delete the organizations this user owns before erasing their data.', {
+      throw new ConflictError('Transfer or delete the organizations this user owns first.', {
         code: ACCOUNT_DELETION_ORG_OWNER_CODE,
         organizations: current.ownedOrganizations,
       });

@@ -74,7 +74,7 @@ import {
   type HeldSignupCreditRelease,
   listHeldSignupIds,
   releaseHeldSignupCredits,
-} from '@server/security/signupDomainHoldAssessment/releaseHeldSignupCredits';
+} from '@bike4mind/server-utils/security/signupDomainHoldAssessment/releaseHeldSignupCredits';
 
 // Namespaces this feature's budget, call cap and concurrency in the shared platform policy.
 const KEY_PREFIX = 'signupDomainHoldAssessment';

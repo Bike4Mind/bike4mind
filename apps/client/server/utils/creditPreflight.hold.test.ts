@@ -102,6 +102,12 @@ describe('holdPreflightCredits', () => {
     );
   });
 
+  it('hands a key that only joins the freeze subject through to the reservation', async () => {
+    await hold({ spendFreezeApiKey: { keyId: 'key-1' } });
+
+    expect(mocks.reserve).toHaveBeenCalledWith(expect.objectContaining({ spendFreezeApiKey: { keyId: 'key-1' } }));
+  });
+
   it('settles the measured cost against the reservation and reports who was billed', async () => {
     const reservation = held({ ownerId: 'org1', ownerType: CreditHolderType.Organization });
     mocks.reserve.mockResolvedValue(reservation);

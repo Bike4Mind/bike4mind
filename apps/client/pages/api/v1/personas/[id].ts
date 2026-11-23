@@ -15,7 +15,7 @@ import {
   loadPersonaSettings,
   isPersonaAccount,
   mayManagePersona,
-} from '@server/personas/personaAccounts';
+} from '@bike4mind/server-utils/personas/personaAccounts';
 
 const OBJECT_ID_PATTERN = /^[a-f0-9]{24}$/i;
 

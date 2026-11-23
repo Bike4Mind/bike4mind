@@ -109,7 +109,7 @@ describe('SessionList Download', () => {
 
     await openMenu();
     const item = query('chat-download-session-btn');
-    expect(item?.textContent).toBe('Download');
+    expect(item?.textContent).toBe('DownloadL');
     await click(item as HTMLElement);
 
     expect(onDownload).toHaveBeenCalledWith(session);

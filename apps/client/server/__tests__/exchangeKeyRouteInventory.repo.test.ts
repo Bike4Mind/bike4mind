@@ -40,6 +40,7 @@ const ALLOWED_CONTRACTS = new Set([
   'createCompletion',
   'createCompletionRun',
   'getCompletionRunUsage',
+  'raiseCompletionRunBudget',
   'synthesizeSpeech',
   'generateMusic',
   'generateSoundEffect',
@@ -59,6 +60,10 @@ const ALLOWED_CONTRACTS = new Set([
   'createSession',
   'listCreditTransactions',
   'cancelVideoGeneration',
+  'createSceneComposition',
+  'getSceneComposition',
+  'listSceneCompositions',
+  'cancelSceneComposition',
   'createVideoGeneration',
   'getVideoGeneration',
   'listVideoGenerations',
@@ -87,12 +92,15 @@ const ALLOWED_ENDPOINTS = [
   'GET /api/generated-content/:ref',
   'GET /api/identify',
   'GET /api/models',
+  'GET /api/oauth/userinfo',
   'GET /api/quests/:id/files',
+  'GET /api/transforms/batch/:id',
   'GET /api/v1/agent-executions/:id',
   'GET /api/v1/client-config',
   'GET /api/v1/completion-runs/:runId/usage',
   'GET /api/v1/credits',
   'GET /api/v1/credits/transactions',
+  'GET /api/v1/completion-runs/:runId/usage',
   'GET /api/v1/decision-models',
   'GET /api/v1/embedding-models',
   'GET /api/v1/image-models',
@@ -102,12 +110,14 @@ const ALLOWED_ENDPOINTS = [
   'GET /api/v1/music-models',
   'GET /api/v1/quests/:id',
   'GET /api/v1/quests/:id/files',
+  'GET /api/v1/scene-compositions/:id',
   'GET /api/v1/video-generations/:id',
   'GET /api/v1/video-models',
   'GET /api/users/:id',
   'GET /api/v1/voice/voices',
   'GET /api/voice/v2/agents',
   'GET|POST /api/v1/music-generations',
+  'GET|POST /api/v1/scene-compositions',
   'GET|POST /api/v1/video-generations',
   'POST /api/ai/music',
   'POST /api/ai/transcribe',
@@ -120,14 +130,17 @@ const ALLOWED_ENDPOINTS = [
   'POST /api/tools/weather',
   'POST /api/tools/web-fetch',
   'POST /api/tools/web-search',
+  'POST /api/transforms/batch',
   'POST /api/user-api-keys/:id/callback-secret',
   'POST /api/v1/agent-executions',
   'POST /api/v1/completion-runs',
+  'POST /api/v1/completion-runs/:runId/budget',
   'POST /api/v1/decisions',
   'POST /api/v1/embeddings',
   'POST /api/v1/image-edits',
   'POST /api/v1/image-generations',
   'POST /api/v1/music-generations/:id/cancel',
+  'POST /api/v1/scene-compositions/:id/cancel',
   'POST /api/v1/sessions',
   'POST /api/v1/text-refinements',
   'POST /api/v1/tools/weather',
@@ -149,7 +162,14 @@ const UNRESOLVABLE_DOOR_ALLOWLIST: Record<string, string> = {};
 
 // Scoped routes an exchange key may not use (credential management, other users' profiles,
 // gamification): each refuses an exchange key in its handler.
-const REFUSING_ROUTES = ['gears/status.ts', 'user-api-keys/[id]/callback-secret.ts', 'users/[id]/index.ts'];
+const REFUSING_ROUTES = [
+  'gears/status.ts',
+  'oauth/userinfo.ts',
+  'transforms/batch.ts',
+  'transforms/batch/[id].ts',
+  'user-api-keys/[id]/callback-secret.ts',
+  'users/[id]/index.ts',
+];
 
 // Scope-less credential and account routes. They stay closed only while they declare no exchange scope.
 const SCOPE_LESS_CREDENTIAL_ROUTES = [
@@ -236,7 +256,9 @@ describe('keys minted for a connected app reach only their scoped routes', () =>
   });
 
   it.each(REFUSING_ROUTES)('%s refuses an exchange key in its handler', route => {
-    expect(routeSource(route)).toMatch(/if \(req\.apiKeyInfo\?\.oauthExchangeClientId\)/);
+    expect(routeSource(route)).toMatch(
+      /if \(req\.apiKeyInfo\?\.oauthExchangeClientId\)|if \(refuseExchangeKey\(req, res\)\) return;/
+    );
   });
 
   it.each(SCOPE_LESS_CREDENTIAL_ROUTES)('%s declares no scope an exchange key holds', route => {

@@ -24,6 +24,7 @@ import { eventBus } from './bus';
 import { mcpHandler } from './mcp';
 import { appUrlForLambdaEnv, cdnUrlForLambdaEnv, router, routerDistributionId } from './router';
 import { searxngUrl } from './searxng';
+import { mailBodyEnvironment, mailBodyPutPermission } from './mailBodyOffload';
 
 // Data Lake Taxonomy Analysis Queue - declared before the chunk/vectorize queues below
 // because both of those Lambdas now need to link it too (finalizeBatchIfComplete, which they
@@ -157,6 +158,7 @@ const fabFileVectorizeQueueSubscription = fabFileVectorizeQueue.subscribe(
     vpc: lambdaVpc,
     // dataLakeTaxonomyQueue + lakeMemoryQueue: finalizeBatchIfComplete (called from this handler)
     // enqueues taxonomy analysis and lake memory extraction, which need their queue URLs.
+    // eventBus: the data lake spend notice is queued as an email.send event.
     link: [
       ...allSecrets,
       websocketApi,
@@ -165,11 +167,14 @@ const fabFileVectorizeQueueSubscription = fabFileVectorizeQueue.subscribe(
       appFilesBucket,
       dataLakeTaxonomyQueue,
       lakeMemoryQueue,
+      eventBus,
     ],
     environment: {
+      ...mailBodyEnvironment(appFilesBucket),
       ...DEFAULT_LAMBDA_ENVIRONMENT,
     },
     permissions: [
+      mailBodyPutPermission(appFilesBucket),
       {
         actions: ['bedrock:InvokeModel'],
         resources: ['*'],
@@ -278,8 +283,10 @@ const fabFileBucketNotification = fabFileBucket.notify({
         // Animated images are moderated frame by frame (up to 60 frames), which can exceed the default 20s/1024 MB.
         timeout: '2 minutes',
         memory: '2048 MB',
-        link: [...allSecrets, websocketApi, fabFileChunkQueue, fabFileBucket],
+        // eventBus: a recorded moderation incident queues its reviewer alert as an email.send event.
+        link: [...allSecrets, websocketApi, fabFileChunkQueue, fabFileBucket, eventBus],
         permissions: [
+          mailBodyPutPermission(appFilesBucket),
           { actions: ['rekognition:DetectModerationLabels'], resources: ['*'] },
           // Required for Lambda's async-invoke failure mechanism to deliver the failed
           // event to the DLQ — AWS Lambda uses the function's own execution role to send.
@@ -287,6 +294,7 @@ const fabFileBucketNotification = fabFileBucket.notify({
         ],
         vpc: lambdaVpc,
         environment: {
+          ...mailBodyEnvironment(appFilesBucket),
           ...DEFAULT_LAMBDA_ENVIRONMENT,
         },
         transform: {
@@ -378,9 +386,11 @@ const imageGenerationQueueSubscription = imageGenerationQueue.subscribe(
       generationCallbackQueue,
     ],
     environment: {
+      ...mailBodyEnvironment(appFilesBucket),
       ...DEFAULT_LAMBDA_ENVIRONMENT,
     },
     permissions: [
+      mailBodyPutPermission(appFilesBucket),
       {
         actions: ['bedrock:*'],
         resources: ['*'],
@@ -426,9 +436,11 @@ const imageEditQueueSubscription = imageEditQueue.subscribe(
       generationCallbackQueue,
     ],
     environment: {
+      ...mailBodyEnvironment(appFilesBucket),
       ...DEFAULT_LAMBDA_ENVIRONMENT,
     },
     permissions: [
+      mailBodyPutPermission(appFilesBucket),
       {
         actions: ['bedrock:*'],
         resources: ['*'],
@@ -463,7 +475,7 @@ const researchEngineQueueSubscription = researchEngineQueue.subscribe(
     runtime: 'nodejs24.x',
     vpc: lambdaVpc,
     timeout: '15 minutes',
-    link: [...allSecrets, fabFileBucket, websocketApi, generatedImagesBucket, researchEngineQueue],
+    link: [...allSecrets, fabFileBucket, websocketApi, generatedImagesBucket, researchEngineQueue, eventBus],
     environment: {
       ...DEFAULT_LAMBDA_ENVIRONMENT,
     },
@@ -586,9 +598,11 @@ const agentProactiveMessageQueueSubscription = agentProactiveMessageQueue.subscr
     vpc: lambdaVpc,
     link: [...allSecrets, websocketApi, fabFileBucket, generatedImagesBucket, appFilesBucket, eventBus],
     environment: {
+      ...mailBodyEnvironment(appFilesBucket),
       ...DEFAULT_LAMBDA_ENVIRONMENT,
     },
     permissions: [
+      mailBodyPutPermission(appFilesBucket),
       {
         actions: ['bedrock:*'],
         resources: ['*'],
@@ -989,7 +1003,7 @@ const dataLakeTaxonomyQueueSubscription = dataLakeTaxonomyQueue.subscribe(
     runtime: 'nodejs24.x',
     timeout: '5 minutes',
     vpc: lambdaVpc,
-    link: [...allSecrets, websocketApi],
+    link: [...allSecrets, websocketApi, eventBus],
     environment: {
       ...DEFAULT_LAMBDA_ENVIRONMENT,
     },
@@ -1011,7 +1025,7 @@ const lakeMemoryQueueSubscription = lakeMemoryQueue.subscribe(
     // lakeMemoryQueue: this handler self-re-enqueues for bounded continuation (a lake too large for one
     // run sends the next slice's message to its own queue), so it needs Resource.lakeMemoryQueue.url and
     // the sqs:SendMessage grant that linking the queue confers.
-    link: [...allSecrets, websocketApi, lakeMemoryQueue],
+    link: [...allSecrets, websocketApi, lakeMemoryQueue, eventBus],
     environment: {
       ...DEFAULT_LAMBDA_ENVIRONMENT,
     },
@@ -1074,7 +1088,7 @@ const dataLakeResearchQueueSubscription = dataLakeResearchQueue.subscribe(
     runtime: 'nodejs24.x',
     timeout: '10 minutes',
     vpc: lambdaVpc,
-    link: [...allSecrets, fabFileBucket],
+    link: [...allSecrets, fabFileBucket, eventBus],
     environment: {
       ...DEFAULT_LAMBDA_ENVIRONMENT,
       // Research runs resolve the web-search provider like ChatCompletion does; same wiring
@@ -1162,7 +1176,8 @@ const githubLakeRevokeQueueSubscription = githubLakeRevokeQueue.subscribe(
 );
 
 // Generated media a notebook or message delete could not purge within its request budget
-// (apps/client/server/sessions/purgeDeletedNotebookMedia.ts, purgeDeletedMessageMedia.ts) finishes here.
+// (packages/server-utils/src/sessions/purgeDeletedNotebookMedia.ts,
+// apps/client/server/sessions/purgeDeletedMessageMedia.ts) finishes here.
 const generatedMediaPurgeQueueDLQ = new sst.aws.Queue('generatedMediaPurgeQueueDLQ', {});
 const generatedMediaPurgeQueue = new sst.aws.Queue('generatedMediaPurgeQueue', {
   visibilityTimeout: '6 minutes',
@@ -1198,6 +1213,21 @@ const generatedMediaPurgeQueueSubscription = generatedMediaPurgeQueue.subscribe(
   }
 );
 
+// Render Job Queue
+// The render engine step (packages/server-utils/src/generationJobs/wiring.ts resolveRenderJobQueueUrl) sends
+// {jobId} here; the render worker (apps/workers/src/render/main.ts) long-polls it, as a Fargate service on hosted
+// stages (infra/renderWorker.ts) or from the self-host chart, so there is no Lambda subscription. The visibility
+// timeout covers the whole render cap (STUDIO_RENDER_MAX_WALL_CLOCK_MS, 30 minutes) plus the hand-back, so a
+// running render is never redelivered to a second task.
+const renderJobDLQ = new sst.aws.Queue('renderJobDLQ', {});
+const renderJobQueue = new sst.aws.Queue('renderJobQueue', {
+  visibilityTimeout: '35 minutes',
+  dlq: {
+    queue: renderJobDLQ.arn,
+    retry: 3,
+  },
+});
+
 // Generation Job Queue
 // One engine step per message (submit, poll or store) for the generic GenerationJob engine; a step that
 // needs another turn re-enqueues itself with a delay. The subscription timeout, queue visibility timeout
@@ -1220,6 +1250,15 @@ const generationJobQueueSubscription = generationJobQueue.subscribe(
     runtime: 'nodejs24.x',
     timeout: '5 minutes',
     memory: '2048 MB',
+    // Scene (compose) jobs download up to 200 MB of inputs and write the rendered MP4 under /tmp.
+    storage: '2 GB',
+    nodejs: {
+      // ffmpeg-static resolves its binary relative to its own package dir, so it cannot be bundled; install runs
+      // npm for the Lambda's linux platform, so its postinstall downloads the matching static ffmpeg into the zip.
+      // Registered by apps/workers/src/queueHandlers/generationJob.ts, never imported by server-utils.
+      install: ['ffmpeg-static'],
+      esbuild: { external: ['ffmpeg-static'] },
+    },
     vpc: lambdaVpc,
     link: [
       ...allSecrets,
@@ -1230,12 +1269,18 @@ const generationJobQueueSubscription = generationJobQueue.subscribe(
       eventBus,
       generationCallbackQueue,
       generationJobQueue,
+      // The render submit step hands the job to the render worker.
+      renderJobQueue,
       // A masked image edit converts the mask to PNG there.
       imageProcessor,
     ],
     // Image jobs run our post-generation scan before the image is stored.
-    permissions: [{ actions: ['rekognition:DetectModerationLabels'], resources: ['*'] }],
+    permissions: [
+      { actions: ['rekognition:DetectModerationLabels'], resources: ['*'] },
+      mailBodyPutPermission(appFilesBucket),
+    ],
     environment: {
+      ...mailBodyEnvironment(appFilesBucket),
       ...DEFAULT_LAMBDA_ENVIRONMENT,
       ...TEST_GENERATION_PROVIDER_ENVIRONMENT,
     },
@@ -1275,12 +1320,14 @@ const liveOpsTriageQueueSubscription = liveOpsTriageQueue.subscribe(
     link: [...allSecrets, websocketApi, fabFileBucket, generatedImagesBucket, appFilesBucket, eventBus, mcpHandler],
     environment: {
       ...DEFAULT_LAMBDA_ENVIRONMENT,
+      ...mailBodyEnvironment(appFilesBucket),
     },
     permissions: [
       {
         actions: ['cloudwatch:PutMetricData'],
         resources: ['*'],
       },
+      mailBodyPutPermission(appFilesBucket),
     ],
   },
   SINGLE_RECORD_BATCH
@@ -1369,11 +1416,14 @@ const deepAgentWakeQueueSubscription = deepAgentWakeQueue.subscribe(
     runtime: 'nodejs24.x',
     timeout: '10 minutes',
     vpc: lambdaVpc,
-    link: [...allSecrets],
+    // eventBus: a recorded moderation incident queues its reviewer alert as an email.send event.
+    link: [...allSecrets, eventBus],
     environment: {
+      ...mailBodyEnvironment(appFilesBucket),
       ...DEFAULT_LAMBDA_ENVIRONMENT,
     },
     permissions: [
+      mailBodyPutPermission(appFilesBucket),
       {
         actions: ['bedrock:InvokeModel'],
         resources: ['*'],
@@ -1689,7 +1739,8 @@ const bobRunQueueSubscription = bobRunQueue.subscribe(
     memory: '1024 MB',
     vpc: lambdaVpc,
     // appFilesBucket: a run's first-screen screenshots are stored under bob-screenshots/<runId>/.
-    link: [...allSecrets, websocketApi, appFilesBucket],
+    // eventBus: the org credit alert email from a run's debit is queued as an email.send event.
+    link: [...allSecrets, websocketApi, appFilesBucket, eventBus],
     environment: {
       ...DEFAULT_LAMBDA_ENVIRONMENT,
     },
@@ -1745,10 +1796,9 @@ const libreoncologyAudioRenderQueueSubscription = libreoncologyAudioRenderQueue.
 );
 
 // Package-declared queue pairs. Core alarms the DLQ (dlqAlarms.ts) and links both URLs
-// (web.ts) but subscribes no consumer, and contributeInfra in sst.config.ts is not handed
-// these queues, so a pair has no consumer until that wiring exists. Without core names
-// nothing stops a pair from reusing a core logical name, so codegen without infra/ fails the
-// deploy here.
+// (web.ts) but subscribes no consumer: sst.config.ts hands the pairs to a package's
+// contributeInfra, which subscribes its own. Without core names nothing stops a pair from
+// reusing a core logical name, so codegen without infra/ fails the deploy here.
 const reservedContributedQueueNames = reservedQueueNames(generatedInfraResources);
 const { contributedInfraResources } = generatedInfraResources;
 if (reservedContributedQueueNames === null && contributedInfraResources.queues.length > 0) {
@@ -1786,6 +1836,7 @@ export {
   imageGenerationQueue,
   imageEditQueue,
   generationJobQueue,
+  renderJobQueue,
   researchEngineQueue,
   whatsNewGenerationQueue,
   notebookCurationQueue,
@@ -1826,6 +1877,7 @@ export {
   imageGenerationDLQ,
   imageEditDLQ,
   generationJobDLQ,
+  renderJobDLQ,
   researchEngineQueueDLQ,
   whatsNewGenerationQueueDLQ,
   notebookCurationQueueDLQ,

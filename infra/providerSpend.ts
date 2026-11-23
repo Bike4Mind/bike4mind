@@ -1,22 +1,26 @@
 /**
  * Provider-reported LLM spend: hourly alarms per provider on ProviderReportedUsd, which the
  * providerUsagePoll cron (infra/cron.ts) reads from each provider's own usage report, plus alarms
- * on the poller failing or skipping a provider, and a small dashboard. The ledger-derived twin is
- * infra/llmSpend.ts. Also alarms on the nightly spend reconciliation (spendReconciliationCron) drifting
- * from the provider's billing or reconciling nothing.
+ * on the poller failing or skipping a provider, meeting output tokens it cannot price or reading an old
+ * or missing model price snapshot, and a small
+ * dashboard. The ledger-derived twin is infra/llmSpend.ts. Also alarms on the nightly spend
+ * reconciliation (spendReconciliationCron) drifting from the provider's billing or reconciling nothing.
  *
- * Also holds the access policy and the access alarms for the provider admin key store
- * (infra/providerAdminKeys.ts) the two spend crons read.
+ * Also holds the access policy, the access alarms and the key age alarms for the provider admin key
+ * store (infra/providerAdminKeys.ts) the two spend crons read.
  */
 
 import { providerUsagePollCron, spendReconciliationCron } from './cron';
 import { dlqAlarmTopic, oobAlarmTopic } from './dlqAlarms';
 import {
+  PROVIDER_ADMIN_KEY_AGE_ALARM_DAYS,
   PROVIDER_ADMIN_KEY_PROVIDERS,
+  providerAdminKeyAgeAlarmDescription,
   providerAdminKeyChangeEventPattern,
   providerAdminKeyKmsEventPattern,
   providerAdminKeyLogsPolicy,
   providerAdminKeyReadEventPattern,
+  providerAdminKeySecretName,
   providerAdminKeySecretPolicy,
   providerAdminKeyStore,
   type ProviderAdminKeyStore,
@@ -31,6 +35,25 @@ const isMonitoredStage = _isMonitoredStage($app.stage, MONITORED_STAGES, process
 export const PROVIDER_SPEND_PROVIDERS = ['anthropic', 'openai'] as const;
 export const PROVIDER_SPEND_ALARM_USD_PER_HOUR_DEFAULT = 25;
 export const PROVIDER_SPEND_ALARM_USD_PER_HOUR_ANTHROPIC_DEFAULT = 90;
+/** Output tokens per hour of unpriced usage below which the unpriced alarm stays quiet, whatever the share. */
+export const PROVIDER_UNPRICED_TOKENS_ALARM_FLOOR_DEFAULT = 20_000;
+export const PROVIDER_UNPRICED_TOKENS_ALARM_SHARE_PCT_DEFAULT = 10;
+
+const unpricedTokensFloor = parseAlarmThreshold(
+  'PROVIDER_UNPRICED_TOKENS_ALARM_FLOOR',
+  process.env.PROVIDER_UNPRICED_TOKENS_ALARM_FLOOR,
+  PROVIDER_UNPRICED_TOKENS_ALARM_FLOOR_DEFAULT
+);
+const unpricedTokensSharePct = parseAlarmThreshold(
+  'PROVIDER_UNPRICED_TOKENS_ALARM_SHARE_PCT',
+  process.env.PROVIDER_UNPRICED_TOKENS_ALARM_SHARE_PCT,
+  PROVIDER_UNPRICED_TOKENS_ALARM_SHARE_PCT_DEFAULT
+);
+if (unpricedTokensSharePct > 100) {
+  throw new Error(
+    `PROVIDER_UNPRICED_TOKENS_ALARM_SHARE_PCT must be an integer <= 100, got "${process.env.PROVIDER_UNPRICED_TOKENS_ALARM_SHARE_PCT}"`
+  );
+}
 
 const providerSpendThresholds: Record<(typeof PROVIDER_SPEND_PROVIDERS)[number], number> = {
   anthropic: parseAlarmThreshold(
@@ -44,6 +67,9 @@ const providerSpendThresholds: Record<(typeof PROVIDER_SPEND_PROVIDERS)[number],
     PROVIDER_SPEND_ALARM_USD_PER_HOUR_DEFAULT
   ),
 };
+
+/** Hours of snapshot age that alarms, and the number of consecutive hourly polls without a snapshot that alarms. */
+const MODEL_PRICE_SNAPSHOT_ALARM_HOURS = 48;
 
 let providerSpendDashboard: aws.cloudwatch.Dashboard | undefined;
 
@@ -109,6 +135,49 @@ if (isMonitoredStage) {
       okActions: actions,
       tags: { Application: 'LLMSpend', Severity: 'Critical' },
     });
+
+    new aws.cloudwatch.MetricAlarm(`providerUnpricedTokensHourly-${provider}`, {
+      name: `${prefix}-provider-unpriced-tokens-hourly-${provider}`,
+      alarmDescription: `${provider} usage report for the last hour has output tokens from models we cannot price, so the provider-reported spend alarm undercounts`,
+      comparisonOperator: 'GreaterThanOrEqualToThreshold',
+      evaluationPeriods: 1,
+      threshold: 1,
+      treatMissingData: 'notBreaching',
+      metricQueries: [
+        {
+          id: 'unpriced',
+          metric: {
+            metricName: 'UnpricedOutputTokens',
+            namespace: LLM_SPEND_NAMESPACE,
+            dimensions: { Provider: provider },
+            period: 3600,
+            stat: 'Sum',
+          },
+          returnData: false,
+        },
+        {
+          id: 'total',
+          metric: {
+            metricName: 'ProviderReportedOutputTokens',
+            namespace: LLM_SPEND_NAMESPACE,
+            dimensions: { Provider: provider },
+            period: 3600,
+            stat: 'Sum',
+          },
+          returnData: false,
+        },
+        {
+          id: 'breach',
+          // Multiplied, not divided, so an hour with no tokens cannot divide by zero.
+          expression: `IF(unpriced >= ${unpricedTokensFloor} AND unpriced * 100 >= ${unpricedTokensSharePct} * total, 1, 0)`,
+          label: 'Unpriced output tokens above the floor and share',
+          returnData: true,
+        },
+      ],
+      alarmActions: actions,
+      okActions: actions,
+      tags: { Application: 'LLMSpend', Severity: 'Medium' },
+    });
   }
 
   // The cron only exists where scheduled jobs run, so a preview that opts in to monitoring has none.
@@ -146,6 +215,43 @@ if (isMonitoredStage) {
       treatMissingData: 'notBreaching',
       dimensions: { FunctionName: providerUsagePollCron.nodes.function.name },
       alarmActions: [dlqAlarmTopic.arn],
+      tags: { Application: 'LLMSpend', Severity: 'Medium' },
+    });
+  }
+
+  if (providerUsagePollCron) {
+    // Published on every poll with no dimensions; the poller publishes Missing instead of an age when
+    // the snapshot cannot be used, so absence is explicit and a stage without the poller stays quiet.
+    new aws.cloudwatch.MetricAlarm('modelPriceSnapshotAge', {
+      name: `${prefix}-model-price-snapshot-age`,
+      alarmDescription: `The model price snapshot the usage poller reads is ${MODEL_PRICE_SNAPSHOT_ALARM_HOURS} hours old or more, so new model prices are not reaching it`,
+      comparisonOperator: 'GreaterThanOrEqualToThreshold',
+      evaluationPeriods: 1,
+      metricName: 'ModelPriceSnapshotAgeHours',
+      namespace: LLM_SPEND_NAMESPACE,
+      period: 3600,
+      statistic: 'Maximum',
+      threshold: MODEL_PRICE_SNAPSHOT_ALARM_HOURS,
+      treatMissingData: 'notBreaching',
+      alarmActions: actions,
+      okActions: actions,
+      tags: { Application: 'LLMSpend', Severity: 'Medium' },
+    });
+
+    new aws.cloudwatch.MetricAlarm('modelPriceSnapshotMissing', {
+      name: `${prefix}-model-price-snapshot-missing`,
+      alarmDescription: `The usage poller could not use the model price snapshot on ${MODEL_PRICE_SNAPSHOT_ALARM_HOURS} consecutive hourly polls`,
+      comparisonOperator: 'GreaterThanOrEqualToThreshold',
+      evaluationPeriods: MODEL_PRICE_SNAPSHOT_ALARM_HOURS,
+      datapointsToAlarm: MODEL_PRICE_SNAPSHOT_ALARM_HOURS,
+      metricName: 'ModelPriceSnapshotMissing',
+      namespace: LLM_SPEND_NAMESPACE,
+      period: 3600,
+      statistic: 'Maximum',
+      threshold: 1,
+      treatMissingData: 'notBreaching',
+      alarmActions: actions,
+      okActions: actions,
       tags: { Application: 'LLMSpend', Severity: 'Medium' },
     });
   }
@@ -299,6 +405,34 @@ if (isMonitoredStage) {
         tags: { Application: 'LLMSpend', Severity: 'Critical' },
       });
     }
+
+    // Fires on the ProviderAdminKeyAgeDays datum the poller publishes each hour for a key it read
+    // from the store. Writing a new secret version resets the age. One breaching hour in the last
+    // three keeps the state, so a run or two that publishes no age does not clear and re-fire it.
+    for (const provider of PROVIDER_ADMIN_KEY_PROVIDERS) {
+      const days = PROVIDER_ADMIN_KEY_AGE_ALARM_DAYS[provider];
+      new aws.cloudwatch.MetricAlarm(`ProviderAdminKeyAgeAlarm-${provider}`, {
+        name: `${prefix}-provider-admin-key-age-${provider}`,
+        alarmDescription: providerAdminKeyAgeAlarmDescription({
+          provider,
+          days,
+          secretName: providerAdminKeySecretName($app.name, $app.stage, provider),
+          namespace: LLM_SPEND_NAMESPACE,
+        }),
+        comparisonOperator: 'GreaterThanOrEqualToThreshold',
+        evaluationPeriods: 3,
+        datapointsToAlarm: 1,
+        metricName: 'ProviderAdminKeyAgeDays',
+        namespace: LLM_SPEND_NAMESPACE,
+        dimensions: { Provider: provider },
+        period: 3600,
+        statistic: 'Maximum',
+        threshold: days,
+        treatMissingData: 'notBreaching',
+        alarmActions: actions,
+        tags: { Application: 'LLMSpend', Severity: 'Medium' },
+      });
+    }
   }
 
   const dashboardBody = aws.getRegionOutput().name.apply(region => {
@@ -340,6 +474,27 @@ if (isMonitoredStage) {
             region,
             period: 3600,
             yAxis: { left: { min: 0, label: 'Tokens' } },
+          },
+        },
+        {
+          type: 'metric',
+          x: 0,
+          y: 6,
+          width: 12,
+          height: 6,
+          properties: {
+            title: 'Model price snapshot age (hours)',
+            metrics: [
+              [LLM_SPEND_NAMESPACE, 'ModelPriceSnapshotAgeHours', { stat: 'Maximum', label: 'Age (hours)' }],
+              [LLM_SPEND_NAMESPACE, 'ModelPriceSnapshotMissing', { stat: 'Maximum', label: 'Missing', yAxis: 'right' }],
+            ],
+            view: 'timeSeries',
+            region,
+            period: 3600,
+            yAxis: { left: { min: 0, label: 'Hours' }, right: { min: 0, max: 1, label: 'Missing' } },
+            annotations: {
+              horizontal: [{ label: 'Alarm', value: MODEL_PRICE_SNAPSHOT_ALARM_HOURS }],
+            },
           },
         },
       ],

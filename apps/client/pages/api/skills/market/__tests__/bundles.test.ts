@@ -22,7 +22,10 @@ vi.mock('@client/server/middlewares/baseApi', () => ({
     return fn;
   },
 }));
-vi.mock('@server/skillMarket/bundles', () => h);
+vi.mock('@server/skillMarket/bundles', async importOriginal => ({
+  bundleOwnerFrom: (await importOriginal<typeof import('@server/skillMarket/bundles')>()).bundleOwnerFrom,
+  ...h,
+}));
 
 import indexHandler from '@pages/api/skills/market/bundles/index';
 import idHandler from '@pages/api/skills/market/bundles/[id]';
@@ -49,8 +52,20 @@ describe('/api/skills/market/bundles', () => {
   it('lists the bundles of the org in the query, for the caller', async () => {
     h.listBundles.mockResolvedValue({ bundles: [], listings: [], canEdit: true });
     const { res } = await call(indexHandler, { method: 'GET', query: { orgId: 'org1' } });
-    expect(h.listBundles).toHaveBeenCalledWith(actor, 'org1');
+    expect(h.listBundles).toHaveBeenCalledWith(actor, { organizationId: 'org1' });
     expect(res._getJSONData()).toEqual({ bundles: [], listings: [], canEdit: true });
+  });
+
+  it('lists the bundles of the Space in the query', async () => {
+    h.listBundles.mockResolvedValue({ bundles: [], listings: [], canEdit: false });
+    await call(indexHandler, { method: 'GET', query: { spaceId: 'sp1' } });
+    expect(h.listBundles).toHaveBeenCalledWith(actor, { spaceId: 'sp1' });
+  });
+
+  it('400s a list with both an orgId and a spaceId', async () => {
+    const { error } = await call(indexHandler, { method: 'GET', query: { orgId: 'org1', spaceId: 'sp1' } });
+    expect(error).toMatchObject({ statusCode: 400 });
+    expect(h.listBundles).not.toHaveBeenCalled();
   });
 
   it('400s a list without an orgId', async () => {

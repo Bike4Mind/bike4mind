@@ -108,7 +108,10 @@ const ModelMetricsTab: React.FC = () => {
     setUserFilter('');
   };
 
-  const chartData = processChartData(filteredAndSortedMetrics, modelInfos, simplifiedNames);
+  const chartData = useMemo(
+    () => processChartData(filteredAndSortedMetrics, modelInfos, simplifiedNames),
+    [filteredAndSortedMetrics, modelInfos, simplifiedNames]
+  );
 
   // Shown in the panels that read model-metrics rows; Spend and Analytics have their own data.
   const rowsState = (() => {

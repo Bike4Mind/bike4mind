@@ -42,7 +42,7 @@ export const SECRET_ROTATION_CONFIG: { [key: string]: SecretRotationEntry } = {
     rotationIntervalDays: 90,
     isAutomatic: false,
     rotationProcess:
-      'Generate new key: openssl rand -hex 32. Copy current value to SECRET_ENCRYPTION_KEY_PREVIOUS, then set the new value via sst secret set. Existing encrypted values are re-encrypted on next read.',
+      'Generate new key: openssl rand -hex 32. Copy current value to SECRET_ENCRYPTION_KEY_PREVIOUS, set the new value via sst secret set, and deploy. Stored values are not re-encrypted on read: under sst shell run "pnpm --filter @bike4mind/scripts migrate:reencrypt-stored-secrets", then the same command with --verify. Clear SECRET_ENCRYPTION_KEY_PREVIOUS only after --verify exits 0.',
   },
   OAUTH_RSA_PRIVATE_KEY: {
     description: 'RSA private key for signing OIDC ID tokens (RS256)',

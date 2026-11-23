@@ -1,11 +1,20 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { ADMIN_ERASURE_COMPLETED_ACTION } from '@bike4mind/common';
-import { AdminAuditLogModel, ErasureRecordModel, Session, mongoose } from '@bike4mind/database';
+import {
+  AdminAuditLogModel,
+  ErasureRecordModel,
+  Session,
+  User,
+  FabFile,
+  AssistantInstructionModel,
+  assistantInstructionRepository,
+  mongoose,
+} from '@bike4mind/database';
 import { inboxRepository } from '@bike4mind/database/social';
 import type { MongoMemoryReplSet } from 'mongodb-memory-server';
 // Registered outside the `@bike4mind/database` barrel, so they register only when imported.
 import '@bike4mind/server-utils/models/Subscription';
-import '@server/models/UserSubscription';
+import '@bike4mind/server-utils/models/UserSubscription';
 import {
   createMongoReplSet,
   MONGO_TEST_TIMEOUT_MS,
@@ -44,7 +53,8 @@ vi.mock('@bike4mind/services', async importOriginal => {
   return { ...actual, authSessionService: { ...actual.authSessionService, endRealtimeConnections: vi.fn() } };
 });
 
-import { completeAccountDeletion } from '@bike4mind/server-utils/users/completeAccountDeletion';
+import { completeAccountDeletion, type ErasureRegistry } from '@bike4mind/server-utils/users/completeAccountDeletion';
+import { PlatformEndUser, platformEndUserRepository } from '@bike4mind/database/ai';
 import { erasureIdHash } from '@bike4mind/server-utils/privacy/erasureHash';
 import { reapplyErasure } from '../users/reapplyErasure';
 import { erasureRegistry } from './erasureRegistry';
@@ -66,6 +76,7 @@ beforeAll(async () => {
   database = await createMongoReplSet();
   await mongoose.connect(database.getUri(), { autoIndex: false });
   await settleAutoIndexBuilds(mongoose);
+  await PlatformEndUser.createIndexes();
 });
 afterAll(async () => {
   await mongoose.disconnect();
@@ -555,7 +566,11 @@ describe('file family authority', () => {
       return original.call(this, checkpoint, async (model, entries) => {
         if (model === 'FabFile') {
           expect(entries.find(entry => String(entry.document._id) === String(file))?.outcome).toBe('deleted');
-          await mongoose.model('FabFile').collection.updateOne({ _id: file }, { $push: { tags: { name: tag } } });
+          const database = mongoose.connection.db;
+          if (!database) throw new Error('Fixture database is not connected');
+          await database
+            .collection<{ tags: { name: string }[] }>(FabFile.collection.name)
+            .updateOne({ _id: file }, { $push: { tags: { name: tag } } });
         }
         await sink?.(model, entries);
       });
@@ -650,5 +665,180 @@ describe('retained content settlement', () => {
     expect(await mongoose.model('User').exists({ _id: userId })).toBeNull();
     expect(await ErasureRecordModel.findOne({ idHash: erasureIdHash(userId) })).not.toBeNull();
     expect(String((await organizations.findOne({ _id: owner!._id }))!.userId)).toBe(DELETED_USER_ID);
+  });
+});
+
+function deletionBarrier() {
+  let release: () => void = () => {
+    throw new Error('Barrier not initialized');
+  };
+  const promise = new Promise<void>(resolve => {
+    release = resolve;
+  });
+  return { promise, release };
+}
+
+function endUserInput(userId: string) {
+  return {
+    providerEndUserId: userId.padEnd(64, 'a'),
+    keyOwnerId: userId,
+    apiKeyId: 'platform-key',
+    endUserId: 'customer_42',
+  };
+}
+
+describe('platform end-user metadata and real account deletion', () => {
+  it('refuses a late writer after holder erasure but before the final User deletion', async () => {
+    const { userId } = await seedAccount('self');
+    const input = endUserInput(userId);
+    await platformEndUserRepository.recordSeen(input);
+    const erased = deletionBarrier();
+    const resume = deletionBarrier();
+    const registry: ErasureRegistry = {
+      ...erasureRegistry,
+      async erase(subject, assertLease, stage, session) {
+        await erasureRegistry.erase(subject, assertLease, stage, session);
+        if (stage === 'beforeDelete' && subject.userId === userId) {
+          erased.release();
+          await resume.promise;
+        }
+      },
+    };
+    const deletion = completeAccountDeletion(userId, { logger, erasureRegistry: registry });
+    try {
+      await Promise.race([
+        erased.promise,
+        deletion.then(() => {
+          throw new Error('Deletion missed the barrier');
+        }),
+      ]);
+      expect(await PlatformEndUser.exists({ keyOwnerId: userId })).toBeNull();
+      const owner = await mongoose.model<{ deletion?: { purgeStartedAt?: Date } }>('User').findById(userId).lean();
+      expect(owner).not.toBeNull();
+      expect(owner?.deletion?.purgeStartedAt).toBeInstanceOf(Date);
+      await platformEndUserRepository.recordSeen(input);
+      expect(await PlatformEndUser.exists({ keyOwnerId: userId })).toBeNull();
+    } finally {
+      resume.release();
+      await deletion;
+    }
+    expect(await mongoose.model('User').exists({ _id: userId })).toBeNull();
+    expect(await PlatformEndUser.exists({ keyOwnerId: userId })).toBeNull();
+  });
+
+  it('refuses a queued metadata writer that resumes after final account deletion', async () => {
+    const { userId } = await seedAccount('self');
+    const input = endUserInput(userId);
+    await platformEndUserRepository.recordSeen(input);
+    const resume = deletionBarrier();
+    const writer = (async () => {
+      await resume.promise;
+      await platformEndUserRepository.recordSeen(input);
+    })();
+    try {
+      await expect(completeAccountDeletion(userId, { logger, erasureRegistry })).resolves.toEqual({ deleted: true });
+      expect(await mongoose.model('User').exists({ _id: userId })).toBeNull();
+      expect(await PlatformEndUser.exists({ keyOwnerId: userId })).toBeNull();
+    } finally {
+      resume.release();
+      await writer;
+    }
+    expect(await PlatformEndUser.exists({ keyOwnerId: userId })).toBeNull();
+  });
+
+  it('erases metadata committed while the owner was live and preserves another owner', async () => {
+    const { userId, other } = await seedAccount('self');
+    await platformEndUserRepository.recordSeen(endUserInput(userId));
+    await platformEndUserRepository.recordSeen(endUserInput(other));
+    await expect(completeAccountDeletion(userId, { logger, erasureRegistry })).resolves.toEqual({ deleted: true });
+    expect(await PlatformEndUser.exists({ keyOwnerId: userId })).toBeNull();
+    expect(await PlatformEndUser.exists({ keyOwnerId: other })).not.toBeNull();
+  });
+});
+
+describe('standing instruction admission and real account deletion', () => {
+  it('rejects late text after real holder erasure and after final deletion, preserving foreign instructions', async () => {
+    const { userId, other } = await seedAccount('self');
+    await assistantInstructionRepository.createWithinCap({ userId, text: 'private instruction' }, 20);
+    await assistantInstructionRepository.createWithinCap({ userId: other, text: 'foreign control' }, 20);
+    const erased = deletionBarrier();
+    const resume = deletionBarrier();
+    const registry: ErasureRegistry = {
+      ...erasureRegistry,
+      async erase(subject, assertLease, stage, session) {
+        await erasureRegistry.erase(subject, assertLease, stage, session);
+        if (stage === 'beforeDelete' && subject.userId === userId) {
+          erased.release();
+          await resume.promise;
+        }
+      },
+    };
+    const deletion = completeAccountDeletion(userId, { logger, erasureRegistry: registry });
+    try {
+      await Promise.race([
+        erased.promise,
+        deletion.then(() => {
+          throw new Error('Deletion missed instruction erasure barrier');
+        }),
+      ]);
+      expect(await AssistantInstructionModel.countDocuments({ userId })).toBe(0);
+      const owner = await User.findById(userId).lean();
+      expect(owner?.deletion?.purgeStartedAt).toBeInstanceOf(Date);
+      await expect(
+        assistantInstructionRepository.createWithinCap({ userId, text: 'late private text' }, 20)
+      ).rejects.toThrow('Account unavailable');
+      expect(await AssistantInstructionModel.countDocuments({ userId })).toBe(0);
+    } finally {
+      resume.release();
+      await deletion;
+    }
+    await expect(
+      assistantInstructionRepository.createWithinCap({ userId, text: 'after deletion' }, 20)
+    ).rejects.toThrow('Account unavailable');
+    expect(await User.exists({ _id: userId })).toBeNull();
+    expect(await AssistantInstructionModel.countDocuments({ userId })).toBe(0);
+    expect((await assistantInstructionRepository.listByUser(other)).map(row => row.text)).toEqual(['foreign control']);
+  });
+
+  it('erases an instruction transaction that acquires the User fence before deletion starts', async () => {
+    const { userId, other } = await seedAccount('self');
+    await assistantInstructionRepository.createWithinCap({ userId: other, text: 'foreign control' }, 20);
+    const locked = deletionBarrier();
+    const resume = deletionBarrier();
+    const deleteAttempted = deletionBarrier();
+    const update = User.collection.updateOne.bind(User.collection);
+    const claim = User.collection.findOneAndUpdate.bind(User.collection);
+    const writerSpy = vi.spyOn(User.collection, 'updateOne').mockImplementationOnce(async (...args) => {
+      const result = await update(...args);
+      locked.release();
+      await resume.promise;
+      return result;
+    });
+    const writer = assistantInstructionRepository.createWithinCap({ userId, text: 'committed before purge' }, 20);
+    await locked.promise;
+    const claimSpy = vi.spyOn(User.collection, 'findOneAndUpdate').mockImplementationOnce(async (...args) => {
+      deleteAttempted.release();
+      return claim(...args);
+    });
+    const deletion = completeAccountDeletion(userId, { logger, erasureRegistry });
+    try {
+      await Promise.race([
+        deleteAttempted.promise,
+        deletion.then(() => {
+          throw new Error('Deletion missed User claim');
+        }),
+      ]);
+    } finally {
+      resume.release();
+      try {
+        await Promise.all([writer, deletion]);
+      } finally {
+        writerSpy.mockRestore();
+        claimSpy.mockRestore();
+      }
+    }
+    expect(await User.exists({ _id: userId })).toBeNull();
+    expect(await AssistantInstructionModel.countDocuments({ userId })).toBe(0);
+    expect((await assistantInstructionRepository.listByUser(other)).map(row => row.text)).toEqual(['foreign control']);
   });
 });

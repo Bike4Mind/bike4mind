@@ -24,7 +24,9 @@ import { Logger } from '@bike4mind/observability';
 const handleSamlCallback = async (req: any, res: any) => {
   try {
     // Extract IDP info from the SAML response/state (simplified; production may want session storage).
-    const RelayState = req.method === 'POST' ? req.body?.RelayState : req.query?.RelayState;
+    const rawRelayState: unknown = req.method === 'POST' ? req.body?.RelayState : req.query?.RelayState;
+    // A repeated parameter arrives as an array, which URLSearchParams below would throw on.
+    const RelayState = typeof rawRelayState === 'string' ? rawRelayState : undefined;
     let idpId: string | undefined;
     // Post-login path round-tripped via RelayState; sanitized client-side in
     // /auth/success, so carried through opaquely here.
@@ -44,7 +46,7 @@ const handleSamlCallback = async (req: any, res: any) => {
 
     if (!idpId) {
       // Fallback: try to get the IDP from query params (for testing)
-      idpId = req.query?.idp as string;
+      idpId = typeof req.query?.idp === 'string' ? req.query.idp : undefined;
       req.logger.debug('Falling back to IDP from query params', { idpId });
     }
 

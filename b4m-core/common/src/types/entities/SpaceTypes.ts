@@ -40,7 +40,15 @@ export interface AddSpaceMemberOptions {
 export interface ISpaceRepository extends IBaseRepository<ISpaceDocument> {
   findLiveById: (id: string) => Promise<ISpaceDocument | null>;
   listForUser: (userId: string) => Promise<ISpaceDocument[]>;
+  /** Ids only of the live Spaces `userId` owns or belongs to. */
+  findIdsForUser: (userId: string) => Promise<string[]>;
+  /** Ids only of the live Spaces `userId` owns or holds an admin row in. */
+  findIdsAdministeredBy: (userId: string) => Promise<string[]>;
   countOwned: (userId: string) => Promise<number>;
+  /** Live Spaces whose parent organization is `organizationId`. */
+  listLiveByParentOrganization: (organizationId: string) => Promise<ISpaceDocument[]>;
+  /** Live Spaces where `userId` holds a member row that joined by domain. */
+  listDomainJoinedForUser: (userId: string) => Promise<ISpaceDocument[]>;
   /** `null` when the Space is gone or full, or the user is the owner, a member, or blocked. */
   addMember: (spaceId: string, member: ISpaceMember, options: AddSpaceMemberOptions) => Promise<ISpaceDocument | null>;
   /**

@@ -8,7 +8,7 @@ import type {
 } from '@bike4mind/common';
 import { DATALAKE_TAG_PREFIX, normalizeTagPrefix, prefixArmTagNames } from '@bike4mind/common';
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';
-import { addFileToLake, type MembershipActor } from './lakeMembership';
+import { addFileToLake, type MembershipActor, type MembershipEventLinks } from './lakeMembership';
 import { assertLakeWritable } from './assertLakeAccess';
 import { canManageLake, isEffectiveOwner, resolveEffectiveOwnerIds } from './manageRule';
 import { loadActiveLakeGrants } from './authorizeLakeManage';
@@ -105,7 +105,8 @@ export const addFileToDataLake = async (
   actor: MembershipActor,
   dataLakeId: string,
   fabFileId: string,
-  { db, logger }: AddFileToDataLakeAdapters
+  { db, logger }: AddFileToDataLakeAdapters,
+  links: MembershipEventLinks = {}
 ): Promise<{ success: true; fileCount: number; totalSizeBytes: number }> => {
   const lake = await db.dataLakes.findById(dataLakeId);
   if (!lake) {
@@ -170,7 +171,7 @@ export const addFileToDataLake = async (
   await assertLakeAdmission([lake], [member], { db, logger }, { forceReportOnly: isRestore });
 
   // Idempotent (the meta-tag push is filtered on absence), so a double-click or a retry converges.
-  await addFileToLake(actor, lake, fabFileId, { db, logger });
+  await addFileToLake(actor, lake, fabFileId, { db, logger }, links);
 
   if (isRestore && liveRemoval) {
     const validated = validateRestoreContentTags(liveRemoval.contentTags, lake.fileTagPrefix);

@@ -1,4 +1,4 @@
-import { isPlaceholderValue } from '@bike4mind/common';
+import { isPlaceholderValue, SELF_HOST_SETTINGS_HINT } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 import { Config } from '../config';
 import { postEmailMirrorToSlack } from '../../integrations/slack/slack';
@@ -12,6 +12,7 @@ import {
   type MailTransport,
   type MailTransportKind,
 } from './transport';
+import { getMailConfigStatus, isUnauthenticatedSmtpRelay, type EmailConfigStatus } from './configStatus';
 
 export {
   SMTP_DNS_TIMEOUT_MS,
@@ -21,6 +22,13 @@ export {
 } from './smtpTransport';
 export { resolveMailTransportKind } from './transport';
 export type { MailCategory, MailSendContext, MailSendResult, MailTransport, MailTransportKind } from './transport';
+export {
+  getMailConfigStatus,
+  isUnauthenticatedSmtpRelay,
+  requiredMailSecrets,
+  statusTransportKind,
+} from './configStatus';
+export type { EmailConfigStatus, MailSecretName } from './configStatus';
 
 export interface SendEmailOptions {
   /** Post the redacted copy to the email-audit Slack channel. Default true. */
@@ -29,19 +37,6 @@ export interface SendEmailOptions {
   logRecipient?: boolean;
   /** Lets the transport route the category through its own SES configuration set. */
   category?: MailCategory;
-}
-
-export interface EmailConfigStatus {
-  configured: boolean;
-  transport: MailTransportKind;
-  missingSecrets: string[];
-  secrets: {
-    MAIL_HOST: boolean;
-    MAIL_PORT: boolean;
-    MAIL_USERNAME: boolean;
-    MAIL_PASSWORD: boolean;
-    MAIL_FROM: boolean;
-  };
 }
 
 export interface TestEmailResult {
@@ -59,11 +54,12 @@ export function createMailTransport(kind: MailTransportKind = resolveMailTranspo
   if (kind === 'ses') {
     return new SesTransport({ configurationSet: process.env.SES_CONFIGURATION_SET || undefined, otcConfigurationSet });
   }
+  const noAuth = isUnauthenticatedSmtpRelay();
   return new SmtpTransport({
     host: Config.MAIL_HOST,
     port: Config.MAIL_PORT,
-    username: Config.MAIL_USERNAME,
-    password: Config.MAIL_PASSWORD,
+    username: noAuth ? undefined : Config.MAIL_USERNAME,
+    password: noAuth ? undefined : Config.MAIL_PASSWORD,
     otcConfigurationSet,
   });
 }
@@ -81,62 +77,26 @@ export class MailService {
     this.validateConfig();
   }
 
-  /** The secrets this transport needs; SES authenticates with the execution role, so only the sender. */
-  private requiredSecrets(): Record<string, string> {
-    const sender = { MAIL_FROM: Config.MAIL_FROM };
-    if (this.transport.kind === 'ses') return sender;
-    return {
-      MAIL_HOST: Config.MAIL_HOST,
-      MAIL_PORT: Config.MAIL_PORT,
-      MAIL_USERNAME: Config.MAIL_USERNAME,
-      MAIL_PASSWORD: Config.MAIL_PASSWORD,
-      ...sender,
-    };
-  }
-
   private validateConfig() {
-    const missing = Object.entries(this.requiredSecrets())
-      .filter(([_, value]) => isPlaceholderValue(value))
-      .map(([key]) => key);
-
-    if (missing.length > 0) {
+    const { missingSecrets } = this.getConfigStatus();
+    if (missingSecrets.length > 0) {
+      const fix =
+        process.env.B4M_SELF_HOST === 'true'
+          ? SELF_HOST_SETTINGS_HINT
+          : `Set them via: ./for-env {stage} npx sst secret set ${missingSecrets[0]} ...`;
       Logger.warn(
         `Mail configuration incomplete (${this.transport.kind}) - emails will fail. ` +
-          `Missing or placeholder values: ${missing.join(', ')}. ` +
-          'Set MAIL_* secrets via: ./for-env {stage} npx sst secret set MAIL_HOST ...'
+          `Missing or placeholder values: ${missingSecrets.join(', ')}. ${fix}`
       );
     }
   }
 
-  /**
-   * Get the current email configuration status.
-   * Used by admin system health panel to show config status without CloudWatch.
-   */
+  /** Config status for this service's transport. The status routes call getMailConfigStatus directly so they never load the mailer. */
   getConfigStatus(): EmailConfigStatus {
-    const isConfigured = (value: string): boolean => !isPlaceholderValue(value);
-
-    const missingSecrets = Object.entries(this.requiredSecrets())
-      .filter(([_, value]) => !isConfigured(value))
-      .map(([key]) => key);
-
-    return {
-      configured: missingSecrets.length === 0,
-      transport: this.transport.kind,
-      missingSecrets,
-      secrets: {
-        MAIL_HOST: isConfigured(Config.MAIL_HOST),
-        MAIL_PORT: isConfigured(Config.MAIL_PORT),
-        MAIL_USERNAME: isConfigured(Config.MAIL_USERNAME),
-        MAIL_PASSWORD: isConfigured(Config.MAIL_PASSWORD),
-        MAIL_FROM: isConfigured(Config.MAIL_FROM),
-      },
-    };
+    return getMailConfigStatus(this.transport.kind);
   }
 
-  /**
-   * Send a test email to verify the transport can deliver.
-   * Used by admin system health panel.
-   */
+  /** Sends the System Health test email; the email-send worker runs it for sendLiveTestEmail (./testEmail). */
   async sendTestEmail(to: string): Promise<TestEmailResult> {
     try {
       await this.transport.verify();

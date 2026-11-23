@@ -122,7 +122,7 @@ This key **cannot** be configured via the Admin UI because it encrypts secrets s
 
 **Format requirement:** Must be exactly 64 hexadecimal characters (32 bytes for AES-256-GCM encryption). The `openssl rand -hex 32` command generates exactly this format.
 
-:::warning If This Key Is Lost or Changed
+:::warning If This Key Is Lost, or Changed Without Keeping the Previous Key
 - All stored OAuth tokens become undecryptable
 - Users must re-authenticate with **all** connected services (Google, Slack, Atlassian, etc.)
 - All API credentials configured via Admin UI must be re-entered
@@ -138,6 +138,23 @@ During domain migration:
 - **DO NOT rotate** `JWT_SECRET` — breaks OAuth state tokens
 - **DO NOT rotate** `SECRET_ENCRYPTION_KEY` — requires re-encrypting stored tokens
 :::
+
+---
+
+## Signing Secret (Optional)
+
+Signed image URLs, hashed telemetry identifiers and purge receipts use their own secret instead of `SECRET_ENCRYPTION_KEY`. Each purpose derives a separate key from the one secret. Both secrets default to `not-configured`; while `HMAC_SIGNING_SECRET` is unset, signatures keep using `SECRET_ENCRYPTION_KEY`.
+
+| Secret | Description | Format | How to Generate |
+|--------|-------------|--------|-----------------|
+| `HMAC_SIGNING_SECRET` | Root secret for signatures; per-purpose keys are derived from it | Any string (64 hex characters recommended) | `openssl rand -hex 32` |
+| `HMAC_SIGNING_SECRET_PREVIOUS` | The secret that signed older values while they are still honoured (see below) | Same as above | The old value of the secret being replaced |
+
+```bash
+pnpm sst secret set HMAC_SIGNING_SECRET "$(openssl rand -hex 32)" --stage <stage>
+```
+
+When you set `HMAC_SIGNING_SECRET` for the first time, copy the secret that signed existing values into `HMAC_SIGNING_SECRET_PREVIOUS`. That is the value of `SECRET_ENCRYPTION_KEY` for a stage that never had a dedicated secret; leave `SECRET_ENCRYPTION_KEY` itself unchanged, since it still encrypts stored data. Values signed with the previous secret keep verifying while it stays set, and new values are signed with the new one. Keep it set for at least 90 days: telemetry export and deletion find a user's records only under the keys still configured, and telemetry is kept for 90 days. Once nothing signed with the old secret needs to verify, clear `HMAC_SIGNING_SECRET_PREVIOUS`.
 
 ---
 
@@ -395,30 +412,59 @@ pnpm sst secret set MAIN_DB_TYPE DocumentDB --stage <stage>
 |--------|-------------|--------|
 | `SESSION_SECRET` | Suspected compromise | All users logged out |
 | `JWT_SECRET` | Suspected compromise | All API tokens invalidated |
-| `SECRET_ENCRYPTION_KEY` | Key compromise, compliance requirement | All OAuth integrations require re-authentication |
+| `SECRET_ENCRYPTION_KEY` | Key compromise, compliance requirement | None when you follow the rotation procedure below |
 
 ### SECRET_ENCRYPTION_KEY Rotation
 
-:::danger Rotation Invalidates All Stored Secrets
-Rotating `SECRET_ENCRYPTION_KEY` makes all previously encrypted data unreadable. This is a destructive operation that requires users to re-authenticate with all OAuth providers and re-enter all Admin UI-configured credentials.
-:::
+You rotate this key without disconnecting integrations by keeping the old key readable while stored values move to the new one. The app reads every stored value with `SECRET_ENCRYPTION_KEY` first and `SECRET_ENCRYPTION_KEY_PREVIOUS` second, and always writes with `SECRET_ENCRYPTION_KEY`.
+
+Reading a value does not re-encrypt it. A stored value moves to the new key only when the re-encrypt command rewrites it, so the previous key must stay configured until that command has verified every value.
 
 **When rotation may be required:**
 - Key compromise (suspected or confirmed)
 - Personnel changes (principle of least privilege)
 - Compliance requirements mandating periodic rotation
 
-**Emergency rotation procedure:**
+**Rotation procedure:**
 
-1. **Notify users** - Warn about upcoming integration disconnection
-2. **Generate new key:** `openssl rand -hex 32`
-3. **Set new secret:**
+1. **Keep the old key readable, then set the new one:**
    ```bash
-   pnpm sst secret set SECRET_ENCRYPTION_KEY "<new-key>" --stage <stage>
+   pnpm sst secret set SECRET_ENCRYPTION_KEY_PREVIOUS "<current-key>" --stage <stage>
+   pnpm sst secret set SECRET_ENCRYPTION_KEY "$(openssl rand -hex 32)" --stage <stage>
    ```
-4. **Deploy** to apply the new key
-5. **Users re-authenticate** - Each user must reconnect their OAuth integrations
-6. **Re-enter Admin UI secrets** - All API keys configured via Admin UI must be re-entered
+2. **Deploy** so every function and service loads both keys.
+3. **Preview the re-encrypt**, which writes nothing:
+   ```bash
+   pnpm sst shell --stage <stage> -- pnpm --filter @bike4mind/scripts migrate:reencrypt-stored-secrets --dry-run
+   ```
+4. **Run the re-encrypt.** It rewrites each value that is still under the previous key. You can stop it and run it again; a second run rotates 0:
+   ```bash
+   pnpm sst shell --stage <stage> -- pnpm --filter @bike4mind/scripts migrate:reencrypt-stored-secrets
+   ```
+5. **Verify with the new key alone:**
+   ```bash
+   pnpm sst shell --stage <stage> -- pnpm --filter @bike4mind/scripts migrate:reencrypt-stored-secrets --verify
+   ```
+6. **Clear the previous key** only after verify exits `0`, then deploy again:
+   ```bash
+   pnpm sst secret set SECRET_ENCRYPTION_KEY_PREVIOUS "not-configured" --stage <stage>
+   ```
+
+The command prints one line of counts per stored field and a total. It never prints a stored value or a document id.
+
+| Exit code | Meaning |
+|-----------|---------|
+| `0` | Every stored value is under the current key |
+| `1` | Some values changed while they were being rewritten (`conflicts`): run the command again. Or no configured key opens some values (`unreadable`): a rerun does not change those, so find out why before you clear the previous key |
+| `2` | Usage or connection error, or no encrypted values were found (wrong or empty database) |
+
+:::warning Do Not Clear the Previous Key Early
+Until verify exits `0`, some stored values can only be read with `SECRET_ENCRYPTION_KEY_PREVIOUS`. Clearing it before then makes those values unreadable.
+:::
+
+:::note One Rotation at a Time
+Do not rotate `JWT_SECRET` and `SECRET_ENCRYPTION_KEY` in the same window. Finish one, including verify, before you start the other.
+:::
 
 ### If SECRET_ENCRYPTION_KEY Is Compromised
 

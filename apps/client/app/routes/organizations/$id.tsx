@@ -26,17 +26,15 @@ import OrgApiKeysSection from '@client/app/components/organizations/OrgApiKeysSe
 import OrgMemberApiKeysSection from '@client/app/components/organizations/OrgMemberApiKeysSection';
 import OrganizationAuditSection from '@client/app/components/organizations/OrganizationAuditSection';
 import TeamOnboardingChecklist from '@client/app/components/organizations/TeamOnboardingChecklist';
+import OwnerOnlyNote from '@client/app/components/organizations/OwnerOnlyNote';
 import { readTeamPreference, recentTeamsKey, rememberTeam } from '@client/app/components/organizations/teamPreferences';
 import { isAxiosError } from 'axios';
 import CreditIcon from '@client/app/components/svgs/icons/CreditIcon';
 import { useUser } from '@client/app/contexts/UserContext';
 import { useGetOrganization, useOrganizationSeats } from '@client/app/hooks/data/organizations';
 import { useGetSubscriptionsByOwner } from '@client/app/hooks/data/subscriptions';
-import {
-  SubscriptionOwnerType,
-  isDelinquentSubscriptionStatus,
-  pickDisplayedSubscription,
-} from '@bike4mind/server-utils/lib/subscriptions/types';
+import { SubscriptionOwnerType, pickDisplayedSubscription } from '@bike4mind/server-utils/lib/subscriptions/types';
+import { getOrgPlanState, isLiveOrgPlan, orgPlanChipColor } from '@client/app/components/organizations/orgPlanState';
 import { useDocumentTitle } from '@client/app/hooks/useDocumentTitle';
 import { useIsMobile } from '@client/app/hooks/useIsMobile';
 import { creditBalanceParams, formatCreditAmount } from '@client/app/utils/formatCredits';
@@ -47,7 +45,6 @@ import {
   Card,
   Chip,
   CircularProgress,
-  LinearProgress,
   Option,
   Select,
   Stack,
@@ -71,6 +68,7 @@ import LanguageOutlinedIcon from '@mui/icons-material/LanguageOutlined';
 import KeyOutlinedIcon from '@mui/icons-material/KeyOutlined';
 import RateReviewOutlinedIcon from '@mui/icons-material/RateReviewOutlined';
 import LocalLibraryOutlinedIcon from '@mui/icons-material/LocalLibraryOutlined';
+import LockOutlinedIcon from '@mui/icons-material/LockOutlined';
 import {
   canManageOrgConnectors,
   canManageOrgDomains,
@@ -81,10 +79,12 @@ import {
   canViewOrgAudit,
   canViewOrgUsage,
   IntegrationSections,
+  isOrgTabLocked,
   LEGACY_INTEGRATION_TABS,
+  ORG_TAB_AUDIENCE,
   OrganizationTabs,
-  resolveAccessibleTab,
   resolveIntegrationSection,
+  resolveOrgTabView,
   visibleIntegrationSections,
   type OrgTabAccess,
 } from '@client/app/routes/organizations/orgTabAccess';
@@ -141,6 +141,7 @@ const RAIL_GROUPS: ReadonlyArray<{ key: 'team' | 'insights' | 'integrations' | '
         visible: a => a.canManageDomains,
         testId: 'org-tab-domains',
       },
+      // A manager gets it as a locked entry: plan, credits and seats read-only, changes owner-only.
       { tab: OrganizationTabs.Billing, icon: <CreditCardOutlinedIcon />, visible: a => a.canViewBilling },
       // Same gate as Connectors: owner, current manager or platform admin.
       { tab: OrganizationTabs.ApiKeys, icon: <KeyOutlinedIcon />, visible: a => a.canManageConnectors },
@@ -159,7 +160,7 @@ const OrganizationPage: FC = () => {
   const { t } = useTranslation();
   const { id } = useParams({ strict: false });
   const { data: organization, isLoading, isError, error, refetch } = useGetOrganization(id as string);
-  const { maxSeats, currentSeats } = useOrganizationSeats(id as string);
+  const { activeSeats } = useOrganizationSeats(id as string);
   const navigate = useNavigate();
   const search = useSearch({ strict: false }) as { tab?: string; section?: string };
   const { currentUser } = useUser();
@@ -224,6 +225,7 @@ const OrganizationPage: FC = () => {
       canManageConnectors: canManageOrgConnectors(currentUser, organization),
       canManageDomains: canManageOrgDomains(currentUser, organization),
       canViewAudit: canViewOrgAudit(currentUser, organization),
+      seesLockedTabs: !!currentUser && !!organization && isOrgOwnerOrCurrentAdmin(currentUser, organization),
     }),
     [currentUser, organization]
   );
@@ -240,11 +242,19 @@ const OrganizationPage: FC = () => {
   // The answer is deliberately not written back to the URL - rewriting ?tab=usage to ?tab=overview
   // would break the link for this caller the day they are granted access, and make one shared URL
   // mean different things to different people.
-  const selectedTab = resolveAccessibleTab(requestedTab, access);
+  // A refused tab is named in a notice on Overview, so the link does not silently land elsewhere.
+  // Not for a caller who already manages the team: they were refused for another reason (a personal
+  // team has no Groups or Domains; Audit excludes platform admins), so "ask the owner" would mislead.
+  const tabView = resolveOrgTabView(requestedTab, access);
+  const selectedTab = tabView.tab;
+  const audience = tabView.denied && currentUser ? ORG_TAB_AUDIENCE[tabView.denied] : undefined;
+  const deniedAudience = audience === 'managers' && access.seesLockedTabs ? undefined : audience;
   const selectedSection = resolveIntegrationSection(requestedSection, access);
   const integrationSections = visibleIntegrationSections(access);
   // Share current grouped tab order and access rules across the rail and phone selector.
-  const visibleTabs = RAIL_GROUPS.flatMap(group => group.tabs.filter(entry => entry.visible(access)));
+  const visibleTabs = RAIL_GROUPS.flatMap(group =>
+    group.tabs.filter(entry => entry.visible(access) || isOrgTabLocked(entry.tab, access))
+  );
   const tabId = (tab: OrganizationTabs) => `${sectionId}-tab-${tab}`;
   const panelId = (tab: OrganizationTabs) => `${sectionId}-panel-${tab}`;
   const panelAccessibility = (
@@ -388,11 +398,31 @@ const OrganizationPage: FC = () => {
                   listbox: { 'aria-label': 'Team sections' },
                 }}
               >
-                {visibleTabs.map(entry => (
-                  <Option key={entry.tab} value={entry.tab} data-testid={`organization-tabs-option-${entry.tab}`}>
-                    {t(`organization.tabs.${entry.tab}`)}
-                  </Option>
-                ))}
+                {visibleTabs.map(entry => {
+                  const locked = isOrgTabLocked(entry.tab, access);
+                  return (
+                    <Option
+                      key={entry.tab}
+                      value={entry.tab}
+                      // Joy takes a non-string child's label from innerText, so name it explicitly: the
+                      // closed Select then shows the tab name alone, without the lock icon's title.
+                      label={t(`organization.tabs.${entry.tab}`)}
+                      data-testid={
+                        locked
+                          ? `organization-tabs-option-locked-${entry.tab}`
+                          : `organization-tabs-option-${entry.tab}`
+                      }
+                    >
+                      {t(`organization.tabs.${entry.tab}`)}
+                      {locked && (
+                        <LockOutlinedIcon
+                          titleAccess={t('organization.access_notice.owner_only')}
+                          sx={{ ml: 'auto', color: 'text.tertiary' }}
+                        />
+                      )}
+                    </Option>
+                  );
+                })}
               </Select>
             </Box>
           ) : (
@@ -405,6 +435,12 @@ const OrganizationPage: FC = () => {
                 borderRight: '1px solid',
                 borderColor: 'divider',
                 p: 2,
+                // The rail is as tall as the page, which can be shorter than its entries; scroll it
+                // rather than letting the last entries (Settings) fall off-screen. Entries keep their
+                // height so the column overflows instead of squashing them.
+                overflowY: 'auto',
+                flexWrap: 'nowrap',
+                '& > *': { flexShrink: 0 },
                 '& .MuiTab-root': {
                   justifyContent: 'flex-start',
                   px: 2,
@@ -421,7 +457,7 @@ const OrganizationPage: FC = () => {
               }}
             >
               {RAIL_GROUPS.map(group => {
-                const tabs = group.tabs.filter(entry => entry.visible(access));
+                const tabs = group.tabs.filter(entry => entry.visible(access) || isOrgTabLocked(entry.tab, access));
                 if (tabs.length === 0) return null;
                 return (
                   <Fragment key={group.key}>
@@ -433,22 +469,31 @@ const OrganizationPage: FC = () => {
                     >
                       {t(`organization.tab_groups.${group.key}`)}
                     </Typography>
-                    {tabs.map(entry => (
-                      <Tab
-                        key={entry.tab}
-                        value={entry.tab}
-                        id={tabId(entry.tab)}
-                        aria-controls={
-                          entry.tab === OrganizationTabs.Audit && selectedTab !== OrganizationTabs.Audit
-                            ? undefined
-                            : panelId(entry.tab)
-                        }
-                        data-testid={entry.testId}
-                      >
-                        {entry.icon}
-                        {t(`organization.tabs.${entry.tab}`)}
-                      </Tab>
-                    ))}
+                    {tabs.map(entry => {
+                      const locked = isOrgTabLocked(entry.tab, access);
+                      return (
+                        <Tab
+                          key={entry.tab}
+                          value={entry.tab}
+                          id={tabId(entry.tab)}
+                          aria-controls={
+                            entry.tab === OrganizationTabs.Audit && selectedTab !== OrganizationTabs.Audit
+                              ? undefined
+                              : panelId(entry.tab)
+                          }
+                          data-testid={locked ? `organization-tab-locked-${entry.tab}` : entry.testId}
+                        >
+                          {entry.icon}
+                          {t(`organization.tabs.${entry.tab}`)}
+                          {locked && (
+                            <LockOutlinedIcon
+                              titleAccess={t('organization.access_notice.owner_only')}
+                              sx={{ ml: 'auto', color: 'text.tertiary' }}
+                            />
+                          )}
+                        </Tab>
+                      );
+                    })}
                   </Fragment>
                 );
               })}
@@ -457,6 +502,19 @@ const OrganizationPage: FC = () => {
 
           <Box sx={{ p: { xs: 1, sm: 3 }, flex: 1, overflow: 'auto', minWidth: 0 }}>
             <TabPanel value={OrganizationTabs.Overview} {...panelAccessibility(OrganizationTabs.Overview)}>
+              {tabView.denied && deniedAudience && (
+                <Alert
+                  color="warning"
+                  variant="soft"
+                  startDecorator={<LockOutlinedIcon />}
+                  sx={{ mb: 3 }}
+                  data-testid="organization-tab-denied-notice"
+                >
+                  {t(`organization.access_notice.denied_${deniedAudience}`, {
+                    tab: t(`organization.tabs.${tabView.denied}`),
+                  })}
+                </Alert>
+              )}
               {header(OrganizationTabs.Overview)}
               {currentUser?.id === organization.userId && !organization.personal && (
                 <TeamOnboardingChecklist
@@ -480,10 +538,8 @@ const OrganizationPage: FC = () => {
               )}
             </TabPanel>
             <TabPanel value={OrganizationTabs.Members} {...panelAccessibility(OrganizationTabs.Members)}>
-              {header(OrganizationTabs.Members, {
-                count: currentSeats,
-                description: t('organization.descriptions.members', { current: currentSeats, max: maxSeats }),
-              })}
+              {/* Seat numbers live only in the tab's seat summary (OrgSeatSummary). */}
+              {header(OrganizationTabs.Members, { count: activeSeats })}
               {currentUser && <OrganizationMembers organization={organization} />}
             </TabPanel>
             {access.canManageGroups && (
@@ -507,6 +563,13 @@ const OrganizationPage: FC = () => {
             {selectedSection && (
               <TabPanel value={OrganizationTabs.Integrations} {...panelAccessibility(OrganizationTabs.Integrations)}>
                 {header(OrganizationTabs.Integrations)}
+                {!access.canManageIntegrations && (
+                  <Box sx={{ mb: 3 }}>
+                    <OwnerOnlyNote testId="organization-integrations-owner-only">
+                      {t('organization.access_notice.integrations_locked')}
+                    </OwnerOnlyNote>
+                  </Box>
+                )}
                 {integrationSections.length > 1 && (
                   <Box sx={{ mb: 3 }}>
                     <SegmentedControl
@@ -528,6 +591,14 @@ const OrganizationPage: FC = () => {
               <TabPanel value={OrganizationTabs.Billing} {...panelAccessibility(OrganizationTabs.Billing)}>
                 {header(OrganizationTabs.Billing)}
                 <OrganizationBillingSection organization={organization} />
+              </TabPanel>
+            )}
+            {isOrgTabLocked(OrganizationTabs.Billing, access) && (
+              <TabPanel value={OrganizationTabs.Billing} {...panelAccessibility(OrganizationTabs.Billing)}>
+                {header(OrganizationTabs.Billing, {
+                  description: t('organization.access_notice.billing_locked_description'),
+                })}
+                <LockedBillingSummary organization={organization} />
               </TabPanel>
             )}
             {access.canManageDomains && (
@@ -597,6 +668,46 @@ const IntegrationSection: FC<{ section: IntegrationSections; organization: WithI
   );
 };
 
+/**
+ * The Billing tab for a manager: credits and seats read-only, with every change left to the owner.
+ * Until granular roles land, the owner is the only one the Billing routes accept.
+ */
+const LockedBillingSummary: FC<{ organization: WithId<IOrganizationDocument> }> = ({ organization }) => {
+  const { t } = useTranslation();
+  const { currentSeats, maxSeats } = useOrganizationSeats(organization.id);
+  return (
+    <Stack spacing={2} data-testid="organization-billing-locked">
+      <OwnerOnlyNote testId="organization-billing-owner-only">
+        {t('organization.access_notice.billing_locked')}
+      </OwnerOnlyNote>
+      <Card variant="outlined" sx={{ p: 3 }}>
+        <Typography level="title-sm">{t('organization.access_notice.billing_summary')}</Typography>
+        <Stack direction="row" spacing={4} flexWrap="wrap" useFlexGap sx={{ mt: 1 }}>
+          <Stack spacing={0.5}>
+            <Typography level="body-xs" color="neutral">
+              {t('organization.access_notice.credits_remaining')}
+            </Typography>
+            <Typography level="h4" data-testid="organization-billing-locked-credits">
+              {formatCreditAmount(organization.currentCredits)}
+            </Typography>
+          </Stack>
+          <Stack spacing={0.5}>
+            <Typography level="body-xs" color="neutral">
+              {t('organization.access_notice.seats_used')}
+            </Typography>
+            <Typography level="h4" data-testid="organization-billing-locked-seats">
+              {/* maxSeats 0 is a plan with no seat cap, so there is no "of" to show. */}
+              {maxSeats > 0
+                ? t('organization.access_notice.seats_value', { current: currentSeats, max: maxSeats })
+                : currentSeats}
+            </Typography>
+          </Stack>
+        </Stack>
+      </Card>
+    </Stack>
+  );
+};
+
 const OrganizationHeader: FC<{
   organization: WithId<IOrganizationDocument>;
   canManageOrg: boolean;
@@ -605,10 +716,8 @@ const OrganizationHeader: FC<{
   const { t } = useTranslation();
   const { name, description } = organization;
   const { data: subscriptions } = useGetSubscriptionsByOwner(SubscriptionOwnerType.Organization, organization.id);
-  const subscription = pickDisplayedSubscription(subscriptions ?? []);
-  const paymentIssue = !!subscription && isDelinquentSubscriptionStatus(subscription.status);
-  const hasActiveSubscription = !!subscription && !subscription.canceledAt && !paymentIssue;
-  const { currentSeats } = useOrganizationSeats(organization.id);
+  const planState = getOrgPlanState(pickDisplayedSubscription(subscriptions ?? []));
+  const { activeSeats } = useOrganizationSeats(organization.id);
 
   return (
     <Card variant="outlined" sx={{ mx: { xs: 2, sm: 3 }, p: { xs: 2, sm: 3 } }} data-testid="organization-header">
@@ -641,7 +750,7 @@ const OrganizationHeader: FC<{
           </Typography>
           <Stack direction="row" spacing={{ xs: 1, sm: 2 }} mt={1} flexWrap="wrap" useFlexGap>
             <Chip size="sm" variant="soft" startDecorator={<GroupOutlinedIcon sx={{ fontSize: 14 }} />}>
-              {t('organization.x_members', { count: currentSeats })}
+              {t('organization.x_members', { count: activeSeats })}
             </Chip>
             <Chip
               size="sm"
@@ -653,14 +762,10 @@ const OrganizationHeader: FC<{
             <Chip
               size="sm"
               variant="soft"
-              color={paymentIssue ? 'danger' : hasActiveSubscription ? 'success' : 'neutral'}
+              color={orgPlanChipColor(planState)}
               startDecorator={<WorkspacePremiumOutlinedIcon sx={{ fontSize: 14 }} />}
             >
-              {paymentIssue
-                ? t('organization.payment_issue')
-                : hasActiveSubscription
-                  ? t('organization.team_plan')
-                  : t('organization.no_active_plan')}
+              {t(`organization.plan_states.${planState}`)}
             </Chip>
           </Stack>
         </Stack>
@@ -671,12 +776,12 @@ const OrganizationHeader: FC<{
 
 const OrganizationOverviewSection: FC<{ organization: IOrganizationDocument }> = ({ organization }) => {
   const { t, i18n } = useTranslation();
-  const { currentSeats, maxSeats, pendingSeats, availableSeats } = useOrganizationSeats(organization.id);
+  const { activeSeats } = useOrganizationSeats(organization.id);
   const { data: subscriptions } = useGetSubscriptionsByOwner(SubscriptionOwnerType.Organization, organization.id);
 
   const subscription = pickDisplayedSubscription(subscriptions ?? []);
-  const paymentIssue = !!subscription && isDelinquentSubscriptionStatus(subscription.status);
-  const activeSubscription = subscription && !subscription.canceledAt && !paymentIssue ? subscription : undefined;
+  const planState = getOrgPlanState(subscription);
+  const activeSubscription = subscription && isLiveOrgPlan(planState) ? subscription : undefined;
   // Format next billing date
   const formatDate = (date: Date | string | undefined) => {
     if (!date) return t('organization.overview.not_available');
@@ -692,7 +797,7 @@ const OrganizationOverviewSection: FC<{ organization: IOrganizationDocument }> =
             <Typography level="body-xs" color="neutral">
               {t('organization.overview.total_members')}
             </Typography>
-            <Typography level="h2">{currentSeats}</Typography>
+            <Typography level="h2">{activeSeats}</Typography>
           </Stack>
         </Card>
         <Card variant="outlined" sx={{ flex: 1, minWidth: 200, p: 3 }}>
@@ -722,16 +827,8 @@ const OrganizationOverviewSection: FC<{ organization: IOrganizationDocument }> =
                 <Typography level="body-sm" color="neutral">
                   {t('organization.overview.plan')}
                 </Typography>
-                <Chip
-                  size="sm"
-                  variant="soft"
-                  color={paymentIssue ? 'danger' : activeSubscription ? 'success' : 'neutral'}
-                >
-                  {paymentIssue
-                    ? t('organization.payment_issue')
-                    : activeSubscription
-                      ? t('organization.team_plan')
-                      : t('organization.no_active_plan')}
+                <Chip size="sm" variant="soft" color={orgPlanChipColor(planState)}>
+                  {t(`organization.plan_states.${planState}`)}
                 </Chip>
               </Stack>
               {activeSubscription && (
@@ -741,7 +838,7 @@ const OrganizationOverviewSection: FC<{ organization: IOrganizationDocument }> =
                       {t('organization.overview.status')}
                     </Typography>
                     <Typography level="body-sm">
-                      {activeSubscription.canceledAt
+                      {planState === 'ending'
                         ? t('organization.overview.canceling')
                         : t('organization.overview.active')}
                     </Typography>
@@ -755,40 +852,6 @@ const OrganizationOverviewSection: FC<{ organization: IOrganizationDocument }> =
                   </Stack>
                 </>
               )}
-            </Stack>
-          </Stack>
-        </Card>
-
-        {/* Seats Utilization Card */}
-        <Card variant="outlined" sx={{ flex: 1, minWidth: 280, p: 3 }} data-testid="seats-utilization-card">
-          <Stack spacing={2}>
-            <Stack direction="row" justifyContent="space-between" alignItems="center">
-              <Typography level="title-md" startDecorator={<GroupOutlinedIcon sx={{ fontSize: 20 }} />}>
-                {t('organization.overview.seats_utilization')}
-              </Typography>
-              <Typography level="body-sm" color="neutral">
-                {currentSeats} / {maxSeats}
-              </Typography>
-            </Stack>
-            <LinearProgress
-              determinate
-              value={maxSeats > 0 ? (currentSeats / maxSeats) * 100 : 0}
-              color={currentSeats >= maxSeats ? 'danger' : currentSeats > maxSeats * 0.8 ? 'warning' : 'primary'}
-              sx={{ '--LinearProgress-thickness': '8px' }}
-              aria-label={t('organization.overview.seats_utilization_label', { current: currentSeats, max: maxSeats })}
-            />
-            <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
-              <Chip size="sm" variant="soft" color="primary">
-                {t('organization.overview.x_active', { count: currentSeats - pendingSeats })}
-              </Chip>
-              {pendingSeats > 0 && (
-                <Chip size="sm" variant="soft" color="warning">
-                  {t('organization.overview.x_pending', { count: pendingSeats })}
-                </Chip>
-              )}
-              <Chip size="sm" variant="soft" color="neutral">
-                {t('organization.overview.x_available', { count: availableSeats })}
-              </Chip>
             </Stack>
           </Stack>
         </Card>

@@ -2,7 +2,7 @@ import type { AdminErasureCollection } from '@bike4mind/common';
 import type { mongoose } from '@bike4mind/database';
 // The walk reads every registry model; these register outside the `@bike4mind/database` barrel.
 import '@bike4mind/server-utils/models/Subscription';
-import '@server/models/UserSubscription';
+import '@bike4mind/server-utils/models/UserSubscription';
 import { DATA_HOLDER_REGISTRY } from './registry';
 import { valuesAt } from './documentPaths';
 import {
@@ -119,7 +119,9 @@ export class SubjectErasurePlan {
   private async decideSubject(model: string, references: readonly UserReference[]): Promise<Decision[]> {
     const { userId } = this.matcher.subject;
     const decisions: Decision[] = [];
-    for await (const document of readDocuments(model, { _id: userId }, this.parentKeyPathsOf(model), this.session)) {
+    for await (const document of readDocuments(model, { _id: userId }, this.parentKeyPathsOf(model), {
+      session: this.session,
+    })) {
       decisions.push(this.keyed(model, document, DELETED));
     }
     // Their references on other people's User rows (who invited whom).
@@ -151,7 +153,7 @@ export class SubjectErasurePlan {
     const documents =
       model === 'DataLake' && references.some(reference => reference.scope === 'personal')
         ? (await this.matcher.personalLakes()).documents
-        : readDocuments(model, { $or: clauses }, projection, this.session);
+        : readDocuments(model, { $or: clauses }, projection, { session: this.session, includeHidden: true });
     for await (const document of documents) {
       if (!include(document)) continue;
       batch.push(document);
@@ -204,13 +206,13 @@ export class SubjectErasurePlan {
     const parentValues = followedParents.flatMap(map => [...map.values()]);
     for (let start = 0; start < parentValues.length; start += PARENT_KEY_BATCH) {
       const filter = { [holder.foreignKey]: { $in: parentValues.slice(start, start + PARENT_KEY_BATCH) } };
-      for await (const document of readDocuments(model, filter, projection, this.session)) {
+      for await (const document of readDocuments(model, filter, projection, { session: this.session })) {
         byId.set(String(document._id), document);
       }
     }
     const clauses = attribution.flatMap(reference => this.matcher.filterFor(reference) ?? []);
     if (clauses.length > 0) {
-      for await (const document of readDocuments(model, { $or: clauses }, projection, this.session)) {
+      for await (const document of readDocuments(model, { $or: clauses }, projection, { session: this.session })) {
         byId.set(String(document._id), document);
       }
     }

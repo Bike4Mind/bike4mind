@@ -1,8 +1,9 @@
-import { fabFileBucket, generatedImagesBucket } from './buckets';
+import { appFilesBucket, fabFileBucket, generatedImagesBucket } from './buckets';
 import { DEFAULT_LAMBDA_ENVIRONMENT } from './constants';
 import { completionEventsDeadLetter, eventBus } from './eventBus';
 import { slackQuestProcessor } from './functions';
 import { allSecrets } from './secrets';
+import { mailBodyEnvironment, mailBodyPutPermission } from './mailBodyOffload';
 import { lambdaVpc } from './vpc';
 import { websocketApi } from './websocket';
 
@@ -59,8 +60,9 @@ const slackQuickAskSubscription = eventBus.subscribe(
     retries: 0,
     environment: {
       ...DEFAULT_LAMBDA_ENVIRONMENT,
+      ...mailBodyEnvironment(appFilesBucket),
     },
-    permissions: [completionEventsDeadLetter.sendPermission],
+    permissions: [completionEventsDeadLetter.sendPermission, mailBodyPutPermission(appFilesBucket)],
     transform: completionEventsDeadLetter.functionTarget,
   },
   {

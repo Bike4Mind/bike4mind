@@ -4,7 +4,6 @@ import {
   canAdministerOrganization,
   isOrgOwnerOrCurrentAdmin,
   isOrgOwnerOrPlatformAdmin,
-  Permission,
   type AdministrableOrg,
 } from '@bike4mind/common';
 import { hasOrgUpdateAccess } from '@client/app/utils/orgAccessGate';
@@ -49,38 +48,11 @@ export const LEGACY_INTEGRATION_TABS: Readonly<Record<string, IntegrationSection
   connectors: IntegrationSections.Connectors,
 };
 
-/**
- * Who may edit the team profile (the system prompt). Mirrors organizationService.update, whose
- * finder admits the owner and a `users[]` row holding `update` (updateAccessArms in
- * SharableDocumentModel.ts), plus a platform admin. `share` alone is not enough: the save would
- * 404. Group-granted `update` is not visible here, so such a member fails closed.
- */
-export const canEditOrgProfile = (
-  currentUser: { id: string; isAdmin?: boolean | null } | null | undefined,
-  organization:
-    { userId: string; users?: ReadonlyArray<{ userId: string; permissions?: Permission[] }> } | null | undefined
-): boolean => {
-  if (!currentUser || !organization) return false;
-  if (currentUser.isAdmin === true || currentUser.id === organization.userId) return true;
-  const row = organization.users?.find(u => u.userId === currentUser.id);
-  return row?.permissions?.includes(Permission.update) ?? false;
-};
-
-/**
- * Who may open the Settings tab (and the header's Settings button): anyone who can edit the
- * profile, plus a current manager, whom organizationService.update admits for `sharingPolicy`
- * alone (OrganizationSharingSettings). The single source for `canManageOrg`; the page computes it
- * once and passes it down.
- */
+/** Who may open and edit the Settings tab. Mirrors organizationService.update's team-role gate. */
 export const canManageOrgSettings = (
   currentUser: { id: string; isAdmin?: boolean | null } | null | undefined,
-  organization:
-    | (Omit<AdministrableOrg, 'users'> & { users?: ReadonlyArray<{ userId: string; permissions?: Permission[] }> })
-    | null
-    | undefined
-): boolean =>
-  canEditOrgProfile(currentUser, organization) ||
-  (!!currentUser && !!organization && isOrgOwnerOrCurrentAdmin(currentUser, organization));
+  organization: AdministrableOrg | null | undefined
+): boolean => !!currentUser && !!organization && canAdministerOrganization(currentUser, organization);
 
 /**
  * Who may see the org's feedback analysis. Mirrors the server gate the feedback-report routes run
@@ -131,21 +103,18 @@ export const canViewOrgUsage = (
 export const canManageOrgIntegrations = ownerTierGate;
 
 /**
- * Who may see the Billing & Subscription tab. Owner only - NOT `canManageOrg`, which is satisfied
- * by any member holding `share`/`update`. All three of the tab's actions are owner-gated, so a
+ * Who may see the Billing & Subscription tab. Owner only - NOT `canManageOrg`, which also admits
+ * managers. All three of the tab's actions are owner-gated, so a
  * member reaching it saw an enabled control for every one of them and an error back from each:
  * - Subscribe        pages/api/organizations/subscriptions/subscribe.ts (verifyOrgOwner)
  * - Change seats     pages/api/organizations/subscriptions/update-seats.ts
  * - Billing portal   pages/api/stripe/portal.ts
  * Must stay in sync with those three.
  *
- * A platform admin who is not the owner is deliberately excluded, though the first two routes would
- * admit them: portal.ts has no admin bypass, so an admin would still get a Billing Portal button
- * that rejects them. Admins act on an org's billing through the Admin -> Organizations panel, which
- * is the same split the page already makes for member management.
- *
- * Nothing is lost by hiding it: the plan, its status, the renewal date and seat usage are all on
- * the Overview tab and the page header, which every member sees.
+ * This decides who gets the real tab. A platform admin who is not the owner is excluded, though the
+ * first two routes would admit them: portal.ts has no admin bypass, so they would get a Billing
+ * Portal button that rejects them. Everyone else who manages the team (`isOrgOwnerOrCurrentAdmin`:
+ * managers, platform admins) gets a locked entry with a read-only summary, see `isOrgTabLocked`.
  */
 export const canViewOrgBilling = (
   currentUser: { id: string } | null | undefined,
@@ -185,7 +154,33 @@ export interface OrgTabAccess {
   canManageConnectors: boolean;
   canManageDomains: boolean;
   canViewAudit?: boolean;
+  /**
+   * Owner, current manager or platform admin. Such a caller gets an owner-only tab they cannot open
+   * as a locked rail entry instead of having it vanish; a plain member is not shown admin tabs at all.
+   */
+  seesLockedTabs?: boolean;
 }
+
+/**
+ * Who may open each gated tab, for the notice a caller sees when a deep link names one they cannot.
+ * Tabs open to every member are absent. Billing is owner-only (canViewOrgBilling); every other gated
+ * tab admits the owner and current managers.
+ */
+export const ORG_TAB_AUDIENCE: Readonly<Partial<Record<OrganizationTabs, 'owner' | 'managers'>>> = {
+  [OrganizationTabs.Groups]: 'managers',
+  [OrganizationTabs.Usage]: 'managers',
+  [OrganizationTabs.Analysis]: 'managers',
+  [OrganizationTabs.Integrations]: 'managers',
+  [OrganizationTabs.Billing]: 'owner',
+  [OrganizationTabs.Domains]: 'managers',
+  [OrganizationTabs.ApiKeys]: 'managers',
+  [OrganizationTabs.Audit]: 'managers',
+  [OrganizationTabs.Settings]: 'managers',
+};
+
+/** Owner-only tabs shown to a manager as a locked entry with a read-only summary. */
+export const isOrgTabLocked = (tab: OrganizationTabs, access: OrgTabAccess): boolean =>
+  tab === OrganizationTabs.Billing && !!access.seesLockedTabs && !access.canViewBilling;
 
 /** The Integrations sub-sections this caller may see, in display order. */
 export const visibleIntegrationSections = (
@@ -216,6 +211,25 @@ export const resolveAccessibleTab = (selected: OrganizationTabs, access: OrgTabA
   // Same verifyOrgAccess gate as Connectors (pages/api/organizations/[id]/api-keys/*).
   if (!access.canManageConnectors && selected === OrganizationTabs.ApiKeys) return OrganizationTabs.Overview;
   return selected;
+};
+
+export interface OrgTabView {
+  /** The tab to select. */
+  tab: OrganizationTabs;
+  /** The tab is owner-only and shows its locked panel rather than its content. */
+  locked: boolean;
+  /** The requested tab, when the caller may not open it and was sent to Overview instead. */
+  denied?: OrganizationTabs;
+}
+
+/**
+ * resolveAccessibleTab, except that a locked tab stays selected (it renders its locked panel) and a
+ * refused one is reported, so the page can say why the link landed on Overview.
+ */
+export const resolveOrgTabView = (requested: OrganizationTabs, access: OrgTabAccess): OrgTabView => {
+  if (isOrgTabLocked(requested, access)) return { tab: requested, locked: true };
+  const tab = resolveAccessibleTab(requested, access);
+  return tab === requested ? { tab, locked: false } : { tab, locked: false, denied: requested };
 };
 
 /** The Integrations sub-section to show: the requested one when visible, else the first visible. */

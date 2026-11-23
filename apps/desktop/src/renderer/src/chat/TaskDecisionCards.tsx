@@ -1,10 +1,11 @@
 import { useEffect, useState } from 'react';
 import Alert from '@mui/joy/Alert';
+import Box from '@mui/joy/Box';
 import Sheet from '@mui/joy/Sheet';
 import Stack from '@mui/joy/Stack';
 import Typography from '@mui/joy/Typography';
 import type { PendingDecision, PendingTaskDecision, TaskDecisionAnswer } from '@shared/orchestration';
-import { contentColumnSx } from './layout';
+import { contentColumnSx, scrollingColumnHostSx } from './layout';
 import { QuestionCard } from './QuestionCard';
 import { SessionLink } from './SessionLink';
 
@@ -104,6 +105,21 @@ export function TaskDecisionCard({
   );
 }
 
+/**
+ * The tallest the list grows before it scrolls. The thread or Orchestrate stage above it is a
+ * `minHeight: 0` flex item, so an uncapped stack of decisions would squeeze it to nothing.
+ */
+export const TASK_DECISION_LIST_MAX_HEIGHT = '40vh';
+
+/** The decisions shown above a conversation's composer: asked by agents under it, and by it itself. */
+export function decisionsFor(
+  sessionId: string | null,
+  decisions: readonly PendingTaskDecision[],
+): readonly PendingTaskDecision[] {
+  if (!sessionId) return [];
+  return decisions.filter(entry => entry.rootId === sessionId || entry.sessionId === sessionId);
+}
+
 /** Above the composer: decisions asked by agents under this conversation, and by this conversation itself. */
 export function TaskDecisionCards({
   sessionId,
@@ -114,20 +130,33 @@ export function TaskDecisionCards({
   decisions: readonly PendingTaskDecision[];
   onOpenSession: (sessionId: string) => void;
 }) {
-  if (!sessionId) return null;
-  const shown = decisions.filter(entry => entry.rootId === sessionId || entry.sessionId === sessionId);
+  const shown = decisionsFor(sessionId, decisions);
   if (shown.length === 0) return null;
   return (
-    <Stack spacing={0.75} sx={{ ...contentColumnSx, pt: 1.5 }} data-testid="task-decision-list">
-      {shown.map(entry => (
-        <TaskDecisionCard
-          key={entry.decision.id}
-          sessionId={entry.sessionId}
-          title={entry.title}
-          decision={entry.decision}
-          {...(entry.sessionId === sessionId ? {} : { onOpenSession })}
-        />
-      ))}
-    </Stack>
+    <Box
+      role="region"
+      aria-label="Decisions waiting on you"
+      // Focusable so the list can be scrolled from the keyboard once it overflows.
+      tabIndex={0}
+      sx={{
+        ...scrollingColumnHostSx,
+        flexShrink: 0,
+        maxHeight: TASK_DECISION_LIST_MAX_HEIGHT,
+        overscrollBehavior: 'contain',
+      }}
+      data-testid="task-decision-list"
+    >
+      <Stack spacing={0.75} sx={{ ...contentColumnSx, pt: 1.5 }}>
+        {shown.map(entry => (
+          <TaskDecisionCard
+            key={entry.decision.id}
+            sessionId={entry.sessionId}
+            title={entry.title}
+            decision={entry.decision}
+            {...(entry.sessionId === sessionId ? {} : { onOpenSession })}
+          />
+        ))}
+      </Stack>
+    </Box>
   );
 }

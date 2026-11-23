@@ -116,6 +116,24 @@ Video and music are stored as separate settings (`videoGeneration` and `musicGen
 
 Located in the AI category. Sets how many video clips one agent-mode run may start, counted across the run and the subagents it delegates to in the same process. The default is 2. Set it to 0 to remove video generation from agent mode. The tool is offered only when `video_generation` is in the Agent Orchestration Defaults allowed tools. A deployment that saved that list before this release keeps its stored list, so an admin must add `video_generation` to it. A platform admin can override it for a single organization from the setting's scoped overrides. When a run reaches its limit, the agent is told so and no further clip is started; each clip still holds and settles its own credits. Runs started with an API key never get the video tool.
 
+### Python Artifact Data Origins
+
+Located in the Experimental category, and used only while Artifacts are enabled. Python artifacts run in an isolated frame that can reach only the Python package CDN. This setting lists the HTTPS origins their code may also read data from, one per line, such as `https://data.example.com`. It is empty by default.
+
+- Enter an origin only: `https://`, a public hostname and an optional port, with no path, query, wildcard or credentials
+- IP addresses, `localhost`, and private or internal names are refused, as are this app's own hosts and their subdomains
+- At most 10 origins can be listed; entries are lowercased and duplicates are dropped on save
+- If the stored list is ever invalid, no origin is allowed until it is saved again
+- The model is told which origins it may read from, and the Python viewer shows the list to the user
+- The data server must allow cross-origin reads (for example `Access-Control-Allow-Origin: *`). Requests carry no cookies or credentials from this app
+- A change applies to pages loaded up to ten minutes after it is saved; a page that has already run Python keeps the earlier list until it is reloaded
+
+Python code can send what it has to a listed origin as well as read from it, so list only hosts you trust with artifact content. HTML and React artifacts stay offline whatever this list holds.
+
+### Enable Callable Functions
+
+When it is on, a Python artifact that declares a function gets a Function tab beside Output and Code.
+
 ### Logo Upload
 
 Located in the Branding category, the Logo Upload component provides:

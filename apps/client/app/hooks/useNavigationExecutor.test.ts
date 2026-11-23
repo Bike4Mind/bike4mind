@@ -92,6 +92,16 @@ describe('useNavigationExecutor', () => {
     expect(mockNavigate).toHaveBeenCalledWith({ to: '/new' });
   });
 
+  it('navigates a contributed admin route intent to its literal path', () => {
+    const { result } = renderHook(() => useNavigationExecutor());
+    result.current({ navigationType: 'route', target: '/admin/ext/example' } as Parameters<
+      ReturnType<typeof useNavigationExecutor>
+    >[0]);
+
+    expect(mockNavigate).toHaveBeenCalledTimes(1);
+    expect(mockNavigate).toHaveBeenCalledWith({ to: '/admin/ext/example' });
+  });
+
   it('navigates to the admin tab before changing the store', () => {
     const { result } = renderHook(() => useNavigationExecutor());
     result.current({ navigationType: 'tab', target: String(AdminTab.Models) } as Parameters<
@@ -130,7 +140,7 @@ describe('useNavigationExecutor', () => {
       ReturnType<typeof useNavigationExecutor>
     >[0]);
 
-    expect(mockNavigate).toHaveBeenCalledWith({ to: '/admin', search: { tab: 'waitlist', inviteSection: 'packages' } });
+    expect(mockNavigate).toHaveBeenCalledWith({ to: '/admin', search: { tab: 'waitlist', inviteSection: 'partners' } });
   });
 
   // A tab intent whose target is not an index still opens the console; it just has no tab to name.

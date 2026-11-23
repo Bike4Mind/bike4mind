@@ -25,6 +25,8 @@ import { SEND_REQUEST_TIMEOUT_MS } from '@client/app/utils/requestTimeouts';
 import { blankRapidReplies, terminalQuests } from '@client/app/hooks/chatCompletionState';
 import { getSurfaceChatContext } from '@client/app/utils/surfaceChatContext';
 import { MODEL_CONFIGURATIONS_QUERY_KEY } from '@client/app/hooks/data/modelAccessRevision';
+import { FREE_QUEST_LIMIT_REACHED_ERROR_CODE } from '@bike4mind/common';
+import { useQuestMasterUpgrade } from '../subscription/questMasterUpgrade';
 
 // modelAdmission's refusal of a model the caller's access entry does not admit (b4m-core/services/src/llm/modelAdmission.ts).
 const MODEL_ACCESS_REFUSAL = /^Model ".+" is not accessible\b/;
@@ -87,6 +89,8 @@ export type LLMCommandArgs = {
   mcpServers?: string[];
   /** Custom MCP connector slugs switched off in the Tools menu (LLMContext.disabledMcpConnections). */
   disabledMcpConnections?: string[];
+  /** Platform connector ids switched on in the Tools menu (LLMContext.enabledPlatformMcpConnections). */
+  enabledPlatformMcpConnections?: string[];
   optimisticSessionId?: string;
   /** Agent-mode toggle state forwarded through to the chat completion payload. */
   agentMode?: LLMApiRequestBody['agentMode'];
@@ -164,6 +168,7 @@ export async function handleLLMCommand(
       deepResearchConfig,
       mcpServers,
       disabledMcpConnections,
+      enabledPlatformMcpConnections,
       optimisticSessionId,
       agentMode,
     } = args;
@@ -211,6 +216,7 @@ export async function handleLLMCommand(
       agentIds: _omitAgentIds,
       mcpServers: _omitMcpServers,
       disabledMcpConnections: _omitDisabledMcpConnections,
+      enabledPlatformMcpConnections: _omitEnabledPlatformMcpConnections,
       modelConfigurations: _omitModelConfigurations,
       deepResearchConfig: _omitDeepResearchConfig,
       researchMode: _omitResearchMode,
@@ -305,6 +311,9 @@ export async function handleLLMCommand(
         ...(Array.isArray(mcpServers) ? { mcpServers } : {}),
         ...(Array.isArray(disabledMcpConnections) && disabledMcpConnections.length > 0
           ? { disabledMcpConnections }
+          : {}),
+        ...(Array.isArray(enabledPlatformMcpConnections) && enabledPlatformMcpConnections.length > 0
+          ? { enabledPlatformMcpConnections }
           : {}),
         ...(deepResearchConfig ? { deepResearchConfig } : {}),
         ...(imageConfig ? { imageConfig } : {}),
@@ -405,6 +414,8 @@ export async function handleLLMCommand(
 
       if (status === 404) {
         toast.error(i18n.t('session.errors.notebookDeleted'));
+      } else if (status === 403 && error.response?.data?.errorCode === FREE_QUEST_LIMIT_REACHED_ERROR_CODE) {
+        useQuestMasterUpgrade.getState().open();
       } else if (status === 403 && isModelAccessRefusal(error.response?.data)) {
         // An admin turned the model off after this picker loaded; refetch access so the picker drops it now
         // rather than when the access revision reaches this tab.

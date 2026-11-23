@@ -175,6 +175,13 @@ export const aiHolders = {
       { path: 'onBehalfOfUserId', matchBy: 'userId', action: 'anonymize' },
     ],
   },
+  LakeConfigSnapshot: {
+    kind: 'holder',
+    references: [
+      { path: 'config.createdByUserId', matchBy: 'userId', action: 'anonymize' },
+      { path: 'config.lastUpdatedByUserId', matchBy: 'userId', action: 'anonymize' },
+    ],
+  },
   LakeMembershipChangeEvent: {
     kind: 'holder',
     references: [
@@ -209,6 +216,9 @@ export const aiHolders = {
       { path: 'userId', matchBy: 'userId', action: 'deleteDocument', where: { ownerType: 'user' } },
       // An org-published definition carries no tokens; a userId on it is its creator.
       { path: 'userId', matchBy: 'userId', action: 'anonymize', where: { ownerType: 'org' } },
+      // A platform connector belongs to the deployment and its key is the platform's; a userId on
+      // it is the admin who created it.
+      { path: 'userId', matchBy: 'userId', action: 'anonymize', where: { ownerType: 'platform' } },
     ],
     secretPaths: [
       'urlEnc',
@@ -280,6 +290,15 @@ export const aiHolders = {
   NotebookCurationJob: {
     kind: 'holder',
     references: [{ path: 'userId', matchBy: 'userId', action: 'deleteDocument' }],
+  },
+  // The platform's end-user ids are the key owner's records, so they go with the owner.
+  PlatformEndUser: {
+    kind: 'holder',
+    references: [{ path: 'keyOwnerId', matchBy: 'userId', action: 'deleteDocument' }],
+    // Derived from keyOwnerId and endUserId, which the export already carries; it only resolves provider notices.
+    secretPaths: ['providerEndUserId'],
+    // The platform's ids for its own end users, not Bike4Mind accounts; deleted with the owner's row.
+    unrelatedPaths: ['endUserId', 'providerEndUserId'],
   },
   RapidReplyAuditLog: {
     kind: 'holder',

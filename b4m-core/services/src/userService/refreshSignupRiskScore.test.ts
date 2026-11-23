@@ -126,6 +126,22 @@ describe('refreshSignupRiskScore', () => {
     expect(stored()?.signals.map(s => s.signal)).toEqual(['datacenterNetwork']);
   });
 
+  it('reads the edge labels from the signup metadata once their weights are set', async () => {
+    const signupMeta = { wafAnonIp: true, wafBotSignal: true };
+    const weighted = setup({
+      user: { signupMeta },
+      settings: { signupRiskScoring: JSON.stringify({ weights: { wafAnonIp: 12, wafBotSignal: 18 } }) },
+    });
+    await refreshSignupRiskScore('u1', weighted.adapters);
+    expect(weighted.stored()).toMatchObject({ score: 30, reviewState: 'none' });
+    expect(weighted.stored()?.signals.map(s => s.signal)).toEqual(['wafAnonIp', 'wafBotSignal']);
+
+    invalidateSettingsCache();
+    const unweighted = setup({ user: { signupMeta } });
+    await refreshSignupRiskScore('u1', unweighted.adapters);
+    expect(unweighted.stored()).toMatchObject({ score: 0, signals: [] });
+  });
+
   it.each([
     ['a disposable domain', 'someone@mailinator.com', {}],
     ['an admin-blocked domain', 'someone@blocked.example', { blockedEmailDomains: ['blocked.example'] }],

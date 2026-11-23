@@ -1,10 +1,11 @@
 import { resolveRequestBillingOrgId } from '@bike4mind/server-utils/billing/resolveRequestBillingOrgId';
-import { admitRequestCompletion } from '@server/utils/untrustedCompletionQuota';
+import { admitRequestCompletion } from '@bike4mind/server-utils/utils/untrustedCompletionQuota';
 import { baseApi } from '@server/middlewares/baseApi';
+import { refuseExchangeKey } from '@server/auth/refuseExchangeKey';
 import { Config } from '@bike4mind/server-utils/utils/config';
 import { transformBatchRepository } from '@bike4mind/database';
 import { AnthropicBatchService, getAvailableModels, type BatchTransformRequest } from '@bike4mind/llm-adapters';
-import { BadRequestError, ModelBackend, type IMessage, type ModelInfo } from '@bike4mind/common';
+import { ApiKeyScope, BadRequestError, ModelBackend, type IMessage, type ModelInfo } from '@bike4mind/common';
 import {
   completionCeilingUsd,
   createModelAdmission,
@@ -73,7 +74,13 @@ const BATCH_CREDIT_HOLD_TTL_MS = 29 * 24 * 60 * 60_000;
 
 // 32mb covers a full maxPerBatch payload of large transform prompts. Both the
 // Next bodyParser (below) and baseApi's own content-length guard must be raised.
-const handler = baseApi({ maxBodySize: 32 * 1024 * 1024 }).post(async (req, res) => {
+const handler = baseApi({
+  maxBodySize: 32 * 1024 * 1024,
+  requiredScopes: [ApiKeyScope.AI_GENERATE, ApiKeyScope.ADMIN],
+  grandfatherLegacyKeys: true,
+}).post(async (req, res) => {
+  // Connected-app keys hold ai:generate but reach only the routes pinned in exchangeKeyRouteInventory.
+  if (refuseExchangeKey(req, res)) return;
   const body = BatchSubmitSchema.parse(req.body);
   // The provider queues this work; its lifetime is independent of the HTTP request.
   await admitRequestCompletion(req, { holdSlot: false });

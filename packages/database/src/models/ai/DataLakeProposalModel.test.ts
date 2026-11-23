@@ -113,6 +113,28 @@ describe('DataLakeProposalRepository', () => {
     expect(await repo.listByLake('lake-1')).toHaveLength(2);
   });
 
+  it('pages by keyset without skipping or repeating rows that share a createdAt', async () => {
+    const ids: string[] = [];
+    for (const n of ['a', 'b', 'c', 'd', 'e']) {
+      ids.push((await create({ canonicalSourceKey: `https://example.com/${n}`, textHash: `hash-${n}` })).id);
+    }
+    await DataLakeProposalModel.collection.updateMany(
+      { dataLakeId: 'lake-1' },
+      { $set: { createdAt: new Date('2026-01-01T00:00:00.000Z') } }
+    );
+
+    const seen: string[] = [];
+    let after: { createdAt: Date; id: string } | undefined;
+    for (let page = 0; page < 5; page++) {
+      const rows = await repo.listByLake('lake-1', { status: 'pending', limit: 2, after });
+      seen.push(...rows.map(r => r.id));
+      if (rows.length < 2) break;
+      after = { createdAt: rows[rows.length - 1].createdAt, id: rows[rows.length - 1].id };
+    }
+
+    expect(seen).toEqual([...ids].sort().reverse());
+  });
+
   it('lets the same source be pending in two different lakes at once', async () => {
     expect((await repo.createProposal(input())).created).toBe(true);
     expect((await repo.createProposal(input({ dataLakeId: 'lake-2' }))).created).toBe(true);
@@ -349,5 +371,27 @@ describe('DataLakeProposalRepository', () => {
     expect(fromSearch.provenance.feedUrl).toBeNull();
     const reread = await repo.listByLake('lake-1');
     expect(reread.find(p => p.id === fromFeed.id)?.provenance.feedUrl).toBe('https://example.com/feed.xml');
+  });
+
+  it('keeps a review reason through a save, and leaves it absent otherwise', async () => {
+    const retrievedAt = new Date('2026-08-01T00:00:00Z');
+    const flagged = await create({
+      provenance: {
+        producer: 'research_run',
+        retrievedAt,
+        reviewReason: { kind: 'rule_match', conditions: ['About sports'] },
+      },
+    });
+    const failed = await create({
+      canonicalSourceKey: 'https://example.com/other',
+      provenance: { producer: 'research_run', retrievedAt, reviewReason: { kind: 'rule_check_failed' } },
+    });
+    const plain = await create({ canonicalSourceKey: 'https://example.com/plain' });
+
+    const rows = await repo.listByLake('lake-1');
+    const byId = (id: string) => rows.find(p => p.id === id)?.provenance;
+    expect(byId(flagged.id)?.reviewReason).toEqual({ kind: 'rule_match', conditions: ['About sports'] });
+    expect(byId(failed.id)?.reviewReason).toEqual({ kind: 'rule_check_failed' });
+    expect(byId(plain.id)?.reviewReason).toBeUndefined();
   });
 });

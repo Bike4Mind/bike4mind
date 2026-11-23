@@ -23,9 +23,11 @@ import {
   AudioGenerationToolCallSchema,
   PROMPT_TEXT_MAX,
   AuthOriginSchema,
+  CreditHolderType,
   type AuthOrigin,
   DEEP_RESEARCH_MAX_DEPTH,
   DEEP_RESEARCH_MAX_DURATION_MIN,
+  EnabledPlatformMcpConnectionsSchema,
 } from '@bike4mind/common';
 
 export const QuestStartBodySchema = z
@@ -40,6 +42,10 @@ export const QuestStartBodySchema = z
     params: ChatCompletionCreateInputSchema,
     dashboardParams: DashboardParamsSchema.optional(),
     enableQuestMaster: z.boolean().optional(),
+    /** Server-generated admission id, never copied from the client request. */
+    questMasterStartId: z.string().optional(),
+    /** Invoke-time admission, preserved across queue redelivery and subscription changes. */
+    questAdmittedAs: z.enum(['subscriber', 'free']).optional(),
     enableMementos: z.boolean().optional(),
     enableArtifacts: z.boolean().optional(),
     /** See ChatCompletionInvokeParamsSchema.promptMode - must stay in sync with it. */
@@ -67,6 +73,11 @@ export const QuestStartBodySchema = z
      */
     apiKeyId: z.string().optional(),
     /**
+     * Whether that key bills its owner or an organization. Server-set like `apiKeyId`. No longer read by the spend
+     * freeze check, which keeps the acting user for every key.
+     */
+    apiKeyBillingOwnerType: z.enum([CreditHolderType.User, CreditHolderType.Organization]).optional(),
+    /**
      * The authenticating key lacks the admin scope, so the worker withholds the owner's admin role
      * on the user it reloads. Server-set like `apiKeyId`; absent means not withheld.
      */
@@ -86,6 +97,7 @@ export const QuestStartBodySchema = z
     mcpServers: z.array(z.string()).optional(),
     /** See ChatCompletionInvokeParamsSchema.disabledMcpConnections - must stay in sync with it. */
     disabledMcpConnections: z.array(z.string()).optional(),
+    enabledPlatformMcpConnections: EnabledPlatformMcpConnectionsSchema,
     projectId: z.string().optional(),
     organizationId: z.string().nullable().optional(),
     questMaster: QuestMasterParamsSchema.optional(),

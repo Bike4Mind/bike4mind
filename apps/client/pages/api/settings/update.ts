@@ -2,8 +2,9 @@ import {
   SettingKeySchema,
   isBlankSettingValue,
   isEnforceCreditsLocked,
-  SreAgentConfig,
-  SRE_SECRET_PLACEHOLDER,
+  mapNestedSecrets,
+  NESTED_SECRET_PLACEHOLDER,
+  redactNestedSecrets,
   formatUsdPerCredit,
   isMaskedSensitiveSettingValue,
   isPricePerCreditBelowFloor,
@@ -11,6 +12,8 @@ import {
   MIN_PRICE_PER_CREDIT_USD,
   partitionDomainList,
   partitionEmailList,
+  partitionPythonDataOrigins,
+  PYTHON_ARTIFACT_DATA_ORIGINS_MAX,
   FULL_ADMIN_SETTING_KEYS,
   isFullAdmin,
   isRegisteredSettingKey,
@@ -39,6 +42,7 @@ import {
 import { encryptSecret, isEncrypted, isValidEncryptionKey } from '@bike4mind/server-utils/security/secretEncryption';
 import { materializePublicSettingsArtifactSafe } from '@server/utils/publicSettingsArtifact';
 import { refuseFloorAboveMeasured } from '@server/utils/refuseFloorAboveMeasured';
+import { appReservedHosts } from '@server/utils/pythonArtifactDataOrigins';
 import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 import { recordAdminSettingChange } from '@bike4mind/server-utils/utils/adminSettingsAudit';
 import { AdminAiConfigSchema } from '@bike4mind/common';
@@ -112,7 +116,7 @@ const handler = adminApi({ adminPermissions: { PUT: 'settings:manage' } }).put(
 
     // The schema accepts any strings so a bad stored entry cannot blank the list on read; the write is
     // where an admin can still fix a typo, so refuse it here.
-    if (key === 'ImageModerationReviewerEmails') {
+    if (key === 'ImageModerationReviewerEmails' || key === 'ImageModerationEscalationEmails') {
       const { valid, invalid } = partitionEmailList(value);
       if (invalid.length > 0) {
         throw new BadRequestError(`Not a valid email address: ${invalid.map(e => JSON.stringify(e)).join(', ')}`);
@@ -131,6 +135,19 @@ const handler = adminApi({ adminPermissions: { PUT: 'settings:manage' } }).put(
         throw new BadRequestError(
           `Not an owned domain (public suffix): ${suffixes.map(d => JSON.stringify(d)).join(', ')}`
         );
+      }
+      value = valid;
+    }
+
+    if (key === 'pythonArtifactDataOrigins') {
+      const { valid, invalid } = partitionPythonDataOrigins(value, appReservedHosts());
+      if (invalid.length > 0) {
+        throw new BadRequestError(
+          `Not an allowed data origin: ${invalid.map(({ entry, problem }) => `${JSON.stringify(entry)} (${problem})`).join(', ')}`
+        );
+      }
+      if (valid.length > PYTHON_ARTIFACT_DATA_ORIGINS_MAX) {
+        throw new BadRequestError(`At most ${PYTHON_ARTIFACT_DATA_ORIGINS_MAX} data origins can be listed.`);
       }
       value = valid;
     }
@@ -169,44 +186,24 @@ const handler = adminApi({ adminPermissions: { PUT: 'settings:manage' } }).put(
       throw new BadRequestError(`Refusing to clear ${key}: send confirmClear: true to unset a sensitive setting.`);
     }
 
-    // Encrypt sensitive fields before storing (v2 config: defaults + per-repo secrets)
-    if (key === 'sreAgentConfig') {
-      const sreValue = value as SreAgentConfig;
+    // Nested secret fields (BaseSetting.nestedSecrets): encrypt new plaintext, keep the stored
+    // value when the mask comes back, leave an already-encrypted value alone.
+    const nestedSecretGroups = definition.nestedSecrets;
+    if (nestedSecretGroups?.length) {
       const encryptionKey = Config.SECRET_ENCRYPTION_KEY;
       const existing = await AdminSettings.findOne({ settingName: key }).lean();
-      const existingConfig = existing?.settingValue as SreAgentConfig | undefined;
-
-      /**
-       * Encrypt or preserve a single secret field.
-       * - New plaintext -> encrypt
-       * - Placeholder (--------) -> preserve existing encrypted value from DB
-       * - Already encrypted -> keep as-is
-       */
-      const processSecret = (current: string | undefined, existingValue: string | undefined): string | undefined => {
-        if (!current) return current;
-        if (current === SRE_SECRET_PLACEHOLDER) return existingValue || '';
-        if (isEncrypted(current)) return current;
+      value = mapNestedSecrets(value, existing?.settingValue, nestedSecretGroups, (submitted, stored) => {
+        if (submitted === NESTED_SECRET_PLACEHOLDER) return stored ?? '';
+        if (isEncrypted(submitted)) return submitted;
         if (!encryptionKey) {
-          throw new Error('SECRET_ENCRYPTION_KEY is not configured — cannot store secrets');
+          throw new Error('SECRET_ENCRYPTION_KEY is not configured - cannot store secrets');
         }
-        return encryptSecret(current, encryptionKey);
-      };
-
-      // Encrypt per-repo secrets (match by owner/repo key, not array index)
-      if (sreValue.repos) {
-        for (let i = 0; i < sreValue.repos.length; i++) {
-          const repo = sreValue.repos[i];
-          const existingRepo = existingConfig?.repos?.find(r => r.owner === repo.owner && r.repo === repo.repo);
-          repo.webhookSecret = processSecret(repo.webhookSecret, existingRepo?.webhookSecret) ?? '';
-          repo.callbackToken = processSecret(repo.callbackToken, existingRepo?.callbackToken) ?? '';
-        }
-      }
-
-      value = sreValue;
+        return encryptSecret(submitted, encryptionKey);
+      });
     }
 
-    // Encrypt sensitive scalar values at rest. sreAgentConfig (an object handled above) is
-    // not isSensitive and never reaches this branch. A confirmed clear ('') is stored as-is,
+    // Encrypt sensitive scalar values at rest. A nestedSecrets setting (an object handled above)
+    // is not isSensitive and never reaches this branch. A confirmed clear ('') is stored as-is,
     // and an already-encrypted value is left untouched (idempotent). The submitted plaintext
     // stays in `value` for the response mask below so the admin sees the real last-4.
     //
@@ -284,21 +281,13 @@ const handler = adminApi({ adminPermissions: { PUT: 'settings:manage' } }).put(
       await materializePublicSettingsArtifactSafe(req.logger);
     }
 
-    // Redact encrypted secrets before responding (v2 config: defaults + per-repo)
-    if (key === 'sreAgentConfig' && updatedSetting.settingValue) {
-      const cfg = updatedSetting.settingValue as unknown as SreAgentConfig;
+    // Mask nested secret fields before responding; the stored ciphertext never leaves the server.
+    if (nestedSecretGroups?.length && updatedSetting.settingValue) {
       const redacted = updatedSetting.toObject();
-      const redactedCfg = JSON.parse(JSON.stringify(cfg)) as SreAgentConfig;
-
-      // Redact per-repo secrets
-      if (redactedCfg.repos) {
-        for (const repo of redactedCfg.repos) {
-          if (repo.webhookSecret) repo.webhookSecret = SRE_SECRET_PLACEHOLDER;
-          if (repo.callbackToken) repo.callbackToken = SRE_SECRET_PLACEHOLDER;
-        }
-      }
-
-      (redacted as unknown as Record<string, unknown>).settingValue = redactedCfg;
+      (redacted as unknown as Record<string, unknown>).settingValue = redactNestedSecrets(
+        JSON.parse(JSON.stringify(updatedSetting.settingValue)),
+        nestedSecretGroups
+      );
       return res.json(redacted);
     }
 

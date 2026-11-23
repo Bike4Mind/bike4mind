@@ -5,9 +5,9 @@ import { sharedTest } from '../../vitest.shared';
 
 const client = path.resolve(__dirname, '../client');
 
-// Same two lanes as apps/client/vitest.config.mts, selected the same way: the real-Mongo
-// `*.e2e.test.ts` suites run only under `test:integration`, which CI gives its own leg with a
-// capped worker pool. Inline with the unit suites they contend for mongod and flake.
+// Same two lanes as apps/client/vitest.config.mts, selected the same way: the real-Mongo and
+// real-Pyodide `*.e2e.test.ts` suites run only under `test:integration`, which CI gives its own leg
+// with a capped worker pool. Inline with the unit suites they contend for mongod and CPU and flake.
 const INTEGRATION_LANE = process.env.WORKERS_TEST_LANE === 'integration';
 export default defineConfig({
   plugins: [tsconfigPaths()],

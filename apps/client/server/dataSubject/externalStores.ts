@@ -98,6 +98,17 @@ export const EXTERNAL_DATA_STORES: readonly ExternalDataStore[] = [
   {
     kind: 's3',
     bucket: 'appFilesBucket',
+    holds: 'Outbound mail bodies too large for the event bus, awaiting the email-send worker',
+    locatedBy: 'The `queued-mail/` prefix',
+    erasure: {
+      action: 'expires',
+      after:
+        'Within 3 days (1-day bucket lifecycle rule, run daily; a versioned bucket keeps the old version 1 more day)',
+    },
+  },
+  {
+    kind: 's3',
+    bucket: 'appFilesBucket',
     holds: 'Per-user desktop bridge download bundles',
     locatedBy: 'The `cc-bridge-downloads/` prefix',
     erasure: { action: 'expires', after: '1 day (bucket lifecycle rule)' },
@@ -116,6 +127,13 @@ export const EXTERNAL_DATA_STORES: readonly ExternalDataStore[] = [
     // A fork copies the key, so two notebooks can share one object.
     locatedBy: 'Quest `images` and `videos`; an object goes only when no other notebook or file still references it',
     erasure: { action: 'erased', erasedBy: 'purgeAccountContent' },
+  },
+  {
+    kind: 's3',
+    bucket: 'modelPriceSnapshotBucket',
+    holds: 'Model price snapshot for the usage poller',
+    locatedBy: 'Not keyed by user',
+    erasure: { action: 'noPersonalData', note: 'Model ids and per-token prices only; overwritten every discovery run' },
   },
   {
     kind: 's3',
@@ -152,13 +170,6 @@ export const EXTERNAL_DATA_STORES: readonly ExternalDataStore[] = [
     holds: 'QA run media',
     locatedBy: 'Not keyed by user',
     erasure: { action: 'noPersonalData', note: 'Recordings of test runs against test accounts' },
-  },
-  {
-    kind: 's3',
-    bucket: 'turboCacheBucket',
-    holds: 'Build cache artifacts',
-    locatedBy: 'Not keyed by user',
-    erasure: { action: 'noPersonalData', note: 'Content-hash keyed build outputs; expires after 30 days' },
   },
 
   {
@@ -211,11 +222,9 @@ export const EXTERNAL_DATA_STORES: readonly ExternalDataStore[] = [
   {
     kind: 'service',
     name: 'Stripe',
-    receives: 'Customer record (email, name), payment methods, subscriptions, invoices and risk metadata',
-    erasure: {
-      action: 'notErased',
-      gap: 'Account deletion cancels subscriptions (`cancelAccountSubscriptions`) but keeps the customer: decide between deleting it and keeping it under the financial-record period',
-    },
+    receives:
+      'Customer record (email, name), payment methods, subscriptions, invoices and risk metadata. Customers of sole-owned organizations are subscription-cancelled with the organization but not redacted',
+    erasure: { action: 'erased', erasedBy: 'redactAccountStripeCustomer' },
     cannotRecall: `Charges and invoices, which Stripe keeps for its own legal obligations; ours: ${FINANCIAL_RECORD.reason}`,
   },
   {

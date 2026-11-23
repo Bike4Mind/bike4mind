@@ -129,11 +129,9 @@ describe('hardDeleteUser guarded self-serve purge', () => {
   });
 
   it('runs the admin assertion before the subscription cancel, and cancels nothing when it throws', async () => {
-    const onDeleteFailed = vi.fn();
     await expect(
       runDelete({
         initiatedBy: 'admin',
-        onDeleteFailed,
         assertInTransaction: async () => {
           throw new Error('no longer an admin');
         },
@@ -142,7 +140,6 @@ describe('hardDeleteUser guarded self-serve purge', () => {
 
     expect(h.cancelSubscriptions).not.toHaveBeenCalled();
     expect(h.deleteUser).not.toHaveBeenCalled();
-    expect(onDeleteFailed).not.toHaveBeenCalled();
   });
 
   it('re-runs the admin assertion inside the transaction after the cancel', async () => {

@@ -6,7 +6,10 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { commandEnv, launchCommand } from './commandLaunch';
 
-vi.mock('./userPath', () => ({ resolveUserPath: async () => process.env.PATH ?? '' }));
+vi.mock('./userPath', () => ({
+  resolveUserPath: async () => process.env.PATH ?? '',
+  resolveLoginShellVariables: async () => ({}),
+}));
 
 const gitVersion = (): [number, number] => {
   const match = /(\d+)\.(\d+)/.exec(execFileSync('git', ['--version'], { encoding: 'utf8' }));

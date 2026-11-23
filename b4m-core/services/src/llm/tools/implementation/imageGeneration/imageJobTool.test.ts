@@ -92,6 +92,63 @@ describe('buildGenerateJobRequest', () => {
     expect(fromTool.outputFormat).toBe('webp');
   });
 
+  it('sends a tool size as its aspect ratio to a model sized by aspect ratio, behind the saved ratio', () => {
+    const request = buildGenerateJobRequest(selectionOf({ model: ImageModels.FLUX_PRO_ULTRA }), 'p', {
+      size: '1536x1024',
+    });
+    expect(request.size).toBeUndefined();
+    expect(request.aspectRatio).toBe('3:2');
+
+    const saved = buildGenerateJobRequest(
+      selectionOf({ model: ImageModels.FLUX_PRO_ULTRA, aspect_ratio: '16:9' }),
+      'p',
+      { size: '1024x1024' }
+    );
+    expect(saved.size).toBeUndefined();
+    expect(saved.aspectRatio).toBe('16:9');
+  });
+
+  it.each([
+    [ImageModels.GEMINI_3_PRO_IMAGE, '1024x1024'],
+    [ImageModels.GROK_IMAGINE_IMAGE_QUALITY, '1536x1024'],
+    [ImageModels.FLUX_PRO_1_1, '1536x1024'],
+  ])('drops a tool size %s cannot produce instead of refusing it', (model, size) => {
+    const request = buildGenerateJobRequest(selectionOf({ model }), 'p', { size });
+    expect(request.size).toBeUndefined();
+  });
+
+  it('keeps a tool size a dimension-sized model can produce', () => {
+    const request = buildGenerateJobRequest(selectionOf({ model: ImageModels.FLUX_PRO_1_1 }), 'p', {
+      size: '1024x1024',
+    });
+    expect(request.size).toBe('1024x1024');
+  });
+
+  it('drops a tool quality a non-GPT model cannot take instead of refusing it', () => {
+    const request = buildGenerateJobRequest(selectionOf({ model: ImageModels.FLUX_PRO_ULTRA }), 'p', {
+      quality: 'high',
+    });
+    expect(request.quality).toBeUndefined();
+  });
+
+  it('keeps the saved aspect ratio and drops a saved size on a model sized by aspect ratio', () => {
+    const request = buildGenerateJobRequest(
+      selectionOf({ model: ImageModels.FLUX_PRO_ULTRA, size: '1024x1536', aspect_ratio: '16:9' }),
+      'p',
+      {}
+    );
+    expect(request.size).toBeUndefined();
+    expect(request.aspectRatio).toBe('16:9');
+  });
+
+  it('keeps a tool size as a size on a model sized by pixels', () => {
+    const request = buildGenerateJobRequest(selectionOf({ model: ImageModels.GPT_IMAGE_1_5 }), 'p', {
+      size: '1536x1024',
+    });
+    expect(request.size).toBe('1536x1024');
+    expect(request.aspectRatio).toBeUndefined();
+  });
+
   it("sends a BFL selection's width/height as the size, and drops a pair the model cannot take", () => {
     const fitted = buildGenerateJobRequest(
       selectionOf({ model: ImageModels.FLUX_PRO, size: '1024x768', width: 1024, height: 576 }),
@@ -131,6 +188,18 @@ describe('buildEditJobRequest', () => {
     const selection = selectionOf({ model: ImageModels.FLUX_PRO_ULTRA });
     expect(resolveEditJobModel(selection, true)).toBe(ImageModels.FLUX_PRO_FILL);
     expect(resolveEditJobModel(selection, false)).toBe(ImageModels.FLUX_KONTEXT_PRO);
+  });
+
+  it('drops a tool size on an edit model that takes its source image size', () => {
+    const request = buildEditJobRequest(
+      selectionOf({ model: ImageModels.FLUX_PRO_ULTRA }),
+      'p',
+      { image: FILE_ID },
+      { size: '1536x1024' }
+    );
+    expect(request.model).toBe(ImageModels.FLUX_KONTEXT_PRO);
+    expect(request.size).toBeUndefined();
+    expect(request.aspectRatio).toBeUndefined();
   });
 
   it('prefers the selection edit model', () => {

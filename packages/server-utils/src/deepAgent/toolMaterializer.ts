@@ -7,13 +7,18 @@ import {
   type ToolBuilderCallbacks,
 } from '@bike4mind/services/llm';
 import { applyOrgToolPolicy } from '@bike4mind/services/llm/orgToolPolicy';
-import { assertOwnerHasCredits, creditService, estimateGeneratedMediaUsd } from '@bike4mind/services';
+import {
+  assertOwnerHasCredits,
+  creditService,
+  estimateGeneratedMediaUsd,
+  spendFreezeService,
+} from '@bike4mind/services';
+import { spendFreezeSubjectForRequest } from '../billing/spendFreezeSubject';
 import { aiAccessDeniedMessage } from '@bike4mind/services/userService/accountState';
 import { usdToCredits } from '@bike4mind/utils';
 import {
   adminSettingsRepository,
   apiKeyRepository,
-  cacheRepository,
   dataLakeAccessGrantRepository,
   dataLakeRepository,
   fabFileChunkRepository,
@@ -25,6 +30,7 @@ import {
   questRepository,
   scopedSettingsRepository,
   sessionRepository,
+  spendFreezeRepository,
   userRepository,
 } from '@bike4mind/database';
 import {
@@ -43,7 +49,9 @@ import {
 } from '@bike4mind/common';
 import type { Logger } from '@bike4mind/observability';
 import { lakeWriteToolDb } from '../dataLakes/lakeWriteToolDb';
+import { buildAudioToolJobs } from '../generationJobs/audioJobWiring';
 import { getFilesStorage, getGeneratedImageStorage } from '../utils/storage/index';
+import { signingKey } from '../security/signingKeys';
 import type { ToolMaterializer } from '@bike4mind/agents';
 import { buildSystemApiKeyTable } from './resolveBackend';
 import { resolveRequestBillingOrgId } from '../billing/resolveRequestBillingOrgId';
@@ -79,15 +87,22 @@ async function assertMediaOwnerStanding(ownerUserId: string): Promise<void> {
 }
 
 /**
- * Media tools call onToolStart before their provider call, so with credits enforced this refuses there (422)
- * when the owner's balance, or their org member cap, cannot cover the estimate.
+ * Media tools call onToolStart before their provider call, so this refuses there: a spend freeze on the owner
+ * or the billed org (403) always, and with credits enforced (422) when the owner's balance, or their org member
+ * cap, cannot cover the estimate.
  */
 async function gateMediaToolStart(toolName: string, data: unknown, ctx: MediaBillingContext): Promise<void> {
+  const owner = (await userRepository.findById(ctx.ownerUserId)) as IUserDocument | null;
+  if (!owner) throw new ForbiddenError(`deep agent tools: owner user ${ctx.ownerUserId} not found`);
+  await spendFreezeService.assertSpendNotFrozen(
+    spendFreezeSubjectForRequest({ user: owner }, ctx.billingOrgId ?? null),
+    {
+      db: { spendFreezes: spendFreezeRepository },
+    }
+  );
   if (!(await isCreditsEnforced())) return;
   const usd = estimateMediaUsd(toolName, data, ctx);
   if (usd <= 0) return;
-  const owner = (await userRepository.findById(ctx.ownerUserId)) as IUserDocument | null;
-  if (!owner) throw new ForbiddenError(`deep agent tools: owner user ${ctx.ownerUserId} not found`);
   const requiredCredits = usdToCredits(usd);
   const org = ctx.billingOrgId ? await organizationRepository.findById(ctx.billingOrgId) : null;
   if (org && creditService.isMemberCreditCapExceeded(org, owner.id, requiredCredits)) {
@@ -235,8 +250,6 @@ export function createDeepAgentToolMaterializer(config: DeepAgentToolMaterialize
         lakeAccessEvents: lakeAccessEventRepository,
         scopedSettings: scopedSettingsRepository,
         ...lakeWriteToolDb,
-        // ElevenLabs shared-key concurrency slots for audio_generation (runElevenLabsWithCapacity).
-        caches: cacheRepository,
       },
       storage: getFilesStorage(),
       imageGenerateStorage: getGeneratedImageStorage(),
@@ -269,7 +282,8 @@ export function createDeepAgentToolMaterializer(config: DeepAgentToolMaterialize
         enabledTools: enabledToolNames,
         config: {
           deep_research: true,
-          web_search: { imageUrlSigningSecret: Resource.SECRET_ENCRYPTION_KEY.value },
+          web_search: { imageUrlSigningSecret: signingKey('search-image-url') },
+          audio_generation: { jobs: buildAudioToolJobs() },
         },
         toolAvailability,
         orgToolPolicy,

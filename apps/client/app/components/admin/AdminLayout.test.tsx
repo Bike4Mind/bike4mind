@@ -20,11 +20,13 @@ import {
   isAdminUserProfilePath,
 } from './AdminLayout';
 import { AdminTab } from './adminSidebarConfig';
+import type { ContributedAdminPage } from './adminContributedPages';
 import { useAdminModal } from './useAdminModal';
 
 const mockUseUser = vi.fn();
 const profileRendered = vi.fn();
 const modelRendered = vi.fn();
+const contributedRendered = vi.fn();
 
 vi.mock('@client/app/contexts/UserContext', () => ({ useUser: () => mockUseUser() }));
 vi.mock('@client/app/utils/user', () => ({ userIsDeveloper: () => false }));
@@ -359,5 +361,258 @@ describe('isAdminSubscriptionDetailPath', () => {
     expect(isAdminSubscriptionDetailPath('/admin/subscriptions/by-stripe/sub_1')).toBe(true);
     expect(isAdminSubscriptionDetailPath('/admin')).toBe(false);
     expect(isAdminSubscriptionDetailPath('/admin/users/abc')).toBe(false);
+  });
+});
+
+describe('AdminLayoutRoute contributed pages', () => {
+  const PAGE_PATH = '/admin/ext/example';
+  const adminPages: ContributedAdminPage[] = [
+    { path: PAGE_PATH, adminPage: { section: 'platform', label: 'Example page', testId: 'ext-example-link' } },
+  ];
+  const everyPermission = ['settings:manage', 'support:read', 'credits:adjust', 'users:moderate'];
+
+  const renderWithPages = async (path: string, pages: readonly ContributedAdminPage[] = adminPages) => {
+    const rootRoute = createRootRoute({ component: () => <Outlet /> });
+    const layoutRoute = createRoute({
+      getParentRoute: () => rootRoute,
+      id: 'admin-layout',
+      component: () => <AdminLayoutRoute fallback={<div>loading</div>} adminPages={pages} />,
+    });
+    const consoleRoute = createRoute({
+      getParentRoute: () => layoutRoute,
+      path: '/admin',
+      component: () => <div data-testid="console-page">console</div>,
+    });
+    const contributedRoutes = pages.map(page =>
+      createRoute({
+        getParentRoute: () => layoutRoute,
+        path: page.path,
+        component: () => {
+          contributedRendered();
+          return <div data-testid="contributed-page">contributed</div>;
+        },
+      })
+    );
+    const router = createRouter({
+      routeTree: rootRoute.addChildren([layoutRoute.addChildren([consoleRoute, ...contributedRoutes])]),
+      history: createMemoryHistory({ initialEntries: [path] }),
+    });
+    await act(async () => {
+      render(
+        <QueryClientProvider client={queryClient}>
+          <CssVarsProvider theme={theme}>
+            <RouterProvider router={router} />
+          </CssVarsProvider>
+        </QueryClientProvider>
+      );
+    });
+    return router;
+  };
+
+  const currentLinks = (sidebar: HTMLElement) =>
+    within(sidebar)
+      .getAllByRole('link')
+      .filter(link => link.getAttribute('aria-current') === 'page');
+
+  beforeEach(() => {
+    queryClient = new QueryClient();
+    mockActionCounts.mockImplementation(() => ({ data: undefined }));
+    window.localStorage.clear();
+    useAdminModal.setState({ activeTab: AdminTab.Dashboard });
+  });
+
+  afterEach(() => {
+    vi.clearAllMocks();
+    useAccessToken.setState({ impersonating: false });
+  });
+
+  describe('for a full admin', () => {
+    beforeEach(() => {
+      mockUseUser.mockReturnValue({ currentUser: { id: 'u1', isAdmin: true, tags: [] } });
+    });
+
+    it('renders the page inside the shell, behind the sidebar', async () => {
+      await renderWithPages(PAGE_PATH);
+
+      const layout = await screen.findByTestId('admin-layout');
+      expect(within(layout).getByTestId('contributed-page')).toBeInTheDocument();
+      expect(screen.queryByTestId('admin-missing-permission-state')).toBeNull();
+      expect(within(desktopSidebar()).getByTestId('ext-example-link')).toHaveTextContent('Example page');
+    });
+
+    it('marks the page current in the sidebar and no tab, not even the stored one', async () => {
+      useAdminModal.setState({ activeTab: AdminTab.Users });
+
+      await renderWithPages(PAGE_PATH);
+      await screen.findByTestId('contributed-page');
+
+      const sidebar = desktopSidebar();
+      expect(currentLinks(sidebar)).toEqual([within(sidebar).getByTestId('ext-example-link')]);
+      expect(within(sidebar).getByTestId('admin-users-tab-btn')).not.toHaveAttribute('aria-current');
+    });
+
+    it('opens the page from the sidebar, and a tab from the page', async () => {
+      const router = await renderWithPages('/admin');
+      await screen.findByTestId('console-page');
+
+      // The Platform section is long, so the page sits behind its More row until the admin opens it.
+      fireEvent.click(within(desktopSidebar()).getByTestId('admin-sidebar-more-platform-btn'));
+      fireEvent.click(within(desktopSidebar()).getByTestId('ext-example-link'));
+
+      expect(await screen.findByTestId('contributed-page')).toBeInTheDocument();
+      expect(router.state.location.pathname).toBe(PAGE_PATH);
+
+      fireEvent.click(within(desktopSidebar()).getByTestId('admin-organizations-tab-btn'));
+
+      await waitFor(() => expect(router.state.location.pathname).toBe('/admin'));
+      expect(router.state.location.search).toEqual({ tab: 'organizations' });
+      expect(useAdminModal.getState().activeTab).toBe(AdminTab.Organizations);
+      expect(await screen.findByTestId('console-page')).toBeInTheDocument();
+      expect(currentLinks(desktopSidebar())).toEqual([
+        within(desktopSidebar()).getByTestId('admin-organizations-tab-btn'),
+      ]);
+    });
+
+    it('lists the page in the phone drawer and closes the drawer when it is picked', async () => {
+      const router = await renderWithPages('/admin');
+      await screen.findByTestId('console-page');
+
+      fireEvent.click(screen.getByTestId('admin-mobile-menu-btn'));
+      const drawer = within(screen.getByTestId('admin-sidebar-close-btn').closest('nav') as HTMLElement);
+      fireEvent.click(drawer.getByTestId('admin-sidebar-more-platform-btn'));
+      fireEvent.click(drawer.getByTestId('ext-example-link'));
+
+      await waitFor(() => expect(router.state.location.pathname).toBe(PAGE_PATH));
+      expect(screen.queryByTestId('admin-sidebar-close-btn')).toBeNull();
+    });
+
+    it('lists the page on the collapsed rail', async () => {
+      window.localStorage.setItem('admin-sidebar-collapsed', 'true');
+      await renderWithPages('/admin');
+      await screen.findByTestId('console-page');
+
+      fireEvent.click(within(desktopSidebar()).getByTestId('admin-sidebar-rail-platform-btn'));
+
+      expect(screen.getByRole('menuitem', { name: 'Example page' })).toBeInTheDocument();
+    });
+
+    it('lists no page when none is contributed', async () => {
+      await renderWithPages('/admin', []);
+      await screen.findByTestId('console-page');
+
+      expect(within(desktopSidebar()).queryByTestId('ext-example-link')).toBeNull();
+      expect(within(desktopSidebar()).getByTestId('admin-dashboard-tab-btn')).toHaveAttribute('aria-current', 'page');
+    });
+  });
+
+  describe('for a delegated admin', () => {
+    const delegate = (adminPermissions: string[]) => ({
+      currentUser: { id: 'u1', name: 'Dee', isAdmin: false, adminPermissions, tags: [] },
+    });
+
+    it.each([['settings:manage'], everyPermission])(
+      'denies the page, never rendering it, whatever they hold (%s)',
+      async (...permissions) => {
+        mockUseUser.mockReturnValue(delegate(permissions.flat()));
+
+        const router = await renderWithPages(PAGE_PATH);
+
+        const state = await screen.findByTestId('admin-missing-permission-state');
+        expect(state).toHaveTextContent('Full admin access required');
+        expect(router.state.location.pathname).toBe(PAGE_PATH);
+        expect(screen.queryByTestId('contributed-page')).toBeNull();
+        expect(contributedRendered).not.toHaveBeenCalled();
+      }
+    );
+
+    it.each([['/ADMIN/EXT/example'], ['/admin/ext/example/'], ['/Admin/Ext/Example']])(
+      'denies the page at %s, in whatever case or form the router matches it',
+      async path => {
+        mockUseUser.mockReturnValue(delegate(everyPermission));
+
+        await renderWithPages(path);
+        await screen.findByTestId('admin-layout');
+
+        expect(screen.queryByTestId('contributed-page')).toBeNull();
+        expect(contributedRendered).not.toHaveBeenCalled();
+        expect(screen.getByTestId('admin-missing-permission-state')).toBeInTheDocument();
+      }
+    );
+
+    it('keeps the page out of the sidebar', async () => {
+      mockUseUser.mockReturnValue(delegate(['settings:manage']));
+      await renderWithPages('/admin');
+      await screen.findByTestId('console-page');
+
+      expect(within(desktopSidebar()).queryByTestId('ext-example-link')).toBeNull();
+      expect(within(desktopSidebar()).queryByText('Example page')).toBeNull();
+    });
+
+    it('never renders the page while navigating to it from the console', async () => {
+      mockUseUser.mockReturnValue(delegate(['settings:manage']));
+      const router = await renderWithPages('/admin');
+      await screen.findByTestId('console-page');
+
+      await act(async () => {
+        await router.navigate({ href: PAGE_PATH });
+      });
+
+      expect(await screen.findByTestId('admin-missing-permission-state')).toBeInTheDocument();
+      expect(contributedRendered).not.toHaveBeenCalled();
+    });
+
+    it('can leave the denied page for a tab they may open', async () => {
+      mockUseUser.mockReturnValue(delegate(['settings:manage']));
+      const router = await renderWithPages(PAGE_PATH);
+      await screen.findByTestId('admin-missing-permission-state');
+      expect(currentLinks(desktopSidebar())).toEqual([]);
+
+      fireEvent.click(within(desktopSidebar()).getByTestId('admin-modals-tab-btn'));
+
+      await waitFor(() => expect(router.state.location.pathname).toBe('/admin'));
+      expect(router.state.location.search).toEqual({ tab: 'modals' });
+      expect(await screen.findByTestId('console-page')).toBeInTheDocument();
+      expect(contributedRendered).not.toHaveBeenCalled();
+    });
+  });
+
+  it('sends a non-admin on a contributed page to /new without rendering the shell or the page', async () => {
+    mockUseUser.mockReturnValue({ currentUser: { id: 'u1', isAdmin: false, tags: [] } });
+    const rootRoute = createRootRoute({ component: () => <Outlet /> });
+    const layoutRoute = createRoute({
+      getParentRoute: () => rootRoute,
+      id: 'admin-layout',
+      component: () => <AdminLayoutRoute fallback={<div>loading</div>} adminPages={adminPages} />,
+    });
+    const pageRoute = createRoute({
+      getParentRoute: () => layoutRoute,
+      path: PAGE_PATH,
+      component: () => {
+        contributedRendered();
+        return <div data-testid="contributed-page">contributed</div>;
+      },
+    });
+    const newRoute = createRoute({
+      getParentRoute: () => rootRoute,
+      path: '/new',
+      component: () => <div data-testid="new-page">new</div>,
+    });
+    const router = createRouter({
+      routeTree: rootRoute.addChildren([layoutRoute.addChildren([pageRoute]), newRoute]),
+      history: createMemoryHistory({ initialEntries: [PAGE_PATH] }),
+    });
+    await act(async () => {
+      render(
+        <QueryClientProvider client={queryClient}>
+          <CssVarsProvider theme={theme}>
+            <RouterProvider router={router} />
+          </CssVarsProvider>
+        </QueryClientProvider>
+      );
+    });
+
+    await waitFor(() => expect(router.state.location.pathname).toBe('/new'));
+    expect(screen.queryByTestId('admin-layout')).toBeNull();
+    expect(contributedRendered).not.toHaveBeenCalled();
   });
 });

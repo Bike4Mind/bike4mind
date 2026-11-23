@@ -25,6 +25,13 @@ export {
   type VersionBytes,
 } from './checkPublishQuota';
 export {
+  planPublishVersions,
+  planVersionedPublish,
+  versionsPushUpdate,
+  type PlanPublishVersionsInput,
+  type PreviousVersionState,
+} from './planPublishVersions';
+export {
   invalidatePublishCdn,
   publishCachePaths,
   toCacheTarget,

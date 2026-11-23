@@ -12,7 +12,8 @@ public final class MediaGalleryViewModel {
   public private(set) var kind: MediaKind?
 
   @ObservationIgnored private let api: any MediaAPI
-  @ObservationIgnored private let pageSize: Int
+  @ObservationIgnored private let firstPages: MediaFirstPageStore
+  @ObservationIgnored private var pageSize: Int { firstPages.pageSize }
   @ObservationIgnored private let onLatestImage: (@Sendable (MediaItem) async -> Void)?
   @ObservationIgnored private var nextPage = 1
   @ObservationIgnored private var hasMore = false
@@ -22,11 +23,13 @@ public final class MediaGalleryViewModel {
 
   /// - Parameter onLatestImage: told about the newest image whenever a refresh lands its first page;
   ///   the app uses it to keep the "Latest generation" widget current.
+  /// - Parameter firstPages: the shared page-1 source; defaults to a private in-memory one.
   public init(
-    api: any MediaAPI, pageSize: Int = 30, onLatestImage: (@Sendable (MediaItem) async -> Void)? = nil
+    api: any MediaAPI, firstPages: MediaFirstPageStore? = nil, pageSize: Int = 30,
+    onLatestImage: (@Sendable (MediaItem) async -> Void)? = nil
   ) {
     self.api = api
-    self.pageSize = pageSize
+    self.firstPages = firstPages ?? MediaFirstPageStore(api: api, pageSize: pageSize)
     self.onLatestImage = onLatestImage
   }
 
@@ -34,7 +37,24 @@ public final class MediaGalleryViewModel {
 
   public func load() async {
     guard state == .idle else { return }
+    await seed()
     await refresh()
+  }
+
+  /// Shows the last page 1 seen for this filter while the network answers.
+  private func seed() async {
+    let requested = generation
+    guard items.isEmpty, let page = await firstPages.seeded(kind: kind) else { return }
+    guard requested == generation, items.isEmpty else { return }
+    apply(page)
+  }
+
+  private func apply(_ page: MediaPage) {
+    items = page.items
+    hasMore = page.hasMore
+    nextPage = 2
+    loadMoreError = nil
+    state = .loaded
   }
 
   public func select(kind: MediaKind?) async {
@@ -46,6 +66,7 @@ public final class MediaGalleryViewModel {
     nextPage = 1
     state = .idle
     isRefreshing = false
+    await seed()
     await refresh()
   }
 
@@ -57,13 +78,9 @@ public final class MediaGalleryViewModel {
 
     if items.isEmpty { state = .loading }
     do {
-      let page = try await api.listMedia(kind: kind, page: 1, limit: pageSize)
+      let page = try await firstPages.refresh(kind: kind)
       guard requested == generation else { return }
-      items = page.items
-      hasMore = page.hasMore
-      nextPage = 2
-      loadMoreError = nil
-      state = .loaded
+      apply(page)
       if kind == nil || kind == .image, let latest = page.items.first(where: { $0.kind == .image }) {
         await onLatestImage?(latest)
       }

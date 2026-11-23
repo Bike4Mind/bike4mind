@@ -4,7 +4,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { CssVarsProvider } from '@mui/joy/styles';
 import type { PendingTaskDecision } from '@shared/orchestration';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { TaskDecisionCards } from './TaskDecisionCards';
+import { TASK_DECISION_LIST_MAX_HEIGHT, TaskDecisionCards, decisionsFor } from './TaskDecisionCards';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -73,6 +73,17 @@ const click = async (element: HTMLElement | undefined) => {
 describe('TaskDecisionCards', () => {
   const decisions = [pending('w1', 'root', 'd1'), pending('w2', 'other-root', 'd2')];
 
+  it('caps the list and scrolls it, so many decisions never squeeze the thread or stage above', () => {
+    mount('root', [pending('w1', 'root', 'd1'), pending('w2', 'root', 'd2'), pending('w3', 'root', 'd3')]);
+    const list = one('task-decision-list');
+    const style = getComputedStyle(list);
+    expect(style.maxHeight).toBe(TASK_DECISION_LIST_MAX_HEIGHT);
+    expect(style.overflowY).toBe('auto');
+    expect(style.flexShrink).toBe('0');
+    expect(list.getAttribute('role')).toBe('region');
+    expect(list.tabIndex).toBe(0);
+  });
+
   it('shows the root only its own agents decisions, and the worker its own', () => {
     mount('root', decisions);
     expect(all('task-decision-card').map(card => card.dataset.decisionId)).toEqual(['d1']);
@@ -116,5 +127,21 @@ describe('TaskDecisionCards', () => {
     const onOpen = mount('root', decisions);
     await click(one('task-decision-agent-link'));
     expect(onOpen).toHaveBeenCalledWith('w1');
+  });
+});
+
+describe('decisionsFor', () => {
+  const decisions = [pending('w1', 'root', 'd1'), pending('root', 'root', 'd2'), pending('w2', 'other', 'd3')];
+
+  it('keeps the decisions asked under this root and by the root itself', () => {
+    expect(decisionsFor('root', decisions).map(entry => entry.decision.id)).toEqual(['d1', 'd2']);
+  });
+
+  it('keeps only the worker its own decision', () => {
+    expect(decisionsFor('w2', decisions).map(entry => entry.decision.id)).toEqual(['d3']);
+  });
+
+  it('keeps nothing for an unsaved conversation', () => {
+    expect(decisionsFor(null, decisions)).toEqual([]);
   });
 });

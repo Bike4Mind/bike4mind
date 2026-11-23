@@ -193,6 +193,13 @@ function typeInto(testId: string, value: string) {
 }
 
 describe('local model and history reachability', () => {
+  it('keeps web conversations out of the primary Chat and Code navigation', async () => {
+    await renderShell();
+    expect(document.querySelector('[data-testid="handoff-server-conversations-btn"]')).toBeNull();
+    expect(host?.textContent).not.toContain('Server conversations / handoff');
+    expect(host?.textContent).not.toContain('Open web conversations');
+  });
+
   it.each([true, false])(
     'allows an offline local prompt while keeping hosted expiry blocked (local: %s)',
     async local => {

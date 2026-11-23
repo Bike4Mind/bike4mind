@@ -144,6 +144,14 @@ declare module "sst" {
       "type": "sst.sst.Secret"
       "value": string
     }
+    "HMAC_SIGNING_SECRET": {
+      "type": "sst.sst.Secret"
+      "value": string
+    }
+    "HMAC_SIGNING_SECRET_PREVIOUS": {
+      "type": "sst.sst.Secret"
+      "value": string
+    }
     "HistoryUploadCompleteFunction": {
       "name": string
       "type": "sst.aws.Function"
@@ -361,6 +369,10 @@ declare module "sst" {
       "value": string
     }
     "SLACK_WEBHOOK_URL": {
+      "type": "sst.sst.Secret"
+      "value": string
+    }
+    "SLACK_FEEDBACK_DESTINATIONS": {
       "type": "sst.sst.Secret"
       "value": string
     }

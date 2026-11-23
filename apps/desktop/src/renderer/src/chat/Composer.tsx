@@ -40,7 +40,9 @@ import {
   composerPlaceholder,
   composerSubmitAction,
   isAttachChord,
+  recallPromptAction,
   shownSuggestion,
+  type PromptRecall,
 } from './composerInput';
 import { useShowDollarCosts } from './costDisplay';
 import { ArrowUpIcon, FolderPlusIcon, PaperclipIcon, StopIcon } from './icons';
@@ -86,6 +88,8 @@ function isTextField(target: EventTarget | null): boolean {
   return target.isContentEditable || target.matches(TEXT_FIELD);
 }
 
+const NO_PROMPTS: readonly string[] = [];
+
 export function Composer({
   sessionId,
   disabled,
@@ -121,8 +125,11 @@ export function Composer({
   onSuggestionDismissed,
   onBrowseSkillMarket,
   addFolder,
+  promptHistory = NO_PROMPTS,
 }: {
   sessionId: string | null;
+  /** This conversation's sent prompts, newest first, for Up-arrow recall (promptHistory). */
+  promptHistory?: readonly string[];
   disabled: boolean;
   streaming: boolean;
   attachments: AttachmentDraft;
@@ -277,6 +284,9 @@ export function Composer({
     setCaret(at);
     pendingCaret.current = at;
   };
+
+  // What Up-arrow last put in the draft; see recallPromptAction.
+  const recall = useRef<PromptRecall | null>(null);
 
   useLayoutEffect(() => {
     const target = pendingCaret.current;
@@ -552,6 +562,21 @@ export function Composer({
       if (menu === 'next') setActiveIndex(current => (current + 1) % rowCount);
       else if (menu === 'previous') setActiveIndex(current => (current - 1 + rowCount) % rowCount);
       else takeMenuRow(Math.min(activeIndex, rowCount - 1));
+      return;
+    }
+
+    const target = event.currentTarget;
+    const recalled = recallPromptAction(
+      event,
+      { text, selectionStart: target.selectionStart, selectionEnd: target.selectionEnd },
+      promptHistory,
+      recall.current
+    );
+    if (recalled) {
+      event.preventDefault();
+      recall.current = recalled.recall;
+      // Caret at the start, so the next Up goes further back.
+      replaceDraft(recalled.text, 0);
       return;
     }
 

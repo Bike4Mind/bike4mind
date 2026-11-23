@@ -36,6 +36,8 @@ import {
   type CitableFabFileFields,
   type CitableFabFileFieldsWithTags,
   LegalHoldError,
+  MAX_LAKE_FILE_TAG_NAME_LENGTH,
+  BadRequestError,
 } from '@bike4mind/common';
 import mongoose, { Model, PipelineStage, Schema } from 'mongoose';
 import { getAtlasIndexForModel, getAtlasIndexStatus as getAtlasIndexStatusForModel } from '@bike4mind/fab-pipeline';
@@ -68,6 +70,13 @@ const META_TAG_REGEX = new RegExp(`^${DATALAKE_TAG_PREFIX}`);
  * membership, never content, so it must not appear in the tag tree or inflate a prefix's count.
  */
 const NOT_META_TAG = { $not: META_TAG_REGEX };
+
+function assertTagRenameLength(name: string): void {
+  // tags is Mixed, so runValidators cannot enforce the shared name cap here.
+  if (name.length > MAX_LAKE_FILE_TAG_NAME_LENGTH) {
+    throw new BadRequestError(`A tag name cannot be longer than ${MAX_LAKE_FILE_TAG_NAME_LENGTH} characters`);
+  }
+}
 
 /**
  * The `$project` stage behind every MEMBERSHIP-dimension read, shared by the lake-wide scan
@@ -1868,6 +1877,7 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     excludeIds: readonly string[] = []
   ): Promise<Pick<IFabFileDocument, 'id' | 'userId' | 'tags'> | null> {
     if (!tag) return null;
+    if (newTag) assertTagRenameLength(newTag);
     // The SAME anchored, escaped, case-insensitive match removeTagByUserId/updateTagsByUserId run,
     // so a claim and the bulk mop-up behind it can never act on different file sets.
     const nameRegex = new RegExp(`^${escapeRegex(tag)}$`, 'i');
@@ -3675,6 +3685,7 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
 
   async updateTagsByUserId(userId: string, tag: string, newTag: string): Promise<number> {
     if (!tag || !newTag) return 0;
+    assertTagRenameLength(newTag);
     // Anchored and escaped for the same reason as removeTagByUserId: unanchored, renaming `q1`
     // also rewrote `q1-draft`.
     const nameRegex = new RegExp(`^${escapeRegex(tag)}$`, 'i');

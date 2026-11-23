@@ -160,10 +160,10 @@ describe('ChatService app-control tools', () => {
     expect(codeTools.filter(name => name.startsWith('session_'))).toEqual([
       'session_list',
       'session_read',
-      'session_spawn',
       'session_send',
       'session_archive',
       'session_delete',
+      'session_spawn',
       'session_suggestion_update',
       'session_suggestion_dismiss',
     ]);

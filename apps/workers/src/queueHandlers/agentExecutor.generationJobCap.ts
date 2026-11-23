@@ -1,12 +1,14 @@
 /**
  * The per-run cap shared by the agent-mode generation tools (agentExecutor.videoToolConfig.ts,
- * agentExecutor.musicToolConfig.ts, agentExecutor.imageToolConfig.ts). One run can fan out across in-process subagents and many
- * iterations, so each kind is capped by a setting (platform default, org override; 0 removes the
- * video or music tool, images floor at 1) and counted atomically on the run's Quest (QuestRepository.claimAgentGenerationSlot).
+ * agentExecutor.musicToolConfig.ts, agentExecutor.imageToolConfig.ts, agentExecutor.audioToolConfig.ts). One run can fan
+ * out across in-process subagents and many iterations, so each kind is capped by a setting (platform default, org
+ * override) and counted atomically on the run's Quest (QuestRepository.claimAgentGenerationSlot). A limit of 0 removes
+ * the video and music tools; images floor at 1; the audio tool stays offered and refuses each call of a kind capped at 0.
  */
-import type { QuestGenerationJobKind } from '@bike4mind/common';
+import type { AgentGenerationSlotKind } from '@bike4mind/common';
 import { questRepository, adminSettingsRepository, scopedSettingsRepository } from '@bike4mind/database';
 import { scopedSettingsService } from '@bike4mind/services';
+import { isModelRequiresSubscriptionError } from '@bike4mind/services/llm/modelAdmission';
 import type { Logger } from '@bike4mind/observability';
 
 export type AgentGenerationSlots = {
@@ -44,9 +46,10 @@ const slotsKept = (result: CreateJobResult, claimed: number): number =>
  * Wraps `createJob` so a call past the cap returns `refusal` instead of starting a job. A call takes all of its
  * slots or none: a batch that does not fit gives back what it claimed and starts nothing. When createJob RETURNS,
  * slots for jobs it did not create go back: a refusal, or an idempotent replay of a job this run already started
- * (`created: false`, or the replayed part of a mixed batch per `createdCount`). A throw keeps them unless
- * `isThrownBeforePersist` vouches for it, because createJob can throw after the job is persisted (a failed enqueue
- * whose cleanup also failed), and so can a Lambda killed mid-call: both err toward one job fewer, never one too many.
+ * (`created: false`, or the replayed part of a mixed batch per `createdCount`). A throw keeps them unless it is the
+ * free-tier model refusal (every create function asserts it before persisting anything) or `isThrownBeforePersist`
+ * vouches for it, because createJob can throw after the job is persisted (a failed enqueue whose cleanup also
+ * failed), and so can a Lambda killed mid-call: both err toward one job fewer, never one too many.
  */
 export function limitJobsPerRun<TInput, TResult extends CreateJobResult>(
   createJob: (input: TInput) => Promise<TResult>,
@@ -84,7 +87,7 @@ export function limitJobsPerRun<TInput, TResult extends CreateJobResult>(
     try {
       result = await createJob(input);
     } catch (error) {
-      if (isThrownBeforePersist?.(error)) await release(claimed);
+      if (isModelRequiresSubscriptionError(error) || isThrownBeforePersist?.(error)) await release(claimed);
       throw error;
     }
     await release(claimed - slotsKept(result, claimed));
@@ -93,7 +96,7 @@ export function limitJobsPerRun<TInput, TResult extends CreateJobResult>(
 }
 
 /** Production slots for one job kind, counted on the run's Quest. */
-export const questGenerationSlots = (kind: QuestGenerationJobKind): AgentGenerationSlots => ({
+export const questGenerationSlots = (kind: AgentGenerationSlotKind): AgentGenerationSlots => ({
   claim: (questId, limit) => questRepository.claimAgentGenerationSlot(questId, kind, limit),
   release: questId => questRepository.releaseAgentGenerationSlot(questId, kind),
 });
@@ -104,7 +107,15 @@ export const questGenerationSlots = (kind: QuestGenerationJobKind): AgentGenerat
  * lift an org's 0 back to the platform value.
  */
 export const resolveAgentRunLimit =
-  (key: 'agentVideoClipsPerRun' | 'agentMusicTracksPerRun' | 'agentImagesPerRun', logger: Logger) =>
+  (
+    key:
+      | 'agentVideoClipsPerRun'
+      | 'agentMusicTracksPerRun'
+      | 'agentImagesPerRun'
+      | 'agentSpeechClipsPerRun'
+      | 'agentSoundEffectsPerRun',
+    logger: Logger
+  ) =>
   async (caller: AgentRunLimitCaller): Promise<number> => {
     const { value } = await scopedSettingsService.resolveScopedSetting(
       key,

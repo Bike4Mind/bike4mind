@@ -1,4 +1,4 @@
-import type { IUserDocument } from '@bike4mind/common';
+import { isMfaForcedForUser, type IUserDocument } from '@bike4mind/common';
 import { adminSettingsRepository } from '@bike4mind/database';
 import { mfaService } from '@bike4mind/services';
 import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
@@ -56,7 +56,8 @@ export async function isMfaEnrollmentRequired(user: IUserDocument): Promise<bool
  * support must reach the account. A test persona is exempt too (mfaService.isMfaEnforcementExempt),
  * matching the `required` flag of the MFA status.
  *
- * Runs per request, so both reads are cached. An enrolled user never reaches them.
+ * Account-level enforcement is checked before the cached deployment and team-policy reads.
+ * An enrolled user never reaches these reads.
  */
 export async function isMfaEnrollmentOwed(
   user: IUserDocument,
@@ -65,7 +66,7 @@ export async function isMfaEnrollmentOwed(
   if (impersonatedBy || mfaService.isMfaEnforcementExempt(user) || mfaService.userHasMFAConfigured(user)) {
     return false;
   }
-  return isMfaEnrollmentRequired(user);
+  return isMfaForcedForUser(user) || isMfaEnrollmentRequired(user);
 }
 
 export const MFA_ENROLLMENT_REQUIRED_MESSAGE = 'MFA enrollment required.';

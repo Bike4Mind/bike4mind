@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import type { LegacyResearchRunLevers, ResearchFeedCursor } from '@bike4mind/common';
+import type { LegacyResearchRunLevers, ResearchFeedCursor, ResearchItemRule } from '@bike4mind/common';
 import {
   researchFeedFingerprint,
   researchFeedUrlKey,
@@ -19,6 +19,7 @@ import {
   type ResearchRunPorts,
   type ResearchRunResult,
 } from './executeResearchRun';
+import type { ItemRuleAnswer, ItemRuleResult } from './ItemRuleService';
 
 const NOW = new Date('2026-03-01T12:00:00.000Z');
 
@@ -173,6 +174,55 @@ describe('executeResearchRun', () => {
       expect(result.totals.proposed).toBe(1);
     });
 
+    it('counts a flagged hit as an unresolved redirect and an unlisted drop apart under drop', async () => {
+      const { ports, calls } = makePorts({
+        candidates: [
+          { ...hit(1, 'www.google.com'), unresolvedRedirect: true },
+          hit(2, 'other.com'),
+          hit(3, 'docs.example.com'),
+        ],
+      });
+
+      const result = await executeResearchRun(
+        levers({ reviewDomains: ['example.com'], unlistedSources: 'drop' }),
+        'run-1',
+        ports
+      );
+
+      expect(calls.judged).toEqual(['https://docs.example.com/3']);
+      expect(result.totals.unresolvedRedirect).toBe(1);
+      expect(result.totals.unlistedDropped).toBe(1);
+      expect(result.totals.filteredBySource).toBe(0);
+    });
+
+    it('skips a flagged hit under review without judging, fetching or proposing it', async () => {
+      const { ports, calls } = makePorts({
+        candidates: [{ ...hit(1, 'www.google.com'), unresolvedRedirect: true }, hit(2, 'docs.example.com')],
+      });
+
+      const result = await executeResearchRun(levers({ unlistedSources: 'review' }), 'run-1', ports);
+
+      expect(calls.judged).toEqual(['https://docs.example.com/2']);
+      expect(calls.fetched).toEqual(['https://docs.example.com/2']);
+      expect(calls.proposals.map(p => p.sourceUrl)).toEqual(['https://docs.example.com/2']);
+      expect(result.totals).toMatchObject({ searchHits: 2, unresolvedRedirect: 1, proposed: 1 });
+    });
+
+    it('counts a never-list hit and an unlisted-drop hit in separate buckets', async () => {
+      const { ports, calls } = makePorts({
+        candidates: [hit(1, 'spam.net'), hit(2, 'other.com'), hit(3, 'docs.example.com')],
+      });
+
+      const result = await executeResearchRun(
+        levers({ reviewDomains: ['example.com'], blockedDomains: ['spam.net'], unlistedSources: 'drop' }),
+        'run-1',
+        ports
+      );
+
+      expect(calls.judged).toEqual(['https://docs.example.com/3']);
+      expect(result.totals).toMatchObject({ filteredBySource: 1, unlistedDropped: 1, unresolvedRedirect: 0 });
+    });
+
     it('drops everything outside the review list when other sites are ignored', async () => {
       const { ports, calls } = makePorts({ candidates: [hit(1, 'other.com'), hit(2, 'docs.example.com')] });
 
@@ -183,7 +233,8 @@ describe('executeResearchRun', () => {
       );
 
       expect(calls.judged).toEqual(['https://docs.example.com/2']);
-      expect(result.totals.filteredBySource).toBe(1);
+      expect(result.totals.unlistedDropped).toBe(1);
+      expect(result.totals.filteredBySource).toBe(0);
     });
 
     it('upgrades a legacy-shaped snapshot, so a stored allow list still restricts the run', async () => {
@@ -196,7 +247,7 @@ describe('executeResearchRun', () => {
       const result = await executeResearchRun(legacy, 'run-1', ports);
 
       expect(calls.judged).toEqual(['https://docs.example.com/2']);
-      expect(result.totals.filteredBySource).toBe(1);
+      expect(result.totals.unlistedDropped).toBe(1);
     });
 
     it('passes the source tier of each proposed candidate to propose', async () => {
@@ -286,6 +337,36 @@ describe('executeResearchRun', () => {
       expect(bucketSum({ ...result.totals })).toBe(result.totals.searchHits);
     });
 
+    it('sweeps unreached candidates into unresolvedRedirect, filteredBySource and unlistedDropped apart', async () => {
+      const candidates = [
+        hit(1),
+        hit(2),
+        hit(3),
+        { ...hit(4, 'www.google.com'), unresolvedRedirect: true },
+        hit(5, 'other.com'),
+        hit(6, 'spam.net'),
+        hit(7),
+      ];
+      const { ports } = makePorts({ candidates, judge: vi.fn(async () => failing) });
+
+      const result = await executeResearchRun(
+        levers({ reviewDomains: ['example.com'], blockedDomains: ['spam.net'], unlistedSources: 'drop' }),
+        'run-1',
+        ports
+      );
+
+      expect(result.stopReason).toBe('judge_unavailable');
+      expect(result.totals).toMatchObject({
+        searchHits: 7,
+        judgeFailed: 3,
+        unresolvedRedirect: 1,
+        filteredBySource: 1,
+        unlistedDropped: 1,
+        notJudged: 1,
+      });
+      expect(bucketSum({ ...result.totals })).toBe(result.totals.searchHits);
+    });
+
     it('leaves nothing uncounted when the breaker trips on the last candidate', async () => {
       const { ports } = makePorts({ candidates: [hit(1), hit(2), hit(3)], judge: vi.fn(async () => failing) });
 
@@ -345,6 +426,69 @@ describe('executeResearchRun', () => {
 
     expect(result.totals.fetchFailed).toBe(1);
     expect(calls.proposals).toHaveLength(1);
+  });
+
+  describe('bucket accounting', () => {
+    const OUTCOME_BUCKETS = [
+      'filteredBySource',
+      'unlistedDropped',
+      'unresolvedRedirect',
+      'belowRelevance',
+      'judgeFailed',
+      'fetchFailed',
+      'proposed',
+      'duplicatePending',
+      'alreadyInLake',
+      'suppressedByTombstone',
+      'unusableSource',
+      'notJudged',
+      'blockedByRule',
+    ] as const;
+    const outcomeSum = (totals: Record<string, number>) =>
+      OUTCOME_BUCKETS.reduce((sum, key) => sum + (totals[key] ?? 0), 0);
+
+    it('sums its outcome buckets to searchHits when the run is exhausted', async () => {
+      const candidates = [
+        hit(1),
+        hit(2, 'spam.net'),
+        hit(3, 'other.com'),
+        { ...hit(4, 'www.google.com'), unresolvedRedirect: true },
+        hit(5, 'docs.example.com'),
+      ];
+      const { ports } = makePorts({ candidates });
+
+      const result = await executeResearchRun(
+        levers({ reviewDomains: ['example.com'], blockedDomains: ['spam.net'], unlistedSources: 'drop' }),
+        'run-1',
+        ports
+      );
+
+      expect(result.stopReason).toBe('exhausted');
+      expect(outcomeSum({ ...result.totals })).toBe(result.totals.searchHits);
+    });
+
+    it('sums its outcome buckets to searchHits when the judge is unavailable', async () => {
+      const failing = { outcome: 'failed', error: 'model access denied', costMicroUsd: 0 } as const;
+      const candidates = [
+        hit(1),
+        hit(2),
+        hit(3),
+        { ...hit(4, 'www.google.com'), unresolvedRedirect: true },
+        hit(5, 'other.com'),
+        hit(6, 'spam.net'),
+        hit(7),
+      ];
+      const { ports } = makePorts({ candidates, judge: vi.fn(async () => failing) });
+
+      const result = await executeResearchRun(
+        levers({ reviewDomains: ['example.com'], blockedDomains: ['spam.net'], unlistedSources: 'drop' }),
+        'run-1',
+        ports
+      );
+
+      expect(result.stopReason).toBe('judge_unavailable');
+      expect(outcomeSum({ ...result.totals })).toBe(result.totals.searchHits);
+    });
   });
 
   // Rule 4: only a card that actually reached a reviewer counts against the limit.
@@ -522,6 +666,203 @@ describe('executeResearchRun', () => {
       const result = await executeResearchRun(autoLevers({ maxProposals: 2 }), 'run-1', ports);
       expect(result.stopReason).toBe('proposal_limit');
       expect(result.totals.proposed).toBe(2);
+    });
+  });
+
+  describe('item rules', () => {
+    const block: ResearchItemRule = { condition: 'is a press release', action: 'block' };
+    const review: ResearchItemRule = { condition: 'authored by a vendor', action: 'review' };
+    const usage = {
+      costMicroUsd: 500,
+      inputTokens: 1,
+      outputTokens: 1,
+      cacheReadInputTokens: 0,
+      cacheCreationInputTokens: 0,
+    };
+    const answered = (...answers: ItemRuleAnswer[]): ItemRuleResult => ({ status: 'evaluated', answers, ...usage });
+    const failed: ItemRuleResult = { status: 'failed', reason: 'model down', ...usage };
+    const ruleLevers = (itemRules: ResearchItemRule[], overrides: Partial<LegacyResearchRunLevers> = {}) =>
+      levers({ trustedDomains: ['example.com'], autoAdmitTrusted: true, maxAutoAdmits: 2, itemRules, ...overrides });
+    const proposedWith = (priorDisposition?: 'declined' | 'approved' | null): ProposalOutcome =>
+      ({ outcome: 'proposed', proposal: { id: 'p1', priorDisposition } }) as unknown as ProposalOutcome;
+    const rulePorts = (result: ItemRuleResult, overrides: PortOverrides = {}) => {
+      const autoAdmit = vi.fn(async () => 'admitted' as const);
+      const evaluateItemRules = vi.fn(async () => result);
+      const proposals: ProposalCandidate[] = [];
+      const propose = async (candidate: ProposalCandidate) => {
+        proposals.push(candidate);
+        return proposedWith(null);
+      };
+      const made = makePorts({ autoAdmit, evaluateItemRules, propose, ...overrides });
+      return { autoAdmit, evaluateItemRules, ports: made.ports, calls: { ...made.calls, proposals } };
+    };
+
+    it('makes no port call and leaves totals alone when there are no rules', async () => {
+      const { ports, evaluateItemRules, autoAdmit } = rulePorts(answered());
+      const result = await executeResearchRun(ruleLevers([]), 'run-1', ports);
+      expect(evaluateItemRules).not.toHaveBeenCalled();
+      expect(autoAdmit).toHaveBeenCalledTimes(1);
+      expect(result.totals).toMatchObject({ proposed: 1, autoAdmitted: 1, blockedByRule: 0, reviewedByRule: 0 });
+    });
+
+    it('drops a block match into blockedByRule with no proposal, settled and reported', async () => {
+      const onProgress = vi.fn(async () => undefined);
+      const { ports, calls } = rulePorts(answered('match'), { onProgress });
+      const result = await executeResearchRun(
+        ruleLevers([block], { source: 'feed', feedUrl: 'https://feeds.example.org/f.xml' }),
+        'run-1',
+        {
+          ...ports,
+          readFeed: async () => [{ ...hit(1), publishedAt: new Date('2026-02-28T00:00:00Z') }],
+        }
+      );
+      expect(result.totals).toMatchObject({ blockedByRule: 1, proposed: 0 });
+      expect(calls.proposals).toHaveLength(0);
+      expect(result.feedCursor!.seenKeys).toContain(canonicalSourceKey(hit(1).url));
+      expect(onProgress).toHaveBeenCalled();
+      expect(result.spentMicroUsd).toBe(1_500);
+    });
+
+    it('sends an auto-admittable item to review on an undetermined block rule and never blocks', async () => {
+      const { ports, calls, autoAdmit } = rulePorts(answered('undetermined'));
+      const result = await executeResearchRun(ruleLevers([block]), 'run-1', ports);
+      expect(autoAdmit).not.toHaveBeenCalled();
+      expect(result.totals).toMatchObject({ proposed: 1, reviewedByRule: 1, blockedByRule: 0 });
+      expect(calls.proposals[0].provenance.reviewReason).toEqual({
+        kind: 'rule_undetermined',
+        conditions: [block.condition],
+      });
+    });
+
+    it('proposes normally on an undetermined block rule when the item cannot auto-admit', async () => {
+      const { ports, calls } = rulePorts(answered('undetermined'), { candidates: [hit(1, 'other.org')] });
+      const result = await executeResearchRun(ruleLevers([block]), 'run-1', ports);
+      expect(result.totals).toMatchObject({ proposed: 1, reviewedByRule: 0, blockedByRule: 0 });
+      expect(calls.proposals[0].provenance.reviewReason).toBeUndefined();
+    });
+
+    it('sends a review match on a trusted item to review and records the condition', async () => {
+      const { ports, calls, autoAdmit } = rulePorts(answered('match'));
+      const result = await executeResearchRun(ruleLevers([review]), 'run-1', ports);
+      expect(autoAdmit).not.toHaveBeenCalled();
+      expect(result.totals).toMatchObject({ proposed: 1, reviewedByRule: 1, autoAdmitted: 0 });
+      expect(calls.proposals[0].provenance.reviewReason).toEqual({
+        kind: 'rule_match',
+        conditions: [review.condition],
+      });
+    });
+
+    it('proposes a trusted item with authors only as rule_undetermined when the rule cannot be checked', async () => {
+      const authored = { ...hit(1), authors: ['A. Writer'] };
+      const { ports, calls, autoAdmit, evaluateItemRules } = rulePorts(answered('undetermined'), {
+        candidates: [authored],
+        fetchSource: async url => ({ title: 'T', finalUrl: url }),
+      });
+      const result = await executeResearchRun(ruleLevers([review]), 'run-1', ports);
+      expect(evaluateItemRules).toHaveBeenCalledWith([review], expect.objectContaining({ authors: ['A. Writer'] }));
+      expect(autoAdmit).not.toHaveBeenCalled();
+      expect(result.totals.reviewedByRule).toBe(1);
+      expect(calls.proposals[0].provenance.reviewReason).toEqual({
+        kind: 'rule_undetermined',
+        conditions: [review.condition],
+      });
+    });
+
+    it('blocks an item with only a title and URL when a block rule matches', async () => {
+      const { ports, evaluateItemRules } = rulePorts(answered('match'), {
+        fetchSource: async url => ({ title: 'T', finalUrl: url }),
+      });
+      const result = await executeResearchRun(ruleLevers([block]), 'run-1', ports);
+      expect(evaluateItemRules).toHaveBeenCalledTimes(1);
+      expect(result.totals.blockedByRule).toBe(1);
+    });
+
+    it('makes no port call for a review-tier item when only review rules exist', async () => {
+      const { ports, evaluateItemRules } = rulePorts(answered('match'), { candidates: [hit(1, 'other.org')] });
+      const result = await executeResearchRun(ruleLevers([review]), 'run-1', ports);
+      expect(evaluateItemRules).not.toHaveBeenCalled();
+      expect(result.totals).toMatchObject({ proposed: 1, reviewedByRule: 0 });
+    });
+
+    it('still sends only the block rules for a review-tier item', async () => {
+      const { ports, evaluateItemRules } = rulePorts(answered('no_match'), { candidates: [hit(1, 'other.org')] });
+      await executeResearchRun(ruleLevers([block, review]), 'run-1', ports);
+      expect(evaluateItemRules).toHaveBeenCalledWith([block], expect.anything());
+    });
+
+    it('does not count reviewedByRule for a previously declined item', async () => {
+      const { ports } = rulePorts(answered('match'), { propose: async () => proposedWith('declined') });
+      const result = await executeResearchRun(ruleLevers([review]), 'run-1', ports);
+      expect(result.totals).toMatchObject({ proposed: 1, reviewedByRule: 0 });
+    });
+
+    it('skips the rule call for a review-rule-only config past maxAutoAdmits', async () => {
+      const { ports, evaluateItemRules, calls } = rulePorts(answered('no_match'), { candidates: [hit(1), hit(2)] });
+      const result = await executeResearchRun(ruleLevers([review], { maxAutoAdmits: 1 }), 'run-1', ports);
+      expect(evaluateItemRules).toHaveBeenCalledTimes(1);
+      expect(result.totals).toMatchObject({ proposed: 2, autoAdmitted: 1, reviewedByRule: 0 });
+      expect(calls.proposals[1].provenance.reviewReason).toBeUndefined();
+    });
+
+    it('still evaluates a block rule past maxAutoAdmits', async () => {
+      const { ports, evaluateItemRules } = rulePorts(answered('no_match'), { candidates: [hit(1), hit(2)] });
+      const result = await executeResearchRun(ruleLevers([block], { maxAutoAdmits: 1 }), 'run-1', ports);
+      expect(evaluateItemRules).toHaveBeenCalledTimes(2);
+      expect(result.totals).toMatchObject({ proposed: 2, autoAdmitted: 1, blockedByRule: 0 });
+    });
+
+    it('proposes a failed check for review, counts its cost and leaves the judge breaker alone', async () => {
+      const { ports, calls, autoAdmit } = rulePorts(failed, { candidates: [hit(1), hit(2), hit(3), hit(4)] });
+      const result = await executeResearchRun(ruleLevers([review], { costCeilingMicroUsd: 100_000 }), 'run-1', ports);
+      expect(autoAdmit).not.toHaveBeenCalled();
+      expect(result.stopReason).toBe('exhausted');
+      expect(result.totals).toMatchObject({ proposed: 4, reviewedByRule: 4, judgeFailed: 0 });
+      expect(result.spentMicroUsd).toBe(4 * 1_500);
+      expect(calls.proposals[0].provenance.reviewReason).toEqual({ kind: 'rule_check_failed' });
+    });
+
+    it('a failed check with only block rules on a trusted item is proposed, not auto-admitted, rule_check_failed', async () => {
+      const { ports, calls, autoAdmit } = rulePorts(failed);
+      const result = await executeResearchRun(ruleLevers([block]), 'run-1', ports);
+      expect(autoAdmit).not.toHaveBeenCalled();
+      expect(result.totals).toMatchObject({ proposed: 1, reviewedByRule: 1, blockedByRule: 0 });
+      expect(calls.proposals[0].provenance.reviewReason).toEqual({ kind: 'rule_check_failed' });
+    });
+
+    it('counts the rule call toward the ceiling and stops before the next item', async () => {
+      const { ports } = rulePorts(answered('no_match'), { candidates: [hit(1), hit(2)] });
+      const result = await executeResearchRun(ruleLevers([block], { costCeilingMicroUsd: 1_500 }), 'run-1', ports);
+      expect(result.stopReason).toBe('cost_ceiling');
+      expect(result.totals.proposed).toBe(1);
+      expect(result.spentMicroUsd).toBe(1_500);
+    });
+
+    it('settles cost_ceiling before the rule call when the judge spent the ceiling', async () => {
+      const { ports, evaluateItemRules, calls } = rulePorts(answered('no_match'));
+      const result = await executeResearchRun(ruleLevers([block], { costCeilingMicroUsd: 1_000 }), 'run-1', ports);
+      expect(result.stopReason).toBe('cost_ceiling');
+      expect(evaluateItemRules).not.toHaveBeenCalled();
+      expect(calls.proposals).toHaveLength(0);
+    });
+
+    it('settles time_budget before the rule call and leaves the feed item unreached', async () => {
+      const remaining = vi.fn().mockReturnValueOnce(1_000_000).mockReturnValue(1_000);
+      const { ports, evaluateItemRules } = rulePorts(answered('match'), { remainingTimeMs: remaining });
+      const result = await executeResearchRun(
+        ruleLevers([block], { source: 'feed', feedUrl: 'https://feeds.example.org/f.xml' }),
+        'run-1',
+        { ...ports, readFeed: async () => [{ ...hit(1), publishedAt: new Date('2026-02-28T00:00:00Z') }] }
+      );
+      expect(result.stopReason).toBe('time_budget');
+      expect(evaluateItemRules).not.toHaveBeenCalled();
+      expect(result.feedCursor!.seenKeys).not.toContain(canonicalSourceKey(hit(1).url));
+    });
+
+    it('never admits on its own: a no_match item still needs the auto-admit conditions', async () => {
+      const { ports, autoAdmit } = rulePorts(answered('no_match', 'no_match'), { candidates: [hit(1, 'other.org')] });
+      const result = await executeResearchRun(ruleLevers([block, review]), 'run-1', ports);
+      expect(autoAdmit).not.toHaveBeenCalled();
+      expect(result.totals.autoAdmitted).toBe(0);
     });
   });
 });

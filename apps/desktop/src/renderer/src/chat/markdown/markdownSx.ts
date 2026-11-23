@@ -67,6 +67,8 @@ export const markdownSx: SxProps = {
     backgroundColor: 'var(--joy-palette-background-level2)',
     color: 'var(--joy-palette-text-primary)',
   },
+  // A path in inline code that FilePathLink made a link reads as one, chip and all.
+  '& a[data-file-path] > code': { color: 'var(--joy-palette-primary-plainColor)' },
 
   // Scrolls on its own so a wide table widens the column rather than the whole thread.
   '& table': {
@@ -94,9 +96,11 @@ export const markdownSx: SxProps = {
   '& img': { maxWidth: '100%', height: 'auto', borderRadius: 'var(--joy-radius-sm)' },
 };
 
-/** The container a fenced block is drawn in: its own surface, scrolling sideways on its own. */
+/**
+ * The container a fenced block is drawn in: its own surface, scrolling sideways on its own. Its
+ * vertical margin is on the wrapper ReplyMarkdown puts around it with the block's toolbar.
+ */
 export const codeBlockSx: SxProps = {
-  my: 1.5,
   p: 1.5,
   overflowX: 'auto',
   ...thinScrollbarSx,

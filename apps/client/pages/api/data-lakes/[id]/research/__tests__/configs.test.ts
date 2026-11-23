@@ -9,6 +9,7 @@ const h = vi.hoisted(() => ({
   listResearchConfigs: vi.fn(),
   createResearchConfig: vi.fn(),
   updateResearchConfig: vi.fn(),
+  setResearchSchedulePaused: vi.fn(),
   deleteResearchConfig: vi.fn(),
   countPendingByLakes: vi.fn(),
 }));
@@ -35,6 +36,7 @@ vi.mock('@bike4mind/services', async importOriginal => ({
     listResearchConfigs: h.listResearchConfigs,
     createResearchConfig: h.createResearchConfig,
     updateResearchConfig: h.updateResearchConfig,
+    setResearchSchedulePaused: h.setResearchSchedulePaused,
     deleteResearchConfig: h.deleteResearchConfig,
   },
 }));
@@ -51,6 +53,8 @@ vi.mock('@bike4mind/database', () => ({
   dataLakeResearchConfigRepository: {},
   dataLakeProposalRepository: { countPendingByLakes: h.countPendingByLakes },
   lakeConfigChangeEventRepository: {},
+  lakeConfigSnapshotRepository: {},
+  lakeMembershipChangeEventRepository: {},
   adminSettingsRepository: {},
 }));
 vi.mock('@server/dataLakes/assertLakeResearchManage', () => ({
@@ -88,6 +92,7 @@ beforeEach(() => {
   h.listResearchConfigs.mockResolvedValue([savedConfig]);
   h.createResearchConfig.mockResolvedValue(savedConfig);
   h.updateResearchConfig.mockResolvedValue(savedConfig);
+  h.setResearchSchedulePaused.mockResolvedValue(savedConfig);
   h.deleteResearchConfig.mockResolvedValue(undefined);
   h.countPendingByLakes.mockResolvedValue({ 'lake-oid-1': 7 });
 });
@@ -117,6 +122,59 @@ describe('/api/data-lakes/[id]/research/configs', () => {
 
     expect(h.createResearchConfig.mock.calls[0][3]).toMatchObject(schedule);
     expect(h.updateResearchConfig.mock.calls[0][4]).toMatchObject(schedule);
+  });
+
+  describe('schedule pause', () => {
+    const put = (body: unknown) => {
+      const { res } = makeRes();
+      return call(byIdHandler, req('PUT', { id: 'l', configId: 'config-1' }, body), res);
+    };
+
+    it('sends a body of only schedulePaused to the narrow pause write, inside the transaction', async () => {
+      await put({ schedulePaused: true });
+
+      expect(h.setResearchSchedulePaused).toHaveBeenCalledTimes(1);
+      const args = h.setResearchSchedulePaused.mock.calls[0];
+      expect(args.slice(0, 5)).toEqual(['config-1', LAKE, true, ACTOR, GRANTS]);
+      expect(h.updateResearchConfig).not.toHaveBeenCalled();
+      expect(h.touchIfStable).toHaveBeenCalledWith(LAKE.id);
+    });
+
+    it('sends schedulePaused false to the narrow write as a resume', async () => {
+      await put({ schedulePaused: false });
+      expect(h.setResearchSchedulePaused.mock.calls[0][2]).toBe(false);
+    });
+
+    it('sends a mixed body through the full update, which carries the flag', async () => {
+      await put({ schedulePaused: true, query: 'new question' });
+
+      expect(h.setResearchSchedulePaused).not.toHaveBeenCalled();
+      expect(h.updateResearchConfig.mock.calls[0][4]).toMatchObject({ schedulePaused: true, query: 'new question' });
+    });
+
+    it('keeps a body without schedulePaused on the full update', async () => {
+      await put({ cadence: 'daily' });
+      expect(h.setResearchSchedulePaused).not.toHaveBeenCalled();
+      expect(h.updateResearchConfig).toHaveBeenCalledTimes(1);
+    });
+
+    it('carries schedulePaused through on create and refuses one of the wrong type', async () => {
+      const { res } = makeRes();
+      await call(
+        indexHandler,
+        req('POST', { id: 'l' }, { name: 'n', query: 'q', cadence: 'weekly', schedulePaused: true }),
+        res
+      );
+      expect(h.createResearchConfig.mock.calls[0][3]).toMatchObject({ schedulePaused: true });
+      await expect(put({ schedulePaused: 'yes' })).rejects.toThrow();
+    });
+
+    it('returns schedulePaused on the response', async () => {
+      h.setResearchSchedulePaused.mockResolvedValue({ ...savedConfig, schedulePaused: true });
+      const { res, json } = makeRes();
+      await call(byIdHandler, req('PUT', { id: 'l', configId: 'config-1' }, { schedulePaused: true }), res);
+      expect(json).toHaveBeenCalledWith({ data: expect.objectContaining({ schedulePaused: true }) });
+    });
   });
 
   describe('source tiers', () => {
@@ -282,6 +340,41 @@ describe('/api/data-lakes/[id]/research/configs', () => {
       await call(indexHandler, req('GET', { id: 'my-lake' }), res);
       expect(json.mock.calls[0][0].data[0].feedStatus).toBeNull();
       expect(json.mock.calls[0][0].data[0]).not.toHaveProperty('feedCursor');
+    });
+  });
+
+  describe('item rules', () => {
+    const itemRules = [
+      { condition: 'Published by Acme', action: 'block' },
+      { condition: 'About sports', action: 'review' },
+    ];
+
+    it('round-trips itemRules to the service on create and update', async () => {
+      const { res } = makeRes();
+      await call(indexHandler, req('POST', { id: 'l' }, { name: 'n', query: 'q', itemRules }), res);
+      await call(byIdHandler, req('PUT', { id: 'l', configId: 'config-1' }, { itemRules }), res);
+      expect(h.createResearchConfig.mock.calls[0][3]).toMatchObject({ itemRules });
+      expect(h.updateResearchConfig.mock.calls[0][4]).toMatchObject({ itemRules });
+    });
+
+    it('returns itemRules on a listed configuration', async () => {
+      const stored = { ...savedConfig, itemRules };
+      h.listResearchConfigs.mockResolvedValue([stored]);
+      const { res, json } = makeRes();
+      await call(indexHandler, req('GET', { id: 'my-lake' }), res);
+      expect(json).toHaveBeenCalledWith({ data: [{ ...stored, feedStatus: null }], pendingProposals: 7 });
+    });
+
+    it('refuses an action other than block or review', async () => {
+      const { res } = makeRes();
+      await expect(
+        call(
+          indexHandler,
+          req('POST', { id: 'l' }, { name: 'n', query: 'q', itemRules: [{ condition: 'c', action: 'allow' }] }),
+          res
+        )
+      ).rejects.toThrow();
+      expect(h.createResearchConfig).not.toHaveBeenCalled();
     });
   });
 

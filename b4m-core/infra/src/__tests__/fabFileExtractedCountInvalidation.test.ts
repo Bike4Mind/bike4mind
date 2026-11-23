@@ -41,12 +41,15 @@ const UPLOAD_PATTERN = new RegExp(`${UPLOAD_CALL.source}|PutObjectCommand|putObj
 const NOT_A_REWRITE = new Set([
   // First write of a new object; the key is hashed from user, tag, name and slot.
   'packages/server-utils/src/tutorials/sheet.ts',
-  // Presigns Turborepo cache artifacts in a separate bucket; no FabFile row exists.
-  'apps/workers/src/turboCache/handler.ts',
+  // Overwrites the model price snapshot in its own bucket; no FabFile row exists.
+  'apps/workers/src/cron/modelPriceSnapshotWriter.ts',
   'b4m-core/services/src/fabFileService/create.ts',
   'b4m-core/services/src/fabFileService/createByUrl.ts',
   // Stages an admin audit-log CSV under exports/ (no FabFile row); nothing to invalidate.
   'apps/client/server/utils/adminAuditExportStorage.ts',
+  // Writes its status object and MP4 under studio-render/ in the generated media bucket (no FabFile row);
+  // the generation job engine creates the output FabFile from that MP4 as a new row.
+  'apps/workers/src/render/main.ts',
   // Uploads the account data export zip under exports/ (no FabFile row); nothing to invalidate.
   'apps/workers/src/queueHandlers/accountDataExport.ts',
   // Shared ZIP upload fence for account and metadata-only organization exports; no FabFile rewrite.
@@ -79,6 +82,7 @@ const NOT_A_REWRITE = new Set([
   'apps/workers/src/queueHandlers/slackQuestProcessor.ts',
   'apps/client/server/qa/storage.ts',
   'apps/client/server/utils/publicSettingsArtifact.ts',
+  'apps/client/server/services/publish/publishStoredArtifact.ts',
   'apps/client/server/utils/cacheExternalImage.ts',
   'apps/client/server/utils/generatedAudioDelivery.ts',
   'apps/client/server/utils/mailer/emailAttachments.ts',
@@ -89,6 +93,8 @@ const NOT_A_REWRITE = new Set([
   'apps/workers/src/queueHandlers/questExport.ts',
   // Stages HTML and stores published-artifact thumbnails; neither upload rewrites FabFile content.
   'apps/workers/src/queueHandlers/publishThumbnail.ts',
+  // Parks an outbound mail body under queued-mail/ for the email-send worker; it writes no FabFile bytes.
+  'packages/server-utils/src/utils/mailer/mailBodyStore.ts',
 ]);
 
 /**

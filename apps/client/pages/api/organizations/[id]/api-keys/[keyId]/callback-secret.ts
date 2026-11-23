@@ -11,7 +11,7 @@ import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { loadOrgOwnedKey } from '@server/organizations/orgApiKeys';
-import { verifyOrgAccess } from '@server/utils/orgAccess';
+import { verifyOrgAccess } from '@bike4mind/server-utils/utils/orgAccess';
 
 const stringParam = (value: unknown): string => (typeof value === 'string' ? value : '');
 

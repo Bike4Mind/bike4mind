@@ -397,6 +397,8 @@ export interface IAgentExecution {
    * forwarded to ToolContext.apiKeyId so a tool-driven lake write is audited under the key.
    */
   apiKeyId?: string;
+  /** Connected app of the exchange key that started the run; absent for every other caller. */
+  oauthClientId?: string;
   /**
    * How the request that started the run was authenticated, forwarded to ToolContext.authOrigin and
    * inherited by child and DAG-node runs. Optional only for runs started before the field existed;
@@ -834,6 +836,7 @@ const AgentExecutionSchema = new mongoose.Schema(
     resolvedEnabledTools: { type: [String], default: undefined },
     scopeDeniedTools: { type: [String], default: undefined },
     apiKeyId: { type: String },
+    oauthClientId: { type: String },
     authOrigin: { type: String, enum: AuthOriginSchema.options },
     adminRoleWithheld: { type: Boolean },
     usedMementoIds: [{ type: String }],
@@ -961,6 +964,12 @@ AgentExecutionSchema.index({ userId: 1, status: 1, parentExecutionId: 1, isBackg
 AgentExecutionSchema.index({ spawnedByExecutionId: 1, status: 1 }); // Abort cascade to background children
 AgentExecutionSchema.index({ parentExecutionId: 1, dagNodeId: 1 }); // Sibling lookup during DAG completion handler
 AgentExecutionSchema.index({ createdAt: 1 }, { expireAfterSeconds: 7776000 }); // 90-day TTL - preserves billing/audit data
+// Per-app run outcome counts. Partial, so it holds only exchange-key runs.
+// Pre-built by 20261115120000_ensure-side-app-attribution-indexes.
+AgentExecutionSchema.index(
+  { oauthClientId: 1, createdAt: -1 },
+  { name: 'oauthClient_createdAt', partialFilterExpression: { oauthClientId: { $exists: true } } }
+);
 
 // --- List filters & summary projection (history viewer) ---
 
@@ -1154,6 +1163,16 @@ class AgentExecutionRepository extends BaseRepository<IAgentExecution> {
       status: { $in: ACTIVE_AGENT_EXECUTION_STATUSES },
     });
     return result?.toObject() ?? null;
+  }
+
+  /** The model of the user's most recent run in a session, to continue that conversation on. */
+  async findLatestModelBySessionId(sessionId: string, userId: string): Promise<string | null> {
+    const latest = await this.model
+      .findOne({ sessionId, userId })
+      .sort({ createdAt: -1 })
+      .select('model')
+      .lean<{ model?: string }>();
+    return latest?.model ?? null;
   }
 
   async findChildExecutions(parentExecutionId: string): Promise<IAgentExecution[]> {
@@ -2226,7 +2245,7 @@ class AgentExecutionRepository extends BaseRepository<IAgentExecution> {
 
 // --- Model & Export ---
 
-const AgentExecutionModel =
+export const AgentExecutionModel =
   (mongoose.models['AgentExecution'] as unknown as mongoose.Model<IAgentExecution>) ||
   mongoose.model<IAgentExecution>('AgentExecution', AgentExecutionSchema);
 

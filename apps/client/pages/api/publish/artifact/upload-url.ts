@@ -11,6 +11,7 @@ import {
   ALLOWED_MIME_EXACT,
   type UploadUrlResponse,
   normalizePublishTags,
+  ApiKeyScope,
 } from '@bike4mind/common';
 import {
   checkScopePermission,
@@ -42,7 +43,10 @@ function isAllowedMime(mimeType: string): boolean {
   return ALLOWED_MIME_EXACT.includes(mimeType) || ALLOWED_MIME_PREFIXES.some(p => mimeType.startsWith(p));
 }
 
-const handler = baseApi().post(outboundActionGate(), async (req, res) => {
+const handler = baseApi({
+  requiredScopes: [ApiKeyScope.ARTIFACTS_PUBLISH, ApiKeyScope.ADMIN],
+  grandfatherLegacyKeys: true,
+}).post(outboundActionGate(), async (req, res) => {
   if (!req.user) {
     return res.status(401).json({ error: 'Authentication required' });
   }

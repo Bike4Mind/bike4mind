@@ -1,5 +1,6 @@
 import mongoose, { Model, Schema } from 'mongoose';
 import type {
+  ResearchKeysetPage,
   CreateDataLakeResearchConfigInput,
   IDataLakeResearchConfigDocument,
   IDataLakeResearchConfigRepository,
@@ -9,6 +10,7 @@ import type {
   UpdateDataLakeResearchConfigInput,
 } from '@bike4mind/common';
 import {
+  RESEARCH_ITEM_RULE_ACTIONS,
   RESEARCH_MAX_AUTO_ADMITS_DEFAULT,
   RESEARCH_REVIEW_BACKLOG_LIMIT_DEFAULT,
   RESEARCH_RUN_TRIGGERS,
@@ -35,6 +37,14 @@ const ResearchScheduleOutcomeSchema = new Schema(
     pendingProposals: { type: Number },
     reviewBacklogLimit: { type: Number },
     error: { type: String },
+  },
+  { _id: false }
+);
+
+export const ResearchItemRuleSchema = new Schema(
+  {
+    condition: { type: String, required: true },
+    action: { type: String, enum: RESEARCH_ITEM_RULE_ACTIONS, required: true },
   },
   { _id: false }
 );
@@ -94,10 +104,12 @@ const DataLakeResearchConfigSchema = new Schema<IDataLakeResearchConfigDocument>
     minRelevance: { type: Number, required: true },
     costCeilingMicroUsd: { type: Number, required: true },
     proposedTags: { type: [String], default: [] },
+    itemRules: { type: [ResearchItemRuleSchema], default: [] },
     trigger: { type: String, enum: RESEARCH_RUN_TRIGGERS, required: true },
     // Defaults rather than `required`, so configs saved before scheduling existed read as unscheduled.
     cadence: { type: String, enum: RESEARCH_SCHEDULE_CADENCES, default: 'off' },
     reviewBacklogLimit: { type: Number, default: RESEARCH_REVIEW_BACKLOG_LIMIT_DEFAULT },
+    schedulePaused: { type: Boolean, default: false },
     nextRunAt: { type: Date, default: null },
     scheduleAnchorAt: { type: Date, default: null },
     lastScheduledOutcome: { type: ResearchScheduleOutcomeSchema, default: null },
@@ -115,9 +127,15 @@ const DataLakeResearchConfigSchema = new Schema<IDataLakeResearchConfigDocument>
 );
 
 // One lake's configs, newest first.
-DataLakeResearchConfigSchema.index({ dataLakeId: 1, createdAt: -1 });
+DataLakeResearchConfigSchema.index({ dataLakeId: 1, createdAt: -1, _id: -1 });
 // The research scheduler's due-config scan (claimDueConfigs).
 DataLakeResearchConfigSchema.index({ nextRunAt: 1 });
+
+/** Rows strictly after `after` in `{createdAt: -1, _id: -1}` order; the id breaks createdAt ties. */
+export const keysetFilter = (after: ResearchKeysetPage['after']) =>
+  after
+    ? { $or: [{ createdAt: { $lt: after.createdAt } }, { createdAt: after.createdAt, _id: { $lt: after.id } }] }
+    : {};
 
 export const DataLakeResearchConfigModel: IDataLakeResearchConfigModel =
   (mongoose.models[ModelName] as IDataLakeResearchConfigModel) ||
@@ -125,6 +143,14 @@ export const DataLakeResearchConfigModel: IDataLakeResearchConfigModel =
     ModelName,
     DataLakeResearchConfigSchema
   );
+
+// Matches by `name` too: instanceof is unreliable if mongoose is loaded twice.
+const nullOnCastError = (err: unknown): null => {
+  if (err instanceof mongoose.Error.CastError || (err as { name?: string } | null)?.name === 'CastError') {
+    return null;
+  }
+  throw err;
+};
 
 class DataLakeResearchConfigRepository
   extends BaseRepository<IDataLakeResearchConfigDocument>
@@ -145,16 +171,20 @@ class DataLakeResearchConfigRepository
     return this.toConfig(doc);
   }
 
-  async listByLake(dataLakeId: string): Promise<IDataLakeResearchConfigDocument[]> {
-    const docs = await this.configModel.find({ dataLakeId }).sort({ createdAt: -1 });
+  async listByLake(dataLakeId: string, options?: ResearchKeysetPage): Promise<IDataLakeResearchConfigDocument[]> {
+    const query = this.configModel
+      .find({ dataLakeId, ...keysetFilter(options?.after) })
+      .sort({ createdAt: -1, _id: -1 });
+    if (options?.limit) query.limit(options.limit);
+    const docs = await query;
     return docs.map(d => this.toConfig(d));
   }
 
   async findByIdInLake(id: string, dataLakeId: string): Promise<IDataLakeResearchConfigDocument | null> {
-    // `.catch(() => null)` rather than a pre-validation of `id`: findOne REJECTS on a non-ObjectId
-    // string, so a caller passing a junk id would get a 500 where the honest answer is "no such
-    // config". Same shape as assertLakeAccess's by-id lookup.
-    const doc = await this.configModel.findOne({ _id: id, dataLakeId }).catch(() => null);
+    // A CastError becomes null rather than a pre-validation of `id`: findOne REJECTS on a non-ObjectId
+    // string, so a junk id would get a 500 where the honest answer is "no such config". Every other
+    // error must propagate, or a transaction write conflict never reaches withTransaction's retry.
+    const doc = await this.configModel.findOne({ _id: id, dataLakeId }).catch(nullOnCastError);
     return doc ? this.toConfig(doc) : null;
   }
 
@@ -167,7 +197,7 @@ class DataLakeResearchConfigRepository
     // unreachable from another lake's route even if the id leaks.
     const doc = await this.configModel
       .findOneAndUpdate({ _id: id, dataLakeId }, { $set: input }, { new: true })
-      .catch(() => null);
+      .catch(nullOnCastError);
     return doc ? this.toConfig(doc) : null;
   }
 
@@ -186,7 +216,7 @@ class DataLakeResearchConfigRepository
     // compare-and-set, so two overlapping ticks split the due set instead of both taking all of it.
     while (claimed.length < limit) {
       const doc = await this.configModel.findOneAndUpdate(
-        { cadence: { $ne: 'off' }, nextRunAt: { $lte: now } },
+        { cadence: { $ne: 'off' }, schedulePaused: { $ne: true }, nextRunAt: { $lte: now } },
         { $set: { nextRunAt: leaseUntil } },
         { sort: { nextRunAt: 1 }, new: false }
       );
@@ -209,7 +239,7 @@ class DataLakeResearchConfigRepository
   }
 
   async deleteConfig(id: string, dataLakeId: string): Promise<boolean> {
-    const res = await this.configModel.deleteOne({ _id: id, dataLakeId }).catch(() => null);
+    const res = await this.configModel.deleteOne({ _id: id, dataLakeId }).catch(nullOnCastError);
     return (res?.deletedCount ?? 0) > 0;
   }
 

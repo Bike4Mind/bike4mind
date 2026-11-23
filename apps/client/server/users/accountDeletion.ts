@@ -129,17 +129,21 @@ export async function scheduleAccountDeletion(
 export async function requestAdminErasure(
   req: DeletionRequest,
   userId: string,
-  now = new Date()
+  now = new Date(),
+  { recordInTransaction }: Pick<ScheduleAccountDeletionInput, 'recordInTransaction'> = {}
 ): Promise<AccountDeletionLockdown> {
   const ownedOrganizations = await findOwnedOrganizations(userId);
   if (ownedOrganizations.length > 0) {
-    throw new ConflictError('Transfer or delete the organizations this user owns before erasing their data.', {
+    throw new ConflictError('Transfer or delete the organizations this user owns first.', {
       code: ACCOUNT_DELETION_ORG_OWNER_CODE,
       organizations: ownedOrganizations,
     });
   }
   const deletion: IUserDeletion = { requestedAt: now, scheduledFor: now, source: 'admin', requestedBy: req.user.id };
-  const { subscriptions } = await lockDownAccount(req, userId, deletion, { actorUserId: req.user.id });
+  const { subscriptions } = await lockDownAccount(req, userId, deletion, {
+    actorUserId: req.user.id,
+    recordInTransaction,
+  });
   return { deletion, subscriptions };
 }
 
@@ -192,7 +196,7 @@ async function lockDownAccount(
     },
     updated => (updated ? { userId, reason: 'account_deletion_requested', actorUserId } : undefined)
   );
-  if (!stamped) throw new ConflictError('This account is already scheduled for deletion.');
+  if (!stamped) throw new ConflictError('This account already has a deletion pending.');
 
   await logAuthAudit(req, {
     userId,

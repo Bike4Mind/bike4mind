@@ -31,6 +31,16 @@ server whose `FCM_SERVICE_ACCOUNT` secret belongs to the same Firebase project.
 - [ ] Uninstalling the app and sending a push prunes the row (FCM answers `UNREGISTERED`).
 - [ ] A build without the `b4m.fcm.*` properties runs normally and registers no token.
 
+## First-launch welcome
+
+- [ ] A fresh install opens on the two-page welcome; swipe and "Next" both advance, back returns a page, "Continue"
+      lands on sign-in.
+- [ ] Relaunching after "Continue" goes straight to sign-in; so does signing out later.
+- [ ] Uninstall and reinstall: the welcome shows again.
+- [ ] Installing a newer build over one that predates the welcome (`adb install -r`, signed in or not) skips it.
+- [ ] The notification permission is still asked at the first signed-in moment, not on the welcome.
+- [ ] Rotating or font scale 200% keeps the page readable (the page scrolls) and keeps the current page.
+
 ## Server picker (debug builds)
 
 - [ ] A fresh debug install points at the build's `-Pb4m.serverUrl` (default staging); the sign-in screen shows it.
@@ -67,6 +77,40 @@ server whose `FCM_SERVICE_ACCOUNT` secret belongs to the same Firebase project.
 - [ ] Airplane mode mid-reply, then back online: the reply still completes (socket reconnect, or the polling fallback).
 - [ ] A refused message (for example out of credits) shows the server's reason and keeps the draft box usable.
 - [ ] Rotation and process death keep the open chat and the draft.
+
+## Brief
+
+Needs a server with the briefs API (`/api/v1/briefs`) and a user with some recent agent activity.
+
+- [ ] "Brief" on the chats list opens the latest brief, or "No brief yet" with "Compose a brief".
+- [ ] "Compose a brief" shows "Putting your brief together", then the brief (usually under a minute); "Refresh" after
+      "Still working on it" picks it up once it is ready.
+- [ ] A slow or hung polling request stops at the 90-second polling deadline, including time spent waiting for HTTP;
+      leaving the screen cancels the request without showing a timeout on another screen.
+- [ ] After composing a new brief while an older ready one exists, fail a polling GET: the error offers "Try again".
+      Restoring connectivity and retrying fetches the new brief by ID, without another compose POST or showing the older one.
+- [ ] Tap a brief push while signed out, then rotate/recreate the Activity before completing sign-in: the pending brief
+      opens afterward. Rotate again after consuming it: returning to chats must not replay the old launch intent.
+- [ ] A ready brief lists "What needs you" first, then "Handled" and "What happened"; empty sections are hidden.
+- [ ] A decision with "Open approval" opens that chat, where the existing approval card answers it.
+- [ ] Tapping a `brief_ready` push opens that brief: from the system tray with the app backgrounded, from a cold start,
+      and from the notification the app shows while in the foreground. Signed out, the tap opens the brief after sign-in.
+- [ ] With the `brief_ready` category switched off for the user (`preferences.pushNotifications.brief_ready: false`,
+      set from web or iOS), no brief push arrives; the brief is still reachable from the chats list.
+
+## Links
+
+Until the server publishes `assetlinks.json`, open links with `adb shell am start -a android.intent.action.VIEW -d <url>
+com.bike4mind.app` (see README).
+
+- [ ] `https://app.bike4mind.com/notebooks/<id>` opens that chat, from a cold start and with the app already running.
+      Signed out, it opens after sign-in.
+- [ ] `/briefs/<id>` opens that brief; `/notebooks` and the bare host open the chats list.
+- [ ] A page with no Android screen (for example `/pricing`) opens in the browser, not back in the app.
+- [ ] A push with a `deepLink` to a chat (for example a finished reply) opens that chat when tapped, from the system
+      tray and from the notification the app shows in the foreground.
+- [ ] Once `assetlinks.json` lists the signing certificate: tapping an `app.bike4mind.com/notebooks/<id>` link in another
+      app (mail, chat) opens the app without a chooser.
 
 ## Upgrade required
 

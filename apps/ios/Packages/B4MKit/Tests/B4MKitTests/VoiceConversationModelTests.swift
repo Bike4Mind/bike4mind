@@ -126,10 +126,10 @@ final class VoiceConversationModelTests: XCTestCase {
   func testSilenceEndsTheUtterance() async throws {
     let model = await startedModel(silenceTimeout: .milliseconds(30))
     await listener.emit("Name two colors")
-    XCTAssertEqual(model.liveTranscript, "")
     await until { await api.sentMessages.count == 1 }
     let sent = await api.sentMessages
     XCTAssertEqual(sent.first?.message, "Name two colors")
+    XCTAssertEqual(model.liveTranscript, "")
     await model.stop()
   }
 
@@ -177,6 +177,58 @@ final class VoiceConversationModelTests: XCTestCase {
     await model.stop()
   }
 
+  func testTheReplysOwnEchoDoesNotInterruptIt() async throws {
+    await speaker.setHolding(true)
+    let model = await startedModel()
+    await say("Tell me about Paris")
+    await until { await api.sentMessages.count == 1 }
+    await realtime.emit(frame(reply: longReply, status: .running))
+    await until { model.phase == .speaking }
+
+    await listener.emit("the capital of France is")
+    await listener.emit("the capital of France is Paris", isFinal: true)
+    try await Task.sleep(for: .milliseconds(50))
+    XCTAssertEqual(model.phase, .speaking)
+    XCTAssertEqual(model.liveTranscript, "")
+    let stops = await speaker.stopCount
+    XCTAssertEqual(stops, 0)
+    let sent = await api.sentMessages
+    XCTAssertEqual(sent.count, 1)
+    await speaker.finishCurrent()
+    await model.stop()
+  }
+
+  func testTalkingOverTheReplyKeepsOnlyTheUsersWords() async throws {
+    await speaker.setHolding(true)
+    let model = await startedModel()
+    await say("Tell me about Paris")
+    await until { await api.sentMessages.count == 1 }
+    await realtime.emit(frame(reply: longReply, status: .running))
+    await until { model.phase == .speaking }
+
+    await listener.emit("the capital of France is Paris what about Rome")
+    await until { model.phase == .listening }
+    XCTAssertEqual(model.liveTranscript, "what about Rome")
+
+    await api.setSendResult(.success(ChatSendReceipt(questID: "quest-2", sessionID: "s1")))
+    await listener.emit("the capital of France is Paris what about Rome", isFinal: true)
+    await until { await api.sentMessages.count == 2 }
+    let sent = await api.sentMessages
+    XCTAssertEqual(sent.last?.message, "what about Rome")
+    await model.stop()
+  }
+
+  func testAFinishedReplyStartsAFreshRecognizer() async throws {
+    let model = await startedModel()
+    await say("Tell me about Paris")
+    await until { await listener.startCount == 2 }
+    await realtime.emit(frame(reply: longReply, status: .done))
+    await until { model.phase == .listening }
+    await until { await listener.startCount == 3 }
+    XCTAssertEqual(model.liveTranscript, "")
+    await model.stop()
+  }
+
   func testTappingInterruptStopsTheReply() async throws {
     await speaker.setHolding(true)
     let model = await startedModel()
@@ -185,10 +237,26 @@ final class VoiceConversationModelTests: XCTestCase {
     await realtime.emit(frame(reply: longReply, status: .running))
     await until { model.phase == .speaking }
 
+    await listener.emit("the capital")
+    let startsBefore = await listener.startCount
     await model.interrupt()
     XCTAssertEqual(model.phase, .listening)
+    XCTAssertEqual(model.liveTranscript, "")
     let stops = await speaker.stopCount
     XCTAssertGreaterThanOrEqual(stops, 1)
+    let startsAfter = await listener.startCount
+    XCTAssertEqual(startsAfter, startsBefore + 1)
+
+    // The rest of the reply is never spoken, and only what is heard after the tap is sent.
+    await realtime.emit(frame(reply: longReply + "A third sentence that is long enough. ", status: .done))
+    await api.setSendResult(.success(ChatSendReceipt(questID: "quest-2", sessionID: "s1")))
+    await say("hello there")
+    await until { await api.sentMessages.count == 2 }
+    try await Task.sleep(for: .milliseconds(50))
+    let sent = await api.sentMessages
+    XCTAssertEqual(sent.map(\.message), ["Tell me about Paris", "hello there"])
+    let spoken = await speaker.spoken
+    XCTAssertEqual(spoken, ["The capital of France is Paris."])
     await model.stop()
   }
 
@@ -327,6 +395,33 @@ final class VoiceConversationModelTests: XCTestCase {
     await until { model.phase == .listening }
     let activations = await audio.activations
     XCTAssertEqual(activations, 2)
+
+    // The reply heard before the pause is not echo any more, so repeating it is the user.
+    await api.setSendResult(.success(ChatSendReceipt(questID: "quest-2", sessionID: "s1")))
+    await listener.emit("the capital of France is Paris", isFinal: true)
+    await until { await api.sentMessages.count == 2 }
+    let sent = await api.sentMessages
+    XCTAssertEqual(sent.last?.message, "the capital of France is Paris")
+    await model.stop()
+  }
+
+  func testStoppingForgetsTheReplysEcho() async throws {
+    await speaker.setHolding(true)
+    let model = await startedModel()
+    await say("Tell me about Paris")
+    await until { await api.sentMessages.count == 1 }
+    await realtime.emit(frame(reply: longReply, status: .running))
+    await until { model.phase == .speaking }
+
+    await model.stop()
+    let starts = await listener.startCount
+    await model.start()
+    await until { await listener.startCount > starts }
+    await api.setSendResult(.success(ChatSendReceipt(questID: "quest-2", sessionID: "s1")))
+    await listener.emit("the capital of France is Paris", isFinal: true)
+    await until { await api.sentMessages.count == 2 }
+    let sent = await api.sentMessages
+    XCTAssertEqual(sent.last?.message, "the capital of France is Paris")
     await model.stop()
   }
 
@@ -406,6 +501,7 @@ final class VoiceConversationModelTests: XCTestCase {
     }
     await listener.endTask()
     await until { model.phase == .failed(.recognizerUnavailable) }
+    await until { await audio.deactivations == 1 }
     let deactivations = await audio.deactivations
     XCTAssertEqual(deactivations, 1)
   }

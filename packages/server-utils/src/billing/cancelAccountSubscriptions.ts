@@ -108,12 +108,37 @@ const requestOptions = (deadline: number | undefined) =>
 
 const pastDeadline = (deadline: number | undefined): boolean => deadline !== undefined && Date.now() >= deadline;
 
+type WriteCheckpoint = {
+  beforeWrite: () => Promise<void>;
+  rethrowFailure: () => void;
+};
+
+/** Keep callback rejection distinct from ordinary Stripe errors, including falsy thrown values. */
+function createWriteCheckpoint(beforeWrite: (() => void | Promise<void>) | undefined): WriteCheckpoint | undefined {
+  if (!beforeWrite) return undefined;
+  let failure: { error: unknown } | undefined;
+  return {
+    beforeWrite: async () => {
+      try {
+        await beforeWrite();
+      } catch (error) {
+        failure = { error };
+        throw error;
+      }
+    },
+    rethrowFailure: () => {
+      if (failure !== undefined) throw failure.error;
+    },
+  };
+}
+
 async function cancelCustomerSubscriptions(
   customerId: string,
   comment: string,
   result: AccountSubscriptionCancellation,
   logger: Pick<Logger, 'info'>,
-  deadline: number | undefined
+  deadline: number | undefined,
+  checkpoint: WriteCheckpoint | undefined
 ): Promise<void> {
   // Stripe, not the local rows, is read: a row can lag a renewal, and a deleted account's rows are
   // the very ones that went unnoticed. Stripe's default listing already omits canceled history, and
@@ -124,6 +149,13 @@ async function cancelCustomerSubscriptions(
     if (pastDeadline(deadline)) {
       result.failed.push({ customerId, subscriptionId: subscription.id, reason: TIME_BUDGET_EXHAUSTED });
       continue;
+    }
+    if (checkpoint) {
+      await checkpoint.beforeWrite();
+      if (pastDeadline(deadline)) {
+        result.failed.push({ customerId, subscriptionId: subscription.id, reason: TIME_BUDGET_EXHAUSTED });
+        continue;
+      }
     }
     try {
       // prorate: false and no invoice_now, so the cancel mints no credit note or invoice; refunds
@@ -146,6 +178,7 @@ async function cancelCustomerSubscriptions(
       const { voided, failed } = await voidOpenSubscriptionInvoices(subscription.id, {
         deadline,
         timeoutMs: STRIPE_REQUEST_TIMEOUT_MS,
+        ...(checkpoint ? { beforeWrite: checkpoint.beforeWrite } : {}),
         ...(deadline === undefined ? {} : { maxNetworkRetries: 0 }),
       });
       if (voided.length > 0 || failed.length > 0) {
@@ -156,6 +189,7 @@ async function cancelCustomerSubscriptions(
         });
       }
     } catch (error) {
+      checkpoint?.rethrowFailure();
       logger.info('[Billing] could not void open invoices after canceling a subscription', {
         subscriptionId: subscription.id,
         error: reasonOf(error),
@@ -166,9 +200,11 @@ async function cancelCustomerSubscriptions(
 
 /**
  * Immediately cancels every live Stripe subscription that bills this account (its own customer
- * and the organizations it owns), so a suspended or deleted account never renews. Never throws:
- * the suspension or deletion it accompanies must go ahead, so each failure is logged at error and
- * returned for the caller's response and audit record. Refunds are deliberately not issued.
+ * and the organizations it owns), so a suspended or deleted account never renews. Ordinary Stripe
+ * failures are collected rather than thrown, so the accompanying suspension or deletion can
+ * proceed. Each failure is logged at error and
+ * returned for the caller's response and audit record. An optional beforeWrite rejection propagates
+ * unchanged, stopping further writes. Refunds are deliberately not issued.
  *
  * Without captured customerIds, call before a hard delete: the IDs are read from the user and its
  * owned orgs. A guarded self-serve delete captures the IDs first and cancels only after commit.
@@ -181,6 +217,8 @@ export async function cancelAccountSubscriptions(
     userId: string;
     reason: AccountSubscriptionCancelReason;
     deadline?: number;
+    /** Checked before each cancellation/invoice write; rejection stops the call rather than aggregating. */
+    beforeWrite?: () => void | Promise<void>;
     /** IDs captured before a committed hard delete; an explicit empty list means nothing to cancel. */
     customerIds?: readonly string[];
   },
@@ -202,6 +240,7 @@ export async function cancelAccountSubscriptions(
     return result;
   }
 
+  const checkpoint = createWriteCheckpoint(input.beforeWrite);
   const comment = CANCELLATION_COMMENT[input.reason];
   for (const customerId of customerIds) {
     if (pastDeadline(input.deadline)) {
@@ -209,8 +248,9 @@ export async function cancelAccountSubscriptions(
       continue;
     }
     try {
-      await cancelCustomerSubscriptions(customerId, comment, result, logger, input.deadline);
+      await cancelCustomerSubscriptions(customerId, comment, result, logger, input.deadline, checkpoint);
     } catch (error) {
+      checkpoint?.rethrowFailure();
       result.failed.push({ customerId, subscriptionId: null, reason: reasonOf(error) });
     }
   }

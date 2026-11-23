@@ -1,7 +1,9 @@
 import type {
+  DataLakeProposalReviewReason,
   IDataLakeProposalDocument,
   LegacyResearchRunLevers,
   ResearchFeedCursor,
+  ResearchItemRule,
   ResearchRunStopReason,
   ResearchRunTotals,
 } from '@bike4mind/common';
@@ -19,9 +21,10 @@ import { trustedEntryCoversHost } from '@bike4mind/utils/registrableDomain';
 import { canonicalSourceKey } from '../dataLakeService/canonicalSourceKey';
 import type { ProposalCandidate, ProposalOutcome } from '../dataLakeService/proposeDataLakeContent';
 import type { FeedItem } from './parseFeed';
+import type { ItemRuleItem, ItemRuleResult } from './ItemRuleService';
 import type { RelevanceJudgement } from './RelevanceJudgeService';
 import { feedCursorMode, selectFeedCandidates } from './selectFeedCandidates';
-import { classifySource, isQueueableVerdict, matchSource, sourceHostname } from './sourceFilter';
+import { classifySource, isQueueableVerdict, matchSource, sourceHostname, type SourceVerdict } from './sourceFilter';
 
 /**
  * The run loop (#1682): search -> filter by source -> judge -> fetch -> propose, once per candidate,
@@ -56,6 +59,8 @@ export interface ResearchCandidate {
   publishedAt?: Date;
   authors?: string[];
   categories?: string[];
+  /** Search path only: still a provider redirect link after the resolver gave up, so its host is unknown. */
+  unresolvedRedirect?: boolean;
 }
 
 /** A feed could not be read. `message` is written for a lake manager and becomes the run's error. */
@@ -113,6 +118,11 @@ export interface ResearchRunPorts {
    * admit-time check on the page the fetch lands on. Must not throw: a failure is `left_pending`.
    */
   autoAdmit?(proposal: IDataLakeProposalDocument, rule: AutoAdmitRule): Promise<'admitted' | 'left_pending'>;
+  /**
+   * Check a fetched item against the config's item rules, one answer per rule in order. Absent when
+   * the config has no rules. Must not throw: a failure is a `failed` result.
+   */
+  evaluateItemRules?(rules: ResearchItemRule[], item: ItemRuleItem): Promise<ItemRuleResult>;
   /** Report progress mid-loop so the panel is not blank while a run works. Best-effort. */
   onProgress?(spentMicroUsd: number, totals: ResearchRunTotals): Promise<void>;
   now(): Date;
@@ -148,7 +158,8 @@ export interface ResearchRunResult {
 /**
  * Stop this far short of the deadline. One candidate is a judgment plus a fetch plus a proposal
  * write, and the fetch alone can take the URL fetcher's full timeout, so the reserve has to cover a
- * whole iteration rather than just the write at the end of it.
+ * whole iteration rather than just the write at the end of it. The rule call has its own clock check
+ * right before it, so a pass there leaves at most one model call plus a write.
  */
 const TIME_BUDGET_RESERVE_MS = 90_000;
 
@@ -168,6 +179,11 @@ export const SETTLED_PROPOSE_OUTCOMES = {
 } as const satisfies Record<ProposalOutcome['outcome'], true>;
 
 type FeedItemState = 'settled' | 'transient';
+
+/** Which totals bucket a source-rule drop lands in: the Never list (or a non-web address) vs "Other sites: Ignore". */
+const dropBucketFor = (
+  verdict: Exclude<SourceVerdict, 'trusted' | 'review'>
+): 'filteredBySource' | 'unlistedDropped' => (verdict === 'unlisted_dropped' ? 'unlistedDropped' : 'filteredBySource');
 
 /**
  * The trusted-list entry that admits `url`, or null. Shared by the run and by the worker's live
@@ -196,6 +212,14 @@ export async function executeResearchRun(
 
   const outOfTime = (): boolean =>
     ports.remainingTimeMs !== undefined && ports.remainingTimeMs() <= TIME_BUDGET_RESERVE_MS;
+
+  const canAutoAdmitBeforePropose = (verdict: string, url: string, finalUrl: string): boolean =>
+    ports.autoAdmit !== undefined &&
+    levers.autoAdmitTrusted &&
+    totals.autoAdmitted < levers.maxAutoAdmits &&
+    verdict === 'trusted' &&
+    trustedEntryForUrl(url, levers) !== null &&
+    trustedEntryForUrl(finalUrl, levers) !== null;
 
   const isFeed = levers.source === 'feed';
   const feedStates = new Map<string, FeedItemState>();
@@ -315,10 +339,19 @@ export async function executeResearchRun(
   totals.searchHits = candidates.length;
 
   for (const [index, candidate] of candidates.entries()) {
+    // A search link that never revealed its site has nothing a source rule or the judge could act on.
+    if (candidate.unresolvedRedirect) {
+      totals.unresolvedRedirect += 1;
+      markFeedItem(candidate, 'settled');
+      await ports.onProgress?.(spentMicroUsd, totals);
+      continue;
+    }
+
     // Rule 1: the free filter, before anything is spent.
     const verdict = classifySource(candidate.url, levers);
     if (!isQueueableVerdict(verdict)) {
-      totals.filteredBySource += 1;
+      const bucket = dropBucketFor(verdict);
+      totals[bucket] = (totals[bucket] ?? 0) + 1;
       markFeedItem(candidate, 'settled');
       continue;
     }
@@ -340,8 +373,15 @@ export async function executeResearchRun(
       // Only before the first score: once the judge has worked, a later failure is a blip, not an outage.
       if (scored === 0 && totals.judgeFailed >= JUDGE_BREAKER_FAILURES) {
         for (const unreached of candidates.slice(index + 1)) {
-          if (!isQueueableVerdict(classifySource(unreached.url, levers))) totals.filteredBySource += 1;
-          else totals.notJudged += 1;
+          if (unreached.unresolvedRedirect) {
+            totals.unresolvedRedirect += 1;
+            continue;
+          }
+          const unreachedVerdict = classifySource(unreached.url, levers);
+          if (!isQueueableVerdict(unreachedVerdict)) {
+            const bucket = dropBucketFor(unreachedVerdict);
+            totals[bucket] = (totals[bucket] ?? 0) + 1;
+          } else totals.notJudged += 1;
         }
         return settle('judge_unavailable');
       }
@@ -363,6 +403,45 @@ export async function executeResearchRun(
       markFeedItem(candidate, 'transient');
       await ports.onProgress?.(spentMicroUsd, totals);
       continue;
+    }
+
+    // Block rules always apply. Review rules, and an undetermined block rule, only matter when the item
+    // could auto-admit; a review-tier item goes to a human anyway.
+    const couldAutoAdmit = canAutoAdmitBeforePropose(verdict, candidate.url, fetched.finalUrl);
+    const applicableRules = levers.itemRules.filter(rule => rule.action === 'block' || couldAutoAdmit);
+    let ruleReview: DataLakeProposalReviewReason | undefined;
+    if (ports.evaluateItemRules && applicableRules.length > 0) {
+      if (spentMicroUsd >= levers.costCeilingMicroUsd) return settle('cost_ceiling');
+      if (outOfTime()) return settle('time_budget');
+      const result = await ports.evaluateItemRules(applicableRules, {
+        title: candidate.title,
+        url: candidate.url,
+        finalUrl: fetched.finalUrl,
+        snippet: candidate.snippet,
+        ...(candidate.authors ? { authors: candidate.authors } : {}),
+        ...(candidate.categories ? { categories: candidate.categories } : {}),
+        ...(fetched.text !== undefined ? { text: fetched.text } : {}),
+      });
+      spentMicroUsd += result.costMicroUsd;
+      const reviewRules = applicableRules.filter(rule => rule.action === 'review');
+      if (result.status === 'failed') {
+        if (couldAutoAdmit) ruleReview = { kind: 'rule_check_failed' };
+      } else {
+        const answerOf = (rule: ResearchItemRule) => result.answers[applicableRules.indexOf(rule)] ?? 'undetermined';
+        if (applicableRules.some(rule => rule.action === 'block' && answerOf(rule) === 'match')) {
+          totals.blockedByRule += 1;
+          markFeedItem(candidate, 'settled');
+          await ports.onProgress?.(spentMicroUsd, totals);
+          continue;
+        }
+        const matched = reviewRules.filter(rule => answerOf(rule) === 'match');
+        const undetermined = couldAutoAdmit ? applicableRules.filter(rule => answerOf(rule) === 'undetermined') : [];
+        if (matched.length > 0) {
+          ruleReview = { kind: 'rule_match', conditions: matched.map(rule => rule.condition) };
+        } else if (undetermined.length > 0) {
+          ruleReview = { kind: 'rule_undetermined', conditions: undetermined.map(rule => rule.condition) };
+        }
+      }
     }
 
     const outcome = await ports.propose({
@@ -387,6 +466,7 @@ export async function executeResearchRun(
         retrievedAt: ports.now(),
         // Admission is never decided by score: the tier comes from the source alone.
         sourceTier: verdict,
+        ...(ruleReview ? { reviewReason: ruleReview } : {}),
       },
     });
 
@@ -394,15 +474,14 @@ export async function executeResearchRun(
       case 'proposed': {
         totals.proposed += 1;
         // Only first-time proposals: a row with any prior disposition (declined, approved) goes to a human.
-        const eligible =
-          ports.autoAdmit !== undefined &&
-          levers.autoAdmitTrusted &&
-          verdict === 'trusted' &&
+        const wouldAutoAdmit =
+          couldAutoAdmit &&
           outcome.proposal.priorDisposition == null &&
           totals.autoAdmitted < levers.maxAutoAdmits &&
-          trustedEntryForUrl(candidate.url, levers) !== null &&
-          trustedEntryForUrl(fetched.finalUrl, levers) !== null &&
           !outOfTime();
+        // Counted only when the rule changed the outcome, not for a row a human was getting anyway.
+        if (ruleReview && wouldAutoAdmit) totals.reviewedByRule += 1;
+        const eligible = wouldAutoAdmit && !ruleReview;
         if (eligible) {
           const result = await ports.autoAdmit!(outcome.proposal, autoAdmitRule);
           if (result === 'admitted') totals.autoAdmitted += 1;

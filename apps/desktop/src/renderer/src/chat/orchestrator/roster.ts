@@ -53,6 +53,16 @@ export interface AgentView {
   credits?: number;
   pr?: PrSummary;
   branch?: string;
+  /**
+   * Presenter mode only: whether the real decision may be answered one click per option, decided before its
+   * labels became placeholders that would always pass that check (presenter.ts, toViewSnapshot).
+   */
+  oneClickDecision?: boolean;
+  /**
+   * A Presenter mode copy (presenter.ts): its words are placeholders. Anything that would look this agent
+   * up past the roster (its transcript, its messages) shows nothing from there instead.
+   */
+  redacted?: true;
 }
 
 /** The orchestrating (root) session itself, as the stage sees it: no roster entry, just what it is doing. */

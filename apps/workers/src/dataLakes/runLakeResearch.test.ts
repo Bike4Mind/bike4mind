@@ -1,5 +1,10 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { emptyResearchRunTotals, researchFeedFingerprint, RESEARCH_FEED_MAX_BYTES } from '@bike4mind/common';
+import {
+  emptyResearchRunTotals,
+  researchFeedFingerprint,
+  RESEARCH_FEED_MAX_BYTES,
+  spendFrozenError,
+} from '@bike4mind/common';
 import type { ResearchFeedCursor } from '@bike4mind/common';
 
 const h = vi.hoisted(() => ({
@@ -9,11 +14,14 @@ const h = vi.hoisted(() => ({
   findLakeById: vi.fn(),
   findUserById: vi.fn(),
   findOrgById: vi.fn(),
+  findActiveFreeze: vi.fn(),
   resolveWebSearchProviders: vi.fn(),
+  resolveSearchRedirect: vi.fn(),
   executeResearchRun: vi.fn(),
   getEffectiveLLMApiKeys: vi.fn(),
   getAvailableModels: vi.fn(),
   judge: vi.fn(),
+  evaluateRules: vi.fn(),
   fetchAndParseURL: vi.fn(),
   proposeDataLakeContent: vi.fn(),
   recordResearchRunOutcome: vi.fn(),
@@ -39,6 +47,7 @@ vi.mock('@bike4mind/database', () => ({
   creditTransactionRepository: {},
   userRepository: { findById: h.findUserById },
   organizationRepository: { findById: h.findOrgById, findIdsWithAdminRights: h.findIdsWithAdminRights },
+  spendFreezeRepository: { findActiveForSubject: h.findActiveFreeze },
   dataLakeRepository: { findById: h.findLakeById },
   dataLakeResearchRunRepository: {
     claimForExecution: h.claimForExecution,
@@ -47,8 +56,11 @@ vi.mock('@bike4mind/database', () => ({
   },
 }));
 vi.mock('@bike4mind/services', async importOriginal => {
-  const real = (await importOriginal<typeof import('@bike4mind/services')>()).dataLakeResearchService;
+  const actual = await importOriginal<typeof import('@bike4mind/services')>();
+  const real = actual.dataLakeResearchService;
   return {
+    // Real: the run must refuse with the shared spend_frozen error and subject.
+    spendFreezeService: actual.spendFreezeService,
     apiKeyService: { getEffectiveLLMApiKeys: h.getEffectiveLLMApiKeys },
     dataLakeService: {
       proposeDataLakeContent: h.proposeDataLakeContent,
@@ -62,6 +74,9 @@ vi.mock('@bike4mind/services', async importOriginal => {
       RelevanceJudgeService: class {
         judge = h.judge;
       },
+      ItemRuleService: class {
+        evaluate = h.evaluateRules;
+      },
       RELEVANCE_JUDGE_DEFAULT_MODEL: 'default-judge-model',
       // Real: the live source rules are what these tests exercise.
       normalizeResearchLevers: real.normalizeResearchLevers,
@@ -70,6 +85,8 @@ vi.mock('@bike4mind/services', async importOriginal => {
       FeedUnavailableError: real.FeedUnavailableError,
       parseFeed: real.parseFeed,
       trustedEntryForUrl: real.trustedEntryForUrl,
+      resolveSearchRedirect: (url: string, opts?: unknown) => h.resolveSearchRedirect(url, opts),
+      isRetryableUnresolved: real.isRetryableUnresolved,
     },
     recordOperationalUsage: h.recordOperationalUsage,
   };
@@ -142,7 +159,9 @@ beforeEach(() => {
   h.findLakeById.mockResolvedValue({ id: 'lake-1', createdByUserId: 'owner-1' });
   h.findUserById.mockResolvedValue({ id: 'owner-1', organizationId: null });
   h.findOrgById.mockResolvedValue(null);
+  h.findActiveFreeze.mockResolvedValue(null);
   h.resolveWebSearchProviders.mockResolvedValue([{ name: 'serpapi', search: vi.fn(async () => []) }, null]);
+  h.resolveSearchRedirect.mockImplementation(async (url: string) => ({ url, resolved: 'not_redirect' }));
   h.getEffectiveLLMApiKeys.mockResolvedValue({ openai: 'k' });
   h.getAvailableModels.mockResolvedValue([{ id: 'gpt-4.1-mini', backend: 'openai' }]);
   h.executeResearchRun.mockResolvedValue({
@@ -187,6 +206,59 @@ describe('runLakeResearch', () => {
       'run-1',
       expect.objectContaining({ status: 'failed', spentMicroUsd: 0, error: expect.stringMatching(/owner account/) })
     );
+  });
+
+  it('fails a run whose billed org has spending paused before any search, judgment or charge', async () => {
+    h.findUserById.mockResolvedValue({ id: 'owner-1', organizationId: 'org-7' });
+    h.findOrgById.mockResolvedValue({ id: 'org-7' });
+    h.findActiveFreeze.mockResolvedValue({ scopeType: 'Organization', frozenAt: new Date() });
+
+    expect(await runLakeResearch('run-1', logger)).toEqual({ claimed: true });
+
+    expect(h.findActiveFreeze).toHaveBeenCalledWith({ userId: 'owner-1', organizationId: 'org-7', apiKeyId: null });
+    expect(h.executeResearchRun).not.toHaveBeenCalled();
+    expect(h.recordOperationalUsage).not.toHaveBeenCalled();
+    expect(h.settleRun).toHaveBeenCalledWith(
+      'run-1',
+      expect.objectContaining({
+        status: 'failed',
+        spentMicroUsd: 0,
+        error: spendFrozenError({ scopeType: 'Organization', frozenAt: new Date() }).message,
+      })
+    );
+  });
+
+  it('checks the owner personally when their home org does not resolve, as the charge does', async () => {
+    h.findUserById.mockResolvedValue({ id: 'owner-1', organizationId: 'org-gone' });
+    h.findOrgById.mockResolvedValue(null);
+
+    await runLakeResearch('run-1', logger);
+
+    expect(h.findActiveFreeze).toHaveBeenCalledWith({ userId: 'owner-1', organizationId: null, apiKeyId: null });
+    expect(h.executeResearchRun).toHaveBeenCalled();
+  });
+
+  it('settles and rethrows when the billed org read fails, without searching', async () => {
+    h.findUserById.mockResolvedValue({ id: 'owner-1', organizationId: 'org-7' });
+    h.findOrgById.mockRejectedValue(new Error('org read down'));
+
+    await expect(runLakeResearch('run-1', logger)).rejects.toThrow('org read down');
+
+    expect(h.findActiveFreeze).not.toHaveBeenCalled();
+    expect(h.executeResearchRun).not.toHaveBeenCalled();
+    expect(h.settleRun).toHaveBeenCalledWith(
+      'run-1',
+      expect.objectContaining({ status: 'failed', error: 'org read down' })
+    );
+  });
+
+  it('settles and rethrows when the spend freeze read fails, without searching', async () => {
+    h.findActiveFreeze.mockRejectedValue(new Error('db down'));
+
+    await expect(runLakeResearch('run-1', logger)).rejects.toThrow('db down');
+
+    expect(h.executeResearchRun).not.toHaveBeenCalled();
+    expect(h.settleRun).toHaveBeenCalledWith('run-1', expect.objectContaining({ status: 'failed', error: 'db down' }));
   });
 
   it('settles a finished run with its stop reason, spend and totals', async () => {
@@ -413,6 +485,50 @@ describe('runLakeResearch', () => {
       expect(h.recordOperationalUsage).toHaveBeenCalledOnce();
     });
 
+    it('wires the item-rule port only when the config has rules, and adds its usage beside the judge', async () => {
+      type RulePorts = { evaluateItemRules?: (rules: unknown[], item: unknown) => Promise<unknown> };
+      const rule = { condition: 'is a press release', action: 'block' };
+      h.evaluateRules.mockResolvedValue({
+        status: 'evaluated',
+        answers: ['no_match'],
+        costMicroUsd: 300,
+        inputTokens: 7,
+        outputTokens: 3,
+        cacheReadInputTokens: 2,
+        cacheCreationInputTokens: 1,
+      });
+      let wired: RulePorts | undefined;
+      h.executeResearchRun.mockImplementationOnce(async (_l: unknown, _r: string, ports: RulePorts) => {
+        wired = ports;
+        return { totals: emptyResearchRunTotals(), spentMicroUsd: 0, stopReason: 'exhausted' };
+      });
+      await runLakeResearch('run-1', logger);
+      expect(wired?.evaluateItemRules).toBeUndefined();
+
+      h.recordOperationalUsage.mockClear();
+      h.claimForExecution.mockResolvedValue(
+        claimedRun({ levers: levers({ itemRules: [rule], model: 'gpt-4.1-mini' }) })
+      );
+      h.executeResearchRun.mockImplementationOnce(async (_l: unknown, _r: string, ports: RulePorts) => {
+        await ports.evaluateItemRules!([rule], { title: 'T', url: 'https://example.com', snippet: 'S' });
+        return { totals: emptyResearchRunTotals(), spentMicroUsd: 300, stopReason: 'exhausted' };
+      });
+      await runLakeResearch('run-1', logger);
+      expect(h.evaluateRules).toHaveBeenCalledWith(
+        expect.objectContaining({ model: 'gpt-4.1-mini', rules: [rule], endUserId: 'owner-1' })
+      );
+      expect(h.recordOperationalUsage).toHaveBeenCalledWith(
+        expect.objectContaining({
+          model: 'gpt-4.1-mini',
+          inputTokens: 7,
+          outputTokens: 3,
+          cachedInputTokens: 2,
+          cacheWriteTokens: 1,
+        }),
+        expect.anything()
+      );
+    });
+
     it('records one UsageEvent for the run, attributed to the lake and the resolved judge model', async () => {
       h.claimForExecution.mockResolvedValue(claimedRun({ levers: levers({ model: 'gpt-4.1-mini' }) }));
 
@@ -609,6 +725,293 @@ describe('runLakeResearch', () => {
       expect(hits()).toEqual([{ title: 'Lead', url: 'https://lead.example', snippet: 's' }]);
     });
 
+    it('classifies on the resolved url, keeps unresolved hits as-is, drops duplicates and counts resolutions', async () => {
+      const goto = 'https://www.google.com/goto?url=tok-1';
+      const stuck = 'https://www.google.com/goto?url=tok-2';
+      const lead = {
+        name: 'serpapi',
+        search: vi.fn(async () => [
+          { title: 'Wiki', url: goto, snippet: 's' },
+          { title: 'Wiki again', url: 'https://en.wikipedia.org/wiki/Qubit', snippet: 's' },
+          { title: 'Stuck', url: stuck, snippet: 's' },
+        ]),
+      };
+      h.resolveWebSearchProviders.mockResolvedValue([lead, null]);
+      let inFlight = 0;
+      let maxInFlight = 0;
+      h.resolveSearchRedirect.mockImplementation(async (url: string) => {
+        inFlight += 1;
+        maxInFlight = Math.max(maxInFlight, inFlight);
+        await new Promise(resolve => setTimeout(resolve, 1));
+        inFlight -= 1;
+        if (url === goto) return { url: 'https://en.wikipedia.org/wiki/Qubit', resolved: 'followed', via: 'script' };
+        if (url === stuck) return { url, resolved: 'unresolved', detail: { reason: 'status', status: 429 } };
+        return { url, resolved: 'not_redirect' };
+      });
+      const hits = searchOnce();
+
+      await runLakeResearch('run-1', logger);
+
+      expect(hits()).toEqual([
+        { title: 'Wiki', url: 'https://en.wikipedia.org/wiki/Qubit', snippet: 's' },
+        { title: 'Stuck', url: stuck, snippet: 's', unresolvedRedirect: true },
+      ]);
+      expect((logger as unknown as { log: ReturnType<typeof vi.fn> }).log).toHaveBeenCalledWith(
+        '[lakeResearch] search',
+        expect.objectContaining({
+          hits: 2,
+          redirects: { decoded: 0, followed: 1, unresolved: 1 },
+          followedVia: { script: 1 },
+          unresolvedDetails: [{ reason: 'status', status: 429, position: 3 }],
+          hosts: ['en.wikipedia.org', 'www.google.com'],
+        })
+      );
+      expect(h.resolveSearchRedirect).toHaveBeenCalledTimes(3);
+      expect(maxInFlight).toBe(1);
+    });
+
+    describe('deferred retry of unresolved redirect links', () => {
+      const link = (n: number) => `https://www.google.com/goto?url=tok-${n}`;
+      const waitingDetail = { reason: 'no_meta_refresh', status: 200, bodyHint: 'verifying' };
+      const waiting = (url: string, retryCookies?: string[]) => ({
+        url,
+        resolved: 'unresolved',
+        detail: waitingDetail,
+        ...(retryCookies ? { retryCookies } : {}),
+      });
+      const followed = (to: string) => ({ url: to, resolved: 'followed', via: 'location' });
+      const provide = (urls: string[]) =>
+        h.resolveWebSearchProviders.mockResolvedValue([
+          { name: 'serpapi', search: vi.fn(async () => urls.map((url, i) => ({ title: `T${i}`, url, snippet: 's' }))) },
+          null,
+        ]);
+      const logged = () =>
+        (logger as unknown as { log: ReturnType<typeof vi.fn> }).log.mock.calls.find(
+          call => call[0] === '[lakeResearch] search'
+        )?.[1] as Record<string, unknown>;
+      const run = (options: { remainingTimeMs?: () => number } = {}) => {
+        const sleep = vi.fn(async (_ms: number) => undefined);
+        return { sleep, done: runLakeResearch('run-1', logger, { ...options, sleep }) };
+      };
+
+      it('resolves a link on the second retry round and logs the retry summary', async () => {
+        provide([link(1)]);
+        const hits = searchOnce();
+        let calls = 0;
+        h.resolveSearchRedirect.mockImplementation(async (url: string) => {
+          calls += 1;
+          return calls < 3 ? waiting(url) : followed('https://arxiv.org/abs/1');
+        });
+        const { sleep, done } = run();
+        await done;
+
+        expect(hits()).toEqual([{ title: 'T0', url: 'https://arxiv.org/abs/1', snippet: 's' }]);
+        expect(logged()).toMatchObject({
+          redirects: { decoded: 0, followed: 1, unresolved: 0 },
+          followedVia: { location: 1 },
+          unresolvedDetails: [],
+          retry: {
+            eligible: 1,
+            rounds: 2,
+            waitedMs: 120_000,
+            resolvedOnRetry: 1,
+            stillUnresolved: 0,
+            skippedForTime: false,
+          },
+        });
+        expect(sleep.mock.calls.map(c => c[0])).toEqual([60_000, 60_000]);
+      });
+
+      it('retries nothing and sleeps never when nothing is retryable', async () => {
+        provide([link(1), link(2), 'https://arxiv.org/abs/9']);
+        searchOnce();
+        h.resolveSearchRedirect.mockImplementation(async (url: string) => {
+          if (url === link(1)) return followed('https://arxiv.org/abs/1');
+          if (url === link(2)) return { url, resolved: 'unresolved', detail: { reason: 'status', status: 429 } };
+          return { url, resolved: 'not_redirect' };
+        });
+        const { sleep, done } = run();
+        await done;
+
+        expect(sleep).not.toHaveBeenCalled();
+        expect(h.resolveSearchRedirect).toHaveBeenCalledTimes(3);
+        expect(logged()).not.toHaveProperty('retry');
+      });
+
+      it.each(['captcha', 'consent'])('does not retry a %s page', async bodyHint => {
+        provide([link(1)]);
+        searchOnce();
+        h.resolveSearchRedirect.mockImplementation(async (url: string) => ({
+          url,
+          resolved: 'unresolved',
+          detail: { ...waitingDetail, bodyHint },
+        }));
+        const { sleep, done } = run();
+        await done;
+
+        expect(sleep).not.toHaveBeenCalled();
+        expect(h.resolveSearchRedirect).toHaveBeenCalledTimes(1);
+      });
+
+      it('skips the wait when time is short, flags the hits and leaves them unresolved', async () => {
+        provide([link(1)]);
+        const hits = searchOnce();
+        h.resolveSearchRedirect.mockImplementation(async (url: string) => waiting(url));
+        const { sleep, done } = run({ remainingTimeMs: () => 300_000 });
+        await done;
+
+        expect(sleep).not.toHaveBeenCalled();
+        expect(h.resolveSearchRedirect).toHaveBeenCalledTimes(1);
+        expect(hits()).toEqual([{ title: 'T0', url: link(1), snippet: 's', unresolvedRedirect: true }]);
+        expect(logged()).toMatchObject({ retry: { eligible: 1, rounds: 0, skippedForTime: true } });
+      });
+
+      it('stops a round mid-way at the floor and keeps what it resolved', async () => {
+        provide([link(1), link(2)]);
+        const hits = searchOnce();
+        h.resolveSearchRedirect.mockImplementation(async (url: string, opts?: unknown) =>
+          opts && url === link(1) ? followed('https://arxiv.org/abs/1') : waiting(url)
+        );
+        const remaining = vi.fn<() => number>();
+        remaining.mockReturnValueOnce(1_000_000).mockReturnValueOnce(1_000_000).mockReturnValue(100_000);
+        const { done } = run({ remainingTimeMs: remaining });
+        await done;
+
+        expect(hits()).toEqual([
+          { title: 'T0', url: 'https://arxiv.org/abs/1', snippet: 's' },
+          { title: 'T1', url: link(2), snippet: 's', unresolvedRedirect: true },
+        ]);
+        expect(logged()).toMatchObject({
+          retry: { rounds: 1, resolvedOnRetry: 1, stillUnresolved: 1, skippedForTime: true },
+        });
+      });
+
+      it('retries only the first 15 retryable links', async () => {
+        const urls = Array.from({ length: 20 }, (_v, i) => link(i));
+        provide(urls);
+        searchOnce();
+        h.resolveSearchRedirect.mockImplementation(async (url: string, opts?: unknown) =>
+          opts ? followed(`https://arxiv.org/abs/${url.slice(-2)}`) : waiting(url)
+        );
+        const { done } = run();
+        await done;
+
+        const retried = h.resolveSearchRedirect.mock.calls.filter(call => call[1]);
+        expect(retried).toHaveLength(15);
+        expect(retried.map(call => call[0])).toEqual(urls.slice(0, 15));
+        expect(logged()).toMatchObject({ retry: { eligible: 20, resolvedOnRetry: 15, stillUnresolved: 5 } });
+      });
+
+      it('drops a retried link that resolves to a url already present', async () => {
+        provide([link(1), 'https://arxiv.org/abs/1']);
+        const hits = searchOnce();
+        h.resolveSearchRedirect.mockImplementation(async (url: string, opts?: unknown) => {
+          if (url === link(1)) return opts ? followed('https://arxiv.org/abs/1') : waiting(url);
+          return { url, resolved: 'not_redirect' };
+        });
+        const { done } = run();
+        await done;
+
+        expect(hits()).toEqual([{ title: 'T0', url: 'https://arxiv.org/abs/1', snippet: 's' }]);
+      });
+
+      it('sleeps the wait before the round and the spacing between links', async () => {
+        provide([link(1), link(2), link(3)]);
+        searchOnce();
+        h.resolveSearchRedirect.mockImplementation(async (url: string, opts?: unknown) =>
+          opts ? followed(`https://arxiv.org/abs/${url.slice(-1)}`) : waiting(url)
+        );
+        const { sleep, done } = run();
+        await done;
+
+        expect(sleep.mock.calls.map(c => c[0])).toEqual([60_000, 2_000, 2_000]);
+      });
+
+      it('records the position of each unresolved link', async () => {
+        provide(['https://arxiv.org/abs/1', link(2), link(3)]);
+        searchOnce();
+        h.resolveSearchRedirect.mockImplementation(async (url: string) =>
+          url.includes('goto') ? waiting(url) : { url, resolved: 'not_redirect' }
+        );
+        const { done } = run({ remainingTimeMs: () => 0 });
+        await done;
+
+        expect(logged()).toMatchObject({
+          unresolvedDetails: [
+            { ...waitingDetail, position: 2 },
+            { ...waitingDetail, position: 3 },
+          ],
+        });
+      });
+
+      it('stops after three retry rounds for a link that never resolves', async () => {
+        provide([link(1)]);
+        const hits = searchOnce();
+        h.resolveSearchRedirect.mockImplementation(async (url: string) => waiting(url));
+        const { sleep, done } = run();
+        await done;
+
+        expect(h.resolveSearchRedirect.mock.calls.filter(call => call[1])).toHaveLength(3);
+        expect(sleep.mock.calls.map(c => c[0])).toEqual([60_000, 60_000, 60_000]);
+        expect(hits()).toEqual([{ title: 'T0', url: link(1), snippet: 's', unresolvedRedirect: true }]);
+        expect(logged()).toMatchObject({ retry: { eligible: 1, rounds: 3, resolvedOnRetry: 0, stillUnresolved: 1 } });
+      });
+
+      it('checks the time floor before each link in a round, not only before the round', async () => {
+        provide([link(1), link(2)]);
+        searchOnce();
+        h.resolveSearchRedirect.mockImplementation(async (url: string) => waiting(url));
+        const remaining = vi.fn<() => number>();
+        remaining.mockReturnValueOnce(400_000).mockReturnValueOnce(400_000).mockReturnValue(200_000);
+        const { done } = run({ remainingTimeMs: remaining });
+        await done;
+
+        const retried = h.resolveSearchRedirect.mock.calls.filter(call => call[1]);
+        expect(retried.map(call => call[0])).toEqual([link(1)]);
+        expect(logged()).toMatchObject({ retry: { rounds: 1, skippedForTime: true } });
+      });
+
+      it('carries the cookies returned by one retry into the next round', async () => {
+        provide([link(1)]);
+        searchOnce();
+        h.resolveSearchRedirect.mockImplementation(async (url: string, opts?: { cookies?: string[] }) => {
+          if (!opts) return waiting(url, ['a=1']);
+          return opts.cookies?.[0] === 'a=1' ? waiting(url, ['b=2']) : followed('https://arxiv.org/abs/1');
+        });
+        const { done } = run();
+        await done;
+
+        const retries = h.resolveSearchRedirect.mock.calls.filter(call => call[1]);
+        expect(retries).toEqual([
+          [link(1), { cookies: ['a=1'] }],
+          [link(1), { cookies: ['b=2'] }],
+        ]);
+      });
+
+      it('passes each link its own cookies on retry and never logs them', async () => {
+        provide([link(1), link(2)]);
+        searchOnce();
+        h.resolveSearchRedirect.mockImplementation(async (url: string, opts?: { cookies?: string[] }) => {
+          if (opts) return followed(`https://arxiv.org/abs/${url.slice(-1)}`);
+          return waiting(url, [`SECRETNAME${url.slice(-1)}=secretvalue${url.slice(-1)}`]);
+        });
+        const { done } = run();
+        await done;
+
+        const retries = h.resolveSearchRedirect.mock.calls.filter(call => call[1]);
+        expect(retries).toEqual([
+          [link(1), { cookies: ['SECRETNAME1=secretvalue1'] }],
+          [link(2), { cookies: ['SECRETNAME2=secretvalue2'] }],
+        ]);
+        const everyLog = JSON.stringify(
+          Object.values(logger as unknown as Record<string, ReturnType<typeof vi.fn>>)
+            .filter(fn => typeof fn === 'function' && 'mock' in fn)
+            .flatMap(fn => fn.mock.calls)
+        );
+        expect(everyLog).not.toMatch(/SECRETNAME|secretvalue/);
+      });
+    });
+
     it('logs the query, serving provider, levers, hit count and hostnames for the run', async () => {
       const backup = {
         name: 'searxng',
@@ -631,6 +1034,9 @@ describe('runLakeResearch', () => {
           maxResults: 5,
           recencyDays: 30,
           hits: 2,
+          redirects: { decoded: 0, followed: 0, unresolved: 0 },
+          followedVia: {},
+          unresolvedDetails: [],
           hosts: ['arxiv.org', 'www.ieee.org'],
         }
       );

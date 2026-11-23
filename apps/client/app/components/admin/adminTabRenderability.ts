@@ -9,6 +9,15 @@ export interface AdminTabVisibility {
   liveOpsTriage?: boolean;
 }
 
+// These tabs moved into other pages; their members stay so old slugs and palette entries keep redirecting.
+const RETIRED_TABS: ReadonlySet<AdminTab> = new Set([
+  AdminTab.RegistrationInvites,
+  AdminTab.PartnerSignupRules,
+  AdminTab.HeldSignupGrants,
+  AdminTab.ModelLifecycle,
+  AdminTab.SecOpsTriage,
+]);
+
 /**
  * Whether the admin console can draw a panel for this tab right now, for this user. A tab that
  * cannot be drawn must not be selected, or the content pane would be blank.
@@ -16,8 +25,7 @@ export interface AdminTabVisibility {
 export function canRenderAdminTab(tab: AdminTab, visibility: AdminTabVisibility): boolean {
   // A retired tab id has no panel.
   if (AdminTab[tab] === undefined) return false;
-  // Model lifecycle moved into the Models tab; its member stays only so its slug and palette entry keep resolving.
-  if (tab === AdminTab.ModelLifecycle) return false;
+  if (RETIRED_TABS.has(tab)) return false;
   if (!canOpenAdminTab(visibility.user, tab)) return false;
   if (tab === AdminTab.Migrate) return !!visibility.enableUserMigration;
   // Keep a deep link that arrived before the visibility query answered.

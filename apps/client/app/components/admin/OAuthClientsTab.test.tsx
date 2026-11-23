@@ -5,8 +5,21 @@ import { toast } from 'sonner';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
+import { AdminTab } from './adminSidebarConfig';
+import { useCreditAnalysisStore } from './CreditAnalysis/store';
+import { useAdminModal } from './useAdminModal';
 
-const { api, copy } = vi.hoisted(() => ({
+const { api, copy, adminSettings } = vi.hoisted(() => ({
+  adminSettings: {
+    loaded: true,
+    values: {
+      apiKeyUntrustedRateLimitPerMin: 20,
+      apiKeyUntrustedRequestsPerDay: 0,
+      apiKeyUntrustedTokensPerMin: 0,
+      apiKeyUntrustedMaxConcurrent: 0,
+    } as Record<string, number>,
+    trustGate: true,
+  },
   api: {
     fetchOAuthClients: vi.fn(),
     createOAuthClient: vi.fn(),
@@ -19,6 +32,13 @@ const { api, copy } = vi.hoisted(() => ({
 vi.mock('@client/app/utils/oauthClientAPICalls', () => api);
 vi.mock('@client/app/hooks/useCopyToClipboard', () => ({
   useCopyToClipboard: () => ({ copied: false, handleCopyToClipboard: copy }),
+}));
+vi.mock('@client/app/contexts/AdminSettingsContext', () => ({
+  useAdminSettings: () => ({
+    authedSettingsLoaded: adminSettings.loaded,
+    getSettingNumber: (key: string, fallback = 0) => adminSettings.values[key] ?? fallback,
+    getSettingBoolean: (_key: string, fallback = false) => (adminSettings.loaded ? adminSettings.trustGate : fallback),
+  }),
 }));
 vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
 
@@ -57,7 +77,7 @@ const client = {
 const SECRET = 'shown-once-secret';
 
 // Edit and rotate live in each row's "..." menu, which renders its items only while open.
-const openRowAction = async (action: 'edit' | 'rotate', clientId = client.clientId) => {
+const openRowAction = async (action: 'edit' | 'rotate' | 'usage', clientId = client.clientId) => {
   fireEvent.click(await screen.findByTestId(`oauth-client-actions-${clientId}`));
   fireEvent.click(await screen.findByTestId(`oauth-client-${action}-${clientId}`));
 };
@@ -70,6 +90,8 @@ beforeEach(() => {
   // Not resetAllMocks: that also wipes global setup mocks (matchMedia) the theme provider needs.
   for (const fn of [...Object.values(api), copy, toast.success, toast.error]) vi.mocked(fn).mockReset();
   api.fetchOAuthClients.mockResolvedValue([client]);
+  adminSettings.loaded = true;
+  adminSettings.trustGate = true;
 });
 
 describe('OAuthClientsTab', () => {
@@ -238,6 +260,17 @@ describe('OAuthClientsTab', () => {
     await waitFor(() => expect(api.updateOAuthClient).toHaveBeenCalledWith('c1', { isActive: false }));
   });
 
+  it('opens the side apps view for the client from the row menu', async () => {
+    api.fetchOAuthClients.mockResolvedValue([client]);
+    renderTab();
+    await openRowAction('usage');
+    expect(useCreditAnalysisStore.getState()).toMatchObject({
+      activeTab: 'side-apps',
+      sideAppClientId: client.clientId,
+    });
+    expect(useAdminModal.getState().activeTab).toBe(AdminTab.CreditAnalytics);
+  });
+
   it('edits redirect URIs', async () => {
     api.updateOAuthClient.mockResolvedValue(client);
     renderTab();
@@ -249,6 +282,45 @@ describe('OAuthClientsTab', () => {
     await waitFor(() =>
       expect(api.updateOAuthClient).toHaveBeenCalledWith('c1', {
         redirectUris: ['https://app.example.test/new'],
+        expectedUpdatedAt: client.updatedAt,
+      })
+    );
+  });
+
+  it('registers post-logout redirect URIs from the form', async () => {
+    api.createOAuthClient.mockResolvedValue({ client, clientSecret: SECRET });
+    renderTab();
+    fireEvent.click(await screen.findByTestId('oauth-client-add-btn'));
+    fireEvent.change(screen.getByTestId('oauth-client-name-input'), { target: { value: 'My App' } });
+    fireEvent.change(screen.getByTestId('oauth-client-redirect-uris-input'), {
+      target: { value: 'https://app.example.test/cb' },
+    });
+    fireEvent.change(screen.getByTestId('oauth-client-post-logout-uris-input'), {
+      target: { value: 'https://app.example.test/signed-out\n' },
+    });
+    fireEvent.click(screen.getByTestId('oauth-client-create-submit-btn'));
+    await waitFor(() =>
+      expect(api.createOAuthClient).toHaveBeenCalledWith({
+        name: 'My App',
+        redirectUris: ['https://app.example.test/cb'],
+        postLogoutRedirectUris: ['https://app.example.test/signed-out'],
+        clientType: 'relying-party',
+      })
+    );
+  });
+
+  it('edits post-logout redirect URIs', async () => {
+    api.fetchOAuthClients.mockResolvedValue([{ ...client, postLogoutRedirectUris: ['https://app.example.test/out'] }]);
+    api.updateOAuthClient.mockResolvedValue(client);
+    renderTab();
+    await openRowAction('edit');
+    const input = screen.getByTestId('oauth-client-edit-post-logout-uris-input');
+    expect(input).toHaveValue('https://app.example.test/out');
+    fireEvent.change(input, { target: { value: '' } });
+    fireEvent.click(screen.getByTestId('oauth-client-edit-save-btn'));
+    await waitFor(() =>
+      expect(api.updateOAuthClient).toHaveBeenCalledWith('c1', {
+        postLogoutRedirectUris: [],
         expectedUpdatedAt: client.updatedAt,
       })
     );
@@ -511,6 +583,7 @@ describe('buildCreatePayload', () => {
   const form = {
     name: 'App',
     redirectUris: 'https://a.example.test/cb',
+    postLogoutRedirectUris: ' \n',
     firstParty: true,
     unpaidAccountsAllowed: true,
     federated: {
@@ -737,6 +810,19 @@ describe('edit modal scopes and federated trust', () => {
 describe('buildEditPayload', () => {
   const stored = { ...client, allowedScopes: ['openid', 'legacy:x'] } as never;
 
+  it('sends post-logout redirect URIs only when they changed', () => {
+    const withUris = { ...client, postLogoutRedirectUris: ['https://n.example.test/out'] } as never;
+    const form = editFormFromClient(withUris);
+    expect(form.postLogoutRedirectUris).toBe('https://n.example.test/out');
+    expect(buildEditPayload(withUris, form)).toEqual({});
+    expect(buildEditPayload(withUris, { ...form, postLogoutRedirectUris: '' })).toEqual({ postLogoutRedirectUris: [] });
+    expect(
+      buildEditPayload(stored, { ...editFormFromClient(stored), postLogoutRedirectUris: 'https://x.example.test/o' })
+    ).toEqual({
+      postLogoutRedirectUris: ['https://x.example.test/o'],
+    });
+  });
+
   it('sends only the changed fields', () => {
     const form = editFormFromClient(stored);
     expect(buildEditPayload(stored, form)).toEqual({});
@@ -778,5 +864,212 @@ describe('federatedFormFromClient', () => {
       federatedIdp: { issuer: 'https://i.example.test', audience: 'a', providerName: 'p' },
     } as never);
     expect(form).toMatchObject({ enabled: true, subjectSource: 'identities', providerName: 'p' });
+  });
+});
+
+describe('unpaid account limits', () => {
+  const idp = {
+    subjectSource: 'sub' as const,
+    issuer: 'https://b4m.example.test',
+    audience: client.clientId,
+    jwksUri: 'https://b4m.example.test/api/oauth/jwks',
+  };
+  const federated = {
+    ...client,
+    allowedScopes: [...client.allowedScopes, 'ai:generate', 'me:read'],
+    federatedIdp: idp,
+  };
+  const limits = { requestsPerMinute: 30, requestsPerDay: 600, tokensPerMinute: 400000, maxConcurrent: 4 };
+  const withLimits = { ...federated, unpaidAccountLimits: limits };
+  const id = (name: string) => `oauth-client-edit-unpaid-limits-${name}`;
+  const input = (name: string) => screen.getByTestId(id(`${name}-input`)) as HTMLInputElement;
+  const sw = () => screen.getByTestId(id('switch')) as HTMLInputElement;
+  const save = () => fireEvent.click(screen.getByTestId('oauth-client-edit-save-btn'));
+  const open = async (c: object) => {
+    api.fetchOAuthClients.mockResolvedValue([c]);
+    api.updateOAuthClient.mockResolvedValue(c);
+    renderTab();
+    await openRowAction('edit');
+  };
+
+  it('shows the switch off with the global line, prefills globals when turned on, and saves the object', async () => {
+    adminSettings.values.apiKeyUntrustedRateLimitPerMin = 25;
+    await open(federated);
+    expect(sw().checked).toBe(false);
+    expect(screen.getByTestId(id('global-text'))).toHaveTextContent(
+      'Using global limits: 25/min, no daily limit, no token limit, no concurrency limit.'
+    );
+    expect(screen.queryByTestId(id('rpm-input'))).toBeNull();
+    fireEvent.click(sw());
+    expect(input('rpm')).toHaveValue('25');
+    expect(input('rpd')).toHaveValue('0');
+    save();
+    await waitFor(() =>
+      expect(api.updateOAuthClient).toHaveBeenCalledWith('c1', {
+        unpaidAccountLimits: { requestsPerMinute: 25, requestsPerDay: 0, tokensPerMinute: 0, maxConcurrent: 0 },
+        expectedUpdatedAt: client.updatedAt,
+      })
+    );
+    adminSettings.values.apiKeyUntrustedRateLimitPerMin = 20;
+  });
+
+  it('shows stored limits formatted and saves the full object after one edit', async () => {
+    await open(withLimits);
+    expect(sw().checked).toBe(true);
+    expect(input('tpm')).toHaveValue('400,000');
+    fireEvent.change(input('rpd'), { target: { value: '1000' } });
+    fireEvent.blur(input('rpd'));
+    expect(input('rpd')).toHaveValue('1,000');
+    save();
+    await waitFor(() =>
+      expect(api.updateOAuthClient).toHaveBeenCalledWith('c1', {
+        unpaidAccountLimits: { ...limits, requestsPerDay: 1000 },
+        expectedUpdatedAt: client.updatedAt,
+      })
+    );
+  });
+
+  it('sends null when the switch is turned off on a stored override', async () => {
+    await open(withLimits);
+    fireEvent.click(sw());
+    save();
+    await waitFor(() =>
+      expect(api.updateOAuthClient).toHaveBeenCalledWith('c1', {
+        unpaidAccountLimits: null,
+        expectedUpdatedAt: client.updatedAt,
+      })
+    );
+  });
+
+  it('omits unpaidAccountLimits on an unrelated edit', async () => {
+    await open(withLimits);
+    fireEvent.change(screen.getByTestId('oauth-client-edit-overwatch-product-input'), { target: { value: 'app' } });
+    save();
+    await waitFor(() => expect(api.updateOAuthClient).toHaveBeenCalled());
+    expect(api.updateOAuthClient.mock.calls[0][1]).not.toHaveProperty('unpaidAccountLimits');
+  });
+
+  it('disables the controls and shows the hint when unpaid accounts are not allowed, without changing the stored override', async () => {
+    await open({ ...withLimits, unpaidAccountsAllowed: false });
+    expect(sw().disabled).toBe(true);
+    expect(input('rpm').disabled).toBe(true);
+    expect(screen.getByTestId(id('disabled-hint'))).toHaveTextContent(
+      'Unpaid accounts cannot use this app. Turn on "Starter and free accounts may use this app" for these limits to apply.'
+    );
+    fireEvent.change(screen.getByTestId('oauth-client-edit-overwatch-product-input'), { target: { value: 'app' } });
+    save();
+    await waitFor(() => expect(api.updateOAuthClient).toHaveBeenCalled());
+    expect(api.updateOAuthClient.mock.calls[0][1]).not.toHaveProperty('unpaidAccountLimits');
+  });
+
+  it.each([
+    ['rpm', '0', 'Must be between 1 and 10,000'],
+    ['rpm', '', 'Enter a whole number'],
+    ['rpd', '12a', 'Enter a whole number'],
+    ['rpd', '1000001', 'Must be between 0 and 1,000,000'],
+    ['tpm', '100000001', 'Must be between 0 and 100,000,000'],
+    ['concurrent', '1001', 'Must be between 0 and 1,000'],
+  ])('flags %s=%j and disables Save', async (name, text, message) => {
+    await open(withLimits);
+    fireEvent.change(input(name), { target: { value: text } });
+    expect(input(name).closest('.MuiFormControl-root')).toHaveTextContent(message);
+    expect(screen.getByTestId('oauth-client-edit-save-btn')).toBeDisabled();
+  });
+
+  it('accepts 0 tokens per minute', async () => {
+    await open(withLimits);
+    fireEvent.change(input('tpm'), { target: { value: '0' } });
+    expect(screen.getByTestId('oauth-client-edit-save-btn')).not.toBeDisabled();
+  });
+
+  it('is hidden when federated trust is off', async () => {
+    await open(client);
+    expect(screen.queryByTestId('oauth-client-edit-unpaid-limits-section')).toBeNull();
+  });
+
+  it('shows no global line or placeholders before settings load', async () => {
+    adminSettings.loaded = false;
+    await open(federated);
+    expect(screen.queryByTestId(id('global-text'))).toBeNull();
+    fireEvent.click(sw());
+    expect(input('rpm')).toHaveValue('20');
+    expect(input('rpm')).not.toHaveAttribute('placeholder');
+  });
+
+  it('notes when the trust gate is off', async () => {
+    adminSettings.trustGate = false;
+    await open(federated);
+    expect(screen.getByTestId(id('trust-gate-text'))).toHaveTextContent(
+      'The API key trust gate is off, so no account is limited as unpaid.'
+    );
+  });
+
+  it('renders the row chip only for clients with limits', async () => {
+    api.fetchOAuthClients.mockResolvedValue([withLimits, { ...client, id: 'c2', clientId: 'other' }]);
+    renderTab();
+    const chip = await screen.findByTestId(`oauth-client-unpaid-limits-chip-${client.clientId}`);
+    expect(chip).toHaveAttribute('title', '30/min, 600/day, 400,000 tokens/min, 4 at once');
+    expect(screen.queryByTestId('oauth-client-unpaid-limits-chip-other')).toBeNull();
+  });
+});
+
+describe('unpaid limits payload', () => {
+  const limits = { requestsPerMinute: 30, requestsPerDay: 600, tokensPerMinute: 400000, maxConcurrent: 4 };
+  const federated = {
+    ...client,
+    federatedIdp: {
+      subjectSource: 'sub' as const,
+      issuer: 'https://b4m.example.test',
+      audience: client.clientId,
+      jwksUri: 'https://b4m.example.test/api/oauth/jwks',
+    },
+  } as never;
+  const base = { ...(federated as object), unpaidAccountLimits: limits } as never;
+
+  it('reads stored limits into the form', () => {
+    expect(editFormFromClient(base).unpaidLimits).toEqual({
+      enabled: true,
+      rpm: '30',
+      rpd: '600',
+      tpm: '400,000',
+      concurrent: '4',
+    });
+    expect(editFormFromClient(federated).unpaidLimits).toMatchObject({ enabled: false, rpm: '20' });
+  });
+
+  it('sends the full object only when it differs from stored', () => {
+    const form = editFormFromClient(base);
+    expect(buildEditPayload(base, form)).toEqual({});
+    expect(buildEditPayload(base, { ...form, unpaidLimits: { ...form.unpaidLimits, concurrent: '5' } })).toEqual({
+      unpaidAccountLimits: { ...limits, maxConcurrent: 5 },
+    });
+    const fresh = editFormFromClient(federated);
+    expect(buildEditPayload(federated, { ...fresh, unpaidLimits: { ...fresh.unpaidLimits, enabled: true } })).toEqual({
+      unpaidAccountLimits: { requestsPerMinute: 20, requestsPerDay: 0, tokensPerMinute: 0, maxConcurrent: 0 },
+    });
+  });
+
+  it('sends null when a stored override is switched off and omits the field when nothing is stored', () => {
+    const form = editFormFromClient(base);
+    expect(buildEditPayload(base, { ...form, unpaidLimits: { ...form.unpaidLimits, enabled: false } })).toEqual({
+      unpaidAccountLimits: null,
+    });
+    expect(buildEditPayload(federated, editFormFromClient(federated))).toEqual({});
+  });
+
+  it('drops the override along with federation, since the server refuses it on a non-federated client', () => {
+    const form = editFormFromClient(base);
+    expect(buildEditPayload(base, { ...form, federated: { ...form.federated, enabled: false } })).toEqual({
+      federatedIdp: null,
+      unpaidAccountLimits: null,
+    });
+    const fresh = editFormFromClient(federated);
+    expect(
+      buildEditPayload(federated, {
+        ...fresh,
+        federated: { ...fresh.federated, enabled: false },
+        unpaidLimits: { ...fresh.unpaidLimits, enabled: true },
+      })
+    ).toEqual({ federatedIdp: null });
   });
 });

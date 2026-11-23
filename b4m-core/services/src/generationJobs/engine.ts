@@ -39,9 +39,46 @@ const FAILURE_CANCEL_BUDGET_MS = 10_000;
 export type StepOptions = {
   /** Lambda `getRemainingTimeInMillis()` at delivery; absent outside Lambda (inline dev path). */
   remainingMs?: number;
+  /**
+   * The most the step itself (provider call and store) may take, for an inline caller that must answer by its own
+   * deadline (runJobInline). Only ever narrows the budget the lease and `remainingMs` allow.
+   */
+  stepBudgetMs?: number;
 };
 
-const orphaned = (message: string): StepResult => ({ next: 'failed', error: { code: 'orphaned_submit', message } });
+const orphaned = (message: string, details: Pick<GenerationJobError, 'cutOffByStepDeadline'> = {}): StepResult => ({
+  next: 'failed',
+  error: { code: 'orphaned_submit', message, ...details },
+});
+
+const CANCELLATION_ERROR_NAMES = new Set(['AbortError', 'TimeoutError', 'CanceledError']);
+
+const isCancellationError = (error: unknown): boolean => {
+  if (!(error instanceof Error)) return false;
+  const code = (error as { code?: unknown }).code;
+  return CANCELLATION_ERROR_NAMES.has(error.name) || code === 'ERR_CANCELED' || code === 'ABORT_ERR';
+};
+
+// Our own step deadline fired (AbortSignal.timeout rejects with a TimeoutError) and the submit threw because of it,
+// either rethrowing the signal's reason or as the HTTP client's own cancellation (axios ERR_CANCELED).
+const isStepDeadlineAbort = (error: unknown, signal: AbortSignal): boolean => {
+  if (!signal.aborted) return false;
+  const reason: unknown = signal.reason;
+  if (!(reason instanceof Error) || reason.name !== 'TimeoutError') return false;
+  return error === reason || isCancellationError(error);
+};
+
+// Payloads name their provider as either `providerId` or `request.provider` (speech, sound effects).
+const providerOf = (job: IGenerationJobDocument): string | undefined => {
+  const payload: unknown = job.payload;
+  if (typeof payload !== 'object' || payload === null) return undefined;
+  if ('providerId' in payload && typeof payload.providerId === 'string') return payload.providerId;
+  if ('request' in payload && typeof payload.request === 'object' && payload.request !== null) {
+    const request = payload.request;
+    if ('provider' in request && typeof request.provider === 'string') return request.provider;
+  }
+  return undefined;
+};
 
 const CANCELLED_BY_USER: GenerationJobCommit = {
   state: 'cancelled',
@@ -107,7 +144,10 @@ export class GenerationJobEngine {
   async step(jobId: string, options: StepOptions = {}): Promise<StepOutcome> {
     // The step must commit before both the lease and the invocation end, whichever is first.
     const stepBudgetMs = Math.floor(
-      Math.min(this.deps.leaseMs, options.remainingMs ?? Number.POSITIVE_INFINITY) - STEP_COMMIT_MARGIN_MS
+      Math.min(
+        Math.min(this.deps.leaseMs, options.remainingMs ?? Number.POSITIVE_INFINITY) - STEP_COMMIT_MARGIN_MS,
+        options.stepBudgetMs ?? Number.POSITIVE_INFINITY
+      )
     );
     // Thrown before leasing so SQS redelivers to a fresh invocation; an already-aborted submit would orphan the job.
     if (!(stepBudgetMs > 0)) throw new Error(`generation job step has no time budget (${stepBudgetMs}ms)`);
@@ -216,9 +256,20 @@ export class GenerationJobEngine {
     handler: GenerationJobHandler,
     context: GenerationJobStepContext
   ): Promise<StepResult> {
+    const startedAt = Date.now();
     try {
       return await handler.submit(job, context);
     } catch (error) {
+      if (isStepDeadlineAbort(error, context.signal)) {
+        // Still orphaned: the provider may have started (and billed) the call, so it must not be resubmitted.
+        this.deps.logger.warn('generation_job_submit_deadline', {
+          jobId: job.id,
+          kind: job.kind,
+          provider: providerOf(job),
+          elapsedMs: Date.now() - startedAt,
+        });
+        return orphaned('The provider submit was cut off by the step deadline', { cutOffByStepDeadline: true });
+      }
       this.deps.logger.error('generation_job_orphaned_submit', { jobId: job.id, kind: job.kind, error });
       return orphaned('The provider submit ended with an unknown outcome');
     }

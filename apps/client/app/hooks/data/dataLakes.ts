@@ -11,6 +11,7 @@ import type {
   IDataLakeResearchRunDocument,
   ResearchRunTrigger,
   ResearchScheduleCadence,
+  ResearchItemRule,
   ResearchUnlistedSources,
   IDataLakeBatchDocument,
   IDataLakeBatchSummary,
@@ -259,10 +260,9 @@ export function useLakeConfigHistory(dataLakeId: string | null, enabled = true, 
     refetchOnWindowFocus: false,
     staleTime: 0,
     queryFn: async () => {
-      const response = await api.get<{ data: LakeConfigHistoryView }>(
-        `/api/data-lakes/${dataLakeId}/config-history`,
-        limit == null ? undefined : { params: { limit } }
-      );
+      const response = await api.get<{ data: LakeConfigHistoryView }>(`/api/data-lakes/${dataLakeId}/config-history`, {
+        params: { include: 'files', ...(limit == null ? {} : { limit }) },
+      });
       return response.data.data;
     },
   });
@@ -2487,6 +2487,8 @@ export type ResearchConfigInput = {
   cadence?: ResearchScheduleCadence;
   /** Pending-proposal count at which a due scheduled run is skipped. See RESEARCH_REVIEW_BACKLOG_LIMIT_DEFAULT. */
   reviewBacklogLimit?: number;
+  /** Sent alone to pause or resume the schedule without re-validating the levers. */
+  schedulePaused?: boolean;
   source?: ResearchSource;
   /** Absolute http(s) address of an RSS or Atom feed; sent when `source` is 'feed', null clears it. */
   feedUrl?: string | null;
@@ -2504,6 +2506,7 @@ export type ResearchConfigInput = {
   minRelevance?: number;
   costCeilingMicroUsd?: number;
   proposedTags?: string[];
+  itemRules?: ResearchItemRule[];
 };
 
 // -- Detected corpus problems (#3039) ---------------------------------------

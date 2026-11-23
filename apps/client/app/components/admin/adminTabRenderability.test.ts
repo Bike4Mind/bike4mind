@@ -18,9 +18,20 @@ describe('canRenderAdminTab', () => {
   });
 
   it('rejects a retired tab id', () => {
-    for (const retired of [4, 11, 17]) {
+    for (const retired of [
+      4,
+      11,
+      17,
+      AdminTab.RegistrationInvites,
+      AdminTab.PartnerSignupRules,
+      AdminTab.HeldSignupGrants,
+    ]) {
       expect(canRenderAdminTab(retired as AdminTab, { user: admin })).toBe(false);
     }
+  });
+
+  it('rejects the retired issue filing page, which has no panel of its own', () => {
+    expect(canRenderAdminTab(AdminTab.SecOpsTriage, { user: admin })).toBe(false);
   });
 
   it('rejects model lifecycle, which has no panel of its own', () => {

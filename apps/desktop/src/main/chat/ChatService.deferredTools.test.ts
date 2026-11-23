@@ -12,6 +12,9 @@ import type { ModelCatalog } from './ModelCatalog';
 import type { McpManager, McpToolBinding } from './mcp/McpManager';
 import { SessionStore } from './SessionStore';
 import type { AccessStore } from './tools/AccessStore';
+import type { CompletionMessage } from './completions';
+import type { WireTool as DeclaredTool } from './deferredTools';
+import { promptFootprint, type BlockFootprint } from '../../../test-utils/requestFootprint';
 
 type WireTool = { toolSchema: { name: string; defer_loading?: boolean } };
 type WireMessage = { role: string; content: unknown; cache?: boolean };
@@ -32,6 +35,13 @@ function headHash(body: Body): string {
     .update(JSON.stringify({ loaded, anyDeferred, system: body.messages[0] }))
     .digest('hex');
 }
+
+/** The system prompt's text, which a cacheable request sends as two blocks. */
+const systemText = (body: Body) =>
+  body.messages
+    .filter(message => message.role === 'system' && typeof message.content === 'string')
+    .map(message => message.content)
+    .join('');
 
 const changes = (body: Body) =>
   body.messages.filter(message => message.role === 'system' && Array.isArray(message.content)).map(m => m.content);
@@ -196,6 +206,55 @@ describe('ChatService deferred tools', () => {
 
   const unmarked = ({ cache: _cache, ...rest }: WireMessage) => rest;
 
+  it('measures the opt-in smaller loaded-tools block on matched reading tasks without claiming billed savings', async () => {
+    const samples: {
+      startSetMaxTokens: number;
+      blocks: Omit<BlockFootprint, 'sha256'>[];
+      requestBytes: number;
+      providerUsage: null;
+      providerCost: null;
+      acceptedLiveResult: null;
+    }[] = [];
+    for (const startSetMaxTokens of [100_000, 0]) {
+      deferredTools = { startSetMaxTokens };
+      const { id } = await service.createSession();
+      const before = post.mock.calls.length;
+      await readingTurn(id, 'Read the fixture.', 'fixture_call');
+      const first = body(before);
+      const second = body(before + 1);
+      expectChangesDeclared(second);
+      expectDeclaredBeforeUse(second);
+      const results = second.messages.flatMap(message => (Array.isArray(message.content) ? message.content : []));
+      expect(results).toContainEqual(
+        expect.objectContaining({ type: 'tool_result', content: expect.stringContaining('z') })
+      );
+      expect(headHash(first)).toBe(headHash(second));
+      const stored = await store.get(id);
+      expect(stored?.messages.some(message => message.content === 'It says z.')).toBe(true);
+      const next = await turn(id, 'Repeat after restart.');
+      service.dispose();
+      service = createService();
+      const restarted = await turn(id, 'Continue.');
+      expect(headHash(next)).toBe(headHash(restarted));
+      expectDeclaredBeforeUse(restarted);
+      const footprint = promptFootprint(first.messages as CompletionMessage[], first.options.tools as DeclaredTool[]);
+      samples.push({
+        startSetMaxTokens,
+        blocks: footprint.map(({ block, bytes, estimatedTokens }) => ({ block, bytes, estimatedTokens })),
+        requestBytes: Buffer.byteLength(JSON.stringify(first)),
+        providerUsage: null,
+        providerCost: null,
+        acceptedLiveResult: null,
+      });
+    }
+    const loaded = (index: number) => samples[index].blocks.find(part => part.block === 'loaded-tools')!;
+    expect(loaded(1).estimatedTokens, 'loaded-tools estimate with zero start set').toBeLessThan(
+      loaded(0).estimatedTokens
+    );
+    if (process.env.B4M_PROMPT_BASELINE === '1')
+      console.info('Sanitized deterministic overhead comparison:', JSON.stringify(samples));
+  });
+
   describe('a tool removed, then called on a turn that was not deferred', () => {
     it('is added back before the replayed call', async () => {
       deferredTools = { startSetMaxTokens: 0 };
@@ -309,7 +368,7 @@ describe('ChatService deferred tools', () => {
     expect(off.options.tools.some(tool => tool.toolSchema.name === DEFERRED_ANCHOR_TOOL_NAME)).toBe(false);
     expect(changes(off)).toEqual([]);
     expect(JSON.stringify(off.messages.slice(1))).not.toContain('<system-reminder>');
-    expect(off.messages[0].content).toContain('These folders are shared');
+    expect(systemText(off)).toContain('These folders are shared');
     expect(off.messages.some(message => blockNames(message, 'tool_use').includes('file_read'))).toBe(true);
     expectDeclaredBeforeUse(off);
 
@@ -456,10 +515,27 @@ describe('ChatService deferred tools', () => {
         expect(live.role).toBe('system');
         expect(blockNames(live, change)).toContain('mcp__echo_echo');
         expectChangesDeclared(second);
+        expect(JSON.stringify(second.messages).match(/Your tools and access from this turn on:/g)).toHaveLength(1);
+        expect((result.content as { type: string }[]).map(block => block.type)).not.toContain('text');
 
         streams[before + 1].write(frame({ type: 'content', text: 'It says z.' }));
         streams[before + 1].write(frame('[DONE]'));
         await vi.waitUntil(() => events.some(event => event.type === 'done'), { timeout: 3000, interval: 5 });
+        service = createService({
+          ensureConnected: async () => {},
+          tools: () => bindings,
+          state: async () => ({ servers: [] }),
+          findTool: (name: string) => bindings.find(binding => binding.definition.schema.name === name),
+        } as unknown as McpManager);
+        const replay = await turn(id, 'continue after service restart');
+        expect(headHash(replay)).toBe(headHash(second));
+        expectDeclaredBeforeUse(replay);
+        // After a removal the next turn's record drops the withdrawn tool, so it replays a second reminder.
+        expect(JSON.stringify(replay.messages).match(/Your tools and access from this turn on:/g)).toHaveLength(
+          change === 'tool_removal' ? 2 : 1
+        );
+        expect(replay.messages.map(unmarked)).toContainEqual(unmarked(result));
+        expectChangesDeclared(replay);
       }
     );
 
@@ -509,7 +585,7 @@ describe('ChatService deferred tools', () => {
     const { id } = await service.createSession();
     const request = await turn(id, 'hi');
     expect(request.options.tools.some(tool => tool.toolSchema.defer_loading)).toBe(false);
-    expect(request.messages[0].content).toContain('These folders are shared');
+    expect(systemText(request)).toContain('These folders are shared');
   });
 
   it('keeps the request shape of today on Bedrock and on a model without tool changes', async () => {

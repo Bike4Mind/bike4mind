@@ -39,6 +39,7 @@ private struct TurnIntoFlow: ViewModifier {
   @State private var grabbing: MediaItem?
   @State private var grabbed: MediaItem?
   @State private var editing: MediaItem?
+  @State private var composing: MediaItem?
 
   func body(content: Content) -> some View {
     content
@@ -52,11 +53,17 @@ private struct TurnIntoFlow: ViewModifier {
           }
         case .morph: picking = request.item
         case .grabFrame: grabbing = request.item
+        case .addMusic, .putOnVideo: composing = request.item
+        }
+      }
+      .sheet(item: $composing) { item in
+        if let context, let draft = SceneDraft.starting(from: item) {
+          SceneComposerView(draft: draft, context: context, onStarted: context.reveal)
         }
       }
       .sheet(item: $picking) { source in
         if let context {
-          MorphPickerView(source: source, media: context.media) { second in
+          MorphPickerView(source: source, firstPages: context.firstPages) { second in
             if let seed = TurnInto.seed(.morph, from: source, secondImage: second, current: context.currentInputs()) {
               context.apply(seed)
             }
@@ -84,13 +91,17 @@ private struct TurnIntoFlow: ViewModifier {
 /// Pick the image a morph ends on.
 private struct MorphPickerView: View {
   let source: MediaItem
-  let media: any MediaAPI
+  let firstPages: MediaFirstPageStore
   let onPick: (MediaItem) -> Void
   @State private var images: [MediaItem] = []
   @State private var failed = false
   @Environment(\.dismiss) private var dismiss
 
   private let columns = [GridItem(.adaptive(minimum: 100), spacing: 2)]
+
+  private func pickable(_ page: MediaPage) -> [MediaItem] {
+    page.items.filter { $0.id != source.id }
+  }
 
   var body: some View {
     NavigationStack {
@@ -107,15 +118,7 @@ private struct MorphPickerView: View {
               dismiss()
             } label: {
               Color.clear.aspectRatio(1, contentMode: .fit)
-                .overlay {
-                  AsyncImage(url: image.url) { phase in
-                    if let loaded = phase.image {
-                      loaded.resizable().scaledToFill()
-                    } else {
-                      Tokens.Palette.groupedBackground
-                    }
-                  }
-                }
+                .overlay { CachedThumbnail(url: image.url) }
                 .clipped()
             }
             .buttonStyle(.plain)
@@ -130,11 +133,12 @@ private struct MorphPickerView: View {
         ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
       }
       .task {
+        if let seeded = await firstPages.seeded(kind: .image) { images = pickable(seeded) }
         do {
-          let page = try await media.listMedia(kind: .image, page: 1, limit: 60)
-          images = page.items.filter { $0.id != source.id }
+          images = pickable(try await firstPages.refresh(kind: .image))
+          failed = false
         } catch {
-          failed = true
+          failed = images.isEmpty
         }
       }
     }

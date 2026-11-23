@@ -88,8 +88,12 @@ export async function saveGeneratedAssetToFiles(
             throw error;
           }
         },
-        generateSignedUrl: (path, expireInSeconds, type) =>
-          getFilesStorage().getSignedUrl(path, type ?? 'get', { expiresIn: expireInSeconds }),
+        generateSignedUrl: (path, expireInSeconds, type, options) =>
+          getFilesStorage().getSignedUrl(path, type ?? 'get', {
+            expiresIn: expireInSeconds,
+            ResponseContentDisposition: options?.ResponseContentDisposition,
+            ResponseContentType: options?.ResponseContentType,
+          }),
       },
       logger,
     });

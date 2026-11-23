@@ -4,6 +4,7 @@ import { isTokenTypeAcceptable, isTokenVersionCurrent } from '@bike4mind/service
 import { isRotatedSecretWithinGraceWindow } from '@bike4mind/server-utils/auth/secretRotationGrace';
 import { decryptAtRest } from '@bike4mind/utils/security';
 import { authTokenGenerator } from '@server/auth/tokenGenerator';
+import { resolveRoleAdminPermissions } from '@bike4mind/server-utils/auth/adminRoles';
 import { assertAccountStateUsable } from '@bike4mind/server-utils/auth/assertAccountStateUsable';
 import { assertNoPendingDeletion } from '@bike4mind/server-utils/auth/deletionPendingGate';
 import { isMfaEnrollmentOwed, MFA_ENROLLMENT_REQUIRED_MESSAGE } from '@bike4mind/server-utils/auth/mfaEnforcement';
@@ -27,6 +28,17 @@ import jwt from 'jsonwebtoken';
  */
 export async function verifyWsAccessToken(accessToken: string | undefined) {
   return (await verifyWsAccessTokenClaims(accessToken)).user;
+}
+
+/**
+ * verifyWsAccessToken plus the user's role-held admin permissions, for the one WS action that
+ * builds an ability from the user (dataSubscribeRequest). Reauth and unsubscribe stay on the
+ * plain verifier so a role lookup failure cannot fail them.
+ */
+export async function verifyWsSubscriberToken(accessToken: string | undefined) {
+  const user = await verifyWsAccessToken(accessToken);
+  await resolveRoleAdminPermissions(user);
+  return user;
 }
 
 /**

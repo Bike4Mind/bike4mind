@@ -33,13 +33,26 @@ export interface DlqMessage {
   recommendation?: DlqRecommendation;
   failureLookupFailed?: boolean;
   messageId: string;
-  failure?: { errorMessage: string; category: 'refused' | 'timeout' | 'invalid output' | 'bug' | 'unknown' };
+  failure?: {
+    errorMessage: string;
+    category: 'refused' | 'timeout' | 'invalid output' | 'bug' | 'unknown';
+    /** 'attributes' when read from the error attributes Lambda or EventBridge attached to the message. */
+    source: 'recorded' | 'attributes';
+    errorCode?: string;
+  };
+  /**
+   * Groups messages that failed the same way (dlqFailureSignature in server-utils dlqMessageRow.ts);
+   * 'unavailable' when the recorded failure could not be looked up. Absent on older servers.
+   */
+  failureSignature?: string;
   body: string;
   sentTimestamp?: string;
   approximateReceiveCount?: string;
   approximateFirstReceiveTimestamp?: string;
-  /** CloudWatch Logs Insights link over the consumer's logs around this message's send time. */
+  /** CloudWatch Logs Insights link over the consumer's (or failed target's) logs for this message. */
   logsUrl?: string | null;
+  /** 'request' when the link is filtered to the failed invocation's request ID. */
+  logsScope?: 'request' | 'window';
 }
 
 /** The record a dead letter is about, from the queue's `describe(body)` in the server DLQ registry. */
@@ -139,6 +152,63 @@ export const useDlqAllMessages = () => {
   });
 };
 
+export const DLQ_SIGNATURE_UNAVAILABLE = 'unavailable';
+
+const COUNT_CEILINGS_KEY = ['admin', 'dlq', 'count-ceilings'] as const;
+// SQS's approximate counts trail a delete by about a minute; hold the post-discard count a little longer.
+export const DLQ_COUNT_LAG_MS = 90 * 1000;
+
+/** Per queue: the most messages it can hold right after a discard, until `until` (epoch ms). */
+export type DlqCountCeilings = Record<string, { ceiling: number; until: number }>;
+
+/**
+ * Caps a queue's lagging SQS count at what a recent discard left, so the page never shows more messages
+ * remaining than the server just reported. -1 (unreadable) passes through.
+ */
+export function applyDlqCountCeiling(
+  ceilings: DlqCountCeilings | undefined,
+  label: string,
+  count: number,
+  now = Date.now()
+): number {
+  const held = ceilings?.[label];
+  if (!held || count < 0 || now >= held.until) return count;
+  return Math.min(count, held.ceiling);
+}
+
+export const useDlqCountCeilings = () =>
+  useQuery({
+    queryKey: COUNT_CEILINGS_KEY,
+    queryFn: () => ({}) as DlqCountCeilings,
+    initialData: {} as DlqCountCeilings,
+    staleTime: Infinity,
+  });
+
+/** Lowers each queue's displayed count by the messages just discarded from it. */
+function recordDlqDiscards(queryClient: ReturnType<typeof useQueryClient>, discardedByQueue: Map<string, number>) {
+  const queues = queryClient.getQueryData<DlqQueueInfo[]>(['admin', 'dlq', 'queues']) ?? [];
+  const now = Date.now();
+  queryClient.setQueryData<DlqCountCeilings>(COUNT_CEILINGS_KEY, previous => {
+    const next = { ...previous };
+    for (const [label, discarded] of discardedByQueue) {
+      if (discarded <= 0) continue;
+      const count = queues.find(queue => queue.label === label)?.approximateMessageCount ?? -1;
+      if (count < 0) continue;
+      const shown = applyDlqCountCeiling(previous, label, count, now);
+      next[label] = { ceiling: Math.max(shown - discarded, 0), until: now + DLQ_COUNT_LAG_MS };
+    }
+    return next;
+  });
+}
+
+const discardedPerQueue = (outcomes: readonly DlqBulkOutcome[]) => {
+  const counts = new Map<string, number>();
+  for (const outcome of outcomes) {
+    if (outcome.status === 'discarded') counts.set(outcome.queueLabel, (counts.get(outcome.queueLabel) ?? 0) + 1);
+  }
+  return counts;
+};
+
 const invalidateDlqQueries = (queryClient: ReturnType<typeof useQueryClient>) => {
   queryClient.invalidateQueries({ queryKey: ['admin', 'dlq', 'queues'] });
   queryClient.invalidateQueries({ queryKey: ALL_MESSAGES_KEY });
@@ -168,7 +238,8 @@ type BatchResult = {
  */
 export async function runDlqBatches(
   messageIdsByQueue: ReadonlyMap<string, readonly string[]>,
-  send: (queueLabel: string, messageIds: string[]) => Promise<BatchResult>
+  send: (queueLabel: string, messageIds: string[]) => Promise<BatchResult>,
+  onProgress?: (done: number) => void
 ): Promise<DlqBulkOutcome[]> {
   const outcomes: DlqBulkOutcome[] = [];
   for (const [queueLabel, ids] of messageIdsByQueue) {
@@ -185,6 +256,7 @@ export async function runDlqBatches(
         const reason = error instanceof Error ? error.message : 'Unknown error';
         outcomes.push(...chunk.map(messageId => ({ messageId, queueLabel, status: 'failed' as const, reason })));
       }
+      onProgress?.(outcomes.length);
     }
   }
   return outcomes;
@@ -214,17 +286,123 @@ export const useDlqReplay = () => {
 export const useDlqDiscard = () => {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: ({
+    mutationFn: async ({
       messageIdsByQueue,
       reason,
+      onProgress,
     }: {
       messageIdsByQueue: ReadonlyMap<string, readonly string[]>;
       reason: string;
-    }) =>
-      runDlqBatches(messageIdsByQueue, async (queueLabel, messageIds) => {
-        const response = await api.post<DlqDiscardResult>('/api/admin/dlq/discard', { queueLabel, reason, messageIds });
-        return response.data;
-      }),
+      /** Messages answered so far, after each request. */
+      onProgress?: (done: number) => void;
+    }) => {
+      const outcomes = await runDlqBatches(
+        messageIdsByQueue,
+        async (queueLabel, messageIds) => {
+          const response = await api.post<DlqDiscardResult>('/api/admin/dlq/discard', {
+            queueLabel,
+            reason,
+            messageIds,
+          });
+          return response.data;
+        },
+        onProgress
+      );
+      recordDlqDiscards(queryClient, discardedPerQueue(outcomes));
+      return outcomes;
+    },
+    onSettled: () => invalidateDlqQueries(queryClient),
+  });
+};
+
+export type DlqGroupDiscardResponse = {
+  discarded: number;
+  failed: number;
+  examined: number;
+  stoppedBy: 'exhausted' | 'limit' | 'budget' | 'lookup_failed';
+  complete: boolean;
+  results: DlqDiscardResult['results'];
+};
+
+export type DlqGroupDiscardOutcome = {
+  discarded: number;
+  failed: number;
+  historyPending: number;
+  /** True once the queue had no visible messages left to match. */
+  complete: boolean;
+  /** Why the run stopped short of complete. */
+  stopped?: 'cancelled' | 'lookup_failed' | 'no_progress' | 'max_rounds' | 'error';
+  firstFailure?: string;
+};
+
+// Each request discards at most 50 (GROUP_DISCARD_MAX_PER_CALL in pages/api/admin/dlq/discard-group.ts).
+export const DLQ_GROUP_DISCARD_MAX_ROUNDS = 20;
+
+/**
+ * Calls the group discard endpoint until it reports the queue exhausted, a round makes no progress, the
+ * caller cancels between rounds, or DLQ_GROUP_DISCARD_MAX_ROUNDS is reached. Reports the running total;
+ * a request that fails after earlier rounds discarded something ends the run instead of throwing.
+ */
+export async function runDlqGroupDiscard(
+  send: () => Promise<DlqGroupDiscardResponse>,
+  options: { onProgress?: (discarded: number) => void; isCancelled?: () => boolean } = {}
+): Promise<DlqGroupDiscardOutcome> {
+  const outcome: DlqGroupDiscardOutcome = { discarded: 0, failed: 0, historyPending: 0, complete: false };
+  for (let round = 0; round < DLQ_GROUP_DISCARD_MAX_ROUNDS; round++) {
+    if (options.isCancelled?.()) return { ...outcome, stopped: 'cancelled' };
+    let response: DlqGroupDiscardResponse;
+    try {
+      response = await send();
+    } catch (error) {
+      // A failed first round is a plain failure; after progress, report what was already discarded.
+      if (outcome.discarded === 0 && outcome.failed === 0) throw error;
+      const reason = error instanceof Error ? error.message : 'Unknown error';
+      return { ...outcome, stopped: 'error', firstFailure: outcome.firstFailure ?? reason };
+    }
+    outcome.discarded += response.discarded;
+    outcome.failed += response.failed;
+    outcome.historyPending += response.results.filter(result => result.historyPending).length;
+    outcome.firstFailure ??= response.results.find(result => result.status === 'failed')?.reason;
+    options.onProgress?.(outcome.discarded);
+    if (response.complete) return { ...outcome, complete: true };
+    if (response.stoppedBy === 'lookup_failed') return { ...outcome, stopped: 'lookup_failed' };
+    // A round that discarded nothing would only repeat itself (failures included: they are not retried here).
+    if (response.discarded === 0) return { ...outcome, stopped: 'no_progress' };
+  }
+  return { ...outcome, stopped: 'max_rounds' };
+}
+
+/** Discards every message of one queue that failed like the given group, matched on the server. */
+export const useDlqGroupDiscard = () => {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async ({
+      queueLabel,
+      failureSignature,
+      reason,
+      onProgress,
+      isCancelled,
+    }: {
+      queueLabel: string;
+      failureSignature: string;
+      reason: string;
+      onProgress?: (discarded: number) => void;
+      isCancelled?: () => boolean;
+    }) => {
+      const outcome = await runDlqGroupDiscard(
+        async () => {
+          const response = await api.post<DlqGroupDiscardResponse>('/api/admin/dlq/discard-group', {
+            queueLabel,
+            failureSignature,
+            reason,
+          });
+          return response.data;
+        },
+        { onProgress, isCancelled }
+      );
+      recordDlqDiscards(queryClient, new Map([[queueLabel, outcome.discarded]]));
+      return outcome;
+    },
     onSettled: () => invalidateDlqQueries(queryClient),
   });
 };

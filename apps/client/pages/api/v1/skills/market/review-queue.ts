@@ -3,7 +3,7 @@
  * of GET /api/skills/market/review-queue.
  */
 import { listSkillMarketReviewQueueContract, type ISkillListingVersion } from '@bike4mind/common';
-import { organizationRepository } from '@bike4mind/database/infra';
+import { adminAudienceIdsFor } from '@bike4mind/server-utils/skillMarket/market';
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
 import { decodeTimeIdCursor, encodeTimeIdCursor } from '@server/utils/cursorPagination';
 import { loadVersionQueue, requireReviewer } from '@server/skillMarket/reviewQueue';
@@ -14,10 +14,10 @@ const CURSOR_SCOPE = 'v1.skills.market.review-queue';
 const handler = nextRouteForContract(listSkillMarketReviewQueueContract).get(async (req, res) => {
   const { limit, cursor } = req.validatedQuery;
   const actor = { id: req.user.id, isAdmin: req.user.isAdmin };
-  const adminOrgIds = await organizationRepository.findIdsAdministeredBy(actor.id);
-  requireReviewer(actor, adminOrgIds);
+  const adminAudience = await adminAudienceIdsFor(actor.id);
+  requireReviewer(actor, adminAudience);
 
-  const { rows, next } = await loadVersionQueue(actor, adminOrgIds, {
+  const { rows, next } = await loadVersionQueue(actor, adminAudience, {
     filter: 'pending',
     limit,
     after: cursor === undefined ? undefined : decodeTimeIdCursor(cursor, CURSOR_SCOPE),

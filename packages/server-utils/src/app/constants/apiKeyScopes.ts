@@ -51,6 +51,13 @@ const HAND_WRITTEN_USER_API_KEY_SCOPES: ApiKeyScopeOption[] = [
     endpoints: [],
   },
   {
+    value: ApiKeyScope.ARTIFACTS_PUBLISH,
+    label: 'Publish Artifacts',
+    description:
+      'Publish, republish and unpublish your artifacts as public web pages. Does not allow reading artifacts',
+    endpoints: [],
+  },
+  {
     value: ApiKeyScope.READ_FILES,
     label: 'Read Files',
     description: 'Download and view files',
@@ -559,6 +566,13 @@ const HAND_WRITTEN_ADMIN_ONLY_API_KEY_SCOPES: ApiKeyScopeOption[] = [
       'PATCH /api/admin/release-notes/:id (video only)',
       'POST /api/files/createFabFile (purpose: modal-media only)',
     ],
+  },
+  {
+    value: ApiKeyScope.AI_END_USER_ID,
+    label: 'AI: Platform End Users',
+    description:
+      'Lets a key that serves many end users send end_user_id on AI completions and text-to-speech, so the model provider sees each end user separately. Opens no route by itself: grant alongside ai:chat or ai:generate',
+    endpoints: [],
   },
 ];
 

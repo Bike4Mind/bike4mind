@@ -11,7 +11,12 @@ import {
   adminTabToSlug,
 } from './adminTabSlugs';
 
-const RETIRED_TABS = [AdminTab.RegistrationInvites, AdminTab.PartnerSignupRules];
+const RETIRED_TABS = [
+  AdminTab.RegistrationInvites,
+  AdminTab.PartnerSignupRules,
+  AdminTab.HeldSignupGrants,
+  AdminTab.SecOpsTriage,
+];
 const ALL_TABS = Object.values(AdminTab).filter(
   (value): value is AdminTab => typeof value === 'number' && !RETIRED_TABS.includes(value)
 );
@@ -54,12 +59,21 @@ describe('adminTabRedirectFromSlug', () => {
   it.each([
     ['subscribers', undefined],
     ['registration-invites', 'invites'],
-    ['partner-signup-rules', 'packages'],
+    ['partner-signup-rules', 'partners'],
+    ['held-signup-grants', 'pending'],
   ])('sends %s to the waitlist tab with section %s', (slug, section) => {
     const redirect = adminTabRedirectFromSlug(slug);
     expect(redirect?.tab).toBe(AdminTab.Waitlist);
     expect(redirect?.search?.inviteSection).toBe(section);
+    expect(redirect?.search?.heldGrants).toBe(slug === 'held-signup-grants' ? 'open' : undefined);
     expect(adminTabFromSlug(slug)).toBeUndefined();
+  });
+
+  it('sends the retired issue filing page to the Security page, Scans view', () => {
+    const redirect = adminTabRedirectFromSlug('sec-ops-triage');
+    expect(redirect?.tab).toBe(AdminTab.SecurityDashboard);
+    expect(redirect?.search).toEqual({ securityView: 'scans' });
+    expect(adminTabFromSlug('sec-ops-triage')).toBeUndefined();
   });
 
   it('never redirects a current slug', () => {
@@ -81,9 +95,21 @@ describe('adminTabLinkSearch', () => {
 
   it.each([
     [AdminTab.RegistrationInvites, 'invites'],
-    [AdminTab.PartnerSignupRules, 'packages'],
+    [AdminTab.PartnerSignupRules, 'partners'],
   ])('links retired tab %s to its Invite Center section', (tab, section) => {
     expect(adminTabLinkSearch(tab)).toEqual({ tab: 'waitlist', inviteSection: section });
+  });
+
+  it('links the retired held grants tab to Pending with the held actions open', () => {
+    expect(adminTabLinkSearch(AdminTab.HeldSignupGrants)).toEqual({
+      tab: 'waitlist',
+      inviteSection: 'pending',
+      heldGrants: 'open',
+    });
+  });
+
+  it('links the retired issue filing page to the Security page, Scans view', () => {
+    expect(adminTabLinkSearch(AdminTab.SecOpsTriage)).toEqual({ tab: 'security-dashboard', securityView: 'scans' });
   });
 
   it('names no tab for a value that is not a member', () => {

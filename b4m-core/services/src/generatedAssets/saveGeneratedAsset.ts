@@ -27,6 +27,8 @@ const MODALITY: Record<GeneratedAssetGenerator, Modality> = {
   speech: 'audio',
   sound_effect: 'audio',
   video: 'video',
+  // A Scene is an MP4: the video with the soundtrack muxed in.
+  scene: 'video',
   image: 'image',
 };
 
@@ -115,7 +117,13 @@ export async function saveGeneratedAsset(
     });
     if (existing?.filePath) {
       const signed = await generateSignedUrl(existing, {
-        storage: { generateSignedUrl: (path, expiresIn) => deps.storage.generateSignedUrl(path, expiresIn, 'get') },
+        storage: {
+          generateSignedUrl: (path, expiresIn, options) =>
+            deps.storage.generateSignedUrl(path, expiresIn, 'get', {
+              ResponseContentDisposition: options?.ResponseContentDisposition,
+              ResponseContentType: options?.ResponseContentType,
+            }),
+        },
       });
       return savedResult(signed, existing.filePath);
     }
