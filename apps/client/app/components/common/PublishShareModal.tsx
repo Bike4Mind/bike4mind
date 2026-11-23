@@ -904,7 +904,7 @@ export function PublishShareModal({
                 value="update"
                 disabled={busy}
                 data-testid="publish-share-mode-update"
-                label={`Update "${existing.title}" - adds a new version`}
+                label={`Update "${existing.title}" - adds a new version if the content changed`}
               />
               <Radio
                 value="new"
@@ -914,10 +914,15 @@ export function PublishShareModal({
               />
             </RadioGroup>
             {mode === 'update' && (
-              <Typography level="body-xs" textColor="text.tertiary" sx={{ mt: 0.75 }}>
+              <Typography
+                level="body-xs"
+                textColor="text.tertiary"
+                sx={{ mt: 0.75 }}
+                data-testid="publish-share-update-helper"
+              >
                 {existing.versionsCount >= 2
-                  ? `Currently ${existing.versionsCount} versions - your update becomes the newest, switchable on the published page.`
-                  : 'Re-publishing adds a 2nd version and turns on the version switcher on the published page.'}
+                  ? `Currently ${existing.versionsCount} versions. Changed content becomes the newest, switchable on the published page. If it matches a version already in the history, no new version is added and the page switches to that existing version.`
+                  : 'Changed content adds a 2nd version and turns on the version switcher on the published page. If it matches the current version, no new version is added.'}
               </Typography>
             )}
           </FormControl>
