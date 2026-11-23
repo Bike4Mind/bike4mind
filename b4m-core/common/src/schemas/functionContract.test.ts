@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   FUNCTION_CONTRACT_LIMITS,
+  compareFunctionOutput,
   hasFunctionEntryPoint,
   parseFunctionContract,
   validateFunctionValue,
@@ -55,15 +56,9 @@ describe('parseFunctionContract', () => {
     expect(Object.keys(result.contract)).toEqual(['name', 'description', 'inputs', 'outputs']);
   });
 
-  it('refuses a tests key like any other unknown key', () => {
-    const contract = {
-      ...sampleContract(),
-      tests: [{ name: 'steel beam', input: { load: 1000 }, expected: { deflection: 0.002 } }],
-    };
-    expect(problemsOf(contract)).toEqual([{ path: 'tests', message: '"tests" is not supported' }]);
-    expect(problemsOf({ ...sampleContract(), tests: [] })).toEqual([
-      { path: 'tests', message: '"tests" is not supported' },
-    ]);
+  it('leaves tests out of the contract when FUNCTION declares none', () => {
+    const result = parseFunctionContract(sampleContract());
+    expect(result.ok && 'tests' in result.contract).toBe(false);
   });
 
   it('refuses a value that is not a dict', () => {
@@ -404,6 +399,148 @@ describe('validateFunctionValue', () => {
       { path: 'point.x', message: 'must be a number' },
       { path: 'point.y', message: 'is not part of the contract' },
     ]);
+  });
+});
+
+describe('parseFunctionContract tests', () => {
+  const steel = () => ({
+    name: '4 m steel beam',
+    input: { load: 1000, span: 4, elastic_modulus: 2e11, second_moment: 8e-6 },
+    expected: { deflection: 0.0020833 },
+    tolerance: { rel: 0.001 },
+  });
+  const withTests = (tests: unknown) => ({ ...sampleContract(), tests });
+
+  it('keeps declared tests on the contract', () => {
+    const result = parseFunctionContract(withTests([steel(), { ...steel(), name: 'exact', tolerance: undefined }]));
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(Object.keys(result.contract)).toEqual(['name', 'description', 'inputs', 'outputs', 'tests']);
+    expect(result.contract.tests?.map(test => test.name)).toEqual(['4 m steel beam', 'exact']);
+    expect(parseFunctionContract(withTests([]))).toMatchObject({ ok: true, contract: { tests: [] } });
+  });
+
+  it(`allows at most ${FUNCTION_CONTRACT_LIMITS.maxTests} test cases`, () => {
+    expect(FUNCTION_CONTRACT_LIMITS.maxTests).toBe(20);
+    expect(problemsOf(withTests(Array.from({ length: 20 }, steel)))).toEqual([]);
+    expect(problemsOf(withTests(Array.from({ length: 21 }, steel)))).toEqual([
+      { path: 'tests', message: 'has 21 test cases; at most 20 are allowed' },
+    ]);
+  });
+
+  it('checks each input against the inputs, as a call would be', () => {
+    const missing = { ...steel(), input: { load: 1000, span: -4, elastic_modulus: 2e11 } };
+    expect(problemsOf(withTests([missing]))).toEqual([
+      { path: 'tests.0.input.second_moment', message: 'is required' },
+      { path: 'tests.0.input.span', message: 'must be greater than 0' },
+    ]);
+    expect(problemsOf(withTests([{ ...steel(), input: { ...steel().input, depth: 1 } }]))).toEqual([
+      { path: 'tests.0.input.depth', message: 'is not part of the contract' },
+    ]);
+  });
+
+  it('checks each expected key against the outputs, without requiring every output', () => {
+    expect(problemsOf(withTests([{ ...steel(), expected: { slope: 0.1 } }]))).toEqual([
+      { path: 'tests.0.expected.slope', message: 'is not an output of the contract' },
+    ]);
+    expect(problemsOf(withTests([{ ...steel(), expected: { deflection: 'small' } }]))).toEqual([
+      { path: 'tests.0.expected.deflection', message: 'must be a number' },
+    ]);
+    expect(problemsOf(withTests([{ ...steel(), expected: {} }]))).toEqual([
+      { path: 'tests.0.expected', message: 'must be an object naming at least one output' },
+    ]);
+  });
+
+  it('refuses a malformed case, tolerance, or list by path', () => {
+    expect(problemsOf(withTests({}))).toEqual([{ path: 'tests', message: 'must be a list of test cases' }]);
+    expect(problemsOf(withTests([7]))).toEqual([
+      { path: 'tests.0', message: 'must be an object with name, input, and expected' },
+    ]);
+    expect(paths(withTests([{ ...steel(), name: ' ', note: 'x' }]))).toEqual(['tests.0.note', 'tests.0.name']);
+    expect(paths(withTests([{ ...steel(), tolerance: { abs: -1, rel: Number.NaN, pct: 1 } }]))).toEqual([
+      'tests.0.tolerance.pct',
+      'tests.0.tolerance.abs',
+      'tests.0.tolerance.rel',
+    ]);
+    expect(paths(withTests([{ ...steel(), tolerance: 0.1 }]))).toEqual(['tests.0.tolerance']);
+  });
+
+  it('still checks the shape of tests when an input side is refused', () => {
+    const contract = withTests([{ name: 'a', input: 1, expected: { deflection: 1 } }]);
+    delete (contract.inputs as Record<string, unknown>).additionalProperties;
+    expect(paths(contract)).toEqual(['inputs.additionalProperties', 'tests.0.input']);
+  });
+});
+
+describe('compareFunctionOutput', () => {
+  it('matches equal values and names nothing', () => {
+    expect(
+      compareFunctionOutput(
+        { deflection: 0.002, ok: true, label: 'a' },
+        { deflection: 0.002, ok: true, label: 'a', extra: 1 }
+      )
+    ).toBeNull();
+  });
+
+  it('compares numbers exactly without a tolerance', () => {
+    expect(compareFunctionOutput({ deflection: 0.002 }, { deflection: 0.0020001 })).toEqual({
+      path: 'deflection',
+      expected: 0.002,
+      actual: 0.0020001,
+    });
+  });
+
+  it('accepts a number within the absolute or the relative tolerance', () => {
+    expect(compareFunctionOutput({ x: 10 }, { x: 10.4 }, { abs: 0.5 })).toBeNull();
+    expect(compareFunctionOutput({ x: 10 }, { x: 10.6 }, { abs: 0.5 })).toMatchObject({ path: 'x' });
+    expect(compareFunctionOutput({ x: 1000 }, { x: 1000.9 }, { rel: 0.001 })).toBeNull();
+    expect(compareFunctionOutput({ x: 1000 }, { x: 1001.1 }, { rel: 0.001 })).toMatchObject({ path: 'x' });
+    expect(compareFunctionOutput({ x: 0 }, { x: 1e-9 }, { rel: 0.5 })).toMatchObject({ path: 'x' });
+    expect(compareFunctionOutput({ x: 0 }, { x: 1e-9 }, { abs: 1e-6, rel: 0.5 })).toBeNull();
+  });
+
+  it('scales the relative tolerance by the expected value, not the actual one', () => {
+    // 10 is within 0.00995 of 1010 but not of 1000.
+    expect(compareFunctionOutput({ x: 1000 }, { x: 1010 }, { rel: 0.00995 })).toMatchObject({ path: 'x' });
+  });
+
+  it('never matches NaN or an infinity', () => {
+    expect(compareFunctionOutput({ x: Number.NaN }, { x: Number.NaN }, { abs: 1 })).toMatchObject({ path: 'x' });
+    expect(compareFunctionOutput({ x: 1 }, { x: Number.NaN }, { abs: 1 })).toMatchObject({ path: 'x' });
+    expect(compareFunctionOutput({ x: Infinity }, { x: Infinity })).toMatchObject({ path: 'x' });
+    expect(compareFunctionOutput({ x: Infinity }, { x: 1 }, { rel: 1 })).toMatchObject({ path: 'x' });
+  });
+
+  it('compares text, true or false, and choices exactly', () => {
+    expect(compareFunctionOutput({ grade: 'S355' }, { grade: 's355' })).toMatchObject({ path: 'grade' });
+    expect(compareFunctionOutput({ ok: true }, { ok: 1 }, { abs: 1 })).toMatchObject({ path: 'ok' });
+    expect(compareFunctionOutput({ n: 1 }, { n: '1' })).toMatchObject({ path: 'n' });
+  });
+
+  it('compares lists item by item and names the first differing item', () => {
+    expect(compareFunctionOutput({ xs: [1, 2, 3] }, { xs: [1, 2.05, 3] }, { abs: 0.1 })).toBeNull();
+    expect(compareFunctionOutput({ xs: [1, 2, 3] }, { xs: [1, 2.5, 4] }, { abs: 0.1 })).toEqual({
+      path: 'xs.1',
+      expected: 2,
+      actual: 2.5,
+    });
+    expect(compareFunctionOutput({ xs: [1, 2] }, { xs: [1, 2, 3] })).toEqual({
+      path: 'xs',
+      expected: [1, 2],
+      actual: [1, 2, 3],
+    });
+  });
+
+  it('walks nested groups and reports a field run left out', () => {
+    expect(compareFunctionOutput({ support: { left: 5 } }, { support: { left: 6 } })).toMatchObject({
+      path: 'support.left',
+    });
+    expect(compareFunctionOutput({ deflection: 1 }, {})).toEqual({
+      path: 'deflection',
+      expected: 1,
+      actual: undefined,
+    });
+    expect(compareFunctionOutput({ constructor: 1 }, {})).toMatchObject({ path: 'constructor', actual: undefined });
   });
 });
 
