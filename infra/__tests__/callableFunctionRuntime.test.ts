@@ -9,7 +9,6 @@ import { readFileSync } from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { balanced, stripComments } from './helpers/infraSource';
-import { callableFunctionRolePolicy } from '../callableFunctionNetwork';
 import {
   CALLABLE_FUNCTION_LAMBDA_EPHEMERAL_STORAGE_MB,
   CALLABLE_FUNCTION_LAMBDA_MEMORY_MB,
@@ -22,13 +21,17 @@ const read = (rel: string) => readFileSync(path.join(REPO_ROOT, rel), 'utf8');
 
 const source = stripComments(read('infra/callableFunctionRuntime.ts'));
 
-/** The argument object of the sole `new <ctor>('<name>', { ... })`. */
-function declaration(ctor: string, name: string): string {
-  const anchor = new RegExp(`new ${ctor.replace(/\./g, '\\.')}\\(\\s*'${name}',\\s*`, 'g');
+const escapeRegExp = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+/** The argument object of the sole `new <ctor>(<nameLiteral>, { ... })`. */
+function declarationOf(ctor: string, nameLiteral: string): string {
+  const anchor = new RegExp(`new ${escapeRegExp(ctor)}\\(\\s*${escapeRegExp(nameLiteral)},\\s*`, 'g');
   const matches = [...source.matchAll(anchor)];
-  expect(matches, `new ${ctor}('${name}', ...) must be declared once`).toHaveLength(1);
+  expect(matches, `new ${ctor}(${nameLiteral}, ...) must be declared once`).toHaveLength(1);
   return balanced(source, matches[0].index! + matches[0][0].length, '{', '}');
 }
+
+const declaration = (ctor: string, name: string) => declarationOf(ctor, `'${name}'`);
 
 /** The body of the sole `function <name>(...)`. */
 function functionBody(name: string): string {
@@ -56,7 +59,7 @@ describe('callable function runtime isolation', () => {
     expect(fn).not.toMatch(/\benvironment\s*:/);
   });
 
-  it('gives its role one inline policy, no managed policy, and no log action on every resource', () => {
+  it('gives its role one inline policy and no managed policy, and logs to its own log group', () => {
     expect(source).not.toMatch(/PolicyAttachment|managedPolicyArns|inlinePolicies|iam::aws:policy|aws\.iam\.Policy\(/);
     expect(source.match(/new aws\.iam\.RolePolicy\(/g)).toHaveLength(1);
     const rolePolicy = declaration('aws.iam.RolePolicy', 'CallableFunctionRuntimePolicy');
@@ -66,9 +69,7 @@ describe('callable function runtime isolation', () => {
     );
     expect(fn).toMatch(/role:\s*role\.arn/);
     expect(source).toMatch(/\{\s*dependsOn:\s*\[rolePolicy\]\s*\}/);
-    for (const statement of callableFunctionRolePolicy('runtime-log-group').Statement) {
-      if (statement.Resource === '*') expect(statement.Action.filter(action => action.startsWith('logs:'))).toEqual([]);
-    }
+    expect(fn).toMatch(/loggingConfig:\s*\{\s*logFormat:\s*'Text',\s*logGroup:\s*logGroup\.name\s*\}/);
   });
 
   it('runs in a security group with no ingress and no egress rules, in the network it runs in', () => {
@@ -102,19 +103,32 @@ describe('callable function runtime isolation', () => {
     );
     expect(source).not.toMatch(/aws\.ec2transitgateway|aws\.route53/);
 
-    const subnet = declaration('aws.ec2.Subnet', 'CallableFunctionRuntimeSubnet');
-    expect(subnet).toMatch(/vpcId:\s*vpc\.id,/);
-    expect(subnet).toMatch(/mapPublicIpOnLaunch:\s*false/);
-    expect(subnet).not.toMatch(/ipv6|assignIpv6/i);
     const routeTable = declaration('aws.ec2.RouteTable', 'CallableFunctionRuntimeRouteTable');
     expect(routeTable).toMatch(/vpcId:\s*vpc\.id,/);
     expect(routeTable).toMatch(/routes:\s*\[\]/);
-    const association = declaration('aws.ec2.RouteTableAssociation', 'CallableFunctionRuntimeRouteTableAssociation');
+  });
+
+  it('spreads the dedicated network over two subnets in two zones, on the one empty route table', () => {
+    const body = functionBody('dedicatedNetwork');
+    expect(source.match(/new aws\.ec2\.Subnet\(/g)).toHaveLength(1);
+    expect(source.match(/new aws\.ec2\.RouteTableAssociation\(/g)).toHaveLength(1);
+    expect(source.match(/new aws\.ec2\.RouteTable\(/g)).toHaveLength(1);
+    expect(body).toMatch(/const subnets = DEDICATED_SUBNET_CIDRS\.map\(\s*\(cidrBlock, index\) =>/);
+    const subnet = declarationOf('aws.ec2.Subnet', '`CallableFunctionRuntimeSubnet${index + 1}`');
+    expect(subnet).toMatch(/vpcId:\s*vpc\.id,/);
+    expect(subnet).toMatch(/cidrBlock,/);
+    expect(subnet).toMatch(/availabilityZoneId:\s*zoneIds\.apply\(ids => ids\[index\]\),/);
+    expect(subnet).toMatch(/mapPublicIpOnLaunch:\s*false/);
+    expect(subnet).not.toMatch(/ipv6|assignIpv6/i);
+    expect(body).toMatch(/\.zoneIds\.apply\(ids => distinctZones\(ids, DEDICATED_SUBNET_CIDRS\.length\)\)/);
+    expect(body).toMatch(/subnets\.forEach\(/);
+    const association = declarationOf(
+      'aws.ec2.RouteTableAssociation',
+      '`CallableFunctionRuntimeRouteTableAssociation${index + 1}`'
+    );
     expect(association).toMatch(/subnetId:\s*subnet\.id,/);
     expect(association).toMatch(/routeTableId:\s*routeTable\.id,/);
-    expect(functionBody('dedicatedNetwork')).toMatch(
-      /return \{ vpcId: vpc\.id, subnetIds: \$output\(\[subnet\.id\]\) \};/
-    );
+    expect(body).toMatch(/return \{ vpcId: vpc\.id, subnetIds: \$output\(subnets\.map\(subnet => subnet\.id\)\) \};/);
   });
 
   it('fails the deploy unless every named subnet passes subnetNetworkFaults', () => {
@@ -134,10 +148,14 @@ describe('callable function runtime isolation', () => {
     expect(named).toMatch(/routes: routeTableId\.apply\(routesOf\),/);
 
     const routes = functionBody('routesOf');
-    expect(routes).toMatch(/has\('route\.gateway-id', \['local'\]\)/);
-    expect(routes).toMatch(/has\('route\.gateway-id', \['vpce-\*'\]\)/);
-    expect(routes).toMatch(/has\('route\.origin', \['EnableVgwRoutePropagation'\]\)/);
-    expect(routes).toMatch(/\.\.\.routes,/);
+    expect(routes).toMatch(/routes: aws\.ec2\.getRouteTableOutput\(\{ routeTableId \}\)\.routes,/);
+    for (const kind of ['local', 'lattice', 'propagated', 'endpoint', 'created']) {
+      expect(routes).toMatch(new RegExp(`${kind}: probe\\('${kind}'\\),`));
+    }
+    expect(routes).toMatch(
+      /aws\.ec2\.getRouteTablesOutput\(\{ filters: routeProbeFilters\(routeTableId, kind\) \}\)\.ids\.apply\(probeMatched\)/
+    );
+    expect(routes).toMatch(/\.apply\(\(\{ routes, \.\.\.probes \}\) => tableRoutes\(routes, probes\)\)/);
   });
 
   it('creates the dedicated VPC only on the stages the repository treats as long-lived', () => {
@@ -211,8 +229,22 @@ describe('callable function runtime isolation', () => {
     expect(errors).toMatch(/statistic:\s*'Sum',/);
     expect(errors).toMatch(/threshold:\s*5,/);
     expect(errors).toMatch(/comparisonOperator:\s*'GreaterThanOrEqualToThreshold',/);
+    const duration = declaration('aws.cloudwatch.MetricAlarm', 'CallableFunctionRuntimeDuration');
+    expect(duration).toMatch(
+      /threshold:\s*CALLABLE_FUNCTION_LAMBDA_TIMEOUT_SECONDS \* 1000 - CALLABLE_FUNCTION_PARENT_MARGIN_MS,/
+    );
+    const throttles = declaration('aws.cloudwatch.MetricAlarm', 'CallableFunctionRuntimeThrottles');
+    expect(throttles).toMatch(/threshold:\s*0,/);
+    expect(throttles).toMatch(/comparisonOperator:\s*'GreaterThanThreshold',/);
     expect(source).toMatch(/period:\s*300,/);
     expect(source).toMatch(/evaluationPeriods:\s*1,/);
     expect(source).toMatch(/dimensions:\s*\{\s*FunctionName:\s*fn\.name\s*\}/);
+  });
+
+  it('creates the alarms with the function, whenever the alarm topic exists', () => {
+    expect(functionBody('createCallableFunctionRuntime')).toMatch(
+      /if \(dlqAlarmTopic\) createAlarms\(fn, dlqAlarmTopic\);/
+    );
+    expect(source).toMatch(/alarmActions:\s*\[topic\.arn\]/);
   });
 });

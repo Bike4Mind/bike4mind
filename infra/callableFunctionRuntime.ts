@@ -5,14 +5,22 @@ import {
   CALLABLE_FUNCTION_LAMBDA_TIMEOUT_SECONDS,
   CALLABLE_FUNCTION_PARENT_MARGIN_MS,
 } from '../packages/server-utils/src/callableFunctions/runtimeLimits';
-import { callableFunctionRolePolicy, subnetNetworkFaults, type RouteTarget } from './callableFunctionNetwork';
+import {
+  callableFunctionRolePolicy,
+  DEDICATED_SUBNET_CIDRS,
+  distinctZones,
+  probeMatched,
+  routeProbeFilters,
+  subnetNetworkFaults,
+  tableRoutes,
+  type RouteProbes,
+  type RouteTarget,
+} from './callableFunctionNetwork';
 import { PRODUCTION_STAGES, STAGE_LOG_RETENTION_DAYS } from './constants';
 import { dlqAlarmTopic } from './dlqAlarms';
 
-// Runs user-written Python (apps/workers/src/callableFunctions/handler.ts, image apps/workers/Dockerfile.callablefunction)
-// with no link, secrets, permissions, or environment, in a security group with no rules, on a network of its own with
-// no route out and no name resolution. A raw aws.lambda.Function, because sst.aws.Function cannot take a prebuilt
-// image; the deploy pipeline builds it per infra/deploy-contract.json and exports CALLABLE_FUNCTION_RUNTIME_IMAGE.
+// Runs user-written Python (apps/workers/src/callableFunctions/handler.ts) with no link, secrets, or environment, on a
+// network with no route out or name resolution. A raw aws.lambda.Function: sst.aws.Function takes no prebuilt image.
 const runtimeImage = process.env.CALLABLE_FUNCTION_RUNTIME_IMAGE;
 if (process.env.CI === 'true' && !runtimeImage) {
   console.warn('CALLABLE_FUNCTION_RUNTIME_IMAGE is not set; skipping the callable function runtime.');
@@ -38,7 +46,7 @@ const enabled = !$dev && !!runtimeImage && !skippedWithoutNetwork;
 
 const NETWORK_NAME = `${$app.name}-${$app.stage}-callable-function`;
 
-/** A VPC with no gateway, no IPv6, and no name resolution, and one subnet whose table holds only the local route. */
+/** A VPC with no gateway, IPv6, or DNS; two subnets in two zones share one table holding only the local route. */
 function dedicatedNetwork() {
   const vpc = new aws.ec2.Vpc('CallableFunctionRuntimeVpc', {
     cidrBlock: '10.0.0.0/16',
@@ -47,54 +55,49 @@ function dedicatedNetwork() {
     assignGeneratedIpv6CidrBlock: false,
     tags: { Name: NETWORK_NAME },
   });
-  const subnet = new aws.ec2.Subnet('CallableFunctionRuntimeSubnet', {
-    vpcId: vpc.id,
-    cidrBlock: '10.0.0.0/20',
-    // Lambda documents use1-az3 as limited capacity for VPC functions.
-    availabilityZoneId: aws
-      .getAvailabilityZonesOutput({ state: 'available', excludeZoneIds: ['use1-az3'] })
-      .zoneIds.apply(ids => ids[0]),
-    mapPublicIpOnLaunch: false,
-    tags: { Name: NETWORK_NAME },
-  });
+  // Lambda documents use1-az3 as limited capacity for VPC functions.
+  const zoneIds = aws
+    .getAvailabilityZonesOutput({ state: 'available', excludeZoneIds: ['use1-az3'] })
+    .zoneIds.apply(ids => distinctZones(ids, DEDICATED_SUBNET_CIDRS.length));
+  const subnets = DEDICATED_SUBNET_CIDRS.map(
+    (cidrBlock, index) =>
+      new aws.ec2.Subnet(`CallableFunctionRuntimeSubnet${index + 1}`, {
+        vpcId: vpc.id,
+        cidrBlock,
+        availabilityZoneId: zoneIds.apply(ids => ids[index]),
+        mapPublicIpOnLaunch: false,
+        tags: { Name: NETWORK_NAME },
+      })
+  );
   const routeTable = new aws.ec2.RouteTable('CallableFunctionRuntimeRouteTable', {
     vpcId: vpc.id,
     routes: [],
     tags: { Name: NETWORK_NAME },
   });
-  new aws.ec2.RouteTableAssociation('CallableFunctionRuntimeRouteTableAssociation', {
-    subnetId: subnet.id,
-    routeTableId: routeTable.id,
-  });
-  return { vpcId: vpc.id, subnetIds: $output([subnet.id]) };
+  subnets.forEach(
+    (subnet, index) =>
+      new aws.ec2.RouteTableAssociation(`CallableFunctionRuntimeRouteTableAssociation${index + 1}`, {
+        subnetId: subnet.id,
+        routeTableId: routeTable.id,
+      })
+  );
+  return { vpcId: vpc.id, subnetIds: $output(subnets.map(subnet => subnet.id)) };
 }
 
-/**
- * Every route in the table. The route table data source leaves out the local route, routes propagated from a virtual
- * private gateway, and gateway endpoint routes, so a filtered lookup reads each of those.
- */
+// The route table data source omits local and VpcLattice routes, propagated routes, vpce- routes with a prefix list,
+// and routes to a network interface attached to another account's instance; a filtered lookup reads each.
 function routesOf(routeTableId: string | undefined) {
   if (!routeTableId) return $output([] as RouteTarget[]);
-  const has = (name: string, values: string[]) =>
-    aws.ec2
-      .getRouteTablesOutput({
-        filters: [
-          { name: 'route-table-id', values: [routeTableId] },
-          { name, values },
-        ],
-      })
-      .ids.apply(ids => ids.length > 0);
+  const probe = (kind: keyof RouteProbes) =>
+    aws.ec2.getRouteTablesOutput({ filters: routeProbeFilters(routeTableId, kind) }).ids.apply(probeMatched);
   return $resolve({
     routes: aws.ec2.getRouteTableOutput({ routeTableId }).routes,
-    local: has('route.gateway-id', ['local']),
-    endpoint: has('route.gateway-id', ['vpce-*']),
-    propagated: has('route.origin', ['EnableVgwRoutePropagation']),
-  }).apply(({ routes, local, endpoint, propagated }): RouteTarget[] => [
-    ...routes,
-    ...(local ? [{ gatewayId: 'local' }] : []),
-    ...(endpoint ? [{ gatewayId: 'vpce-*' }] : []),
-    ...(propagated ? [{ origin: 'EnableVgwRoutePropagation' }] : []),
-  ]);
+    local: probe('local'),
+    lattice: probe('lattice'),
+    propagated: probe('propagated'),
+    endpoint: probe('endpoint'),
+    created: probe('created'),
+  }).apply(({ routes, ...probes }) => tableRoutes(routes, probes));
 }
 
 /** The subnets in CALLABLE_FUNCTION_SUBNET_IDS; the deploy fails unless subnetNetworkFaults finds none. */

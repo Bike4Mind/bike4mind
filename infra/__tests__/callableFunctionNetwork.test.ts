@@ -4,13 +4,28 @@
 import { describe, it, expect } from 'vitest';
 import {
   callableFunctionRolePolicy,
+  DEDICATED_SUBNET_CIDRS,
+  distinctZones,
   LAMBDA_NETWORK_INTERFACE_ACTIONS,
+  probeMatched,
+  routeProbeFilters,
   subnetNetworkFaults,
+  tableRoutes,
+  type RouteProbes,
   type RouteTarget,
   type SubnetNetwork,
 } from '../callableFunctionNetwork';
 
 const LOCAL: RouteTarget = { gatewayId: 'local' };
+
+const probes = (found: Partial<RouteProbes> = {}): RouteProbes => ({
+  local: false,
+  lattice: false,
+  propagated: false,
+  endpoint: false,
+  created: false,
+  ...found,
+});
 
 const subnet = (overrides: Partial<SubnetNetwork> = {}): SubnetNetwork => ({
   subnetId: 'subnet-0a',
@@ -26,17 +41,19 @@ describe('subnetNetworkFaults', () => {
     expect(subnetNetworkFaults([subnet(), subnet({ subnetId: 'subnet-0b', routes: [LOCAL, LOCAL] })])).toEqual([]);
   });
 
-  it.each<[string, RouteTarget, string]>([
-    ['NAT gateway', { natGatewayId: 'nat-0a' }, 'a NAT gateway'],
-    ['internet gateway', { gatewayId: 'igw-0a' }, 'an internet gateway'],
-    ['transit gateway', { transitGatewayId: 'tgw-0a' }, 'a transit gateway'],
-    ['egress-only IPv6', { egressOnlyGatewayId: 'eigw-0a' }, 'an egress-only internet gateway'],
-    ['peering', { vpcPeeringConnectionId: 'pcx-0a' }, 'a peering connection'],
-    ['gateway endpoint', { gatewayId: 'vpce-0a', destinationPrefixListId: 'pl-0a' }, 'a gateway endpoint'],
-    ['propagated', { origin: 'EnableVgwRoutePropagation' }, 'a virtual private gateway'],
-    ['network interface', { networkInterfaceId: 'eni-0a' }, 'a network interface'],
-    ['no target', {}, 'an unknown target'],
-  ])('refuses a %s route by name', (_kind, route, name) => {
+  it.each<[string, RouteTarget]>([
+    ['a NAT gateway', { natGatewayId: 'nat-0a' }],
+    ['an internet gateway', { gatewayId: 'igw-0a' }],
+    ['a transit gateway', { transitGatewayId: 'tgw-0a' }],
+    ['an egress-only internet gateway', { egressOnlyGatewayId: 'eigw-0a' }],
+    ['a peering connection', { vpcPeeringConnectionId: 'pcx-0a' }],
+    ['a gateway endpoint', { gatewayId: 'vpce-0a', destinationPrefixListId: 'pl-0a' }],
+    ['a virtual private gateway', { origin: 'EnableVgwRoutePropagation' }],
+    ['a network interface', { networkInterfaceId: 'eni-0a' }],
+    ['a route added to the table', { origin: 'CreateRoute' }],
+    ['gateway VpcLattice', { gatewayId: 'VpcLattice' }],
+    ['an unknown target', {}],
+  ])('refuses a route to %s', (name, route) => {
     expect(subnetNetworkFaults([subnet({ routes: [LOCAL, route] })])).toEqual([
       `subnet subnet-0a: route table rtb-0a has a route to ${name}`,
     ]);
@@ -69,6 +86,82 @@ describe('subnetNetworkFaults', () => {
   });
 });
 
+describe('tableRoutes', () => {
+  const faultsOf = (listed: RouteTarget[], found: Partial<RouteProbes>) =>
+    subnetNetworkFaults([subnet({ routes: tableRoutes(listed, probes(found)) })]);
+
+  it('passes a table whose only route is the local route the data source omits', () => {
+    expect(faultsOf([], { local: true })).toEqual([]);
+  });
+
+  it('refuses a gateway endpoint route the data source omits', () => {
+    expect(faultsOf([], { local: true, endpoint: true })).toEqual([
+      'subnet subnet-0a: route table rtb-0a has a route to a gateway endpoint',
+    ]);
+  });
+
+  it('refuses a propagated route the data source omits', () => {
+    expect(faultsOf([], { local: true, propagated: true })).toEqual([
+      'subnet subnet-0a: route table rtb-0a has a route to a virtual private gateway',
+    ]);
+  });
+
+  it('refuses a VpcLattice route and a hand-added route the data source omits', () => {
+    expect(faultsOf([], { local: true, lattice: true })).toEqual([
+      'subnet subnet-0a: route table rtb-0a has a route to gateway VpcLattice',
+    ]);
+    expect(faultsOf([], { local: true, created: true })).toEqual([
+      'subnet subnet-0a: route table rtb-0a has a route to a route added to the table',
+    ]);
+  });
+
+  it('keeps a listed route next to the probed routes', () => {
+    expect(faultsOf([{ natGatewayId: 'nat-0a' }], { local: true })).toEqual([
+      'subnet subnet-0a: route table rtb-0a has a route to a NAT gateway',
+    ]);
+    expect(tableRoutes([{ natGatewayId: 'nat-0a' }], probes({ local: true }))).toEqual([
+      { natGatewayId: 'nat-0a' },
+      LOCAL,
+    ]);
+  });
+
+  it('refuses a table with nothing listed and no local route', () => {
+    expect(faultsOf([], { local: false })).toEqual(['subnet subnet-0a: route table rtb-0a returned no routes']);
+  });
+});
+
+describe('route probe lookups', () => {
+  it.each<[keyof RouteProbes, { name: string; values: string[] }]>([
+    ['local', { name: 'route.gateway-id', values: ['local'] }],
+    ['lattice', { name: 'route.gateway-id', values: ['VpcLattice'] }],
+    ['propagated', { name: 'route.origin', values: ['EnableVgwRoutePropagation'] }],
+    ['endpoint', { name: 'route.gateway-id', values: ['vpce-*'] }],
+    ['created', { name: 'route.origin', values: ['CreateRoute'] }],
+  ])('filters the %s probe to the one table and its kind of route', (probe, filter) => {
+    expect(routeProbeFilters('rtb-0a', probe)).toEqual([{ name: 'route-table-id', values: ['rtb-0a'] }, filter]);
+  });
+
+  it('counts a probe as matched when the lookup returned the table', () => {
+    expect(probeMatched([])).toBe(false);
+    expect(probeMatched(['rtb-0a'])).toBe(true);
+    expect(probeMatched(['rtb-0a', 'rtb-0b'])).toBe(true);
+  });
+});
+
+describe('dedicated subnets', () => {
+  it('has two subnets with different CIDRs', () => {
+    expect(DEDICATED_SUBNET_CIDRS).toHaveLength(2);
+    expect(new Set(DEDICATED_SUBNET_CIDRS).size).toBe(2);
+  });
+
+  it('takes one distinct zone per subnet and fails on a region with fewer', () => {
+    expect(distinctZones(['use1-az1', 'use1-az2', 'use1-az4'], 2)).toEqual(['use1-az1', 'use1-az2']);
+    expect(distinctZones(['use1-az1', 'use1-az1', 'use1-az2'], 2)).toEqual(['use1-az1', 'use1-az2']);
+    expect(() => distinctZones(['use1-az1', 'use1-az1'], 2)).toThrow('1 usable zones found');
+    expect(() => distinctZones([], 2)).toThrow('0 usable zones found');
+  });
+});
+
 describe('callableFunctionRolePolicy', () => {
   const policy = callableFunctionRolePolicy('runtime-log-group');
 
@@ -82,12 +175,5 @@ describe('callableFunctionRolePolicy', () => {
         Resource: 'runtime-log-group:*',
       },
     ]);
-  });
-
-  it('grants no log action on every resource', () => {
-    for (const statement of policy.Statement) {
-      if (statement.Action.some(action => action.startsWith('logs:'))) expect(statement.Resource).not.toBe('*');
-      if (statement.Resource === '*') expect(statement.Action.every(action => action.startsWith('ec2:'))).toBe(true);
-    }
   });
 });

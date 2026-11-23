@@ -1,4 +1,4 @@
-// The callable function runtime's deploy-time network check and execution-role policy (infra/callableFunctionRuntime.ts).
+// The callable function runtime's network layout, route check, and role policy (infra/callableFunctionRuntime.ts).
 // Imports nothing and uses no sst global, so its test loads it outside `sst`.
 
 /** One route's targets, named as the route table data source names them; an unset target is empty. */
@@ -50,9 +50,54 @@ const TARGET_FIELDS: Array<[Exclude<keyof RouteTarget, 'origin'>, string]> = [
   ['destinationPrefixListId', 'a prefix list'],
 ];
 
+/** One subnet per CIDR, each in its own zone, all on the one empty route table. */
+export const DEDICATED_SUBNET_CIDRS = ['10.0.0.0/20', '10.0.16.0/20'];
+
+/** The first `count` distinct zones; throws when the region offers fewer. */
+export function distinctZones(zoneIds: string[], count: number): string[] {
+  const zones = [...new Set(zoneIds)].slice(0, count);
+  if (zones.length < count) throw new Error(`${zones.length} usable zones found; the runtime needs ${count}.`);
+  return zones;
+}
+
+/** Whether each filtered route table lookup found the table; one lookup per kind of route the data source omits. */
+export interface RouteProbes {
+  local: boolean;
+  lattice: boolean;
+  propagated: boolean;
+  endpoint: boolean;
+  created: boolean;
+}
+
+const ROUTE_PROBES: Record<keyof RouteProbes, { filter: { name: string; values: string[] }; route: RouteTarget }> = {
+  local: { filter: { name: 'route.gateway-id', values: ['local'] }, route: { gatewayId: 'local' } },
+  lattice: { filter: { name: 'route.gateway-id', values: ['VpcLattice'] }, route: { gatewayId: 'VpcLattice' } },
+  propagated: {
+    filter: { name: 'route.origin', values: ['EnableVgwRoutePropagation'] },
+    route: { origin: 'EnableVgwRoutePropagation' },
+  },
+  endpoint: { filter: { name: 'route.gateway-id', values: ['vpce-*'] }, route: { gatewayId: 'vpce-*' } },
+  created: { filter: { name: 'route.origin', values: ['CreateRoute'] }, route: { origin: 'CreateRoute' } },
+};
+
+/** The `getRouteTables` filters that match `routeTableId` only when its table holds a route of the probed kind. */
+export function routeProbeFilters(routeTableId: string, probe: keyof RouteProbes) {
+  return [{ name: 'route-table-id', values: [routeTableId] }, ROUTE_PROBES[probe].filter];
+}
+
+/** A probe lookup's result: the kind of route is in the table when the lookup returned the table. */
+export const probeMatched = (ids: string[]): boolean => ids.length > 0;
+
+/** The table's listed routes plus one route for each probe that matched. */
+export function tableRoutes(listed: RouteTarget[], probes: RouteProbes): RouteTarget[] {
+  const found = (Object.keys(ROUTE_PROBES) as Array<keyof RouteProbes>).filter(probe => probes[probe]);
+  return [...listed, ...found.map(probe => ROUTE_PROBES[probe].route)];
+}
+
 /** `local` for the VPC's own route, otherwise what the route leads to. */
-export function routeTargetName(route: RouteTarget): string {
+function routeTargetName(route: RouteTarget): string {
   if (route.origin === 'EnableVgwRoutePropagation') return 'a virtual private gateway';
+  if (route.origin === 'CreateRoute') return 'a route added to the table';
   const gatewayId = route.gatewayId ?? '';
   for (const [prefix, name] of GATEWAY_PREFIXES) if (gatewayId.startsWith(prefix)) return name;
   for (const [field, name] of TARGET_FIELDS) if (route[field]) return name;
