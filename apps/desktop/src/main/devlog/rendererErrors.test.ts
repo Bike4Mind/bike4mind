@@ -87,6 +87,18 @@ describe('createRendererErrorHandler', () => {
       expect(after.at(-1)?.message).toBe('later');
       expect(after.filter(record => /dropped/.test(record.message))).toHaveLength(1);
     });
+
+    it('re-arms the summary timer for a second burst', () => {
+      vi.useFakeTimers();
+      const sink = new DevLogSink();
+      const handle = createRendererErrorHandler(sink);
+      for (let index = 0; index < RATE_LIMIT + 5; index++) handle.report({ kind: 'error', message: `a${index}` });
+      vi.advanceTimersByTime(RATE_WINDOW_MS);
+      for (let index = 0; index < RATE_LIMIT + 3; index++) handle.report({ kind: 'error', message: `b${index}` });
+      vi.advanceTimersByTime(RATE_WINDOW_MS);
+      const summaries = sink.snapshot().records.filter(record => /dropped/.test(record.message));
+      expect(summaries.map(record => record.fields?.dropped)).toEqual([5, 3]);
+    });
   });
 
   describe('render', () => {
