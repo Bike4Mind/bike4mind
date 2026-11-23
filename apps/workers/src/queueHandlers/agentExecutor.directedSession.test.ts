@@ -1,6 +1,11 @@
 import { describe, it, expect } from 'vitest';
 import { DIRECTOR_TOOLS, buildDirectorSystemContext } from '@bike4mind/common';
-import { withDirectedSessionTools, withDirectedSystemContext } from './agentExecutor.directedSession';
+import {
+  DIRECTED_NO_TOOL_CHECK,
+  directedFinalCheck,
+  withDirectedSessionTools,
+  withDirectedSystemContext,
+} from './agentExecutor.directedSession';
 
 const compositionId = '64b7f0c2a1b2c3d4e5f60718';
 
@@ -63,5 +68,22 @@ describe('withDirectedSystemContext', () => {
         productionToolsReady: true,
       })
     ).toBeUndefined();
+  });
+});
+
+describe('directedFinalCheck', () => {
+  const directed = { productionCompositionId: compositionId, productionToolsReady: true };
+
+  it('sends a first-iteration answer back once, and lets later answers and tool turns through', async () => {
+    const first = directedFinalCheck(directed, 0);
+    expect(await first?.('final')).toBe(DIRECTED_NO_TOOL_CHECK);
+    expect(await first?.('turn')).toBeNull();
+    expect(await directedFinalCheck(directed, 1)?.('final')).toBeNull();
+  });
+
+  it('is absent for an undirected run, an API-key run or one without the production tools', () => {
+    expect(directedFinalCheck({ productionToolsReady: true }, 0)).toBeUndefined();
+    expect(directedFinalCheck({ ...directed, apiKeyId: 'key1' }, 0)).toBeUndefined();
+    expect(directedFinalCheck({ ...directed, productionToolsReady: false }, 0)).toBeUndefined();
   });
 });

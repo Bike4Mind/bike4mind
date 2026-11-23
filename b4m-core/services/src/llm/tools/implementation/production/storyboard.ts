@@ -213,6 +213,18 @@ function linesDropped(current: readonly StudioShot[], next: readonly ResolvedSho
   });
 }
 
+/** A voice line given to more than one shot, if any. */
+function repeatedLine(shots: readonly ResolvedShot[]): string | undefined {
+  const seen = new Set<string>();
+  for (const shot of shots) {
+    const words = spokenWords(shot.voiceLine);
+    if (!words) continue;
+    if (seen.has(words)) return shot.voiceLine;
+    seen.add(words);
+  }
+  return undefined;
+}
+
 /** True when kept shots appear in a different order relative to each other than they do now. */
 function reordersKeptShots(current: readonly StudioShot[], sources: readonly (StudioShot | undefined)[]): boolean {
   const positions = sources.flatMap(source => (source ? [current.indexOf(source)] : []));
@@ -247,6 +259,13 @@ export const productionStoryboardTool: ToolDefinition = {
               'this run already moved the shots with production_storyboard, so they are now in this order: ' +
                 `${current.shots.map(shot => `${shot.id} "${shot.title}"`).join(', ')}. Calling it again with the ` +
                 'same moves would undo them. Do not move shots again this run; carry on from this order.'
+            );
+          }
+          const repeated = repeatedLine(resolved.map(({ shot }) => shot));
+          if (repeated) {
+            throw new ProductionToolError(
+              `"${repeated}" is the voice line of more than one shot, so it would be said twice. Give each shot its ` +
+                'own line, or no line.'
             );
           }
           const dropped = args.rewriteLines

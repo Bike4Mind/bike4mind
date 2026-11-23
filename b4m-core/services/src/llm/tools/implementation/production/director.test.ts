@@ -541,7 +541,7 @@ describe('production director tools', () => {
     const retimed = {
       ...STORYBOARD,
       shots: STORYBOARD.shots.map((shot, index) =>
-        index === 0 ? { ...shot, durationSeconds: 20 } : { ...shot, voiceLine: 'Shorter.' }
+        index === 0 ? { ...shot, durationSeconds: 20 } : { ...shot, voiceLine: `Shorter ${index}.` }
       ),
       rewriteLines: true,
     };
@@ -560,7 +560,7 @@ describe('production director tools', () => {
     const after = harness.composition().shots;
     expect(after.map(shot => shot.chosenFileId)).toEqual(before.map(shot => shot.chosenFileId));
     expect(after.map(shot => shot.clipFileId)).toEqual(before.map(shot => shot.clipFileId));
-    expect(after.every(shot => shot.voiceLine === 'Shorter.' || shot.id === 'shot-1')).toBe(true);
+    expect(after.slice(1).map(shot => shot.voiceLine)).toEqual(['Shorter 1.', 'Shorter 2.']);
   });
 
   it('keeps the music bed, trimmed, when a re-time shortens the cut', async () => {
@@ -664,6 +664,23 @@ describe('production director tools', () => {
     );
     expect(split.linesRemoved).toBeUndefined();
     expect(split.linesChanged).toHaveLength(2);
+  });
+
+  it('refuses the same voice line on two shots', async () => {
+    await run(productionStoryboardTool, harness, STORYBOARD);
+    const before = harness.composition().shots;
+    expect(
+      await run(productionStoryboardTool, harness, {
+        compositionId: COMPOSITION_ID,
+        shots: [
+          { keep: 'shot-1' },
+          { keep: 'shot-2' },
+          { keep: 'shot-3' },
+          { title: 'End', prompt: 'The bottle on a shelf', durationSeconds: 2, voiceLine: 'Shop now!' },
+        ],
+      })
+    ).toMatch(/^Error: "Shop now!" is the voice line of more than one shot/);
+    expect(harness.composition().shots).toEqual(before);
   });
 
   it('refuses a second reorder in one run, so a repeated swap does not undo the first', async () => {

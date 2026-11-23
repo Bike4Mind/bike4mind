@@ -41,3 +41,22 @@ export function withDirectedSystemContext(
   if (!systemContext || systemContext.trim() === directorContext) return directorContext;
   return `${directorContext}\n\n${systemContext}`;
 }
+
+export const DIRECTED_NO_TOOL_CHECK =
+  'You are answering without having called a production tool this turn, so nothing in the production has changed. ' +
+  'If the user asked for any change, make it now with the production tools and report only what their results ' +
+  'show. If they only asked a question, answer it and say you changed nothing. Never say a change was made, a ' +
+  'voiceover redone or a cut assembled unless a tool result this turn shows it.';
+
+/**
+ * The host's `drainFeedback` for a directed run. A director that answers on the turn's first iteration called no
+ * tool, and has been seen to describe edits it never made; this sends it back once with that fact. Later
+ * iterations follow tool calls (or this check), so they pass. Null for a run that is not directed.
+ */
+export function directedFinalCheck(
+  input: DirectedSessionInput & { productionToolsReady: boolean },
+  iterationIndex: number
+): ((phase: 'turn' | 'final') => Promise<string | null>) | undefined {
+  if (!directedCompositionId(input) || !input.productionToolsReady) return undefined;
+  return async phase => (phase === 'final' && iterationIndex === 0 ? DIRECTED_NO_TOOL_CHECK : null);
+}

@@ -249,7 +249,11 @@ import {
   productionToolsOpen,
 } from './agentExecutor.productionToolConfig';
 import { buildAgentRecentImagesNote, withRecentImagesNote } from './agentExecutor.recentImagesNote';
-import { withDirectedSessionTools, withDirectedSystemContext } from './agentExecutor.directedSession';
+import {
+  directedFinalCheck,
+  withDirectedSessionTools,
+  withDirectedSystemContext,
+} from './agentExecutor.directedSession';
 import { resolveImageJobFiles } from '@server/generations/resolveImageJobFiles';
 import { publishRunGenerationJobs } from './agentExecutor.generationJobs';
 import { resolveMediaRoot } from './agentExecutor.mediaRoot';
@@ -3566,6 +3570,10 @@ async function runExecution(
               // gated call instead of running it, so nothing is spent on a call the user has
               // not approved yet.
               toolGate,
+              drainFeedback: directedFinalCheck(
+                { ...directedSession, productionToolsReady: productionConfig !== null },
+                iterationIndex
+              ),
               signal,
             }),
         },
