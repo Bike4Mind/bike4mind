@@ -371,6 +371,8 @@
     "justAMoment": "Just a moment...",
     "signInToContinueTo": "Sign in to continue to {{product}}",
     "signUpToContinueTo": "Create an account to continue to {{product}}",
+    "signInProductReads": "Sign in and {{product}} reads {{site}}",
+    "signUpProductReads": "Create an account and {{product}} reads {{site}}",
     "fieldErrors": {
       "invalidUsername": "Invalid username",
       "invalidEmail": "Invalid email",
