@@ -228,8 +228,8 @@ describe('SaveFunctionDialog', () => {
     expect(error.textContent).toBe(
       'You already have a tool named beam_midspan_deflection, saved from an artifact that has since been deleted. Replace it with this one?'
     );
-    expect(error.querySelector('.MuiAlert-colorWarning')).toBeTruthy();
-    expect(error.querySelector('.MuiAlert-colorDanger')).toBeNull();
+    expect(error.querySelector('[data-color="warning"]')).toBeTruthy();
+    expect(error.querySelector('[data-color="danger"]')).toBeNull();
     expect(screen.queryByTestId('save-function-dialog-submit-btn')).toBeNull();
     fireEvent.click(screen.getByTestId('save-function-dialog-replace-btn'));
 

@@ -40,7 +40,7 @@ const FINGERPRINT_LENGTH = 12;
 const countLabel = (count: number, noun: string) => (count === 1 ? `1 ${noun}` : `${count} ${noun}s`);
 
 const ErrorAlert = ({ message }: { message: string }) => (
-  <Alert color="danger" variant="solid" sx={dangerAlertSx}>
+  <Alert color="danger" variant="solid" sx={dangerAlertSx} data-color="danger">
     <Typography level="body-sm">{message}</Typography>
   </Alert>
 );
@@ -56,7 +56,7 @@ function SaveError({ error, name }: { error: unknown; name: string }) {
   }
   if (callableFunctionSlugHolder(error)?.sourceDeleted) {
     return (
-      <Alert color="warning" variant="soft">
+      <Alert color="warning" variant="soft" data-color="warning">
         <Typography level="body-sm">
           You already have a tool named {name}, saved from an artifact that has since been deleted. Replace it with this
           one?
