@@ -54,6 +54,7 @@ import { useThreadFind } from './useThreadFind';
 import { SelectionActions } from './SelectionActions';
 import { automaticSummary, displayText, relaySummaryParts } from './relayRows';
 import { MentionedText, SessionLink } from './SessionLink';
+import { ChildReportCard } from './ChildReportCard';
 import { callsIn, roundsOf } from './replyRounds';
 import { skillChipColor, skillSourceLabel } from './skillMenu';
 import { useShowDollarCosts } from './costDisplay';
@@ -565,6 +566,7 @@ const AssistantTurn = memo(function AssistantTurn({
  */
 const SystemTurn = memo(function SystemTurn({ message }: { message: ChatMessage }) {
   if (message.sideChatOf) return <SideChatOpening message={message} from={message.sideChatOf} />;
+  if (message.childReport) return <ChildReportCard message={message} report={message.childReport} />;
   return (
     <Sheet
       variant="soft"

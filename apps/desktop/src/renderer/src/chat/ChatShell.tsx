@@ -101,6 +101,7 @@ import { HeldRelayCard } from './HeldRelayCard';
 import { SessionOpenerContext } from './SessionLink';
 import { clampQuote, quotedMessage } from './quotedReply';
 import { SpawnSuggestionTray } from './SpawnSuggestionTray';
+import { ChildrenStrip } from './ChildrenStrip';
 import { useSpawnLocation } from './spawnLocationSetting';
 import { useHeldRelays } from './useHeldRelays';
 import { TaskDecisionCards, decisionsFor, useTaskDecisions } from './TaskDecisionCards';
@@ -579,6 +580,16 @@ export function ChatShell({
     [activeId, showBrowserPane]
   );
   const artifactsInSession = useMemo(() => sessionArtifacts(conversation.messages), [conversation.messages]);
+  const reportedChildIds = useMemo(
+    () =>
+      new Set(
+        conversation.messages.flatMap(message => {
+          const id = message.reportedChildId ?? message.childReport?.sessionId;
+          return id ? [id] : [];
+        })
+      ),
+    [conversation.messages]
+  );
   const openSessionArtifact = useCallback(
     ({ key, artifact }: SessionArtifact) =>
       openArtifactInSessionBrowser(
@@ -2173,6 +2184,14 @@ export function ChatShell({
                     onDismiss={spawnSuggestions.dismiss}
                     onOpenSession={selectSession}
                     location={spawnLocation}
+                  />
+
+                  <ChildrenStrip
+                    sessions={sessions}
+                    statuses={statuses}
+                    parentId={persistedId}
+                    reportedIds={reportedChildIds}
+                    onOpenSession={selectSession}
                   />
                 </>
               )}

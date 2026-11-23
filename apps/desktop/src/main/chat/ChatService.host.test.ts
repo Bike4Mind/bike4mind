@@ -256,7 +256,7 @@ describe('ChatService app-control tools', () => {
     expect(prompts.every(call => call?.approvalIrreversible === true)).toBe(true);
   });
 
-  it('tells a parent that a spawned session finished, without its output, once the parent is idle', async () => {
+  it('tells a parent that a spawned session finished, with its reply quoted as data, once the parent is idle', async () => {
     const parent = await codeSession(projectA);
     await service.send(parent.id, 'delegate it');
     callTool(await awaitStreamOf('delegate it'), 'c1', 'session_spawn', { prompt: 'go and do it' });
@@ -288,9 +288,10 @@ describe('ChatService app-control tools', () => {
     const stored = (await store.get(parent.id))?.messages ?? [];
     const notice = stored.find(message => message.system);
     expect(notice?.content).toContain('has finished');
-    // Only THAT it finished. Carrying its reply across would put text nobody read into the
-    // parent request as though the user had typed it; session_read is the way to that.
-    expect(notice?.content).not.toContain('Finished: the file is updated.');
+    // The reply rides along fenced as the session's own words, never as the user's.
+    expect(notice?.content).toContain('<child-reply>\nFinished: the file is updated.\n</child-reply>');
+    expect(notice?.content).toContain("not the user's");
+    expect(notice?.display).not.toContain('Finished: the file is updated.');
     expect(notice?.content).toContain('session_read');
     expect(notice?.content).toContain(childId);
     // The user's half of the same report: same event, none of the handles the model needs.

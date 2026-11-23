@@ -750,6 +750,21 @@ export type ChatAutomaticOrigin =
       summary: string;
     };
 
+/** The structured half of a settled child's report, for the thread's card. See ChatMessage.childReport. */
+export interface ChatChildReport {
+  sessionId: string;
+  title: string;
+  outcome: ChildOutcome;
+  /** The child's worktree branch; absent when it shared its parent's folder. */
+  branch?: string;
+  /** Short HEAD of that worktree; absent when git was slow, absent or the child has no worktree. */
+  headSha?: string;
+  /** The child's last reply, cut by childReport.ts cutReply (see replyTruncated). Untrusted text from another session. */
+  reply?: string;
+  /** The reply was cut at the cap; the rest is in the child's own session. */
+  replyTruncated?: boolean;
+}
+
 export interface ChatMessage {
   id: string;
   role: ChatRole;
@@ -846,6 +861,15 @@ export interface ChatMessage {
    * branched from, so the thread can say so and link back. See ChatService.startSideChat.
    */
   sideChatOf?: { sessionId: string; title: string };
+  /**
+   * Set with `system` on the report a settled spawned session leaves in its parent, so the thread
+   * can draw it as a card without parsing `content` (the model's copy). See
+   * ChatService.reportSettledAgent; withheld whole from a hosted parent of a device-local child
+   * (flushChildReports). Absent on reports stored before this field existed, and on waiting notices.
+   */
+  childReport?: ChatChildReport;
+  /** The child this settled report is from. Set even when `childReport` is withheld from a hosted parent. */
+  reportedChildId?: string;
   /**
    * Artifacts parsed out of this reply. Their markup is NOT in `content`, which holds the prose
    * around them; the wire rebuilds it from here (restoreArtifactMarkup) so the model still sees
