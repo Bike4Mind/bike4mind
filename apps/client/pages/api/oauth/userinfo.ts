@@ -7,6 +7,7 @@
 
 import { ApiKeyScope } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
+import { refuseExchangeKey } from '@server/auth/refuseExchangeKey';
 import { releasedIdentityClaims } from '@server/auth/oauthServer';
 
 // OIDC identity endpoint: the one route a relying-party OAuth token is meant to reach. Requires
@@ -18,9 +19,7 @@ const handler = baseApi({
   grandfatherLegacyKeys: true,
 }).get(async (req, res) => {
   // Connected-app keys hold me:read but reach only the routes pinned in exchangeKeyRouteInventory.
-  if (req.apiKeyInfo?.oauthExchangeClientId) {
-    return res.status(403).json({ error: 'Keys minted for a connected app cannot call this route' });
-  }
+  if (refuseExchangeKey(req, res)) return;
   const user = (req as any).user;
 
   if (!user) {

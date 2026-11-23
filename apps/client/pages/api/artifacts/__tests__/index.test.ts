@@ -13,6 +13,7 @@ import '../index';
 const mockRefs = vi.hoisted(() => ({
   getHandler: null as null | ((req: any, res: any) => unknown),
   postHandler: null as null | ((req: any, res: any) => unknown),
+  baseApiOptions: undefined as Record<string, unknown> | undefined,
   listArgs: undefined as unknown[] | undefined,
   createArgs: undefined as unknown[] | undefined,
   settings: {} as Record<string, boolean | undefined>,
@@ -29,7 +30,12 @@ vi.mock('@server/middlewares/baseApi', () => {
       return chain;
     },
   };
-  return { baseApi: () => chain };
+  return {
+    baseApi: (options: Record<string, unknown>) => {
+      mockRefs.baseApiOptions = options;
+      return chain;
+    },
+  };
 });
 
 vi.mock('@bike4mind/database', () => ({
@@ -309,8 +315,15 @@ describe('POST /api/artifacts API key scope posture', () => {
     expect(mockRefs.createArgs).toBeDefined();
   });
 
-  // A key holding a confined scope is never grandfathered, which is how a non-legacy key is
-  // shaped while the legacy window has no cutoff.
+  it('declares the notebook scopes and legacy grandfathering on the door', () => {
+    expect(mockRefs.baseApiOptions).toMatchObject({
+      requiredScopes: ['notebooks:read', 'notebooks:write', 'admin:*'],
+      grandfatherLegacyKeys: true,
+    });
+  });
+
+  // Stand-in for a post-cutoff key: the legacy window has no cutoff yet, and a key holding a
+  // confined scope is never grandfathered.
   it('refuses a non-legacy key holding only notebooks:read and creates nothing', async () => {
     const { req, res } = postWithKey({ scopes: ['notebooks:read', 'embed:chat'] });
     await expect(Promise.resolve(mockRefs.postHandler!(req, res))).rejects.toMatchObject({ statusCode: 403 });

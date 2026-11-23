@@ -21,6 +21,7 @@ const m = vi.hoisted(() => ({
   options: null as unknown,
 }));
 
+vi.mock('@bike4mind/server-utils/auth/sideAppRefusal', () => ({ recordSideAppRefusal: vi.fn() }));
 vi.mock('@server/middlewares/baseApi', () => {
   const chain = {
     get: (fn: (req: unknown, res: unknown) => unknown) => {

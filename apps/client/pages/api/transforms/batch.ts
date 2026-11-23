@@ -1,6 +1,7 @@
 import { resolveRequestBillingOrgId } from '@bike4mind/server-utils/billing/resolveRequestBillingOrgId';
 import { admitRequestCompletion } from '@bike4mind/server-utils/utils/untrustedCompletionQuota';
 import { baseApi } from '@server/middlewares/baseApi';
+import { refuseExchangeKey } from '@server/auth/refuseExchangeKey';
 import { Config } from '@bike4mind/server-utils/utils/config';
 import { transformBatchRepository } from '@bike4mind/database';
 import { AnthropicBatchService, getAvailableModels, type BatchTransformRequest } from '@bike4mind/llm-adapters';
@@ -79,9 +80,7 @@ const handler = baseApi({
   grandfatherLegacyKeys: true,
 }).post(async (req, res) => {
   // Connected-app keys hold ai:generate but reach only the routes pinned in exchangeKeyRouteInventory.
-  if (req.apiKeyInfo?.oauthExchangeClientId) {
-    return res.status(403).json({ error: 'Keys minted for a connected app cannot call this route' });
-  }
+  if (refuseExchangeKey(req, res)) return;
   const body = BatchSubmitSchema.parse(req.body);
   // The provider queues this work; its lifetime is independent of the HTTP request.
   await admitRequestCompletion(req, { holdSlot: false });

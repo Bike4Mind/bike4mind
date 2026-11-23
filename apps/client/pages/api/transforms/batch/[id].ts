@@ -1,4 +1,5 @@
 import { baseApi } from '@server/middlewares/baseApi';
+import { refuseExchangeKey } from '@server/auth/refuseExchangeKey';
 import { Config } from '@bike4mind/server-utils/utils/config';
 import { transformBatchRepository, usageEventRepository } from '@bike4mind/database';
 import { NotFoundError, usdToCreditsStochastic } from '@bike4mind/utils';
@@ -23,9 +24,7 @@ const handler = baseApi({
   grandfatherLegacyKeys: true,
 }).get(async (req, res) => {
   // Connected-app keys hold ai:generate but reach only the routes pinned in exchangeKeyRouteInventory.
-  if (req.apiKeyInfo?.oauthExchangeClientId) {
-    return res.status(403).json({ error: 'Keys minted for a connected app cannot call this route' });
-  }
+  if (refuseExchangeKey(req, res)) return;
   const anthropicBatchId = String(req.query.id ?? '');
   if (!anthropicBatchId) {
     throw new NotFoundError('Batch not found');

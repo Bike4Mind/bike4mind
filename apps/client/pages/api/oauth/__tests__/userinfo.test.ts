@@ -9,7 +9,9 @@ import { ApiKeyScope } from '@bike4mind/common';
  * before scoped OAuth (the "first-party unchanged" contract).
  */
 
-const mockRefs = vi.hoisted(() => ({ options: null as unknown }));
+const mockRefs = vi.hoisted(() => ({ options: null as unknown, recordRefusal: vi.fn() }));
+
+vi.mock('@bike4mind/server-utils/auth/sideAppRefusal', () => ({ recordSideAppRefusal: mockRefs.recordRefusal }));
 
 vi.mock('@server/middlewares/baseApi', () => ({
   baseApi: (options: unknown) => {
@@ -98,6 +100,7 @@ describe('GET /api/oauth/userinfo', () => {
     await promise;
     expect(res._getStatusCode()).toBe(403);
     expect(res._getData()).not.toContain('a@b.co');
+    expect(mockRefs.recordRefusal).toHaveBeenCalledWith(expect.objectContaining({ clientId: 'client-1', status: 403 }));
   });
 
   it('still returns claims for an ordinary API key', async () => {
