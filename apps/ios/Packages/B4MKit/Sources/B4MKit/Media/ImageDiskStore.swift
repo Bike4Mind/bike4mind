@@ -49,10 +49,26 @@ public final class ImageDiskStore: @unchecked Sendable {
     lock.withLock { try? fileManager.removeItem(at: fileURL(for: key)) }
   }
 
+  /// Runs on the main thread at sign-out, so the directory is moved aside under the lock (a rename on the same
+  /// volume) and deleted in the background; a new session's writes land in a fresh directory the delete never sees.
   public func removeAll() {
-    lock.withLock {
+    let trash: URL? = lock.withLock {
       _generation += 1
-      try? fileManager.removeItem(at: directory)
+      guard fileManager.fileExists(atPath: directory.path) else { return nil }
+      let trash = fileManager.temporaryDirectory.appendingPathComponent(
+        "ImageDiskStore-\(UUID().uuidString)", isDirectory: true)
+      do {
+        try fileManager.moveItem(at: directory, to: trash)
+        return trash
+      } catch {
+        // The move can fail (e.g. a different volume); delete in place so the wipe still happens.
+        try? fileManager.removeItem(at: directory)
+        return nil
+      }
+    }
+    guard let trash else { return }
+    DispatchQueue.global(qos: .utility).async {
+      try? FileManager.default.removeItem(at: trash)
     }
   }
 
