@@ -39,6 +39,10 @@ type SigningKey = {
 let sharedKey: SigningKey | null = null;
 let sharedKeyLoad: Promise<SigningKey> | null = null;
 let instanceFallbackKey: SigningKey | null = null;
+let storeRetryAfter = 0;
+
+/** After a failed store load, how long an instance keeps its stopgap key before trying again (ms). */
+const STORE_RETRY_BACKOFF_MS = 60_000;
 
 function toSigningKey(privateKeyPem: string, instanceLocal = false): SigningKey {
   const publicKey = crypto
@@ -95,18 +99,23 @@ async function getSigningKey(): Promise<SigningKey> {
     return sharedKey;
   }
 
+  // A failing store (no encryption key, an undecryptable row) would otherwise cost a key
+  // generation and an error log on every OAuth call.
+  if (instanceFallbackKey && Date.now() < storeRetryAfter) return instanceFallbackKey;
+
   // One store round trip per instance, however many requests arrive while it is in flight.
-  sharedKeyLoad ??= loadOrCreateSharedPrivateKey().then(privateKey => (sharedKey = toSigningKey(privateKey)));
-  try {
-    return await sharedKeyLoad;
-  } catch (error) {
-    // Keep signing with an instance-local key rather than fail the request; the next call retries
-    // the store, since only a stored key is cached for good.
-    sharedKeyLoad = null;
-    console.error('[OAuthServer] Could not load the shared OAuth signing key; using an instance-local key.', error);
-    instanceFallbackKey ??= toSigningKey(generatePrivateKeyPem(), true);
-    return instanceFallbackKey;
-  }
+  sharedKeyLoad ??= loadOrCreateSharedPrivateKey()
+    .then(privateKey => (sharedKey = toSigningKey(privateKey)))
+    .catch((error: unknown) => {
+      // Keep signing with an instance-local key rather than fail the request; only a stored key
+      // is cached for good, so the store is retried once the backoff passes.
+      sharedKeyLoad = null;
+      storeRetryAfter = Date.now() + STORE_RETRY_BACKOFF_MS;
+      console.error('[OAuthServer] Could not load the shared OAuth signing key; using an instance-local key.', error);
+      instanceFallbackKey ??= toSigningKey(generatePrivateKeyPem(), true);
+      return instanceFallbackKey;
+    });
+  return sharedKeyLoad;
 }
 
 // ─── JWKS ─────────────────────────────────────────────────────────────────────

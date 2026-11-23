@@ -298,22 +298,27 @@ describe('signing key without OAUTH_RSA_PRIVATE_KEY', () => {
     expect(jwt.verify(token, winner.publicKey, { algorithms: ['RS256'] })).toMatchObject({ sub: 'u1' });
   });
 
-  it('still signs and verifies on this instance when the store is unavailable, then retries it', async () => {
+  it('still signs and verifies on this instance when the store is unavailable, then retries it after a backoff', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     try {
       const instance = await freshInstance();
-      store.findBySecretName.mockRejectedValueOnce(new Error('db down')).mockRejectedValueOnce(new Error('db down'));
+      store.findBySecretName.mockRejectedValueOnce(new Error('db down'));
 
       const token = await instance.generateIdToken(claims);
-      expect(errorSpy).toHaveBeenCalled();
       expect(await instance.verifyIdTokenHint(token, 'c1')).toEqual({ sub: 'u1', clientId: 'c1' });
-      expect(store.rows.has(GENERATED_SIGNING_KEY_SECRET_NAME)).toBe(false);
+      expect((await instance.getJwks()).cacheable).toBe(false);
+      expect(store.findBySecretName).toHaveBeenCalledTimes(1);
+      expect(errorSpy).toHaveBeenCalledTimes(1);
 
+      vi.advanceTimersByTime(60_000);
       const recovered = await instance.getJwks();
+      expect(store.findBySecretName).toHaveBeenCalledTimes(2);
       expect(store.rows.has(GENERATED_SIGNING_KEY_SECRET_NAME)).toBe(true);
       expect(recovered.cacheable).toBe(true);
     } finally {
       errorSpy.mockRestore();
+      vi.useRealTimers();
     }
   });
 
