@@ -10,7 +10,7 @@ on:
   push:
     branches: [main]
   pull_request:
-    types: [opened, synchronize, reopened, ready_for_review]
+    types: [opened, synchronize, reopened, ready_for_review, labeled, unlabeled]
     # NOTE: no workflow-level paths-ignore. The `changes` gate below evaluates
     # the per-PR (merge-base) diff and skips the build/test legs on non-deployable
     # changes, while still reporting the required CI Complete/Run Tests checks (a
@@ -24,9 +24,11 @@ env:
 # concurrency (jobs were waiting ~15 min for a runner while executing in ~3 min).
 # PR-only: pushes to main are NEVER cancelled.
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}-${{ (github.event.action == 'labeled' || github.event.action == 'unlabeled') && github.event.label.name != 'ci:full' && github.run_id || 'tests' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' && (github.event.action != 'labeled' && github.event.action != 'unlabeled' || github.event.label.name == 'ci:full') }}
 
+# Ignored label runs use separate check names so their skipped jobs cannot replace
+# results from real validation. Keep canonical names for source and ci:full events.
 jobs:
   # Changes gate: evaluate the changeset that fired this run (whole-PR
   # merge-base diff on pull_request, push range on push) and emit three
@@ -45,15 +47,18 @@ jobs:
   # re-runs the whole workflow on the real signals. The secret and leak-shape scans
   # are ungated and still run on drafts.
   changes:
+    name: ${{ (github.event.action == 'labeled' || github.event.action == 'unlabeled') && github.event.label.name != 'ci:full' && 'Ignored label / ' || '' }}changes
+    if: github.event.action != 'labeled' && github.event.action != 'unlabeled' || github.event.label.name == 'ci:full'
     # Root of the whole DAG.
     runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
     permissions:
       contents: read
     outputs:
-      deployable: ${{ github.event.pull_request.draft == true && 'false' || steps.filter.outputs.deployable }}
+      deployable: ${{ github.event.pull_request.draft == true && 'false' || contains(github.event.pull_request.labels.*.name, 'ci:full') && 'true' || steps.filter.outputs.deployable }}
       docs-changed: ${{ github.event.pull_request.draft == true && 'false' || steps.filter.outputs.docs-changed }}
       published-changed: ${{ steps.filter.outputs.published-changed }}
       changed-files: ${{ steps.changed-files.outputs.files }}
+      related-safe: ${{ steps.changed-files.outputs.related-safe }}
     steps:
       - uses: actions/checkout@v6
         with:
@@ -71,17 +76,8 @@ jobs:
         env:
           PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
           PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-        run: |
-          files=''
-          if merge_base=$(git merge-base "$PR_BASE_SHA" "$PR_HEAD_SHA") \
-            && list=$(git -c core.quotePath=false diff --no-renames --name-only "$merge_base" "$PR_HEAD_SHA"); then
-            count=$(printf '%s' "$list" | grep -c '' || true)
-            echo "${count} file(s) changed since ${merge_base}"
-            if [ "$count" -le 3000 ]; then
-              files=$(printf '%s\n' "$list" | jq -Rsc 'split("\n") | map(select(length > 0))')
-            fi
-          fi
-          echo "files=${files}" >> "$GITHUB_OUTPUT"
+          FORCE_FULL: ${{ contains(github.event.pull_request.labels.*.name, 'ci:full') }}
+        run: node scripts/ci-related-tests.mjs diff
 
   # Build the core packages once and publish their dist/ as an artifact. The
   # gating jobs below (lint, the test shards - one of which also carries the
@@ -93,7 +89,7 @@ jobs:
     needs: changes
     if: needs.changes.outputs.deployable == 'true'
     runs-on: ${{ vars.RUNNER_LABEL_MEDIUM || 'ubuntu-latest-m' }}
-    name: Core Build
+    name: ${{ (github.event.action == 'labeled' || github.event.action == 'unlabeled') && github.event.label.name != 'ci:full' && 'Ignored label / ' || '' }}Core Build
     timeout-minutes: 15
     permissions:
       contents: read
@@ -148,6 +144,7 @@ jobs:
         continue-on-error: true
         env:
           CHANGED_FILES: ${{ needs.changes.outputs.changed-files }}
+          RELATED_SAFE: ${{ needs.changes.outputs.related-safe }}
         run: node scripts/ci-affected-tests.mjs plan
 
       - name: Build bike4mind core packages
@@ -182,7 +179,7 @@ jobs:
     needs: changes
     if: needs.changes.outputs.deployable == 'true'
     runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
-    name: Repo Guards
+    name: ${{ (github.event.action == 'labeled' || github.event.action == 'unlabeled') && github.event.label.name != 'ci:full' && 'Ignored label / ' || '' }}Repo Guards
     timeout-minutes: 10
     permissions:
       contents: read
@@ -305,7 +302,7 @@ jobs:
   # paths a pasted credential lands in. checkSecretScanJobWired.test.ts pins this.
   secret-scan:
     runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
-    name: Secret Scan
+    name: ${{ (github.event.action == 'labeled' || github.event.action == 'unlabeled') && github.event.label.name != 'ci:full' && 'Ignored label / ' || '' }}Secret Scan
     timeout-minutes: 10
     permissions:
       contents: read
@@ -362,7 +359,7 @@ jobs:
   # is skipped and the Restricted Terms workflow remains the authority for it.
   leak-shapes:
     runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
-    name: Leak Shapes
+    name: ${{ (github.event.action == 'labeled' || github.event.action == 'unlabeled') && github.event.label.name != 'ci:full' && 'Ignored label / ' || '' }}Leak Shapes
     timeout-minutes: 10
     permissions:
       contents: read
@@ -391,7 +388,7 @@ jobs:
     # TypeScript program, so ESLint needs 3-4 GB of heap - past Node's RAM-derived default on a
     # 2-core runner. The heap is pinned in the root lint:* scripts, not inherited from the runner.
     runs-on: ${{ vars.RUNNER_LABEL_MEDIUM || 'ubuntu-latest-m' }}
-    name: Lint
+    name: ${{ (github.event.action == 'labeled' || github.event.action == 'unlabeled') && github.event.label.name != 'ci:full' && 'Ignored label / ' || '' }}Lint
     timeout-minutes: 15
     permissions:
       contents: read
@@ -463,7 +460,7 @@ jobs:
     needs: changes
     if: needs.changes.outputs.deployable == 'true'
     runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
-    name: OpenAPI Spec
+    name: ${{ (github.event.action == 'labeled' || github.event.action == 'unlabeled') && github.event.label.name != 'ci:full' && 'Ignored label / ' || '' }}OpenAPI Spec
     timeout-minutes: 10
     permissions:
       contents: read
@@ -550,6 +547,10 @@ jobs:
   # selection-code changes test everything, as do push runs and any failure to decide. A leg left
   # with nothing skips its setup and passes in seconds. misc (root-level and repo-scan tests) and
   # the typecheck leg always run.
+  # Client-only source PRs additionally use Vitest's related graph in both client lanes,
+  # retaining the unit shards. Reader/dynamic-import modules seed conservative inclusion.
+  # External files, deletes, config/setup/mocks, unknown graph edges and ci:full keep full
+  # client runs. Related runs bypass turbo entirely; main/push still tests the full graph.
   # The `test` job below aggregates these shards into the required "Run Tests"
   # status check.
   test-shards:
@@ -562,7 +563,7 @@ jobs:
     # leg here marked `tier: light` (none today: the integration lanes ride medium legs).
     # Size full-pool worker budgets for 4 cores.
     runs-on: ${{ matrix.shard.tier == 'light' && (vars.RUNNER_LABEL || 'ubuntu-latest-m') || (vars.RUNNER_LABEL_MEDIUM || 'ubuntu-latest-m') }}
-    name: Run Tests (${{ matrix.shard.name }})
+    name: ${{ (github.event.action == 'labeled' || github.event.action == 'unlabeled') && github.event.label.name != 'ci:full' && 'Ignored label / ' || '' }}Run Tests (${{ matrix.shard.name }})
     # Hard ceiling, not a budget: it costs nothing when a shard finishes early, and its only
     # job is to kill a genuine hang. It was 20, which the client shard's own runtime drifted
     # into - the job was cancelled during cleanup AFTER every test had passed, so a green
@@ -839,6 +840,7 @@ jobs:
           SELECTED_FILTER: ${{ steps.select.outputs.unit-filter }}
           SHARD_SCRIPT: 'test'
           SHARD_ARGS: ${{ matrix.shard.args }}
+          CLIENT_RELATED: ${{ steps.select.outputs.client-related }}
         run: |
           # Split each env var on whitespace into a real argv array, so every token arrives at
           # pnpm as its own argument. The matrix values stay in `env:` and are never interpolated
@@ -868,6 +870,10 @@ jobs:
           # packages (database, scripts) ended up alone on a pool capped at a quarter of the box.
           # Serial with full pools measured faster on the data and misc legs, with no
           # oversubscription by construction. vitestWorkerBudget.test.ts pins this.
+          if [ "$SELECTED_FILTER" = '--filter @bike4mind/client' ] && [ "$CLIENT_RELATED" != '{"mode":"full"}' ]; then
+            node scripts/ci-related-tests.mjs run
+            exit $?
+          fi
           node scripts/turbo-test-cache.mjs context "$SHARD_SCRIPT" "${filter_args[@]}"
           status=0
           pnpm exec turbo run "$SHARD_SCRIPT" "${filter_args[@]}" --only --concurrency=1 --continue=always --env-mode=loose --ui=stream --cache-dir=.turbo/cache --summarize --output-logs=new-only -- "${script_args[@]}" || status=$?
@@ -889,6 +895,7 @@ jobs:
           SHARD_FILTER: ${{ matrix.shard.integration-filter }}
           SELECTED_FILTER: ${{ steps.select.outputs.integration-filter }}
           SHARD_SCRIPT: 'test:integration'
+          CLIENT_RELATED: ${{ steps.select.outputs.client-related }}
         run: |
           read -ra shard_filter_args <<< "$SHARD_FILTER"
           read -ra filter_args <<< "$SELECTED_FILTER"
@@ -897,6 +904,10 @@ jobs:
           if [ "$matched" -eq 0 ]; then
             echo "::error title=Empty test shard::The ${SHARD_NAME} leg's integration-filter matches no workspace package, so it would run no tests. Check the --filter tokens in the matrix."
             exit 1
+          fi
+          if [ "$SELECTED_FILTER" = '--filter @bike4mind/client' ] && [ "$CLIENT_RELATED" != '{"mode":"full"}' ]; then
+            node scripts/ci-related-tests.mjs run
+            exit $?
           fi
           node scripts/turbo-test-cache.mjs context "$SHARD_SCRIPT" "${filter_args[@]}"
           status=0
@@ -1024,7 +1035,7 @@ jobs:
   # names ("Run Tests (client 1/3)", …), so this job re-exposes the exact required
   # context and passes only when every shard succeeded.
   test:
-    name: Run Tests
+    name: ${{ (github.event.action == 'labeled' || github.event.action == 'unlabeled') && github.event.label.name != 'ci:full' && 'Ignored label / ' || '' }}Run Tests
     needs: [changes, test-shards]
     # Run whenever the gate said deployable (!cancelled() within that, so a failed
     # shard is still caught by the assertion below). On a non-deployable run the
@@ -1059,7 +1070,7 @@ jobs:
   # can't slip through by silently skipping. This is the gate that protects the
   # packages/cli/src/index.tsx decomposition (#8554).
   cli-e2e:
-    name: CLI e2e harness
+    name: ${{ (github.event.action == 'labeled' || github.event.action == 'unlabeled') && github.event.label.name != 'ci:full' && 'Ignored label / ' || '' }}CLI e2e harness
     needs: core-build
     # Standard runner: builds the CLI and runs the bundle-baseline harness — a
     # light, I/O-bound leg. Off the capped ubuntu-latest-m pool to free a slot.
@@ -1166,7 +1177,7 @@ jobs:
   # the help guards could go missing on a green docs PR. The fallback build covers that case.
   # Keep the block scalar: a bare `if: !cancelled() && ...` is a YAML tag indicator, not text.
   help-docs:
-    name: Help Docs Guards
+    name: ${{ (github.event.action == 'labeled' || github.event.action == 'unlabeled') && github.event.label.name != 'ci:full' && 'Ignored label / ' || '' }}Help Docs Guards
     needs: [changes, core-build]
     if: |
       !cancelled() &&
@@ -1243,7 +1254,7 @@ jobs:
   # Type-checks the packed @bike4mind/* declarations as a consumer would (see
   # scripts/check-published-dts.mjs). Needs core-build for the dist/ it packs.
   published-dts:
-    name: Published Declarations
+    name: ${{ (github.event.action == 'labeled' || github.event.action == 'unlabeled') && github.event.label.name != 'ci:full' && 'Ignored label / ' || '' }}Published Declarations
     needs: [changes, core-build]
     if: needs.changes.outputs.published-changed == 'true'
     runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
@@ -1308,7 +1319,7 @@ jobs:
         run: node scripts/check-published-dts.mjs
 
   verify-docs-build:
-    name: Verify Docs Build
+    name: ${{ (github.event.action == 'labeled' || github.event.action == 'unlabeled') && github.event.label.name != 'ci:full' && 'Ignored label / ' || '' }}Verify Docs Build
     needs: changes
     if: needs.changes.outputs.docs-changed == 'true'
     uses: ./.github/workflows/_verify-docs-build.yml
@@ -1321,7 +1332,7 @@ jobs:
   # required status that only some PRs ever receive would block every other PR. Push runs skip it
   # (the PR head was already gated). Fails closed if the status never arrives.
   docs-scan-gate:
-    name: Docs Sensitive Scan
+    name: ${{ (github.event.action == 'labeled' || github.event.action == 'unlabeled') && github.event.label.name != 'ci:full' && 'Ignored label / ' || '' }}Docs Sensitive Scan
     needs: changes
     if: needs.changes.outputs.docs-changed == 'true' && github.event_name == 'pull_request'
     runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
@@ -1385,7 +1396,7 @@ jobs:
   # job hangs every PR.
   # =====================================================
   ci-complete:
-    name: CI Complete
+    name: ${{ (github.event.action == 'labeled' || github.event.action == 'unlabeled') && github.event.label.name != 'ci:full' && 'Ignored label / ' || '' }}CI Complete
     needs:
       - changes
       - core-build

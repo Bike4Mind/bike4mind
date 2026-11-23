@@ -17,6 +17,7 @@ import { PipelineTimer } from '@bike4mind/llm-adapters';
 import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { adminRoleWithheldFor, requesterScopedUsers } from '@bike4mind/server-utils/auth/apiKeyAdminScope';
 import { resolveUserRateLimitPerMin } from '@bike4mind/server-utils/utils/userRateTier';
+import { resolveCallableFunctionsEnabled } from '@bike4mind/server-utils/callableFunctions/access';
 import { buildAudioToolJobs } from '@bike4mind/server-utils/generationJobs/audioJobWiring';
 import { resolveCallerDefaultModel } from '@server/utils/callerModelList';
 import {
@@ -376,6 +377,7 @@ async function handleChat(
               imageConfig: undefined,
             },
             logger: req.logger,
+            callableFunctionsResolver: () => resolveCallableFunctionsEnabled(req.user),
             // Pass quest from invoke to skip redundant DB read
             prefetchedQuest: quest,
             // Pass session from invoke to skip redundant DB read

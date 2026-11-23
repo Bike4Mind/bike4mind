@@ -3,7 +3,7 @@ import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { workItemRepository } from '@bike4mind/database';
 import { IWorkItem, WorkItemPatch } from '@bike4mind/common';
 import { NotFoundError } from '@bike4mind/utils';
-import { verifyOrgAccess } from '@bike4mind/server-utils/utils/orgAccess';
+import { verifyOrgPermission } from '@bike4mind/server-utils/utils/orgAccess';
 import { assertDependenciesUsable } from '@server/utils/workItemDependencies';
 import {
   validateWorkItemDependencies,
@@ -42,7 +42,11 @@ const handler = baseApi()
     if (body.description !== undefined) patch.description = validateWorkItemDescription(body.description);
 
     if (body.organizationId !== undefined) {
-      await verifyOrgAccess({ id: req.user!.id, isAdmin: Boolean(req.user!.isAdmin) }, body.organizationId);
+      await verifyOrgPermission(
+        { id: req.user!.id, isAdmin: Boolean(req.user!.isAdmin) },
+        body.organizationId,
+        'manageContent'
+      );
       patch.organizationId = body.organizationId;
     }
 

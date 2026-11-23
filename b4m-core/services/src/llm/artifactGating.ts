@@ -3,6 +3,7 @@ import {
   resolvePythonArtifactDataOrigins,
   withPythonDataOrigins,
 } from '@bike4mind/common';
+import type { Logger } from '@bike4mind/observability';
 import { registrableDomain } from '@bike4mind/utils/registrableDomain';
 
 /**
@@ -55,6 +56,24 @@ export function withArtifactDataOrigins(
   reservedHosts: readonly string[] = dataOriginReservedHosts()
 ): string {
   return withPythonDataOrigins(prompt, resolvePythonArtifactDataOrigins(storedDataOrigins, reservedHosts));
+}
+
+/**
+ * Whether the callable-function note joins the artifact prompt, from the host's resolver (server-utils
+ * `resolveCallableFunctionsEnabled`). No resolver reads as off, and so does a failed read: the note must not fail
+ * the turn. Shared by the chat path and the agent executor.
+ */
+export async function resolveCallableFunctionsSafely(
+  resolve: (() => Promise<boolean>) | undefined,
+  logger: Pick<Logger, 'warn'>
+): Promise<boolean> {
+  if (!resolve) return false;
+  try {
+    return (await resolve()) === true;
+  } catch (error) {
+    logger.warn('Callable functions note left out: the setting could not be read', error);
+    return false;
+  }
 }
 
 /**

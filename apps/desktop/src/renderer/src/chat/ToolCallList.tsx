@@ -22,6 +22,8 @@ import { WEB_FETCH_TOOL_NAME } from '@shared/webSearch';
 import { ApprovalChoiceButtons } from './ApprovalChoice';
 import { describeApproval } from './approvalAttribution';
 import { ClippedBlock } from './ClippedBlock';
+import { useRevealFindTarget } from './ThreadFindContext';
+import { toolScope } from './threadFind';
 import { BLOCK_COPY_BUTTON_CLASS, CopyMessageButton, revealBlockCopyButtonSx } from './CopyMessageButton';
 import { DiffView } from './DiffView';
 import { DirectoryRequestCard } from './DirectoryRequestCard';
@@ -426,6 +428,12 @@ function ToolCallDetail({ call }: { call: ChatToolCall }) {
   // The list stands in for the raw text it was parsed from; the model still got that text.
   const listsHits = useWebSearchHits(call).length > 0;
   const output = call.error ?? call.preview ?? call.progress;
+  // Expanding the clip, not just scrolling inside it, so the match is read in its context.
+  const [revealOutput, setRevealOutput] = useState(0);
+  useRevealFindTarget(
+    target => target.callId === call.id && target.part === 'output',
+    target => setRevealOutput(target.seq)
+  );
 
   const asked = call.name === ASK_USER_TOOL_NAME ? parseQuestions(call.input.questions) : null;
   if (asked && 'questions' in asked && call.status === 'done') {
@@ -457,6 +465,7 @@ function ToolCallDetail({ call }: { call: ChatToolCall }) {
             textColor="text.tertiary"
             sx={{ whiteSpace: 'pre-wrap', wordBreak: 'break-all', flex: 1, minWidth: 0 }}
             data-testid="chat-tool-detail-input"
+            data-find-scope={toolScope(call.id, 'input')}
           >
             {argument}
           </Typography>
@@ -488,13 +497,19 @@ function ToolCallDetail({ call }: { call: ChatToolCall }) {
       {!listsHits && (
         <Stack direction="row" spacing={0.5} alignItems="flex-start" sx={{ mt: 0.5, ...revealBlockCopyButtonSx }}>
           <Box sx={{ flex: 1, minWidth: 0 }}>
-            <ClippedBlock maxHeight={260} measureKey={output ?? ''} testId="chat-tool-detail-output-clip">
+            <ClippedBlock
+              maxHeight={260}
+              measureKey={output ?? ''}
+              testId="chat-tool-detail-output-clip"
+              revealKey={revealOutput}
+            >
               <Typography
                 level="body-xs"
                 fontFamily="monospace"
                 sx={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}
                 textColor={call.error && !isModelRequestRefusal(call) ? 'danger.400' : 'text.tertiary'}
                 data-testid={call.error ? 'chat-tool-detail-error' : 'chat-tool-detail-result'}
+                data-find-scope={toolScope(call.id, 'output')}
               >
                 {output ?? 'Running...'}
               </Typography>
@@ -553,6 +568,10 @@ function DiffStat({ totals }: { totals: DiffTotals }) {
  */
 function ToolCallEntry({ call, first, onMove }: { call: ChatToolCall; first: boolean; onMove?: MoveCallToBackground }) {
   const [open, setOpen] = useState(false);
+  useRevealFindTarget(
+    target => target.callId === call.id,
+    () => setOpen(true)
+  );
   const totals = diffTotals([call]);
 
   return (
@@ -620,6 +639,10 @@ function ToolCallEntry({ call, first, onMove }: { call: ChatToolCall; first: boo
  */
 function ToolGroupRow({ group, onMove }: { group: ToolCallGroup; onMove?: MoveCallToBackground }) {
   const [open, setOpen] = useState(false);
+  useRevealFindTarget(
+    target => group.calls.some(call => call.id === target.callId),
+    () => setOpen(true)
+  );
   const running = group.status === 'running';
   const single = group.calls.length === 1;
   // On the summary only when there is no ambiguity about which command it would move; a group

@@ -10,6 +10,8 @@ import {
   needsSignIn,
   offeredToolCount,
   toggleComposerConnection,
+  toolHintLabels,
+  toolTitle,
   toReviewEntries,
   type McpConnectionTool,
 } from './customMcpModel';
@@ -122,6 +124,25 @@ describe('composerConnections', () => {
 
     expect(composerConnections(all).map(c => c.id)).toEqual(['shared']);
     expect(connectionsFor(all, undefined).map(c => c.id)).toEqual(['mine']);
+  });
+});
+
+describe('connector tool list', () => {
+  it('labels a contradictory read-only claim as a write, the way the review does', () => {
+    expect(toolHintLabels(tool({ annotations: { readOnlyHint: true, destructiveHint: true } }))).toEqual([
+      { label: 'Write', color: 'warning' },
+      { label: 'May delete or overwrite', color: 'neutral' },
+    ]);
+    expect(toolHintLabels(tool({ annotations: { readOnlyHint: true, idempotentHint: true } }))).toEqual([
+      { label: 'Read', color: 'neutral' },
+    ]);
+    expect(toolHintLabels(tool())).toEqual([{ label: 'Write', color: 'warning' }]);
+  });
+
+  it("prefers the tool's own title, then the annotation title", () => {
+    expect(toolTitle(tool({ title: 'Own', annotations: { title: 'Hint' } }))).toBe('Own');
+    expect(toolTitle(tool({ annotations: { title: 'Hint' } }))).toBe('Hint');
+    expect(toolTitle(tool({ title: '' }))).toBeUndefined();
   });
 });
 

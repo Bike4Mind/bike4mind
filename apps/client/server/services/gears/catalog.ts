@@ -31,6 +31,7 @@ import {
   researchDataRepository,
 } from '@bike4mind/database';
 import { creditService } from '@bike4mind/services';
+import { hasVerifiedProjectCollaborator } from './socialEligibility';
 
 /**
  * The gear catalog and its evaluation, shared by GET /api/gears/status, POST
@@ -156,16 +157,13 @@ const GEARS: GearDef[] = [
     check: async ({ userId }) => !!(await FabFile.exists({ userId })),
   },
   {
-    // Nav slot unlocks on publish; the credit payout waits for a SIGNED-IN NON-OWNER
-    // view (anti-farm: "someone saw your work", not "you clicked publish"). An anonymous
-    // view never counts - it could be the owner. Counted by the serve route for a request
-    // that carries a credential, and for bundle pages by /api/publish/view.
+    // Publishing opens the destination; its reward requires a verified non-owner view.
     key: 'published',
     credits: 5000,
     kind: 'destination',
     check: async ({ userId }) => !!(await PublishedArtifact.exists({ ownerId: userId, deletedAt: null })),
     rewardCheck: async ({ userId }) =>
-      !!(await PublishedArtifact.exists({ ownerId: userId, deletedAt: null, externalViewCount: { $gte: 1 } })),
+      !!(await PublishedArtifact.exists({ ownerId: userId, deletedAt: null, verifiedExternalViewCount: { $gte: 1 } })),
   },
   {
     // Derived, not stamped: a channel is the durable trace of using Hearth, and
@@ -219,11 +217,11 @@ const GEARS: GearDef[] = [
     check: async ({ userId }) => !!(await Artifact.exists({ userId, type: 'python' })),
   },
   {
-    // A project with at least one collaborator.
+    // A live owned project with a distinct, verified collaborator.
     key: 'shareproject',
     credits: 5000,
     kind: 'skill',
-    check: async ({ userId }) => !!(await Project.exists({ userId, 'users.0': { $exists: true } })),
+    check: ({ userId }) => hasVerifiedProjectCollaborator(userId),
   },
   {
     key: 'questmaster',

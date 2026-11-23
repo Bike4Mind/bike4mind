@@ -8,10 +8,11 @@ import { EventEmitter } from 'events';
 import { createMocks } from 'node-mocks-http';
 import type { NextApiRequest, NextApiResponse } from 'next';
 
-const { mockResolve, perUserBuckets, limiter } = vi.hoisted(() => ({
+const { mockResolve, perUserBuckets, limiter, session } = vi.hoisted(() => ({
   mockResolve: vi.fn(),
   perUserBuckets: [] as string[],
   limiter: { limited: false },
+  session: { attachUser: true },
 }));
 
 vi.mock('@bike4mind/server-utils/callableFunctions/access', () => ({
@@ -45,7 +46,7 @@ vi.mock('@server/auth/auth', async orig => {
       next: () => void
     ) => {
       if (!req.headers?.authorization) return res.status(401).json({ error: 'Unauthorized' });
-      if (!req.user) req.user = JWT_USER;
+      if (session.attachUser && !req.user) req.user = JWT_USER;
       next();
     },
   };
@@ -73,10 +74,20 @@ describe('GET /api/callable-functions/status', () => {
     mockResolve.mockReset();
     mockResolve.mockResolvedValue(false);
     limiter.limited = false;
+    session.attachUser = true;
   });
 
   it('answers 401 without a session and never reads the setting', async () => {
     const { res, call } = fire();
+    await call();
+
+    expect(res._getStatusCode()).toBe(401);
+    expect(mockResolve).not.toHaveBeenCalled();
+  });
+
+  it('answers 401 if the session middleware leaves the request without an identity', async () => {
+    session.attachUser = false;
+    const { res, call } = fire('live-jwt');
     await call();
 
     expect(res._getStatusCode()).toBe(401);

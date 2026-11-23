@@ -50,6 +50,7 @@ export const useFeedbackFilters = (): UseFeedbackFiltersReturn => {
   const {
     statusFilters,
     organizations: selectedOrganizations,
+    userId,
     subject,
     types,
     received,
@@ -86,6 +87,8 @@ export const useFeedbackFilters = (): UseFeedbackFiltersReturn => {
     [updateView]
   );
 
+  const setUserId = useCallback((next: string | undefined) => updateView({ userId: next, page: 1 }), [updateView]);
+
   const setSubject = useCallback(
     (next: FeedbackSubject | undefined) => updateView({ subject: next, page: 1 }),
     [updateView]
@@ -118,6 +121,7 @@ export const useFeedbackFilters = (): UseFeedbackFiltersReturn => {
         subject: DEFAULT_FEEDBACK_VIEW.subject,
         types: DEFAULT_FEEDBACK_VIEW.types,
         organizations: DEFAULT_FEEDBACK_VIEW.organizations,
+        userId: DEFAULT_FEEDBACK_VIEW.userId,
         received: DEFAULT_FEEDBACK_VIEW.received,
         createdFrom: DEFAULT_FEEDBACK_VIEW.createdFrom,
         createdTo: DEFAULT_FEEDBACK_VIEW.createdTo,
@@ -143,6 +147,7 @@ export const useFeedbackFilters = (): UseFeedbackFiltersReturn => {
     searchTerm,
     statusFilters,
     selectedOrganizations,
+    userId,
     subject,
     resolution,
     types,
@@ -162,6 +167,7 @@ export const useFeedbackFilters = (): UseFeedbackFiltersReturn => {
       // and `status` absent is the server's "any status".
       ...(statuses.length > 0 ? { status: statuses } : {}),
       ...(selectedOrganizations.length > 0 ? { organization: selectedOrganizations } : {}),
+      ...(userId ? { userId } : {}),
       // Single-valued, unlike status/organization: the endpoint takes one subject or none.
       ...(subject ? { subject } : {}),
       ...(resolution ? { resolution } : {}),
@@ -179,6 +185,7 @@ export const useFeedbackFilters = (): UseFeedbackFiltersReturn => {
     resolution,
     statusFilters,
     selectedOrganizations,
+    userId,
     subject,
     types,
     received,
@@ -196,6 +203,7 @@ export const useFeedbackFilters = (): UseFeedbackFiltersReturn => {
     setSearchTerm,
     setStatusFilters,
     setSelectedOrganizations,
+    setUserId,
     setSubject,
     setResolution,
     setTypes,

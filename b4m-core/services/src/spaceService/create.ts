@@ -9,7 +9,7 @@ import {
   SPACE_DESCRIPTION_MAX,
   SPACE_LIMIT_REACHED_CODE,
   SPACE_NAME_MAX,
-  canAdministerOrganization,
+  hasOrgPermission,
 } from '@bike4mind/common';
 import { NotFoundError, secureParameters } from '@bike4mind/utils';
 import { z } from 'zod';
@@ -53,7 +53,7 @@ export async function create(
 
   if (parentOrganizationId) {
     const organization = await db.organizations.findById(parentOrganizationId);
-    if (!organization || !canAdministerOrganization(user, organization)) {
+    if (!organization || !hasOrgPermission(user, organization, 'manageContent')) {
       throw new NotFoundError('Organization not found');
     }
   }

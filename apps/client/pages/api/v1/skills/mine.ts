@@ -2,7 +2,7 @@
 import { listMySkillsContract, NotFoundError, UnprocessableEntityError } from '@bike4mind/common';
 import { skillRepository } from '@bike4mind/database';
 import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
-import { verifyOrgAccess } from '@bike4mind/server-utils/utils/orgAccess';
+import { verifyOrgPermission } from '@bike4mind/server-utils/utils/orgAccess';
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
 import { decodeCursor, encodeCursor } from '@server/utils/cursorPagination';
 import { toPublicSkillSummary } from '@server/skills/publicView';
@@ -30,7 +30,7 @@ const handler = nextRouteForContract(listMySkillsContract).get(async (req, res) 
   const user = { id: req.user.id, isAdmin: Boolean(req.user.isAdmin) };
   if (organization_id !== undefined) {
     if (!isValidObjectId(organization_id)) throw new NotFoundError('Organization not found');
-    await verifyOrgAccess(user, organization_id);
+    await verifyOrgPermission(user, organization_id, 'manageContent');
   }
 
   const result = await skillRepository.searchAccessible(

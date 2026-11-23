@@ -1,11 +1,12 @@
 import { execFile, spawn } from 'node:child_process';
 import { readFile } from 'node:fs/promises';
 import { realpathSync } from 'node:fs';
-import { isDeepStrictEqual, promisify } from 'node:util';
+import { promisify } from 'node:util';
 import {
   FUNCTION_CONTRACT_LIMITS,
   FUNCTION_RESULT_TOO_LARGE_PREFIX,
   PYODIDE_VERSION,
+  canonicalApprovalJson,
   functionCallGluePy,
   functionJsonBytes,
   parseFunctionContract,
@@ -241,6 +242,7 @@ interface ChildRun {
 }
 
 const execFileAsync = promisify(execFile);
+const PS_TIMEOUT_MS = 1000;
 
 // /proc where it exists; `ps` elsewhere (macOS), which also covers the in-process runner in development.
 async function residentMb(pid: number): Promise<number | null> {
@@ -252,7 +254,7 @@ async function residentMb(pid: number): Promise<number | null> {
     // Fall through to ps.
   }
   try {
-    const { stdout } = await execFileAsync('ps', ['-o', 'rss=', '-p', String(pid)]);
+    const { stdout } = await execFileAsync('ps', ['-o', 'rss=', '-p', String(pid)], { timeout: PS_TIMEOUT_MS });
     const kb = Number(stdout.trim());
     return Number.isFinite(kb) && kb > 0 ? kb / 1024 : null;
   } catch {
@@ -570,7 +572,8 @@ export async function runCallableFunctionInChild(
       ? finish({ ...after, outcome: 'ok', contract: read.contract })
       : finish({ ...after, outcome: 'output_invalid', reason: 'contract_invalid', problems: safePaths(read.problems) });
   }
-  if (!pinned || !read.ok || !isDeepStrictEqual(read.contract, pinned)) {
+  // Key-sorted JSON: key order does not count, and -0 reads as 0, as the browser saves it.
+  if (!pinned || !read.ok || canonicalApprovalJson(read.contract) !== canonicalApprovalJson(pinned)) {
     return refused('contract_changed');
   }
 

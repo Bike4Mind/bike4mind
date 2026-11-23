@@ -208,13 +208,15 @@ struct VoiceConversationView: View {
       session = made
       (opening, context) = await made.prepare()
     }
-    guard !Task.isCancelled else { return }
+    let voiceID = await services.voiceCatalog.premiumVoice()
+    // Done may have been tapped during the lookup; onDisappear then had no model to stop.
+    guard !Task.isCancelled, model == nil else { return }
     var handler: VoiceConversationModel.UtteranceHandler?
     if let session {
       handler = { utterance in await session.handle(utterance) }
     }
     let model = Self.makeModel(
-      request: request, services: services, opening: opening, context: context,
+      request: request, services: services, voiceID: voiceID, opening: opening, context: context,
       bargeInWords: session == nil ? [] : BriefVoiceSession.bargeInWords, answerPhrases: session?.answerPhrases ?? [],
       handler: handler)
     self.model = model
@@ -250,8 +252,8 @@ struct VoiceConversationView: View {
   }
 
   private static func makeModel(
-    request: VoiceRequest, services: AppServices, opening: [String], context: String?, bargeInWords: Set<String>,
-    answerPhrases: Set<String>, handler: VoiceConversationModel.UtteranceHandler?
+    request: VoiceRequest, services: AppServices, voiceID: String?, opening: [String], context: String?,
+    bargeInWords: Set<String>, answerPhrases: Set<String>, handler: VoiceConversationModel.UtteranceHandler?
   ) -> VoiceConversationModel {
     let model: VoiceConversationModel
     #if DEBUG
@@ -271,10 +273,18 @@ struct VoiceConversationView: View {
     #endif
     model = VoiceConversationModel(
       target: request.target, api: services.api, realtime: services.realtime, listener: SFSpeechListener(),
-      speaker: AVSpeechSpeaker(), audioSession: AVVoiceAudioSession(), bargeInWords: bargeInWords,
-      answerPhrases: answerPhrases, opening: opening, firstTurnContext: context, utteranceHandler: handler)
+      speaker: makeSpeaker(services: services, voiceID: voiceID), audioSession: AVVoiceAudioSession(),
+      bargeInWords: bargeInWords, answerPhrases: answerPhrases, opening: opening, firstTurnContext: context,
+      utteranceHandler: handler)
     model.onTurnSent = { [transcriptCache = services.transcriptCache] id in transcriptCache.remove(sessionID: id) }
     return model
+  }
+
+  /// The picked premium voice when there is one, else on-device speech; the premium one falls back on its own.
+  private static func makeSpeaker(services: AppServices, voiceID: String?) -> any SpeechSpeaking {
+    guard let voiceID else { return AVSpeechSpeaker() }
+    return ServerSpeechSpeaker(
+      wire: services.voiceAPI, voiceID: voiceID, fallback: AVSpeechSpeaker(), player: AVAudioClipPlayer())
   }
 
   private static func label(for phase: VoiceConversationModel.Phase) -> String {

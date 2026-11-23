@@ -213,6 +213,8 @@ const SELF_VIEW_PASSTHROUGH_FIELDS = {
   numReferralsAvailable: true,
   regInvites: true,
   referredByUserId: true,
+  referredViaLinkAt: true,
+  referralCode: true,
   signupInvite: true,
   organizationId: true,
   lastActiveAt: true,

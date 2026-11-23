@@ -68,6 +68,7 @@ import {
 import {
   ADAPTIVE_THINKING_MAX_TOKENS_FLOOR,
   ADMIN_ASSISTANT_TOOL_NAMES,
+  CALLABLE_FUNCTIONS_PROMPT_NOTE,
   ChatModels,
   CreditHolderType,
   DATA_LAKE_TOOL_NAMES,
@@ -11846,6 +11847,7 @@ describe('ChatCompletionProcess', () => {
       enabledTools: string[];
       videoToolConfigResolver?: () => Promise<VideoToolConfig | null>;
       musicToolConfigResolver?: () => Promise<MusicToolConfig | null>;
+      callableFunctionsResolver?: () => Promise<boolean>;
       /** Rebuilds the service with these constructor options layered over baseOptions. */
       serviceOptions?: Record<string, unknown>;
     }) => {
@@ -11905,6 +11907,7 @@ describe('ChatCompletionProcess', () => {
           logger: mockLogger,
           videoToolConfigResolver: opts.videoToolConfigResolver,
           musicToolConfigResolver: opts.musicToolConfigResolver,
+          callableFunctionsResolver: opts.callableFunctionsResolver,
         });
         return buildToolsSpy.mock.calls[0]?.[0] as BuildToolsArgs | undefined;
       } finally {
@@ -11941,6 +11944,41 @@ describe('ChatCompletionProcess', () => {
       const passed = await runWithResolvers({ enabledTools: [], videoToolConfigResolver: resolver });
       expect(resolver).not.toHaveBeenCalled();
       expect(passed?.config?.video_generation).toBeUndefined();
+    });
+
+    describe('callable-function note', () => {
+      const systemText = () =>
+        ((mockedBuildAndSortMessages.mock.calls.at(-1)?.[1] ?? []) as IMessage[])
+          .map(m => String(m.content))
+          .join('\n');
+
+      beforeEach(() => mockedBuildAndSortMessages.mockClear());
+
+      it('appends the note to the artifact prompt when the resolver says on', async () => {
+        enableAdminFlags('EnableArtifacts');
+        const resolver = vi.fn().mockResolvedValue(true);
+        await runWithResolvers({ enabledTools: [], callableFunctionsResolver: resolver });
+        expect(resolver).toHaveBeenCalledTimes(1);
+        expect(systemText()).toContain(CALLABLE_FUNCTIONS_PROMPT_NOTE);
+      });
+
+      it.each([
+        ['says off', vi.fn().mockResolvedValue(false)],
+        ['fails', vi.fn().mockRejectedValue(new Error('settings unavailable'))],
+        ['is not given', undefined],
+      ])('leaves the note out when the resolver %s', async (_label, resolver) => {
+        enableAdminFlags('EnableArtifacts');
+        await runWithResolvers({ enabledTools: [], callableFunctionsResolver: resolver });
+        expect(mockedBuildAndSortMessages).toHaveBeenCalled();
+        expect(systemText()).not.toContain('CALLABLE FUNCTIONS:');
+      });
+
+      it('does not ask while artifacts are off', async () => {
+        const resolver = vi.fn().mockResolvedValue(true);
+        await runWithResolvers({ enabledTools: [], callableFunctionsResolver: resolver });
+        expect(resolver).not.toHaveBeenCalled();
+        expect(systemText()).not.toContain('CALLABLE FUNCTIONS:');
+      });
     });
 
     // The web_search signing key reaches the tool config only through this call site, so a dropped

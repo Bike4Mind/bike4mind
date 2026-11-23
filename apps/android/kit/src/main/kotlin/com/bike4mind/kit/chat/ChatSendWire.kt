@@ -49,13 +49,17 @@ class ChatSendWire(private val environment: ServerEnvironment, private val http:
         @SerialName("tracking_info") val trackingInfo: TrackingInfo? = null,
     )
 
-    /** Sends into [sessionId], or starts a new session when it is null (the receipt then names it). */
-    suspend fun send(message: String, sessionId: String?): ChatReceipt {
+    /**
+     * Sends into [sessionId], or starts a new session when it is null (the receipt then names it). [fileIds] are
+     * uploaded files that have scanned clean (see capture/CaptureWire.kt).
+     */
+    suspend fun send(message: String, sessionId: String?, fileIds: List<String> = emptyList()): ChatReceipt {
         val request = Request(
             message = message,
             sessionId = sessionId,
             newConversation = if (sessionId == null) true else null,
             stream = true,
+            fileIds = fileIds.ifEmpty { null },
         )
         val response = http.post(environment.baseUrl + "/api/chat") {
             contentType(ContentType.Application.Json)

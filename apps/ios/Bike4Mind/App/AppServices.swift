@@ -59,6 +59,9 @@ final class AppServices {
   let credits: CreditsViewModel
   /// The Studio model lists, kept for the session; cleared when the session ends (`RootView.endSession`).
   let studioModels: StudioModelCatalog
+  /// The deployment's premium voices and this device's pick; empty or unavailable means on-device speech.
+  let voiceCatalog: VoiceCatalogModel
+  let voiceAPI: any VoiceAPI
 
   init(auth: AuthController) {
     self.auth = auth
@@ -113,6 +116,15 @@ final class AppServices {
       return PendingActionClient(baseURL: auth.environment.baseURL, tokens: auth)
     }
     pendingActions = pendingActionAPI
+    let voiceAPI = ForwardingVoiceAPI { VoiceClient(baseURL: auth.environment.baseURL, tokens: auth) }
+    self.voiceAPI = voiceAPI
+    voiceCatalog = VoiceCatalogModel(
+      wire: voiceAPI,
+      store: UserDefaultsVoiceSelectionStore()
+    ) {
+      guard let userID = await auth.userID() else { return nil }
+      return VoiceAccount(userID: userID, baseURL: auth.environment.baseURL)
+    }
     let briefAPI = ForwardingBriefAPI {
       #if DEBUG
         if FixtureServices.isEnabled { return FixtureServices.briefAPI }
@@ -405,6 +417,17 @@ struct ForwardingAgentRunAPI: AgentRunAPI {
 
   func run(id: String) async throws -> AgentRunStatus {
     try await provider().run(id: id)
+  }
+}
+
+/// Routes voice calls to whichever server the app currently points at.
+struct ForwardingVoiceAPI: VoiceAPI {
+  let provider: @MainActor @Sendable () -> any VoiceAPI
+
+  func voiceSessionsEnabled() async throws -> Bool { try await provider().voiceSessionsEnabled() }
+  func listVoices() async throws -> [VoiceOption] { try await provider().listVoices() }
+  func synthesizeSpeech(text: String, voiceID: String) async throws -> Data {
+    try await provider().synthesizeSpeech(text: text, voiceID: voiceID)
   }
 }
 

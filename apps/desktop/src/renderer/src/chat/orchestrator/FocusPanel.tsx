@@ -6,6 +6,7 @@ import type { ColorPaletteProp } from '@mui/joy/styles';
 import { AGENT_STATE_LABEL, countAgentStates, type AgentState } from '@shared/agentState';
 import type { ViewAction, ViewAgent, ViewApproval, ViewSnapshot } from '@shared/viewSnapshot';
 import { oneClickOptions, type BubbleOption } from './tavern/bubbleAnswer';
+import { AgentPrIndicator } from './AgentPrIndicator';
 
 /** Shown as a card: the user has to act on it, or should know it went wrong. */
 const ATTENTION: ReadonlySet<AgentState> = new Set(['needs-you', 'failed']);
@@ -16,6 +17,7 @@ interface AttentionItem {
   key: string;
   title: string;
   detail?: string;
+  pr?: ViewAgent['pr'];
   color: ColorPaletteProp;
   open: ViewAction;
   /** One click per option of the decision it waits on; absent when that needs the full card. */
@@ -51,6 +53,7 @@ function attentionItems(snapshot: ViewSnapshot): AttentionItem[] {
       key: agent.id,
       title: agent.title,
       detail: agent.decision?.question ?? agent.now,
+      pr: agent.pr,
       color: waiting ? 'warning' : 'danger',
       open: { kind: 'open-agent', agentId: agent.id },
       answer: waiting ? decisionAnswer(agent) : undefined,
@@ -184,6 +187,7 @@ export function FocusPanel({
                   <Typography level="title-sm" noWrap>
                     {item.title}
                   </Typography>
+                  <AgentPrIndicator pr={item.pr} onOpen={() => void onAction({ kind: 'open-pr', agentId: item.key })} />
                   {item.detail && (
                     <Typography level="body-sm" textColor="text.secondary" sx={{ overflowWrap: 'anywhere' }}>
                       {item.detail}
@@ -281,6 +285,7 @@ export function FocusPanel({
                 </Typography>
               )}
               <Box sx={{ flex: agent.now ? 0 : 1 }} />
+              <AgentPrIndicator pr={agent.pr} onOpen={() => void onAction({ kind: 'open-pr', agentId: agent.id })} />
               {stopButton(agent)}
               {errorLine([stopKey(agent)])}
             </Box>
@@ -292,6 +297,20 @@ export function FocusPanel({
           {quiet}
         </Typography>
       )}
+      {snapshot.agents
+        .filter(agent => QUIET_ORDER.includes(agent.state) && agent.pr)
+        .map(agent => (
+          <Box
+            key={agent.id}
+            data-testid={`orchestrator-focus-pr-${agent.id}`}
+            sx={{ display: 'flex', alignItems: 'center', gap: 1, minWidth: 0 }}
+          >
+            <Typography level="body-sm" noWrap sx={{ minWidth: 0 }}>
+              {agent.title}
+            </Typography>
+            <AgentPrIndicator pr={agent.pr} onOpen={() => void onAction({ kind: 'open-pr', agentId: agent.id })} />
+          </Box>
+        ))}
     </Box>
   );
 }

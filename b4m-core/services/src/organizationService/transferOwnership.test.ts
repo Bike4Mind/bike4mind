@@ -132,6 +132,12 @@ describe('organizationService - transferOwnership', () => {
     ]);
   });
 
+  it('removes only the new owner from billingManagerUserIds', async () => {
+    org = freshOrg({ billingManagerUserIds: ['admin1', 'biller1'] });
+    await run(owner);
+    expect(adapters.db.organizations.update.mock.calls[0][0].billingManagerUserIds).toEqual(['biller1']);
+  });
+
   it('keeps the other admins and removes only the new owner from adminUserIds', async () => {
     org = freshOrg({ adminUserIds: ['admin1', 'admin2'] });
     await run(owner);

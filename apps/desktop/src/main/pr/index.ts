@@ -77,6 +77,9 @@ export function registerPullRequests(options: RegisterPullRequestsOptions): PrMo
     return monitor.watch(senderId, typeof sessionId === 'string' ? sessionId : null);
   });
   ipcMain.handle(IPC_CHANNELS.prGetSummaries, () => monitor.summaries());
+  ipcMain.handle(IPC_CHANNELS.prGetState, (_event, sessionId: unknown) =>
+    typeof sessionId === 'string' ? monitor.getState(sessionId) : null
+  );
   ipcMain.handle(IPC_CHANNELS.prBind, (_event, sessionId: unknown, url: unknown) =>
     typeof sessionId === 'string' && typeof url === 'string'
       ? monitor.bindManual(sessionId, url)
