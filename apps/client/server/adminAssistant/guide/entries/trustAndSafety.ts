@@ -121,6 +121,28 @@ export const TRUST_AND_SAFETY_GUIDE: readonly AdminGuideEntry[] = [
     keywords: ['chargebacks', 'stripe disputes', 'lost dispute', 'contain', 'undo contain', 'resolve dispute'],
   },
   {
+    id: 'text-moderation-review',
+    title: 'Text moderation review',
+    summary:
+      'Users whose text prompts were flagged and who need a decision: throttled, pending suspension, or with a severe-category hit since their last review. Shows recent hits (time, categories, source) and the appeal text; prompt text is not stored.',
+    views: ['admin.text_moderation_review'],
+    settings: [],
+    howTo: [
+      'Each row shows the moderation status, the latest hits and any appeal. A Severe category chip marks a hit in a severe category that no admin has acted on yet.',
+      'Use the row menu to Confirm suspension, Keep throttled, or Return to active. Each decision needs a reason and is written to the audit log.',
+      'A severe-category user leaves the list once an admin decision postdates their newest severe hit, and returns if a newer one arrives.',
+      'Delegated admins with support:read can view the tab; decisions need the users:moderate permission.',
+    ],
+    keywords: [
+      'text moderation',
+      'flagged prompts',
+      'suspend pending',
+      'throttled',
+      'moderation appeal',
+      'severe category',
+    ],
+  },
+  {
     id: 'moderation-review',
     title: 'Moderation review',
     summary:

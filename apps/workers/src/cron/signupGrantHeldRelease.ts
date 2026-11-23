@@ -12,7 +12,10 @@ import { Config } from '@bike4mind/server-utils/utils/config';
 import { Resource } from 'sst';
 import { buildHeldGrantAdapters } from '@bike4mind/server-utils/credits/heldSignupGrantAdapters';
 import { buildCreditRewardAdapters } from '@bike4mind/server-utils/credits/creditRewardAdapters';
-import { alertForReleasedReferralRewards } from '@bike4mind/server-utils/referrals/firstAnswerReward';
+import {
+  alertForReleasedReferralRewards,
+  REFERRAL_REWARD_SOURCES,
+} from '@bike4mind/server-utils/referrals/firstAnswerReward';
 import {
   sweepRiskReviewAutoApprovals,
   type RiskReviewAutoApprovalSweepResult,
@@ -43,7 +46,7 @@ export async function runSignupGrantHeldRelease(now: Date = new Date()): Promise
     try {
       await alertForReleasedReferralRewards(
         rewards.paidRewards
-          .filter(paid => paid.source === 'referral_first_answer' || paid.source === 'referral_subscription')
+          .filter(paid => REFERRAL_REWARD_SOURCES.has(paid.source))
           .map(paid => paid.creditTransactionId)
       );
     } catch (error) {

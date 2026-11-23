@@ -11,6 +11,18 @@ interface OwnerFields {
   username?: string;
   isBanned?: boolean | null;
   moderation?: { status?: string | null } | null;
+  referralCode?: string | null;
+  emailVerified?: boolean;
+  authProviders?: Array<{ strategy?: string }>;
+}
+
+export interface LiveOwner {
+  name?: string;
+  username?: string;
+  /** The owner's share-link code, for the links on their published pages (server/referrals/shareLink.ts). */
+  referralCode: string | null;
+  /** The owner may be given a share-link code: the bar GET /api/referrals/link sets. */
+  canRefer: boolean;
 }
 
 // The Mongo form of loadLiveOwner's check; the two must agree on what makes an owner live.
@@ -24,12 +36,17 @@ const LIVE_OWNER_QUERY = { isBanned: { $ne: true }, 'moderation.status': { $ne: 
  * Every artifact has an `ownerId` (required on the schema), so there is no ownerless case.
  * The lookup is by `_id` only and is not caught: a DB failure fails the request closed.
  */
-export async function loadLiveOwner(ownerId: string): Promise<{ name?: string; username?: string } | null> {
+export async function loadLiveOwner(ownerId: string): Promise<LiveOwner | null> {
   const owner = await User.findById(ownerId)
-    .select('name username isBanned moderation.status')
+    .select('name username isBanned moderation.status referralCode emailVerified authProviders.strategy')
     .lean<OwnerFields | null>();
   if (!owner || owner.isBanned || owner.moderation?.status === 'suspended') return null;
-  return { name: owner.name, username: owner.username };
+  return {
+    name: owner.name,
+    username: owner.username,
+    referralCode: owner.referralCode ?? null,
+    canRefer: owner.emailVerified === true || (owner.authProviders?.length ?? 0) > 0,
+  };
 }
 
 /**

@@ -1,7 +1,7 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { isAxiosError } from 'axios';
 import { toast } from 'sonner';
-import type { IUser, ThrottleTier } from '@bike4mind/common';
+import type { IUser, ThrottleTier, UserModerationStatus } from '@bike4mind/common';
 import { updateUserToServer } from '@client/app/utils/userAPICalls';
 import { isStepUpCancelled } from '@client/app/utils/stepUpInterceptor';
 
@@ -15,6 +15,8 @@ export type AdminUserUpdate = Omit<Partial<IUser>, 'isAdmin'> & {
   throttleTier?: ThrottleTier;
   throttleReason?: string;
   statusChangeReason?: string;
+  /** The text-moderation escalation state; the route applies it via setModerationStatus and audits it. */
+  moderationStatus?: UserModerationStatus;
   /** Marks a reinstatement as the Undo of this admin's suspend: its detection grades are removed, not flipped to legitimate. */
   undoSuspension?: boolean;
 };

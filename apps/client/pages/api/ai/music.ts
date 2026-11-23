@@ -65,19 +65,20 @@ const handler = nextRouteForContract(generateMusicContract).post(async (req, res
     await createModelAdmission(req.user!, undefined, false, { organizationId: resolveRequestBillingOrgId(req) })
   ).assert(modelId ?? DEFAULT_MUSIC_MODEL_ID, { orgModelBackend: resolveAudioVendorBackend(provider) });
 
-  const apiKey = await apiKeyService.getEffectiveApiKey(
+  const effectiveKey = await apiKeyService.getEffectiveApiKeyWithSource(
     userId,
     { type: PROVIDER_API_KEY_TYPE[provider] },
     { db: { apiKeys: apiKeyRepository, adminSettings: adminSettingsRepository } }
   );
 
-  if (!apiKey) {
+  if (!effectiveKey) {
     // 503, not 401: the caller IS authenticated - the provider key is a server-side
     // capability gap. A 401 would tell an API-key caller to re-authenticate, which
     // never fixes a missing ElevenLabs key. The message survives to the CLI via the
     // arraybuffer error decode + mapApiError's server-message fallback.
     return res.status(503).json({ error: `No ${provider} API key configured` });
   }
+  const apiKey = effectiveKey.key;
 
   const settings = await getSettingsMap(
     { adminSettings: adminSettingsRepository },
@@ -118,6 +119,8 @@ const handler = nextRouteForContract(generateMusicContract).post(async (req, res
         model: modelId,
         // Matches this call's ledger write (deductCreditsWithOrgSupport).
         source,
+        // Only ElevenLabs is metered against a vendor plan (the admin ElevenLabs usage view).
+        ...(provider === 'elevenlabs' && { keySource: effectiveKey.source }),
         inputTokens: 0,
         outputTokens: 0,
         cachedInputTokens: 0,

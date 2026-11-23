@@ -2,7 +2,7 @@ import { create } from 'zustand';
 
 /** Inner tab values of the Credit Analytics tab; must match the Tab/TabPanel values in ./index.tsx. */
 export type CreditAnalysisTab =
-  'users' | 'margins' | 'org-usage' | 'api-usage' | 'side-apps' | 'ledger' | 'adjustments' | 'economy';
+  'users' | 'margins' | 'org-usage' | 'api-usage' | 'side-apps' | 'elevenlabs' | 'ledger' | 'adjustments' | 'economy';
 
 /**
  * Inner-tab state for Credit Analytics, sticky for the whole SPA session: leaving Credit Analytics

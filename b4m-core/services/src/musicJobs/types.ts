@@ -54,8 +54,11 @@ export type MusicJobDeps = {
     costUsd: number;
     /** Seconds the provider delivered (uncapped), the usage event's units; costUsd is priced on it. */
     durationSeconds: number;
-    /** `refusal` for a block the provider billed: spend with no song delivered. */
-    status: Extract<UsageEventStatus, 'ok' | 'refusal'>;
+    /**
+     * `refusal` for a block the provider billed: spend with no song delivered. `error` / `timeout` for a failed job
+     * whose provider call may still have been billed (charged nothing to the user).
+     */
+    status: Extract<UsageEventStatus, 'ok' | 'refusal' | 'error' | 'timeout'>;
   }): Promise<void>;
   now(): Date;
   logger: Logger;

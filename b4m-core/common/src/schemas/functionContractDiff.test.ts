@@ -87,6 +87,21 @@ describe('diffFunctionContracts', () => {
     expect(diffAfter(() => {})).toEqual({ breaking: [], compatible: [] });
   });
 
+  it('finds nothing when only the declared tests are added or changed', () => {
+    const added = diffAfter(c => {
+      c.tests = [{ name: 'light load', input: { load: 10 }, expected: { deflection: 1 } }];
+    });
+    expect(added).toEqual({ breaking: [], compatible: [] });
+
+    const withTest = baseContract();
+    withTest.tests = [{ name: 'light load', input: { load: 10 }, expected: { deflection: 1 } }];
+    const changed = baseContract();
+    changed.tests = [
+      { name: 'heavy load', input: { load: 90 }, expected: { deflection: 9 }, tolerance: { rel: 0.01 } },
+    ];
+    expect(diffFunctionContracts(withTest, changed)).toEqual({ breaking: [], compatible: [] });
+  });
+
   // Breaking kinds the plan names.
   it.each<[string, Mutation, string]>([
     [
