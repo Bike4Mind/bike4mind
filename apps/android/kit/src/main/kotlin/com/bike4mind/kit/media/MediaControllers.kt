@@ -135,7 +135,8 @@ class MediaGalleryController(
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (upgrade: UpgradeRequiredException) {
-                Unit
+                // The upgrade screen covers the app; there is nothing to say here.
+                return@launch
             } catch (failure: Exception) {
                 if (requested == generation) mutableState.update { it.copy(loadMoreError = MediaError.from(failure)) }
             } finally {
