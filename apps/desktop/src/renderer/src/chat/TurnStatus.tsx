@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, useState, type RefObject } from 'react';
+import { useEffect, useId, useLayoutEffect, useRef, useState, type RefObject } from 'react';
 import Box from '@mui/joy/Box';
 import Button from '@mui/joy/Button';
 import Stack from '@mui/joy/Stack';
@@ -129,7 +129,9 @@ export function TurnStatus({ turn, activity }: { turn: TurnProgress | null; acti
   const waiting = activity.kind === 'approval';
   const clock = useTurnClock(startedAt, waiting);
 
-  useEffect(() => {
+  // A layout effect so the frame a wait ends on never paints the resumed clock against the
+  // `now` frozen before the wait, which would read as 0s.
+  useLayoutEffect(() => {
     if (startedAt === null || waiting) return;
     setNow(Date.now());
     const timer = setInterval(() => setNow(Date.now()), 1000);
