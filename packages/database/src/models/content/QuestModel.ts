@@ -652,6 +652,8 @@ export const ChatHistoryItemSchema: Schema<IChatHistoryItemDocument> = new Schem
     agentImagesClaimed: { type: Number, required: false },
     agentSpeechClipsClaimed: { type: Number, required: false },
     agentSoundEffectsClaimed: { type: Number, required: false },
+    // Data lake saves claimed by this turn (see claimLakeSaveSlot). Declared so strict mode keeps the $inc.
+    lakeSaveCount: { type: Number, required: false },
     oob: { type: String, required: false },
     promptMeta: { type: PromptMetaSchema, required: false },
     status: { type: String, required: false },
@@ -1571,6 +1573,23 @@ class QuestRepository extends BaseRepository<IChatHistoryItemDocument> implement
     const result = await this.model.updateOne(
       { _id: convertId(questId), status: { $ne: 'stopped' } },
       { $inc: { agentVideoClipsClaimed: 1 } }
+    );
+    return result.modifiedCount === 1;
+  }
+
+  /**
+   * Claim one of a turn's `limit` save_content_to_data_lake saves. Every tool build in the turn (the chat loop, research mode,
+   * subagents, agent continuations) shares this Quest, so the check and the increment are one atomic update.
+   */
+  async claimLakeSaveSlot(questId: string, limit: number): Promise<boolean> {
+    if (limit <= 0) return false;
+    const result = await this.model.updateOne(
+      {
+        _id: convertId(questId),
+        $or: [{ lakeSaveCount: { $exists: false } }, { lakeSaveCount: { $lt: limit } }],
+      },
+      { $inc: { lakeSaveCount: 1 } },
+      { runValidators: true }
     );
     return result.modifiedCount === 1;
   }
