@@ -16,6 +16,7 @@ import { devLog } from '../devlog/DevLogSink';
 import { ERRORS_TAG } from '../devlog/tags';
 import { CHAT_STREAM_TAG } from './devLogTag';
 import { parseStreamEvent, type CompletionStreamEvent } from './streamEvents';
+import { evaluationContext } from './evaluationBudget';
 
 /** Same-origin default; a self-host stack overrides it with `sseCompletionsUrl` from serverConfig. */
 export const DEFAULT_COMPLETIONS_PATH = '/api/ai/v1/completions';
@@ -251,60 +252,94 @@ async function streamOnce(
     idleTimeoutMs: options.idleTimeoutMs ?? STREAM_IDLE_TIMEOUT_MS,
     requestId: randomUUID(),
   };
-
-  let response: AxiosResponse;
+  const requestId = context.requestId;
+  const evaluation = evaluationContext.getStore();
+  const events: CompletionStreamEvent[] = [];
+  const release = evaluation?.reserve(requestId, request, evaluationModel(axiosInstance, request.model));
+  let failed = true;
   try {
-    response = await axiosInstance.post(
-      endpoint,
-      {
-        model: request.model,
-        messages: wireMessages(request.messages),
-        ...(request.maxTokens ? { max_tokens: request.maxTokens } : {}),
-        ...(request.sessionId ? { sessionId: request.sessionId } : {}),
-        ...(request.run ? { run: request.run } : {}),
-        // The tool loop on this endpoint belongs to the CALLER: the model emits tool_use and
-        // this client executes it locally, then sends the result back as another turn.
-        options: {
-          stream: true,
-          tools: request.tools ?? [],
-          ...(request.generation?.temperature !== undefined ? { temperature: request.generation.temperature } : {}),
-          ...(request.thinking
-            ? {
-                thinking: {
-                  enabled: true,
-                  ...(request.generation?.thinkingBudgetTokens !== undefined
-                    ? { budget_tokens: request.generation.thinkingBudgetTokens }
-                    : {}),
-                },
-              }
-            : {}),
-          ...(request.reasoningEffort ? { reasoningEffort: request.reasoningEffort } : {}),
-          ...(request.cacheTtl ? { cacheTtl: request.cacheTtl } : {}),
+    let response: AxiosResponse;
+    try {
+      response = await axiosInstance.post(
+        endpoint,
+        {
+          model: request.model,
+          messages: wireMessages(request.messages),
+          ...(request.maxTokens ? { max_tokens: request.maxTokens } : {}),
+          ...(request.sessionId ? { sessionId: request.sessionId } : {}),
+          ...(request.run ? { run: request.run } : {}),
+          // The tool loop on this endpoint belongs to the CALLER: the model emits tool_use and
+          // this client executes it locally, then sends the result back as another turn.
+          options: {
+            stream: true,
+            tools: request.tools ?? [],
+            ...(request.generation?.temperature !== undefined ? { temperature: request.generation.temperature } : {}),
+            ...(request.thinking
+              ? {
+                  thinking: {
+                    enabled: true,
+                    ...(request.generation?.thinkingBudgetTokens !== undefined
+                      ? { budget_tokens: request.generation.thinkingBudgetTokens }
+                      : {}),
+                  },
+                }
+              : {}),
+            ...(request.reasoningEffort ? { reasoningEffort: request.reasoningEffort } : {}),
+            ...(request.cacheTtl ? { cacheTtl: request.cacheTtl } : {}),
+          },
         },
-      },
-      {
-        responseType: 'stream',
-        signal,
-        timeout: COMPLETION_HEADER_TIMEOUT_MS,
-        headers: { 'X-Request-ID': context.requestId },
-      }
-    );
-  } catch (err) {
-    if (signal?.aborted || (isAxiosError(err) && err.code === 'ERR_CANCELED')) return;
-    const body = await readErrorBody(err);
-    if (isRunNotFound(err, body)) throw new RunNotFoundError(body?.message);
-    if (isRunBudgetExhausted(err, body)) throw new RunBudgetExhaustedError(body?.message);
-    const failure = toRequestError(err, body?.message);
-    logError(failure, 'request', context, {
-      ...(isAxiosError(err) && err.response?.status ? { status: err.response.status } : {}),
-      ...(isAxiosError(err) && !err.response?.status && err.code ? { code: err.code } : {}),
-      ...(body?.errorCode ? { errorCode: body.errorCode } : {}),
-    });
-    throw failure;
-  }
+        {
+          responseType: 'stream',
+          signal,
+          timeout: COMPLETION_HEADER_TIMEOUT_MS,
+          headers: { 'X-Request-ID': requestId },
+        }
+      );
+    } catch (err) {
+      if (signal?.aborted || (isAxiosError(err) && err.code === 'ERR_CANCELED')) return;
+      const body = await readErrorBody(err);
+      if (isRunNotFound(err, body)) throw new RunNotFoundError(body?.message);
+      if (isRunBudgetExhausted(err, body)) throw new RunBudgetExhaustedError(body?.message);
+      const failure = toRequestError(err, body?.message);
+      logError(failure, 'request', context, {
+        ...(isAxiosError(err) && err.response?.status ? { status: err.response.status } : {}),
+        ...(isAxiosError(err) && !err.response?.status && err.code ? { code: err.code } : {}),
+        ...(body?.errorCode ? { errorCode: body.errorCode } : {}),
+      });
+      throw failure;
+    }
 
-  releaseRequestTimeout(response);
-  await readSseStream(response, onEvent, signal, context);
+    releaseRequestTimeout(response);
+    await readSseStream(
+      response,
+      event => {
+        if (evaluation) {
+          if (event.type === 'meta' || event.type === 'settled') events.push(event);
+          else if ('usage' in event && event.usage) events.push({ type: 'content', usage: event.usage });
+        }
+        onEvent(event);
+      },
+      signal,
+      context
+    );
+    failed = signal?.aborted ?? false;
+  } finally {
+    try {
+      evaluation?.record(requestId, events, failed);
+    } finally {
+      release?.();
+    }
+  }
+}
+
+const evaluationModels = new WeakMap<AxiosInstance, ChatModelOption>();
+
+export function bindEvaluationModel(axios: AxiosInstance, model: ChatModelOption): void {
+  evaluationModels.set(axios, model);
+}
+
+function evaluationModel(axios: AxiosInstance, id: string): ChatModelOption {
+  return evaluationModels.get(axios) ?? { id, name: id };
 }
 
 /**

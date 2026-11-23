@@ -36,6 +36,7 @@ import { registerOrchestrateMini } from './orchestrateMini';
 import { registerWatch } from './watch';
 import { registerWindowTheme } from './windowTheme';
 import { registerSessionHandoff } from './handoff';
+import { runLiveEvaluation } from './chat/liveEvaluation';
 
 // electron-vite sets this in dev only; a packaged build loads the renderer off disk.
 const rendererDevUrl = process.env.ELECTRON_RENDERER_URL;
@@ -190,6 +191,11 @@ void app.whenReady().then(async () => {
   // After ready, not before: safeStorage is only usable once the app is ready, and the vault
   // asks it whether encryption is available on its first access.
   const auth = registerAuth();
+  void runLiveEvaluation(
+    auth,
+    join(app.getPath('userData'), 'controlled-evaluation'),
+    process.argv.includes('--controlled-cost-evaluation-live')
+  ).catch(() => console.warn('EVALUATION: stopped; inspect the local evaluation report.'));
   registerSessionHandoff(auth);
   const attention = registerAttention({
     openWindow: createWindow,
