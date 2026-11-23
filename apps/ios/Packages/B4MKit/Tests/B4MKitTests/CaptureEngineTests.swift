@@ -115,6 +115,17 @@ final class CaptureEngineTests: XCTestCase {
     XCTAssertEqual(ids, ["sess-1"])
   }
 
+  func testResumeReportsSessionsOfCompletedCapturesSentByAnotherProcess() async throws {
+    let store = FileUploadJobStore(directory: temp.url)
+    let extensionRig = rig(store: store, identifier: BackgroundSessionIdentifier.shareExtension)
+    _ = try await extensionRig.engine.submit([.text("worth a look")], to: session, note: nil)
+    let sent = SentSessions()
+    let appRig = rig(store: store, didSendToSession: { await sent.add($0) })
+    await appRig.engine.resume()
+    let ids = await sent.ids
+    XCTAssertEqual(ids, ["sess-1"])
+  }
+
   func testASessionCaptureWithoutANoteNamesTheFile() async throws {
     let rig = rig()
     let job = try only(await rig.engine.submit([photo("menu.jpg")], to: session, note: nil))
