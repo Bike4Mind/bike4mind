@@ -117,7 +117,13 @@ export async function saveGeneratedAsset(
     });
     if (existing?.filePath) {
       const signed = await generateSignedUrl(existing, {
-        storage: { generateSignedUrl: (path, expiresIn) => deps.storage.generateSignedUrl(path, expiresIn, 'get') },
+        storage: {
+          generateSignedUrl: (path, expiresIn, options) =>
+            deps.storage.generateSignedUrl(path, expiresIn, 'get', {
+              ResponseContentDisposition: options?.ResponseContentDisposition,
+              ResponseContentType: options?.ResponseContentType,
+            }),
+        },
       });
       return savedResult(signed, existing.filePath);
     }

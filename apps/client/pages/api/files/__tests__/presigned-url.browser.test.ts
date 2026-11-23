@@ -127,3 +127,49 @@ describe('generic file browser download signing', () => {
     }
   );
 });
+
+describe('response disposition on signed reads', () => {
+  const disposition = (url: string | null) => new URL(url!).searchParams.get('response-content-disposition');
+  const contentType = (url: string | null) => new URL(url!).searchParams.get('response-content-type');
+
+  it.each(['browser', 'server'])('downloads html and serves png inline for %s', async audience => {
+    h.findOne.mockImplementation(async ({ filePath }: { filePath: string }) => ({
+      _id: filePath,
+      moderationStatus: 'clean',
+      fileName: filePath === 'owned/page.html' ? 'page.html' : 'photo.png',
+      mimeType: filePath === 'owned/page.html' ? 'text/html' : 'image/png',
+    }));
+    const [html, png] = await urls(['owned/page.html', 'owned/photo.png'], '600', audience);
+    expect(disposition(html)).toBe('attachment; filename="page.html"');
+    expect(contentType(html)).toBeNull();
+    expect(disposition(png)).toBeNull();
+    expect(contentType(png)).toBe('image/png');
+  });
+
+  const withMime = (mimeType: string | undefined) =>
+    h.findOne.mockResolvedValue({ _id: 'file-1', moderationStatus: 'clean', fileName: 'page.html', mimeType });
+
+  it.each(['image/svg+xml', 'text/plain', undefined])(
+    'downloads %s under a signature covering the override',
+    async mimeType => {
+      withMime(mimeType);
+      const [url] = await urls(['owned/page.html']);
+      expect(disposition(url)).toBe('attachment; filename="page.html"');
+      expect(contentType(url)).toBeNull();
+      expect(new URL(url!).searchParams.get('X-Amz-Signature')).toBe(signature(new URL(url!)));
+    }
+  );
+
+  it.each(['application/pdf', 'video/mp4'])('serves %s inline with a pinned type', async mimeType => {
+    withMime(mimeType);
+    const [url] = await urls(['owned/page.html']);
+    expect(disposition(url)).toBeNull();
+    expect(contentType(url)).toBe(mimeType);
+  });
+
+  it('downloads an untracked modal key under its key name', async () => {
+    h.findOne.mockResolvedValue(null);
+    const [url] = await urls(['modals/banner.html']);
+    expect(disposition(url)).toBe('attachment; filename="banner.html"');
+  });
+});
