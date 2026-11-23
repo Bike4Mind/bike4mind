@@ -715,3 +715,66 @@ describe('file entries merged into the view', () => {
     });
   });
 });
+
+describe('undo facts on entries', () => {
+  const target = { kind: 'researchConfig' as const, id: 'cfg-1' };
+  const lever = [{ lever: 'name', before: 'a', after: 'b' }] as never;
+  const withClaims = (
+    events: ILakeConfigChangeEventDocument[],
+    claims: Array<{ eventId: string; undoEventId?: string }>
+  ) => {
+    const { adapters: a } = adapters(events);
+    return { ...a, db: { ...a.db, lakeConfigUndoClaims: { listForEvents: vi.fn().mockResolvedValue(claims) } } };
+  };
+
+  it('marks a recent targeted change undoable', async () => {
+    const view = await assembleLakeConfigHistory(
+      lake(),
+      withClaims([event({ id: 'e1', action: 'update-research-config', target, leverChanges: lever })], [])
+    );
+    expect(view.entries[0]).toMatchObject({ undoable: true, undone: false });
+  });
+
+  it('marks a claimed event undone and links the undoing row when it is in the window', async () => {
+    const view = await assembleLakeConfigHistory(
+      lake(),
+      withClaims(
+        [
+          event({ id: 'e2', action: 'update-research-config', target, leverChanges: lever, undoesEventId: 'e1' }),
+          event({ id: 'e1', action: 'update-research-config', target, leverChanges: lever }),
+        ],
+        [{ eventId: 'e1', undoEventId: 'e2' }]
+      )
+    );
+    const e1 = view.entries.find(e => e.eventId === 'e1');
+    expect(e1).toMatchObject({ undone: true, undoable: false, undoneByEventId: 'e2' });
+  });
+
+  it('shows Undone from the claim alone when the undoing row never persisted', async () => {
+    const view = await assembleLakeConfigHistory(
+      lake(),
+      withClaims(
+        [event({ id: 'e1', action: 'update-research-config', target, leverChanges: lever })],
+        [{ eventId: 'e1' }]
+      )
+    );
+    expect(view.entries[0]).toMatchObject({ undone: true, undoable: false });
+    expect(view.entries[0].undoneByEventId).toBeUndefined();
+  });
+
+  it('gives an old row with no target no button', async () => {
+    const view = await assembleLakeConfigHistory(
+      lake(),
+      withClaims([event({ id: 'e1', action: 'approve-proposal' })], [])
+    );
+    expect(view.entries[0].undoable).toBe(false);
+  });
+
+  it('leaves the flags off when the caller wires no claims adapter', async () => {
+    const { adapters: a } = adapters([
+      event({ id: 'e1', action: 'update-research-config', target, leverChanges: lever }),
+    ]);
+    const view = await assembleLakeConfigHistory(lake(), a);
+    expect(view.entries[0].undoable).toBeUndefined();
+  });
+});

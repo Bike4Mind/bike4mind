@@ -3,6 +3,7 @@ import type {
   ILakeConfigChangeEventDocument,
   ILakeConfigChangeEventRepository,
   ILakeConfigFieldChange,
+  ILakeConfigUndoClaimRepository,
   ILakeMembershipChangeEventDocument,
   ILakeMembershipChangeEventRepository,
   IUserApiKeyRepository,
@@ -13,6 +14,7 @@ import type {
   LakeConfigHistoryFieldChange,
   LakeConfigHistoryView,
 } from '@bike4mind/common';
+import { classifyConfigUndo, classifyFileUndo, type UndoClassification } from './lakeChangeUndoability';
 
 /**
  * Default cap on config-change events read for one history view. Deliberately small: config writes
@@ -83,6 +85,7 @@ export function toLakeConfigHistoryEntry(
     | 'target'
     | 'leverChanges'
     | 'admittedFabFileId'
+    | 'undoesEventId'
   >
 ): LakeConfigHistoryConfigEntry {
   return {
@@ -98,6 +101,7 @@ export function toLakeConfigHistoryEntry(
     target: event.target,
     leverChanges: event.leverChanges,
     admittedFabFileId: event.admittedFabFileId,
+    undoesEventId: event.undoesEventId,
   };
 }
 
@@ -167,6 +171,8 @@ export interface AssembleLakeConfigHistoryAdapters {
     lakeMembershipChangeEvents: Pick<ILakeMembershipChangeEventRepository, 'listByLake'>;
     users: Pick<IUserRepository, 'findByIds'>;
     userApiKeys: Pick<IUserApiKeyRepository, 'find'>;
+    /** Absent on a caller that predates Undo: no row is then marked undoable or undone. */
+    lakeConfigUndoClaims?: Pick<ILakeConfigUndoClaimRepository, 'listForEvents'>;
   };
   /** Page size; clamped through `clampLakeConfigHistoryLimit`. */
   limit?: number;
@@ -220,7 +226,11 @@ export async function assembleLakeConfigHistory(
   // <date>". The extra row is never returned - it is sliced off below.
   const configProbe = await db.lakeConfigChangeEvents.listByLake(lake.id, { limit: pageSize + 1 });
   const configTruncated = configProbe.length > pageSize;
-  const configEntries = configProbe.slice(0, pageSize).map(toLakeConfigHistoryEntry);
+  const configWindow = configProbe.slice(0, pageSize);
+  const configEntries = configWindow.map(toLakeConfigHistoryEntry);
+  const undoFacts = new Map<string, UndoClassification>(
+    configWindow.map(event => [event.id, classifyConfigUndo(event, now)])
+  );
 
   let fileEntries: LakeConfigHistoryFileEntry[] = [];
   let filesTruncated = false;
@@ -233,9 +243,49 @@ export async function assembleLakeConfigHistory(
       .filter(entry => !oldestConfigAt || entry.changedAt >= oldestConfigAt);
     filesTruncated = fileProbe.length > pageSize;
     fileEntries = fileProbe.slice(0, pageSize);
+    // Classified from the entry: the file row carries every field the classifier reads.
+    for (const entry of fileEntries) {
+      undoFacts.set(
+        entry.eventId,
+        classifyFileUndo(
+          {
+            action: entry.action === 'file-added' ? 'added' : 'removed',
+            causedByEventId: entry.causedByEventId,
+            createdAt: entry.changedAt,
+          },
+          now
+        )
+      );
+    }
   }
 
   const entries: LakeConfigHistoryEntry[] = [...configEntries, ...fileEntries].sort(byNewest);
+
+  // The claim is the source of truth for "undone"; the undoing row is only a convenience link, and
+  // may be outside the window or never have persisted.
+  const claims = db.lakeConfigUndoClaims
+    ? await db.lakeConfigUndoClaims.listForEvents(
+        lake.id,
+        entries.map(entry => entry.eventId)
+      )
+    : [];
+  const claimByEvent = new Map(claims.map(claim => [claim.eventId, claim]));
+  const inWindow = new Set(entries.map(entry => entry.eventId));
+  const undoerByEvent = new Map<string, string>();
+  for (const entry of entries) if (entry.undoesEventId) undoerByEvent.set(entry.undoesEventId, entry.eventId);
+  for (const entry of entries) {
+    if (!db.lakeConfigUndoClaims) break;
+    const facts = undoFacts.get(entry.eventId);
+    const claim = claimByEvent.get(entry.eventId);
+    entry.undone = !!claim;
+    entry.undoable = !claim && !!facts?.plan;
+    const undoer =
+      undoerByEvent.get(entry.eventId) ??
+      (claim?.undoEventId && inWindow.has(claim.undoEventId) ? claim.undoEventId : undefined);
+    if (undoer) entry.undoneByEventId = undoer;
+    if (!claim && !facts?.plan && facts?.note) entry.undoNote = facts.note;
+  }
+
   const truncated = configTruncated || filesTruncated;
   // History is complete only from the later of the two streams' cut-offs.
   const cutoffs = [

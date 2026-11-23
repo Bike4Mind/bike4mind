@@ -8,8 +8,10 @@ import type {
   LakeConfigChangeAction,
   ReviewDataLakeProposalInput,
 } from '@bike4mind/common';
+import { Types } from 'mongoose';
 import {
   BadGatewayError,
+  ConflictError,
   DATALAKE_TAG_STRENGTH,
   FabFileSourceType,
   GatewayTimeoutError,
@@ -28,6 +30,7 @@ import {
   type ManageActor,
   type SerializeLakeClaim,
 } from './manageRule';
+import { FILE_NOT_IN_LAKE_MESSAGE } from './lakeMembership';
 import { recordLakeConfigChange, type LakeConfigAuditAdapters } from './recordLakeConfigChange';
 
 /**
@@ -93,7 +96,13 @@ export interface ReviewAdapters extends LakeConfigAuditAdapters {
   serializeClaim: SerializeLakeClaim;
 }
 
-type ReviewableAdapters = Omit<ReviewAdapters, 'admitSource' | 'serializeClaim'>;
+/** Links the History row a review writes to an Undo: the row it reverses, and its pre-minted id. */
+export interface ReviewAuditLink {
+  undoesEventId?: string;
+  eventId?: string;
+}
+
+type ReviewableAdapters = Omit<ReviewAdapters, 'admitSource' | 'serializeClaim'> & { audit?: ReviewAuditLink };
 
 interface ResolveReviewableAdapters {
   db: {
@@ -507,7 +516,7 @@ export async function declineDataLakeProposal(
   { reason }: { reason?: string },
   adapters: ReviewableAdapters
 ): Promise<IDataLakeProposalDocument> {
-  const { db, logger } = adapters;
+  const { db, logger, audit } = adapters;
   // Resolved for its authorization only. No writability check: declining an archived lake's backlog
   // is housekeeping, not a write into it.
   const { lake, grants } = await resolveReviewable(proposalId, actor, { db });
@@ -528,6 +537,7 @@ export async function declineDataLakeProposal(
       lake,
       grants,
       action: 'decline-proposal',
+      ...audit,
       target: { kind: 'proposal', id: proposalId },
       changes: [proposalReviewChange(declined, 'declined')],
     },
@@ -544,6 +554,7 @@ export interface RestoreAdapters extends LakeConfigAuditAdapters {
       // REQUIRED - see the matching note on ReviewAdapters.
       lakeConfigChangeEvents: NonNullable<LakeConfigAuditAdapters['db']['lakeConfigChangeEvents']>;
     };
+  audit?: ReviewAuditLink;
 }
 
 /**
@@ -557,7 +568,7 @@ export async function restoreDataLakeProposal(
   actor: ManageActor,
   adapters: RestoreAdapters
 ): Promise<IDataLakeProposalDocument> {
-  const { db, logger } = adapters;
+  const { db, logger, audit } = adapters;
   const { proposal, lake, grants } = await resolveReviewable(proposalId, actor, { db });
   if (proposal.status !== 'declined') throw new BadRequestError('Only a declined proposal can be restored');
 
@@ -581,6 +592,7 @@ export async function restoreDataLakeProposal(
       lake,
       grants,
       action: 'restore-proposal',
+      ...audit,
       target: { kind: 'proposal', id: proposalId },
       changes: [proposalReviewChange(result.proposal, 'restored')],
     },
@@ -588,4 +600,99 @@ export async function restoreDataLakeProposal(
   );
 
   return result.proposal;
+}
+
+export interface UnapproveAdapters extends LakeConfigAuditAdapters {
+  db: LakeConfigAuditAdapters['db'] &
+    Omit<ResolveReviewableAdapters['db'], 'dataLakeProposals'> & {
+      dataLakeProposals: Pick<
+        IDataLakeProposalRepository,
+        'findById' | 'findLatestBySourceKey' | 'unapprove' | 'rollbackUnapprove'
+      >;
+      // REQUIRED - see the matching note on ReviewAdapters.
+      lakeConfigChangeEvents: NonNullable<LakeConfigAuditAdapters['db']['lakeConfigChangeEvents']>;
+    };
+  /**
+   * Takes the admitted file out of the lake. Bound by the caller to `removeFileFromDataLake`, so the
+   * membership write keeps its own manage gate and stats recompute.
+   */
+  removeAdmittedFile(
+    actor: ManageActor,
+    lakeId: string,
+    fabFileId: string,
+    links: { causedByEventId: string }
+  ): Promise<void>;
+  audit?: ReviewAuditLink;
+}
+
+/**
+ * Undo an approval: the proposal goes back to pending and the file it admitted leaves the lake.
+ * The FabFile itself stays in its owner's Files.
+ *
+ * Refused when a newer row exists for the same source, whatever its status: a manual approve has no
+ * held-source guard, so re-approving the older row next to a newer one would admit the source twice.
+ *
+ * The History row is written last, under an id minted first, so the membership removal can say it was
+ * caused by this undo and therefore has no Undo of its own. The row is the removal's own record of
+ * which file left, so it carries `admittedFabFileId` like the approval did; that is also how a reader
+ * tells this `restore-proposal` row from the one a decline's undo writes.
+ */
+export async function unapproveDataLakeProposal(
+  proposalId: string,
+  actor: ManageActor,
+  adapters: UnapproveAdapters
+): Promise<{ proposal: IDataLakeProposalDocument; eventId: string; removedFabFileId: string | null }> {
+  const { db, logger, audit } = adapters;
+  const { proposal, lake, grants } = await resolveReviewable(proposalId, actor, { db });
+  if (proposal.status !== 'approved') throw new ConflictError('This proposal is no longer approved');
+
+  const latest = await db.dataLakeProposals.findLatestBySourceKey(proposal.dataLakeId, proposal.canonicalSourceKey);
+  if (latest && latest.id !== proposal.id) {
+    throw new ConflictError(
+      latest.status === 'pending'
+        ? 'This source is already waiting for review again, so this approval cannot be undone'
+        : 'This source has been proposed again since it was approved, so this approval cannot be undone'
+    );
+  }
+
+  const eventId = audit?.eventId ?? new Types.ObjectId().toHexString();
+  const reset = await db.dataLakeProposals.unapprove(proposalId);
+  if (!reset.unapproved) {
+    throw new ConflictError(
+      reset.reason === 'pending_exists'
+        ? 'This source is already waiting for review, so this approval cannot be undone'
+        : 'This proposal is no longer approved'
+    );
+  }
+
+  const fabFileId = reset.previous.admittedFabFileId ?? null;
+  if (fabFileId) {
+    try {
+      await adapters.removeAdmittedFile(actor, lake.id, fabFileId, { causedByEventId: eventId });
+    } catch (err) {
+      // Already gone from the lake is the state this undo wants, so it is done rather than a 404.
+      const alreadyGone = err instanceof NotFoundError && err.message === FILE_NOT_IN_LAKE_MESSAGE;
+      if (!alreadyGone) {
+        await db.dataLakeProposals.rollbackUnapprove(reset.previous).catch(() => {});
+        throw err;
+      }
+    }
+  }
+
+  await recordLakeConfigChange(
+    {
+      actor,
+      lake,
+      grants,
+      action: 'restore-proposal',
+      eventId,
+      undoesEventId: audit?.undoesEventId,
+      target: { kind: 'proposal', id: proposalId },
+      changes: [proposalReviewChange(reset.proposal, 'unapproved')],
+      admittedFabFileId: fabFileId ?? undefined,
+    },
+    { db, logger }
+  );
+
+  return { proposal: reset.proposal, eventId, removedFabFileId: fabFileId };
 }

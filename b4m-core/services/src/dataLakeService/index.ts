@@ -114,6 +114,8 @@ export * from './openSearchRetrievalIndex';
 export * from './attributeAccessedLakes';
 export * from './recordLakeAccessEvent';
 export * from './assembleLakeConfigHistory';
+export * from './lakeChangeUndoability';
+export * from './undoLakeConfigChange';
 export * from './diffLakeMembership';
 export * from './canonicalSourceKey';
 export * from './applyCorpusAction';
