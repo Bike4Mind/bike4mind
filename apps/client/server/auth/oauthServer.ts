@@ -8,7 +8,7 @@
 
 import crypto from 'crypto';
 import jwt from 'jsonwebtoken';
-import { requireEnv } from '@bike4mind/common';
+import { isUnconfiguredSecret, requireEnv } from '@bike4mind/common';
 import { Config } from '@bike4mind/server-utils/utils/config';
 import {
   oauthClientRepository,
@@ -28,18 +28,25 @@ import { PKCE_CODE_VERIFIER_RE, PKCE_S256_CHALLENGE_RE } from './pkce';
 /** SystemSecret row holding the generated key. Distinct from the OAUTH_RSA_PRIVATE_KEY env secret. */
 export const GENERATED_SIGNING_KEY_SECRET_NAME = 'OAUTH_GENERATED_RSA_PRIVATE_KEY';
 
-type SigningKey = { privateKey: string; publicKey: string; keyId: string };
+type SigningKey = {
+  privateKey: string;
+  publicKey: string;
+  keyId: string;
+  /** True for the stopgap key of an instance that could not reach the shared store. */
+  instanceLocal: boolean;
+};
 
 let sharedKey: SigningKey | null = null;
+let sharedKeyLoad: Promise<SigningKey> | null = null;
 let instanceFallbackKey: SigningKey | null = null;
 
-function toSigningKey(privateKeyPem: string): SigningKey {
+function toSigningKey(privateKeyPem: string, instanceLocal = false): SigningKey {
   const publicKey = crypto
     .createPublicKey(crypto.createPrivateKey(privateKeyPem))
     .export({ type: 'spki', format: 'pem' }) as string;
   // Derive kid from public key fingerprint so Cognito auto-detects key rotation
   const keyId = crypto.createHash('sha256').update(publicKey).digest('hex').slice(0, 16);
-  return { privateKey: privateKeyPem, publicKey, keyId };
+  return { privateKey: privateKeyPem, publicKey, keyId, instanceLocal };
 }
 
 function generatePrivateKeyPem(): string {
@@ -74,38 +81,46 @@ async function loadOrCreateSharedPrivateKey(): Promise<string> {
   return decryptStoredSecret(stored.encryptedValue);
 }
 
+function configuredPrivateKey(): string | undefined {
+  const envKey = Config.OAUTH_RSA_PRIVATE_KEY;
+  return envKey && !isUnconfiguredSecret(envKey) ? Buffer.from(envKey, 'base64').toString('utf8') : undefined;
+}
+
 async function getSigningKey(): Promise<SigningKey> {
   if (sharedKey) return sharedKey;
 
-  const envKey =
-    Config.OAUTH_RSA_PRIVATE_KEY && Config.OAUTH_RSA_PRIVATE_KEY !== 'not-configured'
-      ? Config.OAUTH_RSA_PRIVATE_KEY
-      : undefined;
+  const envKey = configuredPrivateKey();
   if (envKey) {
-    sharedKey = toSigningKey(Buffer.from(envKey, 'base64').toString('utf8'));
+    sharedKey = toSigningKey(envKey);
     return sharedKey;
   }
 
+  // One store round trip per instance, however many requests arrive while it is in flight.
+  sharedKeyLoad ??= loadOrCreateSharedPrivateKey().then(privateKey => (sharedKey = toSigningKey(privateKey)));
   try {
-    sharedKey = toSigningKey(await loadOrCreateSharedPrivateKey());
-    return sharedKey;
+    return await sharedKeyLoad;
   } catch (error) {
     // Keep signing with an instance-local key rather than fail the request; the next call retries
     // the store, since only a stored key is cached for good.
+    sharedKeyLoad = null;
     console.error('[OAuthServer] Could not load the shared OAuth signing key; using an instance-local key.', error);
-    instanceFallbackKey ??= toSigningKey(generatePrivateKeyPem());
+    instanceFallbackKey ??= toSigningKey(generatePrivateKeyPem(), true);
     return instanceFallbackKey;
   }
 }
 
 // ─── JWKS ─────────────────────────────────────────────────────────────────────
 
+/**
+ * The JWKS to publish, and whether a cache may keep it. An instance-local stopgap key must not be
+ * cached, since no other instance signs with it.
+ */
 export async function getJwks() {
-  const { publicKey, keyId } = await getSigningKey();
+  const { publicKey, keyId, instanceLocal } = await getSigningKey();
   const keyObject = crypto.createPublicKey(publicKey);
   const jwk = keyObject.export({ format: 'jwk' }) as crypto.JsonWebKey;
 
-  return {
+  const jwks = {
     keys: [
       {
         kty: jwk.kty,
@@ -117,6 +132,7 @@ export async function getJwks() {
       },
     ],
   };
+  return { jwks, cacheable: !instanceLocal };
 }
 
 // ─── PKCE ─────────────────────────────────────────────────────────────────────

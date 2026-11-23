@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeAll, beforeEach, afterEach, vi } from 'vitest';
 import jwt from 'jsonwebtoken';
 import crypto from 'crypto';
 
@@ -26,7 +26,8 @@ vi.mock('@bike4mind/server-utils/security/tokenEncryption', () => ({
   encryptToken: (value: string) => `enc:${value}`,
   decryptStoredSecret: (value: string) => value.replace(/^enc:/, ''),
 }));
-vi.mock('@bike4mind/server-utils/utils/config', () => ({ Config: { OAUTH_RSA_PRIVATE_KEY: undefined } }));
+const config = vi.hoisted(() => ({ OAUTH_RSA_PRIVATE_KEY: undefined as string | undefined }));
+vi.mock('@bike4mind/server-utils/utils/config', () => ({ Config: config }));
 
 import {
   GENERATED_SIGNING_KEY_SECRET_NAME,
@@ -246,11 +247,11 @@ describe('signing key without OAUTH_RSA_PRIVATE_KEY', () => {
   it('verifies on one instance a token another instance signed, and both publish its key', async () => {
     const signer = await freshInstance();
     const token = await signer.generateIdToken(claims);
-    const signerKid = (await signer.getJwks()).keys[0].kid;
+    const signerKid = (await signer.getJwks()).jwks.keys[0].kid;
 
     const verifier = await freshInstance();
 
-    expect((await verifier.getJwks()).keys.map(key => key.kid)).toEqual([signerKid]);
+    expect((await verifier.getJwks()).jwks.keys.map(key => key.kid)).toEqual([signerKid]);
     expect(jwt.decode(token, { complete: true })?.header.kid).toBe(signerKid);
     expect(await verifier.verifyIdTokenHint(token, 'c1')).toEqual({ sub: 'u1', clientId: 'c1' });
   });
@@ -267,6 +268,16 @@ describe('signing key without OAUTH_RSA_PRIVATE_KEY', () => {
     expect(store.rows.get(GENERATED_SIGNING_KEY_SECRET_NAME)?.encryptedValue).toMatch(
       /^enc:-----BEGIN PRIVATE KEY-----/
     );
+  });
+
+  it('reads the store once for concurrent requests on one instance', async () => {
+    const instance = await freshInstance();
+
+    const tokens = await Promise.all([1, 2, 3].map(() => instance.generateIdToken(claims)));
+
+    expect(store.findBySecretName).toHaveBeenCalledTimes(1);
+    expect(store.upsertSecret).toHaveBeenCalledTimes(1);
+    expect(new Set(tokens.map(token => jwt.decode(token, { complete: true })?.header.kid)).size).toBe(1);
   });
 
   it('adopts the key a concurrent instance stored first', async () => {
@@ -298,10 +309,64 @@ describe('signing key without OAUTH_RSA_PRIVATE_KEY', () => {
       expect(await instance.verifyIdTokenHint(token, 'c1')).toEqual({ sub: 'u1', clientId: 'c1' });
       expect(store.rows.has(GENERATED_SIGNING_KEY_SECRET_NAME)).toBe(false);
 
-      await instance.getJwks();
+      const recovered = await instance.getJwks();
       expect(store.rows.has(GENERATED_SIGNING_KEY_SECRET_NAME)).toBe(true);
+      expect(recovered.cacheable).toBe(true);
     } finally {
       errorSpy.mockRestore();
     }
+  });
+
+  it('marks the JWKS uncacheable while serving an instance-local key', async () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    try {
+      store.findBySecretName.mockRejectedValueOnce(new Error('db down'));
+
+      expect((await (await freshInstance()).getJwks()).cacheable).toBe(false);
+    } finally {
+      errorSpy.mockRestore();
+    }
+  });
+});
+
+describe('signing key with OAUTH_RSA_PRIVATE_KEY configured', () => {
+  const configured = crypto.generateKeyPairSync('rsa', {
+    modulusLength: 2048,
+    privateKeyEncoding: { type: 'pkcs8', format: 'pem' },
+    publicKeyEncoding: { type: 'spki', format: 'pem' },
+  });
+  const claims = { ...base, scopes: ['openid'], scopeLimited: true };
+
+  beforeEach(() => {
+    config.OAUTH_RSA_PRIVATE_KEY = Buffer.from(configured.privateKey).toString('base64');
+    store.findBySecretName.mockClear();
+    store.upsertSecret.mockClear();
+  });
+  afterEach(() => {
+    config.OAUTH_RSA_PRIVATE_KEY = undefined;
+  });
+
+  it('signs with the configured key and never touches the store', async () => {
+    vi.resetModules();
+    const instance = await import('./oauthServer');
+
+    const token = await instance.generateIdToken(claims);
+    const { jwks, cacheable } = await instance.getJwks();
+
+    expect(jwt.verify(token, configured.publicKey, { algorithms: ['RS256'] })).toMatchObject({ sub: 'u1' });
+    expect(jwks.keys[0].kid).toBe(jwt.decode(token, { complete: true })?.header.kid);
+    expect(cacheable).toBe(true);
+    expect(store.findBySecretName).not.toHaveBeenCalled();
+    expect(store.upsertSecret).not.toHaveBeenCalled();
+  });
+
+  it('treats the SST placeholder as unset', async () => {
+    config.OAUTH_RSA_PRIVATE_KEY = 'not-configured';
+    vi.resetModules();
+    const instance = await import('./oauthServer');
+
+    await instance.generateIdToken(claims);
+
+    expect(store.findBySecretName).toHaveBeenCalled();
   });
 });

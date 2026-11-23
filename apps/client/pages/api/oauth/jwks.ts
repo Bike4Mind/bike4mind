@@ -10,8 +10,9 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { getJwks } from '@server/auth/oauthServer';
 
 const handler = baseApi({ auth: false }).get(async (_req, res) => {
-  res.setHeader('Cache-Control', 'public, max-age=3600');
-  return res.json(await getJwks());
+  const { jwks, cacheable } = await getJwks();
+  res.setHeader('Cache-Control', cacheable ? 'public, max-age=3600' : 'no-store');
+  return res.json(jwks);
 });
 
 export const config = { api: { externalResolver: true } };
