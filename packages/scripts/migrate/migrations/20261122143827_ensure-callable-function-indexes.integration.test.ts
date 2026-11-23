@@ -9,7 +9,7 @@ import migration from './20261122143827_ensure-callable-function-indexes';
 
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
 
-const UNIQUE_INDEXES = ['callablefn_owner_slug', 'callablefn_owner_artifact'];
+const UNIQUE_INDEXES = ['callablefn_owner_slug'];
 
 let server: Awaited<ReturnType<typeof createMongoServer>>;
 
@@ -28,7 +28,7 @@ const uniqueIndexes = async () =>
   (await CallableFunction.collection.indexes()).filter(i => UNIQUE_INDEXES.includes(i.name ?? ''));
 
 describe('ensure-callable-function-indexes migration (real DB)', () => {
-  it('builds both unique indexes on a collection that has none, and runs again without error', async () => {
+  it('builds the unique index on a collection that has none, and runs again without error', async () => {
     await CallableFunction.collection.dropIndexes();
     expect(await uniqueIndexes()).toEqual([]);
 
@@ -39,10 +39,5 @@ describe('ensure-callable-function-indexes migration (real DB)', () => {
     expect(built.map(i => i.name).sort()).toEqual([...UNIQUE_INDEXES].sort());
     for (const index of built) expect(index.unique).toBe(true);
     expect(built.find(i => i.name === 'callablefn_owner_slug')?.key).toEqual({ ownerType: 1, ownerKey: 1, slug: 1 });
-    expect(built.find(i => i.name === 'callablefn_owner_artifact')?.key).toEqual({
-      ownerType: 1,
-      ownerKey: 1,
-      'pin.artifactId': 1,
-    });
   });
 });

@@ -8,7 +8,14 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { EventEmitter } from 'events';
 import { createMocks, type RequestMethod } from 'node-mocks-http';
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { BadRequestError, CallableFunctionSlugConflictError, ConflictError, NotFoundError } from '@bike4mind/common';
+import {
+  BadRequestError,
+  CallableFunctionBreakingChangeError,
+  CallableFunctionSlugConflictError,
+  ConflictError,
+  NotFoundError,
+  type FunctionContractChange,
+} from '@bike4mind/common';
 
 const h = vi.hoisted(() => ({
   enabled: true,
@@ -381,6 +388,21 @@ describe('forwarding to the registry', () => {
       slug: 'beam_midspan_deflection',
       functionId: FUNCTION_ID,
       sourceDeleted: true,
+    });
+  });
+
+  it('answers a breaking repin with 409 breaking_change and each change', async () => {
+    const changes: FunctionContractChange[] = [
+      { path: 'inputs.load.unit', side: 'inputs', field: 'load', kind: 'unit_changed', before: 'N', after: 'kN' },
+      { path: 'outputs.deflection', side: 'outputs', field: 'deflection', kind: 'removed' },
+    ];
+    h.registry.repinCallableFunction.mockRejectedValue(new CallableFunctionBreakingChangeError(changes));
+    const refused = await fire(PIN);
+    expect(refused._getStatusCode()).toBe(409);
+    expect(refused._getJSONData()).toMatchObject({
+      error: 'This version changes the contract in a way that could break callers of the tool.',
+      code: 'breaking_change',
+      changes,
     });
   });
 });

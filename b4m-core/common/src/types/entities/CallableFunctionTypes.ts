@@ -1,5 +1,5 @@
 import { ConflictError } from '../../errors';
-import type { FunctionContract } from '../../schemas/functionContract';
+import type { FunctionContract, FunctionContractChange } from '../../schemas/functionContract';
 import { IBaseRepository } from './BaseTypes';
 import { IMongoDocument } from './common';
 
@@ -184,11 +184,22 @@ export class CallableFunctionSlugConflictError extends ConflictError {
   }
 }
 
-/** The `callablefn_owner_artifact` unique index: one function per artifact per owner. */
-export class CallableFunctionArtifactConflictError extends ConflictError {
-  constructor(readonly artifactId: string) {
-    super('This artifact is already saved as a tool.', { code: 'artifact_has_function', artifactId });
-    this.name = 'CallableFunctionArtifactConflictError';
+/** A repin refused because the new contract could break callers of the pinned one; `changes` names each change. */
+export class CallableFunctionBreakingChangeError extends ConflictError {
+  constructor(readonly changes: FunctionContractChange[]) {
+    super('This version changes the contract in a way that could break callers of the tool.', {
+      code: 'breaking_change',
+      changes,
+    });
+    this.name = 'CallableFunctionBreakingChangeError';
+  }
+}
+
+/** A repin refused because the stored contract does not parse, so it cannot be compared with the new one. */
+export class CallableFunctionContractUnreadableError extends ConflictError {
+  constructor() {
+    super('The saved contract cannot be read; save this version as a new tool.', { code: 'contract_unreadable' });
+    this.name = 'CallableFunctionContractUnreadableError';
   }
 }
 
@@ -203,8 +214,8 @@ export interface CallableFunctionRepin {
 export interface ICallableFunctionRepository extends IBaseRepository<ICallableFunctionDocument> {
   /**
    * Creates only if the owner stays within `cap`: inserts, re-counts, and deletes its own insert when over, so
-   * racing creates at the boundary may all fail but the cap is never passed. Throws `CallableFunctionCapError`,
-   * `CallableFunctionSlugConflictError`, or `CallableFunctionArtifactConflictError`.
+   * racing creates at the boundary may all fail but the cap is never passed. Throws `CallableFunctionCapError` or
+   * `CallableFunctionSlugConflictError`.
    */
   createWithinOwnerCap(data: CallableFunctionCreateInput, cap: number): Promise<ICallableFunctionDocument>;
   /** Null for another owner's function and for an id that is not an ObjectId. */

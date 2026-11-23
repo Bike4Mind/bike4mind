@@ -29,6 +29,7 @@ import {
   parseFunctionContract,
   validateFunctionValue,
   type FunctionContract,
+  type FunctionContractChange,
   type FunctionContractProblem,
   type FunctionField,
   type FunctionObjectField,
@@ -36,6 +37,8 @@ import {
 } from '@bike4mind/common';
 import { toast } from 'sonner';
 import {
+  callableFunctionBreakingChanges,
+  callableFunctionContractUnreadable,
   callableFunctionErrorMessage,
   useArtifactCallableFunction,
   useDeleteCallableFunction,
@@ -45,6 +48,7 @@ import {
 import { usePyodide } from '@client/app/hooks/usePyodide';
 import { PYTHON_SCRIPT_BUSY } from '@client/app/utils/pyodideManager';
 import ProblemList, { dangerAlertSx } from './FunctionProblemList';
+import BreakingChangeDialog from './BreakingChangeDialog';
 import SaveFunctionDialog from './SaveFunctionDialog';
 
 /** Where saving this artifact as a tool would pin it, or why it cannot be saved yet. */
@@ -424,27 +428,136 @@ const failureToast = (title: string) => (error: unknown) => {
   toast.error(title, reason ? { description: reason } : undefined);
 };
 
-/** Make this a tool, or the saved tool's status with Update, Turn off or Turn on, and Delete. */
-function FunctionSaveSection({ save, contract }: { save: PythonFunctionSave; contract: FunctionContract }) {
-  const { data: saved, isLoading } = useArtifactCallableFunction(save.artifactId, save.version);
-  const repin = useRepinCallableFunction();
+const DELETE_TITLE = 'Delete this tool?';
+
+/** Turn off or Turn on, and Delete, for one tool; `testIdPrefix` keeps the named tool's ids apart from the others'. */
+function ToolControls({
+  tool,
+  testIdPrefix,
+  onDelete,
+}: {
+  tool: ICallableFunctionPublic;
+  testIdPrefix: string;
+  onDelete: (tool: ICallableFunctionPublic) => void;
+}) {
   const setEnabled = useSetCallableFunctionEnabled();
+  // The button is disabled while loading, which drops focus to the page body; put it back once it settles.
+  const enableRef = useRef<HTMLButtonElement>(null);
+  const [refocus, setRefocus] = useState(false);
+  useEffect(() => {
+    if (!refocus || setEnabled.isPending) return;
+    enableRef.current?.focus();
+    setRefocus(false);
+  }, [refocus, setEnabled.isPending]);
+
+  return (
+    <>
+      {tool.status !== 'source_deleted' && (
+        <Button
+          ref={enableRef}
+          size="sm"
+          variant="outlined"
+          color="neutral"
+          loading={setEnabled.isPending}
+          aria-label={`${tool.enabled ? 'Turn off' : 'Turn on'} ${tool.slug}`}
+          data-testid={`${testIdPrefix}-enable-btn`}
+          onClick={() =>
+            setEnabled.mutate(
+              { id: tool.id, enabled: !tool.enabled },
+              {
+                onError: failureToast(tool.enabled ? 'Could not turn off the tool.' : 'Could not turn on the tool.'),
+                onSettled: () => setRefocus(true),
+              }
+            )
+          }
+        >
+          {tool.enabled ? 'Turn off' : 'Turn on'}
+        </Button>
+      )}
+      <Button
+        size="sm"
+        variant="outlined"
+        color="danger"
+        aria-label={`Delete ${tool.slug}`}
+        data-testid={`${testIdPrefix}-delete-btn`}
+        onClick={() => onDelete(tool)}
+      >
+        Delete
+      </Button>
+    </>
+  );
+}
+
+const StatusLines = ({ tool }: { tool: ICallableFunctionPublic }) => (
+  <>
+    {savedStatusLines(tool).map(line => (
+      <Typography level="body-sm" key={line}>
+        {line}
+      </Typography>
+    ))}
+  </>
+);
+
+type FocusWhen = 'saved' | 'repinned' | { deletedId: string };
+
+interface Refusal {
+  version: number;
+  changes: FunctionContractChange[];
+  unreadable: boolean;
+}
+
+/**
+ * Make this a tool, or the saved tool's status with Update, Turn off or Turn on, and Delete; then the artifact's
+ * tools under other names, each with Turn off or Turn on, and Delete.
+ */
+function FunctionSaveSection({ save, contract }: { save: PythonFunctionSave; contract: FunctionContract }) {
+  const { data, isLoading } = useArtifactCallableFunction(save.artifactId, save.version, contract.name);
+  const saved = data?.saved ?? null;
+  const others = data?.others ?? [];
+  const repin = useRepinCallableFunction();
   const remove = useDeleteCallableFunction();
   const [dialogOpen, setDialogOpen] = useState(false);
-  const [confirmingDelete, setConfirmingDelete] = useState(false);
+  const [deleting, setDeleting] = useState<ICallableFunctionPublic | null>(null);
+  const [refused, setRefused] = useState<Refusal | null>(null);
   const target = save.blocked === null ? save : null;
   // A save, delete, or update replaces the button that started it, so focus would fall back to the page body.
   const stateRef = useRef<HTMLDivElement>(null);
-  const [focusWhen, setFocusWhen] = useState<'saved' | 'unsaved' | 'repinned' | null>(null);
+  const [focusWhen, setFocusWhen] = useState<FocusWhen | null>(null);
 
   useEffect(() => {
-    if (focusWhen === null || isLoading || dialogOpen || confirmingDelete) return;
+    if (focusWhen === null || isLoading || dialogOpen || deleting) return;
     const landed =
-      focusWhen === 'unsaved' ? !saved : focusWhen === 'saved' ? Boolean(saved) : saved?.updateAvailable === false;
+      focusWhen === 'saved'
+        ? Boolean(saved)
+        : focusWhen === 'repinned'
+          ? saved?.updateAvailable === false
+          : ![saved, ...others].some(tool => tool?.id === focusWhen.deletedId);
     if (!landed) return;
     stateRef.current?.querySelector('button')?.focus();
     setFocusWhen(null);
-  }, [focusWhen, isLoading, dialogOpen, confirmingDelete, saved]);
+  }, [focusWhen, isLoading, dialogOpen, deleting, saved, others]);
+
+  const renderOthers = () =>
+    others.length > 0 && (
+      <Stack spacing={1} sx={{ mt: 2 }} data-testid="python-function-other-tools">
+        <Typography level="body-xs" sx={{ color: 'text.secondary' }}>
+          Other tools saved from this artifact:
+        </Typography>
+        {others.map(tool => (
+          <Stack key={tool.id} spacing={0.5} data-testid="python-function-other-tool">
+            <Typography level="title-sm">
+              <code>{tool.slug}</code>
+            </Typography>
+            <Box data-testid="python-function-other-tool-status">
+              <StatusLines tool={tool} />
+            </Box>
+            <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
+              <ToolControls tool={tool} testIdPrefix="python-function-other-tool" onDelete={setDeleting} />
+            </Stack>
+          </Stack>
+        ))}
+      </Stack>
+    );
 
   const renderState = () => {
     if (isLoading) return null;
@@ -473,11 +586,7 @@ function FunctionSaveSection({ save, contract }: { save: PythonFunctionSave; con
     return (
       <Stack spacing={1}>
         <Box data-testid="python-function-saved-status">
-          {savedStatusLines(saved).map(line => (
-            <Typography level="body-sm" key={line}>
-              {line}
-            </Typography>
-          ))}
+          <StatusLines tool={saved} />
         </Box>
         <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
           {target && saved.updateAvailable && saved.latestVersion !== null && (
@@ -490,43 +599,23 @@ function FunctionSaveSection({ save, contract }: { save: PythonFunctionSave; con
               onClick={() =>
                 repin.mutate(
                   { id: saved.id, expectedVersion: target.version, contract },
-                  { onSuccess: () => setFocusWhen('repinned'), onError: failureToast('Could not update the tool.') }
+                  {
+                    onSuccess: () => setFocusWhen('repinned'),
+                    onError: error => {
+                      const changes = callableFunctionBreakingChanges(error);
+                      const unreadable = callableFunctionContractUnreadable(error);
+                      if (changes.length > 0 || unreadable) {
+                        setRefused({ version: target.version, changes, unreadable });
+                      } else failureToast('Could not update the tool.')(error);
+                    },
+                  }
                 )
               }
             >
               Update to version {saved.latestVersion}
             </Button>
           )}
-          {saved.status !== 'source_deleted' && (
-            <Button
-              size="sm"
-              variant="outlined"
-              color="neutral"
-              loading={setEnabled.isPending}
-              data-testid="python-function-enable-btn"
-              onClick={() =>
-                setEnabled.mutate(
-                  { id: saved.id, enabled: !saved.enabled },
-                  {
-                    onError: failureToast(
-                      saved.enabled ? 'Could not turn off the tool.' : 'Could not turn on the tool.'
-                    ),
-                  }
-                )
-              }
-            >
-              {saved.enabled ? 'Turn off' : 'Turn on'}
-            </Button>
-          )}
-          <Button
-            size="sm"
-            variant="outlined"
-            color="danger"
-            data-testid="python-function-delete-btn"
-            onClick={() => setConfirmingDelete(true)}
-          >
-            Delete
-          </Button>
+          <ToolControls key={saved.id} tool={saved} testIdPrefix="python-function" onDelete={setDeleting} />
         </Stack>
       </Stack>
     );
@@ -534,7 +623,10 @@ function FunctionSaveSection({ save, contract }: { save: PythonFunctionSave; con
 
   return (
     <>
-      <Box ref={stateRef}>{renderState()}</Box>
+      <Box ref={stateRef}>
+        {renderState()}
+        {!isLoading && renderOthers()}
+      </Box>
       {/* Mounted apart from the state above, which turns into the saved status as soon as the save lands. */}
       {target && dialogOpen && (
         <SaveFunctionDialog
@@ -548,19 +640,20 @@ function FunctionSaveSection({ save, contract }: { save: PythonFunctionSave; con
           contract={contract}
         />
       )}
-      {saved && (
-        <Modal open={confirmingDelete} onClose={() => !remove.isPending && setConfirmingDelete(false)}>
+      {deleting && (
+        <Modal open onClose={() => !remove.isPending && setDeleting(null)}>
           <ModalDialog
             variant="outlined"
             role="alertdialog"
+            aria-label={DELETE_TITLE}
             data-testid="python-function-delete-dialog"
             sx={{ maxWidth: 500 }}
           >
             <ModalClose disabled={remove.isPending} />
-            <Typography level="h4">Delete this tool?</Typography>
+            <Typography level="h4">{DELETE_TITLE}</Typography>
             <Divider sx={{ my: 2 }} />
             <Typography level="body-md">
-              This deletes the tool <code>{saved.slug}</code>. The artifact is not changed.
+              This deletes the tool <code>{deleting.slug}</code>. The artifact is not changed.
             </Typography>
             <Stack direction="row" spacing={1} sx={{ mt: 3, justifyContent: 'flex-end' }}>
               <Button
@@ -568,7 +661,7 @@ function FunctionSaveSection({ save, contract }: { save: PythonFunctionSave; con
                 color="neutral"
                 disabled={remove.isPending}
                 data-testid="python-function-delete-cancel-btn"
-                onClick={() => setConfirmingDelete(false)}
+                onClick={() => setDeleting(null)}
               >
                 Cancel
               </Button>
@@ -578,10 +671,10 @@ function FunctionSaveSection({ save, contract }: { save: PythonFunctionSave; con
                 loading={remove.isPending}
                 data-testid="python-function-delete-confirm-btn"
                 onClick={() =>
-                  remove.mutate(saved.id, {
-                    onSuccess: () => setFocusWhen('unsaved'),
+                  remove.mutate(deleting.id, {
+                    onSuccess: () => setFocusWhen({ deletedId: deleting.id }),
                     onError: failureToast('Could not delete the tool.'),
-                    onSettled: () => setConfirmingDelete(false),
+                    onSettled: () => setDeleting(null),
                   })
                 }
               >
@@ -590,6 +683,22 @@ function FunctionSaveSection({ save, contract }: { save: PythonFunctionSave; con
             </Stack>
           </ModalDialog>
         </Modal>
+      )}
+      {saved && refused && (
+        <BreakingChangeDialog
+          onClose={() => {
+            setRefused(null);
+            // Update was disabled while loading, so the dialog would hand focus back to the page body.
+            requestAnimationFrame(() =>
+              stateRef.current?.querySelector<HTMLElement>('[data-testid="python-function-repin-btn"]')?.focus()
+            );
+          }}
+          slug={saved.slug}
+          pinnedVersion={saved.pin.version}
+          version={refused.version}
+          changes={refused.changes}
+          unreadable={refused.unreadable}
+        />
       )}
     </>
   );

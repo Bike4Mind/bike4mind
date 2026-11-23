@@ -10,6 +10,7 @@ vi.mock('@client/app/hooks/usePyodide', () => ({ usePyodide: () => ({ callFuncti
 
 const fns = vi.hoisted(() => ({
   saved: { data: null as unknown, isLoading: false },
+  others: [] as unknown[],
   query: vi.fn(),
   repin: { mutate: vi.fn(), isPending: false },
   setEnabled: { mutate: vi.fn(), isPending: false },
@@ -20,9 +21,10 @@ const fns = vi.hoisted(() => ({
 vi.mock('@client/app/contexts/ApiContext', () => ({ api: {} }));
 vi.mock('@client/app/hooks/data/callableFunctions', async importOriginal => ({
   ...(await importOriginal<typeof import('@client/app/hooks/data/callableFunctions')>()),
-  useArtifactCallableFunction: (artifactId: string | null, version: number) => {
-    fns.query(artifactId, version);
-    return fns.saved;
+  useArtifactCallableFunction: (artifactId: string | null, version: number, name: string) => {
+    fns.query(artifactId, version, name);
+    const { data, isLoading } = fns.saved;
+    return { isLoading, data: data === undefined ? undefined : { saved: data, others: fns.others } };
   },
   useRepinCallableFunction: () => fns.repin,
   useSetCallableFunctionEnabled: () => fns.setEnabled,
@@ -437,6 +439,7 @@ describe('PythonFunctionPanel save controls', () => {
   beforeEach(() => {
     callFunction.mockReset();
     fns.saved = { data: null, isLoading: false };
+    fns.others = [];
     fns.query.mockReset();
     fns.repin = { mutate: vi.fn(), isPending: false };
     fns.setEnabled = { mutate: vi.fn(), isPending: false };
@@ -458,7 +461,7 @@ describe('PythonFunctionPanel save controls', () => {
     fns.saved = { data: undefined, isLoading: true };
     await renderReady(TARGET);
 
-    expect(fns.query).toHaveBeenCalledWith('artifact-1', 3);
+    expect(fns.query).toHaveBeenCalledWith('artifact-1', 3, 'beam_midspan_deflection');
     expect(screen.queryByTestId('python-function-save-btn')).toBeNull();
     expect(screen.queryByTestId('python-function-saved-status')).toBeNull();
   });
@@ -665,6 +668,17 @@ describe('PythonFunctionPanel save controls', () => {
     );
   });
 
+  it('the delete confirm is an alert dialog named by its title', async () => {
+    fns.saved = { data: savedView(), isLoading: false };
+    await renderReady(TARGET);
+
+    fireEvent.click(screen.getByTestId('python-function-delete-btn'));
+
+    expect(screen.getByRole('alertdialog', { name: 'Delete this tool?' })).toBe(
+      screen.getByTestId('python-function-delete-dialog')
+    );
+  });
+
   it('Cancel in the delete dialog deletes nothing', async () => {
     fns.saved = { data: savedView(), isLoading: false };
     await renderReady(TARGET);
@@ -716,5 +730,248 @@ describe('PythonFunctionPanel save controls', () => {
 
     expect(fns.toastError).toHaveBeenCalledWith('Could not delete the tool.', undefined);
     await waitFor(() => expect(screen.queryByTestId('python-function-delete-dialog')).toBeNull());
+  });
+
+  describe('an update refused as breaking', () => {
+    const refusal = () =>
+      Object.assign(new Error('Request failed with status code 409'), {
+        isAxiosError: true,
+        response: {
+          status: 409,
+          data: {
+            error: 'This version changes the contract in a way that could break callers of the tool.',
+            code: 'breaking_change',
+            changes: [
+              {
+                path: 'inputs.load.unit',
+                side: 'inputs',
+                field: 'load',
+                kind: 'unit_changed',
+                before: 'N',
+                after: 'kN',
+              },
+              { path: 'outputs.deflection', side: 'outputs', field: 'deflection', kind: 'removed' },
+            ],
+          },
+        },
+      });
+
+    const refuseUpdate = async (error: unknown) => {
+      fns.saved = { data: newerVersion(), isLoading: false };
+      await renderReady({ artifactId: 'artifact-1', version: 4, blocked: null });
+      fireEvent.click(screen.getByTestId('python-function-repin-btn'));
+      const [, callbacks] = fns.repin.mutate.mock.calls[0] as [unknown, { onError: (error: unknown) => void }];
+      act(() => callbacks.onError(error));
+    };
+
+    it('lists each change in plain words and offers saving as a new tool, with no override', async () => {
+      await refuseUpdate(refusal());
+
+      const dialog = await screen.findByTestId('breaking-change-dialog');
+      expect(
+        within(dialog)
+          .getAllByTestId('breaking-change-dialog-change')
+          .map(item => item.textContent)
+      ).toEqual(['input load changed unit from N to kN', 'output deflection was removed']);
+      expect(dialog.textContent).toContain(
+        'changes the contract of beam_midspan_deflection in ways that could break its callers, so the tool stays pinned to version 3.'
+      );
+      expect(within(dialog).getByTestId('breaking-change-dialog-offer').textContent).toBe(
+        'To save version 4 as a new tool and keep beam_midspan_deflection as it is, give it a new name in FUNCTION, save the artifact, and select Make this a tool.'
+      );
+      expect(
+        within(dialog)
+          .getAllByRole('button')
+          .map(button => button.textContent)
+      ).toEqual(['', 'Close']);
+      expect(fns.toastError).not.toHaveBeenCalled();
+      expect(fns.remove.mutate).not.toHaveBeenCalled();
+      expect(fns.repin.mutate).toHaveBeenCalledTimes(1);
+
+      fireEvent.click(within(dialog).getByTestId('breaking-change-dialog-close-btn'));
+      await waitFor(() => expect(screen.queryByTestId('breaking-change-dialog')).toBeNull());
+      expect(statusText()).toBe(
+        'A newer version is available. This tool is pinned to version 3, and the artifact is at version 4.'
+      );
+    });
+
+    it('any other refusal stays a toast', async () => {
+      await refuseUpdate(axiosError(409, 'The artifact changed since you opened it. Reload it and try again.'));
+
+      expect(fns.toastError).toHaveBeenCalledWith('Could not update the tool.', {
+        description: 'The artifact changed since you opened it. Reload it and try again.',
+      });
+      expect(screen.queryByTestId('breaking-change-dialog')).toBeNull();
+    });
+
+    it('gives two values added to one output enum their own rows', async () => {
+      const added = (value: string) => ({
+        path: 'outputs.grade.enum',
+        side: 'outputs',
+        field: 'grade',
+        kind: 'enum_value_added',
+        after: value,
+      });
+      const error = refusal();
+      error.response.data.changes = [added('B'), added('C')] as never;
+      const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+      await refuseUpdate(error);
+
+      const dialog = await screen.findByTestId('breaking-change-dialog');
+      expect(
+        within(dialog)
+          .getAllByTestId('breaking-change-dialog-change')
+          .map(item => item.textContent)
+      ).toEqual(['output grade can now return B', 'output grade can now return C']);
+      expect(consoleError.mock.calls.flat().join(' ')).not.toContain('same key');
+      consoleError.mockRestore();
+    });
+
+    it('after Close, puts focus back on Update', async () => {
+      await refuseUpdate(refusal());
+
+      const dialog = await screen.findByTestId('breaking-change-dialog');
+      fireEvent.click(within(dialog).getByTestId('breaking-change-dialog-close-btn'));
+
+      await waitFor(() => expect(document.activeElement).toBe(screen.getByTestId('python-function-repin-btn')));
+    });
+
+    it('a saved contract that cannot be read says so in plain words, with no list', async () => {
+      await refuseUpdate(
+        Object.assign(new Error('Request failed with status code 409'), {
+          isAxiosError: true,
+          response: {
+            status: 409,
+            data: {
+              error: 'The saved contract cannot be read; save this version as a new tool.',
+              code: 'contract_unreadable',
+            },
+          },
+        })
+      );
+
+      const dialog = await screen.findByTestId('breaking-change-dialog');
+      expect(within(dialog).getByText('This tool cannot be updated')).toBeTruthy();
+      expect(within(dialog).getByTestId('breaking-change-dialog-unreadable').textContent).toBe(
+        'The saved contract cannot be read; save this version as a new tool.'
+      );
+      expect(within(dialog).queryByTestId('breaking-change-dialog-changes')).toBeNull();
+      expect(within(dialog).getByTestId('breaking-change-dialog-offer')).toBeTruthy();
+      expect(fns.toastError).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('other tools saved from the artifact', () => {
+    const renamed = () => ({ ...sampleContract(), name: 'beam_midspan_deflection_v2' });
+    const VERSION_4: PythonFunctionSave = { artifactId: 'artifact-1', version: 4, blocked: null };
+
+    const renderRenamed = async () => {
+      callFunction.mockResolvedValueOnce(described(renamed()));
+      const { rerender } = renderPanel(false, VERSION_4);
+      await screen.findByTestId('python-function-contract-inputs', {}, { timeout: 2000 });
+      return { rerender: () => rerender(false) };
+    };
+
+    const otherTool = () => screen.getByTestId('python-function-other-tool');
+
+    it('once FUNCTION has a new name, offers Make this a tool and lists the old tool with its status and controls', async () => {
+      fns.others = [savedView({ enabled: false, status: 'disabled' })];
+      await renderRenamed();
+
+      expect(fns.query).toHaveBeenLastCalledWith('artifact-1', 4, 'beam_midspan_deflection_v2');
+      const save = screen.getByTestId('python-function-save-btn');
+      const others = screen.getByTestId('python-function-other-tools');
+      expect(follows(others, save)).toBe(true);
+      expect(others.textContent).toContain('Other tools saved from this artifact:');
+      expect(within(otherTool()).getByText('beam_midspan_deflection')).toBeTruthy();
+      expect(within(otherTool()).getByTestId('python-function-other-tool-status').textContent).toBe(
+        'This tool is turned off.Saved as a draft tool, pinned to version 3.'
+      );
+      expect(within(otherTool()).getByTestId('python-function-other-tool-enable-btn').textContent).toBe('Turn on');
+      expect(within(otherTool()).getByTestId('python-function-other-tool-delete-btn').textContent).toBe('Delete');
+    });
+
+    it('lists them under the saved tool too', async () => {
+      fns.saved = { data: savedView(), isLoading: false };
+      fns.others = [savedView({ id: 'fn-2', slug: 'beam_midspan_deflection_v2' })];
+      await renderReady(TARGET);
+
+      expect(statusText()).toBe('Saved as a draft tool, pinned to version 3.');
+      expect(within(otherTool()).getByText('beam_midspan_deflection_v2')).toBeTruthy();
+    });
+
+    it('Turn off turns the other tool off and keeps focus on its button', async () => {
+      fns.others = [savedView()];
+      await renderRenamed();
+
+      const toggle = within(otherTool()).getByTestId('python-function-other-tool-enable-btn');
+      expect(toggle.textContent).toBe('Turn off');
+      fireEvent.click(toggle);
+
+      const [input, callbacks] = fns.setEnabled.mutate.mock.calls[0] as [unknown, { onSettled: () => void }];
+      expect(input).toEqual({ id: 'fn-1', enabled: false });
+      act(() => callbacks.onSettled());
+      await waitFor(() => expect(document.activeElement).toBe(toggle));
+    });
+
+    it('Delete asks first with the same dialog, deletes the other tool, and focuses Make this a tool', async () => {
+      fns.others = [savedView()];
+      const { rerender } = await renderRenamed();
+
+      fireEvent.click(within(otherTool()).getByTestId('python-function-other-tool-delete-btn'));
+      const dialog = screen.getByTestId('python-function-delete-dialog');
+      expect(dialog.textContent).toContain(
+        'This deletes the tool beam_midspan_deflection. The artifact is not changed.'
+      );
+      expect(fns.remove.mutate).not.toHaveBeenCalled();
+
+      fireEvent.click(within(dialog).getByTestId('python-function-delete-confirm-btn'));
+      const [id, callbacks] = fns.remove.mutate.mock.calls[0] as [
+        string,
+        { onSuccess: () => void; onSettled: () => void },
+      ];
+      expect(id).toBe('fn-1');
+      act(() => {
+        callbacks.onSuccess();
+        callbacks.onSettled();
+      });
+      fns.others = [];
+      rerender();
+
+      expect(screen.queryByTestId('python-function-other-tools')).toBeNull();
+      await waitFor(() => expect(document.activeElement).toBe(screen.getByTestId('python-function-save-btn')));
+    });
+
+    it('names each tool on its Turn off and Delete buttons, and deletes the tool whose button was clicked', async () => {
+      fns.saved = { data: savedView(), isLoading: false };
+      fns.others = [savedView({ id: 'fn-2', slug: 'beam_midspan_deflection_v2' })];
+      await renderReady(TARGET);
+
+      expect(screen.getByRole('button', { name: 'Turn off beam_midspan_deflection' })).toBeTruthy();
+      expect(screen.getByRole('button', { name: 'Turn off beam_midspan_deflection_v2' })).toBeTruthy();
+      expect(screen.getByRole('button', { name: 'Delete beam_midspan_deflection' })).toBeTruthy();
+
+      fireEvent.click(screen.getByRole('button', { name: 'Delete beam_midspan_deflection_v2' }));
+      const dialog = screen.getByRole('alertdialog');
+      expect(dialog.textContent).toContain('This deletes the tool beam_midspan_deflection_v2.');
+      fireEvent.click(within(dialog).getByTestId('python-function-delete-confirm-btn'));
+
+      expect(fns.remove.mutate).toHaveBeenCalledTimes(1);
+      expect(fns.remove.mutate.mock.calls[0][0]).toBe('fn-2');
+    });
+
+    it('names a turned-off tool on its Turn on button', async () => {
+      fns.others = [savedView({ enabled: false, status: 'disabled' })];
+      await renderRenamed();
+
+      expect(screen.getByRole('button', { name: 'Turn on beam_midspan_deflection' })).toBeTruthy();
+    });
+
+    it('shows none when the artifact has no other tools', async () => {
+      await renderRenamed();
+
+      expect(screen.getByTestId('python-function-save-btn')).toBeTruthy();
+      expect(screen.queryByTestId('python-function-other-tools')).toBeNull();
+    });
   });
 });
