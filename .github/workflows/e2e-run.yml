@@ -68,8 +68,13 @@ jobs:
           STAGE_INPUT: ${{ inputs.stage }}
           PREVIEW_SERVER_DOMAIN: ${{ vars.PREVIEW_SERVER_DOMAIN }}
           STAGING_SERVER_DOMAIN: ${{ vars.STAGING_SERVER_DOMAIN }}
+          TRUSTED_PREVIEW: ${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.preview_deploy_id != '' && inputs.preview_head_sha != '' }}
         run: |
           if [ -n "$PR_NUMBER" ]; then
+            if [ "$TRUSTED_PREVIEW" != "true" ]; then
+              echo "::error::Preview execution requires a trusted main dispatch and verified deployment evidence"
+              exit 1
+            fi
             if ! printf '%s' "$PR_NUMBER" | grep -qE '^[0-9]+$'; then
               echo "::error::pr_number must be digits-only; got '$PR_NUMBER'"
               exit 1
@@ -91,17 +96,17 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v6
         with:
-          ref: ${{ inputs.checkout_ref || github.sha }}
+          ref: ${{ inputs.pr_number != '' && github.sha || inputs.checkout_ref || github.sha }}
           submodules: false
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Verify merge ref head
+      - name: Verify trusted checkout
         if: inputs.preview_head_sha != ''
         env:
-          PREVIEW_HEAD_SHA: ${{ inputs.preview_head_sha }}
+          TRUSTED_SHA: ${{ github.sha }}
         run: |
-          if [ "$(git rev-parse HEAD^2)" != "$PREVIEW_HEAD_SHA" ]; then echo "::error::Merge ref was not built from the deployed head $PREVIEW_HEAD_SHA"; exit 1; fi
+          test "$(git rev-parse HEAD)" = "$TRUSTED_SHA"
 
       - name: Setup Node.js
         uses: actions/setup-node@v6
@@ -236,17 +241,7 @@ jobs:
           DEPLOY_ID: ${{ inputs.preview_deploy_id }}
         with:
           script: |
-            const { data: pr } = await github.rest.pulls.get({ ...context.repo, pull_number: Number(process.env.PR_NUMBER) });
-            const statuses = await github.paginate(github.rest.repos.listCommitStatusesForRef, {
-              ...context.repo, ref: pr.head.sha, per_page: 100,
-            });
-            const status = statuses.find(s => s.context === 'preview/deploy');
-            if (pr.state !== 'open' || pr.head.sha !== process.env.HEAD_SHA ||
-                status?.state !== 'success' || String(status.id) !== process.env.DEPLOY_ID ||
-                status.creator?.login !== 'bike4mind-release-bot[bot]' ||
-                !pr.labels.some(l => l.name === 'preview-deployed') || pr.labels.some(l => l.name === 'preview-stale')) {
-              throw new Error('Preview no longer matches the intended PR head; no tests started.');
-            }
+            await require('./.github/scripts/preview-e2e.cjs').verify({ github, context });
 
       - name: Resolve E2E test ID
         id: testid

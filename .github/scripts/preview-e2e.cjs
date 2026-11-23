@@ -1,33 +1,31 @@
 const DEPLOYER = 'bike4mind-release-bot[bot]';
 
-async function previewStatus(github, repo, pr, requireLabel = true) {
+async function previewStatus(github, repo, pr) {
   const statuses = await github.paginate(github.rest.repos.listCommitStatusesForRef, {
     ...repo, ref: pr.head.sha, per_page: 100,
   });
   const latest = statuses.find(status => status.context === 'preview/deploy');
+  const comments = await github.paginate(github.rest.issues.listComments, {
+    ...repo, issue_number: pr.number, per_page: 100,
+  });
+  const records = comments.filter(comment => comment.user?.login === DEPLOYER)
+    .flatMap(comment => {
+      const marker = comment.body?.match(/<!-- b4m-preview-deployer (\{[^\n]*\}) -->/);
+      try { return marker ? [JSON.parse(marker[1])] : []; } catch { return []; }
+    });
+  const deployed = records.length === 1 && records[0]?.v === 1 &&
+    records[0]?.kind === 'fresh' && records[0]?.sha === pr.head.sha;
   return latest?.state === 'success' && latest.creator?.login === DEPLOYER &&
-    (!requireLabel || (pr.labels.some(label => label.name === 'preview-deployed') &&
-    !pr.labels.some(label => label.name === 'preview-stale'))) ? latest : null;
+    deployed &&
+    latest.description === `Preview deployed at ${pr.head.sha.slice(0, 7)}` &&
+    pr.labels.some(label => label.name === 'preview-deployed') &&
+    !pr.labels.some(label => label.name === 'preview-stale') ? latest : null;
 }
 
 async function prepare({ github, context, core }) {
   const repo = context.repo;
-  const event = context.payload;
-  let number = Number(process.env.PR_NUMBER || 0);
-  if (context.eventName === 'status') {
-    if (event.context !== 'preview/deploy' || event.state !== 'success' ||
-        event.sender?.login !== DEPLOYER) return;
-    const prs = await github.paginate(github.rest.repos.listPullRequestsAssociatedWithCommit, {
-      ...repo, commit_sha: event.sha, per_page: 100,
-    });
-    const current = prs.filter(pr => pr.state === 'open' && pr.head.sha === event.sha &&
-      pr.head.repo?.full_name === `${repo.owner}/${repo.repo}`);
-    if (current.length !== 1) {
-      core.warning('Preview status does not identify exactly one current same-repository PR; not running.');
-      return;
-    }
-    number = current[0].number;
-  }
+  if (context.eventName !== 'workflow_dispatch' || context.ref !== 'refs/heads/main') return;
+  const number = Number(process.env.PR_NUMBER || 0);
   if (!Number.isSafeInteger(number) || number <= 0) return;
   const { data: pr } = await github.rest.pulls.get({ ...repo, pull_number: number });
   if (pr.state !== 'open' || pr.head.repo?.full_name !== `${repo.owner}/${repo.repo}`) return;
@@ -35,13 +33,11 @@ async function prepare({ github, context, core }) {
     core.notice('PR conflicts with its base; resolve conflicts to run preview E2E.');
     return;
   }
-  // Completion posts the status before settling labels; execution rechecks both after setup.
-  const status = await previewStatus(github, repo, pr, context.eventName !== 'status');
+  const status = await previewStatus(github, repo, pr);
   if (!status) {
-    core.notice('No verified current-head preview is ready; no tests requested.');
+    core.warning('Preview revision is not verifiable; no tests requested.');
     return;
   }
-  if (context.eventName === 'status' && (pr.head.sha !== event.sha || status.id !== event.id)) return;
   core.setOutput('pr_number', String(number));
   core.setOutput('head_sha', pr.head.sha);
   core.setOutput('base_sha', pr.base.sha);
@@ -50,13 +46,23 @@ async function prepare({ github, context, core }) {
   core.setOutput('ready', 'true');
 }
 
+async function verify({ github, context }) {
+  const { data: pr } = await github.rest.pulls.get({ ...context.repo, pull_number: Number(process.env.PR_NUMBER) });
+  const status = await previewStatus(github, context.repo, pr);
+  if (pr.state !== 'open' || pr.head.repo?.full_name !== `${context.repo.owner}/${context.repo.repo}` ||
+      pr.head.sha !== process.env.HEAD_SHA || !status || String(status.id) !== process.env.DEPLOY_ID) {
+    throw new Error('Preview revision is no longer verifiable; no tests started.');
+  }
+}
+
 async function report({ github, context, core }) {
   const { stateFor } = await import('../../scripts/e2e-outcome.mjs');
   const number = Number(process.env.PR_NUMBER);
   const sha = process.env.HEAD_SHA;
   const { data: pr } = await github.rest.pulls.get({ ...context.repo, pull_number: number });
   const status = await previewStatus(github, context.repo, pr);
-  if (pr.head.sha !== sha || !status || String(status.id) !== process.env.DEPLOY_ID) {
+  if (pr.state !== 'open' || pr.head.repo?.full_name !== `${context.repo.owner}/${context.repo.repo}` ||
+      pr.head.sha !== sha || !status || String(status.id) !== process.env.DEPLOY_ID) {
     core.notice('PR head or preview changed; refusing to publish a stale E2E result.');
     return;
   }
@@ -79,4 +85,4 @@ async function report({ github, context, core }) {
   });
 }
 
-module.exports = { prepare, report, previewStatus };
+module.exports = { prepare, report, verify, previewStatus };

@@ -125,7 +125,7 @@ describe('e2e skip rendering', () => {
 
   it('renders the PR comment as Skipped rather than Passed', () => {
     const contents = read('e2e-on-label.yml');
-    expect(contents).toContain('uses: ./.github/workflows/e2e-core.yml');
+    expect(contents).toContain("workflow_id: 'e2e-core.yml', ref: 'main'");
     expect(read('e2e-core.yml')).toContain('OUTCOME: ${{ needs.preview.outputs.outcome }}');
     expect(read('e2e-core.yml')).toContain('JOB_RESULT: ${{ needs.preview.result }}');
     const reporter = fs.readFileSync(path.join(REPO_ROOT, '.github/scripts/preview-e2e.cjs'), 'utf8');

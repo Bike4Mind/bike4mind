@@ -26,28 +26,36 @@ cannot be reported as a passing empty run.
 
 ## Preview execution
 
-The existing Core workflow consumes `preview/deploy` success status events.
-The producer was verified via its completion workflow and observed GitHub
-status API: it uses a GitHub App installation token, not the default workflow
-token. It posts the status on the deployed SHA before settling the sticky
-`preview-deployed` label. Status events cover redeploys that do not change labels.
+The Core workflow receives `workflow_dispatch` on `main` with `pr_number`.
+It does not detect deployments through automatic status or label triggers.
+The separate preview-rerun workflow and the Manual preview input explicitly
+dispatch the same receiver. The `e2e:full` label affects selection only; it does
+not start a run.
 
-Selection requires exactly one open same-repository PR at that SHA. Immediately
-before tests, the runner checks the current head, latest status ID, App identity,
-and deployed/not-stale labels again. Reporting repeats those checks and refuses
-to publish stale results. HTTP health is an additional check, not SHA evidence.
-Selection and execution check out the PR merge ref, so older PR heads inherit
-the base's reporting scripts, selector and PR-eligible filter. Deployed-head
-validation and QA attribution still use the original head SHA, not the merge ref.
-The legacy `run-e2e` label and `e2e:full` label delegate to this same path, with a
-45-minute job cap, a 15-minute Playwright timeout and a 17-minute execution-step
-ceiling that leaves time for failure reporting. No preview is required for merging.
+A PR number alone is not revision evidence. Preparation requires an open
+same-repository PR, an exact deployed-head confirmation, a matching full revision
+in the trusted bot's public deployment record, and deployed/not-stale labels.
+Execution and reporting recheck the revision and status ID. Missing, ambiguous,
+changed or unrecognized evidence fails closed without running tests or publishing
+a passing result. HTTP health alone does not establish revision identity.
+
+All installs, selector code, specs, configuration and reporting execute from the
+trusted main dispatch commit. PR refs are fetched only as Git objects for the
+path diff; they are never checked out or executed. New or modified PR specs are
+therefore not executed until they reach main. Selection failures widen to the
+full PR-eligible configuration from main.
+
+The preview job has a 45-minute cap, a 15-minute Playwright timeout and a
+17-minute execution-step ceiling that leaves time for failure reporting.
+No preview is required for merging.
 Results use a nonrequired `e2e/preview-advisory` status and advisory PR comment;
 missing outputs use the reusable job result, never an assumed pass.
 
 Scheduled runs in `e2e-manual.yml` remain full, including referrals and
 launch-readiness. No schedule or promotion-gate scope is changed.
 
-Local checks do not deploy a preview or invoke generation. The status trigger
-becomes active only once its workflow is present on the default branch; verify
-the first real post-merge deploy event operationally.
+Local checks do not deploy a preview or invoke generation. This receiver must
+reach main before dispatch integration can be exercised. A dispatch can arrive
+before revision evidence is available; it will not retry or infer readiness.
+The caller supplies no immutable revision, so a later fully verified deployment
+may be observed instead of the deployment that originally requested the run.

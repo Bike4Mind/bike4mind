@@ -1,15 +1,10 @@
 name: E2E Tests (Core)
 
-# Core staging caller and advisory preview pipeline. Verified preview status events
-# select PR-eligible projects; manual staging runs keep the curated Core subset.
+# Core staging caller and explicit advisory preview dispatch receiver.
+# Preview runs select PR-eligible projects; staging keeps the curated Core subset.
 # Shared execution plumbing lives in e2e-run.yml.
 
 on:
-  # The deployer posts this with an App token, including on redeploys where the label is sticky.
-  status:
-  workflow_call:
-    inputs:
-      pr_number: { type: string, required: true }
   workflow_dispatch:
     inputs:
       stage:
@@ -33,7 +28,7 @@ on:
 
 jobs:
   prepare-preview:
-    if: github.event_name == 'status' || inputs.pr_number != ''
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.pr_number != ''
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -49,7 +44,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
-          ref: ${{ github.event.repository.default_branch }}
+          ref: ${{ github.sha }}
           persist-credentials: false
       - id: preview
         uses: actions/github-script@v8
@@ -70,14 +65,14 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
-          ref: refs/pull/${{ needs.prepare-preview.outputs.pr_number }}/merge
+          ref: ${{ github.sha }}
           fetch-depth: 0
           persist-credentials: false
-      - name: Verify merge ref head
+      - name: Verify trusted checkout
         env:
-          PREVIEW_HEAD_SHA: ${{ needs.prepare-preview.outputs.head_sha }}
+          TRUSTED_SHA: ${{ github.sha }}
         run: |
-          if [ "$(git rev-parse HEAD^2)" != "$PREVIEW_HEAD_SHA" ]; then echo "::error::Merge ref was not built from the deployed head $PREVIEW_HEAD_SHA"; exit 1; fi
+          test "$(git rev-parse HEAD)" = "$TRUSTED_SHA"
       - uses: actions/setup-node@v6
         with:
           node-version: '24'
@@ -91,6 +86,7 @@ jobs:
           AI_LATENCY_RUN: 'false'
           EXPORT_BYTES_RUN: 'false'
         run: |
+          git fetch --no-tags origin "$E2E_BASE_SHA" "$E2E_HEAD_SHA" || echo "::warning::Diff refs unavailable; selection will widen"
           if ! pnpm exec tsx apps/client/e2e/select-projects.ts; then
             echo "::warning::Selector failed; running full PR-eligible configuration"
             echo 'playwright_args=' >> "$GITHUB_OUTPUT"
@@ -108,7 +104,7 @@ jobs:
     secrets: inherit
     with:
       pr_number: ${{ needs.prepare-preview.outputs.pr_number }}
-      checkout_ref: refs/pull/${{ needs.prepare-preview.outputs.pr_number }}/merge
+      checkout_ref: ${{ github.sha }}
       preview_head_sha: ${{ needs.prepare-preview.outputs.head_sha }}
       preview_deploy_id: ${{ needs.prepare-preview.outputs.deploy_id }}
       pr_eligible_only: true
@@ -135,7 +131,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
-          ref: ${{ github.event.repository.default_branch }}
+          ref: ${{ github.sha }}
           persist-credentials: false
       - uses: actions/github-script@v8
         env:

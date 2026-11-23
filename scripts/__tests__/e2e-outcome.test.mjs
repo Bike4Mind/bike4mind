@@ -157,5 +157,5 @@ test('workflow and reusable callers preserve execution failure and always report
   }
   assert.match(read('e2e-run.yml'), /value: \$\{\{ jobs.e2e-run.outputs.outcome \}\}/);
   assert.match(read('e2e-run.yml'), /outcome: \$\{\{ steps.results.outputs.outcome \}\}/);
-  assert.match(read('e2e-on-label.yml'), /uses: \.\/\.github\/workflows\/e2e-core.yml/);
+  assert.match(read('e2e-on-label.yml'), /workflow_id: 'e2e-core.yml', ref: 'main'/);
 });
