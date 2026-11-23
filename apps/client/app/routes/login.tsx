@@ -43,7 +43,10 @@ const LoginPage = () => {
   const queryClient = useQueryClient();
   const router = useRouter();
   const { data: publicConfig } = usePublicConfig();
-  const [checkingSession, setCheckingSession] = useState(shouldResumeSession);
+  // Decided once, at first render: MultiStepLogin's error effect strips `error` from the address,
+  // and child effects run before this page's own, so a later re-read would miss it.
+  const [resumeOnMount] = useState(shouldResumeSession);
+  const [checkingSession, setCheckingSession] = useState(resumeOnMount);
 
   useEffect(() => {
     // Same allow-list and fallback MultiStepLogin applies after a fresh sign-in.
@@ -61,7 +64,7 @@ const LoginPage = () => {
       if (hasLiveSession()) return;
       // The resume must run before the teardown below: removeQueries and the cache wipe would drop
       // the very session the shared bootstrap is about to establish (see sessionBootstrap.ts).
-      if (shouldResumeSession()) {
+      if (resumeOnMount) {
         await bootstrapSession();
         if (cancelled) return;
         if (hasLiveSession()) {
@@ -100,7 +103,7 @@ const LoginPage = () => {
       cancelled = true;
       window.removeEventListener('storage', onStorage);
     };
-  }, [queryClient, router]);
+  }, [queryClient, router, resumeOnMount]);
 
   if (checkingSession) {
     return (

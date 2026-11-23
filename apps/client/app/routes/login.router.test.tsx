@@ -14,15 +14,18 @@ import {
   redirect,
   useRouterState,
 } from '@tanstack/react-router';
+import { AxiosError, type AxiosAdapter, type AxiosResponse, type InternalAxiosRequestConfig } from 'axios';
 import { getThemeConfig } from '@client/app/utils/themes';
+import { api } from '@client/app/contexts/ApiContext';
 import { useUser } from '@client/app/contexts/UserContext';
 import { useAccessToken } from '@client/app/hooks/useAccessToken';
 import { resetRefreshCoordinator } from '@client/app/utils/refreshCoordinator';
 import { bootstrapSession, resetSessionBootstrap } from '@client/app/utils/sessionBootstrap';
 import LoginPage from './login';
 
-// A stand-in for MultiStepLogin that keeps the two pieces of it this flow depends on, verbatim in
-// shape: the "already logged in" effect and finishLogin's store writes followed by applyRedirect.
+// A stand-in for MultiStepLogin that keeps the pieces of it these flows depend on, verbatim in
+// shape: the "already logged in" effect, the sign-in error effect that strips `error` from the
+// address, and finishLogin's store writes followed by applyRedirect.
 vi.mock('@client/app/components/MultiStepLogin', async () => {
   const { useEffect } = await import('react');
   const { useRouter } = await import('@tanstack/react-router');
@@ -39,6 +42,12 @@ vi.mock('@client/app/components/MultiStepLogin', async () => {
         applyRedirect(router.history, new URLSearchParams(window.location.search).get('redirectTo'), '/new', true);
       }
     }, [isLoggedIn, router]);
+    useEffect(() => {
+      const url = new URL(window.location.href);
+      if (!url.searchParams.get('error')) return;
+      url.searchParams.delete('error');
+      window.history.replaceState({}, '', url.pathname + url.search + url.hash);
+    }, []);
     const finishLogin = () => {
       useTokenStore.getState().setVerifiedSession('fresh-access');
       useUserStore.getState().setCurrentUser({ id: 'u1', username: 'rider' } as never);
@@ -136,5 +145,50 @@ describe('LoginPage in the router - a fresh sign-in', () => {
     expect(seen).not.toContain('/new');
     expect(clearClientCaches).not.toHaveBeenCalled();
     expect(screen.getByTestId('page-/projects')).toBeTruthy();
+  });
+
+  it('keeps the form for a sign-in error even with a live cookie, after the error is stripped from the address', async () => {
+    useAccessToken.setState({ hasSession: true });
+    const calls: string[] = [];
+    const realAdapter = api.defaults.adapter;
+    api.defaults.adapter = ((config: InternalAxiosRequestConfig) => {
+      calls.push(config.url ?? '');
+      if (config.url === '/api/auth/refreshToken') {
+        return Promise.resolve({
+          data: { accessToken: 'fresh-access', user: { id: 'u1', username: 'rider' } },
+          status: 200,
+          statusText: 'OK',
+          headers: {},
+          config,
+        } as AxiosResponse);
+      }
+      return Promise.reject(new AxiosError('Unauthorized', 'ERR_BAD_REQUEST', config));
+    }) as AxiosAdapter;
+    window.history.replaceState(null, '', '/login?error=session_expired&redirectTo=%2Fprojects');
+    const router = buildRouter();
+    const seen: string[] = [];
+    router.history.subscribe(({ location }) => seen.push(location.pathname));
+    await act(() => router.load());
+
+    try {
+      render(
+        <QueryClientProvider client={new QueryClient()}>
+          <CssVarsProvider theme={appTheme}>
+            <AppRouter router={router} />
+          </CssVarsProvider>
+        </QueryClientProvider>
+      );
+
+      await screen.findByTestId('login-otc-verify-btn');
+      await waitFor(() => expect(clearClientCaches).toHaveBeenCalled());
+      await act(() => new Promise(resolve => setTimeout(resolve, 50)));
+      expect(window.location.search).toBe('?redirectTo=%2Fprojects');
+      expect(calls).toEqual([]);
+      expect(seen.filter(path => path !== '/login')).toEqual([]);
+      expect(window.location.pathname).toBe('/login');
+      expect(screen.getByTestId('login-otc-verify-btn')).toBeTruthy();
+    } finally {
+      api.defaults.adapter = realAdapter;
+    }
   });
 });
