@@ -309,7 +309,7 @@ function ApprovalPrompt({
           sx={{ mt: 0.5, overflowWrap: 'anywhere' }}
           data-testid="chat-tool-approval-summary"
         >
-          {description}
+          {`Agent's summary: ${description}`}
         </Typography>
       )}
 
@@ -477,7 +477,7 @@ function ToolCallDetail({ call }: { call: ChatToolCall }) {
     <Box data-testid="chat-tool-detail">
       {description && (
         <Typography level="body-xs" textColor="text.tertiary" data-testid="chat-tool-detail-summary">
-          {description}
+          {`Agent's summary: ${description}`}
         </Typography>
       )}
       {argument && (
