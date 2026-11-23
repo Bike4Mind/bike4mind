@@ -134,9 +134,11 @@ export function bubbleText(agent: AgentView, needsYou: number): string | undefin
   if (agent.state === 'working' && agent.preparing) return `${SESSION_SETUP_LABEL[agent.preparing]}\u2026`;
   if (agent.state === 'working' && agent.activity) return truncate(activityLabel(agent.activity), BUBBLE_MAX);
   if (agent.state === 'waiting' && agent.background) return truncate(waitingLabel(agent.background), BUBBLE_MAX);
-  // A settled agent keeps what it last said, so "state blocked: ..." is visible instead of a bare mug.
   if (agent.state === 'paused')
     return truncate(agent.lastSnippet ? `Paused: ${agent.lastSnippet}` : 'Paused: turn budget', BUBBLE_MAX);
+  // A plain agent's Done only means its turn ended; what it last said (a question, "blocked: ...") is
+  // the part the user needs. A worker task's Done is an accepted result, so it stays quiet.
+  if (agent.state === 'done' && !agent.workerTask && agent.lastSnippet) return truncate(agent.lastSnippet, BUBBLE_MAX);
   if (agent.state === 'idle' && agent.lastSnippet) return truncate(agent.lastSnippet, BUBBLE_MAX);
   return undefined;
 }

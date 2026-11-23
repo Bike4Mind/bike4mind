@@ -26,12 +26,20 @@ describe('bubbleText for settled and waiting agents', () => {
     expect(bubbleText(agentFixture('a', 'paused'), 0)).toBe('Paused: turn budget');
   });
 
-  it('keeps an idle agent its last snippet, and a done agent quiet', () => {
+  it('keeps an idle agent its last snippet', () => {
     expect(bubbleText(agentFixture('a', 'idle', { lastSnippet: 'state blocked: queued' }), 0)).toBe(
       'state blocked: queued'
     );
     expect(bubbleText(agentFixture('a', 'idle'), 0)).toBeUndefined();
-    expect(bubbleText(agentFixture('a', 'done', { lastSnippet: 'All green' }), 0)).toBeUndefined();
+  });
+
+  it('shows a plain done agent its last words, and keeps an accepted worker task quiet', () => {
+    expect(bubbleText(agentFixture('a', 'done', { lastSnippet: 'Waiting on your sign-off' }), 0)).toBe(
+      'Waiting on your sign-off'
+    );
+    expect(bubbleText(agentFixture('a', 'done'), 0)).toBeUndefined();
+    const workerTask = { state: { status: 'completed', accepted: true } } as unknown as AgentView['workerTask'];
+    expect(bubbleText(agentFixture('a', 'done', { lastSnippet: 'All green', workerTask }), 0)).toBeUndefined();
   });
 });
 
