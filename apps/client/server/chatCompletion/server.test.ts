@@ -159,6 +159,12 @@ import {
   DRAIN_TIMEOUT_MS,
 } from './server';
 import { GENERIC_PROCESSING_FAILURE_REPLY } from './internal/route';
+import {
+  QUEST_DISPATCH_MAX_SKEW_MS,
+  QUEST_DISPATCH_SIGNATURE_HEADER,
+  QUEST_DISPATCH_TIMESTAMP_HEADER,
+  signQuestDispatch,
+} from '@server/utils/questDispatchSignature';
 
 const VALID_BODY = { questId: 'q1', sessionId: 's1', userId: 'u1', message: 'hello' };
 const AUTH = `Bearer ${mockResource.CHAT_COMPLETION_INTERNAL_SECRET.value}`;
@@ -185,12 +191,29 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
-const post = (body: unknown, headers: Record<string, string> = {}) =>
-  fetch(`${baseUrl}/process`, {
+// Signs like dispatchQuest unless `signed` is false; explicit headers override the signed ones.
+const post = (
+  body: unknown,
+  headers: Record<string, string> = {},
+  { signed = true, signedAt }: { signed?: boolean; signedAt?: number } = {}
+) => {
+  const raw = JSON.stringify(body);
+  const fields = body as Partial<Record<'questId' | 'userId' | 'sessionId', string>>;
+  const signature = signQuestDispatch(
+    mockResource.CHAT_COMPLETION_INTERNAL_SECRET.value,
+    { questId: fields.questId ?? '', userId: fields.userId ?? '', sessionId: fields.sessionId ?? '' },
+    raw,
+    signedAt
+  );
+  const signatureHeaders = signed
+    ? { [QUEST_DISPATCH_TIMESTAMP_HEADER]: signature.timestamp, [QUEST_DISPATCH_SIGNATURE_HEADER]: signature.signature }
+    : {};
+  return fetch(`${baseUrl}/process`, {
     method: 'POST',
-    headers: { 'content-type': 'application/json', ...headers },
-    body: JSON.stringify(body),
+    headers: { 'content-type': 'application/json', ...signatureHeaders, ...headers },
+    body: raw,
   });
+};
 
 describe('ChatCompletion /process', () => {
   it('returns 401 when the bearer token is missing', async () => {
@@ -220,6 +243,40 @@ describe('ChatCompletion /process', () => {
   it('returns 400 on a malformed payload (and does not process)', async () => {
     const res = await post({ questId: 'q1' }, { authorization: AUTH });
     expect(res.status).toBe(400);
+    expect(mockProcessQuest).not.toHaveBeenCalled();
+  });
+
+  it('returns 401 when the dispatch signature headers are missing', async () => {
+    const res = await post(VALID_BODY, { authorization: AUTH }, { signed: false });
+    expect(res.status).toBe(401);
+    expect(mockProcessQuest).not.toHaveBeenCalled();
+  });
+
+  it('returns 401 when the body names a different user than the one signed for', async () => {
+    const signed = signQuestDispatch(
+      mockResource.CHAT_COMPLETION_INTERNAL_SECRET.value,
+      { questId: 'q1', userId: 'u1', sessionId: 's1' },
+      JSON.stringify(VALID_BODY)
+    );
+    const res = await post(
+      { ...VALID_BODY, userId: 'u2' },
+      {
+        authorization: AUTH,
+        [QUEST_DISPATCH_TIMESTAMP_HEADER]: signed.timestamp,
+        [QUEST_DISPATCH_SIGNATURE_HEADER]: signed.signature,
+      }
+    );
+    expect(res.status).toBe(401);
+    expect(mockProcessQuest).not.toHaveBeenCalled();
+  });
+
+  it('returns 401 when the dispatch signature is outside the accepted window', async () => {
+    const res = await post(
+      VALID_BODY,
+      { authorization: AUTH },
+      { signedAt: Date.now() - QUEST_DISPATCH_MAX_SKEW_MS - 60_000 }
+    );
+    expect(res.status).toBe(401);
     expect(mockProcessQuest).not.toHaveBeenCalled();
   });
 
