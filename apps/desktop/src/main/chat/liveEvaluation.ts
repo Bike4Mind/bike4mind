@@ -50,6 +50,8 @@ export async function runLiveEvaluation(auth: AuthService, directory: string, op
   try {
     await evaluationContext.run(budget, async () => {
       for (const deferred of [false, true]) {
+        const outcome = { arm: deferred ? 'deferred-zero' : 'reference', accepted: false, status: 'failed' };
+        outcomes.push(outcome);
         const root = await mkdtemp(join(directory, 'fixture-'));
         await mkdir(join(root, 'instructions'));
         await writeFile(join(root, 'tiny.txt'), 'z');
@@ -88,11 +90,8 @@ export async function runLiveEvaluation(auth: AuthService, directory: string, op
             !reply?.error &&
             reply?.content.trim() === 'z' &&
             !!reply.toolCalls?.some(call => call.name === 'file_read' && call.status === 'done');
-          outcomes.push({
-            arm: deferred ? 'deferred-zero' : 'reference',
-            accepted,
-            status: accepted ? 'accepted' : 'rejected',
-          });
+          outcome.accepted = accepted;
+          outcome.status = accepted ? 'accepted' : 'rejected';
         } finally {
           if (id) service.stop(id);
           service.dispose();
@@ -123,7 +122,6 @@ export async function runLiveEvaluation(auth: AuthService, directory: string, op
         2
       ),
       { mode: 0o600 }
-    );
-    budget.close();
+    ).finally(() => budget.close());
   }
 }
