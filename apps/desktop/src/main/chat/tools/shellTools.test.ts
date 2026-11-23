@@ -12,6 +12,7 @@ import { forgetSessionWrites, recordSessionWrite } from './sessionScripts';
 import { bashExecute, bashExecuteRunOptions, doubleWrapRefusal, mainCheckoutOf, shellApproval } from './shellTools';
 import { MAX_TOOL_OUTPUT_CHARS, type ToolContext } from './types';
 import { resolveUserPath } from './userPath';
+import { runsCheckedInAuto } from './shellApproval.testHelper';
 
 vi.mock('./userPath', async importOriginal => ({
   ...(await importOriginal<typeof import('./userPath')>()),
@@ -806,6 +807,63 @@ describe('shellApproval in the temp folders', () => {
     } finally {
       await rm(guarded, { recursive: true, force: true });
     }
+  });
+});
+
+/** A plain `NAME=literal` set once at the top of a script is a path bash builds, so later reads through it are checked. */
+describe('shellApproval with a literal variable assignment', () => {
+  let root: string;
+  let outside: string;
+  let context: { roots: string[]; signal: AbortSignal; protectedPaths: string[]; workingDirectory: string };
+
+  beforeEach(async () => {
+    root = await realpath(await mkdtemp(join(userInfo().homedir, '.b4m-literal-root-')));
+    outside = await realpath(await mkdtemp(join(userInfo().homedir, '.b4m-literal-outside-')));
+    await mkdir(join(root, 'sub'), { recursive: true });
+    await writeFile(join(root, 'sub', 'a.txt'), 'a\n', 'utf8');
+    context = { roots: [root], signal: new AbortController().signal, protectedPaths: [], workingDirectory: root };
+  });
+
+  afterEach(async () => {
+    await rm(root, { recursive: true, force: true });
+    await rm(outside, { recursive: true, force: true });
+  });
+
+  const approval = (command: string) => shellApproval('bash_execute', { command, cwd: root }, context);
+
+  it.each([
+    'F=sub; sed -n 1,2p $F/a.txt; echo ----; grep -n a $F/a.txt',
+    'F=sub; cat "$F/a.txt"',
+    'F=sub; wc -l ${F}/a.txt',
+  ])('runs a read through the variable unasked: %s', async command => {
+    expect(runsCheckedInAuto(await approval(command))).toBe(true);
+  });
+
+  it('reads an absolute literal path the same way', async () => {
+    expect(runsCheckedInAuto(await approval(`L=${root}/sub/a.txt; wc -l $L`))).toBe(true);
+  });
+
+  it.each([
+    ['a value from a command substitution', 'F=$(pwd)/sub; cat $F/a.txt'],
+    ['a quoted value', 'F="sub"; cat $F/a.txt'],
+    ['a set inside a branch', 'if true; then F=sub; fi; cat $F/a.txt'],
+    ['a second set', 'F=sub; F=other; cat $F/a.txt'],
+    ['an unset', 'F=sub; unset F; cat $F/a.txt'],
+    ['an eval', 'F=sub; eval "F=x"; cat $F/a.txt'],
+    ['an append', 'F=sub; F+=/x; cat $F/a.txt'],
+    ['a backgrounded set', 'F=sub & cat $F/a.txt'],
+    ['a use before the set', 'cat $F/a.txt; F=sub'],
+  ])('still cannot check a word whose variable has %s', async (_name, command) => {
+    expect(runsCheckedInAuto(await approval(command))).toBe(false);
+  });
+
+  it('still names a folder outside the shared ones that the variable points at', async () => {
+    const prompt = await approval(`F=${outside}; cp sub/a.txt $F/b.txt`);
+    expect(prompt.always?.writtenDirectories).toContain(outside);
+  });
+
+  it('does not bind HOME, so a rebound home stays unread', async () => {
+    expect(runsCheckedInAuto(await approval(`HOME=${root}; cat $HOME/sub/a.txt`))).toBe(false);
   });
 });
 
