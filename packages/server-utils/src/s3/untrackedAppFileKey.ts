@@ -1,3 +1,4 @@
+import { MAIL_BODY_PREFIX } from '../utils/mailer/mailBodyStore';
 import { TEXT_EDIT_BACKUP_PREFIX } from '../utils/textEditBackupPrefix';
 
 /**
@@ -31,6 +32,8 @@ export const UNTRACKED_APP_FILE_PREFIXES = [
   'org-feedback-summaries/',
   // Owned by a premium overlay's run worker (bobRunQueue in infra/queues.ts).
   'bob-screenshots/',
+  // Mail bodies too large for an email.send event (mailBodyStore.ts).
+  MAIL_BODY_PREFIX,
 ] as const;
 
 export const isUntrackedAppFileKey = (key: string): boolean =>

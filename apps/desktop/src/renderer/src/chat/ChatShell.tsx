@@ -12,6 +12,7 @@ import type { AttentionOpenEvent } from '@shared/attention';
 import type { AuthState } from '@shared/auth';
 import { DEFAULT_PROMPT_CACHE_TTL, type PromptCacheTtl } from '@bike4mind/common';
 import type { ChatArtifact, ChatModelOption, ChatSessionMode, ChatSessionSummary } from '@shared/chat';
+import { promptHistory } from '@shared/threadRewind';
 import type { SkillMarketListingRef } from '@shared/skillMarket';
 import type { SkillsScope } from '@shared/skills';
 import {
@@ -50,7 +51,8 @@ import type { ComposerFill } from './composerInput';
 import { ModelsScreen } from '../models/ModelsScreen';
 import { ComposerOllamaNotice } from '../models/OllamaNotRunning';
 import { useModelServers } from '../models/useModelHub';
-import { PanelRightIcon } from './icons';
+import { ConversationIcon, PanelRightIcon, StatsIcon } from './icons';
+import { PresenterPendingNotice } from './PresenterPendingNotice';
 import { OpenPaneButtons, PanesMenu, type PaneControl } from './PanesMenu';
 import { SessionArtifactsButton } from './SessionArtifactsButton';
 import { paneDocument, sessionArtifacts, type SessionArtifact } from './sessionArtifacts';
@@ -59,6 +61,7 @@ import type { StudioController } from './studio/controller';
 import { useStudioController } from './studio/useStudioController';
 import { studioPaneLayout } from './studio/layout';
 import { ProjectSubtitleLine } from './ProjectSubtitleLine';
+import { railFitsBesideThread, replyStatsToggleTitle, setReplyStatsRail, useReplyStatsPrefs } from './replyStatsPrefs';
 import { MessageThread } from './MessageThread';
 import {
   chatShellRootSx,
@@ -99,7 +102,7 @@ import { SessionOpenerContext } from './SessionLink';
 import { clampQuote, quotedMessage } from './quotedReply';
 import { SpawnSuggestionTray } from './SpawnSuggestionTray';
 import { useHeldRelays } from './useHeldRelays';
-import { TaskDecisionCards, useTaskDecisions } from './TaskDecisionCards';
+import { TaskDecisionCards, decisionsFor, useTaskDecisions } from './TaskDecisionCards';
 import { pendingDecisionOf } from '@shared/orchestration';
 import { useSpawnSuggestions } from './useSpawnSuggestions';
 import { TurnDot, turnState } from './TurnDot';
@@ -143,8 +146,8 @@ import {
   writeAmbientHintSeen,
   writeIntroSeen,
   writeSurface,
-  type OrchestratorViewId,
 } from './orchestrator/orchestratorPrefs';
+import { singlePaneLayout, type OrchestratorLayout } from './orchestrator/orchestratorLayout';
 import { renderOrchestratorView } from './orchestrator/viewRegistry';
 import { ORCHESTRATOR_VIEW_INFO } from './orchestrator/ViewSwitcher';
 import { latestQuestReport } from './orchestrator/finale';
@@ -229,6 +232,8 @@ export type AccountStrip = (status: ReactNode) => ReactNode;
 
 /** How long the first-run tavern intro plays before it is marked seen (ms). */
 const ORCHESTRATOR_INTRO_MS = 1500;
+/** The intro always plays in the Tavern alone, whatever layout the session is on. */
+const INTRO_LAYOUT = singlePaneLayout('tavern');
 
 /**
  * 'playing' while the first-run intro runs, then 'shown' until the user picks a view: the intro is
@@ -766,6 +771,7 @@ export function ChatShell({
   const turnOpen =
     conversation.streaming || sessionStatus === 'processing' || (sessionStatus === 'needs-action' && !awaitingDecision);
   const plan = useMemo(() => activeTodos(conversation.messages, turnOpen), [conversation.messages, turnOpen]);
+  const sentPrompts = useMemo(() => promptHistory(conversation.messages), [conversation.messages]);
 
   const workspaceChanges = useWorkspaceChanges(
     screen === 'conversation' ? persistedId : null,
@@ -789,7 +795,7 @@ export function ChatShell({
     activeId,
     orchestrationProject && projectGroupDirectory(orchestrationProject)
   );
-  const { setDockOpen, setView: setOrchestratorView, setSurface: setOrchestratorSurface } = orchestratorPrefs;
+  const { setDockOpen, setLayout: setOrchestratorLayout, setSurface: setOrchestratorSurface } = orchestratorPrefs;
   // A Code session can orchestrate before it has any agents; a Chat session only shows its agents.
   // One at the depth cap, or on a model sent no tools, could start none: main ignores its flag
   // there (orchestratesAgents, toolsSupported) and so does this.
@@ -801,6 +807,10 @@ export function ChatShell({
   const hasAgents = spawnedStates.length > 0;
   const agentsSurfaceAvailable = hasAgents || (delegating && orchestrateCapable);
   const orchestrating = orchestratorPrefs.surface === 'orchestrate' && agentsSurfaceAvailable;
+  // Presenter mode redacts the stage (orchestrator/presenter.ts). Around it, the header names the root as
+  // "Orchestrator" without its project line, and the trays above the composer, which quote agents' questions
+  // and messages, are replaced by a neutral count until it is off.
+  const presentingStage = orchestrating && orchestratorPrefs.presenter;
   const { setOrchestrate } = conversation;
   const staleAgentsSurface = !settling && !agentsSurfaceAvailable && orchestratorPrefs.surface === 'orchestrate';
   useEffect(() => {
@@ -834,7 +844,10 @@ export function ChatShell({
     // introEntry too: a switch between two orchestrating sessions keeps the phase 'playing', and the
     // new session's intro still needs its full run.
   }, [introPhase, introEntry]);
-  const orchestratorView = introPhase === 'off' ? orchestratorPrefs.view : 'tavern';
+  const orchestratorLayout = introPhase === 'off' ? orchestratorPrefs.layout : INTRO_LAYOUT;
+  const orchestratorView = orchestratorLayout.panes[0].view;
+  // The ambient settle and the in-scene conversation are a single scene's; a split stage has neither.
+  const orchestratorSplit = orchestratorLayout.panes.length > 1;
   const threadHost = useRef<HTMLDivElement | null>(null);
   const dockToggle = useRef<HTMLButtonElement | null>(null);
   const [conversationRequest, setConversationRequest] = useState(0);
@@ -875,6 +888,7 @@ export function ChatShell({
       orchestrating &&
       activeId !== null &&
       ORCHESTRATOR_VIEW_INFO[orchestratorView].ambient &&
+      !orchestratorSplit &&
       !orchestratorPrefs.focus &&
       introPhase !== 'playing',
     // A reply streaming in is something to watch arrive, not to hide.
@@ -908,6 +922,10 @@ export function ChatShell({
   const stageFocus = useMemo(
     () => ({ on: orchestratorPrefs.focus, onToggle: orchestratorPrefs.setFocus }),
     [orchestratorPrefs.focus, orchestratorPrefs.setFocus]
+  );
+  const stagePresenter = useMemo(
+    () => ({ on: orchestratorPrefs.presenter, onToggle: orchestratorPrefs.setPresenter }),
+    [orchestratorPrefs.presenter, orchestratorPrefs.setPresenter]
   );
 
   const parentReply = useMemo(() => {
@@ -982,12 +1000,12 @@ export function ChatShell({
     },
     [setDockOpen, fillComposer]
   );
-  const changeOrchestratorView = useCallback(
-    (view: OrchestratorViewId) => {
+  const changeOrchestratorLayout = useCallback(
+    (layout: OrchestratorLayout) => {
       setIntroPhase('off');
-      setOrchestratorView(view);
+      setOrchestratorLayout(layout);
     },
-    [setOrchestratorView]
+    [setOrchestratorLayout]
   );
 
   const agentActions = useMemo<AgentActions>(
@@ -1019,6 +1037,12 @@ export function ChatShell({
   const panelDocked = panelLayout !== 'overlay';
   const panelShown = panelAvailable && (panelDocked ? panelPrefs.open : panelPopoverOpen);
   const panelSpace = panelShown && panelLayout === 'push' ? SESSION_PANEL_SPACE : 0;
+  // Unmeasured reads as too narrow, the reverse of the panel: a rail drawn before the width is
+  // known could overhang the sidebar for a frame, where the footer it falls back to cannot.
+  // A pushing panel's reserved space narrows the scroller; the orchestrator's thread dock is narrower still.
+  const statsRailFits =
+    !orchestratorShown && railFitsBesideThread(threadRegionWidth === null ? null : threadRegionWidth - panelSpace);
+  const statsRailOn = useReplyStatsPrefs().rail;
   const bindingErrorHidden =
     !!panelProject && !!conversation.project.error && (!panelShown || panelPrefs.collapsed.has('environment'));
   const { toggleOpen: togglePanelOpen } = panelPrefs;
@@ -1467,9 +1491,13 @@ export function ChatShell({
                   onRespond={conversation.respondToApproval}
                   onMove={background.moveToBackground}
                   onContinue={() => void conversation.continueReply()}
+                  onEditMessage={conversation.editMessage}
+                  onRegenerate={() => void conversation.regenerate()}
                   onReplyToSelection={onReplyToSelection}
                   onSideChatFromSelection={text => void onSideChatFromSelection(text)}
                   status={conversation.turn && <TurnStatus turn={conversation.turn} activity={activity} />}
+                  statsRail={statsRailFits && statsRailOn}
+                  liveTurn={conversation.turn}
                   // At the foot of the thread rather than above the composer: a background command is
                   // something this conversation started, so it reads as the last thing that happened
                   // in it. It scrolls with the transcript, which is the trade - the panel is reached
@@ -1503,7 +1531,10 @@ export function ChatShell({
 
   const threadDockMode: ThreadDockMode = !orchestratorShown ? 'chat' : dockVisible ? 'docked' : 'hidden';
   const sceneConversation =
-    orchestratorShown && !orchestratorPrefs.focus && ORCHESTRATOR_VIEW_INFO[orchestratorView].group === 'scene';
+    orchestratorShown &&
+    !orchestratorPrefs.focus &&
+    !orchestratorSplit &&
+    ORCHESTRATOR_VIEW_INFO[orchestratorView].group === 'scene';
   const handledConversationClicks = useRef(new WeakSet<Event>());
   useEffect(() => {
     if (!sceneConversation || !dockVisible) return;
@@ -1597,19 +1628,7 @@ export function ChatShell({
         sectionActions={sectionActions}
         sectionError={sectionError}
         onDismissSectionError={dismissSectionError}
-        customize={
-          <>
-            <CustomizeNavItem onOpen={() => setScreen('customize')} />
-            <Button
-              size="sm"
-              variant="plain"
-              data-testid="handoff-server-conversations-btn"
-              onClick={() => void window.b4m.attention.openServerSessions()}
-            >
-              Server conversations / handoff
-            </Button>
-          </>
-        }
+        customize={<CustomizeNavItem onOpen={() => setScreen('customize')} />}
         onOpenModels={() => setScreen('models')}
         syncHints={
           onOpenImportSettings
@@ -1669,15 +1688,21 @@ export function ChatShell({
               <Box sx={{ ...contentColumnSx, py: 1.25, display: 'flex', alignItems: 'center', gap: 1 }}>
                 <Box sx={{ flex: 1, minWidth: 0 }}>
                   {conversation.session ? (
-                    <>
-                      <SessionHeader
-                        title={activeSummary?.title ?? conversation.session.title}
-                        onRename={title =>
-                          void (activeSummary ? rename(activeSummary, title) : conversation.rename(title))
-                        }
-                      />
-                      {conversation.session.project && <ProjectSubtitleLine project={conversation.session.project} />}
-                    </>
+                    presentingStage ? (
+                      <Typography level="title-sm" noWrap data-testid="chat-session-title">
+                        Orchestrator
+                      </Typography>
+                    ) : (
+                      <>
+                        <SessionHeader
+                          title={activeSummary?.title ?? conversation.session.title}
+                          onRename={title =>
+                            void (activeSummary ? rename(activeSummary, title) : conversation.rename(title))
+                          }
+                        />
+                        {conversation.session.project && <ProjectSubtitleLine project={conversation.session.project} />}
+                      </>
+                    )
                   ) : opening ? null : (
                     <Typography level="title-sm" textColor="text.tertiary">
                       No conversation open
@@ -1768,6 +1793,35 @@ export function ChatShell({
                     panes={paneControls}
                     historyOn={!opening && conversation.session?.historyEnabled === true}
                   />
+                  {/* Drawn at every width, so the buttons beside it never shift and focus is never
+                  dropped as the window crosses the breakpoint; narrower, the tooltip says why
+                  nothing shows beside the conversation. */}
+                  <Tooltip
+                    size="sm"
+                    variant="soft"
+                    placement="bottom-end"
+                    title={replyStatsToggleTitle({
+                      persisted: !!persistedId,
+                      orchestratorShown,
+                      railFits: statsRailFits,
+                      railOn: statsRailOn,
+                    })}
+                  >
+                    <Box component="span" sx={{ display: 'inline-flex' }}>
+                      <IconButton
+                        size="sm"
+                        variant={statsRailOn && persistedId ? 'soft' : 'plain'}
+                        color="neutral"
+                        disabled={!persistedId}
+                        aria-pressed={statsRailOn}
+                        aria-label={statsRailOn ? 'Hide reply stats' : 'Show reply stats'}
+                        onClick={() => setReplyStatsRail(!statsRailOn)}
+                        data-testid="chat-toggle-reply-stats-btn"
+                      >
+                        <StatsIcon />
+                      </IconButton>
+                    </Box>
+                  </Tooltip>
                 </Box>
               </Box>
             </Box>
@@ -1807,8 +1861,8 @@ export function ChatShell({
                     statuses={statuses}
                     preparing={preparing}
                     prSummaries={prSummaries}
-                    view={orchestratorView}
-                    onViewChange={changeOrchestratorView}
+                    layout={orchestratorLayout}
+                    onLayoutChange={changeOrchestratorLayout}
                     actions={agentActions}
                     introPlaying={introPhase === 'playing'}
                     renderView={renderOrchestratorView}
@@ -1823,6 +1877,7 @@ export function ChatShell({
                     ambient={stageAmbient}
                     focus={stageFocus}
                     conversationRequest={conversationRequest}
+                    presenter={stagePresenter}
                     dockControl={
                       <Tooltip
                         size="sm"
@@ -1851,7 +1906,7 @@ export function ChatShell({
                           }}
                           data-testid="orchestrator-dock-toggle-btn"
                         >
-                          <PanelRightIcon />
+                          <ConversationIcon />
                         </IconButton>
                       </Tooltip>
                     }
@@ -2046,15 +2101,26 @@ export function ChatShell({
                 </Box>
               )}
 
-              <HeldRelayCard held={heldRelays.held} onResolve={heldRelays.resolve} onOpenSession={selectSession} />
+              {presentingStage && (
+                <PresenterPendingNotice
+                  count={heldRelays.held.length + decisionsFor(persistedId, taskDecisions).length}
+                  onTurnOff={() => orchestratorPrefs.setPresenter(false)}
+                />
+              )}
 
-              <TaskDecisionCards sessionId={persistedId} decisions={taskDecisions} onOpenSession={selectSession} />
+              {!presentingStage && (
+                <>
+                  <HeldRelayCard held={heldRelays.held} onResolve={heldRelays.resolve} onOpenSession={selectSession} />
 
-              <SpawnSuggestionTray
-                suggestions={spawnSuggestions.suggestions}
-                onStart={onStartSuggestion}
-                onDismiss={spawnSuggestions.dismiss}
-              />
+                  <TaskDecisionCards sessionId={persistedId} decisions={taskDecisions} onOpenSession={selectSession} />
+
+                  <SpawnSuggestionTray
+                    suggestions={spawnSuggestions.suggestions}
+                    onStart={onStartSuggestion}
+                    onDismiss={spawnSuggestions.dismiss}
+                  />
+                </>
+              )}
 
               {/* After first use, an unbound session or a hidden panel error still needs these controls
             above the composer. Empty Code sessions render them in the transcript instead. */}
@@ -2096,6 +2162,7 @@ export function ChatShell({
 
               <Composer
                 sessionId={activeId}
+                promptHistory={sentPrompts}
                 disabled={!activeId || creatingCode || sessionDraft.busy || openFailed}
                 disabledPlaceholder={disabledPlaceholder}
                 streaming={turnOpen}

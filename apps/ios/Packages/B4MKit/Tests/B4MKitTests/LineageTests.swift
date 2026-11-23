@@ -38,6 +38,32 @@ final class LineageTests: XCTestCase {
     XCTAssertEqual(lineage.madeFrom[1].role.title, "Made from")
   }
 
+  func testASceneIsMadeFromItsPictureSoundtrackAndCover() throws {
+    let scene = Data(
+      """
+      {"file_id":"s1","truncated":false,
+       "ancestors":[
+         {"file_id":"s1","depth":0,"redacted":false,"file_name":"scene.mp4","mime_type":"video/mp4","generator":"scene",
+          "model_id":null,"prompt":null,"download_url":null,"created_at":null,"request":null},
+         {"file_id":"v1","depth":1,"redacted":false,"file_name":"v.mp4","mime_type":"video/mp4","generator":"video",
+          "model_id":null,"prompt":null,"download_url":null,"created_at":null,"request":null},
+         {"file_id":"a1","depth":1,"redacted":false,"file_name":"a.mp3","mime_type":"audio/mpeg","generator":"music",
+          "model_id":null,"prompt":null,"download_url":null,"created_at":null,"request":null},
+         {"file_id":"i1","depth":1,"redacted":false,"file_name":"c.png","mime_type":"image/png","generator":null,
+          "model_id":null,"prompt":null,"download_url":null,"created_at":null,"request":null}],
+       "children":[],
+       "edges":[
+         {"parent_id":"v1","child_id":"s1","role":"scene_video"},
+         {"parent_id":"a1","child_id":"s1","role":"scene_audio"},
+         {"parent_id":"i1","child_id":"s1","role":"scene_cover"}]}
+      """.utf8)
+    let lineage = try MediaWire.lineage(status: 200, body: scene)
+    XCTAssertEqual(lineage.madeFrom.map(\.role), [.sceneVideo, .sceneAudio, .sceneCover])
+    XCTAssertEqual(lineage.madeFrom.map(\.role.title), ["Picture", "Soundtrack", "Cover art"])
+    XCTAssertEqual(lineage.madeFrom.map(\.node.kind), [.video, .audio, .image])
+    XCTAssertNil(LineageBranch.seed(for: try XCTUnwrap(lineage.root), parents: lineage.madeFrom), "nothing to retry")
+  }
+
   func testTwoUnknownRolesFromOneParentGetDistinctIDs() {
     let parent = LineageNode(id: "p", kind: .image)
     let links = [LineageLink(node: parent, role: .other("a")), LineageLink(node: parent, role: .other("b"))]

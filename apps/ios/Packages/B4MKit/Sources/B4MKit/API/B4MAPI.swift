@@ -4,6 +4,7 @@ import Foundation
 /// protocol, never on generated types, so a fake is a dozen lines and a regenerated client cannot
 /// ripple into the UI. Later milestones add their operations here.
 public protocol B4MAPI: Sendable {
+  func session(id: String) async throws -> SessionSummary
   func listSessions(cursor: String?, limit: Int) async throws -> Page<SessionSummary>
   /// A session's turns, oldest first.
   func listSessionQuests(sessionID: String, cursor: String?, limit: Int) async throws -> Page<QuestTurn>

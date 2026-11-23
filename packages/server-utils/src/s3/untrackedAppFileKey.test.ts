@@ -11,6 +11,7 @@ describe('isUntrackedAppFileKey', () => {
     'app-config/public-settings.json',
     'text-edit-backups/u1/id_notes.txt',
     'files/u1/backups/id_notes.txt',
+    'queued-mail/0b6f8a52-3c1e-4f7d-9a0b-2d4c6e8f1a3b.json',
   ])('skips %s', key => {
     expect(isUntrackedAppFileKey(key)).toBe(true);
   });

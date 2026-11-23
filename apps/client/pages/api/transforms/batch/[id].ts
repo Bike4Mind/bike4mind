@@ -1,8 +1,9 @@
 import { baseApi } from '@server/middlewares/baseApi';
+import { refuseExchangeKey } from '@server/auth/refuseExchangeKey';
 import { Config } from '@bike4mind/server-utils/utils/config';
 import { transformBatchRepository, usageEventRepository } from '@bike4mind/database';
 import { NotFoundError, usdToCreditsStochastic } from '@bike4mind/utils';
-import type { ModelInfo } from '@bike4mind/common';
+import { ApiKeyScope, type ModelInfo } from '@bike4mind/common';
 import { isUnpricedTextModel } from '@bike4mind/services/llm/modelAdmission';
 import { executedModelFields } from '@bike4mind/services/llm/shadowTier';
 import { anthropicBatchCost } from '@server/billing/anthropicBatchPricing';
@@ -18,7 +19,12 @@ import { settleHeldCredits } from '@bike4mind/server-utils/billing/reserveReques
  * so the caller can recycle just those. Polling, no webhook (v1).
  */
 
-const handler = baseApi().get(async (req, res) => {
+const handler = baseApi({
+  requiredScopes: [ApiKeyScope.AI_GENERATE, ApiKeyScope.ADMIN],
+  grandfatherLegacyKeys: true,
+}).get(async (req, res) => {
+  // Connected-app keys hold ai:generate but reach only the routes pinned in exchangeKeyRouteInventory.
+  if (refuseExchangeKey(req, res)) return;
   const anthropicBatchId = String(req.query.id ?? '');
   if (!anthropicBatchId) {
     throw new NotFoundError('Batch not found');

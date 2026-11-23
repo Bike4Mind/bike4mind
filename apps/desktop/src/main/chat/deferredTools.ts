@@ -240,23 +240,25 @@ function calledIn(message: CompletionMessage): string[] {
 }
 
 /**
- * A change in the middle of a turn: the reminder joins the newest user turn and the change message
+ * A change in the middle of a turn: changed guidance joins the newest user turn and the change message
  * goes last, so the next round's assistant turn follows it. In place, on this turn's wire only.
  */
-export function appendLiveToolChange(wire: CompletionMessage[], from: readonly string[], to: ChatToolState): void {
-  const reminder = toolStateReminder(to);
-  for (let i = wire.length - 1; i >= 0; i -= 1) {
-    const message = wire[i];
-    if (message.role !== 'user') continue;
-    wire[i] = {
-      ...message,
-      content:
-        typeof message.content === 'string'
-          ? `${message.content}\n\n${reminder}`
-          : [...message.content, { type: 'text', text: reminder }],
-    };
-    break;
+export function appendLiveToolChange(wire: CompletionMessage[], from: ChatToolState, to: ChatToolState): void {
+  if (from.text !== to.text) {
+    const reminder = toolStateReminder(to);
+    for (let i = wire.length - 1; i >= 0; i -= 1) {
+      const message = wire[i];
+      if (message.role !== 'user') continue;
+      wire[i] = {
+        ...message,
+        content:
+          typeof message.content === 'string'
+            ? `${message.content}\n\n${reminder}`
+            : [...message.content, { type: 'text', text: reminder }],
+      };
+      break;
+    }
   }
-  const { added, removed } = diffToolNames(from, to.tools);
+  const { added, removed } = diffToolNames(from.tools, to.tools);
   if (added.length > 0 || removed.length > 0) wire.push({ role: 'system', content: toolChangeContent(added, removed) });
 }

@@ -262,9 +262,15 @@ vi.mock('./DataLakeArticlePanel', () => ({
 vi.mock('./DataLakeSettingsModal', () => ({
   // data-origin exposes editingLake's origin so a test can pin that DataLakeManagerPanel
   // actually threads the lake's real origin through, rather than always seeding 'curated'.
-  DataLakeSettingsModal: ({ lake }: { lake: { name: string; origin?: string } | null }) =>
+  DataLakeSettingsModal: ({
+    lake,
+    initialTab,
+  }: {
+    lake: { name: string; origin?: string } | null;
+    initialTab?: string;
+  }) =>
     lake ? (
-      <div data-testid="mock-settings" data-origin={lake.origin}>
+      <div data-testid="mock-settings" data-origin={lake.origin} data-initial-tab={initialTab}>
         {lake.name}
       </div>
     ) : null,
@@ -573,6 +579,50 @@ describe('DataLakeManagerPanel - pending-proposal chip', () => {
     rerenderPanel(rerender);
     await user.hover(screen.getByTestId('datalake-manager-pending-proposals-mine'));
     expect(await screen.findByText('3 sources are waiting for your review')).toBeInTheDocument();
+  });
+});
+
+describe('DataLakeManagerPanel - research entry points', () => {
+  it('opens settings on Proposals from the row chip without selecting the lake', async () => {
+    const user = userEvent.setup();
+    useGetDataLakes.mockReturnValue({ data: [{ ...mineLake, pendingProposalCount: 2 }, theirsLake], isLoading: false });
+    renderPanel();
+
+    await user.click(screen.getByTestId('datalake-manager-review-proposals-mine'));
+
+    expect(screen.getByTestId('mock-settings')).toHaveAttribute('data-initial-tab', 'proposals');
+    expect(screen.queryByTestId('datalake-settings-btn-mine')).toBeNull();
+  });
+
+  it('opens settings on Research from the lake page', async () => {
+    const user = userEvent.setup();
+    renderPanel();
+
+    await user.click(screen.getByTestId('datalake-manager-lake-mine'));
+    await user.click(screen.getByTestId('datalake-research-btn-mine'));
+
+    expect(screen.getByTestId('mock-settings')).toHaveAttribute('data-initial-tab', 'research');
+  });
+
+  it('opens settings on Proposals from the lake page link', async () => {
+    const user = userEvent.setup();
+    useGetDataLakes.mockReturnValue({ data: [{ ...mineLake, pendingProposalCount: 2 }, theirsLake], isLoading: false });
+    renderPanel();
+
+    await user.click(screen.getByTestId('datalake-manager-lake-mine'));
+    await user.click(screen.getByTestId('datalake-review-proposals-btn-mine'));
+
+    expect(screen.getByTestId('mock-settings')).toHaveAttribute('data-initial-tab', 'proposals');
+  });
+
+  it('keeps the plain Settings button on the Settings tab', async () => {
+    const user = userEvent.setup();
+    renderPanel();
+
+    await user.click(screen.getByTestId('datalake-manager-lake-mine'));
+    await user.click(screen.getByTestId('datalake-settings-btn-mine'));
+
+    expect(screen.getByTestId('mock-settings')).toHaveAttribute('data-initial-tab', 'settings');
   });
 });
 

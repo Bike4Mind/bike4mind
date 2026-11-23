@@ -44,6 +44,9 @@ export const LAKE_CONFIG_VALUE_MAX_CHARS = 512;
  * if the field list grows - a bound on the document, not a policy about which changes matter. */
 export const LAKE_CONFIG_MAX_CHANGES = 32;
 
+/** Cap on structured lever moves per event; a delete snapshot carries every lever and schedule setting. */
+export const LAKE_CONFIG_MAX_LEVER_CHANGES = 40;
+
 /** Truncated SHA-256 hex. 32 hex chars is 128 bits, which is far more than enough to answer "is
  * this the same prompt as that one" and keeps the row small. */
 export const LAKE_CONFIG_TEXT_HASH_CHARS = 32;

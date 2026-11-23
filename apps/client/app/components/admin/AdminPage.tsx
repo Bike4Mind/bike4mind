@@ -27,7 +27,6 @@ import AdminSubscriptions from './Subscriptions';
 import AdminRevenue from './Revenue';
 import OrganizationsTab from './OrganizationsTab';
 import CreditAnalyticsTab from './CreditAnalysis';
-import InviteCenter from './InviteCenter';
 import { ModelLogsTab } from './ModelLogsTab';
 import IdentityProvidersTab from './IdentityProvidersTab';
 import ModelsShell from './Models/ModelsShell';
@@ -78,8 +77,6 @@ const SignupRiskReviewTab = dynamic(() => import('./SignupRiskReviewTab'), { ssr
 const ModerationIncidentsTab = dynamic(() => import('./ModerationIncidentsTab'), { ssr: false });
 const ShadowDetectionsTab = dynamic(() => import('./ShadowDetectionsTab'), { ssr: false });
 const StripeDisputesTab = dynamic(() => import('./StripeDisputesTab'), { ssr: false });
-const HeldSignupGrantsTab = dynamic(() => import('./HeldSignupGrantsTab'), { ssr: false });
-const PartnerSignupRulesTab = dynamic(() => import('./PartnerSignupRulesTab'), { ssr: false });
 const OAuthClientsTab = dynamic(() => import('./OAuthClientsTab'), { ssr: false });
 const PreferenceArenaTab = dynamic(() => import('./PreferenceArenaTab'), { ssr: false });
 const AdminGrowthPricingTab = dynamic(() => import('./AdminGrowthPricingTab'), { ssr: false });
@@ -98,6 +95,7 @@ const RateLimitsTab = dynamic(() => import('./RateLimits'), { ssr: false });
 const DlqReplayTab = dynamic(() => import('./DlqReplayTab'), { ssr: false });
 const ApiKeyScopePreflightTab = dynamic(() => import('./ApiKeyScopePreflightTab'), { ssr: false });
 const LegacyApiKeysTab = dynamic(() => import('./LegacyApiKeysTab'), { ssr: false });
+const SpendMonitorTab = dynamic(() => import('./SpendMonitorTab'), { ssr: false });
 const TutorialsTab = dynamic(() => import('./TutorialsTab'), { ssr: false });
 const IntegrationHealthTab = dynamic(() => import('./IntegrationHealth'), { ssr: false });
 const IntegrationDemandTab = dynamic(() => import('./IntegrationDemandTab'), { ssr: false });
@@ -162,6 +160,7 @@ const AdminPage = ({ enableUserMigration }: AdminPageProps) => {
         />
         <AccessReviewOverdueBanner
           isFullAdmin={!!currentUser?.isAdmin}
+          hidden={activeTab === AdminTab.AccessReview}
           onOpen={() => setActiveTab(AdminTab.AccessReview)}
         />
         <Tabs
@@ -198,9 +197,6 @@ const AdminPage = ({ enableUserMigration }: AdminPageProps) => {
           <TabPanel value={AdminTab.WorldTime}>{activeTab === AdminTab.WorldTime && <WorldTimeTab />}</TabPanel>
           <TabPanel value={AdminTab.Feedback}>{activeTab === AdminTab.Feedback && <FeedbackTab />}</TabPanel>
           <TabPanel value={AdminTab.Analytics}>{activeTab === AdminTab.Analytics && <AnalyticsTab />}</TabPanel>
-          <TabPanel value={AdminTab.RegistrationInvites}>
-            {activeTab === AdminTab.RegistrationInvites && <InviteCenter />}
-          </TabPanel>
           {enableUserMigration && (
             <TabPanel value={AdminTab.Migrate}>{activeTab === AdminTab.Migrate && <MigrateUsersTab />}</TabPanel>
           )}
@@ -240,12 +236,6 @@ const AdminPage = ({ enableUserMigration }: AdminPageProps) => {
           </TabPanel>
           <TabPanel value={AdminTab.StripeDisputes}>
             {activeTab === AdminTab.StripeDisputes && <StripeDisputesTab />}
-          </TabPanel>
-          <TabPanel value={AdminTab.HeldSignupGrants}>
-            {activeTab === AdminTab.HeldSignupGrants && <HeldSignupGrantsTab />}
-          </TabPanel>
-          <TabPanel value={AdminTab.PartnerSignupRules}>
-            {activeTab === AdminTab.PartnerSignupRules && <PartnerSignupRulesTab />}
           </TabPanel>
           <TabPanel value={AdminTab.Revenue}>{activeTab === AdminTab.Revenue && <AdminRevenue />}</TabPanel>
           <TabPanel value={AdminTab.Subscriptions}>
@@ -340,6 +330,9 @@ const AdminPage = ({ enableUserMigration }: AdminPageProps) => {
           <TabPanel value={AdminTab.DlqReplay}>{activeTab === AdminTab.DlqReplay && <DlqReplayTab />}</TabPanel>
           <TabPanel value={AdminTab.ApiKeyScopePreflight}>
             {activeTab === AdminTab.ApiKeyScopePreflight && <ApiKeyScopePreflightTab />}
+          </TabPanel>
+          <TabPanel value={AdminTab.SpendMonitor}>
+            {activeTab === AdminTab.SpendMonitor && <SpendMonitorTab />}
           </TabPanel>
           <TabPanel value={AdminTab.LegacyApiKeys}>
             {activeTab === AdminTab.LegacyApiKeys && <LegacyApiKeysTab />}

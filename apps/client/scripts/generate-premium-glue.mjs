@@ -28,6 +28,7 @@
  *
  *   premiumLlmTools.generated.ts - LLM tool contributions
  *   premiumSystemPrompts.generated.ts - system prompt contributions
+ *   premiumNavigableViews.generated.ts - navigation view registry contributions
  *   premiumAgentExtensions.generated.ts - agent surface profiles + tool-map guards
  *   premiumAdminSettings.generated.ts - contributed admin setting definitions
  *   premiumTutorialOwners.generated.ts - tutorial owner contributions
@@ -1456,6 +1457,43 @@ function generateSystemPrompts(packages) {
   );
 }
 
+// Premium packages can contribute admin pages to the navigate_view registry
+// (b4mContributions.navigableViewsExport -> a module exporting `navigableViews: NavigableView[]`).
+// server-utils' navigation/registerContributedViews.ts imports this file for its side effect, so it
+// must exist in BOTH forms; the registry validates every entry when it registers.
+function generateNavigableViews(packages) {
+  const outPath = join(SERVER_UTILS_GENERATED_DIR, 'premiumNavigableViews.generated.ts');
+  const typeImport = `import type { NavigableView } from '@bike4mind/common';`;
+
+  const contributors = packages.filter(p => p.contributions.navigableViewsExport);
+
+  if (contributors.length === 0) {
+    writeFile(
+      outPath,
+      `${GENERATED_BANNER}\n${typeImport}\n\nexport const premiumNavigableViews: NavigableView[] = [];\n`
+    );
+    return;
+  }
+
+  contributors.forEach(p =>
+    assertModuleSpecifier(p.contributions.navigableViewsExport, p.name, 'navigableViewsExport')
+  );
+
+  const imports = contributors
+    .map((p, i) => {
+      const spec = relativeOverlayImport(p, p.contributions.navigableViewsExport, 'navigableViewsExport', outPath);
+      return `import { navigableViews as views${i} } from '${spec}';`;
+    })
+    .join('\n');
+
+  const items = contributors.map((_, i) => `  ...views${i}`).join(',\n');
+
+  writeFile(
+    outPath,
+    `${GENERATED_BANNER}\n${typeImport}\n${imports}\n\nexport const premiumNavigableViews: NavigableView[] = [\n${items}\n];\n`
+  );
+}
+
 // Premium packages can run their own grant after a partner signup rule matches
 // (b4mContributions.partnerSignupHooksExport -> a module exporting `partnerSignupHooks:
 // PartnerSignupHook[]`). server/entitlements/signupDomainGrant.ts statically imports this
@@ -2254,6 +2292,7 @@ generatePartnerSignupHooks(linkedPackages);
 // once pnpm has installed the overlay, which linking it into apps/client implies.
 generateLlmTools(linkedPackages);
 generateSystemPrompts(linkedPackages);
+generateNavigableViews(linkedPackages);
 generateAgentExtensions(linkedPackages);
 generateAdminSettings(linkedPackages);
 generateDataSubjectRegistry(linkedPackages);

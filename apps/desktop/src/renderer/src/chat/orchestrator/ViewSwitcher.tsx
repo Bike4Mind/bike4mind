@@ -21,9 +21,19 @@ import {
 } from '../icons';
 import { isMac } from '../platform';
 import { ORCHESTRATOR_VIEWS, type OrchestratorViewId } from './orchestratorPrefs';
+import {
+  LAYOUT_PRESETS,
+  applyPreset,
+  presetOf,
+  setPaneView,
+  singlePaneLayout,
+  type LayoutPresetId,
+  type OrchestratorLayout,
+} from './orchestratorLayout';
 import { AMBIENT_IDLE_MS } from './ambient';
 import type { AgentDetailsSkin } from './AgentPeekDrawer';
 import { SkinMenuSection } from './SkinMenuSection';
+import { SoundPackMenuSection } from './SoundPackMenuSection';
 
 type ViewGroup = 'scene' | 'layout';
 
@@ -67,6 +77,11 @@ export const ORCHESTRATOR_VIEW_INFO: Record<OrchestratorViewId, ViewInfo> = {
     group: 'scene',
     icon: <BoardIcon />,
     ambient: true,
+    detailsSkin: {
+      light: { background: '#eef0e6', border: '#aebbab' },
+      dark: { background: '#222d2a', border: '#4c5f58' },
+      radius: '2px',
+    },
   },
   board: {
     label: 'Board',
@@ -142,8 +157,24 @@ export function isViewReset(event: Pick<KeyboardEvent, 'metaKey' | 'ctrlKey' | '
   return mod && event.shiftKey && !event.altKey && event.code === 'Escape';
 }
 
-/** What the reset lands on: the plain layout, so a skinned or broken view is always escapable. */
+/** What the reset lands on: the plain layout alone, so a skinned, broken or crowded stage is always escapable. */
 export const RESET_VIEW: OrchestratorViewId = 'board';
+export const RESET_LAYOUT: OrchestratorLayout = singlePaneLayout(RESET_VIEW);
+
+const PRESET_INFO: Record<LayoutPresetId, { label: string; description: string }> = {
+  single: { label: 'One view', description: 'The whole stage for one view' },
+  'side-by-side': { label: 'Side by side', description: 'Two views next to each other' },
+  stacked: { label: 'Stacked', description: 'Two views, one above the other' },
+  'three-across': { label: 'Three across', description: 'Three views in a row' },
+};
+const PRESET_IDS = Object.keys(LAYOUT_PRESETS) as LayoutPresetId[];
+
+/** Which pane Mod+Shift+[ ] steps: the one holding keyboard focus (StageLayout marks them), else the first. */
+function focusedPane(layout: OrchestratorLayout): number {
+  const pane = document.activeElement?.closest<HTMLElement>('[data-orchestrator-pane]');
+  const index = Number(pane?.dataset.paneIndex);
+  return Number.isInteger(index) && index < layout.panes.length ? index : 0;
+}
 
 const SHORTCUT_HINT = isMac ? '\u2318\u21E7[ ]' : 'Ctrl+Shift+[ ]';
 const FOCUS_SHORTCUT = isMac ? '\u2318\u21E7F' : 'Ctrl+Shift+F';
@@ -155,26 +186,35 @@ interface Toggle {
 }
 
 export function ViewSwitcher({
-  view,
-  onViewChange,
+  layout,
+  onLayoutChange,
   ambient,
   focus,
+  presenter,
 }: {
-  view: OrchestratorViewId;
-  onViewChange(view: OrchestratorViewId): void;
-  /** The quiet-when-idle switch; listed only while the view is one that settles. */
+  layout: OrchestratorLayout;
+  onLayoutChange(layout: OrchestratorLayout): void;
+  /** The quiet-when-idle switch; listed only while the stage is one view that settles. */
   ambient?: Toggle;
-  /** Focus mode, on top of whichever view is chosen; also toggled with Mod+Shift+F. */
+  /** Focus mode, on top of whichever layout is chosen; also toggled with Mod+Shift+F. */
   focus?: Toggle;
+  /** Presenter mode (presenter.ts), on top of whichever view is chosen; Reset leaves it as it is. */
+  presenter?: Toggle;
 }) {
+  const view = layout.panes[0].view;
   const current = ORCHESTRATOR_VIEW_INFO[view];
+  const split = layout.panes.length > 1;
+  const preset = presetOf(layout);
+  const menuLabel = split && preset ? PRESET_INFO[preset].label : current.label;
+  const changePaneView = (index: number, paneView: OrchestratorViewId) =>
+    onLayoutChange(setPaneView(layout, index, paneView));
 
   // On the window, as the sidebar's own shortcuts are: the user is usually typing in the composer.
-  const latest = useRef({ view, onViewChange, focus });
-  latest.current = { view, onViewChange, focus };
+  const latest = useRef({ layout, onLayoutChange, focus });
+  latest.current = { layout, onLayoutChange, focus };
   const resetView = () => {
-    const { onViewChange: changeView, focus: currentFocus } = latest.current;
-    changeView(RESET_VIEW);
+    const { onLayoutChange: changeLayout, focus: currentFocus } = latest.current;
+    changeLayout(RESET_LAYOUT);
     if (currentFocus?.on) currentFocus.onToggle(false);
   };
   useEffect(() => {
@@ -192,7 +232,7 @@ export function ViewSwitcher({
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.defaultPrevented) return;
-      const { focus: currentFocus } = latest.current;
+      const { focus: currentFocus, layout: currentLayout, onLayoutChange: changeLayout } = latest.current;
       if (currentFocus && isFocusToggle(event)) {
         event.preventDefault();
         currentFocus.onToggle(!currentFocus.on);
@@ -201,110 +241,236 @@ export function ViewSwitcher({
       const step = viewStepFor(event);
       if (step === null) return;
       event.preventDefault();
-      latest.current.onViewChange(stepView(latest.current.view, step));
+      const pane = focusedPane(currentLayout);
+      changeLayout(setPaneView(currentLayout, pane, stepView(currentLayout.panes[pane].view, step)));
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
   }, []);
 
   return (
+    <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75, flexShrink: 0 }}>
+      <Dropdown>
+        <MenuButton
+          size="sm"
+          variant="outlined"
+          color="neutral"
+          startDecorator={split ? <LayoutIcon split={layout.split} panes={layout.panes.length} /> : current.icon}
+          endDecorator={<CaretDownIcon />}
+          aria-label={`View: ${menuLabel}${focus?.on ? ', focused' : ''}`}
+          data-testid="orchestrator-view-menu-btn"
+          data-view={view}
+          data-layout={preset ?? 'custom'}
+          data-focus={focus?.on ? 'on' : 'off'}
+        >
+          {focus?.on ? `${menuLabel} \u00B7 Focus` : menuLabel}
+        </MenuButton>
+        <Menu size="sm" placement="bottom-start" sx={{ minWidth: 260 }} data-testid="orchestrator-view-menu">
+          <Typography level="body-xs" textColor="text.tertiary" sx={{ px: 1.5, pt: 0.75, pb: 0.25 }}>
+            Panes
+          </Typography>
+          {PRESET_IDS.map(id => (
+            <MenuItem
+              key={id}
+              selected={id === preset}
+              onClick={() => onLayoutChange(applyPreset(layout, id))}
+              data-testid={`orchestrator-layout-option-${id}`}
+            >
+              <ListItemDecorator>
+                <LayoutIcon split={LAYOUT_PRESETS[id].split} panes={LAYOUT_PRESETS[id].panes} />
+              </ListItemDecorator>
+              <Box sx={{ flex: 1, minWidth: 0 }}>
+                <Typography level="body-sm">{PRESET_INFO[id].label}</Typography>
+                <Typography level="body-xs" textColor="text.tertiary">
+                  {PRESET_INFO[id].description}
+                </Typography>
+              </Box>
+              {id === preset && <CheckIcon />}
+            </MenuItem>
+          ))}
+          {/* A split picks each pane's view from that pane's own menu beside this one. */}
+          {!split && (
+            <>
+              <ListDivider />
+              <ViewOptions
+                selected={view}
+                onPick={id => changePaneView(0, id)}
+                testIdPrefix="orchestrator-view-option"
+              />
+            </>
+          )}
+          <ListDivider />
+          <MenuItem onClick={resetView} data-testid="orchestrator-view-reset">
+            <Box sx={{ flex: 1, minWidth: 0 }}>
+              <Typography level="body-sm">Reset to Board</Typography>
+              <Typography level="body-xs" textColor="text.tertiary">
+                {`Back to Board alone, Focus off (${RESET_SHORTCUT})`}
+              </Typography>
+            </Box>
+          </MenuItem>
+          {focus && (
+            <>
+              <ListDivider />
+              <MenuItem
+                role="menuitemcheckbox"
+                aria-checked={focus.on}
+                onClick={() => focus.onToggle(!focus.on)}
+                data-testid="orchestrator-focus-toggle"
+              >
+                <Box sx={{ flex: 1, minWidth: 0 }}>
+                  <Typography level="body-sm">Focus</Typography>
+                  <Typography level="body-xs" textColor="text.tertiary">
+                    {`Show only what needs you (${FOCUS_SHORTCUT})`}
+                  </Typography>
+                </Box>
+                {focus.on && <CheckIcon />}
+              </MenuItem>
+            </>
+          )}
+          {presenter && (
+            <>
+              <ListDivider />
+              <MenuItem
+                role="menuitemcheckbox"
+                aria-checked={presenter.on}
+                onClick={() => presenter.onToggle(!presenter.on)}
+                data-testid="orchestrator-presenter-toggle"
+              >
+                <Box sx={{ flex: 1, minWidth: 0 }}>
+                  <Typography level="body-sm">Presenter mode</Typography>
+                  <Typography level="body-xs" textColor="text.tertiary">
+                    Hide titles, activity, questions, PRs and costs for screen sharing
+                  </Typography>
+                </Box>
+                {presenter.on && <CheckIcon />}
+              </MenuItem>
+            </>
+          )}
+          {ambient && current.ambient && !split && (
+            <>
+              <ListDivider />
+              <MenuItem
+                role="menuitemcheckbox"
+                aria-checked={ambient.on}
+                onClick={() => ambient.onToggle(!ambient.on)}
+                data-testid="orchestrator-ambient-toggle"
+              >
+                <Box sx={{ flex: 1, minWidth: 0 }}>
+                  <Typography level="body-sm">Quiet when idle</Typography>
+                  <Typography level="body-xs" textColor="text.tertiary">
+                    {`After ${AMBIENT_IDLE_MS / 1000} seconds without input, hide the conversation, composer and agent details`}
+                  </Typography>
+                </Box>
+                {ambient.on && <CheckIcon />}
+              </MenuItem>
+            </>
+          )}
+          <SkinMenuSection />
+          <SoundPackMenuSection />
+          <ListDivider />
+          <Typography level="body-xs" textColor="text.tertiary" sx={{ px: 1.5, py: 0.5 }}>
+            {split ? `${SHORTCUT_HINT} to switch the focused pane's view` : `${SHORTCUT_HINT} to switch views`}
+          </Typography>
+        </Menu>
+      </Dropdown>
+      {split &&
+        layout.panes.map((pane, index) => (
+          <PaneViewMenu key={index} index={index} view={pane.view} onPick={id => changePaneView(index, id)} />
+        ))}
+    </Box>
+  );
+}
+
+/** The views grouped as in ORCHESTRATOR_VIEWS, with `selected` checked; shared by the main and per-pane menus. */
+function ViewOptions({
+  selected,
+  onPick,
+  testIdPrefix,
+}: {
+  selected: OrchestratorViewId;
+  onPick(view: OrchestratorViewId): void;
+  testIdPrefix: string;
+}) {
+  return GROUP_ORDER.map((group, groupIndex) => (
+    <Fragment key={group}>
+      {groupIndex > 0 && <ListDivider />}
+      <Typography level="body-xs" textColor="text.tertiary" sx={{ px: 1.5, pt: 0.75, pb: 0.25 }}>
+        {GROUP_LABEL[group]}
+      </Typography>
+      {ORCHESTRATOR_VIEWS.filter(id => ORCHESTRATOR_VIEW_INFO[id].group === group).map(id => {
+        const info = ORCHESTRATOR_VIEW_INFO[id];
+        const isSelected = id === selected;
+        return (
+          <MenuItem key={id} selected={isSelected} onClick={() => onPick(id)} data-testid={`${testIdPrefix}-${id}`}>
+            <ListItemDecorator>{info.icon}</ListItemDecorator>
+            <Box sx={{ flex: 1, minWidth: 0 }}>
+              <Typography level="body-sm">{info.label}</Typography>
+              <Typography level="body-xs" textColor="text.tertiary">
+                {info.description}
+              </Typography>
+            </Box>
+            {isSelected && <CheckIcon />}
+          </MenuItem>
+        );
+      })}
+    </Fragment>
+  ));
+}
+
+/** One pane's view picker in a split, numbered as the pane's region is labelled (StageLayout). */
+function PaneViewMenu({
+  index,
+  view,
+  onPick,
+}: {
+  index: number;
+  view: OrchestratorViewId;
+  onPick(view: OrchestratorViewId): void;
+}) {
+  const info = ORCHESTRATOR_VIEW_INFO[view];
+  return (
     <Dropdown>
       <MenuButton
         size="sm"
-        variant="outlined"
+        variant="plain"
         color="neutral"
-        startDecorator={current.icon}
+        startDecorator={info.icon}
         endDecorator={<CaretDownIcon />}
-        aria-label={`View: ${current.label}${focus?.on ? ', focused' : ''}`}
-        data-testid="orchestrator-view-menu-btn"
+        aria-label={`Pane ${index + 1} view: ${info.label}`}
+        data-testid={`orchestrator-pane-view-menu-btn-${index}`}
         data-view={view}
-        data-focus={focus?.on ? 'on' : 'off'}
       >
-        {focus?.on ? `${current.label} \u00B7 Focus` : current.label}
+        {`${index + 1}. ${info.label}`}
       </MenuButton>
-      <Menu size="sm" placement="bottom-start" sx={{ minWidth: 260 }} data-testid="orchestrator-view-menu">
-        {GROUP_ORDER.map((group, groupIndex) => (
-          <Fragment key={group}>
-            {groupIndex > 0 && <ListDivider />}
-            <Typography level="body-xs" textColor="text.tertiary" sx={{ px: 1.5, pt: 0.75, pb: 0.25 }}>
-              {GROUP_LABEL[group]}
-            </Typography>
-            {ORCHESTRATOR_VIEWS.filter(id => ORCHESTRATOR_VIEW_INFO[id].group === group).map(id => {
-              const info = ORCHESTRATOR_VIEW_INFO[id];
-              const selected = id === view;
-              return (
-                <MenuItem
-                  key={id}
-                  selected={selected}
-                  onClick={() => onViewChange(id)}
-                  data-testid={`orchestrator-view-option-${id}`}
-                >
-                  <ListItemDecorator>{info.icon}</ListItemDecorator>
-                  <Box sx={{ flex: 1, minWidth: 0 }}>
-                    <Typography level="body-sm">{info.label}</Typography>
-                    <Typography level="body-xs" textColor="text.tertiary">
-                      {info.description}
-                    </Typography>
-                  </Box>
-                  {selected && <CheckIcon />}
-                </MenuItem>
-              );
-            })}
-          </Fragment>
-        ))}
-        <ListDivider />
-        <MenuItem onClick={resetView} data-testid="orchestrator-view-reset">
-          <Box sx={{ flex: 1, minWidth: 0 }}>
-            <Typography level="body-sm">Reset to Board</Typography>
-            <Typography level="body-xs" textColor="text.tertiary">
-              {`Back to the plain layout, Focus off (${RESET_SHORTCUT})`}
-            </Typography>
-          </Box>
-        </MenuItem>
-        {focus && (
-          <>
-            <ListDivider />
-            <MenuItem
-              role="menuitemcheckbox"
-              aria-checked={focus.on}
-              onClick={() => focus.onToggle(!focus.on)}
-              data-testid="orchestrator-focus-toggle"
-            >
-              <Box sx={{ flex: 1, minWidth: 0 }}>
-                <Typography level="body-sm">Focus</Typography>
-                <Typography level="body-xs" textColor="text.tertiary">
-                  {`Show only what needs you (${FOCUS_SHORTCUT})`}
-                </Typography>
-              </Box>
-              {focus.on && <CheckIcon />}
-            </MenuItem>
-          </>
-        )}
-        {ambient && current.ambient && (
-          <>
-            <ListDivider />
-            <MenuItem
-              role="menuitemcheckbox"
-              aria-checked={ambient.on}
-              onClick={() => ambient.onToggle(!ambient.on)}
-              data-testid="orchestrator-ambient-toggle"
-            >
-              <Box sx={{ flex: 1, minWidth: 0 }}>
-                <Typography level="body-sm">Quiet when idle</Typography>
-                <Typography level="body-xs" textColor="text.tertiary">
-                  {`After ${AMBIENT_IDLE_MS / 1000} seconds without input, hide the conversation, composer and agent details`}
-                </Typography>
-              </Box>
-              {ambient.on && <CheckIcon />}
-            </MenuItem>
-          </>
-        )}
-        <SkinMenuSection />
-        <ListDivider />
-        <Typography level="body-xs" textColor="text.tertiary" sx={{ px: 1.5, py: 0.5 }}>
-          {`${SHORTCUT_HINT} to switch views`}
-        </Typography>
+      <Menu
+        size="sm"
+        placement="bottom-start"
+        sx={{ minWidth: 260 }}
+        data-testid={`orchestrator-pane-view-menu-${index}`}
+      >
+        <ViewOptions selected={view} onPick={onPick} testIdPrefix={`orchestrator-pane-${index}-view-option`} />
       </Menu>
     </Dropdown>
+  );
+}
+
+/** A small diagram of a pane preset: `panes` boxes in a row or a column. */
+function LayoutIcon({ split, panes = 2 }: { split: 'row' | 'column'; panes?: number }) {
+  const row = split === 'row';
+  return (
+    <Box
+      aria-hidden
+      sx={{
+        display: 'flex',
+        flexDirection: row ? 'row' : 'column',
+        gap: '2px',
+        width: 16,
+        height: 14,
+      }}
+    >
+      {Array.from({ length: panes }, (_, index) => (
+        <Box key={index} sx={{ flex: 1, border: '1.5px solid currentColor', borderRadius: '2px' }} />
+      ))}
+    </Box>
   );
 }

@@ -41,6 +41,7 @@ describe('resolveModalImageUrl', () => {
     expect(getSignedUrl).toHaveBeenCalledWith('modal-images/a.png', 'get', {
       audience: 'browser',
       expiresIn: 3600,
+      ResponseContentDisposition: 'attachment; filename="a.png"',
     });
   });
 

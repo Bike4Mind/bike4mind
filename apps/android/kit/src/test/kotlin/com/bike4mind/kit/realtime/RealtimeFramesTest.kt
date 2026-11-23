@@ -21,6 +21,23 @@ class RealtimeFramesTest {
     }
 
     @Test
+    fun parsesAPendingAction() {
+        val parked = """{"action":"streamed_chat_completion","quest":{"id":"q1","sessionId":"s1","status":"running",""" +
+            """"pendingAction":{"tool":"web_search","params":{"query":"weather","limit":3,"site":null},"ts":1700000000123}}}"""
+        val action = RealtimeFrames.parse(parked, ChunkReassembler())!!.quest.pendingAction!!
+        assertEquals("web_search", action.tool)
+        assertEquals(mapOf("query" to "weather", "limit" to "3", "site" to ""), action.params)
+        assertEquals(1_700_000_000_123, action.requestedAtMs)
+    }
+
+    @Test
+    fun dropsAPendingActionWithoutATimestamp() {
+        val malformed = """{"action":"streamed_chat_completion","quest":{"id":"q1","sessionId":"s1",""" +
+            """"pendingAction":{"tool":"web_search","params":{}}}}"""
+        assertNull(RealtimeFrames.parse(malformed, ChunkReassembler())!!.quest.pendingAction)
+    }
+
+    @Test
     fun ignoresPongNonJsonAndUnknownActions() {
         val reassembler = ChunkReassembler()
         assertNull(RealtimeFrames.parse("pong", reassembler))

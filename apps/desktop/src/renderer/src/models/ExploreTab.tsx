@@ -336,7 +336,7 @@ function ModelDetail({
         variant="soft"
         data-testid="models-detail-error"
         endDecorator={
-          <Button size="sm" variant="plain" color="danger" onClick={() => void load()}>
+          <Button size="sm" variant="outlined" color="danger" onClick={() => void load()}>
             Retry
           </Button>
         }
@@ -645,7 +645,12 @@ export function ExploreTab({
             color="danger"
             data-testid="models-hf-token-read-error"
             endDecorator={
-              <Button size="sm" variant="plain" onClick={() => setTokenReadVersion(version => version + 1)}>
+              <Button
+                size="sm"
+                variant="outlined"
+                color="neutral"
+                onClick={() => setTokenReadVersion(version => version + 1)}
+              >
                 Retry
               </Button>
             }
@@ -666,7 +671,7 @@ export function ExploreTab({
             data-testid="models-explore-error"
             data-kind={search.error.kind}
             endDecorator={
-              <Button size="sm" variant="plain" color="neutral" onClick={() => void run(remembered.query)}>
+              <Button size="sm" variant="outlined" color="neutral" onClick={() => void run(remembered.query)}>
                 Retry
               </Button>
             }
@@ -690,7 +695,7 @@ export function ExploreTab({
         {search.state === 'ready' && search.nextCursor && (
           <Button
             size="sm"
-            variant="plain"
+            variant="outlined"
             color="neutral"
             loading={search.loadingMore}
             onClick={() => void more()}

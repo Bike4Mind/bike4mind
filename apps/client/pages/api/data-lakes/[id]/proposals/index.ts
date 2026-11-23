@@ -1,14 +1,11 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { DATA_LAKE_READ_SCOPES } from '@bike4mind/server-utils/dataLakes/dataLakeScopes';
 import { requireFeatureEnabled } from '@bike4mind/server-utils/middlewares/featureFlag';
-import { dataLakeService } from '@bike4mind/services';
-import { dataLakeRepository, dataLakeAccessGrantRepository, dataLakeProposalRepository } from '@bike4mind/database';
 import { DATA_LAKE_PROPOSAL_STATUSES, lakeProposalListResponseSchema } from '@bike4mind/common';
-import { ForbiddenError } from '@bike4mind/utils';
 import { Request } from 'express';
 import { z } from 'zod';
 import { toAccessContext } from '@bike4mind/server-utils/dataLakes/toAccessContext';
-import { recordLakeRead } from '@server/dataLakes/recordLakeRead';
+import { listLakeProposals } from '@server/dataLakes/research/proposalListHandler';
 import { respond } from '@server/utils/respond';
 
 const ListQuery = z.object({
@@ -32,31 +29,10 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
   .get(async (req: Request, res) => {
     const { id } = req.query as { id: string };
     const { status, limit } = ListQuery.parse(req.query);
-    const ctx = await toAccessContext(req);
-
-    const lake = await dataLakeService.assertLakeAccess(id, ctx, {
-      db: { dataLakes: dataLakeRepository, dataLakeAccessGrants: dataLakeAccessGrantRepository },
-    });
-    const canManage = await dataLakeService.resolveCanManageLake(lake, ctx, {
-      db: { dataLakeAccessGrants: dataLakeAccessGrantRepository },
-    });
-    // 403, not 400 - same manage-denial the sibling `spend.ts` refuses with, and the same status
-    // `resolveReviewable` uses for the review routes. The read gate above already cleared the caller,
-    // so this is an authorization answer.
-    if (!canManage) {
-      throw new ForbiddenError('You do not have permission to review proposals for this data lake');
-    }
-
-    const proposals = await dataLakeProposalRepository.listByLake(lake.id, {
+    const proposals = await listLakeProposals(req, id, await toAccessContext(req), 'data-lake-proposals', () => ({
       status,
       limit: limit ?? DEFAULT_LIMIT,
-    });
-
-    if (proposals.length > 0) {
-      const fileIds = proposals.flatMap(p => (p.admittedFabFileId ? [p.admittedFabFileId] : []));
-      await recordLakeRead(req, { lakeIds: [lake.id], fileIds, surface: 'data-lake-proposals' });
-    }
-
+    }));
     return respond(res, lakeProposalListResponseSchema, { data: proposals });
   });
 

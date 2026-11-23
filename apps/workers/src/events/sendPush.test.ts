@@ -332,7 +332,7 @@ describe('deliverPush', () => {
     }
   });
 
-  it('selects the brief action category from briefAction and keeps it when content is redacted', async () => {
+  it('selects the brief category from briefAction, falls back to Listen, and keeps it when redacted', async () => {
     const { deps, sent } = makeDeps([{ token: 'tok-a', environment: 'production' }], {
       loadRecipient: vi.fn(async () => ({ preferences: undefined, redactContent: true })),
     });
@@ -346,7 +346,8 @@ describe('deliverPush', () => {
 
     expect(payloadOf(sent[0]).aps.category).toBe('brief_ready_approval');
     expect(payloadOf(sent[1]).aps.category).toBe('brief_ready_reply');
-    for (const call of sent.slice(2)) expect(payloadOf(call).aps).not.toHaveProperty('category');
+    expect(payloadOf(sent[2]).aps.category).toBe('brief_ready_listen');
+    for (const call of sent.slice(3)) expect(payloadOf(call).aps).not.toHaveProperty('category');
     expect(payloadOf(sent[0])).toMatchObject({ briefId: 'brief-1' });
     expect(payloadOf(sent[0])).not.toHaveProperty('approval');
   });

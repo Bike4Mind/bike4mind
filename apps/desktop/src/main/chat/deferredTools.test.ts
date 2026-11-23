@@ -301,7 +301,7 @@ describe('appendLiveToolChange', () => {
       { role: 'assistant', content: [] },
       { role: 'user', content: [{ type: 'tool_result' }] },
     ];
-    appendLiveToolChange(messages, ['a'], { tools: ['a', 'b'], text: 'now' });
+    appendLiveToolChange(messages, { tools: ['a'], text: 'before' }, { tools: ['a', 'b'], text: 'now' });
     expect(messages[2].content).toEqual([
       { type: 'tool_result' },
       { type: 'text', text: '<system-reminder>\nnow\n</system-reminder>' },
@@ -310,5 +310,45 @@ describe('appendLiveToolChange', () => {
       role: 'system',
       content: [{ type: 'tool_addition', tool: { type: 'tool_reference', name: 'b' } }],
     });
+  });
+
+  it('keeps changed access guidance even when tool names do not change', () => {
+    const messages: CompletionMessage[] = [{ role: 'user', content: 'continue' }];
+    appendLiveToolChange(messages, { tools: ['a'], text: 'old access' }, { tools: ['a'], text: 'new access' });
+    expect(messages).toEqual([
+      { role: 'user', content: 'continue\n\n<system-reminder>\nnew access\n</system-reminder>' },
+    ]);
+  });
+
+  it.each(['addition', 'removal'] as const)('does not duplicate identical guidance for a tool %s', change => {
+    const messages: CompletionMessage[] = [{ role: 'user', content: [{ type: 'tool_result', content: 'evidence' }] }];
+    const original = structuredClone(messages[0]);
+    const from = { tools: change === 'addition' ? ['a'] : ['a', 'b'], text: 'unchanged access and permissions' };
+    const to = { tools: change === 'addition' ? ['a', 'b'] : ['a'], text: from.text };
+    appendLiveToolChange(messages, from, to);
+    expect(messages[0]).toEqual(original);
+    expect(messages[1]).toEqual({
+      role: 'system',
+      content: [{ type: `tool_${change}`, tool: { type: 'tool_reference', name: 'b' } }],
+    });
+  });
+
+  it('compares each change against the state the previous change delivered', () => {
+    const messages: CompletionMessage[] = [{ role: 'user', content: 'go' }];
+    const a = { tools: ['a'], text: 'same' };
+    const b = { tools: ['a', 'b'], text: 'same' };
+    const c = { tools: ['a', 'b', 'c'], text: 'changed' };
+    appendLiveToolChange(messages, a, b);
+    messages.push({ role: 'assistant', content: [] }, { role: 'user', content: [{ type: 'tool_result' }] });
+    appendLiveToolChange(messages, b, c);
+    expect(messages[0]).toEqual({ role: 'user', content: 'go' });
+    expect(messages[3].content).toEqual([
+      { type: 'tool_result' },
+      { type: 'text', text: '<system-reminder>\nchanged\n</system-reminder>' },
+    ]);
+    expect(messages.filter(message => message.role === 'system')).toEqual([
+      { role: 'system', content: [{ type: 'tool_addition', tool: { type: 'tool_reference', name: 'b' } }] },
+      { role: 'system', content: [{ type: 'tool_addition', tool: { type: 'tool_reference', name: 'c' } }] },
+    ]);
   });
 });

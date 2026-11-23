@@ -48,6 +48,7 @@ describe('toViewSnapshot', () => {
       id: 'd1',
       question: 'Which database?',
       options: ['Postgres (Recommended)', 'Mongo'],
+      oneClick: true,
     });
     const multi = { ...decision, question: { ...decision.question, multiSelect: true } };
     const many = toViewSnapshot('root', [agentFixture('a', 'needs-you', { decision: multi })], {});

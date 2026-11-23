@@ -5,6 +5,8 @@ import Foundation
 public enum LineageRole: Hashable, Sendable {
   case firstFrame, lastFrame, reference, style
   case extendOf, variationOf, editSource, mask
+  /// The three parts of a Scene: the picture, the soundtrack and the optional cover art.
+  case sceneVideo, sceneAudio, sceneCover
   case other(String)
 
   public init(wire: String) {
@@ -17,6 +19,9 @@ public enum LineageRole: Hashable, Sendable {
     case "variation_of": self = .variationOf
     case "edit_source": self = .editSource
     case "mask": self = .mask
+    case "scene_video": self = .sceneVideo
+    case "scene_audio": self = .sceneAudio
+    case "scene_cover": self = .sceneCover
     default: self = .other(wire)
     }
   }
@@ -42,6 +47,9 @@ public enum LineageRole: Hashable, Sendable {
     case .variationOf: "Variation of"
     case .editSource: "Edited from"
     case .mask: "Mask"
+    case .sceneVideo: "Picture"
+    case .sceneAudio: "Soundtrack"
+    case .sceneCover: "Cover art"
     case .other: "Made from"
     }
   }
@@ -205,6 +213,8 @@ public enum LineageBranch {
       if let duration = number("durationSeconds") { params[.duration] = .number(duration) }
       if request["instrumental"]?.boolValue == true { params[.instrumental] = .flag(true) }
       if let lyrics = text("lyrics"), !lyrics.isEmpty { params[.lyrics] = .text(lyrics) }
+    case .scene:
+      break
     }
     return params
   }
@@ -227,6 +237,7 @@ public enum LineageBranch {
       params: params(from: node.request ?? [:], kind: kind), modelID: node.modelID)
   }
 
+  /// A Scene (`scene`) is not mapped: it has no prompt to retry, so Branch is not offered for one.
   static func kind(forGenerator generator: String) -> GenerationKind? {
     switch generator {
     case "image": .image

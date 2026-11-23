@@ -26,8 +26,7 @@ export function affordableRoundBudget(params: {
   minimumOutputTokens: number;
 }): RoundBudget {
   const { modelInfo, inputUsd, inputTokens, availableCredits, minimumOutputTokens } = params;
-  const inputCredits = inputUsd * CREDITS_PER_USD_COST;
-  const perTokenCredits = getTextModelCost(modelInfo, 0, 1, 0, 0, inputTokens) * CREDITS_PER_USD_COST;
+  const { inputCredits, perTokenCredits } = roundPricing(modelInfo, inputUsd, inputTokens);
   const minimumCredits = Math.ceil(inputCredits + minimumOutputTokens * perTokenCredits);
 
   // An unpriced model costs nothing to answer, so only the input side can bind.
@@ -43,6 +42,33 @@ export function affordableRoundBudget(params: {
     return { affordable: false, minimumCredits };
   }
   return { affordable: true, outputTokens };
+}
+
+/**
+ * What one round can cost: its input plus `minimumOutputTokens` at the least, and its input plus
+ * `maximumOutputTokens` at the most. A run budget claim is sized from this range (cliCompletions),
+ * so a round capped to its claim with affordableRoundBudget settles inside it.
+ */
+export function roundCreditRange(params: {
+  modelInfo: ModelInfo;
+  inputUsd: number;
+  inputTokens: number;
+  minimumOutputTokens: number;
+  maximumOutputTokens: number;
+}): { minimumCredits: number; maximumCredits: number } {
+  const { inputCredits, perTokenCredits } = roundPricing(params.modelInfo, params.inputUsd, params.inputTokens);
+  const outputCredits = perTokenCredits > 0 ? perTokenCredits : 0;
+  return {
+    minimumCredits: Math.ceil(inputCredits + params.minimumOutputTokens * outputCredits),
+    maximumCredits: Math.ceil(inputCredits + params.maximumOutputTokens * outputCredits),
+  };
+}
+
+function roundPricing(modelInfo: ModelInfo, inputUsd: number, inputTokens: number) {
+  return {
+    inputCredits: inputUsd * CREDITS_PER_USD_COST,
+    perTokenCredits: getTextModelCost(modelInfo, 0, 1, 0, 0, inputTokens) * CREDITS_PER_USD_COST,
+  };
 }
 
 /**

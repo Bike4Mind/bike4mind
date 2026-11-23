@@ -355,8 +355,10 @@ describe('buildOpenApiDocument', () => {
     // route yet; named instead, until the GET routes land in a later step.
     const unpollable = new Set(['/api/ai/tts', '/api/ai/sound-effects']);
     // A 202 that starts work on another resource is polled there, so both routes must be named.
+    // A run is polled at a path whose own id segment is named, because the lake already owns `{id}`.
     const polledElsewhere: Record<string, string> = {
       '/api/v1/briefs/{id}/decisions/{decisionId}/reply': '/api/v1/agent-executions/{id}',
+      '/api/v1/data-lakes/{id}/research/runs': '/api/v1/data-lakes/{id}/research/runs/{run_id}',
     };
     for (const path of queued) {
       if (path in polledElsewhere) {

@@ -140,7 +140,12 @@ export function BrowserTabMenu({
               >
                 {total === 1 ? 'Close tab' : 'Close tabs'}
               </Button>
-              <Button variant="plain" onClick={() => setConfirm(null)} data-testid="browser-tab-close-cancel-btn">
+              <Button
+                variant="outlined"
+                color="neutral"
+                onClick={() => setConfirm(null)}
+                data-testid="browser-tab-close-cancel-btn"
+              >
                 Cancel
               </Button>
             </DialogActions>

@@ -15,8 +15,8 @@ const QuestMasterUpgradePrompt = ({ onUpgrade }: { onUpgrade?: () => void }) => 
         </Typography>
         <Typography>
           {onUpgrade
-            ? 'You have used your free Questmaster quest. Questmaster is included with every paid plan, or you can turn it off to keep chatting.'
-            : 'You have used your free Questmaster quest. Ask your administrator about a paid plan, or turn Questmaster off to keep chatting.'}
+            ? 'Starting another Questmaster plan requires an active subscription. Questmaster is included with every paid plan. You can still read and export existing quests, or turn it off to keep chatting.'
+            : 'Starting another Questmaster plan requires an active subscription. Questmaster is included with every paid plan. Ask your administrator about a paid plan, or turn Questmaster off to keep chatting. You can still read and export existing quests.'}
         </Typography>
         <Stack direction="row" gap={1} sx={{ justifyContent: 'flex-end' }}>
           <Button variant="plain" onClick={close} data-testid="questmaster-upgrade-cancel-btn">

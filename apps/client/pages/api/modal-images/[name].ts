@@ -2,6 +2,7 @@ import { ModalModel } from '@bike4mind/database';
 import { NotFoundError } from '@bike4mind/common';
 import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { getFilesStorage } from '@bike4mind/server-utils/utils/storage/index';
+import { storageReadOverrides } from '@bike4mind/utils/contentDisposition';
 import { baseApi } from '@server/middlewares/baseApi';
 import { MODAL_IMAGE_PREFIX } from '@client/server/tools/modalImageUrls';
 
@@ -23,6 +24,8 @@ const handler = baseApi({ auth: false, allowedMethods: ['GET'] })
     const signed = await getFilesStorage().getSignedUrl(key, 'get', {
       expiresIn: SIGNED_URL_TTL_SECONDS,
       audience: 'browser',
+      // Untracked key with no stored type to trust; an <img> ignores the attachment disposition.
+      ...storageReadOverrides({ key }),
     });
     res.setHeader('Cache-Control', CACHE_CONTROL);
     res.setHeader('Referrer-Policy', 'no-referrer');

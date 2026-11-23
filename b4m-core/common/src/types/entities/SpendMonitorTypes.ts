@@ -51,6 +51,22 @@ export type SpendRuleId = (typeof SPEND_RULE_IDS)[number];
 export type SpendAlertStatus = 'open' | 'acknowledged' | 'resolved';
 export type SpendAlertSeverity = 'warning' | 'critical';
 
+/**
+ * The automatic pause decision recorded on an incident: once per mode, and a shadow decision is replaced
+ * when the incident is later evaluated in enforce mode. Written by
+ * apps/workers/src/cron/spendMonitor/autoPause.ts and shown on the admin Spend monitor page.
+ */
+export type SpendAlertAutoPause = {
+  /** `shadow`: the incident met its threshold and nothing was paused. `enforce`: a freeze was applied. */
+  mode: 'shadow' | 'enforce';
+  decidedAt: Date;
+  tier: string;
+  thresholdCredits: number;
+  valueCredits: number;
+  /** The freeze applied for this incident; absent in shadow mode or when another freeze already held the scope. */
+  freezeId?: string;
+};
+
 export interface ISpendAlert {
   rule: SpendRuleId;
   scopeType: SpendRollupScopeType;
@@ -74,6 +90,7 @@ export interface ISpendAlert {
   lastEvaluatedWindowEnd?: Date;
   /** Snapshot rendered in Slack. */
   context: Record<string, unknown>;
+  autoPause?: SpendAlertAutoPause;
 }
 
 export interface ISpendRollupRepository extends IBaseRepository<ISpendRollup> {
@@ -129,6 +146,11 @@ export interface ISpendAlertRepository extends IBaseRepository<SpendAlertRecord>
     patch: Partial<ISpendAlert> & { id: string; lastEvaluatedWindowEnd: Date },
     options?: { unset?: (keyof ISpendAlert)[] }
   ): Promise<boolean>;
+  /**
+   * Records the automatic pause decision on a still-active incident that has none, or replaces a shadow
+   * decision with an enforce one. Returns false when another run recorded it first or the incident resolved.
+   */
+  recordAutoPause(id: string, autoPause: SpendAlertAutoPause): Promise<boolean>;
 }
 
 export function floorToBucket(date: Date): Date {

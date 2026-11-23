@@ -11,6 +11,7 @@ import { lambdaVpc } from './vpc';
 import { cdnUrlForLambdaEnv } from './router';
 import { toolRuntimeAssets } from './toolRuntimeAssets';
 import { searxngUrl } from './searxng';
+import { mailBodyEnvironment, mailBodyPutPermission } from './mailBodyOffload';
 
 // Re-export imageProcessor for other files that import from functions.ts
 export { imageProcessor };
@@ -45,6 +46,7 @@ export const slackQuestProcessor = new sst.aws.Function('SlackQuestProcessor', {
     generationJobQueue,
   ],
   environment: {
+    ...mailBodyEnvironment(appFilesBucket),
     ...DEFAULT_LAMBDA_ENVIRONMENT,
     ...TEST_GENERATION_PROVIDER_ENVIRONMENT,
     // Personal sst dev stages serve files via the local proxy (apps/client/pages/api/app-files/serve); deployed stages use the real distribution.
@@ -53,6 +55,7 @@ export const slackQuestProcessor = new sst.aws.Function('SlackQuestProcessor', {
     ...providerFederation.environment,
   },
   permissions: [
+    mailBodyPutPermission(appFilesBucket),
     { actions: ['bedrock:*'], resources: ['*'] },
     // Content moderation for images produced by the image_generation/edit_image tools
     // (closes an agent-tool moderation bypass; the queue-handler imageGeneration/

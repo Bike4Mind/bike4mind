@@ -1,5 +1,6 @@
 import { afterEach, describe, it, expect, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { countTagPaths } from '@bike4mind/common';
 import { getThemeConfig } from '@client/app/utils/themes';
@@ -96,6 +97,7 @@ const baseProps = {
   onCreateLake: vi.fn(),
   onDiscover: vi.fn(),
   onReviewTaxonomy: vi.fn(),
+  onReviewProposals: vi.fn(),
 };
 
 const makeLake = (overrides: Partial<ManagerLake>): ManagerLake =>
@@ -153,6 +155,44 @@ describe('ManagerNav lake name', () => {
     expect(name).toHaveAttribute('aria-label', 'Vendor Contracts');
     expect(screen.getByTestId('datalake-manager-draft-chip-lake-1')).toBeInTheDocument();
     expect(screen.getByTestId('datalake-manager-pending-proposals-lake-1')).toBeInTheDocument();
+  });
+});
+
+describe('ManagerNav pending-proposals chip', () => {
+  it('opens the lake on Proposals without selecting the row', async () => {
+    const user = userEvent.setup();
+    const onReviewProposals = vi.fn();
+    const onSelectLake = vi.fn();
+    render(
+      <TestWrapper>
+        <ManagerNav
+          {...baseProps}
+          onReviewProposals={onReviewProposals}
+          onSelectLake={onSelectLake}
+          lakes={[makeLake({ id: 'lake-1', name: 'Vendor Contracts', canManage: true, pendingProposalCount: 3 })]}
+        />
+      </TestWrapper>
+    );
+
+    await user.click(screen.getByTestId('datalake-manager-review-proposals-lake-1'));
+
+    expect(onReviewProposals).toHaveBeenCalledWith('lake-1');
+    expect(onSelectLake).not.toHaveBeenCalled();
+  });
+
+  it('labels the button with the count and the lake', () => {
+    render(
+      <TestWrapper>
+        <ManagerNav
+          {...baseProps}
+          lakes={[makeLake({ id: 'lake-1', name: 'Vendor Contracts', canManage: true, pendingProposalCount: 1 })]}
+        />
+      </TestWrapper>
+    );
+
+    expect(screen.getByTestId('datalake-manager-review-proposals-lake-1')).toHaveAccessibleName(
+      'Review 1 source in Vendor Contracts'
+    );
   });
 });
 
