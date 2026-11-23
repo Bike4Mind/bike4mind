@@ -149,6 +149,17 @@ describe('changes-filter deployable', () => {
     expect(outputsFor(['infra/web.ts']).deployable).toBe('true');
   });
 
+  it.each(['.changeset/changelog-github-retry.cjs', '.changeset/config.json'])(
+    'runs build and tests for Changesets runtime input %s',
+    file => {
+      expect(outputsFor([file]).deployable).toBe('true');
+    }
+  );
+
+  it('keeps ordinary version-bump entries non-deployable', () => {
+    expect(outputsFor(['.changeset/example.md']).deployable).toBe('false');
+  });
+
   it('is true when a PR mixes markdown with a source change', () => {
     expect(outputsFor(['infra/preview-shared-response-function.md', 'scripts/preview.mjs']).deployable).toBe('true');
   });

@@ -164,7 +164,12 @@
     },
     "@bike4mind/database#test": {
       "dependsOn": ["^build"],
-      "inputs": ["$TURBO_DEFAULT$", ".turbo/test-context", "$TURBO_ROOT$/packages/server-utils/src/auth/ability.ts"]
+      "inputs": [
+        "$TURBO_DEFAULT$",
+        ".turbo/test-context",
+        "$TURBO_ROOT$/packages/server-utils/src/auth/ability.ts",
+        "$TURBO_ROOT$/packages/scripts/migrate/migrations/20260921241039_ensure-admin-ai-attempt-retention.ts"
+      ]
     },
     "@bike4mind/resource#test": {
       "dependsOn": ["^build"],
@@ -227,6 +232,7 @@
       "inputs": [
         "$TURBO_DEFAULT$",
         ".turbo/test-context",
+        "$TURBO_ROOT$/b4m-core/mcp/src/remote/__fixtures__/remoteFixtureServer.ts",
         "../client/**/*.ts",
         "../client/tsconfig.json",
         "$TURBO_ROOT$/infra/queues.ts",
@@ -237,7 +243,11 @@
         "$TURBO_ROOT$/elasticmq.conf",
         "$TURBO_ROOT$/b4m-core/services/src/notebookCurationService/**",
         "$TURBO_ROOT$/packages/scripts/index.ts",
-        "$TURBO_ROOT$/packages/scripts/migrate/migrationManager.ts",
+        "$TURBO_ROOT$/packages/scripts/migrate/**",
+        "$TURBO_ROOT$/packages/scripts/seeders/**",
+        "$TURBO_ROOT$/packages/scripts/utils/**",
+        "$TURBO_ROOT$/packages/scripts/src/curatedCatalog/devKey.ts",
+        "$TURBO_ROOT$/packages/cli/src/models/curatedDevKey.ts",
         "$TURBO_ROOT$/docs-site/docs/**",
         "$TURBO_ROOT$/catalog/model-hub/curated-v2.json",
         "../../packages/scripts/help/**/*.ts",
@@ -252,6 +262,7 @@
       "inputs": [
         "$TURBO_DEFAULT$",
         ".turbo/test-context",
+        "$TURBO_ROOT$/b4m-core/mcp/src/remote/__fixtures__/remoteFixtureServer.ts",
         "../client/**/*.ts",
         "../client/tsconfig.json",
         "$TURBO_ROOT$/infra/queues.ts",
@@ -262,7 +273,11 @@
         "$TURBO_ROOT$/elasticmq.conf",
         "$TURBO_ROOT$/b4m-core/services/src/notebookCurationService/**",
         "$TURBO_ROOT$/packages/scripts/index.ts",
-        "$TURBO_ROOT$/packages/scripts/migrate/migrationManager.ts",
+        "$TURBO_ROOT$/packages/scripts/migrate/**",
+        "$TURBO_ROOT$/packages/scripts/seeders/**",
+        "$TURBO_ROOT$/packages/scripts/utils/**",
+        "$TURBO_ROOT$/packages/scripts/src/curatedCatalog/devKey.ts",
+        "$TURBO_ROOT$/packages/cli/src/models/curatedDevKey.ts",
         "$TURBO_ROOT$/docs-site/docs/**",
         "$TURBO_ROOT$/catalog/model-hub/curated-v2.json",
         "../../packages/scripts/help/**/*.ts",
@@ -310,6 +325,8 @@
       "inputs": [
         "$TURBO_DEFAULT$",
         ".turbo/test-context",
+        "$TURBO_ROOT$/packages/scripts/src/curatedCatalog/devKey.ts",
+        "$TURBO_ROOT$/packages/cli/src/models/curatedDevKey.ts",
         "../../packages/server-utils/**",
         "!../../packages/server-utils/node_modules/**",
         "!../../packages/server-utils/.turbo/**",
@@ -335,6 +352,8 @@
       "inputs": [
         "$TURBO_DEFAULT$",
         ".turbo/test-context",
+        "$TURBO_ROOT$/packages/scripts/src/curatedCatalog/devKey.ts",
+        "$TURBO_ROOT$/packages/cli/src/models/curatedDevKey.ts",
         "../../packages/server-utils/**",
         "!../../packages/server-utils/node_modules/**",
         "!../../packages/server-utils/.turbo/**",
@@ -374,6 +393,8 @@
       "inputs": [
         "$TURBO_DEFAULT$",
         ".turbo/test-context",
+        "$TURBO_ROOT$/packages/cli/src/models/curatedDevKey.ts",
+        "$TURBO_ROOT$/packages/scripts/src/curatedCatalog/devKey.ts",
         "src/premium-generated/**",
         "$TURBO_ROOT$/catalog/model-hub/curated-v2.json",
         "../../apps/client/pages/**",
@@ -391,6 +412,8 @@
       "inputs": [
         "$TURBO_DEFAULT$",
         ".turbo/test-context",
+        "$TURBO_ROOT$/packages/cli/src/models/curatedDevKey.ts",
+        "$TURBO_ROOT$/packages/scripts/src/curatedCatalog/devKey.ts",
         "src/premium-generated/**",
         "$TURBO_ROOT$/catalog/model-hub/curated-v2.json",
         "../../apps/client/pages/**",

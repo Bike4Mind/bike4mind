@@ -6,10 +6,12 @@ and excludes them from ordinary and integration lanes. Turbo also declares
 `test:repo` non-cacheable. The cache guard asks Vitest to discover all three lanes
 and compares the repo lane with tracked files, including uniqueness.
 
-## Seven-package inventory
+## Seven-package inventory snapshot
 
 Names below omit the `.repo.test.ts` suffix. Renames preserve complete test bodies
 except the database extraction and a services scanner's self-allowlist path.
+This is the rollout snapshot, not a maintained manifest. The discovery guard uses
+tracked repo-test files as the live inventory and verifies their lane coverage.
 
 | Package | Uncached files | Coverage |
 | --- | --- | --- |
@@ -42,7 +44,7 @@ package-specific `test` inputs (mirrored for `test:integration` where present):
   inputs, including generated inputs and the codegen dependency.
 - workers: existing client/server-utils/help inputs plus bounded infra files,
   ElasticMQ config, directly imported notebook curation sources, source-only
-  scripts entries, help docs and curated catalog.
+  scripts entries and their migration, seeder and config trees, help docs and curated catalog.
 
 `@bike4mind/scripts` deliberately remains always-on and whole-tree keyed. Its
 remaining suites still calculate external paths dynamically, including the AI

@@ -82,23 +82,43 @@ const CLIMBING_LITERAL = /['"`](\.\.(?:\/[^'"`\s$]*)?)['"`]/g;
 // Computed joins cannot be inferred safely; changes need a fresh input audit or an uncached lane.
 const AUDITED_ROOT_READERS = {
   'apps/workers/src/cli/tools.wiring.test.ts': 'fe20c678c7cc82e50e8819ee8633667090eaea5144d4250bab803c242afdccb2',
-  'apps/workers/src/database/migratorInvocation.wiring.test.ts': '112b67a3ee6a239d7644d71a074791ea19ac8cc32cf9b44dba1aee70a9a86455',
-  'b4m-core/infra/src/__tests__/bucketRouteCollision.test.ts': '7de59edfa8480f593b890d222078b24809bc6d47a5d2356be68c8ff121edc661',
-  'b4m-core/infra/src/__tests__/changelogGithubRetry.test.ts': 'e71168a74ce0b031e6ab5f4959bd26f904d6dde4d1bc0f3e07fcf5765675e1ac',
+  'apps/workers/src/database/migratorInvocation.wiring.test.ts':
+    '112b67a3ee6a239d7644d71a074791ea19ac8cc32cf9b44dba1aee70a9a86455',
+  'b4m-core/infra/src/__tests__/bucketRouteCollision.test.ts':
+    '7de59edfa8480f593b890d222078b24809bc6d47a5d2356be68c8ff121edc661',
+  'b4m-core/infra/src/__tests__/changelogGithubRetry.test.ts':
+    'e71168a74ce0b031e6ab5f4959bd26f904d6dde4d1bc0f3e07fcf5765675e1ac',
   'b4m-core/resource/src/index.test.ts': '9c39bb47b367afedcc09d29b232392f9da5581e99058c20b9592bd779e2f99a1',
   'b4m-core/resource/src/selfHostAppUrl.test.ts': '2ce51bb6b3f7990e92bc95adc15db1619dac25456f11182d2a18562b53a15890',
-  'b4m-core/resource/src/selfHostQueueParity.test.ts': 'e3cf442449fad5938b53d5d5dd225d6a11b48d1ca59f569582ad81536e1fc027',
-  'packages/server-utils/src/utils/ip.wiring.test.ts': 'f2a34abcea1d1b8479363aaea456e3ff704ff465aa71ed95dc213449eb187b6c',
+  'b4m-core/resource/src/selfHostQueueParity.test.ts':
+    'e3cf442449fad5938b53d5d5dd225d6a11b48d1ca59f569582ad81536e1fc027',
+  'packages/server-utils/src/utils/ip.wiring.test.ts':
+    'f2a34abcea1d1b8479363aaea456e3ff704ff465aa71ed95dc213449eb187b6c',
+  'packages/server-utils/src/utils/textEditBackupPrefix.test.ts':
+    '1bce847a1c64cc66ddc430ad1fc5bd2a6945f423d3fee54cc6702bd939597a10',
 };
+
+function literalTargets(file, literal, source, exists = fs.existsSync) {
+  const bases = [path.dirname(file)];
+  if (/(?:resolve|join)\(\s*fileURLToPath\(import\.meta\.url\)\s*,/.test(source)) bases.push(file);
+  return bases.flatMap(base => {
+    const target = path.resolve(repoRoot, base, literal);
+    return [target, `${target}.ts`, path.join(target, 'index.ts')]
+      .filter(candidate => exists(candidate))
+      .map(candidate => path.relative(repoRoot, candidate))
+      .filter(candidate => !candidate.startsWith('..'));
+  });
+}
 
 function rootLiteralPaths(files) {
   const targets = new Set();
   for (const file of files) {
     const source = fs.readFileSync(path.join(repoRoot, file), 'utf8');
     if (!escapedPaths(path.dirname(file), [file]).includes('.')) continue;
-    expect(createHash('sha256').update(source).digest('hex'), `${file}: re-audit computed root reads and their inputs`).toBe(
-      AUDITED_ROOT_READERS[file]
-    );
+    expect(
+      createHash('sha256').update(source).digest('hex'),
+      `${file}: re-audit computed root reads and their inputs`
+    ).toBe(AUDITED_ROOT_READERS[file]);
     for (const [, literal] of source.matchAll(/['"`]([^'"`\s$]+)['"`]/g)) {
       if (literal.startsWith('.') && !literal.startsWith('.changeset/') && !literal.startsWith('.env.')) continue;
       if (path.isAbsolute(literal) || literal.includes('*')) continue;
@@ -115,11 +135,9 @@ function escapedPaths(dir, files) {
   for (const file of files) {
     const source = fs.readFileSync(path.join(repoRoot, file), 'utf8');
     for (const [, literal] of source.matchAll(CLIMBING_LITERAL)) {
-      const target = path.relative(repoRoot, path.resolve(repoRoot, path.dirname(file), literal));
-      // Above the repo, or a path that does not exist (a traversal fixture such as
-      // `../../etc/passwd`): no repo file to hash.
-      if (target.startsWith('..') || !fs.existsSync(path.join(repoRoot, target))) continue;
-      if (target !== dir && !target.startsWith(`${dir}/`)) escaped.add(target === '' ? '.' : target);
+      for (const target of literalTargets(file, literal, source)) {
+        if (target !== dir && !target.startsWith(`${dir}/`)) escaped.add(target === '' ? '.' : target);
+      }
     }
   }
   return [...escaped];
@@ -128,9 +146,11 @@ function escapedPaths(dir, files) {
 // A declared workspace dependency's build inputs are already in the hash through ^build. One
 // with no build script contributes nothing there: see sourceOnlyDependencyReads.
 function dependencySources(manifest, packages) {
-  const declared = new Set(
-    Object.keys({ ...manifest.dependencies, ...manifest.devDependencies, ...manifest.peerDependencies })
-  );
+  const dependencies = { ...manifest.dependencies, ...manifest.devDependencies, ...manifest.peerDependencies };
+  const declared = new Set([
+    ...Object.keys(dependencies),
+    ...Object.values(dependencies).flatMap(value => /^workspace:(@[^/]+\/[^@]+)@/.exec(value)?.[1] ?? []),
+  ]);
   return packages
     .filter(pkg => declared.has(pkg.manifest.name) && pkg.manifest.scripts?.build)
     .map(pkg => `${pkg.dir}/src/**`);
@@ -181,6 +201,58 @@ function inputCovers(dir, inputs, target) {
     )
     .some(glob => path.matchesGlob(target, glob) || path.matchesGlob(`${target}/x`, glob));
 }
+
+describe('escaped path resolution', () => {
+  it('keeps declared workspace aliases in the dependency build inputs', () => {
+    expect(
+      dependencySources({ dependencies: { '@example/alias': 'workspace:@example/core@*' } }, [
+        { dir: 'packages/core', manifest: { name: '@example/core', scripts: { build: 'tsdown' } } },
+      ])
+    ).toEqual(['packages/core/src/**']);
+  });
+
+  it.each(['packages/database', 'b4m-core/infra', 'b4m-core/resource', 'b4m-core/services', 'packages/scripts'])(
+    '%s preserves Vitest default excludes in the ordinary lane',
+    dir => {
+      const config = fs.readFileSync(path.join(repoRoot, dir, 'vitest.config.ts'), 'utf8');
+      expect(config).toContain("import { configDefaults, defineConfig } from 'vitest/config'");
+      expect(config).toContain("exclude: [...configDefaults.exclude, '**/*.repo.test.ts']");
+    }
+  );
+
+  it.each([
+    ['packages/scripts/migrate/migrations/example', 'packages/scripts/migrate/migrations/example.ts'],
+    ['packages/scripts/migrate/migrations', 'packages/scripts/migrate/migrations/index.ts'],
+  ])('resolves the extensionless import %s', (target, resolved) => {
+    const file = 'apps/workers/src/queueHandlers/example.e2e.test.ts';
+    const literal = path.relative(path.dirname(file), target);
+    expect(literalTargets(file, literal, '', candidate => candidate === path.join(repoRoot, resolved))).toEqual([
+      resolved,
+    ]);
+  });
+
+  it('finds a root climb based on the file URL rather than its directory', () => {
+    expect(
+      escapedPaths('packages/server-utils', ['packages/server-utils/src/utils/textEditBackupPrefix.test.ts'])
+    ).toContain('.');
+    const reads = rootLiteralPaths(['packages/server-utils/src/utils/textEditBackupPrefix.test.ts']);
+    const inputs = readTurboJson().tasks['@bike4mind/server-utils#test'].inputs;
+    for (const target of [
+      'infra/buckets.ts',
+      'compose.selfhost.yaml',
+      'selfhost/kubernetes/files/buckets.sh',
+      'scripts/smoke_selfhost_objectstore.py',
+    ]) {
+      expect(reads).toContain(target);
+      expect(inputCovers('packages/server-utils', inputs, target), target).toBe(true);
+      expect(inputCovers('packages/server-utils', [], target), target).toBe(false);
+    }
+  });
+
+  it('keeps paths above the repository out of the input inventory', () => {
+    expect(literalTargets('packages/example/test.ts', '../../../../etc/passwd', '', () => true)).toEqual([]);
+  });
+});
 
 describe('turbo.json test tasks', () => {
   const turbo = readTurboJson();
@@ -301,7 +373,9 @@ describe('test reads outside the package', () => {
         index > start && line.trim() !== '' && line.search(/\S/) <= indent && !line.trim().startsWith('#')
     );
     const step = lines.slice(start + 1, end === -1 ? undefined : end).filter(line => !line.trim().startsWith('#'));
-    expect(step).toContainEqual(expect.stringMatching(/^\s*run: pnpm --recursive --if-present run test:repo\s*$/));
+    expect(step).toContainEqual(
+      expect.stringMatching(/^\s*run: pnpm --recursive --if-present --workspace-concurrency=1 run test:repo\s*$/)
+    );
     const condition = step.find(line => /^\s*if:/.test(line));
     expect(condition, 'the step needs an if: pinning it to one leg').toBeDefined();
     expect(condition).toContain("matrix.shard.name == 'misc'");

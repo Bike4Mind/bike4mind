@@ -954,7 +954,7 @@ jobs:
       # the naming.
       - name: Run repo-scan tests
         if: ${{ !cancelled() && matrix.shard.name == 'misc' && steps.codegen.outcome == 'success' }}
-        run: pnpm --recursive --if-present run test:repo
+        run: pnpm --recursive --if-present --workspace-concurrency=1 run test:repo
         env:
           CI: true
           VITEST_MAX_WORKERS: ${{ matrix.shard.workers }}

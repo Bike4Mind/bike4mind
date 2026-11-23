@@ -99,6 +99,18 @@ describe('test-shards selection for a PR diff (real turbo graph and ci.yml)', ()
     ['infra/alarms.ts', '@bike4mind/services-core'],
     ['catalog/model-hub/curated-v2.json', '@bike4mind/server-utils'],
     ['packages/server-utils/src/auth/ability.ts', '@bike4mind/database'],
+    [
+      'packages/scripts/migrate/migrations/20261118164439_ensure-email-triage-section-pending-index.ts',
+      '@bike4mind/workers',
+    ],
+    [
+      'packages/scripts/migrate/migrations/20261114125931_ensure-organization-export-erasure-index.ts',
+      '@bike4mind/workers',
+    ],
+    ['packages/scripts/seeders/example.ts', '@bike4mind/workers'],
+    ['packages/scripts/utils/config.ts', '@bike4mind/workers'],
+    ['.changeset/changelog-github-retry.cjs', '@bike4mind/infra'],
+    ['.changeset/config.json', '@bike4mind/infra'],
   ])('selects the bounded reader of %s', (file, name) => {
     const planned = planAffected({ changedFiles: [file], turbo, packageDirs });
     expect(planned.full).toBe(false);
