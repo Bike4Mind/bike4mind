@@ -843,3 +843,15 @@ export function useResendOrganizationInvite(organizationId: string) {
     onError: error => toast.error(getErrorMessage(error)),
   });
 }
+
+/** The user that holds the organization's org-owned API keys; null until one has been minted. */
+export const useAdminOrgServiceAccountId = (orgId: string) =>
+  useQuery({
+    queryKey: ['admin', 'organizations', orgId, 'service-account'],
+    queryFn: async (): Promise<string | null> => {
+      const response = await api.get<{ serviceAccountId: string | null }>(
+        `/api/admin/organizations/${encodeURIComponent(orgId)}/service-account`
+      );
+      return response.data.serviceAccountId;
+    },
+  });

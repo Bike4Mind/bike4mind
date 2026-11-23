@@ -1,6 +1,11 @@
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { ApiKeyStatus, type AdminApiKeyAccess, type IUserApiKeyDocument } from '@bike4mind/common';
+import {
+  ApiKeyStatus,
+  MODERATION_EXCEPTION_CATEGORIES,
+  type AdminApiKeyAccess,
+  type IUserApiKeyDocument,
+} from '@bike4mind/common';
 import { useUser } from '@client/app/contexts/UserContext';
 import { ProfileTestWrapper, buildProfile } from '../../profileTestUtils';
 import { ApiKeysTab } from './ApiKeysTab';
@@ -309,14 +314,30 @@ describe('ApiKeysTab', () => {
     expect(within(row('key-2')).getByTestId('user-keys-moderation-chip')).toHaveTextContent('Exception');
   });
 
-  it('grants the moderation exception with an audited reason', async () => {
+  const category = (name: string) => screen.getByTestId(`user-keys-moderation-category-${name}`);
+
+  it('offers exactly the accepted categories and requires at least one before saving', () => {
+    renderTab();
+
+    fireEvent.click(within(row('key-1')).getByTestId('user-keys-moderation-btn'));
+    expect(screen.getByRole('dialog', { name: 'Moderation exception' })).toBeInTheDocument();
+    for (const name of MODERATION_EXCEPTION_CATEGORIES) expect(category(name)).not.toBeChecked();
+    expect(screen.getByTestId('user-keys-moderation-categories').querySelectorAll('input')).toHaveLength(
+      MODERATION_EXCEPTION_CATEGORIES.length
+    );
+
+    fireEvent.click(screen.getByTestId('user-keys-moderation-dialog-reason-input-preset-0'));
+    expect(screen.getByTestId('user-keys-moderation-dialog-confirm-btn')).toBeDisabled();
+    expect(screen.queryByTestId('user-keys-moderation-dialog-secondary-btn')).not.toBeInTheDocument();
+  });
+
+  it('saves the chosen categories with an audited reason', async () => {
     mocks.setModeration.mockResolvedValue(undefined);
     renderTab();
 
     fireEvent.click(within(row('key-1')).getByTestId('user-keys-moderation-btn'));
-    expect(screen.getByRole('dialog', { name: 'Grant moderation exception' })).toBeInTheDocument();
-    expect(screen.getByTestId('user-keys-moderation-dialog-confirm-btn')).toBeDisabled();
-
+    fireEvent.click(category('violence'));
+    fireEvent.click(category('VIOLENCE'));
     fireEvent.click(screen.getByTestId('user-keys-moderation-dialog-reason-input-preset-0'));
     fireEvent.click(screen.getByTestId('user-keys-moderation-dialog-confirm-btn'));
 
@@ -324,41 +345,67 @@ describe('ApiKeysTab', () => {
       expect(mocks.setModeration).toHaveBeenCalledWith({
         keyId: 'key-1',
         reason: 'Approved security research',
-        categories: ['violence', 'violence/graphic', 'VIOLENCE'],
+        categories: ['violence', 'VIOLENCE'],
       })
     );
-    await waitFor(() =>
-      expect(screen.queryByRole('dialog', { name: 'Grant moderation exception' })).not.toBeInTheDocument()
-    );
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Moderation exception' })).not.toBeInTheDocument());
   });
 
-  it('removes an existing moderation exception by sending no categories', async () => {
-    mocks.setModeration.mockResolvedValue(undefined);
-    respond({
-      data: {
-        apiKeys: KEYS,
-        liveUsage: {},
-        requests: {},
-        access: PAID,
-        moderationExceptions: {
-          'key-1': { categories: ['violence'], reason: 'Security research', setAt: '2026-11-01T00:00:00.000Z' },
+  describe('with an existing exception', () => {
+    beforeEach(() => {
+      mocks.setModeration.mockResolvedValue(undefined);
+      respond({
+        data: {
+          apiKeys: KEYS,
+          liveUsage: {},
+          requests: {},
+          access: PAID,
+          moderationExceptions: {
+            'key-1': {
+              categories: ['violence/graphic'],
+              reason: 'Security research',
+              setAt: '2026-11-01T00:00:00.000Z',
+            },
+          },
         },
-      },
+      });
     });
-    renderTab();
 
-    fireEvent.click(within(row('key-1')).getByTestId('user-keys-moderation-btn'));
-    expect(screen.getByRole('dialog', { name: 'Remove moderation exception' })).toBeInTheDocument();
-    fireEvent.click(screen.getByTestId('user-keys-moderation-dialog-reason-input-preset-2'));
-    fireEvent.click(screen.getByTestId('user-keys-moderation-dialog-confirm-btn'));
+    it('preselects the current categories and saves a changed set', async () => {
+      renderTab();
 
-    await waitFor(() =>
-      expect(mocks.setModeration).toHaveBeenCalledWith({
-        keyId: 'key-1',
-        reason: 'Exception no longer needed',
-        categories: [],
-      })
-    );
+      fireEvent.click(within(row('key-1')).getByTestId('user-keys-moderation-btn'));
+      expect(category('violence/graphic')).toBeChecked();
+      expect(category('violence')).not.toBeChecked();
+
+      fireEvent.click(category('violence'));
+      fireEvent.click(screen.getByTestId('user-keys-moderation-dialog-reason-input-preset-1'));
+      fireEvent.click(screen.getByTestId('user-keys-moderation-dialog-confirm-btn'));
+
+      await waitFor(() =>
+        expect(mocks.setModeration).toHaveBeenCalledWith({
+          keyId: 'key-1',
+          reason: 'Violence-related content is core to the product',
+          categories: ['violence', 'violence/graphic'],
+        })
+      );
+    });
+
+    it('clears the exception with a separate action that sends no categories', async () => {
+      renderTab();
+
+      fireEvent.click(within(row('key-1')).getByTestId('user-keys-moderation-btn'));
+      fireEvent.click(screen.getByTestId('user-keys-moderation-dialog-reason-input-preset-2'));
+      fireEvent.click(screen.getByTestId('user-keys-moderation-dialog-secondary-btn'));
+
+      await waitFor(() =>
+        expect(mocks.setModeration).toHaveBeenCalledWith({
+          keyId: 'key-1',
+          reason: 'Exception no longer needed',
+          categories: [],
+        })
+      );
+    });
   });
 
   it('keeps the moderation dialog open and reports a server refusal', async () => {
@@ -366,11 +413,12 @@ describe('ApiKeysTab', () => {
     renderTab();
 
     fireEvent.click(within(row('key-1')).getByTestId('user-keys-moderation-btn'));
+    fireEvent.click(category('violence'));
     fireEvent.click(screen.getByTestId('user-keys-moderation-dialog-reason-input-preset-0'));
     fireEvent.click(screen.getByTestId('user-keys-moderation-dialog-confirm-btn'));
 
     await waitFor(() => expect(mocks.toastError).toHaveBeenCalledWith('API key not found'));
-    expect(screen.getByRole('dialog', { name: 'Grant moderation exception' })).toBeInTheDocument();
+    expect(screen.getByRole('dialog', { name: 'Moderation exception' })).toBeInTheDocument();
   });
 
   it('disables the moderation action without users:moderate, naming the permission', () => {
