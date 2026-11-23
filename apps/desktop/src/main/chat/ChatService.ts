@@ -25,6 +25,7 @@ import {
   type WorkerTask,
 } from '@shared/orchestration';
 import { randomUUID } from 'node:crypto';
+import { assertEvaluationTool } from './evaluationBudget';
 import { isUpdateOnlyTask, MISSING_TASK_RESULT_REASON } from '@shared/agentState';
 import { LOOP_HELP, parseLoop, type LoopResult, type LoopStart, type LoopState } from '@shared/loop';
 import { LoopScheduler, type LoopOutcome } from './LoopScheduler';
@@ -5862,7 +5863,14 @@ export class ChatService {
 
         // Raced against the stop rather than awaited outright: a tool that ignores the signal would
         // otherwise hold Stop and "send now" until it finished. See untilStopped.
-        const outcome = await untilStopped((async () => tool.run(call.input, context))(), signal, () => writing);
+        const outcome = await untilStopped(
+          (async () => {
+            assertEvaluationTool(request.name);
+            return tool.run(call.input, context);
+          })(),
+          signal,
+          () => writing
+        );
         let settled: ChatToolCall;
         if (outcome.kind === 'abandoned') {
           abandoned = true;
