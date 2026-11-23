@@ -211,6 +211,7 @@ const handler = baseApi({
     // must not count the same batch twice.
     const stamped = await transformBatchRepository.markCreditSettled(batch.id);
     if (stamped !== false) {
+      // Logged from the Next.js server, so it must stay a spend log source in infra/llmSpendLogGroups.ts.
       for (const [ranModel, line] of ran) {
         logLlmUsageSettled({
           backend: 'anthropic',
