@@ -26,6 +26,7 @@ import {
   FUNCTION_CONTRACT_LIMITS,
   FUNCTION_ENTRY_POINT,
   capFunctionProblems,
+  compareFunctionOutput,
   parseFunctionContract,
   validateFunctionValue,
   type FunctionContract,
@@ -33,6 +34,8 @@ import {
   type FunctionContractProblem,
   type FunctionField,
   type FunctionObjectField,
+  type FunctionOutputMismatch,
+  type FunctionTestCase,
   type ICallableFunctionPublic,
 } from '@bike4mind/common';
 import { toast } from 'sonner';
@@ -91,7 +94,16 @@ type CallOutcome =
     }
   | { status: 'failed'; error: string; output: string; executionTime: number };
 
+type TestOutcome =
+  | { status: 'passed' }
+  | { status: 'mismatch'; mismatch: FunctionOutputMismatch }
+  | { status: 'invalid'; problems: FunctionContractProblem[] }
+  | { status: 'failed'; error: string };
+
 type FormValues = Record<string, string | boolean>;
+
+// Decimal only: Number() would also read `0x10`, `0b1`, and `Infinity`.
+const DECIMAL_NUMBER = /^[+-]?(\d+\.?\d*|\.\d+)(e[+-]?\d+)?$/i;
 
 const errorMessage = (error: unknown): string => (error instanceof Error ? error.message : String(error));
 
@@ -187,9 +199,8 @@ function buildParams(inputs: FunctionObjectField, values: FormValues) {
     const text = typeof raw === 'string' ? raw.trim() : '';
     if (text === '') continue;
     if (field.type === 'number' || field.type === 'integer') {
-      const parsed = Number(text);
-      // Text that is not a number is passed through so the contract check names the field.
-      entries.push([name, Number.isNaN(parsed) ? text : parsed]);
+      // Text that is not a decimal number is passed through so the contract check names the field.
+      entries.push([name, DECIMAL_NUMBER.test(text) ? Number(text) : text]);
     } else if (field.type === 'array' || field.type === 'object') {
       try {
         entries.push([name, JSON.parse(text)]);
@@ -413,6 +424,113 @@ const ResultTable = ({ outputs, value }: { outputs: FunctionObjectField; value: 
     </Table>
   </Box>
 );
+
+const TEST_STATUS: Record<TestOutcome['status'] | 'running' | 'not_run', { label: string; color: string }> = {
+  passed: { label: 'Passed', color: 'success.plainColor' },
+  mismatch: { label: 'Failed', color: 'danger.plainColor' },
+  invalid: { label: 'Failed', color: 'danger.plainColor' },
+  failed: { label: 'Failed', color: 'danger.plainColor' },
+  running: { label: 'Running', color: 'text.secondary' },
+  not_run: { label: 'Not run', color: 'text.tertiary' },
+};
+
+function toleranceText(tolerance: FunctionTestCase['tolerance']): string {
+  const parts = [
+    tolerance?.abs !== undefined ? `${tolerance.abs} absolute` : null,
+    tolerance?.rel !== undefined ? `${tolerance.rel} relative` : null,
+  ].filter(Boolean);
+  return parts.length > 0 ? ` (tolerance ${parts.join(' or ')})` : '';
+}
+
+function TestFailure({ test, outcome }: { test: FunctionTestCase; outcome: TestOutcome }) {
+  if (outcome.status === 'passed') return null;
+  if (outcome.status === 'invalid') {
+    return (
+      <ProblemList
+        heading={`${test.name}: the function returned values that do not match the contract:`}
+        problems={outcome.problems}
+      />
+    );
+  }
+  if (outcome.status === 'failed') return <FailureBlock error={outcome.error} output="" />;
+  const { path, expected, actual } = outcome.mismatch;
+  return (
+    <Alert color="danger" variant="soft" data-testid="python-function-test-failure" sx={{ alignItems: 'flex-start' }}>
+      <Typography level="body-sm">
+        {test.name}: output <code>{path || 'result'}</code> expected <code>{formatValue(expected)}</code>, got{' '}
+        <code>{actual === undefined ? 'nothing' : formatValue(actual)}</code>
+        {toleranceText(test.tolerance)}.
+      </Typography>
+    </Alert>
+  );
+}
+
+/** The contract's declared cases, run one at a time through `run`; the run stops at the first failure. */
+function TestsSection({
+  tests,
+  outcomes,
+  running,
+  disabled,
+  onRun,
+}: {
+  tests: FunctionTestCase[];
+  outcomes: TestOutcome[];
+  running: boolean;
+  disabled: boolean;
+  onRun: () => void;
+}) {
+  const failedAt = outcomes.findIndex(outcome => outcome.status !== 'passed');
+  const started = running || outcomes.length > 0;
+  const statusOf = (index: number): keyof typeof TEST_STATUS => {
+    if (index < outcomes.length) return outcomes[index].status;
+    if (running && index === outcomes.length) return 'running';
+    return 'not_run';
+  };
+  return (
+    <Stack spacing={1} data-testid="python-function-tests">
+      <Stack direction="row" spacing={2} alignItems="center" flexWrap="wrap" useFlexGap>
+        <Typography level="title-sm">Tests</Typography>
+        <Button
+          size="sm"
+          variant="outlined"
+          color="neutral"
+          data-testid="python-function-tests-run-btn"
+          disabled={disabled}
+          loading={running}
+          onClick={onRun}
+        >
+          Run tests
+        </Button>
+      </Stack>
+      <Box sx={{ overflowX: 'auto' }}>
+        <Table size="sm" borderAxis="xBetween" sx={{ tableLayout: 'auto' }}>
+          <thead>
+            <tr>
+              <th>Test</th>
+              <th>Result</th>
+            </tr>
+          </thead>
+          <tbody>
+            {tests.map((test, index) => {
+              const status = started ? TEST_STATUS[statusOf(index)] : { label: '-', color: 'text.tertiary' };
+              return (
+                <tr key={index} data-testid="python-function-test-row">
+                  <td>{test.name}</td>
+                  <td>
+                    <Typography level="body-sm" sx={{ color: status.color }} data-testid="python-function-test-status">
+                      {status.label}
+                    </Typography>
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </Table>
+      </Box>
+      {failedAt >= 0 && <TestFailure test={tests[failedAt]} outcome={outcomes[failedAt]} />}
+    </Stack>
+  );
+}
 
 function savedStatusLines(saved: ICallableFunctionPublic): string[] {
   if (saved.status === 'source_deleted') return ['The artifact this tool was saved from was deleted.'];
@@ -715,6 +833,8 @@ const PythonFunctionPanel: React.FC<PythonFunctionPanelProps> = ({ code, package
   const [values, setValues] = useState<FormValues>({});
   const [calling, setCalling] = useState(false);
   const [outcome, setOutcome] = useState<CallOutcome | null>(null);
+  const [testing, setTesting] = useState(false);
+  const [testOutcomes, setTestOutcomes] = useState<TestOutcome[]>([]);
   const describedCode = useRef<string | null>(null);
   const describeRequest = useRef(0);
 
@@ -724,6 +844,7 @@ const PythonFunctionPanel: React.FC<PythonFunctionPanelProps> = ({ code, package
       const request = ++describeRequest.current;
       setDescribed({ status: 'reading' });
       setOutcome(null);
+      setTestOutcomes([]);
       try {
         const result = await callFunction(source, null, sourcePackages);
         if (request !== describeRequest.current) return;
@@ -758,7 +879,8 @@ const PythonFunctionPanel: React.FC<PythonFunctionPanelProps> = ({ code, package
     return () => clearTimeout(timer);
   }, [code, packages, disabled, describe]);
 
-  const handleCall = async (contract: FunctionContract) => {
+  // Called with the code the contract was read from; the controls are held while a newer edit waits to be read.
+  const handleCall = async (contract: FunctionContract, source: string) => {
     const { params, problems } = buildParams(contract.inputs, values);
     if (problems.length > 0) {
       setOutcome({ status: 'inputs', problems });
@@ -767,7 +889,7 @@ const PythonFunctionPanel: React.FC<PythonFunctionPanelProps> = ({ code, package
     setCalling(true);
     setOutcome(null);
     try {
-      const result = await callFunction(code, params, packages);
+      const result = await callFunction(source, params, packages);
       if (!result.success) {
         setOutcome({
           status: 'failed',
@@ -788,6 +910,39 @@ const PythonFunctionPanel: React.FC<PythonFunctionPanelProps> = ({ code, package
       setOutcome({ status: 'failed', error: errorMessage(error), output: '', executionTime: 0 });
     } finally {
       setCalling(false);
+    }
+  };
+
+  const runTest = async (contract: FunctionContract, source: string, test: FunctionTestCase): Promise<TestOutcome> => {
+    try {
+      const result = await callFunction(source, test.input, packages);
+      if (!result.success) return { status: 'failed', error: result.error ?? 'The call failed.' };
+      const problems = outputProblems(contract.outputs, result.value, result.outputProblems ?? []);
+      if (problems.length > 0) return { status: 'invalid', problems };
+      const mismatch = compareFunctionOutput(test.expected, result.value, test.tolerance);
+      return mismatch ? { status: 'mismatch', mismatch } : { status: 'passed' };
+    } catch (error) {
+      return { status: 'failed', error: errorMessage(error) };
+    }
+  };
+
+  const handleRunTests = async (contract: FunctionContract, source: string) => {
+    const request = describeRequest.current;
+    setTesting(true);
+    setTestOutcomes([]);
+    setOutcome(null);
+    const outcomes: TestOutcome[] = [];
+    try {
+      for (const test of contract.tests ?? []) {
+        const next = await runTest(contract, source, test);
+        // A newer read of the code replaced this contract; its results would describe other code.
+        if (request !== describeRequest.current) return;
+        outcomes.push(next);
+        setTestOutcomes([...outcomes]);
+        if (next.status !== 'passed') return;
+      }
+    } finally {
+      setTesting(false);
     }
   };
 
@@ -815,7 +970,8 @@ const PythonFunctionPanel: React.FC<PythonFunctionPanelProps> = ({ code, package
         return <ProblemList heading="The function contract has problems:" problems={described.problems} />;
       case 'ready': {
         const { contract } = described;
-        const controlsDisabled = disabled || calling;
+        const current = described.code === code;
+        const controlsDisabled = disabled || calling || testing || !current;
         return (
           <Stack spacing={2}>
             <Box>
@@ -825,7 +981,7 @@ const PythonFunctionPanel: React.FC<PythonFunctionPanelProps> = ({ code, package
               <Typography level="body-sm">{contract.description}</Typography>
             </Box>
             {/* The contract belongs to the code it was read from; saving waits until the new code is read. */}
-            {save && described.code === code && (
+            {save && current && (
               <>
                 <FunctionSaveSection save={save} contract={contract} />
                 <Divider />
@@ -844,6 +1000,15 @@ const PythonFunctionPanel: React.FC<PythonFunctionPanelProps> = ({ code, package
               </Typography>
               <ContractTable schema={contract.outputs} testId="python-function-contract-outputs" />
             </Box>
+            {contract.tests && contract.tests.length > 0 && (
+              <TestsSection
+                tests={contract.tests}
+                outcomes={testOutcomes}
+                running={testing}
+                disabled={controlsDisabled}
+                onRun={() => void handleRunTests(contract, described.code)}
+              />
+            )}
 
             <Box
               sx={{
@@ -873,7 +1038,7 @@ const PythonFunctionPanel: React.FC<PythonFunctionPanelProps> = ({ code, package
                 data-testid="python-function-call-btn"
                 disabled={controlsDisabled}
                 loading={calling}
-                onClick={() => void handleCall(contract)}
+                onClick={() => void handleCall(contract, described.code)}
               >
                 Call function
               </Button>
