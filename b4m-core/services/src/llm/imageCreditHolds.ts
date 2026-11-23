@@ -17,6 +17,8 @@ export type ImageCreditHolds = {
    * `spend_frozen` when the payer, its organization or the key is frozen.
    * With a `run` (owner already checked), the whole hold is claimed from the run's budget in the same
    * transaction, or the hold is refused with a 422 `run_budget_exhausted` and nothing moves.
+   * With a `holdKey`, an outstanding hold already taken under that key is returned (`reused`) and
+   * nothing moves, so a redelivered queue message neither holds nor claims a second time.
    */
   hold(
     params: HoldContext & {
@@ -27,8 +29,9 @@ export type ImageCreditHolds = {
       apiKeyId?: string;
       apiKeyBillingOwnerType?: ApiKeyBillingOwnerType;
       run?: CompletionRunAttribution;
+      holdKey?: string;
     }
-  ): Promise<PersistedCreditHold>;
+  ): Promise<PersistedCreditHold & { reused?: true }>;
   /** Return the whole hold (and any run claim): the generation failed or stopped before producing a billable image. */
   release(hold: PersistedCreditHold, context: HoldContext): Promise<void>;
   /**

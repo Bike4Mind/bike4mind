@@ -960,6 +960,10 @@ export class ImageGenerationService {
     let stopHeartbeat: (() => void) | undefined;
     // Cleared once settled; the finally returns a hold still set (a failure or an early return).
     let creditHold: PersistedCreditHold | undefined;
+    // A redelivery that found this generation's hold already taken: settling it is safe (settlement
+    // claims the row once), but releasing it could refund a hold the first delivery is still rendering
+    // under, so a failure leaves it to that delivery or the expired-hold sweep.
+    let holdReused = false;
 
     try {
       stopHeartbeat = await startQuestHeartbeat(this.db, quest, logger, 'image-heartbeat');
@@ -1094,7 +1098,7 @@ export class ImageGenerationService {
           logger
         );
         // An atomic decrement, not a balance read: concurrent runs cannot all pass on one balance.
-        creditHold = await this.creditHolds.hold({
+        const held = await this.creditHolds.hold({
           userId,
           organizationId: organization ? organization.id : null,
           requiredCredits,
@@ -1103,7 +1107,11 @@ export class ImageGenerationService {
           apiKeyId,
           apiKeyBillingOwnerType,
           ...(run && { run }),
+          ...(generationId && { holdKey: `image_generation:${generationId}` }),
         });
+        creditHold = held;
+        holdReused = held.reused === true;
+        if (holdReused) logger.warn('Image generation reusing the credit hold of an earlier delivery', { questId });
         quest.creditsUsed = requiredCredits;
         usageCostUsd = usdCost;
       } else {
@@ -1826,7 +1834,7 @@ export class ImageGenerationService {
       // Always stop the heartbeat, on success, error, or an early return (e.g. Gemini
       // clarification). The terminal write above owns the final status.
       stopHeartbeat?.();
-      if (creditHold)
+      if (creditHold && !holdReused)
         await this.creditHolds.release(creditHold, { featureLabel: IMAGE_GENERATION_FEATURE_LABEL, logger });
     }
   }

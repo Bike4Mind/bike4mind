@@ -234,6 +234,62 @@ describe('ImageGenerationService credit hold', () => {
     expect(wallet.state.ledger).toEqual([]);
   });
 
+  describe('on a redelivered message', () => {
+    const deliver = (service: ImageGenerationService) =>
+      service.process({
+        body: {
+          sessionId: 'session1',
+          questId: 'q1',
+          userId: 'user1',
+          prompt: 'a red bicycle',
+          model: MODEL,
+          generationId: 'generation-1',
+        },
+        logger: silentLogger,
+      });
+
+    it('keys the hold on the generation id', async () => {
+      const wallet = makeWallet(ONE_IMAGE_CREDITS * 2);
+      const hold = vi.spyOn(wallet.creditHolds, 'hold');
+      const { service } = makeService(wallet);
+
+      await deliver(service);
+
+      expect(hold).toHaveBeenCalledWith(expect.objectContaining({ holdKey: 'image_generation:generation-1' }));
+    });
+
+    it('leaves a reused hold for its first delivery when the render fails', async () => {
+      const wallet = makeWallet(ONE_IMAGE_CREDITS * 2);
+      const firstDeliveryHold = wallet.creditHolds.hold;
+      vi.spyOn(wallet.creditHolds, 'hold').mockImplementationOnce(async params => ({
+        ...(await firstDeliveryHold(params)),
+        reused: true,
+      }));
+      const release = vi.spyOn(wallet.creditHolds, 'release');
+      const { service } = makeService(wallet);
+      mockGeminiGenerate.mockRejectedValueOnce(new Error('provider down'));
+
+      await deliver(service);
+
+      expect(release).not.toHaveBeenCalled();
+    });
+
+    it('still settles a reused hold when the render succeeds', async () => {
+      const wallet = makeWallet(ONE_IMAGE_CREDITS * 2);
+      const firstDeliveryHold = wallet.creditHolds.hold;
+      vi.spyOn(wallet.creditHolds, 'hold').mockImplementationOnce(async params => ({
+        ...(await firstDeliveryHold(params)),
+        reused: true,
+      }));
+      const settle = vi.spyOn(wallet.creditHolds, 'settle');
+      const { service } = makeService(wallet);
+
+      await deliver(service);
+
+      expect(settle).toHaveBeenCalledOnce();
+    });
+  });
+
   describe('with a completion run', () => {
     const completionRun: CompletionRunAttribution = {
       runId: '6f1c2a3b-4d5e-4f60-8a7b-9c0d1e2f3a4b',

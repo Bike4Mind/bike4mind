@@ -38,6 +38,8 @@ beforeAll(async () => {
     CreditTransaction.createCollection(),
     CompletionRunModel.createCollection(),
   ]);
+  // The holdKey guard rests on the unique index; autoIndex is off, as in deployed environments.
+  await PendingCreditHoldModel.createIndexes();
 });
 
 afterEach(async () => {
@@ -230,6 +232,64 @@ describe('image credit holds against a budgeted completion run', () => {
     expect(await balance()).toBe(100);
     expect(await committed()).toBe(0);
     expect(await PendingCreditHoldModel.countDocuments()).toBe(0);
+  });
+
+  it('takes one hold and one claim for two deliveries of the same generation', async () => {
+    const { userId, balance } = await userWith(100);
+    const { run, committed } = await budgetedRun(userId, 100);
+    const params = {
+      userId,
+      organizationId: null,
+      requiredCredits: 40,
+      run,
+      holdKey: 'image_generation:g1',
+      ...context,
+    };
+
+    const first = await imageCreditHolds.hold(params);
+    const redelivery = await imageCreditHolds.hold(params);
+
+    expect(redelivery.pendingHoldId).toBe(first.pendingHoldId);
+    expect(redelivery.runClaim).toEqual({ runId: run.runId, credits: 40 });
+    expect(first.reused).toBeUndefined();
+    expect(redelivery.reused).toBe(true);
+    expect(await balance()).toBe(60);
+    expect(await committed()).toBe(40);
+    expect(await PendingCreditHoldModel.countDocuments()).toBe(1);
+  });
+
+  it('takes one hold and one claim when two deliveries race', async () => {
+    const { userId, balance } = await userWith(100);
+    const { run, committed } = await budgetedRun(userId, 100);
+    const params = {
+      userId,
+      organizationId: null,
+      requiredCredits: 40,
+      run,
+      holdKey: 'image_generation:g1',
+      ...context,
+    };
+
+    const holds = await Promise.all([imageCreditHolds.hold(params), imageCreditHolds.hold(params)]);
+
+    expect(new Set(holds.map(hold => hold.pendingHoldId)).size).toBe(1);
+    expect(holds.filter(hold => hold.reused)).toHaveLength(1);
+    expect(await balance()).toBe(60);
+    expect(await committed()).toBe(40);
+    expect(await PendingCreditHoldModel.countDocuments()).toBe(1);
+  });
+
+  it('frees the key once the hold settles, so a new hold under it is taken afresh', async () => {
+    const { userId, balance } = await userWith(100);
+    const params = { userId, organizationId: null, requiredCredits: 40, holdKey: 'image_generation:g1', ...context };
+    const first = await imageCreditHolds.hold(params);
+    await imageCreditHolds.settle(first, 40, entry, context);
+
+    const next = await imageCreditHolds.hold(params);
+
+    expect(next.reused).toBeUndefined();
+    expect(next.pendingHoldId).not.toBe(first.pendingHoldId);
+    expect(await balance()).toBe(20);
   });
 
   it('records no claim without a run', async () => {
