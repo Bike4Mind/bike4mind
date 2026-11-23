@@ -1,6 +1,7 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { readEnforceMfa } from '@server/auth/signInSecondFactor';
+import { requiresOrganizationMfaEnrollment } from '@server/auth/organizationMfa';
 import { mfaService } from '@bike4mind/services';
 import { userRepository } from '@bike4mind/database';
 
@@ -21,6 +22,14 @@ const handler = baseApi().get(
       const enforceMFA = await readEnforceMfa();
 
       const status = mfaService.getMFAStatus({ user: freshUser, enforceMFA });
+      // `required` follows the session gate (isMfaEnrollmentOwed); canDisable stays with enforceMFA.
+      if (
+        !status.required &&
+        !mfaService.isMfaEnforcementExempt(freshUser) &&
+        (await requiresOrganizationMfaEnrollment(freshUser))
+      ) {
+        status.required = true;
+      }
       res.json(status);
     } catch (error: any) {
       console.error('Error getting MFA status:', error);

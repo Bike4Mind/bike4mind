@@ -1131,21 +1131,6 @@ export class SessionStore implements SessionWritesStore {
   }
 
   /**
-   * Remember the b4m notebook this conversation's generations are filed under. Written once,
-   * on the first generation; see `remoteSessionId` in @shared/chat for why it exists at all.
-   *
-   * Leaves `updatedAt` alone: this is bookkeeping about a turn, not a turn, and bumping it
-   * would reorder the sidebar behind the user's back.
-   */
-  async setRemoteSessionId(id: string, remoteSessionId: string): Promise<void> {
-    await this.mutate(id, session => {
-      if (session.remoteSessionId === remoteSessionId) return false;
-      session.remoteSessionId = remoteSessionId;
-      return true;
-    });
-  }
-
-  /**
    * Pin or unpin a conversation.
    *
    * Leaves `updatedAt` alone: pinning is about where a row sits, and bumping the timestamp
@@ -1697,7 +1682,6 @@ export class SessionStore implements SessionWritesStore {
         ? { studioWorkspaceId: parsed.studioWorkspaceId, studioRootSessionId: parsed.studioRootSessionId }
         : {}),
       messages: Array.isArray(parsed.messages) ? parsed.messages : [],
-      ...(typeof parsed.remoteSessionId === 'string' ? { remoteSessionId: parsed.remoteSessionId } : {}),
       ...(suggestions.length > 0 ? { spawnSuggestions: suggestions } : {}),
     };
   }

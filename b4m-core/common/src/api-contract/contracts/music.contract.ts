@@ -73,7 +73,12 @@ export const generateMusicContract = defineEndpoint({
       description: 'The provider failed to generate the track; reserved credits are refunded.',
       schema: ApiErrorSchema,
     },
-    503: { description: 'No provider API key is configured for this deployment.', schema: ApiErrorSchema },
+    503: {
+      description:
+        'The provider is unavailable: no API key is configured for this deployment, or the provider account is out ' +
+        'of quota. Reserved credits are refunded.',
+      schema: ApiErrorSchema,
+    },
   },
   // Served by baseApi, so apiKeyRateLimit sets the windowed X-RateLimit-* headers.
   emitsRateLimitHeaders: true,

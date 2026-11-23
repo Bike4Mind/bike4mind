@@ -80,6 +80,43 @@ describe('test-shards selection for a PR diff (real turbo graph and ci.yml)', ()
     for (const name of clientLegs) expect(legs[name].setup, name).toBe(false);
   });
 
+  it('skips isolated ordinary suites for unrelated docs while keeping the uncached misc leg', () => {
+    const legs = legsFor(['README.md']);
+    const selected = Object.values(legs)
+      .map(leg => `${leg.unitFilter} ${leg.integrationFilter}`)
+      .join(' ');
+    for (const name of ['database', 'infra', 'resource', 'server-utils', 'services-core', 'workers']) {
+      expect(selected).not.toContain(`--filter @bike4mind/${name}`);
+    }
+    expect(legs.misc.setup).toBe(true);
+  });
+
+  it.each([
+    ['elasticmq.conf', '@bike4mind/resource'],
+    ['selfhost/env-additions.txt', '@bike4mind/resource'],
+    ['infra/buckets.ts', '@bike4mind/infra'],
+    ['infra/analyticsRollup.ts', '@bike4mind/workers'],
+    ['infra/alarms.ts', '@bike4mind/services-core'],
+    ['catalog/model-hub/curated-v2.json', '@bike4mind/server-utils'],
+    ['packages/server-utils/src/auth/ability.ts', '@bike4mind/database'],
+    [
+      'packages/scripts/migrate/migrations/20261118164439_ensure-email-triage-section-pending-index.ts',
+      '@bike4mind/workers',
+    ],
+    [
+      'packages/scripts/migrate/migrations/20261114125931_ensure-organization-export-erasure-index.ts',
+      '@bike4mind/workers',
+    ],
+    ['packages/scripts/seeders/example.ts', '@bike4mind/workers'],
+    ['packages/scripts/utils/config.ts', '@bike4mind/workers'],
+    ['.changeset/changelog-github-retry.cjs', '@bike4mind/infra'],
+    ['.changeset/config.json', '@bike4mind/infra'],
+  ])('selects the bounded reader of %s', (file, name) => {
+    const planned = planAffected({ changedFiles: [file], turbo, packageDirs });
+    expect(planned.full).toBe(false);
+    expect(affectedPackages(planned.selection, workspace)).toContain(name);
+  });
+
   it.each([
     ['pnpm-lock.yaml'],
     ['turbo.json'],

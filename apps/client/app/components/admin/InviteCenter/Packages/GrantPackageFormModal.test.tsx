@@ -580,6 +580,7 @@ describe('GrantPackageFormModal package fields', () => {
   it('refuses a new package that already expired', () => {
     renderModal(null);
     fillNewPackage();
+    fireEvent.click(screen.getByTestId('grant-package-expires-input-set-btn'));
     type('grant-package-expires-input', '2020-01-01');
     expect(screen.getByTestId('grant-package-save-btn')).toBeDisabled();
   });

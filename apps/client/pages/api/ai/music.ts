@@ -13,7 +13,7 @@ import {
 } from '@bike4mind/common';
 import { adminSettingsRepository, apiKeyRepository, cacheRepository, usageEventRepository } from '@bike4mind/database';
 import { apiKeyService, estimateMusicCredits, ProviderBusyError, runElevenLabsWithCapacity } from '@bike4mind/services';
-import { aiMusicService, getSettingsMap, getSettingsValue } from '@bike4mind/utils';
+import { aiMusicService, getSettingsMap, getSettingsValue, ProviderQuotaExhaustedError } from '@bike4mind/utils';
 import {
   reserveRequestCredits,
   resolveRequestBillingOrgId,
@@ -158,6 +158,13 @@ const handler = nextRouteForContract(generateMusicContract).post(async (req, res
       // Only a 429'd attempt reached the provider; a request that never got a slot made no call to record.
       if (error.reason === 'upstream_rate_limited') recordUsage('error', 0, 0);
       throw providerBusyHttpError(error);
+    }
+    if (error instanceof ProviderQuotaExhaustedError) {
+      // The account behind the shared key is out of credits: expected until it is topped up, so not a paging error.
+      req.logger.warn('Music generation unavailable: provider quota exhausted', { provider, status: error.status });
+      await reservation.refund();
+      recordUsage('error', 0, 0);
+      return res.status(503).json({ error: 'Music generation is temporarily unavailable. Please try again later.' });
     }
     req.logger.error('Music generation failed', {
       provider,

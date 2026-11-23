@@ -47,6 +47,8 @@ final class AppServices {
   let instructions: any InstructionAPI
   /// Answers an approval from a notification button.
   let approvalNotifications: ApprovalNotificationHandler
+  /// Reads and saves when the server composes the user's brief.
+  let briefSchedule: any BriefScheduleAPI
   /// Answers a brief's single decision from a notification button.
   let briefNotifications: BriefNotificationHandler
   /// Whether the signed-in account is waiting to be deleted; `RootView` shows the restore screen then.
@@ -138,6 +140,12 @@ final class AppServices {
       return InstructionClient(baseURL: auth.environment.baseURL, tokens: auth)
     }
     approvalNotifications = ApprovalNotificationHandler(api: pendingActionAPI, feedback: SystemApprovalFeedback())
+    briefSchedule = ForwardingBriefScheduleAPI {
+      #if DEBUG
+        if FixtureServices.isEnabled { return FixtureServices.briefSchedule }
+      #endif
+      return BriefScheduleClient(baseURL: auth.environment.baseURL, tokens: auth)
+    }
     accountProfiles = AccountProfileStore(
       resolveScope: {
         #if DEBUG
@@ -431,6 +439,18 @@ struct ForwardingPendingActionAPI: PendingActionAPI {
 
   func respond(to target: PendingActionTarget, decision: PendingActionDecision) async throws -> PendingActionResult {
     try await provider().respond(to: target, decision: decision)
+  }
+}
+
+struct ForwardingBriefScheduleAPI: BriefScheduleAPI {
+  let provider: @MainActor @Sendable () -> any BriefScheduleAPI
+
+  func schedule() async throws -> BriefSchedule? {
+    try await provider().schedule()
+  }
+
+  func save(_ schedule: BriefSchedule) async throws -> BriefSchedule {
+    try await provider().save(schedule)
   }
 }
 

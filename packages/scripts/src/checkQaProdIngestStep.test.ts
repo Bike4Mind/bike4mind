@@ -15,7 +15,7 @@ import path from 'node:path';
  * - no `--counts-out` (e2e-run): the Slack count comparison reads the staging ingest's file.
  * - `QA_LATENCY_BREACH` (e2e-ai-latency): without it prod stores a breached latency run as passing.
  *
- * Text-matched rather than YAML-parsed, matching `checkE2ePreviewSecretGuard.test.ts`: the repo has
+ * Text-matched rather than YAML-parsed, matching `checkE2ePreviewSecretGuard.repo.test.ts`: the repo has
  * no YAML parser dependency and the assertions are about the literal step text. Each assertion is
  * bounded to the step's own block so a neighbouring step cannot satisfy it.
  */

@@ -269,15 +269,19 @@ final class BriefViewModelTests: XCTestCase {
   func testCancellingAComposeStopsPolling() async {
     let api = FakeBriefAPI()
     await api.set(fetches: [.success(makeBrief(status: .composing))])
+    let pollStarted = Locked(false)
     let model = BriefViewModel(
-      api: api, sleep: { _ in try Task.checkCancellation() })
+      api: api,
+      sleep: { _ in
+        pollStarted.mutate { $0 = true }
+        try await Task.sleep(for: .seconds(3600))
+      })
+    defer { model.cancel() }
     model.startCompose()
+    await eventually { pollStarted.current }
+    XCTAssertTrue(model.isComposing)
     model.cancel()
-    // A fixed yield count races the task on a loaded runner; wait for the compose to run and unwind.
-    for _ in 0..<10_000 {
-      if await api.composeCount == 1, !model.isComposing { break }
-      await Task.yield()
-    }
+    await eventually { await MainActor.run { !model.isComposing } }
     let composes = await api.composeCount
     XCTAssertEqual(composes, 1)
     XCTAssertFalse(model.isComposing)
