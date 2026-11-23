@@ -32,9 +32,16 @@ export class SessionActivity {
    */
   private readonly deciding = new Set<string>();
 
+  private readonly unread = new Set<string>();
+
   constructor(private readonly onChange: (event: ChatSessionStatusEvent) => void) {}
 
   statusOf(sessionId: string): ChatSessionStatus {
+    const runtime = this.runtimeStatusOf(sessionId);
+    return runtime === 'done' && this.unread.has(sessionId) ? 'needs-action' : runtime;
+  }
+
+  runtimeStatusOf(sessionId: string): ChatSessionStatus {
     if ((this.awaiting.get(sessionId) ?? 0) > 0 || this.held.has(sessionId) || this.deciding.has(sessionId))
       return 'needs-action';
     return this.replying.has(sessionId) || this.preparing.has(sessionId) ? 'processing' : 'done';
@@ -53,6 +60,7 @@ export class SessionActivity {
       ...this.awaiting.keys(),
       ...this.held,
       ...this.deciding,
+      ...this.unread,
     ]);
     const events: ChatSessionStatusEvent[] = [];
     for (const sessionId of ids) {
@@ -63,11 +71,21 @@ export class SessionActivity {
   }
 
   replyStarted(sessionId: string): void {
-    this.transition(sessionId, () => this.replying.add(sessionId));
+    this.transition(sessionId, () => {
+      this.unread.delete(sessionId);
+      this.replying.add(sessionId);
+    });
   }
 
-  replyEnded(sessionId: string): void {
-    this.transition(sessionId, () => this.replying.delete(sessionId));
+  replyEnded(sessionId: string, unread = false): void {
+    this.transition(sessionId, () => {
+      this.replying.delete(sessionId);
+      if (unread) this.unread.add(sessionId);
+    });
+  }
+
+  viewed(sessionId: string): void {
+    this.transition(sessionId, () => this.unread.delete(sessionId));
   }
 
   /**
@@ -118,6 +136,7 @@ export class SessionActivity {
     this.awaiting.delete(sessionId);
     this.held.delete(sessionId);
     this.deciding.delete(sessionId);
+    this.unread.delete(sessionId);
   }
 
   /** The setup step of a session still being prepared, with no reply streaming yet; else undefined. */
@@ -128,18 +147,25 @@ export class SessionActivity {
 
   private eventFor(sessionId: string, status: ChatSessionStatus): ChatSessionStatusEvent {
     const step = this.setupStep(sessionId, status);
+    if (status === 'needs-action' && this.runtimeStatusOf(sessionId) === 'done')
+      return { sessionId, status, unreadReply: true };
     return step ? { sessionId, status, preparing: step } : { sessionId, status };
   }
 
   private transition(sessionId: string, mutate: () => void): void {
     const before = this.statusOf(sessionId);
+    const unreadBefore = this.eventFor(sessionId, before).unreadReply;
     const stepBefore = this.setupStep(sessionId, before);
     mutate();
     const after = this.statusOf(sessionId);
     // Only a real change goes out: a turn running four tools would otherwise push four
     // identical 'needs-action' events, and every open window would re-render on each one.
     // The setup step counts as a change: preparing -> replying keeps 'processing'.
-    if (after !== before || this.setupStep(sessionId, after) !== stepBefore) {
+    if (
+      after !== before ||
+      this.eventFor(sessionId, after).unreadReply !== unreadBefore ||
+      this.setupStep(sessionId, after) !== stepBefore
+    ) {
       this.onChange(this.eventFor(sessionId, after));
     }
   }

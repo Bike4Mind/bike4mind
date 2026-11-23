@@ -61,3 +61,17 @@ export function applyPreparingEvents(
 
   return next ?? current;
 }
+
+export function applyUnreadReplyEvents(
+  current: ReadonlySet<string>,
+  events: readonly ChatSessionStatusEvent[]
+): ReadonlySet<string> {
+  let next: Set<string> | undefined;
+  for (const event of events) {
+    if ((next ?? current).has(event.sessionId) === (event.unreadReply === true)) continue;
+    next ??= new Set(current);
+    if (event.unreadReply) next.add(event.sessionId);
+    else next.delete(event.sessionId);
+  }
+  return next ?? current;
+}
