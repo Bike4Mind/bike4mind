@@ -66,6 +66,7 @@ const Caption = styled('div')({
 });
 
 const Title = styled('span')({
+  flex: 1,
   font: `600 13px/1.3 ${studioFont('ui')}`,
   color: studioColor('text'),
   overflow: 'hidden',
@@ -78,6 +79,8 @@ const Meta = styled('span')({
   fontSize: '11px',
   color: studioColor('text-muted'),
   whiteSpace: 'nowrap',
+  // The app's global `min-width: 0` would let the title squeeze this to nothing; the title truncates instead.
+  flexShrink: 0,
 });
 
 type StudioTakeTileProps = {
