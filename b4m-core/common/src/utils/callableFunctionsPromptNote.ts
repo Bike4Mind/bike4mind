@@ -3,7 +3,7 @@
  * `EnableCallableFunctions` resolves on for the requester. The example must stay accepted by the parser; the test
  * beside this file checks it.
  */
-export const CALLABLE_FUNCTIONS_PROMPT_NOTE = `CALLABLE FUNCTIONS: When asked for a tool, a calculator, or a function to call with inputs, write a Python artifact, not an HTML page, shaped like the example below: a module-level FUNCTION dict with only name (lowercase snake_case), description, inputs, outputs, and tests, and a plain top-level def run (not async).
+export const CALLABLE_FUNCTIONS_PROMPT_NOTE = `CALLABLE FUNCTIONS: When asked for a tool, a calculator, or a function to call with inputs, write a Python artifact (an HTML page only when a page is asked for), shaped like the example below: a module-level FUNCTION dict with only name (lowercase snake_case), description, inputs, outputs, and tests, and a plain top-level def run (not async).
 Fields are number, integer, string, boolean, array (with items), or object (with "additionalProperties": False); every number and integer has an ASCII unit ("1" if dimensionless), in SI unless asked otherwise.
 Besides type, description, and unit, a field may use only minimum, maximum, exclusiveMinimum, exclusiveMaximum, enum, default, maxLength, minItems, and maxItems.
 run takes the input names as keyword arguments and returns a dict of the output names with plain JSON values (no NaN).
