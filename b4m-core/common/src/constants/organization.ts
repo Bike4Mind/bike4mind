@@ -77,6 +77,15 @@ export const orgAclRowConfersMembership = (row: { permissions?: readonly string[
   );
 
 /**
+ * May `userId` be given a role above Member? Needs a users[] row that confers membership. The same
+ * rule backs the team route's service and the admin console's role change.
+ */
+export const orgHoldsMemberRow = (
+  org: { users?: ReadonlyArray<{ userId: string; permissions?: readonly string[] | null }> | null },
+  userId: string
+): boolean => (org.users ?? []).some(row => String(row.userId) === userId && orgAclRowConfersMembership(row));
+
+/**
  * Is `user` a member of `org`? Combines the three membership tiers into one predicate:
  * platform admin, billing owner (org.userId), or a users[] row that passes
  * orgAclRowConfersMembership. Use this everywhere an "is X in this org?" question is

@@ -5,7 +5,7 @@ import {
   BadRequestError,
   NotFoundError,
   OrganizationEvents,
-  orgAclRowConfersMembership,
+  orgHoldsMemberRow,
   organizationMemberRole,
 } from '@bike4mind/common';
 import {
@@ -29,6 +29,12 @@ import {
 import { reportAndNotifyKeptPersonalLakeShares } from '@server/utils/keptPersonalLakeSharesNotifier';
 import { refreshSeatEntitlements } from '@server/organizations/refreshSeatEntitlements';
 import { assertFullAdminForMembership } from '@server/organizations/adminMembership';
+
+const ROLE_LABELS: Record<(typeof ASSIGNABLE_ORG_ROLES)[number], string> = {
+  manager: 'manager',
+  billingManager: 'billing manager',
+  member: 'member',
+};
 
 const RoleSchema = z.object({ role: z.enum(ASSIGNABLE_ORG_ROLES) });
 
@@ -115,10 +121,8 @@ const handler = adminApi({
     await withTransaction(async () => {
       const { organization, role } = await loadMembership(organizationId, userId);
       if (role === 'owner') throw new BadRequestError("The owner's role can't be changed.");
-      if (role === next) throw new BadRequestError(`They are already a ${next} of ${organization.name}.`);
-      // Same appointment rule as setOrganizationMemberRole: a role above Member needs a row that confers membership.
-      const row = organization.users.find(member => member.userId === userId);
-      if (next !== 'member' && !(row && orgAclRowConfersMembership(row))) {
+      if (role === next) throw new BadRequestError(`They are already a ${ROLE_LABELS[next]} of ${organization.name}.`);
+      if (next !== 'member' && !orgHoldsMemberRow(organization, userId)) {
         throw new BadRequestError('Only a member with read access can be given that role.');
       }
 

@@ -5,7 +5,7 @@ import {
   IOrganizationDocument,
   IOrganizationRepository,
   IUserDocument,
-  orgAclRowConfersMembership,
+  orgHoldsMemberRow,
   organizationMemberRole,
   type AssignableOrgRole,
   type OrganizationMemberRole,
@@ -69,12 +69,7 @@ export async function setOrganizationMemberRole(
   }
   if (previousRole === role) return { organization, previousRole, role, changed: false };
 
-  if (role !== 'member') {
-    const holdsMemberRow = (organization.users ?? []).some(
-      member => String(member.userId) === userId && orgAclRowConfersMembership(member)
-    );
-    if (!holdsMemberRow) throw new BadRequestError(NOT_A_MEMBER);
-  }
+  if (role !== 'member' && !orgHoldsMemberRow(organization, userId)) throw new BadRequestError(NOT_A_MEMBER);
   // False when the row vanished between the read and the write (a concurrent removal).
   if (!(await organizations.setMemberRole(organizationId, userId, role))) {
     throw new BadRequestError(NOT_A_MEMBER);
