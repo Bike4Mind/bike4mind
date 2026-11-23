@@ -13,18 +13,16 @@ public enum QuestActivityMapping {
   /// the server also marked it stopped.
   public static func state(from frame: ChatQuestFrame) -> QuestActivityContentState {
     state(
-      status: frame.status, kind: frame.kind, hasPendingAction: frame.pendingAction != nil,
-      statusMessage: frame.statusMessage)
+      status: frame.status, kind: frame.kind, pendingAction: frame.pendingAction, statusMessage: frame.statusMessage)
   }
 
   /// A quest as the transcript holds it (a polled snapshot, or the turn a receipt just created).
   public static func state(from turn: QuestTurn, statusMessage: String? = nil) -> QuestActivityContentState {
-    state(
-      status: turn.status, kind: turn.kind, hasPendingAction: turn.pendingAction != nil, statusMessage: statusMessage)
+    state(status: turn.status, kind: turn.kind, pendingAction: turn.pendingAction, statusMessage: statusMessage)
   }
 
   private static func state(
-    status: QuestTurn.Status?, kind: QuestTurn.Kind?, hasPendingAction: Bool, statusMessage: String?
+    status: QuestTurn.Status?, kind: QuestTurn.Kind?, pendingAction: PendingAction?, statusMessage: String?
   ) -> QuestActivityContentState {
     if kind == .error { return QuestActivityContentState(phase: .failed, errored: true) }
     switch status {
@@ -32,8 +30,9 @@ public enum QuestActivityMapping {
     case .stopped: return QuestActivityContentState(phase: .stopped)
     case .pending, .running, nil: break
     }
-    if hasPendingAction {
-      return QuestActivityContentState(phase: .approvalNeeded, stageLabel: approvalLabel)
+    if let pendingAction {
+      return QuestActivityContentState(
+        phase: .approvalNeeded, stageLabel: approvalLabel, pendingActionTs: pendingAction.timestampMillis)
     }
     return QuestActivityContentState(phase: .running, stageLabel: stageLabel(statusMessage))
   }

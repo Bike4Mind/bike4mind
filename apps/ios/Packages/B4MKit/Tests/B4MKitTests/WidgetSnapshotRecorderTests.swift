@@ -142,6 +142,21 @@ final class WidgetSnapshotRecorderTests: XCTestCase {
     XCTAssertNil(store.load()?.runningAgents)
   }
 
+  func testPendingDecisionsAreWrittenAndReloadWhenTheCountMovesOrApprovalsAreOpen() async {
+    let (recorder, store, reloader) = makeRecorder()
+    let briefOnly = PendingDecisionCount(count: 2, approvals: 0, briefDecisions: 2, briefID: "b1")
+    await recorder.recordPendingDecisions(briefOnly)
+    await recorder.recordPendingDecisions(briefOnly)
+    let withApproval = PendingDecisionCount(count: 3, approvals: 1, briefDecisions: 2, briefID: "b1")
+    await recorder.recordPendingDecisions(withApproval)
+    // Same numbers, but the open approval's lapse moves with the new observation, so the widget must re-plan.
+    await recorder.recordPendingDecisions(withApproval)
+
+    XCTAssertEqual(
+      store.load()?.pendingDecisions, .init(approvals: 1, briefDecisions: 2, observedAt: referenceDate))
+    XCTAssertEqual(reloader.reloads, Array(repeating: [WidgetKind.pendingDecisions], count: 3))
+  }
+
   func testReplaceWritesTheSnapshotAndReloadsEveryWidget() async {
     let (recorder, store, reloader) = makeRecorder()
     await recorder.replace(with: .fixture(now: referenceDate))

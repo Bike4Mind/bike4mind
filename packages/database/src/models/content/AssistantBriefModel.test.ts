@@ -1,7 +1,12 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import mongoose from 'mongoose';
 import { createMongoServer, MONGO_TEST_TIMEOUT_MS } from '../../__test__/createMongoServer';
-import { AssistantBriefModel, assistantBriefRepository, type AssistantBriefContent } from './AssistantBriefModel';
+import {
+  AssistantBriefModel,
+  assistantBriefRepository,
+  BRIEF_COMPOSING_STALE_MS,
+  type AssistantBriefContent,
+} from './AssistantBriefModel';
 
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
 
@@ -146,5 +151,62 @@ describe('assistant brief settlement', () => {
       { $set: { status: 'failed', failureReason: 'Unavailable' } },
       { runValidators: true }
     );
+  });
+});
+
+describe('assistantBriefRepository.findLatestReadyDecisionRefs', () => {
+  const approval = { questId: 'q1', sessionId: 's1', pendingActionTs: 1 };
+  const settle = async (userId: string, decisions: AssistantBriefContent['decisions']) => {
+    const brief = await assistantBriefRepository.createComposing({ userId, periodStart: NOW, periodEnd: NOW });
+    await assistantBriefRepository.markReady(String(brief._id), { ...content, decisions }, NOW);
+    return String(brief._id);
+  };
+
+  it("returns the owner's newest ready brief, projected to its decisions' approval refs", async () => {
+    await settle('owner', [{ id: 'old', text: 'Old decision' }]);
+    const latest = await settle('owner', [
+      { id: 'd1', text: 'Reply to the vendor' },
+      { id: 'd2', text: 'Approve the deploy', approval },
+    ]);
+    await createBrief();
+    await settle('someone-else', [{ id: 'x', text: 'Not yours' }]);
+
+    const refs = await assistantBriefRepository.findLatestReadyDecisionRefs('owner');
+
+    expect(String(refs?._id)).toBe(latest);
+    expect(refs?.decisions).toEqual([{}, { approval }]);
+  });
+
+  it('is null when the owner has no ready brief', async () => {
+    await createBrief();
+
+    await expect(assistantBriefRepository.findLatestReadyDecisionRefs('owner')).resolves.toBeNull();
+  });
+});
+
+describe('assistant brief reads', () => {
+  it('finds the in-flight composing brief only while it is fresh', async () => {
+    const brief = await createBrief();
+    const created = (await assistantBriefRepository.findById(String(brief._id)))!.createdAt;
+
+    expect(String((await assistantBriefRepository.findActiveComposing('owner', created))?._id)).toBe(String(brief._id));
+    await expect(
+      assistantBriefRepository.findActiveComposing('owner', new Date(created.getTime() + BRIEF_COMPOSING_STALE_MS))
+    ).resolves.toBeNull();
+    expect(await assistantBriefRepository.findActiveComposing('owner')).toMatchObject({ status: 'composing' });
+  });
+
+  it('lists and reads the latest ready brief of the owner only, and treats a malformed id as missing', async () => {
+    const first = await createBrief();
+    await assistantBriefRepository.markReady(String(first._id), content, NOW);
+    await assistantBriefRepository.createComposing({ userId: 'someone-else', periodStart: NOW, periodEnd: NOW });
+
+    expect((await assistantBriefRepository.listByUser('owner', 5)).map(b => String(b._id))).toEqual([
+      String(first._id),
+    ]);
+    expect(String((await assistantBriefRepository.findLatestReady('owner'))?._id)).toBe(String(first._id));
+    await expect(assistantBriefRepository.findById('not-an-id')).resolves.toBeNull();
+    await expect(assistantBriefRepository.findByIdForUser('not-an-id', 'owner')).resolves.toBeNull();
+    await expect(assistantBriefRepository.removeEmailSourcedItems('owner', [])).resolves.toBe(0);
   });
 });
