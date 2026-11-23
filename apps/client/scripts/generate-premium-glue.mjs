@@ -36,7 +36,7 @@
  *   premiumWorkspaceDeniedTools.generated.ts - tools denied per workspace
  *   premiumEntitlementGrants.generated.ts - entitlement registry rows
  *   premiumApiKeyScopes.generated.ts - contributed API-key scopes
- *   premiumDataSubjectRegistry.generated.ts - overlay data-subject classifications
+ *   premiumDataSubjectRegistry.generated.ts - overlay data-subject classifications and model names
  *
  * Two distinct "empty" forms when no premium packages are present:
  *   SPA/nav   -> emit the file with an empty exported array
@@ -1528,6 +1528,36 @@ function generatePartnerSignupHooks(packages) {
   );
 }
 
+const MODEL_SOURCE_RE = /\.(?:ts|tsx|mts|cts)$/;
+const MODEL_SOURCE_SKIP = /(?:\.test\.|\.spec\.|\.d\.ts$)/;
+const MODEL_SOURCE_SKIP_DIRS = new Set(['node_modules', 'dist', '.git', '__tests__', '__test__']);
+const MODEL_REGISTRATION_RE = /\bmodel\s*(?:<[^()]*?>)?\s*\(\s*(?:(['"`])([A-Za-z_$][\w$]*)\1|([A-Za-z_$][\w$]*)\s*,)/g;
+
+// Model names an overlay's source registers with `model('Name', ...)`, or `model(NAME, ...)` where the
+// same file has `const NAME = 'Name'`. Read from disk rather than imported, so a process that never
+// loads the overlay's models still knows about them.
+function declaredModelNames(pkg) {
+  const names = new Set();
+  const walk = dir => {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      if (entry.isDirectory()) {
+        if (!MODEL_SOURCE_SKIP_DIRS.has(entry.name)) walk(join(dir, entry.name));
+      } else if (entry.isFile() && MODEL_SOURCE_RE.test(entry.name) && !MODEL_SOURCE_SKIP.test(entry.name)) {
+        const source = readFileSync(join(dir, entry.name), 'utf8')
+          .replace(/\/\*[\s\S]*?\*\//g, '')
+          .replace(/(^|[^:'"`\\])\/\/.*$/gm, '$1');
+        for (const [, , literal, identifier] of source.matchAll(MODEL_REGISTRATION_RE)) {
+          const name =
+            literal ?? source.match(new RegExp(`\\bconst ${identifier}\\s*=\\s*(['"\`])([A-Za-z_$][\\w$]*)\\1`))?.[2];
+          if (name) names.add(name);
+        }
+      }
+    }
+  };
+  walk(join(PREMIUM_DIR, pkg.dir));
+  return names;
+}
+
 // Premium packages can classify their own models for data-subject erasure and export
 // (b4mContributions.dataSubjectRegistryExport -> a module whose import registers the package's
 // mongoose models and which exports `dataSubjectRegistry: ContributedDataHolderRegistry`).
@@ -1538,10 +1568,13 @@ function generateDataSubjectRegistry(packages) {
   const typeImport = `import type { ContributedDataHolderRegistry } from '../dataSubject/types';`;
   const declaration = 'export const premiumDataSubjectRegistries: readonly ContributedDataHolderRegistry[]';
 
+  const modelNames = [...new Set(packages.flatMap(p => [...declaredModelNames(p)]))].sort();
+  const modelNamesDeclaration = `export const premiumDeclaredModelNames: readonly string[] = ${JSON.stringify(modelNames)};\n`;
+
   const contributors = packages.filter(p => p.contributions.dataSubjectRegistryExport);
 
   if (contributors.length === 0) {
-    writeFile(outPath, `${GENERATED_BANNER}\n${typeImport}\n\n${declaration} = [];\n`);
+    writeFile(outPath, `${GENERATED_BANNER}\n${typeImport}\n\n${declaration} = [];\n\n${modelNamesDeclaration}`);
     return;
   }
 
@@ -1563,7 +1596,10 @@ function generateDataSubjectRegistry(packages) {
 
   const items = contributors.map((_, i) => `  registry${i}`).join(',\n');
 
-  writeFile(outPath, `${GENERATED_BANNER}\n${typeImport}\n${imports}\n\n${declaration} = [\n${items}\n];\n`);
+  writeFile(
+    outPath,
+    `${GENERATED_BANNER}\n${typeImport}\n${imports}\n\n${declaration} = [\n${items}\n];\n\n${modelNamesDeclaration}`
+  );
 }
 
 // Premium packages can contribute agent-executor extensions (b4mContributions.agentExtensionsExport

@@ -28,7 +28,7 @@ vi.mock('../../premium-generated/premiumDataSubjectRegistry.generated', async ()
   const { Schema: S } = await import('mongoose');
   db.model('FixtureOverlayNote', new S({ ownerId: S.Types.ObjectId, text: String }));
   db.model('FixtureOverlayLog', new S({ actorId: S.Types.ObjectId, actorName: String, text: String }));
-  return { premiumDataSubjectRegistries: [h.contributed] };
+  return { premiumDataSubjectRegistries: [h.contributed], premiumDeclaredModelNames: [] };
 });
 vi.mock('../../services/publish/purgeUserPublishedArtifacts', () => ({
   purgeUserPublishedArtifacts: vi.fn(async () => undefined),

@@ -3,11 +3,14 @@ import type { ContributedDataHolderRegistry } from '../types';
 
 vi.mock('sst', () => ({ Resource: new Proxy({}, { get: () => ({ value: 'test', name: 'test' }) }) }));
 
-const h = vi.hoisted(() => ({ registries: [] as unknown[] }));
+const h = vi.hoisted(() => ({ registries: [] as unknown[], declaredModelNames: [] as string[] }));
 
 vi.mock('../../premium-generated/premiumDataSubjectRegistry.generated', () => ({
   get premiumDataSubjectRegistries() {
     return h.registries;
+  },
+  get premiumDeclaredModelNames() {
+    return h.declaredModelNames;
   },
 }));
 
@@ -52,6 +55,7 @@ const parentHolder = { kind: 'holder', references: [ownerRef] } as const;
 
 afterEach(() => {
   h.registries = [];
+  h.declaredModelNames = [];
 });
 
 const brokenEntries: [string, unknown[], RegExp][] = [
@@ -140,6 +144,22 @@ describe('contributed data holder registry', () => {
   it('leaves the model unclassified when nothing contributes', async () => {
     const { findUnclassifiedModels } = await loadRegistry([]);
     expect(findUnclassifiedModels(['FixtureOverlayNote'])).toEqual(['FixtureOverlayNote']);
+  });
+
+  it('reports a model an overlay declares but this process never registered', async () => {
+    h.declaredModelNames = ['FixtureUnloadedNote'];
+    const { findUnclassifiedModels } = await loadRegistry([]);
+    expect(findUnclassifiedModels(['User'])).toEqual(['FixtureUnloadedNote']);
+    const { assertEveryModelClassified } = await import('../subjectMatcher');
+    expect(() => assertEveryModelClassified(['User'])).toThrow(/unclassified models FixtureUnloadedNote/);
+  });
+
+  it('accepts a declared model once an overlay classifies it, and lists it once', async () => {
+    h.declaredModelNames = ['FixtureOverlayNote'];
+    const { findUnclassifiedModels } = await loadRegistry([fixture]);
+    expect(findUnclassifiedModels(['FixtureOverlayNote'])).toEqual([]);
+    const unclassified = await loadRegistry([]);
+    expect(unclassified.findUnclassifiedModels(['FixtureOverlayNote'])).toEqual(['FixtureOverlayNote']);
   });
 
   it('equals the core-only registry when nothing contributes, and the first-use check passes', async () => {
