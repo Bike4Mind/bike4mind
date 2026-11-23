@@ -44,6 +44,14 @@ const oauthAuthSchema = z.object({ kind: z.literal('oauth') }).strict();
 
 const displayNameSchema = z.string().trim().min(1).max(MCP_CONNECTION_LIMITS.displayNameLength);
 
+/** The service cleans it like tool text; an empty result clears it. */
+const descriptionSchema = z
+  .string()
+  .max(
+    MCP_CONNECTION_LIMITS.descriptionLength,
+    `Description must be at most ${MCP_CONNECTION_LIMITS.descriptionLength} characters`
+  );
+
 const presetIdSchema = z.custom<McpPresetId>(value => isMcpPresetId(value), 'Unknown connector preset');
 
 export const mcpConnectionCreateBodySchema = z
@@ -52,6 +60,7 @@ export const mcpConnectionCreateBodySchema = z
     presetId: presetIdSchema.optional(),
     url: z.string().trim().min(1).max(2048),
     displayName: displayNameSchema,
+    description: descriptionSchema.optional(),
     slug: McpConnectionSlugSchema.optional(),
     transport: z.enum(MCP_CONNECTION_TRANSPORTS).default('auto'),
     auth: z.discriminatedUnion('kind', [noAuthSchema, apiKeyAuthSchema, oauthAuthSchema]),
@@ -72,6 +81,7 @@ export const mcpPlatformConnectionCreateBodySchema = mcpConnectionCreateBodySche
 export const mcpConnectionPatchBodySchema = z
   .object({
     displayName: displayNameSchema.optional(),
+    description: descriptionSchema.optional(),
     enabled: z.boolean().optional(),
     tools: z
       .array(
@@ -90,9 +100,14 @@ export const mcpConnectionPatchBodySchema = z
       .optional(),
   })
   .strict()
-  .refine(body => body.displayName !== undefined || body.enabled !== undefined || body.tools !== undefined, {
-    message: 'Nothing to update',
-  });
+  .refine(
+    body =>
+      body.displayName !== undefined ||
+      body.description !== undefined ||
+      body.enabled !== undefined ||
+      body.tools !== undefined,
+    { message: 'Nothing to update' }
+  );
 
 export type McpConnectionPatchBody = z.infer<typeof mcpConnectionPatchBodySchema>;
 
