@@ -39,16 +39,34 @@ export async function hasQualifyingSocialParty(beneficiaryId: string, partyIds: 
   );
 }
 
-/** hasQualifyingSocialParty over the collaborators of the projects `ownerId` owns. */
+const PROJECT_BATCH = 100;
+
+type ProjectMembers = { _id: unknown; users?: Array<{ userId?: unknown; permissions?: string[] }> };
+
+/**
+ * hasQualifyingSocialParty over the read-access members of every live project `ownerId` owns,
+ * walked in _id order PROJECT_BATCH projects at a time and stopping at the first qualifying member.
+ */
 export async function hasQualifyingProjectCollaborator(ownerId: string): Promise<boolean> {
-  const projects = await Project.find(
-    { userId: ownerId, deletedAt: null, 'users.0': { $exists: true } },
-    { 'users.userId': 1 }
-  )
-    .limit(100)
-    .lean<Array<{ users?: Array<{ userId?: unknown }> }>>();
-  return hasQualifyingSocialParty(
-    ownerId,
-    projects.flatMap(project => (project.users ?? []).map(member => String(member.userId)))
-  );
+  let after: unknown;
+  for (;;) {
+    const projects = await Project.find(
+      {
+        userId: ownerId,
+        deletedAt: null,
+        'users.permissions': 'read',
+        ...(after === undefined ? {} : { _id: { $gt: after } }),
+      },
+      { 'users.userId': 1, 'users.permissions': 1 }
+    )
+      .sort({ _id: 1 })
+      .limit(PROJECT_BATCH)
+      .lean<ProjectMembers[]>();
+    const memberIds = projects.flatMap(project =>
+      (project.users ?? []).filter(member => member.permissions?.includes('read')).map(member => String(member.userId))
+    );
+    if (await hasQualifyingSocialParty(ownerId, memberIds)) return true;
+    if (projects.length < PROJECT_BATCH) return false;
+    after = projects[projects.length - 1]._id;
+  }
 }

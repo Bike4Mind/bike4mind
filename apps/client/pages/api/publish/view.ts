@@ -76,14 +76,15 @@ const handler = baseApi({ auth: false })
       : await checkVisibility(gateArtifact, user, { passphraseVerified });
     if (!access.ok) return res.status(404).json({ error: 'Not found' });
 
-    // Analytics and reward evidence are recorded separately.
+    // One qualifying-party check gates both the external count and the reward evidence.
+    const viewerId = String(principal.id);
     if (
-      String(artifact.ownerId) !== String(principal.id) &&
-      (await hasQualifyingSocialParty(String(artifact.ownerId), [String(principal.id)]))
+      String(artifact.ownerId) !== viewerId &&
+      (await hasQualifyingSocialParty(String(artifact.ownerId), [viewerId]))
     ) {
       await PublishedArtifact.updateOne({ publicId: artifact.publicId }, { $inc: { externalViewCount: 1 } });
+      await recordVerifiedView(artifact, viewerId, true);
     }
-    await recordVerifiedView(artifact, String(principal.id));
     return res.status(204).end();
   });
 

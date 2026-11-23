@@ -10,6 +10,7 @@ import { createMocks } from 'node-mocks-http';
 const { mocks } = vi.hoisted(() => ({
   mocks: {
     userExists: vi.fn(),
+    userFind: vi.fn(),
     findOne: vi.fn(),
     lean: vi.fn(),
     updateOne: vi.fn(() => Promise.resolve({})),
@@ -42,7 +43,10 @@ vi.mock('@server/middlewares/optionalJwtAuth', () => ({
 }));
 
 vi.mock('@bike4mind/database', () => ({
-  User: { exists: (...a: unknown[]) => mocks.userExists(...a) },
+  User: {
+    exists: (...a: unknown[]) => mocks.userExists(...a),
+    find: (...a: unknown[]) => ({ lean: () => mocks.userFind(...a) }),
+  },
   PublishedArtifact: {
     findOne: (...a: unknown[]) => {
       mocks.findOne(...a);
@@ -113,13 +117,13 @@ describe('POST /api/publish/view - whose view counts', () => {
     expect(mocks.updateOne).toHaveBeenCalledWith({ publicId: 'pub1' }, { $inc: { externalViewCount: 1 } });
   });
 
-  it('records separate reward evidence when the admitted viewer is verified in the database', async () => {
+  it('records reward evidence for a qualifying viewer without a second account lookup', async () => {
     published();
-    mocks.userExists.mockResolvedValue({ _id: 'friend' });
     const { res, promise } = run({ path: '/p/u/scope/slug' }, { id: 'friend' });
     await promise;
     expect(res._getStatusCode()).toBe(204);
-    expect(mocks.userExists).toHaveBeenCalledWith({ _id: 'friend', emailVerified: true, deletedAt: null });
+    expect(mocks.qualifies).toHaveBeenCalledTimes(1);
+    expect(mocks.userExists).not.toHaveBeenCalled();
     expect(mocks.updateOne).toHaveBeenCalledWith(
       { publicId: 'pub1', ownerId: 'owner1', deletedAt: null },
       { $inc: { verifiedExternalViewCount: 1 } },
@@ -127,12 +131,49 @@ describe('POST /api/publish/view - whose view counts', () => {
     );
   });
 
-  it('records only analytics for an unverified viewer', async () => {
-    published();
+  it('records only the external count once the page already has reward evidence', async () => {
+    published({ verifiedExternalViewCount: 1 });
     const { promise } = run({ path: '/p/u/scope/slug' }, { id: 'friend' });
     await promise;
     expect(mocks.updateOne).toHaveBeenCalledTimes(1);
     expect(mocks.updateOne).toHaveBeenCalledWith({ publicId: 'pub1' }, { $inc: { externalViewCount: 1 } });
+  });
+
+  describe('against the real qualifying-party rule', () => {
+    const OWNER = 'a'.repeat(24);
+    const VIEWER = 'b'.repeat(24);
+    const owner = { _id: OWNER, emailVerified: true, signupMeta: { ip: '203.0.113.1' } };
+    const viewer = { _id: VIEWER, emailVerified: true, signupMeta: { ip: '198.51.100.7' } };
+
+    beforeEach(async () => {
+      const actual = await vi.importActual<typeof import('@server/services/gears/socialParty')>(
+        '@server/services/gears/socialParty'
+      );
+      mocks.qualifies.mockImplementation(actual.hasQualifyingSocialParty);
+      published({ ownerId: OWNER });
+    });
+
+    it('records reward evidence for a verified viewer from another signup IP', async () => {
+      mocks.userFind.mockResolvedValue([owner, viewer]);
+      const { promise } = run({ path: '/p/u/scope/slug' }, { id: VIEWER });
+      await promise;
+      expect(mocks.updateOne).toHaveBeenCalledWith(
+        { publicId: 'pub1', ownerId: OWNER, deletedAt: null },
+        { $inc: { verifiedExternalViewCount: 1 } },
+        { runValidators: true }
+      );
+    });
+
+    it.each([
+      ['shares the owner signup IP', { signupMeta: { ip: '203.0.113.1' } }],
+      ['is blocked from rewards', { isBanned: true }],
+    ])('records no reward evidence for a verified viewer that %s', async (_label, over) => {
+      mocks.userFind.mockResolvedValue([owner, { ...viewer, ...over }]);
+      const { res, promise } = run({ path: '/p/u/scope/slug' }, { id: VIEWER });
+      await promise;
+      expect(res._getStatusCode()).toBe(204);
+      expect(mocks.updateOne).not.toHaveBeenCalled();
+    });
   });
 
   it('does not count a signed-in viewer that is not a qualifying distinct account', async () => {

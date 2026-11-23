@@ -6,7 +6,9 @@ const { mocks } = vi.hoisted(() => ({
 
 vi.mock('@bike4mind/database', () => ({
   User: { find: (...a: unknown[]) => ({ lean: () => mocks.userFind(...a) }) },
-  Project: { find: (...a: unknown[]) => ({ limit: () => ({ lean: () => mocks.projectFind(...a) }) }) },
+  Project: {
+    find: (...a: unknown[]) => ({ sort: () => ({ limit: () => ({ lean: () => mocks.projectFind(...a) }) }) }),
+  },
 }));
 vi.mock('@bike4mind/services', () => ({
   creditService: {
@@ -66,14 +68,50 @@ describe('hasQualifyingSocialParty', () => {
 describe('hasQualifyingProjectCollaborator', () => {
   beforeEach(() => vi.clearAllMocks());
 
-  it('passes when any collaborator across the owner projects qualifies', async () => {
-    mocks.projectFind.mockResolvedValue([{ users: [{ userId: THIRD }] }, { users: [{ userId: OTHER }] }]);
+  const reader = (userId: string) => ({ userId, permissions: ['read'] });
+
+  it('passes when any read-access collaborator across the owner projects qualifies', async () => {
+    mocks.projectFind.mockResolvedValue([
+      { _id: 'p1', users: [reader(THIRD)] },
+      { _id: 'p2', users: [reader(OTHER)] },
+    ]);
     mocks.userFind.mockResolvedValue([owner, { _id: THIRD, emailVerified: false }, verifiedOther]);
     await expect(hasQualifyingProjectCollaborator(OWNER)).resolves.toBe(true);
     expect(mocks.projectFind).toHaveBeenCalledWith(
-      { userId: OWNER, deletedAt: null, 'users.0': { $exists: true } },
-      { 'users.userId': 1 }
+      { userId: OWNER, deletedAt: null, 'users.permissions': 'read' },
+      { 'users.userId': 1, 'users.permissions': 1 }
     );
+  });
+
+  it('ignores members without read access', async () => {
+    mocks.projectFind.mockResolvedValue([{ _id: 'p1', users: [{ userId: OTHER, permissions: [] }] }]);
+    await expect(hasQualifyingProjectCollaborator(OWNER)).resolves.toBe(false);
+    expect(mocks.userFind).not.toHaveBeenCalled();
+  });
+
+  it('keeps searching past the first batch of projects', async () => {
+    const firstBatch = Array.from({ length: 100 }, (_, i) => ({
+      _id: `p${String(i).padStart(3, '0')}`,
+      users: [reader(THIRD)],
+    }));
+    mocks.projectFind
+      .mockResolvedValueOnce(firstBatch)
+      .mockResolvedValueOnce([{ _id: 'p100', users: [reader(OTHER)] }]);
+    mocks.userFind.mockImplementation((q: { _id: { $in: string[] } }) =>
+      Promise.resolve(
+        [owner, { _id: THIRD, emailVerified: false }, verifiedOther].filter(row => q._id.$in.includes(row._id))
+      )
+    );
+    await expect(hasQualifyingProjectCollaborator(OWNER)).resolves.toBe(true);
+    expect(mocks.projectFind).toHaveBeenCalledTimes(2);
+    expect(mocks.projectFind.mock.calls[1][0]).toMatchObject({ _id: { $gt: 'p099' } });
+  });
+
+  it('stops after a short batch with no qualifying collaborator', async () => {
+    mocks.projectFind.mockResolvedValue([{ _id: 'p1', users: [reader(THIRD)] }]);
+    mocks.userFind.mockResolvedValue([owner, { _id: THIRD, emailVerified: false }]);
+    await expect(hasQualifyingProjectCollaborator(OWNER)).resolves.toBe(false);
+    expect(mocks.projectFind).toHaveBeenCalledTimes(1);
   });
 
   it('fails when the owner has no collaborators', async () => {

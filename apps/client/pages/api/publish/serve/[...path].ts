@@ -1674,7 +1674,6 @@ function bumpViewCount(
   const isOwner = isAuthed && String(viewer!.id) === String(artifact.ownerId);
   const isCrawler = !!userAgent && CRAWLER_UA_RE.test(userAgent);
   const signedInOther = isAuthed && !isOwner && !isCrawler;
-  if (signedInOther) void recordVerifiedView(artifact, String(viewer!.id)).catch(() => undefined);
   // The per-link counter needs its own definition, NOT externalViewCount's: a share link exists
   // so the viewer does NOT sign in, so requiring authentication would leave it at zero forever.
   // Anonymous-inclusive and crawler-excluded; owner-excluded only when the owner is
@@ -1687,6 +1686,7 @@ function bumpViewCount(
     const countsAsExternal =
       signedInOther &&
       (await hasQualifyingSocialParty(String(artifact.ownerId), [String(viewer!.id)]).catch(() => false));
+    if (countsAsExternal) void recordVerifiedView(artifact, String(viewer!.id), true).catch(() => undefined);
     const inc = countsAsExternal ? { viewCount: 1, externalViewCount: 1 } : { viewCount: 1 };
     await (countsAsShareView
       ? PublishedArtifact.updateOne(
