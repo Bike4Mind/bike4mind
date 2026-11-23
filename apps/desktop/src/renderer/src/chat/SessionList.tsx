@@ -1354,7 +1354,18 @@ export function SessionList({
    */
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      if (!(event.metaKey || event.ctrlKey) || event.altKey || event.shiftKey) return;
+      if (!(event.metaKey || event.ctrlKey) || event.altKey) return;
+
+      // Mod+Shift+F as well as Mod+K: it is where find-across-everything sits in an editor, and
+      // Mod+F alone finds in the open conversation. The orchestrator's focus toggle takes the
+      // chord first while that view is up (see ViewSwitcher), and marks it handled.
+      if (event.shiftKey) {
+        if (event.code !== 'KeyF' || event.defaultPrevented) return;
+        event.preventDefault();
+        if (target.current.collapsed) target.current.onToggleCollapsed();
+        setFocusRequest(request => request + 1);
+        return;
+      }
 
       if (event.key === 'b' || event.key === 'B') {
         event.preventDefault();

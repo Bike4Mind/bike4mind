@@ -1427,6 +1427,7 @@ export function ChatShell({
                   // after React drops it.
                   key={`thread-${activeId ?? 'none'}`}
                   messages={conversation.messages}
+                  findable
                   sessionId={activeId}
                   // What stands in for the transcript when there is no session to have one. It is the
                   // only control on screen that starts one from here, so it is a button and not a
