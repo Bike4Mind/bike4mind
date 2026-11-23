@@ -100,6 +100,7 @@ describe('ChatCompletionInvoke retry path session binding', () => {
       id: 'quest-1',
       sessionId: SESSION,
       type: 'error',
+      prompt: body.message,
       errorCode: 'insufficient_credits',
       turnTiming: {
         queueMs: 120,
