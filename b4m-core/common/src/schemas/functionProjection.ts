@@ -1,5 +1,13 @@
 import { canonicalJson } from '../utils/canonicalJson';
-import type { FunctionContract, FunctionField, FunctionNumberField, FunctionObjectField } from './functionContract';
+import {
+  highestWhole,
+  lowestWhole,
+  type FunctionBound,
+  type FunctionContract,
+  type FunctionField,
+  type FunctionNumberField,
+  type FunctionObjectField,
+} from './functionContract';
 
 /** Where a contract is sent: a model's tool list, an MCP tool listing, or the REST API. */
 export type FunctionSurface = 'llm' | 'mcp' | 'rest';
@@ -48,13 +56,8 @@ export const FUNCTION_LLM_KEYWORD_RULES: Readonly<Record<string, 'keep' | 'descr
   default: 'describe',
 };
 
-interface Bound {
-  value: number;
-  exclusive: boolean;
-}
-
-function tightest(bounds: Bound[], side: 'lower' | 'upper'): Bound | undefined {
-  return bounds.reduce<Bound | undefined>((best, bound) => {
+function tightest(bounds: FunctionBound[], side: 'lower' | 'upper'): FunctionBound | undefined {
+  return bounds.reduce<FunctionBound | undefined>((best, bound) => {
     if (!best) return bound;
     if (bound.value === best.value) return bound.exclusive ? bound : best;
     return (side === 'lower') === bound.value > best.value ? bound : best;
@@ -62,11 +65,19 @@ function tightest(bounds: Bound[], side: 'lower' | 'upper'): Bound | undefined {
 }
 
 function rangeText(field: FunctionNumberField): string | undefined {
-  const bound = (value: number | undefined, exclusive: boolean): Bound[] =>
+  const bound = (value: number | undefined, exclusive: boolean): FunctionBound[] =>
     value === undefined ? [] : [{ value, exclusive }];
-  const lower = tightest([...bound(field.minimum, false), ...bound(field.exclusiveMinimum, true)], 'lower');
-  const upper = tightest([...bound(field.maximum, false), ...bound(field.exclusiveMaximum, true)], 'upper');
-  const below = (limit: Bound) => (limit.exclusive ? '<' : '<=');
+  const whole = (limit: FunctionBound | undefined, round: (b: FunctionBound) => number) =>
+    limit && field.type === 'integer' ? { value: round(limit), exclusive: false } : limit;
+  const lower = whole(
+    tightest([...bound(field.minimum, false), ...bound(field.exclusiveMinimum, true)], 'lower'),
+    lowestWhole
+  );
+  const upper = whole(
+    tightest([...bound(field.maximum, false), ...bound(field.exclusiveMaximum, true)], 'upper'),
+    highestWhole
+  );
+  const below = (limit: FunctionBound) => (limit.exclusive ? '<' : '<=');
   if (lower && upper) return `${lower.value} ${below(lower)} value ${below(upper)} ${upper.value}`;
   if (lower) return `value ${lower.exclusive ? '>' : '>='} ${lower.value}`;
   if (upper) return `value ${below(upper)} ${upper.value}`;
@@ -127,16 +138,20 @@ function projectLlmField(field: FunctionField): FunctionLlmSchema {
   return schema;
 }
 
-function unitOf(field: FunctionField): string | undefined {
-  if (field.type === 'number' || field.type === 'integer') return field.unit;
-  return field.type === 'array' ? unitOf(field.items) : undefined;
+/** Every leaf of an output, by path, with its unit: `reaction.left (N)`, `supports[].moment (N*m)`. */
+function leaves(field: FunctionField, path: string): string[] {
+  if (field.type === 'number' || field.type === 'integer')
+    return [field.unit === undefined ? path : `${path} (${field.unit})`];
+  if (field.type === 'array') return leaves(field.items, field.items.type === 'object' ? `${path}[]` : path);
+  if (field.type === 'object') {
+    const children = Object.entries(field.properties);
+    return children.length === 0 ? [path] : children.flatMap(([name, child]) => leaves(child, `${path}.${name}`));
+  }
+  return [path];
 }
 
 function outputsLine(outputs: FunctionObjectField): string {
-  const listed = Object.entries(outputs.properties).map(([name, field]) => {
-    const unit = unitOf(field);
-    return unit === undefined ? name : `${name} (${unit})`;
-  });
+  const listed = Object.entries(outputs.properties).flatMap(([name, field]) => leaves(field, name));
   return listed.length > 0 ? `\nOutputs: ${listed.join(', ')}.` : '';
 }
 

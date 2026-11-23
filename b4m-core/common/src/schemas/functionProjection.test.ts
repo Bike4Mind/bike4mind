@@ -114,6 +114,53 @@ describe('projectFunctionSchema', () => {
     expect([...sent].filter(keyword => !kept.includes(keyword))).toEqual([]);
   });
 
+  it('lists the units of nested outputs by path', () => {
+    const nested = parsed({
+      name: 'frame',
+      description: 'Frame check',
+      inputs: { type: 'object', additionalProperties: false, properties: {} },
+      outputs: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          reaction: {
+            type: 'object',
+            additionalProperties: false,
+            properties: { left: { type: 'number', unit: 'N' }, right: { type: 'number', unit: 'N' } },
+          },
+          supports: {
+            type: 'array',
+            items: {
+              type: 'object',
+              additionalProperties: false,
+              properties: { moment: { type: 'number', unit: 'N*m' } },
+            },
+          },
+          ok: { type: 'boolean' },
+        },
+      },
+    });
+    expect(projectFunctionSchema(nested, 'llm').description).toBe(
+      'Frame check\nOutputs: reaction.left (N), reaction.right (N), supports[].moment (N*m), ok.'
+    );
+  });
+
+  it('renders an integer range as the whole numbers it allows', () => {
+    const whole = parsed({
+      name: 'pick',
+      description: 'Pick',
+      inputs: {
+        type: 'object',
+        additionalProperties: false,
+        properties: { n: { type: 'integer', unit: '1', minimum: 0.5, exclusiveMaximum: 3.2 } },
+      },
+      outputs: { type: 'object', additionalProperties: false, properties: {} },
+    });
+    expect(projectFunctionSchema(whole, 'llm').parameters.properties?.n.description).toBe(
+      'Unit: 1. Range: 1 <= value <= 3.'
+    );
+  });
+
   it('refuses a keyword it has no rule for', () => {
     const span = { ...contract.inputs.properties.span, pattern: '^a' } as FunctionField;
     const widened = {
