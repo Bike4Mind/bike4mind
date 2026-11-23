@@ -84,11 +84,7 @@ const OUTCOME_STATE: Record<ChildOutcome, AgentState> = {
   'no-reply': 'idle',
 };
 
-/**
- * "Needs you" is a live approval or question, or a worker task waiting on the user's decision in its
- * Task panel (blocked, escalated, paused, or finished and not yet accepted). needsYouCount (the dock
- * badge) and the watch model (menu bar) count sessions by this same rule.
- */
+/** Attention comes only from SessionActivity, just like the sidebar badge, including task decisions. */
 export function deriveTaskAgentState(
   session: Pick<ChatSessionSummary, 'workerTask' | 'lastOutcome'>,
   status: ChatSessionStatus | undefined
@@ -96,11 +92,9 @@ export function deriveTaskAgentState(
   const runtimeState = deriveAgentState(status, session.lastOutcome);
   const task = session.workerTask?.state;
   if (runtimeState === 'working' || runtimeState === 'needs-you' || !task) return runtimeState;
-  // Queued or running with no live status (a pre-reply gap, a model switch, a restart) waits on nothing.
-  if (task.status === 'queued' || task.status === 'running') return runtimeState;
-  if (task.status === 'completed' && task.accepted && session.workerTask?.attentionViewed !== false) return 'done';
-  if (isUpdateOnlyTask(task) && session.workerTask?.attentionViewed) return 'done';
-  return task.status === 'canceled' ? 'stopped' : 'needs-you';
+  if (task.status === 'completed') return 'done';
+  if (task.status === 'canceled') return 'stopped';
+  return runtimeState;
 }
 
 /** The live status wins; a stored outcome only speaks for a session that is neither running nor waiting. */

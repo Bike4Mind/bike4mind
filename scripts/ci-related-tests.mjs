@@ -149,13 +149,18 @@ export async function runRelated({ plan, script, shard = '', root = repoRoot, cr
     });
     return result.status ?? 1;
   }
+  // Client tests resolve fixtures from process.cwd() (e.g. app/globals.css), as they do
+  // under `pnpm --filter @bike4mind/client test`, so run them from the package dir.
+  const previousCwd = process.cwd();
   try {
     console.log(`Client ${script}: ${selected.length} related test specification(s), ${shard || 'unsharded'}; bypassing turbo cache.`);
     if (!selected.length) return 0;
+    process.chdir(cwd);
     await vitest.standalone();
     const result = await vitest.runTestSpecifications(selected, false);
     return result.unhandledErrors.length || result.testModules.some(test => !test.ok()) ? 1 : 0;
   } finally {
+    process.chdir(previousCwd);
     await vitest.close();
   }
 }

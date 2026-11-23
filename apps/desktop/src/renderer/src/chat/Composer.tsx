@@ -568,6 +568,10 @@ export function Composer({
    * and its precedence is decided in one place rather than by where the branches happen to sit.
    */
   const onKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
+    // While an IME is composing (Japanese, Chinese, Korean), Enter confirms the candidate and
+    // Escape cancels it: the keys belong to the input method, not to send, stop or the menus.
+    if (event.nativeEvent.isComposing) return;
+
     if (event.key === 'Escape') {
       const escape = composerEscapeAction({ pickerOpen: pickerOpen || mentionOpen, streaming });
       if (escape === 'default') return;

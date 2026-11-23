@@ -616,6 +616,8 @@ const SESSION_LENGTH_WARNING_THRESHOLD = 100;
 
 const questSaveMutex = new Mutex();
 // Identity and server-owned keys; `deletedAt` belongs to soft delete, never to a turn's save.
+// `lakeSaveCount` moves only by claimLakeSaveSlot's atomic $inc; writing the in-memory copy back
+// would reset the count to what it was when the turn loaded the quest.
 const QUEST_FIELDS_NEVER_SAVED: ReadonlySet<string> = new Set([
   'id',
   '_id',
@@ -623,6 +625,7 @@ const QUEST_FIELDS_NEVER_SAVED: ReadonlySet<string> = new Set([
   'createdAt',
   'updatedAt',
   'deletedAt',
+  'lakeSaveCount',
 ]);
 
 interface ProcessInitContext {
