@@ -60,28 +60,81 @@ describe('settleJobHold with a run claim', () => {
     expect(deps.repository.recordSettlement).toHaveBeenCalledWith('job-1', 120);
   });
 
-  it('logs, and still records the settlement, when the claim release fails', async () => {
+  it('moves the credits, records the settlement and releases the claim in one transaction', async () => {
     const budget = claimed();
-    vi.mocked(budget.adapters.release).mockRejectedValue(new Error('run store down'));
+    const inTransaction: boolean[] = [];
+    let open = false;
+    vi.mocked(budget.adapters.transact).mockImplementation(async work => {
+      open = true;
+      try {
+        return await work();
+      } finally {
+        open = false;
+      }
+    });
+    vi.mocked(settleCreditHold).mockImplementationOnce(async (_hold, charged) => {
+      inTransaction.push(open);
+      return charged;
+    });
     const deps = makeDeps(budget);
-    const error = vi.spyOn(logger, 'error');
+    vi.mocked(deps.repository.recordSettlement).mockImplementation(async () => {
+      inTransaction.push(open);
+    });
+    vi.mocked(budget.adapters.release).mockImplementation(async () => {
+      inTransaction.push(open);
+    });
+
+    await settleJobHold(
+      job({ run, runClaim: { runId: 'run-1', credits: 300 } }),
+      { credits: 120, entry, featureLabel: 'video generation' },
+      deps
+    );
+
+    expect(budget.adapters.transact).toHaveBeenCalledTimes(1);
+    expect(inTransaction).toEqual([true, true, true]);
+    // Inside a transaction a failed ledger write must abort it, not be logged past.
+    expect(vi.mocked(settleCreditHold).mock.calls[0][3]).toMatchObject({ throwOnWriteFailure: true });
+  });
+
+  it('rolls the settlement back when the claim release fails inside the transaction', async () => {
+    const budget = claimed();
+    const failure = new Error('run store down');
+    const settled: number[] = [];
+    // A transaction stand-in that undoes the settlement it ran when its work throws.
+    vi.mocked(budget.adapters.transact).mockImplementation(async work => {
+      const before = settled.length;
+      try {
+        return await work();
+      } catch (error) {
+        settled.length = before;
+        throw error;
+      }
+    });
+    vi.mocked(budget.adapters.release).mockRejectedValue(failure);
+    const deps = makeDeps(budget);
+    vi.mocked(deps.repository.recordSettlement).mockImplementation(async (_id: string, charged: number) => {
+      settled.push(charged);
+    });
+
     await expect(
       settleJobHold(
         job({ run, runClaim: { runId: 'run-1', credits: 300 } }),
         { credits: 120, entry, featureLabel: 'video generation' },
         deps
       )
-    ).resolves.toBe(120);
+    ).rejects.toBe(failure);
     expect(deps.repository.recordSettlement).toHaveBeenCalledWith('job-1', 120);
-    expect(error).toHaveBeenCalledWith('generation_job_run_claim_release_failed', expect.anything());
+    expect(settled).toEqual([]);
+    expect(budget.state.committedCredits).toBe(300);
   });
 
-  it('tags an unbudgeted run on the ledger row without releasing anything', async () => {
+  it('tags an unbudgeted run on the ledger row without releasing anything or opening a transaction', async () => {
     const budget = createFakeRunBudget();
     const deps = makeDeps(budget);
     await settleJobHold(job({ run }), { credits: 120, entry, featureLabel: 'video generation' }, deps);
     expect(settleCreditHold).toHaveBeenCalledWith(creditHold, 120, { ...entry, run }, expect.anything(), deps.credits);
     expect(budget.adapters.release).not.toHaveBeenCalled();
+    expect(budget.adapters.transact).not.toHaveBeenCalled();
   });
 
   it('is unchanged without a run', async () => {
@@ -89,7 +142,9 @@ describe('settleJobHold with a run claim', () => {
     const deps = makeDeps(budget);
     await settleJobHold(job(), { credits: 120, entry, featureLabel: 'video generation' }, deps);
     expect(settleCreditHold).toHaveBeenCalledWith(creditHold, 120, entry, expect.anything(), deps.credits);
+    expect(vi.mocked(settleCreditHold).mock.calls[0][3]).toMatchObject({ throwOnWriteFailure: false });
     expect(budget.adapters.release).not.toHaveBeenCalled();
+    expect(budget.adapters.transact).not.toHaveBeenCalled();
   });
 });
 
@@ -102,6 +157,19 @@ describe('releaseJobHold with a run claim', () => {
     expect(budget.adapters.release).toHaveBeenCalledWith({ runId: 'run-1', credits: 300 }, 0);
     expect(budget.state.committedCredits).toBe(0);
     expect(deps.repository.recordSettlement).toHaveBeenCalledWith('job-1', 0);
+    expect(budget.adapters.transact).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps the hold when the claim release fails, since the transaction rolls both back', async () => {
+    const budget = claimed();
+    const failure = new Error('run store down');
+    vi.mocked(budget.adapters.release).mockRejectedValue(failure);
+    const deps = makeDeps(budget);
+    await expect(releaseJobHold(job({ run, runClaim: { runId: 'run-1', credits: 300 } }), deps)).rejects.toBe(
+      failure
+    );
+    expect(budget.adapters.transact).toHaveBeenCalledTimes(1);
+    expect(budget.state.committedCredits).toBe(300);
   });
 
   it('reports a claim it cannot release when no run budget is wired', async () => {
