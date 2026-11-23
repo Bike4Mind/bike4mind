@@ -58,7 +58,7 @@ describe('provider spend over HTTP', () => {
           deadlineMs: Date.now() + 5_000,
           onDiagnostic: diagnostic => diagnostics.push(diagnostic),
         });
-        expect(result).toEqual({ providerUsd: 2, breakdown: { input: 1.25, output: 0.75 } });
+        expect(result).toEqual({ providerUsd: 2, orgUsd: 2, breakdown: { input: 1.25, output: 0.75 } });
       }
     );
     expect(requests).toHaveLength(2);
