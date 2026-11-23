@@ -61,6 +61,15 @@ describe('countPendingDecisions', () => {
     });
   });
 
+  it('drops a brief question already answered from the brief', async () => {
+    repos.findLatestReadyDecisionRefs.mockResolvedValue({
+      _id: { toString: () => 'brief-1' },
+      decisions: [{}, { repliedAt: new Date(NOW) }],
+    });
+
+    await expect(countPendingDecisions('owner', NOW)).resolves.toMatchObject({ count: 1, briefDecisions: 1 });
+  });
+
   it('propagates a failed read instead of answering a partial count', async () => {
     repos.findSessionIdsByUserId.mockRejectedValue(new Error('db down'));
 

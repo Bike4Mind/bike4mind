@@ -168,7 +168,7 @@ describe('assistantBriefRepository.findLatestReadyDecisionRefs', () => {
       { id: 'd1', text: 'Reply to the vendor' },
       { id: 'd2', text: 'Approve the deploy', approval },
     ]);
-    await createComposingBrief();
+    await createBrief();
     await settle('someone-else', [{ id: 'x', text: 'Not yours' }]);
 
     const refs = await assistantBriefRepository.findLatestReadyDecisionRefs('owner');
@@ -178,7 +178,7 @@ describe('assistantBriefRepository.findLatestReadyDecisionRefs', () => {
   });
 
   it('is null when the owner has no ready brief', async () => {
-    await createComposingBrief();
+    await createBrief();
 
     await expect(assistantBriefRepository.findLatestReadyDecisionRefs('owner')).resolves.toBeNull();
   });
@@ -186,7 +186,7 @@ describe('assistantBriefRepository.findLatestReadyDecisionRefs', () => {
 
 describe('assistant brief reads', () => {
   it('finds the in-flight composing brief only while it is fresh', async () => {
-    const brief = await createComposingBrief();
+    const brief = await createBrief();
     const created = (await assistantBriefRepository.findById(String(brief._id)))!.createdAt;
 
     expect(String((await assistantBriefRepository.findActiveComposing('owner', created))?._id)).toBe(String(brief._id));
@@ -197,7 +197,7 @@ describe('assistant brief reads', () => {
   });
 
   it('lists and reads the latest ready brief of the owner only, and treats a malformed id as missing', async () => {
-    const first = await createComposingBrief();
+    const first = await createBrief();
     await assistantBriefRepository.markReady(String(first._id), content, NOW);
     await assistantBriefRepository.createComposing({ userId: 'someone-else', periodStart: NOW, periodEnd: NOW });
 
