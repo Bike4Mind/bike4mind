@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { orchestrateMiniPayloadSchema, type OrchestrateMiniPayload } from '@shared/orchestrateMini';
 import { OrchestratorStage } from './OrchestratorStage';
 import { toMiniPayload } from './orchestrateMini';
+import { singlePaneLayout } from './orchestratorLayout';
 import type { AgentView } from './roster';
 import { DEFAULT_SKIN_THEME } from './statePalette';
 import { agentFixture, createThemedMount, el, query, snapshotFixture, viewAgentFixture } from './testUtils';
@@ -49,8 +50,8 @@ const renderStage = (presenting: boolean) =>
     <OrchestratorStage
       agents={ROSTER}
       rootId="root"
-      view="table"
-      onViewChange={vi.fn()}
+      layout={singlePaneLayout('table')}
+      onLayoutChange={vi.fn()}
       actions={{ open: vi.fn(), stop: vi.fn(), archive: vi.fn() }}
       introPlaying={false}
       presenter={{ on: presenting, onToggle: vi.fn() }}
