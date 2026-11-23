@@ -1,12 +1,12 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { refuseExchangeKey } from '@server/auth/refuseExchangeKey';
-import { Config } from '@bike4mind/server-utils/utils/config';
 import { transformBatchRepository, usageEventRepository } from '@bike4mind/database';
 import { NotFoundError, usdToCreditsStochastic } from '@bike4mind/utils';
 import { ApiKeyScope, type ModelInfo } from '@bike4mind/common';
 import { isUnpricedTextModel } from '@bike4mind/services/llm/modelAdmission';
 import { executedModelFields } from '@bike4mind/services/llm/shadowTier';
 import { anthropicBatchCost } from '@server/billing/anthropicBatchPricing';
+import { batchAnthropicKeys, firstKeyHolding } from '@server/billing/batchAnthropicKeys';
 import { AnthropicBatchService, getAvailableModels } from '@bike4mind/llm-adapters';
 import { settleHeldCredits } from '@bike4mind/server-utils/billing/reserveRequestCredits';
 
@@ -53,13 +53,14 @@ const handler = baseApi({
     });
   }
 
-  const apiKey = Config.ANTHROPIC_API_KEY;
-  if (!apiKey || apiKey === 'not-configured') {
+  const keys = await batchAnthropicKeys();
+  if (keys.length === 0) {
     return res.status(503).json({ error: 'Anthropic API key not configured', request_id: req.requestId });
   }
 
-  const service = AnthropicBatchService.fromApiKey(apiKey, req.logger);
-  const status = await service.getBatchResults(anthropicBatchId, batch.customIdMap);
+  const { key: apiKey, value: status } = await firstKeyHolding(keys, key =>
+    AnthropicBatchService.fromApiKey(key, req.logger).getBatchResults(anthropicBatchId, batch.customIdMap)
+  );
 
   if (status.processingStatus !== 'ended') {
     return res.json({ batch_id: anthropicBatchId, status: 'in_progress', counts: status.counts });
