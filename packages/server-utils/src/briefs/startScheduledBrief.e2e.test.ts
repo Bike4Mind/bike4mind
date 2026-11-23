@@ -66,6 +66,7 @@ const makeDeps = () => {
   const publishCompose = vi.fn().mockResolvedValue(undefined);
   const deps: ScheduledBriefDeps = {
     briefs: assistantBriefRepository,
+    runs: agentExecutionRepository,
     users: userRepository,
     hasRunsSince: async (userId, since) =>
       (await agentExecutionRepository.findByUserIdPaginated(userId, { fromDate: since }, { limit: 1 })).items.length >

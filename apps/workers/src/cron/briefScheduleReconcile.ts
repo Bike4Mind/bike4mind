@@ -6,7 +6,9 @@
  * RETRY_WINDOW_MS after it fell due; uncertain event acceptance retains the row and advanced slot.
  * The brief itself rides the existing `brief.compose`
  * event; startScheduledBrief skips users whose schedule was turned off after the claim, users with brief
- * pushes off, and windows with no agent runs and no pending triaged email.
+ * pushes off, windows with no agent runs and no pending triaged email, and starts within
+ * SCHEDULED_BRIEF_MIN_GAP_MS of another brief start (`debounced`: a racing event brief covers the slot,
+ * which stays advanced).
  *
  * Schedule: rate(5 minutes). Self-host twin: apps/workers/src/selfhost/briefScheduleReconcile.ts.
  */
@@ -55,6 +57,7 @@ export async function runBriefScheduleReconcile(
     claimedElsewhere: 0,
     unscheduled: 0,
     failed: 0,
+    debounced: 0,
     enqueued: 0,
     in_flight: 0,
     no_activity: 0,
