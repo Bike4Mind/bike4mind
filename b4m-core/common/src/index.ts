@@ -48,6 +48,7 @@ export * from './integrations';
 export * from './decisions';
 export * from './soundGeneration';
 export * from './soundPricing';
+export * from './elevenLabsPlanUsage';
 export * from './musicGeneration';
 export * from './studioFeatureFlags';
 export * from './studioComposition';

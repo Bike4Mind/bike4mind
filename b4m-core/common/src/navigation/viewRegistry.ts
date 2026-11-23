@@ -327,10 +327,10 @@ export const VIEW_REGISTRY: NavigableView[] = [
     section: 'admin',
     label: 'Credit Analytics',
     description:
-      'Credits per user and adjustments, margins against provider invoices, org and API usage, and the transaction ledger',
+      'Credits per user and adjustments, margins against provider invoices, org and API usage, ElevenLabs plan usage, and the transaction ledger',
     navigationType: 'tab',
     target: '15', // AdminTab.CreditAnalytics
-    keywords: ['credits', 'billing', 'usage', 'add credits', 'balance', 'cost'],
+    keywords: ['credits', 'billing', 'usage', 'add credits', 'balance', 'cost', 'elevenlabs', 'vendor plan'],
     requiresAdmin: true,
   },
   {
