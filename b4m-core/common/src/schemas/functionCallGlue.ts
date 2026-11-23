@@ -36,9 +36,9 @@ import traceback
 from io import StringIO
 
 _MAX_OUTPUT_CHARS = 100000
-_MAX_CONTRACT_BYTES = 32768
+_MAX_CONTRACT_BYTES = ${FUNCTION_CONTRACT_LIMITS.maxContractBytes}
 _MAX_RESULT_BYTES = ${maxResultBytes}
-_MAX_PROBLEMS = 50
+_MAX_PROBLEMS = ${FUNCTION_CONTRACT_LIMITS.maxProblems}
 
 class _FunctionCallError(Exception):
     pass
@@ -93,7 +93,7 @@ def _b4m_call_function(code, params_json):
         except (TypeError, ValueError) as e:
             raise _FunctionCallError('FUNCTION is not valid JSON: ' + str(e))
         if len(contract_text) > _MAX_CONTRACT_BYTES:
-            raise _FunctionCallError('The function contract is larger than 32 KB.')
+            raise _FunctionCallError('The function contract is larger than ${sizeLabel(FUNCTION_CONTRACT_LIMITS.maxContractBytes)}.')
         contract_json = contract_text
         if params_json is not None:
             run = namespace.get('run')

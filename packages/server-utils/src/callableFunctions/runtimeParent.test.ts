@@ -137,7 +137,9 @@ describe('runCallableFunctionInChild', () => {
       pyodideVersion: string;
       glueBytes: number;
     };
-    expect(report.env).toEqual({});
+    // macOS adds __CF_USER_TEXT_ENCODING to every process it starts, whatever env the parent passes.
+    const { __CF_USER_TEXT_ENCODING: _osAdded, ...childEnv } = report.env;
+    expect(childEnv).toEqual({});
     expect(report.execArgv).toEqual(
       expect.arrayContaining(['--permission', '--disallow-code-generation-from-strings', `--allow-fs-read=${CHILD}`])
     );
