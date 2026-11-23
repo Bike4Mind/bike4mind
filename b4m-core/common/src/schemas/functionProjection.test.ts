@@ -145,6 +145,22 @@ describe('projectFunctionSchema', () => {
     );
   });
 
+  it('keeps one [] per array level in an output path', () => {
+    const grid = parsed({
+      name: 'grid',
+      description: 'Grid',
+      inputs: { type: 'object', additionalProperties: false, properties: {} },
+      outputs: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          matrix: { type: 'array', items: { type: 'array', items: { type: 'number', unit: 'm' } } },
+        },
+      },
+    });
+    expect(projectFunctionSchema(grid, 'llm').description).toBe('Grid\nOutputs: matrix[] (m).');
+  });
+
   it('renders an integer range as the whole numbers it allows', () => {
     const whole = parsed({
       name: 'pick',

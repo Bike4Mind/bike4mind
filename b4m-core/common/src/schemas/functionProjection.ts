@@ -142,7 +142,10 @@ function projectLlmField(field: FunctionField): FunctionLlmSchema {
 function leaves(field: FunctionField, path: string): string[] {
   if (field.type === 'number' || field.type === 'integer')
     return [field.unit === undefined ? path : `${path} (${field.unit})`];
-  if (field.type === 'array') return leaves(field.items, field.items.type === 'object' ? `${path}[]` : path);
+  if (field.type === 'array') {
+    const nested = field.items.type === 'object' || field.items.type === 'array';
+    return leaves(field.items, nested ? `${path}[]` : path);
+  }
   if (field.type === 'object') {
     const children = Object.entries(field.properties);
     return children.length === 0 ? [path] : children.flatMap(([name, child]) => leaves(child, `${path}.${name}`));
