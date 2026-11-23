@@ -441,8 +441,8 @@ export function Composer({
 
   // A `/path` or an `@decorator` in code is code, not a request for a skill or a session.
   const code = useMemo(() => codeRanges(text), [text]);
-  const inCode = caretInCode(text, caret, code);
   const inBlock = caretInFencedBlock(text, caret);
+  const inCode = caretInCode(text, caret, code, inBlock);
   const token = (skills || onRunCommand) && !disabled && !inCode ? skillQuery(text, caret) : null;
   const query = token?.query ?? null;
   const offerCommands = !!onRunCommand && !!token?.wholeDraft;

@@ -156,8 +156,13 @@ function closedAfter(text: string, from: number, ticks: number): boolean {
  * span. The `/` and `@` menus stay shut there, since a path or a decorator in code is not a
  * request for a skill or a session.
  */
-export function caretInCode(text: string, caret: number, ranges: CodeRange[] = codeRanges(text)): boolean {
-  if (caretInFencedBlock(text, caret)) return true;
+export function caretInCode(
+  text: string,
+  caret: number,
+  ranges: CodeRange[] = codeRanges(text),
+  inBlock: boolean = caretInFencedBlock(text, caret),
+): boolean {
+  if (inBlock) return true;
   return ranges.some(range => range.kind === 'inline' && range.start < caret && caret < range.end);
 }
 
