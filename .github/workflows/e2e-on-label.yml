@@ -13,7 +13,7 @@ jobs:
     # (label is maintainer-added). No AWS credentials here: the dev role's OIDC trust
     # rejects the pull_request subject, and preview runs never `sst shell` anyway.
     if: github.event.label.name == 'run-e2e' && github.event.pull_request.head.repo.full_name == github.repository
-    runs-on: ${{ vars.RUNNER_LABEL_MEDIUM || 'ubuntu-latest-m' }}
+    runs-on: ${{ vars.RUNNER_LABEL_STATIC || vars.RUNNER_LABEL_MEDIUM || 'ubuntu-latest-m' }}
     name: E2E Tests
     timeout-minutes: 20
     continue-on-error: true
