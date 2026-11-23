@@ -37,8 +37,8 @@ vi.mock('react-i18next', () => ({
     t: (key: string, opts?: { credits?: string }) => opts?.credits ?? key,
     i18n: { language: 'en-US' },
   }),
-  Trans: ({ i18nKey, values }: { i18nKey: string; values?: { credits?: string } }) =>
-    `${i18nKey} ${values?.credits ?? ''}`,
+  Trans: ({ i18nKey, values, count }: { i18nKey: string; values?: { credits?: string }; count?: number }) =>
+    count === undefined ? `${i18nKey} ${values?.credits ?? ''}` : `${i18nKey} ${count} ${values?.credits ?? ''}`,
 }));
 vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
 
@@ -134,6 +134,7 @@ it('shows the inviter summary once the program is on', () => {
       creditsEarned: 7000,
       recentRewards: [],
       rewards: { firstAnswer: 1000, firstPayment: 0, secondPayment: 2500 },
+      milestones: [],
     },
   });
   useReferralModal.setState({ isOpen: true });
@@ -156,6 +157,7 @@ it("shows the inviter's non-zero rewards and no invitee credit amount", () => {
       creditsEarned: 0,
       recentRewards: [],
       rewards: { firstAnswer: 1000, firstPayment: 0, secondPayment: 2500 },
+      milestones: [],
     },
   });
   useReferralModal.setState({ isOpen: true });
@@ -194,7 +196,7 @@ it('hides the inviter summary while the program is off', () => {
 
 it('skips the reward lines when a cached summary predates the rewards field', () => {
   useGetReferralSummary.mockReturnValue({
-    data: { enabled: true, invited: 0, active: 0, subscribed: 0, creditsEarned: 0, recentRewards: [] },
+    data: { enabled: true, invited: 0, active: 0, subscribed: 0, creditsEarned: 0, recentRewards: [], milestones: [] },
   });
   useReferralModal.setState({ isOpen: true });
   const queryClient = renderModal();
@@ -236,5 +238,50 @@ it('leaves the share link out when it cannot be loaded', () => {
   expect(useGetReferralLink).toHaveBeenLastCalledWith({ enabled: true });
   expect(screen.queryByTestId('referral-link')).toBeNull();
   expect(screen.getByTestId('referral-email-input')).toBeInTheDocument();
+  queryClient.clear();
+});
+
+const milestoneSummary = (active: number) => ({
+  data: {
+    enabled: true,
+    invited: 9,
+    active,
+    subscribed: 0,
+    creditsEarned: 0,
+    recentRewards: [],
+    rewards: { firstAnswer: 0, firstPayment: 0, secondPayment: 0 },
+    milestones: [
+      { friends: 5, credits: 500, reached: active >= 5 },
+      { friends: 10, credits: 1500, reached: active >= 10 },
+    ],
+  },
+});
+
+it('shows how far the inviter is from the next milestone and marks the ones reached', () => {
+  useGetReferralSummary.mockReturnValue(milestoneSummary(7));
+  useReferralModal.setState({ isOpen: true });
+  const queryClient = renderModal();
+  expect(screen.getByTestId('referral-modal-milestone-next')).toHaveTextContent('referral.milestone_next 3 1,500');
+  expect(screen.getByTestId('referral-modal-milestone-5')).toHaveAttribute('data-reached', 'true');
+  expect(screen.getByTestId('referral-modal-milestone-10')).toHaveAttribute('data-reached', 'false');
+  queryClient.clear();
+});
+
+it('says every milestone is reached once the last one is', () => {
+  useGetReferralSummary.mockReturnValue(milestoneSummary(12));
+  useReferralModal.setState({ isOpen: true });
+  const queryClient = renderModal();
+  expect(screen.getByTestId('referral-modal-milestone-next')).toHaveTextContent('referral.milestone_all_reached');
+  queryClient.clear();
+});
+
+it('leaves the milestone section out while none are set', () => {
+  useGetReferralSummary.mockReturnValue({
+    ...milestoneSummary(0),
+    data: { ...milestoneSummary(0).data, milestones: [] },
+  });
+  useReferralModal.setState({ isOpen: true });
+  const queryClient = renderModal();
+  expect(screen.queryByTestId('referral-modal-milestones')).toBeNull();
   queryClient.clear();
 });

@@ -65,6 +65,7 @@ compute per-run and per-day USD caps) and settings that only toggle a feature.
 | `preferenceArenaLifetimeCreditCap` | Growth and Pricing > Preference arena | The same arena vote judge. Default 0 earns nothing. | no. A limit. | Usage limits |
 | `ReferralFirstPaymentCredits` | Invite Center > Rewards | The reward held for the inviter on the invited friend's first full-price Professional payment (`packages/server-utils/src/referrals/subscriptionReward.ts`), locked when the payment is recorded. Payments made while both payment rewards are 0 are not counted, so after activation the next eligible payment takes the first step. Default 0 (off). | no. A free grant. | Signup and starter credits |
 | `ReferralSecondPaymentCredits` | Invite Center > Rewards | The reward held for the inviter on the invited friend's second full-price Professional payment (`packages/server-utils/src/referrals/subscriptionReward.ts`), locked when the payment is recorded. Payments made while both payment rewards are 0 are not counted, so after activation the next eligible payment takes the first step. Default 0 (off). | no. A free grant. | Signup and starter credits |
+| `ReferralMilestones` | Invite Center > Rewards | Credits an inviter earns once that many of their referred friends are active (a verified email and a first answer), as `friends:credits` pairs, e.g. `5:500, 10:1500`. Parsed by `parseReferralMilestones` (`b4m-core/common/src/utils/referralMilestones.ts`), paid once per milestone by `packages/server-utils/src/referrals/milestoneReward.ts` when a friend becomes active, and shown as progress in the referral modal (`apps/client/server/referrals/inviterSummary.ts`). Default empty (off). | no. A free grant. | Signup and starter credits |
 | `ReferralHoldDays` | Invite Center > Rewards | Days a payment reward is held before the release job credits it (`packages/server-utils/src/referrals/subscriptionReward.ts`, `apps/workers/src/cron/referralRewardRelease.ts`). | no. A hold period. | Signup and starter credits |
 | `ReferralInvitesPerUser` | Invite Center > Rewards | The starting invite count at registration (`register.ts`). New signups only. | no. A limit. | Usage limits |
 | `ReferralLinkSignupsPerMonth` | Invite Center > Rewards | The most signups one user's share link is credited with in any 30 days (`apps/client/server/referrals/shareLink.ts`). A signup past it still creates the account but credits nobody. 0 stops share links from crediting anyone. Default 10. | no. A limit. | Usage limits |
@@ -173,6 +174,15 @@ files (`AdminGrowthPricingTab.tsx`, `AdminSettingsTab.tsx`, `settingHomes.ts`) a
 - `apps/client/app/components/admin/settingHomes.ts`
 - `apps/client/server/referrals/inviterSummary.ts`
 - `packages/server-utils/src/referrals/subscriptionReward.ts`
+
+</details>
+
+<details><summary><code>ReferralMilestones</code> (4 files)</summary>
+
+- `apps/client/app/components/admin/AdminGrowthPricingTab.tsx`
+- `apps/client/app/components/admin/settingHomes.ts`
+- `apps/client/server/referrals/inviterSummary.ts`
+- `packages/server-utils/src/referrals/firstAnswerReward.ts`
 
 </details>
 
