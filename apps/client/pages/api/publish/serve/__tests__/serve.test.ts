@@ -12,6 +12,7 @@ const {
   mockStarterCredits,
   mockGetSignedUrl,
   mockBrowserSigningOrigin,
+  mockQualifies,
   signing,
 } = vi.hoisted(() => ({
   mockArtifactFindOne: vi.fn(),
@@ -24,6 +25,7 @@ const {
   mockStarterCredits: vi.fn(() => Promise.resolve(0)),
   mockGetSignedUrl: vi.fn(),
   mockBrowserSigningOrigin: vi.fn(),
+  mockQualifies: vi.fn(() => Promise.resolve(true)),
   // Signing is off unless a suite turns it on, so the buffered path stays the default here.
   signing: { enabled: false },
 }));
@@ -57,6 +59,10 @@ vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({
 
 vi.mock('@server/utils/starterCredits', () => ({
   getOpenSignupStarterCredits: () => mockStarterCredits(),
+}));
+
+vi.mock('@server/services/gears/socialParty', () => ({
+  hasQualifyingSocialParty: (...a: unknown[]) => mockQualifies(...a),
 }));
 
 vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
@@ -184,6 +190,7 @@ beforeEach(() => {
   mockUpdateOne.mockReset().mockResolvedValue(undefined);
   // Every artifact's owner exists by default; the owner-check tests override this per id.
   mockUserFindById.mockReset().mockResolvedValue({});
+  mockQualifies.mockReset().mockResolvedValue(true);
 });
 
 describe('GET /api/publish/serve - owner check', () => {
@@ -2236,7 +2243,20 @@ describe('GET /api/publish/serve - external view counting (Published gear feed)'
     mockArtifactFindOne.mockReturnValue(renderedReply());
     const { promise } = run(['r', 'pub1'], { user: { id: 'someone-else' } });
     await promise;
-    expect(mockUpdateOne).toHaveBeenCalledWith({ publicId: 'pub1' }, { $inc: { viewCount: 1, externalViewCount: 1 } });
+    await vi.waitFor(() =>
+      expect(mockUpdateOne).toHaveBeenCalledWith({ publicId: 'pub1' }, { $inc: { viewCount: 1, externalViewCount: 1 } })
+    );
+    expect(mockQualifies).toHaveBeenCalledWith('owner1', ['someone-else']);
+  });
+
+  it('a signed-in viewer that is not a qualifying distinct account counts only as a view', async () => {
+    mockArtifactFindOne.mockReturnValue(renderedReply());
+    mockQualifies.mockResolvedValue(false);
+    const { promise } = run(['r', 'pub1'], { user: { id: 'alt' } });
+    await promise;
+    await vi.waitFor(() =>
+      expect(mockUpdateOne).toHaveBeenCalledWith({ publicId: 'pub1' }, { $inc: { viewCount: 1 } })
+    );
   });
 
   it('records reward evidence for an admitted verified non-owner', async () => {

@@ -17,6 +17,7 @@ const { mocks } = vi.hoisted(() => ({
     checkVisibility: vi.fn(),
     checkShareGrant: vi.fn(),
     hasGateProof: vi.fn(() => false),
+    qualifies: vi.fn(() => Promise.resolve(true)),
   },
 }));
 
@@ -65,6 +66,10 @@ vi.mock('@bike4mind/server-utils/services/publish/publishGateToken', () => ({
   requestHasGateProof: (...a: unknown[]) => mocks.hasGateProof(...a),
 }));
 
+vi.mock('@server/services/gears/socialParty', () => ({
+  hasQualifyingSocialParty: (...a: unknown[]) => mocks.qualifies(...a),
+}));
+
 import handler from '../view';
 
 type Principal = { id: string; mfaPending?: boolean; oauthGrant?: { scopes: string[]; clientId: string } } | undefined;
@@ -93,6 +98,7 @@ beforeEach(() => {
   mocks.hasGateProof.mockReturnValue(false);
   mocks.checkVisibility.mockResolvedValue({ ok: true });
   mocks.checkShareGrant.mockResolvedValue({ ok: true });
+  mocks.qualifies.mockResolvedValue(true);
 });
 
 describe('POST /api/publish/view - whose view counts', () => {
@@ -103,6 +109,7 @@ describe('POST /api/publish/view - whose view counts', () => {
     await promise;
 
     expect(res._getStatusCode()).toBe(204);
+    expect(mocks.qualifies).toHaveBeenCalledWith('owner1', ['friend']);
     expect(mocks.updateOne).toHaveBeenCalledWith({ publicId: 'pub1' }, { $inc: { externalViewCount: 1 } });
   });
 
@@ -126,6 +133,17 @@ describe('POST /api/publish/view - whose view counts', () => {
     await promise;
     expect(mocks.updateOne).toHaveBeenCalledTimes(1);
     expect(mocks.updateOne).toHaveBeenCalledWith({ publicId: 'pub1' }, { $inc: { externalViewCount: 1 } });
+  });
+
+  it('does not count a signed-in viewer that is not a qualifying distinct account', async () => {
+    published();
+    mocks.qualifies.mockResolvedValue(false);
+
+    const { res, promise } = run({ path: '/p/u/scope/slug' }, { id: 'alt' });
+    await promise;
+
+    expect(res._getStatusCode()).toBe(204);
+    expect(mocks.updateOne).not.toHaveBeenCalled();
   });
 
   it('does not count the owner opening their own page', async () => {

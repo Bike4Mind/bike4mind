@@ -77,6 +77,7 @@ import {
   stripSignupGateHtml,
 } from '@client/app/utils/shareFooter';
 import { getOpenSignupStarterCredits } from '@server/utils/starterCredits';
+import { hasQualifyingSocialParty } from '@server/services/gears/socialParty';
 // Use require for all Prism imports so ESM/CJS interop can't split the singleton:
 // language component files call require('../prism-core') and must get the exact same
 // object reference that our highlight calls use.
@@ -1672,9 +1673,8 @@ function bumpViewCount(
   const isAuthed = !!viewer?.id;
   const isOwner = isAuthed && String(viewer!.id) === String(artifact.ownerId);
   const isCrawler = !!userAgent && CRAWLER_UA_RE.test(userAgent);
-  const countsAsExternal = isAuthed && !isOwner && !isCrawler;
-  if (countsAsExternal) void recordVerifiedView(artifact, String(viewer!.id)).catch(() => undefined);
-  const inc = countsAsExternal ? { viewCount: 1, externalViewCount: 1 } : { viewCount: 1 };
+  const signedInOther = isAuthed && !isOwner && !isCrawler;
+  if (signedInOther) void recordVerifiedView(artifact, String(viewer!.id)).catch(() => undefined);
   // The per-link counter needs its own definition, NOT externalViewCount's: a share link exists
   // so the viewer does NOT sign in, so requiring authentication would leave it at zero forever.
   // Anonymous-inclusive and crawler-excluded; owner-excluded only when the owner is
@@ -1683,8 +1683,11 @@ function bumpViewCount(
   // for externalViewCount, where it was a credit-reward bypass): a per-link count is a
   // vanity/diagnostic number that grants nothing.
   const countsAsShareView = !!shareTokenEntryId && !isOwner && !isCrawler;
-  void (
-    countsAsShareView
+  void (async () => {
+    const countsAsExternal =
+      signedInOther && (await hasQualifyingSocialParty(String(artifact.ownerId), [String(viewer!.id)]));
+    const inc = countsAsExternal ? { viewCount: 1, externalViewCount: 1 } : { viewCount: 1 };
+    await (countsAsShareView
       ? PublishedArtifact.updateOne(
           { publicId: artifact.publicId },
           {
@@ -1693,8 +1696,8 @@ function bumpViewCount(
           },
           { arrayFilters: [{ 'entry._id': shareTokenEntryId }] }
         )
-      : PublishedArtifact.updateOne({ publicId: artifact.publicId }, { $inc: inc })
-  ).catch(() => undefined);
+      : PublishedArtifact.updateOne({ publicId: artifact.publicId }, { $inc: inc }));
+  })().catch(() => undefined);
   // Audit non-owner authenticated gate views only: the point is who OTHER than the
   // owner reached a gated artifact, and the owner bypasses their own gate anyway.
   if (gateView && viewer?.id && !isOwner) {
