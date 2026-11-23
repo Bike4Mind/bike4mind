@@ -2058,7 +2058,8 @@ export function deletesFiles(tokens: readonly string[], depth = 0): boolean {
     const values = args.map(wordValue);
     const git = gitSubcommand(values, '.');
     if (git?.unread) return values.includes('clean');
-    return git?.sub === 'clean' && !git.rest.some(arg => /^(-[A-Za-z]*n[A-Za-z]*|--dry-run)$/.test(arg));
+    // `-e` takes the rest of its word, so an `n` after it is part of the pattern, not `-n`.
+    return git?.sub === 'clean' && !git.rest.some(arg => /^(-[A-Za-df-z]*n|--dry-run$)/.test(arg));
   }
   if (name === 'eval' || name === 'parallel') return textDeletes(args, depth);
   if (XARGS_SHELLS.has(name)) {
