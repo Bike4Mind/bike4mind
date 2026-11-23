@@ -7,6 +7,7 @@ import { MongoDeepAgentStore } from '@bike4mind/server-utils/deepAgent/store';
 import { createLlmReviewStep, runReviewWake } from '@bike4mind/server-utils/deepAgent/reviewWake';
 import { bridgeReviewToSession } from '@bike4mind/server-utils/deepAgent/missionSessionBridge';
 import { DEFAULT_WAKE_MODEL_ID, resolveDeepAgentBackend } from '@bike4mind/server-utils/deepAgent/resolveBackend';
+import { userAiAccessDenial } from '@bike4mind/server-utils/deepAgent/wakeMetering';
 
 /**
  * POST /api/deep-agent/review  (admin/dev only)
@@ -50,6 +51,8 @@ const handler = baseApi({ auth: 'jwtOnly' })
       if (charter.identity.ownerUserId !== userId && !req.user?.isAdmin) {
         return res.status(403).json({ error: 'not your agent' });
       }
+      const denial = await userAiAccessDenial(charter.identity.ownerUserId);
+      if (denial) return res.status(403).json({ error: denial });
 
       const resolved = await resolveDeepAgentBackend(modelId ?? DEFAULT_WAKE_MODEL_ID, logger);
       if (!resolved) return res.status(500).json({ error: 'could not resolve reviewer model' });

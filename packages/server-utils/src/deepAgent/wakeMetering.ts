@@ -45,7 +45,10 @@ export class MissionModelRefusedError extends ForbiddenError {}
 /** Largest max_tokens any single wake LLM call requests (see llmSteps). */
 const WAKE_MAX_OUTPUT_TOKENS = 8000;
 
-/** Bills each wake LLM call to the mission owner (their org seat when present). */
+/**
+ * Bills each wake LLM call to the mission owner (their org seat when present). Standing is re-read before
+ * every call, so a restriction mid-wake refuses the rest of the wake's calls.
+ */
 export async function missionWakeMeter(
   store: DeepAgentStore,
   agentId: string,
@@ -57,6 +60,8 @@ export async function missionWakeMeter(
   if (!owner) throw new Error(`deep agent wake: owner ${charter.identity.ownerUserId} not found`);
   const meter = createCompletionMeter(owner, logger, 'mission wake');
   return async (...args) => {
+    const denial = await userAiAccessDenial(owner.id);
+    if (denial) throw new ForbiddenError(denial);
     try {
       return await meter(...args);
     } catch (err) {

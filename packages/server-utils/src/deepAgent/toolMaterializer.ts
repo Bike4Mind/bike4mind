@@ -79,7 +79,7 @@ function estimateMediaUsd(toolName: string, data: unknown, ctx: MediaBillingCont
 }
 
 /** Refuses a restricted owner with the AI-access 403; reloaded per call since standing can change mid-mission. */
-async function assertMediaOwnerStanding(ownerUserId: string): Promise<void> {
+async function assertOwnerStanding(ownerUserId: string): Promise<void> {
   const owner = (await userRepository.findById(ownerUserId)) as IUserDocument | null;
   if (!owner) throw new ForbiddenError(`deep agent tools: owner user ${ownerUserId} not found`);
   const denial = aiAccessDeniedMessage(owner);
@@ -112,18 +112,19 @@ async function gateMediaToolStart(toolName: string, data: unknown, ctx: MediaBil
 }
 
 /**
- * Runs the media tools one call at a time behind the owner-standing check. The check sits on the tool itself
- * because image_generation without a preset model returns its picker prompt before onToolStart; one at a time
- * so each credit gate reads the balance after the previous call has settled.
+ * Runs every tool behind the owner-standing check, so a restriction mid-wake refuses the remaining calls. The
+ * check sits on the tool itself because image_generation without a preset model returns its picker prompt
+ * before onToolStart. Media tools also run one at a time so each credit gate reads the balance after the
+ * previous call has settled.
  */
-function gateMediaTools(tools: ICompletionOptionTools[], ownerUserId: string): ICompletionOptionTools[] {
+function gateOwnerTools(tools: ICompletionOptionTools[], ownerUserId: string): ICompletionOptionTools[] {
   let tail: Promise<unknown> = Promise.resolve();
   return tools.map(tool => {
-    if (!MEDIA_TOOLS.has(tool.toolSchema.name)) return tool;
     const run = async (parameters?: unknown, apiKey?: string) => {
-      await assertMediaOwnerStanding(ownerUserId);
+      await assertOwnerStanding(ownerUserId);
       return tool.toolFn(parameters, apiKey);
     };
+    if (!MEDIA_TOOLS.has(tool.toolSchema.name)) return { ...tool, toolFn: run };
     return {
       ...tool,
       toolFn: (parameters?: unknown, apiKey?: string) => {
@@ -288,6 +289,6 @@ export function createDeepAgentToolMaterializer(config: DeepAgentToolMaterialize
         toolAvailability,
         orgToolPolicy,
       }) ?? [];
-    return gateMediaTools(applyOrgToolPolicy(tools, orgToolPolicy).tools, ownerUserId);
+    return gateOwnerTools(applyOrgToolPolicy(tools, orgToolPolicy).tools, ownerUserId);
   };
 }

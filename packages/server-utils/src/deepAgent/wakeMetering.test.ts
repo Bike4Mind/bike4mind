@@ -1,13 +1,23 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { DeepAgentStore } from '@bike4mind/agents';
 import { ForbiddenError, spendFrozenError, type ModelInfo } from '@bike4mind/common';
-import { AI_ACCESS_PENDING_REVIEW_MESSAGE } from '@bike4mind/services/userService/accountState';
+import {
+  AI_ACCESS_PENDING_REVIEW_MESSAGE,
+  AI_ACCESS_REVOKED_MESSAGE,
+  isAiAccessRefusal,
+} from '@bike4mind/services/userService/accountState';
 import { Logger } from '@bike4mind/observability';
 
-const state = vi.hoisted(() => ({ disabled: false, restricted: false, failure: undefined as Error | undefined }));
+const state = vi.hoisted(() => ({
+  disabled: false,
+  restricted: false,
+  ownerModerated: false,
+  meterCalls: 0,
+  failure: undefined as Error | undefined,
+}));
 vi.mock('@bike4mind/database', () => ({
   organizationRepository: {},
-  userRepository: { findById: async () => ({ id: 'owner', tags: [] }) },
+  userRepository: { findById: async () => ({ id: 'owner', tags: [], isModerated: state.ownerModerated }) },
 }));
 vi.mock('../billing/meterPlatformCompletion', async () => {
   const { createModelAdmission } = await import('@bike4mind/services/llm/modelAdmission');
@@ -16,6 +26,7 @@ vi.mock('../billing/meterPlatformCompletion', async () => {
     completionCeilingUsd: vi.fn(),
     isCreditsEnforced: vi.fn(),
     createCompletionMeter: () => async (model: ModelInfo) => {
+      state.meterCalls += 1;
       if (state.failure) throw state.failure;
       const admission = createModelAdmission({
         user: { tags: [] },
@@ -38,7 +49,25 @@ const model = { id: 'mission-model' } as unknown as ModelInfo;
 beforeEach(() => {
   state.disabled = false;
   state.restricted = false;
+  state.ownerModerated = false;
+  state.meterCalls = 0;
   state.failure = undefined;
+});
+
+describe('missionWakeMeter owner standing', () => {
+  it('refuses every call after the owner is restricted mid-wake, before any reservation', async () => {
+    const meter = await missionWakeMeter(store, 'mission', new Logger());
+    await expect(meter(model, [], 100)).resolves.toBeDefined();
+    expect(state.meterCalls).toBe(1);
+
+    state.ownerModerated = true;
+    const refusal = await meter(model, [], 100).catch((err: unknown) => err);
+
+    expect(isAiAccessRefusal(refusal)).toBe(true);
+    expect((refusal as Error).message).toBe(AI_ACCESS_REVOKED_MESSAGE);
+    await expect(meter(model, [], 100)).rejects.toThrow(AI_ACCESS_REVOKED_MESSAGE);
+    expect(state.meterCalls).toBe(1);
+  });
 });
 
 describe('missionWakeMeter admission refusals', () => {

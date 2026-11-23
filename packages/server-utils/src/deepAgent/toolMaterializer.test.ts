@@ -104,8 +104,14 @@ vi.mock('@bike4mind/services', async importOriginal => {
 });
 
 const { createDeepAgentToolMaterializer } = await import('./toolMaterializer');
-const { organizationRepository, questRepository, sessionRepository, spendFreezeRepository, userRepository } =
-  await import('@bike4mind/database');
+const {
+  adminSettingsRepository,
+  organizationRepository,
+  questRepository,
+  sessionRepository,
+  spendFreezeRepository,
+  userRepository,
+} = await import('@bike4mind/database');
 
 // A minimal backend stand-in; never invoked by the paths under test.
 const fakeLlm = { complete: vi.fn() } as unknown as ICompletionBackend;
@@ -239,6 +245,18 @@ describe('createDeepAgentToolMaterializer', () => {
     const reply = await save?.toolFn({ content: 'hello', fileName: 'note.md', dataLakeId: 'lake-1' });
     expect(reply).not.toMatch(/not available on this surface/);
     expect(reply).toMatch(/Data lakes are not enabled/);
+  });
+
+  it('refuses a non-media tool call once the owner is restricted', async () => {
+    const tools = await materialize()(['save_content_to_data_lake'], 'owner-1');
+    const save = tools.find(t => t.toolSchema.name === 'save_content_to_data_lake');
+    vi.mocked(adminSettingsRepository.getSettingsValue).mockClear();
+    vi.mocked(userRepository.findById).mockResolvedValueOnce({ id: 'owner-1', isModerated: true } as never);
+
+    await expect(save?.toolFn({ content: 'hello', fileName: 'note.md', dataLakeId: 'lake-1' })).rejects.toMatchObject({
+      statusCode: 403,
+    });
+    expect(adminSettingsRepository.getSettingsValue).not.toHaveBeenCalled();
   });
 });
 
