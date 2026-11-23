@@ -17,7 +17,11 @@ import { unpublishUserArtifactsBySource } from '@bike4mind/server-utils/services
 import { baseApi } from '@server/middlewares/baseApi';
 import { adjustOwnerStorageInSession } from '@bike4mind/server-utils/s3/storageCharge';
 import { getFilesStorage } from '@bike4mind/server-utils/utils/storage/index';
-import { fileContentUrl } from '@bike4mind/server-utils/files/browserFileSigner';
+import {
+  fileContentUrl,
+  signFabFileGet,
+  type FabFileSignOptions,
+} from '@bike4mind/server-utils/files/browserFileSigner';
 import { getGeneratedCopyStore } from '@bike4mind/server-utils/files/generatedCopyStore';
 import { createCdnInvalidationBatch } from '@bike4mind/server-utils/services/cdn/invalidateRouterCdn';
 import {
@@ -47,13 +51,9 @@ const handler = baseApi({ requiredScopes: FILES_READ_OR_WRITE_SCOPES })
         adminSettings: adminSettingsRepository,
       },
       storage: {
-        generateSignedUrl: async (path: string, expireInSeconds: number, options?: { signingDate?: Date }) => {
+        generateSignedUrl: async (path: string, expireInSeconds: number, options?: FabFileSignOptions) => {
           try {
-            return await getFilesStorage().getSignedUrl(path, 'get', {
-              expiresIn: expireInSeconds,
-              signingDate: options?.signingDate,
-              audience: 'browser',
-            });
+            return await signFabFileGet(path, expireInSeconds, options);
           } catch (e) {
             req.logger.error('Error generating signed URL for file', {
               error: e,

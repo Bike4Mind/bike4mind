@@ -44,6 +44,34 @@ final class APIClientTests: XCTestCase {
 
   // MARK: - 401 handling
 
+  func testDirectSessionUsesOneVersionedRequest() async throws {
+    let body = """
+      {"id":"old-session","name":"Old session","userId":"owner",
+       "firstCreated":"2026-10-02T08:00:00Z","lastUpdated":"2026-10-02T08:00:00Z"}
+      """
+    let (client, transport) = makeClient(tokens: FakeTokens()) { _ in Self.ok(body) }
+    let session = try await client.session(id: "old-session")
+    XCTAssertEqual(session.name, "Old session")
+    let requests = await transport.requests
+    XCTAssertEqual(requests.count, 1)
+    XCTAssertEqual(requests.first?.url?.path(), "/api/v1/sessions/old-session")
+    XCTAssertEqual(requests.first?.httpMethod, "GET")
+  }
+
+  func testDirectSessionMapsAccessAndMissingErrors() async {
+    for (status, expected) in [(403, APIError.forbidden), (404, APIError.notFound)] {
+      let (client, _) = makeClient(tokens: FakeTokens()) { _ in
+        (status, Data(APIFixtures.errorBody.utf8))
+      }
+      do {
+        _ = try await client.session(id: "missing")
+        XCTFail("expected an error")
+      } catch {
+        XCTAssertEqual(error as? APIError, expected)
+      }
+    }
+  }
+
   func testA401IsRetriedOnceWithAFreshToken() async throws {
     let tokens = FakeTokens([.success("stale"), .success("fresh")])
     let (client, transport) = makeClient(tokens: tokens) { request in

@@ -38,6 +38,8 @@ export interface FeedbackFilters {
   searchTerm: string;
   statusFilters: Record<FeedbackStatus, boolean>;
   selectedOrganizations: string[];
+  /** One reporter's user id; undefined is every reporter. */
+  userId?: string;
   /** Undefined is every subject: the server reads an absent `subject` as no filter at all. */
   subject?: FeedbackSubject;
   resolution?: FeedbackResolution;
@@ -118,6 +120,7 @@ export interface UseFeedbackFiltersReturn {
   setSearchTerm: (term: string) => void;
   setStatusFilters: React.Dispatch<React.SetStateAction<Record<FeedbackStatus, boolean>>>;
   setSelectedOrganizations: (orgs: string[]) => void;
+  setUserId: (userId: string | undefined) => void;
   /** Undefined clears the filter back to every subject. */
   setSubject: (subject: FeedbackSubject | undefined) => void;
   setResolution: (resolution: FeedbackResolution | undefined) => void;
@@ -130,7 +133,7 @@ export interface UseFeedbackFiltersReturn {
   /** Undefined clears the filter back to reports with or without a comment. */
   setComment: (comment: FeedbackCommentFilter | undefined) => void;
   /** Replaces every filter with the defaults plus `view`, and clears the search box. */
-  showOnly: (view: Partial<Pick<FeedbackView, 'statusFilters' | 'types' | 'received'>>) => void;
+  showOnly: (view: Partial<Pick<FeedbackView, 'statusFilters' | 'types' | 'received' | 'userId'>>) => void;
   toggleSortDirection: () => void;
   /** Debounced, server-ready filter query. Feeds both the list and the CSV export. */
   filterParams: FeedbackListFilterParams;

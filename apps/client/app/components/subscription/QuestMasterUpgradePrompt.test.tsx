@@ -34,6 +34,9 @@ describe('QuestMasterUpgradePrompt', () => {
     expect(screen.getByTestId('questmaster-upgrade-prompt')).toHaveTextContent(
       'Questmaster is included with every paid plan'
     );
+    expect(screen.getByTestId('questmaster-upgrade-prompt')).toHaveTextContent('requires an active subscription');
+    expect(screen.getByTestId('questmaster-upgrade-prompt')).toHaveTextContent('read and export existing quests');
+    expect(screen.getByTestId('questmaster-upgrade-prompt')).not.toHaveTextContent('You have used your free');
     fireEvent.click(screen.getByTestId('questmaster-upgrade-plans-btn'));
     expect(onUpgrade).toHaveBeenCalledOnce();
     expect(screen.queryByTestId('questmaster-upgrade-prompt')).not.toBeInTheDocument();
@@ -57,6 +60,10 @@ describe('QuestMasterUpgradePrompt', () => {
     expect(screen.getByTestId('questmaster-upgrade-prompt')).toBeInTheDocument();
     expect(screen.queryByTestId('questmaster-upgrade-plans-btn')).not.toBeInTheDocument();
     expect(screen.getByTestId('questmaster-upgrade-prompt')).toHaveTextContent('Ask your administrator');
+    expect(screen.getByTestId('questmaster-upgrade-prompt')).toHaveTextContent(
+      'Questmaster is included with every paid plan'
+    );
+    expect(screen.getByTestId('questmaster-upgrade-prompt')).toHaveTextContent('read and export existing quests');
     expect(screen.getByTestId('questmaster-upgrade-disable-btn')).toBeInTheDocument();
   });
 

@@ -62,8 +62,20 @@ describe('refreshAgentAvatarUrls access gate', () => {
     expect(h.getSignedUrl).toHaveBeenCalledWith('abc.png', 'get', {
       expiresIn: 3600,
       signingDate: expect.any(Date),
+      ResponseContentType: 'image/png',
     });
     expect(h.update).not.toHaveBeenCalled();
+  });
+
+  it('signs an owned non-image portrait file as an attachment', async () => {
+    h.findOne.mockResolvedValue({ ...expiredFile('owner'), fileName: 'page.html', mimeType: 'text/html' });
+    await refreshAgentAvatarUrls([makeAgent('owner')], 'viewer');
+    expect(h.getSignedUrl).toHaveBeenCalledWith(
+      'abc.png',
+      'get',
+      expect.objectContaining({ ResponseContentDisposition: 'attachment; filename="page.html"' })
+    );
+    expect(h.getSignedUrl.mock.calls[0][2]).not.toHaveProperty('ResponseContentType');
   });
 
   it('refuses to sign a foreign private file the agent portrait points at (exploit)', async () => {

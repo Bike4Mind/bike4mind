@@ -213,7 +213,7 @@ type AuditFn = (
   lake: IDataLakeDocument,
   action: 'revoke-access' | 'membership-succession',
   changes: ReturnType<typeof grantChange>[]
-) => Promise<void>;
+) => Promise<unknown>;
 type Db = LapseDepartedMemberLakeAccessAdapters['db'];
 
 /**

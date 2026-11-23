@@ -1,8 +1,13 @@
 import { useState } from 'react';
 import { styled } from '@mui/system';
-import { Autocomplete, Button, IconButton, Option, Select, Stack, Typography } from '@mui/joy';
+import { Autocomplete, Button, Chip, IconButton, Option, Select, Stack, Typography } from '@mui/joy';
 import CloseIcon from '@mui/icons-material/Close';
-import { STUDIO_COMPOSITION_LIMITS, type StudioBrandKit, type StudioCompositionResponse } from '@bike4mind/common';
+import {
+  STUDIO_COMPOSITION_LIMITS,
+  withProductLook,
+  type StudioBrandKit,
+  type StudioCompositionResponse,
+} from '@bike4mind/common';
 import { useStudioCompositions } from '@client/app/hooks/data/studioCompositions';
 import { StudioPanel, StudioSectionLabel } from '../design/StudioPanel';
 import { studioColor, studioRadius } from '../design/studioTokens';
@@ -162,18 +167,50 @@ const BrandKitPanel = ({ composition }: { composition: StudioCompositionResponse
 
       <Stack spacing={0.5}>
         <StudioSectionLabel>Product references</StudioSectionLabel>
+        {kit.productFileIds.length > 1 && (
+          <Typography level="body-xs" data-testid="production-brand-kit-product-look-hint">
+            The first image is the product look. Click another image to make it the look.
+          </Typography>
+        )}
         <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" useFlexGap>
-          {kit.productFileIds.map(fileId => (
-            <LibraryThumb
-              key={fileId}
-              fileId={fileId}
-              size={56}
-              testId={`production-brand-kit-product-${fileId}`}
-              onRemove={() =>
-                set(current => ({ ...current, productFileIds: current.productFileIds.filter(id => id !== fileId) }))
-              }
-            />
-          ))}
+          {kit.productFileIds.map((fileId, index) => {
+            const isLook = index === 0;
+            return (
+              <LibraryThumb
+                key={fileId}
+                fileId={fileId}
+                size={56}
+                selected={isLook && kit.productFileIds.length > 1}
+                selectLabel="Use as the product look"
+                onSelect={
+                  isLook
+                    ? undefined
+                    : () =>
+                        set(current => ({
+                          ...current,
+                          productFileIds: withProductLook(current.productFileIds, fileId),
+                        }))
+                }
+                badge={
+                  isLook &&
+                  kit.productFileIds.length > 1 && (
+                    <Chip
+                      size="sm"
+                      variant="solid"
+                      sx={{ position: 'absolute', bottom: 2, left: 2, pointerEvents: 'none' }}
+                      data-testid="production-brand-kit-product-look-badge"
+                    >
+                      Look
+                    </Chip>
+                  )
+                }
+                testId={`production-brand-kit-product-${fileId}`}
+                onRemove={() =>
+                  set(current => ({ ...current, productFileIds: current.productFileIds.filter(id => id !== fileId) }))
+                }
+              />
+            );
+          })}
           {kit.productFileIds.length < STUDIO_COMPOSITION_LIMITS.brandProductFilesMax && (
             <Button size="sm" variant="outlined" onClick={pickProducts} data-testid="production-brand-kit-products-btn">
               Add from Library

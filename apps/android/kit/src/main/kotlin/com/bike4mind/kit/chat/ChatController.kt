@@ -1,6 +1,13 @@
 package com.bike4mind.kit.chat
 
+import com.bike4mind.kit.approvals.ApprovalCardState
+import com.bike4mind.kit.approvals.PendingActionApi
+import com.bike4mind.kit.approvals.PendingActionDecision
+import com.bike4mind.kit.approvals.PendingActionFailure
+import com.bike4mind.kit.approvals.PendingActionOutcome
+import com.bike4mind.kit.approvals.PendingActionTarget
 import com.bike4mind.kit.realtime.RealtimeFrames
+import com.bike4mind.kit.sessions.PendingAction
 import com.bike4mind.kit.sessions.Quest
 import com.bike4mind.kit.sessions.QuestStatus
 import com.bike4mind.kit.sessions.SessionsRepository
@@ -23,7 +30,12 @@ data class ChatState(
     val sending: Boolean = false,
     val statusMessage: String? = null,
     val error: ChatError? = null,
-)
+    /** Answers given from this screen, by the action they answered. */
+    val approvals: Map<PendingActionTarget, ApprovalCardState> = emptyMap(),
+) {
+    fun approval(questId: String, action: PendingAction): ApprovalCardState =
+        approvals[PendingActionTarget(questId, action.requestedAtMs)] ?: ApprovalCardState.Open
+}
 
 sealed interface ChatError {
     data class Refused(val errorCode: String?, val message: String?) : ChatError
@@ -34,7 +46,8 @@ sealed interface ChatError {
 interface ChatBackend {
     suspend fun transcript(sessionId: String): List<Quest>
     suspend fun quest(id: String): Quest
-    suspend fun send(message: String, sessionId: String?): ChatReceipt
+    suspend fun send(message: String, sessionId: String?, fileIds: List<String>): ChatReceipt
+    suspend fun respond(target: PendingActionTarget, decision: PendingActionDecision): PendingActionOutcome
 
     /** One socket's worth of frames; completes when the socket closes. */
     fun completions(): Flow<RealtimeFrames.StreamedCompletion>
@@ -44,11 +57,15 @@ class LiveChatBackend(
     private val sessions: SessionsRepository,
     private val wire: ChatSendWire,
     private val realtime: com.bike4mind.kit.realtime.RealtimeConnection,
+    private val pendingActions: PendingActionApi,
 ) : ChatBackend {
     override suspend fun transcript(sessionId: String) = sessions.quests(sessionId)
     override suspend fun quest(id: String) = sessions.quest(id)
-    override suspend fun send(message: String, sessionId: String?) = wire.send(message, sessionId)
+    override suspend fun send(message: String, sessionId: String?, fileIds: List<String>) =
+        wire.send(message, sessionId, fileIds)
     override fun completions() = realtime.completions()
+    override suspend fun respond(target: PendingActionTarget, decision: PendingActionDecision) =
+        pendingActions.respond(target, decision)
 }
 
 /**
@@ -82,17 +99,19 @@ class ChatController(
         socket = null
     }
 
-    fun send(message: String) {
+    /** [onAccepted] runs once the server took the turn, e.g. to let go of the composer's attachments. */
+    fun send(message: String, fileIds: List<String> = emptyList(), onAccepted: () -> Unit = {}) {
         val text = message.trim()
         if (text.isEmpty() || mutableState.value.sending) return
         mutableState.update { it.copy(sending = true, error = null) }
         scope.launch {
             try {
-                when (val receipt = backend.send(text, mutableState.value.sessionId)) {
+                when (val receipt = backend.send(text, mutableState.value.sessionId, fileIds)) {
                     is ChatReceipt.Refused -> mutableState.update {
                         it.copy(sending = false, error = ChatError.Refused(receipt.errorCode, receipt.message))
                     }
                     is ChatReceipt.Accepted -> {
+                        onAccepted()
                         lastHeard[receipt.questId] = now()
                         mutableState.update { state ->
                             state.copy(
@@ -118,6 +137,36 @@ class ChatController(
                 mutableState.update { it.copy(sending = false, error = ChatError.Failed(error.message ?: "Send failed")) }
             }
         }
+    }
+
+    /**
+     * Approves or denies the pending action a turn shows. The server decides whether it is still current: a lapsed,
+     * replaced or already-answered action comes back as a settled failure, after which the transcript is reloaded so
+     * the card shows what really happened. Twin of apps/ios ChatViewModel.respond.
+     */
+    fun respond(questId: String, action: PendingAction, decision: PendingActionDecision) {
+        val target = PendingActionTarget(questId, action.requestedAtMs)
+        if (!mutableState.value.approval(questId, action).offersDecision) return
+        setApproval(target, ApprovalCardState.Submitting(decision))
+        scope.launch {
+            val outcome = try {
+                backend.respond(target, decision)
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                PendingActionOutcome.Failed(PendingActionFailure.ServerError)
+            }
+            when (outcome) {
+                is PendingActionOutcome.Answered -> setApproval(target, ApprovalCardState.Answered(outcome.result))
+                is PendingActionOutcome.Failed -> setApproval(target, ApprovalCardState.Failed(outcome.failure))
+            }
+            val settled = outcome !is PendingActionOutcome.Failed || !outcome.failure.isRetryable
+            if (settled) mutableState.value.sessionId?.let { loadTranscript(it) }
+        }
+    }
+
+    private fun setApproval(target: PendingActionTarget, card: ApprovalCardState) {
+        mutableState.update { it.copy(approvals = it.approvals + (target to card)) }
     }
 
     private suspend fun loadTranscript(sessionId: String) {
@@ -179,6 +228,11 @@ class ChatController(
                 prompt = update.prompt ?: existing?.prompt,
                 // Replies are cumulative: replace, and keep the last text when a frame carries none.
                 reply = update.reply ?: existing?.reply,
+                // A frame carries the current action (or none); a REST poll carries none, so keep it. The server parks actions on done quests, so status does not clear it.
+                pendingAction = when {
+                    heard -> update.pendingAction
+                    else -> update.pendingAction ?: existing?.pendingAction
+                },
             )
             if (existing == null) turns += merged else turns[turns.indexOf(existing)] = merged
             current.copy(turns = turns, statusMessage = if (merged.status.isTerminal) null else statusMessage)

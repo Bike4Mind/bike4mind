@@ -60,6 +60,7 @@ export * from './restoreDeletedDataLake';
 export * from './deleteDataLake';
 export * from './lakeMembership';
 export { recordLakeConfigChange } from './recordLakeConfigChange';
+export { recordLakeConfigSnapshot } from './recordLakeConfigSnapshot';
 export { diffLakeConfig } from './diffLakeConfig';
 export * from './recordLakeMembershipChange';
 export * from './recordLakeUploadBatch';

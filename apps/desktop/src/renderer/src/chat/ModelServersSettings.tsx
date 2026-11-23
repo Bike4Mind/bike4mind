@@ -387,7 +387,7 @@ function SpecsFields({
         {server.specs && (
           <Button
             size="sm"
-            variant="plain"
+            variant="outlined"
             color="neutral"
             disabled={busy}
             onClick={() => save(null)}
@@ -543,6 +543,7 @@ function LaunchSection({
           <Button
             size="sm"
             variant="outlined"
+            color="neutral"
             disabled={busy || !!launch.busy}
             onClick={() => void start()}
             data-testid="model-servers-launch-start-btn"
@@ -555,6 +556,7 @@ function LaunchSection({
             <Button
               size="sm"
               variant={launch.pendingRestart ? 'solid' : 'outlined'}
+              color={launch.pendingRestart ? 'primary' : 'neutral'}
               disabled={busy}
               onClick={() => void onAction('restart')}
               data-testid="model-servers-launch-restart-btn"
@@ -563,7 +565,7 @@ function LaunchSection({
             </Button>
             <Button
               size="sm"
-              variant="plain"
+              variant="outlined"
               color="neutral"
               disabled={busy}
               onClick={() => void onAction('stop')}
@@ -575,8 +577,9 @@ function LaunchSection({
         )}
         <Button
           size="sm"
-          variant="plain"
+          variant="outlined"
           color="neutral"
+          aria-expanded={open}
           onClick={() => setOpen(value => !value)}
           data-testid="model-servers-launch-settings-btn"
         >
@@ -744,48 +747,111 @@ function ServerRow({
       data-state={server.health.state}
     >
       <Stack spacing={1}>
-        <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" useFlexGap>
-          <Typography level="title-sm" data-testid="model-servers-name">
-            {server.name}
+        <Stack direction="row" spacing={1} alignItems="flex-start" flexWrap="wrap" useFlexGap>
+          <Stack
+            direction="row"
+            spacing={1}
+            alignItems="center"
+            flexWrap="wrap"
+            useFlexGap
+            sx={{ flex: 1, minWidth: 200 }}
+          >
+            <Typography level="title-sm" data-testid="model-servers-name">
+              {server.name}
+            </Typography>
+            <Chip size="sm" variant="soft" color={look.color} data-testid="model-servers-status">
+              {look.label}
+            </Chip>
+            <Chip size="sm" variant="outlined">
+              {KIND_LABEL[server.kind]}
+            </Chip>
+            {ssh && (
+              <Chip size="sm" variant="outlined" data-testid="model-servers-ssh-chip">
+                SSH
+              </Chip>
+            )}
+            {server.unencrypted && (
+              <Chip size="sm" variant="soft" color="warning" data-testid="model-servers-unencrypted-chip">
+                Unencrypted
+              </Chip>
+            )}
+            {server.toolsHint && (
+              <Chip size="sm" variant="soft" color="warning" data-testid="model-servers-tools-off-chip">
+                Tools off
+              </Chip>
+            )}
+            {!server.local && server.auth.type !== 'none' && !server.credentialsPersisted && (
+              <Chip size="sm" variant="soft" color="neutral" data-testid="model-servers-session-only-chip">
+                Credentials kept until Desktop quits
+              </Chip>
+            )}
+          </Stack>
+          <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap data-testid="model-servers-row-actions">
+            <Button
+              size="sm"
+              variant="outlined"
+              color="neutral"
+              disabled={busy}
+              onClick={() =>
+                void window.b4m.modelServers.check(server.id).then(servers => onResult({ ok: true, servers }))
+              }
+              data-testid="model-servers-recheck-btn"
+            >
+              Check now
+            </Button>
+            <Button
+              size="sm"
+              variant="outlined"
+              color="neutral"
+              disabled={settingsDisabled}
+              aria-expanded={editingSpecs}
+              onClick={() => setEditingSpecs(open => !open)}
+              data-testid="model-servers-specs-btn"
+            >
+              Hardware
+            </Button>
+            {!server.local &&
+              (confirmRemove ? (
+                <>
+                  <Button
+                    size="sm"
+                    color="danger"
+                    disabled={busy}
+                    onClick={() => void run(() => window.b4m.modelServers.remove(server.id))}
+                    data-testid="model-servers-remove-confirm-btn"
+                  >
+                    Remove {server.name}
+                  </Button>
+                  <Button size="sm" variant="outlined" color="neutral" onClick={() => setConfirmRemove(false)}>
+                    Keep
+                  </Button>
+                </>
+              ) : (
+                <Button
+                  size="sm"
+                  variant="outlined"
+                  color="danger"
+                  onClick={() => setConfirmRemove(true)}
+                  data-testid="model-servers-remove-btn"
+                >
+                  Remove
+                </Button>
+              ))}
+          </Stack>
+        </Stack>
+        <Stack direction="row" columnGap={2} rowGap={0.5} flexWrap="wrap" useFlexGap>
+          <Typography level="body-xs" textColor="text.tertiary" data-testid="model-servers-address">
+            {server.address}
+            {ssh && server.port !== undefined ? ` - port ${server.port} on that machine` : ''}
+            {server.auth.type === 'bearer' ? ' - bearer token' : ''}
+            {server.auth.type === 'header' ? ` - ${server.auth.headerName} header` : ''}
           </Typography>
-          <Chip size="sm" variant="soft" color={look.color} data-testid="model-servers-status">
-            {look.label}
-          </Chip>
-          <Chip size="sm" variant="outlined">
-            {KIND_LABEL[server.kind]}
-          </Chip>
-          {ssh && (
-            <Chip size="sm" variant="outlined" data-testid="model-servers-ssh-chip">
-              SSH
-            </Chip>
-          )}
-          {server.unencrypted && (
-            <Chip size="sm" variant="soft" color="warning" data-testid="model-servers-unencrypted-chip">
-              Unencrypted
-            </Chip>
-          )}
-          {server.toolsHint && (
-            <Chip size="sm" variant="soft" color="warning" data-testid="model-servers-tools-off-chip">
-              Tools off
-            </Chip>
-          )}
-          {!server.local && server.auth.type !== 'none' && !server.credentialsPersisted && (
-            <Chip size="sm" variant="soft" color="neutral" data-testid="model-servers-session-only-chip">
-              Credentials kept until Desktop quits
-            </Chip>
+          {healthLine(server) && (
+            <Typography level="body-xs" textColor="text.tertiary" data-testid="model-servers-health">
+              {healthLine(server)}
+            </Typography>
           )}
         </Stack>
-        <Typography level="body-xs" textColor="text.tertiary" data-testid="model-servers-address">
-          {server.address}
-          {ssh && server.port !== undefined ? ` - port ${server.port} on that machine` : ''}
-          {server.auth.type === 'bearer' ? ' - bearer token' : ''}
-          {server.auth.type === 'header' ? ` - ${server.auth.headerName} header` : ''}
-        </Typography>
-        {healthLine(server) && (
-          <Typography level="body-xs" textColor="text.tertiary" data-testid="model-servers-health">
-            {healthLine(server)}
-          </Typography>
-        )}
         {server.health.error && server.health.state !== 'online' && (
           <Typography level="body-xs" textColor="danger.plainColor" data-testid="model-servers-error">
             {server.health.error}
@@ -904,57 +970,6 @@ function ServerRow({
             {error}
           </Alert>
         )}
-        <Stack direction="row" spacing={1}>
-          <Button
-            size="sm"
-            variant="plain"
-            color="neutral"
-            disabled={busy}
-            onClick={() =>
-              void window.b4m.modelServers.check(server.id).then(servers => onResult({ ok: true, servers }))
-            }
-            data-testid="model-servers-recheck-btn"
-          >
-            Check now
-          </Button>
-          <Button
-            size="sm"
-            variant="plain"
-            color="neutral"
-            disabled={settingsDisabled}
-            onClick={() => setEditingSpecs(open => !open)}
-            data-testid="model-servers-specs-btn"
-          >
-            Hardware
-          </Button>
-          {!server.local &&
-            (confirmRemove ? (
-              <>
-                <Button
-                  size="sm"
-                  color="danger"
-                  disabled={busy}
-                  onClick={() => void run(() => window.b4m.modelServers.remove(server.id))}
-                  data-testid="model-servers-remove-confirm-btn"
-                >
-                  Remove {server.name}
-                </Button>
-                <Button size="sm" variant="plain" color="neutral" onClick={() => setConfirmRemove(false)}>
-                  Keep
-                </Button>
-              </>
-            ) : (
-              <Button
-                size="sm"
-                variant="plain"
-                color="danger"
-                onClick={() => setConfirmRemove(true)}
-                data-testid="model-servers-remove-btn"
-              >
-                Remove
-              </Button>
-            ))}
-        </Stack>
       </Stack>
     </Sheet>
   );
@@ -1273,6 +1288,7 @@ function AddServer({ onResult }: { onResult: (result: ModelServerMutationResult)
         <Button
           size="sm"
           variant="outlined"
+          color="neutral"
           disabled={busy || !address.trim()}
           loading={busy && !probe}
           sx={{ alignSelf: 'flex-start' }}

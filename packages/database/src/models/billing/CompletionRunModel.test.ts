@@ -60,4 +60,89 @@ describe('CompletionRunModel', () => {
       ownerId: 'user-1',
     });
   });
+
+  describe('run budget', () => {
+    const owner = { userId: 'user-1', ownerType: CreditHolderType.User, ownerId: 'user-1' } as const;
+
+    it('records a budget with nothing committed, and no counter for a run without one', async () => {
+      const budgeted = await completionRunRepository.create({ ...owner, budgetCredits: 500 });
+      const unbudgeted = await completionRunRepository.create(owner);
+
+      expect(budgeted).toMatchObject({ budgetCredits: 500, committedCredits: 0 });
+      expect(unbudgeted).not.toHaveProperty('budgetCredits');
+      expect(unbudgeted).not.toHaveProperty('committedCredits');
+      await expect(completionRunRepository.claimBudget(unbudgeted.runId, 100, 10)).resolves.toEqual({
+        kind: 'unbudgeted',
+      });
+    });
+
+    it('never lets concurrent claims together exceed the budget', async () => {
+      const { runId } = await completionRunRepository.create({ ...owner, budgetCredits: 1000 });
+
+      const outcomes = await Promise.all(
+        Array.from({ length: 25 }, () => completionRunRepository.claimBudget(runId, 120, 30))
+      );
+
+      const claimed = outcomes.flatMap(outcome => (outcome.kind === 'claimed' ? [outcome.credits] : []));
+      const total = claimed.reduce((sum, credits) => sum + credits, 0);
+      expect(total).toBeLessThanOrEqual(1000);
+      // Eight full claims fit; the last 40 credits still cover a short answer.
+      expect(total).toBe(1000);
+      expect(claimed.every(credits => credits >= 30)).toBe(true);
+      expect(outcomes.filter(outcome => outcome.kind === 'exhausted')).toHaveLength(25 - claimed.length);
+      await expect(completionRunRepository.findById(runId)).resolves.toMatchObject({ committedCredits: 1000 });
+    });
+
+    it('claims what is left when it covers the minimum, and refuses below it', async () => {
+      const { runId } = await completionRunRepository.create({ ...owner, budgetCredits: 100 });
+
+      await expect(completionRunRepository.claimBudget(runId, 80, 10)).resolves.toEqual({
+        kind: 'claimed',
+        credits: 80,
+      });
+      await expect(completionRunRepository.claimBudget(runId, 80, 10)).resolves.toEqual({
+        kind: 'claimed',
+        credits: 20,
+      });
+      await expect(completionRunRepository.claimBudget(runId, 80, 10)).resolves.toEqual({
+        kind: 'exhausted',
+        budgetCredits: 100,
+        committedCredits: 100,
+      });
+    });
+
+    it('releases the unused part of a claim on settlement and the whole claim on a refund', async () => {
+      const { runId } = await completionRunRepository.create({ ...owner, budgetCredits: 100 });
+      await completionRunRepository.claimBudget(runId, 60, 10);
+      await completionRunRepository.claimBudget(runId, 40, 10);
+
+      await completionRunRepository.releaseClaim({ runId, credits: 60 }, 25);
+      await completionRunRepository.releaseClaim({ runId, credits: 40 }, 0);
+
+      await expect(completionRunRepository.findById(runId)).resolves.toMatchObject({ committedCredits: 25 });
+      await expect(completionRunRepository.claimBudget(runId, 100, 10)).resolves.toEqual({
+        kind: 'claimed',
+        credits: 75,
+      });
+    });
+
+    it('only ever raises a budget, and never adds one to a run minted without', async () => {
+      const budgeted = await completionRunRepository.create({ ...owner, budgetCredits: 100 });
+      const unbudgeted = await completionRunRepository.create(owner);
+      await completionRunRepository.claimBudget(budgeted.runId, 100, 10);
+
+      await expect(completionRunRepository.raiseBudget(budgeted.runId, 100)).resolves.toEqual({
+        kind: 'not_higher',
+        budgetCredits: 100,
+      });
+      await expect(completionRunRepository.raiseBudget(unbudgeted.runId, 100)).resolves.toEqual({ kind: 'unbudgeted' });
+
+      const raised = await completionRunRepository.raiseBudget(budgeted.runId, 150);
+      expect(raised).toMatchObject({ kind: 'raised', run: { budgetCredits: 150, committedCredits: 100 } });
+      await expect(completionRunRepository.claimBudget(budgeted.runId, 100, 10)).resolves.toEqual({
+        kind: 'claimed',
+        credits: 50,
+      });
+    });
+  });
 });

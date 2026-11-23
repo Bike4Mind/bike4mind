@@ -66,6 +66,29 @@ describe('UsageBreakdown', () => {
     expect(html).toContain('500');
   });
 
+  it('states each credit row as its request count, then its credits, with a bar against the largest', () => {
+    const html = renderToStaticMarkup(
+      <UsageBreakdown title="By model" caption="Credits charged." rows={rows} testId="profile-model-breakdown" />
+    );
+    expect(html.match(/data-testid="profile-model-breakdown-row"/g)).toHaveLength(2);
+    // Text nodes only; the Emotion <style> blocks are the rest.
+    const figures = [...html.matchAll(/>([^<>{}]+)</g)].map(match => match[1]);
+    expect(figures).toEqual([
+      'By model',
+      'Credits charged.',
+      'claude-opus-5',
+      'anthropic',
+      '9 req',
+      '500',
+      'gpt-5',
+      'openai',
+      '2 req',
+      '100',
+    ]);
+    expect(html).toContain('width:100%');
+    expect(html).toContain('width:20%');
+  });
+
   it('says nothing was recorded rather than drawing an empty frame', () => {
     const html = renderToStaticMarkup(
       <UsageBreakdown title="By model" caption="Credits charged." rows={[]} testId="profile-model-breakdown" />

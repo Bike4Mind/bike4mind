@@ -11,10 +11,12 @@ type Hold = {
   balanceAfterHold: number;
   featureLabel: string;
   expiresAt: Date;
+  runClaim?: { runId: string; credits: number };
 };
 
-const { holds, userIncrement, orgIncrement, emitMetrics } = vi.hoisted(() => ({
+const { holds, userIncrement, orgIncrement, emitMetrics, releaseClaim } = vi.hoisted(() => ({
   holds: new Map<string, Hold>(),
+  releaseClaim: vi.fn(),
   userIncrement: vi.fn(),
   orgIncrement: vi.fn(),
   emitMetrics: vi.fn(),
@@ -35,6 +37,7 @@ vi.mock('@bike4mind/database', () => ({
   },
   userRepository: { incrementCredits: userIncrement },
   organizationRepository: { incrementCredits: orgIncrement },
+  completionRunRepository: { releaseClaim },
   pendingCreditHoldRepository: {
     findExpired: async (now: Date, limit: number) =>
       [...holds.values()]
@@ -114,6 +117,15 @@ describe('creditHoldSweep', () => {
         { name: 'ExpiredHoldsReclaimed', value: 1, dimensions: { Stage: 'test' }, unit: 'Count' },
       ])
     );
+  });
+
+  it("returns a completion's run budget claim with its hold, and leaves other holds' runs alone", async () => {
+    addHold('run', { featureLabel: 'platform-key completion', runClaim: { runId: 'run-1', credits: 40 } });
+    addHold('plain');
+
+    await runCreditHoldSweep({ now: NOW });
+
+    expect(releaseClaim).toHaveBeenCalledExactlyOnceWith({ runId: 'run-1', credits: 40 }, 0);
   });
 
   it('refunds an organization hold to the organization pool', async () => {

@@ -2,7 +2,9 @@ import type {
   IAdminSettingsRepository,
   IDataLakeDocument,
   ILakeConfigChangeEventRepository,
+  ILakeConfigEventTarget,
   ILakeConfigFieldChange,
+  ILakeConfigLeverChange,
   LakeConfigChangeAction,
   LakeManageRung,
 } from '@bike4mind/common';
@@ -45,6 +47,12 @@ export interface RecordLakeConfigChangeParams {
   grants?: readonly LakeGrant[];
   action: LakeConfigChangeAction;
   changes: ILakeConfigFieldChange[];
+  /** The entity the change is about; see `ILakeConfigChangeEvent.target`. */
+  target?: ILakeConfigEventTarget;
+  /** Structured lever moves, feed addresses already redacted. */
+  leverChanges?: ILakeConfigLeverChange[];
+  /** The file an approve or auto-approve admitted. */
+  admittedFabFileId?: string;
   /**
    * The rung that authorized THIS call, when the caller knows it better than `resolveLakeManageRung`
    * can infer it. Two legitimate uses: a write no principal drove (the `auto-activate` action, which
@@ -68,17 +76,30 @@ export interface RecordLakeConfigChangeParams {
  * succeeded and invite a retry of a finished operation. Failing loudly in the log, and only there,
  * is the honest middle: an operator can see that a change went unrecorded.
  *
+ * Resolves to the written event's id, or null when nothing was written (no changes, no repository,
+ * or a swallowed failure). A caller that links a later write to this row treats null as "no link".
+ *
  * Records NOTHING when `changes` is empty. A write that moved no value is not a change, and a
  * history that listed it would put a line in an owner's audit for something that never altered how
  * their lake answers. Callers therefore do not need to guard the call site.
  */
 export async function recordLakeConfigChange(
-  { actor, lake, grants = [], action, changes, manageRung }: RecordLakeConfigChangeParams,
+  {
+    actor,
+    lake,
+    grants = [],
+    action,
+    changes,
+    target,
+    leverChanges,
+    admittedFabFileId,
+    manageRung,
+  }: RecordLakeConfigChangeParams,
   { db, logger }: LakeConfigAuditAdapters
-): Promise<void> {
-  if (changes.length === 0) return;
+): Promise<string | null> {
+  if (changes.length === 0) return null;
   const events = db.lakeConfigChangeEvents;
-  if (!events) return;
+  if (!events) return null;
 
   // AUDIT LOSS is logged at ERROR, matching the read-side twin (recordLakeAccessEvent). The two
   // halves of the trail must be one alert surface: at `warn` this was invisible to any alert keyed
@@ -97,7 +118,7 @@ export async function recordLakeConfigChange(
       ? await resolveLakeConfigAuditRetention({ adminSettings: db.adminSettings }, { logger })
       : undefined;
 
-    await events.record({
+    const written = await events.record({
       // A route that accepts API-key auth resolves the principal itself and attaches it to the
       // actor; that always wins, because only the route can tell a key from a session. Otherwise a
       // blank actor id means no principal drove this write (a script, a migration, the
@@ -124,13 +145,18 @@ export async function recordLakeConfigChange(
       manageRung: manageRung ?? resolveLakeManageRung(lake, actor, grants) ?? 'system',
       action,
       changes,
+      target,
+      leverChanges,
+      admittedFabFileId,
       retentionDays,
     });
+    return written.id ?? null;
   } catch (err) {
     logAuditLoss('[dataLakes] lake config changed but the audit event did not persist', {
       dataLakeId: lake.id,
       action,
       err,
     });
+    return null;
   }
 }

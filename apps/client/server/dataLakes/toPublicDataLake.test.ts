@@ -22,7 +22,7 @@ const dbLake = {
 
 describe('toPublicDataLake', () => {
   it('projects a DB lake onto the snake_case public shape with ISO timestamps', () => {
-    const resource = toPublicDataLake(dbLake);
+    const resource = toPublicDataLake(dbLake, undefined, true);
     expect(resource).toEqual({
       id: dbLake.id,
       name: 'Handbook',
@@ -32,6 +32,7 @@ describe('toPublicDataLake', () => {
       organization_id: dbLake.organizationId,
       is_public: true,
       built_in: false,
+      can_manage: true,
       status: 'active',
       file_count: 3,
       total_size_bytes: 4096,
@@ -44,21 +45,29 @@ describe('toPublicDataLake', () => {
 
   it('never leaks a field outside the public shape, even from a full editor document', () => {
     const editorDoc = { ...dbLake, systemPrompt: 'secret', requiredUserTag: 'vip', createdByUserId: 'u1' };
-    const resource = toPublicDataLake(editorDoc);
+    const resource = toPublicDataLake(editorDoc, undefined, false);
     expect(Object.keys(resource).sort()).toEqual(Object.keys(DataLakeResourceSchema.shape).sort());
     expect(JSON.stringify(resource)).not.toContain('secret');
   });
 
   it('returns a stored tag verbatim, even one that predates the lake organization', () => {
-    const resource = toPublicDataLake({
-      ...dbLake,
-      datalakeTag: 'datalake:handbook',
-    });
+    const resource = toPublicDataLake(
+      {
+        ...dbLake,
+        datalakeTag: 'datalake:handbook',
+      },
+      undefined,
+      false
+    );
     expect(resource.datalake_tag).toBe('datalake:handbook');
   });
 
   it('fills absent optional fields with null, false, 0 and an active status', () => {
-    const resource = toPublicDataLake({ id: dbLake.id, name: 'Bare', slug: 'bare', datalakeTag: 'datalake:bare' });
+    const resource = toPublicDataLake(
+      { id: dbLake.id, name: 'Bare', slug: 'bare', datalakeTag: 'datalake:bare' },
+      undefined,
+      false
+    );
     expect(resource).toMatchObject({
       description: null,
       organization_id: null,
@@ -74,10 +83,14 @@ describe('toPublicDataLake', () => {
   });
 
   it('accepts timestamps that already crossed the wire as strings', () => {
-    const resource = toPublicDataLake({
-      ...dbLake,
-      createdAt: '2026-01-01T00:00:00.000Z' as unknown as Date,
-    });
+    const resource = toPublicDataLake(
+      {
+        ...dbLake,
+        createdAt: '2026-01-01T00:00:00.000Z' as unknown as Date,
+      },
+      undefined,
+      false
+    );
     expect(resource.created_at).toBe('2026-01-01T00:00:00.000Z');
   });
 
@@ -91,11 +104,13 @@ describe('toPublicDataLake', () => {
         createdAt: new Date(),
         updatedAt: new Date(),
       },
-      { fileCount: 12, totalSizeBytes: 999 }
+      { fileCount: 12, totalSizeBytes: 999 },
+      true
     );
     expect(resource).toMatchObject({
       datalake_tag: registryLake.datalakeTag,
       built_in: true,
+      can_manage: false,
       file_count: 12,
       total_size_bytes: 999,
       created_at: null,

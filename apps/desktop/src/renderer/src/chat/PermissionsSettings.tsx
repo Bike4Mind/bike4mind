@@ -193,7 +193,7 @@ function RuleRow({
       {draft === null ? (
         <Button
           size="sm"
-          variant="plain"
+          variant="outlined"
           color="neutral"
           onClick={() => setDraft(view.rule)}
           data-testid="permissions-rule-edit-btn"
@@ -203,7 +203,6 @@ function RuleRow({
       ) : (
         <Button
           size="sm"
-          variant="soft"
           disabled={!draft.trim()}
           onClick={() => void saveDraft()}
           data-testid="permissions-rule-save-btn"
@@ -211,7 +210,7 @@ function RuleRow({
           Save
         </Button>
       )}
-      <Button size="sm" variant="plain" color="danger" onClick={onRemove} data-testid="permissions-rule-remove-btn">
+      <Button size="sm" variant="outlined" color="danger" onClick={onRemove} data-testid="permissions-rule-remove-btn">
         Remove
       </Button>
     </Stack>
@@ -667,6 +666,7 @@ function ApprovalSummaryExport() {
         <Button
           size="sm"
           variant="outlined"
+          color="neutral"
           loading={status === 'saving'}
           data-testid="permissions-export-summary-btn"
           onClick={async () => {
@@ -767,7 +767,7 @@ function CapabilityLedgerView({
                 </Stack>
                 <Button
                   size="sm"
-                  variant="plain"
+                  variant="outlined"
                   color="danger"
                   onClick={() => void onRevoke(grant.id)}
                   data-testid="capability-revoke-btn"
@@ -874,7 +874,7 @@ function SourceCard({
                 {!view.problem && (
                   <Button
                     size="sm"
-                    variant="plain"
+                    variant="outlined"
                     color="neutral"
                     disabled={isCopied(view)}
                     onClick={() => onCopy(view)}

@@ -18,6 +18,7 @@ import { searxngUrl } from './searxng';
 import { allSecrets, contributedSecretEnvironment, secrets } from './secrets';
 import { cluster, resolvedVpcId, vpc, vpcId } from './vpc';
 import { websocketApi } from './websocket';
+import { mailBodyEnvironment, mailBodyPutPermission } from './mailBodyOffload';
 
 /**
  * Quest Processor Service
@@ -75,6 +76,8 @@ const ecsSecretNames = [
   'SESSION_SECRET',
   'SECRET_ENCRYPTION_KEY',
   'SECRET_ENCRYPTION_KEY_PREVIOUS',
+  'HMAC_SIGNING_SECRET',
+  'HMAC_SIGNING_SECRET_PREVIOUS',
   'MEMORY_KEY_SECRET',
   'OAUTH_RSA_PRIVATE_KEY',
   'APNS_KEY',
@@ -257,6 +260,7 @@ export const chatCompletion = new sst.aws.Service('ChatCompletion', {
   ],
   ssm: ecsSecretParameters,
   permissions: [
+    mailBodyPutPermission(appFilesBucket),
     { actions: ['bedrock:*'], resources: ['*'] },
     // Content moderation for images produced by the image_generation/edit_image tools
     // (closes an agent-tool moderation bypass; the queue-handler imageGeneration/
@@ -291,6 +295,7 @@ export const chatCompletion = new sst.aws.Service('ChatCompletion', {
     // First, so a core variable of the same name always wins.
     ...contributedSecretEnvironment(),
     ...DEFAULT_LAMBDA_ENVIRONMENT,
+    ...mailBodyEnvironment(appFilesBucket),
     ...TEST_GENERATION_PROVIDER_ENVIRONMENT,
     NEXT_PUBLIC_CDN_URL: cdnUrlForLambdaEnv(),
     // External instance-service, consumed by a premium overlay tool that reads these as

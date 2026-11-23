@@ -54,7 +54,7 @@
       "title": "Account deletion and restore",
       "web": "green",
       "ios": "green",
-      "android": "red",
+      "android": "yellow",
       "notes": "Required by both stores before public release."
     },
     {
@@ -62,7 +62,7 @@
       "title": "Settings and profile",
       "web": "green",
       "ios": "green",
-      "android": "red"
+      "android": "green"
     },
     {
       "id": "studio-media-gallery",
@@ -84,7 +84,7 @@
       "title": "Share sheet, camera and voice capture",
       "web": "na",
       "ios": "green",
-      "android": "red"
+      "android": "yellow"
     },
     {
       "id": "home-screen-widgets",

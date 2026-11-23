@@ -23,6 +23,7 @@ import {
 } from '@bike4mind/database';
 import { saveGeneratedAsset } from '@bike4mind/services';
 import { fileUrlSigningDate, FILE_URL_TTL_SECONDS, signedUrlExpiresAt } from '@bike4mind/utils';
+import { storageReadOverrides } from '@bike4mind/utils/contentDisposition';
 import { logEvent } from '@bike4mind/server-utils/utils/analyticsLog';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
@@ -112,9 +113,11 @@ const handler = baseApi({ requiredScopes: FILES_WRITE_SCOPES })
               storage: {
                 upload: (filepath, content, option) =>
                   getFilesStorage().upload(content, filepath, { ContentType: option?.ContentType || contentType }),
-                generateSignedUrl: (filepath: string, expireInSeconds: number, mode?: 'get' | 'put') =>
+                generateSignedUrl: (filepath, expireInSeconds, mode, options) =>
                   getFilesStorage().getSignedUrl(filepath, mode ?? 'get', {
                     expiresIn: expireInSeconds,
+                    ResponseContentDisposition: options?.ResponseContentDisposition,
+                    ResponseContentType: options?.ResponseContentType,
                   }),
               },
               logger,
@@ -151,6 +154,11 @@ const handler = baseApi({ requiredScopes: FILES_WRITE_SCOPES })
           expiresIn: FILE_URL_TTL_SECONDS,
           audience: 'browser',
           signingDate: fileUrlSigningDate(),
+          ...storageReadOverrides({
+            mimeType: responseFile.mimeType,
+            fileName: responseFile.fileName,
+            key: responseFile.filePath,
+          }),
         });
 
         return respond(res, fabFileResponseSchema, {

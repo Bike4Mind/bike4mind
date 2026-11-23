@@ -1,4 +1,4 @@
-import type { SkinSummary } from './mods';
+import type { SkinSummary, SoundPackSummary } from './mods';
 import type { NewSessionDefaults } from './sessionDefaults';
 import type { StudioApi } from './studioIpc';
 import type { PendingTaskDecision, RolePolicy, TaskAction, TaskDecisionAnswer } from './orchestration';
@@ -6,7 +6,7 @@ import type { AppWorktree, WorktreeRemoval, WorktreeSweepItem } from './worktree
 import type { LoopResult, LoopState } from './loop';
 import type { RunSpend } from './runSpend';
 import type { PromptCacheTtl } from '@bike4mind/common';
-import type { AttentionNotice, AttentionOpenEvent } from './attention';
+import type { AttentionNotice, AttentionOpenEvent, NotifyScope } from './attention';
 import type { AccountBilling, AccountCredits, AccountProfile, SubscribePlanResult } from './account';
 import type { FeedbackSubmitResult } from './feedback';
 import type { AccountPage, AuthState, EnvironmentSelection, SetEnvironmentResult } from './auth';
@@ -71,6 +71,7 @@ import type {
   RecentFolder,
   ContextBoundaryResult,
   ReasoningEffortSetting,
+  EditMessageRequest,
   SendMessageRequest,
   SendMessageResult,
   SpawnSuggestionResult,
@@ -88,6 +89,7 @@ import type { ShareDirectoryResult } from './directoryRequest';
 import type { PrActionResult, PrBarState, PrOption, PrSummaryEvent } from './pullRequest';
 import type { LocalContextFit, LocalContextSetting } from './localContextSetting';
 import type { SidebarSectionsState } from './sidebarSections';
+import type { ComposerDrafts } from './composerDrafts';
 import type { WorkspaceChanges } from './workspaceChanges';
 import type { SkillsScope, SkillsState } from './skills';
 import type { PermissionMutationResult, PermissionRuleLists, PermissionScope, PermissionsState } from './permissions';
@@ -140,7 +142,7 @@ import type {
   ModelRuntimeStatus,
   LoadedModelState,
 } from './models';
-import type { AccountUsageResult, UsageWindowId } from './usage';
+import type { AccountUsageResult, LocalUsageResult, UsageWindowId } from './usage';
 import type { FleetState } from './fleet';
 import type {
   ModelBuildReport,
@@ -194,6 +196,7 @@ export const IPC_CHANNELS = {
   accountPurchaseCredits: 'account:purchase-credits',
   accountSendFeedback: 'account:send-feedback',
   usageGetHistory: 'usage:get-history',
+  usageGetLocal: 'usage:get-local',
   fleetGetState: 'fleet:get-state',
   fleetRefresh: 'fleet:refresh',
   fleetSetConsent: 'fleet:set-consent',
@@ -265,6 +268,8 @@ export const IPC_CHANNELS = {
   chatLoopChanged: 'chat:loop-changed',
   chatStopReply: 'chat:stop-reply',
   chatContinueReply: 'chat:continue-reply',
+  chatEditMessage: 'chat:edit-message',
+  chatRegenerateReply: 'chat:regenerate-reply',
   /**
    * The two context commands. Renderer -> main only, and deliberately NOT reachable from a
    * tool: see the renderer's commands.ts for why a slash command is not a model capability.
@@ -556,6 +561,7 @@ export const IPC_CHANNELS = {
    * (auto-merge in particular) are switched on here and nowhere else.
    */
   prWatch: 'pr:watch',
+  prGetState: 'pr:get-state',
   prBind: 'pr:bind',
   prDismiss: 'pr:dismiss',
   prRefresh: 'pr:refresh',
@@ -575,6 +581,9 @@ export const IPC_CHANNELS = {
   sidebarRenameSection: 'sidebar:rename-section',
   sidebarDeleteSection: 'sidebar:delete-section',
   sidebarMoveSession: 'sidebar:move-session',
+  /** Unsent composer text per conversation; see @shared/composerDrafts. */
+  composerDraftsList: 'drafts:list',
+  composerDraftsSave: 'drafts:save',
   /**
    * The user's terminals; see @shared/terminal. Input and resize are one-way sends rather than
    * invokes: a keystroke has nothing to wait for, and a round trip each would be felt.
@@ -593,12 +602,17 @@ export const IPC_CHANNELS = {
   terminalsChanged: 'terminal:changed',
   /** A session needs the user while the app is in the background; see @shared/attention. */
   attentionNotify: 'attention:notify',
+  handoffOpenServerSessions: 'handoff:open-server-sessions',
   attentionClaim: 'attention:claim',
   attentionSetBadge: 'attention:set-badge',
   /** main -> renderer push: the user clicked a notice. */
   attentionOpen: 'attention:open',
   /** A notice clicked while no window was open, waiting for the window it reopened; see takePendingOpen. */
   attentionTakePendingOpen: 'attention:take-pending-open',
+  /** Which sessions alert (NotifyScope), for Settings; main pushes `attentionNotifyScope` when it changes. */
+  attentionGetNotifyScope: 'attention:get-notify-scope',
+  attentionSetNotifyScope: 'attention:set-notify-scope',
+  attentionNotifyScope: 'attention:notify-scope',
   /** The menu-bar toggle, for Settings; see @shared/watch. */
   watchGetPreferences: 'watch:get-preferences',
   watchSetPreferences: 'watch:set-preferences',
@@ -615,6 +629,10 @@ export const IPC_CHANNELS = {
   skinsList: 'skins:list',
   /** main -> renderer push after the mods folder changed on disk. */
   skinsChanged: 'skins:changed',
+  /** Rescan userData/mods and return every sound pack, valid or broken (main/mods). */
+  soundPacksList: 'soundpacks:list',
+  /** Pushed with the fresh list when the mods folder changes. */
+  soundPacksChanged: 'soundpacks:changed',
 } as const;
 
 export type IpcChannel = (typeof IPC_CHANNELS)[keyof typeof IPC_CHANNELS];
@@ -780,6 +798,11 @@ export interface DesktopApi {
     list(): Promise<SkinSummary[]>;
     onChanged(listener: (skins: SkinSummary[]) => void): () => void;
   };
+  /** Data-only sound packs for the Orchestrate events; validated in main, like skins. */
+  soundPacks: {
+    list(): Promise<SoundPackSummary[]>;
+    onChanged(listener: (packs: SoundPackSummary[]) => void): () => void;
+  };
   setTheme(mode: 'light' | 'dark' | 'system', backgroundColor: string): Promise<void>;
   update: {
     getState(): Promise<UpdateState>;
@@ -873,6 +896,11 @@ export interface DesktopApi {
      * the cache after a turn has just spent.
      */
     getHistory(window: UsageWindowId, force?: boolean): Promise<AccountUsageResult>;
+    /**
+     * Self-hosted model usage in the current conversation scope, signed in or not. Computed in
+     * main from the sessions stored on this device; nothing is requested from any server.
+     */
+    getLocal(window: UsageWindowId, force?: boolean): Promise<LocalUsageResult>;
   };
   fleet: {
     getState(): Promise<FleetState>;
@@ -1007,6 +1035,10 @@ export interface DesktopApi {
      * message, so the events are indistinguishable from the turn never having stopped.
      */
     continueReply(sessionId: string): Promise<SendMessageResult>;
+    /** Replace a sent prompt and drop every turn after it, then send the edit; ChatService.editMessage. */
+    editMessage(request: EditMessageRequest): Promise<SendMessageResult>;
+    /** Drop the last reply and run its prompt again; ChatService.regenerateReply. */
+    regenerateReply(sessionId: string): Promise<SendMessageResult>;
     /**
      * `/clear`: insert a context boundary, carrying nothing across. Instant - no model involved.
      * Nothing is deleted; the transcript keeps every message and folds the earlier ones away.
@@ -1380,6 +1412,12 @@ export interface DesktopApi {
     /** Null takes the session out of its section. */
     moveSession(sessionId: string, sectionId: string | null): Promise<SidebarSectionsState>;
   };
+  /** Unsent composer text per conversation; see @shared/composerDrafts. */
+  composerDrafts: {
+    list(): Promise<ComposerDrafts>;
+    /** Blank text clears the conversation's draft. Unknown conversations are ignored. */
+    save(sessionId: string, text: string): Promise<void>;
+  };
   tools: {
     getAccess(): Promise<ToolAccessState>;
     /** Opens the OS folder picker. Resolves unchanged if the user cancels. */
@@ -1429,6 +1467,8 @@ export interface DesktopApi {
      * when it has no PR; a read starts in main when the one in hand is missing or stale.
      */
     watch(sessionId: string | null): Promise<PrBarState | null>;
+    /** Read a selected agent's bar without replacing the conversation's watch. */
+    getState(sessionId: string): Promise<PrBarState | null>;
     /** Bind a pasted PR URL to the conversation. */
     bind(sessionId: string, url: string): Promise<PrActionResult>;
     dismiss(sessionId: string): Promise<PrActionResult>;
@@ -1479,6 +1519,7 @@ export interface DesktopApi {
   };
   /** OS notices for sessions that need the user while the app is not focused. */
   attention: {
+    openServerSessions(): Promise<void>;
     /**
      * Of `sessionIds`, the ones this window may announce. Every open window sees the same entry into
      * needs-action, so main hands each entry to the first window that asks and the rest get nothing.
@@ -1495,6 +1536,11 @@ export interface DesktopApi {
      * the renderer is listening.
      */
     takePendingOpen(): Promise<AttentionOpenEvent | null>;
+    /** Whether plain sessions alert too, or only orchestrations and their agents. */
+    getNotifyScope(): Promise<NotifyScope>;
+    /** Resolves to the scope main now holds; an invalid value leaves it unchanged. */
+    setNotifyScope(scope: NotifyScope): Promise<NotifyScope>;
+    onNotifyScope(listener: (scope: NotifyScope) => void): () => void;
   };
   /** The menu-bar item's setting; the mini Tavern's bounds and visibility are main's to keep. */
   watch: {

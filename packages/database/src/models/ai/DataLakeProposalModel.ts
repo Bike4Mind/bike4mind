@@ -89,7 +89,7 @@ DataLakeProposalSchema.index(
   { unique: true, partialFilterExpression: { status: 'pending' } }
 );
 // The review queue: one lake's pending proposals, newest first.
-DataLakeProposalSchema.index({ dataLakeId: 1, status: 1, createdAt: -1 });
+DataLakeProposalSchema.index({ dataLakeId: 1, status: 1, createdAt: -1, _id: -1 });
 // The declined-text check a rule admission makes (hasDeclinedWithTextHash).
 DataLakeProposalSchema.index({ dataLakeId: 1, textHash: 1, status: 1 });
 
@@ -143,11 +143,18 @@ class DataLakeProposalRepository
 
   async listByLake(
     dataLakeId: string,
-    options?: { status?: DataLakeProposalStatus; limit?: number }
+    options?: { status?: DataLakeProposalStatus; limit?: number; after?: { createdAt: Date; id: string } }
   ): Promise<IDataLakeProposalDocument[]> {
+    const after = options?.after;
     const query = this.proposalModel
-      .find({ dataLakeId, ...(options?.status ? { status: options.status } : {}) })
-      .sort({ createdAt: -1 });
+      .find({
+        dataLakeId,
+        ...(options?.status ? { status: options.status } : {}),
+        ...(after
+          ? { $or: [{ createdAt: { $lt: after.createdAt } }, { createdAt: after.createdAt, _id: { $lt: after.id } }] }
+          : {}),
+      })
+      .sort({ createdAt: -1, _id: -1 });
     if (options?.limit) query.limit(options.limit);
     const docs = await query;
     return docs.map(d => d.toJSON() as IDataLakeProposalDocument);

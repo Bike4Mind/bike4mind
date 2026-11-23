@@ -88,6 +88,35 @@ describe('DlqReplayLogRepository.findRecent', () => {
     expect(explicit.every(r => typeof r.messageBody === 'string')).toBe(true);
   });
 
+  it('links an outcome by suggestion, queue and message and exposes no recovery or error text', async () => {
+    const aiSuggestionId = 'a'.repeat(24);
+    const base = {
+      queueLabel: 'quest',
+      messageId: 'linked',
+      messageBody: 'PRIVATE BODY',
+      sourceQueue: 'Quest',
+      replayedBy: 'admin',
+      operation: 'discard' as const,
+    };
+    const log = await dlqReplayLogRepository.logReplay({ ...base, aiSuggestionId, status: 'pending' });
+    expect(await dlqReplayLogRepository.findSuggestionOutcome(aiSuggestionId, 'quest', 'linked')).toMatchObject({
+      status: 'pending',
+    });
+    await dlqReplayLogRepository.finalizeDiscard(log.id, 'failed', 'PRIVATE ERROR');
+    await dlqReplayLogRepository.logReplay({ ...base, status: 'discarded' });
+    const outcome = await dlqReplayLogRepository.findSuggestionOutcome(aiSuggestionId, 'quest', 'linked');
+    expect(outcome).toMatchObject({
+      status: 'failed',
+      operation: 'discard',
+      hasWarning: true,
+      recordedAt: expect.any(String),
+    });
+    expect(JSON.stringify(outcome)).not.toContain('PRIVATE');
+    expect(await dlqReplayLogRepository.findSuggestionOutcome('b'.repeat(24), 'quest', 'linked')).toBeNull();
+    expect(await dlqReplayLogRepository.findSuggestionOutcome(aiSuggestionId, 'other', 'linked')).toBeNull();
+    expect(await dlqReplayLogRepository.findSuggestionOutcome(aiSuggestionId, 'quest', 'other')).toBeNull();
+  });
+
   it('omits messageBody but keeps the other fields when includeBody is false', async () => {
     const rows = await dlqReplayLogRepository.findRecent({ includeBody: false });
 

@@ -60,6 +60,15 @@ export function ChevronIcon({ open }: { open: boolean }) {
   );
 }
 
+/** A find step: up to the previous match, or down to the next. */
+export function FindStepIcon({ direction }: { direction: 'up' | 'down' }) {
+  return (
+    <Glyph>
+      <path d={direction === 'up' ? 'M4 10l4-4 4 4' : 'M4 6l4 4 4-4'} />
+    </Glyph>
+  );
+}
+
 /** A pager step: back to the previous item, or on to the next. */
 export function PagerIcon({ direction }: { direction: 'previous' | 'next' }) {
   return (
@@ -580,6 +589,15 @@ export function SlidersIcon() {
       <circle cx="5.75" cy="4.5" r="1.4" />
       <circle cx="10.25" cy="8" r="1.4" />
       <circle cx="6.75" cy="11.5" r="1.4" />
+    </Glyph>
+  );
+}
+
+/** Reply stats: a bar chart, for the rail of figures beside each reply. */
+export function StatsIcon() {
+  return (
+    <Glyph>
+      <path d="M2.5 13.5h11M4.75 11V8.5M8 11V4M11.25 11V6.5" />
     </Glyph>
   );
 }

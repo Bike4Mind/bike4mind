@@ -39,8 +39,10 @@ const toRecorded = (doc: StoredIncident) => ({
 });
 
 const incidents: IncidentReviewSweepDeps['incidents'] = {
-  findUnalerted: async (createdBefore, limit) =>
-    (await imageModerationIncidentRepository.findUnalerted(createdBefore, limit)).map(toRecorded),
+  findUnalerted: async (createdBefore, limit, queuedBefore, lostBefore) =>
+    (await imageModerationIncidentRepository.findUnalerted(createdBefore, limit, queuedBefore, lostBefore)).map(
+      toRecorded
+    ),
   findDueForReminder: async (notifiedBefore, limit) =>
     (await imageModerationIncidentRepository.findDueForReminder(notifiedBefore, limit)).map(toRecorded),
   findOldestPending: async () => {
@@ -48,6 +50,7 @@ const incidents: IncidentReviewSweepDeps['incidents'] = {
     return oldest && toRecorded(oldest);
   },
   markAlerted: (id, at) => imageModerationIncidentRepository.markAlerted(id, at),
+  markAlertQueued: (id, at) => imageModerationIncidentRepository.markAlertQueued(id, at),
   countPending: () => imageModerationIncidentRepository.countPendingReview(),
   markReminded: (ids, at) => imageModerationIncidentRepository.markReminded(ids, at),
   findDueForEscalation: async (createdBefore, limit) =>
@@ -56,9 +59,10 @@ const incidents: IncidentReviewSweepDeps['incidents'] = {
     const escalated = await imageModerationIncidentRepository.escalate(id, { trigger: 'timeout' }, at);
     return escalated && toRecorded(escalated);
   },
-  findEscalationUnalerted: async limit =>
-    (await imageModerationIncidentRepository.findEscalationUnalerted(limit)).map(toRecorded),
+  findEscalationUnalerted: async (limit, queuedBefore, lostBefore) =>
+    (await imageModerationIncidentRepository.findEscalationUnalerted(limit, queuedBefore, lostBefore)).map(toRecorded),
   markEscalationAlerted: (id, at) => imageModerationIncidentRepository.markEscalationAlerted(id, at),
+  markEscalationAlertQueued: (id, at) => imageModerationIncidentRepository.markEscalationAlertQueued(id, at),
   findDueForEscalationReminder: async (notifiedBefore, limit) =>
     (await imageModerationIncidentRepository.findDueForEscalationReminder(notifiedBefore, limit)).map(toRecorded),
   markEscalationReminded: (ids, at) => imageModerationIncidentRepository.markEscalationReminded(ids, at),

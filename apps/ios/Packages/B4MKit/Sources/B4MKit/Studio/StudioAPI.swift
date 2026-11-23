@@ -74,10 +74,13 @@ public struct GenerationStatus: Equatable, Sendable {
   public let phase: GenerationPhase
   /// Short-lived presigned URLs of the output.
   public let resultURLs: [URL]
+  /// The Files entry of a job's output, once it succeeded; nil for image quests and outputs stored outside Files.
+  public let resultFileID: String?
 
-  public init(phase: GenerationPhase, resultURLs: [URL] = []) {
+  public init(phase: GenerationPhase, resultURLs: [URL] = [], resultFileID: String? = nil) {
     self.phase = phase
     self.resultURLs = resultURLs
+    self.resultFileID = resultFileID
   }
 }
 
@@ -86,6 +89,8 @@ public protocol StudioAPI: Sendable {
   func models(for kind: GenerationKind) async throws -> [GenerationModel]
   func generate(_ request: GenerationRequest) async throws -> GenerationHandle
   func editImage(_ request: ImageEditRequest) async throws -> GenerationHandle
+  /// Starts a Scene: a video and a music track muxed into one clip. Free, so it never refuses for credits.
+  func composeScene(_ request: SceneRequest) async throws -> GenerationHandle
   func status(of handle: GenerationHandle) async throws -> GenerationStatus
   func cancel(_ handle: GenerationHandle) async throws
   /// A notebook for edits of images that do not name one (the edit route requires a session).

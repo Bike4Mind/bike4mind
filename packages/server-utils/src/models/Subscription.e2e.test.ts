@@ -61,6 +61,41 @@ afterEach(async () => {
   await Subscription.deleteMany({});
 });
 
+describe('hasLapsedSubscriptionsByOwners', () => {
+  it.each(['canceled', 'past_due', 'unpaid', 'paused'] as const)('recognizes %s history', async status => {
+    await Subscription.create(row({ status }));
+    await expect(
+      subscriptionRepository.hasLapsedSubscriptionsByOwners(SubscriptionOwnerType.User, ['user_1'])
+    ).resolves.toBe(true);
+  });
+
+  it.each(['active', 'trialing', 'incomplete', 'incomplete_expired'] as const)(
+    'does not classify %s as lapsed',
+    async status => {
+      await Subscription.create(row({ status }));
+      await expect(
+        subscriptionRepository.hasLapsedSubscriptionsByOwners(SubscriptionOwnerType.User, ['user_1'])
+      ).resolves.toBe(false);
+    }
+  );
+
+  it('scopes history to the requested owner type and ids', async () => {
+    await Subscription.create(row({ status: 'canceled', ownerType: SubscriptionOwnerType.Organization }));
+    await expect(
+      subscriptionRepository.hasLapsedSubscriptionsByOwners(SubscriptionOwnerType.User, ['user_1'])
+    ).resolves.toBe(false);
+    await expect(
+      subscriptionRepository.hasLapsedSubscriptionsByOwners(SubscriptionOwnerType.Organization, ['other'])
+    ).resolves.toBe(false);
+    await expect(
+      subscriptionRepository.hasLapsedSubscriptionsByOwners(SubscriptionOwnerType.Organization, [])
+    ).resolves.toBe(false);
+    await expect(
+      subscriptionRepository.hasLapsedSubscriptionsByOwners(SubscriptionOwnerType.Organization, ['user_1'])
+    ).resolves.toBe(true);
+  });
+});
+
 describe('subscription acquisition', () => {
   it('persists touches and includes them in the admin owner-details projection', async () => {
     const acquisition = { firstTouch: { source: 'widgets' }, lastTouch: { source: 'email', medium: 'newsletter' } };

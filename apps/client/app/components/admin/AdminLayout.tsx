@@ -1,10 +1,10 @@
-import { Suspense, useCallback, useState, type ReactNode } from 'react';
+import { Suspense, useCallback, useMemo, useState, type ReactNode } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { Outlet, useLocation, useNavigate, useRouterState } from '@tanstack/react-router';
 import { useShallow } from 'zustand/react/shallow';
 import MenuIcon from '@mui/icons-material/Menu';
 import { Box, Drawer, IconButton, Sheet, Typography } from '@mui/joy';
-import { isFullAdmin } from '@bike4mind/common';
+import { hasAdminPermission, isFullAdmin } from '@bike4mind/common';
 import RestrictedPage from '@client/app/components/common/RestrictedPage';
 import { ProviderBundle } from '@client/app/contexts/ProviderBundle';
 import { useUser } from '@client/app/contexts/UserContext';
@@ -14,7 +14,9 @@ import { adminActionCountsQueryKey, useAdminActionCounts } from '@client/app/hoo
 import { HelpPanel } from '../help';
 import EnvironmentBanner from './AdminEnvironmentBanner';
 import { SidebarNav } from './AdminSidebarNav';
-import { AdminTab } from './adminSidebarConfig';
+import { canOpenContributedAdminPage, withContributedPages, type ContributedAdminPage } from './adminContributedPages';
+import { isAdminExtPath } from './adminExtPath';
+import { AdminTab, SIDEBAR_SECTIONS } from './adminSidebarConfig';
 import { canEnterAdminConsole, canOpenAdminTab, DELEGATED_ADMIN_TAB_PERMISSIONS } from './adminTabPermissions';
 import { environmentChipLabel, resolveCurrentEnvironment } from './environmentBanner';
 import { adminTabToSlug } from './adminTabSlugs';
@@ -47,10 +49,14 @@ const detailPageTabFor = (pathname: string): AdminTab | undefined =>
         ? AdminTab.Models
         : undefined;
 
+const NO_ADMIN_PAGES: readonly ContributedAdminPage[] = [];
+
 type AdminLayoutProps = {
   children: ReactNode;
   /** Must match the flag `routes/admin/index.tsx` passes to AdminPage, which gates the same tab. */
   enableUserMigration?: boolean;
+  /** Pages a premium package contributes; each is listed in the sidebar for full admins. */
+  adminPages?: readonly ContributedAdminPage[];
 };
 
 /**
@@ -63,7 +69,11 @@ type AdminLayoutProps = {
  * rendered inside it (the AI chat, the help panel) opts out with `data-admin-surface-exclude`. The
  * phone drawer is rendered in place (not portalled) to stay inside the scope.
  */
-export const AdminLayout = ({ children, enableUserMigration = false }: AdminLayoutProps) => {
+export const AdminLayout = ({
+  children,
+  enableUserMigration = false,
+  adminPages = NO_ADMIN_PAGES,
+}: AdminLayoutProps) => {
   const pathname = useLocation({ select: location => location.pathname });
   const navigate = useNavigate();
   const [storedActiveTab, setActiveTab] = useAdminModal(useShallow(state => [state.activeTab, state.setActiveTab]));
@@ -72,15 +82,21 @@ export const AdminLayout = ({ children, enableUserMigration = false }: AdminLayo
   const isAdmin = !!currentUser?.isAdmin;
   const { data: liveOpsEnv } = useLiveOpsTriageEnv(isAdmin);
   const impersonating = useAccessToken(s => s.impersonating);
-  // Every counted queue is a full-admin tab; the server still gates each count by its own permission.
-  const actionCounts = useAdminActionCounts({ enabled: isFullAdmin(currentUser) && !impersonating });
+  // The route needs support:read and gates each count by its own permission, so a delegate sees only the held grants count.
+  const actionCounts = useAdminActionCounts({
+    enabled: (isFullAdmin(currentUser) || hasAdminPermission(currentUser, 'support:read')) && !impersonating,
+  });
   const queryClient = useQueryClient();
   const newSubscriptions = useNewSubscriptionsDot(isAdmin);
   const { collapsed, toggleCollapsed } = useAdminSidebarCollapsed();
   const [drawerOpen, setDrawerOpen] = useState(false);
 
   const detailPageTab = detailPageTabFor(pathname);
-  const activeTab = detailPageTab ?? storedActiveTab;
+  // A contributed page is no tab, so none is highlighted while one is open.
+  const onContributedPage = isAdminExtPath(pathname);
+  const activeTab = onContributedPage ? null : (detailPageTab ?? storedActiveTab);
+  const sections = useMemo(() => withContributedPages(SIDEBAR_SECTIONS, adminPages), [adminPages]);
+  const canOpenPage = useCallback(() => canOpenContributedAdminPage(currentUser), [currentUser]);
 
   // A detail page belongs to its tab, so a delegate who cannot open that tab cannot open the page.
   const canOpenTab = useCallback((tab: AdminTab) => canOpenAdminTab(currentUser, tab), [currentUser]);
@@ -92,6 +108,9 @@ export const AdminLayout = ({ children, enableUserMigration = false }: AdminLayo
   // both: one render of a denied page would already fire its requests.
   const renderedPathname = useRouterState({ select: state => state.matches.at(-1)?.pathname ?? '' });
   const deniedDetailTab = deniedTabOf(pathname) ?? deniedTabOf(renderedPathname);
+  // Same rule for a contributed page, which no delegated permission opens.
+  const deniedContributedPage =
+    !canOpenContributedAdminPage(currentUser) && (isAdminExtPath(pathname) || isAdminExtPath(renderedPathname));
 
   const selectTab = (tab: AdminTab) => {
     setDrawerOpen(false);
@@ -101,6 +120,12 @@ export const AdminLayout = ({ children, enableUserMigration = false }: AdminLayo
     // On the console the tab URL sync mirrors the store into `?tab=`; anywhere else, go there.
     if (pathname === ADMIN_CONSOLE_PATH) return;
     navigate({ to: '/admin', search: { tab: adminTabToSlug(tab) } });
+  };
+
+  const selectPage = (path: string) => {
+    setDrawerOpen(false);
+    void queryClient.invalidateQueries({ queryKey: adminActionCountsQueryKey });
+    navigate({ href: path });
   };
 
   const account = currentUser
@@ -119,9 +144,14 @@ export const AdminLayout = ({ children, enableUserMigration = false }: AdminLayo
     actionCounts: actionCounts.data,
     // No dot on the tab the admin is looking at; a row started meanwhile lights it once they leave.
     newSubscriptions: newSubscriptions && activeTab !== AdminTab.Subscriptions,
+    isFullAdmin: isFullAdmin(currentUser),
     hiddenNotifications,
     canOpenTab,
     onTabSelect: selectTab,
+    sections,
+    canOpenPage,
+    activePagePath: onContributedPage ? pathname : null,
+    onPageSelect: selectPage,
     environmentLabel: environmentChipLabel[resolveCurrentEnvironment().environment],
   };
 
@@ -142,7 +172,7 @@ export const AdminLayout = ({ children, enableUserMigration = false }: AdminLayo
             data-testid="admin-layout-content"
             sx={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}
           >
-            {(isAdminSubscriptionDetailPath(pathname) || isAdminModelsDetailPath(pathname)) && (
+            {(isAdminSubscriptionDetailPath(pathname) || isAdminModelsDetailPath(pathname) || onContributedPage) && (
               <AdminCommandPalette enableEntitySearch={isAdmin} canOpenTab={canOpenTab} onNavigate={selectTab} />
             )}
             <Box
@@ -175,10 +205,12 @@ export const AdminLayout = ({ children, enableUserMigration = false }: AdminLayo
               </Typography>
             </Box>
             <Box sx={{ flex: 1, minHeight: 0, overflow: 'auto', ...adminScrollGutter }}>
-              {deniedDetailTab === undefined ? (
-                children
-              ) : (
+              {deniedDetailTab !== undefined ? (
                 <MissingPermissionState requirement={DELEGATED_ADMIN_TAB_PERMISSIONS[deniedDetailTab]} />
+              ) : deniedContributedPage ? (
+                <MissingPermissionState />
+              ) : (
+                children
               )}
             </Box>
           </Box>
@@ -204,11 +236,17 @@ export const AdminLayout = ({ children, enableUserMigration = false }: AdminLayo
  * The `/admin` layout route's element. The guard, the providers and the Suspense boundary live
  * here once, so no admin child route can render outside them or without the sidebar.
  */
-export const AdminLayoutRoute = ({ fallback }: { fallback: ReactNode }) => (
+export const AdminLayoutRoute = ({
+  fallback,
+  adminPages,
+}: {
+  fallback: ReactNode;
+  adminPages?: readonly ContributedAdminPage[];
+}) => (
   <RestrictedPage requireAccess={canEnterAdminConsole}>
     {/* Mounted only behind the guard, so an unauthorised visit does not trigger their fetches. */}
     <ProviderBundle>
-      <AdminLayout>
+      <AdminLayout adminPages={adminPages}>
         <Suspense fallback={fallback}>
           <Outlet />
         </Suspense>

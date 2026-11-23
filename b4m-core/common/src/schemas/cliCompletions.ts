@@ -344,17 +344,57 @@ export const CompletionRunAttributionSchema = z
 
 export type CompletionRunAttribution = z.infer<typeof CompletionRunAttributionSchema>;
 
+/** The largest run budget accepted, in credits; well past any real job, it keeps the counter exact. */
+export const COMPLETION_RUN_MAX_BUDGET_CREDITS = 1_000_000_000;
+
+export const CompletionRunBudgetCreditsSchema = z
+  .number()
+  .int()
+  .min(1)
+  .max(COMPLETION_RUN_MAX_BUDGET_CREDITS)
+  .describe(
+    "The most the run's completions may claim together, in credits. Each completion claims its share before the model is called, so concurrent completions cannot together be admitted past it. An estimate miss can take the run slightly over."
+  );
+
 export const CreateCompletionRunRequestSchema = z.object({
   rootSessionId: CompletionSessionIdSchema.optional().describe(
     'Your own id for the conversation that starts the run. A conversation can start many runs; each gets its own id.'
+  ),
+  budgetCredits: CompletionRunBudgetCreditsSchema.optional().describe(
+    'Caps what its completions may claim, in credits; an estimate miss can take the run slightly over. Omit it and the run draws only on the account balance, as before. A budget can be raised later but never added to a run minted without one.'
   ),
 });
 
 export const CompletionRunSchema = z.object({
   runId: CompletionRunIdSchema,
   rootSessionId: z.string().optional(),
+  budgetCredits: z.number().int().positive().optional().describe('The run budget; absent for a run without one.'),
   createdAt: z.iso.datetime(),
 });
+
+export const RaiseCompletionRunBudgetRequestSchema = z.object({
+  budgetCredits: CompletionRunBudgetCreditsSchema.describe(
+    "The run's new budget, in credits. Must be above the current one: a budget is only ever raised."
+  ),
+});
+
+export type RaiseCompletionRunBudgetRequest = z.infer<typeof RaiseCompletionRunBudgetRequestSchema>;
+
+const CreditAmountSchema = z.number().nonnegative();
+
+/** A budgeted run's ceiling and what is held against it. */
+export const CompletionRunBudgetStateSchema = z.object({
+  budgetCredits: z.number().int().positive(),
+  committedCredits: CreditAmountSchema.describe(
+    'Settled charges plus the claims of completions still running: what new completions are admitted against. Can sit above `settled.creditsCharged` until those completions settle.'
+  ),
+  reservedCredits: CreditAmountSchema.describe(
+    'The part of `committedCredits` not yet settled: claims of completions still running, or waiting for the expired-hold sweep.'
+  ),
+  remainingCredits: CreditAmountSchema.describe('`budgetCredits` minus `committedCredits`, never below zero.'),
+});
+
+export type CompletionRunBudgetState = z.infer<typeof CompletionRunBudgetStateSchema>;
 
 export type CompletionRun = z.infer<typeof CompletionRunSchema>;
 
@@ -408,6 +448,7 @@ export const CompletionRunUsageSchema = z.object({
   byAttemptTruncated: z
     .boolean()
     .describe('True when the run has more attempts than `byAttempt` lists; `settled` still counts all of them.'),
+  budget: CompletionRunBudgetStateSchema.optional().describe('Present only for a run minted with a budget.'),
 });
 
 export type CompletionRunUsage = z.infer<typeof CompletionRunUsageSchema>;

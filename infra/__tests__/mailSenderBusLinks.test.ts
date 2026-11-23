@@ -28,6 +28,16 @@ const linkAfter = (file: string, marker: string) => {
   return /\blink: \[([^\]]*)\]/.exec(source.slice(from))?.[1] ?? '';
 };
 
+/** The source from the marker up to the next compute constructor, i.e. that compute's own options. */
+const blockAfter = (file: string, marker: string) => {
+  const source = readRepo(file);
+  const from = source.indexOf(marker);
+  expect(from, `${marker} not found in ${file}`).toBeGreaterThanOrEqual(0);
+  const rest = source.slice(from + marker.length);
+  const next = rest.search(/new sst\.aws\.|\.subscribe\(|\.notify\(/);
+  return next === -1 ? rest : rest.slice(0, next);
+};
+
 // Built from parts so the infra handler scan in packages/scripts does not read it as a handler path.
 const WORKERS_SRC = ['apps', 'workers', 'src'].join('/');
 const worker = (handler: string) => `handler: '${WORKERS_SRC}/${handler}'`;
@@ -53,11 +63,21 @@ const MAIL_SENDING_COMPUTE: { file: string; marker: string; sends: string }[] = 
   { file: 'infra/functions.ts', marker: worker('queueHandlers/slackQuestProcessor.handler'), sends: 'alerts' },
   { file: 'infra/agentExecutor.ts', marker: worker('queueHandlers/agentExecutor.handler'), sends: 'alerts' },
   { file: 'infra/chatCompletion.ts', marker: "new sst.aws.Service('ChatCompletion'", sends: 'alerts' },
+  // These two run chat completions through the Slack package, whose defaults record incidents.
+  { file: 'infra/queues.ts', marker: worker('cron/liveopsTriageWorker.handler'), sends: 'alerts' },
+  { file: 'infra/llm.ts', marker: worker('events/slackQuickAsk.handler'), sends: 'alerts' },
 ];
 
 describe('computes that queue mail link the event bus', () => {
   it.each(MAIL_SENDING_COMPUTE)('$marker in $file links eventBus', ({ file, marker }) => {
     expect(linkAfter(file, marker)).toMatch(/\beventBus\b/);
+  });
+
+  // queuedMailer offloads an over-limit body to the app files bucket before publishing.
+  it.each(MAIL_SENDING_COMPUTE)('$marker in $file can write offloaded mail bodies', ({ file, marker }) => {
+    const block = blockAfter(file, marker);
+    expect(block).toContain('mailBodyEnvironment(appFilesBucket)');
+    expect(block).toContain('mailBodyPutPermission(appFilesBucket)');
   });
 
   it('reads a link that lacks the bus as not linked', () => {

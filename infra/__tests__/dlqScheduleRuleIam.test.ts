@@ -8,12 +8,28 @@ import { describe, it, expect } from 'vitest';
 import { readdirSync, readFileSync } from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import ts from 'typescript';
 import { stripComments } from './helpers/infraSource';
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const read = (file: string) => stripComments(readFileSync(path.join(REPO_ROOT, 'infra', file), 'utf8'));
 const source = read('web.ts');
 const INFRA_FILES = readdirSync(path.join(REPO_ROOT, 'infra')).filter(file => file.endsWith('.ts'));
+
+function deadLetteredCronNames(src: string): string[] {
+  const names: string[] = [];
+  const visit = (node: ts.Node): void => {
+    if (ts.isVariableDeclaration(node) && node.initializer) {
+      const initializer = node.initializer.getText();
+      if (/new sst\.aws\.Cron\(/.test(initializer) && /\.(functionTarget|ruleTarget)\b/.test(initializer)) {
+        names.push(node.name.getText());
+      }
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(ts.createSourceFile('infra.ts', src, ts.ScriptTarget.Latest, true));
+  return names;
+}
 
 function statementFor(action: string): string {
   const at = source.indexOf(`'${action}'`);
@@ -67,15 +83,29 @@ describe('web function DLQ rule target log permissions', () => {
   });
 
   it('passes every dead-lettered cron to allowRules', () => {
-    const CRON = /(?:const|let) (\w+) =[^;=]*?new sst\.aws\.Cron\(/.source;
     const deadLettered = INFRA_FILES.flatMap(file => {
       const src = read(file);
-      return [...src.matchAll(new RegExp(`${CRON}([\\s\\S]*?)(?=${CRON}|$)`, 'g'))]
-        .filter(([, , chunk]) => /\.(functionTarget|ruleTarget)\b/.test(chunk))
-        .map(([, name]) => ({ file, name, listed: src.includes(`.allowRules([$util.output(${name})])`) }));
+      return deadLetteredCronNames(src).map(name => ({
+        file,
+        name,
+        listed: src.includes(`.allowRules([$util.output(${name})])`),
+      }));
     });
     expect(deadLettered.length).toBeGreaterThanOrEqual(12);
     expect(deadLettered.filter(cron => !cron.listed).map(cron => `${cron.file}:${cron.name}`)).toEqual([]);
+  });
+
+  it('does not attribute an intervening worker DLQ to the preceding cron', () => {
+    expect(
+      deadLetteredCronNames(`
+        const health = enabled ? new sst.aws.Cron('health', { function: {} }) : undefined;
+        const worker = new sst.aws.Function('worker', { transform: deadLetter.functionTarget });
+        const scan = enabled ? new sst.aws.Cron('scan', {
+          job: worker.arn,
+          transform: { target: deadLetter.ruleTarget.target },
+        }) : undefined;
+      `)
+    ).toEqual(['scan']);
   });
 
   it('grants no wildcard on Lambda functions anywhere in infra', () => {

@@ -5,7 +5,9 @@ import { createMocks } from 'node-mocks-http';
 const h = vi.hoisted(() => ({
   audit: vi.fn(),
   axiosPost: vi.fn(),
-  runCloudScan: vi.fn(),
+  invoke: vi.fn(),
+  cooldown: vi.fn(),
+  functionNames: { cloudSecurityScan: 'cloud-scan-worker' } as Record<string, string>,
   findLatest: vi.fn(),
 }));
 
@@ -32,7 +34,7 @@ vi.mock('@bike4mind/database', () => ({
   securityDashboardSnapshotRepository: { findLatestByStageAndScanType: h.findLatest },
 }));
 vi.mock('@bike4mind/server-utils/security/cooldown', () => ({
-  getCooldownStatus: () => ({ canRun: true, hoursRemaining: 0 }),
+  getCooldownStatus: h.cooldown,
 }));
 vi.mock('@bike4mind/server-utils/security/resolveStage', () => ({ resolveStage: () => 'dev' }));
 vi.mock('@bike4mind/server-utils/integrations/github/githubWorkflowTrigger', () => ({
@@ -53,13 +55,21 @@ vi.mock('@aws-sdk/client-sqs', () => ({
 }));
 vi.mock('sst', () => ({
   Resource: {
+    lambdaFunctionNames: h.functionNames,
     SECOPS_ZAP_DISPATCH_TOKEN: { value: 'test-token' },
     SECOPS_PROWLER_WORKFLOW_TOKEN: { value: 'test-token' },
     GITHUB_ZAP_REF: { value: 'main' },
   },
 }));
 vi.mock('axios', () => ({ default: { post: h.axiosPost } }));
-vi.mock('@bike4mind/server-utils/security/cloudScan', () => ({ handler: h.runCloudScan }));
+vi.mock('@aws-sdk/client-lambda', () => ({
+  LambdaClient: class {
+    send = h.invoke;
+  },
+  InvokeCommand: class {
+    constructor(public input: unknown) {}
+  },
+}));
 
 import cloud from '../cloud';
 import cloudProwler from '../cloud-prowler';
@@ -78,13 +88,15 @@ beforeEach(() => {
   vi.clearAllMocks();
   h.audit.mockResolvedValue(null);
   h.axiosPost.mockResolvedValue({ status: 204 });
-  h.runCloudScan.mockResolvedValue(undefined);
+  h.invoke.mockResolvedValue({ StatusCode: 202 });
+  h.cooldown.mockReturnValue({ canRun: true, hoursRemaining: 0 });
+  h.functionNames.cloudSecurityScan = 'cloud-scan-worker';
   h.findLatest.mockResolvedValue(null);
 });
 
 describe('admin security scan triggers audit', () => {
   it.each([
-    ['cloud', cloud, 202, h.runCloudScan],
+    ['cloud', cloud, 202, h.invoke],
     ['cloud-prowler', cloudProwler, 202, h.axiosPost],
     ['web', web, 202, h.axiosPost],
   ])('records settings.security_scan.triggered for a %s scan', async (scanType, route, status, effect) => {
@@ -110,12 +122,55 @@ describe('admin security scan triggers audit', () => {
     expect(h.audit).not.toHaveBeenCalled();
   });
 
-  it('does not record a trigger when an inline scan fails', async () => {
-    h.runCloudScan.mockRejectedValue(new Error('scan failed'));
+  it('does not record a trigger when Lambda dispatch fails', async () => {
+    h.invoke.mockRejectedValue(new Error('dispatch failed'));
 
     const { res } = await post(cloud);
 
     expect(res._getStatusCode()).toBe(500);
+    expect(h.audit).not.toHaveBeenCalled();
+  });
+
+  it('queues the manual worker payload and returns without reading a result snapshot', async () => {
+    const { res } = await post(cloud);
+    expect(res._getJSONData()).toEqual({ canRun: true, queued: true });
+    expect(h.invoke).toHaveBeenCalledWith(
+      expect.objectContaining({
+        input: {
+          FunctionName: 'cloud-scan-worker',
+          InvocationType: 'Event',
+          Payload: Buffer.from(JSON.stringify({ trigger: 'manual' })),
+        },
+      })
+    );
+    expect(h.findLatest).toHaveBeenCalledExactlyOnceWith('dev', 'cloud');
+  });
+
+  it('preserves the cooldown without dispatching or auditing', async () => {
+    const checkedAt = new Date();
+    h.findLatest.mockResolvedValue({ checkedAt });
+    h.cooldown.mockReturnValue({ canRun: false, hoursRemaining: 12 });
+    const { res } = await post(cloud);
+    expect(res._getStatusCode()).toBe(429);
+    expect(res._getJSONData()).toEqual({ canRun: false, reason: 'cooldown', hoursRemaining: 12 });
+    expect(h.cooldown).toHaveBeenCalledWith(checkedAt);
+    expect(h.invoke).not.toHaveBeenCalled();
+    expect(h.audit).not.toHaveBeenCalled();
+  });
+
+  it('fails without auditing when the worker is not linked', async () => {
+    delete h.functionNames.cloudSecurityScan;
+    const { res } = await post(cloud);
+    expect(res._getStatusCode()).toBe(500);
+    expect(h.invoke).not.toHaveBeenCalled();
+    expect(h.audit).not.toHaveBeenCalled();
+  });
+
+  it('rejects a non-admin before dispatch', async () => {
+    const { req, res } = createMocks({ method: 'POST' });
+    (req as Record<string, unknown>).user = { id: 'user-1', isAdmin: false };
+    await expect((cloud as unknown as Route)(req, res)).rejects.toThrow();
+    expect(h.invoke).not.toHaveBeenCalled();
     expect(h.audit).not.toHaveBeenCalled();
   });
 });

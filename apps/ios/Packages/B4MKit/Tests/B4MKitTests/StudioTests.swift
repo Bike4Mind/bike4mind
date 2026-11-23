@@ -11,6 +11,7 @@ actor FakeStudioAPI: StudioAPI {
   private(set) var edits: [ImageEditRequest] = []
   private(set) var generated: [GenerationRequest] = []
   private(set) var sessionsCreated: [String] = []
+  private(set) var scenes: [SceneRequest] = []
   private var statuses: [String: [Result<GenerationStatus, APIError>]] = [:]
   var models: [GenerationKind: [GenerationModel]] = [:]
   var generateFailure: (any Error)?
@@ -36,6 +37,12 @@ actor FakeStudioAPI: StudioAPI {
   func editImage(_ request: ImageEditRequest) async throws -> GenerationHandle {
     edits.append(request)
     return GenerationHandle(kind: .image, id: "edit-\(edits.count)", prompt: request.summaryPrompt, startedAt: Date())
+  }
+
+  func composeScene(_ request: SceneRequest) async throws -> GenerationHandle {
+    if let generateFailure { throw generateFailure }
+    scenes.append(request)
+    return GenerationHandle(kind: .scene, id: "scene-\(scenes.count)", prompt: request.label, startedAt: Date())
   }
 
   func status(of handle: GenerationHandle) async throws -> GenerationStatus {

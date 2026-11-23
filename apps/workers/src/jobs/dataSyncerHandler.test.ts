@@ -394,6 +394,19 @@ describe('dataSyncerHandler', () => {
     expect(adminFilter.settingName.$nin).toContain('modelAccessRevision');
   });
 
+  it('does not copy the Bedrock guardrail settings, which name a guardrail of the source stage', async () => {
+    process.env.SEED_STAGE_NAME = 'pr123';
+
+    await invoke();
+
+    const adminFilter = state.findFilters.find(f => f.name === 'adminsettings')?.filter as {
+      settingName: { $nin: string[] };
+    };
+    expect(adminFilter.settingName.$nin).toEqual(
+      expect.arrayContaining(['BedrockGuardrailId', 'BedrockGuardrailVersion'])
+    );
+  });
+
   it('excludes ciphertext-shaped values under any name and keeps plaintext', async () => {
     process.env.SEED_STAGE_NAME = 'pr123';
 

@@ -2,6 +2,7 @@ export const API_KEY_USER_CAP_ERROR_CODE = 'api_key_user_cap';
 export const API_KEY_TRUST_REQUIRED_ERROR_CODE = 'api_key_trust_required';
 export const ACCOUNT_TRUST_REQUIRED_ERROR_CODE = 'account_trust_required';
 export const AGENT_LIMIT_REACHED_ERROR_CODE = 'agent_limit_reached';
+export const INSTRUCTION_LIMIT_REACHED_ERROR_CODE = 'instruction_limit_reached';
 export const UNKNOWN_MODEL_ERROR_CODE = 'unknown_model';
 export const MODEL_REQUIRES_SUBSCRIPTION_ERROR_CODE = 'model_requires_subscription';
 export const FREE_QUEST_LIMIT_REACHED_ERROR_CODE = 'free_quest_limit_reached';
@@ -19,9 +20,12 @@ export const ACCOUNT_SUSPENDED_ERROR_CODE = 'account_suspended';
 export const RUN_NOT_FOUND_ERROR_CODE = 'run_not_found';
 export const ORG_MODEL_NOT_ALLOWED_ERROR_CODE = 'org_model_not_allowed';
 export const ORG_TOOL_NOT_ALLOWED_ERROR_CODE = 'org_tool_not_allowed';
+export const RUN_BUDGET_EXHAUSTED_ERROR_CODE = 'run_budget_exhausted';
+export const RUN_BUDGET_NOT_RAISED_ERROR_CODE = 'run_budget_not_raised';
 export const MCP_ACTION_REPLACED_ERROR_CODE = 'action_replaced';
 export const PENDING_ACTION_EXPIRED_ERROR_CODE = 'action_expired';
 export const PENDING_ACTION_ALREADY_RESOLVED_ERROR_CODE = 'action_already_resolved';
+export const BRIEF_QUESTION_CLOSED_ERROR_CODE = 'question_closed';
 export const END_USER_ID_NOT_ALLOWED_ERROR_CODE = 'end_user_id_not_allowed';
 export const INVALID_END_USER_ID_ERROR_CODE = 'invalid_end_user_id';
 
@@ -54,6 +58,8 @@ export const API_ERROR_CODES = [
   SPEND_FROZEN_ERROR_CODE,
   /** The user owns as many agents as their tier allows; remediation is deleting one or upgrading. */
   AGENT_LIMIT_REACHED_ERROR_CODE,
+  /** The user keeps as many standing assistant instructions as allowed; remediation is removing one. */
+  INSTRUCTION_LIMIT_REACHED_ERROR_CODE,
   /** The caller cannot afford the request; remediation is buying credits. */
   'insufficient_credits',
   /** The owner is solvent but this key hit its admin-set ceiling; remediation is raising the cap. */
@@ -91,12 +97,18 @@ export const API_ERROR_CODES = [
   ORG_MODEL_NOT_ALLOWED_ERROR_CODE,
   /** A 403: the request names a built-in tool the caller's organization policy does not allow. */
   ORG_TOOL_NOT_ALLOWED_ERROR_CODE,
+  /** A 422: the completion's `run` has no budget left for it; remediation is raising the run budget (POST /api/v1/completion-runs/{runId}/budget), not buying credits. */
+  RUN_BUDGET_EXHAUSTED_ERROR_CODE,
+  /** A 409: a run budget change that is not a raise - the new budget is not above the current one, or the run was minted without one. */
+  RUN_BUDGET_NOT_RAISED_ERROR_CODE,
   /** A 409: the pending action the caller answered was replaced by a newer one; review the new one. */
   MCP_ACTION_REPLACED_ERROR_CODE,
   /** A 409: the pending action lapsed before it was answered; it is cleared and the agent must ask again. */
   PENDING_ACTION_EXPIRED_ERROR_CODE,
   /** A 409: the pending action was already approved, denied or cleared (including by a replayed request). */
   PENDING_ACTION_ALREADY_RESOLVED_ERROR_CODE,
+  /** A 409: the brief question was already replied to, or the conversation moved past it; nothing was sent. */
+  BRIEF_QUESTION_CLOSED_ERROR_CODE,
   // Video generation (POST /api/v1/video-generations). Must stay in sync with VIDEO_GENERATION_API_ERROR_CODES.
   'unsupported_duration',
   'unsupported_aspect_ratio',

@@ -51,7 +51,11 @@ type ResearchRunRefusalReason = Exclude<
  */
 export type ResearchRunRefusedError = BadRequestError & { reason: ResearchRunRefusalReason };
 
-const REFUSAL_REASONS: ReadonlySet<unknown> = new Set<ResearchRunRefusalReason>(['run_in_progress', 'daily_cap']);
+const REFUSAL_REASONS: ReadonlySet<unknown> = new Set<ResearchRunRefusalReason>([
+  'run_in_progress',
+  'daily_cap',
+  'schedule_paused',
+]);
 
 const researchRunRefused = (message: string, reason: ResearchRunRefusalReason): ResearchRunRefusedError =>
   Object.assign(new BadRequestError(message), { reason });
@@ -165,6 +169,12 @@ export async function startResearchRun(
   const dataLakeId = lake.id;
   const config = await db.dataLakeResearchConfigs.findByIdInLake(configId, dataLakeId);
   if (!config) throw new NotFoundError('Research configuration not found');
+
+  // The claim returns the pre-update snapshot, so a pause that landed after the claim is only
+  // visible on this fresh read.
+  if (starter.trigger === 'periodic' && config.schedulePaused === true) {
+    throw researchRunRefused('This research schedule is paused', 'schedule_paused');
+  }
 
   // One at a time per lake. Checked before the daily cap because it is the guard whose message is
   // the clearer of the two.
