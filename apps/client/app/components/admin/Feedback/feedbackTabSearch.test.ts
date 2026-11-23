@@ -295,6 +295,7 @@ describe('feedbackViewToSearch', () => {
         'feedbackStatus',
         'feedbackSubject',
         'feedbackType',
+        'feedbackUser',
       ].sort()
     );
   });
