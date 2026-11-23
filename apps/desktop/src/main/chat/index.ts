@@ -68,6 +68,9 @@ import { createCompletionRunMinter } from './completionRuns';
 import { ApprovalModePreference } from './ApprovalModePreference';
 import { PromptCacheTtlPreference } from './PromptCacheTtlPreference';
 import { LocalContextPreference } from './LocalContextPreference';
+import { SpawnLocationPreference } from './SpawnLocationPreference';
+import { registerSpawnLocationIpc } from './spawnLocationIpc';
+import { SPAWN_LOCATION_FILE_NAME } from '@shared/spawnLocation';
 import { createLateReload } from './lateReload';
 import { registerGenerationIpc } from './generationIpc';
 import { modelSettingsChanged, registerModelSettingsIpc } from './modelSettingsIpc';
@@ -543,6 +546,7 @@ export function registerChat(
     logger,
   });
   const localContext = new LocalContextPreference(join(userData, 'local-context.json'));
+  const spawnLocation = new SpawnLocationPreference(join(userData, SPAWN_LOCATION_FILE_NAME));
   const localSizing = localContextSizing({
     setting: () => localContext.read(),
     pinnedProjectors: () => hooks.pinnedProjectors?.() ?? new Map(),
@@ -704,6 +708,8 @@ export function registerChat(
     hooks.observeSessionStatus?.(event);
     // Only reached once a turn has run, long after pullRequests below exists.
     if (event.status === 'done' || event.unreadReply) pullRequests.turnSettled(event.sessionId);
+    // Same: a session changes status only once `service` below exists.
+    service.sessionStatusChanged(event);
   });
 
   // Typed-ahead messages, on their own channel: this is per-session state that outlives any
@@ -792,6 +798,7 @@ export function registerChat(
     composerDrafts,
     models,
     modelSettings,
+    spawnLocation,
     logger,
     mintCompletionRun: createCompletionRunMinter(message =>
       logger.warn(`CHAT: could not mint a completion run: ${message}`)
@@ -902,6 +909,10 @@ export function registerChat(
       models.forgetLocal();
     },
     fit: () => local.contextFit(),
+  });
+  registerSpawnLocationIpc(ipcMain, {
+    preference: spawnLocation,
+    broadcast: location => send(IPC_CHANNELS.chatSpawnLocation, location),
   });
   ipcMain.handle(IPC_CHANNELS.chatListCreationTools, (_event, model: string) => service.listCreationTools(model));
   ipcMain.handle(IPC_CHANNELS.chatSetSessionArchived, (event, sessionId: unknown, archived: unknown) => {

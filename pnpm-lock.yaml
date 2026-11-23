@@ -2765,6 +2765,9 @@ importers:
       '@aws-sdk/client-sqs':
         specifier: ^3.1150.0
         version: 3.1151.0
+      '@aws-sdk/client-wafv2':
+        specifier: ^3.1150.0
+        version: 3.1151.0
       '@bike4mind/agents':
         specifier: workspace:*
         version: link:../../b4m-core/agents

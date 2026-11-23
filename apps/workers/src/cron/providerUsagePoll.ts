@@ -6,6 +6,10 @@
  * alarmed in infra/providerSpend.ts, as is UnpricedOutputTokens). Unlike the ledger-derived EstimatedUsd (infra/llmSpend.ts),
  * this counts every call billed to the organization, whichever service made it.
  *
+ * Where a provider spend scope is configured for the stage (providerSpendScope.ts), ProviderReportedUsd
+ * and the token metrics cover only that scope, the same scope the nightly reconciliation applies, and
+ * ProviderReportedOrgUsd keeps the organization-wide figure so spend outside the stage stays visible.
+ *
  * Prices come from the static adapter tables plus the ModelPrice snapshot that model discovery
  * writes to S3 (modelPriceSnapshotWriter.ts); without the snapshot the static tables alone price
  * the hour.
@@ -40,6 +44,7 @@ import { randomUUID } from 'crypto';
 import { spendReconciliationService } from '@bike4mind/services';
 import { Resource } from 'sst';
 import { lookupProviderAdminKey } from './providerAdminKey';
+import { describeProviderSpendScope, readProviderSpendScope } from './providerSpendScope';
 
 type ProviderHourlyUsage = spendReconciliationService.ProviderHourlyUsage;
 type UsageReportProvider = spendReconciliationService.UsageReportProvider;
@@ -59,21 +64,43 @@ const contextToLogs = (context: Context) => ({
   stage: Resource.App.stage,
 });
 
+interface ScopedUsage {
+  rows: ProviderHourlyUsage[];
+  /** Undefined when the stage has no scope, so every row is in scope. */
+  scope: object | undefined;
+}
+
 interface ProviderConfig {
   provider: UsageReportProvider;
-  fetch: (key: string, start: Date, end: Date) => Promise<ProviderHourlyUsage[]>;
+  fetch: (key: string, start: Date, end: Date) => Promise<ScopedUsage>;
 }
 
 const PROVIDERS: ProviderConfig[] = [
   {
     provider: 'anthropic',
-    fetch: (key, start, end) =>
-      spendReconciliationService.fetchAnthropicHourlyUsage(key, start.toISOString(), end.toISOString()),
+    fetch: async (key, start, end) => {
+      const scope = await readProviderSpendScope('anthropic');
+      const rows = await spendReconciliationService.fetchAnthropicHourlyUsage(
+        key,
+        start.toISOString(),
+        end.toISOString(),
+        scope
+      );
+      return { rows, scope };
+    },
   },
   {
     provider: 'openai',
-    fetch: (key, start, end) =>
-      spendReconciliationService.fetchOpenAIHourlyUsage(key, start.getTime() / 1000, end.getTime() / 1000),
+    fetch: async (key, start, end) => {
+      const scope = await readProviderSpendScope('openai');
+      const rows = await spendReconciliationService.fetchOpenAIHourlyUsage(
+        key,
+        start.getTime() / 1000,
+        end.getTime() / 1000,
+        scope
+      );
+      return { rows, scope };
+    },
   },
 ];
 
@@ -211,8 +238,12 @@ export async function handler(_event: unknown, context: Context) {
     }
 
     try {
-      const rows = await fetch(key, start, end);
+      const { rows: allRows, scope } = await fetch(key, start, end);
+      const rows = allRows.filter(row => row.inScope);
       const price = await spendReconciliationService.priceProviderUsage(provider, rows, undefined, snapshot);
+      const orgPrice = scope
+        ? await spendReconciliationService.priceProviderUsage(provider, allRows, undefined, snapshot)
+        : price;
       if (price.unpricedModels.length > 0) {
         logger.warn(
           `[ProviderUsagePoll] ${provider}: no price for ${price.unpricedModels.join(', ')} ` +
@@ -225,6 +256,13 @@ export async function handler(_event: unknown, context: Context) {
       const dimensions = [{ Name: 'Provider', Value: provider }];
       metricData.push(
         { MetricName: 'ProviderReportedUsd', Value: price.usd, Unit: 'None', Dimensions: dimensions, Timestamp: now },
+        {
+          MetricName: 'ProviderReportedOrgUsd',
+          Value: orgPrice.usd,
+          Unit: 'None',
+          Dimensions: dimensions,
+          Timestamp: now,
+        },
         {
           MetricName: 'ProviderReportedOutputTokens',
           Value: price.outputTokens,
@@ -246,6 +284,7 @@ export async function handler(_event: unknown, context: Context) {
       const models = new Set(rows.map(row => row.model)).size;
       logger.info(
         `[ProviderUsagePoll] ${provider} ${window}: usd=$${price.usd.toFixed(2)} ` +
+          `orgUsd=$${orgPrice.usd.toFixed(2)} scope=${describeProviderSpendScope(scope)} ` +
           `outputTokens=${price.outputTokens} models=${models}`
       );
     } catch (err) {

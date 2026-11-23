@@ -31,7 +31,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
     return chain;
   },
 }));
-vi.mock('@server/security/incidentSignals', () => ({ getIncidentSignals: h.signals }));
+vi.mock('@bike4mind/server-utils/security/incidentSignals', () => ({ getIncidentSignals: h.signals }));
 vi.mock('@server/security/incidentState', () => ({ getIncidentState: h.state }));
 
 import incidentSignals from '../incident-signals';

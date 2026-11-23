@@ -6,16 +6,18 @@ import { registerSessionOrchestrateIpc } from './sessionOrchestrateIpc';
 function setup() {
   const summary = { id: 's1', orchestrate: true } as ChatSessionSummary;
   const setSessionOrchestrate = vi.fn(() => Promise.resolve(summary));
+  const raiseRunBudget = vi.fn(() => Promise.resolve({ ok: true as const, resumed: 1 }));
   const handlers = new Map<string, (...args: unknown[]) => unknown>();
   registerSessionOrchestrateIpc(
     {
       handle: (channel: string, listener: (...args: never[]) => unknown) =>
         void handlers.set(channel, listener as never),
     },
-    { setSessionOrchestrate }
+    { setSessionOrchestrate, raiseRunBudget }
   );
   const call = (...args: unknown[]) => handlers.get(IPC_CHANNELS.chatSetSessionOrchestrate)?.({}, ...args);
-  return { summary, setSessionOrchestrate, call };
+  const raise = (...args: unknown[]) => handlers.get(IPC_CHANNELS.chatRaiseRunBudget)?.({}, ...args);
+  return { summary, setSessionOrchestrate, raiseRunBudget, call, raise };
 }
 
 describe('session orchestrate IPC handler', () => {
@@ -44,5 +46,28 @@ describe('session orchestrate IPC handler', () => {
 
     expect(answers).toEqual([null, null, null, null, null]);
     expect(setSessionOrchestrate).not.toHaveBeenCalled();
+  });
+
+  it('passes a positive whole budget through and refuses any other', async () => {
+    const { summary, setSessionOrchestrate, call } = setup();
+
+    expect(await call('s1', true, 500)).toBe(summary);
+    expect(await Promise.all([call('s1', true, 0), call('s1', true, 1.5), call('s1', true, '500')])).toEqual([
+      null,
+      null,
+      null,
+    ]);
+
+    expect(setSessionOrchestrate.mock.calls).toEqual([['s1', true, 500]]);
+  });
+
+  it('raises a run budget only for a positive whole number of credits', async () => {
+    const { raiseRunBudget, raise } = setup();
+
+    expect(await raise('s1', 2000)).toEqual({ ok: true, resumed: 1 });
+    expect(await raise('s1', -5)).toEqual({ ok: false, error: 'Enter a whole number of credits.' });
+    expect(await raise(7, 2000)).toEqual({ ok: false, error: 'Enter a whole number of credits.' });
+
+    expect(raiseRunBudget.mock.calls).toEqual([['s1', 2000]]);
   });
 });

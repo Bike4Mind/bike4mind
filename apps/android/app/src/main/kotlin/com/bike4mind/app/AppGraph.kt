@@ -6,6 +6,7 @@ import android.util.Log
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.net.toUri
 import com.bike4mind.app.capture.MediaAudioRecorder
+import com.bike4mind.app.push.AgentRunNotifications
 import com.bike4mind.app.push.FcmClient
 import com.bike4mind.app.push.SharedPreferencesPushTokenMemory
 import com.bike4mind.app.storage.KeystoreTokenStore
@@ -21,6 +22,9 @@ import com.bike4mind.kit.account.AccountWire
 import com.bike4mind.kit.account.SettingsController
 import com.bike4mind.kit.account.StepUpController
 import com.bike4mind.kit.account.StepUpWire
+import com.bike4mind.kit.agents.AgentRunMonitor
+import com.bike4mind.kit.agents.AgentRunService
+import com.bike4mind.kit.agents.AgentRunWire
 import com.bike4mind.kit.approvals.PendingActionWire
 import com.bike4mind.kit.capture.CaptureEngine
 import com.bike4mind.kit.capture.CaptureJobStore
@@ -55,6 +59,9 @@ import io.ktor.client.plugins.websocket.WebSockets
 import java.io.File
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 
 /**
  * Every long-lived object, wired once per server. Twin of apps/ios Bike4Mind/AppModel.swift: the screens get
@@ -99,6 +106,13 @@ class AppGraph(context: Context, val environment: ServerEnvironment) {
         PendingActionWire(environment, http),
     )
 
+    // Agent runs outlive the chat that started them, so they are followed from this scope, not a screen's.
+    private val agentRunScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val agentRunApi = AgentRunWire(environment, http)
+    private val agentRunNotifications = AgentRunNotifications(appContext)
+    private val agentRunMonitor = AgentRunMonitor(agentRunApi, agentRunNotifications, agentRunScope)
+    private val agentRuns = AgentRunService(agentRunApi, agentRunNotifications, agentRunMonitor)
+
     // Presigned storage URLs carry their own signature; a bearer token or the identity headers would break it.
     private val storageHttp = HttpClient(engine)
     private val captureWire = CaptureWire(environment, http, storageHttp)
@@ -121,7 +135,7 @@ class AppGraph(context: Context, val environment: ServerEnvironment) {
     val oauth = OAuthConfiguration.forEnvironment(environment)
     private val pendingSignIn = PendingSignInStore(context)
 
-    fun chat(sessionId: String?, scope: CoroutineScope) = ChatController(sessionId, chatBackend, scope)
+    fun chat(sessionId: String?, scope: CoroutineScope) = ChatController(sessionId, chatBackend, scope, agentRuns = agentRuns)
 
     fun composerAttachments(scope: CoroutineScope) = ComposerAttachments(captureWire, scope)
 
@@ -226,6 +240,8 @@ class AppGraph(context: Context, val environment: ServerEnvironment) {
     }
 
     fun close() {
+        agentRunMonitor.stopAll()
+        agentRunScope.cancel()
         authHttp.close()
         http.close()
         storageHttp.close()

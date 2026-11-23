@@ -574,6 +574,26 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  '/api/v1/pending-decisions': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * Count decisions waiting on you
+     * @description The number of decisions waiting on you, for a badge or a lock-screen widget: the agent approvals still open in your notebooks plus the other decisions in your latest ready brief. Read-only and cheap; it composes nothing. Authenticate with a JWT access token of the signed-in user; only your own notebooks and briefs are counted.
+     */
+    get: operations['getPendingDecisionCount'];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   '/api/v1/push-tokens': {
     parameters: {
       query?: never;
@@ -6089,6 +6109,16 @@ export interface components {
       text: string;
       /** @description Index into the question `options` when the reply picks one of them; recorded on the question. */
       choiceIndex?: number;
+    };
+    getPendingDecisionCountResponse200: {
+      /** @description Decisions waiting on you: `approvals` plus `briefDecisions`. Nothing is counted twice. */
+      count: number;
+      /** @description Agent approvals still open in your notebooks: raised within the last 15 minutes and not yet answered. */
+      approvals: number;
+      /** @description Decisions in your latest ready brief that are not agent approvals. An approval decision in the brief is counted under `approvals` while it is open, and not at all once it was answered or lapsed. */
+      briefDecisions: number;
+      /** @description The latest ready brief `briefDecisions` comes from; null when there is none. */
+      briefId: string | null;
     };
     /**
      * @example {
@@ -19546,6 +19576,85 @@ export interface operations {
       };
       /** @description The agent run could not be started. When the dispatch could not be confirmed either way the question stays answered so the reply can never run twice; open the conversation to see whether it went through. Otherwise nothing was sent and the question stays open for another reply. */
       502: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+    };
+  };
+  getPendingDecisionCount: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description The count. */
+      200: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['getPendingDecisionCountResponse200'];
+        };
+      };
+      /** @description Missing or invalid JWT. */
+      401: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The account is suspended (`errorCode: account_suspended`). */
+      403: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ScopeForbiddenResponse'];
+        };
+      };
+      /** @description The path does not serve this HTTP method. */
+      405: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description The methods this path serves. GET implies HEAD. */
+          Allow?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The request declared a client build (`X-Client-Name` + `X-Client-Version`) older than the minimum this API still serves for that client. Upgrade to `minimum_version` or later. Never sent to a request that omits either header. */
+      426: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['UpgradeRequiredResponse'];
+        };
+      };
+      /** @description Per-user rate limit exceeded. */
+      429: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
           'X-Request-ID'?: string;

@@ -26,7 +26,7 @@ export const handler = async (
     // Only allow seeding on preview environments using IS_PREVIEW environment variable
     const isPreview = 'isPreview' in event ? event.isPreview : process.env.IS_PREVIEW === 'true';
 
-    // Set IS_PREVIEW env var so seeders can check it (e.g., SystemSecretsSeeder skips validation in preview)
+    // Set IS_PREVIEW env var so seeders can check it (e.g., OAuthClientSeeder only seeds on a preview)
     if (isPreview) {
       process.env.IS_PREVIEW = 'true';
     }

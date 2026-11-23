@@ -43,6 +43,14 @@ export const USAGE_EVENT_STATUSES = ['ok', 'error', 'timeout', 'refusal', 'degen
 
 export type UsageEventStatus = (typeof USAGE_EVENT_STATUSES)[number];
 
+/**
+ * Whose provider key paid for the call: the platform's (admin setting or self-host env) or the
+ * user's own stored key. Only the platform's draws down the platform's vendor plan.
+ */
+export const USAGE_KEY_SOURCES = ['platform', 'user'] as const;
+
+export type UsageKeySource = (typeof USAGE_KEY_SOURCES)[number];
+
 /** Where a UsageEvent's rates came from: a ModelPrice catalog row, or the adapter literal fallback. */
 export const USAGE_PRICE_SOURCES = ['catalog', 'literal'] as const;
 
@@ -241,6 +249,8 @@ export const UsageEvent = z.object({
   source: z.enum(COMPLETION_SOURCES).optional(),
   /** API key that authed the call; present only for API-key-authed usage. */
   apiKeyId: z.string().optional(),
+  /** Whose provider key served the call. Set on vendor-quota paths (ElevenLabs); unset elsewhere and on older rows. */
+  keySource: z.enum(USAGE_KEY_SOURCES).optional(),
 
   // Price stamp, written at text-model settlement so a refund or audit can recompute the
   // charge from the rates actually applied. All optional: rows written before the stamp, and
@@ -448,6 +458,31 @@ export type NamedPlatformConsumerUsage = IPlatformConsumerUsage & {
   ownerType?: CreditHolderType;
   ownerName?: string;
 };
+
+export interface IProviderUnitsParams {
+  provider: string;
+  from: Date;
+  to: Date;
+  /**
+   * A per-call units value the vendor prices flat (ElevenLabs bills an auto-duration sound effect per generation,
+   * and we record it as the default duration). Rows with exactly this value are bucketed apart, flagged atDefaultUnits.
+   */
+  defaultUnits?: number;
+}
+
+/** One bucket of providerUnitsBreakdown. keySource is null on rows written before it was recorded. */
+export interface IProviderUnitsRow {
+  day: string; // YYYY-MM-DD (UTC)
+  feature: UsageEventFeature;
+  model: string;
+  userId: string;
+  keySource: UsageKeySource | null;
+  status: UsageEventStatus;
+  /** True for the bucket of rows whose units equal params.defaultUnits; always false without it. */
+  atDefaultUnits: boolean;
+  requests: number;
+  units: number;
+}
 
 /**
  * Optional platform-summary filters. `source` and `ownerType` are applied as the
@@ -896,6 +931,13 @@ export interface IUsageEventRepository extends IBaseRepository<IUsageEventDocume
    * sources / all owner types. Admin-only surface.
    */
   platformUsageSummary(params?: IPlatformUsageParams): Promise<IPlatformUsageSummary>;
+
+  /**
+   * One provider's usage over [from, to), summed per (UTC day, feature, model, user, key source,
+   * status): request count and `units` (characters, seconds, ...). Powers the vendor-plan views,
+   * which convert units to vendor credits (see ../../vendorQuota).
+   */
+  providerUnitsBreakdown(params: IProviderUnitsParams): Promise<IProviderUnitsRow[]>;
 
   /**
    * One session's usage rolled up by quest and by model. Defaults to all events

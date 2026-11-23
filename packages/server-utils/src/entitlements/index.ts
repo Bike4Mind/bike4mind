@@ -62,6 +62,8 @@ export interface EntitlementUser {
   emailVerified?: boolean | null;
   /** Set by a credit purchase, never by an admin grant alone; unlocks `plan:paid` (see paidStanding.ts). */
   lastCreditsPurchasedAt?: Date | null;
+  /** Set on an org's service account: its plan is the organization's (see activeSubscriptions.ts). */
+  serviceAccountOrganizationId?: string | null;
 }
 
 /** Projects an authenticated `IUserDocument` onto the fields `getUserEntitlements` reads. */
@@ -73,6 +75,7 @@ export function toEntitlementUser(user: IUserDocument): EntitlementUser {
     email: user.email,
     emailVerified: user.emailVerified,
     lastCreditsPurchasedAt: user.lastCreditsPurchasedAt,
+    serviceAccountOrganizationId: user.serviceAccountOrganizationId,
   };
 }
 
@@ -97,15 +100,22 @@ export async function getUserEntitlements(
   preloadedActiveSubscriptions?: readonly { priceId: string }[],
   options?: { requireComplete?: boolean }
 ): Promise<EntitlementKey[]> {
+  // An org service account holds its organization's plan (the same rule as getRequestActiveSubscriptions,
+  // strict on failure) and no partner grants: its address is a synthetic one, not a person's.
+  const serviceAccountOrgId = user.serviceAccountOrganizationId;
   // Both reads are independent - run them together to avoid serializing two round-trips.
   const [activeSubscriptions, partnerKeys] = await Promise.all([
     preloadedActiveSubscriptions ??
-      (options?.requireComplete
-        ? getActiveSubscriptionsForUser(user.id, { strict: true })
-        : getActiveSubscriptionsForUser(user.id)),
-    options?.requireComplete
-      ? partnerEntitlementsForEmail(user.email, user.emailVerified, { strict: true })
-      : partnerEntitlementsForEmail(user.email, user.emailVerified),
+      (serviceAccountOrgId
+        ? getActiveSubscriptionsForOrganization(serviceAccountOrgId)
+        : options?.requireComplete
+          ? getActiveSubscriptionsForUser(user.id, { strict: true })
+          : getActiveSubscriptionsForUser(user.id)),
+    serviceAccountOrgId
+      ? []
+      : options?.requireComplete
+        ? partnerEntitlementsForEmail(user.email, user.emailVerified, { strict: true })
+        : partnerEntitlementsForEmail(user.email, user.emailVerified),
   ]);
   // DB-backed partner rules (issue #293) union with the pure registry grants
   // (subscription + tag + env-domain). Additive so an env-configured domain

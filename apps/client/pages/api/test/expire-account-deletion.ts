@@ -4,7 +4,7 @@ import { isE2EEnabled } from '@bike4mind/server-utils/utils/config';
 import { User } from '@bike4mind/database';
 import { isValidE2eTestSecret } from '@server/auth/e2eTestSecret';
 import { completeAccountDeletion } from '@bike4mind/server-utils/users/completeAccountDeletion';
-import { erasureRegistry } from '@server/dataSubject/erasureRegistry';
+import { erasureRegistry } from '@bike4mind/server-utils/dataSubject/erasureRegistry';
 import { Request } from 'express';
 
 interface ExpireAccountDeletionBody {

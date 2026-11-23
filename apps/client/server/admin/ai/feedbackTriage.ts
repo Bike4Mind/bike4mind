@@ -18,12 +18,12 @@ import {
 import { Logger } from '@bike4mind/observability';
 import { executeDecision } from '@bike4mind/server-utils/decisions/executeDecision';
 import { callablePlatformModel, resolveJsonInput } from '@bike4mind/server-utils/decisions/platformDecision';
-import { adminAiDecisionAccounting } from './budget';
+import { adminAiDecisionAccounting } from '@bike4mind/server-utils/admin/ai/budget';
 import { embedAdminAi, loadFeedbackAiConfig } from './embedAdminAi';
 import { feedbackQuestions, nearestFeedback, readFeedbackAnswers } from './feedbackDecision';
-import { pseudonymiseEvidence } from './pseudonymiseEvidence';
-import { recordAdminAiAttempt } from './telemetry';
-import { AdminAiSkip } from './adminAiSkip';
+import { pseudonymiseEvidence } from '@bike4mind/server-utils/admin/ai/pseudonymiseEvidence';
+import { recordAdminAiAttempt } from '@bike4mind/server-utils/admin/ai/telemetry';
+import { AdminAiSkip } from '@bike4mind/server-utils/admin/ai/adminAiSkip';
 import { decisionFailureCode } from '@bike4mind/server-utils/decisions/platformDecision';
 
 export async function triageFeedback(rawFeedbackId: string): Promise<void> {

@@ -66,6 +66,7 @@ describe('fetchAnthropicHourlyUsage', () => {
         outputTokens: 400,
         cacheReadTokens: 3000,
         cacheWriteTokens: 250,
+        inScope: true,
       },
       {
         bucketStart: new Date(START_ISO),
@@ -74,6 +75,7 @@ describe('fetchAnthropicHourlyUsage', () => {
         outputTokens: 5,
         cacheReadTokens: 0,
         cacheWriteTokens: 0,
+        inScope: true,
       },
     ]);
     expect(mockFetch).toHaveBeenCalledTimes(2);
@@ -143,6 +145,7 @@ describe('fetchOpenAIHourlyUsage', () => {
         outputTokens: 700,
         cacheReadTokens: 2000,
         cacheWriteTokens: 0,
+        inScope: true,
       },
       {
         bucketStart: new Date(START_ISO),
@@ -151,6 +154,7 @@ describe('fetchOpenAIHourlyUsage', () => {
         outputTokens: 20,
         cacheReadTokens: 0,
         cacheWriteTokens: 0,
+        inScope: true,
       },
     ]);
 
@@ -174,5 +178,83 @@ describe('fetchOpenAIHourlyUsage', () => {
     await expect(fetchOpenAIHourlyUsage('sk-admin', START_UNIX, END_UNIX)).rejects.toThrow(
       'OpenAI API 429: rate limited'
     );
+  });
+});
+
+describe('scoped usage reports', () => {
+  it('groups the Anthropic usage report by workspace and API key and tags rows in scope', async () => {
+    mockFetch.mockResolvedValueOnce(
+      json({
+        data: [
+          {
+            starting_at: START_ISO,
+            results: [
+              { model: 'claude-sonnet-4-5', workspace_id: 'wrkspc_prod', api_key_id: 'apikey_prod', output_tokens: 1 },
+              { model: 'claude-sonnet-4-5', workspace_id: 'wrkspc_prod', api_key_id: 'apikey_dev', output_tokens: 2 },
+              { model: 'claude-sonnet-4-5', workspace_id: null, api_key_id: 'apikey_prod', output_tokens: 3 },
+              { model: 'claude-sonnet-4-5', workspace_id: 'wrkspc_prod', api_key_id: null, output_tokens: 4 },
+            ],
+          },
+        ],
+        has_more: false,
+      })
+    );
+
+    const rows = await fetchAnthropicHourlyUsage('sk-admin', START_ISO, END_ISO, {
+      workspaceIds: ['wrkspc_prod'],
+      apiKeyIds: ['apikey_prod'],
+    });
+
+    expect(requestedUrl(0).searchParams.getAll('group_by[]')).toEqual(['model', 'workspace_id', 'api_key_id']);
+    expect(rows.map(row => [row.outputTokens, row.inScope])).toEqual([
+      [1, true],
+      [2, false],
+      [3, false],
+      [4, false],
+    ]);
+  });
+
+  it('matches the Anthropic default workspace, reported as null, by the "default" id', async () => {
+    mockFetch.mockResolvedValueOnce(
+      json({
+        data: [{ starting_at: START_ISO, results: [{ model: 'm', workspace_id: null, output_tokens: 1 }] }],
+        has_more: false,
+      })
+    );
+
+    const rows = await fetchAnthropicHourlyUsage('sk-admin', START_ISO, END_ISO, { workspaceIds: ['default'] });
+
+    expect(requestedUrl(0).searchParams.getAll('group_by[]')).toEqual(['model', 'workspace_id']);
+    expect(rows[0].inScope).toBe(true);
+  });
+
+  it('groups the OpenAI usage report by project and API key and tags rows in scope', async () => {
+    mockFetch.mockResolvedValueOnce(
+      json({
+        data: [
+          {
+            start_time: START_UNIX,
+            results: [
+              { model: 'gpt-5', project_id: 'proj_prod', api_key_id: 'key_prod', output_tokens: 1 },
+              { model: 'gpt-5', project_id: 'proj_other', api_key_id: 'key_prod', output_tokens: 2 },
+              { model: 'gpt-5', project_id: 'proj_prod', api_key_id: 'key_dev', output_tokens: 3 },
+            ],
+          },
+        ],
+        has_more: false,
+      })
+    );
+
+    const rows = await fetchOpenAIHourlyUsage('sk-admin', START_UNIX, END_UNIX, {
+      projectIds: ['proj_prod'],
+      apiKeyIds: ['key_prod'],
+    });
+
+    expect(requestedUrl(0).searchParams.getAll('group_by[]')).toEqual(['model', 'project_id', 'api_key_id']);
+    expect(rows.map(row => [row.outputTokens, row.inScope])).toEqual([
+      [1, true],
+      [2, false],
+      [3, false],
+    ]);
   });
 });

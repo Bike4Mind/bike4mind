@@ -8,6 +8,7 @@ import {
   BriefScheduleResponseSchema,
   BriefScheduleSchema,
   BriefSchema,
+  PendingDecisionCountSchema,
 } from '../../schemas/brief';
 import { ApiErrorSchema } from '../../schemas/chat';
 
@@ -173,4 +174,25 @@ export const replyToBriefDecisionContract = defineEndpoint({
     streaming: false,
     body: { text: 'Go with the second option.', choiceIndex: 1 },
   },
+});
+
+/** Served by apps/client/pages/api/v1/pending-decisions.ts; counted by apps/client/server/briefs/countPendingDecisions.ts. */
+export const getPendingDecisionCountContract = defineEndpoint({
+  method: 'get',
+  path: '/api/v1/pending-decisions',
+  operationId: 'getPendingDecisionCount',
+  summary: 'Count decisions waiting on you',
+  description:
+    'The number of decisions waiting on you, for a badge or a lock-screen widget: the agent approvals still ' +
+    'open in your notebooks plus the other decisions in your latest ready brief. Read-only and cheap; it ' +
+    'composes nothing. Authenticate with a JWT access token of the signed-in user; only your own notebooks ' +
+    'and briefs are counted.',
+  tags: ['AI'],
+  auth: 'jwtOnly',
+  responses: {
+    200: { description: 'The count.', schema: PendingDecisionCountSchema },
+    401: { description: 'Missing or invalid JWT.', schema: ApiErrorSchema },
+    429: { description: 'Per-user rate limit exceeded.', schema: ApiErrorSchema },
+  },
+  codeSample: { authToken: '<access_token>', streaming: false },
 });

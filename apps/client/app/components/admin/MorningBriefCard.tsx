@@ -1,7 +1,7 @@
 import { Box, Button, Link, Stack, Typography } from '@mui/joy';
 import { useQuery } from '@tanstack/react-query';
 import { api } from '@client/app/contexts/ApiContext';
-import { latestMorningBriefSchema } from '@client/shared/adminMorningBrief';
+import { latestMorningBriefSchema } from '@bike4mind/server-utils/shared/adminMorningBrief';
 import { useUser } from '@client/app/contexts/UserContext';
 import { isFullAdmin } from '@bike4mind/common';
 import { SectionCard, ErrorState, LoadingState } from './shared';

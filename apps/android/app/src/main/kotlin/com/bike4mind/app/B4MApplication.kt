@@ -2,6 +2,7 @@ package com.bike4mind.app
 
 import android.app.Application
 import com.bike4mind.app.capture.CaptureWorker
+import com.bike4mind.app.push.AgentRunNotifications
 import com.bike4mind.app.push.FcmClient
 import com.bike4mind.app.push.PushNotifications
 import com.bike4mind.app.storage.EnvironmentStore
@@ -35,6 +36,7 @@ class B4MApplication : Application() {
         environments = EnvironmentStore(this)
         onboarding = OnboardingStore(this)
         PushNotifications.createChannel(this)
+        AgentRunNotifications.createChannel(this)
         FcmClient.initialize(this)
         mutableGraph.value = AppGraph(this, environments.current())
         // A share the system stopped (an update, a reboot) carries on once the app runs again.

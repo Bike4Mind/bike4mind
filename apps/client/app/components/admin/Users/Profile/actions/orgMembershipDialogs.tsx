@@ -23,7 +23,10 @@ import { useAdminUserOrgMembership, type OrgMemberRoleChoice } from './useAdminU
 import { ORGANIZATION_ROLE_LABELS, displayName, type AdminUserProfile } from '../userProfileModel';
 
 /** The slice of an organization the membership dialogs read. */
-export type MembershipOrg = Pick<IOrganizationDocument, 'id' | 'name' | 'userId' | 'users' | 'adminUserIds' | 'seats'>;
+export type MembershipOrg = Pick<
+  IOrganizationDocument,
+  'id' | 'name' | 'userId' | 'users' | 'adminUserIds' | 'billingManagerUserIds' | 'seats'
+>;
 
 type DialogProps = { user: AdminUserProfile; onClose: () => void; onAudit?: () => void };
 
@@ -118,9 +121,10 @@ export const AddToOrganizationDialog: React.FC<DialogProps & { memberOrgIds: rea
 const ROLE_CHOICES: readonly { value: OrgMemberRoleChoice; label: string }[] = [
   { value: 'member', label: ORGANIZATION_ROLE_LABELS.member },
   { value: 'manager', label: ORGANIZATION_ROLE_LABELS.manager },
+  { value: 'billingManager', label: ORGANIZATION_ROLE_LABELS.billingManager },
 ];
 
-/** Managers administer the org's roster and groups; the owner's role is fixed. */
+/** Managers administer the org's roster and groups, billing managers its billing; the owner's role is fixed. */
 export const ChangeOrgRoleDialog: React.FC<DialogProps & { org: MembershipOrg }> = ({
   user,
   org,
@@ -130,10 +134,12 @@ export const ChangeOrgRoleDialog: React.FC<DialogProps & { org: MembershipOrg }>
   const membership = useAdminUserOrgMembership(user.id);
   const showUndo = useUndoToast();
   const current: OrganizationMemberRole | null = organizationMemberRole(org, user.id);
-  const [next, setNext] = useState<OrgMemberRoleChoice>(current === 'manager' ? 'manager' : 'member');
+  const [next, setNext] = useState<OrgMemberRoleChoice>(
+    current === 'manager' || current === 'billingManager' ? current : 'member'
+  );
 
   const handleConfirm = async (reason: string) => {
-    if (current !== 'manager' && current !== 'member') return;
+    if (current === null || current === 'owner') return;
     await membership.setRole(org.id, next, reason);
     onClose();
     showUndo({
@@ -157,7 +163,7 @@ export const ChangeOrgRoleDialog: React.FC<DialogProps & { org: MembershipOrg }>
       open
       onClose={onClose}
       title="Change organization role"
-      description={`Managers of ${org.name} can add and remove its members and manage its groups.`}
+      description={`Managers of ${org.name} can add and remove its members and manage its groups. Billing managers handle its billing and usage.`}
       reasonPresets={ADMIN_REASON_PRESETS.orgRoleChange}
       confirmLabel={`Make ${ORGANIZATION_ROLE_LABELS[next]}`}
       blockedReason={blockedReason}
@@ -208,6 +214,7 @@ export const RemoveFromOrganizationDialog: React.FC<DialogProps & { org: Members
       description={[
         `${name} loses access to the data lakes and groups of ${org.name}.`,
         role === 'manager' && 'Their manager rights are removed.',
+        role === 'billingManager' && 'Their billing manager rights are removed.',
         isActive && 'It is their active organization, so that is cleared too.',
         'Adding them back does not restore what was shared with them.',
       ]

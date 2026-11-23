@@ -6,9 +6,9 @@ import WidgetKit
 /// The Live Activity for a quest (a chat turn or an agent run): lock screen banner and Dynamic Island.
 /// The app starts and updates it (`QuestActivityManager`); the server's pushes update it while the app is
 /// closed. A tap opens the session, whose transcript opens scrolled to the latest turn: for an approval that is
-/// the pending-approval card, where the tool and its arguments are shown before the user answers. There is
-/// deliberately no approve button here: the activity's content state carries no pending-action id, so a button
-/// could not tell which request it answers, and approving without seeing the tool call is the wrong default.
+/// the pending-approval card, where the tool and its arguments are shown. While the state names the pending
+/// action's `ts`, approve and deny buttons answer exactly that action (`ApproveQuestActionIntent`), the same
+/// way the approval notification's buttons do; without it the activity only offers the tap.
 struct QuestLiveActivity: Widget {
   var body: some WidgetConfiguration {
     ActivityConfiguration(for: QuestActivityAttributes.self) { context in
@@ -44,6 +44,9 @@ struct QuestLiveActivity: Widget {
               .lineLimit(2)
             if let progress = presentation.progress {
               ProgressView(value: progress).tint(WidgetStyle.color(for: presentation.tone))
+            }
+            if let target = context.attributes.approvalTarget(in: context.state) {
+              QuestApprovalButtons(target: target, tint: WidgetStyle.color(for: presentation.tone))
             }
           }
           .frame(maxWidth: .infinity, alignment: .leading)
@@ -162,7 +165,9 @@ struct QuestLockScreenView: View {
       if let progress = presentation.progress {
         ProgressView(value: progress).tint(tint)
       }
-      if presentation.isUrgent {
+      if let target = attributes.approvalTarget(in: state) {
+        QuestApprovalButtons(target: target, tint: tint)
+      } else if presentation.isUrgent {
         Label("Tap to review and approve in Bike4Mind", systemImage: "arrow.up.forward.app")
           .font(.caption.weight(.semibold))
           .foregroundStyle(tint)
@@ -170,6 +175,29 @@ struct QuestLockScreenView: View {
     }
     .padding(16)
     .opacity(isStale && !presentation.isTerminal ? 0.7 : 1)
+  }
+}
+
+/// Approve asks for the device to be unlocked first; deny only ever stops something.
+struct QuestApprovalButtons: View {
+  let target: PendingActionTarget
+  let tint: Color
+
+  var body: some View {
+    HStack(spacing: 8) {
+      Button(intent: DenyQuestActionIntent(target: target)) {
+        Label("Deny", systemImage: "xmark").frame(maxWidth: .infinity)
+      }
+      .buttonStyle(.bordered)
+      .accessibilityIdentifier("live-activity-deny-btn")
+      Button(intent: ApproveQuestActionIntent(target: target)) {
+        Label("Approve", systemImage: "checkmark").frame(maxWidth: .infinity)
+      }
+      .buttonStyle(.borderedProminent)
+      .tint(tint)
+      .accessibilityIdentifier("live-activity-approve-btn")
+    }
+    .font(.caption.weight(.semibold))
   }
 }
 

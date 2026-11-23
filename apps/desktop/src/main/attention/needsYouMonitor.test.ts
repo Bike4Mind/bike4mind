@@ -115,13 +115,13 @@ describe('NeedsYouMonitor with no window open', () => {
     expect(notices[0]).toMatchObject({ sessionId: 'root', rootId: 'root', title: 'Session root needs you' });
   });
 
-  it('stays quiet for plain, archived and deleted sessions, and leaves them out of the badge', async () => {
+  it('stays quiet for plain, archived and deleted sessions; only the plain one counts on the badge', async () => {
     sessions = [...sessions, session('shelved', undefined, { archived: true }), session('under', 'shelved')];
     await enter('plain');
     await enter('under');
     await enter('gone');
     expect(notices).toEqual([]);
-    expect(setBadge).toHaveBeenLastCalledWith(0);
+    expect(setBadge).toHaveBeenLastCalledWith(1);
   });
 
   it('with the all scope, announces and counts a plain session, but not an archived one', async () => {

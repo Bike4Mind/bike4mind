@@ -14,7 +14,7 @@ cp Config/Local.xcconfig.example Config/Local.xcconfig
 
 In `Config/Local.xcconfig`, set `DEVELOPMENT_TEAM` (your personal team id) and `B4M_APP_BUNDLE_ID` (a unique id; the
 widgets and share extension ids derive from it), and leave the three `*_ENTITLEMENTS` lines pointing at
-`Config/Entitlements/*.personal.entitlements` (empty variants). Then build and run the `Bike4Mind` scheme on your phone.
+`Config/Entitlements/*.personal.entitlements` (empty variants). Then run `make device` with the phone plugged in (or build and run the `Bike4Mind` scheme from Xcode).
 
 What to expect: the app keeps its refresh token in an app-private keychain item, the share extension reports it is signed out,
 widgets show placeholders, and universal links and push do not work. Production sign-in needs the signed Associated Domains
@@ -214,6 +214,8 @@ Run on the first TestFlight build and every release candidate:
 - [ ] Push: register, receive, tap through.
 - [ ] Share: share a link and an image from another app.
 - [ ] Live Activity: start, update, end.
+- [ ] Live Activity approval: an agent run that needs approval shows Approve and Deny on the lock screen; Approve asks to unlock first, Deny does not, and each posts the result as a notification.
+- [ ] Decisions widget (lock screen): after opening the app it shows the same number of decisions as the latest brief's "What needs you" (excluding answered approvals) plus open approvals; a tap opens the latest brief.
 - [ ] App Lock (Face ID), sign out, sign in again.
 - [ ] Dynamic Type at the largest accessibility size on the Chat home, Notebooks, chat and Settings; VoiceOver through sign-in, a chat turn and Settings.
 - [ ] Home-screen icon, launch screen, sign-in header and the Chat home greeting mark show the official brand mark.

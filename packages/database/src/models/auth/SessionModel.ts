@@ -876,7 +876,7 @@ export class SessionRepository extends BaseRepository<ISessionDocument> implemen
       $or: [{ deletedAt: null }, { deletedAt: { $exists: false } }],
     };
 
-    const sessions = await this.sessionModel.find({ userId, ...deletedAtFilter }, { _id: 1 });
+    const sessions = await this.sessionModel.find({ userId, ...deletedAtFilter }, { _id: 1 }).lean();
     // Filter out any sessions with null/undefined _id to prevent toString() errors
     return sessions.filter(s => s._id != null).map(s => s._id.toString());
   }

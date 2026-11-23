@@ -19,6 +19,9 @@ vi.mock('../utils/liveActivityPush', () => ({ endAgentRunLiveActivity: vi.fn() }
 vi.mock('../utils/persistRunAsQuest', () => ({
   persistRunAsQuest: vi.fn(),
 }));
+vi.mock('../briefs/eventBriefTrigger', () => ({
+  startEventBriefForCompletedRun: vi.fn(),
+}));
 vi.mock('../utils/extractFinalAnswer', () => ({
   extractFinalAnswer: vi.fn(),
 }));
@@ -54,6 +57,7 @@ vi.mock('@aws-sdk/client-apigatewaymanagementapi', () => ({
 }));
 
 import { endAgentRunLiveActivity } from '../utils/liveActivityPush';
+import { startEventBriefForCompletedRun } from '../briefs/eventBriefTrigger';
 import { handleGateResponse } from './gateResponse';
 
 const noopLogger = { info: vi.fn(), error: vi.fn(), warn: vi.fn(), updateMetadata: vi.fn() };
@@ -123,6 +127,7 @@ describe('gate response live activity settlement', () => {
       noopLogger as never
     );
     expect(endAgentRunLiveActivity).toHaveBeenCalledWith(execution, { status: 'completed' }, noopLogger);
+    expect(startEventBriefForCompletedRun).toHaveBeenCalledWith('exec-1', execution, noopLogger);
   });
 
   describe('held low-confidence completion', () => {
@@ -152,6 +157,8 @@ describe('gate response live activity settlement', () => {
       );
       expect(endAgentRunLiveActivity).toHaveBeenCalledTimes(1);
       expect(endAgentRunLiveActivity).toHaveBeenCalledWith(heldExecution, { status: 'completed' }, noopLogger);
+      expect(startEventBriefForCompletedRun).toHaveBeenCalledTimes(1);
+      expect(startEventBriefForCompletedRun).toHaveBeenCalledWith(heldExecution.id, heldExecution, noopLogger);
     });
 
     it('ends the activity when Continue has nothing to reopen and accepts the held completion', async () => {

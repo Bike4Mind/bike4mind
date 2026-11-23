@@ -1,5 +1,5 @@
 import type { ElementType } from 'react';
-import type { AdminActionCountKey } from './adminActionCounts';
+import type { AdminActionCountKey } from '@bike4mind/server-utils/app/components/admin/adminActionCounts';
 import {
   Activity,
   AppWindow,
@@ -32,6 +32,7 @@ import {
   Handshake,
   Hash,
   ImageOff,
+  MessageSquareWarning,
   HeartPulse,
   Inbox,
   Key,
@@ -157,6 +158,7 @@ export enum AdminTab {
   AccessReview = 81,
   SpendExplorer = 82,
   SpendMonitor = 83,
+  TextModerationReview = 84,
 }
 
 /**
@@ -316,6 +318,13 @@ export const SIDEBAR_SECTIONS: SidebarSection[] = [
         label: 'Moderation review',
         testid: 'admin-moderation-incidents-btn',
         badge: 'moderationReview',
+      },
+      {
+        Icon: MessageSquareWarning,
+        tab: AdminTab.TextModerationReview,
+        label: 'Text moderation review',
+        testid: 'admin-text-moderation-review-btn',
+        badge: 'textModerationReview',
       },
       {
         Icon: ScrollText,

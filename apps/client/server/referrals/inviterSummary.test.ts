@@ -8,7 +8,10 @@ const m = vi.hoisted(() => ({
   find: vi.fn(),
 }));
 
-vi.mock('@bike4mind/common', () => ({ CreditHolderType: { User: 'User' } }));
+vi.mock('@bike4mind/common', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/common')>()),
+  CreditHolderType: { User: 'User' },
+}));
 vi.mock('@bike4mind/database', () => ({
   adminSettingsRepository: {},
   CREDIT_BALANCE_EVENT_TYPES: [
@@ -25,7 +28,8 @@ vi.mock('@bike4mind/database', () => ({
 }));
 vi.mock('@bike4mind/utils', () => ({
   getSettingsMap: m.getSettingsMap,
-  getSettingsValue: (key: string, settings: Record<string, string>, fallback = 0) => Number(settings[key] ?? fallback),
+  getSettingsValue: (key: string, settings: Record<string, string>, fallback: unknown = 0) =>
+    key === 'ReferralMilestones' ? (settings[key] ?? fallback) : Number(settings[key] ?? fallback),
 }));
 vi.mock('@bike4mind/server-utils/referrals/firstAnswerReward', () => ({ REFERRAL_REWARD_REASON: 'referral_reward' }));
 
@@ -57,7 +61,7 @@ beforeEach(() => {
 });
 
 describe('getInviterSummary', () => {
-  it('stays hidden and reads nothing while all three reward amounts are 0', async () => {
+  it('stays hidden and reads nothing while all three reward amounts are 0 and no milestone is set', async () => {
     m.getSettingsMap.mockResolvedValue({
       ReferralFirstAnswerCredits: '0',
       ReferralFirstPaymentCredits: '0',
@@ -72,6 +76,7 @@ describe('getInviterSummary', () => {
       creditsEarned: 0,
       recentRewards: [],
       rewards: { firstAnswer: 0, firstPayment: 0, secondPayment: 0 },
+      milestones: [],
     });
     expect(m.countUsers).not.toHaveBeenCalled();
     expect(m.aggregate).not.toHaveBeenCalled();
@@ -96,6 +101,26 @@ describe('getInviterSummary', () => {
   it('is enabled as soon as any one reward amount is above 0', async () => {
     m.getSettingsMap.mockResolvedValue({ ReferralSecondPaymentCredits: '6000' });
     expect((await getInviterSummary('inviter1', NOW)).enabled).toBe(true);
+  });
+
+  it('is enabled by milestones alone, and lists them with the ones the active count has reached', async () => {
+    m.getSettingsMap.mockResolvedValue({ ReferralMilestones: '10:1500, 3:300, 5:500' });
+    const summary = await getInviterSummary('inviter1', NOW);
+    expect(summary.enabled).toBe(true);
+    expect(summary.active).toBe(3);
+    expect(summary.milestones).toEqual([
+      { friends: 3, credits: 300, reached: true },
+      { friends: 5, credits: 500, reached: false },
+      { friends: 10, credits: 1500, reached: false },
+    ]);
+  });
+
+  it('reads the milestones with the reward amounts, past the cache', async () => {
+    await getInviterSummary('inviter1', NOW);
+    expect(m.getSettingsMap).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ names: expect.arrayContaining(['ReferralMilestones']), skipCache: true })
+    );
   });
 
   it('counts invited and active friends of this inviter, leaving out synthetic and deleted accounts', async () => {
@@ -159,6 +184,18 @@ describe('getInviterSummary', () => {
       setup([reward('tx1', 1000)], [takeback(1000, 'in_1')]);
       expect((await getInviterSummary('inviter1', NOW)).recentRewards.map(r => r.credits)).toEqual([1000]);
     });
+  });
+
+  it('marks a recent milestone reward with the friend count it was paid for', async () => {
+    m.find
+      .mockReturnValueOnce(
+        findChain([
+          { _id: 'r1', credits: 500, createdAt: new Date(NOW.getTime() - DAY_MS), metadata: { milestoneFriends: 5 } },
+        ])
+      )
+      .mockReturnValueOnce(findChain([]));
+    const { recentRewards } = await getInviterSummary('inviter1', NOW);
+    expect(recentRewards).toEqual([expect.objectContaining({ id: 'r1', credits: 500, milestoneFriends: 5 })]);
   });
 
   it('lists recent usable rewards with a 90 day expiry and only looks back 14 days', async () => {

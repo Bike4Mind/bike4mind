@@ -70,6 +70,7 @@ const NOT_TRACED_TO_AN_ORG_EVENT = new Set([
   // Containment debits a User holder, never an org.
   `${WORKERS}/queueHandlers/riskEvidence`,
   // Ingest, purge, export, delivery and notification work; no metered completion found.
+  `${WORKERS}/events/moderationEscalationAlert`,
   `${WORKERS}/events/sendPush`,
   `${WORKERS}/events/studioJobCompleted`,
   `${WORKERS}/s3/appFileUploadComplete`,

@@ -16,6 +16,7 @@ vi.mock('../userService/moderationPolicy', () => ({
   applyModerationHit: vi.fn().mockResolvedValue({ hitsInWindow: 1, status: 'active' }),
   MODERATION_POLICY: {},
   moderationThrottleKey: vi.fn(),
+  moderationEscalationAlert: vi.fn().mockReturnValue(null),
 }));
 vi.mock('@bike4mind/llm-adapters', async importOriginal => {
   const actual = await importOriginal<typeof import('@bike4mind/llm-adapters')>();

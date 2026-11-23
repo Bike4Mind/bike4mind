@@ -13,7 +13,7 @@ import { createMocks } from 'node-mocks-http';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const {
-  getEffectiveApiKey,
+  getEffectiveApiKeyWithSource,
   deductCredits,
   estimateMusicCredits,
   generate,
@@ -28,7 +28,7 @@ const {
   pendingHolds,
   settlementDraw,
 } = vi.hoisted(() => ({
-  getEffectiveApiKey: vi.fn(),
+  getEffectiveApiKeyWithSource: vi.fn(),
   deductCredits: vi.fn(),
   estimateMusicCredits: vi.fn(),
   generate: vi.fn(),
@@ -157,7 +157,7 @@ vi.mock('@bike4mind/services', async () => {
   const services = await vi.importActual<typeof import('@bike4mind/services')>('@bike4mind/services');
   return {
     organizationService: { isCurrentOrgMember: services.organizationService.isCurrentOrgMember },
-    apiKeyService: { getEffectiveApiKey: (...a: unknown[]) => getEffectiveApiKey(...a) },
+    apiKeyService: { getEffectiveApiKeyWithSource: (...a: unknown[]) => getEffectiveApiKeyWithSource(...a) },
     creditService: {
       ...creditService,
       deductCreditsWithOrgSupport: (...a: unknown[]) => deductCredits(...a),
@@ -208,7 +208,7 @@ const run = (
 beforeEach(() => {
   pendingHolds.clear();
   [
-    getEffectiveApiKey,
+    getEffectiveApiKeyWithSource,
     deductCredits,
     estimateMusicCredits,
     generate,
@@ -229,7 +229,7 @@ beforeEach(() => {
   saveGeneratedAssetToFiles.mockResolvedValue({ saved: false, reason: 'error' });
   upload.mockReset().mockResolvedValue(undefined);
   getSignedUrl.mockReset().mockResolvedValue('https://s3/offload');
-  getEffectiveApiKey.mockResolvedValue('eleven-key');
+  getEffectiveApiKeyWithSource.mockResolvedValue({ key: 'eleven-key', source: 'platform' });
   // Pass-through capacity gate: the gate's own behaviour is covered in @bike4mind/services.
   runElevenLabsWithCapacity
     .mockReset()
@@ -314,6 +314,7 @@ describe('POST /api/ai/music', () => {
         model: 'music_v1',
         // Must match the ledger write's source or the two analytics surfaces disagree.
         source: 'api',
+        keySource: 'platform',
         ownerId: 'u1',
         ownerType: CreditHolderType.User,
         creditsCharged: 150,
@@ -464,6 +465,18 @@ describe('POST /api/ai/music', () => {
     expect(recordUsage).toHaveBeenCalledWith(expect.objectContaining({ feature: 'music_generation', units: 10 }));
   });
 
+  it("stamps keySource 'user' when the call ran on the user's own ElevenLabs key", async () => {
+    getEffectiveApiKeyWithSource.mockResolvedValue({ key: 'own-key', source: 'user' });
+    getSettingsValue.mockReturnValue(true);
+    estimateMusicCredits.mockReturnValue({ requiredCredits: 150, usdCost: 0.075, billedSeconds: 30 });
+
+    const { res, promise } = run({ prompt: 'jazz', lengthMs: 30000 });
+    await promise;
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(recordUsage).toHaveBeenCalledWith(expect.objectContaining({ keySource: 'user' }));
+  });
+
   it('rejects (422) and rolls back the reservation before generating when the balance is short', async () => {
     getSettingsValue.mockReturnValue(true);
     estimateMusicCredits.mockReturnValue({ requiredCredits: 300, usdCost: 0.15, billedSeconds: 60 });
@@ -484,7 +497,7 @@ describe('POST /api/ai/music', () => {
   });
 
   it('returns 503 (not 401) when no provider key resolves (no reservation)', async () => {
-    getEffectiveApiKey.mockResolvedValue(null);
+    getEffectiveApiKeyWithSource.mockResolvedValue(undefined);
 
     const { res, promise } = run({ prompt: 'jazz', lengthMs: 30000 });
     await promise;
@@ -543,7 +556,7 @@ describe('POST /api/ai/music', () => {
     await promise;
 
     expect(res._getStatusCode()).toBe(422);
-    expect(getEffectiveApiKey).not.toHaveBeenCalled();
+    expect(getEffectiveApiKeyWithSource).not.toHaveBeenCalled();
   });
 
   it('rejects an out-of-range length (422) without resolving a key', async () => {
@@ -552,7 +565,7 @@ describe('POST /api/ai/music', () => {
     await promise;
 
     expect(res._getStatusCode()).toBe(422);
-    expect(getEffectiveApiKey).not.toHaveBeenCalled();
+    expect(getEffectiveApiKeyWithSource).not.toHaveBeenCalled();
   });
 
   it.each(['alaw_8000', ''])('refuses format %j with 422, before reserving or generating', async format => {

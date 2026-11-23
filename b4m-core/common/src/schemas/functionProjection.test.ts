@@ -219,11 +219,29 @@ describe('reviewHash', () => {
     expect(await reviewHash(change(contract) as FunctionContract)).not.toBe(await reviewHash(contract));
   });
 
+  it('leaves declared tests out of every projection and the hash, so editing a test needs no new review', async () => {
+    const tested = parsed({
+      ...functionProjectionSample(),
+      tests: [
+        {
+          name: 'two supports',
+          input: { span: 4, load: 1000, supports: [{ position: 0 }, { position: 4 }] },
+          expected: { within_limit: true },
+        },
+      ],
+    });
+    expect(tested.tests).toHaveLength(1);
+    for (const surface of ['llm', 'mcp', 'rest'] as const) {
+      expect(JSON.stringify(projectFunctionSchema(tested, surface))).not.toContain('two supports');
+    }
+    expect(await reviewHash(tested)).toBe(await reviewHash(contract));
+  });
+
   it('covers the canonical contract only, never a surface rendering or a key outside it', async () => {
     const before = await reviewHash(contract);
     for (const surface of ['llm', 'mcp', 'rest'] as const) projectFunctionSchema(contract, surface);
     expect(await reviewHash(contract)).toBe(before);
-    expect(await reviewHash({ ...contract, tests: [{ inputs: {} }] } as FunctionContract)).toBe(before);
+    expect(await reviewHash({ ...contract, extra: 1 } as FunctionContract)).toBe(before);
     expect(await reviewHash(projectFunctionSchema(contract, 'rest'))).toBe(before);
 
     const llm = projectFunctionSchema(contract, 'llm');

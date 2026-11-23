@@ -7,7 +7,7 @@ import {
   getAdminAiClassReadiness,
   ADMIN_AI_CLASS_REGISTRY,
   validateAdminAiConfigPromotion,
-} from '@server/admin/ai/readiness';
+} from '@bike4mind/server-utils/admin/ai/readiness';
 import { recordAdminSettingChange } from '@bike4mind/server-utils/utils/adminSettingsAudit';
 import { BadRequestError, invalidateSettingsCache } from '@bike4mind/utils';
 

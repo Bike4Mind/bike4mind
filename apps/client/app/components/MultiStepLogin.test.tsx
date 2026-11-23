@@ -1220,5 +1220,51 @@ describe('MultiStepLogin - product hint from redirectTo', () => {
     renderLogin();
     expect(screen.queryByTestId('auth-redirect-product-hint')).toBeNull();
     expect(screen.getByText('auth.signInOrCreate')).toBeInTheDocument();
+    expect(screen.getByTestId('signup-text')).toHaveTextContent('auth.registerNow');
+    expect(screen.getByTestId('login-register-prompt')).toHaveTextContent('auth.noAccount');
+    expect(screen.queryByTestId('login-new-here-text')).toBeNull();
+  });
+
+  // The email step already says the code signs in or creates an account; a "Register now" link under
+  // it reads as a second, required step for a visitor sent here by a product link.
+  it('from a product link with registration open, says the email creates the account and offers no register link', () => {
+    premiumNav.items = [{ path: '/product', label: 'Product' }];
+    window.history.replaceState(null, '', '/login?redirectTo=%2Fproduct%2Frun');
+    renderLogin({ enableRegister: true });
+    expect(screen.getByText('auth.signInOrCreate')).toBeInTheDocument();
+    const prompt = screen.getByTestId('login-register-prompt');
+    expect(prompt).toHaveTextContent(/^auth\.newHereEmailCreates$/);
+    expect(within(prompt).getByTestId('login-new-here-text')).toBeInTheDocument();
+    expect(screen.queryByTestId('signup-text')).toBeNull();
+    expect(screen.queryByText(/auth\.noAccount|auth\.registerNow/)).toBeNull();
+    expect(screen.queryByRole('button', { name: /register/i })).toBeNull();
+    expect(prompt).toHaveStyle({ minHeight: '21px' });
+  });
+
+  it('the new-here line matches the one-time-code line it sits under', () => {
+    expect(en.auth.newHereEmailCreates).toBe("New here? Enter your email above and we'll create your account.");
+    expect(en.auth.newHereEmailCreates).not.toMatch(/register/i);
+    expect(en.auth.signInOrCreate).toMatch(/create an account/i);
+  });
+
+  it('from a product link with registration closed, keeps the invite and waitlist line', () => {
+    premiumNav.items = [{ path: '/product', label: 'Product' }];
+    window.history.replaceState(null, '', '/login?redirectTo=%2Fproduct%2Frun');
+    renderLogin({ enableRegister: false });
+    expect(screen.getByTestId('signup-text')).toHaveTextContent('Have an invite code?');
+    expect(screen.getByTestId('login-join-waitlist-link')).toHaveTextContent('auth.joinWaitlist');
+    expect(screen.queryByTestId('login-new-here-text')).toBeNull();
+  });
+
+  it('from a product link, shows no sign-up line while the public config is pending', () => {
+    premiumNav.items = [{ path: '/product', label: 'Product' }];
+    window.history.replaceState(null, '', '/login?redirectTo=%2Fproduct%2Frun');
+    Object.assign(mocks.publicConfig, { isPending: true, isLoading: true });
+    try {
+      renderLogin({ enableRegister: true });
+      expect(screen.getByTestId('login-register-prompt')).toBeEmptyDOMElement();
+    } finally {
+      Object.assign(mocks.publicConfig, { isPending: false, isLoading: false });
+    }
   });
 });

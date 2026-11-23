@@ -12,6 +12,7 @@ const ADD_CREDITS_REF = /\baddCredits(WithLedgerRow)?\b/;
 const REWARD_PATHS: Record<string, string> = {
   'apps/client/pages/api/gears/claim.ts': 'payCreditReward(',
   'packages/server-utils/src/referrals/firstAnswerReward.ts': 'payCreditReward(',
+  'packages/server-utils/src/referrals/milestoneReward.ts': 'payCreditReward(',
   'packages/server-utils/src/referrals/subscriptionReward.ts': 'payCreditReward(',
   'apps/client/server/preferenceArena/index.ts': 'payCreditReward(',
   'apps/client/server/preferenceArena/arenaService.ts': 'deps.payReward(',

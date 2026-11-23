@@ -207,11 +207,11 @@ const OWNER_OR_ADMIN = new Map<string, string>([
     'isAdmin only passed to toSafeOrganization; org authority checked in service',
   ],
   ['organizations/[id]/members/[userId]/index.ts', 'isAdmin only passed to toSafeOrganization for response shaping'],
-  ['organizations/[id]/members/[userId]/manager.ts', 'isAdmin only passed to toSafeOrganization for response shaping'],
   [
     'organizations/[id]/model-policy.ts',
     'managePolicies holder manages the org; verifyOrgPermission lets an admin through',
   ],
+  ['organizations/[id]/members/[userId]/role.ts', 'isAdmin only passed to toSafeOrganization for response shaping'],
   ['organizations/[id]/mfa-policy.ts', 'isAdmin only passed to toSafeOrganization for response shaping'],
   ['organizations/[id]/pendingUsers.ts', 'isAdmin only widens projection of returned users'],
   [
@@ -236,6 +236,7 @@ const OWNER_OR_ADMIN = new Map<string, string>([
   ],
   ['organizations/stats.ts', 'members see own orgs stats; admin sees all orgs'],
   ['organizations/subscriptions/subscribe.ts', 'manageBilling holder (verifyOrgPermission) subscribes the org'],
+  ['organizations/subscriptions/update-seats.ts', 'manageBilling holder (verifyOrgPermission) changes the seat count'],
   ['organizations/users.ts', 'manageMembers holder reports; admin may pick another org via verifyOrgPermission'],
   ['otc/verify.ts', 'sign-in; reads the signing-in account isAdmin as data for the self-host first-admin bootstrap'],
   [
@@ -275,6 +276,10 @@ const OWNER_OR_ADMIN = new Map<string, string>([
   [
     'studio/compositions/[id]/renders.ts',
     'composition owner exports; isAdmin only forwarded to the paid-plan exemption',
+  ],
+  [
+    'stripe/portal.ts',
+    'own customer, or a manageBilling holder (verifyOrgPermission) for an org; opens the billing portal',
   ],
   ['stripe/webhook.ts', 'webhook; user.isAdmin read from dispute subject only to pick a Slack message'],
   [

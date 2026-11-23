@@ -18,8 +18,8 @@ public enum Route: Hashable, Sendable {
   case media
   /// Settings, pushed on the home screen (opened from the avatar or the drawer's account row).
   case settings
-  /// A server-composed assistant brief, pushed on the home screen.
-  case brief(id: String)
+  /// A server-composed assistant brief, pushed on the home screen; a `nil` id is the latest brief.
+  case brief(id: String?)
   /// Open the composer with text already in it. Raised by App Intents (Siri, Shortcuts, Spotlight); the
   /// text is only prefilled, never sent, so a misheard phrase cannot spend credits.
   case compose(ComposeRequest)

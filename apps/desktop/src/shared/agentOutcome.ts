@@ -25,6 +25,16 @@ export type ChildOutcome =
   /** Someone pressed stop. */
   | 'aborted';
 
+/**
+ * Outcomes where the child did not get its work done, which the UI marks red. 'max-tokens' and
+ * 'no-reply' are not here: the run ended on its own, and the UI only notes a cut-short reply.
+ */
+const UNFINISHED_OUTCOMES: ReadonlySet<ChildOutcome> = new Set(['failed', 'aborted', 'turn-budget', 'context-limit']);
+
+export function isUnfinishedOutcome(outcome: ChildOutcome | undefined): boolean {
+  return outcome !== undefined && UNFINISHED_OUTCOMES.has(outcome);
+}
+
 /** Only the last assistant turn decides: an earlier failure that a later turn recovered from does not count. */
 export function classifyMessagesOutcome(messages: readonly ChatMessage[]): ChildOutcome {
   const last = [...messages].reverse().find(message => message.role === 'assistant');

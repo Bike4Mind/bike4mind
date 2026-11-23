@@ -205,6 +205,24 @@ describe('withAgentTerminalPush live activity', () => {
     expect(sentEvents(deps).map(e => e.contentState.status)).toEqual(['running', 'approval_needed', 'paused']);
   });
 
+  it('carries the pending action ts on the approval frame, so the activity can answer that action', async () => {
+    const stamps: unknown[] = [];
+    for (const pendingAction of [
+      { tool: 'create_issue', ts: 1700000000000 },
+      { tool: 'create_issue' },
+      { tool: 'create_issue', ts: 1.5 },
+      { tool: 'create_issue', ts: 0 },
+      'legacy',
+    ]) {
+      const deps = makeLiveDeps();
+      const sendWs = withAgentTerminalPush(async () => undefined, deps, logger);
+      await sendWs('progress', { executionId: 'exec-1', questId: 'quest-1', pendingAction });
+      stamps.push(sentEvents(deps)[0].contentState.pendingActionTs);
+    }
+
+    expect(stamps).toEqual([1700000000000, undefined, undefined, undefined, undefined]);
+  });
+
   it('ends the activity on completed, failed and a user abort', async () => {
     const outcomes: Array<[string, Record<string, unknown>, unknown]> = [
       ['completed', {}, { status: 'completed' }],

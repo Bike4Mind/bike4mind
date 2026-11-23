@@ -41,6 +41,12 @@ describe('secret rotation registry', () => {
     expect(getUnregisteredContributedRotations()).toEqual([]);
   });
 
+  it('never asks for the signing secret sooner than its previous value has to be honoured', async () => {
+    const { SECRET_ROTATION_CONFIG } = await load({ secrets: [], rotations: [] });
+    // One previous slot: a shorter interval would replace a value that is still being verified against.
+    expect(SECRET_ROTATION_CONFIG.HMAC_SIGNING_SECRET.rotationIntervalDays).toBeGreaterThanOrEqual(90);
+  });
+
   it('tells a tree that declares rotations from one that declares none', async () => {
     expect((await load({ secrets: [], rotations: [] })).declaresContributedRotations()).toBe(false);
     vi.resetModules();

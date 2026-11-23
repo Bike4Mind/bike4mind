@@ -119,6 +119,7 @@ const REVIEWED_ENCRYPT_SITES: Record<string, { calls: number; writes: readonly s
     writes: PROVIDER_TOKENS,
     note: 'The sealed tokens are stored under both authProviders and oauthCredentials.',
   },
+  'apps/client/server/auth/oauthServer.ts': { calls: 1, writes: ['systemsecrets.encryptedValue'] },
   'apps/client/server/integrations/notion/notionTokenManager.ts': { calls: 1, writes: [MCP_ENV] },
   'apps/client/server/mcpConnections/connectionService.ts': {
     calls: 2,
