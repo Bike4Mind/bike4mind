@@ -13,7 +13,7 @@ name: Dependency Audit Gate
 
 on:
   pull_request:
-    types: [opened, synchronize, reopened, ready_for_review]
+    types: [opened, synchronize, reopened]
     paths:
       - 'package.json'
       - '**/package.json'

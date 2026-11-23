@@ -10,7 +10,7 @@ on:
   push:
     branches: [main]
   pull_request:
-    types: [opened, synchronize, reopened, ready_for_review]
+    types: [opened, synchronize, reopened, labeled, unlabeled]
     # NOTE: no workflow-level paths-ignore. The `changes` gate below evaluates
     # the per-PR (merge-base) diff and skips the build/test legs on non-deployable
     # changes, while still reporting the required CI Complete/Run Tests checks (a
@@ -24,8 +24,8 @@ env:
 # concurrency (jobs were waiting ~15 min for a runner while executing in ~3 min).
 # PR-only: pushes to main are NEVER cancelled.
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}-${{ (github.event.action == 'labeled' || github.event.action == 'unlabeled') && github.event.label.name != 'ci:full' && github.run_id || 'tests' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' && (github.event.action != 'labeled' && github.event.action != 'unlabeled' || github.event.label.name == 'ci:full') }}
 
 jobs:
   # Changes gate: evaluate the changeset that fired this run (whole-PR
@@ -37,21 +37,15 @@ jobs:
   # Cheap, always runs, so the required checks always have a status to
   # report. Logic + the default exclude list live in the local composite
   # action. Fails open on all three.
-  #
-  # A draft PR reports `deployable` and `docs-changed` as 'false', so it takes the
-  # same skip path as a non-deployable change: the build, test and docs legs skip
-  # (published-dts too, through its `needs: core-build`), and Run Tests / CI
-  # Complete still report green. Marking it ready fires `ready_for_review`, which
-  # re-runs the whole workflow on the real signals. The secret and leak-shape scans
-  # are ungated and still run on drafts.
   changes:
+    if: github.event.action != 'labeled' && github.event.action != 'unlabeled' || github.event.label.name == 'ci:full'
     # Root of the whole DAG.
     runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
     permissions:
       contents: read
     outputs:
-      deployable: ${{ github.event.pull_request.draft == true && 'false' || steps.filter.outputs.deployable }}
-      docs-changed: ${{ github.event.pull_request.draft == true && 'false' || steps.filter.outputs.docs-changed }}
+      deployable: ${{ contains(github.event.pull_request.labels.*.name, 'ci:full') && 'true' || steps.filter.outputs.deployable }}
+      docs-changed: ${{ steps.filter.outputs.docs-changed }}
       published-changed: ${{ steps.filter.outputs.published-changed }}
       changed-files: ${{ steps.changed-files.outputs.files }}
     steps:
@@ -67,7 +61,8 @@ jobs:
       # the range does not resolve, or past 3000 files (job outputs are capped at 1 MB).
       - name: List the PR's changed files
         id: changed-files
-        if: github.event_name == 'pull_request'
+        # An empty list output takes the selector's full-run fallback.
+        if: github.event_name == 'pull_request' && !contains(github.event.pull_request.labels.*.name, 'ci:full')
         env:
           PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
           PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
@@ -1400,7 +1395,7 @@ jobs:
       - verify-docs-build
       - docs-scan-gate
       - published-dts
-    if: ${{ !cancelled() }}
+    if: ${{ !cancelled() && needs.changes.result != 'skipped' }}
     runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
     permissions:
       contents: read
