@@ -205,6 +205,8 @@ describe('orchestration run budget', () => {
 
     await expect(service.raiseRunBudget(root.id, 1500)).resolves.toEqual({ ok: true, resumed: 1 });
     expect(raise).toHaveBeenCalledWith(BUDGET_PATH, { budgetCredits: 1500 }, expect.anything());
+    // The 80% warning named the old budget, so the raise withdraws it.
+    expect(events).toContainEqual({ type: 'context-notice-cleared', sessionId: root.id, kind: 'run-budget' });
     await waitStream(0);
     expect(wire(1).run?.runId).toBe(RUN_A);
     finish(0, 'Carried on');
@@ -300,6 +302,7 @@ describe('orchestration run budget', () => {
         sessionId: root.id,
         message:
           'This orchestration run has committed 82% of its 500-credit budget (350 spent, 60 reserved, 90 left). It pauses when the budget runs out.',
+        kind: 'run-budget',
       },
     ]);
 

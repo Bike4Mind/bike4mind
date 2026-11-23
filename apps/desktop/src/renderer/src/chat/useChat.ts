@@ -926,6 +926,12 @@ export function useConversation(
         // background conversation spends from the same balance as this one.
         setSettledTurns(count => count + 1);
       }
+      if (event.type === 'context-notice-cleared') {
+        const keep = (list: ContextNotice[] | undefined) => (list ?? []).filter(item => item.kind !== event.kind);
+        if (event.sessionId === activeSessionId.current) setNotices(keep);
+        else backgroundNotices.set(event.sessionId, keep(backgroundNotices.get(event.sessionId)));
+        return;
+      }
       if (event.type === 'context-notice' && event.sessionId !== activeSessionId.current) {
         backgroundNotices.set(
           event.sessionId,

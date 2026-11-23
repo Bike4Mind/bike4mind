@@ -2203,7 +2203,7 @@ export class ChatService {
       // Another round of the run may have shown it while this one read.
       if (recorded?.orchestrationPolicy?.budgetWarnedAt !== budget) return;
       for (const id of new Set([session.id, policy.rootSessionId])) {
-        this.emit({ type: 'context-notice', sessionId: id, message: warning });
+        this.emit({ type: 'context-notice', sessionId: id, message: warning, kind: 'run-budget' });
       }
     } catch (err) {
       this.deps.logger.warn(`CHAT: could not check the run budget: ${err instanceof Error ? err.message : err}`);
@@ -2258,6 +2258,8 @@ export class ChatService {
         scope
       );
       if (updated) this.deps.summaryChanged?.(updated);
+      // The 80% warning named the old budget.
+      this.emit({ type: 'context-notice-cleared', sessionId: id, kind: 'run-budget' });
     }
     if (!serverRunId) return { ok: true, resumed: 0 };
     let resumed = 0;

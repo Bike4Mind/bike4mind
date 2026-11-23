@@ -1583,7 +1583,7 @@ export type ModelPhase =
   { kind: 'waiting' } | { kind: 'thinking' } | { kind: 'responding' } | { kind: 'writing-tool'; name: string };
 
 /** A newer context notice of the same kind replaces the older one for a conversation. */
-export type ContextNoticeKind = 'context-size' | 'no-tools';
+export type ContextNoticeKind = 'context-size' | 'no-tools' | 'run-budget';
 
 export type ChatStreamEvent =
   | {
@@ -1669,6 +1669,8 @@ export type ChatStreamEvent =
   | { type: 'context-trimmed'; sessionId: string; dropped: number }
   /** Auto changed a local model's context mid-turn in a way that affects its replies (slower, or smaller). */
   | { type: 'context-notice'; sessionId: string; message: string; kind?: ContextNoticeKind }
+  /** Withdraws the notice of `kind` that no longer holds, such as a budget warning after a raise. */
+  | { type: 'context-notice-cleared'; sessionId: string; kind: ContextNoticeKind }
   /**
    * A first turn is cutting the session's worktree before it goes out
    * (ChatService.ensureWorkspace). `branch` arrives once it has been chosen; `running: false`

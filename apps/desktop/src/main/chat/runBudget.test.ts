@@ -15,6 +15,19 @@ describe('runBudgetPausedMessage', () => {
     );
   });
 
+  it('says the next request does not fit when credits are left', () => {
+    expect(
+      runBudgetPausedMessage(100, {
+        budgetCredits: 100,
+        committedCredits: 75,
+        reservedCredits: 0,
+        remainingCredits: 25,
+      })
+    ).toBe(
+      "Paused: the next request does not fit in what is left of this orchestration run's 100-credit budget (75 spent, 0 reserved, 25 left). Raise the budget to resume; the work so far is kept."
+    );
+  });
+
   it('falls back to the local budget, then to no number, when the read failed', () => {
     expect(runBudgetPausedMessage(500)).toBe(
       'Paused: this orchestration run has used its 500-credit budget. Raise the budget to resume; the work so far is kept.'

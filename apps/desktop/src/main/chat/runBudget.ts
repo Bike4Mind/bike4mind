@@ -17,12 +17,22 @@ function spentAndReserved(state: CompletionRunBudgetState): string {
 /**
  * The fixed text a budget-stopped turn stores. Deterministic by design: no model is asked to
  * explain a stop the run can no longer pay for. `state` is omitted when the usage read failed.
+ * The server refuses a request whose hold does not fit in what is left, so a run can pause with
+ * credits remaining; the text then says so rather than claiming the budget is used up.
  */
 export function runBudgetPausedMessage(budgetCredits?: number, state?: CompletionRunBudgetState): string {
+  const resume = 'Raise the budget to resume; the work so far is kept.';
   const budget = state?.budgetCredits ?? budgetCredits;
   const what = budget !== undefined ? `its ${credits(budget)}-credit budget` : 'its credit budget';
+  if (state && state.remainingCredits > 0) {
+    return (
+      `Paused: the next request does not fit in what is left of this orchestration run's ` +
+      `${credits(state.budgetCredits)}-credit budget (${spentAndReserved(state)}, ` +
+      `${credits(state.remainingCredits)} left). ${resume}`
+    );
+  }
   const detail = state ? ` (${spentAndReserved(state)})` : '';
-  return `Paused: this orchestration run has used ${what}${detail}. Raise the budget to resume; the work so far is kept.`;
+  return `Paused: this orchestration run has used ${what}${detail}. ${resume}`;
 }
 
 /** The 80% notice for `state`, or `undefined` while the run is below it. */
