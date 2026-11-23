@@ -669,6 +669,29 @@ describe('video job end to end with the test provider', () => {
     expect(logged.raw).toEqual(stored);
   });
 
+  it.each([
+    ['ASCII', 'x'.repeat(40 * 1024)],
+    ['multibyte', '\u00e9'.repeat(10 * 1024)],
+    ['astral', '\u{1f600}'.repeat(10 * 1024)],
+  ])('bounds the logged and stored %s payload to 16 KiB including the marker', async (_name, text) => {
+    const t = setup({
+      providers: createVideoProviderRegistry([
+        stubProvider({
+          poll: async () => ({ status: 'failed', retryable: false, message: 'provider_failed', raw: { text } }),
+        }),
+      ]),
+    });
+    const warn = vi.spyOn(t.deps.logger, 'warn');
+    const created = await createVideoJob({ user, request: request(), source: 'studio' }, t.deps);
+    await t.runToCompletion();
+    const stored = t.jobOf(created).rawProviderError;
+    expect(typeof stored).toBe('string');
+    if (typeof stored !== 'string') throw new Error('Expected a bounded payload string');
+    expect(Buffer.byteLength(stored, 'utf8')).toBeLessThanOrEqual(16 * 1024);
+    expect(stored).not.toContain('\ufffd');
+    expect(warn).toHaveBeenCalledWith('video provider failed the job', expect.objectContaining({ raw: stored }));
+  });
+
   it('fails a job queued before its model was retired without submitting it', async () => {
     const submit = vi.fn<VideoProvider['submit']>();
     const t = setup({ providers: createVideoProviderRegistry([stubProvider({ submit })]) });

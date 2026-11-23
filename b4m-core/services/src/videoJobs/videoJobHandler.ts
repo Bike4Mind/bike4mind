@@ -47,8 +47,15 @@ const boundRawPayload = (raw: unknown): unknown => {
   } catch {
     return '[raw provider payload not serializable]';
   }
-  if (json === undefined || json.length <= MAX_RAW_PROVIDER_BYTES) return raw;
-  return `${json.slice(0, MAX_RAW_PROVIDER_BYTES)}...[truncated, ${json.length} chars total]`;
+  if (json === undefined) return raw;
+  const bytes = Buffer.from(json, 'utf8');
+  if (bytes.byteLength <= MAX_RAW_PROVIDER_BYTES) return raw;
+  const marker = `...[truncated, ${json.length} chars total]`;
+  // Streaming decode omits a trailing partial UTF-8 character.
+  const prefix = new TextDecoder().decode(bytes.subarray(0, MAX_RAW_PROVIDER_BYTES - Buffer.byteLength(marker)), {
+    stream: true,
+  });
+  return prefix + marker;
 };
 
 const fail = (code: GenerationJobErrorCode, message: string, rawProviderError?: unknown): VideoStepResult => ({
