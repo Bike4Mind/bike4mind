@@ -24,6 +24,8 @@ interface BreakingChangeDialogProps {
   /** The artifact version the update was refused for. */
   version: number;
   changes: FunctionContractChange[];
+  /** The saved contract no longer parses, so the two could not be compared and `changes` is empty. */
+  unreadable?: boolean;
 }
 
 const ChangeLine = ({ change }: { change: FunctionContractChange }) => {
@@ -45,22 +47,34 @@ const BreakingChangeDialog: React.FC<BreakingChangeDialogProps> = ({
   pinnedVersion,
   version,
   changes,
+  unreadable = false,
 }) => (
   <Modal open onClose={onClose}>
     <ModalDialog size="lg" data-testid="breaking-change-dialog" sx={{ width: '90%', maxWidth: 600 }}>
       <ModalClose />
-      <DialogTitle>This update could break the tool</DialogTitle>
+      <DialogTitle>{unreadable ? 'This tool cannot be updated' : 'This update could break the tool'}</DialogTitle>
       <DialogContent>
         <Stack spacing={2}>
-          <Typography level="body-sm">
-            Version {version} changes the contract of <code>{slug}</code> in ways that could break its callers, so the
-            tool stays pinned to version {pinnedVersion}.
-          </Typography>
-          <Box component="ul" sx={{ my: 0, pl: 3 }} data-testid="breaking-change-dialog-changes">
-            {changes.map(change => (
-              <ChangeLine key={`${change.kind}:${change.path}:${change.before ?? ''}`} change={change} />
-            ))}
-          </Box>
+          {unreadable ? (
+            <Typography level="body-sm" data-testid="breaking-change-dialog-unreadable">
+              The saved contract cannot be read; save this version as a new tool.
+            </Typography>
+          ) : (
+            <>
+              <Typography level="body-sm">
+                Version {version} changes the contract of <code>{slug}</code> in ways that could break its callers, so
+                the tool stays pinned to version {pinnedVersion}.
+              </Typography>
+              <Box component="ul" sx={{ my: 0, pl: 3 }} data-testid="breaking-change-dialog-changes">
+                {changes.map(change => (
+                  <ChangeLine
+                    key={`${change.kind}:${change.path}:${change.before ?? ''}:${change.after ?? ''}`}
+                    change={change}
+                  />
+                ))}
+              </Box>
+            </>
+          )}
           <Typography level="body-sm" data-testid="breaking-change-dialog-offer">
             To save version {version} as a new tool and keep <code>{slug}</code> as it is, give it a new{' '}
             <code>name</code> in <code>{FUNCTION_CONTRACT_GLOBAL}</code>, save the artifact, and select Make this a

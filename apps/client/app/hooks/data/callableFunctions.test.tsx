@@ -4,6 +4,7 @@ import { act, renderHook, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import {
   callableFunctionBreakingChanges,
+  callableFunctionContractUnreadable,
   callableFunctionErrorCode,
   callableFunctionErrorMessage,
   callableFunctionErrorProblems,
@@ -103,25 +104,26 @@ describe('useArtifactCallableFunction', () => {
     h.get.mockResolvedValue({ data: [saved] });
     const { client, result } = renderWith(() => useArtifactCallableFunction('artifact-1', 2, 'double_it'));
 
-    await waitFor(() => expect(result.current.data).toEqual(saved));
+    await waitFor(() => expect(result.current.data).toEqual({ saved, others: [] }));
     expect(h.get).toHaveBeenCalledWith('/api/callable-functions', { params: { artifactId: 'artifact-1' } });
     expect(client.getQueryData([...CALLABLE_FUNCTIONS_LIST_QUERY_KEY, 'artifact-1', 2])).toEqual([saved]);
   });
 
-  it('picks the tool named in the code when the artifact holds several', async () => {
+  it('picks the tool named in the code and returns the other tools in order', async () => {
     const renamed = { id: 'fn-2', slug: 'double_it_v2', pin: { version: 4 } };
-    h.get.mockResolvedValue({ data: [saved, renamed] });
-    const { result } = renderWith(() => useArtifactCallableFunction('artifact-1', 4, 'double_it_v2'));
+    const third = { id: 'fn-3', slug: 'double_it_v3', pin: { version: 5 } };
+    h.get.mockResolvedValue({ data: [saved, renamed, third] });
+    const { result } = renderWith(() => useArtifactCallableFunction('artifact-1', 5, 'double_it_v2'));
 
-    await waitFor(() => expect(result.current.data).toEqual(renamed));
+    await waitFor(() => expect(result.current.data).toEqual({ saved: renamed, others: [saved, third] }));
   });
 
-  it('is null when no function from the artifact has the name in the code', async () => {
+  it('has no saved tool, and the rest as others, when none has the name in the code', async () => {
     h.get.mockResolvedValue({ data: [saved] });
     const { result } = renderWith(() => useArtifactCallableFunction('artifact-1', 1, 'triple_it'));
 
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
-    expect(result.current.data).toBeNull();
+    expect(result.current.data).toEqual({ saved: null, others: [saved] });
   });
 
   it('does not ask without an artifact id or a session', () => {
@@ -164,7 +166,7 @@ describe('callable function mutations', () => {
   });
 
   it('a refused create re-reads the list too', async () => {
-    h.post.mockRejectedValue(axiosError(409, { error: 'This artifact is already saved as a tool.' }));
+    h.post.mockRejectedValue(axiosError(409, { error: 'You can have at most 100 saved tools.' }));
     const client = newClient();
     const invalidate = vi.spyOn(client, 'invalidateQueries');
     const { result } = renderWith(() => useCreateCallableFunction(), client);
@@ -285,5 +287,11 @@ describe('callable function error helpers', () => {
       []
     );
     expect(callableFunctionBreakingChanges(new Error('Network Error'))).toEqual([]);
+  });
+
+  it('reads a contract_unreadable answer, and nothing from other answers', () => {
+    expect(callableFunctionContractUnreadable(axiosError(409, { code: 'contract_unreadable' }))).toBe(true);
+    expect(callableFunctionContractUnreadable(axiosError(409, { code: 'breaking_change', changes: [] }))).toBe(false);
+    expect(callableFunctionContractUnreadable(new Error('Network Error'))).toBe(false);
   });
 });

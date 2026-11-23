@@ -71,17 +71,33 @@ export function callableFunctionBreakingChanges(error: unknown): FunctionContrac
   );
 }
 
+/** Whether a 409 `contract_unreadable` refused an update: the stored contract no longer parses. */
+export function callableFunctionContractUnreadable(error: unknown): boolean {
+  if (!isAxiosError(error)) return false;
+  return (error.response?.data as { code?: unknown } | undefined)?.code === 'contract_unreadable';
+}
+
+export interface ArtifactCallableFunctions {
+  /** The tool saved under `name`, or null when there is none. */
+  saved: ICallableFunctionPublic | null;
+  /** The artifact's tools under other names, oldest first. */
+  others: ICallableFunctionPublic[];
+}
+
 /**
- * The function saved from this artifact under `name`, or null when there is none; an artifact holds one tool per
- * name. `version` is the artifact version the viewer shows; it is part of the key so that saving the artifact
- * re-reads whether a newer version is available.
+ * The tools saved from this artifact, split by whether their name is `name`; an artifact holds one tool per name.
+ * `version` is the artifact version the viewer shows; it is part of the key so that saving the artifact re-reads
+ * whether a newer version is available.
  */
 export function useArtifactCallableFunction(artifactId: string | null, version: number, name: string) {
   const hasAccessToken = useAccessToken(s => !!s.accessToken);
   return useQuery({
     queryKey: [...CALLABLE_FUNCTIONS_LIST_QUERY_KEY, artifactId, version],
     queryFn: async () => (await api.get<ICallableFunctionPublic[]>(COLLECTION, { params: { artifactId } })).data,
-    select: (functions: ICallableFunctionPublic[]) => functions.find(fn => fn.slug === name) ?? null,
+    select: (functions: ICallableFunctionPublic[]): ArtifactCallableFunctions => ({
+      saved: functions.find(fn => fn.slug === name) ?? null,
+      others: functions.filter(fn => fn.slug !== name),
+    }),
     enabled: hasAccessToken && !!artifactId,
   });
 }
