@@ -178,6 +178,33 @@ describe('related CI workflow guard', () => {
     expect(ci).toContain("if: github.event.action != 'labeled' && github.event.action != 'unlabeled' || github.event.label.name == 'ci:full'");
     expect(ci).toContain("github.event.label.name != 'ci:full' && github.run_id || 'tests'");
   });
+  // Ignored label runs must not replace a real validation's required results,
+  // including skipped matrix jobs and the reusable docs workflow caller.
+  it.each([
+    ["changes", "changes"],
+    ["core-build", "Core Build"],
+    ["repo-guards", "Repo Guards"],
+    ["secret-scan", "Secret Scan"],
+    ["leak-shapes", "Leak Shapes"],
+    ["lint", "Lint"],
+    ["openapi", "OpenAPI Spec"],
+    ["test-shards", "Run Tests (${{ matrix.shard.name }})"],
+    ["test", "Run Tests"],
+    ["cli-e2e", "CLI e2e harness"],
+    ["help-docs", "Help Docs Guards"],
+    ["published-dts", "Published Declarations"],
+    ["verify-docs-build", "Verify Docs Build"],
+    ["docs-scan-gate", "Docs Sensitive Scan"],
+    ["ci-complete", "CI Complete"],
+  ])('keeps ignored label events out of the canonical %s check', (id, canonicalName) => {
+    const block = ci.match(new RegExp(`^  ${id}:\\n([\\s\\S]*?)(?=^  [a-z][a-z0-9-]*:|$(?![\\s\\S]))`, 'm'))?.[1];
+    expect(block, `missing CI job ${id}`).toBeDefined();
+    const name = block.match(/^ {4}name: (.+)$/m)?.[1];
+    // Bind to the event itself, not a dependency result: real validation failures
+    // and unexpected skips must continue reporting their canonical check names.
+    const ignoredLabelPrefix = "${{ (github.event.action == 'labeled' || github.event.action == 'unlabeled') && github.event.label.name != 'ci:full' && 'Ignored label / ' || '' }}";
+    expect(name).toBe(`${ignoredLabelPrefix}${canonicalName}`);
+  });
   it('bypasses turbo only for the client in both lanes before creating any full cache context', () => {
     const blocks = ci.split('          if [ "$SELECTED_FILTER" = \'--filter @bike4mind/client\' ]');
     expect(blocks).toHaveLength(3);
