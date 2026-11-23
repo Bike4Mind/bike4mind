@@ -328,6 +328,22 @@ describe('OrganizationUserCard team role', () => {
     renderCard({ ...member('a', usage), permissions: [] }, false, false, { organization: managedOrg });
     expect(screen.queryByTestId('organization-user-card-role-select')).toBeNull();
   });
+
+  it('offers no selector on a personal organization, even to its owner', () => {
+    renderCard(member('a', usage), false, false, {
+      organization: { ...managedOrg, personal: true } as unknown as IOrganizationDocument,
+    });
+    expect(screen.queryByTestId('organization-user-card-role-select')).toBeNull();
+  });
+
+  it('lets a platform admin who is not on the team assign any role', () => {
+    viewer.id = 'platform-admin';
+    viewer.isAdmin = true;
+    renderCard(member('a', usage), false, false, { organization: managedOrg });
+    openSelect();
+    expect(option('manager')).not.toHaveAttribute('aria-disabled', 'true');
+    expect(option('billingManager')).not.toHaveAttribute('aria-disabled', 'true');
+  });
 });
 
 type ConfirmArgs = {

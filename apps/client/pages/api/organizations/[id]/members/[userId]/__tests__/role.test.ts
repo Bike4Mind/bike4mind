@@ -47,6 +47,7 @@ vi.mock('@bike4mind/database', () => ({
 const recordAdminActionFromRequest = vi.hoisted(() => vi.fn().mockResolvedValue(null));
 vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({ recordAdminActionFromRequest }));
 
+import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 import '@pages/api/organizations/[id]/members/[userId]/role';
 
 const call = (body: unknown) => {
@@ -95,7 +96,7 @@ describe('/api/organizations/[id]/members/[userId]/role', () => {
 
   it.each([[{ role: 'owner' }], [{ role: 'admin' }], [{}]])('refuses body %j before the service', async body => {
     const { run } = call(body);
-    await Promise.resolve(run()).catch(() => undefined);
+    await expect(Promise.resolve(run())).rejects.toBeInstanceOf(BadRequestError);
 
     expect(setOrganizationMemberRole).not.toHaveBeenCalled();
     expect(recordAdminActionFromRequest).not.toHaveBeenCalled();
@@ -134,6 +135,13 @@ describe('/api/organizations/[id]/members/[userId]/role', () => {
 
     await expect(Promise.resolve(run())).rejects.toThrow('audit down');
     expect(depthAtWrite).toEqual([1, 1]);
+  });
+
+  it('refuses a request with no member id before the service', async () => {
+    const { req, res } = createMocks({ method: 'PUT', query: { id: 'org1' }, body: { role: 'manager' } });
+    Object.assign(req, { user: { id: 'owner1', isAdmin: false } });
+    await expect(Promise.resolve(mockRefs.handlers.put(req, res))).rejects.toBeInstanceOf(BadRequestError);
+    expect(setOrganizationMemberRole).not.toHaveBeenCalled();
   });
 
   it('does not audit when the service refuses', async () => {
