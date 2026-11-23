@@ -33,6 +33,8 @@ export class ComposerDraftStore {
   private entries = new Map<string, Entry>();
   // Until the file is read, memory is empty rather than current: a quit then must not write it.
   private loaded = false;
+  // True while memory differs from the file, so a quit with no edits leaves the file untouched.
+  private dirty = false;
   // Serialised so a burst of saves lands in order and never interleaves two renames.
   private writes: Promise<void> = Promise.resolve();
   private pendingSave: ReturnType<typeof setTimeout> | undefined;
@@ -50,24 +52,35 @@ export class ComposerDraftStore {
     let stored: unknown;
     try {
       stored = JSON.parse(await readFile(this.filePath, 'utf8'));
-    } catch {
-      // Missing or unreadable: no drafts, as on a first launch.
-      stored = undefined;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException | undefined)?.code === 'ENOENT') {
+        this.entries = new Map();
+        this.loaded = true;
+        return {};
+      }
+      // Left unloaded so nothing overwrites a file that exists but could not be read.
+      console.warn(`DRAFTS: could not read composer drafts, leaving the file alone: ${String(error)}`);
+      this.entries = new Map();
+      return {};
     }
     const parsed = storedSchema.safeParse(stored);
+    if (!parsed.success) {
+      console.warn('DRAFTS: composer drafts file has an unexpected shape, leaving it alone');
+      this.entries = new Map();
+      return {};
+    }
     const oldest = this.now() - COMPOSER_DRAFT_MAX_AGE_MS;
     this.entries = new Map(
-      parsed.success
-        ? Object.entries(parsed.data.drafts).filter(
-            ([, entry]) =>
-              entry.updatedAt >= oldest && isKeptDraft(entry.text) && entry.text.length <= COMPOSER_DRAFT_MAX_LENGTH
-          )
-        : []
+      Object.entries(parsed.data.drafts).filter(
+        ([, entry]) =>
+          entry.updatedAt >= oldest && isKeptDraft(entry.text) && entry.text.length <= COMPOSER_DRAFT_MAX_LENGTH
+      )
     );
     this.loaded = true;
+    if (this.entries.size !== Object.keys(parsed.data.drafts).length) this.dirty = true;
     this.enforceTotalLimit();
     // Written back only when something expired or was over a limit, so a plain launch never writes.
-    if (parsed.success && this.entries.size !== Object.keys(parsed.data.drafts).length) void this.persist();
+    if (this.dirty) void this.persist();
     return this.all();
   }
 
@@ -88,6 +101,7 @@ export class ComposerDraftStore {
     if (!keep) return this.forget(sessionId);
     if (this.entries.get(sessionId)?.text === text) return this.writes;
     this.entries.set(sessionId, { text, updatedAt: this.now() });
+    this.dirty = true;
     this.enforceTotalLimit();
     this.scheduleSave();
     return this.writes;
@@ -96,6 +110,7 @@ export class ComposerDraftStore {
   /** Clearing is written at once, so a sent message's text cannot come back. */
   forget(sessionId: string): Promise<void> {
     if (!this.entries.delete(sessionId)) return this.writes;
+    this.dirty = true;
     return this.persist();
   }
 
@@ -107,12 +122,13 @@ export class ComposerDraftStore {
   /** For `will-quit`, which cannot await: writes what is in memory now, synchronously. */
   flushSync(): void {
     this.cancelPendingSave();
-    if (!this.loaded) return;
+    if (!this.loaded || !this.dirty) return;
     try {
       mkdirSync(dirname(this.filePath), { recursive: true });
       const temporary = this.temporaryPath();
       writeFileSync(temporary, this.serialize(), { encoding: 'utf8', mode: 0o600 });
       renameSync(temporary, this.filePath);
+      this.dirty = false;
     } catch (error) {
       console.warn(`DRAFTS: could not save composer drafts at quit: ${String(error)}`);
     }
@@ -126,6 +142,7 @@ export class ComposerDraftStore {
     for (const [sessionId, entry] of byAge) {
       if (total <= COMPOSER_DRAFTS_TOTAL_MAX_LENGTH) break;
       this.entries.delete(sessionId);
+      this.dirty = true;
       total -= entry.text.length;
     }
   }
@@ -145,6 +162,8 @@ export class ComposerDraftStore {
 
   private persist(): Promise<void> {
     this.cancelPendingSave();
+    if (!this.loaded) return this.writes;
+    this.dirty = false;
     const snapshot = this.serialize();
     this.writes = this.writes
       .then(() => this.write(snapshot))

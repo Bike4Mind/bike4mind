@@ -3023,7 +3023,6 @@ export class ChatService {
     this.deps.sessionClosed?.(sessionId);
     await this.deps.browser?.closeSession(sessionId);
     await this.deps.attachments?.deleteSession(sessionId);
-    await this.deps.composerDrafts?.forget(sessionId);
     // The generated media goes with it: nothing else references those files once the
     // conversation that displayed them is gone, and they are the largest thing this app writes.
     // Video polling stops first, so a download landing afterwards cannot recreate the folder.
@@ -3036,6 +3035,7 @@ export class ChatService {
       await this.deps.store.delete(sessionId, decisionScope);
       this.markTaskDecisionMutation(sessionId, decisionScope);
     }
+    await this.deps.composerDrafts?.forget(sessionId);
     if (parentId) this.bumpScope(parentId);
     // The stopped reply can settle and reindex while process/browser cleanup is awaiting I/O.
     // Once the serialized delete has finished, no later append can resurrect the session.

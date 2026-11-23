@@ -5,7 +5,7 @@ import type { IpcMain } from 'electron';
 import { describe, expect, it } from 'vitest';
 import { IPC_CHANNELS } from '@shared/ipc';
 import { ComposerDraftStore } from './ComposerDraftStore';
-import { registerComposerDraftsIpc } from './composerDraftsIpc';
+import { registerComposerDraftsIpc, SESSION_ID_MAX_LENGTH } from './composerDraftsIpc';
 
 type Handler = Parameters<IpcMain['handle']>[1];
 
@@ -39,8 +39,15 @@ describe('registerComposerDraftsIpc', () => {
     await call(IPC_CHANNELS.composerDraftsSave, 'draft-123', 'not a session yet');
     await call(IPC_CHANNELS.composerDraftsSave, 's1', 42);
     await call(IPC_CHANNELS.composerDraftsSave, { id: 's1' }, 'text');
-    await call(IPC_CHANNELS.composerDraftsSave, 'x'.repeat(500), 'text');
+    await call(IPC_CHANNELS.composerDraftsSave, 'x'.repeat(SESSION_ID_MAX_LENGTH + 1), 'text');
     expect(store.all()).toEqual({});
+  });
+
+  it('accepts a known id of exactly the maximum length', async () => {
+    const id = 'x'.repeat(SESSION_ID_MAX_LENGTH);
+    const { store, call } = await setup([id]);
+    await call(IPC_CHANNELS.composerDraftsSave, id, 'text');
+    expect(store.all()).toEqual({ [id]: 'text' });
   });
 
   it('applies saves in the order they arrive, even when a session lookup is slow', async () => {

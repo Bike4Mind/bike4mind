@@ -74,7 +74,8 @@ export function createComposerDraftsStore(bridge: () => DraftsBridge | undefined
       if (kept === undefined) delete next[sessionId];
       else next[sessionId] = kept;
       state.setState({ drafts: next });
-      save(sessionId);
+      // A not-yet-created conversation (see isSessionDraft in useSessionDraft) is unknown to main, which would drop it.
+      if (!sessionId.startsWith('draft-')) save(sessionId);
     },
   };
 }

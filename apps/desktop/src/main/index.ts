@@ -350,6 +350,7 @@ void app.whenReady().then(async () => {
   });
 
   app.once('will-quit', () => {
+    composerDrafts.flushSync();
     auth.dispose();
     fleet.dispose();
     models.dispose();
@@ -358,7 +359,6 @@ void app.whenReady().then(async () => {
     claudeImport.dispose();
     pullRequests.dispose();
     updates.dispose();
-    composerDrafts.flushSync();
     // Synchronous and unconditional: this handler cannot await, and a quit that raced the
     // grace period above must not leave a process group behind.
     background.shutdownSync();

@@ -3,7 +3,7 @@ import { isKeptDraft, type ComposerDrafts } from '@shared/composerDrafts';
 import { IPC_CHANNELS } from '@shared/ipc';
 import type { ComposerDraftStore } from './ComposerDraftStore';
 
-const SESSION_ID_MAX_LENGTH = 200;
+export const SESSION_ID_MAX_LENGTH = 200;
 
 /**
  * Arguments are checked rather than trusted, and a draft is only kept for a conversation

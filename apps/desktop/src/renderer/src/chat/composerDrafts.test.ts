@@ -67,4 +67,12 @@ describe('createComposerDraftsStore', () => {
     await drafts.hydrate();
     expect(drafts.state.getState()).toEqual({ drafts: { s1: 'only here' }, hydrated: true });
   });
+
+  it('keeps the text of a conversation that does not exist yet in memory without sending it to main', () => {
+    const api = bridge();
+    const drafts = createComposerDraftsStore(() => api);
+    drafts.update('draft-123', 'not a session yet');
+    expect(drafts.state.getState().drafts).toEqual({ 'draft-123': 'not a session yet' });
+    expect(api.save).not.toHaveBeenCalled();
+  });
 });

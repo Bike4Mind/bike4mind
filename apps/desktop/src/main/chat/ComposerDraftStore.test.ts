@@ -5,6 +5,7 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   COMPOSER_DRAFT_MAX_AGE_MS,
   COMPOSER_DRAFT_MAX_LENGTH,
+  COMPOSER_DRAFT_SAVE_DELAY_MS,
   COMPOSER_DRAFTS_TOTAL_MAX_LENGTH,
 } from '@shared/composerDrafts';
 import { ComposerDraftStore } from './ComposerDraftStore';
@@ -173,5 +174,64 @@ describe('ComposerDraftStore', () => {
     void store.set('s2', 'typed just before quit');
     store.flushSync();
     expect(await new ComposerDraftStore(path).load()).toEqual({ s1: 'on disk', s2: 'typed just before quit' });
+  });
+
+  it('leaves a corrupt file byte-identical through load and quit', async () => {
+    const path = await fileIn();
+    await writeFile(path, '{not json');
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      const store = new ComposerDraftStore(path);
+      expect(await store.load()).toEqual({});
+      store.flushSync();
+      await store.set('s1', 'typed after a failed read');
+      await store.flush();
+      store.flushSync();
+      expect(warn).toHaveBeenCalled();
+    } finally {
+      warn.mockRestore();
+    }
+    expect(await readFile(path, 'utf8')).toBe('{not json');
+  });
+
+  it('does not rewrite the file on a plain launch and quit', async () => {
+    const path = await fileIn();
+    const contents = `{ "drafts": { "s1": { "text": "on disk", "updatedAt": ${Date.now()} } } }\n`;
+    await writeFile(path, contents);
+    const store = new ComposerDraftStore(path);
+    await store.load();
+    store.flushSync();
+    expect(await readFile(path, 'utf8')).toBe(contents);
+  });
+
+  it('keeps a draft exactly at the age limit and drops one a millisecond older', async () => {
+    const path = await fileIn();
+    const now = 10 * COMPOSER_DRAFT_MAX_AGE_MS;
+    await writeFile(
+      path,
+      JSON.stringify({
+        drafts: {
+          edge: { text: 'at the limit', updatedAt: now - COMPOSER_DRAFT_MAX_AGE_MS },
+          over: { text: 'just past it', updatedAt: now - COMPOSER_DRAFT_MAX_AGE_MS - 1 },
+        },
+      })
+    );
+    expect(await new ComposerDraftStore(path, () => now).load()).toEqual({ edge: 'at the limit' });
+  });
+
+  it('waits COMPOSER_DRAFT_SAVE_DELAY_MS by default before writing', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      const path = await fileIn();
+      const store = new ComposerDraftStore(path);
+      await store.load();
+      void store.set('s1', 'typing');
+      vi.advanceTimersByTime(COMPOSER_DRAFT_SAVE_DELAY_MS - 1);
+      expect(await onDiskSoon(path, { s1: 'typing' })).toEqual({});
+      vi.advanceTimersByTime(1);
+      expect(await onDiskSoon(path, { s1: 'typing' })).toEqual({ s1: 'typing' });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
