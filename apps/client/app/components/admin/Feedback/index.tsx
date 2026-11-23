@@ -149,6 +149,7 @@ const ReporterName = ({ row }: { row: FeedbackRow }) => {
 
 const ReporterCell = ({ row }: { row: FeedbackRow }) => {
   const organization = row.organization && row.organization !== 'Unknown' ? row.organization : undefined;
+  const reporterId = parseObjectId(row.userId);
   return (
     <Stack gap={0.25} alignItems="flex-start" sx={{ minWidth: 0, maxWidth: '100%' }}>
       <Stack direction="row" alignItems="baseline" gap={0.75} sx={{ minWidth: 0, width: '100%' }}>
@@ -165,7 +166,7 @@ const ReporterCell = ({ row }: { row: FeedbackRow }) => {
             {row.userEmail}
           </Typography>
         )}
-        {row.userId && <UserIdChip userId={row.userId} />}
+        {reporterId && <UserIdChip userId={reporterId} />}
       </Stack>
     </Stack>
   );
@@ -785,7 +786,7 @@ const FeedbackTab: React.FC = () => {
         onClose={closeFeedback}
         onStatusChange={handleStatusChange}
         onShowReporterReports={userId => {
-          // Every status, so the list matches the drawer's earlier-report count.
+          // Every status, so no report the drawer counted is hidden; the list also holds this report and any later ones.
           showOnly({ userId, statusFilters: toStatusFilters(FEEDBACK_STATUS_ORDER) });
           closeFeedback();
         }}

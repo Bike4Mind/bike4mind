@@ -195,6 +195,38 @@ describe('FeedbackDetailDrawer', () => {
       expect(screen.getByTestId('feedback-detail-reporter')).not.toHaveTextContent('waitlist-abc');
       expect(mocks.getFeedbackReporterSummaryFromServer).not.toHaveBeenCalled();
     });
+
+    it('omits the plan when the summary carries none for this caller', async () => {
+      mocks.getFeedbackByIdFromServer.mockResolvedValue(makeRecord());
+      mocks.getFeedbackReporterSummaryFromServer.mockResolvedValue(reporterSummary({ plan: undefined }));
+
+      renderDrawer({ onShowReporterReports: vi.fn() });
+
+      expect(await screen.findByTestId('feedback-detail-reporter-status')).toHaveTextContent('Active');
+      expect(screen.queryByTestId('feedback-detail-reporter-plan')).not.toBeInTheDocument();
+    });
+
+    it('drops the profile link for a deleted reporter', async () => {
+      mocks.getFeedbackByIdFromServer.mockResolvedValue(makeRecord());
+      mocks.getFeedbackReporterSummaryFromServer.mockResolvedValue(reporterSummary({ exists: false }));
+
+      renderDrawer({ onShowReporterReports: vi.fn() });
+
+      expect(await screen.findByTestId('feedback-detail-reporter-status')).toHaveTextContent('Deleted');
+      expect(screen.queryByTestId('feedback-detail-reporter-profile-btn')).not.toBeInTheDocument();
+    });
+
+    it('drops the profile link and user id when the summary names no reporter', async () => {
+      mocks.getFeedbackByIdFromServer.mockResolvedValue(makeRecord());
+      mocks.getFeedbackReporterSummaryFromServer.mockResolvedValue({ reporter: null });
+
+      renderDrawer({ onShowReporterReports: vi.fn() });
+
+      await waitFor(() => expect(mocks.getFeedbackReporterSummaryFromServer).toHaveBeenCalled());
+      await waitFor(() => expect(screen.queryByTestId('feedback-detail-reporter-profile-btn')).not.toBeInTheDocument());
+      expect(screen.queryByTestId('admin-user-id-chip')).not.toBeInTheDocument();
+      expect(screen.getByTestId('feedback-detail-reporter')).toHaveTextContent('reporter@example.com');
+    });
   });
 
   describe('emailing the reporter', () => {

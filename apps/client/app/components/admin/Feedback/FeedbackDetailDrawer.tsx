@@ -21,8 +21,13 @@ import LinkIcon from '@mui/icons-material/Link';
 import MailOutlineIcon from '@mui/icons-material/MailOutline';
 import MenuBookIcon from '@mui/icons-material/MenuBook';
 import PersonIcon from '@mui/icons-material/Person';
-import { useQuery } from '@tanstack/react-query';
-import { adminUserProfilePath, FeedbackStatus, FEEDBACK_RESOLUTION_LABELS } from '@bike4mind/common';
+import { useQuery, type UseQueryResult } from '@tanstack/react-query';
+import {
+  adminUserProfilePath,
+  FeedbackStatus,
+  FEEDBACK_RESOLUTION_LABELS,
+  type FeedbackReporterSummary,
+} from '@bike4mind/common';
 import FeedbackHistory from './FeedbackHistory';
 import { getFeedbackByIdFromServer, getFeedbackReporterSummaryFromServer } from '@client/app/utils/feedbackAPICalls';
 import { relativeTimeFormat } from '@client/app/utils/dateUtils';
@@ -252,17 +257,12 @@ const FeedbackDetailDrawer = ({
 
 /** Plan, account age, suspension and earlier reports. Renders nothing when the read is refused or fails. */
 const ReporterFacts = ({
-  feedbackId,
+  summaryQuery,
   onShowReporterReports,
 }: {
-  feedbackId: string;
+  summaryQuery: UseQueryResult<FeedbackReporterSummary>;
   onShowReporterReports?: FeedbackDetailDrawerProps['onShowReporterReports'];
 }) => {
-  const summaryQuery = useQuery({
-    queryKey: feedbackReporterQueryKey(feedbackId),
-    queryFn: () => getFeedbackReporterSummaryFromServer(feedbackId),
-    retry: false,
-  });
   if (summaryQuery.isPending) {
     return (
       <Fact label="Account">
@@ -277,9 +277,11 @@ const ReporterFacts = ({
     <>
       {reporter.exists ? (
         <>
-          <Fact label="Plan" data-testid="feedback-detail-reporter-plan">
-            {reporter.plan ?? 'Free'}
-          </Fact>
+          {reporter.plan !== undefined && (
+            <Fact label="Plan" data-testid="feedback-detail-reporter-plan">
+              {reporter.plan ?? 'Free'}
+            </Fact>
+          )}
           <Fact label="Account age" data-testid="feedback-detail-reporter-age">
             {reporter.createdAt ? relativeTimeFormat(new Date(reporter.createdAt)) : undefined}
           </Fact>
@@ -331,6 +333,16 @@ const FeedbackDetailBody = ({
   const reporterMailto = feedbackReporterMailto(record);
   // Legacy waitlist rows carry a non-id userId: no profile, no user facts.
   const reporterId = parseObjectId(record.userId);
+  const summaryQuery = useQuery({
+    queryKey: feedbackReporterQueryKey(record._id),
+    queryFn: () => getFeedbackReporterSummaryFromServer(record._id),
+    enabled: !!reporterId,
+    retry: false,
+  });
+  // A refused or failed read keeps the id-based links; a summary that names no reporter, or a deleted one, drops them.
+  const summaryReporter = summaryQuery.isSuccess ? summaryQuery.data.reporter : undefined;
+  const showUserId = !!reporterId && summaryReporter !== null;
+  const showProfile = showUserId && summaryReporter?.exists !== false;
 
   return (
     <Stack gap={2}>
@@ -417,7 +429,7 @@ const FeedbackDetailBody = ({
         title="Reporter"
         data-testid="feedback-detail-reporter"
         action={
-          reporterId || reporterMailto ? (
+          showProfile || reporterMailto ? (
             <Stack direction="row" flexWrap="wrap" gap={0.5}>
               {reporterMailto && (
                 <Button
@@ -432,7 +444,7 @@ const FeedbackDetailBody = ({
                   Email reporter
                 </Button>
               )}
-              {reporterId && (
+              {showProfile && reporterId && (
                 <Button
                   size="sm"
                   variant="plain"
@@ -454,8 +466,8 @@ const FeedbackDetailBody = ({
         <Fact label="Name">{record.username}</Fact>
         <Fact label="Email">{record.userEmail}</Fact>
         <Fact label="Organization">{organization}</Fact>
-        <Fact label="User id">{reporterId ? <UserIdChip userId={reporterId} /> : undefined}</Fact>
-        {reporterId && <ReporterFacts feedbackId={record._id} onShowReporterReports={onShowReporterReports} />}
+        <Fact label="User id">{showUserId && reporterId ? <UserIdChip userId={reporterId} /> : undefined}</Fact>
+        {reporterId && <ReporterFacts summaryQuery={summaryQuery} onShowReporterReports={onShowReporterReports} />}
       </SectionCard>
 
       {(turn || promptMetaLoading) && (
