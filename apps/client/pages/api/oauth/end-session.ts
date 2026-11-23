@@ -58,7 +58,7 @@ const handler = baseApi({ auth: false, allowedMethods: ['POST'] })
     }
     const { client_id, post_logout_redirect_uri, state, id_token_hint, confirm } = parsed.data;
 
-    const hint = id_token_hint !== undefined ? verifyIdTokenHint(id_token_hint, client_id) : undefined;
+    const hint = id_token_hint !== undefined ? await verifyIdTokenHint(id_token_hint, client_id) : undefined;
     if (hint === null) return reject('invalid_request', 'id_token_hint is invalid');
     const clientId = hint?.clientId ?? client_id;
     if (clientId === undefined) return reject('invalid_request', 'client_id or id_token_hint is required');

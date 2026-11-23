@@ -204,7 +204,7 @@ const handler = baseApi({ auth: false })
           .json({ error: 'invalid_grant', error_description: 'Invalid or expired authorization code' });
       }
 
-      const idToken = generateIdToken({
+      const idToken = await generateIdToken({
         ...idTokenUserParams(user),
         clientId: client_id,
         scopes: authCode.scopes,
@@ -397,7 +397,7 @@ const handler = baseApi({ auth: false })
         aud: oauthAccessTokenAudience(),
       });
       // No nonce on a refreshed id_token (OIDC Core 12.2).
-      const idToken = generateIdToken({
+      const idToken = await generateIdToken({
         ...idTokenUserParams(user),
         clientId: client_id,
         scopes,
