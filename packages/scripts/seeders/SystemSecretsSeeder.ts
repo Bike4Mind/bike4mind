@@ -1,5 +1,5 @@
 import { BaseSeeder } from './base';
-import { SST_PLACEHOLDER_VALUE } from '@bike4mind/common';
+import { isUnconfiguredSecret } from '@bike4mind/common';
 
 /**
  * Tier 1 secrets that must be validated but NEVER stored in DB.
@@ -47,20 +47,13 @@ const TIER1_REQUIRED_SECRETS = [
  * - All Tier 1 secrets must be set via SST CLI before deployment
  * - No secrets are auto-generated to prevent data loss from regeneration
  * - Tier 2/3 secrets (mail, OAuth, API keys) can be configured via admin GUI
- * - Preview environments skip validation (secrets may not be configured for PR previews)
+ * - Preview stages are validated too: the deploy-time check in infra/secrets.ts already
+ *   refuses a placeholder on every stage, and this keeps the seed step from running past one
  */
 export class SystemSecretsSeeder extends BaseSeeder {
   async seed(): Promise<void> {
     this.logger.info('Starting SystemSecrets validation...');
 
-    // Skip Tier 1 validation in preview environments - secrets may not be configured
-    const isPreview = process.env.IS_PREVIEW === 'true';
-    if (isPreview) {
-      this.logger.info('Skipping Tier 1 secret validation in preview environment');
-      return;
-    }
-
-    // Validate Tier 1 secrets (these must be set via SST CLI)
     await this.validateTier1Secrets();
 
     this.logger.info('SystemSecrets validation complete');
@@ -77,8 +70,7 @@ export class SystemSecretsSeeder extends BaseSeeder {
     for (const secret of TIER1_REQUIRED_SECRETS) {
       const value = (Resource as unknown as Record<string, { value?: string }>)[secret.secretName]?.value;
 
-      // Check if missing or placeholder
-      if (!value || value === SST_PLACEHOLDER_VALUE) {
+      if (!value || isUnconfiguredSecret(value)) {
         throw new Error(
           `\n\n` +
             `========================================\n` +
