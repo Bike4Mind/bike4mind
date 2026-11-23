@@ -47,6 +47,9 @@ const SaveContentArgsSchema = z.object({
 
 const DEFAULT_BASE_NAME = 'untitled';
 
+/** Byte cap for one save (1 MiB), far below the platform file-size limit and any single tool call's output. */
+export const MAX_SAVE_CONTENT_BYTES = 1024 * 1024;
+
 function isSavableMimeType(mimeType: string): mimeType is SavableMimeType {
   return (SAVABLE_MIME_TYPES as readonly string[]).includes(mimeType);
 }
@@ -145,6 +148,11 @@ export const saveContentToDataLakeTool: ToolDefinition = {
         return `Invalid parameters: ${parsed.error.issues.map(i => `${i.path.join('.')}: ${i.message}`).join('; ')}`;
       }
       const { content, dataLakeId } = parsed.data;
+      // Bytes, not string length: a multibyte character counts as one char but up to 4 bytes.
+      const encoded = Buffer.from(content, 'utf8');
+      if (encoded.length > MAX_SAVE_CONTENT_BYTES) {
+        return `Nothing was saved: content is ${encoded.length} bytes, over the 1 MiB limit for one save. Split it into smaller files.`;
+      }
       const { fileName, mimeType } = resolveFileNameAndType(parsed.data.fileName, parsed.data.mimeType);
       await context.onStart?.(TOOL_NAME, { fileName, dataLakeId });
 
@@ -192,7 +200,7 @@ export const saveContentToDataLakeTool: ToolDefinition = {
         file = await createUserFile(context, adapters, ctx.administeredOrgIds, {
           fileName,
           mimeType,
-          content: Buffer.from(content, 'utf8'),
+          content: encoded,
         });
       } catch (error) {
         context.logger.error('[save_content_to_data_lake] file create failed:', error);
@@ -237,7 +245,7 @@ export const saveContentToDataLakeTool: ToolDefinition = {
       parameters: {
         type: 'object',
         properties: {
-          content: { type: 'string', description: 'The full text to save' },
+          content: { type: 'string', description: 'The full text to save, at most 1 MiB' },
           fileName: { type: 'string', description: 'e.g. "q3-summary.md"' },
           mimeType: { type: 'string', enum: SAVABLE_MIME_TYPES, description: 'Default text/markdown' },
           dataLakeId: { type: 'string', description: 'Target lake id' },
