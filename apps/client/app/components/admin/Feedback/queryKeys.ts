@@ -10,4 +10,8 @@ export const FEEDBACK_RECORD_QUERY_KEY = ['admin', 'feedback', 'record'] as cons
 /** The trend strip's counts; a status change or delete moves the open count. */
 export const FEEDBACK_TRENDS_QUERY_KEY = ['admin', 'feedback', 'trends'] as const;
 
+/** The drawer's reporter facts, keyed by report id because the earlier-report count anchors on that report. */
+export const FEEDBACK_REPORTER_QUERY_KEY = ['admin', 'feedback', 'reporter'] as const;
+
 export const feedbackRecordQueryKey = (feedbackId: string) => [...FEEDBACK_RECORD_QUERY_KEY, feedbackId];
+export const feedbackReporterQueryKey = (feedbackId: string) => [...FEEDBACK_REPORTER_QUERY_KEY, feedbackId];

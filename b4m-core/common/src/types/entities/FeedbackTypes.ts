@@ -32,6 +32,20 @@ export type FeedbackHistoryItem = {
   changes?: { field: string; before: unknown; after: unknown }[];
 };
 export type FeedbackHistoryPage = { items: FeedbackHistoryItem[]; nextCursor: string | null };
+/** Reporter context for one report. `reporter` is null for legacy waitlist rows, whose userId is not a user id. */
+export type FeedbackReporterSummary =
+  | { reporter: null }
+  | {
+      reporter: {
+        userId: string;
+        exists: boolean;
+        plan: string | null;
+        createdAt: string | null;
+        isBanned: boolean;
+        /** Reports this user filed before the one being viewed. */
+        earlierReports: number;
+      };
+    };
 
 export enum FeedbackType {
   BUG = 'Bug',
