@@ -180,7 +180,7 @@ describe('ToolCallList', () => {
     const summaryOf = (html: string) =>
       /data-testid="chat-tool-approval-summary"[^>]*>([^<]*)</.exec(html)?.[1] ?? null;
 
-    it('shows the description on one labelled line between the heading and the command', () => {
+    it('shows the description on one line between the heading and the command', () => {
       const html = markup([
         awaiting({
           name: 'bash_execute',
@@ -188,7 +188,7 @@ describe('ToolCallList', () => {
           approvalDescription: 'Deletes the build folder',
         }),
       ]);
-      expect(summaryOf(html)).toBe('Agent&#x27;s summary: Deletes the build folder');
+      expect(summaryOf(html)).toBe('Deletes the build folder');
       const heading = html.indexOf('Run this command?');
       const summary = html.indexOf('data-testid="chat-tool-approval-summary"');
       const detail = html.indexOf('data-testid="chat-tool-approval-detail"');
@@ -206,9 +206,9 @@ describe('ToolCallList', () => {
     it('folds line breaks into one line and cuts a long description short', () => {
       const html = markup([awaiting({ approvalDescription: `Runs the tests\n\nand ${'reports '.repeat(40)}` })]);
       const shown = summaryOf(html) ?? '';
-      expect(shown.startsWith('Agent&#x27;s summary: Runs the tests and reports')).toBe(true);
+      expect(shown.startsWith('Runs the tests and reports')).toBe(true);
       expect(shown.endsWith('...')).toBe(true);
-      expect(shown.length).toBeLessThanOrEqual('Agent&#x27;s summary: '.length + 140);
+      expect(shown.length).toBeLessThanOrEqual(140);
     });
 
     it('leaves the description off a card that shows a diff', () => {

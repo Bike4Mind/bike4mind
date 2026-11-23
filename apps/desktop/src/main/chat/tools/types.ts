@@ -717,8 +717,8 @@ export interface ApprovalPrompt {
   /** Shown to the user verbatim. */
   detail: string;
   /**
-   * The model's own few words on what a shell command does, shown beside `detail` and labelled as
-   * the agent's. Display only: it can be wrong, so it never feeds `key`, `reasons`, rules or refusals.
+   * The model's own few words on what a shell command does, shown beside `detail`. Display
+   * only: it can be wrong, so it never feeds `key`, `reasons`, rules or refusals.
    */
   summary?: string;
   /**

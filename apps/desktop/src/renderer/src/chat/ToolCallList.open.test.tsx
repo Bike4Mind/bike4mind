@@ -81,7 +81,7 @@ describe('a tool row behind its disclosure', () => {
     };
 
     expect(summaries([shell('a', { command: 'pnpm build', description: 'Builds the app' })])).toEqual([
-      "Agent's summary: Builds the app",
+      'Builds the app',
     ]);
     expect(container.querySelector('[data-testid="chat-tool-detail-input"]')?.textContent).toBe('pnpm build');
     expect(summaries([shell('b', { command: 'pnpm build' })])).toEqual([]);

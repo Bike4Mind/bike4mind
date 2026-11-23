@@ -302,7 +302,6 @@ function ApprovalPrompt({
                 : 'Run this command?'))}
       </Typography>
 
-      {/* Labelled as the agent's: it is the model's account of the command, not a check of it. */}
       {!diff && description && (
         <Typography
           level="body-xs"
@@ -310,7 +309,7 @@ function ApprovalPrompt({
           sx={{ mt: 0.5, overflowWrap: 'anywhere' }}
           data-testid="chat-tool-approval-summary"
         >
-          {`Agent's summary: ${description}`}
+          {description}
         </Typography>
       )}
 
@@ -478,7 +477,7 @@ function ToolCallDetail({ call }: { call: ChatToolCall }) {
     <Box data-testid="chat-tool-detail">
       {description && (
         <Typography level="body-xs" textColor="text.tertiary" data-testid="chat-tool-detail-summary">
-          {`Agent's summary: ${description}`}
+          {description}
         </Typography>
       )}
       {argument && (
