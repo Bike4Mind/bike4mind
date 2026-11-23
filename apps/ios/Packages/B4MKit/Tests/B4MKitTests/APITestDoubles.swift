@@ -60,7 +60,23 @@ actor FakeAPI: B4MAPI {
   func listSessionQuests(sessionID: String, cursor: String?, limit: Int) async throws -> Page<QuestTurn> {
     questCursors.append(cursor)
     if let failure { throw failure }
-    return questPages[cursor] ?? Page(items: [], nextCursor: nil)
+    let page = questPages[cursor] ?? Page(items: [], nextCursor: nil)
+    if holdingNextQuestHistory {
+      holdingNextQuestHistory = false
+      await withCheckedContinuation { heldQuestHistory.append($0) }
+    }
+    return page
+  }
+
+  private var holdingNextQuestHistory = false
+  private var heldQuestHistory: [CheckedContinuation<Void, Never>] = []
+
+  /// Captures the next response before suspending, like an older history request already in flight.
+  func holdNextQuestHistory() { holdingNextQuestHistory = true }
+
+  func releaseQuestHistory() {
+    for request in heldQuestHistory { request.resume() }
+    heldQuestHistory.removeAll()
   }
 
   func creditBalance() async throws -> CreditBalance {

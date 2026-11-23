@@ -21,6 +21,7 @@ public final class TranscriptViewModel {
   @ObservationIgnored private var loadedPageCount = 0
   @ObservationIgnored private let cache: SettledTranscriptCache?
   @ObservationIgnored private let cacheGeneration: UUID?
+  @ObservationIgnored private var cacheToken: SettledTranscriptCache.Token?
   @ObservationIgnored private var loadedPages: [Page<QuestTurn>] = []
   @ObservationIgnored private var revalidateLastPage = false
   @ObservationIgnored private var canCache = true
@@ -33,9 +34,17 @@ public final class TranscriptViewModel {
     cacheGeneration = cache?.generation
   }
 
+  private func beginCacheRequest() -> SettledTranscriptCache.Admission? {
+    guard canCache, let cacheGeneration else { return nil }
+    let admission = cache?.begin(sessionID: sessionID, pageSize: pageSize, generation: cacheGeneration)
+    cacheToken = admission?.token
+    return admission
+  }
+
   private func seedCacheIfNeeded() {
-    guard !pages.hasLoadedFirstPage, canCache, cacheGeneration == cache?.generation else { return }
-    if let snapshot = cache?.load(sessionID: sessionID, pageSize: pageSize) {
+    guard !pages.hasLoadedFirstPage, !isRefreshing, !isLoadingMore, canCache, cacheGeneration == cache?.generation
+    else { return }
+    if let snapshot = beginCacheRequest()?.snapshot {
       loadedPages = snapshot.pages
       loadedPageCount = loadedPages.count
       revalidateLastPage = snapshot.revalidateLastPage
@@ -67,6 +76,7 @@ public final class TranscriptViewModel {
     guard !isRefreshing else { return }
     isRefreshing = true
     defer { isRefreshing = false }
+    let requestToken = cacheToken
     do {
       let cursor = loadedPages.dropLast().last?.nextCursor
       let page = try await api.listSessionQuests(sessionID: sessionID, cursor: cursor, limit: pageSize)
@@ -74,18 +84,19 @@ public final class TranscriptViewModel {
       pages = PageAccumulator()
       for page in loadedPages { pages.append(page) }
       revalidateLastPage = false
-      publish()
+      publish(cacheToken: requestToken)
       state = .loaded
     } catch {
       state = .failed((error as? APIError) ?? .malformedResponse)
     }
   }
 
-  private func publish() {
+  private func publish(cacheToken: SettledTranscriptCache.Token?) {
     turns = pages.items
     messages = TranscriptMapper.messages(from: turns)
-    if canCache, let cacheGeneration {
-      cache?.save(sessionID: sessionID, pageSize: pageSize, pages: loadedPages, generation: cacheGeneration)
+    if canCache, let cacheGeneration, let cacheToken {
+      cache?.save(
+        sessionID: sessionID, pageSize: pageSize, pages: loadedPages, generation: cacheGeneration, token: cacheToken)
     }
   }
 
@@ -96,6 +107,7 @@ public final class TranscriptViewModel {
     guard !isRefreshing else { return }
     isRefreshing = true
     defer { isRefreshing = false }
+    let requestToken = beginCacheRequest()?.token
 
     if messages.isEmpty { state = .loading }
     do {
@@ -112,7 +124,7 @@ public final class TranscriptViewModel {
       loadedPageCount = fetchedPages
       loadedPages = freshPages
       revalidateLastPage = false
-      publish()
+      publish(cacheToken: requestToken)
       loadMoreError = nil
       state = .loaded
     } catch {
@@ -136,12 +148,13 @@ public final class TranscriptViewModel {
     guard let cursor = pages.nextCursor, !isLoadingMore, !isRefreshing else { return }
     isLoadingMore = true
     defer { isLoadingMore = false }
+    let requestToken = cacheToken
     do {
       let page = try await api.listSessionQuests(sessionID: sessionID, cursor: cursor, limit: pageSize)
       pages.append(page)
       loadedPages.append(page)
       loadedPageCount += 1
-      publish()
+      publish(cacheToken: requestToken)
       loadMoreError = nil
     } catch {
       loadMoreError = (error as? APIError) ?? .malformedResponse

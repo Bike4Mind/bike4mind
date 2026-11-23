@@ -2,6 +2,25 @@ import XCTest
 
 @testable import B4MKit
 
+private actor ResumeInvalidationGate {
+  private(set) var entered = false
+  private(set) var sessions: [String] = []
+  private var continuation: CheckedContinuation<Void, Never>?
+
+  func pause() async {
+    entered = true
+    await withCheckedContinuation { continuation = $0 }
+  }
+
+  func record(_ sessionID: String) { sessions.append(sessionID) }
+
+  func release() {
+    let pending = continuation
+    continuation = nil
+    pending?.resume()
+  }
+}
+
 final class CaptureEngineTests: XCTestCase {
   private let temp = TempDirectory()
   private let lake = CaptureDestination.lake(id: "lake-1", name: "Research")
@@ -54,6 +73,38 @@ final class CaptureEngineTests: XCTestCase {
   }
 
   private func photo(_ name: String = "photo.jpg") -> ShareItem { .image(sharedFile(temp, name: name)) }
+
+  func testResumeInvalidatesCompletedSessionBeforeWaitingForUnfinishedWork() async throws {
+    let rig = rig()
+    let completedJobs = try await rig.engine.enqueue([photo("done.jpg")], to: session, note: nil)
+    var done = try only(completedJobs)
+    done.stage = .done
+    done.updatedAt = clock.now
+    try rig.store.save(done)
+    let uploadingJobs = try await rig.engine.enqueue([photo("live.jpg")], to: lake, note: nil)
+    var live = try only(uploadingJobs)
+    live.stage = .uploading
+    live.uploadSession = BackgroundSessionIdentifier.app
+    live.uploadTaskID = 42
+    live.uploadAttempts = 1
+    try rig.store.save(live)
+    rig.uploader.adopt(jobID: live.id, taskID: 42)
+
+    let gate = ResumeInvalidationGate()
+    let uploader = rig.uploader
+    let clock = clock
+    let engine = CaptureEngine(
+      store: rig.store, api: rig.api, ownIdentifier: BackgroundSessionIdentifier.app,
+      makeUploader: { _ in uploader }, now: { clock.now }, sleep: { _ in await gate.pause() },
+      configuration: Self.fastConfiguration, didSendToSession: { await gate.record($0) })
+    let resumed = Task { await engine.resume() }
+    defer { Task { await gate.release() } }
+    try await eventually("reconciliation paused") { await gate.entered }
+    let invalidated = await gate.sessions
+    XCTAssertEqual(invalidated, ["sess-1"])
+    await gate.release()
+    await resumed.value
+  }
 
   // MARK: - Happy paths
 

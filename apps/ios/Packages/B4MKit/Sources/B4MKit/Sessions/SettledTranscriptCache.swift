@@ -8,6 +8,20 @@ public final class SettledTranscriptCache {
     let revalidateLastPage: Bool
   }
 
+  struct Token: Equatable, Sendable {
+    fileprivate let value: UUID
+  }
+
+  struct Admission {
+    let snapshot: Snapshot?
+    let token: Token
+  }
+
+  private struct Entry {
+    let token: Token
+    var snapshot: Snapshot?
+  }
+
   private struct Key: Hashable {
     let sessionID: String
     let pageSize: Int
@@ -15,7 +29,7 @@ public final class SettledTranscriptCache {
 
   private let maxSessions: Int
   private let maxPages: Int
-  private var entries: [Key: Snapshot] = [:]
+  private var entries: [Key: Entry] = [:]
   private var recency: [Key] = []
   private(set) var generation = UUID()
 
@@ -32,9 +46,23 @@ public final class SettledTranscriptCache {
 
   func load(sessionID: String, pageSize: Int) -> Snapshot? {
     let key = Key(sessionID: sessionID, pageSize: pageSize)
-    guard let snapshot = entries[key] else { return nil }
+    guard let snapshot = entries[key]?.snapshot else { return nil }
     touch(key)
     return snapshot
+  }
+
+  /// Reserves bounded ownership even on a miss. Removing or evicting the entry revokes its token.
+  func begin(sessionID: String, pageSize: Int, generation: UUID) -> Admission? {
+    guard generation == self.generation, pageSize > 0, pageSize <= 50 else { return nil }
+    let key = Key(sessionID: sessionID, pageSize: pageSize)
+    let snapshot = entries[key]?.snapshot
+    let token = Token(value: UUID())
+    entries[key] = Entry(token: token, snapshot: snapshot)
+    touch(key)
+    while recency.count > maxSessions {
+      entries.removeValue(forKey: recency.removeFirst())
+    }
+    return Admission(snapshot: snapshot, token: token)
   }
 
   /// Drops a session's entries so the next open fetches it; for sends made outside a transcript view model.
@@ -48,13 +76,17 @@ public final class SettledTranscriptCache {
     recency.removeAll { $0.sessionID == sessionID }
   }
 
-  func save(sessionID: String, pageSize: Int, pages: [Page<QuestTurn>], generation: UUID) {
-    guard generation == self.generation, pageSize > 0, pageSize <= 50 else { return }
+  func save(sessionID: String, pageSize: Int, pages: [Page<QuestTurn>], generation: UUID, token: Token) {
+    let key = Key(sessionID: sessionID, pageSize: pageSize)
+    guard generation == self.generation, pageSize > 0, pageSize <= 50,
+      var entry = entries[key], entry.token == token
+    else { return }
     var settled: [Page<QuestTurn>] = []
     var revalidate = false
     for page in pages.prefix(maxPages) {
       guard page.items.count <= pageSize else {
-        remove(sessionID: sessionID, generation: generation)
+        entries.removeValue(forKey: key)
+        recency.removeAll { $0 == key }
         return
       }
       let prefix = page.items.prefix {
@@ -62,7 +94,8 @@ public final class SettledTranscriptCache {
           ?? ($0.kind == .error || !($0.reply?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true))
       }
       if settled.isEmpty, prefix.isEmpty, !page.items.isEmpty {
-        remove(sessionID: sessionID, generation: generation)
+        entries.removeValue(forKey: key)
+        recency.removeAll { $0 == key }
         return
       }
       settled.append(Page(items: Array(prefix), nextCursor: page.nextCursor))
@@ -72,12 +105,9 @@ public final class SettledTranscriptCache {
       }
     }
     guard !settled.isEmpty else { return }
-    let key = Key(sessionID: sessionID, pageSize: pageSize)
-    entries[key] = Snapshot(pages: settled, revalidateLastPage: revalidate)
+    entry.snapshot = Snapshot(pages: settled, revalidateLastPage: revalidate)
+    entries[key] = entry
     touch(key)
-    while recency.count > maxSessions {
-      entries.removeValue(forKey: recency.removeFirst())
-    }
   }
 
   private func touch(_ key: Key) {

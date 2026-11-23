@@ -3,6 +3,14 @@ import XCTest
 @testable import B4MKit
 
 @MainActor
+private extension SettledTranscriptCache {
+  func seed(sessionID: String, pageSize: Int, pages: [Page<QuestTurn>], generation: UUID) {
+    guard let admission = begin(sessionID: sessionID, pageSize: pageSize, generation: generation) else { return }
+    save(sessionID: sessionID, pageSize: pageSize, pages: pages, generation: generation, token: admission.token)
+  }
+}
+
+@MainActor
 final class SettledTranscriptCacheTests: XCTestCase {
   func testSendSettleReopenFetchesTheNewExchange() async {
     let api = FakeAPI()
@@ -40,6 +48,110 @@ final class SettledTranscriptCacheTests: XCTestCase {
     XCTAssertEqual(reopened.turns.map(\.id), ["old", "sent"])
   }
 
+  func testRepeatedLoadDoesNotRevokeAnInFlightCacheAdmission() async {
+    let api = FakeAPI()
+    let cache = SettledTranscriptCache()
+    await api.setQuestPages([nil: Page(items: [Samples.quest("old")], nextCursor: nil)])
+    await api.holdNextQuestHistory()
+    let model = TranscriptViewModel(sessionID: "s", api: api, cache: cache)
+    let request = Task { await model.load() }
+    await eventually { await api.questCursors.count == 1 }
+    await model.load()
+    await api.releaseQuestHistory()
+    await request.value
+    XCTAssertNotNil(cache.load(sessionID: "s", pageSize: 50))
+    let reopened = TranscriptViewModel(sessionID: "s", api: api, cache: cache)
+    await reopened.load()
+    let requests = await api.questCursors.count
+    XCTAssertEqual(requests, 1)
+  }
+
+  func testExternalRemovalRejectsAnOlderInFlightHistoryPage() async {
+    let api = FakeAPI()
+    let cache = SettledTranscriptCache()
+    await api.setQuestPages([nil: Page(items: [Samples.quest("old")], nextCursor: nil)])
+    await api.holdNextQuestHistory()
+    let original = TranscriptViewModel(sessionID: "s", api: api, cache: cache)
+    let request = Task { await original.refresh() }
+    await eventually { await api.questCursors.count == 1 }
+    cache.remove(sessionID: "s")
+    await api.setQuestPages([nil: Page(items: [Samples.quest("old"), Samples.quest("sent")], nextCursor: nil)])
+    await api.releaseQuestHistory()
+    await request.value
+    XCTAssertNil(cache.load(sessionID: "s", pageSize: 50))
+
+    let reopened = TranscriptViewModel(sessionID: "s", api: api, cache: cache)
+    await reopened.load()
+    XCTAssertEqual(reopened.turns.map(\.id), ["old", "sent"])
+  }
+
+  func testLateHistoryCannotReplaceANewerSnapshotAfterRemoval() async {
+    let api = FakeAPI()
+    let cache = SettledTranscriptCache()
+    await api.setQuestPages([nil: Page(items: [Samples.quest("old")], nextCursor: nil)])
+    let original = TranscriptViewModel(sessionID: "s", api: api, cache: cache)
+    await original.load()
+    await api.holdNextQuestHistory()
+    let request = Task { await original.refresh() }
+    await eventually { await api.questCursors.count == 2 }
+    cache.remove(sessionID: "s")
+    await api.setQuestPages([nil: Page(items: [Samples.quest("old"), Samples.quest("sent")], nextCursor: nil)])
+    let newer = TranscriptViewModel(sessionID: "s", api: api, cache: cache)
+    await newer.load()
+    await api.releaseQuestHistory()
+    await request.value
+
+    XCTAssertEqual(cache.load(sessionID: "s", pageSize: 50)?.pages.first?.items.map(\.id), ["old", "sent"])
+    let reopened = TranscriptViewModel(sessionID: "s", api: api, cache: cache)
+    await reopened.load()
+    XCTAssertEqual(reopened.turns.map(\.id), ["old", "sent"])
+    let requests = await api.questCursors.count
+    XCTAssertEqual(requests, 3)
+  }
+
+  func testExplicitRefreshCanCacheFreshHistoryAfterExternalRemoval() async {
+    let api = FakeAPI()
+    let cache = SettledTranscriptCache()
+    await api.setQuestPages([nil: Page(items: [Samples.quest("old")], nextCursor: nil)])
+    let model = TranscriptViewModel(sessionID: "s", api: api, cache: cache)
+    await model.load()
+    cache.remove(sessionID: "s")
+    await api.setQuestPages([nil: Page(items: [Samples.quest("old"), Samples.quest("sent")], nextCursor: nil)])
+    await model.refresh()
+    XCTAssertEqual(cache.load(sessionID: "s", pageSize: 50)?.pages.first?.items.map(\.id), ["old", "sent"])
+  }
+
+  func testStaleOversizedResponseCannotRemoveTheCurrentEntry() throws {
+    let cache = SettledTranscriptCache()
+    let generation = cache.generation
+    let old = try XCTUnwrap(cache.begin(sessionID: "s", pageSize: 1, generation: generation))
+    cache.remove(sessionID: "s")
+    let current = try XCTUnwrap(cache.begin(sessionID: "s", pageSize: 1, generation: generation))
+    cache.save(
+      sessionID: "s", pageSize: 1, pages: [Page(items: [Samples.quest("new")], nextCursor: nil)],
+      generation: generation, token: current.token)
+    cache.save(
+      sessionID: "s", pageSize: 1,
+      pages: [Page(items: [Samples.quest("old"), Samples.quest("oversized")], nextCursor: nil)],
+      generation: generation, token: old.token)
+    XCTAssertEqual(cache.load(sessionID: "s", pageSize: 1)?.pages.first?.items.map(\.id), ["new"])
+  }
+
+  func testMissReservationsAreBoundedAndEvictedTokensCannotRecreateEntries() throws {
+    let cache = SettledTranscriptCache(maxSessions: 1)
+    let generation = cache.generation
+    let old = try XCTUnwrap(cache.begin(sessionID: "old", pageSize: 1, generation: generation))
+    let current = try XCTUnwrap(cache.begin(sessionID: "new", pageSize: 1, generation: generation))
+    cache.save(
+      sessionID: "old", pageSize: 1, pages: [Page(items: [Samples.quest("stale")], nextCursor: nil)],
+      generation: generation, token: old.token)
+    XCTAssertNil(cache.load(sessionID: "old", pageSize: 1))
+    cache.save(
+      sessionID: "new", pageSize: 1, pages: [Page(items: [Samples.quest("fresh")], nextCursor: nil)],
+      generation: generation, token: current.token)
+    XCTAssertNotNil(cache.load(sessionID: "new", pageSize: 1))
+  }
+
   func testUnsettledFirstTurnDoesNotSeedAnEmptyLoadedChat() async {
     let api = FakeAPI()
     let cache = SettledTranscriptCache()
@@ -74,16 +186,16 @@ final class SettledTranscriptCacheTests: XCTestCase {
 
   func testCacheRejectsOversizedPagesAndPageSizes() {
     let cache = SettledTranscriptCache()
-    cache.save(
+    cache.seed(
       sessionID: "s", pageSize: 51, pages: [Page(items: [Samples.quest("1")], nextCursor: nil)],
       generation: cache.generation)
     XCTAssertNil(cache.load(sessionID: "s", pageSize: 51))
-    cache.save(
+    cache.seed(
       sessionID: "s", pageSize: 1, pages: [Page(items: [Samples.quest("1"), Samples.quest("2")], nextCursor: nil)],
       generation: cache.generation)
     XCTAssertNil(cache.load(sessionID: "s", pageSize: 1))
     let error = QuestTurn(id: "error", prompt: "p", reply: nil, kind: .error, createdAt: Samples.date)
-    cache.save(
+    cache.seed(
       sessionID: "s", pageSize: 1, pages: [Page(items: [error], nextCursor: nil)], generation: cache.generation)
     XCTAssertEqual(cache.load(sessionID: "s", pageSize: 1)?.pages.first?.items, [error])
   }
@@ -158,7 +270,7 @@ final class SettledTranscriptCacheTests: XCTestCase {
     let cache = SettledTranscriptCache(maxSessions: 2, maxPages: 2)
     let pages = (1...3).map { Page(items: [Samples.quest("\($0)")], nextCursor: "c\($0 + 1)") }
     func save(_ id: String) {
-      cache.save(sessionID: id, pageSize: 1, pages: pages, generation: cache.generation)
+      cache.seed(sessionID: id, pageSize: 1, pages: pages, generation: cache.generation)
     }
     save("a")
     save("b")
@@ -202,7 +314,7 @@ final class SettledTranscriptCacheTests: XCTestCase {
     await oldModel.load()
     cache.invalidate()
     XCTAssertNil(cache.load(sessionID: "s", pageSize: 50))
-    cache.save(
+    cache.seed(
       sessionID: "s", pageSize: 50, pages: [Page(items: [Samples.quest("late")], nextCursor: nil)],
       generation: oldGeneration)
     await oldModel.refresh()

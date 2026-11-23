@@ -128,9 +128,7 @@ public actor CaptureEngine {
 
   /// App launch / foreground: retry lost uploads, push every unfinished job forward, prune old results.
   public func resume() async {
-    await reconcile()
     prune()
-    for job in jobs() where !job.stage.isTerminal { await advance(job.id) }
     // The share extension sends into sessions from its own process, so the app's cached transcripts for
     // those sessions can only be dropped here, when the app next comes forward.
     var sessionIDs = Set<String>()
@@ -138,6 +136,9 @@ public actor CaptureEngine {
       if case .session(let sessionID, _) = job.destination { sessionIDs.insert(sessionID) }
     }
     for sessionID in sessionIDs { await didSendToSession?(sessionID) }
+    // Reconciliation and scan polling can wait; completed sends must invalidate history first.
+    await reconcile()
+    for job in jobs() where !job.stage.isTerminal { await advance(job.id) }
   }
 
   /// The system relaunched the app to deliver events of a background session (`identifier`).
