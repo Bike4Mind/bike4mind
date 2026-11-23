@@ -256,6 +256,7 @@ describe('runBriefScheduleReconcile', () => {
             emails: [],
           }),
           canCompose: async () => 'ok',
+          loadInstructions: async () => [],
           complete,
           push,
           logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
