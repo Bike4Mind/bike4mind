@@ -1,9 +1,8 @@
 name: E2E Tests (Core)
 
-# Thin caller for the Core promote-gate. Runs the curated Core project subset and
-# posts the e2e/core commit status the prod-promotion console gates on. All shared
-# plumbing lives in e2e-run.yml; this file only maps the Core-specific parameters.
-# Core set graduates over time — see apps/client/e2e/README.md ("Core gate").
+# Core staging caller and advisory preview pipeline. Verified preview status events
+# select PR-eligible projects; manual staging runs keep the curated Core subset.
+# Shared execution plumbing lives in e2e-run.yml.
 
 on:
   # The deployer posts this with an App token, including on redeploys where the label is sticky.
@@ -71,7 +70,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
-          ref: ${{ needs.prepare-preview.outputs.head_sha }}
+          ref: refs/pull/${{ needs.prepare-preview.outputs.pr_number }}/merge
           fetch-depth: 0
           persist-credentials: false
       - uses: actions/setup-node@v6
@@ -104,15 +103,17 @@ jobs:
     secrets: inherit
     with:
       pr_number: ${{ needs.prepare-preview.outputs.pr_number }}
-      checkout_ref: ${{ needs.prepare-preview.outputs.head_sha }}
+      checkout_ref: refs/pull/${{ needs.prepare-preview.outputs.pr_number }}/merge
+      preview_head_sha: ${{ needs.prepare-preview.outputs.head_sha }}
       preview_deploy_id: ${{ needs.prepare-preview.outputs.deploy_id }}
       pr_eligible_only: true
       playwright_args: ${{ needs.select-preview.outputs.playwright_args }}
       status_context: 'e2e/preview-advisory'
       suite_name: 'PR selected'
       artifact_suffix: 'preview'
-      timeout_minutes: 20
+      timeout_minutes: 45
       global_timeout_minutes: 15
+      execution_timeout_minutes: 17
       stamp_promotable: false
       trigger_label: 'Verified preview'
       concurrency_group: preview-e2e-${{ needs.prepare-preview.outputs.pr_number }}

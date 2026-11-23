@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
+import { stateFor } from '../e2e-outcome.mjs';
 
 const require = createRequire(import.meta.url);
 const { prepare, report } = require('../../.github/scripts/preview-e2e.cjs');
@@ -72,13 +73,31 @@ test('actual project configuration guard and path tables run in the existing scr
   execFileSync(process.execPath, ['--test', 'apps/client/e2e/project-selection.test.mjs'], { cwd: root });
 }, 30_000);
 
-test('preview workflows preserve caps, immutable checkout and full scheduled caller', () => {
+test('preview statuses use the shared outcome state mapping', async () => {
+  const original = { ...process.env };
+  try {
+    Object.assign(process.env, { PR_NUMBER: '1', HEAD_SHA: sha, DEPLOY_ID: '42', JOB_RESULT: 'success' });
+    for (const outcome of ['passed', 'failed', 'setup_failed', 'no_tests', 'incomplete', 'not_run', 'skipped', 'cancelled']) {
+      process.env.OUTCOME = outcome;
+      const f = fixture();
+      await report(f);
+      assert.equal(f.writes[1].state, stateFor(outcome));
+    }
+  } finally { process.env = original; }
+});
+
+test('preview workflows use base-integrated merge trees and retain deployed-head validation', () => {
   const read = name => readFileSync(new URL(`.github/workflows/${name}`, root), 'utf8');
   const core = read('e2e-core.yml');
-  assert.match(core, /timeout_minutes: 20/);
+  assert.match(core, /timeout_minutes: 45/);
   assert.match(core, /global_timeout_minutes: 15/);
   assert.match(core, /JOB_RESULT: \$\{\{ needs.preview.result \}\}/);
-  assert.match(core, /checkout_ref: \$\{\{ needs.prepare-preview.outputs.head_sha \}\}/);
+  assert.match(core, /checkout_ref: refs\/pull\/\$\{\{ needs.prepare-preview.outputs.pr_number \}\}\/merge/);
+  assert.match(core, /ref: refs\/pull\/\$\{\{ needs.prepare-preview.outputs.pr_number \}\}\/merge/);
+  assert.match(core, /preview_head_sha: \$\{\{ needs.prepare-preview.outputs.head_sha \}\}/);
+  assert.match(read('e2e-run.yml'), /HEAD_SHA: \$\{\{ inputs.preview_head_sha \|\| inputs.checkout_ref \}\}/);
+  assert.match(core, /execution_timeout_minutes: 17/);
+  assert.match(read('e2e-run.yml'), /timeout-minutes: \$\{\{ inputs.execution_timeout_minutes \}\}/);
   assert.match(core, /stamp_promotable: false/);
   assert.match(core, /preview:\n\s+needs: \[prepare-preview, select-preview\]\n\s+if: always\(\) && !cancelled\(\)/);
   assert.doesNotMatch(core, /--no-deps/);

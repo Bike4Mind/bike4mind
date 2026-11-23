@@ -129,7 +129,8 @@ describe('e2e skip rendering', () => {
     expect(read('e2e-core.yml')).toContain('OUTCOME: ${{ needs.preview.outputs.outcome }}');
     expect(read('e2e-core.yml')).toContain('JOB_RESULT: ${{ needs.preview.result }}');
     const reporter = fs.readFileSync(path.join(REPO_ROOT, '.github/scripts/preview-e2e.cjs'), 'utf8');
-    expect(reporter).toContain("state: outcome === 'passed' ? 'success'");
+    expect(reporter).toContain("const { stateFor } = await import('../../scripts/e2e-outcome.mjs')");
+    expect(reporter).toContain('state: stateFor(outcome)');
   });
 
   /**

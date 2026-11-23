@@ -47,6 +47,7 @@ async function prepare({ github, context, core }) {
 }
 
 async function report({ github, context, core }) {
+  const { stateFor } = await import('../../scripts/e2e-outcome.mjs');
   const number = Number(process.env.PR_NUMBER);
   const sha = process.env.HEAD_SHA;
   const { data: pr } = await github.rest.pulls.get({ ...context.repo, pull_number: number });
@@ -69,7 +70,7 @@ async function report({ github, context, core }) {
   else await github.rest.issues.createComment({ ...context.repo, issue_number: number, body });
   await github.rest.repos.createCommitStatus({
     ...context.repo, sha, context: 'e2e/preview-advisory', target_url: runUrl,
-    state: outcome === 'passed' ? 'success' : ['failed', 'setup_failed', 'no_tests', 'incomplete'].includes(outcome) ? 'failure' : 'error',
+    state: stateFor(outcome),
     description: `Advisory preview E2E: ${outcome}`,
   });
 }

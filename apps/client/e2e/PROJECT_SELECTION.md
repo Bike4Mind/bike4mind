@@ -36,8 +36,12 @@ Selection requires exactly one open same-repository PR at that SHA. Immediately
 before tests, the runner checks the current head, latest status ID, App identity,
 and deployed/not-stale labels again. Reporting repeats those checks and refuses
 to publish stale results. HTTP health is an additional check, not SHA evidence.
+Selection and execution check out the PR merge ref, so older PR heads inherit
+the base's reporting scripts, selector and PR-eligible filter. Deployed-head
+validation and QA attribution still use the original head SHA, not the merge ref.
 The legacy `run-e2e` label and `e2e:full` label delegate to this same path, with a
-20-minute job cap and a 15-minute Playwright timeout. No preview is required.
+45-minute job cap, a 15-minute Playwright timeout and a 17-minute execution-step
+ceiling that leaves time for failure reporting. No preview is required for merging.
 Results use a nonrequired `e2e/preview-advisory` status and advisory PR comment;
 missing outputs use the reusable job result, never an assumed pass.
 

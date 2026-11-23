@@ -1,6 +1,10 @@
 import fs from 'node:fs';
 import { pathToFileURL } from 'node:url';
 
+export function stateFor(outcome) {
+  return outcome === 'passed' ? 'success' : ['failed', 'incomplete'].includes(outcome) ? 'failure' : 'error';
+}
+
 export function summarize(report, { execution = 'skipped', skipped = false, cancelled = false, job = 'success' } = {}) {
   const counts = { passed: 0, flaky: 0, failed: 0, skipped: 0, not_started: 0, executed: 0, total: 0, setup_failed: 0 };
   const lines = [];
@@ -16,7 +20,7 @@ export function summarize(report, { execution = 'skipped', skipped = false, canc
           continue;
         }
         const bucket = !ran
-          ? test.status === 'skipped' || results.length
+          ? test.expectedStatus === 'skipped'
             ? 'skipped'
             : 'not_started'
           : failed
@@ -45,12 +49,12 @@ export function summarize(report, { execution = 'skipped', skipped = false, canc
   let outcome;
   if (cancelled || execution === 'cancelled') outcome = 'cancelled';
   else if (skipped) outcome = 'skipped';
-  else if (counts.setup_failed || report?.errors?.length || (!report && (execution !== 'skipped' || job === 'failure')))
+  else if (counts.setup_failed || (report?.errors?.length && counts.executed === 0) || (!report && (execution !== 'skipped' || job === 'failure')))
     outcome = 'setup_failed';
   else if (counts.failed) outcome = 'failed';
   else if (execution === 'skipped') outcome = 'not_run';
   else if (counts.executed === 0) outcome = 'no_tests';
-  else if (execution === 'failure') outcome = 'failed';
+  else if (execution === 'failure' || report?.errors?.length) outcome = 'failed';
   else if (counts.not_started) outcome = 'incomplete';
   else outcome = 'passed';
   const labels = {
@@ -67,7 +71,7 @@ export function summarize(report, { execution = 'skipped', skipped = false, canc
     ...counts,
     outcome,
     label: labels[outcome],
-    state: outcome === 'passed' ? 'success' : ['failed', 'incomplete'].includes(outcome) ? 'failure' : 'error',
+    state: stateFor(outcome),
     summary: `${counts.passed} passed (${counts.flaky} flaky), ${counts.failed} failed, ${counts.skipped} skipped, ${counts.not_started} not started (${counts.total} test cases; ${counts.setup_failed} setup failures)`,
     spec_summary: JSON.stringify(lines.join('\n') || 'No test case results available').slice(1, -1),
   };

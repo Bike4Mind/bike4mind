@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { summarize } from '../e2e-outcome.mjs';
 
 const root = fileURLToPath(new URL('../../', import.meta.url));
-const pwTest = (status, results) => ({ status, results });
+const pwTest = (status, results, expectedStatus = status === 'skipped' ? 'skipped' : 'passed') => ({ status, results, expectedStatus });
 const passed = () => pwTest('expected', [{ status: 'passed' }]);
 const report = (...tests) => ({ suites: [{ title: 'example.spec.ts', specs: [{ tests }] }] });
 
@@ -19,7 +19,7 @@ test('counts project cases, skips and retries without counting skipped cases as 
       passed(),
       pwTest('skipped', [{ status: 'skipped' }]),
       pwTest('flaky', [{ status: 'failed' }, { status: 'passed' }]),
-      pwTest('expected', [])
+      pwTest('skipped', [], 'passed')
     ),
     { execution: 'success' }
   );
@@ -48,8 +48,8 @@ test('distinguishes all execution outcomes and never infers pass from counts alo
     [
       { ...report(passed()), errors: [{ message: 'global teardown failed' }] },
       { execution: 'failure' },
-      'setup_failed',
-      'error',
+      'failed',
+      'failure',
     ],
   ];
   for (const [json, options, outcome, state] of cases) {
@@ -66,6 +66,27 @@ test('setup failures are separate from test case counts', () => {
   assert.equal(result.failed, 0);
   assert.equal(result.total, 1);
   assert.equal(result.outcome, 'setup_failed');
+});
+
+test('real Playwright did-not-run entries differ from intentional skips', () => {
+  const result = summarize(report(
+    passed(),
+    pwTest('skipped', [], 'passed'),
+    pwTest('skipped', [{ status: 'skipped' }], 'passed'),
+    pwTest('skipped', [{ status: 'skipped' }], 'skipped')
+  ), { execution: 'success' });
+  assert.equal(result.not_started, 2);
+  assert.equal(result.skipped, 1);
+  assert.equal(result.outcome, 'incomplete');
+});
+
+test('global errors after execution are failures, not setup failures', () => {
+  for (const tests of [[passed()], [pwTest('unexpected', [{ status: 'interrupted' }])]]) {
+    const result = summarize({ ...report(...tests), errors: [{ message: 'Timed out waiting for the test suite to run' }] }, { execution: 'failure' });
+    assert.equal(result.outcome, 'failed');
+    assert.equal(result.state, 'failure');
+  }
+  assert.equal(summarize({ ...report(), errors: [{ message: 'setup error' }] }, { execution: 'failure' }).outcome, 'setup_failed');
 });
 
 test('reports five skipped cases even when the spec is marked ok', () => {
