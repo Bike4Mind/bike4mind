@@ -48,6 +48,7 @@ export const AGENT_FIELD_REDACTION = {
   lastSnippet: 'drop',
   usdCost: 'drop',
   credits: 'drop',
+  plan: 'drop',
   pr: 'drop',
   branch: 'drop',
   redacted: 'replace',
