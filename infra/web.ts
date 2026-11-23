@@ -764,7 +764,7 @@ export const web = new sst.aws.Nextjs(
 // them, and '*' would expose every function's env vars. A managed policy keeps the ARN list out
 // of the server role's inline policy size budget. Consumers subscribed outside core (premium
 // overlays) are not listed; their queues show no logs link.
-const dlqConsumerFunctionArns = [
+export const dlqConsumerFunctionArns = [
   fabFileChunkQueueSubscription,
   fabFileVectorizeQueueSubscription,
   generationCallbackQueueSubscription,

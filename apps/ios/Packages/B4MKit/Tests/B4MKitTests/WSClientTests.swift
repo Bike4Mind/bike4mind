@@ -55,6 +55,10 @@ final class WSClientTests: XCTestCase {
     URLComponents(url: socket.url, resolvingAgainstBaseURL: false)?.queryItems?.first { $0.name == "ticket" }?.value
   }
 
+  func testEventuallyChecksASatisfiedConditionAtTheDeadline() async {
+    await eventually(timeout: 0) { true }
+  }
+
   // MARK: - Handshake
 
   func testEachConnectMintsAFreshTicket() async throws {

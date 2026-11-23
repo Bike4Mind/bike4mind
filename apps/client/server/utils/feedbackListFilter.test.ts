@@ -21,4 +21,10 @@ describe('buildFeedbackListFilter', () => {
       $and: [{}, { contentStored: false }],
     });
   });
+
+  it('leaves out unverified reports when filtering by userId', async () => {
+    expect(await buildFeedbackListFilter({ userId: 'u1' }, {}, true)).toEqual({
+      $and: [{}, { userId: 'u1' }, { userIdVerified: { $ne: false } }],
+    });
+  });
 });

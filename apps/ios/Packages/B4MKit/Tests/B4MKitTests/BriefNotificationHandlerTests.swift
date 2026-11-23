@@ -87,10 +87,35 @@ final class BriefNotificationHandlerTests: XCTestCase {
 
   func testRegistersTheServerSelectedCategoriesWithDistinctActionIdentifiers() {
     let categories = BriefNotificationCategory.makeCategories()
-    XCTAssertEqual(categories.map(\.identifier), ["brief_ready_approval", "brief_ready_reply"])
-    XCTAssertEqual(categories[0].actions.map(\.identifier), ["brief_approve", "brief_deny"])
+    XCTAssertEqual(
+      categories.map(\.identifier), ["brief_ready_approval", "brief_ready_reply", "brief_ready_listen"])
+    XCTAssertEqual(categories[0].actions.map(\.identifier), ["brief_approve", "brief_deny", "brief_listen"])
     XCTAssertTrue(categories[1].actions.first is UNTextInputNotificationAction)
+    XCTAssertEqual(categories[1].actions.map(\.identifier), ["brief_reply", "brief_listen"])
+    XCTAssertEqual(categories[2].actions.map(\.identifier), ["brief_listen"])
+    XCTAssertTrue(categories.allSatisfy { $0.actions.last?.options.contains(.foreground) == true })
     XCTAssertNil(ApprovalNotificationCategory.decision(forActionIdentifier: "brief_approve"))
+  }
+
+  func testListenOpensVoiceForTheBriefWithoutFetchingIt() async {
+    let (handler, briefs, pending, feedback) = make(.success(brief([approval(.pending)])))
+    let outcome = await handler.handle(actionIdentifier: "brief_listen", replyText: nil, payload: payload)
+    XCTAssertEqual(outcome, .listen(briefID: "b1"))
+    let fetched = await briefs.fetchedIDs
+    let calls = await pending.calls
+    XCTAssertTrue(fetched.isEmpty)
+    XCTAssertTrue(calls.isEmpty)
+    XCTAssertTrue(feedback.posts.isEmpty)
+  }
+
+  func testListenWithoutABriefIDFallsBackToOpeningTheBrief() async {
+    let (handler, briefs, _, feedback) = make(.success(brief([])))
+    let outcome = await handler.handle(
+      actionIdentifier: "brief_listen", replyText: nil, payload: NotificationPayload(category: .briefReady))
+    XCTAssertEqual(outcome, .openBrief)
+    let fetched = await briefs.fetchedIDs
+    XCTAssertTrue(fetched.isEmpty)
+    XCTAssertTrue(feedback.posts.isEmpty)
   }
 
   func testApproveRefetchesTheBriefAndAnswersItsPendingApproval() async {

@@ -893,7 +893,7 @@ const accountDataExportQueueSubscription = accountDataExportQueue.subscribe(
 // Owner-only thumbnails of published bundles: one message per artifact version, enqueued by publish
 // finalize, restore and AI revise (enqueuePublishThumbnail in packages/server-utils). Hosted only -
 // the self-host worker image ships no browser (see selfhostParityPolicy.ts and
-// manifestCoverage.test.ts).
+// manifestCoverage.repo.test.ts).
 //
 // Two functions. The queue handler (orchestrator) has the database and the private bucket: it
 // loads the artifact, checks the version, builds the fully inlined document, stages it under

@@ -31,7 +31,7 @@ const gap = (id: string, fingerprint: string, signals: string[] = []): ParityPol
   reviewed(id, fingerprint, 'pending', signals);
 // A gap whose reason is specific to the entry: who reaches it on self-host and what wiring it needs.
 // The registered-but-unconsumed ones must stay in sync with REGISTERED_WITHOUT_CONSUMER in
-// b4m-core/resource/src/manifestCoverage.test.ts.
+// b4m-core/resource/src/manifestCoverage.repo.test.ts.
 const gapBecause = (id: string, fingerprint: string, reason: string, signals: string[] = []): ParityPolicyEntry => ({
   ...reviewed(id, fingerprint, 'pending', signals),
   reason,
@@ -58,9 +58,9 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   ),
   hostedOnly(
     'schedule:infra/cron.ts:dlqTriageSweep',
-    '38acecc248ea7557053ca90c3f3623e71d8119281f5af6461b316749ce158107',
+    '8c353c2b1713c580d01f4faaac7374b02b0dffc6f32f4da70ccdfcfb5d291dd2',
     'Hosted CloudWatch alarm and SQS dead-letter sampling; portable deployments do not run the hosted alarm sweep.',
-    ['cloudwatch:DescribeAlarms', 'import:@aws-sdk/client-cloudwatch']
+    ['cloudwatch:DescribeAlarms', 'import:@aws-sdk/client-cloudwatch', 'lambda:ListEventSourceMappings']
   ),
   broker(
     'queue:infra/organizationRetention.ts:organizationRetentionDlq',
@@ -1314,8 +1314,13 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   ),
   gap(
     'snsSubscription:infra/dlqAlarms.ts:DlqAlarmTopic',
-    '88b055402e66c2942f661c8c6dce9385b5568ee29f63058aaa54ece2f69f8854',
-    ['cloudwatch:DescribeAlarms', 'cloudwatch:GetInsightRuleReport', 'ssm:GetParameter']
+    '5e2b51e155fca8780f1b5a2b76d04559750bb1aca7bbe0a8b14384fe97bf8ce3',
+    [
+      'cloudwatch:DescribeAlarms',
+      'cloudwatch:GetInsightRuleReport',
+      'lambda:ListEventSourceMappings',
+      'ssm:GetParameter',
+    ]
   ),
   gap(
     'snsSubscription:infra/dlqAlarms.ts:OobAlarmTopicEmailSub',

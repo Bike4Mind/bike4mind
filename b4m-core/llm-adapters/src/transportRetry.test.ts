@@ -1,9 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { isTransportError, retryTransportErrors } from './transportRetry';
+import { isLlmTimeoutError } from './llmTimeoutErrors';
+import { isHeadersTimeoutError, isTransportError, retryTransportErrors } from './transportRetry';
 
 const logger = { warn: vi.fn() } as unknown as Parameters<typeof retryTransportErrors>[1]['logger'];
 const fetchFailed = () =>
   new TypeError('fetch failed', { cause: Object.assign(new Error('x'), { code: 'ECONNRESET' }) });
+const headersTimeout = () =>
+  new TypeError('fetch failed', {
+    cause: Object.assign(new Error('Headers Timeout Error'), { code: 'UND_ERR_HEADERS_TIMEOUT' }),
+  });
 
 describe('isTransportError', () => {
   it('matches only the undici TypeErrors', () => {
@@ -12,6 +17,15 @@ describe('isTransportError', () => {
     expect(isTransportError(new Error('fetch failed'))).toBe(false);
     expect(isTransportError(new TypeError('other'))).toBe(false);
     expect(isTransportError('fetch failed')).toBe(false);
+  });
+});
+
+describe('isHeadersTimeoutError', () => {
+  it('matches only the undici headers timeout', () => {
+    expect(isHeadersTimeoutError(headersTimeout())).toBe(true);
+    expect(isHeadersTimeoutError(fetchFailed())).toBe(false);
+    expect(isHeadersTimeoutError(new TypeError('fetch failed'))).toBe(false);
+    expect(isHeadersTimeoutError(new Error('x', { cause: { code: 'UND_ERR_HEADERS_TIMEOUT' } }))).toBe(false);
   });
 });
 
@@ -84,5 +98,19 @@ describe('retryTransportErrors', () => {
     controller.abort();
     expect(await run(open, controller.signal)).toEqual({ error: err });
     expect(open).toHaveBeenCalledTimes(1);
+  });
+
+  it('turns a headers timeout into a typed request timeout without reopening', async () => {
+    const open = vi.fn().mockRejectedValue(headersTimeout());
+    const result = await run(open);
+
+    expect(open).toHaveBeenCalledTimes(1);
+    expect('error' in result && isLlmTimeoutError(result.error)).toBe(true);
+    const error = (result as { error: { kind: string; timeoutMs: number; message: string } }).error;
+    expect(error.kind).toBe('request');
+    expect(error.timeoutMs).toBe(300_000);
+    // The completion loop's message predicates key on this phrase.
+    expect(error.message).toContain('request timeout');
+    expect(logger.warn).toHaveBeenCalledTimes(1);
   });
 });

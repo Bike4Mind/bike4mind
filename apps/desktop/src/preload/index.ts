@@ -1,6 +1,7 @@
 import type { PendingTaskDecision, RolePolicy, TaskAction, TaskDecisionAnswer } from '@shared/orchestration';
 import { contextBridge, ipcRenderer, webUtils } from 'electron';
 import type { AttentionNotice, AttentionOpenEvent, NotifyScope } from '@shared/attention';
+import type { AppMenuAction, RendererErrorReport } from '@shared/appShell';
 import type { AccountPage, AuthState, EnvironmentSelection } from '@shared/auth';
 import type { PromptCacheTtl } from '@bike4mind/common';
 import type {
@@ -80,6 +81,15 @@ const api: DesktopApi = {
     },
   },
   getAppInfo: () => ipcRenderer.invoke(IPC_CHANNELS.getAppInfo),
+  appMenu: {
+    onAction: listener => {
+      const handler = (_event: unknown, action: AppMenuAction) => listener(action);
+      ipcRenderer.on(IPC_CHANNELS.appMenuAction, handler);
+      return () => ipcRenderer.removeListener(IPC_CHANNELS.appMenuAction, handler);
+    },
+    takePending: () => ipcRenderer.invoke(IPC_CHANNELS.appMenuTakePending),
+  },
+  reportRendererError: (report: RendererErrorReport) => ipcRenderer.invoke(IPC_CHANNELS.rendererReportError, report),
   setTheme: (mode, backgroundColor) => ipcRenderer.invoke(IPC_CHANNELS.setTheme, mode, backgroundColor),
   skins: {
     list: () => ipcRenderer.invoke(IPC_CHANNELS.skinsList),
@@ -508,6 +518,10 @@ const api: DesktopApi = {
     moveSession: (sessionId: string, sectionId: string | null) =>
       ipcRenderer.invoke(IPC_CHANNELS.sidebarMoveSession, sessionId, sectionId),
   },
+  composerDrafts: {
+    list: () => ipcRenderer.invoke(IPC_CHANNELS.composerDraftsList),
+    save: (sessionId: string, text: string) => ipcRenderer.invoke(IPC_CHANNELS.composerDraftsSave, sessionId, text),
+  },
   mcp: {
     getServers: () => ipcRenderer.invoke(IPC_CHANNELS.mcpGetServers),
     addServer: (input: McpServerInput) => ipcRenderer.invoke(IPC_CHANNELS.mcpAddServer, input),
@@ -578,6 +592,7 @@ const api: DesktopApi = {
   },
   pullRequests: {
     watch: (sessionId: string | null) => ipcRenderer.invoke(IPC_CHANNELS.prWatch, sessionId),
+    getState: (sessionId: string) => ipcRenderer.invoke(IPC_CHANNELS.prGetState, sessionId),
     bind: (sessionId: string, url: string) => ipcRenderer.invoke(IPC_CHANNELS.prBind, sessionId, url),
     dismiss: (sessionId: string) => ipcRenderer.invoke(IPC_CHANNELS.prDismiss, sessionId),
     refresh: (sessionId: string) => ipcRenderer.invoke(IPC_CHANNELS.prRefresh, sessionId),

@@ -1,5 +1,5 @@
 // Core's tutorial drafts: the profile's capture wiring and store.
-// Server-only, like the registry (see registry.clientImports.test.ts).
+// Server-only, like the registry (see registry.clientImports.repo.test.ts).
 import { WORKSPACE_SURFACES } from '@bike4mind/common';
 import { questRepository, sessionRepository } from '@bike4mind/database';
 import { coreModels } from './core';

@@ -258,6 +258,13 @@ export const SECRET_ROTATION_CONFIG: { [key: string]: SecretRotationEntry } = {
     isAutomatic: false,
     rotationProcess: 'Generate new random token and update SST Secret',
   },
+  CHAT_COMPLETION_INTERNAL_SECRET: {
+    description: 'Bearer shared by the frontend Lambda and ChatCompletion for internal quest dispatch',
+    rotationIntervalDays: 180,
+    isAutomatic: false,
+    rotationProcess:
+      'Generate a new random value, set it with `sst secret set`, then deploy the frontend and ChatCompletion together',
+  },
   E2E_CLEANUP_SECRET: {
     description: 'Header secret for the E2E test endpoints (/api/test/*)',
     rotationIntervalDays: 180,

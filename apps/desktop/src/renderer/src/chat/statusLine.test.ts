@@ -3,6 +3,9 @@ import type { ChatMessage, ChatReplyRound, ChatToolCall, ChatToolStatus, ModelPh
 import type { PendingCode } from './codeStream';
 import {
   activityDetail,
+  clockElapsedMs,
+  holdClock,
+  startClock,
   allowanceArc,
   allowanceColor,
   contextPercent,
@@ -237,14 +240,14 @@ describe('describeActivity', () => {
   it('still lets a running tool or an approval outrank code being written', () => {
     expect(describeActivity([call('file_read', 'running')], true, code('x')).kind).toBe('tool');
     expect(describeActivity([call('file_write', 'awaiting-approval')], true, code('x')).label).toBe(
-      'Waiting for your answer...'
+      'Waiting for your answer'
     );
   });
 
   it('puts a blocked approval ahead of everything else', () => {
     expect(describeActivity([call('bash_execute', 'awaiting-approval'), call('file_read', 'running')], false)).toEqual({
       kind: 'approval',
-      label: 'Waiting for your answer...',
+      label: 'Waiting for your answer',
     });
   });
 
@@ -457,14 +460,20 @@ describe('statusFields', () => {
   const startedAt = 1_000_000;
 
   it('leaves the token field out until a real count has arrived', () => {
-    expect(statusFields({ startedAt, tokens: null }, startedAt + 5000, 'Thinking...')).toEqual(['5s', 'Thinking...']);
+    expect(statusFields({ startedAt, tokens: null }, 5000, 'Thinking...')).toEqual(['5s', 'Thinking...']);
   });
 
   it('shows elapsed, tokens and activity once it has', () => {
-    expect(statusFields({ startedAt, tokens: 1100 }, startedAt + 187_000, 'Running tools...')).toEqual([
+    expect(statusFields({ startedAt, tokens: 1100 }, 187_000, 'Running tools...')).toEqual([
       '3m 7s',
       '1.1k tokens',
       'Running tools...',
+    ]);
+  });
+
+  it('drops the clock while the turn waits on the user', () => {
+    expect(statusFields({ startedAt, tokens: null }, null, 'Waiting for your answer')).toEqual([
+      'Waiting for your answer',
     ]);
   });
 });
@@ -827,5 +836,39 @@ describe('a real turn against a very large window', () => {
       describeUsage({ contextTokens: 4190, contextLimit: 1_050_000, credits, monthlyAllowance: 50_000 });
     expect(at(2045)).toContain('Credits 2,045 personal balance');
     expect(at(1991)).toContain('Credits 1,991 personal balance');
+  });
+});
+
+describe('the turn clock', () => {
+  it('counts from the start while nothing waits on the user', () => {
+    expect(clockElapsedMs(startClock(1_000), 61_000)).toBe(60_000);
+  });
+
+  it('stands still while the turn waits on the user', () => {
+    const held = holdClock(startClock(0), true, 10_000);
+    expect(clockElapsedMs(held, 10_000)).toBe(10_000);
+    expect(clockElapsedMs(held, 40 * 60_000)).toBe(10_000);
+  });
+
+  it('resumes from where it stopped, leaving the wait out', () => {
+    const held = holdClock(startClock(0), true, 10_000);
+    const resumed = holdClock(held, false, 30 * 60_000);
+    expect(clockElapsedMs(resumed, 30 * 60_000 + 5_000)).toBe(15_000);
+  });
+
+  it('adds up several waits in one turn', () => {
+    let clock = startClock(0);
+    clock = holdClock(clock, true, 1_000);
+    clock = holdClock(clock, false, 6_000);
+    clock = holdClock(clock, true, 8_000);
+    clock = holdClock(clock, false, 18_000);
+    expect(clockElapsedMs(clock, 20_000)).toBe(5_000);
+  });
+
+  it('returns the same clock when the wait state did not change', () => {
+    const running = startClock(0);
+    expect(holdClock(running, false, 5_000)).toBe(running);
+    const held = holdClock(running, true, 5_000);
+    expect(holdClock(held, true, 9_000)).toBe(held);
   });
 });

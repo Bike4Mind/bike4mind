@@ -90,7 +90,7 @@ describe('Aquarium', () => {
 
   it('builds on the snapshot contract alone', () => {
     const allowed =
-      /^(react|@mui\/.+|@shared\/viewSnapshot|@shared\/agentState|\.\/[\w]+|\.\.\/\.\.\/\.\.\/assets\/.+)$/;
+      /^(react|@mui\/.+|@shared\/viewSnapshot|@shared\/agentState|\.\.\/AgentPrIndicator|\.\/[\w]+|\.\.\/\.\.\/\.\.\/assets\/.+)$/;
     const sources = import.meta.glob<string>(['./*.{ts,tsx}', '!./*.test.{ts,tsx}'], {
       query: '?raw',
       import: 'default',

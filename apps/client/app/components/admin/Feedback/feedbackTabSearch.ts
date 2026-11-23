@@ -34,6 +34,7 @@ export const FEEDBACK_SUBJECT_PARAM = 'feedbackSubject';
 export const FEEDBACK_RESOLUTION_PARAM = 'feedbackResolution';
 export const FEEDBACK_TYPE_PARAM = 'feedbackType';
 export const FEEDBACK_ORG_PARAM = 'feedbackOrg';
+export const FEEDBACK_USER_PARAM = 'feedbackUser';
 export const FEEDBACK_RECEIVED_PARAM = 'feedbackReceived';
 export const FEEDBACK_FROM_PARAM = 'feedbackFrom';
 export const FEEDBACK_TO_PARAM = 'feedbackTo';
@@ -51,6 +52,7 @@ const FEEDBACK_VIEW_PARAMS = [
   FEEDBACK_RESOLUTION_PARAM,
   FEEDBACK_TYPE_PARAM,
   FEEDBACK_ORG_PARAM,
+  FEEDBACK_USER_PARAM,
   FEEDBACK_RECEIVED_PARAM,
   FEEDBACK_FROM_PARAM,
   FEEDBACK_TO_PARAM,
@@ -81,6 +83,7 @@ export type FeedbackSearch = {
   [FEEDBACK_RESOLUTION_PARAM]?: FeedbackResolution;
   [FEEDBACK_TYPE_PARAM]?: FeedbackType[];
   [FEEDBACK_ORG_PARAM]?: string[];
+  [FEEDBACK_USER_PARAM]?: string;
   [FEEDBACK_RECEIVED_PARAM]?: FeedbackReceivedWindow;
   [FEEDBACK_FROM_PARAM]?: string;
   [FEEDBACK_TO_PARAM]?: string;
@@ -102,6 +105,8 @@ export type FeedbackView = {
   types: FeedbackType[];
   /** Organization names; empty is every organization. */
   organizations: string[];
+  /** One reporter's user id; undefined is every reporter. */
+  userId?: string;
   /** Undefined is any age. Never set together with `createdFrom`/`createdTo`. */
   received: FeedbackReceivedWindow | undefined;
   /** A custom range of `YYYY-MM-DD` days in the viewer's time zone, both inclusive; either end may be open. */
@@ -128,6 +133,7 @@ export const DEFAULT_FEEDBACK_VIEW: FeedbackView = {
   subject: undefined,
   types: [],
   organizations: [],
+  userId: undefined,
   received: undefined,
   createdFrom: undefined,
   createdTo: undefined,
@@ -183,6 +189,7 @@ export const FEEDBACK_SEARCH_PARSERS: {
   [FEEDBACK_RESOLUTION_PARAM]: oneOf(FEEDBACK_RESOLUTIONS),
   [FEEDBACK_TYPE_PARAM]: parseTypes,
   [FEEDBACK_ORG_PARAM]: parseStringList,
+  [FEEDBACK_USER_PARAM]: parseObjectId,
   [FEEDBACK_RECEIVED_PARAM]: oneOf(FEEDBACK_RECEIVED_WINDOWS),
   [FEEDBACK_FROM_PARAM]: parseCalendarDate,
   [FEEDBACK_TO_PARAM]: parseCalendarDate,
@@ -225,6 +232,7 @@ export function feedbackViewFromSearch(search: Record<string, unknown>): Feedbac
     resolution,
     types: parseTypes(search[FEEDBACK_TYPE_PARAM]) ?? DEFAULT_FEEDBACK_VIEW.types,
     organizations: parseStringList(search[FEEDBACK_ORG_PARAM]) ?? DEFAULT_FEEDBACK_VIEW.organizations,
+    userId: parseObjectId(search[FEEDBACK_USER_PARAM]),
     received: hasCreatedRange(range)
       ? undefined
       : FEEDBACK_SEARCH_PARSERS[FEEDBACK_RECEIVED_PARAM](search[FEEDBACK_RECEIVED_PARAM]),
@@ -254,6 +262,7 @@ export function feedbackViewToSearch(view: FeedbackView): {
     [FEEDBACK_RESOLUTION_PARAM]: view.resolution,
     [FEEDBACK_TYPE_PARAM]: parseTypes(view.types),
     [FEEDBACK_ORG_PARAM]: parseStringList(view.organizations),
+    [FEEDBACK_USER_PARAM]: parseObjectId(view.userId),
     [FEEDBACK_RECEIVED_PARAM]: hasCreatedRange(range)
       ? undefined
       : FEEDBACK_SEARCH_PARSERS[FEEDBACK_RECEIVED_PARAM](view.received),

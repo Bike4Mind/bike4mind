@@ -26,6 +26,8 @@ Each publish opens a dialog with the live URL plus the social-share bar (Bluesky
 
 Published pages are served under Bike4Mind's own domain with strict, per-page Content-Security-Policy and a visibility check on every request.
 
+The Live Artifacts gear opens when you publish a page. Its reward becomes eligible after another signed-in account with a verified email views the page. Your own account must also meet the verification and account-age requirements shown in Gears.
+
 ## Publish a multi-file React app
 
 Ask for the entry and all its sibling React files in the same reply. Each sibling needs a unique identifier matching the name used by its relative imports, such as `import Counter from './Counter'` and `identifier="Counter"`.
@@ -121,8 +123,8 @@ The URL is absolute, for example `https://app.example.com/p/u/<userId>/<slug>`. 
 ### The `artifacts:publish` scope
 
 - API keys created before this scope existed need `artifacts:publish` added. Creating a key with **Full access** includes it.
-- The scope covers only the three v1 routes above. The web app's `/api/publish` routes are unchanged and are not affected by it.
-- The scope does not let a key read artifacts. Add a read scope as well if the same key also lists or fetches artifacts.
+- The scope covers the three v1 routes above. It also applies when you call these web app routes with an API key: `POST /api/publish/artifact/upload-url`, `POST /api/publish/artifact/finalize`, `GET /api/publish/artifacts` and `/api/publish/artifacts/<id>`. Existing keys keep working on those routes for now; add `artifacts:publish` to any key you publish with.
+- The scope does not let a key read your stored artifacts. Add `notebooks:read` as well if the same key also lists or fetches artifacts through `/api/v1/artifacts`.
 
 ### What gets published
 

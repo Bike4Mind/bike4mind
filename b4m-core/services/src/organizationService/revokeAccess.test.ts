@@ -108,6 +108,7 @@ describe('organizationService - revokeAccess', () => {
         { id: 'user2', name: 'Second User', email: 'second@example.com', usedCredits: 0, lastCreditUsedAt: null },
       ],
       adminUserIds: [], // purge normalizes adminUserIds (none appointed here)
+      billingManagerUserIds: [],
     };
 
     expect(result).toEqual(expectedUpdatedOrg);

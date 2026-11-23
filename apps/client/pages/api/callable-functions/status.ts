@@ -8,6 +8,7 @@ export type CallableFunctionsStatus = { enabled: boolean };
 const handler = baseApi({ auth: 'jwtOnly' }).get(
   perUserRateLimit('GET /api/callable-functions/status'),
   async (req, res) => {
+    if (!req.user) return res.status(401).json({ error: 'Unauthorized' });
     const status: CallableFunctionsStatus = { enabled: await resolveCallableFunctionsEnabled(req.user) };
     res.json(status);
   }

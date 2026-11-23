@@ -15,6 +15,7 @@ export * from './UsageEventModel';
 export * from './ModelPriceModel';
 export * from './ProviderInvoiceModel';
 export * from './SpendReconciliationModel';
+export * from './SpokeBudgetModel';
 export * from './RevenueSnapshotModel';
 export * from './BillingEventModel';
 export * from './SpendRollupModel';

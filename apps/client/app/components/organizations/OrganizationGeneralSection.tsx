@@ -41,8 +41,8 @@ const compressLogo = (file: File): Promise<File | Blob> =>
 /**
  * Team name, description, logo and billing contact. The fields follow their server gates:
  * - name and description: `canEditProfile`, the Settings section's mirror of organizationService.update's
- *   team-role gate (owner, current manager or platform admin);
- * - logo: owner, manager or platform admin (upload-logo.ts, verifyOrgAccess);
+ *   team-role gate (`managePolicies`: owner, current manager or platform admin);
+ * - logo: owner, manager or platform admin (upload-logo.ts, `managePolicies`);
  * - billing contact: owner or platform admin. update.ts ignores it from a manager, and
  *   toSafeOrganization strips it from everyone else, so nobody else could see what they edit.
  */

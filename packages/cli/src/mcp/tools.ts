@@ -182,8 +182,7 @@ export const TOOL_META: ToolMeta[] = [
     title: 'Publish artifact',
     description:
       "Publish an artifact you own to a shareable /p/... link and return its absolute URL. Republishing an artifact updates its existing page and keeps that page's visibility unless you pass one; a first publish defaults to public.",
-    // The publish routes declare no required scope; this is only the hint a 403 names.
-    scope: 'files:write',
+    scope: 'artifacts:publish',
   },
   {
     name: 'bob_read_site',
@@ -1551,7 +1550,7 @@ export function registerTools(server: McpServer, client: B4mApiClient): void {
       description: meta('publish_artifact').description,
       inputSchema: publishArtifactShape,
     },
-    args => run('files:write', () => publishArtifact(client, args))
+    args => run('artifacts:publish', () => publishArtifact(client, args))
   );
 
   // Bob's routes enforce their scopes, so these map errors with mapBobApiError.

@@ -3,7 +3,7 @@
 //
 // The registry rejects a publish once that document passes 100 MB, and the versions that fill
 // it cannot be removed afterwards, so the only useful warning is an early one. Run weekly by
-// .github/workflows/npm-metadata-size.yml; packages/scripts/src/checkNpmPublishSources.test.ts
+// .github/workflows/npm-metadata-size.yml; packages/scripts/src/checkNpmPublishSources.repo.test.ts
 // is the static half (it keeps snapshot publishing, the usual cause, out of the workflows).
 //
 // Restricted packages need NPM_READ_TOKEN (a read-only token). Without it they read as 404,
