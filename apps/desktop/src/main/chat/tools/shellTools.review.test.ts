@@ -234,6 +234,8 @@ describe('recursive or forced deletes', () => {
     'git clean',
     'git -C src clean -fd',
     'git clean -fdx -evendor',
+    'git clean -fdx -e -n',
+    'git clean -fdx --exclude -n',
     'rsync -a --delete src/ out/',
     'rsync -a --delete-after src/ out/',
     'rsync -a --remove-source-files src/ out/',
