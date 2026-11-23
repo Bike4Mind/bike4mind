@@ -30,6 +30,8 @@ vi.mock('@client/app/utils/regInviteAPICalls', () => ({
 }));
 const { useGetReferralSummary } = vi.hoisted(() => ({ useGetReferralSummary: vi.fn() }));
 vi.mock('@client/app/hooks/data/referralSummary', () => ({ useGetReferralSummary }));
+const { useGetReferralLink } = vi.hoisted(() => ({ useGetReferralLink: vi.fn() }));
+vi.mock('@client/app/hooks/data/referralLink', () => ({ useGetReferralLink }));
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
     t: (key: string, opts?: { credits?: string }) => opts?.credits ?? key,
@@ -60,6 +62,7 @@ const renderModal = (inviteType?: ReferralInviteType) => {
 beforeEach(() => {
   vi.clearAllMocks();
   useGetReferralSummary.mockReturnValue({ data: undefined });
+  useGetReferralLink.mockReturnValue({ data: undefined });
   useReferralModal.setState({ isOpen: false });
   useUser.setState({ currentUser: { id: 'sender', name: 'Sender', numReferralsAvailable: 2 } });
 });
@@ -204,4 +207,34 @@ it('skips the reward lines when a cached summary predates the rewards field', ()
 it('only asks for the summary while the modal is open', () => {
   renderModal();
   expect(useGetReferralSummary).toHaveBeenCalledWith({ enabled: false });
+});
+
+it('shows the share link once it loads and copies it', async () => {
+  const writeText = vi.fn().mockResolvedValue(undefined);
+  Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true });
+  useGetReferralLink.mockReturnValue({ data: { code: 'abcd2345', url: 'https://app.example.test/r/abcd2345' } });
+  useReferralModal.setState({ isOpen: true });
+  const queryClient = renderModal();
+  expect(screen.getByTestId('referral-link-input')).toHaveValue('https://app.example.test/r/abcd2345');
+  fireEvent.click(screen.getByTestId('referral-link-copy-btn'));
+  expect(writeText).toHaveBeenCalledWith('https://app.example.test/r/abcd2345');
+  await waitFor(() =>
+    expect(screen.getByTestId('referral-link-copy-btn')).toHaveTextContent('referral.share_link_copied')
+  );
+  queryClient.clear();
+});
+
+it('asks for the share link only while the referral modal is open', () => {
+  renderModal();
+  expect(useGetReferralLink).toHaveBeenLastCalledWith({ enabled: false });
+  expect(screen.queryByTestId('referral-link')).toBeNull();
+});
+
+it('leaves the share link out when it cannot be loaded', () => {
+  useReferralModal.setState({ isOpen: true });
+  const queryClient = renderModal();
+  expect(useGetReferralLink).toHaveBeenLastCalledWith({ enabled: true });
+  expect(screen.queryByTestId('referral-link')).toBeNull();
+  expect(screen.getByTestId('referral-email-input')).toBeInTheDocument();
+  queryClient.clear();
 });
