@@ -4,6 +4,7 @@ import {
   buildArtifactEmissionMessages,
   dataOriginReservedHosts,
   resolveArtifactsEnabled,
+  resolveCallableFunctionsSafely,
   withArtifactDataOrigins,
 } from './artifactGating';
 import { buildTaggedContextMessages } from './systemPromptSources';
@@ -112,5 +113,28 @@ describe('withArtifactDataOrigins', () => {
     expect(note).toContain('pyodide.http import pyfetch');
     expect(note).toContain('pyodide.http import open_url');
     expect(note).toContain('Every other address is blocked');
+  });
+});
+
+describe('resolveCallableFunctionsSafely', () => {
+  const logger = { warn: vi.fn() };
+
+  afterEach(() => {
+    logger.warn.mockReset();
+  });
+
+  it('is off when the host gives no resolver', async () => {
+    await expect(resolveCallableFunctionsSafely(undefined, logger)).resolves.toBe(false);
+  });
+
+  it('answers with the resolver', async () => {
+    await expect(resolveCallableFunctionsSafely(async () => true, logger)).resolves.toBe(true);
+    await expect(resolveCallableFunctionsSafely(async () => false, logger)).resolves.toBe(false);
+  });
+
+  it('is off and logs when the setting cannot be read, so the turn goes on', async () => {
+    const error = new Error('settings unavailable');
+    await expect(resolveCallableFunctionsSafely(() => Promise.reject(error), logger)).resolves.toBe(false);
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('could not be read'), error);
   });
 });

@@ -137,6 +137,45 @@ describe('PublishShareModal — update seeds controls from the prior publication
   });
 });
 
+describe('PublishShareModal - update helper text for content already in history', () => {
+  const renderUpdate = (versionsCount: number) =>
+    render(
+      <Wrapper>
+        <PublishShareModal
+          open
+          onClose={() => {}}
+          publish={noopPublish}
+          title="My artifact"
+          resolveExisting={() =>
+            Promise.resolve({ title: 'My artifact', versionsCount, slug: 's', visibility: 'private' })
+          }
+        />
+      </Wrapper>
+    );
+
+  it('says an identical re-publish adds no version when there is a single version', async () => {
+    renderUpdate(1);
+    const helper = await screen.findByTestId('publish-share-update-helper');
+    expect(helper).toHaveTextContent('adds a 2nd version');
+    expect(helper).toHaveTextContent('If it matches the current version, no new version is added');
+  });
+
+  it('conditions the update label on content being new to the page, not merely changed', async () => {
+    renderUpdate(1);
+    await screen.findByTestId('publish-share-update-helper');
+    expect(screen.getByText(/^Update "My artifact" - /)).toHaveTextContent(
+      'adds a new version if the content is new to this page'
+    );
+  });
+
+  it('says known content switches the page to the existing version when there are several', async () => {
+    renderUpdate(3);
+    const helper = await screen.findByTestId('publish-share-update-helper');
+    expect(helper).toHaveTextContent('Currently 3 versions');
+    expect(helper).toHaveTextContent('no new version is added and the page switches to that existing version');
+  });
+});
+
 describe('PublishShareModal - immediate stored gate updates before readback', () => {
   const apiGet = api.get as unknown as ReturnType<typeof vi.fn>;
   afterEach(() => {

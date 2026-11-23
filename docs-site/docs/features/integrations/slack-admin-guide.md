@@ -120,8 +120,8 @@ Navigate to **General Ops → Admin Settings → Slack Workspaces** to see:
 To disconnect a workspace:
 
 1. Navigate to **Admin Settings → Slack Workspaces**
-2. Click **Remove** next to the workspace
-3. Confirm the removal
+2. Open the workspace's **More actions** (...) menu and choose **Deactivate workspace**
+3. Pick or write a reason (it is not stored yet) and confirm
 
 :::warning Removing a Workspace
 Removing a workspace disconnects all users in that workspace from Slack features. Their linked Slack accounts will no longer function until reconnected.

@@ -1210,6 +1210,9 @@ importers:
         specifier: ^4.6.6
         version: 4.6.6
     devDependencies:
+      '@aws-sdk/client-eventbridge':
+        specifier: ^3.1150.0
+        version: 3.1151.0
       '@bike4mind/typescript-config':
         specifier: workspace:*
         version: link:../../packages/typescript-config
@@ -2733,6 +2736,9 @@ importers:
         specifier: ^3.1150.0
         version: 3.1151.0
       '@aws-sdk/client-cloudwatch':
+        specifier: ^3.1150.0
+        version: 3.1151.0
+      '@aws-sdk/client-cloudwatch-logs':
         specifier: ^3.1150.0
         version: 3.1151.0
       '@aws-sdk/client-ec2':

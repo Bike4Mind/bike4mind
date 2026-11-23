@@ -3,6 +3,8 @@
 
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- Dictation records a short voice note and sends it for transcription. -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
 
     <!-- Lets MainActivity find a browser for pages with no native screen (package visibility, Android 11+). -->
     <queries>
@@ -68,5 +70,39 @@
                 <data android:pathPrefix="/briefs" />
             </intent-filter>
         </activity>
+
+        <!-- "Share to Bike4Mind": text, links, images and files from other apps (share/ShareActivity). -->
+        <activity
+            android:name=".share.ShareActivity"
+            android:exported="true"
+            android:excludeFromRecents="true"
+            android:label="@string/share_target_label"
+            android:taskAffinity=""
+            android:windowSoftInputMode="adjustResize">
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="text/*" />
+                <data android:mimeType="image/*" />
+                <data android:mimeType="application/*" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.SEND_MULTIPLE" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="image/*" />
+                <data android:mimeType="application/*" />
+            </intent-filter>
+        </activity>
+
+        <!-- Hands the camera app a file to write the photo into (capture/ in the cache). -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.files"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/capture_paths" />
+        </provider>
     </application>
 </manifest>

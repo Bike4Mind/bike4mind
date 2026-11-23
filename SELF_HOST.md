@@ -58,7 +58,7 @@ The app refuses to run with the template values: JWT signing and verification fa
 ChatCompletion service exits at startup, and the internal websocket, upload webhook and quest
 dispatch calls are rejected until each secret holds a generated value.
 
-> **Do not rotate `SECRET_ENCRYPTION_KEY` casually.** It encrypts other secrets stored in the database, and rotation is not automated for self-host. If you must change it, set `SECRET_ENCRYPTION_KEY_PREVIOUS` to the old key and leave it set permanently: reads fall back to the previous key, so old ciphertext (admin settings, per-user API keys, OAuth tokens, social connections) stays readable. Dropping the previous key makes anything still encrypted under it unrecoverable.
+> **Do not rotate `SECRET_ENCRYPTION_KEY` casually.** It encrypts other secrets stored in the database. If you must change it, follow [Rotating the encryption key](#rotating-the-encryption-key): set `SECRET_ENCRYPTION_KEY_PREVIOUS` to the old key so reads fall back to it and old ciphertext (admin settings, per-user API keys, OAuth tokens, social connections) stays readable, then re-encrypt the stored values. Dropping the previous key before that finishes makes anything still encrypted under it unrecoverable.
 
 > **Rotating `JWT_SECRET`?** The rotation grace window (which briefly accepts tokens signed with the outgoing secret) stores that outgoing secret encrypted at rest, so it now depends on `SECRET_ENCRYPTION_KEY` being configured - and on `SECRET_ENCRYPTION_KEY_PREVIOUS` too if you are mid-way through an encryption-key rotation. With no encryption key set the outgoing secret is stored in plaintext (logged once) and the grace window still works; but if the encryption key is set at renew time and then changed without carrying the previous key, grace-window tokens fail to verify until they naturally expire.
 
@@ -872,6 +872,31 @@ python3 scripts/verify-compose-backup-restore.py          # add --auth for a Mon
 
 With built `minio` and `createbuckets` images (see the storage build steps above) and `.env.selfhost`, the drill starts disposable `mongo` and `minio` projects, seeds one user, one 64 KiB file and one object in each of the seven buckets, keeps writing to Mongo so the dump has an oplog slice, runs a backup, deletes the source project, restores into a second fresh project, and prints `PASS user` and `PASS file sha256` only if the same user `_id` and the same file bytes come back. It also checks that a restore without `--yes` refuses a populated target and leaves it untouched. It starts no application, publishes no ports, and removes only its own projects and volumes. Run your own restore of a real backup before relying on it: the drill proves the tool, not your data.
 
+## Rotating the encryption key
+
+`SECRET_ENCRYPTION_KEY` encrypts secrets stored in the database. Reads fall back to `SECRET_ENCRYPTION_KEY_PREVIOUS`, but a stored value is not re-encrypted when it is read, so a rotation is finished by a command that rewrites every stored value under the new key. Take a backup first (see [Backup and restore](#backup-and-restore)).
+
+1. In `.env.selfhost`, copy the current `SECRET_ENCRYPTION_KEY` value to `SECRET_ENCRYPTION_KEY_PREVIOUS`, then set `SECRET_ENCRYPTION_KEY` to a new value (`openssl rand -hex 32`). If `HMAC_SIGNING_SECRET` is empty, signed links and hashed identifiers are keyed with `SECRET_ENCRYPTION_KEY`: to keep the ones issued so far valid, also set `HMAC_SIGNING_SECRET_PREVIOUS` to the old key and `HMAC_SIGNING_SECRET` to another new value.
+2. Recreate the services so they load the new values:
+
+   ```bash
+   docker compose -f compose.selfhost.yaml --env-file .env.selfhost up -d
+   ```
+
+3. From the repo checkout on the host (Node and `pnpm install`), run the re-encrypt command against the published Mongo port. It reads the two keys and the database URI from the environment. Use the URI from `.env.selfhost` with the host changed to `localhost` and your published port, plus `directConnection=true`:
+
+   ```bash
+   export SECRET_ENCRYPTION_KEY="$(grep '^SECRET_ENCRYPTION_KEY=' .env.selfhost | cut -d= -f2-)"
+   export SECRET_ENCRYPTION_KEY_PREVIOUS="$(grep '^SECRET_ENCRYPTION_KEY_PREVIOUS=' .env.selfhost | cut -d= -f2-)"
+   export MONGODB_URI='mongodb://localhost:27017/bike4mind?replicaSet=rs0&directConnection=true'
+   pnpm --filter @bike4mind/scripts migrate:reencrypt-stored-secrets --dry-run
+   pnpm --filter @bike4mind/scripts migrate:reencrypt-stored-secrets
+   pnpm --filter @bike4mind/scripts migrate:reencrypt-stored-secrets --verify
+   ```
+
+   `--dry-run` writes nothing and reports what a run would rewrite. The output is counts per stored field; no value is printed. Exit code 0 means every stored value is under the new key, 1 means some values are unreadable or changed while the command ran (run it again), and 2 means a usage or connection error, or a database with nothing encrypted in it.
+4. Only after `--verify` exits 0, empty `SECRET_ENCRYPTION_KEY_PREVIOUS` in `.env.selfhost` and recreate the services again. Until then keep it set: anything still encrypted under the old key is unrecoverable without it.
+
 ## Troubleshooting
 
 - **`docker pull` fails with `unauthorized` / `manifest unknown`** - the prebuilt image isn't available to your account (or isn't published yet). Build it from source instead - see "Building from source" in step 3.
@@ -903,7 +928,7 @@ With built `minio` and `createbuckets` images (see the storage build steps above
 - **GPU override fails with "could not select device driver \"nvidia\" with capabilities: [[gpu]]"** - the NVIDIA Container Toolkit isn't installed or wired into Docker. Install it and run `sudo nvidia-ctk runtime configure --runtime=docker && sudo systemctl restart docker` (see "GPU acceleration"). Without a working GPU runtime, drop the `-f compose.ollama-gpu.yaml` and run CPU-only.
 - **`opensearch` container exits at boot with a "max virtual memory areas" error** - the OpenSearch JVM needs a higher `vm.max_map_count` than most Linux kernels default to. Run once on the HOST (not in the container): `sudo sysctl -w vm.max_map_count=262144`, then restart the `opensearch` service. Not needed on Docker Desktop (macOS/Windows) - its VM already sets this.
 - **Chat replies only appear after a refresh** - realtime isn't connecting. Check the `ws` gateway is up (`docker compose -f compose.selfhost.yaml ps ws`) and healthy, that `INTERNAL_WS_SECRET` is set and identical for the `app` and `ws` services, and that `WEBSOCKET_URL` points at the gateway's browser port (3001) and `WEBSOCKET_MANAGEMENT_ENDPOINT` at its private management port (`http://ws:3002`, pinned in `compose.selfhost.yaml`). In the browser console you should see `ws connected`; a reconnect loop usually means the gateway can't reach the app (`docker compose -f compose.selfhost.yaml logs ws`).
-- **Changed `SECRET_ENCRYPTION_KEY` and now secrets fail to decrypt** - set `SECRET_ENCRYPTION_KEY_PREVIOUS` to the old key and leave it configured permanently, or restore the original key. Rotation is not automated, so dropping the previous key makes anything still encrypted under it unrecoverable.
+- **Changed `SECRET_ENCRYPTION_KEY` and now secrets fail to decrypt** - set `SECRET_ENCRYPTION_KEY_PREVIOUS` to the old key, or restore the original key. Keep the previous key set until the steps in [Rotating the encryption key](#rotating-the-encryption-key) finish: dropping it earlier makes anything still encrypted under it unrecoverable.
 - **Notebook auto-naming / summaries / mementos never happen** - background enrichment runs on the `worker` service via the event queue. Check the worker is up (`docker compose -f compose.selfhost.yaml ps worker`) and that `SELF_HOST_EVENT_QUEUE` is set in `.env.selfhost` (the app warns and drops enrichment events when it's unset). Watch `docker compose -f compose.selfhost.yaml logs -f worker`.
 - **Image generation or image edit never completes (the quest stays "pending")** - both are queued to the `worker` service. Check `IMAGE_GENERATION_QUEUE` and `IMAGE_EDIT_QUEUE` are set in `.env.selfhost` (added after the initial release, so an upgraded install may be missing them), then confirm the worker picked them up: its boot line names every queue it polls, e.g. `[selfHostWorker] started: polling 6 queue(s) [researchEngineQueue, ..., imageGenerationQueue, imageEditQueue]`. An unset var is warned about by name and the consumer is skipped, leaving the rest of the worker running. Also make sure the queues exist in `elasticmq.conf` and that a provider key is configured (see "Image generation and image edit"). An OpenAI **edit** fails by design here - use Gemini or BFL.
 - **Research/deep-research tasks never complete** - the `worker` consumes the research queue. Confirm it's running and check its logs; a task that keeps failing is left for a few retries, then dropped with an error log (ElasticMQ has no dead-letter queue).
@@ -997,7 +1022,7 @@ Whichever path you choose, do the checklist first.
 
 - [ ] **Use a real SMTP provider.** Mailpit is local-only, so remote friends cannot read their sign-in codes from it. Point `MAIL_*` at a real provider (port 587 STARTTLS or 465 implicit TLS).
 - [ ] **Keep sign-up invite-only and cap per-user usage.** Registration is invite-only by default (`allowOpenRegistration` is OFF; the account matching `B4M_BOOTSTRAP_ADMIN_EMAIL` becomes admin, or the first account created if it is unset). Leave it off and invite friends explicitly from the admin settings. Self-host also defaults credit enforcement OFF - as admin, turn on **Enforce Credits** and give each friend a finite credit budget so a runaway (or a shared key) cannot burn your LLM spend. Per-key API rate limits default to 60/min and 1000/day.
-- [ ] **Back up `SECRET_ENCRYPTION_KEY`** (see [Backup and restore](#backup-and-restore)). It encrypts other secrets in the database and losing it makes that data unrecoverable. Rotation is not automated for self-host: if you ever change it, set `SECRET_ENCRYPTION_KEY_PREVIOUS` to the old key and keep it configured permanently so existing ciphertext still decrypts.
+- [ ] **Back up `SECRET_ENCRYPTION_KEY`** (see [Backup and restore](#backup-and-restore)). It encrypts other secrets in the database and losing it makes that data unrecoverable. If you ever change it, follow [Rotating the encryption key](#rotating-the-encryption-key) and keep `SECRET_ENCRYPTION_KEY_PREVIOUS` set until its verify step passes.
 
 ### Read-only production configuration preflight
 
@@ -1448,7 +1473,7 @@ listed fails the guard.
 Run the focused guard with:
 
 ```bash
-pnpm --filter @bike4mind/scripts exec vitest run src/selfhostParityInventory.test.ts
+pnpm --filter @bike4mind/scripts test:repo src/selfhostParityInventory.repo.test.ts
 ```
 
 A failing guard reports the declaration identity, current declaration/local fingerprint

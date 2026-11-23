@@ -17,12 +17,18 @@ final class QuestActivityContentStateTests: XCTestCase {
     XCTAssertEqual(state.errored, false)
   }
 
+  func testDecodesThePendingActionTsOfAnApproval() throws {
+    let state = try decode(#"{"status":"approval_needed","pendingActionTs":1700000000123}"#)
+    XCTAssertEqual(state.pendingActionTs, 1_700_000_000_123)
+  }
+
   func testOptionalKeysMayBeAbsent() throws {
     let state = try decode(#"{"status":"running"}"#)
     XCTAssertEqual(state, QuestActivityContentState(phase: .running))
     XCTAssertNil(state.stageLabel)
     XCTAssertNil(state.progress)
     XCTAssertNil(state.errored)
+    XCTAssertNil(state.pendingActionTs)
   }
 
   func testEveryServerStatusMapsToItsPhase() {
@@ -80,13 +86,15 @@ final class QuestActivityContentStateTests: XCTestCase {
 }
 
 final class QuestActivityMappingTests: XCTestCase {
+  private let requestedAt = Date(timeIntervalSince1970: 1_700_000_000)
+
   private func frame(
     status: QuestTurn.Status? = .running, kind: QuestTurn.Kind? = .message, pending: Bool = false,
     message: String? = nil
   ) -> ChatQuestFrame {
     ChatQuestFrame(
       questID: "q1", sessionID: "s1", reply: nil, status: status, kind: kind,
-      pendingAction: pending ? PendingAction(tool: "web_browse", parameters: [:], requestedAt: Date()) : nil,
+      pendingAction: pending ? PendingAction(tool: "web_browse", parameters: [:], requestedAt: requestedAt) : nil,
       statusMessage: message)
   }
 
@@ -108,10 +116,11 @@ final class QuestActivityMappingTests: XCTestCase {
     XCTAssertTrue(try XCTUnwrap(state.stageLabel).hasSuffix("..."))
   }
 
-  func testAPendingActionIsApprovalNeeded() {
+  func testAPendingActionIsApprovalNeededAndNamesTheActionShown() {
     XCTAssertEqual(
       QuestActivityMapping.state(from: frame(pending: true, message: "ignored while waiting")),
-      QuestActivityContentState(phase: .approvalNeeded, stageLabel: "Waiting for your approval"))
+      QuestActivityContentState(
+        phase: .approvalNeeded, stageLabel: "Waiting for your approval", pendingActionTs: 1_700_000_000_000))
   }
 
   func testTerminalFramesMapToCompletedStoppedAndFailed() {
@@ -126,7 +135,7 @@ final class QuestActivityMappingTests: XCTestCase {
   }
 
   func testTurnMappingAgreesWithFrameMapping() {
-    let pending = PendingAction(tool: "web_browse", parameters: [:], requestedAt: Date())
+    let pending = PendingAction(tool: "web_browse", parameters: [:], requestedAt: requestedAt)
     let cases: [(QuestTurn, ChatQuestFrame)] = [
       (QuestTurn(id: "q1", prompt: nil, reply: nil, status: .running, createdAt: Date()), frame()),
       (QuestTurn(id: "q1", prompt: nil, reply: nil, status: .done, createdAt: Date()), frame(status: .done)),
@@ -201,5 +210,51 @@ final class QuestActivityMappingTests: XCTestCase {
     XCTAssertEqual(QuestActivityTitle.fromPrompt("  Plan   a\ntrip  "), "Plan a trip")
     XCTAssertEqual(QuestActivityTitle.fromPrompt(""), "Bike4Mind")
     XCTAssertEqual(QuestActivityTitle.fromPrompt(String(repeating: "x", count: 100)).count, 40)
+  }
+}
+
+final class QuestActivityApprovalTargetTests: XCTestCase {
+  private let attributes = QuestActivityAttributes(
+    questId: "q1", sessionId: "s1", title: "Run", startedAt: Date(timeIntervalSince1970: 0))
+
+  func testAnApprovalWithItsTsIsAnsweredForExactlyThatAction() {
+    let state = QuestActivityContentState(phase: .approvalNeeded, pendingActionTs: 1_700_000_000_000)
+    XCTAssertEqual(
+      attributes.approvalTarget(in: state), PendingActionTarget(questID: "q1", pendingActionTs: 1_700_000_000_000))
+  }
+
+  func testNoButtonsWithoutATsOrOutsideAnApproval() {
+    XCTAssertNil(attributes.approvalTarget(in: QuestActivityContentState(phase: .approvalNeeded)))
+    XCTAssertNil(attributes.approvalTarget(in: QuestActivityContentState(phase: .approvalNeeded, pendingActionTs: 0)))
+    XCTAssertNil(attributes.approvalTarget(in: QuestActivityContentState(phase: .running, pendingActionTs: 5)))
+    XCTAssertNil(attributes.approvalTarget(in: QuestActivityContentState(phase: .completed, pendingActionTs: 5)))
+  }
+
+  func testThePreviewApprovalShowsTheButtons() {
+    XCTAssertNotNil(QuestActivityAttributes.preview.approvalTarget(in: .previewApproval))
+  }
+}
+
+@MainActor
+final class LiveActivityApprovalsTests: XCTestCase {
+  override func tearDown() async throws {
+    LiveActivityApprovals.answer = nil
+  }
+
+  func testWithoutAHandlerTheAnswerIsDropped() async {
+    LiveActivityApprovals.answer = nil
+    let taken = await LiveActivityApprovals.submit(questID: "q1", pendingActionTs: 7, decision: .approve)
+    XCTAssertFalse(taken)
+  }
+
+  func testTheInstalledHandlerGetsTheTargetAndDecision() async {
+    var received: [(PendingActionTarget, PendingActionDecision)] = []
+    LiveActivityApprovals.answer = { target, decision in received.append((target, decision)) }
+
+    let taken = await LiveActivityApprovals.submit(questID: "q1", pendingActionTs: 7, decision: .deny)
+
+    XCTAssertTrue(taken)
+    XCTAssertEqual(received.map(\.0), [PendingActionTarget(questID: "q1", pendingActionTs: 7)])
+    XCTAssertEqual(received.map(\.1), [.deny])
   }
 }

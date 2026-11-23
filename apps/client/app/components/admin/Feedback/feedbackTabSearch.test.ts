@@ -85,6 +85,17 @@ describe('the type param', () => {
   });
 });
 
+describe('the reporter param', () => {
+  it('round-trips a user id and drops anything that is not one', () => {
+    const userId = 'b'.repeat(24);
+    expect(feedbackViewFromSearch({ feedbackUser: userId }).userId).toBe(userId);
+    expect(feedbackViewToSearch({ ...DEFAULT_FEEDBACK_VIEW, userId }).feedbackUser).toBe(userId);
+    expect(feedbackViewFromSearch({ feedbackUser: 'waitlist-abc' }).userId).toBeUndefined();
+    expect(feedbackViewToSearch({ ...DEFAULT_FEEDBACK_VIEW, userId: 'junk' }).feedbackUser).toBeUndefined();
+    expect(feedbackViewToSearch(DEFAULT_FEEDBACK_VIEW).feedbackUser).toBeUndefined();
+  });
+});
+
 describe('the limit param', () => {
   const parseLimit = FEEDBACK_SEARCH_PARSERS.feedbackLimit;
 
@@ -284,6 +295,7 @@ describe('feedbackViewToSearch', () => {
         'feedbackStatus',
         'feedbackSubject',
         'feedbackType',
+        'feedbackUser',
       ].sort()
     );
   });

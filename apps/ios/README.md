@@ -20,6 +20,7 @@ needs a device or signing.
 ## Targets and packages
 
 - **Bike4Mind**: the app. **Widgets**: widget and Live Activity extension. **ShareExtension**: the share sheet target.
+- **ActivityIntents**: App Intents compiled into both the app and the widget extension (the Live Activity's approve and deny buttons), so the system runs them in the app's process.
 - **Packages/B4MKit**: everything that is not a view (API, auth, view models, wire formats); unit-tested on the simulator and the host.
 - **Packages/B4MClient**: the generated OpenAPI client (see below).
 - Screens never use generated types; `B4MKit` maps them to domain models behind `B4MAPI`.
@@ -133,7 +134,7 @@ let any app or page open Bike4Mind with that URL. Server URIs are exact-match.
 
 ## Widgets, App Intents and the media gallery
 
-- **Widgets** (`Widgets/`): the app writes a `WidgetSnapshot` JSON into the `group.com.bike4mind.app` container and the extension only reads it, with no network or auth in the widget process. The app calls `WidgetCenter.reloadTimelines` when a chat turn settles, credits load, or the latest image changes. A missing container degrades to placeholders. `Widgets/Bike4MindWidgets.swift` is the bundle entry point and registers the widgets plus `QuestLiveActivity`, which reuses `Widgets/Shared/`.
+- **Widgets** (`Widgets/`): the app writes a `WidgetSnapshot` JSON into the `group.com.bike4mind.app` container and the extension only reads it, with no network or auth in the widget process. The app calls `WidgetCenter.reloadTimelines` when a chat turn settles, credits load, or the latest image changes. A missing container degrades to placeholders. `Widgets/Bike4MindWidgets.swift` is the bundle entry point and registers the widgets plus `QuestLiveActivity`, which reuses `Widgets/Shared/`. The lock-screen decisions widget shows `GET /api/v1/pending-decisions`, which the app re-reads on foreground, when a turn settles, after the brief loads and after an approval is answered; counted approvals drop out of it 15 minutes after the count was read, since by then they have lapsed.
 - **App Intents** (`Bike4Mind/Features/Intents/`): Ask, Start quest and Capture note only open the composer with a draft (`AssistantRequest.route`); they never send. Ask and Capture note land on the home screen, the root of the stack.
 - **Settings** (`Bike4Mind/Features/Settings/`): the avatar on the home screen and the drawer's account row push Settings onto the stack, and `Route.settings` (deep links, the Credits widget) lands there too. The profile header reads the access token's claims (`AccountProfile`); there is no profile endpoint.
 - **Studio** (code name `media`, `Bike4Mind/Features/Media/`): a grid over the Files API via the hand-written `MediaClient`. Presigned URLs are re-fetched near expiry and at most twice after a playback failure. Under `B4M_UI_FIXTURES=1` the Studio gallery and the widgets show canned data.

@@ -11,6 +11,8 @@ enum WidgetDestination {
   static var sessions: URL { link("sessions") }
   static var media: URL { link("media") }
   static var settings: URL { link("settings") }
+  /// The latest brief, whose "What needs you" section lists the decisions.
+  static var latestBrief: URL { link("briefs") }
 
   private static func link(_ path: String) -> URL {
     // An id with a space or '%' makes `URL(string:)` return nil; fall back to the app root rather than crash.

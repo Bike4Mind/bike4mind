@@ -3,8 +3,9 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { CssVarsProvider } from '@mui/joy/styles';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Composer } from './Composer';
+import { composerDrafts } from './composerDrafts';
 import { ContextRing } from './ContextRing';
 import type { ComposerUsage } from './statusLine';
 import type { AttachmentDraft } from './useAttachments';
@@ -130,6 +131,9 @@ Element.prototype.scrollIntoView ??= () => {};
 
 let root: Root | null = null;
 let host: HTMLElement | null = null;
+
+// The drafts store outlives a mount, as it does across a session switch in the app.
+beforeEach(() => composerDrafts.state.setState({ drafts: {}, hydrated: true }));
 
 afterEach(() => {
   act(() => root?.unmount());
@@ -315,6 +319,37 @@ describe('the composer command menu', () => {
   });
 });
 
+describe('IME composition', () => {
+  function pressComposing(key: string): void {
+    act(() => {
+      input().dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true, isComposing: true }));
+    });
+  }
+
+  // Enter while an IME is composing confirms the candidate word; it must not send the draft.
+  it('does not send on an Enter that confirms a composition', () => {
+    const send = vi.fn();
+    mount({ onSend: send });
+    type('konnichiwa');
+    pressComposing('Enter');
+
+    expect(send).not.toHaveBeenCalled();
+    expect(input().value).toBe('konnichiwa');
+
+    press('Enter');
+    expect(send).toHaveBeenCalledWith('konnichiwa');
+  });
+
+  it('does not stop a live turn on an Escape that cancels a composition', () => {
+    const stop = vi.fn();
+    mount({ onStop: stop, streaming: true });
+    type('kanji');
+    pressComposing('Escape');
+
+    expect(stop).not.toHaveBeenCalled();
+  });
+});
+
 describe('skills mid-sentence', () => {
   const skills = {
     skills: [
@@ -397,6 +432,44 @@ describe('the draft and the conversation it belongs to', () => {
     rerender({ sessionId: 's2' });
     rerender({ sessionId: 's1' });
     expect(input().value).toBe('');
+  });
+
+  it('restores a draft saved before the app last quit, and clears it once sent', () => {
+    composerDrafts.state.setState({ drafts: { s1: 'typed before the restart' }, hydrated: true });
+    const send = vi.fn();
+    mount({ sessionId: 's1', onSend: send });
+    expect(input().value).toBe('typed before the restart');
+
+    press('Enter');
+    expect(send).toHaveBeenCalledWith('typed before the restart');
+    expect(composerDrafts.state.getState().drafts).toEqual({});
+  });
+
+  it('does not clear a saved draft, even for a moment, when the composer mounts on it', () => {
+    composerDrafts.state.setState({ drafts: { s1: 'saved' }, hydrated: true });
+    const changes = vi.fn();
+    const unsubscribe = composerDrafts.state.subscribe(changes);
+    mount({ sessionId: 's1' });
+    unsubscribe();
+    expect(input().value).toBe('saved');
+    expect(changes).not.toHaveBeenCalled();
+  });
+
+  it('restores a saved draft that is read in after the conversation opened', () => {
+    composerDrafts.state.setState({ drafts: {}, hydrated: false });
+    mount({ sessionId: 's1' });
+    expect(input().value).toBe('');
+
+    act(() => composerDrafts.state.setState({ drafts: { s1: 'arrived late' }, hydrated: true }));
+    expect(input().value).toBe('arrived late');
+  });
+
+  it('records what is typed, and forgets it when the composer is emptied', () => {
+    mount({ sessionId: 's1' });
+    type('work in progress');
+    expect(composerDrafts.state.getState().drafts).toEqual({ s1: 'work in progress' });
+    type('');
+    expect(composerDrafts.state.getState().drafts).toEqual({});
   });
 
   it('leaves no command menu open from the conversation left behind', () => {

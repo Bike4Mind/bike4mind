@@ -26,7 +26,10 @@ export {
   composeBriefContract,
   listBriefsContract,
   getBriefContract,
+  getBriefScheduleContract,
+  putBriefScheduleContract,
   replyToBriefDecisionContract,
+  getPendingDecisionCountContract,
 } from './contracts/briefs.contract';
 export { registerPushTokenContract, unregisterPushTokenContract } from './contracts/pushTokens.contract';
 export { listHandoffDevicesContract, sendSessionHandoffContract } from './contracts/sessionHandoff.contract';
@@ -40,6 +43,12 @@ export { getCreditBalanceContract } from './contracts/credits.contract';
 export { listModelsContract } from './contracts/models.contract';
 export { generateImageContract } from './contracts/imageGeneration.contract';
 export { editImageContract } from './contracts/imageEdit.contract';
+export {
+  cancelImageJobContract,
+  createImageJobContract,
+  getImageJobContract,
+  listImageJobsContract,
+} from './contracts/imageJob.contract';
 export {
   createFileUploadContract,
   getFileContract,

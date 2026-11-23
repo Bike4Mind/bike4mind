@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { isValidIanaTimeZone } from '../utils/ianaTimeZone';
 import { BRIEF_QUESTION_CLOSED_ERROR_CODE, type ApiErrorCode } from '../apiErrorCodes';
 
 /**
@@ -150,9 +151,64 @@ export const BriefListResponseSchema = z.object({
   briefs: z.array(BriefSchema).describe('Most recent first.'),
 });
 
+export const BriefScheduleSchema = z.object({
+  enabled: z.boolean().describe('Whether scheduled briefs are composed. Disabling keeps the rest of the schedule.'),
+  timeOfDay: z
+    .string()
+    .regex(/^([01]\d|2[0-3]):[0-5]\d$/, 'Use 24-hour HH:mm')
+    .describe('Local wall-clock time in `timeZone`, 24-hour `HH:mm`.'),
+  days: z
+    .array(z.number().int().min(0).max(6))
+    .min(1)
+    .max(7)
+    .refine(days => new Set(days).size === days.length, 'Days must not repeat')
+    .describe('Local weekdays the brief is composed on, 0 = Sunday through 6 = Saturday.'),
+  timeZone: z
+    .string()
+    .min(1)
+    .max(64)
+    .refine(isValidIanaTimeZone, 'Unknown IANA time zone')
+    .describe('IANA time zone name, e.g. `America/New_York`. Send the device zone on every save.'),
+});
+
+export const BriefScheduleResponseSchema = z.object({
+  schedule: BriefScheduleSchema.nullable().describe('Null until a schedule has been saved.'),
+  nextBriefAt: z
+    .string()
+    .nullable()
+    .describe('ISO 8601 instant of the next scheduled brief; null when the schedule is off or unset.'),
+});
+
+export const PendingDecisionCountSchema = z.object({
+  count: z
+    .number()
+    .int()
+    .nonnegative()
+    .describe('Decisions waiting on you: `approvals` plus `briefDecisions`. Nothing is counted twice.'),
+  approvals: z
+    .number()
+    .int()
+    .nonnegative()
+    .describe('Agent approvals still open in your notebooks: raised within the last 15 minutes and not yet answered.'),
+  briefDecisions: z
+    .number()
+    .int()
+    .nonnegative()
+    .describe(
+      'Decisions in your latest ready brief that are not agent approvals. An approval decision in the brief is ' +
+        'counted under `approvals` while it is open, and not at all once it was answered or lapsed.'
+    ),
+  briefId: z
+    .string()
+    .nullable()
+    .describe('The latest ready brief `briefDecisions` comes from; null when there is none.'),
+});
+
 export type Brief = z.infer<typeof BriefSchema>;
 export type BriefItem = z.infer<typeof BriefItemSchema>;
 export type BriefDecision = z.infer<typeof BriefDecisionSchema>;
+export type BriefSchedule = z.infer<typeof BriefScheduleSchema>;
+export type BriefScheduleResponse = z.infer<typeof BriefScheduleResponseSchema>;
 export type BriefApprovalRef = z.infer<typeof BriefApprovalRefSchema>;
 export type BriefQuestionRef = z.infer<typeof BriefQuestionRefSchema>;
 export type BriefReplyRequest = z.infer<typeof BriefReplyRequestSchema>;
@@ -165,3 +221,4 @@ export type StoredBriefDecision = Omit<BriefDecision, 'approval' | 'question'> &
 };
 export type BriefSourceRef = z.infer<typeof BriefSourceRefSchema>;
 export type BriefDraftReply = z.infer<typeof BriefDraftReplySchema>;
+export type PendingDecisionCount = z.infer<typeof PendingDecisionCountSchema>;

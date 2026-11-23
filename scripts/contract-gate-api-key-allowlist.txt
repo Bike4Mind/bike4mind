@@ -14,6 +14,7 @@
 #   - When a route becomes jwtOnly (or is deleted), remove its entry. The gate
 #     prints an INFO line for entries that no longer need exemption.
 
+apps/client/pages/api/referrals/visit/[code].ts # Deliberately public auth:false share-link redirect; stores a referral cookie and returns no account data
 apps/client/pages/api/[...unmatchedApiPath].ts
 apps/client/pages/api/[type]/[id]/index.ts
 apps/client/pages/api/[type]/[id]/invites/index.ts
@@ -759,7 +760,6 @@ apps/client/pages/api/user/accept-policies.ts
 apps/client/pages/api/users/[id]/activities/index.ts
 apps/client/pages/api/users/[id]/agents.ts
 apps/client/pages/api/users/[id]/collections/index.ts
-apps/client/pages/api/users/[id]/delete.ts
 apps/client/pages/api/users/[id]/docx-template.ts
 apps/client/pages/api/users/[id]/email-settings.ts
 apps/client/pages/api/users/[id]/friend-requests.ts

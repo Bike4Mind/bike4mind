@@ -76,6 +76,8 @@ import { registerLocalContextIpc } from './localContextIpc';
 import { localContextSizing, localHardware, localLlamaServer, relistAfterSave } from './localContextSizing';
 import { findOnPath, resolveUserPath } from './tools/userPath';
 import { SidebarSectionStore } from './SidebarSectionStore';
+import { ComposerDraftStore } from './ComposerDraftStore';
+import { registerComposerDraftsIpc } from './composerDraftsIpc';
 import { registerImageMenuIpc } from './imageMenuIpc';
 import { registerFilePathLinkIpc } from './filePathLinks';
 import { registerSessionExportIpc } from './sessionExportIpc';
@@ -325,6 +327,8 @@ export interface RegisteredChat {
   modelViews: ModelLiveViews;
   /** Each conversation's pull request, and the timers that watch it. */
   pullRequests: PrMonitor;
+  /** Unsent composer text, written once more on quit in case a debounced save is still in flight. */
+  composerDrafts: Pick<ComposerDraftStore, 'flushSync'>;
   /** Import from Claude; started once the window is up so it never delays launch. */
   claudeImport: ClaudeImportService;
   /** Spare checkouts, removed on the quit pass that can wait for git. */
@@ -515,6 +519,9 @@ export function registerChat(
     .catch(error => logger.warn(`CAPABILITIES: could not migrate grants: ${String(error)}`));
   const attachmentsDir = join(userData, 'attachments');
   const attachments = new AttachmentStore(attachmentsDir, logger, shrinkImage);
+  // App-wide like sidebar-sections.json: session ids are unique across scopes.
+  const composerDrafts = new ComposerDraftStore(join(userData, 'composer-drafts.json'));
+  const composerDraftsLoaded = composerDrafts.load();
   const media = new MediaStore(join(userData, 'media'));
   registerMediaProtocol(media);
   registerArtifactProtocol();
@@ -696,7 +703,7 @@ export function registerChat(
     send(IPC_CHANNELS.chatSessionStatus, event);
     hooks.observeSessionStatus?.(event);
     // Only reached once a turn has run, long after pullRequests below exists.
-    if (event.status === 'done') pullRequests.turnSettled(event.sessionId);
+    if (event.status === 'done' || event.unreadReply) pullRequests.turnSettled(event.sessionId);
   });
 
   // Typed-ahead messages, on their own channel: this is per-session state that outlives any
@@ -782,6 +789,7 @@ export function registerChat(
     store,
     access,
     attachments,
+    composerDrafts,
     models,
     modelSettings,
     logger,
@@ -1228,12 +1236,13 @@ export function registerChat(
     await service.deleteSession(sessionId, removeWorktree === true);
     await pullRequests.forget(sessionId);
   });
-  registerSidebarIpc(ipcMain, sidebarSections, sessionId =>
+  const isKnownSession = (sessionId: string) =>
     store.get(sessionId).then(
       session => session !== null,
       () => false
-    )
-  );
+    );
+  registerSidebarIpc(ipcMain, sidebarSections, isKnownSession);
+  registerComposerDraftsIpc(ipcMain, composerDrafts, composerDraftsLoaded, isKnownSession);
   ipcMain.handle(IPC_CHANNELS.chatSendMessage, (_event, request: SendMessageRequest) =>
     service.send(request.sessionId, request.text, request.attachments, { notes: rendererNotes(request.notes) })
   );
@@ -1645,6 +1654,7 @@ export function registerChat(
     simulatorView,
     modelViews,
     pullRequests,
+    composerDrafts,
     claudeImport,
     spareWorktrees,
     modelServers,

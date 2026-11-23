@@ -58,6 +58,8 @@ export const CORE_DISALLOWED_PATHS: readonly string[] = [
   '/verify-',
   '/auth',
   '/oauth',
+  // Share links: a referral code is public by design and grants nothing, and the path only redirects to /register.
+  '/r/',
   // Authenticated product surfaces.
   '/admin',
   '/agent',

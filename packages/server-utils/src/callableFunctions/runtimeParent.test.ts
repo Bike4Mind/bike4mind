@@ -1,6 +1,8 @@
 import { describe, it, expect, vi, beforeEach, afterAll } from 'vitest';
 import path from 'node:path';
-import { spawn, type ChildProcess } from 'node:child_process';
+import { execFile, spawn, type ChildProcess } from 'node:child_process';
+import { readFile } from 'node:fs/promises';
+import { promisify } from 'node:util';
 import {
   FUNCTION_CONTRACT_LIMITS,
   FUNCTION_RESULT_TOO_LARGE_MESSAGE,
@@ -24,7 +26,17 @@ import {
 
 vi.mock('node:child_process', async importOriginal => {
   const actual = await importOriginal<typeof import('node:child_process')>();
-  return { ...actual, spawn: vi.fn(actual.spawn) };
+  const { promisify } = await import('node:util');
+  // promisify(execFile) takes the custom form, so that is the one to spy on.
+  const execFile = Object.assign(vi.fn(actual.execFile), {
+    [promisify.custom]: vi.fn(promisify(actual.execFile)),
+  });
+  return { ...actual, spawn: vi.fn(actual.spawn), execFile };
+});
+
+vi.mock('node:fs/promises', async importOriginal => {
+  const actual = await importOriginal<typeof import('node:fs/promises')>();
+  return { ...actual, readFile: vi.fn(actual.readFile) };
 });
 
 const FIXTURES = path.resolve(import.meta.dirname, '__fixtures__');
@@ -352,6 +364,25 @@ describe('runCallableFunctionInChild', () => {
     }
   );
 
+  it.runIf(process.platform === 'linux' || process.platform === 'darwin')(
+    'falls back to ps under a time limit when /proc cannot be read, and still kills a child over the memory cap',
+    async () => {
+      const { readFile: actualReadFile } = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises');
+      const ps = (execFile as unknown as Record<symbol, ReturnType<typeof vi.fn>>)[promisify.custom];
+      ps.mockClear();
+      vi.mocked(readFile).mockRejectedValue(Object.assign(new Error('EACCES'), { code: 'EACCES' }));
+      try {
+        const result = await run(call({ mode: 'memory' }), { memoryMb: 200 });
+        expect(result.outcome).toBe('memory');
+        const pid = String(lastChild().pid);
+        expect(readFile).toHaveBeenCalledWith(`/proc/${pid}/status`, 'utf8');
+        expect(ps).toHaveBeenCalledWith('ps', ['-o', 'rss=', '-p', pid], { timeout: 1000 });
+      } finally {
+        vi.mocked(readFile).mockImplementation(actualReadFile);
+      }
+    }
+  );
+
   it('returns error with no_reply when the child exits without replying', async () => {
     expect(await run(call({ mode: 'exit' }))).toMatchObject({ outcome: 'error', reason: 'no_reply' });
   });
@@ -556,10 +587,23 @@ describe('error paths of the child reply', () => {
     });
   });
 
-  it('accepts the pinned contract written in a different key order', async () => {
+  it('accepts the pinned contract written in a different key order, inside a field too', async () => {
     const { name, description, inputs, outputs } = CONTRACT;
-    const reordered = JSON.stringify({ outputs, inputs, description, name });
+    const reordered = JSON.stringify({
+      outputs: { ...outputs, properties: { deflection: { unit: 'm', type: 'number' } } },
+      inputs,
+      description,
+      name,
+    });
     expect(await run(call(reply({ contractJson: reordered, outputsJson: '{"deflection": 1}' })))).toMatchObject({
+      outcome: 'ok',
+    });
+  });
+
+  it('accepts a contract the child reads with -0 where the pinned one has 0', async () => {
+    const negativeZero = CONTRACT_JSON.replace('"exclusiveMinimum":0', '"exclusiveMinimum":-0.0');
+    expect(negativeZero).not.toBe(CONTRACT_JSON);
+    expect(await run(call(reply({ contractJson: negativeZero, outputsJson: '{"deflection": 1}' })))).toMatchObject({
       outcome: 'ok',
     });
   });

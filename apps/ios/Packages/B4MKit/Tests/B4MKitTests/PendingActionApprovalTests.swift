@@ -224,6 +224,15 @@ final class ApprovalNotificationHandlerTests: XCTestCase {
     XCTAssertEqual(feedback.posts.map(\.body), [PendingActionFailure.unavailable.message])
   }
 
+  func testALiveActivityAnswerGoesThroughTheSamePathWithoutAPush() async {
+    let (handler, api, feedback) = handler(.success(PendingActionResult(decision: .deny)))
+    await handler.answer(target, decision: .deny)
+    let calls = await api.calls
+    XCTAssertEqual(calls.map(\.0), [target])
+    XCTAssertEqual(calls.map(\.1), [.deny])
+    XCTAssertEqual(feedback.posts.map(\.title), ["Denied"])
+  }
+
   func testOtherActionsAreLeftToTheCaller() async {
     let (handler, api, feedback) = handler(.success(PendingActionResult(decision: .approve)))
     let handled = await handler.handle(actionIdentifier: UNNotificationDefaultActionIdentifier, payload: payload)

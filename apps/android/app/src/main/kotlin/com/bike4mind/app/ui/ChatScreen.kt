@@ -24,8 +24,10 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
@@ -36,6 +38,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.bike4mind.app.AppGraph
 import com.bike4mind.app.R
 import com.bike4mind.kit.approvals.PendingActionDecision
+import com.bike4mind.kit.capture.readyFileIds
 import com.bike4mind.kit.chat.ChatError
 import com.bike4mind.kit.chat.ChatState
 import com.bike4mind.kit.sessions.PendingAction
@@ -43,9 +46,13 @@ import com.bike4mind.kit.sessions.Quest
 
 class ChatViewModel(graph: AppGraph, sessionId: String?) : ViewModel() {
     val controller = graph.chat(sessionId, viewModelScope).also { it.start() }
+    val attachments = graph.composerAttachments(viewModelScope)
+    val dictation = graph.dictation(viewModelScope)
 
     override fun onCleared() {
         controller.stop()
+        dictation.cancel()
+        attachments.clear()
     }
 }
 
@@ -55,12 +62,24 @@ fun ChatScreen(graph: AppGraph, sessionId: String?, onBack: () -> Unit) {
     // Scoped by AppRoot's ScreenScope: cleared (and the controller stopped) when this chat closes.
     val model = viewModel { ChatViewModel(graph, sessionId) }
     val state by model.controller.state.collectAsStateWithLifecycle()
+    val attachments by model.attachments.state.collectAsStateWithLifecycle()
+    val dictation by model.dictation.state.collectAsStateWithLifecycle()
     var draft by rememberSaveable { mutableStateOf("") }
+    var problem by remember { mutableStateOf<String?>(null) }
     val list = rememberLazyListState()
+    val fileIds = attachments.readyFileIds()
+    val attachedMessage = stringResource(R.string.capture_attached_message, attachments.joinToString(", ") { it.name })
 
     LaunchedEffect(state.turns.size) {
         if (state.turns.isNotEmpty()) list.animateScrollToItem(state.turns.lastIndex)
     }
+
+    DictationDialog(
+        state = dictation,
+        onDone = { model.dictation.finish { text -> draft = if (draft.isBlank()) text else "$draft $text" } },
+        onCancel = model.dictation::cancel,
+        onDismissFailure = model.dictation::dismissFailure,
+    )
 
     Scaffold(
         topBar = {
@@ -94,18 +113,38 @@ fun ChatScreen(graph: AppGraph, sessionId: String?, onBack: () -> Unit) {
                     modifier = Modifier.padding(horizontal = Spacing.m),
                 )
             }
+            problem?.let {
+                Text(it, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(horizontal = Spacing.m))
+            }
+            AttachmentList(attachments, onRemove = model.attachments::remove, onRetry = model.attachments::retry)
             Row(
                 modifier = Modifier.fillMaxWidth().padding(Spacing.m),
                 horizontalArrangement = Arrangement.spacedBy(Spacing.s),
+                verticalAlignment = Alignment.CenterVertically,
             ) {
+                AttachMenu(
+                    onPicked = { picked ->
+                        problem = null
+                        model.attachments.add(picked.file, picked.name, picked.mimeType)
+                    },
+                    onDictate = {
+                        problem = null
+                        model.dictation.start()
+                    },
+                    onProblem = { problem = it },
+                    enabled = !state.sending,
+                )
                 OutlinedTextField(
                     value = draft,
                     onValueChange = { draft = it },
                     modifier = Modifier.weight(1f).testTag("chat-composer-field"),
                     placeholder = { Text(stringResource(R.string.chat_message_placeholder)) },
                 )
-                Button(modifier = Modifier.testTag("chat-composer-send"), enabled = draft.isNotBlank() && !state.sending, onClick = {
-                    model.controller.send(draft)
+                val canSend = !state.sending && fileIds != null && (draft.isNotBlank() || attachments.isNotEmpty())
+                Button(modifier = Modifier.testTag("chat-composer-send"), enabled = canSend, onClick = {
+                    // A turn needs words; files sent on their own go out named.
+                    val message = draft.ifBlank { attachedMessage }
+                    model.controller.send(message, fileIds.orEmpty()) { model.attachments.clear() }
                     draft = ""
                 }) {
                     Text(stringResource(R.string.chat_send))

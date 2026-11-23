@@ -46,7 +46,7 @@ import './adminMorningBrief';
 import './organizationRetention';
 import { secrets } from './secrets';
 import { dlqTriageSweepDeadLetter } from './dlqTriageSweepDeadLetter';
-import { dlqTriagePermissions } from './dlqTriagePermissions';
+import { dlqTriageEvidencePermissions, dlqTriagePermissions, dlqTriageRoleNames } from './dlqTriagePermissions';
 import { cloudSecurityScanDeadLetter } from './cloudScanDeadLetter';
 import { mailBodyEnvironment, mailBodyPutPermission } from './mailBodyOffload';
 
@@ -66,12 +66,14 @@ if (runsScheduledJobs && dlqTriageSweepDeadLetter) {
         deadLetter.sendPermission,
         { actions: ['cloudwatch:DescribeAlarms'], resources: ['*'] },
         dlqTriagePermissions(),
+        ...dlqTriageEvidencePermissions(),
       ],
       transform: deadLetter.functionTarget,
     },
     transform: { target: { ...deadLetter.ruleTarget.target, input: undefined } },
   });
   deadLetter.allowRules([$util.output(sweep)]);
+  dlqTriageRoleNames.push(sweep.nodes.function.nodes.role.name);
 }
 
 const scheduleTaskCron = new sst.aws.Cron('scheduleTaskCron', {
@@ -629,6 +631,31 @@ const voiceHoldSweepCron = runsScheduledJobs
             resources: ['*'],
           },
         ],
+        logging: {
+          retention: '1 week',
+        },
+      },
+    })
+  : undefined;
+
+// Brief Schedule Reconcile - starts the scheduled assistant briefs that have come due, through the same
+// brief.compose event as POST /api/v1/briefs (its rule carries the DLQ). Each due user is claimed by a
+// compare-and-set on nextBriefAt, so overlapping runs start a slot once. A start that throws hands its
+// slot back, so later runs retry it for up to an hour (RETRY_WINDOW_MS). Self-host twin:
+// apps/workers/src/selfhost/briefScheduleReconcile.ts; keep the schedules in step.
+const briefScheduleReconcileCron = runsScheduledJobs
+  ? new sst.aws.Cron('briefScheduleReconcile', {
+      schedule: 'rate(5 minutes)',
+      function: {
+        vpc: lambdaVpc,
+        handler: 'apps/workers/src/cron/briefScheduleReconcile.handler',
+        runtime: 'nodejs24.x',
+        timeout: '2 minutes',
+        retries: 0,
+        link: [...allSecrets, eventBus],
+        environment: {
+          ...DEFAULT_LAMBDA_ENVIRONMENT,
+        },
         logging: {
           retention: '1 week',
         },
@@ -1733,6 +1760,7 @@ export {
   completionSequenceSweepCron,
   creditLotSweepCron,
   voiceHoldSweepCron,
+  briefScheduleReconcileCron,
   creditHoldSweepCron,
   referralRewardReleaseCron,
   sreStaleDispatchCron,

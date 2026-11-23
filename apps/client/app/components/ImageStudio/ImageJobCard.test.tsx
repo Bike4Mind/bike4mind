@@ -65,15 +65,16 @@ describe('ImageJobCard preview', () => {
     expect(screen.getByTestId('image-job-image')).toHaveAttribute('src', 'https://files.example/fox.png');
   });
 
-  it('puts the card body in the element AspectRatio centers and sizes', () => {
-    // Joy's centering and img cover styles target [data-first-child] and its direct img child.
+  it('draws the preview inside the take tile frame', () => {
     h.file = { data: { moderationStatus: 'scanning' } };
     const { rerender } = renderCard();
-    expect(screen.getByTestId('image-job-image-loading').parentElement).toHaveAttribute('data-first-child');
+    const frame = screen.getByTestId('image-job-card-done-media');
+    expect(frame).toContainElement(screen.getByTestId('image-job-image-loading'));
 
     h.file = { data: { moderationStatus: 'clean', fileUrl: 'https://files.example/fox.png' } };
     rerender(<ImageJobCard job={savedJob} />);
-    expect(screen.getByTestId('image-job-image').parentElement).toHaveAttribute('data-first-child');
+    // The tile fills and crops only an img that is a direct child of its frame.
+    expect(screen.getByTestId('image-job-image').parentElement).toBe(frame);
   });
 
   it('settles on a blocked image instead of spinning', () => {

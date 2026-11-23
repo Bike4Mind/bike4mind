@@ -137,7 +137,7 @@ afterEach(() => {
 });
 
 describe('AgentPeekDrawer', () => {
-  it('acknowledges a focused opening once, not refreshes or stream events', async () => {
+  it('acknowledges visible refreshed replies but not hidden content', async () => {
     vi.spyOn(document, 'hasFocus').mockReturnValue(true);
     vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('visible');
     function Messages({ refreshKey, visible }: { refreshKey: string; visible: boolean }) {
@@ -146,7 +146,8 @@ describe('AgentPeekDrawer', () => {
     }
     await themed.render(<Messages refreshKey="first" visible />);
     const acknowledgements = () => chat.getSession.mock.calls.filter(([, viewed]) => viewed === true);
-    expect(acknowledgements()).toHaveLength(1);
+    expect(acknowledgements().length).toBeGreaterThan(0);
+    const opened = acknowledgements().length;
     await themed.render(<Messages refreshKey="next" visible />);
     vi.useFakeTimers();
     try {
@@ -154,14 +155,17 @@ describe('AgentPeekDrawer', () => {
         queueListener?.({ sessionId: 'a1', queued: [] });
         await vi.advanceTimersByTimeAsync(200);
       });
-      expect(acknowledgements()).toHaveLength(1);
-      expect(chat.getSession).toHaveBeenLastCalledWith('a1', false);
+      expect(acknowledgements().length).toBeGreaterThan(opened);
+      expect(chat.getSession).toHaveBeenCalledWith('a1', true);
     } finally {
       vi.useRealTimers();
     }
     await themed.render(<Messages refreshKey="next" visible={false} />);
+    const hidden = acknowledgements().length;
+    await themed.render(<Messages refreshKey="hidden-update" visible={false} />);
+    expect(acknowledgements()).toHaveLength(hidden);
     await themed.render(<Messages refreshKey="next" visible />);
-    expect(acknowledgements()).toHaveLength(2);
+    expect(acknowledgements().length).toBeGreaterThan(hidden);
   });
 
   it('keeps the task title and state without a redundant persona subtitle', async () => {

@@ -405,7 +405,7 @@ describe('ChatCompletionInvoke.invoke - session access', () => {
       mockedGetAvailableModels.mockResolvedValue([
         { id: 'gpt-4', type: 'text', name: 'GPT-4', max_tokens: 100, contextWindow: 1000, pricing: {} },
       ] as never);
-      const priorQuest = { id: 'quest-1', sessionId: 'session-1', status: 'error' };
+      const priorQuest = { id: 'quest-1', sessionId: 'session-1', status: 'error', prompt: body.message };
       mockDb.quests.findById.mockResolvedValue(priorQuest);
       mockDb.adminSettings.getSettingsValue.mockResolvedValue('text-embedding-ada-002');
       await makeInvoke({ id: OWNER_ID, signupGrant: enrolledGrant }).invoke({
@@ -420,6 +420,40 @@ describe('ChatCompletionInvoke.invoke - session access', () => {
       expect(options).toEqual({ unset: ['errorCode', 'turnTiming'] });
     }
   );
+
+  async function retryQuestWithLakeSaves(storedPrompt: string) {
+    mockedGetAvailableModels.mockResolvedValue([
+      { id: 'gpt-4', type: 'text', name: 'GPT-4', max_tokens: 100, contextWindow: 1000, pricing: {} },
+    ] as never);
+    mockDb.quests.findById.mockResolvedValue({
+      id: 'quest-1',
+      sessionId: 'session-1',
+      status: 'error',
+      prompt: storedPrompt,
+      lakeSaveCount: 5,
+    });
+    mockDb.adminSettings.getSettingsValue.mockResolvedValue('text-embedding-ada-002');
+
+    await makeInvoke({ id: OWNER_ID }).invoke({
+      body: { ...body, questId: 'quest-1' },
+      userId: OWNER_ID,
+      authOrigin: 'session',
+    });
+
+    return mockDb.quests.update.mock.calls[0];
+  }
+
+  it('keeps the data lake save count when a turn is retried, so earlier saves still count', async () => {
+    const [updated, options] = await retryQuestWithLakeSaves(body.message);
+    expect(updated).not.toHaveProperty('lakeSaveCount');
+    expect(options.unset).not.toContain('lakeSaveCount');
+  });
+
+  it('resets the data lake save count when the retried prompt was edited', async () => {
+    const [updated, options] = await retryQuestWithLakeSaves(`${body.message} (before edit)`);
+    expect(updated).not.toHaveProperty('lakeSaveCount');
+    expect(options.unset).toContain('lakeSaveCount');
+  });
 
   // Same boundary: a workflow-style caller's integration isolation would silently lapse on the
   // async path, handing a prompt the user did not write their MCP servers, agents and skills.

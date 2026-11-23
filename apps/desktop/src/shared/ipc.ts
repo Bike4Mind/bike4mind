@@ -7,6 +7,7 @@ import type { LoopResult, LoopState } from './loop';
 import type { RunSpend } from './runSpend';
 import type { PromptCacheTtl } from '@bike4mind/common';
 import type { AttentionNotice, AttentionOpenEvent, NotifyScope } from './attention';
+import type { AppMenuAction, RendererErrorReport } from './appShell';
 import type { AccountBilling, AccountCredits, AccountProfile, SubscribePlanResult } from './account';
 import type { FeedbackSubmitResult } from './feedback';
 import type { AccountPage, AuthState, EnvironmentSelection, SetEnvironmentResult } from './auth';
@@ -89,6 +90,7 @@ import type { ShareDirectoryResult } from './directoryRequest';
 import type { PrActionResult, PrBarState, PrOption, PrSummaryEvent } from './pullRequest';
 import type { LocalContextFit, LocalContextSetting } from './localContextSetting';
 import type { SidebarSectionsState } from './sidebarSections';
+import type { ComposerDrafts } from './composerDrafts';
 import type { WorkspaceChanges } from './workspaceChanges';
 import type { SkillsScope, SkillsState } from './skills';
 import type { PermissionMutationResult, PermissionRuleLists, PermissionScope, PermissionsState } from './permissions';
@@ -560,6 +562,7 @@ export const IPC_CHANNELS = {
    * (auto-merge in particular) are switched on here and nowhere else.
    */
   prWatch: 'pr:watch',
+  prGetState: 'pr:get-state',
   prBind: 'pr:bind',
   prDismiss: 'pr:dismiss',
   prRefresh: 'pr:refresh',
@@ -579,6 +582,9 @@ export const IPC_CHANNELS = {
   sidebarRenameSection: 'sidebar:rename-section',
   sidebarDeleteSection: 'sidebar:delete-section',
   sidebarMoveSession: 'sidebar:move-session',
+  /** Unsent composer text per conversation; see @shared/composerDrafts. */
+  composerDraftsList: 'drafts:list',
+  composerDraftsSave: 'drafts:save',
   /**
    * The user's terminals; see @shared/terminal. Input and resize are one-way sends rather than
    * invokes: a keystroke has nothing to wait for, and a round trip each would be felt.
@@ -604,6 +610,12 @@ export const IPC_CHANNELS = {
   attentionOpen: 'attention:open',
   /** A notice clicked while no window was open, waiting for the window it reopened; see takePendingOpen. */
   attentionTakePendingOpen: 'attention:take-pending-open',
+  /** main -> renderer push: an app-menu item the renderer carries out (main/appMenu.ts). */
+  appMenuAction: 'appmenu:action',
+  /** A menu action chosen while no window was open, waiting for the window it reopened. */
+  appMenuTakePending: 'appmenu:take-pending',
+  /** Renderer -> main: a render error the top-level error boundary caught, for main's log. */
+  rendererReportError: 'renderer:report-error',
   /** Which sessions alert (NotifyScope), for Settings; main pushes `attentionNotifyScope` when it changes. */
   attentionGetNotifyScope: 'attention:get-notify-scope',
   attentionSetNotifyScope: 'attention:set-notify-scope',
@@ -788,6 +800,12 @@ export interface MiniTavernApi {
 export interface DesktopApi {
   studio: StudioApi;
   getAppInfo(): Promise<AppInfo>;
+  /** App-menu items (Cmd+N, Cmd+,) that act on the renderer's views. */
+  appMenu: {
+    onAction(listener: (action: AppMenuAction) => void): () => void;
+    takePending(): Promise<AppMenuAction | null>;
+  };
+  reportRendererError(report: RendererErrorReport): Promise<void>;
   /** Data-only skins for the Orchestrate views; only validated values ever arrive here. */
   skins: {
     list(): Promise<SkinSummary[]>;
@@ -1407,6 +1425,12 @@ export interface DesktopApi {
     /** Null takes the session out of its section. */
     moveSession(sessionId: string, sectionId: string | null): Promise<SidebarSectionsState>;
   };
+  /** Unsent composer text per conversation; see @shared/composerDrafts. */
+  composerDrafts: {
+    list(): Promise<ComposerDrafts>;
+    /** Blank text clears the conversation's draft. Unknown conversations are ignored. */
+    save(sessionId: string, text: string): Promise<void>;
+  };
   tools: {
     getAccess(): Promise<ToolAccessState>;
     /** Opens the OS folder picker. Resolves unchanged if the user cancels. */
@@ -1456,6 +1480,8 @@ export interface DesktopApi {
      * when it has no PR; a read starts in main when the one in hand is missing or stale.
      */
     watch(sessionId: string | null): Promise<PrBarState | null>;
+    /** Read a selected agent's bar without replacing the conversation's watch. */
+    getState(sessionId: string): Promise<PrBarState | null>;
     /** Bind a pasted PR URL to the conversation. */
     bind(sessionId: string, url: string): Promise<PrActionResult>;
     dismiss(sessionId: string): Promise<PrActionResult>;

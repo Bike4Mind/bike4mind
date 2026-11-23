@@ -23,7 +23,10 @@ import {
   composeBriefContract,
   listBriefsContract,
   getBriefContract,
+  getBriefScheduleContract,
+  putBriefScheduleContract,
   replyToBriefDecisionContract,
+  getPendingDecisionCountContract,
 } from './briefs.contract';
 import { registerPushTokenContract, unregisterPushTokenContract } from './pushTokens.contract';
 import { listHandoffDevicesContract, sendSessionHandoffContract } from './sessionHandoff.contract';
@@ -37,6 +40,12 @@ import { getCreditBalanceContract } from './credits.contract';
 import { listModelsContract } from './models.contract';
 import { generateImageContract } from './imageGeneration.contract';
 import { editImageContract } from './imageEdit.contract';
+import {
+  cancelImageJobContract,
+  createImageJobContract,
+  getImageJobContract,
+  listImageJobsContract,
+} from './imageJob.contract';
 import {
   createFileUploadContract,
   getFileContract,
@@ -213,10 +222,13 @@ export const CONTRACTS: readonly EndpointContract[] = [
   composeBriefContract,
   listBriefsContract,
   getBriefContract,
+  getBriefScheduleContract,
+  putBriefScheduleContract,
   listAssistantInstructionsContract,
   createAssistantInstructionContract,
   deleteAssistantInstructionContract,
   replyToBriefDecisionContract,
+  getPendingDecisionCountContract,
   registerPushTokenContract,
   unregisterPushTokenContract,
   listHandoffDevicesContract,
@@ -225,6 +237,10 @@ export const CONTRACTS: readonly EndpointContract[] = [
   listModelsContract,
   generateImageContract,
   editImageContract,
+  createImageJobContract,
+  getImageJobContract,
+  listImageJobsContract,
+  cancelImageJobContract,
   createFileUploadContract,
   getFileContract,
   listFilesContract,

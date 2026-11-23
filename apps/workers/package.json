@@ -7,6 +7,7 @@
     "typecheck:native": "tsgo --noEmit",
     "typecheck:fast": "tsgo --noEmit",
     "test": "vitest run",
+    "test:repo": "REPO_TEST_LANE=repo vitest run",
     "test:integration": "WORKERS_TEST_LANE=integration vitest run"
   },
   "dependencies": {
@@ -62,6 +63,7 @@
     "zod": "^4.6.6"
   },
   "devDependencies": {
+    "@aws-sdk/client-eventbridge": "^3.1150.0",
     "@bike4mind/typescript-config": "workspace:*",
     "@googleapis/drive": "^22.0.0",
     "@types/archiver": "^7.0.0",

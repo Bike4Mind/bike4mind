@@ -8,6 +8,7 @@ const {
   mockDownload,
   mockUpdateOne,
   mockUserFindById,
+  mockUserExists,
   mockStarterCredits,
   mockGetSignedUrl,
   mockBrowserSigningOrigin,
@@ -19,6 +20,7 @@ const {
   mockUpdateOne: vi.fn(() => Promise.resolve()),
   // Domain access gates look the viewer's verified email up through User (checkVisibility).
   mockUserFindById: vi.fn(),
+  mockUserExists: vi.fn().mockResolvedValue(null),
   mockStarterCredits: vi.fn(() => Promise.resolve(0)),
   mockGetSignedUrl: vi.fn(),
   mockBrowserSigningOrigin: vi.fn(),
@@ -89,6 +91,7 @@ vi.mock('@bike4mind/database', () => ({
     findOne: (...a: unknown[]) => ({ select: () => ({ lean: () => Promise.resolve(mockProjectFindOne(...a)) }) }),
   },
   User: {
+    exists: (...a: unknown[]) => mockUserExists(...a),
     findById: (...a: unknown[]) => ({ select: () => ({ lean: () => Promise.resolve(mockUserFindById(...a)) }) }),
   },
 }));
@@ -2236,6 +2239,20 @@ describe('GET /api/publish/serve - external view counting (Published gear feed)'
     expect(mockUpdateOne).toHaveBeenCalledWith({ publicId: 'pub1' }, { $inc: { viewCount: 1, externalViewCount: 1 } });
   });
 
+  it('records reward evidence for an admitted verified non-owner', async () => {
+    mockArtifactFindOne.mockReturnValue(renderedReply());
+    mockUserExists.mockResolvedValueOnce({ _id: 'someone-else' });
+    const { promise } = run(['r', 'pub1'], { user: { id: 'someone-else' } });
+    await promise;
+    await vi.waitFor(() =>
+      expect(mockUpdateOne).toHaveBeenCalledWith(
+        { publicId: 'pub1', ownerId: 'owner1', deletedAt: null },
+        { $inc: { verifiedExternalViewCount: 1 } },
+        { runValidators: true }
+      )
+    );
+  });
+
   it('an ANONYMOUS view does NOT count as external - the serve route cannot tell the owner from a stranger without a credential (self-grant bypass)', async () => {
     mockArtifactFindOne.mockReturnValue(renderedReply());
     const { promise } = run(['r', 'pub1'], { userAgent: 'Mozilla/5.0 (Macintosh) Safari/605.1' });
@@ -2282,8 +2299,16 @@ describe('GET /api/publish/serve - external view counting (Published gear feed)'
       expect((res._getData() as string).match(WIDGET_TAG)?.[1]).toBe(' data-b4m-count-view');
     });
 
-    it('drops the marker once an external view has landed, so readers stop exchanging tokens', async () => {
-      mockArtifactFindOne.mockReturnValue(bundle({ externalViewCount: 1 }));
+    it('continues requesting verified evidence on a page with historical external views', async () => {
+      mockArtifactFindOne.mockReturnValue(bundle({ externalViewCount: 5 }));
+      mockDownload.mockResolvedValue(bundleHtml);
+      const { res, promise } = run(['u', 'scope123', 'my-slug']);
+      await promise;
+      expect((res._getData() as string).match(WIDGET_TAG)?.[1]).toBe(' data-b4m-count-view');
+    });
+
+    it('drops the marker once a verified view has landed, so readers stop exchanging tokens', async () => {
+      mockArtifactFindOne.mockReturnValue(bundle({ verifiedExternalViewCount: 1 }));
       mockDownload.mockResolvedValue(bundleHtml);
       const { res, promise } = run(['u', 'scope123', 'my-slug']);
       await promise;

@@ -39,6 +39,7 @@ import {
   type ChatSessionStatus,
   type ChatSessionSummary,
 } from '@shared/chat';
+import { useHasComposerDraft } from './composerDrafts';
 import { useLocalHistory } from './localHistory';
 import { refLabel } from '@shared/githubRefs';
 import { findSessionsByRef } from './sessionRefSearch';
@@ -567,10 +568,11 @@ const SessionRow = memo(function SessionRow({
       : status === 'processing' || subActivity === 'processing'
         ? 'processing'
         : undefined;
-  const needsAction = status === 'needs-action';
   // Main pushes the project once the worktree exists, which is what ends this.
   const preparing = status === 'processing' && awaitsWorktree(session.project);
   const { ref: titleRef, clipped } = useTitleClipped(session.title, editing);
+  // The open conversation's draft is in the composer in front of the user; only others are marked.
+  const showDraft = useHasComposerDraft(session.id) && !selected && !editing;
 
   const onRenameDone = (next: string | null) => {
     setEditing(false);
@@ -758,7 +760,6 @@ const SessionRow = memo(function SessionRow({
           // Paired with the opacity the button fades in on, so the title's edge travels with
           // the button instead of snapping the moment the pointer lands.
           transition: 'padding-inline-end 120ms',
-          ...(needsAction && { boxShadow: 'inset 2px 0 0 var(--joy-palette-warning-400)' }),
         }}
         data-testid="chat-session-item"
         data-session-status={status}
@@ -791,6 +792,18 @@ const SessionRow = memo(function SessionRow({
               data-testid="chat-session-title-text"
             >
               {session.title}
+            </Typography>
+          )}
+          {showDraft && (
+            <Typography
+              level="body-xs"
+              noWrap
+              textColor="text.tertiary"
+              sx={{ flexShrink: 0, fontSize: '0.6875rem', fontStyle: 'italic' }}
+              title="Unsent text in the composer"
+              data-testid="chat-session-draft-marker"
+            >
+              Draft
             </Typography>
           )}
           {!editing && hintTitle && (
@@ -1355,7 +1368,18 @@ export function SessionList({
    */
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      if (!(event.metaKey || event.ctrlKey) || event.altKey || event.shiftKey) return;
+      if (!(event.metaKey || event.ctrlKey) || event.altKey) return;
+
+      // Mod+Shift+F as well as Mod+K: it is where find-across-everything sits in an editor, and
+      // Mod+F alone finds in the open conversation. The orchestrator's focus toggle takes the
+      // chord first while that view is up (see ViewSwitcher), and marks it handled.
+      if (event.shiftKey) {
+        if (event.code !== 'KeyF' || event.defaultPrevented) return;
+        event.preventDefault();
+        if (target.current.collapsed) target.current.onToggleCollapsed();
+        setFocusRequest(request => request + 1);
+        return;
+      }
 
       if (event.key === 'b' || event.key === 'B') {
         event.preventDefault();

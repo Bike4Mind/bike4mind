@@ -62,6 +62,7 @@ import {
   type MentionableSession,
   type RecordedMention,
 } from './sessionMentionMenu';
+import { composerDrafts, useComposerDraftsHydrated } from './composerDrafts';
 import { SkillPicker } from './SkillPicker';
 import {
   allowanceArc,
@@ -249,7 +250,9 @@ export function Composer({
   onSuggestionDismissed?: () => void;
 }) {
   const showDollars = useShowDollarCosts();
-  const [text, setText] = useState('');
+  // Starts from the saved draft: an empty first render would reach the save effect below and clear
+  // it on disk until the restored text is saved again.
+  const [text, setText] = useState(() => (sessionId && composerDrafts.state.getState().drafts[sessionId]) || '');
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   // Where the caret is, so the `/` menu answers the token being typed wherever it sits in the draft.
   const [caret, setCaret] = useState(0);
@@ -258,14 +261,17 @@ export function Composer({
 
   // Per-conversation draft: this component is not keyed on the session (unlike the thread beside
   // it), so it saves and restores text across switches. Cmd+1-9 (SessionList) has no text-field
-  // guard, so switching mid-draft is routine. Attachments deliberately do not work this way; see
+  // guard, so switching mid-draft is routine. The text is also saved to disk (./composerDrafts),
+  // so it survives a quit, a reload or a crash. Attachments deliberately do not work this way; see
   // useAttachmentDraft.
-  const drafts = useRef(new Map<string, string>());
   const latest = useRef(text);
   latest.current = text;
+  const draftSessionId = useRef(sessionId);
+  draftSessionId.current = sessionId;
+  const draftsHydrated = useComposerDraftsHydrated();
 
   useLayoutEffect(() => {
-    const kept = (sessionId && drafts.current.get(sessionId)) || '';
+    const kept = (sessionId && composerDrafts.state.getState().drafts[sessionId]) || '';
     setText(kept);
     setCaret(kept.length);
     pendingCaret.current = null;
@@ -273,10 +279,26 @@ export function Composer({
     // the last keystroke that went into it.
     return () => {
       if (!sessionId) return;
-      if (latest.current) drafts.current.set(sessionId, latest.current);
-      else drafts.current.delete(sessionId);
+      composerDrafts.update(sessionId, latest.current);
     };
   }, [sessionId]);
+
+  // Saved drafts are read in asynchronously at launch; one that lands after this conversation
+  // opened is restored unless the user has already started typing.
+  useLayoutEffect(() => {
+    if (!draftsHydrated || !sessionId || latest.current !== '') return;
+    const kept = composerDrafts.state.getState().drafts[sessionId];
+    if (!kept) return;
+    setText(kept);
+    setCaret(kept.length);
+    pendingCaret.current = kept.length;
+  }, [draftsHydrated, sessionId]);
+
+  // Keyed on the text alone and reading the session through a ref: on a switch the first render
+  // still holds the previous conversation's text, which must not be written under the new id.
+  useEffect(() => {
+    if (draftSessionId.current) composerDrafts.update(draftSessionId.current, text);
+  }, [text]);
 
   /** Replace the draft and put the caret at `at` (the end by default), as typing would have. */
   const replaceDraft = (next: string, at: number = next.length) => {
@@ -546,6 +568,10 @@ export function Composer({
    * and its precedence is decided in one place rather than by where the branches happen to sit.
    */
   const onKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
+    // While an IME is composing (Japanese, Chinese, Korean), Enter confirms the candidate and
+    // Escape cancels it: the keys belong to the input method, not to send, stop or the menus.
+    if (event.nativeEvent.isComposing) return;
+
     if (event.key === 'Escape') {
       const escape = composerEscapeAction({ pickerOpen: pickerOpen || mentionOpen, streaming });
       if (escape === 'default') return;

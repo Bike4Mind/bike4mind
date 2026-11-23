@@ -112,7 +112,7 @@ export const DEFAULT_MANIFEST = {
   // unregistered key here left a folder reading "Connected" that could never sync, with the
   // claim released only by hand. Not optional: the self-host worker consumes it
   // (apps/workers/src/selfhost/main.ts), and the route has no degrade path - it throws AFTER
-  // taking a global, cross-org claim, unlike webhookDeliveryQueue's sites (see manifestCoverage.test.ts).
+  // taking a global, cross-org claim, unlike webhookDeliveryQueue's sites (see manifestCoverage.repo.test.ts).
   driveLakeIngestQueue: { kind: 'queue' },
   // Read by the Drive disconnect route (via sourceQueueUrls) and by its consumer's own slice
   // re-enqueue. Optional so an install that upgraded without the env var keeps the worker up; the

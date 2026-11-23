@@ -1,3 +1,5 @@
+import { hasOrgPermission, orgMemberHasPermission, type OrgPermissionActor, type OrgRoleSubject } from './orgRoles';
+
 /**
  * Organization seat-limit policy - the floor and ceiling every seat change is bound by.
  *
@@ -82,42 +84,37 @@ export const isOrgMember = (
   (org.users ?? []).some(member => member.userId === user.id && orgAclRowConfersMembership(member));
 
 /**
- * Is `user` the org's billing owner, a CURRENT appointed org admin, or a platform admin? The one
- * "owner or appointed admin" authority predicate: `assertCanManageOrgGroups`
- * (services organizationService/groupMembership.ts), `canManageMemberCreditBudgets` below, and the
- * client's `canManageGroups` (routes/organizations/$id.tsx) all derive from it.
+ * The manager tier: billing owner, a current Manager, or a platform admin - exactly
+ * `hasOrgPermission(user, org, 'manageMembers')`.
  *
- * The `users[]` conjunct is defence in depth, not redundancy: if the purge of `adminUserIds` on
- * removal ever misses (or a row predates it), a removed admin keeps no authority. It is a bare
- * row match rather than `orgAclRowConfersMembership` because the appointment route could persist
- * an admin whose row had no permissions.
+ * @deprecated Name the permission instead (`hasOrgPermission`, constants/orgRoles.ts). Kept for the
+ * readers that ask "is this person a team administrator" outside any one gate.
  */
-export const isOrgOwnerOrCurrentAdmin = (
-  user: { id: string; isAdmin?: boolean | null },
-  org: {
-    userId: string;
-    adminUserIds?: readonly string[] | null;
-    users?: ReadonlyArray<{ userId: string }> | null;
-  }
-): boolean =>
-  user.isAdmin === true ||
-  org.userId === user.id ||
-  ((org.adminUserIds ?? []).includes(user.id) && (org.users ?? []).some(member => member.userId === user.id));
+export const isOrgOwnerOrCurrentAdmin = (user: OrgPermissionActor, org: OrgRoleSubject): boolean =>
+  hasOrgPermission(user, org, 'manageMembers');
 
 /**
  * May this actor set the org's per-member credit budgets - the default `maxCreditsPerMember` and
- * each member's `userDetails[].maxCredits` override?
- *
- * Exactly `isOrgOwnerOrCurrentAdmin`, so every `adminUserIds` manager may set budgets. Appointed admins hold only a read row
- * in `users[]` and so cannot pass `shareable.findUpdateAccessById` - server callers must fetch with
- * `findById`. The budget routes enforce it; the client uses it only to decide which controls to show.
+ * each member's `userDetails[].maxCredits` override? `managePolicies`. Appointed managers hold only a
+ * read row in `users[]` and so cannot pass `shareable.findUpdateAccessById` - server callers must
+ * fetch with `findById`. The budget routes enforce it; the client uses it only to decide which
+ * controls to show.
  */
-export const canManageMemberCreditBudgets = isOrgOwnerOrCurrentAdmin;
+export const canManageMemberCreditBudgets = (user: OrgPermissionActor, org: OrgRoleSubject): boolean =>
+  hasOrgPermission(user, org, 'managePolicies');
 
 /**
- * The owner-only tier: the billing owner or a platform admin, never a manager. The server enforces
- * it with `verifyOrgOwner` (packages/server-utils/src/utils/orgAccess.ts) and the client's org tab gates
- * (apps/client/app/routes/organizations/orgTabAccess.ts) run this same function.
+ * May this actor see other members' credit fields (ORGANIZATION_MEMBER_CREDIT_FIELDS)? Whoever sets
+ * the budgets (`managePolicies`) or reads the team's usage (`viewUsage`). The REST serializer
+ * (`toSafeOrganization`) and the realtime field limits (`dataSubscribeRequest`) both ask this.
+ */
+export const canViewOrgMemberCredits = (user: OrgPermissionActor, org: OrgRoleSubject): boolean =>
+  hasOrgPermission(user, org, 'managePolicies') || hasOrgPermission(user, org, 'viewUsage');
+
+/**
+ * The billing owner or a platform admin, never anyone holding a role. Not a permission: it guards the
+ * owner's own acts (ownership transfer, deleting the team, appointing managers), which no role can
+ * be granted.
  */
 export const isOrgOwnerOrPlatformAdmin = (
   user: { id: string; isAdmin?: boolean | null },
@@ -125,46 +122,31 @@ export const isOrgOwnerOrPlatformAdmin = (
 ): boolean => user.isAdmin === true || org.userId === user.id;
 
 /** The actor slice an administration decision needs - resolved from auth, never from the body. */
-export type OrgAuthorityActor = { id: string; isAdmin?: boolean | null };
+export type OrgAuthorityActor = OrgPermissionActor;
 
 /** The organization slice an administration decision needs. */
-export type AdministrableOrg = {
-  userId: string;
-  adminUserIds?: readonly string[] | null;
-  users?: ReadonlyArray<{ userId: string }> | null;
-};
+export type AdministrableOrg = OrgRoleSubject;
 
 /**
- * May this actor administer the organization - its roster (remove members, or add them through the
- * direct `addMember` path) and the write routes behind `verifyOrgAccess`, such as connecting a
- * lake's GitHub or Drive source? Billing owner, any org manager, or platform admin.
- *
- * "Managers" are the `adminUserIds` list the owner edits in the UI, held to the same current-row
- * rule as `isOrgOwnerOrCurrentAdmin`. Billing, credit spend reports and org integration secrets stay
- * owner-only via `verifyOrgOwner` (see `isOrgOwnerOrPlatformAdmin`).
+ * May this actor administer the organization's roster - remove members, or add them through the
+ * direct `addMember` path? `manageMembers`.
  *
  * Deliberately NARROWER than `shareable.findAccessibleById`, which is a MEMBERSHIP ACL: it admits
  * anyone in `users[]` holding `read`, and `addMember` only ever grants `[Permission.read]`, so
  * every ordinary member satisfied it and could therefore enroll arbitrary accounts.
  *
- * The same answer as `isOrgOwnerOrCurrentAdmin`, kept as its own name because it is the roster
- * gate; invites (and cancelling them) gate on that one directly, behind an `isOrgMember` check.
- *
- * `userId` and `adminUserIds` are declared as strings on the organization schema, so a strict
- * comparison is correct. Callers include `organizationService` `addMember` and `revokeAccess`
- * (b4m-core/services), the addUser route (apps/client/pages/api/organizations/[id]/addUser.ts),
- * `canManageOrg` in packages/server-utils/src/utils/orgAccess.ts, and the client's Members tab
+ * Callers include `organizationService` `addMember` and `revokeAccess` (b4m-core/services), the
+ * addUser route (apps/client/pages/api/organizations/[id]/addUser.ts) and the client's Members tab
  * (components/organizations/Member.tsx).
  */
 export function canAdministerOrganization(actor: OrgAuthorityActor, organization: AdministrableOrg): boolean {
-  return isOrgOwnerOrCurrentAdmin(actor, organization);
+  return hasOrgPermission(actor, organization, 'manageMembers');
 }
 
 /**
- * May this actor remove `targetUserId` from the organization? `canAdministerOrganization`, except
- * that only the billing owner or a platform admin may remove a manager: removal purges the target
- * from `adminUserIds`, so a manager revoking another manager would be
- * editing the Managers list, which `organizations/[id]/admins.ts` reserves for the owner.
+ * May this actor remove `targetUserId` from the organization? `manageMembers`, and only the billing
+ * owner or a platform admin may remove anyone who holds a role: removal also clears the target's
+ * role, and role holders are the owner's to change.
  *
  * Enforced by `organizationService.revokeAccess`; the client's Members tab
  * (components/organizations/Member.tsx) asks it per card so it never offers a refused Revoke.
@@ -176,7 +158,10 @@ export function canRevokeOrgMember(
 ): boolean {
   if (!canAdministerOrganization(actor, organization)) return false;
   if (isOrgOwnerOrPlatformAdmin(actor, organization)) return true;
-  return !(organization.adminUserIds ?? []).includes(targetUserId);
+  // Keyed on the role lists rather than organizationMemberRole: a pending invitee has no users[] row
+  // yet and stays revocable, while a stale list entry stays protected, as before roles existed.
+  const privileged = [...(organization.adminUserIds ?? []), ...(organization.billingManagerUserIds ?? [])];
+  return !privileged.includes(targetUserId);
 }
 
 export type OrganizationSeatUsage = { used: number; seats: number; full: boolean };
@@ -198,14 +183,21 @@ export const organizationSeatUsage = (org: {
 export const organizationSeatsFullMessage = (name: string, seats: number): string =>
   `${name} uses ${seats === 1 ? 'its only paid seat' : `all ${seats} paid seats`}. Raise the seat count on its profile before adding anyone.`;
 
-export type OrganizationMemberRole = 'owner' | 'manager' | 'member';
-
 /**
- * The user's place in the org: billing owner, a manager (`adminUserIds` with a current `users[]` row,
- * the rule `isOrgOwnerOrCurrentAdmin` applies), a plain member, or null when not on the roster.
+ * May this user read the team audit trail (`pages/api/organizations/[id]/audit.ts`, the Audit tab)?
+ * `viewAudit` from the user's own role - no platform-admin arm, admins read it from the admin
+ * console - and a manager's row must also confer membership, a stricter row test than the role's.
  */
-export const organizationMemberRole = (org: AdministrableOrg, userId: string): OrganizationMemberRole | null => {
-  if (org.userId === userId) return 'owner';
-  if (!(org.users ?? []).some(member => member.userId === userId)) return null;
-  return (org.adminUserIds ?? []).includes(userId) ? 'manager' : 'member';
-};
+export const canReadOrganizationAudit = (
+  user: { id: string } | null | undefined,
+  org:
+    | (Omit<OrgRoleSubject, 'users'> & {
+        users?: ReadonlyArray<{ userId: string; permissions?: readonly string[] | null }> | null;
+      })
+    | null
+    | undefined
+): boolean =>
+  !!user &&
+  !!org &&
+  orgMemberHasPermission(org, user.id, 'viewAudit') &&
+  (org.userId === user.id || (org.users ?? []).some(row => row.userId === user.id && orgAclRowConfersMembership(row)));
