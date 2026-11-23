@@ -55,7 +55,7 @@ done && rm -f .env.selfhost.bak
 The app refuses to run with the template values: JWT signing and verification fail, the ChatCompletion service exits at startup, and internal service calls are rejected until each secret holds a generated value.
 
 :::warning
-**Do not rotate `SECRET_ENCRYPTION_KEY` casually.** It encrypts secrets stored in the database. If you change it, set `SECRET_ENCRYPTION_KEY_PREVIOUS` to the old key and keep it configured permanently so existing ciphertext remains readable; rotation is not automated.
+**Do not rotate `SECRET_ENCRYPTION_KEY` casually.** It encrypts secrets stored in the database. If you change it, set `SECRET_ENCRYPTION_KEY_PREVIOUS` to the old key and follow [Rotating the encryption key](./configuration.md#rotating-the-encryption-key) so existing ciphertext remains readable. Keep the previous key configured until the verify step there passes.
 :::
 
 :::note Formatting
