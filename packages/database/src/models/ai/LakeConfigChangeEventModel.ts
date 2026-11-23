@@ -132,6 +132,7 @@ const LakeConfigChangeEventSchema = new Schema<ILakeConfigChangeEventDocument>(
     target: { type: LakeConfigEventTargetSchema },
     leverChanges: { type: [LakeConfigLeverChangeSchema], default: undefined },
     admittedFabFileId: { type: String },
+    undoesEventId: { type: String },
     // Computed at write time from the floor-clamped retention. `immutable` blocks the ordinary
     // updateOne/updateMany/findOneAndUpdate paths (Mongoose strips immutable fields from a query
     // update's cast unless the caller passes `overwriteImmutable: true`) - a backstop against an
@@ -189,6 +190,7 @@ class LakeConfigChangeEventRepository
     const retentionDays = resolveLakeConfigAuditRetentionDays(input.retentionDays);
 
     const created = await this.eventModel.create({
+      ...(input.eventId ? { _id: input.eventId } : {}),
       principalKind: input.principalKind,
       principalId: input.principalId,
       onBehalfOfUserId: input.onBehalfOfUserId,
@@ -200,6 +202,7 @@ class LakeConfigChangeEventRepository
       target: input.target,
       leverChanges: input.leverChanges?.slice(0, LAKE_CONFIG_MAX_LEVER_CHANGES),
       admittedFabFileId: input.admittedFabFileId,
+      undoesEventId: input.undoesEventId,
       expiresAt: lakeConfigExpiresAt(now, retentionDays),
     });
     return created.toJSON() as unknown as ILakeConfigChangeEventDocument;
