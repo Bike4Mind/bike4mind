@@ -128,7 +128,7 @@ describe('FeatureCostSection', () => {
   it('lists features with cost, units, failures and spike flags, and opens a feature on click', () => {
     const { onChange } = renderSection();
 
-    expect(h.useSpendFeatures).toHaveBeenCalledWith({ range: RANGE, audience: 'all' });
+    expect(h.useSpendFeatures).toHaveBeenCalledWith({ range: RANGE, audience: 'all', enabled: true });
     const music = screen.getByTestId('spend-features-table-row-music_generation');
     expect(within(music).getByText('Music generation')).toBeTruthy();
     expect(within(music).getByText('1,200 seconds')).toBeTruthy();
@@ -149,6 +149,8 @@ describe('FeatureCostSection', () => {
   it("pages a feature's top users from the server and opens a user on click", () => {
     const { onChange } = renderSection({ feature: 'music_generation', audience: 'external' });
 
+    // The hidden platform table does not query while the drill-down replaces it.
+    expect(h.useSpendFeatures).toHaveBeenCalledWith({ range: RANGE, audience: 'external', enabled: false });
     expect(h.useSpendFeatureUsers).toHaveBeenCalledWith({
       range: RANGE,
       audience: 'external',

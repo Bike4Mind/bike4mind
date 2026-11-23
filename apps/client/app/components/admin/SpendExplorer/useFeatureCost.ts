@@ -10,7 +10,12 @@ const rangeParams = (range: SpendRange, audience: SpendAudience) =>
   new URLSearchParams({ from: range.from.toISOString(), to: range.to.toISOString(), audience });
 
 /** Per-feature cost for the range; `userId` narrows it to the calls one user ran. */
-export function useSpendFeatures(params: { range: SpendRange; audience: SpendAudience; userId?: string }) {
+export function useSpendFeatures(params: {
+  range: SpendRange;
+  audience: SpendAudience;
+  userId?: string;
+  enabled?: boolean;
+}) {
   const query = rangeParams(params.range, params.audience);
   if (params.userId) query.set('userId', params.userId);
   const queryString = query.toString();
@@ -18,6 +23,7 @@ export function useSpendFeatures(params: { range: SpendRange; audience: SpendAud
     queryKey: ['admin-spend-explorer', 'features', queryString],
     queryFn: async () =>
       (await api.get<SpendFeaturesResponse>(`/api/admin/spend-explorer/features?${queryString}`)).data,
+    enabled: params.enabled ?? true,
     staleTime: STALE_MS,
     placeholderData: keepPreviousData,
   });

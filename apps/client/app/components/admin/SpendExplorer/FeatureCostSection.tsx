@@ -150,7 +150,7 @@ function featureColumns(params: {
     {
       id: 'failed',
       label: 'Failed',
-      help: 'Requests that errored or timed out. They are left out of cost, credits and units.',
+      help: 'Requests that errored or timed out. Errors are left out of cost, credits and units; timeouts keep the provider cost they absorbed.',
       numeric: true,
       width: '6.5rem',
       render: row => formatCount(row.failedRequests),
@@ -407,7 +407,8 @@ export function FeatureCostSection({ range, rangeLabel, selection, onChange }: F
   // The clicked row's name, so the user panel need not look it up again; a pasted link shows the id.
   const [picked, setPicked] = useState<{ userId: string; name: string } | null>(null);
   const userName = picked && picked.userId === user ? picked.name : null;
-  const features = useSpendFeatures({ range, audience });
+  // The platform table is hidden while a drill-down panel replaces it, so skip its query then.
+  const features = useSpendFeatures({ range, audience, enabled: !user && !feature });
 
   const body = user ? (
     <UserFeaturesPanel range={range} userId={user} userName={userName} onBack={() => onChange({ user: null })} />
@@ -445,7 +446,7 @@ export function FeatureCostSection({ range, rangeLabel, selection, onChange }: F
       <AdminPageHeader
         level="section"
         title="Cost by feature"
-        description="Recorded cost per product feature. Failed requests are not counted as spend."
+        description="Recorded cost per product feature. Errored requests are not counted as spend."
         // One named user's mix ignores the audience, so the control is offered only where it applies.
         actions={
           !user && (
