@@ -44,10 +44,17 @@ import {
   type IUsageFundingBreakdown,
   type SpendBreakdown,
   type SpendBreakdownParams,
+  type SpendActorScanParams,
+  type SpendFeatureAggregate,
+  type SpendFeaturesParams,
+  type SpendFeatureUsersPage,
+  type SpendFeatureUsersParams,
+  type SpendFeatureTotals,
   type SpendTimelineParams,
   type SpendTimelineRow,
 } from '@bike4mind/common';
 import { EXECUTED_MODEL_GROUP_KEY, spendBreakdownPipeline, spendTimelinePipeline } from './spendExplorerPipelines';
+import { spendActorIdsPipeline, spendFeaturesPipeline, spendFeatureUsersPipeline } from './spendFeaturePipelines';
 import { loadCreditHolderFundingSnapshot, type LoadCreditHolderFundingSnapshot } from './creditHolderFundingSnapshot';
 
 export type IUsageEventDocument = IUsageEvent & IMongoDocument;
@@ -719,6 +726,49 @@ export class UsageEventRepository extends BaseRepository<IUsageEventDocument> im
       bySegment: result?.bySegment ?? [],
       topActors: result?.topActors ?? [],
     };
+  }
+
+  async spendFeatures(params: SpendFeaturesParams): Promise<SpendFeatureAggregate[]> {
+    const [result] = await this.model
+      .aggregate<{
+        totals: Array<SpendFeatureTotals & { feature: string; distinctUsers: number }>;
+        daily: Array<{ feature: string; day: string; costUsd: number }>;
+      }>(spendFeaturesPipeline(params))
+      .allowDiskUse(true)
+      .option({ maxTimeMS: SPEND_EXPLORER_MAX_TIME_MS });
+    const dailyByFeature = new Map<string, Array<{ day: string; costUsd: number }>>();
+    for (const row of result?.daily ?? []) {
+      const days = dailyByFeature.get(row.feature) ?? [];
+      days.push({ day: row.day, costUsd: row.costUsd });
+      dailyByFeature.set(row.feature, days);
+    }
+    return (result?.totals ?? []).map(row => ({
+      ...row,
+      daily: (dailyByFeature.get(row.feature) ?? []).sort((a, b) => a.day.localeCompare(b.day)),
+    }));
+  }
+
+  async spendFeatureUsers(params: SpendFeatureUsersParams): Promise<SpendFeatureUsersPage> {
+    const [result] = await this.model
+      .aggregate<{
+        summary: Array<{ users: number; costUsd: number }>;
+        page: SpendFeatureUsersPage['users'];
+      }>(spendFeatureUsersPipeline(params))
+      .allowDiskUse(true)
+      .option({ maxTimeMS: SPEND_EXPLORER_MAX_TIME_MS });
+    return {
+      users: result?.page ?? [],
+      totalUsers: result?.summary?.[0]?.users ?? 0,
+      featureCostUsd: result?.summary?.[0]?.costUsd ?? 0,
+    };
+  }
+
+  async spendActorIds(params: SpendActorScanParams): Promise<string[]> {
+    const rows = await this.model
+      .aggregate<{ _id: string }>(spendActorIdsPipeline(params))
+      .allowDiskUse(true)
+      .option({ maxTimeMS: SPEND_EXPLORER_MAX_TIME_MS });
+    return rows.map(row => row._id);
   }
 
   async settlementBreakdown(days: number = 30): Promise<ISettlementBreakdown[]> {

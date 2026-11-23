@@ -3,7 +3,9 @@ import {
   SPEND_BUCKET_SIZES,
   SPEND_EXPLORER_MAX_ACCOUNTS,
   SPEND_EXPLORER_MAX_RANGE_DAYS,
+  SPEND_FEATURE_USERS_MAX_LIMIT,
   SPEND_SPLIT_DIMENSIONS,
+  SpendAudienceSchema,
   type SpendBucketSize,
 } from '@bike4mind/common';
 import { z } from 'zod';
@@ -87,11 +89,54 @@ export const AccountsQuerySchema = z
     path: ['compareTo'],
   });
 
+// The feature view works in whole UTC days: its daily trend and last-day spike need complete days.
+const featureRangeFields = {
+  from: isoDate,
+  to: isoDate,
+  audience: SpendAudienceSchema.default('all'),
+  recache,
+};
+
+const withFeatureRangeChecks = <S extends z.ZodType<{ from: unknown; to: unknown }>>(schema: S) =>
+  schema
+    .refine(orderedRange, { message: 'from must be before to', path: ['from'] })
+    .refine(q => !orderedRange(q) || withinWidth(q.from, q.to, SPEND_EXPLORER_MAX_RANGE_DAYS.day), {
+      message: 'range too wide',
+      path: ['to'],
+    });
+
+const snapToDays = <Q extends { from: Date; to: Date }>(q: Q): Q => ({
+  ...q,
+  from: floorToBucket(q.from, 'day'),
+  to: ceilToBucket(q.to, 'day'),
+});
+
+export const FeaturesQuerySchema = withFeatureRangeChecks(
+  z.object({ ...featureRangeFields, userId: z.string().min(1).max(64).optional() })
+).transform(snapToDays);
+
+export const FeatureUsersQuerySchema = withFeatureRangeChecks(
+  z.object({
+    ...featureRangeFields,
+    // UsageEvent.feature values, legacy ones included, so not the current enum.
+    feature: z
+      .string()
+      .min(1)
+      .max(64)
+      .regex(/^[a-z0-9_]+$/, 'invalid feature'),
+    limit: z.coerce.number().int().min(1).max(SPEND_FEATURE_USERS_MAX_LIMIT).default(20),
+    offset: z.coerce.number().int().min(0).max(10_000).default(0),
+  })
+).transform(snapToDays);
+
 /**
  * Cache key for one explorer response. Unversioned and short-lived on purpose, like the
  * short-TTL keys in server/utils/cacheKeys.ts: entries self-heal well inside a deploy.
  */
-export function spendExplorerCacheKey(kind: 'timeline' | 'accounts', params: Record<string, unknown>): string {
+export function spendExplorerCacheKey(
+  kind: 'timeline' | 'accounts' | 'features' | 'feature-users',
+  params: Record<string, unknown>
+): string {
   const hash = createHash('sha256').update(JSON.stringify(params)).digest('hex').slice(0, 16);
   return `admin-spend-explorer:${kind}:${hash}`;
 }

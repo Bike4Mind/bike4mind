@@ -4,6 +4,7 @@ import { Button, Chip, Link, Stack, Typography } from '@mui/joy';
 import { CreditHolderType, type SpendAccountRow } from '@bike4mind/common';
 import { ChartSection, InlineBar, SectionCard } from '../shared';
 import { adminOrganizationHref } from '../organizationsTabSearch';
+import { UserFeaturesPanel } from './FeatureCostSection';
 import { SpendBucketTable } from './SpendBucketTable';
 import { SpendChart } from './SpendChart';
 import { formatShare, formatUsd, type SpendRange } from './spendExplorerModel';
@@ -129,6 +130,7 @@ export function AccountSpendPanel({ account, range, onClose }: AccountSpendPanel
           </Stack>
         </SectionCard>
       </Box2Columns>
+      <UserFeaturesPanel range={range} userId={account.accountId} userName={account.name} />
     </Stack>
   );
 }
