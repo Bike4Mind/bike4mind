@@ -85,6 +85,7 @@ import type {
   UpdateProjectResult,
   WorkspacePreparation,
   ContextNoticeKind,
+  ChatChildReport,
 } from '@shared/chat';
 import {
   awaitsWorktree,
@@ -194,7 +195,7 @@ import type { AttachmentStore } from './AttachmentStore';
 import type { ComposerDraftStore } from './ComposerDraftStore';
 import type { SidebarSectionStore } from './SidebarSectionStore';
 import { childOutcomeDisplay, classifyChildOutcome } from './childOutcome';
-import { childReplyBlock, childReportDetails } from './childReport';
+import { childReplyBlock, childReportDetails, cutReply, lastAssistantMessage } from './childReport';
 import { sideChatOpening } from './sideChat';
 import { summarizeSession } from '@shared/agentOutcome';
 import { createPhaseTracker, RESPONDING, THINKING, WAITING } from './modelPhase';
@@ -7463,10 +7464,20 @@ export class ChatService {
 
   /** Tell the parent how a spawned session ended, and count it toward the parent's next wake. */
   private async reportSettledAgent(parentId: string, child: ChatSession, localOnly: boolean): Promise<void> {
-    const replyBlock = childReplyBlock(child, await childReportDetails(child));
+    const details = await childReportDetails(child);
+    const replyBlock = childReplyBlock(child, details);
+    const last = lastAssistantMessage(child);
+    const reply = cutReply(last);
     await this.deliverChildReport(parentId, {
       localOnly,
       childId: child.id,
+      structured: {
+        sessionId: child.id,
+        title: child.title,
+        outcome: classifyChildOutcome(child),
+        ...details,
+        ...(reply ? { reply: reply.text, ...(reply.dropped > 0 ? { replyTruncated: true } : {}) } : {}),
+      },
       content:
         describeChildOutcome(child) +
         (replyBlock ? `\n${replyBlock}` : '') +
@@ -7475,7 +7486,6 @@ export class ChatService {
           : ''),
       display: childOutcomeDisplay(child),
     });
-    const last = [...child.messages].reverse().find(message => message.role === 'assistant');
     await this.recordAgentSettled(parentId, {
       sessionId: child.id,
       title: child.title,
@@ -7673,6 +7683,10 @@ export class ChatService {
         display: withheld ? localNotice : report.display,
         createdAt: new Date().toISOString(),
         system: true,
+        // Withheld whole: its title and reply are exactly what a hosted parent must not get.
+        ...(report.structured && !withheld ? { childReport: report.structured } : {}),
+        // Not sensitive, so kept when the report is withheld: it is how the strip knows this child has reported.
+        ...(report.structured ? { reportedChildId: report.structured.sessionId } : {}),
       };
       const updated = await this.deps.store.appendMessage(sessionId, message);
       // The parent can have been deleted while its child was still running. The child keeps its
@@ -9734,6 +9748,8 @@ type ChildReport = {
   kind?: 'waiting';
   content: string;
   display: string;
+  /** The thread card's data; becomes ChatMessage.childReport unless the report is withheld. */
+  structured?: ChatChildReport;
 };
 
 /**

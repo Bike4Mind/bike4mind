@@ -455,9 +455,11 @@ describe('device-local conversation boundary', () => {
       let parentId = '';
       let parentRounds = 0;
       let failChild: (() => void) | undefined;
+      let childId = '';
       const { service, store, events, create } = await fixture(
         async (request: CompletionRequest, emit: (event: CompletionStreamEvent) => void) => {
           if (request.sessionId !== parentId) {
+            childId = request.sessionId;
             await new Promise<void>((_resolve, reject) => {
               failChild = () => reject(new Error('private local failure details'));
             });
@@ -498,6 +500,8 @@ describe('device-local conversation boundary', () => {
       await vi.waitUntil(() => events.some(event => event.type === 'message' && event.sessionId === parentId));
       const report = (await store.get(parentId))?.messages.at(-1);
       expect(report?.content).toBe('A device-local child session finished. Open that conversation to read its report.');
+      expect(report?.childReport).toBeUndefined();
+      expect(report?.reportedChildId).toBe(childId);
       expect(JSON.stringify(report)).not.toContain('private local failure details');
       expect(JSON.stringify(report)).not.toContain('Private task title');
     }

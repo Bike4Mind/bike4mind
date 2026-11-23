@@ -1,10 +1,28 @@
 import { describe, expect, it } from 'vitest';
 import type { ChatMessage, ChatSession } from './chat';
-import { classifyMessagesOutcome, plainText, snippetOf, summarizeSession } from './agentOutcome';
+import { classifyMessagesOutcome, isUnfinishedOutcome, plainText, snippetOf, summarizeSession } from './agentOutcome';
 
 function assistant(overrides: Partial<ChatMessage> = {}): ChatMessage {
   return { id: 'a', role: 'assistant', content: 'done', createdAt: '2026-01-01T00:00:00.000Z', ...overrides };
 }
+
+describe('isUnfinishedOutcome', () => {
+  it.each([
+    ['finished', false],
+    ['no-reply', false],
+    ['max-tokens', false],
+    ['failed', true],
+    ['aborted', true],
+    ['turn-budget', true],
+    ['context-limit', true],
+  ] as const)('%s -> %s', (outcome, expected) => {
+    expect(isUnfinishedOutcome(outcome)).toBe(expected);
+  });
+
+  it('is false without an outcome', () => {
+    expect(isUnfinishedOutcome(undefined)).toBe(false);
+  });
+});
 
 describe('classifyMessagesOutcome', () => {
   it('is no-reply without an assistant message', () => {
