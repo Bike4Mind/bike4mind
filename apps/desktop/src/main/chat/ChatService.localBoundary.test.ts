@@ -459,7 +459,7 @@ describe('device-local conversation boundary', () => {
       const { service, store, events, create } = await fixture(
         async (request: CompletionRequest, emit: (event: CompletionStreamEvent) => void) => {
           if (request.sessionId !== parentId) {
-            childId = request.sessionId;
+            childId = request.sessionId ?? '';
             await new Promise<void>((_resolve, reject) => {
               failChild = () => reject(new Error('private local failure details'));
             });
