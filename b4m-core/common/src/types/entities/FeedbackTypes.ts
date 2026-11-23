@@ -32,6 +32,24 @@ export type FeedbackHistoryItem = {
   changes?: { field: string; before: unknown; after: unknown }[];
 };
 export type FeedbackHistoryPage = { items: FeedbackHistoryItem[]; nextCursor: string | null };
+/**
+ * Reporter context for one report. `reporter` is null when the report's userId cannot be trusted as a
+ * user id: legacy waitlist rows, and reports whose userId came from an unauthenticated request body.
+ */
+export type FeedbackReporterSummary =
+  | { reporter: null }
+  | {
+      reporter: {
+        userId: string;
+        exists: boolean;
+        /** Plan name, null for no plan. Absent when the caller may not read subscriptions. */
+        plan?: string | null;
+        createdAt: string | null;
+        isBanned: boolean;
+        /** Reports this user filed before the one being viewed. */
+        earlierReports: number;
+      };
+    };
 
 export enum FeedbackType {
   BUG = 'Bug',
@@ -257,6 +275,9 @@ export interface IFeedback {
   /** True iff the sibling `IFeedbackText` document was successfully written - lets a reader tell
    * "text expired under the 90-day TTL" apart from "this report never had text". */
   contentStored: boolean;
+  /** True when `userId` came from the authenticated session, false when it came from an unauthenticated
+   * request body. Absent on reports from before it was captured. */
+  userIdVerified?: boolean;
   /** The admin who last set `status`, and when. Admin-only: written by the status route alone. */
   handledBy?: string;
   handledAt?: Date;

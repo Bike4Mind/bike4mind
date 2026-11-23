@@ -118,6 +118,29 @@ describe('useFeedbackFilters', () => {
     expect(result.current.filterParams).not.toHaveProperty('organization');
   });
 
+  it('sends one reporter and resets the page when a userId filter is set', () => {
+    const userId = 'b'.repeat(24);
+    act(() => fakeAdminRouter.reset({ tab: 'feedback', feedbackPage: 3 }));
+    const { result } = setup();
+
+    act(() => result.current.setUserId(userId));
+
+    expect(result.current.filterParams.userId).toBe(userId);
+    expect(result.current.filters.userId).toBe(userId);
+    expect(fakeAdminRouter.search).toMatchObject({ feedbackUser: userId });
+    expect(fakeAdminRouter.search).not.toHaveProperty('feedbackPage');
+  });
+
+  it('clears the reporter filter on showOnly unless it names one', () => {
+    act(() => fakeAdminRouter.reset({ tab: 'feedback', feedbackUser: 'b'.repeat(24) }));
+    const { result } = setup();
+    expect(result.current.filterParams.userId).toBe('b'.repeat(24));
+
+    act(() => result.current.showOnly({ types: [] }));
+
+    expect(result.current.filterParams).not.toHaveProperty('userId');
+  });
+
   /**
    * The gap this filter closed: GET /api/feedback has always accepted `subject`, and the console
    * never sent one - so the server-side filter was unreachable and every subject landed in one
