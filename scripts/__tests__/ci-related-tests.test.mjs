@@ -166,6 +166,27 @@ describe('related discovery', () => {
       else process.env.CLIENT_TEST_LANE = previous;
     }
   });
+  it('runs the selected client tests from the client package directory', async () => {
+    const file = 'apps/client/app/constants/apiKeyScopeEndpoints.generated.test.ts';
+    const spec = { moduleId: resolve(root, file), project: { name: 'node' } };
+    const before = process.cwd();
+    let runCwd;
+    const create = vi.fn(async () => ({
+      config: {}, close: vi.fn(), standalone: async () => {},
+      globTestSpecifications: async () => [spec],
+      getRelevantTestSpecifications: async () => [spec],
+      runTestSpecifications: async () => { runCwd = process.cwd(); return { testModules: [], unhandledErrors: [] }; },
+    }));
+    const previous = process.env.CLIENT_TEST_LANE;
+    try {
+      expect(await runRelated({ plan: { mode: 'related', files: [file] }, script: 'test:integration', root, create, run: vi.fn() })).toBe(0);
+      expect(runCwd).toBe(resolve(root, 'apps/client'));
+      expect(process.cwd()).toBe(before);
+    } finally {
+      if (previous === undefined) delete process.env.CLIENT_TEST_LANE;
+      else process.env.CLIENT_TEST_LANE = previous;
+    }
+  });
 });
 
 describe('related CI workflow guard', () => {
