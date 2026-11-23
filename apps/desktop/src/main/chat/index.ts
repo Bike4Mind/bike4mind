@@ -103,7 +103,7 @@ import { ModelVersionStore } from './model3d/ModelVersionStore';
 import { modelIpcHandlers } from './model3d/modelIpc';
 import { ChatService, sessionForRenderer, type ChatServiceDeps } from './ChatService';
 import { DeferredToolsSetting, parseDeferredToolsOverride } from './DeferredToolsSetting';
-import { CHAT_STREAM_TAG } from './devLogTag';
+import { logDownstream } from './devLogDownstream';
 import { McpManager } from './mcp/McpManager';
 import { McpServerStore } from './mcp/McpServerStore';
 import { privateFile } from '../privateFile';
@@ -173,7 +173,6 @@ import type { PreparedImage } from './tools/types';
 import { desktopScreenCapturer } from './screen/desktopScreen';
 import { parsePaneInput, SimulatorLiveView } from './simulator/SimulatorLiveView';
 import { XcodeSimulatorDriver } from './simulator/XcodeSimulatorDriver';
-import { devLog } from '../devlog/DevLogSink';
 import { registerPullRequests } from '../pr';
 import type { PrMonitor } from '../pr/PrMonitor';
 import { appWindows, focusedAppWindow } from '../windows';
@@ -368,37 +367,6 @@ function paneBounds(value: unknown): BrowserPaneBounds | null {
   if (![x, y, width, height].every(side => typeof side === 'number' && Number.isFinite(side))) return null;
   if (width! < 1 || height! < 1) return null;
   return { x: Math.round(x!), y: Math.round(y!), width: Math.round(width!), height: Math.round(height!) };
-}
-
-/**
- * Publish one renderer-bound push to the developer log.
- *
- * The downstream half of the chat stream, and a different thing from the upstream SSE frames
- * logged in completions.ts: these are what the UI is actually told, after the agent loop has
- * folded tool calls, reasoning and queue changes into it. Same source, so the same single tag -
- * the direction is a field. Seeing both texts side by side is the point: a delta that differs
- * from the frame it came from is the agent loop having rewritten it.
- *
- * Fields are named one at a time, never spread: a payload carries whatever a session put in it,
- * and an allowlist is the only reason this cannot start carrying something it should not.
- */
-function logDownstream(channel: string, payload: unknown): void {
-  devLog.publish(() => {
-    const event = (payload ?? {}) as { type?: unknown; sessionId?: unknown; text?: unknown; status?: unknown };
-    // The event's own kind, or the channel's name without its namespace.
-    const kind = typeof event.type === 'string' ? event.type : (channel.split(':')[1] ?? channel);
-    const text = typeof event.text === 'string' ? event.text : '';
-    return {
-      tags: [CHAT_STREAM_TAG],
-      message: `downstream ${kind}${text ? `: ${text}` : ''}`,
-      fields: {
-        channel,
-        ...(text ? { chars: text.length } : {}),
-        ...(typeof event.sessionId === 'string' ? { session: event.sessionId } : {}),
-        ...(typeof event.status === 'string' ? { status: event.status } : {}),
-      },
-    };
-  });
 }
 
 /**

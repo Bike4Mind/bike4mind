@@ -86,7 +86,7 @@ import type {
 } from './chat';
 import type { GenerationSettings } from './generation';
 import type { ModelLoadOffer, ModelSettings, UnsupportedModelSetting } from './modelSettings';
-import type { DevLogRecord, DevLogSnapshot } from './devLog';
+import type { DevLogErrorReport, DevLogRecord, DevLogSnapshot } from './devLog';
 import type { ShareDirectoryResult } from './directoryRequest';
 import type { PrActionResult, PrBarState, PrOption, PrSummaryEvent } from './pullRequest';
 import type { LocalContextFit, LocalContextSetting } from './localContextSetting';
@@ -549,8 +549,9 @@ export const IPC_CHANNELS = {
   /** main -> renderer push; what the pane's standing indicator draws. */
   browserCookiesChanged: 'browser:cookies-changed',
   /**
-   * The developer log. Every one of these belongs to the dev window alone, and none of them is
-   * reachable from a tool or from a reply: the window is opened by a chord the user presses.
+   * The developer log. All but devLogReportError belong to the dev window alone, and none of
+   * them is reachable from a tool or from a reply: the window is opened by a chord the user
+   * presses. devLogReportError is the one any window may call, and its input is untrusted.
    *
    * Source-agnostic by design - see @shared/devLog. Adding a source to the log adds nothing
    * here.
@@ -561,6 +562,8 @@ export const IPC_CHANNELS = {
   devLogCopy: 'devlog:copy',
   /** main -> renderer push; a batch of newly captured records, coalesced in the sink. */
   devLogRecords: 'devlog:records',
+  /** Renderer -> main, fire-and-forget (no reply). A caught renderer failure; main validates and rate-limits it. */
+  devLogReportError: 'devlog:report-error',
   /** Renderer -> main only. Main decides what may be opened; see isExternallyOpenable. */
   shellOpenExternal: 'shell:open-external',
   /**
@@ -1591,5 +1594,7 @@ export interface DesktopApi {
     copy(text: string): Promise<void>;
     /** Subscribe to batches of newly captured records; returns the unsubscribe. */
     onRecords(listener: (records: DevLogRecord[]) => void): () => void;
+    /** Report a renderer failure to the log. Fire-and-forget, so it cannot reject into a handler. */
+    reportError(report: DevLogErrorReport): void;
   };
 }
