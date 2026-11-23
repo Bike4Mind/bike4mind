@@ -115,7 +115,8 @@ export async function processDelegation(
     return;
   }
   // EventBridge can deliver twice at once; without the lease both would run, and bill, the same work.
-  if (!(await items.claim(input.delegationId, deps.now(), CLAIM_LEASE_MS))) {
+  const claimedAt = deps.now();
+  if (!(await items.claim(input.delegationId, claimedAt, CLAIM_LEASE_MS))) {
     logger.info('[Delegation] another delivery holds the item; skipping', { delegationId: input.delegationId });
     return;
   }
@@ -124,7 +125,8 @@ export async function processDelegation(
     await settleClaimed(deps, input.delegationId, item);
   } catch (error) {
     // Hand the lease back before the retry lands, or that retry would skip the item as held by another delivery.
-    await items.releaseClaim(input.delegationId).catch((releaseError: unknown) => {
+    const leaseEnd = new Date(claimedAt.getTime() + CLAIM_LEASE_MS);
+    await items.releaseClaim(input.delegationId, leaseEnd).catch((releaseError: unknown) => {
       logger.error('[Delegation] could not release the claim', { delegationId: input.delegationId, releaseError });
     });
     throw error;
@@ -139,6 +141,7 @@ async function settleClaimed(deps: DelegationProcessDeps, delegationId: string, 
     return;
   }
 
+  let billed = false;
   try {
     const content = await loadContent(deps, item);
     const { reply, model } = await deps.complete(
@@ -146,13 +149,23 @@ async function settleClaimed(deps: DelegationProcessDeps, delegationId: string, 
       delegationId,
       buildDelegationPrompt(item.intent, content)
     );
+    billed = true;
     const outcome = parseDelegationReply(reply);
     await items.markSettled(delegationId, { ...outcome, model }, deps.now());
     logger.info('[Delegation] item settled', { delegationId, status: outcome.status });
   } catch (error) {
     if (error instanceof ContentNotReadyError) throw error;
     logger.error('[Delegation] processing failed', { delegationId, error });
-    await items.markFailed(delegationId, 'processing_failed', deps.now());
+    try {
+      await items.markFailed(delegationId, 'processing_failed', deps.now());
+    } catch (markError) {
+      // Once the model has run and billed, a retry would run and bill it again; the stale sweep fails the item instead.
+      if (!billed) throw markError;
+      logger.error('[Delegation] could not record the outcome; leaving the item to the stale sweep', {
+        delegationId,
+        markError,
+      });
+    }
   }
 }
 

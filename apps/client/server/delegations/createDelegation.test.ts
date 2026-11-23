@@ -62,6 +62,18 @@ describe('createDelegation', () => {
     expect(mocks.create).not.toHaveBeenCalled();
   });
 
+  it('422s whitespace-only text with nothing else shared', async () => {
+    await expect(createDelegation('u1', { intent: 'Handle this', text: ' \n\t ' })).rejects.toMatchObject({
+      statusCode: 422,
+    });
+    expect(mocks.create).not.toHaveBeenCalled();
+  });
+
+  it('stores whitespace-only text as absent when a link is shared', async () => {
+    await createDelegation('u1', { intent: 'Read', url: 'https://example.com/r', text: '   ' });
+    expect(mocks.create).toHaveBeenCalledWith(expect.objectContaining({ url: 'https://example.com/r', text: null }));
+  });
+
   it('404s a file that is missing or belongs to someone else, and stores nothing', async () => {
     mocks.findAllByIds.mockResolvedValue([{ id: 'f1', userId: 'u2' }]);
     await expect(createDelegation('u1', { intent: 'Read', file_ids: ['f1'] })).rejects.toMatchObject({

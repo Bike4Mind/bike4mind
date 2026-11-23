@@ -36,7 +36,9 @@ export async function createDelegation(
   deps: Deps = defaultDeps
 ): Promise<IDelegatedItem> {
   const fileIds = [...new Set(body.file_ids ?? [])];
-  if (!body.url && !body.text && fileIds.length === 0) {
+  // Whitespace-only text shares nothing, so it counts as absent.
+  const text = body.text?.trim() ? body.text : null;
+  if (!body.url && !text && fileIds.length === 0) {
     throw new UnprocessableEntityError('Send at least one of url, text or file_ids');
   }
 
@@ -51,7 +53,7 @@ export async function createDelegation(
     userId,
     intent: body.intent.trim(),
     url: body.url ?? null,
-    text: body.text ?? null,
+    text,
     fileIds,
   });
   const delegationId = item._id.toString();

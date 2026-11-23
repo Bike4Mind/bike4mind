@@ -85,7 +85,10 @@ describe('delegatedItemRepository settling', () => {
     expect(await delegatedItemRepository.claim(id, at(0), 100)).toBe(true);
     expect(await delegatedItemRepository.claim(id, at(50), 100)).toBe(false);
     expect(await delegatedItemRepository.claim(id, at(100), 100)).toBe(true);
-    await delegatedItemRepository.releaseClaim(id);
+    // The first delivery's lease (ending at 100) has been taken over; releasing it leaves the newer claim alone.
+    await delegatedItemRepository.releaseClaim(id, at(100));
+    expect((await delegatedItemRepository.findById(id))?.claimedUntil).toEqual(at(200));
+    await delegatedItemRepository.releaseClaim(id, at(200));
     expect((await delegatedItemRepository.findById(id))?.claimedUntil).toBeNull();
     expect(await delegatedItemRepository.claim(id, at(101), 100)).toBe(true);
 

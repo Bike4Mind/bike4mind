@@ -201,7 +201,7 @@ describe('processDelegation', () => {
       });
       deps.items.findById.mockResolvedValue(item({ fileIds: ['f1'] }));
       await expect(processDelegation(deps, input)).rejects.toBeInstanceOf(ContentNotReadyError);
-      expect(deps.items.releaseClaim).toHaveBeenCalledWith('g1');
+      expect(deps.items.releaseClaim).toHaveBeenCalledWith('g1', new Date(soon.getTime() + 3 * 60 * 1000));
       expect(deps.items.markFailed).not.toHaveBeenCalled();
       expect(deps.complete).not.toHaveBeenCalled();
     }
@@ -211,7 +211,7 @@ describe('processDelegation', () => {
     const outage = new Error('mongo unavailable');
     const gateDeps = makeDeps({ canRun: vi.fn().mockRejectedValue(outage) });
     await expect(processDelegation(gateDeps, input)).rejects.toBe(outage);
-    expect(gateDeps.items.releaseClaim).toHaveBeenCalledWith('g1');
+    expect(gateDeps.items.releaseClaim).toHaveBeenCalledWith('g1', new Date(later.getTime() + 3 * 60 * 1000));
 
     const markDeps = makeDeps({ complete: vi.fn().mockRejectedValue(new Error('model down')) });
     markDeps.items.markFailed.mockRejectedValue(outage);
@@ -220,6 +220,21 @@ describe('processDelegation', () => {
     expect(markDeps.logger.error).toHaveBeenCalledWith(
       '[Delegation] could not release the claim',
       expect.objectContaining({ delegationId: 'g1' })
+    );
+  });
+
+  it('does not hand a billed run back for a retry when its outcome cannot be saved', async () => {
+    const outage = new Error('mongo unavailable');
+    const deps = makeDeps();
+    deps.items.markSettled.mockRejectedValue(outage);
+    deps.items.markFailed.mockRejectedValue(outage);
+
+    await expect(processDelegation(deps, input)).resolves.toBeUndefined();
+    expect(deps.complete).toHaveBeenCalledOnce();
+    expect(deps.items.releaseClaim).not.toHaveBeenCalled();
+    expect(deps.logger.error).toHaveBeenCalledWith(
+      '[Delegation] could not record the outcome; leaving the item to the stale sweep',
+      expect.objectContaining({ delegationId: 'g1', markError: outage })
     );
   });
 

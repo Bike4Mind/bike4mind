@@ -82,9 +82,10 @@ export const delegatedItemRepository = {
     return result.modifiedCount === 1;
   },
 
-  async releaseClaim(id: string): Promise<void> {
+  /** Releases only the lease ending at `leaseEnd`, so a slow delivery cannot clear a newer delivery's claim. */
+  async releaseClaim(id: string, leaseEnd: Date): Promise<void> {
     await DelegatedItemModel.updateOne(
-      { _id: id, status: 'pending' },
+      { _id: id, status: 'pending', claimedUntil: leaseEnd },
       { $set: { claimedUntil: null } },
       { runValidators: true }
     );

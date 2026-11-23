@@ -22,8 +22,14 @@ const ReplySchema = z.object({
   result: z.string().trim().min(1),
 });
 
+// Drops a high surrogate left at the cut, so an emoji is never stored as half a UTF-16 pair.
 const clip = (text: string, max: number): string =>
-  text.length > max ? `${text.slice(0, max - 3).trimEnd()}...` : text;
+  text.length > max
+    ? `${text
+        .slice(0, max - 3)
+        .replace(/[\uD800-\uDBFF]$/, '')
+        .trimEnd()}...`
+    : text;
 
 /** `fence` is a per-call random marker, so shared content cannot guess it to close the data block early. */
 export function buildDelegationPrompt(

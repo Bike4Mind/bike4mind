@@ -78,7 +78,13 @@ const MAX_RUNS_IN_PROMPT = 30;
 
 const clip = (text: string, limit: number): string => {
   const flat = text.replace(/\s+/g, ' ').trim();
-  return flat.length <= limit ? flat : `${flat.slice(0, limit - 3).trimEnd()}...`;
+  // Drops a high surrogate left at the cut, so an emoji is never stored as half a UTF-16 pair.
+  return flat.length <= limit
+    ? flat
+    : `${flat
+        .slice(0, limit - 3)
+        .replace(/[\uD800-\uDBFF]$/, '')
+        .trimEnd()}...`;
 };
 
 export const hasActivity = (activity: BriefActivity): boolean =>

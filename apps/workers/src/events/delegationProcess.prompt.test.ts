@@ -48,6 +48,14 @@ describe('parseDelegationReply', () => {
     expect(result.endsWith('...')).toBe(true);
   });
 
+  it('never cuts an emoji in half when it clips', () => {
+    const head = 'x'.repeat(DELEGATION_LIMITS.result - 4);
+    const { result } = parseDelegationReply(
+      JSON.stringify({ outcome: 'handled', result: `${head}${'\u{1F600}'.repeat(200)}` })
+    );
+    expect(result).toBe(`${head}...`);
+  });
+
   it.each([
     ['no JSON object', 'I could not do it'],
     ['an unknown outcome', '{"outcome": "ignored", "result": "x"}'],
