@@ -67,6 +67,8 @@ public final class VoiceConversationModel {
 
   /// Called once when a new conversation's session is created.
   @ObservationIgnored public var onSessionStarted: (@MainActor (String) -> Void)?
+  /// Fires once the server has accepted a turn, with the session it joined.
+  @ObservationIgnored public var onTurnSent: (@MainActor (String) -> Void)?
 
   private let api: any B4MAPI
   private let realtime: any RealtimeClient
@@ -392,6 +394,7 @@ public final class VoiceConversationModel {
       target = .session(id)
       onSessionStarted?(id)
     }
+    if let id = sessionID { onTurnSent?(id) }
     guard token == turnToken else { return }
     if receipt.isRefused {
       return endTurn(saying: receipt.message ?? Self.refusalNotice(receipt.errorCode))

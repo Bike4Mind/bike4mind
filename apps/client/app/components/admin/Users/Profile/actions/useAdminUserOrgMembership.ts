@@ -1,10 +1,11 @@
+import type { AssignableOrgRole } from '@bike4mind/common';
 import { useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import { api } from '@client/app/contexts/ApiContext';
 import { isStepUpCancelled } from '@client/app/utils/stepUpInterceptor';
 import { adminUpdateErrorMessage } from './useAdminUserUpdate';
 
-export type OrgMemberRoleChoice = 'manager' | 'member';
+export type OrgMemberRoleChoice = AssignableOrgRole;
 
 /**
  * Audited org membership writes for one user (pages/api/admin/organizations/[id]/members). Failures

@@ -4949,6 +4949,49 @@
           "error"
         ]
       },
+      "synthesizeSpeechResponse503": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "string"
+          },
+          "request_id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string",
+            "deprecated": true,
+            "description": "Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this."
+          },
+          "provider": {
+            "type": "string",
+            "enum": [
+              "openai",
+              "elevenlabs"
+            ]
+          },
+          "errorCode": {
+            "type": "string",
+            "enum": [
+              "insufficient_credits",
+              "provider_not_configured",
+              "provider_rejected",
+              "end_user_id_not_allowed",
+              "invalid_end_user_id",
+              "request_timeout"
+            ]
+          },
+          "jobId": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "error"
+        ]
+      },
       "synthesizeSpeechResponse504": {
         "type": "object",
         "properties": {
@@ -8780,6 +8823,169 @@
           "decisions"
         ]
       },
+      "getBriefScheduleResponse200": {
+        "type": "object",
+        "properties": {
+          "schedule": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "properties": {
+              "enabled": {
+                "type": "boolean",
+                "description": "Whether scheduled briefs are composed. Disabling keeps the rest of the schedule."
+              },
+              "timeOfDay": {
+                "type": "string",
+                "pattern": "^([01]\\d|2[0-3]):[0-5]\\d$",
+                "description": "Local wall-clock time in `timeZone`, 24-hour `HH:mm`."
+              },
+              "days": {
+                "type": "array",
+                "items": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 6
+                },
+                "minItems": 1,
+                "maxItems": 7,
+                "description": "Local weekdays the brief is composed on, 0 = Sunday through 6 = Saturday."
+              },
+              "timeZone": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 64,
+                "description": "IANA time zone name, e.g. `America/New_York`. Send the device zone on every save."
+              }
+            },
+            "required": [
+              "enabled",
+              "timeOfDay",
+              "days",
+              "timeZone"
+            ],
+            "description": "Null until a schedule has been saved."
+          },
+          "nextBriefAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "ISO 8601 instant of the next scheduled brief; null when the schedule is off or unset."
+          }
+        },
+        "required": [
+          "schedule",
+          "nextBriefAt"
+        ]
+      },
+      "putBriefScheduleResponse200": {
+        "type": "object",
+        "properties": {
+          "schedule": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "properties": {
+              "enabled": {
+                "type": "boolean",
+                "description": "Whether scheduled briefs are composed. Disabling keeps the rest of the schedule."
+              },
+              "timeOfDay": {
+                "type": "string",
+                "pattern": "^([01]\\d|2[0-3]):[0-5]\\d$",
+                "description": "Local wall-clock time in `timeZone`, 24-hour `HH:mm`."
+              },
+              "days": {
+                "type": "array",
+                "items": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 6
+                },
+                "minItems": 1,
+                "maxItems": 7,
+                "description": "Local weekdays the brief is composed on, 0 = Sunday through 6 = Saturday."
+              },
+              "timeZone": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 64,
+                "description": "IANA time zone name, e.g. `America/New_York`. Send the device zone on every save."
+              }
+            },
+            "required": [
+              "enabled",
+              "timeOfDay",
+              "days",
+              "timeZone"
+            ],
+            "description": "Null until a schedule has been saved."
+          },
+          "nextBriefAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "ISO 8601 instant of the next scheduled brief; null when the schedule is off or unset."
+          }
+        },
+        "required": [
+          "schedule",
+          "nextBriefAt"
+        ]
+      },
+      "putBriefScheduleRequest": {
+        "type": "object",
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "description": "Whether scheduled briefs are composed. Disabling keeps the rest of the schedule."
+          },
+          "timeOfDay": {
+            "type": "string",
+            "pattern": "^([01]\\d|2[0-3]):[0-5]\\d$",
+            "description": "Local wall-clock time in `timeZone`, 24-hour `HH:mm`."
+          },
+          "days": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 6
+            },
+            "minItems": 1,
+            "maxItems": 7,
+            "description": "Local weekdays the brief is composed on, 0 = Sunday through 6 = Saturday."
+          },
+          "timeZone": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64,
+            "description": "IANA time zone name, e.g. `America/New_York`. Send the device zone on every save."
+          }
+        },
+        "required": [
+          "enabled",
+          "timeOfDay",
+          "days",
+          "timeZone"
+        ],
+        "example": {
+          "enabled": true,
+          "timeOfDay": "08:00",
+          "days": [
+            1,
+            2,
+            3,
+            4,
+            5
+          ],
+          "timeZone": "America/New_York"
+        }
+      },
       "listAssistantInstructionsResponse200": {
         "type": "object",
         "properties": {
@@ -8916,6 +9122,39 @@
         },
         "required": [
           "text"
+        ]
+      },
+      "getPendingDecisionCountResponse200": {
+        "type": "object",
+        "properties": {
+          "count": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Decisions waiting on you: `approvals` plus `briefDecisions`. Nothing is counted twice."
+          },
+          "approvals": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Agent approvals still open in your notebooks: raised within the last 15 minutes and not yet answered."
+          },
+          "briefDecisions": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Decisions in your latest ready brief that are not agent approvals. An approval decision in the brief is counted under `approvals` while it is open, and not at all once it was answered or lapsed."
+          },
+          "briefId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The latest ready brief `briefDecisions` comes from; null when there is none."
+          }
+        },
+        "required": [
+          "count",
+          "approvals",
+          "briefDecisions",
+          "briefId"
         ]
       },
       "registerPushTokenRequest": {
@@ -39888,6 +40127,60 @@
               }
             }
           },
+          "503": {
+            "description": "Every candidate provider is out of quota, so speech is temporarily unavailable.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/synthesizeSpeechResponse503"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-RateLimit-Limit-Minute": {
+                "description": "Request quota per minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Minute": {
+                "description": "Requests remaining in the current minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Minute": {
+                "description": "Unix epoch (seconds) when the minute window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Limit-Day": {
+                "description": "Request quota per day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Day": {
+                "description": "Requests remaining in the current day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Day": {
+                "description": "Unix epoch (seconds) when the day window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          },
           "504": {
             "description": "The speech took longer than this request can wait. Tagged `errorCode: \"request_timeout\"`. Two cases. (1) It would not be saved to the file browser (a `preview` call, or a storage quota with no room for it), so it could never be retrieved: the generation is cancelled and its credits returned, unless the provider had already started it, in which case that one finishes and is billed, and the response carries `jobId` (also `X-B4M-Generation-Job-Id`) and a `message`. Retrying generates a new clip. (2) It is being saved to the file browser but the request did not send `Prefer: respond-async`: the generation is NOT cancelled and carries on, the audio lands in the file browser when it finishes, and it is billed only if it succeeds. Do not retry, which would generate and bill a second clip. The body carries `jobId`, also sent as `X-B4M-Generation-Job-Id`.",
             "headers": {
@@ -40749,7 +41042,7 @@
             }
           },
           "503": {
-            "description": "No provider API key is configured for this deployment.",
+            "description": "The provider is unavailable: no API key is configured for this deployment, or the provider account is out of quota. Reserved credits are refunded.",
             "headers": {
               "X-Request-ID": {
                 "description": "Correlation id for this request; safe to log and quote in support requests.",
@@ -41590,7 +41883,7 @@
             }
           },
           "503": {
-            "description": "No provider API key is configured for this deployment.",
+            "description": "The provider is unavailable: no API key is configured for this deployment, or the provider account is out of quota. Reserved credits are refunded.",
             "content": {
               "application/json": {
                 "schema": {
@@ -43298,6 +43591,346 @@
         ]
       }
     },
+    "/api/v1/briefs/schedule": {
+      "get": {
+        "operationId": "getBriefSchedule",
+        "summary": "Get your brief schedule",
+        "description": "Reads when scheduled briefs are composed for you and when the next one is due. Authenticate with a JWT access token of the signed-in user. The schedule is the caller's own; scheduled briefs are composed only when there was activity since the last one.",
+        "tags": [
+          "AI"
+        ],
+        "security": [
+          {
+            "jwtAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Your brief schedule.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/getBriefScheduleResponse200"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid JWT.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The account is suspended (`errorCode: account_suspended`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScopeForbiddenResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "405": {
+            "description": "The path does not serve this HTTP method.",
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Allow": {
+                "description": "The methods this path serves. GET implies HEAD.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "426": {
+            "description": "The request declared a client build (`X-Client-Name` + `X-Client-Version`) older than the minimum this API still serves for that client. Upgrade to `minimum_version` or later. Never sent to a request that omits either header.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UpgradeRequiredResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Per-user rate limit exceeded.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "x-codeSamples": [
+          {
+            "lang": "curl",
+            "label": "curl",
+            "source": "curl -s -X GET \"https://your-deployment.example.com/api/v1/briefs/schedule\" \\\n  -H \"Authorization: Bearer <access_token>\""
+          },
+          {
+            "lang": "JavaScript",
+            "label": "fetch",
+            "source": "const res = await fetch(\"https://your-deployment.example.com/api/v1/briefs/schedule\", {\n  method: \"GET\",\n  headers: {\n    \"Authorization\": \"Bearer <access_token>\",\n  },\n});"
+          },
+          {
+            "lang": "Python",
+            "label": "requests",
+            "source": "import requests\n\nres = requests.get(\n    \"https://your-deployment.example.com/api/v1/briefs/schedule\",\n    headers={\"Authorization\": \"Bearer <access_token>\"},\n)"
+          }
+        ]
+      },
+      "put": {
+        "operationId": "putBriefSchedule",
+        "summary": "Set your brief schedule",
+        "description": "Replaces your brief schedule and returns it with the next due time. `timeOfDay` and `days` are read in `timeZone`, so a time skipped by a daylight-saving change runs at the shifted time and a repeated one runs once. Authenticate with a JWT access token of the signed-in user. The schedule is the caller's own; scheduled briefs are composed only when there was activity since the last one.",
+        "tags": [
+          "AI"
+        ],
+        "security": [
+          {
+            "jwtAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/putBriefScheduleRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The saved schedule.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/putBriefScheduleResponse200"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed JSON request body.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid JWT.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The account is suspended (`errorCode: account_suspended`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScopeForbiddenResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "405": {
+            "description": "The path does not serve this HTTP method.",
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Allow": {
+                "description": "The methods this path serves. GET implies HEAD.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Request failed validation.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "426": {
+            "description": "The request declared a client build (`X-Client-Name` + `X-Client-Version`) older than the minimum this API still serves for that client. Upgrade to `minimum_version` or later. Never sent to a request that omits either header.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UpgradeRequiredResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Per-user rate limit exceeded.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "x-codeSamples": [
+          {
+            "lang": "curl",
+            "label": "curl",
+            "source": "curl -s -X PUT \"https://your-deployment.example.com/api/v1/briefs/schedule\" \\\n  -H \"Authorization: Bearer <access_token>\" \\\n  -H \"Content-Type: application/json\" \\\n  --data-binary @- <<'B4M_REQUEST_BODY'\n{\n  \"enabled\": true,\n  \"timeOfDay\": \"08:00\",\n  \"days\": [\n    1,\n    2,\n    3,\n    4,\n    5\n  ],\n  \"timeZone\": \"America/New_York\"\n}\nB4M_REQUEST_BODY"
+          },
+          {
+            "lang": "JavaScript",
+            "label": "fetch",
+            "source": "const res = await fetch(\"https://your-deployment.example.com/api/v1/briefs/schedule\", {\n  method: \"PUT\",\n  headers: {\n    \"Authorization\": \"Bearer <access_token>\",\n    \"Content-Type\": \"application/json\",\n  },\n  body: JSON.stringify({\n  \"enabled\": true,\n  \"timeOfDay\": \"08:00\",\n  \"days\": [\n    1,\n    2,\n    3,\n    4,\n    5\n  ],\n  \"timeZone\": \"America/New_York\"\n}),\n});"
+          },
+          {
+            "lang": "Python",
+            "label": "requests",
+            "source": "import requests\n\nres = requests.put(\n    \"https://your-deployment.example.com/api/v1/briefs/schedule\",\n    headers={\"Authorization\": \"Bearer <access_token>\"},\n    json={\n        \"enabled\": True,\n        \"timeOfDay\": \"08:00\",\n        \"days\": [\n            1,\n            2,\n            3,\n            4,\n            5\n        ],\n        \"timeZone\": \"America/New_York\"\n    },\n)"
+          }
+        ]
+      }
+    },
     "/api/v1/assistant/instructions": {
       "get": {
         "operationId": "listAssistantInstructions",
@@ -44096,6 +44729,154 @@
             "lang": "Python",
             "label": "requests",
             "source": "import requests\n\nres = requests.post(\n    \"https://your-deployment.example.com/api/v1/briefs/<id>/decisions/<decisionId>/reply\",\n    headers={\"Authorization\": \"Bearer <access_token>\"},\n    json={\n        \"text\": \"Go with the second option.\",\n        \"choiceIndex\": 1\n    },\n)"
+          }
+        ]
+      }
+    },
+    "/api/v1/pending-decisions": {
+      "get": {
+        "operationId": "getPendingDecisionCount",
+        "summary": "Count decisions waiting on you",
+        "description": "The number of decisions waiting on you, for a badge or a lock-screen widget: the agent approvals still open in your notebooks plus the other decisions in your latest ready brief. Read-only and cheap; it composes nothing. Authenticate with a JWT access token of the signed-in user; only your own notebooks and briefs are counted.",
+        "tags": [
+          "AI"
+        ],
+        "security": [
+          {
+            "jwtAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The count.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/getPendingDecisionCountResponse200"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid JWT.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The account is suspended (`errorCode: account_suspended`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScopeForbiddenResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "405": {
+            "description": "The path does not serve this HTTP method.",
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Allow": {
+                "description": "The methods this path serves. GET implies HEAD.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "426": {
+            "description": "The request declared a client build (`X-Client-Name` + `X-Client-Version`) older than the minimum this API still serves for that client. Upgrade to `minimum_version` or later. Never sent to a request that omits either header.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UpgradeRequiredResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Per-user rate limit exceeded.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "x-codeSamples": [
+          {
+            "lang": "curl",
+            "label": "curl",
+            "source": "curl -s -X GET \"https://your-deployment.example.com/api/v1/pending-decisions\" \\\n  -H \"Authorization: Bearer <access_token>\""
+          },
+          {
+            "lang": "JavaScript",
+            "label": "fetch",
+            "source": "const res = await fetch(\"https://your-deployment.example.com/api/v1/pending-decisions\", {\n  method: \"GET\",\n  headers: {\n    \"Authorization\": \"Bearer <access_token>\",\n  },\n});"
+          },
+          {
+            "lang": "Python",
+            "label": "requests",
+            "source": "import requests\n\nres = requests.get(\n    \"https://your-deployment.example.com/api/v1/pending-decisions\",\n    headers={\"Authorization\": \"Bearer <access_token>\"},\n)"
           }
         ]
       }

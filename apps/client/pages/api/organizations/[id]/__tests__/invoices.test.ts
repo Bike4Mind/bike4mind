@@ -41,7 +41,7 @@ vi.mock('@bike4mind/server-utils/integrations/stripe/stripe', () => ({
   getStripe: () => ({ invoices: { list: mockRefs.invoicesList } }),
 }));
 
-// The gate (verifyOrgPermission + orgMemberHasPermission, manageBilling) runs for real against a stubbed repository, so these tests pin who the
+// The gate (verifyOrgPermission, manageBilling) runs for real against a stubbed repository, so these tests pin who the
 // route admits rather than asserting a mocked helper.
 vi.mock('@bike4mind/database/infra', () => ({
   organizationRepository: { findById: (...args: unknown[]) => mockRefs.orgFindById(...args) },
@@ -55,12 +55,16 @@ const ORG = '650000000000000000000abc';
 const OWNER = '650000000000000000000111';
 const APPOINTED_ADMIN = '650000000000000000000444';
 const MEMBER = '650000000000000000000333';
+const BILLING_MANAGER = '650000000000000000000555';
+const OUTSIDER = '650000000000000000000666';
+const MISSING_ORG = '650000000000000000000999';
 
 const org = {
   id: ORG,
   userId: OWNER,
   adminUserIds: [APPOINTED_ADMIN],
-  users: [{ userId: MEMBER }],
+  billingManagerUserIds: [BILLING_MANAGER],
+  users: [{ userId: MEMBER }, { userId: APPOINTED_ADMIN }, { userId: BILLING_MANAGER }],
   stripeCustomerId: 'cus_org',
 };
 
@@ -151,19 +155,40 @@ describe('GET /api/organizations/[id]/invoices', () => {
     expect(invoice).toMatchObject({ hostedInvoiceUrl: null, invoicePdf: null });
   });
 
-  it.each([
-    ['a platform admin', { id: MEMBER, isAdmin: true }],
-    ['an appointed admin', { id: APPOINTED_ADMIN, isAdmin: false }],
-    ['an ordinary member', { id: MEMBER, isAdmin: false }],
-  ])('404s %s without calling Stripe', async (_label, user) => {
-    await expect(call(user)).rejects.toMatchObject({
-      constructor: NotFoundError,
-      message: 'Organization not found',
+  describe('role matrix (manageBilling)', () => {
+    const ADMITTED = [
+      ['the owner', { id: OWNER, isAdmin: false }],
+      ['a billing manager', { id: BILLING_MANAGER, isAdmin: false }],
+      ['a platform admin who is not a member', { id: OUTSIDER, isAdmin: true }],
+    ] as const;
+    const DENIED = [
+      ['a plain member', { id: MEMBER, isAdmin: false }, ORG],
+      ['a manager', { id: APPOINTED_ADMIN, isAdmin: false }, ORG],
+      ['an outsider', { id: OUTSIDER, isAdmin: false }, ORG],
+      ['a nonexistent org', { id: OWNER, isAdmin: false }, MISSING_ORG],
+    ] as const;
+
+    it.each(ADMITTED)('admits %s', async (_label, user) => {
+      const res = await call(user);
+
+      expect(res._getStatusCode()).toBe(200);
+      expect(mockRefs.invoicesList).toHaveBeenCalledTimes(1);
     });
-    expect(mockRefs.invoicesList).not.toHaveBeenCalled();
+
+    it.each(DENIED)('404s %s with the same error and no Stripe call', async (_label, user, orgId) => {
+      mockRefs.orgFindById.mockImplementation(async (id: string) => (id === ORG ? org : null));
+
+      const missing = await call({ id: OWNER, isAdmin: false }, MISSING_ORG).catch((error: unknown) => error);
+      const denied = await call(user, orgId).catch((error: unknown) => error);
+
+      expect(denied).toBeInstanceOf(NotFoundError);
+      expect(denied).toMatchObject({ message: 'Organization not found' });
+      expect(denied).toEqual(missing);
+      expect(mockRefs.invoicesList).not.toHaveBeenCalled();
+    });
   });
 
-  it('404s a missing org identically to a non-owner', async () => {
+  it('404s a missing org', async () => {
     mockRefs.orgFindById.mockResolvedValue(null);
 
     await expect(call({ id: OWNER, isAdmin: false })).rejects.toMatchObject({

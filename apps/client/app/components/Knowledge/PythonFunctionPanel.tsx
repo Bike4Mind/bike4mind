@@ -5,10 +5,14 @@ import {
   Button,
   Checkbox,
   CircularProgress,
+  Divider,
   FormControl,
   FormHelperText,
   FormLabel,
   Input,
+  Modal,
+  ModalClose,
+  ModalDialog,
   Option,
   Select,
   Stack,
@@ -28,15 +32,38 @@ import {
   type FunctionContractProblem,
   type FunctionField,
   type FunctionObjectField,
+  type ICallableFunctionPublic,
 } from '@bike4mind/common';
+import { toast } from 'sonner';
+import {
+  callableFunctionErrorMessage,
+  useArtifactCallableFunction,
+  useDeleteCallableFunction,
+  useRepinCallableFunction,
+  useSetCallableFunctionEnabled,
+} from '@client/app/hooks/data/callableFunctions';
 import { usePyodide } from '@client/app/hooks/usePyodide';
 import { PYTHON_SCRIPT_BUSY } from '@client/app/utils/pyodideManager';
+import ProblemList, { dangerAlertSx } from './FunctionProblemList';
+import SaveFunctionDialog from './SaveFunctionDialog';
+
+/** Where saving this artifact as a tool would pin it, or why it cannot be saved yet. */
+export interface PythonFunctionSave {
+  /** Also read while the artifact is not in the database, so a tool whose artifact was deleted still shows. */
+  artifactId: string;
+  /** The artifact version the viewer shows. */
+  version: number;
+  /** Why the artifact cannot be saved as a tool right now; null when it can. */
+  blocked: string | null;
+}
 
 interface PythonFunctionPanelProps {
   code: string;
   packages: string[];
   /** True while Pyodide is loading or a script run is in flight. */
   disabled: boolean;
+  /** Null offers no save controls: the viewer is read only or the person does not own the artifact. */
+  save: PythonFunctionSave | null;
 }
 
 const DESCRIBE_DEBOUNCE_MS = 500;
@@ -45,7 +72,7 @@ const NO_CONTRACT_ERROR = `${FUNCTION_CONTRACT_GLOBAL} is not defined`;
 
 type Described =
   | { status: 'reading' }
-  | { status: 'ready'; contract: FunctionContract }
+  | { status: 'ready'; contract: FunctionContract; code: string }
   | { status: 'invalid'; problems: FunctionContractProblem[] }
   | { status: 'failed'; error: string; output: string };
 
@@ -190,34 +217,6 @@ function outputProblems(
   }
   return capFunctionProblems(problems);
 }
-
-// Matches the Output tab's error Alert in PythonArtifactViewer.
-const dangerAlertSx = {
-  bgcolor: 'danger.700',
-  color: 'white',
-  '& .MuiTypography-root': { color: 'white' },
-} as const;
-
-const ProblemList = ({ heading, problems }: { heading: string; problems: FunctionContractProblem[] }) => (
-  <Alert color="danger" variant="solid" data-testid="python-function-problems" sx={dangerAlertSx}>
-    <Box sx={{ minWidth: 0 }}>
-      <Typography level="title-sm">{heading}</Typography>
-      <Box component="ul" sx={{ my: 0.5, pl: 3 }}>
-        {capFunctionProblems(problems).map(problem => (
-          <Typography component="li" level="body-sm" key={`${problem.path}:${problem.message}`}>
-            {problem.path ? (
-              <>
-                <code>{problem.path}</code>: {problem.message}
-              </>
-            ) : (
-              problem.message
-            )}
-          </Typography>
-        ))}
-      </Box>
-    </Box>
-  </Alert>
-);
 
 const codeBlockSx = {
   backgroundColor: 'background.level1',
@@ -411,11 +410,197 @@ const ResultTable = ({ outputs, value }: { outputs: FunctionObjectField; value: 
   </Box>
 );
 
+function savedStatusLines(saved: ICallableFunctionPublic): string[] {
+  if (saved.status === 'source_deleted') return ['The artifact this tool was saved from was deleted.'];
+  const pinned =
+    saved.updateAvailable && saved.latestVersion !== null
+      ? `A newer version is available. This tool is pinned to version ${saved.pin.version}, and the artifact is at version ${saved.latestVersion}.`
+      : `Saved as a draft tool, pinned to version ${saved.pin.version}.`;
+  return saved.enabled ? [pinned] : ['This tool is turned off.', pinned];
+}
+
+const failureToast = (title: string) => (error: unknown) => {
+  const reason = callableFunctionErrorMessage(error, '');
+  toast.error(title, reason ? { description: reason } : undefined);
+};
+
+/** Make this a tool, or the saved tool's status with Update, Turn off or Turn on, and Delete. */
+function FunctionSaveSection({ save, contract }: { save: PythonFunctionSave; contract: FunctionContract }) {
+  const { data: saved, isLoading } = useArtifactCallableFunction(save.artifactId, save.version);
+  const repin = useRepinCallableFunction();
+  const setEnabled = useSetCallableFunctionEnabled();
+  const remove = useDeleteCallableFunction();
+  const [dialogOpen, setDialogOpen] = useState(false);
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
+  const target = save.blocked === null ? save : null;
+  // A save, delete, or update replaces the button that started it, so focus would fall back to the page body.
+  const stateRef = useRef<HTMLDivElement>(null);
+  const [focusWhen, setFocusWhen] = useState<'saved' | 'unsaved' | 'repinned' | null>(null);
+
+  useEffect(() => {
+    if (focusWhen === null || isLoading || dialogOpen || confirmingDelete) return;
+    const landed =
+      focusWhen === 'unsaved' ? !saved : focusWhen === 'saved' ? Boolean(saved) : saved?.updateAvailable === false;
+    if (!landed) return;
+    stateRef.current?.querySelector('button')?.focus();
+    setFocusWhen(null);
+  }, [focusWhen, isLoading, dialogOpen, confirmingDelete, saved]);
+
+  const renderState = () => {
+    if (isLoading) return null;
+    if (!saved) {
+      if (!target) {
+        return (
+          <Typography level="body-xs" sx={{ color: 'text.secondary' }} data-testid="python-function-save-blocked">
+            {save.blocked}
+          </Typography>
+        );
+      }
+      return (
+        <Box>
+          <Button
+            size="sm"
+            variant="outlined"
+            color="neutral"
+            data-testid="python-function-save-btn"
+            onClick={() => setDialogOpen(true)}
+          >
+            Make this a tool
+          </Button>
+        </Box>
+      );
+    }
+    return (
+      <Stack spacing={1}>
+        <Box data-testid="python-function-saved-status">
+          {savedStatusLines(saved).map(line => (
+            <Typography level="body-sm" key={line}>
+              {line}
+            </Typography>
+          ))}
+        </Box>
+        <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
+          {target && saved.updateAvailable && saved.latestVersion !== null && (
+            <Button
+              size="sm"
+              variant="outlined"
+              color="primary"
+              loading={repin.isPending}
+              data-testid="python-function-repin-btn"
+              onClick={() =>
+                repin.mutate(
+                  { id: saved.id, expectedVersion: target.version, contract },
+                  { onSuccess: () => setFocusWhen('repinned'), onError: failureToast('Could not update the tool.') }
+                )
+              }
+            >
+              Update to version {saved.latestVersion}
+            </Button>
+          )}
+          {saved.status !== 'source_deleted' && (
+            <Button
+              size="sm"
+              variant="outlined"
+              color="neutral"
+              loading={setEnabled.isPending}
+              data-testid="python-function-enable-btn"
+              onClick={() =>
+                setEnabled.mutate(
+                  { id: saved.id, enabled: !saved.enabled },
+                  {
+                    onError: failureToast(
+                      saved.enabled ? 'Could not turn off the tool.' : 'Could not turn on the tool.'
+                    ),
+                  }
+                )
+              }
+            >
+              {saved.enabled ? 'Turn off' : 'Turn on'}
+            </Button>
+          )}
+          <Button
+            size="sm"
+            variant="outlined"
+            color="danger"
+            data-testid="python-function-delete-btn"
+            onClick={() => setConfirmingDelete(true)}
+          >
+            Delete
+          </Button>
+        </Stack>
+      </Stack>
+    );
+  };
+
+  return (
+    <>
+      <Box ref={stateRef}>{renderState()}</Box>
+      {/* Mounted apart from the state above, which turns into the saved status as soon as the save lands. */}
+      {target && dialogOpen && (
+        <SaveFunctionDialog
+          open
+          onClose={didSave => {
+            setDialogOpen(false);
+            if (didSave) setFocusWhen('saved');
+          }}
+          artifactId={target.artifactId}
+          version={target.version}
+          contract={contract}
+        />
+      )}
+      {saved && (
+        <Modal open={confirmingDelete} onClose={() => !remove.isPending && setConfirmingDelete(false)}>
+          <ModalDialog
+            variant="outlined"
+            role="alertdialog"
+            data-testid="python-function-delete-dialog"
+            sx={{ maxWidth: 500 }}
+          >
+            <ModalClose disabled={remove.isPending} />
+            <Typography level="h4">Delete this tool?</Typography>
+            <Divider sx={{ my: 2 }} />
+            <Typography level="body-md">
+              This deletes the tool <code>{saved.slug}</code>. The artifact is not changed.
+            </Typography>
+            <Stack direction="row" spacing={1} sx={{ mt: 3, justifyContent: 'flex-end' }}>
+              <Button
+                variant="outlined"
+                color="neutral"
+                disabled={remove.isPending}
+                data-testid="python-function-delete-cancel-btn"
+                onClick={() => setConfirmingDelete(false)}
+              >
+                Cancel
+              </Button>
+              <Button
+                variant="solid"
+                color="danger"
+                loading={remove.isPending}
+                data-testid="python-function-delete-confirm-btn"
+                onClick={() =>
+                  remove.mutate(saved.id, {
+                    onSuccess: () => setFocusWhen('unsaved'),
+                    onError: failureToast('Could not delete the tool.'),
+                    onSettled: () => setConfirmingDelete(false),
+                  })
+                }
+              >
+                Delete
+              </Button>
+            </Stack>
+          </ModalDialog>
+        </Modal>
+      )}
+    </>
+  );
+}
+
 /**
  * The Python viewer's Function tab: reads the FUNCTION contract in the sandbox, offers a typed form, and calls
- * `run`. The contract and every returned value are checked here against the contract; nothing is saved.
+ * `run`. The contract and every returned value are checked here against the contract. The owner can save the
+ * artifact's current version as a draft tool.
  */
-const PythonFunctionPanel: React.FC<PythonFunctionPanelProps> = ({ code, packages, disabled }) => {
+const PythonFunctionPanel: React.FC<PythonFunctionPanelProps> = ({ code, packages, disabled, save }) => {
   const { callFunction } = usePyodide();
   const [described, setDescribed] = useState<Described>({ status: 'reading' });
   const [values, setValues] = useState<FormValues>({});
@@ -443,7 +628,7 @@ const PythonFunctionPanel: React.FC<PythonFunctionPanelProps> = ({ code, package
           return;
         }
         setValues(previous => initialValues(parsed.contract.inputs, previous));
-        setDescribed({ status: 'ready', contract: parsed.contract });
+        setDescribed({ status: 'ready', contract: parsed.contract, code: source });
       } catch (error) {
         if (request !== describeRequest.current) return;
         // The sandbox was busy or failed to start; read again once it is free.
@@ -530,6 +715,13 @@ const PythonFunctionPanel: React.FC<PythonFunctionPanelProps> = ({ code, package
               </Typography>
               <Typography level="body-sm">{contract.description}</Typography>
             </Box>
+            {/* The contract belongs to the code it was read from; saving waits until the new code is read. */}
+            {save && described.code === code && (
+              <>
+                <FunctionSaveSection save={save} contract={contract} />
+                <Divider />
+              </>
+            )}
 
             <Box>
               <Typography level="title-sm" sx={{ mb: 0.5 }}>
@@ -577,7 +769,7 @@ const PythonFunctionPanel: React.FC<PythonFunctionPanelProps> = ({ code, package
                 Call function
               </Button>
               <Typography level="body-xs" sx={{ color: 'text.secondary' }}>
-                Calls run in your browser. Nothing is saved.
+                Calls run in your browser. Call results are not saved.
               </Typography>
             </Stack>
 

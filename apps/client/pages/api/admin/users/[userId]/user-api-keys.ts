@@ -32,6 +32,8 @@ function serializeKey(key: IUserApiKeyDocument): IUserApiKey {
  * whose counter sits at its limit is wedged; the per-key reset endpoint
  * (/api/admin/user-api-keys/[id]/reset-rate-limit) clears it.
  *
+ * moderationExceptions holds the exception of each key that has one (withheld from the key docs themselves).
+ *
  * requests is each key's request count over the last 24 hours and 7 days from the usage log (one
  * aggregation; a key with no requests is absent), and access explains whether the paid-subscription
  * switch lets this user mint and use personal keys.
@@ -58,18 +60,29 @@ const handler = adminApi({ requiredScopes: [ApiKeyScope.ADMIN], adminPermissions
       { includeDisabled: true }
     );
 
-    const [usageEntries, requests, access] = await Promise.all([
+    const [usageEntries, exceptionEntries, requests, access] = await Promise.all([
       Promise.all(apiKeys.map(async key => [key.id, await getApiKeyRateLimitUsage(key.id)] as const)),
+      Promise.all(
+        apiKeys.map(async key => [key.id, await userApiKeyRepository.findModerationException(key.id)] as const)
+      ),
       apiKeyUsageLogRepository.countRequestsByKeyWindows(targetUser.id, new Date()),
       describeApiKeyAccess(targetUser),
     ]);
     const liveUsage: Record<string, RateLimitUsage> = Object.fromEntries(usageEntries);
+    const moderationExceptions = Object.fromEntries(
+      exceptionEntries.flatMap(([id, found]) => {
+        if (!found) return [];
+        const { categories, reason, setAt } = found.moderationException;
+        return [[id, { categories, reason, setAt }]];
+      })
+    );
 
     return respond(res, adminUserApiKeysResponseSchema, {
       apiKeys: apiKeys.map(serializeKey),
       liveUsage,
       requests,
       access,
+      moderationExceptions,
     });
   })
 );

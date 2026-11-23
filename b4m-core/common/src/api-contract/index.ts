@@ -26,7 +26,10 @@ export {
   composeBriefContract,
   listBriefsContract,
   getBriefContract,
+  getBriefScheduleContract,
+  putBriefScheduleContract,
   replyToBriefDecisionContract,
+  getPendingDecisionCountContract,
 } from './contracts/briefs.contract';
 export { registerPushTokenContract, unregisterPushTokenContract } from './contracts/pushTokens.contract';
 export { listHandoffDevicesContract, sendSessionHandoffContract } from './contracts/sessionHandoff.contract';

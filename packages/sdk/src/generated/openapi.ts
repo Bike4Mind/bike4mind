@@ -486,6 +486,30 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  '/api/v1/briefs/schedule': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * Get your brief schedule
+     * @description Reads when scheduled briefs are composed for you and when the next one is due. Authenticate with a JWT access token of the signed-in user. The schedule is the caller's own; scheduled briefs are composed only when there was activity since the last one.
+     */
+    get: operations['getBriefSchedule'];
+    /**
+     * Set your brief schedule
+     * @description Replaces your brief schedule and returns it with the next due time. `timeOfDay` and `days` are read in `timeZone`, so a time skipped by a daylight-saving change runs at the shifted time and a repeated one runs once. Authenticate with a JWT access token of the signed-in user. The schedule is the caller's own; scheduled briefs are composed only when there was activity since the last one.
+     */
+    put: operations['putBriefSchedule'];
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   '/api/v1/assistant/instructions': {
     parameters: {
       query?: never;
@@ -544,6 +568,26 @@ export interface paths {
      * @description Answers a decision item that carries a `question`: the reply is sent to the agent as your next message in that notebook, starting an agent run. A question can be answered from the brief once; a second reply, or one after the conversation moved on (`state` other than `open`), is `409` with `errorCode: "question_closed"`. A decision that is an approval is `404` here; answer it through the pending-actions endpoints. Authenticate with a JWT access token of the signed-in user. A brief is readable only by the user it was composed for; anyone else gets `404`, exactly like a missing brief. Nothing in a push notification authorizes this call.
      */
     post: operations['replyToBriefDecision'];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/v1/pending-decisions': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * Count decisions waiting on you
+     * @description The number of decisions waiting on you, for a badge or a lock-screen widget: the agent approvals still open in your notebooks plus the other decisions in your latest ready brief. Read-only and cheap; it composes nothing. Authenticate with a JWT access token of the signed-in user; only your own notebooks and briefs are counted.
+     */
+    get: operations['getPendingDecisionCount'];
+    put?: never;
+    post?: never;
     delete?: never;
     options?: never;
     head?: never;
@@ -4639,6 +4683,27 @@ export interface components {
       jobId?: string;
       message?: string;
     };
+    synthesizeSpeechResponse503: {
+      error: string;
+      request_id?: string;
+      /**
+       * @deprecated
+       * @description Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this.
+       */
+      name?: string;
+      /** @enum {string} */
+      provider?: 'openai' | 'elevenlabs';
+      /** @enum {string} */
+      errorCode?:
+        | 'insufficient_credits'
+        | 'provider_not_configured'
+        | 'provider_rejected'
+        | 'end_user_id_not_allowed'
+        | 'invalid_end_user_id'
+        | 'request_timeout';
+      jobId?: string;
+      message?: string;
+    };
     synthesizeSpeechResponse504: {
       error: string;
       request_id?: string;
@@ -5944,6 +6009,60 @@ export interface components {
         };
       }[];
     };
+    getBriefScheduleResponse200: {
+      /** @description Null until a schedule has been saved. */
+      schedule: {
+        /** @description Whether scheduled briefs are composed. Disabling keeps the rest of the schedule. */
+        enabled: boolean;
+        /** @description Local wall-clock time in `timeZone`, 24-hour `HH:mm`. */
+        timeOfDay: string;
+        /** @description Local weekdays the brief is composed on, 0 = Sunday through 6 = Saturday. */
+        days: number[];
+        /** @description IANA time zone name, e.g. `America/New_York`. Send the device zone on every save. */
+        timeZone: string;
+      } | null;
+      /** @description ISO 8601 instant of the next scheduled brief; null when the schedule is off or unset. */
+      nextBriefAt: string | null;
+    };
+    putBriefScheduleResponse200: {
+      /** @description Null until a schedule has been saved. */
+      schedule: {
+        /** @description Whether scheduled briefs are composed. Disabling keeps the rest of the schedule. */
+        enabled: boolean;
+        /** @description Local wall-clock time in `timeZone`, 24-hour `HH:mm`. */
+        timeOfDay: string;
+        /** @description Local weekdays the brief is composed on, 0 = Sunday through 6 = Saturday. */
+        days: number[];
+        /** @description IANA time zone name, e.g. `America/New_York`. Send the device zone on every save. */
+        timeZone: string;
+      } | null;
+      /** @description ISO 8601 instant of the next scheduled brief; null when the schedule is off or unset. */
+      nextBriefAt: string | null;
+    };
+    /**
+     * @example {
+     *       "enabled": true,
+     *       "timeOfDay": "08:00",
+     *       "days": [
+     *         1,
+     *         2,
+     *         3,
+     *         4,
+     *         5
+     *       ],
+     *       "timeZone": "America/New_York"
+     *     }
+     */
+    putBriefScheduleRequest: {
+      /** @description Whether scheduled briefs are composed. Disabling keeps the rest of the schedule. */
+      enabled: boolean;
+      /** @description Local wall-clock time in `timeZone`, 24-hour `HH:mm`. */
+      timeOfDay: string;
+      /** @description Local weekdays the brief is composed on, 0 = Sunday through 6 = Saturday. */
+      days: number[];
+      /** @description IANA time zone name, e.g. `America/New_York`. Send the device zone on every save. */
+      timeZone: string;
+    };
     listAssistantInstructionsResponse200: {
       /** @description Oldest first. */
       instructions: {
@@ -5990,6 +6109,16 @@ export interface components {
       text: string;
       /** @description Index into the question `options` when the reply picks one of them; recorded on the question. */
       choiceIndex?: number;
+    };
+    getPendingDecisionCountResponse200: {
+      /** @description Decisions waiting on you: `approvals` plus `briefDecisions`. Nothing is counted twice. */
+      count: number;
+      /** @description Agent approvals still open in your notebooks: raised within the last 15 minutes and not yet answered. */
+      approvals: number;
+      /** @description Decisions in your latest ready brief that are not agent approvals. An approval decision in the brief is counted under `approvals` while it is open, and not at all once it was answered or lapsed. */
+      briefDecisions: number;
+      /** @description The latest ready brief `briefDecisions` comes from; null when there is none. */
+      briefId: string | null;
     };
     /**
      * @example {
@@ -17286,6 +17415,29 @@ export interface operations {
           'application/json': components['schemas']['synthesizeSpeechResponse502'];
         };
       };
+      /** @description Every candidate provider is out of quota, so speech is temporarily unavailable. */
+      503: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['synthesizeSpeechResponse503'];
+        };
+      };
       /** @description The speech took longer than this request can wait. Tagged `errorCode: "request_timeout"`. Two cases. (1) It would not be saved to the file browser (a `preview` call, or a storage quota with no room for it), so it could never be retrieved: the generation is cancelled and its credits returned, unless the provider had already started it, in which case that one finishes and is billed, and the response carries `jobId` (also `X-B4M-Generation-Job-Id`) and a `message`. Retrying generates a new clip. (2) It is being saved to the file browser but the request did not send `Prefer: respond-async`: the generation is NOT cancelled and carries on, the audio lands in the file browser when it finishes, and it is billed only if it succeeds. Do not retry, which would generate and bill a second clip. The body carries `jobId`, also sent as `X-B4M-Generation-Job-Id`. */
       504: {
         headers: {
@@ -17627,7 +17779,7 @@ export interface operations {
           'application/json': components['schemas']['ErrorResponse'];
         };
       };
-      /** @description No provider API key is configured for this deployment. */
+      /** @description The provider is unavailable: no API key is configured for this deployment, or the provider account is out of quota. Reserved credits are refunded. */
       503: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
@@ -17972,7 +18124,7 @@ export interface operations {
           'application/json': components['schemas']['generateSoundEffectResponse502'];
         };
       };
-      /** @description No provider API key is configured for this deployment. */
+      /** @description The provider is unavailable: no API key is configured for this deployment, or the provider account is out of quota. Reserved credits are refunded. */
       503: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
@@ -18818,6 +18970,190 @@ export interface operations {
       };
     };
   };
+  getBriefSchedule: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Your brief schedule. */
+      200: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['getBriefScheduleResponse200'];
+        };
+      };
+      /** @description Missing or invalid JWT. */
+      401: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The account is suspended (`errorCode: account_suspended`). */
+      403: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ScopeForbiddenResponse'];
+        };
+      };
+      /** @description The path does not serve this HTTP method. */
+      405: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description The methods this path serves. GET implies HEAD. */
+          Allow?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The request declared a client build (`X-Client-Name` + `X-Client-Version`) older than the minimum this API still serves for that client. Upgrade to `minimum_version` or later. Never sent to a request that omits either header. */
+      426: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['UpgradeRequiredResponse'];
+        };
+      };
+      /** @description Per-user rate limit exceeded. */
+      429: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+    };
+  };
+  putBriefSchedule: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['putBriefScheduleRequest'];
+      };
+    };
+    responses: {
+      /** @description The saved schedule. */
+      200: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['putBriefScheduleResponse200'];
+        };
+      };
+      /** @description Malformed JSON request body. */
+      400: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Missing or invalid JWT. */
+      401: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The account is suspended (`errorCode: account_suspended`). */
+      403: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ScopeForbiddenResponse'];
+        };
+      };
+      /** @description The path does not serve this HTTP method. */
+      405: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description The methods this path serves. GET implies HEAD. */
+          Allow?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Request failed validation. */
+      422: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The request declared a client build (`X-Client-Name` + `X-Client-Version`) older than the minimum this API still serves for that client. Upgrade to `minimum_version` or later. Never sent to a request that omits either header. */
+      426: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['UpgradeRequiredResponse'];
+        };
+      };
+      /** @description Per-user rate limit exceeded. */
+      429: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+    };
+  };
   listAssistantInstructions: {
     parameters: {
       query?: never;
@@ -19236,6 +19572,85 @@ export interface operations {
       };
       /** @description The agent run could not be started. When the dispatch could not be confirmed either way the question stays answered so the reply can never run twice; open the conversation to see whether it went through. Otherwise nothing was sent and the question stays open for another reply. */
       502: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+    };
+  };
+  getPendingDecisionCount: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description The count. */
+      200: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['getPendingDecisionCountResponse200'];
+        };
+      };
+      /** @description Missing or invalid JWT. */
+      401: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The account is suspended (`errorCode: account_suspended`). */
+      403: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ScopeForbiddenResponse'];
+        };
+      };
+      /** @description The path does not serve this HTTP method. */
+      405: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description The methods this path serves. GET implies HEAD. */
+          Allow?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The request declared a client build (`X-Client-Name` + `X-Client-Version`) older than the minimum this API still serves for that client. Upgrade to `minimum_version` or later. Never sent to a request that omits either header. */
+      426: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['UpgradeRequiredResponse'];
+        };
+      };
+      /** @description Per-user rate limit exceeded. */
+      429: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
           'X-Request-ID'?: string;

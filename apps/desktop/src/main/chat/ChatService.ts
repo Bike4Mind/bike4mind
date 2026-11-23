@@ -1077,6 +1077,8 @@ export class ChatService {
    * built from the store once per scope, for decisions asked before a restart.
    */
   private readonly decisionIndex = new Map<string, PendingTaskDecision & { parentId: string; scope: string | null }>();
+  /** Worker tasks parked on the user (a decision, an upgrade approval or a budget pause), by scope. */
+  private readonly waitingTasks = new Map<string, string | null>();
   private decisionIndexLoad: TaskDecisionIndexLoad | null = null;
 
   /**
@@ -1312,7 +1314,7 @@ export class ChatService {
   }
 
   childArchiveStatus(session: Pick<ChatSessionSummary, 'id' | 'workerTask'>): 'finished' | 'running' | 'waiting' {
-    const status = this.deps.activity?.statusOf(session.id);
+    const status = this.deps.activity?.runtimeStatusOf(session.id);
     if (status === 'needs-action' || pendingDecisionOf(session.workerTask)) return 'waiting';
     if (
       status === 'processing' ||
@@ -2213,9 +2215,15 @@ export class ChatService {
   /** Index (or drop) the decision `session` waits on; a no-op when nothing changed. */
   private syncTaskDecision(session: ChatSessionSummary | null, scope: string | null): void {
     if (!session || this.deps.store.scopeKey() !== scope) return;
+    const status = session.workerTask?.state.status;
     const decision = pendingDecisionOf(session.workerTask);
     const known = this.decisionIndex.get(session.id);
     const parentId = session.origin?.parentSessionId;
+    this.setTaskWaiting(
+      session.id,
+      (!!decision && !!parentId) || status === 'escalation-requested' || status === 'budget-paused',
+      scope
+    );
     if (decision && parentId) {
       const title = session.title.trim() || 'Untitled agent';
       if (known?.decision.id === decision.id && known.title === title) return;
@@ -2227,13 +2235,18 @@ export class ChatService {
         decision,
         scope,
       });
-      if (!known) this.deps.activity?.decisionChanged(session.id, true);
     } else {
       if (!known) return;
       this.decisionIndex.delete(session.id);
-      this.deps.activity?.decisionChanged(session.id, false);
     }
     this.announceTaskDecisions();
+  }
+
+  private setTaskWaiting(sessionId: string, waiting: boolean, scope: string | null): void {
+    if (waiting === this.waitingTasks.has(sessionId)) return;
+    if (waiting) this.waitingTasks.set(sessionId, scope);
+    else this.waitingTasks.delete(sessionId);
+    this.deps.activity?.decisionChanged(sessionId, waiting);
   }
 
   private currentTaskDecisions(): PendingTaskDecision[] {
@@ -2257,7 +2270,9 @@ export class ChatService {
       for (const [sessionId, entry] of this.decisionIndex) {
         if (entry.scope === scope) continue;
         this.decisionIndex.delete(sessionId);
-        this.deps.activity?.decisionChanged(sessionId, false);
+      }
+      for (const [sessionId, entryScope] of this.waitingTasks) {
+        if (entryScope !== scope) this.setTaskWaiting(sessionId, false, entryScope);
       }
       // Install before reading: task writes/deletes can finish while list captures its snapshots.
       const load: TaskDecisionIndexLoad = { scope, touched: new Set<string>(), ready: Promise.resolve() };
@@ -2764,6 +2779,7 @@ export class ChatService {
    * next event to extend, and shows the prompt alone until the turn ends.
    */
   async getSession(sessionId: string, viewed = false): Promise<ChatSession | null> {
+    if (viewed) this.deps.activity?.viewed(sessionId);
     let session = await this.deps.store.get(sessionId);
     const task = session?.workerTask;
     if (viewed && task && !task.attentionViewed && isUpdateOnlyTask(task.state)) {
@@ -3035,6 +3051,7 @@ export class ChatService {
     // Once the serialized delete has finished, no later append can resurrect the session.
     this.deps.history?.removeSession(sessionId, historyScope);
     this.deps.activity?.forget(sessionId);
+    this.waitingTasks.delete(sessionId);
     if (this.decisionIndex.delete(sessionId)) this.announceTaskDecisions();
     this.deps.queue?.forget(sessionId);
     await this.deps.sidebarSections?.forgetSession(sessionId).catch((err: unknown) => {
@@ -3919,7 +3936,7 @@ export class ChatService {
         this.active.delete(sessionId);
         this.autoFixTurns.delete(sessionId);
         this.attendedTurns.delete(sessionId);
-        this.deps.activity?.replyEnded(sessionId);
+        this.deps.activity?.replyEnded(sessionId, outcome === 'completed' && finalReply.content.trim().length > 0);
         // All three need the session to be idle, and this is the moment it becomes so: a
         // spawned run gives its concurrency slot back and reports to its parent, and a parent
         // that was mid-turn takes delivery of anything that finished while it was busy.
@@ -6719,7 +6736,7 @@ export class ChatService {
       agent =>
         this.hasTurnInFlight(agent.id) ||
         this.launching.has(agent.id) ||
-        (this.deps.activity?.statusOf(agent.id) ?? 'done') !== 'done'
+        (this.deps.activity?.runtimeStatusOf(agent.id) ?? 'done') !== 'done'
     );
     if (working.length > 0) {
       reasons.push(`Still working or waiting on approval: ${working.map(agent => `"${agent.title}"`).join(', ')}.`);
@@ -6753,7 +6770,7 @@ export class ChatService {
       updatedAt: entry.updatedAt,
       archived: entry.archived === true,
       ...(entry.origin ? { spawnedBy: entry.origin.parentSessionId } : {}),
-      status: this.deps.activity?.statusOf(entry.id) ?? 'done',
+      status: this.deps.activity?.runtimeStatusOf(entry.id) ?? 'done',
       ...(entry.project ? { project: projectName(entry) } : {}),
     };
   }
@@ -7885,6 +7902,7 @@ export class ChatService {
             approvalDetail: [asked.prompt.detail, ...unshownStops, ...(outsideReason ? [outsideReason] : [])].join(
               '\n\n'
             ),
+            ...(prompt.summary ? { approvalDescription: prompt.summary } : {}),
             ...(approvalReasons.length > 0 ? { approvalReasons } : {}),
             ...(asked.parts ? { approvalParts: asked.parts } : {}),
             ...(prompt.diff ? { approvalDiff: prompt.diff } : {}),

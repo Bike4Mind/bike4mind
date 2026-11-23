@@ -189,6 +189,12 @@ export interface ChatToolCall {
   /** What the user is being asked to allow, ready to display. Set with `approvalId`. */
   approvalDetail?: string;
   /**
+   * Set with `approvalId` on a shell call the model described: its own words on what the command
+   * does. Unchecked, so a surface shows it only next to `approvalDetail`, never in its place, and
+   * nothing decides on it (see isQuickApproval in watch.ts).
+   */
+  approvalDescription?: string;
+  /**
    * Set with `approvalId` on a tool whose effect cannot be undone. The card must not offer
    * "always in this chat" for one of these, and main refuses to honour a standing approval
    * against it however the user answered an earlier identical call.
@@ -1697,6 +1703,8 @@ export type ChatSessionStatus = 'processing' | 'needs-action' | 'done';
 export interface ChatSessionStatusEvent {
   sessionId: string;
   status: ChatSessionStatus;
+  /** Attention for a finished reply, not a turn waiting on an answer. */
+  unreadReply?: boolean;
   /** A 'processing' session that is still being prepared, not yet replying: the step it is on. */
   preparing?: SessionSetupStep;
 }

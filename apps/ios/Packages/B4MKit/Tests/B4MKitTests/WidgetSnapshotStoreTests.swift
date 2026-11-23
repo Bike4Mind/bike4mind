@@ -19,7 +19,16 @@ final class WidgetSnapshotStoreTests: XCTestCase {
         count: 2, top: .init(sessionID: "s1", title: "Metrics", status: "running"), observedAt: referenceDate),
       credits: .init(balance: 1234.5, observedAt: referenceDate),
       latestGeneration: .init(
-        mediaID: "m1", title: "Lighthouse", createdAt: referenceDate, thumbnailFileName: "m1.img"))
+        mediaID: "m1", title: "Lighthouse", createdAt: referenceDate, thumbnailFileName: "m1.img"),
+      pendingDecisions: .init(approvals: 1, briefDecisions: 2, observedAt: referenceDate))
+  }
+
+  func testASnapshotWrittenBeforePendingDecisionsStillLoads() throws {
+    let store = FileWidgetSnapshotStore(directory: directory)
+    var older = fullSnapshot()
+    older.pendingDecisions = nil
+    try store.save(older)
+    XCTAssertEqual(store.load(), older)
   }
 
   func testSnapshotRoundTripsThroughTheFileStore() throws {

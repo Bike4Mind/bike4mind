@@ -8,6 +8,7 @@ struct Bike4MindWidgets: WidgetBundle {
     RunningAgentsWidget()
     CreditsWidget()
     LatestGenerationWidget()
+    PendingDecisionsWidget()
     QuestLiveActivity()
   }
 }
