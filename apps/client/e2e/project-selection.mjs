@@ -34,6 +34,9 @@ const isDependency = name => name === 'setup-core' || name === 'warmup' ||
   (name.startsWith('setup-') && SUITES.includes(name.slice(6)));
 
 function matches(project, file) {
+  if (project.testDir || project.testIgnore || project.grep || project.grepInvert) {
+    throw new Error(`Unresolvable project filtering for ${project.name}`);
+  }
   const patterns = Array.isArray(project.testMatch) ? project.testMatch : [project.testMatch];
   if (!patterns.length || patterns.some(pattern => !(pattern instanceof RegExp))) {
     throw new Error(`Unresolvable testMatch for ${project.name}`);
@@ -97,7 +100,7 @@ export function classificationErrors(projects, files) {
   return [...new Set(errors)];
 }
 
-export function selectProjects({ projects, files, changedPaths, full = false, errors = [] }) {
+export function selectProjects({ projects, files, changedPaths, full = false, errors = /** @type {string[]} */ ([]) }) {
   const all = eligibleProjects(projects);
   const fallback = reason => ({ projects: all, mode: 'full', reason });
   if (full) return fallback('e2e:full');

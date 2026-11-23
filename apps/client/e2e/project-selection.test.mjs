@@ -77,6 +77,7 @@ test('unclassified projects, uncovered specs and unresolvable matching widen sel
     { projects: [...projects, { name: 'new-suite', testMatch: /new\.spec\.ts$/ }] },
     { files: [...files, '/e2e/new.spec.ts'] },
     { projects: projects.map(project => project.name === 'teams' ? { ...project, testMatch: '**/*.ts' } : project) },
+    { projects: projects.map(project => project.name === 'teams' ? { ...project, testDir: '/other' } : project) },
     { projects: projects.map(project => project.name === 'teams' ? { ...project, dependencies: ['missing'] } : project) },
   ]) {
     const selection = select({ changedPaths: ['apps/client/e2e/teams.spec.ts'], ...changes });

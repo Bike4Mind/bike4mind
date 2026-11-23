@@ -94,7 +94,7 @@ jobs:
 
   preview:
     needs: [prepare-preview, select-preview]
-    if: needs.prepare-preview.outputs.ready == 'true'
+    if: always() && !cancelled() && needs.prepare-preview.outputs.ready == 'true'
     permissions:
       contents: read
       pull-requests: read

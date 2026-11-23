@@ -80,6 +80,7 @@ test('preview workflows preserve caps, immutable checkout and full scheduled cal
   assert.match(core, /JOB_RESULT: \$\{\{ needs.preview.result \}\}/);
   assert.match(core, /checkout_ref: \$\{\{ needs.prepare-preview.outputs.head_sha \}\}/);
   assert.match(core, /stamp_promotable: false/);
+  assert.match(core, /preview:\n\s+needs: \[prepare-preview, select-preview\]\n\s+if: always\(\) && !cancelled\(\)/);
   assert.doesNotMatch(core, /--no-deps/);
   assert.match(read('e2e-on-label.yml'), /uses: \.\/\.github\/workflows\/e2e-core.yml/);
   assert.match(read('e2e-manual.yml'), /schedule:/);
