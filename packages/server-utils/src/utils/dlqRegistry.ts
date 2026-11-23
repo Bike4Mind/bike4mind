@@ -934,7 +934,7 @@ const resolvers: DlqResolvers = {
 // infra/queues.ts partitions the same specs against the same reservedQueueNames, so the
 // registry lists exactly the pairs that deploy. Registers nothing when codegen could not read
 // the core names, or read names this file's DLQ_REGISTRY contradicts (a stale generated file).
-function contributedDescriptors(): DlqDescriptor[] {
+function contributedDescriptors(): (DlqDescriptor & Partial<DlqQueueHelp>)[] {
   const specs = generatedInfraResources.contributedInfraResources.queues;
   if (specs.length === 0) return [];
   const reserved = reservedQueueNames(generatedInfraResources);
@@ -958,11 +958,16 @@ function contributedDescriptors(): DlqDescriptor[] {
   }
   const result = partitionContributedQueues(specs, reserved);
   for (const line of describeDroppedContributions('contributed queue', result)) Logger.warn(`[dlqRegistry] ${line}`);
-  return result.registered.map(({ label, displayName, application, name }) => ({
+  return result.registered.map(({ label, displayName, application, name, description, replay, replayNote, owner }) => ({
     label,
     displayName,
     application,
     sourceQueue: name,
+    // Only declared help keys, so an entry without help stays exactly as it was.
+    ...(description === undefined ? {} : { description }),
+    ...(replay === undefined ? {} : { replay }),
+    ...(replayNote === undefined ? {} : { replayNote }),
+    ...(owner === undefined ? {} : { owner }),
   }));
 }
 

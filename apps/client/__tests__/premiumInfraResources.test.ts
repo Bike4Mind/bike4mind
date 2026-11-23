@@ -84,6 +84,31 @@ describe('infra resource glue', () => {
     expect(infra).not.toContain('evil');
   });
 
+  it('copies the DLQ visibility timeout and operator help of a queue pair', () => {
+    const help = {
+      dlqVisibilityTimeout: '15 minutes',
+      description: 'Runs the example job.',
+      replay: 'side-effects',
+      replayNote: 'A replay can send the notice again.',
+      owner: 'Example',
+    };
+    writeOverlay({ queues: [{ ...QUEUE, ...help }] });
+    const result = runCodegen();
+    expect(result.status, result.stderr).toBe(0);
+    const [infra, runtime] = readTargets();
+    expect(infra).toBe(runtime);
+    for (const [field, value] of Object.entries(help)) expect(infra).toContain(`"${field}": "${value}"`);
+  });
+
+  it('adds no new keys to a queue pair that declares none of the optional fields', () => {
+    writeOverlay({ queues: [QUEUE] });
+    expect(runCodegen().status).toBe(0);
+    const infra = readTargets()[0];
+    for (const field of ['dlqVisibilityTimeout', 'description', 'replay', 'replayNote', 'owner']) {
+      expect(infra).not.toContain(`"${field}"`);
+    }
+  });
+
   it('emits the same declared data to both targets, even for an unlinked overlay', () => {
     writeOverlay({ secrets: [{ name: 'EXAMPLE_API_TOKEN', env: true }], rotations: [ROTATION] });
     const result = runCodegen();
@@ -120,6 +145,13 @@ describe('infra resource glue', () => {
     ['a queue with a negative retry', { queues: [{ ...QUEUE, retry: -1 }] }],
     ['a queue with an unknown encryption', { queues: [{ ...QUEUE, encryption: 'aes' }] }],
     ['a queue with non-string tags', { queues: [{ ...QUEUE, tags: { Team: 1 } }] }],
+    ['a queue with a non-string DLQ visibility timeout', { queues: [{ ...QUEUE, dlqVisibilityTimeout: 900 }] }],
+    ['a queue with an unknown replay value', { queues: [{ ...QUEUE, replay: 'maybe' }] }],
+    ['a queue with an empty description', { queues: [{ ...QUEUE, description: '' }] }],
+    ['a queue with a description over 200 characters', { queues: [{ ...QUEUE, description: 'x'.repeat(201) }] }],
+    ['a queue with a multi-line replay note', { queues: [{ ...QUEUE, replayNote: 'Safe.\nUpserts.' }] }],
+    ['a queue with a control character in its owner', { queues: [{ ...QUEUE, owner: 'Ex\u0000ample' }] }],
+    ['a queue with an owner over 64 characters', { queues: [{ ...QUEUE, owner: 'x'.repeat(65) }] }],
   ])('fails codegen on %s', (_label, value) => {
     writeOverlay(value);
     const result = runCodegen();
