@@ -2,8 +2,9 @@
  * The data-holder registry classifies every registered Mongoose model by how it holds a person's
  * data, so access/portability exports and erasure can walk one list instead of a hand-maintained
  * set of queries. `dataHolderCoverage.test.ts` fails when a model is registered but not classified.
- * It sees only the models registered by `@bike4mind/database` and the modules it imports itself, so a
- * model registered anywhere else escapes it until that test imports the module that registers it.
+ * It sees only the models registered by `@bike4mind/database` and by the modules the registry files
+ * import, so a model registered anywhere else escapes it until its domain file in `registry/` imports
+ * the module that registers it.
  *
  * Paths are dotted Mongoose paths. A path inside an array of subdocuments is written through the
  * array (`users.userId`), matching how a Mongo filter addresses it.

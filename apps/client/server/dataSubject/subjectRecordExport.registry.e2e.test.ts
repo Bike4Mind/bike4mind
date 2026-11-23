@@ -1,9 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { accountDeletionNoticeRepository, mongoose } from '@bike4mind/database';
 import type { MongoMemoryReplSet } from 'mongodb-memory-server';
-// Registered outside the `@bike4mind/database` barrel, so they register only when imported.
-import '@bike4mind/server-utils/models/Subscription';
-import '@bike4mind/server-utils/models/UserSubscription';
 import {
   createMongoReplSet,
   settleAutoIndexBuilds,

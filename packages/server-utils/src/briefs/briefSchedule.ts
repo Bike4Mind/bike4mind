@@ -14,7 +14,7 @@ export interface BriefScheduleTiming {
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const DEFAULT_WINDOW_MS = DAY_MS;
-const MAX_WINDOW_MS = 7 * DAY_MS;
+export const BRIEF_MAX_WINDOW_MS = 7 * DAY_MS;
 
 // Keyed by the ASCII-lowercased name: Intl matches zone names ASCII-case-insensitively and rejects unknown
 // ones before anything is cached, so the cache is bounded by the zones and UTC offsets Intl accepts. A full
@@ -115,6 +115,15 @@ export function computeNextBriefAt(schedule: BriefScheduleTiming, after: Date): 
   return null;
 }
 
+// Minimum gap an event start needs since the user's last automatic brief start, scheduled or event (ms).
+export const BRIEF_MIN_GAP_MS = 4 * 60 * 60 * 1000;
+
+/**
+ * The gap a scheduled start needs since the last claim (ms). Only long enough to collapse a scheduled start
+ * racing an event start into one brief, so an earlier event brief never uses up the user's chosen slot.
+ */
+export const SCHEDULED_BRIEF_MIN_GAP_MS = 15 * 60 * 1000;
+
 /**
  * The activity window a brief covers: from the end of the last ready brief, capped at a week back, or
  * the last day when there is none. Shared by on-demand composition and the scheduler's pre-check.
@@ -124,7 +133,7 @@ export function briefWindow(
   now: Date
 ): { periodStart: Date; periodEnd: Date } {
   const periodEnd = now;
-  const earliest = periodEnd.getTime() - MAX_WINDOW_MS;
+  const earliest = periodEnd.getTime() - BRIEF_MAX_WINDOW_MS;
   const periodStart = latestReadyEnd
     ? new Date(Math.max(latestReadyEnd.getTime(), earliest))
     : new Date(periodEnd.getTime() - DEFAULT_WINDOW_MS);

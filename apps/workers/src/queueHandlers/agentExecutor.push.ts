@@ -3,11 +3,11 @@ import { agentExecutionRepository, sessionRepository } from '@bike4mind/database
 import type { Logger } from '@bike4mind/observability';
 import {
   createLiveActivityThrottle,
-  isTopLevelRun,
   LIVE_ACTIVITY_STAGE_LABEL_MAX,
   publishLiveActivityUpdate,
   type LiveActivityThrottle,
 } from '@bike4mind/server-utils/utils/liveActivityPush';
+import { isTopLevelRun } from '@bike4mind/server-utils/utils/isTopLevelRun';
 import {
   isPushDeliveryConfigured,
   publishPushNotification,
@@ -129,10 +129,18 @@ function liveActivityFrameFor(
         : { event: 'end', contentState: { status: 'failed', errored: true } };
     case 'progress': {
       if (payload.pendingAction) {
+        const { pendingAction } = payload;
+        const raw = typeof pendingAction === 'object' && 'ts' in pendingAction ? pendingAction.ts : undefined;
+        // LiveActivityContentStateSchema takes only a positive integer; anything else drops the buttons, not the frame.
+        const ts = typeof raw === 'number' && Number.isSafeInteger(raw) && raw > 0 ? raw : undefined;
         return {
           event: 'update',
           immediate: true,
-          contentState: { status: 'approval_needed', stageLabel: 'Waiting for your approval' },
+          contentState: {
+            status: 'approval_needed',
+            stageLabel: 'Waiting for your approval',
+            ...(ts !== undefined && { pendingActionTs: ts }),
+          },
         };
       }
       if (typeof payload.status !== 'string' || !payload.status.trim()) return null;

@@ -297,6 +297,8 @@ describe('spend cron access to the store', () => {
         DEFAULT_LAMBDA_ENVIRONMENT: { DEFAULT: 'env' },
         providerAdminKeyStore: storeExists ? providerAdminKeyStore : undefined,
         providerAdminKeyCronAccess,
+        // Spend-scope access is covered in providerSpendScope.test.ts; empty here keeps these assertions about the store alone.
+        providerSpendScopeCronAccess: () => ({ environment: {}, permissions: [] }),
         modelPriceSnapshotAccess: { environment: {}, read: [] },
       });
       const fn = (name: string) => {

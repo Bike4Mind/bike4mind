@@ -597,6 +597,35 @@ export class SessionStore implements SessionWritesStore {
     );
   }
 
+  /**
+   * Update a run's budget fields on a session's orchestration policy. `undefined` in `patch` clears
+   * that field. A no-op unless the policy still belongs to `rootRunId`, as for setServerRunId, and,
+   * when `expectedBudget` is given, unless the budget is still that one.
+   */
+  setRunBudget(
+    id: string,
+    rootRunId: string,
+    patch: Partial<Pick<RootPolicy, 'budgetCredits' | 'budgetPaused' | 'budgetWarnedAt'>>,
+    expectedScope?: string | null,
+    expectedBudget?: number
+  ): Promise<ChatSessionSummary | null> {
+    return this.mutate(
+      id,
+      session => {
+        const policy = session.orchestrationPolicy;
+        if (policy?.rootRunId !== rootRunId) return null;
+        if (expectedBudget !== undefined && policy.budgetCredits !== expectedBudget) return null;
+        const next: Record<string, unknown> = { ...policy, ...patch };
+        for (const key of Object.keys(patch) as (keyof typeof patch)[]) {
+          if (patch[key] === undefined) delete next[key];
+        }
+        session.orchestrationPolicy = rootPolicySchema.parse(next);
+        return true;
+      },
+      expectedScope
+    );
+  }
+
   setWorkerModel(id: string, model: string, expectedScope: string | null): Promise<ChatSessionSummary | null> {
     return this.mutate(
       id,
@@ -1632,9 +1661,13 @@ export class SessionStore implements SessionWritesStore {
       if (!result.success && parsed[field] !== undefined)
         console.warn(`Dropping unreadable ${field} from session ${parsed.id ?? id}.`);
     }
-    // A root's snapshot is only reused while its orchestrate flag is; workers keep theirs.
+    // A root's snapshot is only reused while its orchestrate flag is; workers keep theirs. A budgeted
+    // run's policy outlives the flag: it holds the run's identity, budget and pause, which a
+    // relaunch must not reset (only permission to spawn expires).
     const orchestrateExpired =
-      parsed.orchestrate === true && (parsed as StoredSession).orchestrateLaunch !== this.launchId;
+      parsed.orchestrate === true &&
+      (parsed as StoredSession).orchestrateLaunch !== this.launchId &&
+      !(orchestrationPolicy.success && orchestrationPolicy.data.budgetCredits !== undefined);
     // Absolute only: a relative entry would resolve against wherever the app was launched from.
     const grantedDirectories = Array.isArray(parsed.grantedDirectories)
       ? parsed.grantedDirectories.filter((entry): entry is string => typeof entry === 'string' && isAbsolute(entry))

@@ -7,12 +7,7 @@ import { initialUpdateState, reduceUpdate, type UpdateBusyReport, type UpdateIns
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { desktopTheme } from '../theme';
 import { Home } from './Home';
-import {
-  SESSION_PANEL_INSET,
-  SESSION_PANEL_SPACE,
-  SESSION_PANEL_WIDTH,
-  writeSessionPanelOpen,
-} from '../chat/sessionPanelState';
+import { writeSessionPanelOpen } from '../chat/sessionPanelState';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -126,9 +121,18 @@ async function mount() {
 
 const byTestId = (id: string) => document.querySelector<HTMLElement>(`[data-testid="${id}"]`);
 const notices = () => Array.from(document.querySelectorAll<HTMLElement>('[data-testid="update-notice"]'));
+const expectCornerAnchored = (el: HTMLElement) => {
+  const style = getComputedStyle(el);
+  expect(style.position).toBe('absolute');
+  expect(style.right).toBe('12px');
+  expect(style.bottom).toBe('12px');
+  expect(el.parentElement).toBe(byTestId('chat-update-notice-region'));
+  expect(getComputedStyle(el.parentElement!).position).toBe('relative');
+  expect(el.parentElement?.contains(byTestId('chat-composer-region'))).toBe(false);
+};
 
 describe('the update card in the signed-in window', () => {
-  it('moves left of the session panel while it is open, then returns when it closes', async () => {
+  it('stays at the thread bottom-right and below the docked session panel', async () => {
     writeSessionPanelOpen(false);
     vi.spyOn(Element.prototype, 'getBoundingClientRect').mockImplementation(() => new DOMRect(0, 0, 1280, 720));
     const session = {
@@ -158,10 +162,8 @@ describe('the update card in the signed-in window', () => {
 
     await act(async () => byTestId('chat-toggle-session-panel-btn')?.click());
     expect(byTestId('session-panel')?.getAttribute('role')).toBe('complementary');
-    const rightInset = Number.parseFloat(getComputedStyle(notices()[0]).right);
-    expect(rightInset).toBe(SESSION_PANEL_SPACE);
-    expect(rightInset).toBeGreaterThan(SESSION_PANEL_INSET + SESSION_PANEL_WIDTH);
-    expect(getComputedStyle(notices()[0]).bottom).toBe('12px');
+    expectCornerAnchored(notices()[0]);
+    expect(Number(getComputedStyle(notices()[0]).zIndex)).toBeLessThan(desktopTheme.zIndex.table);
 
     await act(async () => byTestId('chat-toggle-session-panel-btn')?.click());
     expect(byTestId('session-panel')).toBeNull();
@@ -217,22 +219,18 @@ describe('the update card in the signed-in window', () => {
     expect(install).toHaveBeenLastCalledWith(true);
   });
 
-  it('anchors above the composer, outside the sidebar, whether the sidebar is open or collapsed', async () => {
+  it('anchors above the composer whether the sidebar is open or collapsed', async () => {
     await mount();
     expect(byTestId('sidebar')).not.toBeNull();
     expect(notices()).toHaveLength(1);
-    expect(getComputedStyle(notices()[0]).position).toBe('absolute');
-    expect(notices()[0].parentElement).toBe(byTestId('chat-update-notice-region'));
-    expect(getComputedStyle(notices()[0].parentElement!).position).toBe('relative');
-    expect(byTestId('chat-update-notice-region')?.contains(byTestId('chat-composer-region'))).toBe(false);
+    expectCornerAnchored(notices()[0]);
     expect(byTestId('chat-update-notice-region')?.nextElementSibling).toBe(byTestId('chat-composer-region'));
     expect(byTestId('sidebar')?.contains(notices()[0])).toBe(false);
 
     await act(async () => byTestId('sidebar-toggle-btn')?.click());
     expect(byTestId('sidebar-rail')).not.toBeNull();
     expect(notices()).toHaveLength(1);
-    expect(getComputedStyle(notices()[0]).position).toBe('absolute');
-    expect(notices()[0].parentElement).toBe(byTestId('chat-update-notice-region'));
+    expectCornerAnchored(notices()[0]);
   });
 
   it('confirms in the card a restart the account label asked for while work is running', async () => {

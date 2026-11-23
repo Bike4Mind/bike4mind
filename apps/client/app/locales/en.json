@@ -82,7 +82,12 @@
     "share_link_label": "Your share link",
     "share_link_copy": "Copy",
     "share_link_copied": "Copied",
-    "share_link_hint": "Anyone who signs up through this link counts as your referral."
+    "share_link_hint": "Anyone who signs up through this link counts as your referral.",
+    "milestone_next_one": "<strong>{{count}} more active friend</strong> to earn a <strong>{{credits}} credit</strong> bonus.",
+    "milestone_next_other": "<strong>{{count}} more active friends</strong> to earn a <strong>{{credits}} credit</strong> bonus.",
+    "milestone_all_reached": "You have reached every referral milestone.",
+    "milestone_chip_one": "{{count}} friend: {{credits}}",
+    "milestone_chip_other": "{{count}} friends: {{credits}}"
   },
   "activateVoice": "Activate this voice",
   "liveVoice": "Live voice",
@@ -142,8 +147,10 @@
     "learn_about": "Learn about Teams",
     "document_title_suffix": " | Team",
     "roles": {
+      "label": "Role",
       "owner": "Owner",
       "manager": "Manager",
+      "billingManager": "Billing manager",
       "member": "Member"
     },
     "admin_preview": {
@@ -328,6 +335,7 @@
     "needCode": "Need Code?",
     "noAccount": "No Account?",
     "registerNow": "Register now",
+    "newHereEmailCreates": "New here? Enter your email above and we'll create your account.",
     "haveAccount": "Already have an account?",
     "loginWithProvider": "Login with {{ provider }}",
     "checking": "Checking...",

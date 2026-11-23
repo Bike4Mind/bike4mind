@@ -134,6 +134,8 @@ Python code can send what it has to a listed origin as well as read from it, so 
 
 When it is on, a Python artifact that declares a function gets a Function tab beside Output and Code.
 
+From the Function tab you can save a Python artifact you own as a draft tool pinned to its saved version; later edits do not change the tool until you update it. A saved tool cannot be called yet. If that artifact is deleted, the tool can only be deleted, or replaced by saving another artifact under the same function name. Turning the setting off hides saved tools and keeps them until their owner deletes them or the account is deleted.
+
 ### Logo Upload
 
 Located in the Branding category, the Logo Upload component provides:

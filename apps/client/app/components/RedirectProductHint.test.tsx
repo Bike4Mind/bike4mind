@@ -6,7 +6,7 @@ import { getThemeConfig } from '@client/app/utils/themes';
 import type { PremiumNavDescriptor } from '@client/app/premiumContract';
 import i18next from 'i18next';
 import en from '@client/app/locales/en.json';
-import RedirectProductHint from './RedirectProductHint';
+import RedirectProductHint, { useRedirectProduct } from './RedirectProductHint';
 
 const nav = vi.hoisted(() => ({ items: [] as PremiumNavDescriptor[] }));
 vi.mock('@client/app/premium-generated/premiumNavItems.generated', () => ({
@@ -27,11 +27,17 @@ i18n.t = instance.t.bind(instance) as (key: string) => string;
 const ProductIcon = () => <svg data-testid="product-icon" />;
 const appTheme = extendTheme({ ...getThemeConfig() });
 
+// Wired the way MultiStepLogin and Register wire it, so the URL checks in useRedirectProduct are exercised.
+function Harness({ mode }: { mode: 'signIn' | 'signUp' }) {
+  const item = useRedirectProduct();
+  return <RedirectProductHint mode={mode} item={item} />;
+}
+
 const renderAt = (url: string, mode: 'signIn' | 'signUp' = 'signIn') => {
   window.history.replaceState(null, '', url);
   return render(
     <CssVarsProvider theme={appTheme}>
-      <RedirectProductHint mode={mode} />
+      <Harness mode={mode} />
     </CssVarsProvider>
   );
 };

@@ -99,6 +99,17 @@ final class VoiceConversationModelTests: XCTestCase {
     await model.stop()
   }
 
+  func testAcceptedTurnReportsItsSession() async throws {
+    let model = await startedModel()
+    var reported: [String] = []
+    model.onTurnSent = { reported.append($0) }
+    await say("Hello there")
+    await until { await api.sentMessages.count == 1 }
+    await until { !reported.isEmpty }
+    XCTAssertEqual(reported, ["s1"])
+    await model.stop()
+  }
+
   func testAFrameThatBeatsTheSendResponseIsNotLost() async throws {
     await api.holdSends()
     let model = await startedModel()

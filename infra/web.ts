@@ -40,6 +40,7 @@ import {
 import {
   eventBus,
   telemetryAlertDeadLetter,
+  moderationAlertsDeadLetter,
   sessionEnrichmentDeadLetter,
   billingEventsDeadLetter,
   emailEventsDeadLetter,
@@ -277,6 +278,7 @@ const dlqUrls = new sst.Linkable('dlqUrls', {
       'generated-media-purge': generatedMediaPurgeQueueDLQ.url,
       'fab-file-moderation': fabFileModerationDLQ.url,
       'telemetry-alert-rule': telemetryAlertDeadLetter.queue.url,
+      'moderation-alerts': moderationAlertsDeadLetter.queue.url,
       'session-enrichment': sessionEnrichmentDeadLetter.queue.url,
       'billing-events': billingEventsDeadLetter.queue.url,
       'email-events': emailEventsDeadLetter.queue.url,

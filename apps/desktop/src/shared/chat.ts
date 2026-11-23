@@ -189,6 +189,12 @@ export interface ChatToolCall {
   /** What the user is being asked to allow, ready to display. Set with `approvalId`. */
   approvalDetail?: string;
   /**
+   * Set with `approvalId` on a shell call the model described: its own words on what the command
+   * does. Unchecked, so a surface shows it only next to `approvalDetail`, never in its place, and
+   * nothing decides on it (see isQuickApproval in watch.ts).
+   */
+  approvalDescription?: string;
+  /**
    * Set with `approvalId` on a tool whose effect cannot be undone. The card must not offer
    * "always in this chat" for one of these, and main refuses to honour a standing approval
    * against it however the user answered an earlier identical call.
@@ -1596,7 +1602,7 @@ export type ModelPhase =
   { kind: 'waiting' } | { kind: 'thinking' } | { kind: 'responding' } | { kind: 'writing-tool'; name: string };
 
 /** A newer context notice of the same kind replaces the older one for a conversation. */
-export type ContextNoticeKind = 'context-size' | 'no-tools';
+export type ContextNoticeKind = 'context-size' | 'no-tools' | 'run-budget';
 
 export type ChatStreamEvent =
   | {
@@ -1682,6 +1688,8 @@ export type ChatStreamEvent =
   | { type: 'context-trimmed'; sessionId: string; dropped: number }
   /** Auto changed a local model's context mid-turn in a way that affects its replies (slower, or smaller). */
   | { type: 'context-notice'; sessionId: string; message: string; kind?: ContextNoticeKind }
+  /** Withdraws the notice of `kind` that no longer holds, such as a budget warning after a raise. */
+  | { type: 'context-notice-cleared'; sessionId: string; kind: ContextNoticeKind }
   /**
    * A first turn is cutting the session's worktree before it goes out
    * (ChatService.ensureWorkspace). `branch` arrives once it has been chosen; `running: false`
@@ -2060,6 +2068,8 @@ export interface ChatSpawnSuggestion {
   dismissedBy?: 'user' | 'assistant';
   /** A user outcome the model has not been told yet; cleared when the next turn carries it. */
   unreported?: boolean;
+  /** Why the automatic start Settings asked for did not happen; the card shows it and waits. */
+  autoStartError?: string;
 }
 
 /** 'here' runs the task as the user's own next message in the suggesting conversation. */
@@ -2077,6 +2087,8 @@ interface SpawnSuggestionStartBase {
   title: string;
   /** The user changed the prompt or title before starting. */
   edited: boolean;
+  /** Started by the Settings location with no card; the model heard it in the tool result. */
+  auto?: boolean;
 }
 
 export type ChatSpawnSuggestionStart =
@@ -2247,10 +2259,20 @@ export const SESSION_EXPIRED_STOP = 'session_expired';
 export const SERVER_CREDENTIALS_STOP = 'server_credentials';
 
 /**
+ * The stop reason of a turn the server refused because its orchestration run's credit budget is
+ * used up. Resumable: refused before the provider ran, so the transcript ends on a request
+ * boundary, and raising the budget continues every session the run paused.
+ */
+export const RUN_BUDGET_STOP = 'run_budget_exhausted';
+
+/** What raising a run budget did: how many paused sessions it continued, or why it was refused. */
+export type RaiseRunBudgetResult = { ok: true; resumed: number } | { ok: false; error: string };
+
+/**
  * Whether Continue can carry the turn on in place. A turn cut by an expired session stopped at
  * a request boundary - before any of that request streamed - so its transcript ends where a
  * budget-stopped one does, or on the user's own prompt.
  */
 export function isResumableStop(reason?: string): boolean {
-  return isTurnBudgetStop(reason) || reason === SESSION_EXPIRED_STOP;
+  return isTurnBudgetStop(reason) || reason === SESSION_EXPIRED_STOP || reason === RUN_BUDGET_STOP;
 }

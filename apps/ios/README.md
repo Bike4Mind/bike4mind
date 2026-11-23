@@ -1,8 +1,21 @@
 # Bike4Mind iOS
 
 Native iPhone app (SwiftUI, Swift 6). `make build`, `make test`, `make format`, `make lint` (see the Makefile).
-Simulator-only until an Apple Developer team id is configured (`IOS_TEAM_ID`); see [DEVICE_TESTING.md](DEVICE_TESTING.md) for everything that
-needs a device or signing.
+`make device` builds, installs and launches on a connected iPhone (see below). The other targets run on the simulator; see
+[DEVICE_TESTING.md](DEVICE_TESTING.md) for everything that needs a device or signing.
+
+### Run on a connected iPhone
+
+```sh
+make device                       # the single connected, paired iPhone
+make device DEVICE="My iPhone"    # a device name or UDID, when several are connected
+```
+
+It builds the Debug configuration with automatic signing, installs over any existing copy (the app stays signed in) and
+launches it. It needs the personal signing config from [DEVICE_TESTING.md](DEVICE_TESTING.md) (`Config/Local.xcconfig` with
+`DEVELOPMENT_TEAM`), and exits with a message when no team is set or when zero or several devices are connected. What it cannot
+automate: Developer Mode on (Settings > Privacy & Security), the phone unlocked and trusted, and on the first launch trusting the
+developer certificate (Settings > General > VPN & Device Management).
 
 ## Feature map
 
@@ -20,6 +33,7 @@ needs a device or signing.
 ## Targets and packages
 
 - **Bike4Mind**: the app. **Widgets**: widget and Live Activity extension. **ShareExtension**: the share sheet target.
+- **ActivityIntents**: App Intents compiled into both the app and the widget extension (the Live Activity's approve and deny buttons), so the system runs them in the app's process.
 - **Packages/B4MKit**: everything that is not a view (API, auth, view models, wire formats); unit-tested on the simulator and the host.
 - **Packages/B4MClient**: the generated OpenAPI client (see below).
 - Screens never use generated types; `B4MKit` maps them to domain models behind `B4MAPI`.
@@ -133,7 +147,7 @@ let any app or page open Bike4Mind with that URL. Server URIs are exact-match.
 
 ## Widgets, App Intents and the media gallery
 
-- **Widgets** (`Widgets/`): the app writes a `WidgetSnapshot` JSON into the `group.com.bike4mind.app` container and the extension only reads it, with no network or auth in the widget process. The app calls `WidgetCenter.reloadTimelines` when a chat turn settles, credits load, or the latest image changes. A missing container degrades to placeholders. `Widgets/Bike4MindWidgets.swift` is the bundle entry point and registers the widgets plus `QuestLiveActivity`, which reuses `Widgets/Shared/`.
+- **Widgets** (`Widgets/`): the app writes a `WidgetSnapshot` JSON into the `group.com.bike4mind.app` container and the extension only reads it, with no network or auth in the widget process. The app calls `WidgetCenter.reloadTimelines` when a chat turn settles, credits load, or the latest image changes. A missing container degrades to placeholders. `Widgets/Bike4MindWidgets.swift` is the bundle entry point and registers the widgets plus `QuestLiveActivity`, which reuses `Widgets/Shared/`. The lock-screen decisions widget shows `GET /api/v1/pending-decisions`, which the app re-reads on foreground, when a turn settles, after the brief loads and after an approval is answered; counted approvals drop out of it 15 minutes after the count was read, since by then they have lapsed.
 - **App Intents** (`Bike4Mind/Features/Intents/`): Ask, Start quest and Capture note only open the composer with a draft (`AssistantRequest.route`); they never send. Ask and Capture note land on the home screen, the root of the stack.
 - **Settings** (`Bike4Mind/Features/Settings/`): the avatar on the home screen and the drawer's account row push Settings onto the stack, and `Route.settings` (deep links, the Credits widget) lands there too. The profile header reads the access token's claims (`AccountProfile`); there is no profile endpoint.
 - **Studio** (code name `media`, `Bike4Mind/Features/Media/`): a grid over the Files API via the hand-written `MediaClient`. Presigned URLs are re-fetched near expiry and at most twice after a playback failure. Under `B4M_UI_FIXTURES=1` the Studio gallery and the widgets show canned data.

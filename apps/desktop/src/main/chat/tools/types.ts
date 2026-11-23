@@ -723,6 +723,11 @@ export interface ApprovalPrompt {
   /** Shown to the user verbatim. */
   detail: string;
   /**
+   * The model's own few words on what a shell command does, shown beside `detail`. Display
+   * only: it can be wrong, so it never feeds `key`, `reasons`, rules or refusals.
+   */
+  summary?: string;
+  /**
    * Why the gate stops for this call, each already a paragraph of `detail`. Kept apart as well so a
    * surface that shows less than the full card (the menu bar, the mini window) can tell the call
    * carries a reason it would otherwise drop.

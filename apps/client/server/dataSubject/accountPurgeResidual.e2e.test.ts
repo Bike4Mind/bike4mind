@@ -12,9 +12,6 @@ import {
 } from '@bike4mind/database';
 import { inboxRepository } from '@bike4mind/database/social';
 import type { MongoMemoryReplSet } from 'mongodb-memory-server';
-// Registered outside the `@bike4mind/database` barrel, so they register only when imported.
-import '@bike4mind/server-utils/models/Subscription';
-import '@bike4mind/server-utils/models/UserSubscription';
 import {
   createMongoReplSet,
   MONGO_TEST_TIMEOUT_MS,
@@ -178,6 +175,7 @@ async function seedAccount(source: 'self' | 'admin' = 'admin') {
   await insert('FeedbackNote', { userId, body: 'private account note' });
   await insert('Friendship', { requester: userId, recipient: String(other) });
   await insert('McpConnection', { ownerType: 'user', ownerKey: userId, userId, slug: 'mine' });
+  await insert('CallableFunction', { ownerType: 'user', ownerKey: userId, userId, slug: 'mine' });
   await insert('GenerationJob', { ownerType: 'User', ownerId: userId });
   await insert('Activity', { ownerType: 'User', ownerId: userId });
   await insert('TaskSchedule', { payload: { userId } });

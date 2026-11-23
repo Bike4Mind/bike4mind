@@ -64,6 +64,7 @@ import type {
   ChatSessionStatusEvent,
   ChatSessionExportResult,
   ChatSessionSummary,
+  RaiseRunBudgetResult,
   ChatStreamEvent,
   ChatVideoJob,
   ChatVideoLinkResult,
@@ -89,6 +90,7 @@ import type { DevLogRecord, DevLogSnapshot } from './devLog';
 import type { ShareDirectoryResult } from './directoryRequest';
 import type { PrActionResult, PrBarState, PrOption, PrSummaryEvent } from './pullRequest';
 import type { LocalContextFit, LocalContextSetting } from './localContextSetting';
+import type { SpawnLocation } from './spawnLocation';
 import type { SidebarSectionsState } from './sidebarSections';
 import type { ComposerDrafts } from './composerDrafts';
 import type { WorkspaceChanges } from './workspaceChanges';
@@ -211,6 +213,10 @@ export const IPC_CHANNELS = {
   chatGetLocalContext: 'chat:get-local-context',
   chatSetLocalContext: 'chat:set-local-context',
   chatGetLocalContextFit: 'chat:get-local-context-fit',
+  /** Where a suggested session starts (SpawnLocation); main pushes `chatSpawnLocation` when it changes. */
+  chatGetSpawnLocation: 'chat:get-spawn-location',
+  chatSetSpawnLocation: 'chat:set-spawn-location',
+  chatSpawnLocation: 'chat:spawn-location',
   chatListCreationTools: 'chat:list-creation-tools',
   chatSetSessionModel: 'chat:set-session-model',
   chatSettleLocalModel: 'chat:settle-local-model',
@@ -228,6 +234,7 @@ export const IPC_CHANNELS = {
   chatGetModelLoadOffer: 'chat:get-model-load-offer',
   chatSetSessionPinned: 'chat:set-session-pinned',
   chatSetSessionOrchestrate: 'chat:set-session-orchestrate',
+  chatRaiseRunBudget: 'chat:raise-run-budget',
   chatGetRolePolicy: 'chat:get-role-policy',
   chatSetRolePolicy: 'chat:set-role-policy',
   chatTaskAction: 'chat:task-action',
@@ -943,6 +950,10 @@ export interface DesktopApi {
     setLocalContext(setting: LocalContextSetting): Promise<LocalContextSetting>;
     /** Which local models each fixed size may not fit, by the memory estimate. */
     getLocalContextFit(): Promise<LocalContextFit>;
+    /** Where a suggested session starts; see @shared/spawnLocation. */
+    getSpawnLocation(): Promise<SpawnLocation>;
+    setSpawnLocation(location: SpawnLocation): Promise<SpawnLocation>;
+    onSpawnLocation(listener: (location: SpawnLocation) => void): () => void;
     /** The generation tools a Chat turn on `model` would be offered now; empty when signed out, local or unsupported. */
     listCreationTools(model: string): Promise<CreationTool[]>;
     /** Pin a conversation to a model. Null when the session is gone. */
@@ -973,7 +984,14 @@ export interface DesktopApi {
     getModelLoadOffer(modelId: string, draftTokens?: number): Promise<ModelLoadOffer | null>;
     /** Pin a conversation to the top of the sidebar. Null when the session is gone. */
     setSessionPinned(sessionId: string, pinned: boolean): Promise<ChatSessionSummary | null>;
-    setSessionOrchestrate(sessionId: string, orchestrate: boolean): Promise<ChatSessionSummary | null>;
+    /** `budgetCredits` caps the run Orchestrate starts; only read when it turns on. */
+    setSessionOrchestrate(
+      sessionId: string,
+      orchestrate: boolean,
+      budgetCredits?: number
+    ): Promise<ChatSessionSummary | null>;
+    /** Set or raise the credit budget of the session's orchestration run; a raise resumes a paused run. */
+    raiseRunBudget(sessionId: string, budgetCredits: number): Promise<RaiseRunBudgetResult>;
     getRolePolicy(): Promise<RolePolicy>;
     setRolePolicy(policy: RolePolicy): Promise<RolePolicy>;
     taskAction(sessionId: string, action: TaskAction): Promise<ChatSessionSummary>;

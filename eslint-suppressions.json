@@ -229,7 +229,7 @@
   "packages/database/src/models/infra/admin/OrgAdminNotificationPrefModel.ts": { "b4m/require-update-validators": { "count": 1 } },
   "packages/database/src/models/infra/admin/OrgAlertNotificationModel.ts": { "b4m/require-update-validators": { "count": 1 } },
   "packages/database/src/models/infra/admin/OrgDomainClaimModel.ts": { "b4m/require-update-validators": { "count": 4 } },
-  "packages/database/src/models/infra/admin/OrganizationModel.ts": { "b4m/require-update-validators": { "count": 15 } },
+  "packages/database/src/models/infra/admin/OrganizationModel.ts": { "b4m/require-update-validators": { "count": 14 } },
   "packages/database/src/models/infra/admin/SpaceModel.ts": { "b4m/require-update-validators": { "count": 3 } },
   "packages/database/src/models/infra/email/EmailJobModel.ts": { "b4m/require-update-validators": { "count": 4 } },
   "packages/database/src/models/infra/email/EmailPreferencesModel.ts": { "b4m/require-update-validators": { "count": 4 } },

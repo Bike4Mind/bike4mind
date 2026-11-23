@@ -188,28 +188,28 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
     }
     secret = decryptStoredSecret(orgConfig.secret);
   } catch (error) {
-    // Differentiate between configuration errors and potential tampering
     const errorMessage = error instanceof Error ? error.message : 'Unknown error';
 
-    // Check for authentication tag failures (indicates tampered ciphertext)
-    const isTamperingIndicator =
+    // An authentication failure means no configured key opens the value. The cipher cannot tell
+    // a key that was rotated out too early from altered ciphertext, so the message names both.
+    const isAuthenticationFailure =
       errorMessage.includes('authentication tag') ||
       errorMessage.includes('Unsupported state') ||
       errorMessage.includes('bad decrypt');
 
-    if (isTamperingIndicator) {
-      // Potential security incident - log at critical level
-      logger.error('SECURITY: Potential secret tampering detected', {
+    if (isAuthenticationFailure) {
+      logger.error('SECURITY: Webhook secret failed authentication under every configured key', {
         error: errorMessage,
         orgId: payload.orgId,
         subscriptionId: payload.subscriptionId,
+        hint: 'key rotated out before stored values were re-encrypted, or altered ciphertext',
       });
       await recordDelivery(
         payload,
         startTime,
         WebhookDeliveryStatus.Failed,
         0,
-        'Security error: Secret verification failed - possible tampering'
+        'Security error: Secret verification failed - key mismatch or altered ciphertext'
       );
       // TODO: Send security alert to ops team
     } else {

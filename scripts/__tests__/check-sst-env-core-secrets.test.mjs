@@ -29,6 +29,8 @@ function run(staged = false) {
 beforeEach(() => {
   directory = mkdtempSync(join(tmpdir(), 'sst-env-core-secrets-'));
   git('init', '--quiet');
+  // A developer's global ignore file may list sst-env.d.ts, which would keep it out of `git add .`.
+  git('config', 'core.excludesFile', join(directory, '.git', 'no-global-excludes'));
   write('infra/secrets.ts', "export const secret = new sst.Secret('CORE_TOKEN', 'x');\n");
   write('sst-env.d.ts', declaration('CORE_TOKEN'));
   git('add', '.');

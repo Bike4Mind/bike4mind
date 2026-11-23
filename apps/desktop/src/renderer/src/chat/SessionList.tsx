@@ -77,6 +77,7 @@ import { ResizeHandle } from './ResizeHandle';
 import { SectionNameDialog, type SectionNameRequest } from './SectionNameDialog';
 import { thinScrollbarSx } from './layout';
 import { SessionBadge } from './SessionBadge';
+import { WORKING_COLOR_VAR } from './sessionStatus';
 import { PREPARING_WORKTREE } from './chipState';
 import {
   clampSidebarWidth,
@@ -213,11 +214,7 @@ function railSx(depth: number, first: boolean, last: boolean, guides: string, he
   // The elbow into a branch holding working or waiting sessions lights up in the fold pill's colours,
   // so a deep tree shows where the activity is, even folded, and every ancestor on the path glows.
   const elbowColor =
-    heat === 'needs-action'
-      ? 'var(--joy-palette-warning-400)'
-      : heat === 'processing'
-        ? 'var(--joy-palette-primary-400)'
-        : RAIL_COLOR;
+    heat === 'needs-action' ? 'var(--joy-palette-warning-400)' : heat === 'processing' ? WORKING_COLOR_VAR : RAIL_COLOR;
   return {
     marginInlineStart: `${indent}px`,
     // Above the button, so a selected or hovered row's fill does not paint over its own elbow.
@@ -766,7 +763,12 @@ const SessionRow = memo(function SessionRow({
         data-session-pr-state={pr?.state}
       >
         <Stack direction="row" spacing={1.25} sx={{ alignItems: 'center', minWidth: 0, width: '100%' }}>
-          <SessionBadge status={status} pr={pr} deciding={pendingDecisionOf(session.workerTask) !== undefined} />
+          <SessionBadge
+            status={status}
+            pr={pr}
+            outcome={session.lastOutcome}
+            deciding={pendingDecisionOf(session.workerTask) !== undefined}
+          />
           {editing ? (
             <RenameInput title={session.title} onDone={onRenameDone} />
           ) : (

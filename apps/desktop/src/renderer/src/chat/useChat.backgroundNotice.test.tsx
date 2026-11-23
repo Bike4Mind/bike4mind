@@ -113,6 +113,22 @@ describe('a context notice for a conversation that is not open', () => {
     expect(conversation.notice).toBe('a\nb');
   });
 
+  it('withdraws only the cleared kind, whether the conversation is open or away', async () => {
+    const budget = (sessionId: string) =>
+      emit({ type: 'context-notice', sessionId, message: `budget ${sessionId}`, kind: 'run-budget' });
+    const cleared = (sessionId: string) => emit({ type: 'context-notice-cleared', sessionId, kind: 'run-budget' });
+    await act(async () => root.render(<Harness id="open" />));
+    await act(async () => emit({ type: 'context-notice', sessionId: 'open', message: 'tools', kind: 'no-tools' }));
+    await act(async () => budget('open'));
+    await act(async () => budget('away'));
+    await act(async () => cleared('open'));
+    await act(async () => cleared('away'));
+    expect(conversation.notice).toBe('tools');
+
+    await act(async () => root.render(<Harness id="away" />));
+    expect(conversation.notice).toBeNull();
+  });
+
   it('shows notices that arrive together on separate lines while the conversation is open', async () => {
     await act(async () => root.render(<Harness id="open" />));
     await act(async () => emit({ type: 'context-notice', sessionId: 'open', message: 'first', kind: 'no-tools' }));

@@ -108,6 +108,11 @@ describe('developer dollar cost preference', () => {
         setNotifyScope: async () => 'agents',
         onNotifyScope: () => () => undefined,
       },
+      chat: {
+        getSpawnLocation: async () => 'worktree',
+        setSpawnLocation: async () => 'worktree',
+        onSpawnLocation: () => () => undefined,
+      },
     });
     window.localStorage.clear();
     useCostDisplayPreference.setState({ showDollarCosts: false });

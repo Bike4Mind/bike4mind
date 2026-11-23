@@ -15,11 +15,12 @@ import {
   Input,
   FormLabel,
   FormControl,
+  Chip,
 } from '@mui/joy';
 import CloseIcon from '@mui/icons-material/Close';
 import { toast } from 'sonner';
 import { useSubmitUserInvitation, useSubmitReferral } from '@client/app/hooks/data/regInvites';
-import { useGetReferralSummary } from '@client/app/hooks/data/referralSummary';
+import { useGetReferralSummary, type InviterMilestone } from '@client/app/hooks/data/referralSummary';
 import { useGetReferralLink } from '@client/app/hooks/data/referralLink';
 import { useCopyToClipboard } from '@client/app/hooks/useCopyToClipboard';
 import type { IReferralResult } from '@client/app/utils/regInviteAPICalls';
@@ -267,6 +268,10 @@ export const ReferralModal: React.FC<ReferralModalProps> = ({
             </Box>
           )}
 
+          {referralSummary?.enabled && referralSummary.milestones.length > 0 && (
+            <ReferralMilestones milestones={referralSummary.milestones} active={referralSummary.active} />
+          )}
+
           {referralSummary?.enabled && (
             <Box
               data-testid="referral-summary"
@@ -430,6 +435,42 @@ export const ReferralModal: React.FC<ReferralModalProps> = ({
         </DialogContent>
       </ModalDialog>
     </Modal>
+  );
+};
+
+const ReferralMilestones: React.FC<{ milestones: InviterMilestone[]; active: number }> = ({ milestones, active }) => {
+  const { t, i18n } = useTranslation();
+  const next = milestones.find(milestone => !milestone.reached);
+  const credits = (amount: number) => amount.toLocaleString(i18n.language);
+  return (
+    <Box data-testid="referral-modal-milestones" sx={{ mb: 2, textAlign: 'center' }}>
+      <Typography level="body-sm" data-testid="referral-modal-milestone-next">
+        {next ? (
+          <Trans
+            i18nKey="referral.milestone_next"
+            count={Math.max(1, next.friends - active)}
+            values={{ credits: credits(next.credits) }}
+            components={{ strong: <strong /> }}
+          />
+        ) : (
+          t('referral.milestone_all_reached')
+        )}
+      </Typography>
+      <Stack direction="row" spacing={1} useFlexGap justifyContent="center" flexWrap="wrap" sx={{ mt: 1 }}>
+        {milestones.map(milestone => (
+          <Chip
+            key={milestone.friends}
+            size="sm"
+            variant={milestone.reached ? 'solid' : 'outlined'}
+            color={milestone.reached ? 'success' : 'neutral'}
+            data-testid={`referral-modal-milestone-${milestone.friends}`}
+            data-reached={milestone.reached}
+          >
+            {t('referral.milestone_chip', { count: milestone.friends, credits: credits(milestone.credits) })}
+          </Chip>
+        ))}
+      </Stack>
+    </Box>
   );
 };
 

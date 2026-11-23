@@ -318,7 +318,7 @@ export interface IUserModeration {
   hits: IModerationHit[];
   /** Current escalation state. */
   status: UserModerationStatus;
-  /** When `status` last changed. */
+  /** When an admin last set `status`. Automatic escalations leave it alone, so it marks the last human review. */
   statusChangedAt: Date | null;
   /** While `throttled`, the instant the throttle expires. */
   throttledUntil: Date | null;
@@ -326,6 +326,36 @@ export interface IUserModeration {
   appealedAt?: Date | null;
   /** The most recent appeal message the user submitted, surfaced to admins for review. */
   appealText?: string | null;
+}
+
+/**
+ * Moderation categories severe enough that every hit is alerted on and queued for admin review,
+ * whatever the user's escalation status. Matching is exact against `IModerationHit.categories`.
+ */
+export const MODERATION_SEVERE_CATEGORIES: readonly string[] = ['sexual/minors'];
+
+/** Display names for each {@link ModerationHitSource}, shared by the review list and the escalation alert. */
+export const MODERATION_SOURCE_LABELS: Record<ModerationHitSource, string> = {
+  openai: 'OpenAI moderation',
+  bedrock: 'Bedrock guardrail',
+  provider: 'Provider refusal',
+};
+
+/** Statuses the admin moderation review list always shows: they await a human decision. */
+export const MODERATION_REVIEW_STATUSES = [
+  'throttled',
+  'suspend_pending',
+] as const satisfies readonly UserModerationStatus[];
+
+/** One row of the admin text-moderation review list. */
+export interface ModerationReviewUser {
+  id: string;
+  name: string | null;
+  email: string | null;
+  createdAt: Date | null;
+  moderation: IUserModeration;
+  /** Whether a retained hit carries a {@link MODERATION_SEVERE_CATEGORIES} label newer than the last status change. */
+  hasUnreviewedSevereHit: boolean;
 }
 
 export const THROTTLE_TIERS = ['none', 'shadow'] as const;
@@ -533,6 +563,8 @@ export interface IUser extends ICreditHolder {
   deletion?: IUserDeletion | null;
   /** When the next scheduled brief is due; unset while the brief schedule is off. See `preferences.briefSchedule`. */
   nextBriefAt?: Date;
+  /** When the last scheduled or event-triggered brief started; the debounce both paths claim. */
+  lastBriefStartedAt?: Date;
   /** Private erasure retry state, including restored accounts with no deletion schedule. */
   accountFilePurge?: {
     startedAt?: Date;
@@ -1270,13 +1302,21 @@ export interface IUserRepository
    */
   recordModerationHit: (userId: string, hit: IModerationHit) => Promise<IUserDocument | null>;
   /**
+   * The admin text-moderation review list: users in a {@link MODERATION_REVIEW_STATUSES} status, plus
+   * users with a severe-category hit newer than their last status change. Most recent hit first.
+   */
+  findModerationReviewQueue: (limit: number) => Promise<ModerationReviewUser[]>;
+  /** How many users {@link findModerationReviewQueue} would list, counting stops at `limit`. */
+  countModerationReviewQueue: (options?: { limit?: number }) => Promise<number>;
+  /**
    * Transition a user's moderation escalation state. Leaves `isModerated` alone. Returns the
-   * updated user.
+   * updated user. `automatic` marks a policy-driven transition: it does not stamp
+   * `statusChangedAt`, which records the last admin decision.
    */
   setModerationStatus: (
     userId: string,
     status: UserModerationStatus,
-    options?: { throttledUntil?: Date | null }
+    options?: { throttledUntil?: Date | null; automatic?: boolean }
   ) => Promise<IUserDocument | null>;
   /**
    * Store a recomputed risk score. Preserve pending holds and approved/banned rulings in the

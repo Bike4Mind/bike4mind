@@ -14,10 +14,12 @@ function frame(payload: unknown): string {
   return `data: ${typeof payload === 'string' ? payload : JSON.stringify(payload)}\n\n`;
 }
 
-function bashTurn(id: string, command: string): string {
+function bashTurn(id: string, command: string, description?: string): string {
   return frame({
     type: 'tool_use',
-    tools: [{ id, name: 'bash_execute', arguments: JSON.stringify({ command }) }],
+    tools: [
+      { id, name: 'bash_execute', arguments: JSON.stringify({ command, ...(description ? { description } : {}) }) },
+    ],
   });
 }
 
@@ -167,6 +169,42 @@ describe('ChatService approval gate', () => {
     streams[2].write(bashTurn('call_3', 'ls -la'));
     streams[2].write(frame('[DONE]'));
     await vi.waitUntil(() => toolEvents('awaiting-approval').length === 2, { timeout: 3000, interval: 5 });
+  });
+
+  it("puts the model's description on the card beside the command, and lets an allowance ignore it", async () => {
+    const id = await askingSession();
+    await service.send(id, 'run it twice');
+    await vi.waitUntil(() => streams.length === 1, { timeout: 3000, interval: 5 });
+
+    streams[0].write(bashTurn('call_1', 'echo described', 'Prints a word'));
+    streams[0].write(frame('[DONE]'));
+    const approvalId = await pendingApprovalId();
+    const asked = toolEvents('awaiting-approval')[0];
+    if (asked.type !== 'tool-start') throw new Error('no approval announced');
+    expect(asked.call.approvalDescription).toBe('Prints a word');
+    expect(asked.call.approvalDetail).toContain('$ echo described');
+    expect(asked.call.approvalDetail).not.toContain('Prints a word');
+    approvals.resolve(approvalId, { decision: 'always' });
+
+    await vi.waitUntil(() => streams.length === 2, { timeout: 5000, interval: 10 });
+    streams[1].write(bashTurn('call_2', 'echo described', 'Says something else entirely'));
+    streams[1].write(frame('[DONE]'));
+
+    await vi.waitUntil(() => streams.length === 3, { timeout: 5000, interval: 10 });
+    expect(toolEvents('awaiting-approval')).toHaveLength(1);
+  });
+
+  it('sends no description for a call that gave none', async () => {
+    const id = await askingSession();
+    await service.send(id, 'run it');
+    await vi.waitUntil(() => streams.length === 1, { timeout: 3000, interval: 5 });
+
+    streams[0].write(bashTurn('call_1', 'echo plain'));
+    streams[0].write(frame('[DONE]'));
+    await pendingApprovalId();
+    const asked = toolEvents('awaiting-approval')[0];
+    if (asked.type !== 'tool-start') throw new Error('no approval announced');
+    expect(asked.call).not.toHaveProperty('approvalDescription');
   });
 
   it('does not gate the read-only file tools', async () => {

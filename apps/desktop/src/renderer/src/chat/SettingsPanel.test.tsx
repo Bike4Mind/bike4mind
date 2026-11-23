@@ -54,7 +54,7 @@ describe('the Settings screen', () => {
     expect(html).not.toContain('data-testid="settings-group-other"');
     const expected = [
       ['appearance', 'orchestrator-sound', 'notify-scope', 'menu-bar', 'nested-sessions'],
-      ['prompt-suggestions', 'worktree-default', 'autofix-attempts', 'orchestration-policy'],
+      ['prompt-suggestions', 'worktree-default', 'spawn-location', 'autofix-attempts', 'orchestration-policy'],
       ['local-context', 'reply-stats', 'curated-list'],
       ['local-history', 'local-data-export'],
       ['server', 'updates'],

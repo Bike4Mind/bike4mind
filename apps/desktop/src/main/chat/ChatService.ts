@@ -31,7 +31,12 @@ import { LoopScheduler, type LoopOutcome } from './LoopScheduler';
 import { realpath, stat } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { NotAuthenticatedError, SessionRevokedError, type AuthenticatedApiClient } from '@bike4mind/client-auth';
-import { DEFAULT_PROMPT_CACHE_TTL, type CompletionRunAttribution, type PromptCacheTtl } from '@bike4mind/common';
+import {
+  COMPLETION_RUN_MAX_BUDGET_CREDITS,
+  DEFAULT_PROMPT_CACHE_TTL,
+  type CompletionRunAttribution,
+  type PromptCacheTtl,
+} from '@bike4mind/common';
 import { localRunSettlement, type RunSpend } from '@shared/runSpend';
 import { readReplyStats } from '@shared/replyStats';
 import type {
@@ -61,6 +66,7 @@ import type {
   ChatSession,
   ChatSessionStatusEvent,
   ChatSessionSummary,
+  RaiseRunBudgetResult,
   ChatSpawnSuggestion,
   ChatStreamEvent,
   ChatRoundTiming,
@@ -105,6 +111,7 @@ import {
   orchestratesAgents,
   parseLocalModelId,
   pickLocalModel,
+  RUN_BUDGET_STOP,
   SERVER_CREDENTIALS_STOP,
   SESSION_EXPIRED_STOP,
 } from '@shared/chat';
@@ -209,16 +216,26 @@ import {
   supportsPromptCache,
   withCacheBreakpoints,
   withRunFallback,
+  RunBudgetExhaustedError,
+  RunNotFoundError,
   type CompletionMessage,
   type CompletionRequest,
 } from './completions';
 import { PrefixWarmGate, prefixKey, sharesSiblingPrefix } from './prefixWarmGate';
-import { readCompletionRunUsage, type CompletionRunMinter } from './completionRuns';
+import {
+  RunBudgetNotRaisedError,
+  fetchRunBudget,
+  raiseRunBudget,
+  readCompletionRunUsage,
+  type CompletionRunMinter,
+} from './completionRuns';
+import { runBudgetPausedMessage, runBudgetWarning } from './runBudget';
 import { describeAlways, outsideFoldersReason } from './approvalScope';
 import { ensureScratchDirectory, isScratchDirectory, removeScratchDirectory } from './scratchDirectory';
 import { reasoningEffortFor, requestsThinking } from './reasoningEffort';
 import { auxiliaryGeneration, turnEffortSetting, turnGeneration, turnThinks } from '@shared/modelDefaults';
 import type { ModelSettingsStore } from './ModelSettingsStore';
+import type { SpawnLocationPreference } from './SpawnLocationPreference';
 import { addUsage, foldUsage } from './streamEvents';
 import type { CompletionStreamEvent } from './streamEvents';
 import { LocalModelRemovedError, OllamaLocal, toMessages } from './OllamaLocal';
@@ -407,7 +424,7 @@ type TaskDecisionIndexLoad = {
 /** How a turn ended. Only 'completed' lets a queued message go out; see settleQueue. */
 type TurnOutcome = 'completed' | 'aborted' | 'failed' | 'expired';
 type AuxiliaryPurpose = Extract<CompletionRunAttribution['purpose'], 'title' | 'compaction' | 'suggestion'>;
-type AuxiliaryRun = { session: ChatSession; run: CompletionRunAttribution };
+type AuxiliaryRun = { session: ChatSession; run: CompletionRunAttribution; budgeted: boolean };
 
 /** Rides with a message typed while the turn ran, so the model answers it without dropping the task. */
 const MID_TURN_NOTE =
@@ -464,6 +481,9 @@ interface MidTurnArrival {
 
 /** Stored on a turn the session expired under; the thread shows it as paused, not as an error. */
 const SESSION_PAUSED_MESSAGE = 'Your session expired before this reply finished. Sign in again, then press Continue.';
+/** A budgeted run the server no longer recognises: it is not resent unattributed, and not re-minted at zero. */
+const RUN_LOST_MESSAGE =
+  'The server no longer recognises this orchestration run, so its budget cannot be enforced and this turn was not sent. Turn Orchestrate off and on to start a new run.';
 
 type SendOptions = {
   loop?: {
@@ -601,6 +621,11 @@ export interface ChatServiceDeps {
   models?: ModelCatalog;
   /** Per-model defaults from the Models screen. Absent in tests that do not set any. */
   modelSettings?: Pick<ModelSettingsStore, 'get'>;
+  /**
+   * Where a suggested session starts, from Settings. Absent in tests that do not set it, which
+   * then keep the card for every suggestion, as before the setting existed.
+   */
+  spawnLocation?: Pick<SpawnLocationPreference, 'read'>;
   /** This build's default model: what a new conversation prefers when the user has picked nothing it can have. */
   preferredModel?: string;
   /** The user's last pick in the model picker. Absent in tests that do not exercise it. */
@@ -1992,7 +2017,11 @@ export class ChatService {
   }
 
   /** Read at the start of each turn, so a change applies from the next one. */
-  async setSessionOrchestrate(sessionId: string, orchestrate: boolean): Promise<ChatSessionSummary | null> {
+  async setSessionOrchestrate(
+    sessionId: string,
+    orchestrate: boolean,
+    budgetCredits?: number
+  ): Promise<ChatSessionSummary | null> {
     const scope = this.deps.store.scopeKey();
     const session = await this.deps.store.get(sessionId);
     if (!session || this.deps.store.scopeKey() !== scope) return null;
@@ -2000,6 +2029,7 @@ export class ChatService {
       const rootPolicy: RootPolicy = {
         rootSessionId: sessionId,
         rootRunId: randomUUID(),
+        ...(budgetCredits !== undefined ? { budgetCredits } : {}),
         policy: await this.deps.store.getRolePolicy(),
       };
       // No server run is minted here: the first orchestrated turn mints one, so a toggle that never
@@ -2029,7 +2059,12 @@ export class ChatService {
   ): Promise<string | undefined> {
     const api = this.deps.getApiClient();
     if (!api || !this.deps.mintCompletionRun) return undefined;
-    const run = await this.deps.mintCompletionRun(policy.rootRunId, api.getAxiosInstance(), policy.rootSessionId);
+    const run = await this.deps.mintCompletionRun(
+      policy.rootRunId,
+      api.getAxiosInstance(),
+      policy.rootSessionId,
+      policy.budgetCredits
+    );
     if (!run) return undefined;
     this.serverRuns.set(policy.rootRunId, run.runId);
     await this.recordServerRun(requesterId, policy, run.runId, scope);
@@ -2052,37 +2087,206 @@ export class ChatService {
   }
 
   /**
+   * The orchestration policy a session's run is governed by: the ROOT's current one when the root
+   * still carries this run, else the session's own copy (taken at spawn).
+   */
+  private async governingPolicy(session: ChatSession): Promise<RootPolicy | undefined> {
+    const policy = session.orchestrationPolicy;
+    if (!policy) return undefined;
+    const root =
+      policy.rootSessionId === session.id ? session : await this.deps.store.get(policy.rootSessionId).catch(() => null);
+    return root?.orchestrationPolicy?.rootRunId === policy.rootRunId ? root.orchestrationPolicy : policy;
+  }
+
+  /**
    * The `run` an orchestrated session's agent turn is sent with; `undefined` outside orchestration
    * or when no server run id could be had, which sends the turn unattributed rather than holding
    * it. Prefers the ROOT's current policy over the session's own copy: a worker copied its policy
    * at spawn, possibly before the root's id arrived. An id found only on the root or in memory is
    * copied onto the session, since after a restart the root's policy and the map are both gone.
+   *
+   * A budgeted run is never sent unattributed: a paused one throws RunBudgetExhaustedError without
+   * a request, and one whose server run could not be minted throws, so no spend escapes the cap.
    */
-  private async runAttribution(session: ChatSession): Promise<CompletionRunAttribution | undefined> {
+  private async runAttribution(
+    session: ChatSession
+  ): Promise<{ run: CompletionRunAttribution; budgeted: boolean } | undefined> {
     const policy = session.orchestrationPolicy;
     if (!policy || !this.deps.mintCompletionRun) return undefined;
     const scope = this.deps.store.scopeKey();
-    const root =
-      policy.rootSessionId === session.id ? session : await this.deps.store.get(policy.rootSessionId).catch(() => null);
-    const rootPolicy = root?.orchestrationPolicy?.rootRunId === policy.rootRunId ? root.orchestrationPolicy : undefined;
+    const governing = (await this.governingPolicy(session)) ?? policy;
+    const budgeted = governing.budgetCredits !== undefined;
+    if (governing.budgetPaused) throw new RunBudgetExhaustedError(runBudgetPausedMessage(governing.budgetCredits));
+    const rootPolicy = governing === policy && policy.rootSessionId !== session.id ? undefined : governing;
     const known = rootPolicy?.serverRunId ?? policy.serverRunId ?? this.serverRuns.get(policy.rootRunId);
     if (known && known !== policy.serverRunId) await this.recordServerRun(session.id, policy, known, scope);
-    const serverRunId = known ?? (await this.mintServerRun(session.id, policy, scope));
+    const serverRunId = known ?? (await this.mintServerRun(session.id, governing, scope));
     if (!serverRunId) {
+      if (budgeted) {
+        throw new Error(
+          'Could not start the budgeted run with the server, so this turn was not sent. Try again in a minute.'
+        );
+      }
       this.deps.logger.warn(`CHAT: no server run id for session ${session.id}; sending its turn unattributed`);
       return undefined;
     }
     const attemptId = session.workerTask?.attempts.at(-1)?.id;
     return {
-      runId: serverRunId,
-      role: session.origin ? 'worker' : 'root',
-      purpose: 'turn',
-      // A worker session carries exactly one task, so its id names the task. Sent for a worker with
-      // no contract too, or the server folds every such worker into one id-less attempt.
-      ...(session.origin ? { taskId: session.id } : {}),
-      ...(attemptId ? { attemptId } : {}),
-      ...(session.origin ? { parentSessionId: session.origin.parentSessionId } : {}),
+      budgeted,
+      run: {
+        runId: serverRunId,
+        role: session.origin ? 'worker' : 'root',
+        purpose: 'turn',
+        // A worker session carries exactly one task, so its id names the task. Sent for a worker with
+        // no contract too, or the server folds every such worker into one id-less attempt.
+        ...(session.origin ? { taskId: session.id } : {}),
+        ...(attemptId ? { attemptId } : {}),
+        ...(session.origin ? { parentSessionId: session.origin.parentSessionId } : {}),
+      },
     };
+  }
+
+  /** Root runs whose usage is being read for the 80% warning, so overlapping rounds read once. */
+  private budgetChecks = new Set<string>();
+
+  /** The server's run id for a policy: its own record, else the one minted this app run. */
+  private serverRunIdOf(policy: RootPolicy): string | undefined {
+    return policy.serverRunId ?? this.serverRuns.get(policy.rootRunId);
+  }
+
+  /** The sessions sharing `rootRunId`: the root and every worker that copied its policy. */
+  private async runSessionIds(rootRunId: string): Promise<string[]> {
+    const summaries = await this.deps.store.list();
+    return summaries.filter(summary => summary.orchestrationPolicy?.rootRunId === rootRunId).map(summary => summary.id);
+  }
+
+  /**
+   * Mark `session`'s run paused after the server refused a completion for its budget, and return
+   * the fixed text the stopped turn stores. Every later turn in the run is refused locally, without
+   * a request, until raiseRunBudget lifts the pause.
+   */
+  private async pauseRunForBudget(session: ChatSession): Promise<string> {
+    const policy = await this.governingPolicy(session);
+    if (!policy) return runBudgetPausedMessage();
+    const scope = this.deps.store.scopeKey();
+    try {
+      for (const id of new Set([policy.rootSessionId, session.id])) {
+        await this.deps.store.setRunBudget(id, policy.rootRunId, { budgetPaused: true }, scope);
+      }
+    } catch (err) {
+      this.deps.logger.warn(`CHAT: could not record the run pause: ${err instanceof Error ? err.message : err}`);
+    }
+    const serverRunId = this.serverRunIdOf(policy);
+    const api = this.deps.getApiClient();
+    // Already paused locally: the run's numbers are only detail for the message.
+    const state =
+      serverRunId && api
+        ? await fetchRunBudget(api.getAxiosInstance(), serverRunId).catch((err: unknown) => {
+            this.deps.logger.warn(`CHAT: could not read the run budget: ${err instanceof Error ? err.message : err}`);
+            return undefined;
+          })
+        : undefined;
+    return runBudgetPausedMessage(policy.budgetCredits, state);
+  }
+
+  /**
+   * Read a budgeted run's usage after one of its rounds and, the first time it has committed 80%
+   * of the current budget, show a notice on the session that ran and on the root. A raise re-arms
+   * it, since the warning is recorded against the budget it was shown for.
+   */
+  private async checkRunBudget(session: ChatSession): Promise<void> {
+    const policy = await this.governingPolicy(session);
+    const budget = policy?.budgetCredits;
+    const serverRunId = policy ? this.serverRunIdOf(policy) : undefined;
+    const api = this.deps.getApiClient();
+    if (!policy || budget === undefined || !serverRunId || !api || policy.budgetWarnedAt === budget) return;
+    const key = `${policy.rootRunId}:${budget}`;
+    if (this.budgetChecks.has(key)) return;
+    this.budgetChecks.add(key);
+    try {
+      const state = await fetchRunBudget(api.getAxiosInstance(), serverRunId);
+      const warning = state ? runBudgetWarning(state) : undefined;
+      if (!warning) return;
+      // Recorded only while the budget is still the one read: a raise during the read makes it stale.
+      const recorded = await this.deps.store.setRunBudget(
+        policy.rootSessionId,
+        policy.rootRunId,
+        { budgetWarnedAt: budget },
+        undefined,
+        budget
+      );
+      // Another round of the run may have shown it while this one read.
+      if (!recorded || recorded.orchestrationPolicy?.budgetWarnedAt !== budget) return;
+      for (const id of new Set([session.id, policy.rootSessionId])) {
+        this.emit({ type: 'context-notice', sessionId: id, message: warning, kind: 'run-budget' });
+      }
+    } catch (err) {
+      this.deps.logger.warn(`CHAT: could not check the run budget: ${err instanceof Error ? err.message : err}`);
+    } finally {
+      this.budgetChecks.delete(key);
+    }
+  }
+
+  /**
+   * Set or raise the credit budget of the orchestration run `sessionId` belongs to. Before the run
+   * is minted this only records the budget it will be minted with. After, it raises the server's
+   * ceiling (a raise only: anything not above the current budget is refused), lifts the pause, and
+   * continues every session of the run the budget stopped. That raise is the only way a paused run
+   * resumes.
+   */
+  async raiseRunBudget(sessionId: string, budgetCredits: number): Promise<RaiseRunBudgetResult> {
+    if (!Number.isInteger(budgetCredits) || budgetCredits < 1 || budgetCredits > COMPLETION_RUN_MAX_BUDGET_CREDITS) {
+      return { ok: false, error: 'Enter a whole number of credits.' };
+    }
+    const scope = this.deps.store.scopeKey();
+    const session = await this.deps.store.get(sessionId);
+    const policy = session ? await this.governingPolicy(session) : undefined;
+    if (!session || !policy) return { ok: false, error: 'This conversation is not part of an orchestration run.' };
+    const serverRunId = this.serverRunIdOf(policy);
+    if (serverRunId && policy.budgetCredits === undefined) {
+      return {
+        ok: false,
+        error: 'This run started without a budget. Turn Orchestrate off and on to start a budgeted run.',
+      };
+    }
+    if (serverRunId) {
+      const api = this.deps.getApiClient();
+      if (!api) return { ok: false, error: 'Sign in to raise the budget.' };
+      try {
+        await raiseRunBudget(api.getAxiosInstance(), serverRunId, budgetCredits);
+      } catch (err) {
+        if (err instanceof RunBudgetNotRaisedError) {
+          return {
+            ok: false,
+            error: `Enter a budget above the current ${(policy.budgetCredits ?? 0).toLocaleString('en-US')} credits.`,
+          };
+        }
+        return { ok: false, error: err instanceof Error ? err.message : String(err) };
+      }
+    }
+    const ids = await this.runSessionIds(policy.rootRunId);
+    for (const id of ids) {
+      const updated = await this.deps.store.setRunBudget(
+        id,
+        policy.rootRunId,
+        { budgetCredits, budgetPaused: undefined },
+        scope
+      );
+      if (updated) this.deps.summaryChanged?.(updated);
+      // The 80% warning named the old budget.
+      this.emit({ type: 'context-notice-cleared', sessionId: id, kind: 'run-budget' });
+    }
+    if (!serverRunId) return { ok: true, resumed: 0 };
+    let resumed = 0;
+    for (const id of ids) {
+      const member = await this.deps.store.get(id);
+      const last = member?.messages.at(-1);
+      if (last?.role !== 'assistant' || last.stopReason !== RUN_BUDGET_STOP || this.isBusy(id)) continue;
+      const result = await this.continueReply(id);
+      if (result.ok) resumed += 1;
+      else this.deps.logger.warn(`CHAT: could not resume ${id} after a budget raise: ${result.error}`);
+    }
+    return { ok: true, resumed };
   }
 
   /**
@@ -4214,8 +4418,13 @@ export class ChatService {
       // A local turn posts nowhere, so it needs no completions endpoint.
       const serverConfig = api && !localTurn ? await this.resolveServerConfig(api) : { endpoint: '' };
       // Once per turn: a worker's attempt cannot change mid-turn. Cleared when the server refuses it.
-      let run = api && !localTurn ? await this.runAttribution(session) : undefined;
+      const attribution = api && !localTurn ? await this.runAttribution(session) : undefined;
+      let run = attribution?.run;
+      // Never resent unattributed, and the refused id is kept: minting a fresh one would restart
+      // the budget at zero. See withRunFallback.
+      const runBudgeted = attribution?.budgeted ?? false;
       const dropRun = async (): Promise<void> => {
+        if (runBudgeted) return;
         const refused = run?.runId;
         run = undefined;
         if (refused) await this.forgetServerRun(session, refused);
@@ -4343,6 +4552,7 @@ export class ChatService {
               models: catalog?.models ?? [],
               sessionModel: session.model,
               run: () => (run ? { ...run, purpose: 'explore' } : undefined),
+              runBudgeted,
               onRunRejected: dropRun,
               onUsage: spent => {
                 usage = addUsage(usage, spent);
@@ -4801,12 +5011,14 @@ export class ChatService {
                         onCompletionEvent,
                         controller.signal
                       ),
-                    dropRun
+                    dropRun,
+                    { budgeted: runBudgeted }
                   )
                 )
             );
         append(splitThinking.flush());
         const timing = timer.end();
+        if (runBudgeted) void this.checkRunBudget(session);
         if (probe) this.logRoundPhases(sessionId, session.model, roundIndex, probe.end());
 
         // Recorded before the exits below, so the round that ENDS a turn - the one carrying the
@@ -5128,13 +5340,31 @@ export class ChatService {
       // The client already refreshed and retried; what is left is a session only signing in
       // again can fix, and AuthService is showing the one notice that says so.
       const expired = err instanceof SessionRevokedError || err instanceof NotAuthenticatedError;
-      const message = expired ? SESSION_PAUSED_MESSAGE : err instanceof Error ? err.message : String(err);
-      this.deps.logger.warn(expired ? 'CHAT: reply paused: the session expired' : `CHAT: reply failed: ${message}`);
+      const budgetStopped = err instanceof RunBudgetExhaustedError;
+      // Written here, never by the model: the run has no budget left to explain itself with.
+      const message = expired
+        ? SESSION_PAUSED_MESSAGE
+        : budgetStopped
+          ? await this.pauseRunForBudget(session)
+          : err instanceof RunNotFoundError && session.orchestrationPolicy
+            ? RUN_LOST_MESSAGE
+            : err instanceof Error
+              ? err.message
+              : String(err);
+      this.deps.logger.warn(
+        expired
+          ? 'CHAT: reply paused: the session expired'
+          : budgetStopped
+            ? 'CHAT: reply paused: the run budget is used up'
+            : `CHAT: reply failed: ${message}`
+      );
       const stop = expired
         ? { stopReason: SESSION_EXPIRED_STOP }
-        : err instanceof ServerCredentialsError
-          ? { stopReason: SERVER_CREDENTIALS_STOP }
-          : {};
+        : budgetStopped
+          ? { stopReason: RUN_BUDGET_STOP }
+          : err instanceof ServerCredentialsError
+            ? { stopReason: SERVER_CREDENTIALS_STOP }
+            : {};
 
       if (segmentSettled) {
         // settleSegment already stored this reply whole, rounds and artifacts included; a
@@ -6111,7 +6341,7 @@ export class ChatService {
         const stored = await this.deps.store.changeSpawnSuggestions(sessionId, current => [...current, suggestion]);
         if (!stored) throw new Error('This conversation no longer exists.');
         this.emitSuggestions(sessionId, stored);
-        return suggestion;
+        return (await this.autoStartSuggestion(sessionId, project, suggestion)) ?? suggestion;
       },
 
       update: (id, changes) =>
@@ -6144,6 +6374,59 @@ export class ChatService {
    * queues behind a live reply exactly as typing it would. See runSuggestionHere.
    */
   async startSpawnSuggestion(request: StartSpawnSuggestionRequest): Promise<SpawnSuggestionResult> {
+    return this.startSuggestion(request, null, false);
+  }
+
+  /**
+   * Start a fresh suggestion without its card, where Settings names a location and the session's
+   * approval mode already lets tools act without asking. Null leaves the card to the user: in Ask
+   * mode, for 'ask', for a worktree outside a git repository, and after a failed start, whose
+   * reason goes on the card. It never falls back to this working directory.
+   */
+  private async autoStartSuggestion(
+    sessionId: string,
+    project: ChatProject,
+    suggestion: ChatSpawnSuggestion
+  ): Promise<ChatSpawnSuggestion | null> {
+    const location = await this.deps.spawnLocation?.read();
+    if (!location || location === 'ask') return null;
+    if (location === 'worktree' && suggestion.repository === false) return null;
+    if ((await this.deps.store.approvalMode(sessionId)) === 'ask') return null;
+    // App-picked, so a leftover branch from an earlier attempt gets -2 rather than a refusal.
+    const picked = location === 'worktree' ? await unusedBranchName(project.directory, suggestion.branch) : null;
+    const result = await this.startSuggestion(
+      {
+        sessionId,
+        suggestionId: suggestion.id,
+        placement: location,
+        prompt: suggestion.prompt,
+        title: suggestion.title,
+        ...(picked ? { branch: picked.branch } : {}),
+      },
+      picked?.reservation ?? null,
+      true
+    );
+    if (result.ok) return result.suggestion;
+    // Released only on failure: a launched spawn owns the reservation. A no-op once released.
+    if (picked?.reservation) releaseBranchName(picked.reservation);
+    const stored = await this.deps.store.changeSpawnSuggestions(sessionId, current =>
+      current.map(entry =>
+        entry.id === suggestion.id && entry.status === 'pending' ? { ...entry, autoStartError: result.error } : entry
+      )
+    );
+    if (stored) this.emitSuggestions(sessionId, stored);
+    return null;
+  }
+
+  /**
+   * `reservation` is the branch an automatic start already holds; `auto` marks a start the model
+   * is told about in its own tool result, so no later turn reports it again.
+   */
+  private async startSuggestion(
+    request: StartSpawnSuggestionRequest,
+    reservation: BranchReservation | null,
+    auto: boolean
+  ): Promise<SpawnSuggestionResult> {
     const { sessionId, suggestionId } = request;
     if (!isValidSessionId(sessionId)) return { ok: false, error: 'That conversation no longer exists.' };
     const key = `${sessionId}:${suggestionId}`;
@@ -6167,12 +6450,15 @@ export class ChatService {
       const branch = typeof request.branch === 'string' ? request.branch.trim() : '';
       if (request.placement === 'worktree' && !branch) return { ok: false, error: 'Name a branch for the worktree.' };
       const placement: SpawnPlacement =
-        request.placement === 'worktree' ? { kind: 'worktree', branch, base: suggestion.base } : { kind: 'local' };
+        request.placement === 'worktree'
+          ? { kind: 'worktree', branch, base: suggestion.base, ...(reservation ? { reservation } : {}) }
+          : { kind: 'local' };
 
       const named = suggestion.derivedTitle && title === suggestion.title ? undefined : title;
-      const outcome = await this.spawnSession(parent, prompt, named, placement, async () => {
+      const outcome = await this.spawnSession(parent, prompt, named, placement, async message => {
         await markedStarted;
-        await this.reopenSuggestion(sessionId, suggestionId);
+        // An automatic start already told the model it started, so the failure has to reach it too.
+        await this.reopenSuggestion(sessionId, suggestionId, auto ? message : undefined);
       });
       if (!outcome.ok) return { ok: false, error: outcome.message };
 
@@ -6180,13 +6466,15 @@ export class ChatService {
       const stored = await this.deps.store.changeSpawnSuggestions(sessionId, current =>
         current.map(entry => {
           if (entry.id !== suggestionId) return entry;
+          const { autoStartError: _error, ...rest } = entry;
           started = {
-            ...entry,
+            ...rest,
             title,
             prompt,
             status: 'started',
-            unreported: true,
+            ...(auto ? {} : { unreported: true }),
             started: {
+              ...(auto ? { auto: true } : {}),
               sessionId: outcome.session.id,
               title: outcome.session.title,
               placement: placement.kind,
@@ -6263,12 +6551,14 @@ export class ChatService {
   }
 
   /** Put a card whose session could not start back as it was, as the user edited it, to try again. */
-  private async reopenSuggestion(sessionId: string, suggestionId: string): Promise<void> {
+  private async reopenSuggestion(sessionId: string, suggestionId: string, autoStartError?: string): Promise<void> {
     const stored = await this.deps.store.changeSpawnSuggestions(sessionId, current =>
       current.map(entry => {
         if (entry.id !== suggestionId || entry.status !== 'started') return entry;
         const { started: _started, unreported: _unreported, ...rest } = entry;
-        return { ...rest, status: 'pending' };
+        return autoStartError
+          ? { ...rest, status: 'pending', autoStartError, unreported: true }
+          : { ...rest, status: 'pending' };
       })
     );
     if (stored) this.emitSuggestions(sessionId, stored);
@@ -8018,6 +8308,7 @@ export class ChatService {
             approvalDetail: [asked.prompt.detail, ...unshownStops, ...(outsideReason ? [outsideReason] : [])].join(
               '\n\n'
             ),
+            ...(prompt.summary ? { approvalDescription: prompt.summary } : {}),
             ...(approvalReasons.length > 0 ? { approvalReasons } : {}),
             ...(asked.parts ? { approvalParts: asked.parts } : {}),
             ...(prompt.diff ? { approvalDiff: prompt.diff } : {}),
@@ -8630,7 +8921,10 @@ export class ChatService {
           onEvent,
           signal
         ),
-      () => (attributed ? this.forgetServerRun(attributed.session, attributed.run.runId) : undefined)
+      // A budgeted run keeps its id: re-minting would restart the budget at zero.
+      () =>
+        attributed && !attributed.budgeted ? this.forgetServerRun(attributed.session, attributed.run.runId) : undefined,
+      { budgeted: attributed?.budgeted }
     );
   }
 
@@ -8645,8 +8939,8 @@ export class ChatService {
     purpose: AuxiliaryPurpose
   ): Promise<AuxiliaryRun | undefined> {
     if (isLocalModel(model)) return undefined;
-    const run = await this.runAttribution(session);
-    return run ? { session, run: { ...run, purpose } } : undefined;
+    const attribution = await this.runAttribution(session);
+    return attribution ? { session, run: { ...attribution.run, purpose }, budgeted: attribution.budgeted } : undefined;
   }
 
   /**
@@ -10387,6 +10681,12 @@ export const RUN_HERE_PREAMBLE =
 /** The note the model gets about one suggestion the user acted on. See reportSuggestionOutcomes. */
 export function describeSuggestionOutcome(suggestion: ChatSpawnSuggestion): string {
   const name = `suggestion ${suggestion.id} ("${suggestion.title}")`;
+  if (suggestion.status === 'pending' && suggestion.autoStartError) {
+    return (
+      `The automatic start of ${name} failed after you were told it started: ${suggestion.autoStartError} ` +
+      'Nothing is running for it. It is back on the card for the user to start or dismiss; tell them.'
+    );
+  }
   const started = suggestion.started;
   if (suggestion.status !== 'started' || !started) {
     return `The user dismissed ${name}. Nothing was started; do not suggest it again unless they ask.`;

@@ -713,6 +713,24 @@ export const VIEW_REGISTRY: NavigableView[] = [
     requiresAdmin: true,
   },
   {
+    id: 'admin.text_moderation_review',
+    section: 'admin',
+    label: 'Text moderation review',
+    description:
+      'Review users throttled or pending suspension for flagged prompts, or with a severe-category hit; confirm the suspension, keep them throttled or return them to active',
+    navigationType: 'tab',
+    target: '84', // AdminTab.TextModerationReview
+    keywords: [
+      'text moderation',
+      'flagged prompts',
+      'moderation hits',
+      'suspend pending',
+      'throttled users',
+      'moderation appeal',
+    ],
+    requiresAdmin: true,
+  },
+  {
     id: 'admin.signup_risk_review',
     section: 'admin',
     label: 'Risk review',

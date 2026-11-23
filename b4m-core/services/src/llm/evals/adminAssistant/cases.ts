@@ -162,6 +162,12 @@ export const ADMIN_EVAL_CASES: readonly AdminEvalCase[] = [
     expectViewIds: ['admin.moderation_incidents'],
   },
   {
+    id: 'howto-text-moderation',
+    category: 'how-to',
+    question: 'Where do I review users who are pending suspension for flagged prompts?',
+    expectViewIds: ['admin.text_moderation_review'],
+  },
+  {
     id: 'howto-feedback',
     category: 'how-to',
     question: 'How do I triage user bug reports?',
