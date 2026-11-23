@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { execFileSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -78,12 +79,26 @@ const GIT_SCAN =
 // CI never caches (the "Run repo-scan tests" step), so they stay out of the `test` hash.
 const REPO_LANE_FILE = /\.repo\.test\.[cm]?[jt]sx?$/;
 const CLIMBING_LITERAL = /['"`](\.\.(?:\/[^'"`\s$]*)?)['"`]/g;
+// Computed joins cannot be inferred safely; changes need a fresh input audit or an uncached lane.
+const AUDITED_ROOT_READERS = {
+  'apps/workers/src/cli/tools.wiring.test.ts': 'fe20c678c7cc82e50e8819ee8633667090eaea5144d4250bab803c242afdccb2',
+  'apps/workers/src/database/migratorInvocation.wiring.test.ts': '112b67a3ee6a239d7644d71a074791ea19ac8cc32cf9b44dba1aee70a9a86455',
+  'b4m-core/infra/src/__tests__/bucketRouteCollision.test.ts': '7de59edfa8480f593b890d222078b24809bc6d47a5d2356be68c8ff121edc661',
+  'b4m-core/infra/src/__tests__/changelogGithubRetry.test.ts': 'e71168a74ce0b031e6ab5f4959bd26f904d6dde4d1bc0f3e07fcf5765675e1ac',
+  'b4m-core/resource/src/index.test.ts': '9c39bb47b367afedcc09d29b232392f9da5581e99058c20b9592bd779e2f99a1',
+  'b4m-core/resource/src/selfHostAppUrl.test.ts': '2ce51bb6b3f7990e92bc95adc15db1619dac25456f11182d2a18562b53a15890',
+  'b4m-core/resource/src/selfHostQueueParity.test.ts': 'e3cf442449fad5938b53d5d5dd225d6a11b48d1ca59f569582ad81536e1fc027',
+  'packages/server-utils/src/utils/ip.wiring.test.ts': 'f2a34abcea1d1b8479363aaea456e3ff704ff465aa71ed95dc213449eb187b6c',
+};
 
 function rootLiteralPaths(files) {
   const targets = new Set();
   for (const file of files) {
     const source = fs.readFileSync(path.join(repoRoot, file), 'utf8');
     if (!escapedPaths(path.dirname(file), [file]).includes('.')) continue;
+    expect(createHash('sha256').update(source).digest('hex'), `${file}: re-audit computed root reads and their inputs`).toBe(
+      AUDITED_ROOT_READERS[file]
+    );
     for (const [, literal] of source.matchAll(/['"`]([^'"`\s$]+)['"`]/g)) {
       if (literal.startsWith('.') && !literal.startsWith('.changeset/') && !literal.startsWith('.env.')) continue;
       if (path.isAbsolute(literal) || literal.includes('*')) continue;

@@ -285,7 +285,7 @@
         "packages/server-utils/src/tutorials/__tests__/models.test.ts",
         "packages/server-utils/src/tutorials/__tests__/overrides.test.ts",
         "packages/server-utils/src/tutorials/__tests__/overridesRoute.test.ts",
-        "packages/server-utils/src/tutorials/__tests__/registry.clientImports.test.ts",
+        "packages/server-utils/src/tutorials/__tests__/registry.clientImports.repo.test.ts",
         "packages/server-utils/src/tutorials/__tests__/registry.test.ts",
         "packages/server-utils/src/tutorials/__tests__/service.test.ts",
         "packages/server-utils/src/tutorials/__tests__/sheet.test.ts",
