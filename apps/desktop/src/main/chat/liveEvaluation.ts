@@ -1,12 +1,22 @@
 import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import type { ChatModelOption } from '@shared/chat';
 import type { AuthService } from '../auth/AuthService';
 import { ChatService } from './ChatService';
 import { ModelCatalog } from './ModelCatalog';
 import { SessionStore } from './SessionStore';
 import { AccessStore } from './tools/AccessStore';
 import { bindEvaluationModel } from './completions';
+import { supportsDeferredTools } from './deferredTools';
 import { EvaluationBudget, EVALUATION_LIMITS, evaluationContext, liveEvaluationBlockers } from './evaluationBudget';
+
+export function effectiveEvaluationArms(model: ChatModelOption) {
+  const supported = supportsDeferredTools(model);
+  return [
+    { name: 'reference', deferred: false, skip: false },
+    { name: 'deferred-zero', deferred: supported, skip: !supported },
+  ];
+}
 
 /** Main-process entry point only; no token or auth-store access is exposed to the evaluator. */
 export async function runLiveEvaluation(auth: AuthService, directory: string, optedIn: boolean): Promise<void> {
@@ -49,9 +59,13 @@ export async function runLiveEvaluation(auth: AuthService, directory: string, op
   const outcomes: { arm: string; accepted: boolean; status: string }[] = [];
   try {
     await evaluationContext.run(budget, async () => {
-      for (const deferred of [false, true]) {
-        const outcome = { arm: deferred ? 'deferred-zero' : 'reference', accepted: false, status: 'failed' };
+      for (const arm of effectiveEvaluationArms(pinned)) {
+        const outcome = { arm: arm.name, accepted: false, status: 'failed' };
         outcomes.push(outcome);
+        if (arm.skip) {
+          outcome.status = 'duplicate-effective-arm-not-run';
+          continue;
+        }
         const root = await mkdtemp(join(directory, 'fixture-'));
         await mkdir(join(root, 'instructions'));
         await writeFile(join(root, 'tiny.txt'), 'z');
@@ -64,7 +78,7 @@ export async function runLiveEvaluation(auth: AuthService, directory: string, op
           models,
           logger,
           userInstructionsRoot: join(root, 'instructions'),
-          deferredTools: deferred ? { startSetMaxTokens: 0 } : undefined,
+          deferredTools: arm.deferred ? { startSetMaxTokens: 0 } : undefined,
           turnLimits: { rounds: EVALUATION_LIMITS.rounds },
           getApiClient: () => api,
           getEnvironmentUrl: () => auth.getState().environment.url,

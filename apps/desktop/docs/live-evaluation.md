@@ -24,8 +24,11 @@ After those gates are implemented and reviewed, the entry point uses
 `AuthService.getSessionBoundApiClient()`, the account's real ModelCatalog and real
 ChatService. It neither reads auth stores nor accepts provider keys. Only the
 exact available OpenAI-backed `gpt-6.1-sol` record is admitted; there is no Opus
-fallback. The catalog price map is recorded. Two sequential isolated file-read
-fixtures compare reference and zero deferred start set. Acceptance requires a
+fallback. The catalog price map is recorded. Effective arms are selected before
+fixture creation: the unsupported zero deferred start set is reported as
+`duplicate-effective-arm-not-run` for this OpenAI model, with no second session,
+request or reservation. Only the reference runs; this is not a matched comparison
+or evidence for deferred-loading savings. Acceptance requires a
 successful file_read and the exact single-character answer, not just a success
 HTTP response. No other tools, workers or model upgrades are admitted.
 
