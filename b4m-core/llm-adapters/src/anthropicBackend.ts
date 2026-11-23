@@ -3559,6 +3559,12 @@ export class AnthropicBackend implements ICompletionBackend {
               return null; // Mark for removal
             }
           }
+          // Gemini's thought_signature rides on tool_use blocks a Gemini round produced; Anthropic
+          // rejects the extra field with a 400, which broke every Gemini -> Claude fallback mid-turn.
+          if (block.type === 'tool_use' && 'thought_signature' in block) {
+            const { thought_signature: _geminiOnly, ...anthropicBlock } = block;
+            return anthropicBlock;
+          }
           return block;
         })
         .filter(block => block !== null);
