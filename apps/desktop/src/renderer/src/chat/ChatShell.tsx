@@ -1078,6 +1078,10 @@ export function ChatShell({
     }),
     [selectSession, sessions, toggleArchived]
   );
+  const paneSessions = useMemo(
+    () => ({ sessions, statuses, prSummaries, preparing }),
+    [sessions, statuses, prSummaries, preparing]
+  );
   const initialCodeSetup = conversation.session?.mode === 'code' && conversation.messages.length === 0;
 
   /**
@@ -1942,6 +1946,7 @@ export function ChatShell({
                     focus={stageFocus}
                     conversationRequest={conversationRequest}
                     presenter={stagePresenter}
+                    paneSessions={paneSessions}
                     dockControl={
                       <Tooltip
                         size="sm"

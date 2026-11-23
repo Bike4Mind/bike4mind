@@ -17,8 +17,10 @@ import { NeedsYouCard } from './NeedsYouCard';
 import { toMiniPayload, useOrchestrateMiniWindow, usePublishOrchestrateMini } from './orchestrateMini';
 import { numberAgents, redactForPresenter, restorePresentedAction, type PresentedStage } from './presenter';
 import type { OrchestratorViewId } from './orchestratorPrefs';
-import type { OrchestratorLayout } from './orchestratorLayout';
+import type { OrchestratorLayout, OrchestratorPane } from './orchestratorLayout';
 import { StageLayout } from './StageLayout';
+import { pinLabel, resolvePaneSession } from './panePins';
+import { PinnedPane, type PaneSessionSource } from './PinnedPane';
 import { assignPersonas, type AgentPersona } from '@shared/agentPersona';
 import { formatRosterCost, summarizeRoster, type AgentView, type ParentView } from './roster';
 import { TableView } from './TableView';
@@ -135,6 +137,11 @@ export interface OrchestratorStageProps {
   /** Showing the parent conversation takes precedence over an agent peek. */
   conversationRequest?: number;
   presenter?: StagePresenter;
+  /**
+   * The shell's sessions, so a pane in a split can be pinned to another session (panePins.ts) and draw its
+   * roster. Without it every pane shows this stage's roster.
+   */
+  paneSessions?: PaneSessionSource;
 }
 
 const NO_PARENT: ParentView = {};
@@ -177,6 +184,7 @@ export function OrchestratorStage({
   focus,
   conversationRequest,
   presenter,
+  paneSessions,
 }: OrchestratorStageProps) {
   const [prAgentId, setPrAgentId] = useState<string | null>(null);
   const [localSelectedId, setLocalSelectedId] = useState<string | null>(null);
@@ -377,6 +385,28 @@ export function OrchestratorStage({
     restoreAction,
   };
 
+  // A pane pinned to another session draws that session's roster; the stage's selection, drawer, finale and
+  // desk stay the active session's, so a click there opens the agent's session instead.
+  const renderPane = (pane: OrchestratorPane) => {
+    if (!renderView) return null;
+    const pinned =
+      paneSessions && resolvePaneSession(pane, { activeId: rootId, sessions: paneSessions.sessions, split });
+    if (!paneSessions || !pinned) return renderView(pane.view, viewProps);
+    return (
+      <PinnedPane
+        key={pinned.id}
+        rootId={pinned.id}
+        view={pane.view}
+        label={pinLabel(pinned, rootId, paneSessions.sessions, { presenting })}
+        source={paneSessions}
+        renderView={renderView}
+        onOpenSession={actions.open}
+        presenterNumbers={presenting ? presenterNumbers : undefined}
+        settled={settled}
+      />
+    );
+  };
+
   const snapshot = useMemo(
     () => (focused && rootId !== undefined ? toViewSnapshot(rootId, agents, parent, approvals) : undefined),
     [focused, rootId, agents, parent, approvals]
@@ -468,6 +498,7 @@ export function OrchestratorStage({
             focus={focus}
             presenter={presenter}
             miniWindow={miniWindow}
+            paneSessions={paneSessions && { activeId: rootId, sessions: paneSessions.sessions, presenting }}
           />
           {presenting && <PresentingBadge />}
           <Typography
@@ -535,11 +566,7 @@ export function OrchestratorStage({
           ) : snapshot ? (
             <FocusPanel snapshot={snapshot} onAction={onViewAction} />
           ) : renderView ? (
-            <StageLayout
-              layout={layout}
-              onLayoutChange={onLayoutChange}
-              renderPane={paneView => renderView(paneView, viewProps)}
-            />
+            <StageLayout layout={layout} onLayoutChange={onLayoutChange} renderPane={renderPane} />
           ) : (
             <TableView {...viewProps} />
           )}

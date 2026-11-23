@@ -156,6 +156,19 @@ describe('orchestratorPrefs', () => {
       expect(readLayout('s3', '/other')).toEqual(split);
     });
 
+    it('keeps session pins at the session level only, stripping them at the project and global levels', () => {
+      const pinnedSplit: OrchestratorLayout = {
+        ...split,
+        panes: [split.panes[0], { ...split.panes[1], sessionId: 'other' }],
+      };
+      writeLayout('s1', pinnedSplit, '/repo');
+      expect(readLayout('s1', '/repo')).toEqual(pinnedSplit);
+      expect(readLayout('s2', '/repo')).toEqual(split);
+      expect(readLayout('s3', '/elsewhere')).toEqual(split);
+      expect(window.localStorage.getItem('b4m.orchestrator.projectLayout./repo')).not.toContain('sessionId');
+      expect(window.localStorage.getItem('b4m.orchestrator.lastLayout')).not.toContain('sessionId');
+    });
+
     it("writes the first pane's view as the single view too", () => {
       writeLayout('s1', split, '/repo');
       expect(readView('s1', '/repo')).toBe('board');

@@ -103,7 +103,7 @@ describe('PR indicators across Show agents views', () => {
             panes: ORCHESTRATOR_VIEWS.slice(0, preset.panes).map(view => ({ view, size: 1 / preset.panes })),
           }}
           onLayoutChange={vi.fn()}
-          renderPane={view => renderOrchestratorView(view, props)}
+          renderPane={pane => renderOrchestratorView(pane.view, props)}
         />
       );
       expect(agentIndicators()).toHaveLength(preset.panes * agents.length);

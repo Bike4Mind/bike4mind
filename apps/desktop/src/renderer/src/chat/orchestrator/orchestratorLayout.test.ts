@@ -7,9 +7,12 @@ import {
   parseLayout,
   parseStoredLayout,
   presetOf,
+  layoutsEqual,
   resizePanes,
+  setPaneSession,
   setPaneView,
   singlePaneLayout,
+  withoutPins,
   type OrchestratorLayout,
 } from './orchestratorLayout';
 
@@ -25,7 +28,78 @@ function sizes(layout: OrchestratorLayout | undefined): number[] {
   return layout?.panes.map(pane => pane.size) ?? [];
 }
 
+const pinned: OrchestratorLayout = {
+  split: 'row',
+  panes: [
+    { view: 'board', size: 0.5 },
+    { view: 'transit', size: 0.5, sessionId: 'other' },
+  ],
+};
+
 describe('orchestratorLayout', () => {
+  describe('session pins', () => {
+    it('parses a pane pinned to a session', () => {
+      expect(parseLayout(pinned)).toEqual(pinned);
+      expect(parseStoredLayout(JSON.stringify(pinned))).toEqual(pinned);
+    });
+
+    it('parses a stored layout from before pins exactly as before, with no sessionId key', () => {
+      const parsed = parseLayout(sideBySide);
+      expect(parsed).toEqual(sideBySide);
+      expect(parsed?.panes.every(pane => !('sessionId' in pane))).toBe(true);
+    });
+
+    it.each([
+      ['an empty string', ''],
+      ['a number', 42],
+      ['null', null],
+    ])('drops a pin that is %s and keeps the pane and the layout', (_label, sessionId) => {
+      const parsed = parseLayout({
+        split: 'row',
+        panes: [
+          { view: 'board', size: 0.5 },
+          { view: 'transit', size: 0.5, sessionId },
+        ],
+      });
+      expect(parsed).toEqual(sideBySide);
+      expect(parsed?.panes[1]).not.toHaveProperty('sessionId');
+    });
+
+    it('keeps a pin through the unknown-view fallback', () => {
+      const parsed = parseLayout({ split: 'row', panes: [{ view: 'hologram', size: 1, sessionId: 's9' }] });
+      expect(parsed?.panes[0]).toEqual({ view: FALLBACK_PANE_VIEW, size: 1, sessionId: 's9' });
+    });
+
+    it('setPaneSession pins one pane and undefined unpins it', () => {
+      const set = setPaneSession(sideBySide, 1, 'other');
+      expect(set).toEqual(pinned);
+      const cleared = setPaneSession(set, 1, undefined);
+      expect(cleared).toEqual(sideBySide);
+      expect(cleared.panes[1]).not.toHaveProperty('sessionId');
+      expect(setPaneSession(sideBySide, 5, 'other')).toBe(sideBySide);
+    });
+
+    it('withoutPins drops every pin and keeps views and sizes', () => {
+      expect(withoutPins(pinned)).toEqual(sideBySide);
+      expect(withoutPins(sideBySide)).toBe(sideBySide);
+    });
+
+    it('layoutsEqual tells a pinned pane from an unpinned one', () => {
+      expect(layoutsEqual(pinned, sideBySide)).toBe(false);
+      expect(layoutsEqual(pinned, { ...pinned })).toBe(true);
+    });
+
+    it('applyPreset keeps pins on the panes it keeps, and drops the pin when going to one pane', () => {
+      expect(applyPreset(pinned, 'three-across').panes.map(pane => pane.sessionId)).toEqual([
+        undefined,
+        'other',
+        undefined,
+      ]);
+      const single = applyPreset(setPaneSession(pinned, 0, 'first'), 'single');
+      expect(single.panes).toEqual([{ view: 'board', size: 1 }]);
+    });
+  });
+
   describe('parseLayout', () => {
     it('accepts a row or column of one to three registered views', () => {
       expect(parseLayout(sideBySide)).toEqual(sideBySide);

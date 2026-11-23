@@ -8,6 +8,7 @@ import { snapshotView, type SnapshotViewProps } from './snapshotView';
 import { presenterAgentTitle } from './presenter';
 import { RESIZE_KEY_STEP } from './StageLayout';
 import { agentFixture, createThemedMount, el, query } from './testUtils';
+import { sessionFixture } from './sessionFixture';
 
 const chime = vi.hoisted(() => ({ playChime: vi.fn() }));
 vi.mock('./chime', () => chime);
@@ -231,5 +232,82 @@ describe('StageLayout in the stage', () => {
     await renderStage({ ...SIDE_BY_SIDE, split: 'column' });
     expect(el('orchestrator-layout').dataset.split).toBe('column');
     expect(el('orchestrator-pane-handle-0').getAttribute('aria-orientation')).toBe('horizontal');
+  });
+});
+
+describe('panes pinned to another session', () => {
+  // root (the active session) has the stage's agents; other is a separate orchestration with one agent.
+  const SESSIONS = [
+    sessionFixture('root'),
+    sessionFixture('a1', 'root'),
+    sessionFixture('other', undefined, { orchestrate: true, title: 'Other run' }),
+    sessionFixture('o1', 'other', { title: 'Secret other agent' }),
+  ];
+  const paneSessions = { sessions: SESSIONS, statuses: new Map(), prSummaries: new Map() };
+  const pinnedSplit = (sessionId: string): OrchestratorLayout => ({
+    split: 'row',
+    panes: [
+      { view: 'board', size: 0.5 },
+      { view: 'transit', size: 0.5, sessionId },
+    ],
+  });
+  const renderPinned = (layout: OrchestratorLayout, presenting = false) =>
+    themed.render(
+      <OrchestratorStage
+        agents={AGENTS}
+        rootId="root"
+        layout={layout}
+        onLayoutChange={onLayoutChange}
+        actions={actions}
+        introPlaying={false}
+        renderView={renderProbeView}
+        paneSessions={paneSessions}
+        presenter={presenting ? { on: true, onToggle: vi.fn() } : undefined}
+      />
+    );
+
+  it("draws the pinned session's roster in its pane and the active roster in the others", async () => {
+    await renderPinned(pinnedSplit('other'));
+    expect(
+      snapshotsByView
+        .get('board')
+        ?.agents.map(agent => agent.id)
+        .sort()
+    ).toEqual(['a1', 'a2']);
+    expect(snapshotsByView.get('transit')?.root.id).toBe('other');
+    expect(snapshotsByView.get('transit')?.agents.map(agent => agent.id)).toEqual(['o1']);
+    const pane = el('orchestrator-pane-1');
+    expect(pane.contains(el('orchestrator-pinned-pane'))).toBe(true);
+    expect(el('orchestrator-pinned-pane-label').textContent).toBe('Other run');
+  });
+
+  it("opens a clicked agent's session instead of selecting it on the active stage", async () => {
+    await renderPinned(pinnedSplit('other'));
+    act(() => el('probe-transit-open-o1').click());
+    expect(actions.open).toHaveBeenCalledWith('o1');
+    expect(query('orchestrator-peek-drawer-region')).toBeNull();
+  });
+
+  it.each([
+    ['a session no longer listed', 'deleted'],
+    ['the active session itself', 'root'],
+  ])('falls back to the active roster for a pin to %s', async (_label, sessionId) => {
+    await renderPinned(pinnedSplit(sessionId));
+    expect(query('orchestrator-pinned-pane')).toBeNull();
+    expect(snapshotsByView.get('transit')).toEqual(snapshotsByView.get('board'));
+  });
+
+  it('ignores the pin on a single pane', async () => {
+    await renderPinned({ split: 'row', panes: [{ view: 'transit', size: 1, sessionId: 'other' }] });
+    expect(query('orchestrator-pinned-pane')).toBeNull();
+    expect(snapshotsByView.get('transit')?.root.id).toBe('root');
+  });
+
+  it('redacts the pinned pane in Presenter mode too', async () => {
+    await renderPinned(pinnedSplit('other'), true);
+    const titles = snapshotsByView.get('transit')?.agents.map(agent => agent.title);
+    expect(titles).toEqual([presenterAgentTitle(3)]);
+    expect(el('orchestrator-pinned-pane-label').textContent).toBe('Session 1');
+    expect(document.body.textContent).not.toMatch(/Secret other agent|Other run/);
   });
 });
