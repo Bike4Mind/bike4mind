@@ -93,3 +93,11 @@ test('setup graph remains automatic and includes unauthenticated multifile depen
     assert.ok(closure.includes(name), name);
   }
 });
+
+test('empty-argument PR config fallback excludes restricted suites and keeps setup dependencies', () => {
+  const pr = loadProjects({ PR_E2E: 'true', AI_LATENCY_RUN: 'false', EXPORT_BYTES_RUN: 'false' });
+  assert.ok(EXCLUDED.every(name => !pr.some(project => project.name === name)));
+  assert.deepEqual(eligibleProjects(pr), eligibleProjects(projects));
+  assert.ok(dependencyClosure(pr, eligibleProjects(pr)).includes('setup-projects'));
+  assert.ok(EXCLUDED.every(name => projects.some(project => project.name === name)));
+});

@@ -2,6 +2,7 @@ import { defineConfig, devices } from '@playwright/test';
 import dotenv from 'dotenv';
 import path from 'path';
 import { TIMEOUTS } from './e2e/constants';
+import { prEligibleConfigProjects } from './e2e/project-selection.mjs';
 
 dotenv.config({ path: path.resolve(__dirname, '.env.e2e') });
 
@@ -147,7 +148,7 @@ const specProjects = [
     : []),
 ];
 
-export default defineConfig({
+const config = defineConfig({
   testDir: './e2e',
   fullyParallel: true,
   forbidOnly: !!process.env.CI,
@@ -295,3 +296,9 @@ export default defineConfig({
       : []),
   ],
 });
+
+if (process.env.PR_E2E === 'true' && config.projects) {
+  config.projects = prEligibleConfigProjects(config.projects);
+}
+
+export default config;

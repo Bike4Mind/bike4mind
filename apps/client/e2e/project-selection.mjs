@@ -59,16 +59,21 @@ export function dependencyClosure(projects, names) {
   return [...seen];
 }
 
-export function eligibleProjects(projects) {
+export function prEligibleConfigProjects(projects) {
   return projects.filter(project => {
-    if (isDependency(project.name) || EXCLUDED.includes(project.name)) return false;
+    if (EXCLUDED.includes(project.name)) return false;
     try {
       return !dependencyClosure(projects, [project.name]).some(name => EXCLUDED.includes(name));
     } catch {
       // Broken graphs must not turn into a green empty run; let Playwright reject them.
       return true;
     }
-  }).map(project => project.name).sort();
+  });
+}
+
+export function eligibleProjects(projects) {
+  return prEligibleConfigProjects(projects).filter(project => !isDependency(project.name))
+    .map(project => project.name).sort();
 }
 
 export function classificationErrors(projects, files) {
