@@ -1,9 +1,32 @@
 # Post-merge full-suite triage
 
-`post-merge-triage.yml` observes failed `CI` pushes to main and the two scheduled
+When explicitly enabled, `post-merge-triage.yml` observes failed `CI` pushes to main and the two scheduled
 `E2E Tests (Manual)` full-suite runs. It does not dispatch tests, alter coverage,
 merge PRs, close tracking on green, or use an LLM. Existing bot review remains
 separate; it does not establish failure causality.
+
+## Disabled-by-default staged rollout
+
+Landing this workflow does not enable writes. Two repository Actions variables
+require the exact lowercase string `true`:
+
+- `POST_MERGE_TRIAGE_ENABLED`: enables automatic issue tracking and non-dry manual
+  tracking. Unset, empty or any other value skips the write job.
+- `POST_MERGE_REMEDIATION_ENABLED`: additionally required for confirmed non-dry
+  draft remediation and App-token generation. It does not enable tracking alone.
+
+No variables, App grants or secrets are changed by this implementation. Clearing
+the tracking opt-in disables all write paths; clearing only the remediation
+opt-in leaves tracking enabled but disables draft requests and their App token.
+The planner also enforces both opt-ins before making any API calls for a write
+request, even if called directly with a remediation client.
+
+Manual `dry_run=true` remains available on main while disabled. Its separate job
+has only actions/contents/issues read permissions, forces dry-run planning,
+references no secrets and has no App-token step. `run_id` is sufficient for an
+ordinary historical plan; reproduction and parent IDs are needed only when
+requesting last-change confirmation. A rejected confirmation can fail the plan
+but cannot publish a blocker, issue, branch, commit or PR in dry-run mode.
 
 ## Tracking and diagnostics
 
@@ -51,7 +74,8 @@ triage > Run workflow**, on **main**, with:
 4. `confirmed_last_change`: only after inspecting the same failing test on head,
    verifying it passes on parent, and reviewing the change for safe reversal.
 5. Leave `dry_run` true first. Inspect the triage job's classification.
-6. Repeat with `dry_run` false only after confirming the evidence.
+6. Repeat with `dry_run` false only after confirming the evidence and explicitly
+   enabling both repository rollout opt-ins through the approved rollout process.
 
 Repeated failed jobs plus a green parent alone do **not** prove causality; the
 maintainer attestation is essential. No run is dispatched automatically.
@@ -101,13 +125,35 @@ catalog diagnostics, not workflow syntax or expression checks.
 
 Mocked tests cover representative failed runs, passing/recovered runs, setup,
 known failures, deduplication, trust rejection, draft API behavior and blockers.
-They make no live GitHub writes. **This is not live operational proof.** After
-landing, a maintainer must inspect a naturally failed eligible full run and its
-tracking, verify a repeated event reuses it, then use a read-only dry-run dispatch
-with reviewed historical CI evidence. Confirm App grants before an authorized
-real draft request. Do not intentionally dispatch a failing full suite or create
-a live revert just to test this automation. Until this is done, rollout remains
-pending operational validation; missing causality is a blocker, never green.
+They make no live GitHub writes. **This is not live operational proof.** The
+workflow can land disabled without claiming the live failure path is operational.
+After landing, follow these stages:
+
+1. Leave both variables unset. Dispatch on main with `run_id` from a naturally
+   failed eligible historical run and `dry_run=true`. Confirm classification,
+   original-run eligibility and no issue/PR/branch writes or App-token step.
+2. Review App grants and tracking permissions through the approved process.
+   Explicitly opt in to tracking only when authorized; do not enable remediation.
+3. Inspect the next naturally failed eligible full run and its tracking. Replay
+   that event's evidence with an authorized non-dry tracking dispatch and confirm
+   the original issue is reused without duplicate evidence. Do not manufacture
+   failures or dispatch a failing full suite for validation.
+4. Keep remediation disabled until a real incident has reviewed head/parent
+   test-level evidence and an authorized operator approves the App grants and
+   remediation opt-in. Use dry-run confirmation first. Never create a real draft
+   merely to test credentials; the first authorized real remediation remains
+   draft pending normal full checks and human review.
+
+Until each stage is evidenced, its operational claim remains unverified. Missing
+causality is a blocker, never green. No stage authorizes an automatic merge.
+
+Read-only pre-landing inspection validated the API metadata and main ancestry of
+[a historical main CI failure](https://github.com/Bike4Mind/bike4mind/actions/runs/45112287572)
+and [a scheduled full E2E failure](https://github.com/Bike4Mind/bike4mind/actions/runs/45098561238).
+The local planner classified their three and one failed jobs respectively as
+uncertain/blocked. Only metadata GET requests were made, without reading logs or
+dispatching workflows. This supports eligibility assumptions, not live workflow
+delivery, token grants, tracking deduplication or remediation readiness.
 
 GitHub concurrency serializes writes but retains only one pending run per group:
 bursts can replace an older pending triage invocation. Original CI/E2E runs remain

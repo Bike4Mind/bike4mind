@@ -11,7 +11,7 @@ const run = (overrides = {}) => ({
 });
 const job = (name = 'Run tests') => ({ id: 200, name: 'Run Tests (client 1/3)', conclusion: 'failure', steps: [{ name, conclusion: 'failure' }] });
 
-function harness({ target = run(), issues = [], comments = [], failedJobs = [job()], inputs, app = false, main = head, reproduction = run({ id: 101 }), baseline = run({ id: 99, head_sha: parent, conclusion: 'success' }), files = [{ filename: 'apps/client/server/calculate.ts', status: 'modified' }], existingPr = [] } = {}) {
+function harness({ target = run(), issues = [], comments = [], failedJobs = [job()], inputs, app = false, main = head, reproduction = run({ id: 101 }), baseline = run({ id: 99, head_sha: parent, conclusion: 'success' }), files = [{ filename: 'apps/client/server/calculate.ts', status: 'modified' }], existingPr = [], rollout = { tracking: 'true', remediation: 'true' } } = {}) {
   const github = { rest: { actions: {}, issues: {}, repos: {}, pulls: {}, git: {} }, paginate: vi.fn(async (method, args) => method(args)) };
   github.rest.actions.getWorkflowRun = vi.fn(async ({ run_id }) => ({ data: run_id === 101 ? reproduction : run_id === 99 ? baseline : target }));
   github.rest.actions.listJobsForWorkflowRunAttempt = vi.fn(async () => failedJobs);
@@ -29,7 +29,7 @@ function harness({ target = run(), issues = [], comments = [], failedJobs = [job
   github.rest.git.getRef = vi.fn(async () => ({ data: { object: { sha: 'e'.repeat(40) } } }));
   github.rest.git.createRef = vi.fn(async () => ({}));
   const context = { repo: { owner: 'Bike4Mind', repo: 'bike4mind' }, eventName: inputs ? 'workflow_dispatch' : 'workflow_run', payload: { workflow_run: target } };
-  const execute = () => triage({ github, remediation: app ? github : null, context, core: { info: vi.fn() }, inputs });
+  const execute = () => triage({ github, remediation: app ? github : null, context, core: { info: vi.fn() }, inputs, rollout });
   return { github, context, execute };
 }
 const confirmedInputs = { run_id: '100', reproduction_run_id: '101', parent_run_id: '99', confirmed_last_change: 'true', dry_run: 'false' };
@@ -90,6 +90,53 @@ describe('conservative classification and evidence', () => {
 });
 
 describe('mocked API orchestration', () => {
+  const expectNoWrites = github => {
+    for (const method of [github.rest.issues.create, github.rest.issues.createComment,
+      github.rest.git.createCommit, github.rest.git.createRef, github.rest.pulls.create]) {
+      expect(method).not.toHaveBeenCalled();
+    }
+  };
+  it('defaults an omitted rollout argument to disabled without accessing the API', async () => {
+    const h = harness();
+    expect(await triage({ context: h.context, core: { info: vi.fn() } })).toEqual([]);
+  });
+  it('disables automatic and manual writes by default, even when a token is supplied', async () => {
+    for (const inputs of [undefined, { run_id: '100', dry_run: 'false' }, confirmedInputs]) {
+      const h = harness({ inputs, app: true, rollout: {} });
+      expect(await h.execute()).toEqual([]);
+      expect(h.github.rest.actions.getWorkflowRun).not.toHaveBeenCalled();
+      expectNoWrites(h.github);
+    }
+  });
+  it.each([undefined, '', 'false', 'TRUE', true])('requires exact tracking opt-in, not %s', async tracking => {
+    const h = harness({ rollout: { tracking, remediation: 'true' } });
+    expect(await h.execute()).toEqual([]);
+    expectNoWrites(h.github);
+  });
+  it.each([undefined, '', 'false', 'TRUE', true])('requires a separate exact remediation opt-in, not %s', async remediation => {
+    const h = harness({ inputs: confirmedInputs, app: true, rollout: { tracking: 'true', remediation } });
+    expect(await h.execute()).toEqual([]);
+    expect(h.github.rest.actions.getWorkflowRun).not.toHaveBeenCalled();
+    expectNoWrites(h.github);
+  });
+  it('allows tracking opt-in without enabling remediation', async () => {
+    const h = harness({ rollout: { tracking: 'true' } });
+    await h.execute();
+    expect(h.github.rest.issues.create).toHaveBeenCalledOnce();
+    expect(h.github.rest.pulls.create).not.toHaveBeenCalled();
+  });
+  it('keeps disabled-rollout dry runs read-only for confirmed and ordinary plans', async () => {
+    for (const inputs of [{ run_id: '100' }, { ...confirmedInputs, dry_run: 'true' }]) {
+      const h = harness({ inputs, rollout: {} });
+      expect((await h.execute())[0]).toBeTruthy();
+      expectNoWrites(h.github);
+    }
+  });
+  it('keeps opted-in dry runs read-only even if a remediation token is supplied', async () => {
+    const h = harness({ inputs: { ...confirmedInputs, dry_run: 'true' }, app: true });
+    await h.execute();
+    expectNoWrites(h.github);
+  });
   it('ignores first-attempt success', async () => {
     const h = harness({ target: run({ conclusion: 'success' }) });
     expect(await h.execute()).toEqual([]);
@@ -187,6 +234,19 @@ describe('mocked API orchestration', () => {
 });
 
 describe('workflow contract', () => {
+  it('isolates dry-run permissions and gates every write job and token behind exact opt-ins', () => {
+    const workflow = readFileSync(new URL('../../.github/workflows/post-merge-triage.yml', import.meta.url), 'utf8');
+    const plan = workflow.split('  plan:')[1].split('  triage:')[0];
+    const writes = workflow.split('  triage:')[1];
+    expect(plan).toContain("github.ref == 'refs/heads/main' && inputs.dry_run");
+    expect(plan).toContain('issues: read');
+    expect(plan).toContain("dry_run: 'true'");
+    expect(plan).not.toMatch(/: write|secrets\.|REMEDIATION_TOKEN|create-github-app-token/);
+    expect(writes).toContain("vars.POST_MERGE_TRIAGE_ENABLED == 'true'");
+    expect(writes).toContain("!inputs.confirmed_last_change || vars.POST_MERGE_REMEDIATION_ENABLED == 'true'");
+    expect(writes).toContain("vars.POST_MERGE_TRIAGE_ENABLED == 'true' && vars.POST_MERGE_REMEDIATION_ENABLED == 'true'");
+    expect(writes).toContain('rollout: { tracking: process.env.TRACKING_ENABLED, remediation: process.env.REMEDIATION_ENABLED }');
+  });
   it('uses only trusted main code without logs/artifacts or auto-merge', () => {
     const workflow = readFileSync(new URL('../../.github/workflows/post-merge-triage.yml', import.meta.url), 'utf8');
     expect(workflow).toContain('workflows: [CI, E2E Tests (Manual)]');

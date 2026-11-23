@@ -75,12 +75,17 @@ const id = value => {
   return Number(value);
 };
 
-export async function triage({ github, remediation, context, core, inputs = {} }) {
+export async function triage({ github, remediation, context, core, inputs = {}, rollout = {} }) {
   const params = { owner: 'Bike4Mind', repo: 'bike4mind' };
   if (`${context.repo.owner}/${context.repo.repo}` !== REPO) throw new Error('Unexpected repository');
   const dispatch = context.eventName === 'workflow_dispatch';
   if (!dispatch && context.eventName !== 'workflow_run') throw new Error('Unexpected event');
   const dryRun = dispatch && inputs.dry_run !== 'false';
+  if (!dryRun && (rollout.tracking !== 'true' ||
+      (dispatch && inputs.confirmed_last_change === 'true' && rollout.remediation !== 'true'))) {
+    core.info('Post-merge writes disabled by rollout configuration; no API calls made.');
+    return [];
+  }
   const getRun = async runId => validateRun((await github.rest.actions.getWorkflowRun({ ...params, run_id: id(runId) })).data);
   const run = await getRun(dispatch ? inputs.run_id : context.payload.workflow_run.id);
   // The API is authoritative, including for reruns delivered out of order.
