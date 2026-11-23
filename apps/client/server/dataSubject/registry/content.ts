@@ -59,6 +59,28 @@ export const contentHolders = {
     kind: 'holder',
     references: [{ path: 'userId', matchBy: 'userId', action: 'deleteDocument' }],
   },
+  // The four CoreTutorial models register outside `@bike4mind/database`, in
+  // `@bike4mind/server-utils/tutorials/coreModels`. Drafts, overrides and their change log are
+  // platform tutorial content an admin wrote, so they stay with the author cleared.
+  CoreTutorialDraft: {
+    kind: 'holder',
+    references: [
+      { path: 'capturedBy', matchBy: 'userId', action: 'anonymize' },
+      { path: 'updatedBy', matchBy: 'userId', action: 'anonymize' },
+    ],
+  },
+  CoreTutorialOverride: {
+    kind: 'holder',
+    references: [{ path: 'updatedBy', matchBy: 'userId', action: 'anonymize' }],
+  },
+  CoreTutorialOverrideChange: {
+    kind: 'holder',
+    references: [{ path: 'actorId', matchBy: 'userId', action: 'anonymize' }],
+  },
+  CoreTutorialProgress: {
+    kind: 'holder',
+    references: [{ path: 'userId', matchBy: 'userId', action: 'deleteDocument' }],
+  },
   DailyReport: { kind: 'noUserData', note: 'Platform-wide generated activity summary for a date, not per person.' },
   DungeonInstance: {
     kind: 'holder',

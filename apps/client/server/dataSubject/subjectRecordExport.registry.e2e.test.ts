@@ -4,6 +4,7 @@ import type { MongoMemoryReplSet } from 'mongodb-memory-server';
 // Registered outside the `@bike4mind/database` barrel, so they register only when imported.
 import '@bike4mind/server-utils/models/Subscription';
 import '@bike4mind/server-utils/models/UserSubscription';
+import '@bike4mind/server-utils/tutorials/coreModels';
 import {
   createMongoReplSet,
   settleAutoIndexBuilds,

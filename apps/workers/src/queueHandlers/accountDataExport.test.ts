@@ -87,6 +87,7 @@ vi.mock('@bike4mind/database', () => ({
 
 vi.mock('@bike4mind/server-utils/models/Subscription', () => ({}));
 vi.mock('@bike4mind/server-utils/models/UserSubscription', () => ({}));
+vi.mock('@bike4mind/server-utils/tutorials/coreModels', () => ({}));
 vi.mock('@server/dataSubject/subjectRecordExport', () => ({
   assertEveryModelClassified: h.assertClassified,
   SubjectRecordExport: class {
