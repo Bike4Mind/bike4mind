@@ -21,21 +21,39 @@ function targetNameOf(item: PremiumNavDescriptor, redirectTo: string | null): st
 }
 
 /**
- * "Sign in to continue to <product>" (or the sign-up wording) when the page's `?redirectTo=` leads into a
- * premium product's nav path; nothing otherwise. When the item names a target from the redirect's query
+ * The premium product the page's `?redirectTo=` leads into, or undefined. MultiStepLogin and Register
+ * read it once to show RedirectProductHint and to drop copy that would compete with the hint.
+ */
+export function useRedirectProduct(): PremiumNavDescriptor | undefined {
+  // Read once: the query only changes by navigating away from the page.
+  const [item] = useState(() =>
+    typeof window === 'undefined'
+      ? undefined
+      : premiumNavItemForRedirect(premiumNavItems, new URLSearchParams(window.location.search).get('redirectTo'))
+  );
+  return item;
+}
+
+/**
+ * "Sign in to continue to <product>" (or the sign-up wording) for the product useRedirectProduct found;
+ * nothing when there is none. When the item names a target from the redirect's query
  * (`redirectTargetName`, e.g. the site a landing carried through), the line says "Sign in and <product> reads
  * <site>" instead. Shared by MultiStepLogin and Register, which both carry
  * `redirectTo` through to the post-login redirect.
  */
-export default function RedirectProductHint({ mode }: { mode: 'signIn' | 'signUp' }) {
+export default function RedirectProductHint({
+  mode,
+  item,
+}: {
+  mode: 'signIn' | 'signUp';
+  item: PremiumNavDescriptor | undefined;
+}) {
   const { t } = useTranslation();
-  // Read once: the query only changes by navigating away from the page.
-  const [{ item, site }] = useState(() => {
-    if (typeof window === 'undefined') return {};
-    const redirectTo = new URLSearchParams(window.location.search).get('redirectTo');
-    const found = premiumNavItemForRedirect(premiumNavItems, redirectTo);
-    return { item: found, site: found ? targetNameOf(found, redirectTo) : null };
-  });
+  const [site] = useState(() =>
+    item && typeof window !== 'undefined'
+      ? targetNameOf(item, new URLSearchParams(window.location.search).get('redirectTo'))
+      : null
+  );
   if (!item) return null;
   const Icon = item.icon;
   return (

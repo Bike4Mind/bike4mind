@@ -192,7 +192,8 @@ struct RegionEditView: View {
 
   // MARK: Loading
 
-  /// Loads the bytes once so the box geometry knows the image's real aspect ratio.
+  /// Loads the image so the box geometry knows its real aspect ratio, reusing one the full-screen viewer
+  /// already fetched.
   private func loadImage() async {
     loadFailed = false
     guard let url = model.item.url else {
@@ -200,9 +201,7 @@ struct RegionEditView: View {
       return
     }
     do {
-      let (data, _) = try await URLSession.shared.data(from: url)
-      guard let loaded = UIImage(data: data) else { throw URLError(.cannotDecodeContentData) }
-      image = loaded
+      image = UIImage(cgImage: try await ThumbnailCache.fullSize.image(for: url))
     } catch {
       loadFailed = true
     }
