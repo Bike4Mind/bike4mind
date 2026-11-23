@@ -104,3 +104,4 @@ export * from './networkMeta';
 export * from './modelHub';
 export * from './modelHost';
 export * from './functionContract';
+export * from './functionCallGlue';
