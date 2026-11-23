@@ -18,6 +18,7 @@ export function AgentPrDialog({
   const [state, setState] = useState<PrBarState | null>(null);
   const [loaded, setLoaded] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [refreshError, setRefreshError] = useState<string | null>(null);
   const [attempt, setAttempt] = useState(0);
   useEffect(() => {
     let live = true;
@@ -81,6 +82,11 @@ export function AgentPrDialog({
         <Typography level="body-sm" textColor="text.secondary" noWrap>
           {title}
         </Typography>
+        {refreshError && (
+          <Typography level="body-sm" color="danger" role="alert">
+            {refreshError}
+          </Typography>
+        )}
         {error ? (
           <Box>
             <Typography level="body-sm" color="danger" role="alert">
@@ -107,7 +113,13 @@ export function AgentPrDialog({
                 return result;
               })
             }
-            onRefresh={() => void window.b4m.pullRequests.refresh(sessionId).catch(caught => setError(String(caught)))}
+            onRefresh={() => {
+              setRefreshError(null);
+              void action(async () => {
+                await window.b4m.pullRequests.refresh(sessionId);
+                return { ok: true };
+              }).then(result => setRefreshError(result.ok ? null : result.error));
+            }}
             onSetOption={(option, enabled) =>
               action(() => window.b4m.pullRequests.setOption(sessionId, option, enabled))
             }

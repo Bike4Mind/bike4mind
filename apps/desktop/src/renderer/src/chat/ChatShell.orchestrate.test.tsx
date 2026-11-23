@@ -11,6 +11,7 @@ import type {
   ChatSessionSummary,
 } from '@shared/chat';
 import type { AttentionOpenEvent } from '@shared/attention';
+import type { PrBarState } from '@shared/pullRequest';
 import { EMPTY_SIDEBAR_SECTIONS } from '@shared/sidebarSections';
 import { inheritancePolicy } from '@shared/orchestration';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -23,6 +24,11 @@ import { reloadReplyStatsPrefs } from './replyStatsPrefs';
 
 // Screens and panels this test never opens, each with its own IPC to stub otherwise.
 vi.mock('./CustomizePanel', () => ({ CustomizeNavItem: () => null, CustomizeScreen: () => null }));
+vi.mock('./BrowserPane', () => ({
+  BrowserPane: ({ sessionId }: { sessionId: string | null }) => (
+    <div data-testid="test-browser-pane" data-session-id={sessionId} />
+  ),
+}));
 
 const threadMounts = vi.hoisted(() => ({ count: 0 }));
 // The real thread, counting its mounts.
@@ -266,6 +272,70 @@ async function relist(sessions: ChatSessionSummary[]) {
 }
 
 describe('orchestrate mode in the chat shell', () => {
+  it('opens agent PR and CI links in the parent browser without changing its watch, scene or dialog', async () => {
+    window.localStorage.setItem(INTRO_SEEN_KEY, '1');
+    const ref = {
+      owner: 'example-org',
+      repo: 'widgets',
+      number: 611,
+      url: 'https://github.com/example-org/widgets/pull/611',
+    };
+    const state: PrBarState = {
+      sessionId: CHILD.id,
+      binding: { ...ref, source: 'shell', boundAt: '' },
+      snapshot: {
+        ...ref,
+        title: 'Widget change',
+        author: 'octo-dev',
+        state: 'OPEN',
+        isDraft: false,
+        headRefName: 'feat/widget',
+        headSha: 'head',
+        baseRefName: 'main',
+        baseSha: 'base',
+        additions: 1,
+        deletions: 0,
+        mergeable: 'MERGEABLE',
+        mergeStateStatus: 'CLEAN',
+        reviewDecision: 'REVIEW_REQUIRED',
+        autoMergeArmed: false,
+        checks: [],
+        repoSettings: { autoMergeAllowed: false, allowedMethods: ['squash'] },
+        viewer: 'octo-dev',
+        fetchedAt: 0,
+      },
+      gh: 'ok',
+      refreshing: false,
+      autoFix: { status: 'off', attempts: 0, max: 5 },
+      autoMerge: { mode: null },
+    };
+    const watch = vi.fn().mockResolvedValue(null);
+    const navigate = vi.fn().mockResolvedValue(undefined);
+    Object.assign(window.b4m.pullRequests, {
+      watch,
+      getSummaries: async () => [{ sessionId: CHILD.id, summary: { number: 611, state: 'open' } }],
+      getState: vi.fn().mockResolvedValue(state),
+    });
+    Object.assign(window.b4m, { browser: quietBridge({ navigate }) });
+    await openParent();
+    await enterOrchestrate();
+    const stage = el('orchestrator-stage');
+    const scene = el('orchestrator-tavern');
+    await act(async () => el('orchestrator-pr-indicator').click());
+    const dialog = el('orchestrator-pr-dialog');
+    watch.mockClear();
+    await act(async () => el('pr-bar-open-btn').click());
+    expect(navigate).toHaveBeenLastCalledWith({ sessionId: PARENT.id, url: ref.url });
+    expect(el('test-browser-pane').dataset.sessionId).toBe(PARENT.id);
+    await act(async () => el('pr-bar-ci-btn').click());
+    await act(async () => el('pr-ci-open-btn').click());
+    expect(navigate).toHaveBeenLastCalledWith({ sessionId: PARENT.id, url: `${ref.url}/checks` });
+    expect(watch).not.toHaveBeenCalled();
+    expect(el('orchestrator-stage')).toBe(stage);
+    expect(el('orchestrator-tavern')).toBe(scene);
+    expect(el('orchestrator-pr-dialog')).toBe(dialog);
+  });
+
   it('offers the toggle only on a session that has spawned agents, and keeps the chat surface as before', async () => {
     await openParent();
     expect(el('chat-orchestrate-count').textContent).toBe('1');

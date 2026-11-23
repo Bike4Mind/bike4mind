@@ -34,6 +34,8 @@ const props: OrchestratorViewProps = {
   personas: assignPersonas(roster),
 };
 const indicators = (root: ParentNode = document) => [...root.querySelectorAll('[data-pr-number]')];
+const agentIndicators = () =>
+  indicators().filter(badge => !badge.closest('[data-testid="orchestrator-tavern-quest-board"]'));
 
 beforeEach(() => {
   (window as unknown as { b4m: unknown }).b4m = {
@@ -53,7 +55,7 @@ afterEach(() => {
 describe('PR indicators across Show agents views', () => {
   it.each(ORCHESTRATOR_VIEWS)('%s shows PRs in every execution state, but not for agents without a PR', async view => {
     await themed.render(renderOrchestratorView(view, props));
-    expect(indicators()).toHaveLength(agents.length);
+    expect(agentIndicators()).toHaveLength(agents.length);
     agents.forEach(agent => {
       const indicator = document.querySelector(`[data-pr-number="${agent.pr!.number}"]`);
       expect(indicator?.textContent).toContain(`#${agent.pr!.number}`);
@@ -104,7 +106,7 @@ describe('PR indicators across Show agents views', () => {
           renderPane={view => renderOrchestratorView(view, props)}
         />
       );
-      expect(indicators()).toHaveLength(preset.panes * agents.length);
+      expect(agentIndicators()).toHaveLength(preset.panes * agents.length);
       if (preset.panes > 1) {
         const first = el('orchestrator-pane-0');
         const second = el('orchestrator-pane-1');

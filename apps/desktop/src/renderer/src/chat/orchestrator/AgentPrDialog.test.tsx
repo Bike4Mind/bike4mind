@@ -140,6 +140,19 @@ it('filters pushes, ignores late reads, polls only while open, and leaves the ro
   expect(api.watch).not.toHaveBeenCalled();
 });
 
+it('keeps the PR bar and shows a refresh failure inline, then clears it on retry', async () => {
+  await show();
+  const bar = el('pr-bar');
+  api.refresh.mockRejectedValueOnce(new Error('Refresh failed'));
+  await click('pr-bar-refresh-btn');
+  expect(el('pr-bar')).toBe(bar);
+  expect(document.querySelector('[role="alert"]')?.textContent).toBe('Refresh failed');
+  expect(query('orchestrator-pr-retry')).toBeNull();
+  await click('pr-bar-refresh-btn');
+  expect(document.querySelector('[role="alert"]')).toBeNull();
+  expect(el('pr-bar')).toBe(bar);
+});
+
 it('handles read failures, retry, unbinding and session switches', async () => {
   api.getState.mockRejectedValueOnce(new Error('Read failed'));
   await show();

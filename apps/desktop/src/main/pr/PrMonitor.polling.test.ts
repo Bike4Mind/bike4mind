@@ -94,6 +94,39 @@ describe('PrMonitor polling', () => {
     expect(await monitor.getState('dismissed')).toBeNull();
     expect(fake.calls).toHaveLength(2);
   });
+  it('refreshes a selected agent on each 30s dialog tick despite GitHub response latency', async () => {
+    const { store, fake, monitor, advance } = setup(snapshot({ fetchedAt: 990_000 }));
+    await store.set('agent', { ...REF, source: 'shell', boundAt: '' });
+    await monitor.getState('agent');
+    await settle();
+    advance(30_000);
+    fake.answer(snapshot({ fetchedAt: 1_020_500 }));
+    await monitor.getState('agent');
+    await settle();
+    advance(30_000);
+    await monitor.getState('agent');
+    await settle();
+    expect(fake.calls).toEqual(['snapshot', 'snapshot', 'snapshot']);
+  });
+
+  it('retries gh from selected-agent reads after the recovery interval', async () => {
+    const { store, fake, monitor, advance } = setup();
+    await store.set('agent', { ...REF, source: 'shell', boundAt: '' });
+    fake.answer(new GhError('missing', 'gh is not installed'));
+    await monitor.getState('agent');
+    await settle();
+    fake.answer(snapshot());
+    advance(30_000);
+    await monitor.getState('agent');
+    await settle();
+    expect(fake.calls).toEqual(['snapshot']);
+    advance(30_001);
+    await monitor.getState('agent');
+    await settle();
+    expect(fake.calls).toEqual(['snapshot', 'snapshot']);
+    expect((await monitor.getState('agent'))?.gh).toBe('ok');
+  });
+
   it('does no GitHub work at start, and arms only PRs with automation on', async () => {
     const { store, fake, clock, monitor } = setup();
     await store.set('armed', { ...REF, source: 'shell', boundAt: '', autoArchive: true, lastState: 'OPEN' });

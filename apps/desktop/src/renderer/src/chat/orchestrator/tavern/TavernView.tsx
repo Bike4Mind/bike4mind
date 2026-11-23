@@ -834,7 +834,7 @@ export function TavernView({
             transition: 'opacity 0.6s ease-in',
           }}
         />
-        <QuestBoard notes={quests} name={shortName} selectedId={selectedId} onSelect={onSelect} />
+        <QuestBoard notes={quests} name={shortName} selectedId={selectedId} onSelect={onSelect} onOpenPr={onOpenPr} />
         <TavernLight mood={mood} />
         {visible.map(({ agent, placement }) => (
           <Sprite

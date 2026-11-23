@@ -50,6 +50,9 @@ const AFTER_PUSH_MS = 15_000;
 /** A missing or signed-out gh is re-tried on opening a conversation at most this often. */
 const GH_RETRY_MS = 60_000;
 
+/** Leave room for the GitHub response time before the dialog's next 30s tick. */
+const SELECTED_AGENT_STALE_MS = 25_000;
+
 /**
  * How long after enqueueing a PR missing from the queue with no removal recorded is still
  * taken for GitHub catching up, rather than the queue having let it go.
@@ -247,9 +250,10 @@ export class PrMonitor {
 
   /** Inspect a selected agent without changing the window's conversation watch. */
   async getState(sessionId: string): Promise<PrBarState | null> {
+    if (this.gh !== 'ok' && this.now() - this.ghFailedAt > GH_RETRY_MS) this.gh = 'ok';
     const binding = await this.deps.store.get(sessionId);
     if (!binding || binding.dismissed) return null;
-    if (this.wantsRead(sessionId, binding)) void this.read(sessionId);
+    if (this.wantsRead(sessionId, binding, SELECTED_AGENT_STALE_MS)) void this.read(sessionId);
     return this.state(sessionId, binding);
   }
 
@@ -261,11 +265,11 @@ export class PrMonitor {
   }
 
   /** Whether opening this conversation should start a read: nothing in hand, or it went stale. */
-  protected wantsRead(sessionId: string, binding: PrBinding): boolean {
+  protected wantsRead(sessionId: string, binding: PrBinding, staleMs: number = POLL_MS.onScreenActive): boolean {
     if (this.gh !== 'ok' || this.now() < this.pausedUntil) return false;
     const snapshot = this.live.get(sessionId)?.snapshot ?? binding.finalSnapshot;
     if (!snapshot) return true;
-    return snapshot.state === 'OPEN' && this.now() - snapshot.fetchedAt > POLL_MS.onScreenActive;
+    return snapshot.state === 'OPEN' && this.now() - snapshot.fetchedAt > staleMs;
   }
 
   /**
