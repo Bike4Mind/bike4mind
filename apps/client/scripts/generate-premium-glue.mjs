@@ -2038,6 +2038,9 @@ const INFRA_RESOURCE_TARGETS = [
   join(INFRA_GENERATED_DIR, 'infraResources.generated.ts'),
   join(REPO_ROOT, 'packages/server-utils/src/premium-generated/infraResources.generated.ts'),
 ];
+// Mirror QUEUE_HELP_MAX and QUEUE_REPLAY_VALUES in b4m-core/infra/src/contributions.ts; keep in sync.
+const QUEUE_HELP_MAX = { description: 200, replayNote: 400, owner: 64 };
+const QUEUE_REPLAY_VALUES = ['safe', 'side-effects', 'unsafe'];
 
 function readInfraResources(pkg) {
   const raw = pkg.contributions.infraResources;
@@ -2077,6 +2080,13 @@ function readInfraResources(pkg) {
   };
   const isString = v => typeof v === 'string';
   const isIntBetween = (min, max) => v => Number.isInteger(v) && v >= min && v <= max;
+  const help = (q, field) =>
+    optional(
+      q,
+      field,
+      v => isString(v) && v.length <= QUEUE_HELP_MAX[field] && GRANT_LABEL_RE.test(v) && !/\p{Cc}/u.test(v),
+      `one trimmed line of 1-${QUEUE_HELP_MAX[field]} characters with no control characters`
+    );
   const queues = list('queues').map(q => {
     for (const field of ['name', 'visibilityTimeout', 'label', 'displayName', 'application']) {
       if (typeof q[field] !== 'string') fail(`queue ${field} must be a string`);
@@ -2086,6 +2096,7 @@ function readInfraResources(pkg) {
       name: q.name,
       dlqName: optional(q, 'dlqName', isString, 'a string'),
       visibilityTimeout: q.visibilityTimeout,
+      dlqVisibilityTimeout: optional(q, 'dlqVisibilityTimeout', isString, 'a string'),
       retry: optional(q, 'retry', isIntBetween(1, 1000), 'an integer from 1 to 1000'),
       encryption: optional(q, 'encryption', v => ['kms', 'sse-sqs', 'none'].includes(v), "'kms', 'sse-sqs' or 'none'"),
       dlqEncryption: optional(q, 'dlqEncryption', v => ['kms', 'none'].includes(v), "'kms' or 'none'"),
@@ -2099,6 +2110,10 @@ function readInfraResources(pkg) {
       label: q.label,
       displayName: q.displayName,
       application: q.application,
+      description: help(q, 'description'),
+      replay: optional(q, 'replay', v => QUEUE_REPLAY_VALUES.includes(v), "'safe', 'side-effects' or 'unsafe'"),
+      replayNote: help(q, 'replayNote'),
+      owner: help(q, 'owner'),
     };
   });
   return { secrets, rotations, queues };

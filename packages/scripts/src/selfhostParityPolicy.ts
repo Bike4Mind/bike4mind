@@ -331,8 +331,8 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
     'Renders publish thumbnails for the hosted-only publishThumbnailQueue, invoked synchronously by its handler; it packages a Lambda-only headless Chromium the self-host worker image does not ship.'
   ),
   gap(
-    'logSubscription:infra/logMonitor.ts:createLogSubscriptions()',
-    'bbad157840d9254be64aef4e45143a82514a3aa5caf069c96a019ea1b46a4e09',
+    'logSubscription:infra/logMonitor.ts:forwardErrorLogs()',
+    '9212883df5ec6e0a3f1a1ce73c5fd24cb37ab67ac51d1b966d48306d142840a0',
     ['lambda:InvokeFunction']
   ),
   gap(
