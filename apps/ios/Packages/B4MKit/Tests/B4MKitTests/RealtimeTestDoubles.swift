@@ -192,6 +192,7 @@ func eventually(
     if await condition() { return }
     try? await Task.sleep(for: .milliseconds(5))
   }
+  if await condition() { return }
   XCTFail("Condition not met within \(timeout)s", file: file, line: line)
 }
 

@@ -514,6 +514,17 @@ describe('POST /api/v1/image-generations (integration - contract auth + validati
     expect(legacyHandler).toBe(handler);
   });
 
+  // The sunset date is a promise to API clients; the /api/ai/generate-image alias shares this handler (asserted above).
+  it('sends Deprecation, Sunset (2027-02-17) and a Link to /api/v1/image-jobs', async () => {
+    validateWithScopes([ApiKeyScope.AI_GENERATE]);
+    const { req, res } = fire();
+    await handler(req, res);
+    expect(res._getStatusCode()).toBe(200);
+    expect(res.getHeader('Deprecation')).toBe('@1794873600');
+    expect(res.getHeader('Sunset')).toBe('Wed, 17 Feb 2027 00:00:00 GMT');
+    expect(res.getHeader('Link')).toBe('</api/v1/image-jobs>; rel="successor-version"');
+  });
+
   it('leaves JWT/browser callers unaffected (200, no api key)', async () => {
     const { req, res } = fire({ apiKey: null });
     await handler(req, res);

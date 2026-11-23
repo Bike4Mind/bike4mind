@@ -1,6 +1,7 @@
 import { useMemo } from 'react';
 import { Box, Button, Typography } from '@mui/joy';
 import type { OrchestratorViewProps } from '../OrchestratorStage';
+import { AgentPrIndicator } from '../AgentPrIndicator';
 import { OFFICE_CAST, OFFICE_PARENT, assignOfficeCast } from './officeCast';
 import { OFFICE_ROOMS, type OfficeRoom } from './officeLayout';
 import { groupOfficeAgents } from './scene';
@@ -27,6 +28,7 @@ export function OfficeView({
   agents,
   parent,
   onSelect,
+  onOpenPr,
   selectedId,
   onInnkeeperSelect,
   sceneOverlay,
@@ -147,6 +149,14 @@ export function OfficeView({
               {members.map((agent, index) => (
                 <Button
                   key={agent.id}
+                  component="div"
+                  role="button"
+                  tabIndex={0}
+                  onKeyDown={(event: React.KeyboardEvent<HTMLDivElement>) => {
+                    if (event.target !== event.currentTarget || (event.key !== 'Enter' && event.key !== ' ')) return;
+                    event.preventDefault();
+                    onSelect(agent.id);
+                  }}
                   data-testid={`office-agent-${agent.id}`}
                   data-agent-avatar={agent.id}
                   aria-label={`${cast.get(agent.id)}: ${agent.title}, ${agent.state}`}
@@ -194,6 +204,7 @@ export function OfficeView({
                     {cast.get(agent.id)?.split(' ')[0]}
                     {agent.state === 'needs-you' ? ' !' : agent.state === 'done' ? ' *' : ''}
                   </span>
+                  <AgentPrIndicator pr={agent.pr} onOpen={() => onOpenPr?.(agent.id)} compact scene />
                 </Button>
               ))}
             </Box>

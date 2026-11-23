@@ -118,7 +118,7 @@ Every in-repo file a merged queue touches:
 - `infra/web.ts`: DLQ URL map entries (`release-notes`, `whats-new-highlights`) and the linked queue URLs (`whatsNewHighlightsQueue`, `whatsNewGenerationQueue`).
 - `infra/cron.ts`: `whatsNewHighlightsCron` links `whatsNewHighlightsQueue`.
 - `packages/server-utils/src/utils/dlqRegistry.ts` and its test: registry labels and source queues.
-- `b4m-core/resource/src/manifestCoverage.test.ts`: exemptions for both queues.
+- `b4m-core/resource/src/manifestCoverage.repo.test.ts`: exemptions for both queues.
 - `packages/scripts/src/selfhostParityPolicy.ts`: queue parity entries for both queues (and both DLQs); the only schedule entry is `whatsNewHighlightsCron`.
 - `infra/__tests__/releaseNotesQueue.test.ts`: matches the release-notes subscription by variable name and handler.
 - Worker tests (`pnpm --filter @bike4mind/workers test`, plus `pnpm --filter @bike4mind/workers test:integration` for `releaseNotes.e2e.test.ts`, which the default lane excludes): `apps/workers/src/queueHandlers/whatsNewHighlights.test.ts` and `whatsNewHighlights.model.test.ts` build highlights payloads without `kind`, so a required discriminator breaks them; `releaseNotes.test.ts` and `releaseNotes.e2e.test.ts` hardcode `kind: 'release-notes'` and may need touching depending on the routing shape. Fix the fixtures; do not make `kind` optional.

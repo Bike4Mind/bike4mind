@@ -419,6 +419,7 @@ const handler = baseApi()
     const newFeedback = new FeedbackModel({
       _id: feedbackId,
       userId: req.isAuthenticated() ? req.user.id : userId,
+      userIdVerified: authenticated,
       tags,
       status: autoClosed ? FeedbackStatus.Closed : FeedbackStatus.New,
       ...(autoClosed && type === FeedbackType.THUMBS_UP ? { resolution: 'no_action_needed' } : {}),

@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, useState, type RefObject } from 'react';
+import { useEffect, useId, useLayoutEffect, useRef, useState, type RefObject } from 'react';
 import Box from '@mui/joy/Box';
 import Button from '@mui/joy/Button';
 import Stack from '@mui/joy/Stack';
@@ -9,12 +9,16 @@ import { ChevronIcon } from './icons';
 import { thinScrollbarSx } from './layout';
 import {
   activityDetail,
+  clockElapsedMs,
   describeSplit,
   hasActivityDetail,
+  holdClock,
+  startClock,
   statusFields,
   withStall,
   type ActivityDetail,
   type TurnActivity,
+  type TurnClock,
   type TurnProgress,
 } from './statusLine';
 import { useReplyStatShown } from './replyStatsPrefs';
@@ -73,7 +77,31 @@ function ActivityDetailView({
 }
 
 /**
+ * The turn's clock, held for as long as `waiting` is true. Adjusted during render rather than in
+ * an effect, so the frame the card appears on already shows the line without a clock.
+ */
+function useTurnClock(startedAt: number | null, waiting: boolean): TurnClock | null {
+  const [clock, setClock] = useState<TurnClock | null>(() =>
+    startedAt === null ? null : holdClock(startClock(startedAt), waiting, Date.now())
+  );
+  if (startedAt === null) {
+    if (clock !== null) setClock(null);
+    return null;
+  }
+  if (clock?.startedAt !== startedAt) {
+    const fresh = holdClock(startClock(startedAt), waiting, Date.now());
+    setClock(fresh);
+    return fresh;
+  }
+  const held = holdClock(clock, waiting, Date.now());
+  if (held !== clock) setClock(held);
+  return held;
+}
+
+/**
  * The one quiet line while a turn is in flight: elapsed, tokens, and what is happening now.
+ * While the turn waits on the user the clock stops and drops out of the line, and resumes from
+ * where it stopped once they answer.
  *
  * It takes the composer's own row above the controls, and the idle Ready/Working indicator
  * stands down while it is there, so exactly one element on screen speaks for whether a reply
@@ -97,13 +125,18 @@ export function TurnStatus({ turn, activity }: { turn: TurnProgress | null; acti
   const detailId = useId();
   const panel = useRef<HTMLDivElement | null>(null);
   const startedAt = turn?.startedAt ?? null;
+  // Waiting on the user is not the agent working: no ticking clock, no pulse. See TurnClock.
+  const waiting = activity.kind === 'approval';
+  const clock = useTurnClock(startedAt, waiting);
 
-  useEffect(() => {
-    if (startedAt === null) return;
+  // A layout effect so the frame a wait ends on never paints the resumed clock against the
+  // `now` frozen before the wait, which would read as 0s.
+  useLayoutEffect(() => {
+    if (startedAt === null || waiting) return;
     setNow(Date.now());
     const timer = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(timer);
-  }, [startedAt]);
+  }, [startedAt, waiting]);
 
   // The line sits at the bottom of a scrolled transcript, so what opening it reveals can open
   // below the fold - which reads as a control that did nothing. Only on the toggle, never on the
@@ -136,7 +169,9 @@ export function TurnStatus({ turn, activity }: { turn: TurnProgress | null; acti
       sx={{ minWidth: 0, display: 'block' }}
       data-testid="chat-turn-status-text"
     >
-      {statusFields(turn, now, live.label, showDollars, rate).join(' \u00b7 ')}
+      {statusFields(turn, waiting || !clock ? null : clockElapsedMs(clock, now), live.label, showDollars, rate).join(
+        ' \u00b7 '
+      )}
     </Typography>
   );
 
@@ -147,7 +182,12 @@ export function TurnStatus({ turn, activity }: { turn: TurnProgress | null; acti
           level="body-xs"
           textColor="text.tertiary"
           aria-hidden
-          sx={{ animation: `${pulse} 1.4s ease-in-out infinite`, lineHeight: 1, flex: '0 0 auto' }}
+          sx={{
+            animation: waiting ? 'none' : `${pulse} 1.4s ease-in-out infinite`,
+            lineHeight: 1,
+            flex: '0 0 auto',
+          }}
+          data-waiting={waiting || undefined}
         >
           {/* The variation selector forces the text form: bare U+2733 renders as a colour emoji
               on macOS, which is the one loud thing in a line meant to be ignorable. */}

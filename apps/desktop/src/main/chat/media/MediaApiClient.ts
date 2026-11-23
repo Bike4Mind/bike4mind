@@ -4,7 +4,9 @@ import axios, { isAxiosError, type AxiosError } from 'axios';
 import { SessionChangedError, type AuthenticatedApiClient } from '@bike4mind/client-auth';
 import {
   CreateFileUploadResponseSchema,
+  CreateImageJobResponseSchema,
   FileResponseSchema,
+  ImageJobSchema,
   MusicGenerationSchema,
   VideoGenerationSchema,
   ttsBase64ResponseSchema,
@@ -12,8 +14,10 @@ import {
   GENERATION_JOB_STATES,
   type ImageJobRequest,
   type CreateFileUploadResponse,
+  type CreateImageJobBody,
   type CreateVideoGenerationBody,
   type FileResponse,
+  type PublicImageJob,
   type VideoGeneration,
   type CreateMusicGenerationBody,
   type MusicGeneration,
@@ -58,6 +62,11 @@ export class MediaToolError extends Error {
   }
 }
 
+// The quest-based image path below (GenerateImageRequest, QuestPoll, isTerminalQuest, generateImage,
+// getQuest) serves only StudioGenerationService's legacy branch (a request without `mode`, and jobs it
+// saved with a quest id). Chat image generation uses the /api/v1/image-jobs methods. Remove these when
+// Studio's legacy branch moves onto image jobs, before the quest routes' sunset (2027-02-17).
+
 /** POST /api/ai/generate-image, narrowed to what this client sends. */
 export interface GenerateImageRequest {
   prompt: string;
@@ -93,14 +102,11 @@ export interface FetchedBytes {
  * Per-request timeouts, because the app's shared client is configured for ordinary API calls
  * and these are not ordinary API calls.
  *
- * Found the hard way: the default 30s killed `POST /api/ai/generate-image` before the job was
- * even queued. That route resolves the prompt against the notebook's history with an LLM call
- * of its own before it enqueues, so the submit alone can outrun a timeout sized for a JSON read.
- * The audio routes are worse - they synthesize inline and return the bytes, so the whole
+ * The audio routes are the slow ones - they synthesize inline and return the bytes, so the whole
  * provider round trip happens inside the request.
  */
 const TIMEOUT_MS = {
-  /** Queue submit: prompt resolution plus notebook creation before it answers. */
+  /** Queue submit: the route validates inputs and reserves credits before it answers. */
   submit: 90_000,
   /** Synthesis happens inline on these, and a long track takes a while to render. */
   audio: 180_000,
@@ -110,10 +116,7 @@ const TIMEOUT_MS = {
   video: 300_000,
 };
 
-/**
- * Quest statuses that mean the job will not change again. Everything else - 'running',
- * 'pending', an absent status on a freshly queued quest - is still in flight.
- */
+// Anything else - 'running', 'pending', an absent status on a freshly queued quest - is still in flight.
 const TERMINAL_STATUSES = new Set(['done', 'stopped']);
 
 export function isTerminalQuest(quest: QuestPoll): boolean {
@@ -149,8 +152,24 @@ export class MediaApiClient {
   }
 
   /**
-   * Queue an image generation. Returns the quest to poll, not an image: the route hands the
-   * request to a worker and answers immediately.
+   * Start an image job. Returns as soon as it is queued; the image renders server-side.
+   * `idempotencyKey` makes a retried submit of the same call return the same job, not a second bill.
+   */
+  async createImageJob(body: CreateImageJobBody, idempotencyKey: string): Promise<PublicImageJob[]> {
+    try {
+      const response = await this.api.post<unknown>('/api/v1/image-jobs', body, {
+        timeout: TIMEOUT_MS.submit,
+        headers: { 'Idempotency-Key': idempotencyKey },
+      });
+      return CreateImageJobResponseSchema.parse(response).data;
+    } catch (error) {
+      throw toMediaError(error, 'Image generation');
+    }
+  }
+
+  /**
+   * Queue a quest-based image generation (Studio's legacy branch only). Returns the quest to poll,
+   * not an image: the route hands the request to a worker and answers immediately.
    */
   async generateImage(request: GenerateImageRequest): Promise<{ questId: string; remoteSessionId?: string }> {
     try {
@@ -175,8 +194,33 @@ export class MediaApiClient {
     }
   }
 
+  async getImageJob(jobId: string, signal?: AbortSignal): Promise<PublicImageJob> {
+    try {
+      const response = await this.api.get<unknown>(`/api/v1/image-jobs/${encodeURIComponent(jobId)}`, {
+        timeout: TIMEOUT_MS.download,
+        signal,
+      });
+      return ImageJobSchema.parse(response);
+    } catch (error) {
+      throw toMediaError(error, 'Reading the image job');
+    }
+  }
+
+  async cancelImageJob(jobId: string): Promise<PublicImageJob> {
+    try {
+      const response = await this.api.post<unknown>(
+        `/api/v1/image-jobs/${encodeURIComponent(jobId)}/cancel`,
+        {},
+        { timeout: TIMEOUT_MS.download }
+      );
+      return ImageJobSchema.parse(response);
+    } catch (error) {
+      throw toMediaError(error, 'Cancelling the image');
+    }
+  }
+
   /**
-   * Fetch a generated file the quest pointed at.
+   * Fetch a generated file an image job pointed at.
    *
    * A relative URL is this deployment's own local file proxy (self-host and personal dev stages
    * set NEXT_PUBLIC_CDN_URL to `/api/app-files/serve`), so it goes through the authenticated

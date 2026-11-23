@@ -147,6 +147,26 @@ describe('ViewSwitcher', () => {
     expect(onLayoutChange).not.toHaveBeenCalled();
   });
 
+  it('takes Mod+Shift+F in the capture phase and marks it handled, so the sidebar search yields to it', async () => {
+    const onToggle = vi.fn();
+    await themed.render(
+      <ViewSwitcher
+        layout={singlePaneLayout('board')}
+        onLayoutChange={onLayoutChange}
+        focus={{ on: false, onToggle }}
+      />
+    );
+    const sawHandled = vi.fn();
+    const later = (event: KeyboardEvent) => sawHandled(event.defaultPrevented);
+    window.addEventListener('keydown', later);
+    act(() => {
+      window.dispatchEvent(new KeyboardEvent('keydown', { ...shortcut('KeyF'), cancelable: true }));
+    });
+    window.removeEventListener('keydown', later);
+    expect(onToggle).toHaveBeenCalledTimes(1);
+    expect(sawHandled).toHaveBeenCalledWith(true);
+  });
+
   it('offers the quiet-when-idle switch only on views that settle, checked while on', async () => {
     const onToggle = vi.fn();
     await themed.render(

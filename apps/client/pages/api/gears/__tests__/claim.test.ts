@@ -4,6 +4,7 @@ import { createMocks } from 'node-mocks-http';
 const { mocks } = vi.hoisted(() => ({
   mocks: {
     projectExists: vi.fn(),
+    projectAggregate: vi.fn(),
     agentCount: vi.fn(),
     dataLakeFindOne: vi.fn(),
     fabFileExists: vi.fn(),
@@ -51,7 +52,10 @@ vi.mock('@server/middlewares/asyncHandler', () => ({
 }));
 
 vi.mock('@bike4mind/database', () => ({
-  Project: { exists: (...a: unknown[]) => mocks.projectExists(...a) },
+  Project: {
+    exists: (...a: unknown[]) => mocks.projectExists(...a),
+    aggregate: (...a: unknown[]) => mocks.projectAggregate(...a),
+  },
   FabFile: { exists: (...a: unknown[]) => mocks.fabFileExists(...a) },
   PublishedArtifact: { exists: (...a: unknown[]) => mocks.publishedExists(...a) },
   Artifact: { exists: (...a: unknown[]) => mocks.artifactExists(...a) },
@@ -139,6 +143,7 @@ const makeTrustedUser = () =>
 
 const lockEverything = () => {
   mocks.projectExists.mockResolvedValue(null);
+  mocks.projectAggregate.mockResolvedValue([]);
   mocks.agentCount.mockResolvedValue(0);
   mocks.dataLakeFindOne.mockResolvedValue(null);
   mocks.fabFileExists.mockResolvedValue(null);
@@ -326,8 +331,8 @@ describe('POST /api/gears/claim', () => {
   });
 
   it('refuses while the payout condition is still pending (published, no outside view)', async () => {
-    mocks.publishedExists.mockImplementation((q: { externalViewCount?: unknown }) =>
-      Promise.resolve(q.externalViewCount ? null : { _id: 'a1' })
+    mocks.publishedExists.mockImplementation((q: { verifiedExternalViewCount?: unknown }) =>
+      Promise.resolve(q.verifiedExternalViewCount ? null : { _id: 'a1' })
     );
     const { res, promise } = claim({ key: 'published' });
     await promise;

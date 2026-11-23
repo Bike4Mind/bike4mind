@@ -15,7 +15,7 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { NotFoundError } from '@bike4mind/utils';
 import { Logger } from '@bike4mind/observability';
 import { GitHubService } from '@bike4mind/server-utils/services/githubService';
-import { verifyOrgOwner } from '@bike4mind/server-utils/utils/orgAccess';
+import { verifyOrgPermission } from '@bike4mind/server-utils/utils/orgAccess';
 import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { logTestExecuted } from '@server/integrations/github/githubConnectionAuditLog';
 import { orgGitHubConnectionRepository } from '@bike4mind/database';
@@ -34,7 +34,7 @@ const handler = baseApi()
     const orgId = req.query.id as string;
     const user = req.user!;
 
-    await verifyOrgOwner(user, orgId);
+    await verifyOrgPermission(user, orgId, 'manageIntegrations');
 
     const connection = await orgGitHubConnectionRepository.findByOrganizationId(orgId);
     if (!connection) {

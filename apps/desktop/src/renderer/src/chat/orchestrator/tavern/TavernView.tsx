@@ -14,6 +14,7 @@ import {
 } from 'react';
 import { SESSION_SETUP_LABEL } from '@shared/chat';
 import { activityLabel, toolKind, type ToolKind } from '../activity';
+import { AgentPrIndicator } from '../AgentPrIndicator';
 import { prefersReducedMotion } from '../motion';
 import type { OrchestratorViewProps } from '../OrchestratorStage';
 import {
@@ -387,6 +388,7 @@ function Sprite({
   visited,
   cheering,
   onSelect,
+  onOpenPr,
 }: {
   agent: AgentView;
   point: SlotPoint;
@@ -404,6 +406,7 @@ function Sprite({
   visited: boolean;
   cheering: boolean;
   onSelect(id: string): void;
+  onOpenPr?(id: string): void;
 }) {
   const [start] = useState(walkFrom);
   const entered = useAfterFirstPaint(!start);
@@ -416,8 +419,13 @@ function Sprite({
   const tooltip = `${persona ? `${persona.label}: ${persona.shortTitle}` : agent.title}${viaSuffix}`;
   return (
     <Box
-      component="button"
-      type="button"
+      role="button"
+      tabIndex={0}
+      onKeyDown={event => {
+        if (event.target !== event.currentTarget || (event.key !== 'Enter' && event.key !== ' ')) return;
+        event.preventDefault();
+        onSelect(agent.id);
+      }}
       data-testid={`orchestrator-tavern-agent-${agent.id}`}
       data-agent-avatar={agent.id}
       aria-label={`${fullName}: ${AGENT_STATE_LABEL[agent.state]}`}
@@ -475,6 +483,11 @@ function Sprite({
         text={displayName}
         state={agent.state}
       />
+      {agent.pr && (
+        <Box sx={{ position: 'absolute', top: '100%', left: '50%', transform: 'translateX(-50%)' }}>
+          <AgentPrIndicator pr={agent.pr} onOpen={() => onOpenPr?.(agent.id)} compact scene />
+        </Box>
+      )}
     </Box>
   );
 }
@@ -634,6 +647,7 @@ function Innkeeper({
 export function TavernView({
   agents,
   onSelect,
+  onOpenPr,
   selectedId,
   introPlaying,
   personas,
@@ -820,7 +834,7 @@ export function TavernView({
             transition: 'opacity 0.6s ease-in',
           }}
         />
-        <QuestBoard notes={quests} name={shortName} selectedId={selectedId} onSelect={onSelect} />
+        <QuestBoard notes={quests} name={shortName} selectedId={selectedId} onSelect={onSelect} onOpenPr={onOpenPr} />
         <TavernLight mood={mood} />
         {visible.map(({ agent, placement }) => (
           <Sprite
@@ -837,6 +851,7 @@ export function TavernView({
             visited={reducedMotion && agent.id === visit}
             cheering={celebrating}
             onSelect={onSelect}
+            onOpenPr={onOpenPr}
           />
         ))}
         {[...answerBubbles].map(([carrierId, group]) => {
@@ -881,6 +896,7 @@ export function TavernView({
             stacked={stack.stacked}
             selectedId={selectedId}
             onSelect={onSelect}
+            onOpenPr={onOpenPr}
           />
         ))}
         {sceneOverlay}

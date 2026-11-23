@@ -7,6 +7,7 @@ import { isUnconfiguredSecret } from '@bike4mind/common';
 import { computeStatusScoreAndSummary } from '@bike4mind/server-utils/security/securityDashboardScoring';
 import { resolveStage } from '@bike4mind/server-utils/security/resolveStage';
 import { SQSClient, SendMessageCommand } from '@aws-sdk/client-sqs';
+import { resolveCheckedAt } from '@bike4mind/server-utils/security/resolveCheckedAt';
 import { getSourceQueueUrl } from '@bike4mind/server-utils/utils/dlqRegistry';
 import { Logger } from '@bike4mind/observability';
 
@@ -111,8 +112,7 @@ const handler = baseApi<Request, Response>({ auth: false }).post(async (req: Req
     noneDetectedSentence: 'No Prowler cloud misconfigurations detected in the latest scan.',
   });
 
-  const checkedAt =
-    (finishedAt && !Number.isNaN(Date.parse(finishedAt)) && new Date(finishedAt)) || new Date(startedAt || Date.now());
+  const checkedAt = resolveCheckedAt(finishedAt, startedAt);
 
   const snapshot = await securityDashboardSnapshotRepository.create({
     stage,

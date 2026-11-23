@@ -287,12 +287,20 @@ export function createClient(options: ClientOptions) {
       return questHandle(ack.id, ack);
     },
 
+    /**
+     * @deprecated `POST /api/v1/image-generations` sunsets 2027-02-17. Queue jobs with
+     * `call('createImageJob', ...)` and poll `getImageJob` instead.
+     */
     async generateImage(body: JsonBody<'generateImage'>, opts: { signal?: AbortSignal } = {}) {
       const ack = await call('generateImage', { body, signal: opts.signal });
       return questHandle(ack.quest.id, ack);
     },
 
-    /** Edited images arrive on the finished quest's `files[].url`. */
+    /**
+     * Edited images arrive on the finished quest's `files[].url`.
+     * @deprecated `POST /api/v1/image-edits` sunsets 2027-02-17. Queue an edit with
+     * `call('createImageJob', { body: { mode: 'edit', ... } })` and poll `getImageJob` instead.
+     */
     async editImage(body: JsonBody<'editImage'>, opts: { signal?: AbortSignal } = {}) {
       const ack = await call('editImage', { body, signal: opts.signal });
       return questHandle(ack.id, ack);

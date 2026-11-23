@@ -151,12 +151,13 @@ import { singlePaneLayout, type OrchestratorLayout } from './orchestrator/orches
 import { renderOrchestratorView } from './orchestrator/viewRegistry';
 import { ORCHESTRATOR_VIEW_INFO } from './orchestrator/ViewSwitcher';
 import { latestQuestReport } from './orchestrator/finale';
-import { agentStates } from './orchestrator/roster';
+import { agentStates, descendantIds } from './orchestrator/roster';
 import { prefersReducedMotion } from './orchestrator/motion';
 import { ThreadDock, type ThreadDockMode } from './orchestrator/ThreadDock';
 import { useOrchestratorPrefs } from './orchestrator/useOrchestrator';
 import { useNeedsYouAlerts } from './orchestrator/useNeedsYouAlerts';
 import { SidebarSyncHints } from './SyncHints';
+import { useNewChatRequests } from '../appMenu/newChatRequests';
 import type { ClaudeImportKind } from '@shared/claudeImport';
 
 /** How long the orchestrator's "Read the report" keeps the summary highlighted (ms). */
@@ -989,7 +990,31 @@ export function ChatShell({
     [parentReply, wakeAmbient, readParentReport, dockVisible]
   );
   // The agent a clicked needs-you notice asked for; handed to its parent's stage once that is open.
-  const [noticeFocus, setNoticeFocus] = useState<{ rootId: string; agentId: string } | null>(null);
+  // Distinct from selectedAgentId below, which is the standing selection the stage and sidebar share.
+  const [agentFocus, setAgentFocus] = useState<{ rootId: string; agentId: string } | null>(null);
+  const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
+  const rosterIds = useMemo(() => descendantIds(sessions, activeId), [sessions, activeId]);
+  const viewerVisible = screen === 'conversation' && orchestrating && activeId !== null;
+  const selectionHost = viewerVisible ? activeId : null;
+  const [previousSelectionHost, setPreviousSelectionHost] = useState(selectionHost);
+  if (selectionHost !== previousSelectionHost) {
+    setPreviousSelectionHost(selectionHost);
+    setSelectedAgentId(null);
+  }
+  const selectedRosterId = viewerVisible && selectedAgentId && rosterIds.has(selectedAgentId) ? selectedAgentId : null;
+  const selectSidebarSession = useCallback(
+    (sessionId: string) => {
+      if (viewerVisible && rosterIds.has(sessionId)) {
+        wakeAmbient();
+        setSelectedAgentId(sessionId);
+        markSessionViewed(sessionId);
+      } else {
+        setSelectedAgentId(null);
+        selectSession(sessionId);
+      }
+    },
+    [viewerVisible, rosterIds, wakeAmbient, selectSession]
+  );
   const openNotice = ({ sessionId, rootId }: AttentionOpenEvent) => {
     // A notice outlives its session in the OS notification centre; a deleted one has nothing to open.
     if (!sessions.some(session => session.id === rootId)) return;
@@ -999,13 +1024,13 @@ export function ChatShell({
       else writeSurface(rootId, 'orchestrate');
     }
     selectSession(rootId);
-    if (sessionId !== rootId) setNoticeFocus({ rootId, agentId: sessionId });
+    if (sessionId !== rootId) setAgentFocus({ rootId, agentId: sessionId });
     // The dock is a global preference, so a plain session's notice must not reopen one the user hid.
     else if (alertableSessions(sessions, 'agents').has(rootId)) setDockOpen(true);
   };
   // Only the conversation screen shows the session asking; Artifacts, Models and the rest hide it.
   useNeedsYouAlerts(sessions, statuses, statusesLoaded, openNotice, screen === 'conversation' ? activeId : null);
-  const clearNoticeFocus = useCallback(() => setNoticeFocus(null), []);
+  const clearAgentFocus = useCallback(() => setAgentFocus(null), []);
   const pickExampleQuest = useCallback(
     (prompt: string) => {
       // The conversation the quest starts plays out in the dock, so a collapsed one would hide the reply.
@@ -1239,6 +1264,8 @@ export function ChatShell({
     if (created) setActiveId(created);
     setComposerFocus(request => request + 1);
   }, [startSession, markSessionStart]);
+  // The app menu's New Chat (Cmd+N), once the last conversation is restored.
+  useNewChatRequests(onCreate, !settling);
 
   const shareFolderTo = conversation.addContextDirectoryTo;
   const addingFolder = useRef(false);
@@ -1441,6 +1468,7 @@ export function ChatShell({
                   // after React drops it.
                   key={`thread-${activeId ?? 'none'}`}
                   messages={conversation.messages}
+                  findable
                   sessionId={activeId}
                   // What stands in for the transcript when there is no session to have one. It is the
                   // only control on screen that starts one from here, so it is a button and not a
@@ -1619,12 +1647,12 @@ export function ChatShell({
         mode={mode}
         onModeChange={setMode}
         loading={loading}
-        activeId={activeId}
+        activeId={selectedRosterId ?? activeId}
         statuses={statuses}
         prSummaries={prSummaries}
         collapsed={collapsed}
         onToggleCollapsed={() => setCollapsed(current => !current)}
-        onSelect={selectSession}
+        onSelect={selectSidebarSession}
         onCreate={() => void onCreate()}
         onOpenArtifacts={() => setScreen('artifacts')}
         onCreateInProject={directory => void onCreateInProject(directory)}
@@ -1878,14 +1906,16 @@ export function ChatShell({
                     layout={orchestratorLayout}
                     onLayoutChange={changeOrchestratorLayout}
                     actions={agentActions}
+                    onOpenPrLink={(_sessionId, url) => openInBrowserPane(url)}
                     introPlaying={introPhase === 'playing'}
                     renderView={renderOrchestratorView}
                     onParentFocus={focusParentChat}
                     onParentToggle={toggleParentChat}
                     report={parentReport}
                     onReadReport={readParentReport}
-                    focusAgent={noticeFocus?.rootId === activeId ? noticeFocus.agentId : null}
-                    onFocusAgentConsumed={clearNoticeFocus}
+                    selection={{ id: selectedRosterId, onChange: setSelectedAgentId }}
+                    focusAgent={agentFocus?.rootId === activeId ? agentFocus.agentId : null}
+                    onFocusAgentConsumed={clearAgentFocus}
                     onExampleQuest={pickExampleQuest}
                     desk={innkeeperDesk}
                     ambient={stageAmbient}

@@ -4,6 +4,7 @@ import { createMocks } from 'node-mocks-http';
 const { mocks } = vi.hoisted(() => ({
   mocks: {
     projectExists: vi.fn(),
+    projectAggregate: vi.fn(),
     agentCount: vi.fn(),
     dataLakeFindOne: vi.fn(),
     fabFileExists: vi.fn(),
@@ -44,7 +45,10 @@ vi.mock('@server/middlewares/asyncHandler', () => ({
 }));
 
 vi.mock('@bike4mind/database', () => ({
-  Project: { exists: (...a: unknown[]) => mocks.projectExists(...a) },
+  Project: {
+    exists: (...a: unknown[]) => mocks.projectExists(...a),
+    aggregate: (...a: unknown[]) => mocks.projectAggregate(...a),
+  },
   FabFile: { exists: (...a: unknown[]) => mocks.fabFileExists(...a) },
   PublishedArtifact: { exists: (...a: unknown[]) => mocks.publishedExists(...a) },
   Artifact: { exists: (...a: unknown[]) => mocks.artifactExists(...a) },
@@ -110,6 +114,7 @@ const run = (user?: { id: string }) => {
 
 const lockEverything = () => {
   mocks.projectExists.mockResolvedValue(null);
+  mocks.projectAggregate.mockResolvedValue([]);
   mocks.agentCount.mockResolvedValue(0);
   mocks.dataLakeFindOne.mockResolvedValue(null);
   mocks.fabFileExists.mockResolvedValue(null);
@@ -505,10 +510,25 @@ describe('GET /api/gears/status - reward schedule', () => {
   });
 });
 
+describe('GET /api/gears/status - verified project collaboration', () => {
+  it('reports a verified collaborator as unlocked and claimable', async () => {
+    const friendId = '507f1f77bcf86cd799439011';
+    mocks.projectAggregate.mockResolvedValue([{ _id: 'u1' }, { _id: friendId }]);
+    mocks.miscExists.mockImplementation((q: { emailVerified?: boolean }) =>
+      Promise.resolve(q.emailVerified ? { _id: friendId } : null)
+    );
+    const { res, promise } = run({ id: 'u1' });
+    await promise;
+    const body = res._getJSONData() as { gears: Array<{ key: string; unlocked: boolean; claimable?: boolean }> };
+    expect(body.gears.find(g => g.key === 'shareproject')).toMatchObject({ unlocked: true, claimable: true });
+    expect(mocks.miscExists).toHaveBeenCalledWith({ _id: { $in: [friendId] }, emailVerified: true, deletedAt: null });
+  });
+});
+
 describe('GET /api/gears/status - published reward waits for a non-owner view', () => {
   it('publishing unlocks the gear but the payout stays pending until an external view', async () => {
-    mocks.publishedExists.mockImplementation((q: { externalViewCount?: unknown }) =>
-      Promise.resolve(q.externalViewCount ? null : { _id: 'a1' })
+    mocks.publishedExists.mockImplementation((q: { verifiedExternalViewCount?: unknown }) =>
+      Promise.resolve(q.verifiedExternalViewCount ? null : { _id: 'a1' })
     );
     const { res, promise } = run({ id: 'u1' });
     await promise;

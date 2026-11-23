@@ -56,6 +56,7 @@ export interface IPublishedArtifactDocument extends Omit<PublishedArtifactData, 
   /** Set only by the v1 publish endpoint, to the artifact id it published; absent on every other page. Backs the
    *  one-live-page-per-artifact unique index, which the web flow (several slugs per artifact) must stay outside of. */
   v1ArtifactId?: string | null;
+  verifiedExternalViewCount?: number;
   softDelete(deletedBy?: string): Promise<IPublishedArtifactDocument>;
   restore(): Promise<IPublishedArtifactDocument>;
 }
@@ -243,9 +244,10 @@ const PublishedArtifactSchema = new Schema(
     /** See PublishedArtifactThumbnail. Absent until the first render lands. */
     thumbnail: { type: ThumbnailSubSchema, default: undefined },
     viewCount: { type: Number, default: 0, min: 0 },
-    /** Views by anyone OTHER than the signed-in owner (anonymous counts as
-     *  external). Feeds the Published gear and social proof; best-effort. */
+    /** Authenticated non-owner views for analytics. */
     externalViewCount: { type: Number, default: 0, min: 0 },
+    /** Verified non-owner views recorded after page admission; used for gear rewards. */
+    verifiedExternalViewCount: { type: Number, default: 0, min: 0 },
 
     /** Concurrency lock for AI revise - set while a revision is in flight,
      *  cleared when it finishes (or expires). Prevents two concurrent revisions
