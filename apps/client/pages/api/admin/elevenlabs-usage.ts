@@ -19,8 +19,11 @@ const PLAN_SETTINGS = [
 ] as const;
 type PlanSetting = (typeof PLAN_SETTINGS)[number];
 
-const planSetting = (key: PlanSetting, settings: Record<string, string>): number =>
-  getSettingsValue(key, settings, settingsMap[key].defaultValue);
+const planSetting = (key: PlanSetting, settings: Record<string, string>): number => {
+  const value = getSettingsValue(key, settings, settingsMap[key].defaultValue);
+  if (value === undefined) throw new Error(`Setting ${key} has no value and no default`);
+  return value;
+};
 
 const parseCyclesBack = (raw: unknown): number => {
   if (raw === undefined) return 0;
