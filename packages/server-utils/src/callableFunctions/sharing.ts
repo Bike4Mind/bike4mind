@@ -185,13 +185,14 @@ export async function shareCallableFunction(
   return toCallableFunctionPublic(saved, await readHead(actor, saved.pin.artifactId));
 }
 
-/** Removes every grant; the next call by a former recipient is refused. */
+/** Removes every grant and review: a former recipient's next call is refused, and a new share starts at pending. */
 export async function revokeCallableFunctionShare(
   actor: CallableFunctionActor,
   id: string
 ): Promise<ICallableFunctionPublic> {
   const saved = await callableFunctionRepository.setGrants(id, userOwner(actor), null);
   if (!saved) throw notFound();
+  await callableFunctionReviewRepository.deleteForFunction(saved.id);
   return toCallableFunctionPublic(saved, await readHead(actor, saved.pin.artifactId));
 }
 

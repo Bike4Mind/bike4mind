@@ -7,6 +7,7 @@ import {
   type CallableFunctionApprovalMode,
   type FunctionContract,
   type ICallableFunctionDocument,
+  type ICallableFunctionReviewDocument,
   type ICallableFunctionShared,
 } from '@bike4mind/common';
 import { callableFunctionRepository, callableFunctionReviewRepository } from '@bike4mind/database';
@@ -21,13 +22,26 @@ import type { CallableFunctionActor } from './registry';
 
 const notFound = () => new NotFoundError('Tool not found');
 
+/** Whether `review` is an enabled review of exactly this interface. */
+export async function isCurrentReview(
+  review: Pick<ICallableFunctionReviewDocument, 'enabled' | 'reviewHash'> | null,
+  contract: FunctionContract
+): Promise<boolean> {
+  return review !== null && review.enabled && review.reviewHash === (await reviewHash(contract));
+}
+
 /** Whether `userId` holds an enabled review of exactly this interface. */
 export async function hasCurrentReview(
   userId: string,
   fn: Pick<ICallableFunctionDocument, 'id'> & { contract: FunctionContract }
 ): Promise<boolean> {
-  const review = await callableFunctionReviewRepository.findFor(fn.id, userId);
-  return review !== null && review.enabled && review.reviewHash === (await reviewHash(fn.contract));
+  return isCurrentReview(await callableFunctionReviewRepository.findFor(fn.id, userId), fn.contract);
+}
+
+/** Deletes the recipients' reviews of every function `userId` owns, ahead of the erasure that deletes the functions. */
+export async function deleteReviewsOfOwnedCallableFunctions(userId: string): Promise<void> {
+  const ids = await callableFunctionRepository.listIdsForUser(userId);
+  await callableFunctionReviewRepository.deleteForFunctions(ids);
 }
 
 export interface CallableFunctionOffer {
@@ -49,7 +63,7 @@ export async function callableFunctionOffer(
   if (!access) return null;
   if (access === 'owner') return { access, approval: 'default' };
   const review = await callableFunctionReviewRepository.findFor(fn.id, caller.id);
-  if (!review || !review.enabled || review.reviewHash !== (await reviewHash(fn.contract))) return null;
+  if (!review || !(await isCurrentReview(review, fn.contract))) return null;
   if (options.headless && review.approval === 'always_ask') return null;
   return { access, approval: review.approval };
 }

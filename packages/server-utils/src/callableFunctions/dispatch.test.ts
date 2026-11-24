@@ -5,6 +5,7 @@ import {
   PYODIDE_VERSION,
   canonicalJson,
   parseFunctionContract,
+  reviewHash,
   type FunctionContract,
   type ICallableFunctionCall,
 } from '@bike4mind/common';
@@ -20,6 +21,7 @@ const h = vi.hoisted(() => ({
   reads: [] as string[],
   /** How long each read takes under fake timers. */
   readMs: 0,
+  review: null as { enabled: boolean; reviewHash: string } | null,
 }));
 const readTakesTime = vi.hoisted(() => () => {
   if (h.readMs > 0) vi.setSystemTime(Date.now() + h.readMs);
@@ -42,6 +44,7 @@ vi.mock('@bike4mind/database', async () => ({
       return h.fn;
     }),
   },
+  callableFunctionReviewRepository: { findFor: vi.fn(async () => h.review) },
   artifactRepository: {
     findOne: vi.fn(async () => {
       h.reads.push('head');
@@ -159,6 +162,7 @@ beforeEach(() => {
   h.rows = [];
   h.reads = [];
   h.readMs = 0;
+  h.review = null;
 });
 
 afterEach(() => {
@@ -210,6 +214,21 @@ describe('dispatchFunctionCall refusals, in order', () => {
     expect(theirs).toEqual(missing);
     expect(theirs).toEqual({ outcome: 'refused', reason: 'not_found' });
     expect(h.rows.map(row => row.reason)).toEqual(['not_caller', 'not_found']);
+  });
+
+  it('checks a recipient review against the contract the call runs under, not the record copy', async () => {
+    h.fn = record({ state: 'live', grants: { visibility: 'private', userIds: ['person-1'] } });
+    h.review = { enabled: true, reviewHash: await reviewHash(CONTRACT) };
+    const read = { ...CONTRACT, description: 'Read from the pinned code, and changed.' };
+    const runner = runnerOf(ok());
+
+    const result = await dispatchFunctionCall(call({ caller: { id: 'person-1' } }), { runner, contract: read });
+    expect(result).toMatchObject({ outcome: 'refused', reason: 'review_required' });
+    expect(runner).not.toHaveBeenCalled();
+
+    await expect(dispatchFunctionCall(call({ caller: { id: 'person-1' } }), { runner })).resolves.toMatchObject({
+      outcome: 'ok',
+    });
   });
 
   it('refuses a turned-off function before checking the inputs', async () => {

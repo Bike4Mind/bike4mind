@@ -52,11 +52,17 @@ class CallableFunctionReviewRepository extends BaseRepository<ICallableFunctionR
     approval: CallableFunctionApprovalMode;
   }): Promise<ICallableFunctionReviewDocument> {
     const { functionId, userId, reviewHash, approval } = review;
-    const doc = await this.model.findOneAndUpdate(
-      { functionId, userId },
-      { $set: { reviewHash, approval, enabled: true, reviewedAt: new Date() } },
-      { new: true, upsert: true, runValidators: true, setDefaultsOnInsert: true }
-    );
+    const save = () =>
+      this.model.findOneAndUpdate(
+        { functionId, userId },
+        { $set: { reviewHash, approval, enabled: true, reviewedAt: new Date() } },
+        { new: true, upsert: true, runValidators: true, setDefaultsOnInsert: true }
+      );
+    // Two upserts racing on the unique key: the loser updates the row the winner just inserted.
+    const doc = await save().catch(error => {
+      if ((error as { code?: number }).code !== 11000) throw error;
+      return save();
+    });
     return doc.toJSON();
   }
 
@@ -76,6 +82,11 @@ class CallableFunctionReviewRepository extends BaseRepository<ICallableFunctionR
 
   async deleteForFunction(functionId: string): Promise<void> {
     await this.model.deleteMany({ functionId });
+  }
+
+  async deleteForFunctions(functionIds: string[]): Promise<void> {
+    if (functionIds.length === 0) return;
+    await this.model.deleteMany({ functionId: { $in: functionIds } });
   }
 }
 

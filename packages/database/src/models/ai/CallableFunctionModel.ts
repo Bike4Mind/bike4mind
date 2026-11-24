@@ -295,6 +295,12 @@ class CallableFunctionRepository extends BaseRepository<FunctionDoc> implements 
     return docs.map(doc => doc.toObject() as ICallableFunctionSummary);
   }
 
+  /** Ids of the functions a person owns directly, not through a team. */
+  async listIdsForUser(userId: string): Promise<string[]> {
+    const docs = await this.model.find(ownerFilter({ ownerType: 'user', ownerKey: userId }), { _id: 1 }).lean();
+    return docs.map(doc => String(doc._id));
+  }
+
   async countForOwner(owner: CallableFunctionOwner): Promise<number> {
     return this.model.countDocuments(ownerFilter(owner));
   }

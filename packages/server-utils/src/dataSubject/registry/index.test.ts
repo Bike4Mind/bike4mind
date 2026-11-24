@@ -167,6 +167,12 @@ describe('account purge reconciliation', () => {
     expect(matched('CallableFunction', { ownerType: 'user', ownerKey: 'other', userId: 'other' })).toEqual([]);
   });
 
+  it("deletes the recipients' reviews of a person's functions before the functions go", () => {
+    expect(DATA_HOLDER_REGISTRY.CallableFunction).toMatchObject({
+      beforeErasure: ['deleteReviewsOfOwnedCallableFunctions'],
+    });
+  });
+
   it("removes a person from the grants of another person's shared function", () => {
     const shared = { ownerType: 'user', ownerKey: 'other', userId: 'other' };
     expect(matched('CallableFunction', { ...shared, grants: { userIds: ['x', userId] } })).toEqual(['pullFromArray']);

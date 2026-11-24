@@ -18,6 +18,7 @@ import {
   Project,
   User,
   callableFunctionRepository,
+  callableFunctionReviewRepository,
 } from '@bike4mind/database';
 import { createMongoServer, MONGO_TEST_TIMEOUT_MS } from '../../../../packages/database/src/__test__/createMongoServer';
 
@@ -53,6 +54,7 @@ import {
 import { promoteCallableFunction } from './promote';
 import {
   callableFunctionOffer,
+  deleteReviewsOfOwnedCallableFunctions,
   hasCurrentReview,
   reviewSharedCallableFunction,
   updateSharedCallableFunctionReview,
@@ -340,6 +342,20 @@ describe('revoking', () => {
     expect(revoked.grants).toBeNull();
     expect(await callAs(PERSON, id)).toMatchObject({ outcome: 'refused', reason: 'not_found' });
     expect(await listSharedCallableFunctions(PERSON)).toEqual([]);
+  });
+
+  it('deletes the reviews, so a later share of the same interface starts at pending', async () => {
+    const id = await seedLiveFunction();
+    const people = { visibility: 'private' as const, userIds: [PERSON.id] };
+    await shareCallableFunction(OWNER, id, people);
+    await reviewSharedCallableFunction(PERSON, id, { reviewHash: await reviewHash(CONTRACT), approval: 'default' });
+    expect(await callAs(PERSON, id)).toMatchObject({ outcome: 'ok' });
+
+    await revokeCallableFunctionShare(OWNER, id);
+    expect(await CallableFunctionReview.countDocuments({ functionId: id })).toBe(0);
+
+    await shareCallableFunction(OWNER, id, people);
+    expect(await callAs(PERSON, id)).toMatchObject({ outcome: 'refused', reason: 'review_required' });
   });
 });
 
@@ -645,6 +661,45 @@ describe('a recipient review', () => {
 
     await deleteCallableFunction(OWNER, id);
     expect(await CallableFunctionReview.countDocuments({})).toBe(0);
+  });
+
+  it('erases recipients reviews of a function with its owner, and no one elses', async () => {
+    const id = await seedLiveFunction({ visibility: 'private', userIds: [PERSON.id] });
+    await review(PERSON, id);
+    const elsewhere = { functionId: oid(), userId: PERSON.id, reviewHash: await reviewHash(CONTRACT) };
+    await CallableFunctionReview.create({ ...elsewhere, approval: 'default', enabled: true, reviewedAt: new Date() });
+
+    await deleteReviewsOfOwnedCallableFunctions(OWNER.id);
+    expect((await CallableFunctionReview.find({}).lean()).map(row => row.functionId)).toEqual([elsewhere.functionId]);
+  });
+
+  it('saves two simultaneous reviews by the same person as one row, even when one loses the upsert race', async () => {
+    const id = await seedLiveFunction({ visibility: 'private', userIds: [PERSON.id] });
+    const input = {
+      functionId: id,
+      userId: PERSON.id,
+      reviewHash: await reviewHash(CONTRACT),
+      approval: 'default' as const,
+    };
+    // The server can answer the losing upsert with a duplicate-key error; the second call is made to lose.
+    const upsert = CallableFunctionReview.findOneAndUpdate.bind(CallableFunctionReview);
+    let calls = 0;
+    const spy = vi
+      .spyOn(CallableFunctionReview, 'findOneAndUpdate')
+      .mockImplementation(((...args: Parameters<typeof upsert>) =>
+        ++calls === 2
+          ? Promise.reject(Object.assign(new Error('E11000 duplicate key error'), { code: 11000 }))
+          : upsert(...args)) as typeof upsert);
+    try {
+      const saved = await Promise.all([
+        callableFunctionReviewRepository.saveReview(input),
+        callableFunctionReviewRepository.saveReview(input),
+      ]);
+      expect(saved.map(row => row.userId)).toEqual([PERSON.id, PERSON.id]);
+    } finally {
+      spy.mockRestore();
+    }
+    expect(await CallableFunctionReview.countDocuments({ functionId: id })).toBe(1);
   });
 });
 

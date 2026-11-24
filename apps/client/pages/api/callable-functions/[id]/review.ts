@@ -22,7 +22,7 @@ const handler = baseApi({ auth: 'jwtOnly' })
     const body = parseCallableFunctionBody(callableFunctionReviewBodySchema, req.body);
     res.json(await reviewSharedCallableFunction(req.user, functionId(req.query), body));
   })
-  // Not gated, like stopping a share: a recipient can always turn a shared function off.
+  // Not gated, like stopping a share: with the setting off a recipient can still turn a function off or adjust it.
   .patch(perUserRateLimit('PATCH /api/callable-functions/[id]/review'), async (req, res) => {
     if (!req.user) throw new UnauthorizedError('Sign in to use callable functions.');
     const body = parseCallableFunctionBody(callableFunctionReviewSettingsBodySchema, req.body);
