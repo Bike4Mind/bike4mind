@@ -1741,6 +1741,27 @@ export interface ChatSessionStatusEvent {
   unreadReply?: boolean;
   /** A 'processing' session that is still being prepared, not yet replying: the step it is on. */
   preparing?: SessionSetupStep;
+  /**
+   * Background commands the agent started that are still running and will wake it when they end.
+   * Absent when there are none. Independent of `status`: a 'done' session can still be waiting on them.
+   */
+  background?: SessionBackgroundJobs;
+}
+
+/** A session's running wake-on-exit background commands, as the Tavern shows them. */
+export interface SessionBackgroundJobs {
+  running: number;
+  /** The newest one's command, cut short for a bubble. */
+  label: string;
+}
+
+export const BACKGROUND_LABEL_MAX = 40;
+
+/** One line of a background command for a bubble: whitespace collapsed, cut with a trailing '...'. */
+export function backgroundJobLabel(command: string): string {
+  const collapsed = command.replace(/\s+/g, ' ').trim();
+  if (collapsed.length <= BACKGROUND_LABEL_MAX) return collapsed;
+  return `${collapsed.slice(0, BACKGROUND_LABEL_MAX - 3)}...`;
 }
 
 /**

@@ -286,6 +286,20 @@ describe('SlackWorkspacesTab dialogs', () => {
     expect(screen.queryByTestId('slack-workspace-export-btn-ws-new')).toBeNull();
   });
 
+  it('links an installed workspace to its install page from the row menu, and offers none before an install', async () => {
+    renderTab();
+    await loaded();
+    fireEvent.click(screen.getByTestId('slack-workspace-menu-btn-T1'));
+    expect(await screen.findByTestId('slack-workspace-reinstall-btn-T1')).toHaveAttribute(
+      'href',
+      '/integrations/slack/install?workspaceId=ws-ok'
+    );
+
+    fireEvent.click(screen.getByTestId('slack-workspace-menu-btn-ws-new'));
+    await screen.findByTestId('slack-workspace-deactivate-btn-ws-new');
+    expect(screen.queryByTestId('slack-workspace-reinstall-btn-ws-new')).toBeNull();
+  });
+
   it('holds the deactivate confirm open while its PATCH runs', async () => {
     let resolvePatch: (value: unknown) => void = () => undefined;
     mocks.patch.mockImplementation(() => new Promise(resolve => (resolvePatch = resolve)));

@@ -11,8 +11,10 @@ export type FishZone = 'midwater' | 'glass' | 'low' | 'sand';
 const STATE_PLACE: Record<AgentState, { pose: FishPose; zone: FishZone }> = {
   'needs-you': { pose: 'front', zone: 'glass' },
   working: { pose: 'swim', zone: 'midwater' },
+  waiting: { pose: 'rest', zone: 'midwater' },
   done: { pose: 'rest', zone: 'low' },
   failed: { pose: 'pale', zone: 'sand' },
+  paused: { pose: 'sleep', zone: 'sand' },
   stopped: { pose: 'sleep', zone: 'sand' },
   idle: { pose: 'sleep', zone: 'sand' },
 };

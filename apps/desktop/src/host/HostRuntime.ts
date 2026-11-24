@@ -15,6 +15,8 @@ import { parseReasoningEffortSetting } from '../main/chat/reasoningEffort';
 import { rendererNotes } from '../main/chat/rendererNotes';
 import { archiveFromSidebar, type ConfirmArchive } from '../main/chat/sessionArchive';
 import { SessionActivity } from '../main/chat/SessionActivity';
+import { BackgroundJobsFeed } from '../main/chat/backgroundJobsFeed';
+import { BACKGROUND_EXIT_HOLD_MS } from '../main/chat/backgroundWake';
 import { sessionScopeForChat } from '../main/chat/sessionScope';
 import { SessionStore } from '../main/chat/SessionStore';
 import { AccessStore } from '../main/chat/tools/AccessStore';
@@ -141,8 +143,8 @@ export class HostRuntime {
     // Declared before the two things that feed it, because both take it as a constructor
     // argument: the gate reports who is waiting on the user, the service reports who is
     // replying, and this turns the pair into the one status a sidebar row draws.
-    this.activity = new SessionActivity(event => {
-      events.sessionStatus(event);
+    this.activity = new SessionActivity((event, statusChanged) => {
+      events.sessionStatus(event, statusChanged);
       // A session changes status only once the service below exists.
       this.service.sessionStatusChanged(event);
     });
@@ -159,10 +161,19 @@ export class HostRuntime {
     // Output and status go out on the same channel as reply tokens: a background process is
     // still something that conversation is doing, and a renderer that reloads re-subscribes to
     // one stream rather than two.
+    // Holds Waiting across the wake's coalesce gap after a job ends on its own; see BackgroundJobsFeed.
+    const backgroundJobs = new BackgroundJobsFeed(
+      (sessionId, jobs) => this.activity.backgroundChanged(sessionId, jobs),
+      BACKGROUND_EXIT_HOLD_MS
+    );
     this.background = new BackgroundProcessRegistry({
       output: (sessionId, processId, stream, text) =>
         events.streamEvent({ type: 'background-output', sessionId, processId, stream, text }),
-      status: (sessionId, process) => events.streamEvent({ type: 'background-status', sessionId, process }),
+      status: (sessionId, process) => {
+        events.streamEvent({ type: 'background-status', sessionId, process });
+        // Only ever fires from start/finish, after `background` has been assigned.
+        backgroundJobs.update(sessionId, this.background.wakingJobs(sessionId), process.status);
+      },
       // Only ever fires once a process has run, long after the service below exists.
       exited: (sessionId, processId) => this.service.backgroundExited(sessionId, processId),
     });

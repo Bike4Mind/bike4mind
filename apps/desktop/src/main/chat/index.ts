@@ -628,11 +628,12 @@ export function registerChat(
   const events: HostEventSink = {
     streamEvent: broadcast,
     sessionSummary: summary => send(IPC_CHANNELS.chatSessionSummary, summary),
-    sessionStatus: event => {
+    sessionStatus: (event, statusChanged) => {
       send(IPC_CHANNELS.chatSessionStatus, event);
       hooks.observeSessionStatus?.(event);
-      // Only reached once a turn has run, long after pullRequests below exists.
-      if (event.status === 'done' || event.unreadReply) pullRequests.turnSettled(event.sessionId);
+      // Only reached once a turn has run, long after pullRequests below exists. A background job
+      // starting or ending re-sends 'done' without a new turn, so only a real change settles one.
+      if (statusChanged && (event.status === 'done' || event.unreadReply)) pullRequests.turnSettled(event.sessionId);
     },
     queueChanged: event => send(IPC_CHANNELS.chatQueueChanged, event),
     taskDecisions: decisions => send(IPC_CHANNELS.chatTaskDecisions, decisions),

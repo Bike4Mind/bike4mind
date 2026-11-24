@@ -22,7 +22,8 @@ export type HostEnvironment = {
 export type HostEventSink = {
   streamEvent(event: ChatStreamEvent): void;
   sessionSummary(summary: ChatSessionSummary): void;
-  sessionStatus(event: ChatSessionStatusEvent): void;
+  /** `statusChanged` is false when only the event's detail moved, such as its background jobs. */
+  sessionStatus(event: ChatSessionStatusEvent, statusChanged: boolean): void;
   queueChanged(event: ChatQueueEvent): void;
   taskDecisions(decisions: PendingTaskDecision[]): void;
   loopChanged(sessionId: string, state: LoopState | null): void;

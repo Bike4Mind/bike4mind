@@ -2,6 +2,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { ImageModels } from '@bike4mind/common';
 import { ChatService } from '../ChatService';
 import { SessionStore } from '../SessionStore';
 import { AttachmentStore } from '../AttachmentStore';
@@ -18,7 +19,10 @@ const roots: string[] = [];
 afterEach(async () => {
   await Promise.all(roots.splice(0).map(root => rm(root, { recursive: true, force: true })));
 });
-const request: StudioGenerationRequest = { kind: 'image', body: { model: 'gpt-image-2', prompt: 'a garden' } };
+const request: StudioGenerationRequest = {
+  kind: 'image',
+  body: { mode: 'generate', model: ImageModels.GPT_IMAGE_2, prompt: 'a garden' },
+};
 async function setup() {
   const root = await mkdtemp(join(tmpdir(), 'studio-delete-'));
   roots.push(root);
@@ -28,7 +32,7 @@ async function setup() {
   const attachments = new AttachmentStore(join(root, 'attachments'), logger);
   const workspaces = new StudioWorkspaceStore(join(root, 'studio'), sessions);
   const media = new MediaStore(join(root, 'media'));
-  const paid = vi.fn(async () => ({ questId: 'remote' }));
+  const paid = vi.fn(async () => ({ groupId: 'group', jobs: [{ id: 'remote' }] }));
   const authorize = vi.fn(async () => true);
   const generation = new StudioGenerationService({
     workspaces,
@@ -36,8 +40,7 @@ async function setup() {
     authorize,
     connection: () => ({
       scope: sessionScopeKey(account),
-      client: { generateImage: paid } as unknown as MediaApiClient,
-      cdnUrl: '',
+      client: { createStudioImages: paid } as unknown as MediaApiClient,
     }),
   });
   const live = new StudioLiveService({
