@@ -37,6 +37,7 @@ import {
   type FunctionOutputMismatch,
   type FunctionTestCase,
   type ICallableFunctionPublic,
+  type McpToolApprovalMode,
 } from '@bike4mind/common';
 import { toast } from 'sonner';
 import {
@@ -49,6 +50,7 @@ import {
   useDeleteCallableFunction,
   useRepinCallableFunction,
   useRunCallableFunctionTests,
+  useSetCallableFunctionApproval,
   useSetCallableFunctionEnabled,
 } from '@client/app/hooks/data/callableFunctions';
 import type {
@@ -793,6 +795,14 @@ const failureToast = (title: string) => (error: unknown) => {
 
 const DELETE_TITLE = 'Delete this tool?';
 
+// A function cannot write anywhere, so `default` already runs it without a card; `always_allow` would read the same.
+type FunctionApproval = Extract<McpToolApprovalMode, 'default' | 'always_ask'>;
+const FUNCTION_APPROVALS: readonly FunctionApproval[] = ['default', 'always_ask'];
+const FUNCTION_APPROVAL_LABELS: Record<FunctionApproval, string> = {
+  default: 'Run without asking',
+  always_ask: 'Always ask',
+};
+
 /** Turn off or Turn on, and Delete, for one tool; `testIdPrefix` keeps the named tool's ids apart from the others'. */
 function ToolControls({
   tool,
@@ -804,6 +814,7 @@ function ToolControls({
   onDelete: (tool: ICallableFunctionPublic) => void;
 }) {
   const setEnabled = useSetCallableFunctionEnabled();
+  const setApproval = useSetCallableFunctionApproval();
   // The button is disabled while loading, which drops focus to the page body; put it back once it settles.
   const enableRef = useRef<HTMLButtonElement>(null);
   const [refocus, setRefocus] = useState(false);
@@ -836,6 +847,31 @@ function ToolControls({
         >
           {tool.enabled ? 'Turn off' : 'Turn on'}
         </Button>
+      )}
+      {tool.status !== 'source_deleted' && (
+        <Select<FunctionApproval>
+          size="sm"
+          value={tool.approval === 'always_ask' ? 'always_ask' : 'default'}
+          disabled={setApproval.isPending}
+          onChange={(_, approval) =>
+            approval &&
+            approval !== tool.approval &&
+            setApproval.mutate(
+              { id: tool.id, approval },
+              { onError: failureToast('Could not change when chat asks before a call.') }
+            )
+          }
+          slotProps={{
+            button: { 'aria-label': `When chat runs ${tool.slug}`, 'data-testid': `${testIdPrefix}-approval` },
+          }}
+          sx={{ minWidth: '170px' }}
+        >
+          {FUNCTION_APPROVALS.map(mode => (
+            <Option key={mode} value={mode} data-testid={`${testIdPrefix}-approval-${mode}`}>
+              {FUNCTION_APPROVAL_LABELS[mode]}
+            </Option>
+          ))}
+        </Select>
       )}
       <Button
         size="sm"

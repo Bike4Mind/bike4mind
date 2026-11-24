@@ -14,6 +14,7 @@ const fns = vi.hoisted(() => ({
   query: vi.fn(),
   repin: { mutate: vi.fn(), isPending: false },
   setEnabled: { mutate: vi.fn(), isPending: false },
+  setApproval: { mutate: vi.fn(), isPending: false },
   remove: { mutate: vi.fn(), isPending: false },
   dialog: vi.fn(),
   toastError: vi.fn(),
@@ -28,6 +29,7 @@ vi.mock('@client/app/hooks/data/callableFunctions', async importOriginal => ({
   },
   useRepinCallableFunction: () => fns.repin,
   useSetCallableFunctionEnabled: () => fns.setEnabled,
+  useSetCallableFunctionApproval: () => fns.setApproval,
   useDeleteCallableFunction: () => fns.remove,
 }));
 vi.mock('../SaveFunctionDialog', () => ({
@@ -617,6 +619,7 @@ describe('PythonFunctionPanel save controls', () => {
     fns.query.mockReset();
     fns.repin = { mutate: vi.fn(), isPending: false };
     fns.setEnabled = { mutate: vi.fn(), isPending: false };
+    fns.setApproval = { mutate: vi.fn(), isPending: false };
     fns.remove = { mutate: vi.fn(), isPending: false };
     fns.dialog.mockReset();
     fns.toastError.mockReset();
@@ -788,6 +791,18 @@ describe('PythonFunctionPanel save controls', () => {
     fireEvent.click(screen.getByTestId('python-function-enable-btn'));
 
     expect(fns.setEnabled.mutate).toHaveBeenCalledWith({ id: 'fn-1', enabled: false }, expect.anything());
+  });
+
+  it('shows when chat runs the tool and sets Always ask', async () => {
+    fns.saved = { data: savedView(), isLoading: false };
+    await renderReady(TARGET);
+
+    const select = screen.getByTestId('python-function-approval');
+    expect(select.textContent).toBe('Run without asking');
+    fireEvent.click(select);
+    fireEvent.click(await screen.findByTestId('python-function-approval-always_ask'));
+
+    expect(fns.setApproval.mutate).toHaveBeenCalledWith({ id: 'fn-1', approval: 'always_ask' }, expect.anything());
   });
 
   it.each([

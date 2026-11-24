@@ -32,7 +32,8 @@ const mocks = vi.hoisted(() => {
   const useLLM: any = (selector: (s: Record<string, unknown>) => unknown) => selector(state);
   useLLM.setState = vi.fn();
   const connections = { value: [] as Array<Record<string, unknown>> };
-  return { state, useLLM, connections };
+  const functions = { on: false, list: [] as Array<Record<string, unknown>> };
+  return { state, useLLM, connections, functions };
 });
 
 vi.mock('@client/app/contexts/LLMContext', () => ({ useLLM: mocks.useLLM }));
@@ -65,6 +66,10 @@ vi.mock('@client/app/hooks/useComposerMcpConnections', () => ({
 vi.mock('@client/app/hooks/data/settings', () => ({
   useConfig: () => ({ data: { toolAvailability: undefined } }),
 }));
+vi.mock('@client/app/hooks/data/callableFunctions', () => ({
+  useCallableFunctionsEnabled: () => mocks.functions.on,
+  useCallableFunctionList: (enabled: boolean) => ({ data: enabled ? mocks.functions.list : undefined }),
+}));
 vi.mock('./DeepResearchConfigModal', () => ({ default: () => null }));
 vi.mock('./ImageGenerationModelSelectionModal', () => ({ default: () => null }));
 vi.mock('@client/app/components/help/ContextHelpButton', () => ({ default: () => null }));
@@ -87,6 +92,58 @@ beforeEach(() => {
     { id: 'c2', slug: 'docs', displayName: 'Docs', urlHost: 'mcp.docs.test' },
   ];
   mocks.useLLM.setState.mockClear();
+  mocks.functions.on = false;
+  mocks.functions.list = [];
+});
+
+describe('ToolsSection - Functions row', () => {
+  const row = (container: HTMLElement) => container.querySelector('.tool-item-functions') as HTMLElement | null;
+  const toggle = (container: HTMLElement) => container.querySelector('[data-testid="tool-toggle-functions"]');
+
+  it('is absent while callable functions are off', () => {
+    mocks.functions.list = [{ slug: 'beam', status: 'live', trustLabel: 'verified' }];
+    const { container } = render(<ToolsSection />, { wrapper: Wrapper });
+    expect(row(container)).toBeNull();
+  });
+
+  it('names each live tool with its label, with no custom connector at all, and is on by default', () => {
+    mocks.functions.on = true;
+    mocks.connections.value = [];
+    mocks.functions.list = [
+      { slug: 'beam_deflection', status: 'live', trustLabel: 'verified' },
+      { slug: 'draft_tool', status: 'draft', trustLabel: null },
+      { slug: 'off_tool', status: 'disabled', trustLabel: null },
+      { slug: 'pipe_flow', status: 'live', trustLabel: 'unverified' },
+    ];
+    const { container } = render(<ToolsSection />, { wrapper: Wrapper });
+
+    expect(within(row(container)!).getByText('Functions')).toBeTruthy();
+    expect(within(row(container)!).getByText('beam_deflection (verified), pipe_flow (unverified)')).toBeTruthy();
+    expect(toggle(container)!.getAttribute('aria-checked')).toBe('true');
+  });
+
+  it('says how to get a tool there when none is live', () => {
+    mocks.functions.on = true;
+    const { container } = render(<ToolsSection />, { wrapper: Wrapper });
+    expect(
+      within(row(container)!).getByText('No live tools yet. Promote a saved tool to offer it in chat.')
+    ).toBeTruthy();
+  });
+
+  it('switches off by adding fn to the opt-out list, and back on by removing it', () => {
+    mocks.functions.on = true;
+    mocks.state.disabledMcpConnections = ['docs'];
+    const first = render(<ToolsSection />, { wrapper: Wrapper });
+    fireEvent.click(toggle(first.container)!);
+    expect(mocks.useLLM.setState).toHaveBeenCalledWith({ disabledMcpConnections: ['docs', 'fn'] });
+    first.unmount();
+
+    mocks.state.disabledMcpConnections = ['docs', 'fn'];
+    const { container } = render(<ToolsSection />, { wrapper: Wrapper });
+    expect(toggle(container)!.getAttribute('aria-checked')).toBe('false');
+    fireEvent.click(toggle(container)!);
+    expect(mocks.useLLM.setState).toHaveBeenLastCalledWith({ disabledMcpConnections: ['docs'] });
+  });
 });
 
 describe('ToolsSection - custom MCP connector rows', () => {
