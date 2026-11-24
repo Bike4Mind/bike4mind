@@ -3,7 +3,7 @@ import { AUTO_CONTAINMENT_MODES, type AutoContainmentConfig, type AutoContainmen
 
 /**
  * Automated containment decisions: what the executor decided for one shadow detection from its abuse
- * assessment, one record per (detection, revision): a campaign detection that gains members after a
+ * assessment, one graduated record and one independent Contain record per revision: a campaign detection that gains members after a
  * decision gets a new one covering only the new members. Shadow-mode records are graded against the detection's admin
  * verdict (shadowDetection.ts), so the precision of automated containment is measured before it is
  * enforced. Produced by apps/workers/src/security/autoContainment; stored in the
@@ -26,6 +26,7 @@ export const INTERVENTION_RELEASE_CONDITIONS = [
   'expiry',
   'verification',
   'legitimate_verdict',
+  'contained',
 ] as const;
 export type InterventionReleaseCondition = (typeof INTERVENTION_RELEASE_CONDITIONS)[number];
 

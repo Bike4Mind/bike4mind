@@ -1,10 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { toast } from 'sonner';
 import { InterventionDecisionsPanel, InterventionHoldsCard, holdStatus } from './InterventionHolds';
 import { ProfileTestWrapper } from './Users/Profile/profileTestUtils';
 
 const mocks = vi.hoisted(() => ({ get: vi.fn(), post: vi.fn() }));
-vi.mock('sonner', () => ({ toast: { error: vi.fn(), success: vi.fn() } }));
+vi.mock('sonner', () => ({ toast: { error: vi.fn(), success: vi.fn(), warning: vi.fn(), info: vi.fn() } }));
 vi.mock('@client/app/contexts/ApiContext', () => ({ api: { get: mocks.get, post: mocks.post } }));
 
 const HOUR_MS = 3_600_000;
@@ -25,6 +26,7 @@ const hold = (over: Record<string, unknown> = {}) => ({
 });
 
 beforeEach(() => {
+  vi.clearAllMocks();
   mocks.get.mockReset();
   mocks.post.mockReset().mockResolvedValue({ data: { released: [] } });
 });
@@ -55,6 +57,40 @@ describe('InterventionHoldsCard', () => {
 
     expect(await screen.findByTestId('user-intervention-hold-expires')).toHaveTextContent(/^Expires in 3 days$/);
   });
+
+  it.each([
+    {
+      userIds: [],
+      skippedUserIds: ['subject'],
+      message: 'No holds released: 1 account could not be released',
+      kind: 'error',
+      staysOpen: true,
+    },
+    { userIds: [], skippedUserIds: [], message: 'No active holds were released', kind: 'info', staysOpen: true },
+    {
+      userIds: ['other'],
+      skippedUserIds: ['subject'],
+      message: 'Released holds for 1 account; 1 account could not be released',
+      kind: 'warning',
+      staysOpen: true,
+    },
+    { userIds: ['subject'], skippedUserIds: [], message: 'Hold released', kind: 'success', staysOpen: false },
+  ] as const)(
+    'reports the actual release response: $kind',
+    async ({ userIds, skippedUserIds, message, kind, staysOpen }) => {
+      mocks.get.mockResolvedValue({ data: { data: [hold()] } });
+      mocks.post.mockResolvedValue({ data: { released: [{ decisionId: 'decision-1', userIds, skippedUserIds }] } });
+      render(<InterventionHoldsCard userId="subject" />, { wrapper: ProfileTestWrapper });
+      fireEvent.click(await screen.findByTestId('user-intervention-hold-release-btn'));
+      fireEvent.click(screen.getByTestId('user-intervention-release-dialog-reason-input-preset-0'));
+      fireEvent.click(screen.getByTestId('user-intervention-release-dialog-confirm-btn'));
+      await waitFor(() => expect(toast[kind]).toHaveBeenCalledWith(message));
+      if (kind !== 'success') expect(toast.success).not.toHaveBeenCalled();
+      await waitFor(() =>
+        expect(Boolean(screen.queryByTestId('user-intervention-release-dialog-confirm-btn'))).toBe(staysOpen)
+      );
+    }
+  );
 
   it('offers Release only on an active hold and posts that decision with the reason', async () => {
     mocks.get.mockResolvedValue({

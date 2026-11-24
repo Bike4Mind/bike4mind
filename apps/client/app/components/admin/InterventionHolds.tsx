@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { Button, Stack, Typography } from '@mui/joy';
 import { toast } from 'sonner';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import type { InterventionTier } from '@bike4mind/common';
+import { interventionReleaseResponseSchema, type InterventionTier } from '@bike4mind/common';
 import { api } from '@client/app/contexts/ApiContext';
 import { isStepUpCancelled } from '@client/app/utils/stepUpInterceptor';
 import { ActionDialog, ADMIN_REASON_PRESETS, RelativeTime, SectionCard, StatusChip } from './shared';
@@ -130,11 +130,24 @@ const ReleaseDialog: React.FC<{
 const useRelease = (url: string, invalidate: readonly unknown[], onDone: () => void) => {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: async ({ decisionId, reason }: { decisionId: string; reason: string }) =>
-      api.post(url, { decisionId, reason }),
-    onSuccess: async () => {
-      toast.success('Hold released');
-      onDone();
+    mutationFn: async ({ decisionId, reason }: { decisionId: string; reason: string }) => {
+      const response = await api.post<unknown>(url, { decisionId, reason });
+      return interventionReleaseResponseSchema.parse(response.data);
+    },
+    onSuccess: async result => {
+      const released = result.released.reduce((count, row) => count + row.userIds.length, 0);
+      const skipped = result.released.reduce((count, row) => count + (row.skippedUserIds?.length ?? 0), 0);
+      const accounts = (count: number) => `${count} account${count === 1 ? '' : 's'}`;
+      if (skipped > 0) {
+        const message = `${accounts(skipped)} could not be released`;
+        if (released > 0) toast.warning(`Released holds for ${accounts(released)}; ${message}`);
+        else toast.error(`No holds released: ${message}`);
+      } else if (released === 0) {
+        toast.info('No active holds were released');
+      } else {
+        toast.success('Hold released');
+        onDone();
+      }
       await queryClient.invalidateQueries({ queryKey: invalidate });
     },
     onError: error => {

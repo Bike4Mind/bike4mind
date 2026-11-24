@@ -53,12 +53,13 @@ import {
   PaginatedResponse,
 } from '@bike4mind/common';
 import bcrypt from 'bcryptjs';
-import mongoose, { Document, Model, model, Schema, Query, type PipelineStage } from 'mongoose';
+import mongoose, { Document, Model, model, Schema, Query, type PipelineStage, type ClientSession } from 'mongoose';
 import { emailTokenStoredValues, NotFoundError } from '@bike4mind/utils';
 import { decryptAtRest, encryptAtRest, isEncrypted } from '@bike4mind/utils/security';
 import { convertIds } from '../../utils/mongo';
 import { CountersSchema } from '../infra/ops/CounterModel';
-import BaseRepository from '@bike4mind/db-core';
+import BaseRepository, { withTransaction } from '@bike4mind/db-core';
+import { AutoContainmentDecisionModel } from '../infra/security/AutoContainmentDecisionModel';
 import { executeFacetCompatible } from '../../utils/documentdb-compat';
 import { buildCollectionSearchPipeline } from '../../queries/collectionSearchQuery';
 import { NETWORK_META_FIELDS } from './networkMetaFields';
@@ -1440,14 +1441,87 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
    * Adds a graduated hold unless one from the same decision is already there, so a retried decision
    * never applies twice. True when this call added it.
    */
-  async addInterventionHold(userId: string, hold: InterventionHold): Promise<boolean> {
+  async addInterventionHold(userId: string, hold: InterventionHold, session?: ClientSession): Promise<boolean> {
     if (!mongoose.Types.ObjectId.isValid(userId)) return false;
     const result = await this.model.updateOne(
-      { _id: new mongoose.Types.ObjectId(userId), 'interventionHolds.decisionId': { $ne: hold.decisionId } },
+      {
+        _id: new mongoose.Types.ObjectId(userId),
+        isAdmin: { $ne: true },
+        isBanned: { $ne: true },
+        'interventionHolds.decisionId': { $ne: hold.decisionId },
+      },
       { $push: { interventionHolds: hold } },
-      { runValidators: true }
+      { runValidators: true, session }
     );
     return result.modifiedCount === 1;
+  }
+
+  /** Serializes a hold write with release and claim replacement on the original decision. */
+  async addClaimedInterventionHold(userId: string, hold: InterventionHold, startedAt: Date): Promise<boolean> {
+    if (!mongoose.Types.ObjectId.isValid(userId) || !mongoose.Types.ObjectId.isValid(hold.decisionId)) return false;
+    return withTransaction(async session => {
+      const claim = await AutoContainmentDecisionModel.updateOne(
+        {
+          _id: new mongoose.Types.ObjectId(hold.decisionId),
+          tier: hold.tier,
+          outcome: 'pending',
+          decidedAt: startedAt,
+          releasedAt: null,
+          containedUserIds: { $ne: userId },
+          userIds: userId,
+        },
+        { $inc: { holdWriteVersion: 1 } },
+        { session, runValidators: true }
+      );
+      if (claim.modifiedCount !== 1) return false;
+      return this.addInterventionHold(userId, hold, session);
+    });
+  }
+
+  /** Keeps a durable per-account Contain receipt and lifts only the original decision's holds. */
+  async releaseContainedInterventionHolds(
+    decisionId: string,
+    committedUserIds: string[],
+    release: { by: string; now: Date }
+  ): Promise<void> {
+    if (!mongoose.Types.ObjectId.isValid(decisionId) || committedUserIds.length === 0) return;
+    await withTransaction(async session => {
+      const decision = await AutoContainmentDecisionModel.findOne({
+        _id: new mongoose.Types.ObjectId(decisionId),
+        tier: { $ne: 'contain' },
+        outcome: { $in: ['pending', 'intervened', 'failed', 'capped'] },
+        releasedAt: null,
+      }).session(session);
+      if (!decision) return;
+      const selected = [...new Set(committedUserIds)].filter(userId => decision.userIds.includes(userId));
+      if (selected.length === 0) return;
+      // Both writers change this row in their transaction, so neither can commit from a stale snapshot.
+      await AutoContainmentDecisionModel.updateOne(
+        { _id: decision._id },
+        { $inc: { holdWriteVersion: 1 }, $addToSet: { containedUserIds: { $each: selected } } },
+        { session, runValidators: true }
+      );
+      for (const userId of selected) await this.releaseInterventionHold(userId, decisionId, release, session);
+      const contained = new Set([...(decision.containedUserIds ?? []), ...selected]);
+      if (!decision.userIds.every(userId => contained.has(userId))) return;
+      const remaining = await this.model
+        .exists({ interventionHolds: { $elemMatch: { decisionId, releasedAt: null } } })
+        .session(session);
+      if (remaining) return;
+      await AutoContainmentDecisionModel.updateOne(
+        { _id: decision._id },
+        {
+          $set: {
+            outcome: 'released',
+            releasedAt: release.now,
+            releasedBy: release.by,
+            releaseReason: 'Graduated holds replaced by committed account containment',
+            releaseCondition: 'contained',
+          },
+        },
+        { session, runValidators: true }
+      );
+    });
   }
 
   /**
@@ -1457,7 +1531,8 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
   async releaseInterventionHold(
     userId: string,
     decisionId: string,
-    { by, now }: { by: string; now: Date }
+    { by, now }: { by: string; now: Date },
+    session?: ClientSession
   ): Promise<boolean> {
     if (!mongoose.Types.ObjectId.isValid(userId)) return false;
     const result = await this.model.updateOne(
@@ -1466,7 +1541,7 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
         interventionHolds: { $elemMatch: { decisionId, releasedAt: null } },
       },
       { $set: { 'interventionHolds.$[hold].releasedAt': now, 'interventionHolds.$[hold].releasedBy': by } },
-      { arrayFilters: [{ 'hold.decisionId': decisionId, 'hold.releasedAt': null }], runValidators: true }
+      { arrayFilters: [{ 'hold.decisionId': decisionId, 'hold.releasedAt': null }], runValidators: true, session }
     );
     return result.modifiedCount === 1;
   }

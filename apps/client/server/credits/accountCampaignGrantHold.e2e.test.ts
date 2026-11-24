@@ -265,6 +265,20 @@ describe('holdGrant intervention on the staged signup grant', () => {
   const placeHold = (userId: string, expiresAt = new Date(Date.now() + HOUR_MS)) =>
     User.updateOne({ _id: userId }, { $push: { interventionHolds: hold(expiresAt) } });
 
+  it('permits the pending-email tranche while an intervention is active', async () => {
+    const user = await User.create({
+      username: 'synthetic-first',
+      name: 'Synthetic First',
+      email: 'first@example.test',
+      emailVerified: true,
+      signupGrant: await newSignupGrant(adminSettings),
+    });
+    await placeHold(user.id);
+    await userService.releaseSignupTranche(user.id, adapters);
+    expect(await creditsOf(user.id)).toBe(1000);
+    expect(await CreditTransaction.countDocuments({ ownerId: user.id })).toBe(1);
+  });
+
   it('withholds unlocks and drips while the hold is active, without moving the grant', async () => {
     const user = await createSignupStageUser();
     const before = await grantOf(user.id);

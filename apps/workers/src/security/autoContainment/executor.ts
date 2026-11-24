@@ -28,7 +28,7 @@ import { decideIntervention, type InterventionDecision, type InterventionSkipRea
  *
  * - autoContainmentConfig.mode gates it: off does nothing, shadow (the default) records the decision
  *   and changes no account, enforce contains.
- * - One decision per (detection, revision), so a re-sweep or a cached judgment never acts twice; a
+ * - One graduated decision and one independent Contain decision per revision, so a re-sweep or a cached judgment never acts twice; a
  *   campaign detection that gains members after a decision is decided again for the new members only.
  *   An admin verdict on the detection always wins, re-read right before the Contain runs.
  * - The decision is claimed (inserted `pending`) before an hourly slot is taken, so a run that loses
@@ -67,7 +67,7 @@ export type AutoContainmentDeps = {
   findDetection: (id: string) => Promise<ShadowDetectionItem | null>;
   decisions: Pick<
     typeof autoContainmentDecisionRepository,
-    'listForDetection' | 'recordOnce' | 'reclaim' | 'supersedeWithContain' | 'finish' | 'release'
+    'listForDetection' | 'recordOnce' | 'reclaim' | 'finish' | 'release'
   >;
   /** Takes one decision from the hourly window of the mode (Contain) or of the tier and mode; false when it is spent. */
   takeHourlySlot: (
@@ -77,7 +77,9 @@ export type AutoContainmentDeps = {
   ) => Promise<boolean>;
   contain: (request: ContainRequest) => Promise<AdminUsersBulkResult | null>;
   /** Adds the hold unless that decision's hold is already on the account; false when it was not added. */
-  applyHold: (userId: string, hold: InterventionHold) => Promise<boolean>;
+  applyHold: (userId: string, hold: InterventionHold, startedAt: Date) => Promise<boolean>;
+  /** Commits the per-account receipt and graduated-hold release in one transaction. */
+  releaseContainedHolds: (decisionId: string, userIds: string[]) => Promise<void>;
   /** Lifts one decision's hold from the account; false when it was not on it. */
   releaseHold: (userId: string, decisionId: string) => Promise<boolean>;
   /** One audit row per account a graduated hold reached. */
@@ -125,7 +127,12 @@ export const liveAutoContainmentDeps = (logger: Logger): AutoContainmentDeps => 
     maxPerHour > 0 &&
     (await cacheRepository.tryIncrementWithinLimitFixedWindow(hourlyKey(mode, tier), maxPerHour, HOUR_MS)).success,
   contain: containAsSystem(logger),
-  applyHold: (userId, hold) => userRepository.addInterventionHold(userId, hold),
+  applyHold: (userId, hold, startedAt) => userRepository.addClaimedInterventionHold(userId, hold, startedAt),
+  releaseContainedHolds: (decisionId, userIds) =>
+    userRepository.releaseContainedInterventionHolds(decisionId, userIds, {
+      by: AUTO_CONTAINMENT_ACTOR_ID,
+      now: new Date(),
+    }),
   releaseHold: (userId, decisionId) =>
     userRepository.releaseInterventionHold(userId, decisionId, { by: AUTO_CONTAINMENT_ACTOR_ID, now: new Date() }),
   auditHold: async (userId, decision) => {
@@ -190,19 +197,12 @@ async function claimDecision(
   const now = deps.now();
   const staleBefore = new Date(now.getTime() - STALE_PENDING_MS);
   const prior = await deps.decisions.listForDetection(detection.id);
-  const current = prior.find(row => row.revision === detection.revision);
+  const current = prior.find(row => row.revision === detection.revision && row.tier === decided.tier);
   // A graduated hold never stands in for Contain, so only earlier Contain rows cover an account for it.
   const covering = decided.tier === 'contain' ? prior.filter(row => row.tier === 'contain') : prior;
   const covered = new Set(covering.filter(row => row !== current).flatMap(row => row.userIds));
   const userIds = decided.userIds.filter(userId => !covered.has(userId));
   if (current) {
-    if (decided.tier === 'contain' && current.tier !== 'contain') {
-      return userIds.length > 0
-        ? supersedeGraduated(current, assessment, decided, userIds, mode, staleBefore, deps)
-        : null;
-    }
-    // A row of another tier is that tier's decision: reclaiming it would run this tier on its record.
-    if (current.tier !== decided.tier) return null;
     const reclaimed = await deps.decisions.reclaim(current.id, {
       staleBefore,
       cappedBefore: new Date(now.getTime() - HOUR_MS),
@@ -237,41 +237,37 @@ async function claimDecision(
   return recorded ? { decision: recorded, retried: false } : null;
 }
 
-/**
- * Contain outranks a graduated decision on the same revision: it takes over that row and lifts the
- * holds the row placed, so the graduated path never blocks a Contain the pre-tier policy would run.
- */
-async function supersedeGraduated(
-  current: AutoContainmentDecisionItem,
-  assessment: AbuseAssessmentItem,
-  decided: Extract<InterventionDecision, { kind: 'act' }>,
-  userIds: string[],
-  mode: AutoContainmentDecisionItem['mode'],
-  staleBefore: Date,
+/** A committed receipt names accounts; an applied count alone never authorizes lifting a hold. */
+async function releaseContainedHolds(
+  detectionId: string,
+  requestedUserIds: string[],
+  result: AdminUsersBulkResult | null,
   deps: AutoContainmentDeps
-): Promise<{ decision: AutoContainmentDecisionItem; retried: boolean } | null> {
-  const superseded = await deps.decisions.supersedeWithContain(current.id, {
-    assessmentId: assessment.id,
-    mode,
-    userIds,
-    confidence: assessment.confidence ?? 0,
-    reason: decided.reason,
-    staleBefore,
-    now: deps.now(),
-  });
-  if (!superseded) return null;
-  // A hold left behind by a failed lift still lapses at its expiresAt.
-  for (const userId of current.userIds) {
-    try {
-      await deps.releaseHold(userId, current.id);
-    } catch (error) {
-      deps.logger.error('[AUTO_CONTAINMENT] lifting a superseded hold failed', {
-        decisionId: current.id,
-        error: errorText(error),
-      });
+): Promise<void> {
+  const committed = [...new Set(result?.committedUserIds ?? [])].filter(id => requestedUserIds.includes(id));
+  if (committed.length === 0) return;
+  try {
+    // Refresh after Contain commits to include a graduated claim created while it was running.
+    const rows = await deps.decisions.listForDetection(detectionId);
+    for (const row of rows) {
+      if (row.tier === 'contain' || row.releasedAt) continue;
+      const selected = committed.filter(id => row.userIds.includes(id));
+      if (selected.length === 0) continue;
+      try {
+        await deps.releaseContainedHolds(row.id, selected);
+      } catch (error) {
+        deps.logger.error('[AUTO_CONTAINMENT] releasing contained account holds failed', {
+          decisionId: row.id,
+          error: errorText(error),
+        });
+      }
     }
+  } catch (error) {
+    deps.logger.error('[AUTO_CONTAINMENT] loading graduated decisions after containment failed', {
+      detectionId,
+      error: errorText(error),
+    });
   }
-  return { decision: superseded, retried: false };
 }
 
 /** Decides, and in enforce mode acts on, one assessment. Throws only on a database failure. */
@@ -308,7 +304,9 @@ export async function applyAutoContainment(
   if (claim.retried) deps.logger.warn('[AUTO_CONTAINMENT] retrying a decision a run left pending', logMeta);
 
   const settle = async (finished: Finished): Promise<AutoContainmentRunResult> => {
-    await deps.decisions.finish(decision.id, finished);
+    if (!(await deps.decisions.finish(decision.id, finished, decision.decidedAt))) {
+      return { status: 'skipped', reason: 'already_decided' };
+    }
     return { status: 'decided', decision: { ...decision, ...finished } };
   };
 
@@ -331,14 +329,14 @@ export async function applyAutoContainment(
 
   let finished: Finished;
   try {
-    finished = finishedFrom(
-      await deps.contain({
-        userIds: decision.userIds,
-        reason: decision.reason,
-        idempotencyKey: `auto-containment:${detection.id}:${detection.revision}`,
-        blockEmailDomains: config.blockEmailDomains,
-      })
-    );
+    const result = await deps.contain({
+      userIds: decision.userIds,
+      reason: decision.reason,
+      idempotencyKey: `auto-containment:${detection.id}:${detection.revision}`,
+      blockEmailDomains: config.blockEmailDomains,
+    });
+    finished = finishedFrom(result);
+    await releaseContainedHolds(detection.id, decision.userIds, result, deps);
   } catch (error) {
     finished = { outcome: 'failed', batchId: null, error: errorText(error) };
   }
@@ -372,7 +370,9 @@ async function applyGraduatedTier(
   if (claim.retried) deps.logger.warn('[AUTO_CONTAINMENT] retrying a decision a run left pending', logMeta);
 
   const settle = async (finished: Finished): Promise<AutoContainmentRunResult> => {
-    await deps.decisions.finish(decision.id, finished);
+    if (!(await deps.decisions.finish(decision.id, finished, decision.decidedAt))) {
+      return { status: 'skipped', reason: 'already_decided' };
+    }
     return { status: 'decided', decision: { ...decision, ...finished } };
   };
 
@@ -410,7 +410,7 @@ async function applyGraduatedTier(
   for (const userId of decision.userIds) {
     try {
       // Idempotent by decisionId, so a retried pending decision never stacks a second hold.
-      if (await deps.applyHold(userId, hold)) await deps.auditHold(userId, decision);
+      if (await deps.applyHold(userId, hold, decision.decidedAt)) await deps.auditHold(userId, decision);
     } catch (error) {
       failures.push(`${userId}: ${errorText(error)}`);
     }
