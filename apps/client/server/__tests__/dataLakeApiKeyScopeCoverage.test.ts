@@ -24,6 +24,7 @@ import {
   listDataLakeProposalsContract,
   decideDataLakeProposalContract,
   getDataLakeConfigHistoryContract,
+  undoDataLakeConfigChangeContract,
 } from '@bike4mind/common';
 import { methodBlocks } from './scopeCoverageHelpers';
 
@@ -112,6 +113,7 @@ const V1_EXPECTED_SCOPES = [
   [listDataLakeProposalsContract, DATA_LAKE_READ_API_KEY_SCOPES] as const,
   [decideDataLakeProposalContract, DATA_LAKE_WRITE_API_KEY_SCOPES] as const,
   [getDataLakeConfigHistoryContract, DATA_LAKE_READ_API_KEY_SCOPES] as const,
+  [undoDataLakeConfigChangeContract, DATA_LAKE_WRITE_API_KEY_SCOPES] as const,
 ];
 
 // Keyed by the identifier a route passes to nextRouteForContract(), so the source scan can tie
@@ -134,6 +136,7 @@ const V1_CONTRACTS_BY_IDENTIFIER = {
   listDataLakeProposalsContract,
   decideDataLakeProposalContract,
   getDataLakeConfigHistoryContract,
+  undoDataLakeConfigChangeContract,
 };
 
 describe('data-lake routes declare an API-key scope gate', () => {

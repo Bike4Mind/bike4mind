@@ -36,7 +36,7 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 
 ## Summary
 
-1282 routes: 134 contracted, 11 aliases of another route, 358 with no static caller in `apps/client/app`.
+1284 routes: 135 contracted, 11 aliases of another route, 355 with no static caller in `apps/client/app`.
 
 | Area | Routes | Contracted | jwt+key | jwt | optional | handler | No static caller |
 | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -64,7 +64,7 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | chat | 1 | 1 | 1 | 0 | 0 | 0 | 0 |
 | chat-completion-status | 1 | 0 | 1 | 0 | 0 | 0 | 0 |
 | credits | 2 | 0 | 1 | 1 | 0 | 0 | 0 |
-| data-lakes | 60 | 0 | 59 | 1 | 0 | 0 | 8 |
+| data-lakes | 61 | 0 | 59 | 2 | 0 | 0 | 8 |
 | deep-agent | 5 | 0 | 3 | 2 | 0 | 0 | 0 |
 | documentation | 1 | 0 | 0 | 0 | 0 | 1 | 0 |
 | elabs | 4 | 0 | 4 | 0 | 0 | 0 | 0 |
@@ -138,7 +138,7 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | skills | 22 | 0 | 3 | 19 | 0 | 0 | 0 |
 | sky-greeting | 1 | 0 | 0 | 0 | 0 | 1 | 0 |
 | slack | 16 | 0 | 7 | 1 | 0 | 8 | 8 |
-| spaces | 13 | 0 | 0 | 13 | 0 | 0 | 13 |
+| spaces | 13 | 0 | 0 | 13 | 0 | 0 | 9 |
 | sre | 12 | 0 | 11 | 0 | 0 | 1 | 1 |
 | stripe | 5 | 0 | 2 | 2 | 0 | 1 | 1 |
 | studio | 7 | 0 | 0 | 7 | 0 | 0 | 0 |
@@ -154,7 +154,7 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | user | 2 | 0 | 1 | 1 | 0 | 0 | 0 |
 | user-api-keys | 8 | 0 | 7 | 1 | 0 | 0 | 1 |
 | users | 36 | 0 | 27 | 9 | 0 | 0 | 5 |
-| v1 | 132 | 128 | 113 | 12 | 0 | 7 | 118 |
+| v1 | 133 | 129 | 114 | 12 | 0 | 7 | 119 |
 | voice | 6 | 0 | 5 | 0 | 0 | 1 | 2 |
 | webhooks | 12 | 0 | 7 | 0 | 0 | 5 | 5 |
 | websocket | 1 | 0 | 0 | 1 | 0 | 0 | 0 |
@@ -803,6 +803,7 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | `/api/data-lakes/[id]/access` | GET | jwt+key | `datalake:query`, `datalake:read`, `datalake:write` | - | no | - | 1: `hooks/data/dataLakes.ts` |
 | `/api/data-lakes/[id]/articles` | GET | jwt+key | `datalake:query`, `datalake:read`, `datalake:write` | - | no | - | 1: `hooks/data/dataLakes.ts` |
 | `/api/data-lakes/[id]/config-history` | GET | jwt+key | `datalake:query`, `datalake:read`, `datalake:write` | - | no | - | 1: `hooks/data/dataLakes.ts` |
+| `/api/data-lakes/[id]/config-history/[eventId]/undo` | POST | jwt | - | - | no | - | 1: `hooks/data/dataLakes.ts` |
 | `/api/data-lakes/[id]/converge` | GET, POST | jwt+key | `datalake:query`, `datalake:read`, `datalake:write` | - | no | - | 1: `hooks/data/dataLakes.ts` |
 | `/api/data-lakes/[id]/drive-connection` | GET, DELETE | jwt+key | `datalake:query`, `datalake:read`, `datalake:write` | - | no | - | 1: `hooks/data/googleDrive.ts` |
 | `/api/data-lakes/[id]/files/[fabFileId]` | POST, DELETE | jwt+key | `datalake:write` | - | no | - | 1: `hooks/data/dataLakes.ts` |
@@ -1118,7 +1119,7 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | Route | Methods | Auth | Scopes | Permissions | Contract | Alias of | Callers |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | `/api/invites` | GET | jwt+key | - | - | no | - | 0 |
-| `/api/invites/[id]` | GET, DELETE | jwt+key | - | - | no | - | 2: `hooks/data/invites.ts`, `utils/invitesAPICalls.ts` |
+| `/api/invites/[id]` | GET, DELETE | jwt+key | - | - | no | - | 3: `hooks/data/invites.ts`, `hooks/data/spaces.ts`, `utils/invitesAPICalls.ts` |
 | `/api/invites/[id]/accept` | POST | jwt+key | - | - | no | - | 1: `utils/invitesAPICalls.ts` |
 | `/api/invites/[id]/refuse` | POST | jwt+key | - | - | no | - | 1: `utils/invitesAPICalls.ts` |
 | `/api/invites/batch` | POST | jwt | - | - | no | - | 1: `hooks/data/invites.ts` |
@@ -1662,10 +1663,10 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 
 | Route | Methods | Auth | Scopes | Permissions | Contract | Alias of | Callers |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| `/api/spaces` | GET, POST | jwt | - | - | no | - | 0 |
-| `/api/spaces/[id]` | GET, PATCH, DELETE | jwt | - | - | no | - | 0 |
+| `/api/spaces` | GET, POST | jwt | - | - | no | - | 1: `hooks/data/spaces.ts` |
+| `/api/spaces/[id]` | GET, PATCH, DELETE | jwt | - | - | no | - | 1: `hooks/data/spaces.ts` |
 | `/api/spaces/[id]/domain-join` | POST | jwt | - | - | no | - | 0 |
-| `/api/spaces/[id]/domains` | GET, POST | jwt | - | - | no | - | 0 |
+| `/api/spaces/[id]/domains` | GET, POST | jwt | - | - | no | - | 1: `utils/spaceDomainAPICalls.ts` |
 | `/api/spaces/[id]/domains/[claimId]` | PATCH, DELETE | jwt | - | - | no | - | 0 |
 | `/api/spaces/[id]/domains/[claimId]/verify` | POST | jwt | - | - | no | - | 0 |
 | `/api/spaces/[id]/invite-links` | GET, POST | jwt | - | - | no | - | 0 |
@@ -1674,7 +1675,7 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | `/api/spaces/[id]/leave` | POST | jwt | - | - | no | - | 0 |
 | `/api/spaces/[id]/members/[userId]` | PATCH, DELETE | jwt | - | - | no | - | 0 |
 | `/api/spaces/[id]/transfer-ownership` | POST | jwt | - | - | no | - | 0 |
-| `/api/spaces/domain-suggestions` | GET | jwt | - | - | no | - | 0 |
+| `/api/spaces/domain-suggestions` | GET | jwt | - | - | no | - | 1: `hooks/data/spaces.ts` |
 
 ### sre
 
@@ -1898,6 +1899,7 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | `/api/v1/data-lakes` | GET | jwt+key | `datalake:query`, `datalake:read`, `datalake:write` | - | yes | - | 0 |
 | `/api/v1/data-lakes/[id]` | GET | jwt+key | `datalake:query`, `datalake:read`, `datalake:write` | - | yes | - | 0 |
 | `/api/v1/data-lakes/[id]/config-history` | GET | jwt+key | `datalake:query`, `datalake:read`, `datalake:write` | - | yes | - | 0 |
+| `/api/v1/data-lakes/[id]/config-history/[event_id]/undo` | POST | jwt+key | `datalake:write` | - | yes | - | 0 |
 | `/api/v1/data-lakes/[id]/files/[file_id]` | GET, POST, DELETE | jwt+key | GET: `datalake:query`, `datalake:read`, `datalake:write`; POST, DELETE: `datalake:write` | - | yes | - | 0 |
 | `/api/v1/data-lakes/[id]/proposals` | GET | jwt+key | `datalake:query`, `datalake:read`, `datalake:write` | - | yes | - | 0 |
 | `/api/v1/data-lakes/[id]/proposals/[proposal_id]` | POST | jwt+key | `datalake:write` | - | yes | - | 0 |

@@ -114,6 +114,7 @@ import {
   listDataLakeProposalsContract,
   decideDataLakeProposalContract,
   getDataLakeConfigHistoryContract,
+  undoDataLakeConfigChangeContract,
 } from './dataLakeResearch.contract';
 import { listImageModelsContract } from './imageModels.contract';
 import {
@@ -290,6 +291,7 @@ export const CONTRACTS: readonly EndpointContract[] = [
   listDataLakeProposalsContract,
   decideDataLakeProposalContract,
   getDataLakeConfigHistoryContract,
+  undoDataLakeConfigChangeContract,
   listImageModelsContract,
   cancelVideoGenerationContract,
   createVideoGenerationContract,

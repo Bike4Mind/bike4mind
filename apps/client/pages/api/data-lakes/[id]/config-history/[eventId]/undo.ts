@@ -23,7 +23,7 @@ const undoRateLimit = rateLimit({
   bucket: 'data-lakes/config-history-undo',
 });
 
-// Session-only until the public undo route exists; an API key never reaches this handler.
+// Session-only: API keys reach undo through the /api/v1 twin.
 const handler = baseApi({ auth: 'jwtOnly' })
   .use(requireFeatureEnabled('EnableDataLakes'))
   .use(undoRateLimit)

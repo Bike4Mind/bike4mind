@@ -1556,6 +1556,26 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  '/api/v1/data-lakes/{id}/config-history/{event_id}/undo': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /**
+     * Undo a config change
+     * @description Reverses one config-history row through the ordinary service for the inverse change: a lever edit, a config create or delete, a proposal approval, decline or restore, or a file add or remove. Take `event_id` from the config-history route, and only rows with `undoable: true` apply. A change can be undone once. Returns the row the undo wrote, which may itself be undoable, and `notes` for consequences such as a schedule put on hold. The refusal is a 409 when the row was already undone, a later change touched the same item, the old value no longer passes the current checks (the message names the field), the config no longer exists, or the stored copy needed to restore it has expired.
+     */
+    post: operations['undoDataLakeConfigChange'];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   '/api/v1/image-models': {
     parameters: {
       query?: never;
@@ -10537,6 +10557,10 @@ export interface components {
               /** @enum {string} */
               principal_kind: 'user' | 'agent' | 'apiKey' | 'system';
               principal_name: string | null;
+              /** @description True when POST .../config-history/{event_id}/undo can reverse this row: not yet undone, and supported. */
+              undoable: boolean;
+              /** @description The row that undid this one. Null when this row was not undone, or the undoing row is outside the window. */
+              undone_by_event_id: string | null;
               /** @description The thing the row is about. Absent on older rows. */
               target?: {
                 /** @enum {string} */
@@ -10615,12 +10639,18 @@ export interface components {
               /** @enum {string} */
               principal_kind: 'user' | 'agent' | 'apiKey' | 'system';
               principal_name: string | null;
+              /** @description True when POST .../config-history/{event_id}/undo can reverse this row: not yet undone, and supported. */
+              undoable: boolean;
+              /** @description The row that undid this one. Null when this row was not undone, or the undoing row is outside the window. */
+              undone_by_event_id: string | null;
               /** @description The file the row is about. */
               target: {
                 /** @enum {string} */
                 kind: 'researchConfig' | 'proposal' | 'file';
                 id: string;
               };
+              /** @description The name of the file. Null when the file no longer exists. */
+              file_name: string | null;
               /** @enum {string} */
               action: 'file-added' | 'file-removed';
               /** @enum {string} */
@@ -10635,6 +10665,122 @@ export interface components {
         window_starts_at: string | null;
         generated_at: string;
       };
+    };
+    undoDataLakeConfigChangeResponse200: {
+      /** @description The History row the undo wrote. Null when that best-effort write did not persist; the undo still happened. */
+      data:
+        | {
+            /** @enum {string} */
+            kind: 'config';
+            event_id: string;
+            changed_at: string;
+            /** @enum {string} */
+            principal_kind: 'user' | 'agent' | 'apiKey' | 'system';
+            principal_name: string | null;
+            /** @description True when POST .../config-history/{event_id}/undo can reverse this row: not yet undone, and supported. */
+            undoable: boolean;
+            /** @description The row that undid this one. Null when this row was not undone, or the undoing row is outside the window. */
+            undone_by_event_id: string | null;
+            /** @description The thing the row is about. Absent on older rows. */
+            target?: {
+              /** @enum {string} */
+              kind: 'researchConfig' | 'proposal' | 'file';
+              id: string;
+            };
+            /** @enum {string} */
+            manage_rung:
+              'platform-admin' | 'grant-owner' | 'creator' | 'grant-curator' | 'org-admin' | 'org-grant' | 'system';
+            /** @enum {string} */
+            action:
+              | 'update'
+              | 'visibility'
+              | 'transfer-ownership'
+              | 'archive'
+              | 'unarchive'
+              | 'delete'
+              | 'restore'
+              | 'promote'
+              | 'demote'
+              | 'purge'
+              | 'auto-activate'
+              | 'grant-access'
+              | 'revoke-access'
+              | 'membership-succession'
+              | 'approve-proposal'
+              | 'auto-approve-proposal'
+              | 'decline-proposal'
+              | 'restore-proposal'
+              | 'create-research-config'
+              | 'update-research-config'
+              | 'delete-research-config'
+              | 'start-research-run'
+              | 'complete-research-run'
+              | 'create'
+              | 'upload-files';
+            changes: {
+              field: string;
+              /** @enum {string} */
+              kind: 'literal' | 'fingerprint';
+              /** @description A literal change only. Absent means unset on that side. */
+              before?: string | number | boolean | null;
+              /** @description A literal change only. Absent means unset on that side. */
+              after?: string | number | boolean | null;
+              /** @description A literal string value was clipped. */
+              truncated?: boolean;
+              /** @description A fingerprint change only. Size, never the text. */
+              before_fingerprint?: {
+                present: boolean;
+                length: number;
+              };
+              /** @description A fingerprint change only. Size, never the text. */
+              after_fingerprint?: {
+                present: boolean;
+                length: number;
+              };
+              /** @description A fingerprint change only. The two sides are the same text. */
+              text_unchanged?: boolean;
+            }[];
+            /** @description Absent on older rows. */
+            lever_changes?: {
+              lever: string;
+              /** @description Absent or null means unset. A feed address is origin and path only. */
+              before?: unknown;
+              /** @description Null on a delete, which records the setting as it stood. */
+              after?: unknown;
+            }[];
+            /** @description The file an approval admitted. */
+            admitted_fab_file_id?: string;
+          }
+        | {
+            /** @enum {string} */
+            kind: 'file';
+            event_id: string;
+            changed_at: string;
+            /** @enum {string} */
+            principal_kind: 'user' | 'agent' | 'apiKey' | 'system';
+            principal_name: string | null;
+            /** @description True when POST .../config-history/{event_id}/undo can reverse this row: not yet undone, and supported. */
+            undoable: boolean;
+            /** @description The row that undid this one. Null when this row was not undone, or the undoing row is outside the window. */
+            undone_by_event_id: string | null;
+            /** @description The file the row is about. */
+            target: {
+              /** @enum {string} */
+              kind: 'researchConfig' | 'proposal' | 'file';
+              id: string;
+            };
+            /** @description The name of the file. Null when the file no longer exists. */
+            file_name: string | null;
+            /** @enum {string} */
+            action: 'file-added' | 'file-removed';
+            /** @enum {string} */
+            origin: 'connector' | 'person';
+            undoes_event_id?: string;
+            caused_by_event_id?: string;
+          }
+        | null;
+      /** @description Consequences of the undo in words, for example a schedule put on hold. */
+      notes: string[];
     };
     listImageModelsResponse200: {
       /** @description Best first for a plain text-to-image request: generally available before preview, then flagship tier first, then newest release first. */
@@ -30474,6 +30620,205 @@ export interface operations {
         };
       };
       /** @description `limit` is not an integer from 1 to 500. */
+      422: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The request declared a client build (`X-Client-Name` + `X-Client-Version`) older than the minimum this API still serves for that client. Upgrade to `minimum_version` or later. Never sent to a request that omits either header. */
+      426: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['UpgradeRequiredResponse'];
+        };
+      };
+      /** @description Per-user rate limit exceeded. */
+      429: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+    };
+  };
+  undoDataLakeConfigChange: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        id: string;
+        event_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description The undo was applied. */
+      200: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['undoDataLakeConfigChangeResponse200'];
+        };
+      };
+      /** @description Missing or invalid credentials. */
+      401: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The API key lacks `datalake:write`, the caller can read this lake but may not manage it, or Data Lakes are disabled on this deployment. */
+      403: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ScopeForbiddenResponse'];
+        };
+      };
+      /** @description No lake with that id is visible to the caller. A lake that exists but is not yours to read is reported as 404 too, so lake ids cannot be probed through this endpoint. The same 404 answers a history row that does not exist in this lake. */
+      404: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The path does not serve this HTTP method. */
+      405: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description The methods this path serves. GET implies HEAD. */
+          Allow?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Already undone, a later change touched the same item, the old value is no longer valid, the config no longer exists, or the stored copy to restore from has expired. */
+      409: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Request failed validation. */
       422: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */

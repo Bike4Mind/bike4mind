@@ -778,3 +778,82 @@ describe('undo facts on entries', () => {
     expect(view.entries[0].undoable).toBeUndefined();
   });
 });
+
+describe('created-config liveness', () => {
+  const CFG_A = 'aaaaaaaaaaaaaaaaaaaaaaaa';
+  const CFG_B = 'bbbbbbbbbbbbbbbbbbbbbbbb';
+  const create = (id: string, cfg: string) =>
+    event({ id, action: 'create-research-config', target: { kind: 'researchConfig', id: cfg } });
+  const withConfigs = (events: ILakeConfigChangeEventDocument[], live: string[] | undefined) => {
+    const { adapters: a } = adapters(events);
+    const find = vi.fn().mockResolvedValue((live ?? []).map(id => ({ id })));
+    return {
+      find,
+      adapters: {
+        ...a,
+        db: {
+          ...a.db,
+          lakeConfigUndoClaims: { listForEvents: vi.fn().mockResolvedValue([]) },
+          ...(live ? { dataLakeResearchConfigs: { find } } : {}),
+        },
+      },
+    };
+  };
+
+  it('offers Undo on a create row only while its config still exists, in one batched read', async () => {
+    const { adapters: a, find } = withConfigs([create('c1', CFG_A), create('c2', CFG_B)], [CFG_A]);
+    const view = await assembleLakeConfigHistory(lake(), a);
+    expect(view.entries.find(e => e.eventId === 'c1')?.undoable).toBe(true);
+    expect(view.entries.find(e => e.eventId === 'c2')?.undoable).toBe(false);
+    expect(find).toHaveBeenCalledTimes(1);
+    expect(find).toHaveBeenCalledWith({ dataLakeId: 'lake1', _id: { $in: [CFG_A, CFG_B] } });
+  });
+
+  it('does not read configs when no row is a create, and assumes live when the adapter is absent', async () => {
+    const none = withConfigs(
+      [event({ id: 'u1', action: 'update-research-config', target: { kind: 'researchConfig', id: CFG_A }, leverChanges: [{ lever: 'name', before: 'a', after: 'b' }] as never })],
+      []
+    );
+    await assembleLakeConfigHistory(lake(), none.adapters);
+    expect(none.find).not.toHaveBeenCalled();
+
+    const absent = withConfigs([create('c1', CFG_A)], undefined);
+    const view = await assembleLakeConfigHistory(lake(), absent.adapters);
+    expect(view.entries[0]?.undoable).toBe(true);
+  });
+});
+
+describe('file names', () => {
+  const FAB_A = 'aaaaaaaaaaaaaaaaaaaaaaaa';
+  const FAB_GONE = 'cccccccccccccccccccccccc';
+  const build = (rows: Array<Record<string, unknown>>) => {
+    const { adapters: a } = adapters([], {
+      includeFiles: true,
+      fileEvents: [fileEvent({ id: 'f1', fabFileId: FAB_A }), fileEvent({ id: 'f2', fabFileId: FAB_GONE })],
+    });
+    const find = vi.fn().mockResolvedValue(rows);
+    return { find, adapters: { ...a, db: { ...a.db, fabFiles: { find } } } };
+  };
+
+  it('names each file in one batched read, and leaves a deleted file without a name', async () => {
+    const { adapters: a, find } = build([{ id: FAB_A, fileName: 'handbook.pdf' }]);
+    const view = await assembleLakeConfigHistory(lake(), a);
+    const byId = Object.fromEntries(view.entries.map(e => [e.eventId, e]));
+    expect(byId.f1).toMatchObject({ fileName: 'handbook.pdf' });
+    expect(byId.f2).not.toHaveProperty('fileName');
+    expect(find).toHaveBeenCalledTimes(1);
+  });
+
+  it('ignores a soft-deleted file row', async () => {
+    const { adapters: a } = build([{ id: FAB_A, fileName: 'old.pdf', deletedAt: new Date() }]);
+    const view = await assembleLakeConfigHistory(lake(), a);
+    expect(view.entries[0]).not.toHaveProperty('fileName');
+  });
+
+  it('does not read files when no file rows are returned', async () => {
+    const { adapters: a } = adapters([event({ id: 'c1' })]);
+    const find = vi.fn();
+    await assembleLakeConfigHistory(lake(), { ...a, db: { ...a.db, fabFiles: { find } } } as never);
+    expect(find).not.toHaveBeenCalled();
+  });
+});

@@ -6,6 +6,8 @@ import type {
   ILakeConfigUndoClaimRepository,
   ILakeMembershipChangeEventDocument,
   ILakeMembershipChangeEventRepository,
+  IDataLakeResearchConfigRepository,
+  IFabFileRepository,
   IUserApiKeyRepository,
   IUserRepository,
   LakeConfigHistoryConfigEntry,
@@ -173,6 +175,10 @@ export interface AssembleLakeConfigHistoryAdapters {
     userApiKeys: Pick<IUserApiKeyRepository, 'find'>;
     /** Absent on a caller that predates Undo: no row is then marked undoable or undone. */
     lakeConfigUndoClaims?: Pick<ILakeConfigUndoClaimRepository, 'listForEvents'>;
+    /** Absent: every created config is assumed to still exist, so its Undo is offered. */
+    dataLakeResearchConfigs?: Pick<IDataLakeResearchConfigRepository, 'find'>;
+    /** Absent: file rows carry no name. */
+    fabFiles?: Pick<IFabFileRepository, 'find'>;
   };
   /** Page size; clamped through `clampLakeConfigHistoryLimit`. */
   limit?: number;
@@ -228,8 +234,33 @@ export async function assembleLakeConfigHistory(
   const configTruncated = configProbe.length > pageSize;
   const configWindow = configProbe.slice(0, pageSize);
   const configEntries = configWindow.map(toLakeConfigHistoryEntry);
+  // One read for every config a create row targets. A config that was deleted, or deleted and
+  // restored under a new id, leaves its create row with nothing to undo.
+  const createdConfigIds = [
+    ...new Set(
+      configWindow
+        .filter(e => e.action === 'create-research-config' && e.target?.kind === 'researchConfig')
+        .map(e => e.target!.id)
+        .filter(isObjectIdShaped)
+    ),
+  ];
+  const liveConfigIds =
+    db.dataLakeResearchConfigs && createdConfigIds.length > 0
+      ? new Set(
+          (await db.dataLakeResearchConfigs.find({ dataLakeId: lake.id, _id: { $in: createdConfigIds } })).map(
+            c => c.id
+          )
+        )
+      : undefined;
   const undoFacts = new Map<string, UndoClassification>(
-    configWindow.map(event => [event.id, classifyConfigUndo(event, now)])
+    configWindow.map(event => [
+      event.id,
+      classifyConfigUndo(
+        event,
+        now,
+        !liveConfigIds || event.target?.kind !== 'researchConfig' || liveConfigIds.has(event.target.id)
+      ),
+    ])
   );
 
   let fileEntries: LakeConfigHistoryFileEntry[] = [];
@@ -311,12 +342,20 @@ export async function assembleLakeConfigHistory(
     // trip however many rows reference an identity.
     if (entry.kind === 'config') for (const id of identityValueIds(entry.changes)) userIds.add(id);
   }
-  const [users, keys] = await Promise.all([
+  const fileIds = [
+    ...new Set(
+      entries.flatMap(entry => (entry.kind === 'file' && isObjectIdShaped(entry.target.id) ? [entry.target.id] : []))
+    ),
+  ];
+  const [users, keys, files] = await Promise.all([
     userIds.size > 0 ? db.users.findByIds(Array.from(userIds)) : [],
     // The soft-delete plugin's find hook skips deleted keys, so a deleted key falls back to its id.
     // Do not pass `includeDeleted` here.
     keyIds.size > 0 ? db.userApiKeys.find({ _id: { $in: Array.from(keyIds) } }) : [],
+    // A deleted file has no row to name, so its entry keeps showing the id.
+    db.fabFiles && fileIds.length > 0 ? db.fabFiles.find({ _id: { $in: fileIds } }) : [],
   ]);
+  const fileNameById = new Map(files.filter(f => !f.deletedAt && f.fileName).map(f => [f.id, f.fileName]));
   const userNameById = new Map(users.map(u => [u.id, userDisplayName(u)]));
   const keyNameById = new Map(keys.map(k => [k.id, k.name || undefined]));
 
@@ -325,6 +364,9 @@ export async function assembleLakeConfigHistory(
     lakeName: lake.name,
     entries: entries.map(entry => ({
       ...entry,
+      ...(entry.kind === 'file' && fileNameById.has(entry.target.id)
+        ? { fileName: fileNameById.get(entry.target.id) }
+        : {}),
       principalName:
         entry.principalKind === 'user'
           ? userNameById.get(entry.principalId)

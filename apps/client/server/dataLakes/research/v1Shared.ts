@@ -1,5 +1,6 @@
 import type { ResearchKeysetPage } from '@bike4mind/common';
 import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
+import { isDevelopment } from '@bike4mind/server-utils/utils/config';
 import { resolveUserRateLimitPerMin } from '@bike4mind/server-utils/utils/userRateTier';
 import { decodeTimeIdCursor, encodeTimeIdCursor } from '@server/utils/cursorPagination';
 
@@ -49,3 +50,14 @@ export function toCamelInput(body: object): Record<string, unknown> {
       .map(([key, value]) => [camel(key), value])
   );
 }
+
+const HOUR_MS = 60 * 60 * 1000;
+const UNDO_HOURLY_CAP = 120;
+
+/** Undo is capped per hour, like its SPA twin, rather than by the per-minute tier. */
+export const undoRateLimit = (bucket: string) =>
+  rateLimit({
+    limit: () => (isDevelopment() ? Infinity : UNDO_HOURLY_CAP),
+    windowMs: HOUR_MS,
+    bucket,
+  });

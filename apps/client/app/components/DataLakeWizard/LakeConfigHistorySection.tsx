@@ -343,8 +343,14 @@ function FileRow({ entry, undo }: { entry: LakeConfigHistoryFileEntry; undo?: Un
           <Typography level="body-xs" fontWeight="lg">
             File
           </Typography>
-          <Typography level="body-xs" textColor="text.tertiary" noWrap title={entry.target.id}>
-            {entry.target.id}
+          <Typography
+            level="body-xs"
+            textColor="text.tertiary"
+            noWrap
+            title={entry.target.id}
+            data-testid="datalake-config-history-file-name"
+          >
+            {entry.fileName ?? entry.target.id}
           </Typography>
         </Box>
       </td>
