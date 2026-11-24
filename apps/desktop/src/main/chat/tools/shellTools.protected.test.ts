@@ -552,11 +552,12 @@ describe('shell commands that reach a protected location', () => {
       expect((await judge(command, 'P')).auto).toBe(false);
     });
 
+    // Only the scan's verdicts: a saved rule matches a written-out command, never a loop header, so `allowed` differs.
     it('judges an unquoted plain loop value as the command written out', async () => {
       for (const scenario of scenarios) {
-        expect(await judge('for f in src; do rm -rf $f; done', scenario), scenario).toEqual(
-          await judge('rm -rf src', scenario)
-        );
+        const { auto, full } = await judge('for f in src; do rm -rf $f; done', scenario);
+        const written = await judge('rm -rf src', scenario);
+        expect({ auto, full }, scenario).toEqual({ auto: written.auto, full: written.full });
       }
     });
 
