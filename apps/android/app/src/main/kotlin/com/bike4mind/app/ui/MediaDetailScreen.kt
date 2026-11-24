@@ -160,9 +160,10 @@ private fun Player(url: String, onReady: () -> Unit, onFailed: () -> Unit) {
                 controls.setAnchorView(this)
                 setMediaController(controls)
                 setOnPreparedListener {
-                    ready()
                     start()
                     controls.show(0)
+                    // Prepared is not played: a codec the device lacks fails right after, so count it once playback runs.
+                    postDelayed({ if (isPlaying && currentPosition > 0) ready() }, PLAYBACK_PROOF_MS)
                 }
                 setOnErrorListener { _, _, _ ->
                     failed()
@@ -176,5 +177,6 @@ private fun Player(url: String, onReady: () -> Unit, onFailed: () -> Unit) {
 }
 
 private const val MIN_ZOOM = 1f
+private const val PLAYBACK_PROOF_MS = 1_000L
 private const val DOUBLE_TAP_ZOOM = 2.5f
 private const val MAX_ZOOM = 5f
