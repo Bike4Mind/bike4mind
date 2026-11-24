@@ -6,8 +6,8 @@ import TutorialDraftsCard from '@client/app/components/tutorial/admin/TutorialDr
 import TutorialModulesCard from '@client/app/components/tutorial/admin/TutorialModulesCard';
 import TutorialsSwitchCard from '@client/app/components/tutorial/admin/TutorialsSwitchCard';
 import { AdminPageHeader, ErrorState, LoadingState, SectionCard } from './shared';
-import { useTutorialOwners, useTutorialOwnerSummary } from '@client/app/hooks/tutorials/useTutorialOwners';
 import { ADMIN_REGION_GAP } from './shared/adminStyles';
+import { useTutorialOwners, useTutorialOwnerSummary } from '@client/app/hooks/tutorials/useTutorialOwners';
 
 const CORE_OWNER = 'core';
 
@@ -80,7 +80,7 @@ export const TutorialsTab: React.FC = () => {
     <Stack gap={ADMIN_REGION_GAP} data-testid="tutorials-tab">
       <AdminPageHeader
         title="Tutorials"
-        description="Turn tutorials on or off, and see the tutorials each installed feature adds."
+        description="Turn tutorials on, edit core modules and drafts, and see what other owners contribute."
       />
       <Stack gap={1.5} data-testid="tutorials-core-section">
         <Typography level="title-lg">Core</Typography>

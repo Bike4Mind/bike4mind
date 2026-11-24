@@ -54,6 +54,12 @@ describe('TutorialsTab', () => {
     summaries.byBase = {};
   });
 
+  it('opens with the shared page header as the only h1', () => {
+    renderTab();
+    expect(screen.getByTestId('tutorials-tab').firstElementChild).toBe(screen.getByTestId('admin-page-header'));
+    expect(screen.getAllByRole('heading', { level: 1 }).map(h => h.textContent)).toEqual(['Tutorials']);
+  });
+
   it('renders the Core section with the cards against the core base', () => {
     renderTab();
     expect(screen.getByTestId('tutorials-core-section')).toBeInTheDocument();

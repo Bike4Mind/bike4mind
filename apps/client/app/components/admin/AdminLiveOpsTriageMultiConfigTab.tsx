@@ -36,6 +36,7 @@ import {
   Radio,
   Textarea,
   Tooltip,
+  Stack,
 } from '@mui/joy';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '@client/app/contexts/ApiContext';
@@ -74,13 +75,11 @@ import ForumIcon from '@mui/icons-material/Forum';
 
 // Components
 import ContextHelpButton from '@client/app/components/help/ContextHelpButton';
+import { AdminPageHeader, ErrorState, LoadingState } from './shared';
+import { ADMIN_REGION_GAP } from './shared/adminStyles';
 
 // Template variable docs
 import { TEMPLATE_VARIABLE_DOCS } from '@bike4mind/server-utils/services/liveopsTriagePrompt';
-import { AdminPageHeader } from './shared/AdminPageHeader';
-import { ErrorState } from './shared/ErrorState';
-import { LoadingState } from './shared/LoadingState';
-import { ADMIN_REGION_GAP } from './shared/adminStyles';
 
 // Types
 interface LiveopsTriageConfig {
@@ -224,6 +223,15 @@ const getDefaultConfig = (): Partial<LiveopsTriageConfig> => ({
 });
 
 const POLL_INTERVAL_MS = 3000;
+
+const PAGE_ROOT_SX = { height: '100%' } as const;
+
+const LiveOpsTriagePageHeader = () => (
+  <AdminPageHeader
+    title="LiveOps triage"
+    description="Route Slack alerts into GitHub or Jira issues, one config per channel."
+  />
+);
 
 // Default prompt template (simplified version for display)
 const DEFAULT_PROMPT_TEMPLATE = `You are an expert DevOps engineer analyzing production errors. Review the alerts and triage them.
@@ -593,38 +601,31 @@ export const AdminLiveOpsTriageMultiConfigTab: React.FC = () => {
   const activeRuns = runsData?.runs.filter(r => r.status === 'queued' || r.status === 'processing') || [];
   const recentRuns = runsData?.runs.filter(r => r.status === 'complete' || r.status === 'failed').slice(0, 5) || [];
 
-  const header = (
-    <AdminPageHeader
-      title="LiveOps triage"
-      description="Triage production alerts from Slack channels into GitHub or Jira issues, one configuration per channel."
-    />
-  );
-
   if (configsLoading) {
     return (
-      <Box sx={{ display: 'flex', flexDirection: 'column', gap: ADMIN_REGION_GAP }}>
-        {header}
+      <Stack gap={ADMIN_REGION_GAP} sx={PAGE_ROOT_SX}>
+        <LiveOpsTriagePageHeader />
         <LoadingState label="Loading configurations" />
-      </Box>
+      </Stack>
     );
   }
 
   if (configsError) {
     return (
-      <Box sx={{ display: 'flex', flexDirection: 'column', gap: ADMIN_REGION_GAP }}>
-        {header}
+      <Stack gap={ADMIN_REGION_GAP} sx={PAGE_ROOT_SX}>
+        <LiveOpsTriagePageHeader />
         <ErrorState
           message="The triage configurations failed to load."
           onRetry={() => void refetchConfigs()}
           retrying={configsFetching}
         />
-      </Box>
+      </Stack>
     );
   }
 
   return (
-    <Box sx={{ display: 'flex', flexDirection: 'column', height: '100%', gap: ADMIN_REGION_GAP }}>
-      {header}
+    <Stack gap={ADMIN_REGION_GAP} sx={PAGE_ROOT_SX}>
+      <LiveOpsTriagePageHeader />
       {/* Active Runs Panel */}
       <Card variant="outlined" sx={{ p: 2 }}>
         <Box
@@ -1859,7 +1860,7 @@ export const AdminLiveOpsTriageMultiConfigTab: React.FC = () => {
           )}
         </ModalDialog>
       </Modal>
-    </Box>
+    </Stack>
   );
 };
 

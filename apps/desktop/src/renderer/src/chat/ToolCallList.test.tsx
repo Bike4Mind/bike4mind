@@ -283,6 +283,19 @@ describe('ToolCallList', () => {
     expect(html).not.toContain('data-testid="chat-tool-approve-everywhere"');
   });
 
+  it('asks once for a whole batch of deletes, naming how many', () => {
+    const html = markup([
+      awaiting({ name: 'session_delete', input: { session_ids: ['a', 'b', 'c'] }, approvalIrreversible: true }),
+    ]);
+    expect(html).toContain('Delete these 3 conversations for good?');
+    expect(html).toContain('Delete them');
+    expect(html).toContain('Keep them');
+    const single = markup([
+      awaiting({ name: 'session_delete', input: { session_ids: ['a'] }, approvalIrreversible: true }),
+    ]);
+    expect(single).toContain('Delete this conversation for good?');
+  });
+
   it('withholds "always" on a call that cannot be undone', () => {
     const html = markup([awaiting({ approvalIrreversible: true })]);
     expect(html).toContain('data-irreversible="true"');

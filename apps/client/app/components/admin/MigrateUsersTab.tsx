@@ -21,9 +21,9 @@ import React, { ReactNode, useMemo, useState } from 'react';
 import { toast } from 'sonner';
 import { buildMigratedUsersCsv } from '@client/app/utils/migratedUsersCsv';
 import ContextHelpButton from '@client/app/components/help/ContextHelpButton';
-import { AdminPageHeader } from './shared/AdminPageHeader';
-import { ADMIN_REGION_GAP } from './shared/adminStyles';
 import SingleOrganizationSelector from '../common/SingleOrganizationSelector';
+import { AdminPageHeader } from './shared';
+import { ADMIN_DETAIL_MAX_WIDTH, ADMIN_REGION_GAP } from './shared/adminStyles';
 
 const MigrateUsersTab: React.FC = () => {
   const organizations = useGetAllOrganizations({ filters: { personal: false } });
@@ -120,10 +120,10 @@ const MigrateUsersTab: React.FC = () => {
   const secondOption = false;
 
   return (
-    <Stack spacing={ADMIN_REGION_GAP}>
+    <Stack gap={ADMIN_REGION_GAP} sx={{ maxWidth: ADMIN_DETAIL_MAX_WIDTH }}>
       <AdminPageHeader
-        title="Migration"
-        description="Create accounts in bulk from a list of names and emails, optionally into an organization."
+        title="Migrate users"
+        description="Add people to an organization in bulk from a pasted list, with an optional welcome email."
         actions={<ContextHelpButton helpId="admin/user-migration" tooltipText="User migration help" />}
       />
       <Stack spacing={2}>

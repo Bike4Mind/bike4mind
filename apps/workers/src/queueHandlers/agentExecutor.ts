@@ -251,6 +251,7 @@ import {
 import { buildAgentRecentImagesNote, withRecentImagesNote } from './agentExecutor.recentImagesNote';
 import {
   directedFinalCheck,
+  loadDirectorBriefing,
   withDirectedSessionTools,
   withDirectedSystemContext,
 } from './agentExecutor.directedSession';
@@ -3540,6 +3541,7 @@ async function runExecution(
         withDirectedSystemContext(startPayload?.systemContext, {
           ...directedSession,
           productionToolsReady: productionConfig !== null,
+          briefing: await loadDirectorBriefing(directedSession, productionConfig?.compositions, logger),
         }),
         recentImagesNote
       );
