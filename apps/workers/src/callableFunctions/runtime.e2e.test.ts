@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeAll, afterAll } from 'vitest';
 import { spawn, type ChildProcess } from 'node:child_process';
-import { realpathSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { readFileSync, realpathSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import net from 'node:net';
 import path from 'node:path';
@@ -471,6 +472,8 @@ describe('callable function runtime with real Pyodide', () => {
     const result = await runner({ op: 'call', code: BEAM, contract, params });
     expect(result.outcome).toBe('ok');
     expect(result.outputs?.deflection).toBeCloseTo((5 * 1000 * 5 ** 4) / (384 * 200e9 * 8e-6), 12);
+    const lock = readFileSync(path.join(PYODIDE_DIR, 'pyodide-lock.json'));
+    expect(result.runtime).toEqual({ lockHash: createHash('sha256').update(lock).digest('hex'), packages: [] });
     expect(spawnedPids().slice(-2).every(pidGone)).toBe(true);
     expect(liveCallableFunctionChildren()).toEqual([]);
   }, 120_000);

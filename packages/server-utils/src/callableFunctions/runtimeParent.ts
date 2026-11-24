@@ -1,16 +1,20 @@
 import { execFile, spawn } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { realpathSync } from 'node:fs';
+import path from 'node:path';
 import { promisify } from 'node:util';
 import {
+  CALLABLE_FUNCTION_CALL_OUTCOMES,
   FUNCTION_CONTRACT_LIMITS,
   FUNCTION_RESULT_TOO_LARGE_PREFIX,
   PYODIDE_VERSION,
-  canonicalApprovalJson,
+  canonicalJson,
   functionCallGluePy,
   functionJsonBytes,
   parseFunctionContract,
   validateFunctionValue,
+  type CallableFunctionCallOutcome,
   type FunctionContract,
   type FunctionContractProblem,
 } from '@bike4mind/common';
@@ -20,6 +24,11 @@ import {
  * spawned with an empty environment and killed at the timeout and after every run. The child is
  * `apps/workers/src/callableFunctions/child.ts`; the Lambda entry is `handler.ts` beside it.
  */
+
+/** Path of `child.ts` (or its build). */
+export const CALLABLE_FUNCTION_CHILD_PATH_ENV = 'CALLABLE_FUNCTION_CHILD_PATH';
+/** Directory holding pyodide.mjs, the rest of the Pyodide core, pyodide-lock.json and the package wheels. */
+export const CALLABLE_FUNCTION_PYODIDE_DIR_ENV = 'CALLABLE_FUNCTION_PYODIDE_DIR';
 
 export interface CallableFunctionLimits {
   /** The guest's own run (the contract read and `run`), timed from the child's run-start line. */
@@ -70,17 +79,8 @@ type CallLimitKey = (typeof CALL_LIMIT_KEYS)[number];
 /** Limits one call asks for; each must be a positive whole number no higher than the runtime's ceiling. */
 export type CallableFunctionCallLimits = Partial<Pick<CallableFunctionLimits, CallLimitKey>>;
 
-export const CALLABLE_FUNCTION_OUTCOMES = [
-  'ok',
-  'input_invalid',
-  'output_invalid',
-  'error',
-  'timeout',
-  'memory',
-  'output_too_large',
-  'refused',
-] as const;
-export type CallableFunctionOutcome = (typeof CALLABLE_FUNCTION_OUTCOMES)[number];
+export const CALLABLE_FUNCTION_OUTCOMES = CALLABLE_FUNCTION_CALL_OUTCOMES;
+export type CallableFunctionOutcome = CallableFunctionCallOutcome;
 
 /** Fixed codes only: nothing the guest prints or raises is returned as text, except `printed`. */
 export const CALLABLE_FUNCTION_REASONS = [
@@ -132,6 +132,15 @@ export interface CallableFunctionRunResult {
   initMs?: number;
   /** Spawn to run start, outside the time limit. */
   startMs?: number;
+  /** What the run loaded, for the stamp; set once the child replied. */
+  runtime?: CallableFunctionRuntimeReport;
+}
+
+export interface CallableFunctionRuntimeReport {
+  /** sha256 of the runtime's `pyodide-lock.json`. */
+  lockHash: string;
+  /** Sorted by name; versions from the lock file. */
+  packages: { name: string; version: string }[];
 }
 
 /** One request line on the child's stdin. */
@@ -155,6 +164,8 @@ export type CallableFunctionChildReply =
       error?: string;
       /** The exception's class name from its type, not parsed out of the traceback text. */
       errorClass?: string;
+      /** Pyodide's loaded package names, read before guest code ran. */
+      packages?: string[];
     }
   | { ok: false; failure: 'request' | 'load' | 'version' };
 
@@ -398,7 +409,56 @@ function parseReply(raw: unknown): CallableFunctionChildReply | null {
     printed: raw.printed,
     error: optionalString(raw.error),
     errorClass: optionalString(raw.errorClass),
+    packages: Array.isArray(raw.packages)
+      ? raw.packages
+          .filter((name): name is string => typeof name === 'string' && PACKAGE_NAME.test(name))
+          .slice(0, MAX_PACKAGES)
+      : [],
   };
+}
+
+const PACKAGE_NAME = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,99}$/;
+const MAX_PACKAGES = 200;
+
+interface PyodideLock {
+  lockHash: string;
+  versions: Map<string, string>;
+}
+
+const locks = new Map<string, Promise<PyodideLock | null>>();
+
+async function readPyodideLock(pyodideDir: string): Promise<PyodideLock | null> {
+  try {
+    const bytes = await readFile(path.join(pyodideDir, 'pyodide-lock.json'));
+    const parsed: unknown = JSON.parse(bytes.toString('utf8'));
+    const packages = isObject(parsed) && isObject(parsed.packages) ? parsed.packages : {};
+    const versions = new Map<string, string>();
+    for (const [name, entry] of Object.entries(packages)) {
+      if (isObject(entry) && typeof entry.version === 'string') versions.set(name, entry.version);
+    }
+    return { lockHash: createHash('sha256').update(bytes).digest('hex'), versions };
+  } catch {
+    return null;
+  }
+}
+
+/** The lock file's hash and the versions of the packages the child loaded; null when the lock is unreadable. */
+async function runtimeReport(pyodideDir: string, names: string[]): Promise<CallableFunctionRuntimeReport | null> {
+  let pending = locks.get(pyodideDir);
+  if (!pending) {
+    pending = readPyodideLock(pyodideDir);
+    locks.set(pyodideDir, pending);
+  }
+  const lock = await pending;
+  if (!lock) {
+    locks.delete(pyodideDir);
+    return null;
+  }
+  const packages = [...new Set(names)].sort().flatMap(name => {
+    const version = lock.versions.get(name);
+    return version === undefined ? [] : [{ name, version }];
+  });
+  return { lockHash: lock.lockHash, packages };
 }
 
 const CHILD_FAILURES = {
@@ -552,7 +612,12 @@ export async function runCallableFunctionInChild(
   if (!reply) return finish({ outcome: 'error', reason: 'no_reply' });
   if (!reply.ok) return refused(CHILD_FAILURES[reply.failure]);
 
-  const after = { initMs: reply.initMs, printed: reply.printed.slice(0, limits.printedChars) };
+  const report = await runtimeReport(options.pyodideDir, reply.packages ?? []);
+  const after = {
+    initMs: reply.initMs,
+    printed: reply.printed.slice(0, limits.printedChars),
+    ...(report ? { runtime: report } : {}),
+  };
   if (reply.error !== undefined) {
     const { errorClass, reason } = classifyGuestError(reply.error, reply.errorClass);
     if (reason === 'result_too_large') return finish({ ...after, outcome: 'output_too_large', reason });
@@ -573,7 +638,7 @@ export async function runCallableFunctionInChild(
       : finish({ ...after, outcome: 'output_invalid', reason: 'contract_invalid', problems: safePaths(read.problems) });
   }
   // Key-sorted JSON: key order does not count, and -0 reads as 0, as the browser saves it.
-  if (!pinned || !read.ok || canonicalApprovalJson(read.contract) !== canonicalApprovalJson(pinned)) {
+  if (!pinned || !read.ok || canonicalJson(read.contract) !== canonicalJson(pinned)) {
     return refused('contract_changed');
   }
 

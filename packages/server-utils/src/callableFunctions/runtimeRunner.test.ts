@@ -4,8 +4,17 @@ import {
   createInProcessCallableFunctionRunner,
   createLambdaCallableFunctionRunner,
   parseCallableFunctionRunResult,
+  selectCallableFunctionRunner,
 } from './runtimeRunner';
 import { runCallableFunctionInChild } from './runtimeParent';
+
+const lambdaSend = vi.hoisted(() => vi.fn(async (_command: InvokeCommand) => ({})));
+vi.mock('@aws-sdk/client-lambda', async importOriginal => ({
+  ...(await importOriginal<typeof import('@aws-sdk/client-lambda')>()),
+  LambdaClient: class {
+    send = lambdaSend;
+  },
+}));
 
 vi.mock('./runtimeParent', async importOriginal => {
   const actual = await importOriginal<typeof import('./runtimeParent')>();
@@ -76,6 +85,56 @@ describe('parseCallableFunctionRunResult', () => {
       })
     ).toEqual({ outcome: 'output_invalid', durationMs: 1, problems: [{ path: 'a', message: 'is required' }] });
     expect(parseCallableFunctionRunResult({ outcome: 'ok', durationMs: 1, contract: { name: 'x' } })).toBeNull();
+  });
+});
+
+describe('the runtime report in a reply', () => {
+  const lockHash = 'c'.repeat(64);
+
+  it('keeps the lock hash and well-formed packages', () => {
+    const runtime = { lockHash, packages: [{ name: 'numpy', version: '1.26.4' }, { name: '../x', version: '1' }, 7] };
+    expect(parseCallableFunctionRunResult({ outcome: 'ok', durationMs: 1, runtime })).toEqual({
+      outcome: 'ok',
+      durationMs: 1,
+      runtime: { lockHash, packages: [{ name: 'numpy', version: '1.26.4' }] },
+    });
+  });
+
+  it('drops a report whose lock hash is not a sha256', () => {
+    const runtime = { lockHash: 'guest text', packages: [] };
+    expect(parseCallableFunctionRunResult({ outcome: 'ok', durationMs: 1, runtime })).toEqual({
+      outcome: 'ok',
+      durationMs: 1,
+    });
+  });
+});
+
+describe('selectCallableFunctionRunner', () => {
+  it('picks the Lambda runner when the environment names the function', async () => {
+    vi.mocked(runCallableFunctionInChild).mockClear();
+    const runner = selectCallableFunctionRunner({
+      CALLABLE_FUNCTION_RUNTIME_FUNCTION_NAME: 'runtime-fn',
+      CALLABLE_FUNCTION_CHILD_PATH: '/srv/child.ts',
+      CALLABLE_FUNCTION_PYODIDE_DIR: '/srv/pyodide',
+    } as NodeJS.ProcessEnv);
+    expect(runner).not.toBeNull();
+    await expect(runner!(payload)).rejects.toThrow(/^Callable function runtime invocation failed$/);
+    expect(lambdaSend).toHaveBeenCalledTimes(1);
+    expect(lambdaSend.mock.calls[0][0].input.FunctionName).toBe('runtime-fn');
+    expect(runCallableFunctionInChild).not.toHaveBeenCalled();
+  });
+
+  it('picks the in-process runner when only the child paths are set, and none when they are not', async () => {
+    vi.mocked(runCallableFunctionInChild).mockResolvedValue({ outcome: 'ok', durationMs: 1 });
+    const env = { CALLABLE_FUNCTION_CHILD_PATH: '/srv/child.ts', CALLABLE_FUNCTION_PYODIDE_DIR: '/srv/pyodide' };
+    await selectCallableFunctionRunner(env as NodeJS.ProcessEnv)!(payload);
+    expect(runCallableFunctionInChild).toHaveBeenCalledWith(payload, {
+      childPath: '/srv/child.ts',
+      pyodideDir: '/srv/pyodide',
+    });
+    expect(
+      selectCallableFunctionRunner({ CALLABLE_FUNCTION_CHILD_PATH: '/srv/child.ts' } as NodeJS.ProcessEnv)
+    ).toBeNull();
   });
 });
 

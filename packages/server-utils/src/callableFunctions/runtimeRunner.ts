@@ -1,12 +1,15 @@
 import { InvokeCommand, LambdaClient } from '@aws-sdk/client-lambda';
 import { parseFunctionContract, type FunctionContractProblem } from '@bike4mind/common';
 import {
+  CALLABLE_FUNCTION_CHILD_PATH_ENV,
   CALLABLE_FUNCTION_OUTCOMES,
+  CALLABLE_FUNCTION_PYODIDE_DIR_ENV,
   CALLABLE_FUNCTION_REASONS,
   runCallableFunctionInChild,
   type CallableFunctionChildOptions,
   type CallableFunctionRunPayload,
   type CallableFunctionRunResult,
+  type CallableFunctionRuntimeReport,
 } from './runtimeParent';
 
 /**
@@ -19,11 +22,41 @@ export function createInProcessCallableFunctionRunner(options: CallableFunctionC
   return payload => runCallableFunctionInChild(payload, options);
 }
 
+/** Names the runtime Lambda; when unset, the child runs on this host if its two paths are set. */
+export const CALLABLE_FUNCTION_RUNTIME_NAME_ENV = 'CALLABLE_FUNCTION_RUNTIME_FUNCTION_NAME';
+
+/** The Lambda runner when the environment names the function, the in-process runner otherwise; null when neither. */
+export function selectCallableFunctionRunner(env: NodeJS.ProcessEnv = process.env): CallableFunctionRunner | null {
+  const functionName = env[CALLABLE_FUNCTION_RUNTIME_NAME_ENV];
+  if (functionName) return createLambdaCallableFunctionRunner(functionName);
+  const childPath = env[CALLABLE_FUNCTION_CHILD_PATH_ENV];
+  const pyodideDir = env[CALLABLE_FUNCTION_PYODIDE_DIR_ENV];
+  return childPath && pyodideDir ? createInProcessCallableFunctionRunner({ childPath, pyodideDir }) : null;
+}
+
 const OUTCOMES: ReadonlySet<string> = new Set(CALLABLE_FUNCTION_OUTCOMES);
 const REASONS: ReadonlySet<string> = new Set(CALLABLE_FUNCTION_REASONS);
 
 const isObject = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
+
+const SHA256 = /^[0-9a-f]{64}$/;
+const PACKAGE_FIELD = /^[A-Za-z0-9][A-Za-z0-9_.+-]{0,99}$/;
+
+function parseRuntimeReport(raw: unknown): CallableFunctionRuntimeReport | null {
+  if (!isObject(raw) || typeof raw.lockHash !== 'string' || !SHA256.test(raw.lockHash)) return null;
+  if (!Array.isArray(raw.packages)) return null;
+  const packages = raw.packages.flatMap(item =>
+    isObject(item) &&
+    typeof item.name === 'string' &&
+    typeof item.version === 'string' &&
+    PACKAGE_FIELD.test(item.name) &&
+    PACKAGE_FIELD.test(item.version)
+      ? [{ name: item.name, version: item.version }]
+      : []
+  );
+  return { lockHash: raw.lockHash, packages };
+}
 
 /** Rebuilds a run result from the Lambda's reply, keeping only known fields; null if it is not one. */
 export function parseCallableFunctionRunResult(raw: unknown): CallableFunctionRunResult | null {
@@ -42,6 +75,8 @@ export function parseCallableFunctionRunResult(raw: unknown): CallableFunctionRu
   if (typeof raw.initMs === 'number') result.initMs = raw.initMs;
   if (typeof raw.startMs === 'number') result.startMs = raw.startMs;
   if (isObject(raw.outputs)) result.outputs = raw.outputs;
+  const runtime = parseRuntimeReport(raw.runtime);
+  if (runtime) result.runtime = runtime;
   if (raw.contract !== undefined) {
     const parsed = parseFunctionContract(raw.contract);
     if (!parsed.ok) return null;
