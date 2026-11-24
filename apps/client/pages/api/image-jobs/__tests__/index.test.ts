@@ -94,7 +94,7 @@ vi.mock('@server/generations/chatImageQuestFollowUps', () => ({
   nameNotebookAfterChatImage: mocks.nameNotebookAfterChatImage,
 }));
 
-const { ForbiddenError } = await import('@bike4mind/server-utils/utils/errors');
+const { ForbiddenError, NotFoundError } = await import('@bike4mind/server-utils/utils/errors');
 
 const { default: handler } = await import('../index');
 
@@ -602,6 +602,56 @@ describe('POST /api/image-jobs', () => {
       mocks.createImageJobs.mockRejectedValue(new Error('model requires a paid plan'));
       await expect(call(editBody({ temporaryFileIds: [MASK_ID] }))).rejects.toThrow('model requires a paid plan');
       expect(mocks.discardJobInputFiles).toHaveBeenCalledWith('user-1', [MASK_ID], logger);
+    });
+  });
+
+  describe('discarding the temporary inputs of an edit that never reaches the job engine', () => {
+    const editBody = (extra: Record<string, unknown> = {}) => ({
+      mode: 'edit',
+      prompt: 'make the door red',
+      sessionId: SESSION_ID,
+      selection: { model: 'gpt-image-1.5' },
+      editSourceFileId: SOURCE_ID,
+      maskFileId: MASK_ID,
+      temporaryFileIds: [MASK_ID, SOURCE_ID],
+      ...extra,
+    });
+    const discarded = [MASK_ID, SOURCE_ID];
+
+    it('deletes them when the payer is refused', async () => {
+      mocks.resolveMediaBillingOrgId.mockRejectedValue(new ForbiddenError('not your org'));
+      await expect(call(editBody())).rejects.toThrow('not your org');
+      expect(mocks.discardJobInputFiles).toHaveBeenCalledWith('user-1', discarded, logger);
+      expect(mocks.createImageJobs).not.toHaveBeenCalled();
+    });
+
+    it('deletes them when the session is not found', async () => {
+      mocks.getOrCreateSession.mockRejectedValue(new NotFoundError('Session not found'));
+      await expect(call(editBody())).rejects.toThrow('Session not found');
+      expect(mocks.discardJobInputFiles).toHaveBeenCalledWith('user-1', discarded, logger);
+    });
+
+    it('deletes them when the retried quest is not found', async () => {
+      mocks.quests.findById.mockResolvedValue(null);
+      await expect(call(editBody({ questId: 'quest-9' }))).rejects.toThrow('Quest not found');
+      expect(mocks.discardJobInputFiles).toHaveBeenCalledWith('user-1', discarded, logger);
+    });
+
+    it('deletes them when the body fails validation but still names the inputs', async () => {
+      const { status } = await call(editBody({ prompt: '' }));
+      expect(status).toBe(400);
+      expect(mocks.discardJobInputFiles).toHaveBeenCalledWith('user-1', discarded, logger);
+    });
+
+    it('lists only ids that are one of the edit inputs when the body fails validation', async () => {
+      const { status } = await call(editBody({ prompt: '', temporaryFileIds: [MASK_ID, ATTACHED_ID] }));
+      expect(status).toBe(400);
+      expect(mocks.discardJobInputFiles).toHaveBeenCalledWith('user-1', [MASK_ID], logger);
+    });
+
+    it('does not discard once the job engine has taken the inputs', async () => {
+      await call(editBody());
+      expect(mocks.discardJobInputFiles).not.toHaveBeenCalled();
     });
   });
 

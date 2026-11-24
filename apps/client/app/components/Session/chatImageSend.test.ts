@@ -20,7 +20,7 @@ const files = vi.hoisted(() => ({
   moderateFabFileNow: vi.fn(),
 }));
 vi.mock('@client/app/utils/filesAPICalls', () => files);
-vi.mock('@client/app/components/Session/ImageContainer', () => ({
+vi.mock('@client/app/utils/generatedImageUrl', () => ({
   isGeneratedImage: (url: string) => url.includes('generatedimagesbucket'),
   extractS3KeyFromUrl: () => 'generated/key.png',
 }));
@@ -168,7 +168,8 @@ describe('sendChatImageEdit', () => {
     files.copyGeneratedImageToFabFile.mockResolvedValue({ id: 'a'.repeat(24), created: false });
     files.moderateFabFileNow.mockResolvedValue('blocked');
     await expect(sendChatImageEdit(baseArgs({ image: GENERATED_URL }))).rejects.toThrow();
-    expect(files.deleteFileUtility).not.toHaveBeenCalled();
+    expect(files.deleteFileUtility).toHaveBeenCalledTimes(1);
+    expect(files.deleteFileUtility).toHaveBeenCalledWith('b'.repeat(24));
     expect(mockPost).not.toHaveBeenCalled();
   });
 
@@ -176,6 +177,49 @@ describe('sendChatImageEdit', () => {
     files.moderateFabFileNow.mockResolvedValue('pending');
     await expect(sendChatImageEdit(baseArgs({ image: GENERATED_URL }))).rejects.toThrow();
     expect(mockPost).not.toHaveBeenCalled();
+    expect(files.deleteFileUtility).toHaveBeenCalledWith('a'.repeat(24));
+  });
+
+  describe('when the edit fails before the request is sent', () => {
+    it('deletes the mask and the copy this send made when the copy is still being scanned', async () => {
+      files.moderateFabFileNow.mockResolvedValue('pending');
+      await expect(sendChatImageEdit(baseArgs({ image: GENERATED_URL }))).rejects.toThrow();
+      expect(files.deleteFileUtility.mock.calls.map(call => call[0]).sort()).toEqual(['a'.repeat(24), 'b'.repeat(24)]);
+    });
+
+    it('deletes the mask when resolving the source throws', async () => {
+      files.copyGeneratedImageToFabFile.mockRejectedValue(new Error('copy refused'));
+      await expect(sendChatImageEdit(baseArgs({ image: GENERATED_URL }))).rejects.toThrow('copy refused');
+      expect(files.deleteFileUtility).toHaveBeenCalledTimes(1);
+      expect(files.deleteFileUtility).toHaveBeenCalledWith('b'.repeat(24));
+    });
+
+    it('deletes the copy this send made when the scan itself throws', async () => {
+      files.moderateFabFileNow.mockRejectedValue(new Error('scan failed'));
+      await expect(sendChatImageEdit(baseArgs({ image: GENERATED_URL }))).rejects.toThrow('scan failed');
+      expect(files.deleteFileUtility.mock.calls.map(call => call[0]).sort()).toEqual(['a'.repeat(24), 'b'.repeat(24)]);
+    });
+
+    it('never deletes a source the caller already had, only the mask', async () => {
+      files.copyGeneratedImageToFabFile.mockResolvedValue({ id: 'a'.repeat(24), created: false });
+      files.moderateFabFileNow.mockResolvedValue('pending');
+      await expect(sendChatImageEdit(baseArgs({ image: GENERATED_URL }))).rejects.toThrow();
+      expect(files.deleteFileUtility).toHaveBeenCalledTimes(1);
+      expect(files.deleteFileUtility).toHaveBeenCalledWith('b'.repeat(24));
+    });
+
+    it('still rethrows the original error when a cleanup delete fails', async () => {
+      const consoleWarn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      files.copyGeneratedImageToFabFile.mockRejectedValue(new Error('copy refused'));
+      files.deleteFileUtility.mockRejectedValue(new Error('delete failed'));
+      await expect(sendChatImageEdit(baseArgs({ image: GENERATED_URL }))).rejects.toThrow('copy refused');
+      consoleWarn.mockRestore();
+    });
+  });
+
+  it('leaves the inputs to the server once the request was sent and failed', async () => {
+    mockPost.mockRejectedValue(new Error('network down'));
+    await expect(sendChatImageEdit(baseArgs({ image: GENERATED_URL }))).rejects.toThrow('network down');
     expect(files.deleteFileUtility).not.toHaveBeenCalled();
   });
 });

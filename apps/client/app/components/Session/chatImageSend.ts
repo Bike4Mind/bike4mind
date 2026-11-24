@@ -34,7 +34,7 @@ import {
   getFabFileByIdFromServer,
   moderateFabFileNow,
 } from '@client/app/utils/filesAPICalls';
-import { extractS3KeyFromUrl, isGeneratedImage } from '@client/app/components/Session/ImageContainer';
+import { extractS3KeyFromUrl, isGeneratedImage } from '@client/app/utils/generatedImageUrl';
 
 export type ChatImageSendArgs = {
   /** Prompt */
@@ -266,7 +266,7 @@ function formatImageActionError(error: unknown, action: 'generate' | 'edit'): st
   if (status === 400) return `Invalid request: ${serverMessage}`;
   if (status === 401 || status === 403) return `Cannot ${verbPresent} images: ${serverMessage}`;
   if (status === 429) return 'Too many requests. Please try again later.';
-  if (status && status >= 500) return `Server error — could not ${verbPresent} image. Please try again.`;
+  if (status && status >= 500) return `Server error \u2014 could not ${verbPresent} image. Please try again.`;
   return `${verbPast} failed: ${serverMessage}`;
 }
 
@@ -275,6 +275,17 @@ class EditSourceUnavailableError extends Error {}
 
 /** The edit's source file; `created` when this send made it, so the server may delete it once the edit ends. */
 type EditSource = { fileId: string; created: boolean };
+
+/** Deletes a file this send made for an edit that will not run; a failure is logged, never thrown over the send's own error. */
+async function discardEditInputs(fileIds: readonly string[]): Promise<void> {
+  for (const fileId of fileIds) {
+    try {
+      if (!(await deleteFileUtility(fileId))) console.warn('Could not delete an unused edit input file.', fileId);
+    } catch (error) {
+      console.warn('Could not delete an unused edit input file.', fileId, error);
+    }
+  }
+}
 
 /** The caller's own clean file behind the shown image, if any: the edit reads it directly instead of a copy. */
 async function ownCleanFileId(fileId: string | undefined, userId: string | undefined): Promise<string | undefined> {
@@ -305,13 +316,21 @@ async function resolveEditSource(imageUrl: string, imageFileId?: string, userId?
         created: file.created === true,
       }))
     : await uploadImageFromUrl(imageUrl, fileName).then(file => ({ id: file.id, created: true }));
-  const scan = await moderateFabFileNow(id);
+  // Never the caller's earlier copy of a generated image: only a file this send made.
+  const discardCopy = () => (created ? discardEditInputs([id]) : Promise.resolve());
+  let scan: Awaited<ReturnType<typeof moderateFabFileNow>>;
+  try {
+    scan = await moderateFabFileNow(id);
+  } catch (error) {
+    await discardCopy();
+    throw error;
+  }
   if (scan === 'blocked') {
-    // Never the caller's earlier copy of a generated image: only a file this send made.
-    if (created) await deleteFileUtility(id);
+    await discardCopy();
     throw new EditSourceUnavailableError('This image cannot be edited.');
   }
   if (scan === 'pending') {
+    await discardCopy();
     throw new EditSourceUnavailableError('The image is still being checked. Try the edit again in a moment.');
   }
   return { fileId: id, created };
@@ -357,10 +376,12 @@ export async function sendChatImageEdit(args: ChatImageEditArgs): Promise<void> 
     prompt: params,
   });
 
+  const maskFileId = promptFileIds?.[0];
+  let editSource: EditSource | undefined;
+  let requestSent = false;
   try {
     if (!image) throw new EditSourceUnavailableError('There is no image to edit.');
-    const editSource = await resolveEditSource(image, imageFileId, userId);
-    const maskFileId = promptFileIds?.[0];
+    editSource = await resolveEditSource(image, imageFileId, userId);
     const requestBody: ChatImageJobsBody = {
       mode: 'edit',
       prompt: params,
@@ -378,10 +399,18 @@ export async function sendChatImageEdit(args: ChatImageEditArgs): Promise<void> 
       organizationId,
     };
     await send(async () => {
+      requestSent = true;
       const { data } = await api.post<ChatImageJobsResponse>('/api/image-jobs', requestBody);
       return data;
     });
   } catch (error) {
+    // Once the request is out the server owns the inputs (it deletes them when the edit ends or is refused).
+    if (!requestSent) {
+      await discardEditInputs([
+        ...(maskFileId ? [maskFileId] : []),
+        ...(editSource?.created ? [editSource.fileId] : []),
+      ]);
+    }
     console.error('Error editing image:', error);
     toast.error(error instanceof EditSourceUnavailableError ? error.message : formatImageActionError(error, 'edit'));
     throw error;
