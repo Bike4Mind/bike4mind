@@ -424,5 +424,21 @@ describe('menu height', () => {
     await themed.render(<ViewSwitcher layout={singlePaneLayout('tavern')} onLayoutChange={onLayoutChange} />);
     act(() => el('orchestrator-view-menu-btn').click());
     expect(getComputedStyle(el('orchestrator-view-menu')).overflowY).toBe('auto');
+    await act(async () => {});
+    expect(el('orchestrator-view-menu').style.maxHeight).toMatch(/^\d+px$/);
+  });
+
+  it('bounds a pane view menu the same way', async () => {
+    const split: OrchestratorLayout = {
+      split: 'row',
+      panes: [
+        { view: 'board', size: 0.5 },
+        { view: 'transit', size: 0.5 },
+      ],
+    };
+    await themed.render(<ViewSwitcher layout={split} onLayoutChange={onLayoutChange} />);
+    act(() => el('orchestrator-pane-view-menu-btn-0').click());
+    await act(async () => {});
+    expect(el('orchestrator-pane-view-menu-0').style.maxHeight).toMatch(/^\d+px$/);
   });
 });
