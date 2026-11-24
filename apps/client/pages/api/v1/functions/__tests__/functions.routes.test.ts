@@ -88,7 +88,8 @@ type Owner = { ownerType: string; ownerKey: string };
 const owned = (owner: Owner) => (fn: Record<string, unknown>) => fn.ownerKey === owner.ownerKey;
 const isHexId = (id: string) => /^[0-9a-f]{24}$/.test(id);
 
-vi.mock('@bike4mind/database', () => ({
+vi.mock('@bike4mind/database', async () => ({
+  mongoose: (await import('mongoose')).default,
   adminSettingsRepository: {},
   artifactContentRepository: {},
   cacheRepository: {
