@@ -265,31 +265,29 @@ export class ImageEditService {
     const {
       sessionId,
       prompt,
-      model: requestedModel,
+      model,
       questId,
       fabFileIds,
       organizationId,
       run: _bodyRun,
       ...rest
     } = EditImageRequestBodySchema.parse(body);
-    if (rest.edit_regions?.length && !isFlux3ImageModel(requestedModel))
+    if (rest.edit_regions?.length && !isFlux3ImageModel(model))
       throw new BadRequestError('edit_regions are only supported on FLUX 3 models');
     // Native FLUX edits take the source image and optional references, without a mask.
-    if (isFlux2ImageModel(requestedModel) || isFlux3ImageModel(requestedModel)) {
+    if (isFlux2ImageModel(model) || isFlux3ImageModel(model)) {
       if (fabFileIds.length > 0)
         throw new BadRequestError(
-          `${isFlux3ImageModel(requestedModel) ? 'FLUX 3' : 'FLUX.2'} edits take no mask; omit fabFileIds`
+          `${isFlux3ImageModel(model) ? 'FLUX 3' : 'FLUX.2'} edits take no mask; omit fabFileIds`
         );
     } else if (fabFileIds.length === 0) {
       throw new BadRequestError('No fabFileIds provided');
     }
 
     // Fail rather than quietly render opaque or on a different model than the caller picked.
-    if (rest.background === 'transparent' && !supportsTransparentBackgroundByCatalog(requestedModel)) {
-      throw new BadRequestError(transparentBackgroundUnsupportedMessage(requestedModel));
+    if (rest.background === 'transparent' && !supportsTransparentBackgroundByCatalog(model)) {
+      throw new BadRequestError(transparentBackgroundUnsupportedMessage(model));
     }
-    const model = requestedModel;
-
     await this.assertModelAdmission(userId, model, adminRoleWithheld, organizationId);
     const session = await this.db.sessions.findById(sessionId);
     if (!session) throw new NotFoundError('Session not found');
@@ -537,7 +535,7 @@ export class ImageEditService {
       apiKeyId,
       apiKeyBillingOwnerType,
       prompt,
-      model: requestedModel,
+      model,
       safety_tolerance,
       prompt_upsampling,
       seed,
@@ -554,9 +552,6 @@ export class ImageEditService {
       edit_regions,
       run,
     } = ImageEditBodySchema.parse(body);
-    // invoke() already refused a transparent background this model cannot render.
-    const model = requestedModel;
-
     logger.updateMetadata({ notebookId: sessionId, questId, userId });
 
     const quest = await this.db.quests.findById(questId);

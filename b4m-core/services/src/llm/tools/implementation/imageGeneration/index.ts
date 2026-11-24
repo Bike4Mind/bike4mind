@@ -5,7 +5,6 @@ import { ToolContext, ToolDefinition } from '../../base/types';
 import type { ImageToolCostInput, ImageToolFinishData } from '../../imageToolBilling';
 import {
   ApiKeyType,
-  ImageModels,
   BFL_SAFETY_TOLERANCE,
   TOOL_SELECTABLE_IMAGE_QUALITIES,
   XAI_IMAGE_MODELS,
@@ -14,7 +13,8 @@ import {
   isGeminiImageModel,
   resolveImageDimensions,
   BFL_DIMENSION_BOUNDS,
-  rejectsTransparentBackground,
+  supportsTransparentBackgroundByCatalog,
+  transparentBackgroundUnsupportedMessage,
   isGPTImage25Model,
   isExtendedGptImageQuality,
   toNonWebpOutputFormat,
@@ -278,14 +278,10 @@ export const imageGenerationTool: ToolDefinition = {
         quality: toolQuality,
       });
 
-      // Step any gpt-image-2 selection - default or explicit - down to gpt-image-1.5 when
-      // transparency is requested: gpt-image-2 rejects background: 'transparent' outright,
-      // so sending it there would silently turn a valid request into a 400.
-      // (OpenAIImageService.resolveGptImageOutputOptions is the last-resort backstop
-      // that strips 'transparent' if a gpt-image-2 request reaches it regardless.)
-      const wantsTransparent = background === 'transparent';
-      const model =
-        wantsTransparent && rejectsTransparentBackground(resolvedModel) ? ImageModels.GPT_IMAGE_1_5 : resolvedModel;
+      if (background === 'transparent' && !supportsTransparentBackgroundByCatalog(resolvedModel)) {
+        return `Error: ${transparentBackgroundUnsupportedMessage(resolvedModel)}`;
+      }
+      const model = resolvedModel;
       const refusal = await toolModelRefusal(
         context,
         await createToolModelAdmission(context),

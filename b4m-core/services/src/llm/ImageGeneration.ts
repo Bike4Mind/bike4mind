@@ -338,22 +338,12 @@ export class ImageGenerationService {
     const now = new Date();
 
     const parsedBody = GenerateImageIvokeParamsSchema.parse(body);
-    const {
-      sessionId,
-      prompt,
-      model: requestedModel,
-      questId,
-      fabFileIds,
-      promptEnhancement,
-      organizationId,
-      intent,
-      ...rest
-    } = parsedBody;
+    const { sessionId, prompt, model, questId, fabFileIds, promptEnhancement, organizationId, intent, ...rest } =
+      parsedBody;
     // Fail rather than quietly render opaque or on a different model than the caller picked.
-    if (rest.background === 'transparent' && !supportsTransparentBackgroundByCatalog(requestedModel)) {
-      throw new BadRequestError(transparentBackgroundUnsupportedMessage(requestedModel));
+    if (rest.background === 'transparent' && !supportsTransparentBackgroundByCatalog(model)) {
+      throw new BadRequestError(transparentBackgroundUnsupportedMessage(model));
     }
-    const model = requestedModel;
     await this.assertModelAdmission(userId, model, adminRoleWithheld, organizationId);
     const session = await this.db.sessions.findById(sessionId);
     if (!session) throw new NotFoundError('Session not found');

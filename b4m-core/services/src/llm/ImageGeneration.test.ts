@@ -116,7 +116,7 @@ const makeService = (overrides: {
 
 // Test bodies omit fields the schema defaults, so the cast is confined to one place.
 const imageBody = (model: string, extra: Record<string, unknown> = {}) =>
-  ({ sessionId: 'session1', prompt: 'a cutout icon', model, fabFileIds: [], ...extra }) as any;
+  ({ sessionId: 'session1', prompt: 'a cutout icon', model, fabFileIds: [], ...extra }) as never;
 
 describe('ImageGenerationService.maybeSummarizeAfterImage', () => {
   it('does nothing when invokeSummarizeSession is not configured', async () => {
