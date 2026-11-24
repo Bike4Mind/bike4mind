@@ -1,5 +1,6 @@
 import type { AssignableOrgRole } from '@bike4mind/common';
-import { useQueryClient } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import type { AdminHomeOrganization } from '@client/pages/api/admin/users/[userId]/home-organization';
 import { toast } from 'sonner';
 import { api } from '@client/app/contexts/ApiContext';
 import { isStepUpCancelled } from '@client/app/utils/stepUpInterceptor';
@@ -13,6 +14,19 @@ export type OrgMemberRoleChoice = AssignableOrgRole;
  * toast here and rethrow an Error with the same message, so an ActionDialog stays open and an undo
  * reports the friendly text instead of the raw request error.
  */
+/**
+ * The raw home-org pointer, which the profile's user record serves as null once the user left that org or
+ * it was deleted. Keyed under ['admin', 'users', userId] so the membership writes below refresh it.
+ */
+export const useAdminHomeOrg = (userId: string | null) =>
+  useQuery({
+    queryKey: ['admin', 'users', userId, 'home-organization'],
+    queryFn: async () =>
+      (await api.get<AdminHomeOrganization>(`/api/admin/users/${encodeURIComponent(userId ?? '')}/home-organization`))
+        .data,
+    enabled: userId !== null,
+  });
+
 export const useAdminUserOrgMembership = (userId: string) => {
   const cache = useQueryClient();
   const membersPath = (organizationId: string) =>

@@ -243,12 +243,12 @@ export const RemoveFromOrganizationDialog: React.FC<DialogProps & { org: Members
 export const ClearHomeOrgDialog: React.FC<DialogProps & { orgName: string | null }> = ({ user, orgName, onClose }) => {
   const membership = useAdminUserOrgMembership(user.id);
   const name = displayName(user);
-  const org = orgName ?? 'this organization';
+  const org = orgName ?? 'their home org';
 
   const handleConfirm = async (reason: string) => {
     await membership.clearHomeOrg(reason);
     onClose();
-    toast.success(`${org} is no longer the home org of ${name}.`);
+    toast.success(`Cleared the home org of ${name}.`);
   };
 
   return (

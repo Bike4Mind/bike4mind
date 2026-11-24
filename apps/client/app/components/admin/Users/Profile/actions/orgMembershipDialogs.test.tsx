@@ -256,6 +256,7 @@ describe('ClearHomeOrgDialog', () => {
     const onClose = vi.fn();
     render(<ClearHomeOrgDialog user={user} orgName={null} onClose={onClose} />, { wrapper: ProfileTestWrapper });
 
+    expect(screen.getByText(/instead of their home org/)).toBeInTheDocument();
     pickReason('org-clear-home-dialog');
     fireEvent.click(confirmButton('org-clear-home-dialog'));
 

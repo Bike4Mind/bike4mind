@@ -1,17 +1,34 @@
+import type { Request } from 'express';
 import {
   BadRequestError,
   ForbiddenError,
   NotFoundError,
   assertCanActOnAdminTarget,
   isFullAdmin,
+  organizationMemberRole,
 } from '@bike4mind/common';
 import { organizationRepository, userRepository, withTransaction } from '@bike4mind/database';
 import { organizationService } from '@bike4mind/services';
 import { adminApi } from '@server/middlewares/adminApi';
 import { parseAdminActionReason, recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 
+/** GET body: the raw pointer, which GET /api/users/[id] serves as null once the user left or the org is gone. */
+export type AdminHomeOrganization = {
+  organizationId: string | null;
+  organizationName: string | null;
+  isMember: boolean;
+};
+
+const readUserId = (req: Request): string => {
+  if (!isFullAdmin(req.user)) throw new ForbiddenError("Only full administrators can manage a user's home org");
+  const userId = req.query.userId;
+  if (typeof userId !== 'string' || !userId) throw new BadRequestError('Invalid user ID');
+  return userId;
+};
+
 /**
- * DELETE /api/admin/users/[userId]/home-organization - clear a user's home org (`user.organizationId`).
+ * GET / DELETE /api/admin/users/[userId]/home-organization - read or clear a user's home org
+ * (`user.organizationId`).
  *
  * The home org is what a request that names no account falls back to for billing (an API key, the
  * CLI; see resolveBillingOrgId in server-utils orgAccess.ts) and the org-scoped access context, so
@@ -19,11 +36,26 @@ import { parseAdminActionReason, recordAdminActionFromRequest } from '@bike4mind
  * like the membership actions beside it on the profile. The user's own escape is
  * DELETE /api/users/[id]/organization; this is the audited admin equivalent.
  */
-const handler = adminApi({ auth: 'jwtOnly', adminPermissions: { DELETE: 'users:moderate' } }).delete(
-  async (req, res) => {
-    if (!isFullAdmin(req.user)) throw new ForbiddenError("Only full administrators can clear a user's home org");
-    const userId = req.query.userId;
-    if (typeof userId !== 'string' || !userId) throw new BadRequestError('Invalid user ID');
+const handler = adminApi({
+  auth: 'jwtOnly',
+  adminPermissions: { GET: 'users:moderate', DELETE: 'users:moderate' },
+})
+  .get(async (req, res) => {
+    const userId = readUserId(req);
+    const user = await userRepository.findById(userId);
+    if (!user) throw new NotFoundError('User not found');
+
+    const organizationId = user.organizationId?.toString() ?? null;
+    const organization = organizationId ? await organizationRepository.findById(organizationId) : null;
+    const body: AdminHomeOrganization = {
+      organizationId,
+      organizationName: organization?.name ?? null,
+      isMember: organization ? organizationMemberRole(organization, userId) !== null : false,
+    };
+    return res.json(body);
+  })
+  .delete(async (req, res) => {
+    const userId = readUserId(req);
     const reason = parseAdminActionReason((req.body as { reason?: unknown } | undefined)?.reason);
 
     await withTransaction(async () => {
@@ -41,7 +73,7 @@ const handler = adminApi({ auth: 'jwtOnly', adminPermissions: { DELETE: 'users:m
 
       await recordAdminActionFromRequest(req, {
         action: 'user.home_org.cleared',
-        target: { kind: 'user', id: user.id, displayName: user.email ?? user.username },
+        target: { kind: 'user', id: user.id, displayName: user.email ?? user.username ?? user.id },
         organizationId: before,
         summary: `cleared home organization ${organization?.name ?? before}`,
         reason,
@@ -51,8 +83,7 @@ const handler = adminApi({ auth: 'jwtOnly', adminPermissions: { DELETE: 'users:m
     });
 
     return res.status(204).end();
-  }
-);
+  });
 
 export const config = { api: { externalResolver: true } };
 export default handler;

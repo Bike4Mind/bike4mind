@@ -12,6 +12,7 @@ import {
   RemoveFromOrganizationDialog,
   type MembershipOrg,
 } from '../actions/orgMembershipDialogs';
+import { useAdminHomeOrg } from '../actions/useAdminUserOrgMembership';
 import {
   ORGANIZATION_ROLE_LABELS,
   activeOrganizationId,
@@ -54,8 +55,12 @@ export const OrganizationsCard: React.FC<{ user: AdminUserProfile; onAudit?: () 
   const activeId = activeOrganizationId(user);
   const activeName = organizationName(user);
   const list = orgs.data ?? [];
-  // A home org they are no longer a member of (or that was deleted) has no row, so it gets its own line.
-  const strayHome = activeId !== null && orgs.data !== undefined && !list.some(org => org.id === activeId);
+  // The profile serves a home org they left, or one that was deleted, as null, so the raw pointer comes from
+  // its own query. Such a home org has no row in the list, so it gets its own line.
+  const homeOrg = useAdminHomeOrg(canManage ? user.id : null);
+  const strayHomeId = homeOrg.data?.organizationId ?? null;
+  const strayHome = strayHomeId !== null && orgs.data !== undefined && !list.some(org => org.id === strayHomeId);
+  const strayHomeName = homeOrg.data?.organizationName ?? null;
 
   const addButton = (
     <HeaderAction onClick={() => setDialog({ kind: 'add' })} data-testid="user-profile-org-add-btn">
@@ -105,15 +110,23 @@ export const OrganizationsCard: React.FC<{ user: AdminUserProfile; onAudit?: () 
         data-testid="user-profile-stray-home-org"
       >
         <Typography level="body-sm">
-          {`Home org is ${activeName ?? activeId}, which they are not a member of.`}
+          {strayHomeName
+            ? `Home org is ${strayHomeName}, which they are not a member of.`
+            : 'Home org is an organization that no longer exists.'}
         </Typography>
         <Box sx={{ ml: 'auto' }}>{clearHomeAction}</Box>
       </Stack>
+    );
+    const homeNote = (activeId || strayHome) && (
+      <Box sx={{ px: 2, pb: 1.5 }}>
+        <HomeOrgNote />
+      </Box>
     );
     if (list.length === 0) {
       return (
         <>
           {strayHomeLine}
+          {homeNote}
           <EmptyState title="Not in any organization" action={addButton} />
         </>
       );
@@ -163,11 +176,7 @@ export const OrganizationsCard: React.FC<{ user: AdminUserProfile; onAudit?: () 
           })}
         </Box>
         {strayHomeLine}
-        {activeId && (
-          <Box sx={{ px: 2, pb: 1.5 }}>
-            <HomeOrgNote />
-          </Box>
-        )}
+        {homeNote}
       </>
     );
   };
@@ -187,7 +196,9 @@ export const OrganizationsCard: React.FC<{ user: AdminUserProfile; onAudit?: () 
       {dialog?.kind === 'add' && (
         <AddToOrganizationDialog user={user} memberOrgIds={list.map(org => org.id)} onClose={close} onAudit={onAudit} />
       )}
-      {dialog?.kind === 'clearHome' && <ClearHomeOrgDialog user={user} orgName={activeName} onClose={close} />}
+      {dialog?.kind === 'clearHome' && (
+        <ClearHomeOrgDialog user={user} orgName={strayHome ? strayHomeName : activeName} onClose={close} />
+      )}
       {dialog?.kind === 'role' && (
         <ChangeOrgRoleDialog user={user} org={dialog.org} onClose={close} onAudit={onAudit} />
       )}

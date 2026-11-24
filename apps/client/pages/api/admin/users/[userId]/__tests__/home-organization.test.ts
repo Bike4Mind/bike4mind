@@ -5,6 +5,7 @@ import { ADMIN_AUDIT_CATALOGUE } from '@bike4mind/common';
 
 const h = vi.hoisted(() => ({
   handler: null as null | ((req: Request, res: Response) => Promise<unknown>),
+  getHandler: null as null | ((req: Request, res: Response) => Promise<unknown>),
   guard: null as null | ((req: Request, res: Response, next: () => void) => void),
   options: null as null | Record<string, unknown>,
   findUser: vi.fn(),
@@ -20,6 +21,10 @@ vi.mock('@server/middlewares/baseApi', () => ({
     const chain = {
       use: (guard: (req: Request, res: Response, next: () => void) => void) => {
         h.guard = guard;
+        return chain;
+      },
+      get: (fn: (req: Request, res: Response) => Promise<unknown>) => {
+        h.getHandler = fn;
         return chain;
       },
       delete: (fn: (req: Request, res: Response) => Promise<unknown>) => {
@@ -55,6 +60,14 @@ const call = async (body: unknown, actor: { isAdmin?: boolean; adminPermissions?
   return res;
 };
 
+const read = async (actor: { isAdmin?: boolean; adminPermissions?: string[] } = { isAdmin: true }) => {
+  const { req, res } = createMocks({ method: 'GET', query: { userId: 'user-1' } });
+  const request = Object.assign(req, { user: { id: 'admin-1', ...actor } }) as unknown as Request;
+  h.guard!(request, res as unknown as Response, () => {});
+  await h.getHandler!(request, res as unknown as Response);
+  return res;
+};
+
 beforeEach(() => {
   vi.clearAllMocks();
   h.audit.mockResolvedValue(null);
@@ -64,8 +77,9 @@ beforeEach(() => {
 });
 
 describe('DELETE /api/admin/users/[userId]/home-organization', () => {
-  it('declares first-party JWT-only authentication and only DELETE', () => {
-    expect(h.options).toMatchObject({ auth: 'jwtOnly', allowedMethods: ['DELETE'] });
+  it('declares first-party JWT-only authentication and only GET and DELETE', () => {
+    expect(h.options).toMatchObject({ auth: 'jwtOnly' });
+    expect([...(h.options!.allowedMethods as string[])].sort()).toEqual(['DELETE', 'GET']);
   });
 
   it.each([
@@ -97,6 +111,17 @@ describe('DELETE /api/admin/users/[userId]/home-organization', () => {
       })
     );
     expect(res.statusCode).toBe(204);
+  });
+
+  it('falls back to the user id for the audit target of an account with no email or username', async () => {
+    h.findUser.mockResolvedValue({ id: 'user-1', organizationId: ORG_ID });
+
+    await call({ reason: REASON });
+
+    expect(h.audit).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ target: { kind: 'user', id: 'user-1', displayName: 'user-1' } })
+    );
   });
 
   it('still clears a pointer to an org that no longer exists', async () => {
@@ -135,5 +160,47 @@ describe('DELETE /api/admin/users/[userId]/home-organization', () => {
 
   it('records the clear strictly, so it never commits without its record', () => {
     expect(ADMIN_AUDIT_CATALOGUE['user.home_org.cleared']).toMatchObject({ write: 'strict' });
+  });
+});
+
+describe('GET /api/admin/users/[userId]/home-organization', () => {
+  it('returns a home org they are a member of', async () => {
+    h.findOrg.mockResolvedValue({ id: ORG_ID, name: 'Acme', userId: 'owner-1', users: [{ userId: 'user-1' }] });
+
+    const res = await read();
+
+    expect(res._getJSONData()).toEqual({ organizationId: ORG_ID, organizationName: 'Acme', isMember: true });
+  });
+
+  it('returns the raw pointer for an org they left, which the user record serves as null', async () => {
+    h.findOrg.mockResolvedValue({ id: ORG_ID, name: 'Acme', userId: 'owner-1', users: [] });
+
+    const res = await read();
+
+    expect(res._getJSONData()).toEqual({ organizationId: ORG_ID, organizationName: 'Acme', isMember: false });
+  });
+
+  it('returns the raw pointer with no name for a deleted org', async () => {
+    h.findOrg.mockResolvedValue(null);
+
+    const res = await read();
+
+    expect(res._getJSONData()).toEqual({ organizationId: ORG_ID, organizationName: null, isMember: false });
+  });
+
+  it('returns no home org without reading an org', async () => {
+    h.findUser.mockResolvedValue({ id: 'user-1', username: 'u', organizationId: null });
+
+    const res = await read();
+
+    expect(h.findOrg).not.toHaveBeenCalled();
+    expect(res._getJSONData()).toEqual({ organizationId: null, organizationName: null, isMember: false });
+  });
+
+  it('refuses a users:moderate delegate before touching the user', async () => {
+    await expect(read({ isAdmin: false, adminPermissions: ['users:moderate'] })).rejects.toMatchObject({
+      statusCode: 403,
+    });
+    expect(h.findUser).not.toHaveBeenCalled();
   });
 });
