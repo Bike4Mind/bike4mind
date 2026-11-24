@@ -166,10 +166,11 @@ const { default: invokeRoute, config: invokeConfig } = await import('@pages/api/
 const { default: pollRoute } = await import('@pages/api/v1/functions/calls/[call_id]');
 const {
   FUNCTION_INVOKE_BUDGET_MS,
+  FUNCTION_CALL_STOPPED_MESSAGE,
   FUNCTION_INVOKE_MAX_BODY_BYTES,
-  FUNCTION_QUEUE_FAILED_MESSAGE,
   FUNCTION_SYNC_STOP_MESSAGE,
   TIMEOUT_MESSAGE,
+  functionCallAnswer,
   invokeAnswer,
 } = await import('@server/callableFunctions/publicFunctions');
 // The limiters are built once, at module load, before any beforeEach clears the recorder.
@@ -719,7 +720,10 @@ describe('async invoke and poll', () => {
     vi.stubEnv('B4M_SELF_HOST', 'true');
     try {
       const res = await asyncInvoke();
-      expect(res).toEqual({ status: 503, body: { error: FUNCTION_QUEUE_FAILED_MESSAGE } });
+      expect(res).toEqual({
+        status: 503,
+        body: { error: 'Asynchronous calls are not available on self-hosted installs.' },
+      });
     } finally {
       vi.unstubAllEnvs();
     }
@@ -758,6 +762,34 @@ describe('async invoke and poll', () => {
       outcome: 'timeout',
       error: TIMEOUT_MESSAGE,
     });
+  });
+
+  it.each(['worker_lost', 'dispatch_failed'] as const)(
+    'polls a call ended as %s as stopped before it finished, not as a function error',
+    reason => {
+      const answer = functionCallAnswer({
+        callId: 'c1',
+        state: 'finished',
+        outcome: 'error',
+        reason,
+      } as Parameters<typeof functionCallAnswer>[0]);
+      expect(answer).toEqual({
+        call_id: 'c1',
+        status: 'finished',
+        outcome: 'error',
+        error: FUNCTION_CALL_STOPPED_MESSAGE,
+      });
+    }
+  );
+
+  it('still polls a call whose function raised as a function error', () => {
+    const answer = functionCallAnswer({
+      callId: 'c1',
+      state: 'finished',
+      outcome: 'error',
+      errorClass: 'ValueError',
+    } as Parameters<typeof functionCallAnswer>[0]);
+    expect(answer.error).toBe('The function raised an error (ValueError).');
   });
 
   it("answers another person's call id exactly as a made-up or malformed one", async () => {

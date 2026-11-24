@@ -109,5 +109,5 @@ Errors use the shared error envelope described in [Errors](./errors.md).
 - `422`: an input does not fit `input_schema`. The `error` names the first field, for example `Input span must be a number.`, and `problems` lists every field with its `path` and `message`.
 - `429`: you passed the rate limit.
 - `502`: the function raised an error, ran out of memory, returned outputs that do not fit `output_schema`, or returned too much. `outcome` names which, and `stamp` is included.
-- `503`: no function runtime is available, the runtime was slow to start or did not answer, or the call could not be queued. Try again later.
+- `503`: no function runtime is available, the runtime was slow to start or did not answer, or the call could not be queued; try again later. On a self-hosted install, where `"mode": "async"` is not available, an asynchronous call also answers `503`.
 - `504`: the call ran past its time limit. `errorCode` is `request_timeout`. When your time limit is longer than 45 seconds, the `error` says to send `"mode": "async"`.
