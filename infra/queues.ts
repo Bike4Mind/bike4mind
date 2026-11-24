@@ -782,6 +782,33 @@ const slackExportQueueSubscription = subscribeUnlessPreview(
   SINGLE_RECORD_BATCH
 );
 
+// Asynchronous callable function calls queued by POST /api/v1/functions/{id}/invoke with mode async. The job carries
+// only the call id; the handler claims the call once, so a redelivery never runs the guest twice.
+const callableFunctionCallQueueDLQ = new sst.aws.Queue('callableFunctionCallQueueDLQ', {});
+const callableFunctionCallQueue = new sst.aws.Queue('callableFunctionCallQueue', {
+  // Above the consumer's timeout, so a call still running is never handed to a second consumer.
+  visibilityTimeout: '16 minutes',
+  dlq: {
+    queue: callableFunctionCallQueueDLQ.arn,
+    retry: 2,
+  },
+});
+const callableFunctionCallQueueSubscription = callableFunctionCallQueue.subscribe(
+  {
+    handler: 'apps/workers/src/queueHandlers/callableFunctionCall.dispatch',
+    runtime: 'nodejs24.x',
+    // CALLABLE_FUNCTION_CALL_CONSUMER_TIMEOUT_SECONDS in packages/server-utils/src/callableFunctions/asyncCalls.ts.
+    timeout: '15 minutes',
+    memory: '512 MB',
+    vpc: lambdaVpc,
+    link: [...allSecrets],
+    environment: {
+      ...DEFAULT_LAMBDA_ENVIRONMENT,
+    },
+  },
+  SINGLE_RECORD_BATCH
+);
+
 // Quest Export Queue
 // Handles async export of QuestMaster plans to ZIP (markdown + images)
 const questExportQueueDLQ = new sst.aws.Queue('questExportQueueDLQ', {});
@@ -1836,6 +1863,7 @@ export {
   slackExportQueue,
   githubWebhookQueue,
   webhookDeliveryQueue,
+  callableFunctionCallQueue,
   questExportQueue,
   accountDataExportQueue,
   accountErasureQueue,
@@ -1876,6 +1904,7 @@ export {
   slackExportQueueDLQ,
   githubWebhookQueueDLQ,
   webhookDeliveryQueueDLQ,
+  callableFunctionCallQueueDLQ,
   questExportQueueDLQ,
   accountDataExportQueueDLQ,
   accountErasureQueueDLQ,
@@ -1917,6 +1946,7 @@ export {
   slackExportQueueSubscription,
   githubWebhookQueueSubscription,
   webhookDeliveryQueueSubscription,
+  callableFunctionCallQueueSubscription,
   questExportQueueSubscription,
   accountDataExportQueueSubscription,
   accountErasureQueueSubscription,

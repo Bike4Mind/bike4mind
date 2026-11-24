@@ -40,6 +40,7 @@ import {
   githubWebhookQueueDLQ,
   webhookDeliveryQueueDLQ,
   slackExportQueueDLQ,
+  callableFunctionCallQueueDLQ,
   questExportQueueDLQ,
   accountDataExportQueueDLQ,
   accountErasureQueueDLQ,
@@ -374,6 +375,13 @@ const DLQ_DESCRIPTORS: InfraDlqDescriptor[] = [
     application: 'SlackExport',
     sourceQueue: 'slackExportQueue',
     queue: slackExportQueueDLQ,
+  },
+  {
+    label: 'callable-function-call',
+    displayName: 'Callable Function Call',
+    application: 'CallableFunctionCall',
+    sourceQueue: 'callableFunctionCallQueue',
+    queue: callableFunctionCallQueueDLQ,
   },
   {
     label: 'quest-export',

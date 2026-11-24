@@ -728,6 +728,16 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
     'queue:infra/queues.ts:publishThumbnailQueueDLQ',
     'a1b84e4b8d1c2da1390507f0e1bdd7a567c77e5390ede903ca583acdfdbe87d2'
   ),
+  gapBecause(
+    'queue:infra/queues.ts:callableFunctionCallQueue',
+    '41c498a7ac05c71d243fce6c218e0e7de9252d33d64d605d8d3c485a658e1cdd',
+    'Asynchronous function calls are not wired on self-host: the broker declares no such queue, so an async invoke answers 503 and a synchronous call still runs.'
+  ),
+  gapBecause(
+    'queue:infra/queues.ts:callableFunctionCallQueueDLQ',
+    'f939d07fd88701b31fed10da4b2388692f410bd56fa4884c4711c95514c92140',
+    'Dead-letter queue of callableFunctionCallQueue, which is not wired on self-host.'
+  ),
   wired(
     'queue:infra/queues.ts:questExportQueue',
     'fcade3ba3497611b1ed891bb4f3afd618d95b96846078962fcdc166cfca34a5d',
