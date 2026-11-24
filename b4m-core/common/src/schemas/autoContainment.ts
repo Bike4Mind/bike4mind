@@ -128,6 +128,13 @@ export const interventionReleaseRequestSchema = z.union([
   z.object({ tier: z.enum(INTERVENTION_TIERS).exclude(['contain']), reason: z.string() }),
 ]);
 export const interventionReleaseResponseSchema = z.object({
-  released: z.array(z.object({ decisionId: z.string(), userIds: z.array(z.string()) })),
+  released: z.array(
+    z.object({
+      decisionId: z.string(),
+      userIds: z.array(z.string()),
+      /** Accounts the admin may not release (their own, or an admin's for a delegated admin); their hold stays. */
+      skippedUserIds: z.array(z.string()).optional(),
+    })
+  ),
 });
 export type InterventionReleaseResponse = z.infer<typeof interventionReleaseResponseSchema>;

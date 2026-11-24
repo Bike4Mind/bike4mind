@@ -146,6 +146,39 @@ describe('AutoContainmentDecisionRepository', () => {
     expect(byRevision[0]).toMatchObject({ releasedAt: NOW, releaseCondition: 'expiry' });
   });
 
+  it('supersedes a settled graduated decision with a Contain claim, never a Contain or fresh pending one', async () => {
+    const claim = {
+      assessmentId: 'assessment-2',
+      mode: 'enforce' as const,
+      userIds: ['user-1'],
+      confidence: 0.95,
+      reason: 'contain',
+      staleBefore: new Date(NOW.getTime() - MINUTE_MS),
+      now: NOW,
+    };
+    const limit = await repository.recordOnce(
+      input({ tier: 'limit', outcome: 'intervened', expiresAt: NOW, policyVersion: 1, scope: 'ai_spend' })
+    );
+    const fresh = await repository.recordOnce(
+      input({ revision: 1, tier: 'limit', outcome: 'pending', decidedAt: NOW })
+    );
+    const contained = await repository.recordOnce(input({ revision: 2, outcome: 'capped' }));
+
+    expect(await repository.supersedeWithContain(limit!.id, claim)).toMatchObject({
+      id: limit!.id,
+      tier: 'contain',
+      scope: 'account',
+      outcome: 'pending',
+      expiresAt: null,
+      policyVersion: null,
+      assessmentId: 'assessment-2',
+      confidence: 0.95,
+    });
+    expect(await repository.supersedeWithContain(limit!.id, claim)).toBeNull();
+    expect(await repository.supersedeWithContain(fresh!.id, claim)).toBeNull();
+    expect(await repository.supersedeWithContain(contained!.id, claim)).toBeNull();
+  });
+
   it('finds a decision by id and lists applied, unreleased decisions of one tier oldest first', async () => {
     const first = await repository.recordOnce(input({ tier: 'limit', outcome: 'intervened' }));
     const second = await repository.recordOnce(input({ revision: 1, tier: 'limit', outcome: 'intervened' }));

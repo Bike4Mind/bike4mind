@@ -67,7 +67,7 @@ export type AutoContainmentDeps = {
   findDetection: (id: string) => Promise<ShadowDetectionItem | null>;
   decisions: Pick<
     typeof autoContainmentDecisionRepository,
-    'listForDetection' | 'recordOnce' | 'reclaim' | 'finish' | 'release'
+    'listForDetection' | 'recordOnce' | 'reclaim' | 'supersedeWithContain' | 'finish' | 'release'
   >;
   /** Takes one decision from the hourly window of the mode (Contain) or of the tier and mode; false when it is spent. */
   takeHourlySlot: (
@@ -188,21 +188,29 @@ async function claimDecision(
   deps: AutoContainmentDeps
 ): Promise<{ decision: AutoContainmentDecisionItem; retried: boolean } | null> {
   const now = deps.now();
+  const staleBefore = new Date(now.getTime() - STALE_PENDING_MS);
   const prior = await deps.decisions.listForDetection(detection.id);
   const current = prior.find(row => row.revision === detection.revision);
+  // A graduated hold never stands in for Contain, so only earlier Contain rows cover an account for it.
+  const covering = decided.tier === 'contain' ? prior.filter(row => row.tier === 'contain') : prior;
+  const covered = new Set(covering.filter(row => row !== current).flatMap(row => row.userIds));
+  const userIds = decided.userIds.filter(userId => !covered.has(userId));
   if (current) {
+    if (decided.tier === 'contain' && current.tier !== 'contain') {
+      return userIds.length > 0
+        ? supersedeGraduated(current, assessment, decided, userIds, mode, staleBefore, deps)
+        : null;
+    }
+    // A row of another tier is that tier's decision: reclaiming it would run this tier on its record.
+    if (current.tier !== decided.tier) return null;
     const reclaimed = await deps.decisions.reclaim(current.id, {
-      staleBefore: new Date(now.getTime() - STALE_PENDING_MS),
+      staleBefore,
       cappedBefore: new Date(now.getTime() - HOUR_MS),
       now,
       mode,
     });
     return reclaimed ? { decision: reclaimed, retried: current.outcome === 'pending' } : null;
   }
-  // A graduated hold never stands in for Contain, so only earlier Contain rows cover an account for it.
-  const covering = decided.tier === 'contain' ? prior.filter(row => row.tier === 'contain') : prior;
-  const covered = new Set(covering.flatMap(row => row.userIds));
-  const userIds = decided.userIds.filter(userId => !covered.has(userId));
   if (userIds.length === 0) return null;
   const recorded = await deps.decisions.recordOnce({
     detectionId: detection.id,
@@ -227,6 +235,43 @@ async function claimDecision(
         }),
   });
   return recorded ? { decision: recorded, retried: false } : null;
+}
+
+/**
+ * Contain outranks a graduated decision on the same revision: it takes over that row and lifts the
+ * holds the row placed, so the graduated path never blocks a Contain the pre-tier policy would run.
+ */
+async function supersedeGraduated(
+  current: AutoContainmentDecisionItem,
+  assessment: AbuseAssessmentItem,
+  decided: Extract<InterventionDecision, { kind: 'act' }>,
+  userIds: string[],
+  mode: AutoContainmentDecisionItem['mode'],
+  staleBefore: Date,
+  deps: AutoContainmentDeps
+): Promise<{ decision: AutoContainmentDecisionItem; retried: boolean } | null> {
+  const superseded = await deps.decisions.supersedeWithContain(current.id, {
+    assessmentId: assessment.id,
+    mode,
+    userIds,
+    confidence: assessment.confidence ?? 0,
+    reason: decided.reason,
+    staleBefore,
+    now: deps.now(),
+  });
+  if (!superseded) return null;
+  // A hold left behind by a failed lift still lapses at its expiresAt.
+  for (const userId of current.userIds) {
+    try {
+      await deps.releaseHold(userId, current.id);
+    } catch (error) {
+      deps.logger.error('[AUTO_CONTAINMENT] lifting a superseded hold failed', {
+        decisionId: current.id,
+        error: errorText(error),
+      });
+    }
+  }
+  return { decision: superseded, retried: false };
 }
 
 /** Decides, and in enforce mode acts on, one assessment. Throws only on a database failure. */

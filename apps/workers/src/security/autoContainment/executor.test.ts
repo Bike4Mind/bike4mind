@@ -138,6 +138,22 @@ function makeDecisions() {
         return { ...row };
       }
     ),
+    supersedeWithContain: vi.fn(
+      async (
+        id: string,
+        claim: Pick<Row, 'assessmentId' | 'mode' | 'userIds' | 'confidence' | 'reason'> & {
+          staleBefore: Date;
+          now: Date;
+        }
+      ): Promise<Row | null> => {
+        const row = stored.find(candidate => candidate.id === id);
+        if (!row || row.tier === 'contain') return null;
+        if (row.outcome === 'pending' && row.decidedAt >= claim.staleBefore) return null;
+        const { staleBefore: _staleBefore, now, ...fields } = claim;
+        Object.assign(row, fields, { tier: 'contain', outcome: 'pending', expiresAt: null, decidedAt: now });
+        return { ...row };
+      }
+    ),
     release: vi.fn(async (id: string, _input: { reason: string; condition: string }) => {
       const row = stored.find(candidate => candidate.id === id);
       if (row) Object.assign(row, { outcome: 'released' });
@@ -564,6 +580,37 @@ describe('applyAutoContainment Contain fallback to the limit tier', () => {
       decision: { tier: 'contain', outcome: 'contained', userIds: ['user-1'] },
     });
     expect(deps.contain).toHaveBeenCalledTimes(1);
+  });
+
+  it('contains on the same revision once a later judgment reaches Contain confidence, lifting the limit hold', async () => {
+    const { deps, stored } = makeDeps({
+      mode: 'enforce',
+      tiers: { limit: { mode: 'enforce', minConfidence: 0.7, rolloutPercent: 100 } },
+    } as Partial<AutoContainmentConfig>);
+    await applyAutoContainment({ ...assessment, confidence: 0.8 }, deps);
+    expect(stored[0]).toMatchObject({ tier: 'limit', outcome: 'intervened' });
+    expect(deps.applyHold).toHaveBeenCalledTimes(1);
+
+    const run = await applyAutoContainment({ ...assessment, id: 'assessment-2' }, deps);
+    expect(run).toMatchObject({
+      status: 'decided',
+      decision: { id: stored[0].id, tier: 'contain', outcome: 'contained', userIds: ['user-1'] },
+    });
+    expect(deps.contain).toHaveBeenCalledTimes(1);
+    expect(deps.releaseHold).toHaveBeenCalledWith('user-1', stored[0].id);
+    expect(stored).toHaveLength(1);
+  });
+
+  it('never lets a graduated run reclaim a capped Contain decision on the revision', async () => {
+    const { deps, stored, advance } = makeDeps(config, false);
+    await applyAutoContainment(assessment, deps);
+    expect(stored[0]).toMatchObject({ tier: 'contain', outcome: 'capped' });
+    vi.mocked(deps.takeHourlySlot).mockResolvedValue(true);
+    advance(2 * 60 * 60 * 1000);
+
+    const run = await applyAutoContainment({ ...assessment, confidence: 0.8 }, deps);
+    expect(run).toEqual({ status: 'skipped', reason: 'already_decided' });
+    expect(stored[0]).toMatchObject({ tier: 'contain', outcome: 'capped' });
   });
 });
 

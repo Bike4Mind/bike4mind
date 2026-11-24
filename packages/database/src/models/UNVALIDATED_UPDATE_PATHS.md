@@ -1,4 +1,8 @@
 # Constrained paths written by update calls
+| AutoContainmentDecision | `outcome` | enum | `infra/security/AutoContainmentDecisionModel.ts#AutoContainmentDecisionRepository.supersedeWithContain` | schema | `runValidators` | writes "pending" |
+| AutoContainmentDecision | `releaseCondition` | enum | `infra/security/AutoContainmentDecisionModel.ts#AutoContainmentDecisionRepository.supersedeWithContain` | schema | `runValidators` | writes null |
+| AutoContainmentDecision | `scope` | enum | `infra/security/AutoContainmentDecisionModel.ts#AutoContainmentDecisionRepository.supersedeWithContain` | schema | `runValidators` | writes "account" |
+| AutoContainmentDecision | `tier` | enum | `infra/security/AutoContainmentDecisionModel.ts#AutoContainmentDecisionRepository.supersedeWithContain` | schema | `runValidators` | writes "contain" |
 
 Mongoose runs schema validators (`enum`, `maxlength`, `minlength`, `min`, `max`, `match`) on `create` and
 `save` only. An update (`findOneAndUpdate`, `updateOne`, `updateMany`, `findByIdAndUpdate`) reaches them only

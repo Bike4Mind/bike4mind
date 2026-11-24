@@ -54,8 +54,11 @@ const decision = (id: string, userIds = ['u1']) => ({ id, detectionId: DETECTION
 beforeEach(() => {
   vi.clearAllMocks();
   h.list.mockResolvedValue([]);
-  h.release.mockImplementation(async (released: { userIds: string[] }, input: { actor: { id: string } }) =>
-    released.userIds.filter(id => id !== input.actor.id)
+  h.release.mockImplementation(
+    async (released: { userIds: string[] }, input: { actor: { id: string }; onSkip: (id: string) => void }) => {
+      released.userIds.filter(id => id === input.actor.id).forEach(input.onSkip);
+      return released.userIds.filter(id => id !== input.actor.id);
+    }
   );
 });
 
@@ -89,7 +92,9 @@ describe('/api/admin/shadow-detections/decisions', () => {
       })
     );
     expect(h.audit).toHaveBeenCalledTimes(1);
-    expect(res._getJSONData()).toEqual({ released: [{ decisionId: DECISION_ID, userIds: ['u1'] }] });
+    expect(res._getJSONData()).toEqual({
+      released: [{ decisionId: DECISION_ID, userIds: ['u1'], skippedUserIds: [ADMIN_ID] }],
+    });
   });
 
   it('answers 404 for an unknown or Contain decision', async () => {
@@ -109,8 +114,8 @@ describe('/api/admin/shadow-detections/decisions', () => {
     expect(h.audit).toHaveBeenCalledTimes(3);
     expect(res._getJSONData()).toEqual({
       released: [
-        { decisionId: 'd1', userIds: ['u1'] },
-        { decisionId: 'd2', userIds: ['u2', 'u3'] },
+        { decisionId: 'd1', userIds: ['u1'], skippedUserIds: [] },
+        { decisionId: 'd2', userIds: ['u2', 'u3'], skippedUserIds: [] },
       ],
     });
   });

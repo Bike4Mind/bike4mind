@@ -65,14 +65,16 @@ const handler = adminApi({
       const released: InterventionReleaseResponse['released'] = [];
       for (const decision of decisions) {
         if (!decision) continue;
+        const skippedUserIds: string[] = [];
         const userIds = await releaseInterventionDecision(decision, {
           actor: req.user,
+          onSkip: userId => skippedUserIds.push(userId),
           by: req.user.id,
           reason,
           condition: 'admin_release',
           now,
         });
-        released.push({ decisionId: decision.id, userIds });
+        released.push({ decisionId: decision.id, userIds, skippedUserIds });
         for (const userId of userIds) {
           await recordAdminActionFromRequest(req, {
             action: 'user.intervention_hold.released',

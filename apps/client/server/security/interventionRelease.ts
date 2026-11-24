@@ -35,6 +35,8 @@ export interface InterventionReleaseInput {
   reason: string;
   condition: InterventionReleaseCondition;
   now: Date;
+  /** Called for each account the actor may not release, whose hold stays on. */
+  onSkip?: (userId: string) => void;
 }
 
 /**
@@ -52,7 +54,10 @@ export async function releaseInterventionDecision(
   const released: string[] = [];
   for (const userId of input.userIds ?? decision.userIds) {
     if (!decision.userIds.includes(userId)) continue;
-    if (input.actor && !(await mayRelease(input.actor, userId, deps))) continue;
+    if (input.actor && !(await mayRelease(input.actor, userId, deps))) {
+      input.onSkip?.(userId);
+      continue;
+    }
     if (await deps.users.releaseInterventionHold(userId, decision.id, { by: input.by, now: input.now })) {
       released.push(userId);
     }
@@ -105,6 +110,8 @@ export async function releaseHoldsAfterVerdict(
       reason,
       now: new Date(),
       actor: req.user,
+      onSkip: userId =>
+        req.logger.warn(`Automated hold left on ${userId}: the verdict's admin may not release that account`),
     });
     for (const { decisionId, userIds } of released) {
       for (const userId of userIds) {

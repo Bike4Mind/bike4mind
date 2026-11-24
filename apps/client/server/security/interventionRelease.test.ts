@@ -96,12 +96,14 @@ describe('releaseInterventionDecision', () => {
       id === 'u2' ? { id, adminPermissions: ['users:moderate'] } : { id }
     );
     const delegated = { id: 'u1', adminPermissions: ['users:moderate' as const] };
+    const skipped: string[] = [];
     const own = await releaseInterventionDecision(
       decision({ userIds: ['u1', 'u2', 'u3'] }),
-      { ...input, condition: 'admin_release', actor: delegated },
+      { ...input, condition: 'admin_release', actor: delegated, onSkip: id => skipped.push(id) },
       asDeps()
     );
     expect(own).toEqual(['u3']);
+    expect(skipped).toEqual(['u1', 'u2']);
 
     const full = await releaseInterventionDecision(
       decision({ userIds: ['u1', 'u2'] }),

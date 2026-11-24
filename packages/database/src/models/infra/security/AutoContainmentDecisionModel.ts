@@ -160,6 +160,49 @@ export class AutoContainmentDecisionRepository {
     return doc ? toItem(doc) : null;
   }
 
+  /**
+   * Turns a graduated decision on the revision into a pending Contain claim, since the unique
+   * (detection, revision) pair leaves Contain no row of its own. Atomic; a graduated decision still
+   * being applied (fresh `pending`) is left alone. Null when nothing moved. The caller lifts the
+   * holds the graduated decision placed: they keep this decision's id.
+   */
+  async supersedeWithContain(
+    id: string,
+    claim: Pick<AutoContainmentDecisionItem, 'assessmentId' | 'mode' | 'userIds' | 'confidence' | 'reason'> & {
+      staleBefore: Date;
+      now: Date;
+    }
+  ): Promise<AutoContainmentDecisionItem | null> {
+    if (!Types.ObjectId.isValid(id)) return null;
+    const { staleBefore, now, ...fields } = claim;
+    const doc = await AutoContainmentDecisionModel.findOneAndUpdate(
+      {
+        _id: new Types.ObjectId(id),
+        tier: { $in: INTERVENTION_TIERS.filter(tier => tier !== 'contain') },
+        $or: [{ outcome: { $ne: 'pending' } }, { outcome: 'pending', decidedAt: { $lt: staleBefore } }],
+      },
+      {
+        $set: {
+          ...fields,
+          tier: 'contain',
+          scope: 'account',
+          policyVersion: null,
+          expiresAt: null,
+          releaseCondition: null,
+          releasedAt: null,
+          releasedBy: null,
+          releaseReason: null,
+          outcome: 'pending',
+          batchId: null,
+          error: null,
+          decidedAt: now,
+        },
+      },
+      { new: true, runValidators: true }
+    ).lean<LeanDecision>();
+    return doc ? toItem(doc) : null;
+  }
+
   /** Records how a claimed decision ended. */
   async finish(id: string, patch: Pick<AutoContainmentDecisionItem, 'outcome' | 'batchId' | 'error'>): Promise<void> {
     await AutoContainmentDecisionModel.updateOne({ _id: new Types.ObjectId(id) }, { $set: patch });
