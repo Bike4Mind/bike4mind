@@ -7,6 +7,7 @@
  */
 import {
   IMAGE_MODEL_CATALOG,
+  studioFileMediaKind,
   type AudioGenerationToolCall,
   type GenerateImageToolCall,
   type GenerationJobState,
@@ -136,6 +137,11 @@ export async function buildAgentProductionToolConfig(
       findJobs: async ids => {
         const jobs = await Promise.all(ids.map(id => deps.findJob(id)));
         return jobs.filter((job): job is ProductionJobRecord => job?.requestedBy === user.id).map(toJobView);
+      },
+      fileKinds: async ids => {
+        if (ids.length === 0) return new Map();
+        const files = await adapters.db.fabFiles.findAccessibleInIds([...ids], { userId: user.id });
+        return new Map(files.map(file => [file.id, studioFileMediaKind(file.mimeType)]));
       },
     };
   } catch (error) {

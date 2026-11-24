@@ -9,6 +9,7 @@ import {
   validateStudioComposition,
   type ImageModels,
   type StudioCompositionUpdateInput,
+  type StudioFileMediaKind,
 } from '@bike4mind/common';
 import type { ToolContext } from '../../base/types';
 import type { ImageToolConfig } from '../imageGeneration/imageJobTool';
@@ -30,10 +31,15 @@ vi.mock('./audio', () => ({ createProductionAudio: vi.fn() }));
 const COMPOSITION_ID = '5'.repeat(24);
 const PRODUCT_FILE_ID = 'ab'.repeat(12);
 
-const referenceModel = (Object.keys(IMAGE_MODEL_CATALOG) as ImageModels[]).find(
-  id => (IMAGE_MODEL_CATALOG[id].modes.generate?.inputs.reference?.max ?? 0) > 0
-);
-if (!referenceModel) throw new Error('the image catalog has no model that takes reference images');
+const referenceCap = (id: ImageModels) => IMAGE_MODEL_CATALOG[id].modes.generate?.inputs.reference?.max ?? 0;
+const imageModelWith = (fits: (cap: number) => boolean): ImageModels => {
+  const model = (Object.keys(IMAGE_MODEL_CATALOG) as ImageModels[]).find(id => fits(referenceCap(id)));
+  if (!model) throw new Error('the image catalog has no model with the reference cap this test needs');
+  return model;
+};
+const referenceModel = imageModelWith(cap => cap > 0);
+const singleReferenceModel = imageModelWith(cap => cap === 1);
+const multiReferenceModel = imageModelWith(cap => cap > 1);
 
 type Harness = {
   config: ProductionToolConfig;
@@ -42,6 +48,8 @@ type Harness = {
   composition(): ProductionComposition;
   counts: { image: number; video: number; music: number; speech: number; sfx: number };
   imageRequests: { request: unknown; count: number }[];
+  /** A new file the user can read, of the given kind. */
+  addFile(kind: StudioFileMediaKind): string;
 };
 
 /** An in-memory production: the real validator guards every write, as the real composition service does. */
@@ -49,9 +57,11 @@ function createHarness(): Harness {
   let nextFile = 1;
   const newFileId = () => (nextFile++).toString(16).padStart(24, '0');
   const knownFileIds = new Set<string>([PRODUCT_FILE_ID]);
-  const makeFile = () => {
+  const kinds = new Map<string, StudioFileMediaKind>([[PRODUCT_FILE_ID, 'image']]);
+  const makeFile = (kind: StudioFileMediaKind = 'image') => {
     const id = newFileId();
     knownFileIds.add(id);
+    kinds.set(id, kind);
     return id;
   };
   const jobs = new Map<string, ProductionJobView>();
@@ -63,7 +73,7 @@ function createHarness(): Harness {
     jobs.set(id, {
       id,
       state: 'succeeded',
-      fileId: makeFile(),
+      fileId: makeFile(kind === 'music' ? 'audio' : kind),
       ...(durationSeconds !== undefined && { durationSeconds }),
     });
     counts[kind] += 1;
@@ -106,11 +116,11 @@ function createHarness(): Harness {
   const adapter: ProductionAudioAdapter = {
     speech: async () => {
       counts.speech += 1;
-      return { ok: true, fileId: makeFile(), durationMs: 1500 };
+      return { ok: true, fileId: makeFile('audio'), durationMs: 1500 };
     },
     soundEffect: async () => {
       counts.sfx += 1;
-      return { ok: true, fileId: makeFile(), durationMs: 800 };
+      return { ok: true, fileId: makeFile('audio'), durationMs: 800 };
     },
   };
   vi.mocked(createProductionAudio).mockReturnValue(adapter);
@@ -151,6 +161,7 @@ function createHarness(): Harness {
       },
     },
     findJobs: async ids => ids.flatMap(id => (jobs.has(id) ? [jobs.get(id) as ProductionJobView] : [])),
+    fileKinds: async ids => new Map(ids.flatMap(id => (kinds.has(id) ? [[id, kinds.get(id)] as const] : []))),
     waitTimeoutMs: 100,
     pollIntervalMs: 1,
   };
@@ -165,7 +176,7 @@ function createHarness(): Harness {
     statusUpdate,
   } as unknown as ToolContext;
 
-  return { config, context, statusUpdate, composition: () => stored, counts, imageRequests };
+  return { config, context, statusUpdate, composition: () => stored, counts, imageRequests, addFile: makeFile };
 }
 
 type Tool = typeof productionStoryboardTool;
@@ -318,6 +329,51 @@ describe('production director tools', () => {
     );
     expect(cards.filter(card => card.kind === 'image')).toHaveLength(3);
     expect(cards.filter(card => card.kind === 'video')).toHaveLength(3);
+  });
+
+  describe('shot references', () => {
+    const inputsOf = (request: unknown) => (request as { inputs?: { fileId: string }[] }).inputs?.map(i => i.fileId);
+    const setUp = async (model: ImageModels) => {
+      harness.config.imageModels = [model];
+      await run(productionStoryboardTool, harness, { ...STORYBOARD, productFileId: undefined });
+      const photo = harness.addFile('image');
+      const kitVideo = harness.addFile('video');
+      const kitImage = harness.addFile('image');
+      const current = harness.composition();
+      await harness.config.compositions.update(COMPOSITION_ID, {
+        brief: { ...current.brief, productFileId: photo },
+        brandKit: { ...current.brandKit, productFileIds: [kitVideo, kitImage, photo] },
+      });
+      return { photo, kitVideo, kitImage };
+    };
+
+    it('puts the brief photo first, then the kit images, and never a kit video', async () => {
+      const { photo, kitImage } = await setUp(multiReferenceModel);
+      await run(productionGenerateShotTool, harness, { compositionId: COMPOSITION_ID, animate: false });
+
+      expect(harness.imageRequests).toHaveLength(3);
+      for (const { request } of harness.imageRequests) expect(inputsOf(request)).toEqual([photo, kitImage]);
+    });
+
+    it('drops the video before slicing to a one-reference model, so the brief photo takes the slot', async () => {
+      const { photo } = await setUp(singleReferenceModel);
+      await run(productionGenerateShotTool, harness, { compositionId: COMPOSITION_ID, animate: false });
+
+      for (const { request } of harness.imageRequests) expect(inputsOf(request)).toEqual([photo]);
+    });
+
+    it('uses a kit image when a video sits at the front of the kit and there is no brief photo', async () => {
+      harness.config.imageModels = [singleReferenceModel];
+      await run(productionStoryboardTool, harness, { ...STORYBOARD, productFileId: undefined });
+      const kitVideo = harness.addFile('video');
+      const kitImage = harness.addFile('image');
+      await harness.config.compositions.update(COMPOSITION_ID, {
+        brandKit: { ...harness.composition().brandKit, productFileIds: [kitVideo, kitImage] },
+      });
+      await run(productionGenerateShotTool, harness, { compositionId: COMPOSITION_ID, animate: false });
+
+      for (const { request } of harness.imageRequests) expect(inputsOf(request)).toEqual([kitImage]);
+    });
   });
 
   it('starts nothing new when generate_shot is called again with the same arguments', async () => {

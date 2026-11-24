@@ -1,5 +1,12 @@
 import { z } from 'zod';
-import { STUDIO_COMPOSITION_LIMITS, StudioFileIdSchema, VIDEO_MODEL_CATALOG, type StudioShot } from '@bike4mind/common';
+import {
+  STUDIO_COMPOSITION_LIMITS,
+  StudioFileIdSchema,
+  VIDEO_MODEL_CATALOG,
+  productImageReferenceFileIds,
+  productReferenceFileIds,
+  type StudioShot,
+} from '@bike4mind/common';
 import { IMAGE_JOB_BATCH_MAX } from '../../../../imageJobs/types';
 import type { ToolContext, ToolDefinition } from '../../base/types';
 import { buildUnavailableTool, toToolParameters } from '../generationJobTool';
@@ -118,7 +125,10 @@ async function makeTakes(
   reports: Map<string, ShotReport>
 ): Promise<StudioShot[]> {
   const composition = await config.compositions.get(compositionId);
-  const products = composition.brandKit.productFileIds;
+  const references = productImageReferenceFileIds(
+    composition,
+    await config.fileKinds(productReferenceFileIds(composition))
+  );
   const aspectRatio = primaryAspectRatio(composition);
   const started = new Map<string, string[]>();
   for (const shot of shots.filter(candidate => !candidate.chosenFileId)) {
@@ -126,11 +136,11 @@ async function makeTakes(
       reports.set(shot.id, { id: shot.id, problem: 'no prompt; storyboard it first' });
       continue;
     }
-    const prompt = buildShotImagePrompt(shot.prompt, composition.brandKit.colors, products.length > 0);
+    const prompt = buildShotImagePrompt(shot.prompt, composition.brandKit.colors, references.length > 0);
     const submitted = await submitShotImages(
       context,
       config,
-      { prompt, references: products, aspectRatio, compositionId, shotId: shot.id },
+      { prompt, references, aspectRatio, compositionId, shotId: shot.id },
       takes
     );
     if (submitted.ok) started.set(shot.id, submitted.jobIds);

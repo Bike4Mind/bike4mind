@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { STUDIO_COMPOSITION_LIMITS } from './composition';
-import { productReferenceFileIds, withProductLook } from './productReferences';
+import { productImageReferenceFileIds, productReferenceFileIds, withProductLook } from './productReferences';
 
 const id = (n: number): string => n.toString(16).padStart(24, '0');
 
@@ -23,6 +23,38 @@ describe('productReferenceFileIds', () => {
 
   it('is empty when the production has no product images', () => {
     expect(productReferenceFileIds({ brief: {}, brandKit: { productFileIds: [] } })).toEqual([]);
+  });
+});
+
+describe('productImageReferenceFileIds', () => {
+  const kinds = new Map([
+    [id(1), 'image' as const],
+    [id(2), 'video' as const],
+    [id(3), 'image' as const],
+  ]);
+
+  it('drops videos, keeping the brief photo first', () => {
+    expect(
+      productImageReferenceFileIds(
+        { brief: { productFileId: id(1) }, brandKit: { productFileIds: [id(2), id(3)] } },
+        kinds
+      )
+    ).toEqual([id(1), id(3)]);
+  });
+
+  it('drops a video at the front of the kit before any cap slice, so it cannot take the only slot', () => {
+    const refs = productImageReferenceFileIds({ brief: {}, brandKit: { productFileIds: [id(2), id(3)] } }, kinds);
+    expect(refs.slice(0, 1)).toEqual([id(3)]);
+  });
+
+  it('drops a file whose kind is unknown', () => {
+    expect(
+      productImageReferenceFileIds({ brief: { productFileId: id(9) }, brandKit: { productFileIds: [id(3)] } }, kinds)
+    ).toEqual([id(3)]);
+  });
+
+  it('is empty for a kit of only videos and no brief photo', () => {
+    expect(productImageReferenceFileIds({ brief: {}, brandKit: { productFileIds: [id(2)] } }, kinds)).toEqual([]);
   });
 });
 

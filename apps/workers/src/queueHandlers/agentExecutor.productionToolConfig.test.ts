@@ -221,6 +221,40 @@ describe('buildAgentProductionToolConfig', () => {
         expect(studioCompositionService.updateComposition).toHaveBeenCalledWith(USER.id, adapters, 'c1', patch);
       });
     });
+
+    describe('fileKinds', () => {
+      const withFiles = (files: { id: string; mimeType: string }[]) => {
+        const findAccessibleInIds = vi.fn(async () => files);
+        const deps = makeDeps({
+          compositionAdapters: { db: { fabFiles: { findAccessibleInIds } } } as unknown as Deps['compositionAdapters'],
+        });
+        return { deps, findAccessibleInIds };
+      };
+
+      it("maps each file the run user can read to its media kind, scoped to the user's access", async () => {
+        const { deps, findAccessibleInIds } = withFiles([
+          { id: 'photo', mimeType: 'image/png' },
+          { id: 'clip', mimeType: 'video/mp4' },
+        ]);
+        const config = await buildAgentProductionToolConfig(makeInput(), deps);
+
+        const kinds = await config!.fileKinds(['photo', 'clip', 'gone']);
+
+        expect(findAccessibleInIds).toHaveBeenCalledWith(['photo', 'clip', 'gone'], { userId: USER.id });
+        expect([...kinds]).toEqual([
+          ['photo', 'image'],
+          ['clip', 'video'],
+        ]);
+      });
+
+      it('reads nothing for no ids', async () => {
+        const { deps, findAccessibleInIds } = withFiles([]);
+        const config = await buildAgentProductionToolConfig(makeInput(), deps);
+
+        expect((await config!.fileKinds([])).size).toBe(0);
+        expect(findAccessibleInIds).not.toHaveBeenCalled();
+      });
+    });
   });
 });
 

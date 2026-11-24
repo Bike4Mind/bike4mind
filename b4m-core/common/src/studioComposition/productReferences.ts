@@ -1,4 +1,5 @@
 import { STUDIO_COMPOSITION_LIMITS, type StudioBrandKit, type StudioCompositionBrief } from './composition';
+import type { StudioFileMediaKind } from './validateTimeline';
 
 /**
  * The product images every shot of a production is generated against, most authoritative first: the brief's
@@ -16,6 +17,16 @@ export const productReferenceFileIds = (content: {
   ];
   return [...new Set(ids)];
 };
+
+/**
+ * productReferenceFileIds narrowed to images, the only kind an image model takes as a reference. The brand kit also
+ * holds product videos, and a file missing from `fileKinds` (deleted, unshared, unknown) is dropped too. Filter before
+ * slicing to a model's cap, so a video never takes the one slot a single-reference model has.
+ */
+export const productImageReferenceFileIds = (
+  content: Parameters<typeof productReferenceFileIds>[0],
+  fileKinds: ReadonlyMap<string, StudioFileMediaKind>
+): string[] => productReferenceFileIds(content).filter(id => fileKinds.get(id) === 'image');
 
 /**
  * Moves `fileId` to the front of the brand kit's product images, making it the production's product look.
