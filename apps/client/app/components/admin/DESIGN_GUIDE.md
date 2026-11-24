@@ -336,8 +336,8 @@ A new admin tab or admin tool adds at least one question to `b4m-core/services/s
 
 1. **Tokens and toolkit.** Done: admin tokens in the Joy theme, the admin skin, and the components above in `components/admin/shared` with tests.
 2. **Users first.** Done: the users list and user profile run on the toolkit and are the reference implementation.
-3. **Shared frame.** Done: `AdminPage` gives every tab panel `adminPageFrame`, and `AdminPageHeader` renders the 24 px `h1`. Tabs that still pad themselves are marked `selfFramed` in `AdminPage.tsx`; a tab leaves that list in the PR that drops its own outer padding, and no tab joins it.
-4. **Every other admin tab.** In progress, one PR per tab: page header, frame, toolkit table, states and the narrow-screen check.
+3. **Shared frame.** Done: `AdminPage` gives every tab panel `adminPageFrame`, and `AdminPageHeader` renders the 24 px `h1`.
+4. **Every other admin tab.** Page headers: every admin tab except Waitlist opens with `AdminPageHeader` inside the shared frame; Dashboard, Migrate users, Tutorials and LiveOps triage moved last. Remaining: moving the legacy-exempt screens (the raw `Card`, `Modal` and `Table` imports listed in `eslint-rules/admin-joy-legacy.mjs`) onto the toolkit is #8328, and aligning the remaining save paths with `SaveBar` and `UnsavedChangesGuard` is #8329.
 5. **Lock it in.** The lint guard below, and the admin design-guide checkbox in the PR template.
 
 ### Lint guard
