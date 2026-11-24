@@ -119,7 +119,11 @@ function RiderButton({ rider, onAction }: { rider: Rider; onAction(action: ViewA
           {rider.line}
         </Typography>
       )}
-      <AgentPrIndicator pr={rider.pr} onOpen={() => onAction({ kind: 'open-pr', agentId: rider.key })} />
+      <AgentPrIndicator
+        agentId={rider.key}
+        pr={rider.pr}
+        onOpen={() => onAction({ kind: 'open-pr', agentId: rider.key })}
+      />
     </Box>
   );
 }

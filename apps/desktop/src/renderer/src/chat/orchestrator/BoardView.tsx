@@ -224,7 +224,7 @@ function BoardCard({
             {formatAgentCost(agent.usdCost, agent.credits)}
           </Typography>
         )}
-        <AgentPrIndicator pr={agent.pr} onOpen={() => onOpenPr?.(agent.id)} />
+        <AgentPrIndicator agentId={agent.id} pr={agent.pr} onOpen={() => onOpenPr?.(agent.id)} />
       </Box>
     </Box>
   );

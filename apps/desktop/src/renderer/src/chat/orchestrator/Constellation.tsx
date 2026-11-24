@@ -119,6 +119,7 @@ function Node({
   x,
   y,
   radius,
+  agentId,
   pr,
   onOpen,
   onOpenPr,
@@ -129,6 +130,7 @@ function Node({
   x: number;
   y: number;
   radius: number;
+  agentId?: string;
   pr?: ViewAgent['pr'];
   onOpen(): void;
   onOpenPr?(): void;
@@ -168,10 +170,10 @@ function Node({
       <text x={x} y={y + radius + 14} textAnchor="middle" fontSize={11} fill={LABEL_COLOR} pointerEvents="none">
         {truncate(title)}
       </text>
-      {pr && (
+      {pr && agentId && (
         <foreignObject x={x - 55} y={y + radius + 18} width={110} height={24}>
           <Box sx={{ display: 'flex', justifyContent: 'center' }}>
-            <AgentPrIndicator pr={pr} onOpen={onOpenPr} compact />
+            <AgentPrIndicator agentId={agentId} pr={pr} onOpen={onOpenPr} compact />
           </Box>
         </foreignObject>
       )}
@@ -227,6 +229,7 @@ export function Constellation({ snapshot, onAction }: { snapshot: ViewSnapshot; 
             testId={`orchestrator-constellation-node-${node.id}`}
             state={node.agent.state}
             title={node.agent.title}
+            agentId={node.id}
             pr={node.agent.pr}
             x={node.x}
             y={node.y}

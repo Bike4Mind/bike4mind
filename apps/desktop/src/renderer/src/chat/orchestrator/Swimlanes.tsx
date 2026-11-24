@@ -173,7 +173,11 @@ export function Swimlanes({ snapshot, onAction }: { snapshot: ViewSnapshot; onAc
             >
               {lane.line ?? ''}
             </Typography>
-            <AgentPrIndicator pr={lane.pr} onOpen={() => onAction({ kind: 'open-pr', agentId: lane.key })} />
+            <AgentPrIndicator
+              agentId={lane.key}
+              pr={lane.pr}
+              onOpen={() => onAction({ kind: 'open-pr', agentId: lane.key })}
+            />
           </Box>
         );
       })}

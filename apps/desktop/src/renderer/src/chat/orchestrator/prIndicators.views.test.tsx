@@ -15,10 +15,13 @@ import { OverflowStack } from './tavern/OverflowStack';
 const themed = createThemedMount();
 const onSelect = vi.fn();
 const onOpenPr = vi.fn();
+const openExternal = vi.fn().mockResolvedValue(undefined);
+const shiftClick = (badge: Element) =>
+  badge.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, shiftKey: true }));
 const states = ['working', 'needs-you', 'done', 'failed', 'idle', 'stopped'] as const;
 const agents = states.map((state, index) =>
   agentFixture(state, state, {
-    pr: { number: 8100 + index, state: index % 2 === 0 ? 'open' : 'merged' },
+    pr: { number: 8100 + index, state: index % 2 === 0 ? 'open' : 'merged', repo: 'acme/app' },
   })
 );
 const roster = [...agents, agentFixture('no-pr')];
@@ -43,12 +46,18 @@ beforeEach(() => {
       onStreamEvent: vi.fn(() => () => undefined),
       onQueueChanged: vi.fn(() => () => undefined),
     },
+    shell: { openExternal },
+    pullRequests: {
+      getState: vi.fn().mockResolvedValue(null),
+      onStateChanged: vi.fn(() => () => undefined),
+    },
   };
 });
 afterEach(() => {
   themed.unmount();
   onSelect.mockClear();
   onOpenPr.mockClear();
+  openExternal.mockClear();
 });
 
 describe('PR indicators across Show agents views', () => {
@@ -74,12 +83,17 @@ describe('PR indicators across Show agents views', () => {
         badge.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
         badge.click();
       });
-      expect(onOpenPr).toHaveBeenCalledWith(agent.id);
+      await act(async () => undefined);
+      expect(openExternal).toHaveBeenCalledWith(`https://github.com/acme/app/pull/${agent.pr!.number}`);
+      expect(onOpenPr).not.toHaveBeenCalled();
       expect(onSelect).not.toHaveBeenCalled();
+      act(() => {
+        shiftClick(badge);
+      });
+      expect(onOpenPr).toHaveBeenCalledWith(agent.id);
       onOpenPr.mockClear();
       act(() => {
-        badge.dispatchEvent(new KeyboardEvent('keydown', { key: ' ', bubbles: true }));
-        badge.click();
+        badge.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', shiftKey: true, bubbles: true }));
       });
       expect(onOpenPr).toHaveBeenCalledTimes(1);
       expect(onSelect).not.toHaveBeenCalled();
@@ -123,7 +137,7 @@ describe('PR indicators across Show agents views', () => {
     expect(indicators()).toHaveLength(states.length);
     for (const badge of indicators()) {
       const index = Number((badge as HTMLElement).dataset.prNumber) - 8100;
-      act(() => (badge as HTMLButtonElement).click());
+      act(() => shiftClick(badge));
       expect(onAction).toHaveBeenLastCalledWith({ kind: 'open-pr', agentId: states[index] });
     }
   });
@@ -141,7 +155,7 @@ describe('PR indicators across Show agents views', () => {
     );
     act(() => el('orchestrator-tavern-overflow-workbench').click());
     expect(indicators(el('orchestrator-tavern-overflow-workbench-list'))).toHaveLength(1);
-    act(() => (indicators()[0] as HTMLButtonElement).click());
+    act(() => shiftClick(indicators()[0]));
     expect(onOpenPr).toHaveBeenCalledWith('working');
     expect(onSelect).not.toHaveBeenCalled();
     act(() => el('orchestrator-tavern-overflow-item-working').click());
@@ -150,23 +164,24 @@ describe('PR indicators across Show agents views', () => {
 });
 
 describe('PR state presentation', () => {
-  it('uses the existing PR icon and color semantics per state, and goes away with the PR metadata', async () => {
+  it('uses the same PR icon and color as the sidebar per state, and goes away with the PR metadata', async () => {
     const colors: [string, string][] = [
-      ['open', 'success.plainColor'],
+      // An open PR with nothing waiting is the quiet state, as in the sidebar (prIconColor).
+      ['open', 'text.secondary'],
       ['draft', 'text.tertiary'],
       ['queued', 'warning.plainColor'],
       ['merged', '#8250df'],
       ['closed', 'danger.plainColor'],
-      ['OPEN', 'success.plainColor'],
+      ['OPEN', 'text.secondary'],
       ['future-state', 'text.tertiary'],
     ];
     for (const [state, color] of colors) {
-      await themed.render(<AgentPrIndicator pr={{ number: 42, state }} />);
+      await themed.render(<AgentPrIndicator agentId="a" pr={{ number: 42, state }} />);
       const indicator = el('orchestrator-pr-indicator');
       expect(indicator.querySelector('[data-pr-color]')?.getAttribute('data-pr-color'), state).toBe(color);
       expect(indicator.textContent).toContain('#42');
     }
-    await themed.render(<AgentPrIndicator pr={undefined} />);
+    await themed.render(<AgentPrIndicator agentId="a" pr={undefined} />);
     expect(indicators()).toHaveLength(0);
   });
 });

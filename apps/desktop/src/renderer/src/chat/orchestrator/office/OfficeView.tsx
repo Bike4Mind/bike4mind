@@ -268,7 +268,7 @@ export function OfficeView({
               {cast.get(agent.id)?.split(' ')[0]}
               {agent.state === 'needs-you' ? ' !' : agent.state === 'done' ? ' *' : ''}
             </span>
-            <AgentPrIndicator pr={agent.pr} onOpen={() => onOpenPr?.(agent.id)} compact scene />
+            <AgentPrIndicator agentId={agent.id} pr={agent.pr} onOpen={() => onOpenPr?.(agent.id)} compact scene />
           </Button>
         ))}
         <Typography

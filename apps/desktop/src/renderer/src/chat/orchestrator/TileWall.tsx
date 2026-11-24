@@ -162,6 +162,7 @@ export function TileWall({ snapshot, onAction }: { snapshot: ViewSnapshot; onAct
                 {tile.title}
               </Typography>
               <AgentPrIndicator
+                agentId={tile.key}
                 pr={tile.pr}
                 onOpen={() => onAction({ kind: 'open-pr', agentId: tile.key })}
                 testId="orchestrator-tile-pr"
