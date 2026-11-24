@@ -62,6 +62,10 @@ const initialState = () => ({
   environment: { url: 'https://app.example.test' },
   user: { id: 'user' },
 });
+type ApiFixture = { post: ReturnType<typeof vi.fn> } | null;
+/** An AuthService fixture; with no API client the window falls back to the plain web sign-in. */
+const authFor = (state: unknown, api: ApiFixture = null) =>
+  ({ getState: () => state, getSessionBoundApiClient: () => api }) as unknown as AuthService;
 const partitionAt = (index: number) => (h.options[index].webPreferences as { partition: string }).partition;
 const expectedPartition = (scope: string) =>
   `persist:server-conversations-${createHash('sha256').update(scope).digest('hex')}`;
@@ -99,7 +103,7 @@ describe('desktop server conversations handoff surface', () => {
 
   it('uses a sandbox without a privileged preload and clears the captured owner on synchronous close', async () => {
     const state = initialState();
-    registerSessionHandoff({ getState: () => state } as unknown as AuthService);
+    registerSessionHandoff(authFor(state));
     expect(IPC_CHANNELS.handoffOpenServerSessions).toBe('handoff:open-server-sessions');
     await open();
     expect(h.options[0].webPreferences).toEqual({
@@ -123,7 +127,7 @@ describe('desktop server conversations handoff surface', () => {
     'clears ownership after an ordinary close and %s change',
     async change => {
       const state = initialState();
-      registerSessionHandoff({ getState: () => state } as unknown as AuthService);
+      registerSessionHandoff(authFor(state));
       await open();
       const owner = partitionAt(0);
       h.windows[0].close();
@@ -138,7 +142,7 @@ describe('desktop server conversations handoff surface', () => {
 
   it('reopens a normally closed window in the same partition without clearing it', async () => {
     const state = initialState();
-    registerSessionHandoff({ getState: () => state } as unknown as AuthService);
+    registerSessionHandoff(authFor(state));
     await open();
     h.windows[0].close();
     await open();
@@ -150,7 +154,7 @@ describe('desktop server conversations handoff surface', () => {
   it('observes initialized auth ownership without opening a window', async () => {
     const state = initialState();
     state.status = 'signed-out';
-    registerSessionHandoff({ getState: () => state } as unknown as AuthService);
+    registerSessionHandoff(authFor(state));
     state.status = 'signed-in';
     changed();
     state.status = 'signed-out';
@@ -161,7 +165,7 @@ describe('desktop server conversations handoff surface', () => {
 
   it('waits for its own cleanup and creates only one window for concurrent opens', async () => {
     const state = initialState();
-    registerSessionHandoff({ getState: () => state } as unknown as AuthService);
+    registerSessionHandoff(authFor(state));
     await open();
     const pending = deferred();
     h.clearStorageData.mockReturnValueOnce(pending.promise);
@@ -181,7 +185,7 @@ describe('desktop server conversations handoff surface', () => {
 
   it('invalidates an old open across sign-out and return to the same owner', async () => {
     const state = initialState();
-    registerSessionHandoff({ getState: () => state } as unknown as AuthService);
+    registerSessionHandoff(authFor(state));
     await open();
     const pending = deferred();
     h.clearStorageData.mockReturnValueOnce(pending.promise);
@@ -203,7 +207,7 @@ describe('desktop server conversations handoff surface', () => {
 
   it('does not make a different account wait for the old partition cleanup', async () => {
     const state = initialState();
-    registerSessionHandoff({ getState: () => state } as unknown as AuthService);
+    registerSessionHandoff(authFor(state));
     await open();
     const owner = partitionAt(0);
     const pending = deferred();
@@ -222,7 +226,7 @@ describe('desktop server conversations handoff surface', () => {
     const warning = vi.spyOn(console, 'warn').mockImplementation(() => {});
     try {
       const state = initialState();
-      registerSessionHandoff({ getState: () => state } as unknown as AuthService);
+      registerSessionHandoff(authFor(state));
       await open();
       const owner = partitionAt(0);
       const pending = deferred();
@@ -249,8 +253,59 @@ describe('desktop server conversations handoff surface', () => {
   });
 
   it('does not open for a signed-out account', async () => {
-    registerSessionHandoff({ getState: () => ({ status: 'signed-out' }) } as unknown as AuthService);
+    registerSessionHandoff(authFor({ status: 'signed-out' }));
     await open();
     expect(h.options).toEqual([]);
+  });
+
+  describe('signing the window in from the Desktop session', () => {
+    it('redeems a minted code with a POST navigation, keeping the code out of the URL', async () => {
+      const api = { post: vi.fn().mockResolvedValue({ code: 'one-time-code', expiresInSeconds: 60 }) };
+      registerSessionHandoff(authFor(initialState(), api));
+      await open();
+
+      expect(api.post).toHaveBeenCalledExactlyOnceWith('/api/auth/desktop-web-session');
+      expect(h.loadURL).toHaveBeenCalledExactlyOnceWith(
+        'https://app.example.test/api/auth/desktop-web-session/redeem',
+        {
+          userAgent: 'Electron B4M-Server-Conversations',
+          postData: [{ type: 'rawData', bytes: Buffer.from(JSON.stringify({ code: 'one-time-code' })) }],
+          extraHeaders: 'Content-Type: application/json',
+        }
+      );
+    });
+
+    it.each([
+      ['the mint request fails', vi.fn().mockRejectedValue(new Error('403'))],
+      ['the response has no code', vi.fn().mockResolvedValue({})],
+    ])('falls back to the plain web sign-in when %s', async (_label, post) => {
+      const warning = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+      try {
+        registerSessionHandoff(authFor(initialState(), { post }));
+        await open();
+        expect(h.loadURL).toHaveBeenCalledExactlyOnceWith('https://app.example.test/notebooks', {
+          userAgent: 'Electron B4M-Server-Conversations',
+        });
+      } finally {
+        warning.mockRestore();
+      }
+    });
+
+    it('loads nothing when the account changes while the code is being minted', async () => {
+      const state = initialState();
+      const minted = deferred();
+      const api = { post: vi.fn(() => minted.promise.then(() => ({ code: 'one-time-code' }))) };
+      registerSessionHandoff(authFor(state, api));
+      const opening = open();
+      await vi.waitFor(() => expect(api.post).toHaveBeenCalled());
+
+      state.user.id = 'another-user';
+      changed();
+      minted.resolve();
+      await opening;
+
+      expect(h.close).toHaveBeenCalledOnce();
+      expect(h.loadURL).not.toHaveBeenCalled();
+    });
   });
 });

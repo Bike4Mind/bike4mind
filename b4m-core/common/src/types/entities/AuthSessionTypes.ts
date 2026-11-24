@@ -17,7 +17,8 @@ export type AuthSessionCreatedVia =
   | 'device'
   | 'ios'
   | 'legacy-migration'
-  | 'persona-mint';
+  | 'persona-mint'
+  | 'desktop-handoff';
 
 /** Device/agent metadata captured at session creation, for the active-sessions list. */
 export interface IAuthSessionDevice {
