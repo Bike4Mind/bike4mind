@@ -275,7 +275,7 @@ describe('POST /api/skills/template/run/[slug]', () => {
     it('refuses empty input', async () => {
       const res = await call({ text: '   ', turnstileToken: 'tok' });
       expect(res.statusCode).toBe(400);
-      expect(json(res).code).toBe('input_required');
+      expect(json(res)).toMatchObject({ code: 'input_required', error: 'Paste some text or attach a file to run.' });
     });
 
     it('refuses input over the admin length cap', async () => {

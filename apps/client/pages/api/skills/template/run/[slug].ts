@@ -123,7 +123,11 @@ const handler = baseApi({ auth: false, allowedMethods: ['POST'], maxBodySize: FR
     if (!read.ok) return refuse(req, res, read.refusal);
     const file = read.file;
     if (!text && !file) {
-      return refuse(req, res, { status: 400, code: 'input_required', error: 'Paste some text to run.' });
+      return refuse(req, res, {
+        status: 400,
+        code: 'input_required',
+        error: 'Paste some text or attach a file to run.',
+      });
     }
     if (file && !(await freeRunAcceptsFiles(settings.model, req.logger))) return refuse(req, res, FILE_NOT_SUPPORTED);
 
