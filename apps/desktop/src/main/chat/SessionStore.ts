@@ -57,8 +57,7 @@ export function isValidSessionId(id: string): boolean {
 }
 
 export type AgentRenameOutcome =
-  | { ok: true; summary: ChatSessionSummary }
-  | { ok: false; reason: 'user-title' | 'missing' };
+  { ok: true; summary: ChatSessionSummary } | { ok: false; reason: 'user-title' | 'missing' };
 
 /**
  * Whether an agent may replace this session's title. Unlocked and agent-set titles are fair game.
@@ -576,14 +575,23 @@ export class SessionStore implements SessionWritesStore {
     id: string,
     rootRunId: string,
     serverRunId: string,
-    expectedScope?: string | null
+    expectedScope?: string | null,
+    organizationId: string | null = null
   ): Promise<ChatSessionSummary | null> {
     return this.mutate(
       id,
       session => {
         const policy = session.orchestrationPolicy;
-        if (policy?.rootRunId !== rootRunId || policy.serverRunId === serverRunId) return null;
-        session.orchestrationPolicy = rootPolicySchema.parse({ ...policy, serverRunId });
+        if (policy?.rootRunId !== rootRunId) return null;
+        if (policy.serverRunId === serverRunId && (policy.serverRunOrganizationId ?? null) === organizationId) {
+          return null;
+        }
+        const { serverRunOrganizationId: _previous, ...rest } = policy;
+        session.orchestrationPolicy = rootPolicySchema.parse({
+          ...rest,
+          serverRunId,
+          ...(organizationId ? { serverRunOrganizationId: organizationId } : {}),
+        });
         return true;
       },
       expectedScope
@@ -605,7 +613,7 @@ export class SessionStore implements SessionWritesStore {
       session => {
         const policy = session.orchestrationPolicy;
         if (policy?.rootRunId !== rootRunId || policy.serverRunId !== refusedRunId) return null;
-        const { serverRunId: _refused, ...rest } = policy;
+        const { serverRunId: _refused, serverRunOrganizationId: _payer, ...rest } = policy;
         session.orchestrationPolicy = rootPolicySchema.parse(rest);
         return true;
       },

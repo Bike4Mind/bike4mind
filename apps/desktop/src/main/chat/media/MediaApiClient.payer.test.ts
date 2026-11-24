@@ -1,19 +1,25 @@
 import type { AuthenticatedApiClient } from '@bike4mind/client-auth';
 import { describe, expect, it, vi } from 'vitest';
 import type { BillingPayer } from '@shared/account';
-import { MediaApiClient } from './MediaApiClient';
+import { MediaApiClient, type MediaRun } from './MediaApiClient';
 
 type Submit = (client: MediaApiClient, idempotencyKey: string) => Promise<unknown>;
 
 let keyCounter = 0;
 const freshKey = () => `key-${++keyCounter}`;
 
-function harness() {
+function harness(runPayer?: BillingPayer) {
   let payer: BillingPayer = { organization_id: null };
   const post = vi.fn().mockResolvedValue({});
   const axiosPost = vi.fn().mockResolvedValue({ data: new ArrayBuffer(0), headers: {} });
   const api = { post, getAxiosInstance: () => ({ post: axiosPost }) } as unknown as AuthenticatedApiClient;
-  const client = new MediaApiClient(api, undefined, () => payer);
+  const run: MediaRun | undefined = runPayer && {
+    current: () => ({ runId: 'run-1', role: 'root' }),
+    budgeted: false,
+    onRejected: async () => undefined,
+    payer: runPayer,
+  };
+  const client = new MediaApiClient(api, run, () => payer);
   const submitted = async (call: Submit, idempotencyKey = freshKey()) => {
     post.mockClear();
     axiosPost.mockClear();
@@ -84,6 +90,28 @@ describe('MediaApiClient payer', () => {
       const retry = await submitted(call, key);
 
       expect(retry[1]).toHaveProperty('organization_id', null);
+    }
+  );
+
+  it.each(CASES)(
+    "%s bills an organization run's payer on %s after the selection switches",
+    async (_name, _path, call) => {
+      const { submitted, pay } = harness({ organization_id: 'org-1' });
+      pay({ organization_id: null });
+
+      const sent = await submitted(call);
+      expect(sent[1]).toHaveProperty('organization_id', 'org-1');
+      expect(sent[1]).toHaveProperty('run.runId', 'run-1');
+    }
+  );
+
+  it.each(CASES)(
+    '%s states null for a Personal run on %s after an organization is selected',
+    async (_name, _path, call) => {
+      const { submitted, pay } = harness({ organization_id: null });
+      pay({ organization_id: 'org-1' });
+
+      expect((await submitted(call))[1]).toHaveProperty('organization_id', null);
     }
   );
 });

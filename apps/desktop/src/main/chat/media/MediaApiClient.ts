@@ -56,6 +56,8 @@ export interface MediaRun {
   current: () => CompletionRunAttribution | undefined;
   /** A budgeted run is never resent unattributed: that would spend outside the cap. */
   budgeted: boolean;
+  /** The payer the run was minted for. Every call this client makes for the run bills it, not the selection. */
+  payer?: BillingPayer;
   /** Runs when the server no longer knows the run, before any resend. See withRunFallback. */
   onRejected: () => Promise<void>;
 }
@@ -518,7 +520,7 @@ export class MediaApiClient {
     const keyed = path && idempotencyKey ? `${path}|${idempotencyKey}` : null;
     const remembered = keyed ? PAYER_BY_IDEMPOTENCY_KEY.get(keyed) : undefined;
     if (remembered) return remembered;
-    const payer: BillingPayer = { organization_id: (await this.getPayer()).organization_id };
+    const payer: BillingPayer = { organization_id: (this.run?.payer ?? (await this.getPayer())).organization_id };
     if (keyed) {
       PAYER_BY_IDEMPOTENCY_KEY.set(keyed, payer);
       if (PAYER_BY_IDEMPOTENCY_KEY.size > PAYER_BY_IDEMPOTENCY_KEY_LIMIT) {
