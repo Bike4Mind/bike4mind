@@ -973,6 +973,47 @@ describe('shellApproval with an unquoted loop variable inside a word', () => {
   });
 });
 
+/** A command substitution whose output is only printed names no program or path, so a read inside it is checked. */
+describe('shellApproval with a command substitution that is only printed', () => {
+  let root: string;
+  let context: { roots: string[]; signal: AbortSignal; protectedPaths: string[]; workingDirectory: string };
+
+  beforeEach(async () => {
+    root = await realpath(await mkdtemp(join(userInfo().homedir, '.b4m-subst-root-')));
+    await mkdir(join(root, 'sub'), { recursive: true });
+    await writeFile(join(root, 'sub', 'a.txt'), 'a\n', 'utf8');
+    context = { roots: [root], signal: new AbortController().signal, protectedPaths: [], workingDirectory: root };
+  });
+
+  afterEach(async () => {
+    await rm(root, { recursive: true, force: true });
+  });
+
+  const approval = (command: string) => shellApproval('bash_execute', { command, cwd: root }, context);
+
+  it.each([
+    'echo "$(grep -n a sub/a.txt)"',
+    'echo $(wc -l < sub/a.txt)',
+    'printf "%s\\n" "$(wc -l < sub/a.txt)"',
+    'N=$(grep -c a sub/a.txt); echo $N',
+  ])('runs it unasked: %s', async command => {
+    expect(runsCheckedInAuto(await approval(command))).toBe(true);
+  });
+
+  it.each([
+    ['a path operand', 'cat $(echo sub/a.txt)'],
+    ['a path built from it', 'D=$(echo sub); cat "$D/a.txt"'],
+  ])('still cannot check a substitution used as %s', async (_name, command) => {
+    expect(runsCheckedInAuto(await approval(command))).toBe(false);
+  });
+
+  it('still asks about a delete inside the substitution', async () => {
+    expect((await approval('echo $(rm -rf sub)')).reasons).toContain(
+      'Deletes files recursively or forcefully, which cannot be undone.'
+    );
+  });
+});
+
 describe('shellApproval for folders a command only reads', () => {
   let root: string;
   let outside: string;
