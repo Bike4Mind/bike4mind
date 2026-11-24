@@ -371,6 +371,7 @@ const SessionMiddle: React.FC<IProps> = ({ isFullWidth = false, sessionId, empty
           questId: isVariation || correctsQuestId ? undefined : messageData?.id,
           correctsQuestId,
           image: options?.image,
+          imageFileId: options?.imageFileId,
           queryClient,
           tools,
           projectId,

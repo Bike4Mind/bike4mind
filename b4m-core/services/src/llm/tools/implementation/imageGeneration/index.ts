@@ -59,7 +59,11 @@ import {
 } from './imageJobTool';
 
 export {
+  buildEditJobRequest,
+  buildGenerateJobRequest,
+  clampImageCount,
   isImageJobToolConfig,
+  type ImageJobRequestDraft,
   type ImageLimitRefusal,
   type ImageToolConfig,
   type ImageToolJobsResult,

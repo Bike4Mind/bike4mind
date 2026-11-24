@@ -1,7 +1,7 @@
 import { api } from '@client/app/contexts/ApiContext';
-import { createOptimisticQuest, updateOptimisticQuest } from '@client/app/utils/llm';
+import { createOptimisticQuest, createOptimisticSessionId, updateOptimisticQuest } from '@client/app/utils/llm';
 import {
-  IChatHistoryItemDocument,
+  KnowledgeType,
   OpenAIImageQuality,
   OpenAIImageSize,
   OpenAIImageStyle,
@@ -10,15 +10,24 @@ import {
   ImageModels,
   B4MLLMTools,
   GenerateImageToolCall,
-  PromptIntent,
   requiresImageInput,
+  type ChatImageJobsBody,
+  type ChatImageJobsResponse,
+  type CreateFabFileRequestInputType,
 } from '@bike4mind/common';
 import { ISessionDocument } from '@bike4mind/common';
 import { QueryClient } from '@tanstack/react-query';
 import { isAxiosError } from 'axios';
 import { toast } from 'sonner';
-import { createOptimisticSessionId } from '@client/app/utils/llm';
 import { getCachedModels } from '@client/app/hooks/data/useModelInfo';
+import {
+  copyGeneratedImageToFabFile,
+  createFabFileOnServerWithUpload,
+  deleteFileUtility,
+  getFabFileByIdFromServer,
+  moderateFabFileNow,
+} from '@client/app/utils/filesAPICalls';
+import { extractS3KeyFromUrl, isGeneratedImage } from '@client/app/components/Session/ImageContainer';
 
 export type ImageGenerationCommandArgs = {
   /** Prompt */
@@ -38,10 +47,14 @@ export type ImageGenerationCommandArgs = {
   /** tmpId set by useSendMessage during /new pre-navigation. Must be used to key
    * the optimistic placeholder so the session.created cache migration finds it. */
   optimisticSessionId?: string;
+  projectId?: string;
 } & GenerateImageToolCall;
 
 export type ImageEditCommandArgs = {
   image?: string; // Image to be edited
+  /** The FabFile behind `image`, if the chat knows it; reused as the edit source when it is the caller's own. */
+  imageFileId?: string;
+  userId?: string;
 } & ImageGenerationCommandArgs;
 
 export type AIImageSettings = {
@@ -58,6 +71,68 @@ export type AIImageSettings = {
   aspect_ratio?: string;
 };
 
+/** The saved selection fields the command receives; the server maps them onto the job request. */
+const SELECTION_FIELDS = [
+  'size',
+  'quality',
+  'style',
+  'background',
+  'safety_tolerance',
+  'prompt_upsampling',
+  'seed',
+  'output_format',
+  'width',
+  'height',
+  'aspect_ratio',
+  'editModel',
+] as const satisfies readonly (keyof GenerateImageToolCall)[];
+
+/**
+ * The chat's image selection as POST /api/image-jobs takes it. The top-level settings the send path passes win over
+ * `imageConfig` (as the legacy route read them), and `model` is the image model actually chosen for the send.
+ */
+function buildSelection(
+  settings: Partial<GenerateImageToolCall>,
+  imageConfig: GenerateImageToolCall | undefined,
+  model: GenerateImageToolCall['model']
+): GenerateImageToolCall {
+  const selection: Partial<GenerateImageToolCall> = { ...imageConfig };
+  for (const field of SELECTION_FIELDS) {
+    const value = settings[field];
+    if (value !== undefined) Object.assign(selection, { [field]: value });
+  }
+  return { ...selection, model };
+}
+
+type ImageJobsSend = (cb: () => Promise<ChatImageJobsResponse>) => Promise<unknown>;
+
+/** Updates the retried quest in place, or shows the new turn optimistically until the route answers. */
+function optimisticImageSend(params: {
+  queryClient: QueryClient;
+  questId?: string;
+  sessionId: string | undefined;
+  optimisticSessionId?: string;
+  prompt: string;
+  placeholderPrompt?: string;
+}): ImageJobsSend {
+  const { queryClient, questId, sessionId, prompt } = params;
+  // Reuse the tmpId from useSendMessage when present: generating a fresh id here
+  // would key the optimistic placeholder under an id that session.created can't
+  // migrate, leaving the assistant turn blank when chunks arrive for the realId.
+  const placeholderSessionId = sessionId || params.optimisticSessionId || createOptimisticSessionId();
+  if (questId) {
+    return cb =>
+      updateOptimisticQuest(
+        queryClient,
+        questId,
+        sessionId,
+        { replies: [], reply: undefined, prompt, timestamp: new Date(), status: undefined },
+        cb
+      );
+  }
+  return cb => createOptimisticQuest(queryClient, placeholderSessionId, params.placeholderPrompt ?? prompt, cb);
+}
+
 export async function handleImageGenerationCommand(args: ImageGenerationCommandArgs): Promise<void> {
   const {
     params,
@@ -69,41 +144,22 @@ export async function handleImageGenerationCommand(args: ImageGenerationCommandA
     promptFileIds,
     tools,
     organizationId,
-    setChatCompletion,
     imageConfig,
     optimisticSessionId,
-    ...rest
+    projectId,
+    n,
+    ...settings
   } = args as ImageGenerationCommandArgs & { imageConfig?: GenerateImageToolCall };
 
   const isPromptEnhancementEnabled = tools.includes('prompt_enhancement' as B4MLLMTools);
-
-  // Reuse the tmpId from useSendMessage when present: generating a fresh id here
-  // would key the optimistic placeholder under an id that session.created can't
-  // migrate, leaving the assistant turn blank when chunks arrive for the realId.
-  const tmpSessionId = optimisticSessionId ?? createOptimisticSessionId();
-
-  const optimisticOperation = questId
-    ? (cb: () => Promise<{ quest: IChatHistoryItemDocument; session: ISessionDocument }>) =>
-        updateOptimisticQuest(
-          queryClient,
-          questId,
-          currentSession?.id,
-          { replies: [], reply: undefined, prompt: params, timestamp: new Date(), status: undefined },
-          cb
-        )
-    : currentSession?.id || tmpSessionId
-      ? (cb: () => Promise<{ quest: IChatHistoryItemDocument; session: ISessionDocument }>) =>
-          createOptimisticQuest(
-            queryClient,
-            currentSession?.id || tmpSessionId,
-            isPromptEnhancementEnabled ? `${params}\n\n_Enhancing prompt..._ ✨` : params,
-            cb
-          )
-      : async (cb: () => Promise<{ quest: IChatHistoryItemDocument; session: ISessionDocument }>) => {
-          // For new sessions: call API first, then optimistically update cache with response
-          const result = await cb();
-          return result;
-        };
+  const send = optimisticImageSend({
+    queryClient,
+    questId,
+    sessionId: currentSession?.id,
+    optimisticSessionId,
+    prompt: params,
+    placeholderPrompt: isPromptEnhancementEnabled ? `${params}\n\n_Enhancing prompt..._ \u2728` : params,
+  });
 
   // Include message-level (paperclip) attachments, not just notebook-context workbench files,
   // so an image attached inline without the "Add as Notebook Context" toggle still feeds
@@ -114,24 +170,22 @@ export async function handleImageGenerationCommand(args: ImageGenerationCommandA
   // falling back to the model param only if imageConfig is not available
   const effectiveModel = imageConfig?.model ?? model;
 
-  const requestBody = {
-    ...rest,
+  const requestBody: ChatImageJobsBody = {
+    mode: 'generate',
     prompt: params,
     sessionId: currentSession?.id,
     questId,
-    model: effectiveModel,
-    fabFileIds,
-    tools,
+    projectId,
+    selection: buildSelection(settings, imageConfig, effectiveModel),
+    count: n,
+    promptEnhancement: isPromptEnhancementEnabled,
+    fileIds: fabFileIds,
     organizationId,
   };
 
   try {
-    await optimisticOperation(async () => {
-      const { data } = await api.post<{
-        session: ISessionDocument;
-        quest: IChatHistoryItemDocument;
-        intent?: PromptIntent;
-      }>(`/api/ai/generate-image`, requestBody);
+    await send(async () => {
+      const { data } = await api.post<ChatImageJobsResponse>('/api/image-jobs', requestBody);
 
       // Surface a one-shot hint when the user clearly wanted to continue from the prior image
       // (resolver classified intent='continuation') but their selected model can't take an image
@@ -155,7 +209,7 @@ export async function handleImageGenerationCommand(args: ImageGenerationCommandA
               ? variationCapableNames.join(', ')
               : 'GPT Image 2, Gemini Image, or Flux Kontext';
           toast.info(
-            `This model can't refine prior images — your prompt was treated as a fresh request. ` +
+            `This model can't refine prior images \u2014 your prompt was treated as a fresh request. ` +
               `Switch to ${suggestions} to edit the previous result.`,
             { duration: 8000 }
           );
@@ -210,65 +264,120 @@ function formatImageActionError(error: unknown, action: 'generate' | 'edit'): st
   return `${verbPast} failed: ${serverMessage}`;
 }
 
+/** Thrown when the image to edit cannot be turned into a clean file of the caller's; the message is user-facing. */
+class EditSourceUnavailableError extends Error {}
+
+/** The edit's source file; `created` when this send made it, so the server may delete it once the edit ends. */
+type EditSource = { fileId: string; created: boolean };
+
+/** The caller's own clean file behind the shown image, if any: the edit reads it directly instead of a copy. */
+async function ownCleanFileId(fileId: string | undefined, userId: string | undefined): Promise<string | undefined> {
+  if (!fileId || !userId) return undefined;
+  try {
+    const file = await getFabFileByIdFromServer(fileId);
+    return file.userId === userId && file.moderationStatus === 'clean' ? fileId : undefined;
+  } catch (error) {
+    console.warn('The image file could not be read; the edit uses a copy instead.', error);
+    return undefined;
+  }
+}
+
+/**
+ * An edit job reads its source from the caller's Files, scanned clean. The caller's own file behind the image is used
+ * as is; otherwise a generated-bucket image is copied server-side (as the Studio edit does) and any other image the
+ * chat shows is fetched and uploaded. A copy is scanned now, since the job refuses an input that is still pending.
+ */
+async function resolveEditSource(imageUrl: string, imageFileId?: string, userId?: string): Promise<EditSource> {
+  const ownFileId = await ownCleanFileId(imageFileId, userId);
+  if (ownFileId) return { fileId: ownFileId, created: false };
+
+  const fileName = `image_${Date.now()}.png`;
+  const generatedKey = isGeneratedImage(imageUrl) ? extractS3KeyFromUrl(imageUrl) : null;
+  const { id, created } = generatedKey
+    ? await copyGeneratedImageToFabFile(generatedKey, fileName).then(file => ({
+        id: file.id,
+        created: file.created === true,
+      }))
+    : await uploadImageFromUrl(imageUrl, fileName).then(file => ({ id: file.id, created: true }));
+  const scan = await moderateFabFileNow(id);
+  if (scan === 'blocked') {
+    // Never the caller's earlier copy of a generated image: only a file this send made.
+    if (created) await deleteFileUtility(id);
+    throw new EditSourceUnavailableError('This image cannot be edited.');
+  }
+  if (scan === 'pending') {
+    throw new EditSourceUnavailableError('The image is still being checked. Try the edit again in a moment.');
+  }
+  return { fileId: id, created };
+}
+
+async function uploadImageFromUrl(imageUrl: string, fallbackName: string) {
+  const response = await fetch(imageUrl);
+  if (!response.ok) throw new EditSourceUnavailableError('The image to edit could not be loaded.');
+  const blob = await response.blob();
+  const formData: CreateFabFileRequestInputType = {
+    type: KnowledgeType.FILE,
+    fileName: fallbackName,
+    mimeType: blob.type || 'image/png',
+    fileSize: blob.size,
+  };
+  return createFabFileOnServerWithUpload(formData, new File([blob], fallbackName, { type: formData.mimeType }));
+}
+
+/** The in-chat masked edit: `image` is the shown image's URL and the mask is the send's one attached file. */
 export async function handleImageEditCommand(args: ImageEditCommandArgs): Promise<void> {
   const {
     params,
     image,
+    imageFileId,
+    userId,
     currentSession,
     questId,
     queryClient,
-    model,
-    workBenchFiles,
     promptFileIds,
     organizationId,
-    setChatCompletion,
     imageConfig,
     optimisticSessionId,
-    ...rest
+    projectId,
+    n,
+    ...settings
   } = args as ImageEditCommandArgs & { imageConfig?: GenerateImageToolCall };
 
-  const tmpSessionId = optimisticSessionId ?? createOptimisticSessionId();
+  const send = optimisticImageSend({
+    queryClient,
+    questId,
+    sessionId: currentSession?.id,
+    optimisticSessionId,
+    prompt: params,
+  });
 
-  const optimisticOperation = questId
-    ? (cb: () => Promise<{ quest: IChatHistoryItemDocument; session: ISessionDocument }>) =>
-        updateOptimisticQuest(
-          queryClient,
-          questId,
-          currentSession?.id,
-          { replies: [], reply: undefined, prompt: params, timestamp: new Date(), status: undefined },
-          cb
-        )
-    : currentSession?.id || tmpSessionId
-      ? (cb: () => Promise<{ quest: IChatHistoryItemDocument; session: ISessionDocument }>) =>
-          createOptimisticQuest(queryClient, currentSession?.id || tmpSessionId, params, cb)
-      : async (cb: () => Promise<{ quest: IChatHistoryItemDocument; session: ISessionDocument }>) => {
-          // For new sessions: call API first, then optimistically update cache with response
-          const result = await cb();
-          return result;
-        };
-
-  const imageEditModel = imageConfig?.editModel ?? ImageModels.FLUX_PRO_FILL;
-  const fabFileIds = [...workBenchFiles.map(file => file.id), ...(promptFileIds || [])];
   try {
-    await optimisticOperation(async () => {
-      const { data } = await api.post<{ session: ISessionDocument; quest: IChatHistoryItemDocument }>(
-        `/api/ai/edit-image`,
-        {
-          ...rest,
-          prompt: params,
-          image,
-          promptFileIds,
-          sessionId: currentSession?.id,
-          model: imageEditModel,
-          fabFileIds,
-          organizationId,
-        }
-      );
+    if (!image) throw new EditSourceUnavailableError('There is no image to edit.');
+    const editSource = await resolveEditSource(image, imageFileId, userId);
+    const maskFileId = promptFileIds?.[0];
+    const requestBody: ChatImageJobsBody = {
+      mode: 'edit',
+      prompt: params,
+      sessionId: currentSession?.id,
+      questId,
+      projectId,
+      // The edit renders with the selection's edit model (FLUX Fill unless one is saved), so the generation model only
+      // needs to be a valid image model here.
+      selection: buildSelection(settings, imageConfig, imageConfig?.model ?? ImageModels.FLUX_PRO_FILL),
+      count: n,
+      editSourceFileId: editSource.fileId,
+      maskFileId,
+      // The mask (uploadEditMask) and a source copy exist only for this edit; the server deletes them once it ends.
+      temporaryFileIds: [...(maskFileId ? [maskFileId] : []), ...(editSource.created ? [editSource.fileId] : [])],
+      organizationId,
+    };
+    await send(async () => {
+      const { data } = await api.post<ChatImageJobsResponse>('/api/image-jobs', requestBody);
       return data;
     });
   } catch (error) {
     console.error('Error editing image:', error);
-    toast.error(formatImageActionError(error, 'edit'));
+    toast.error(error instanceof EditSourceUnavailableError ? error.message : formatImageActionError(error, 'edit'));
     throw error;
   }
 }

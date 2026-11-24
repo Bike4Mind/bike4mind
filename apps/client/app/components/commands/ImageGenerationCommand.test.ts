@@ -9,54 +9,172 @@ vi.mock('@client/app/utils/llm', () => ({
   createOptimisticSessionId: () => 'tmp-session',
 }));
 vi.mock('@client/app/hooks/data/useModelInfo', () => ({ getCachedModels: () => [] }));
-vi.mock('sonner', () => ({ toast: { error: vi.fn() } }));
+vi.mock('sonner', () => ({ toast: { error: vi.fn(), info: vi.fn() } }));
 vi.mock('@bike4mind/database/infra', () => ({ organizationRepository: {} }));
 vi.mock('@bike4mind/server-utils/utils/resolveActiveOrg', () => ({ resolveActiveOrg: vi.fn() }));
+const files = vi.hoisted(() => ({
+  copyGeneratedImageToFabFile: vi.fn(),
+  createFabFileOnServerWithUpload: vi.fn(),
+  deleteFileUtility: vi.fn(),
+  getFabFileByIdFromServer: vi.fn(),
+  moderateFabFileNow: vi.fn(),
+}));
+vi.mock('@client/app/utils/filesAPICalls', () => files);
+vi.mock('@client/app/components/Session/ImageContainer', () => ({
+  isGeneratedImage: (url: string) => url.includes('generatedimagesbucket'),
+  extractS3KeyFromUrl: () => 'generated/key.png',
+}));
 
+import { ChatImageJobsBodySchema } from '@bike4mind/common';
 import { assertNoStrayBillingOrgKeys } from '@bike4mind/server-utils/utils/orgAccess';
+import { toast } from 'sonner';
 import { handleImageEditCommand, handleImageGenerationCommand } from './ImageGenerationCommand';
 
-// The commands forward every arg they do not destructure (`...rest`) to the public image routes,
-// which 422 any billing-shaped key. These stand in for the LLM settings the chat send path adds.
+// The LLM settings the chat send path adds ride along on the args; only the image fields may reach the route.
 const baseArgs = (extra: Record<string, unknown> = {}) =>
   ({
     params: 'a lighthouse',
     currentSession: { id: 'sess-1' },
-    workBenchFiles: [],
+    workBenchFiles: [{ id: 'f'.repeat(24) }],
+    promptFileIds: ['b'.repeat(24)],
     queryClient: {} as QueryClient,
-    model: 'gpt-image-1',
+    model: 'gpt-image-1.5',
     tools: [],
     organizationId: 'org-1',
     temperature: 0.7,
     top_p: 1,
+    n: 2,
     max_tokens: 1024,
     stream: true,
     thinking: { enabled: false },
     size: '1024x1024',
     quality: 'high',
+    safety_tolerance: 1,
+    imageConfig: { model: 'flux-pro-1.1', editModel: 'flux-pro-1.0-fill', size: '512x512', style: 'vivid' },
     ...extra,
   }) as never;
 
 const postedBody = () => mockPost.mock.calls[0][1] as Record<string, unknown>;
+const GENERATED_URL = 'https://generatedimagesbucket.s3.amazonaws.com/generated/key.png?sig=1';
 
-describe.each([
-  ['handleImageGenerationCommand', handleImageGenerationCommand, '/api/ai/generate-image'],
-  ['handleImageEditCommand', handleImageEditCommand, '/api/ai/edit-image'],
-])('%s request body vs the stray billing-key guard', (_name, handler, url) => {
-  beforeEach(() => {
-    mockPost.mockReset();
-    mockPost.mockResolvedValue({ data: { session: {}, quest: {} } });
-  });
+beforeEach(() => {
+  vi.clearAllMocks();
+  mockPost.mockResolvedValue({ data: { session: {}, quest: {}, jobs: [], groupId: 'g' } });
+  files.copyGeneratedImageToFabFile.mockResolvedValue({ id: 'a'.repeat(24), created: true });
+  files.moderateFabFileNow.mockResolvedValue('clean');
+});
 
-  it('posts a body the guard accepts', async () => {
-    await handler(baseArgs());
-    expect(mockPost.mock.calls[0][0]).toBe(url);
-    expect(postedBody()).toHaveProperty('organizationId', 'org-1');
+describe('handleImageGenerationCommand', () => {
+  it('posts a chat image job body the route schema and the billing-key guard accept', async () => {
+    await handleImageGenerationCommand(baseArgs({ colorGrade: 'warm' }));
+    expect(mockPost.mock.calls[0][0]).toBe('/api/image-jobs');
+    expect(ChatImageJobsBodySchema.safeParse(postedBody()).success).toBe(true);
     expect(() => assertNoStrayBillingOrgKeys(postedBody())).not.toThrow();
+    expect(postedBody()).toEqual({
+      mode: 'generate',
+      prompt: 'a lighthouse',
+      sessionId: 'sess-1',
+      selection: {
+        model: 'flux-pro-1.1',
+        editModel: 'flux-pro-1.0-fill',
+        size: '1024x1024',
+        quality: 'high',
+        style: 'vivid',
+        safety_tolerance: 1,
+      },
+      count: 2,
+      promptEnhancement: false,
+      fileIds: ['f'.repeat(24), 'b'.repeat(24)],
+      organizationId: 'org-1',
+    });
   });
 
-  it('a new command arg containing "org" (colorGrade) would be rejected - the guard is live over this body', async () => {
-    await handler(baseArgs({ colorGrade: 'warm' }));
-    expect(() => assertNoStrayBillingOrgKeys(postedBody())).toThrow(/colorGrade/);
+  it('asks for prompt enhancement when the tool is on', async () => {
+    await handleImageGenerationCommand(baseArgs({ tools: ['prompt_enhancement'] }));
+    expect(postedBody().promptEnhancement).toBe(true);
+  });
+
+  it('toasts the server message and rethrows on a refusal', async () => {
+    const error = Object.assign(new Error('Request failed'), {
+      isAxiosError: true,
+      response: { status: 400, data: { error: 'invalid_request', message: 'Bad size' } },
+    });
+    mockPost.mockRejectedValue(error);
+    await expect(handleImageGenerationCommand(baseArgs())).rejects.toBe(error);
+    expect(toast.error).toHaveBeenCalledWith('Invalid request: Bad size');
+  });
+});
+
+describe('handleImageEditCommand', () => {
+  it('copies a generated image into Files, scans it, and posts a masked edit', async () => {
+    await handleImageEditCommand(baseArgs({ image: GENERATED_URL }));
+    expect(files.copyGeneratedImageToFabFile).toHaveBeenCalledWith('generated/key.png', expect.any(String));
+    expect(files.moderateFabFileNow).toHaveBeenCalledWith('a'.repeat(24));
+    expect(mockPost.mock.calls[0][0]).toBe('/api/image-jobs');
+    expect(ChatImageJobsBodySchema.safeParse(postedBody()).success).toBe(true);
+    expect(() => assertNoStrayBillingOrgKeys(postedBody())).not.toThrow();
+    expect(postedBody()).toMatchObject({
+      mode: 'edit',
+      prompt: 'a lighthouse',
+      editSourceFileId: 'a'.repeat(24),
+      maskFileId: 'b'.repeat(24),
+      temporaryFileIds: ['b'.repeat(24), 'a'.repeat(24)],
+      selection: { model: 'flux-pro-1.1', editModel: 'flux-pro-1.0-fill' },
+    });
+  });
+
+  it('keeps the caller earlier copy of a generated image: only the mask is temporary', async () => {
+    files.copyGeneratedImageToFabFile.mockResolvedValue({ id: 'a'.repeat(24), created: false });
+    await handleImageEditCommand(baseArgs({ image: GENERATED_URL }));
+    expect(postedBody()).toMatchObject({ editSourceFileId: 'a'.repeat(24), temporaryFileIds: ['b'.repeat(24)] });
+  });
+
+  it('edits the caller own clean file behind the image directly, without a copy', async () => {
+    const ownId = 'c'.repeat(24);
+    files.getFabFileByIdFromServer.mockResolvedValue({ id: ownId, userId: 'user-1', moderationStatus: 'clean' });
+
+    await handleImageEditCommand(
+      baseArgs({ image: 'https://files.example.com/upload.png', imageFileId: ownId, userId: 'user-1' })
+    );
+
+    expect(files.getFabFileByIdFromServer).toHaveBeenCalledWith(ownId);
+    expect(files.createFabFileOnServerWithUpload).not.toHaveBeenCalled();
+    expect(files.moderateFabFileNow).not.toHaveBeenCalled();
+    expect(postedBody()).toMatchObject({ editSourceFileId: ownId, temporaryFileIds: ['b'.repeat(24)] });
+  });
+
+  it.each([
+    ['another user', { userId: 'user-2', moderationStatus: 'clean' }],
+    ['not scanned clean', { userId: 'user-1', moderationStatus: 'pending' }],
+  ])('copies the image when the file behind it is %s', async (_label, file) => {
+    files.getFabFileByIdFromServer.mockResolvedValue({ id: 'c'.repeat(24), ...file });
+
+    await handleImageEditCommand(baseArgs({ image: GENERATED_URL, imageFileId: 'c'.repeat(24), userId: 'user-1' }));
+
+    expect(files.copyGeneratedImageToFabFile).toHaveBeenCalled();
+    expect(postedBody()).toMatchObject({ editSourceFileId: 'a'.repeat(24) });
+  });
+
+  it('does not post when the copied source is blocked, and removes the copy', async () => {
+    files.moderateFabFileNow.mockResolvedValue('blocked');
+    await expect(handleImageEditCommand(baseArgs({ image: GENERATED_URL }))).rejects.toThrow();
+    expect(files.deleteFileUtility).toHaveBeenCalledWith('a'.repeat(24));
+    expect(mockPost).not.toHaveBeenCalled();
+    expect(toast.error).toHaveBeenCalledWith('This image cannot be edited.');
+  });
+
+  it('does not delete the caller earlier copy when it scans blocked', async () => {
+    files.copyGeneratedImageToFabFile.mockResolvedValue({ id: 'a'.repeat(24), created: false });
+    files.moderateFabFileNow.mockResolvedValue('blocked');
+    await expect(handleImageEditCommand(baseArgs({ image: GENERATED_URL }))).rejects.toThrow();
+    expect(files.deleteFileUtility).not.toHaveBeenCalled();
+    expect(mockPost).not.toHaveBeenCalled();
+  });
+
+  it('does not post while the copied source is still being scanned', async () => {
+    files.moderateFabFileNow.mockResolvedValue('pending');
+    await expect(handleImageEditCommand(baseArgs({ image: GENERATED_URL }))).rejects.toThrow();
+    expect(mockPost).not.toHaveBeenCalled();
+    expect(files.deleteFileUtility).not.toHaveBeenCalled();
   });
 });
