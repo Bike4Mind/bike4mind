@@ -97,3 +97,24 @@ describe('CreateInviteModal grant package', () => {
     expect(onSubmit.mock.calls[0][0]).not.toHaveProperty('grantPackageId');
   });
 });
+
+describe('CreateInviteModal closing', () => {
+  beforeEach(() => {
+    mocks.fetchGrantPackages.mockResolvedValue({ data: [], meta: { total: 0, page: 1, limit: 100, totalPages: 0 } });
+    useRegistrationInvitesStore.getState().setOpenCreate(true);
+  });
+
+  it('closes on Escape when idle', () => {
+    render(<CreateInviteModal onSubmit={vi.fn()} isLoading={false} />, { wrapper: Wrapper });
+    fireEvent.keyDown(screen.getByTestId('create-invite-modal'), { key: 'Escape' });
+    expect(useRegistrationInvitesStore.getState().openCreate).toBe(false);
+  });
+
+  it('stays open while the create request is in flight', () => {
+    render(<CreateInviteModal onSubmit={vi.fn()} isLoading />, { wrapper: Wrapper });
+    expect(screen.getByTestId('create-invite-modal-close-btn')).toBeDisabled();
+    expect(screen.getByTestId('create-invite-cancel-btn')).toBeDisabled();
+    fireEvent.keyDown(screen.getByTestId('create-invite-modal'), { key: 'Escape' });
+    expect(useRegistrationInvitesStore.getState().openCreate).toBe(true);
+  });
+});

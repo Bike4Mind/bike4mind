@@ -140,7 +140,7 @@ export default function CreateSlackAppModal({ open, onClose, onSuccess }: Create
         open={open}
         onClose={handleClose}
         closeDisabled={loading}
-        title="Create Slack App from Manifest"
+        title="Create Slack app from manifest"
         width={1000}
         data-testid="create-slack-app-modal"
       >
@@ -321,7 +321,7 @@ export default function CreateSlackAppModal({ open, onClose, onSuccess }: Create
       <AdminDialog
         open={showWorkflowWarning}
         onClose={() => setShowWorkflowWarning(false)}
-        title="Disable Workflow Steps?"
+        title="Disable workflow steps?"
         role="alertdialog"
         width={520}
         data-testid="workflow-steps-warning-modal"

@@ -60,13 +60,13 @@ export default function EmailPreviewModal({ open, onClose, attemptId }: EmailPre
   });
 
   return (
-    <AdminDialog open={open} onClose={onClose} title="Email Preview" width={1000} data-testid="email-preview-modal">
+    <AdminDialog open={open} onClose={onClose} title="Email preview" width={1000} data-testid="email-preview-modal">
       {isLoading ? (
         <Box sx={{ display: 'flex', justifyContent: 'center', p: 4 }}>
           <CircularProgress />
         </Box>
       ) : attempt ? (
-        <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2, overflow: 'auto', flex: 1, minHeight: 0 }}>
+        <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
           {/* Email Details */}
           <Sheet variant="soft" sx={{ p: 2, borderRadius: 'md' }}>
             <Typography level="title-sm" sx={{ mb: 1 }}>
@@ -125,7 +125,7 @@ export default function EmailPreviewModal({ open, onClose, attemptId }: EmailPre
 
           {/* Email Content */}
           {attempt.renderedHtml && (
-            <Box sx={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }}>
+            <Box sx={{ display: 'flex', flexDirection: 'column' }}>
               <Typography level="title-sm" sx={{ mb: 1 }}>
                 Email Content
               </Typography>

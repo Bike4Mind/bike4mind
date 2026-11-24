@@ -138,8 +138,9 @@ const CreateUserModal: React.FC = () => {
         if (!createUserMutation.isPending) handleClose();
       }}
       closeDisabled={createUserMutation.isPending}
-      title="Create New User"
+      title="Create new user"
       width={700}
+      anchorTop
       data-testid="create-user-modal"
     >
       {createUserMutation.isError && !isStepUpCancelled(createUserMutation.error) && (

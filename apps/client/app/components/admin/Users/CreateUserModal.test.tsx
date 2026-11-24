@@ -67,7 +67,7 @@ describe('CreateUserModal - dismissal', () => {
         </QueryClientProvider>
       </CssVarsProvider>
     );
-    expect(screen.getByRole('dialog', { name: 'Create New User' })).toBeTruthy();
+    expect(screen.getByRole('dialog', { name: 'Create new user' })).toBeTruthy();
     fireEvent.submit(screen.getByTestId('create-user-submit-btn').closest('form')!);
     await waitFor(() => expect(screen.getByTestId('create-user-modal-close-btn')).toHaveProperty('disabled', true));
     fireEvent.keyDown(screen.getByTestId('create-user-modal'), { key: 'Escape' });

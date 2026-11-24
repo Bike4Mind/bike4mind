@@ -23,7 +23,7 @@ const ComplianceModal = () => {
     <AdminDialog
       open={!!userId}
       onClose={() => setUserId(null)}
-      title="User Compliance"
+      title="User compliance"
       width={720}
       data-testid="compliance-modal"
     >

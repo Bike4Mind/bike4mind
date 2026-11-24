@@ -40,7 +40,33 @@ describe('AdminDialog', () => {
     const onClose = renderDialog();
     fireEvent.click(screen.getByTestId('test-dialog-close-btn'));
     fireEvent.keyDown(screen.getByTestId('test-dialog'), { key: 'Escape' });
-    expect(onClose.mock.calls).toEqual([['closeClick'], ['escapeKeyDown']]);
+    const backdrop = document.querySelector('.MuiModal-backdrop');
+    expect(backdrop).not.toBeNull();
+    fireEvent.click(backdrop as Element);
+    expect(onClose.mock.calls).toEqual([['closeClick'], ['escapeKeyDown'], ['backdropClick']]);
+  });
+
+  it('pins the dialog to the top on touch devices only when anchorTop is set', () => {
+    const coarseRuleFor = (el: HTMLElement) => {
+      const css = Array.from(document.styleSheets)
+        .flatMap(sheet => Array.from(sheet.cssRules))
+        .map(rule => rule.cssText)
+        .join('\n');
+      return Array.from(el.classList).some(cls =>
+        new RegExp(`@media \\(pointer: coarse\\)\\s*\\{\\s*\\.${cls}\\s*\\{[^}]*top: 5%`).test(css)
+      );
+    };
+    const { unmount } = render(
+      <CssVarsProvider theme={theme}>
+        <AdminDialog title="Plain" onClose={vi.fn()} data-testid="plain-dialog">
+          <p>Body</p>
+        </AdminDialog>
+      </CssVarsProvider>
+    );
+    expect(coarseRuleFor(screen.getByTestId('plain-dialog'))).toBe(false);
+    unmount();
+    renderDialog({ anchorTop: true });
+    expect(coarseRuleFor(screen.getByTestId('test-dialog'))).toBe(true);
   });
 
   it('disables only the close button when closeDisabled is set', () => {

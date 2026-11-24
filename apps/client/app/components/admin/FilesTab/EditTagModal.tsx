@@ -102,7 +102,7 @@ const EditTagModal = () => {
     <AdminDialog
       open={!!targetFile}
       onClose={handleModalClose}
-      title="Report Settings"
+      title="Report settings"
       width={600}
       data-testid="edit-tag-modal"
     >

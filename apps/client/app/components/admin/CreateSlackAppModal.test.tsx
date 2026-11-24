@@ -27,7 +27,7 @@ describe('CreateSlackAppModal', () => {
 
   it('renders in the admin dialog frame and closes on Escape when idle', () => {
     const onClose = renderModal();
-    expect(screen.getByRole('dialog', { name: 'Create Slack App from Manifest' })).toBeTruthy();
+    expect(screen.getByRole('dialog', { name: 'Create Slack app from manifest' })).toBeTruthy();
     fireEvent.keyDown(screen.getByTestId('create-slack-app-modal'), { key: 'Escape' });
     expect(onClose).toHaveBeenCalledTimes(1);
   });

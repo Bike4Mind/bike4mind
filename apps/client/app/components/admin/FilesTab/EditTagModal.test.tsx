@@ -34,7 +34,7 @@ describe('EditTagModal', () => {
 
   it('ignores a backdrop click but closes on Escape', () => {
     renderModal();
-    expect(screen.getByRole('dialog', { name: 'Report Settings' })).toBeTruthy();
+    expect(screen.getByRole('dialog', { name: 'Report settings' })).toBeTruthy();
     // Joy's backdrop has no slot for a test id; MuiModal-backdrop is its stable utility class.
     fireEvent.click(document.querySelector('.MuiModal-backdrop') as Element);
     expect(useEditAppFileTagModal.getState().targetFile).toBe(file);

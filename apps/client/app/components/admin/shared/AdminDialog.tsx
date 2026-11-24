@@ -15,6 +15,8 @@ export type AdminDialogProps = {
   width?: number;
   /** `alertdialog` for a confirm that interrupts, such as a delete. */
   role?: 'dialog' | 'alertdialog';
+  /** Pins the dialog near the top on touch devices, so a form does not jump when the virtual keyboard opens. */
+  anchorTop?: boolean;
   /** Also derives `<id>-close-btn`. */
   'data-testid': string;
 };
@@ -31,6 +33,7 @@ export function AdminDialog({
   children,
   width = 440,
   role = 'dialog',
+  anchorTop = false,
   'data-testid': testId,
 }: AdminDialogProps) {
   const titleId = useId();
@@ -46,6 +49,7 @@ export function AdminDialog({
           overflowY: 'auto',
           // The dialog scrolls as a whole; a nested scroll box in DialogContent clips focus rings.
           [`& .${dialogContentClasses.root}`]: { overflow: 'visible' },
+          ...(anchorTop && { '@media (pointer: coarse)': { top: '5%', transform: 'translateX(-50%)' } }),
         }}
       >
         <ModalClose disabled={closeDisabled} data-testid={`${testId}-close-btn`} />

@@ -147,8 +147,11 @@ export const CreateInviteModal: React.FC<CreateInviteModalProps> = ({ onSubmit, 
   return (
     <AdminDialog
       open={openCreate}
-      onClose={handleClose}
-      title="Create Registration Invites"
+      onClose={() => {
+        if (!isLoading) handleClose();
+      }}
+      closeDisabled={isLoading}
+      title="Create registration invites"
       width={460}
       data-testid="create-invite-modal"
     >
@@ -367,7 +370,13 @@ export const CreateInviteModal: React.FC<CreateInviteModalProps> = ({ onSubmit, 
             </Grid>
           </Box>
           <AdminDialogFooter>
-            <Button variant="plain" color="neutral" onClick={handleClose} data-testid="create-invite-cancel-btn">
+            <Button
+              variant="plain"
+              color="neutral"
+              onClick={handleClose}
+              disabled={isLoading}
+              data-testid="create-invite-cancel-btn"
+            >
               Cancel
             </Button>
             <Button data-testid="create-invite-submit-btn" loading={isLoading} type="submit">

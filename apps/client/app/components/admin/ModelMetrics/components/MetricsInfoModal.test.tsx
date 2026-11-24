@@ -15,7 +15,7 @@ describe('MetricsInfoModal', () => {
         <MetricsInfoModal open onClose={onClose} hasStreamingData={false} />
       </CssVarsProvider>
     );
-    expect(screen.getByRole('dialog', { name: 'Performance Metrics Explained' })).toBeTruthy();
+    expect(screen.getByRole('dialog', { name: 'Performance metrics explained' })).toBeTruthy();
     fireEvent.keyDown(screen.getByTestId('metrics-info-modal'), { key: 'Escape' });
     fireEvent.click(screen.getByTestId('metrics-info-modal-close-btn'));
     expect(onClose).toHaveBeenCalledTimes(2);

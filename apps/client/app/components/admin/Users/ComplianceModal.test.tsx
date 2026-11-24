@@ -43,7 +43,7 @@ describe('ComplianceModal', () => {
   it('renders in the admin dialog frame and closes on Escape', () => {
     mockData.mockReturnValue({ data: NEVER_ACCEPTED, isLoading: false, isError: false, error: null, refetch: vi.fn() });
     render(<ComplianceModal />, { wrapper: TestWrapper });
-    expect(screen.getByRole('dialog', { name: 'User Compliance' })).toBeTruthy();
+    expect(screen.getByRole('dialog', { name: 'User compliance' })).toBeTruthy();
     fireEvent.keyDown(screen.getByTestId('compliance-modal'), { key: 'Escape' });
     expect(useComplianceModal.getState().userId).toBeNull();
   });

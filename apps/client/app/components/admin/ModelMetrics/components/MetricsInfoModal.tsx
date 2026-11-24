@@ -13,7 +13,7 @@ export const MetricsInfoModal: React.FC<MetricsInfoModalProps> = ({ open, onClos
     <AdminDialog
       open={open}
       onClose={onClose}
-      title="Performance Metrics Explained"
+      title="Performance metrics explained"
       width={800}
       data-testid="metrics-info-modal"
     >
