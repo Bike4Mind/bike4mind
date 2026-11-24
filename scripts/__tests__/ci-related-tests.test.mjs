@@ -108,6 +108,18 @@ describe('related discovery', () => {
     expect(await runRelated({ plan: null, script: 'test', shard: '--shard=2/3', root, run })).toBe(7);
     expect(run.mock.calls[0].slice(0, 2)).toEqual(['pnpm', ['--filter', '@bike4mind/client', 'test', '--shard=2/3']]);
   });
+  it('pins NODE_ENV to test for the fallback when the caller left it unset', async () => {
+    const previous = process.env.NODE_ENV;
+    delete process.env.NODE_ENV;
+    try {
+      const run = vi.fn().mockReturnValue({ status: 0 });
+      await runRelated({ plan: null, script: 'test', root, run });
+      expect(run.mock.calls[0][2].env.NODE_ENV).toBe('test');
+    } finally {
+      if (previous === undefined) delete process.env.NODE_ENV;
+      else process.env.NODE_ENV = previous;
+    }
+  });
   it('rejects executable shard strings before invoking a command', async () => {
     await expect(runRelated({ script: 'test', shard: '--shard=1/3;echo bad' })).rejects.toThrow('invalid shard');
   });
