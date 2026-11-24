@@ -99,6 +99,8 @@ export function formatDisplayDate(date: Date | string | null | undefined): strin
 
 export const todayUtc = (): string => new Date().toISOString().slice(0, 10);
 
+export const yesterdayUtc = (): string => new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+
 /** Pattern for display dates from formatDisplayDate (e.g., "February 7, 2026") */
 export const DISPLAY_DATE_REGEX =
   /^(January|February|March|April|May|June|July|August|September|October|November|December) \d{1,2}, \d{4}$/;

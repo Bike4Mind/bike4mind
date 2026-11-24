@@ -2,7 +2,7 @@ import { Button, Stack, Typography } from '@mui/joy';
 import { useQuery } from '@tanstack/react-query';
 import { api } from '@client/app/contexts/ApiContext';
 import { OptionalDateInput } from '@client/app/components/common/OptionalDateInput';
-import { todayUtc } from '@client/app/utils/dateUtils';
+import { yesterdayUtc } from '@client/app/utils/dateUtils';
 import {
   ADOPTION_CLIENTS,
   adoptionQueryParams,
@@ -93,7 +93,8 @@ export function AdoptionView() {
           emptyLabel="Through yesterday"
           setLabel="Set last day"
           clearLabel="Use yesterday as the last day"
-          initialDate={todayUtc}
+          initialDate={yesterdayUtc}
+          max={yesterdayUtc()}
           aria-label="Last complete UTC day (blank means yesterday)"
           testId="adoption-end"
         />

@@ -33,11 +33,17 @@ describe('EmailActivityHistory date bounds', () => {
   });
 
   it('starts with the last 30 days set and sends both bounds', () => {
-    renderHistory();
-    expect(screen.getByTestId('email-activity-start-date')).toHaveValue(String(mocks.lastParams?.startDate));
-    expect(screen.getByTestId('email-activity-end-date')).toHaveValue(todayUtc());
-    expect(mocks.lastParams).toMatchObject({ endDate: todayUtc() });
-    expect(mocks.lastParams?.startDate).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+    // Midday UTC keeps the local day equal to the UTC day in every zone the suite runs in.
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-06-15T12:00:00Z'));
+    try {
+      renderHistory();
+      expect(screen.getByTestId('email-activity-start-date')).toHaveValue('2026-05-16');
+      expect(screen.getByTestId('email-activity-end-date')).toHaveValue('2026-06-15');
+      expect(mocks.lastParams).toMatchObject({ startDate: '2026-05-16', endDate: '2026-06-15' });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('shows the empty label and omits a bound once it is cleared, then sends it again when set', () => {

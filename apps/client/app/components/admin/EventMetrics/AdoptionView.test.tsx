@@ -11,7 +11,7 @@ import { fireEvent, render, screen, waitFor, within } from '@testing-library/rea
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { getThemeConfig } from '@client/app/utils/themes';
 import { ADOPTION_FEATURES, ADOPTION_LABELS, type FeatureAdoption } from '@client/app/utils/featureAdoption';
-import { todayUtc } from '@client/app/utils/dateUtils';
+import { yesterdayUtc } from '@client/app/utils/dateUtils';
 import { parseAdminSearch } from '../adminTabParams';
 const mocks = vi.hoisted(() => ({ get: vi.fn() }));
 vi.mock('@client/app/contexts/ApiContext', () => ({ api: { get: mocks.get } }));
@@ -131,7 +131,8 @@ describe('feature adoption view', () => {
     expect(screen.queryByTestId('adoption-end')).not.toBeInTheDocument();
     expect(mocks.get).toHaveBeenCalledWith('/api/admin/analytics/feature-adoption?accounts=external&client=all&days=7');
     fireEvent.click(screen.getByTestId('adoption-end-set-btn'));
-    await waitFor(() => expect(router.state.location.search.adoptionEnd).toBe(todayUtc()));
+    await waitFor(() => expect(router.state.location.search.adoptionEnd).toBe(yesterdayUtc()));
+    expect(screen.getByTestId('adoption-end')).toHaveAttribute('max', yesterdayUtc());
     fireEvent.click(screen.getByTestId('adoption-end-clear-btn'));
     await waitFor(() => expect(router.state.location.search.adoptionEnd).toBeUndefined());
   });
