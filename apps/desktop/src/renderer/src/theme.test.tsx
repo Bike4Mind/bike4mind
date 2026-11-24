@@ -79,11 +79,9 @@ describe('the desktop theme', () => {
     }
   });
 
+  // The popup fill applies only to neutral soft: one row per condition it checks.
   it.each([
     ['primary', 'soft'],
-    ['danger', 'soft'],
-    ['success', 'soft'],
-    ['warning', 'soft'],
     ['neutral', 'solid'],
   ] as const)('preserves the %s %s tooltip fill', async (color, variant) => {
     await act(async () =>

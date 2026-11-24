@@ -31,13 +31,19 @@ const segmentStyles = {
   cursor: 'pointer',
   textDecoration: 'none',
   transition: 'background-color 120ms ease, color 120ms ease',
-  '&:hover': { color: studioColor('text') },
+  '&:hover:not(:disabled)': { color: studioColor('text') },
   '&:focus-visible': STUDIO_FOCUS_VISIBLE,
   '&[data-selected="true"]': {
     backgroundColor: studioColor('selected'),
     borderColor: studioColor('border-strong'),
     color: studioColor('text'),
   },
+  '&[data-invalid="true"]': { color: studioColor('danger') },
+  '&[data-invalid="true"][data-selected="true"]': {
+    backgroundColor: studioColor('danger-soft'),
+    borderColor: studioColor('danger-border'),
+  },
+  '&:disabled': { opacity: 0.5, cursor: 'not-allowed' },
   '@media (prefers-reduced-motion: reduce)': { transition: 'none' },
 } as const;
 
@@ -52,6 +58,8 @@ export type StudioSegmentOption<Value extends string> = {
   panelId?: string;
   /** `nav` mode: render the segment as a link to this route, so open-in-new-tab works. */
   link?: LinkComponentProps<typeof SegmentLink>;
+  /** A kept value the current model does not take: drawn in the danger color and marked `data-invalid`. */
+  invalid?: boolean;
 };
 
 export type StudioNavOption<Value extends string> = StudioSegmentOption<Value> &
@@ -65,6 +73,8 @@ type StudioSegmentedControlProps<Value extends string> = {
   value: Value;
   onChange?: (value: Value) => void;
   'aria-label': string;
+  /** Radio and tab segments only; a nav of links cannot be disabled. */
+  disabled?: boolean;
   testId?: string;
 } & (
   | { semantics?: 'tabs' | 'radio'; options: readonly StudioSegmentOption<Value>[] }
@@ -89,6 +99,7 @@ const StudioSegmentedControl = <Value extends string>({
   onChange,
   'aria-label': ariaLabel,
   semantics = 'radio',
+  disabled = false,
   testId = 'studio-segmented-control',
 }: StudioSegmentedControlProps<Value>) => {
   const segmentRefs = useRef<(HTMLElement | null)[]>([]);
@@ -112,7 +123,7 @@ const StudioSegmentedControl = <Value extends string>({
   };
 
   const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
-    if (isNav) return;
+    if (isNav || disabled) return;
     const next = targetIndex(event.key);
     if (next === null) return;
     event.preventDefault();
@@ -158,7 +169,9 @@ const StudioSegmentedControl = <Value extends string>({
             aria-controls={isTabs ? option.panelId : undefined}
             aria-checked={segmentRole === 'radio' ? isSelected : undefined}
             tabIndex={isSelected ? 0 : -1}
+            disabled={disabled}
             data-selected={isSelected}
+            data-invalid={option.invalid === true}
             onClick={() => {
               if (!isSelected) onChange?.(option.value);
             }}

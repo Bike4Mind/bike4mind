@@ -133,7 +133,10 @@ describe('AdminSystemHealthTab', () => {
     respond({ [HEALTH_URL]: () => Promise.resolve({ data: { ...HEALTH, email: sesEmail } }) });
     renderTab();
 
-    expect(await screen.findByTestId('system-health-email-secret-MAIL_FROM')).toBeInTheDocument();
+    const sender = await screen.findByTestId('system-health-email-secret-MAIL_FROM');
+    expect(sender).toHaveTextContent('Sender address');
+    expect(sender).toHaveTextContent('MAIL_FROM: the address system emails are sent from');
+    expect(screen.getByTestId('system-health-email-delivery')).toHaveTextContent('Sent through Amazon SES');
     expect(screen.queryByTestId('system-health-email-secret-MAIL_HOST')).not.toBeInTheDocument();
     expect(screen.getByTestId('system-health-email-secret-hint-MAIL_FROM')).toHaveTextContent(
       'sst secret set MAIL_FROM'
@@ -192,6 +195,7 @@ describe('AdminSystemHealthTab', () => {
     respond({ [HEALTH_URL]: () => Promise.resolve({ data: { ...HEALTH, email: noAuthEmail } }) });
     renderTab();
 
+    expect(await screen.findByTestId('system-health-email-delivery')).toHaveTextContent('Sent through SMTP server');
     for (const name of noAuthEmail.optionalSecrets) {
       const row = await screen.findByTestId(`system-health-email-secret-${name}`);
       expect(row).toHaveTextContent('Optional');

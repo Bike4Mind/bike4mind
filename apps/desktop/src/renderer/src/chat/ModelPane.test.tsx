@@ -142,6 +142,10 @@ window.matchMedia ??= ((query: string) => ({
   dispatchEvent: () => false,
 })) as typeof window.matchMedia;
 
+// Joy's popups (menus, selects, tooltips, modals) read every ancestor's computed style on each update,
+// and jsdom resolves that against every emotion sheet with no layout to find; the inline style will do.
+window.getComputedStyle = ((element: Element) => (element as HTMLElement).style) as typeof getComputedStyle;
+
 globalThis.ResizeObserver ??= class {
   observe() {}
   unobserve() {}
@@ -248,22 +252,34 @@ function render(
 const byTestId = (id: string) => document.body.querySelector<HTMLElement>(`[data-testid="${id}"]`);
 
 describe('ModelPane', () => {
-  it('offers example prompts that fill the composer when no model is open', () => {
+  it('offers example prompts when no model is open, and says why a picked file could not be opened', async () => {
     const onExamplePrompt = vi.fn();
-    render(engine(), { onExamplePrompt });
+    const model = engine({
+      openFile: vi.fn(async () => {
+        throw new Error("Error invoking remote method 'model:open-dialog': Error: Not a model file: /a/b.js.");
+      }),
+    });
+    render(model, { onExamplePrompt });
     expect(byTestId('model-pane-empty')).not.toBeNull();
     expect(byTestId('model-pane-viewport')).toBeNull();
     act(() => byTestId('model-pane-example-0')?.click());
     expect(onExamplePrompt).toHaveBeenCalledWith(MODEL_EXAMPLE_PROMPTS[0]);
+
+    await act(async () => byTestId('model-pane-open-empty-btn')?.click());
+    expect(byTestId('model-pane-note')?.textContent).toBe('Not a model file: /a/b.js.');
   });
 
-  it('shows the file, its size and a slider per param once built', () => {
+  it('shows the file, its size and a slider per param once built, and which params were not written back', () => {
     render(engine(BUILT));
     expect(byTestId('model-pane-title')?.textContent).toBe('chest.model.js');
     expect(byTestId('model-pane-status')?.textContent).toBe('Ready');
     expect(byTestId('model-pane-size')?.textContent).toContain('60 x 40 x 30 mm');
     expect(byTestId('model-pane-param-width')).not.toBeNull();
     expect(byTestId('model-pane-export-btn')?.hasAttribute('disabled')).toBe(false);
+    expect(byTestId('model-pane-joints'), 'no joints section for a model without joints').toBeNull();
+
+    render(engine({ ...BUILT, unsaved: ['width'] }));
+    expect(byTestId('model-pane-unsaved')?.textContent).toContain('width');
   });
 
   it('announces each build state in a polite live region that stays mounted', () => {
@@ -278,57 +294,34 @@ describe('ModelPane', () => {
     expect(announcer?.textContent).toBe('Model build failed at line 7: width is not defined');
   });
 
-  it('reads a timeout, which has no line number, as a plain failure with its reason', () => {
-    const message = 'Build stopped after 5 s without finishing.';
-    render(engine({ ...BUILT, status: 'error', error: { message } }));
-    expect(byTestId('model-pane-announcer')?.textContent).toBe(`Model build failed: ${message}`);
-    expect(byTestId('model-pane-error')?.textContent).toBe(message);
-  });
-
-  it('keeps the last good model dimmed under the error', () => {
+  it('keeps the last good model dimmed under the error, and reads a timeout as a plain failure', () => {
     render(engine({ ...BUILT, status: 'error', error: { message: 'width is not defined', line: 7 } }));
     expect(byTestId('model-pane-error')?.textContent).toBe('Line 7: width is not defined');
     expect(byTestId('model-pane-viewport')?.dataset.dimmed).toBe('true');
     expect(byTestId('model-pane-export-btn')?.hasAttribute('disabled')).toBe(false);
     // A clip of the dimmed stale model would pass for the broken one.
     expect(byTestId('model-pane-record-btn')?.hasAttribute('disabled')).toBe(true);
+
+    // A timeout has no line number.
+    const message = 'Build stopped after 5 s without finishing.';
+    render(engine({ ...BUILT, status: 'error', error: { message } }));
+    expect(byTestId('model-pane-announcer')?.textContent).toBe(`Model build failed: ${message}`);
+    expect(byTestId('model-pane-error')?.textContent).toBe(message);
   });
 
-  it('says which params could not be written back', () => {
-    render(engine({ ...BUILT, unsaved: ['width'] }));
-    expect(byTestId('model-pane-unsaved')?.textContent).toContain('width');
-  });
-
-  it('exports and reports where the file went', async () => {
+  it('exports and reports where the file went, offering STL only for model files', async () => {
     const model = engine(BUILT);
     render(model);
     act(() => byTestId('model-pane-export-btn')?.click());
     await act(async () => byTestId('model-pane-export-glb-btn')?.click());
     expect(model.exportFile).toHaveBeenCalledWith('glb');
     expect(byTestId('model-pane-note')?.textContent).toBe('Saved chest.glb');
-  });
 
-  it('says why a picked file could not be opened', async () => {
-    const model = engine({
-      openFile: vi.fn(async () => {
-        throw new Error("Error invoking remote method 'model:open-dialog': Error: Not a model file: /a/b.js.");
-      }),
-    });
-    render(model);
-    await act(async () => byTestId('model-pane-open-empty-btn')?.click());
-    expect(byTestId('model-pane-note')?.textContent).toBe('Not a model file: /a/b.js.');
-  });
-
-  it('only offers STL for model files, since a loaded asset has no source parts', () => {
+    // A loaded asset has no source parts to write as STL.
     render(engine({ ...BUILT, state: { ...BUILT.state!, path: '/project/chest.glb', kind: 'glb' }, params: {} }));
     act(() => byTestId('model-pane-export-btn')?.click());
     expect(byTestId('model-pane-export-stl-btn')?.getAttribute('aria-disabled')).toBe('true');
     expect(byTestId('model-pane-params')).toBeNull();
-  });
-
-  it('shows no joints section for a model without joints', () => {
-    render(engine(BUILT));
-    expect(byTestId('model-pane-joints')).toBeNull();
   });
 
   it('poses the viewer from a joint slider and stops playback when dragged', () => {
@@ -386,19 +379,31 @@ describe('ModelPane', () => {
         );
       });
 
-    it('nudges a picked moving part with the arrows and announces the value', () => {
+    it('nudges a picked moving part with the arrows, held at its range, and orbits with a fixed part', () => {
       handle.orbit.mockClear();
       const setJointAngles = vi.fn();
-      render(engine({ ...BUILT, object: hinged(), joints: [lidJoint], jointAngles: { lid: 40 }, setJointAngles }));
+      const posed = (lid: number) =>
+        engine({ ...BUILT, object: hinged(), joints: [lidJoint], jointAngles: { lid }, setJointAngles });
+      render(posed(40));
       act(() => byTestId('pick-lid')?.click());
       pressKey('ArrowRight');
       expect(setJointAngles).toHaveBeenLastCalledWith({ lid: 41 });
       expect(byTestId('model-pane-joint-announcer')?.textContent).toBe('lid 41\u00b0');
       // The engine feeds the new angles back before the next key.
-      render(engine({ ...BUILT, object: hinged(), joints: [lidJoint], jointAngles: { lid: 41 }, setJointAngles }));
+      render(posed(41));
       pressKey('ArrowDown', true);
       expect(setJointAngles).toHaveBeenLastCalledWith({ lid: 26 });
       expect(handle.orbit).not.toHaveBeenCalled();
+
+      render(posed(89.5));
+      pressKey('ArrowUp', true);
+      expect(setJointAngles, 'holds at the end of the range').toHaveBeenLastCalledWith({ lid: 90 });
+
+      setJointAngles.mockClear();
+      act(() => byTestId('pick-body')?.click());
+      pressKey('ArrowLeft');
+      expect(handle.orbit, 'a fixed part picked still orbits').toHaveBeenCalledWith(-Math.PI / 12, 0);
+      expect(setJointAngles).not.toHaveBeenCalled();
     });
 
     it('opens a joint whose range runs downwards with Right and Up', () => {
@@ -412,35 +417,7 @@ describe('ModelPane', () => {
       expect(setJointAngles).toHaveBeenLastCalledWith({ lid: -39 });
     });
 
-    it('holds a nudge at the end of the range', () => {
-      const setJointAngles = vi.fn();
-      render(engine({ ...BUILT, object: hinged(), joints: [lidJoint], jointAngles: { lid: 89.5 }, setJointAngles }));
-      act(() => byTestId('pick-lid')?.click());
-      pressKey('ArrowUp', true);
-      expect(setJointAngles).toHaveBeenLastCalledWith({ lid: 90 });
-    });
-
-    it('still orbits with a fixed part picked', () => {
-      handle.orbit.mockClear();
-      const setJointAngles = vi.fn();
-      render(engine({ ...BUILT, object: hinged(), joints: [lidJoint], setJointAngles }));
-      act(() => byTestId('pick-body')?.click());
-      pressKey('ArrowLeft');
-      expect(handle.orbit).toHaveBeenCalledWith(-Math.PI / 12, 0);
-      expect(setJointAngles).not.toHaveBeenCalled();
-    });
-
-    it('moves the sliders with a drag and stops playback', () => {
-      const setJointAngles = vi.fn();
-      render(engine({ ...BUILT, object: hinged(), joints: [lidJoint], jointAngles: { lid: 10 }, setJointAngles }));
-      act(() => byTestId('model-pane-joints-play-btn')?.click());
-      expect(byTestId('model-pane-joints-play-btn')?.textContent).toBe('Stop');
-      act(() => byTestId('drag-lid')?.click());
-      expect(setJointAngles).toHaveBeenLastCalledWith({ lid: 55 });
-      expect(byTestId('model-pane-joints-play-btn')?.textContent).toBe('Play');
-    });
-
-    it('keeps the other joints when a drag moves one', () => {
+    it('moves the sliders with a drag, keeping the other joints, and stops playback', () => {
       const setJointAngles = vi.fn();
       const flap = { ...lidJoint, name: 'flap', range: [0, 45] as [number, number] };
       render(
@@ -452,8 +429,11 @@ describe('ModelPane', () => {
           setJointAngles,
         })
       );
+      act(() => byTestId('model-pane-joints-play-btn')?.click());
+      expect(byTestId('model-pane-joints-play-btn')?.textContent).toBe('Stop');
       act(() => byTestId('drag-lid')?.click());
       expect(setJointAngles).toHaveBeenLastCalledWith({ lid: 55, flap: 5 });
+      expect(byTestId('model-pane-joints-play-btn')?.textContent).toBe('Play');
     });
 
     it('does not start playing on the next jointed model after the joints went away', () => {
@@ -555,13 +535,21 @@ describe('ModelPane', () => {
     expect(onSendEdit).not.toHaveBeenCalled();
   });
 
-  it('picks parts from the keyboard and opens the prompt with Enter', () => {
+  it('picks parts from the keyboard, stepping over parts the section cut removed, and opens the prompt with Enter', () => {
     render(engine(LANTERN));
     const stage = byTestId('model-pane-stage') as HTMLElement;
+    const picked = () => byTestId('model-pane-viewport')?.dataset.picked;
+    handle.partKept.mockImplementation(name => name !== 'body');
     press(stage, ']');
-    expect(byTestId('model-pane-viewport')?.dataset.picked).toBe('body');
+    expect(picked(), 'the cut-away body is stepped over').toBe('lid');
     press(stage, ']');
-    expect(byTestId('model-pane-viewport')?.dataset.picked).toBe('lid');
+    expect(picked()).toBe('lid');
+    handle.partKept.mockImplementation(() => true);
+
+    press(stage, ']');
+    expect(picked()).toBe('body');
+    press(stage, ']');
+    expect(picked()).toBe('lid');
     expect(byTestId('model-pane-edit-prompt')).toBeNull();
     press(stage, 'Enter');
     expect(handle.partPoint).toHaveBeenCalledWith(['lid']);
@@ -569,38 +557,19 @@ describe('ModelPane', () => {
     expect(document.activeElement).toBe(byTestId('model-pane-edit-input'));
   });
 
-  it('steps over parts the section cut has removed', () => {
-    render(engine(LANTERN));
-    const stage = byTestId('model-pane-stage') as HTMLElement;
-    handle.partKept.mockImplementation(name => name !== 'body');
-    press(stage, ']');
-    expect(byTestId('model-pane-viewport')?.dataset.picked).toBe('lid');
-    press(stage, ']');
-    expect(byTestId('model-pane-viewport')?.dataset.picked).toBe('lid');
-    handle.partKept.mockImplementation(() => true);
-  });
-
-  it('highlights a part of an opened GLB without offering an edit', () => {
-    render(
-      engine({
-        ...LANTERN,
-        state: { path: '/project/chest.glb', kind: 'glb', generation: 3, source: null, missing: false },
-      })
-    );
-    act(() => byTestId('pick-lid')?.click());
-    expect(byTestId('model-pane-viewport')?.dataset.picked).toBe('lid');
-    expect(byTestId('model-pane-edit-prompt')).toBeNull();
-  });
-
-  it('plays one animation of an opened GLB at a time', () => {
+  it('highlights a part of an opened GLB without offering an edit, and plays one animation at a time', () => {
     const glb = {
-      ...BUILT,
+      ...LANTERN,
       state: { path: '/project/chest.glb', kind: 'glb' as const, generation: 3, source: null, missing: false },
       clips: ['lid', 'drawer'],
     };
     render(engine(BUILT));
     expect(byTestId('model-pane-clips')).toBeNull();
     render(engine(glb));
+    act(() => byTestId('pick-lid')?.click());
+    expect(byTestId('model-pane-viewport')?.dataset.picked).toBe('lid');
+    expect(byTestId('model-pane-edit-prompt')).toBeNull();
+
     act(() => byTestId('model-pane-clip-lid')?.click());
     expect(byTestId('model-pane-viewport')?.dataset.clip).toBe('lid');
     expect(byTestId('model-pane-clip-lid')?.textContent).toBe('Stop');
@@ -609,9 +578,13 @@ describe('ModelPane', () => {
     expect(byTestId('model-pane-clip-lid')?.textContent).toBe('Play');
     act(() => byTestId('model-pane-clip-drawer')?.click());
     expect(byTestId('model-pane-viewport')?.dataset.clip).toBe('');
+
+    render(engine({ ...BUILT, state: { ...BUILT.state!, path: '/project/door.model.js' } }));
+    expect(byTestId('model-pane-viewport')?.dataset.picked, 'another file drops the highlight').toBe('');
   });
 
-  it('picks a lighting preset from the lighting menu', () => {
+  it('picks a lighting preset and a preset view from their menus', () => {
+    handle.setView.mockClear();
     render(engine(BUILT));
     expect(byTestId('model-pane-viewport')?.dataset.lighting).toBe('studio');
     act(() => byTestId('model-pane-lighting-btn')?.click());
@@ -621,6 +594,10 @@ describe('ModelPane', () => {
     expect(byTestId('model-pane-lighting-sunset')?.getAttribute('aria-checked')).toBe('true');
     act(() => byTestId('model-pane-lighting-studio')?.click());
     expect(byTestId('model-pane-viewport')?.dataset.lighting).toBe('studio');
+
+    act(() => byTestId('model-pane-view-btn')?.click());
+    act(() => byTestId('model-pane-view-top')?.click());
+    expect(handle.setView).toHaveBeenCalledWith('top');
   });
 
   it('records a turntable of the joints, stops playback first, and saves it as WebM', async () => {
@@ -729,8 +706,23 @@ describe('ModelPane', () => {
     expect(byTestId('model-pane-viewport')?.dataset.lighting).toBe('night');
   });
 
-  it('offers an exploded view only for a model with separable parts, by button and by E', () => {
+  it('offers a fit once the model grows past a placed camera, and an exploded view for separable parts', () => {
+    handle.fit.mockClear();
     render(engine(BUILT));
+    expect(byTestId('model-pane-fit-btn')).toBeNull();
+    act(() => byTestId('report-cropped')?.click());
+    act(() => byTestId('model-pane-fit-btn')?.click());
+    expect(handle.fit).toHaveBeenCalledTimes(1);
+    act(() => {
+      byTestId('model-pane-stage')?.dispatchEvent(
+        new KeyboardEvent('keydown', { key: 'f', bubbles: true, cancelable: true })
+      );
+    });
+    expect(handle.fit).toHaveBeenCalledTimes(2);
+    act(() => byTestId('report-in-view')?.click());
+    expect(byTestId('model-pane-fit-btn')).toBeNull();
+
+    // An exploded view only for a model with separable parts, by button and by E.
     expect(byTestId('model-pane-explode-btn')).toBeNull();
     const parted = new THREE.Group();
     const lid = new THREE.Object3D();
@@ -747,39 +739,6 @@ describe('ModelPane', () => {
       );
     });
     expect(byTestId('model-pane-viewport')?.dataset.exploded).toBe('false');
-  });
-
-  it('frames a preset view from the camera menu', () => {
-    handle.setView.mockClear();
-    render(engine(BUILT));
-    act(() => byTestId('model-pane-view-btn')?.click());
-    act(() => byTestId('model-pane-view-top')?.click());
-    expect(handle.setView).toHaveBeenCalledWith('top');
-  });
-
-  it('offers a fit once the model grows past a placed camera, by button and by F', () => {
-    handle.fit.mockClear();
-    render(engine(BUILT));
-    expect(byTestId('model-pane-fit-btn')).toBeNull();
-    act(() => byTestId('report-cropped')?.click());
-    act(() => byTestId('model-pane-fit-btn')?.click());
-    expect(handle.fit).toHaveBeenCalledTimes(1);
-    act(() => {
-      byTestId('model-pane-stage')?.dispatchEvent(
-        new KeyboardEvent('keydown', { key: 'f', bubbles: true, cancelable: true })
-      );
-    });
-    expect(handle.fit).toHaveBeenCalledTimes(2);
-    act(() => byTestId('report-in-view')?.click());
-    expect(byTestId('model-pane-fit-btn')).toBeNull();
-  });
-
-  it('drops the highlight when another file opens', () => {
-    render(engine(BUILT));
-    act(() => byTestId('pick-lid')?.click());
-    expect(byTestId('model-pane-viewport')?.dataset.picked).toBe('lid');
-    render(engine({ ...BUILT, state: { ...BUILT.state!, path: '/project/door.model.js' } }));
-    expect(byTestId('model-pane-viewport')?.dataset.picked).toBe('');
   });
 
   it('resizes from its left edge and remembers the width', () => {
@@ -818,29 +777,14 @@ describe('ModelPane versions', () => {
     return model;
   }
 
-  it('lists the kept versions with thumbnails and marks the current one', async () => {
-    await renderWithVersions([version(1, 'a'), version(2, 'x')]);
+  it('lists the kept versions with thumbnails, marks the current one, and previews one at its kept pose', async () => {
+    const model = await renderWithVersions([version(1, 'a', { jointAngles: { lid: 30 } }), version(2, 'x')]);
     expect(byTestId('model-versions')).not.toBeNull();
     expect(byTestId('model-version-1')?.getAttribute('aria-pressed')).toBe('false');
     expect(byTestId('model-version-2')?.getAttribute('aria-pressed')).toBe('true');
     expect(byTestId('model-version-2')?.getAttribute('aria-label')).toContain('current');
     expect(byTestId('model-version-1')?.querySelector('img')?.getAttribute('src')).toMatch(/^data:image\/png;base64,/);
-  });
 
-  it('shows no strip before anything is kept', async () => {
-    await renderWithVersions([]);
-    expect(byTestId('model-versions')).toBeNull();
-  });
-
-  it('lists again when main says this conversation kept a version', async () => {
-    await renderWithVersions([version(1, 'x')]);
-    listedVersions = [version(1, 'a'), version(2, 'x')];
-    await act(async () => versionsListener?.({ sessionId: 'chat-a' }));
-    expect(byTestId('model-version-2')).not.toBeNull();
-  });
-
-  it('previews a version in the viewport at its kept pose, without picking', async () => {
-    const model = await renderWithVersions([version(1, 'a', { jointAngles: { lid: 30 } }), version(2, 'x')]);
     await act(async () => byTestId('model-version-1')?.click());
     expect(model.buildSource).toHaveBeenCalledWith('a');
     const viewport = byTestId('model-pane-viewport');
@@ -848,11 +792,21 @@ describe('ModelPane versions', () => {
     expect(viewport?.dataset.pose).toBe(JSON.stringify({ lid: 30 }));
     expect(byTestId('model-version-banner-title')?.textContent).toBe('Previewing v1');
     expect(byTestId('model-version-1')?.getAttribute('aria-pressed')).toBe('true');
+    // A preview is not pickable.
     act(() => byTestId('pick-lid')?.click());
     expect(byTestId('model-pane-viewport')?.dataset.picked).toBe('');
   });
 
-  it('goes back to the current build from the close button, Escape or the current thumbnail', async () => {
+  it('shows no strip before anything is kept, and lists again when main says this conversation kept one', async () => {
+    await renderWithVersions([]);
+    expect(byTestId('model-versions')).toBeNull();
+    listedVersions = [version(1, 'a'), version(2, 'x')];
+    await act(async () => versionsListener?.({ sessionId: 'chat-a' }));
+    expect(byTestId('model-version-2')).not.toBeNull();
+  });
+
+  // Escape on the banner and the strip themselves is ModelVersionStrip's, covered in its own tests.
+  it('goes back to the current build from the close button, Escape in the 3D view or the current thumbnail', async () => {
     await renderWithVersions([version(1, 'a'), version(2, 'x')]);
     await act(async () => byTestId('model-version-1')?.click());
     act(() => byTestId('model-version-close')?.click());
@@ -861,7 +815,9 @@ describe('ModelPane versions', () => {
 
     await act(async () => byTestId('model-version-1')?.click());
     act(() => {
-      byTestId('model-version-banner')?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+      byTestId('model-pane-stage')?.dispatchEvent(
+        new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true })
+      );
     });
     expect(byTestId('model-version-banner')).toBeNull();
 
@@ -870,18 +826,7 @@ describe('ModelPane versions', () => {
     expect(byTestId('model-version-banner')).toBeNull();
   });
 
-  it('compares the previewed version with the current one, side by side or overlaid', async () => {
-    await renderWithVersions([version(1, 'a'), version(2, 'x')]);
-    await act(async () => byTestId('model-version-1')?.click());
-    act(() => byTestId('model-version-compare-side')?.click());
-    expect(byTestId('model-version-compare-view-side')?.dataset.labels).toBe('v1|v2 (current)');
-    expect(byTestId('model-version-banner-title')?.textContent).toBe('Comparing v1 with v2');
-    act(() => byTestId('model-version-compare-overlay')?.click());
-    expect(byTestId('model-version-compare-view-overlay')).not.toBeNull();
-    expect(byTestId('model-version-compare-view-side')).toBeNull();
-  });
-
-  it('hides the joints while previewing, so a pose change never rebuilds the compare view', async () => {
+  it('compares side by side or overlaid, hiding the joints so a pose change never rebuilds the view', async () => {
     const joint = {
       name: 'lid',
       motion: 'turn' as const,
@@ -893,27 +838,19 @@ describe('ModelPane versions', () => {
     expect(byTestId('model-pane-joints')).not.toBeNull();
     await act(async () => byTestId('model-version-1')?.click());
     act(() => byTestId('model-version-compare-side')?.click());
+    expect(byTestId('model-version-compare-view-side')?.dataset.labels).toBe('v1|v2 (current)');
+    expect(byTestId('model-version-banner-title')?.textContent).toBe('Comparing v1 with v2');
     expect(byTestId('model-pane-joints')).toBeNull();
     const changes = compareView.subjectChanges;
     render({ ...model, jointAngles: { lid: 20 } });
     expect(byTestId('model-version-compare-view-side')).not.toBeNull();
     expect(compareView.subjectChanges).toBe(changes);
+
+    act(() => byTestId('model-version-compare-overlay')?.click());
+    expect(byTestId('model-version-compare-view-overlay')).not.toBeNull();
+    expect(byTestId('model-version-compare-view-side')).toBeNull();
     act(() => byTestId('model-version-close')?.click());
     expect(byTestId('model-pane-joints')).not.toBeNull();
-  });
-
-  it('goes back to the current build on Escape in the 3D view or the strip', async () => {
-    await renderWithVersions([version(1, 'a'), version(2, 'x')]);
-    const escape = (id: string) =>
-      act(() => {
-        byTestId(id)?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
-      });
-    await act(async () => byTestId('model-version-1')?.click());
-    escape('model-pane-stage');
-    expect(byTestId('model-version-banner')).toBeNull();
-    await act(async () => byTestId('model-version-1')?.click());
-    escape('model-version-1');
-    expect(byTestId('model-version-banner')).toBeNull();
   });
 
   it('restores the previewed version and poses the pane as it was kept', async () => {

@@ -64,6 +64,8 @@ const onOpenSettings = vi.fn();
 let root: Root;
 let host: HTMLElement;
 
+const theme = extendTheme({});
+
 async function mount(state: ClaudeImportState, empty: boolean) {
   current = state;
   Object.assign(window, {
@@ -80,7 +82,7 @@ async function mount(state: ClaudeImportState, empty: boolean) {
   });
   await act(async () =>
     root.render(
-      <CssVarsProvider theme={extendTheme({})}>
+      <CssVarsProvider theme={theme}>
         <SidebarSyncHints
           empty={empty}
           fallback={<span data-testid="chat-sessions-empty">No conversations yet.</span>}

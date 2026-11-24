@@ -15,6 +15,10 @@ import { git } from './project/git';
 import { ApprovalGate } from './tools/ApprovalGate';
 import { CapabilityLedger } from './capabilities/CapabilityLedger';
 
+vi.mock('../git/hostGitArgs', async importOriginal =>
+  (await import('./plainFolderGit.testHelper')).skipGitOutsideRepositories(await importOriginal())
+);
+
 // A worktree cut that holds until a test releases it; every other call is the real resolver.
 const cut = vi.hoisted(() => ({ hold: null as Promise<WorkspaceResolution> | null }));
 vi.mock('./project/workspace', async importOriginal => {

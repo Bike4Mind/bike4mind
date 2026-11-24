@@ -1,8 +1,9 @@
 import { execFileSync } from 'node:child_process';
 import { mkdir, mkdtemp, readFile, realpath, rm, stat } from 'node:fs/promises';
-import { tmpdir, userInfo } from 'node:os';
+import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
 import { PassThrough } from 'node:stream';
+import { mkdtempOutsideTemp } from '../../../vitest.tempRoot';
 import type { AuthenticatedApiClient } from '@bike4mind/client-auth';
 import type { ChatApprovalMode, ChatProject, ChatStreamEvent, ChatToolCall } from '@shared/chat';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -15,6 +16,10 @@ import { PermissionService } from './permissions/PermissionService';
 import type { AccessStore } from './tools/AccessStore';
 import { ApprovalGate } from './tools/ApprovalGate';
 import { mainCheckoutOf } from './tools/shellTools';
+
+vi.mock('../git/hostGitArgs', async importOriginal =>
+  (await import('./plainFolderGit.testHelper')).skipGitOutsideRepositories(await importOriginal())
+);
 
 function frame(payload: unknown): string {
   return `data: ${typeof payload === 'string' ? payload : JSON.stringify(payload)}\n\n`;
@@ -61,13 +66,13 @@ describe('ChatService approvals decided per part', () => {
   beforeEach(async () => {
     sessionIds.length = 0;
     runningReplies.clear();
-    root = await realpath(await mkdtemp(join(userInfo().homedir, '.b4m-parts-')));
+    root = await realpath(await mkdtempOutsideTemp('b4m-parts-'));
     main = join(root, 'repo');
     worktree = join(root, 'repo-wt');
     other = join(root, 'other');
     await mkdir(main);
     await mkdir(other);
-    outside = await realpath(await mkdtemp(join(userInfo().homedir, '.b4m-parts-outside-')));
+    outside = await realpath(await mkdtempOutsideTemp('b4m-parts-outside-'));
     const sharedTemporaryDirectory = join(root, 'shared-temp');
     await mkdir(sharedTemporaryDirectory);
     vi.stubEnv('TMPDIR', sharedTemporaryDirectory);

@@ -8,9 +8,23 @@ import type { PrBarState } from '@shared/pullRequest';
 import type { WorkspaceChanges } from '@shared/workspaceChanges';
 import { desktopTheme } from '../theme';
 import { SessionPanel, type SessionPanelProps } from './SessionPanel';
-import { useSessionPanelPrefs } from './sessionPanelState';
+import {
+  useSessionPanelPrefs,
+  SESSION_PANEL_BESIDE_MIN_WIDTH,
+  SESSION_PANEL_PUSH_MIN_WIDTH,
+  SESSION_PANEL_SPACE,
+  sessionPanelLayout,
+  readCollapsedSections,
+  readSessionPanelOpen,
+  writeCollapsedSections,
+  writeSessionPanelOpen,
+} from './sessionPanelState';
 import type { ProjectBindingController } from './useChat';
 import type { BackgroundProcessView } from './useBackgroundProcesses';
+import { COLUMN_PADDING, CONTENT_MAX_WIDTH } from './layout';
+import { renderToStaticMarkup } from 'react-dom/server';
+import type { PlanItem } from '@shared/todos';
+import { TodoPanel } from './TodoPanel';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -521,5 +535,160 @@ describe('the overlay variant', () => {
     await act(async () => document.body.dispatchEvent(new Event('pointerdown', { bubbles: true })));
     await act(async () => document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })));
     expect(onDismiss).not.toHaveBeenCalled();
+  });
+});
+
+describe('sessionPanelState', () => {
+  beforeEach(() => window.localStorage.clear());
+  afterEach(() => vi.restoreAllMocks());
+
+  describe('sessionPanelLayout', () => {
+    const centered = { centeredColumn: true };
+    const stage = { centeredColumn: false };
+
+    it('floats in the margin once the centered column leaves room for the whole card', () => {
+      // The card may sit over the column's padding, never its text.
+      expect(SESSION_PANEL_BESIDE_MIN_WIDTH).toBe(CONTENT_MAX_WIDTH + 2 * (SESSION_PANEL_SPACE - COLUMN_PADDING));
+      expect(sessionPanelLayout(SESSION_PANEL_BESIDE_MIN_WIDTH, centered)).toBe('beside');
+      expect(sessionPanelLayout(2400, centered)).toBe('beside');
+    });
+
+    it('pushes the column when only the rail and a full reading column fit', () => {
+      expect(SESSION_PANEL_PUSH_MIN_WIDTH).toBe(CONTENT_MAX_WIDTH + SESSION_PANEL_SPACE);
+      expect(sessionPanelLayout(SESSION_PANEL_BESIDE_MIN_WIDTH - 1, centered)).toBe('push');
+      expect(sessionPanelLayout(SESSION_PANEL_PUSH_MIN_WIDTH, centered)).toBe('push');
+    });
+
+    it('overlays the thread below that, rather than squeezing the reading column', () => {
+      expect(sessionPanelLayout(SESSION_PANEL_PUSH_MIN_WIDTH - 1, centered)).toBe('overlay');
+      expect(sessionPanelLayout(CONTENT_MAX_WIDTH, centered)).toBe('overlay');
+      expect(sessionPanelLayout(0, centered)).toBe('overlay');
+    });
+
+    it('never floats without a centered column, since the stage has no free margin', () => {
+      expect(sessionPanelLayout(2400, stage)).toBe('push');
+      expect(sessionPanelLayout(SESSION_PANEL_PUSH_MIN_WIDTH, stage)).toBe('push');
+      expect(sessionPanelLayout(SESSION_PANEL_PUSH_MIN_WIDTH - 1, stage)).toBe('overlay');
+    });
+
+    it('treats a region not yet measured as wide', () => {
+      expect(sessionPanelLayout(null, centered)).toBe('beside');
+      expect(sessionPanelLayout(null, stage)).toBe('push');
+    });
+  });
+
+  describe('the remembered open flag', () => {
+    it('is open until the user closes it, and remembers either way', () => {
+      expect(readSessionPanelOpen()).toBe(true);
+      writeSessionPanelOpen(false);
+      expect(readSessionPanelOpen()).toBe(false);
+      writeSessionPanelOpen(true);
+      expect(readSessionPanelOpen()).toBe(true);
+    });
+  });
+
+  describe('the remembered folded sections', () => {
+    it('round-trips through storage', () => {
+      writeCollapsedSections(new Set(['plan', 'environment']));
+      expect([...readCollapsedSections()].sort()).toEqual(['environment', 'plan']);
+    });
+
+    it('drops anything it does not recognise instead of throwing', () => {
+      window.localStorage.setItem('b4m.sessionPanel.collapsed', JSON.stringify(['plan', 'connectors', 7]));
+      expect([...readCollapsedSections()]).toEqual(['plan']);
+      window.localStorage.setItem('b4m.sessionPanel.collapsed', '{not json');
+      expect(readCollapsedSections().size).toBe(0);
+    });
+  });
+
+  describe('storage that throws', () => {
+    it('falls back to the defaults on read and swallows writes', () => {
+      vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => {
+        throw new Error('blocked');
+      });
+      vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+        throw new Error('blocked');
+      });
+
+      expect(readSessionPanelOpen()).toBe(true);
+      expect(readCollapsedSections().size).toBe(0);
+      expect(() => writeSessionPanelOpen(false)).not.toThrow();
+      expect(() => writeCollapsedSections(new Set(['plan']))).not.toThrow();
+    });
+  });
+});
+
+const todos: PlanItem[] = [
+  { id: '1', content: 'Read the code', status: 'completed' },
+  { id: '2', content: 'Write the fix', status: 'in_progress' },
+  { id: '3', content: 'Run the tests', status: 'pending' },
+];
+const render = (list: PlanItem[] | null, turnOpen: boolean) =>
+  renderToStaticMarkup(<TodoPanel todos={list} turnOpen={turnOpen} />);
+
+describe('TodoPanel', () => {
+  it('opens collapsed, with the count and the item in hand on its one line', () => {
+    const html = render(todos, true);
+    expect(html).toContain('1 of 3 done');
+    expect(html).toContain('Write the fix');
+    expect(html).toContain('aria-expanded="false"');
+    // The list itself is not drawn until the bar is clicked.
+    expect(html).not.toContain('chat-todo-item-');
+    expect(html).not.toContain('Run the tests');
+  });
+
+  it('leaves the bar to the count alone when nothing is in progress', () => {
+    const html = render([{ id: '1', content: 'Read the code', status: 'pending' }], true);
+    expect(html).toContain('0 of 1 done');
+    expect(html).not.toContain('Read the code');
+  });
+
+  it('draws nothing without a plan', () => {
+    expect(render(null, true)).toBe('');
+    expect(render([], true)).toBe('');
+  });
+
+  it('stays while a turn runs after the last item is done, and leaves once the turn ends', () => {
+    const finished = todos.map(todo => ({ ...todo, status: 'completed' as const }));
+    expect(render(finished, true)).toContain('3 of 3 done');
+    expect(render(finished, false)).toBe('');
+  });
+
+  it('shows the activeForm of the current item on the bar', () => {
+    const list = todos.map(todo => (todo.status === 'in_progress' ? { ...todo, activeForm: 'Writing the fix' } : todo));
+    expect(render(list, true)).toContain('Writing the fix');
+  });
+
+  it('leaves cancelled items out of n/m', () => {
+    const list: PlanItem[] = [
+      { id: '1', content: 'Read the code', status: 'completed' },
+      { id: '2', content: 'Old idea', status: 'cancelled' },
+      { id: '3', content: 'Run the tests', status: 'pending' },
+    ];
+    expect(render(list, true)).toContain('1 of 2 done');
+  });
+
+  it('hides an all-cancelled plan, whatever the turn', () => {
+    const list: PlanItem[] = [{ id: '1', content: 'Old idea', status: 'cancelled' }];
+    expect(render(list, false)).toBe('');
+    expect(render(list, true)).toBe('');
+  });
+
+  it('lists a cancelled item struck through, and the current item by its activeForm', async () => {
+    const list: PlanItem[] = [
+      { id: '1', content: 'Old idea', status: 'cancelled' },
+      { id: '2', content: 'Write the fix', activeForm: 'Writing the fix', status: 'in_progress' },
+    ];
+    const host = document.createElement('div');
+    const root = createRoot(host);
+    await act(async () => root.render(<TodoPanel todos={list} turnOpen />));
+    await act(async () => host.querySelector<HTMLElement>('[data-testid="chat-todo-toggle"]')?.click());
+    const cancelled = host.querySelector('[data-testid="chat-todo-item-cancelled"]');
+    expect(cancelled).not.toBeNull();
+    expect(getComputedStyle(cancelled!.querySelector('[data-testid="chat-todo-text"]')!).textDecoration).toContain(
+      'line-through'
+    );
+    expect(host.querySelector('[data-testid="chat-todo-item-in_progress"]')?.textContent).toContain('Writing the fix');
+    await act(async () => root.unmount());
   });
 });

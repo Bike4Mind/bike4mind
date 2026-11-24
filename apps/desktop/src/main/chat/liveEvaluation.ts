@@ -126,7 +126,7 @@ export async function runLiveEvaluation(
   directory: string,
   optedIn: boolean,
   configPath?: string,
-  options: { finalPhase?: boolean; recoverRunId?: string } = {}
+  options: { finalPhase?: boolean; recoverRunId?: string; workerQuietMs?: number } = {}
 ): Promise<void> {
   if (!optedIn) return;
   const suppliedConfig = configPath ? await load(configPath) : { version: 1 };
@@ -337,7 +337,7 @@ export async function runLiveEvaluation(
               while (Date.now() < deadline) {
                 const busy = service.isSessionBusy(id) || service.isSessionBusy(childId);
                 if (busy) quietSince = Date.now();
-                if (!busy && Date.now() - quietSince > 1000) break;
+                if (!busy && Date.now() - quietSince > (options.workerQuietMs ?? 1000)) break;
                 await new Promise(resolve => setTimeout(resolve, 20));
               }
               const child = await store.get(childId);
