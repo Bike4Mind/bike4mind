@@ -182,6 +182,9 @@ describe('OAuthClientsTab', () => {
     await waitFor(() => expect(api.createOAuthClient).toHaveBeenCalled());
     const closeBtn = await screen.findByTestId('oauth-client-create-modal-close-btn');
     await waitFor(() => expect(closeBtn).toBeDisabled());
+    expect(
+      within(screen.getByTestId('oauth-client-create-modal')).getByRole('button', { name: 'Cancel' })
+    ).toBeDisabled();
     fireEvent.keyDown(screen.getByTestId('oauth-client-create-modal'), { key: 'Escape' });
     expect(screen.getByTestId('oauth-client-create-modal')).toBeInTheDocument();
 
@@ -199,6 +202,9 @@ describe('OAuthClientsTab', () => {
     });
     fireEvent.click(screen.getByTestId('oauth-client-edit-save-btn'));
     await waitFor(() => expect(screen.getByTestId('oauth-client-edit-modal-close-btn')).toBeDisabled());
+    expect(
+      within(screen.getByTestId('oauth-client-edit-modal')).getByRole('button', { name: 'Cancel' })
+    ).toBeDisabled();
     fireEvent.keyDown(screen.getByTestId('oauth-client-edit-modal'), { key: 'Escape' });
     expect(screen.getByTestId('oauth-client-edit-modal')).toBeInTheDocument();
     resolveUpdate(client);

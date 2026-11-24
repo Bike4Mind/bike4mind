@@ -1080,7 +1080,12 @@ export default function OAuthClientsTab() {
             )}
 
             <Stack direction="row" justifyContent="flex-end" spacing={1}>
-              <Button variant="plain" color="neutral" onClick={() => setCreateOpen(false)}>
+              <Button
+                variant="plain"
+                color="neutral"
+                disabled={createMutation.isPending}
+                onClick={() => setCreateOpen(false)}
+              >
                 Cancel
               </Button>
               <Button
@@ -1225,7 +1230,12 @@ export default function OAuthClientsTab() {
             </Alert>
           )}
           <Stack direction="row" justifyContent="flex-end" spacing={1} sx={{ mt: 1 }}>
-            <Button variant="plain" color="neutral" onClick={() => setEditTarget(null)}>
+            <Button
+              variant="plain"
+              color="neutral"
+              disabled={editMutation.isPending}
+              onClick={() => setEditTarget(null)}
+            >
               Cancel
             </Button>
             <Button
@@ -1269,7 +1279,12 @@ export default function OAuthClientsTab() {
             </Typography>
           )}
           <Stack direction="row" justifyContent="flex-end" spacing={1} sx={{ mt: 2 }}>
-            <Button variant="plain" color="neutral" onClick={() => setNarrowing(null)}>
+            <Button
+              variant="plain"
+              color="neutral"
+              disabled={editMutation.isPending}
+              onClick={() => setNarrowing(null)}
+            >
               Cancel
             </Button>
             <Button
