@@ -76,7 +76,7 @@ describe('free-run admin settings', () => {
       globalDailyCap: 500,
       inputMaxChars: 8000,
       outputMaxTokens: 1500,
-      fileMaxMb: 5,
+      fileMaxMb: 4,
       fileMaxPages: 10,
     });
   });
