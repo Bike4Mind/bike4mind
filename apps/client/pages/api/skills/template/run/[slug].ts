@@ -13,6 +13,7 @@ import { approvedSnapshotOf } from '@server/skillMarket/template';
 import {
   buildFreeRunMessages,
   completeFreeRun,
+  FreeRunTimeoutError,
   freeRunCookieHeader,
   hasUsedFreeRun,
   loadFreeRunSettings,
@@ -52,7 +53,7 @@ const CAPPED: Refusal = {
 const FAILED: Refusal = {
   status: 502,
   code: 'free_run_failed',
-  error: 'The run could not finish. Nothing was used up; try again in a moment.',
+  error: 'The run could not finish. Try again in a moment.',
 };
 
 const refuse = (req: Request, res: Response, refusal: Refusal) =>
@@ -127,9 +128,11 @@ const handler = baseApi({ auth: false, allowedMethods: ['POST'] })
         logger: req.logger,
       });
     } catch (error) {
-      await reservation
-        .release()
-        .catch(releaseError => req.logger?.warn('skill-free-run: cap release failed', releaseError));
+      if (!(error instanceof FreeRunTimeoutError)) {
+        await reservation
+          .release()
+          .catch(releaseError => req.logger?.warn('skill-free-run: cap release failed', releaseError));
+      }
       req.logger?.warn('skill-free-run: model call failed', error);
       return refuse(req, res, FAILED);
     }

@@ -69,6 +69,7 @@ vi.mock('@server/skillMarket/templateFreeRun', async () => {
   );
   return {
     buildFreeRunMessages: actual.buildFreeRunMessages,
+    FreeRunTimeoutError: actual.FreeRunTimeoutError,
     renderFreeRunResult: actual.renderFreeRunResult,
     freeRunCookieHeader: () => 'b4m_template_free_run=signed; Path=/; HttpOnly',
     hasUsedFreeRun: h.used,
@@ -304,6 +305,15 @@ describe('POST /api/skills/template/run/[slug]', () => {
       expect(json(res).code).toBe('free_run_failed');
       expect(h.release).toHaveBeenCalledTimes(1);
       expect(h.record).not.toHaveBeenCalled();
+      expect(res.getHeader('Set-Cookie')).toBeUndefined();
+    });
+
+    it('keeps the caps spent when the run times out, since the provider call may still bill', async () => {
+      const { FreeRunTimeoutError } = await import('@server/skillMarket/templateFreeRun');
+      h.complete.mockRejectedValue(new FreeRunTimeoutError('Free run timed out'));
+      const res = await call();
+      expect(res.statusCode).toBe(502);
+      expect(h.release).not.toHaveBeenCalled();
       expect(res.getHeader('Set-Cookie')).toBeUndefined();
     });
 
