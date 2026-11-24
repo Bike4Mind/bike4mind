@@ -356,7 +356,24 @@ export const CompletionRunBudgetCreditsSchema = z
     "The most the run's completions may claim together, in credits. Each completion claims its share before the model is called, so concurrent completions cannot together be admitted past it. An estimate miss can take the run slightly over."
   );
 
+export {
+  CompletionEvaluationLimitsSchema,
+  CompletionEvaluationReceiptSchema,
+  CompletionEvaluationStateSchema,
+} from './completionEvaluation';
+export type {
+  CompletionEvaluationLimits,
+  CompletionEvaluationReceipt,
+  CompletionEvaluationState,
+} from './completionEvaluation';
+import {
+  CompletionEvaluationLimitsSchema,
+  CompletionEvaluationRequestSchema,
+  CompletionEvaluationStateSchema,
+} from './completionEvaluation';
+
 export const CreateCompletionRunRequestSchema = z.object({
+  evaluation: CompletionEvaluationLimitsSchema.optional(),
   rootSessionId: CompletionSessionIdSchema.optional().describe(
     'Your own id for the conversation that starts the run. A conversation can start many runs; each gets its own id.'
   ),
@@ -366,6 +383,7 @@ export const CreateCompletionRunRequestSchema = z.object({
 });
 
 export const CompletionRunSchema = z.object({
+  evaluation: CompletionEvaluationStateSchema.optional(),
   runId: CompletionRunIdSchema,
   rootSessionId: z.string().optional(),
   budgetCredits: z.number().int().positive().optional().describe('The run budget; absent for a run without one.'),
@@ -464,6 +482,7 @@ export type CompletionRunUsage = z.infer<typeof CompletionRunUsageSchema>;
  * canonical `options.<field>` location before downstream consumption.
  */
 export const CompletionRequestSchema = z.object({
+  evaluation: CompletionEvaluationRequestSchema.optional(),
   model: ModelIdSchema,
   messages: z.array(CompletionMessageSchema).min(1),
   response_format: ResponseFormatSchema.optional(),

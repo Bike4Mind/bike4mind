@@ -40,6 +40,8 @@ const ALLOWED_CONTRACTS = new Set([
   'createCompletion',
   'createCompletionRun',
   'getCompletionRunUsage',
+  // Declares ai:generate, but its handler refuses an exchange key (REFUSING_ROUTES).
+  'getCompletionRunEvaluation',
   'raiseCompletionRunBudget',
   'synthesizeSpeech',
   'generateMusic',
@@ -101,6 +103,7 @@ const ALLOWED_ENDPOINTS = [
   'GET /api/transforms/batch/:id',
   'GET /api/v1/agent-executions/:id',
   'GET /api/v1/client-config',
+  'GET /api/v1/completion-runs/:runId/evaluation',
   'GET /api/v1/completion-runs/:runId/usage',
   'GET /api/v1/credits',
   'GET /api/v1/credits/transactions',
@@ -176,6 +179,7 @@ const REFUSING_ROUTES = [
   'transforms/batch/[id].ts',
   'user-api-keys/[id]/callback-secret.ts',
   'users/[id]/index.ts',
+  'v1/completion-runs/[runId]/evaluation.ts',
 ];
 
 // Scope-less credential and account routes. They stay closed only while they declare no exchange scope.
