@@ -71,6 +71,8 @@ OverwatchUserDaySchema.index(
   { name: OVERWATCH_USER_DAY_INTERNAL_INDEX, partialFilterExpression: { internal: true } }
 );
 // TTL: retain user-day records for 180 days
+// Account erasure, as on OverwatchRawEvent. Pre-built by 20261124180550_ensure-overwatch-user-id-indexes.
+OverwatchUserDaySchema.index({ userId: 1 });
 OverwatchUserDaySchema.index({ createdAt: 1 }, { expireAfterSeconds: 15552000 });
 
 export const OverwatchUserDay: IOverwatchUserDayModel =

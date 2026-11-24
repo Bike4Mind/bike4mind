@@ -338,10 +338,8 @@ export const EXTERNAL_DATA_STORES: readonly ExternalDataStore[] = [
     kind: 'service',
     name: 'Product analytics ingest (Overwatch)',
     receives: 'Activity events keyed by an HMAC pseudonym of the user id',
-    erasure: {
-      action: 'notErased',
-      gap: 'No delete call; the pseudonym can be recomputed from the user id to find the events',
-    },
-    cannotRecall: 'Aggregates already derived from the events',
+    // Deleted by the pseudonym recomputed from the user id.
+    erasure: { action: 'erased', erasedBy: 'eraseProductAnalyticsEvents' },
+    cannotRecall: 'Aggregates already derived from the events, and the account_deleted event sent after the purge',
   },
 ];
