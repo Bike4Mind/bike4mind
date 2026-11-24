@@ -1,3 +1,4 @@
+import childProcess from 'node:child_process';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { loadEnv } from 'electron-vite';
 import config from '../../../electron.vite.config';
@@ -6,6 +7,12 @@ import config from '../../../electron.vite.config';
 vi.mock('electron-vite', async importOriginal => {
   const actual = await importOriginal<typeof import('electron-vite')>();
   return { ...actual, loadEnv: vi.fn() };
+});
+
+// Every config() call asks git for the dev version (dev-version.cjs), status of the whole checkout
+// included; nothing here reads that version.
+vi.spyOn(childProcess, 'execFileSync').mockImplementation(() => {
+  throw new Error('git is not run by these tests');
 });
 
 const API_VARIABLE = 'B4M_DEFAULT_API_URL';

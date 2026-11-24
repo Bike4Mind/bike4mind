@@ -11,7 +11,7 @@ type DeleteArtifactParameters = z.infer<typeof deleteArtifactSchema>;
 
 interface DeleteArtifactAdapters {
   db: {
-    artifacts: IArtifactRepository;
+    artifacts: Pick<IArtifactRepository, 'findOne' | 'update'>;
   };
 }
 

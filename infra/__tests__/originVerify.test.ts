@@ -70,6 +70,16 @@ describe('origin verification wiring', () => {
     expect(router).toMatch(/new random\.RandomPassword\('OriginVerifySecret', \{[^}]*special: false/);
   });
 
+  it('rotates the secret only when ORIGIN_VERIFY_SECRET_GENERATION is set', () => {
+    expect(router).toContain(
+      'const originVerifySecretGeneration = process.env.ORIGIN_VERIFY_SECRET_GENERATION || undefined;'
+    );
+    expect(router).toContain(
+      '...(originVerifySecretGeneration ? { keepers: { generation: originVerifySecretGeneration } } : {}),'
+    );
+    expect(read('infra/deploy-contract.json')).toContain('"ORIGIN_VERIFY_SECRET_GENERATION"');
+  });
+
   it('passes ORIGIN_VERIFY_SECRET to the server only outside sst dev and unless disabled', () => {
     expect(web).toMatch(
       /\.\.\.\(!\$dev && process\.env\.DISABLE_ORIGIN_VERIFY !== 'true'\s*\? \{ ORIGIN_VERIFY_SECRET: originVerifySecret\.result \}\s*: \{\}\)/

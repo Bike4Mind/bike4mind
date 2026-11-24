@@ -84,6 +84,7 @@ describe('CORE_DISALLOWED_PATHS', () => {
   // the list needs the missing siblings spelled out.
   it.each([
     ['/admin-emergency', '/admin'],
+    ['/admin/qa', '/admin'],
     ['/agents', '/agent'],
     ['/agent-executions', '/agent'],
     ['/verify-email', '/verify-'],

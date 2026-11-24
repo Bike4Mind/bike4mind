@@ -41,9 +41,12 @@ type UpdateArtifactParameters = z.infer<typeof updateArtifactSchema>;
 
 interface UpdateArtifactAdapters {
   db: {
-    artifacts: IArtifactRepository;
-    artifactContents: IArtifactContentRepository;
-    artifactVersions: IArtifactVersionRepository;
+    artifacts: Pick<IArtifactRepository, 'findOne' | 'updateWithWriteAccess'>;
+    artifactContents: Pick<IArtifactContentRepository, 'createOrUpdate' | 'delete' | 'findByArtifactId'>;
+    artifactVersions: Pick<
+      IArtifactVersionRepository,
+      'createOrUpdate' | 'delete' | 'findByArtifactId' | 'findOne' | 'update'
+    >;
   };
 }
 

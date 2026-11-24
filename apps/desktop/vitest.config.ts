@@ -16,5 +16,6 @@ export default defineConfig({
     globalSetup: [resolve(__dirname, 'vitest.globalSetup.ts')],
     setupFiles: [resolve(__dirname, 'vitest.setup.ts')],
     include: ['src/**/*.test.ts', 'src/**/*.test.tsx'],
+    reporters: ['default', resolve(__dirname, 'vitest.budgetReporter.ts')],
   },
 });

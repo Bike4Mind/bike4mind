@@ -12,6 +12,10 @@ import { SessionStore } from './SessionStore';
 import type { ModelCatalog } from './ModelCatalog';
 import type { AccessStore } from './tools/AccessStore';
 
+vi.mock('../git/hostGitArgs', async importOriginal =>
+  (await import('./plainFolderGit.testHelper')).skipGitOutsideRepositories(await importOriginal())
+);
+
 const contract: TaskContract = {
   version: 1,
   outcome: 'Fix the focused behavior',
@@ -206,7 +210,10 @@ describe('role routing and task runtime compatibility', () => {
     const child = await spawn(parent, { contract });
     expect(child?.model).toBe('worker');
     if (!child) throw new Error('Child not created');
-    await vi.waitUntil(() => post.mock.calls.some((_call, index) => wire(index).model === 'worker'), { timeout: 5000 });
+    await vi.waitUntil(() => post.mock.calls.some((_call, index) => wire(index).model === 'worker'), {
+      interval: 5,
+      timeout: 5000,
+    });
     expect((await store.get(parent.id))?.model).toBe('planner');
     expect(child.workerSelection).toMatchObject({
       role: 'implementation',
@@ -291,7 +298,9 @@ describe('role routing and task runtime compatibility', () => {
       await vi.waitUntil(() => reachedPolicy, { timeout: 5000, interval: 5 });
       scope = 'another-account';
       releasePolicy();
-      await vi.waitUntil(() => events.some(event => event.type === 'tool-end' && event.call.name === 'session_spawn'));
+      await vi.waitUntil(() => events.some(event => event.type === 'tool-end' && event.call.name === 'session_spawn'), {
+        interval: 5,
+      });
 
       const refused = events.find(event => event.type === 'tool-end' && event.call.name === 'session_spawn');
       expect(createChild).not.toHaveBeenCalled();
@@ -352,7 +361,10 @@ describe('role routing and task runtime compatibility', () => {
     await service.setSessionOrchestrate(parent.id, true);
     const child = await spawn(parent, { contract });
     if (!child) throw new Error('No child');
-    await vi.waitUntil(() => post.mock.calls.some((_call, index) => wire(index).model === 'worker'), { timeout: 5000 });
+    await vi.waitUntil(() => post.mock.calls.some((_call, index) => wire(index).model === 'worker'), {
+      interval: 5,
+      timeout: 5000,
+    });
     const workerIndex = post.mock.calls.findIndex((_call, index) => wire(index).model === 'worker');
     const report = {
       status: 'escalation-requested' as const,
@@ -363,9 +375,11 @@ describe('role routing and task runtime compatibility', () => {
     };
     tool(workerIndex, 'task_report', { report });
     await vi.waitUntil(async () => (await store.get(child.id))?.workerTask?.state.status === 'escalation-requested', {
+      interval: 5,
       timeout: 5000,
     });
     await vi.waitUntil(() => post.mock.calls.filter((_call, index) => wire(index).model === 'worker').length === 2, {
+      interval: 5,
       timeout: 5000,
     });
     const lastWorker = post.mock.calls.findLastIndex((_call, index) => wire(index).model === 'worker');
@@ -451,6 +465,7 @@ describe('role routing and task runtime compatibility', () => {
     finish(nextIndex);
     await idle(child.id);
     await vi.waitUntil(async () => (await store.get(child.id))?.workerTask?.state.status === 'blocked', {
+      interval: 5,
       timeout: 5000,
     });
   });
@@ -460,7 +475,10 @@ describe('role routing and task runtime compatibility', () => {
     await service.setSessionOrchestrate(parent.id, true);
     const child = await spawn(parent, { contract });
     if (!child) throw new Error('No child');
-    await vi.waitUntil(() => post.mock.calls.some((_call, index) => wire(index).model === 'worker'), { timeout: 5000 });
+    await vi.waitUntil(() => post.mock.calls.some((_call, index) => wire(index).model === 'worker'), {
+      interval: 5,
+      timeout: 5000,
+    });
     const childIndex = post.mock.calls.findIndex((_call, index) => wire(index).model === 'worker');
     expect(wire(childIndex).options?.tools?.map(entry => entry.toolSchema.name)).toContain('task_assess');
     const grandchild = await store.create('reviewer', {
@@ -513,12 +531,14 @@ describe('role routing and task runtime compatibility', () => {
     expect(child.model).toBe('reviewer');
     expect(child.workerSelection?.source).toBe('override');
     await vi.waitUntil(() => post.mock.calls.some((_call, index) => wire(index).model === 'reviewer'), {
+      interval: 5,
       timeout: 5000,
     });
     const childIndex = post.mock.calls.findIndex((_call, index) => wire(index).model === 'reviewer');
     finish(childIndex);
     await idle(child.id);
     await vi.waitUntil(async () => (await store.get(child.id))?.workerTask?.state.status === 'blocked', {
+      interval: 5,
       timeout: 5000,
     });
     await service.actOnTask(child.id, child.id, {
@@ -533,7 +553,7 @@ describe('role routing and task runtime compatibility', () => {
     });
     const count = post.mock.calls.length;
     await service.actOnTask(null, child.id, { kind: 'upgrade', modelId: 'planner', decisionId: 'upgrade-one' });
-    await vi.waitUntil(() => post.mock.calls.length > count, { timeout: 5000 });
+    await vi.waitUntil(() => post.mock.calls.length > count, { interval: 5, timeout: 5000 });
     const upgraded = await store.get(child.id);
     expect(upgraded?.workerTask?.attempts).toHaveLength(2);
     expect(upgraded?.workerTask?.attempts[1].trigger).toBe('user-upgrade');
@@ -555,7 +575,10 @@ describe('role routing and task runtime compatibility', () => {
     await service.setSessionOrchestrate(parent.id, true);
     const child = await spawn(parent, { contract });
     if (!child) throw new Error('No child');
-    await vi.waitUntil(() => post.mock.calls.some((_call, index) => wire(index).model === 'worker'), { timeout: 5000 });
+    await vi.waitUntil(() => post.mock.calls.some((_call, index) => wire(index).model === 'worker'), {
+      interval: 5,
+      timeout: 5000,
+    });
     const mutate = store.updateWorkerTask.bind(store);
     vi.spyOn(store, 'updateWorkerTask').mockImplementationOnce(async (id, change, scope, model) => {
       await mutate(
@@ -604,7 +627,10 @@ describe('role routing and task runtime compatibility', () => {
     await service.setSessionOrchestrate(parent.id, true);
     const child = await spawn(parent, { contract });
     if (!child) throw new Error('No child');
-    await vi.waitUntil(() => post.mock.calls.some((_call, index) => wire(index).model === 'worker'), { timeout: 5000 });
+    await vi.waitUntil(() => post.mock.calls.some((_call, index) => wire(index).model === 'worker'), {
+      interval: 5,
+      timeout: 5000,
+    });
     await drain([parent.id, child.id], { parentId: parent.id, childId: child.id });
     await service.actOnTask(parent.id, child.id, { kind: 'cancel', reason: 'Closing out: the work is finished.' });
     await drain([parent.id, child.id]);
@@ -656,11 +682,15 @@ describe('role routing and task runtime compatibility', () => {
     await service.setSessionOrchestrate(parent.id, true);
     const child = await spawn(parent, { contract });
     if (!child) throw new Error('No child');
-    await vi.waitUntil(() => post.mock.calls.some((_call, index) => wire(index).model === 'worker'), { timeout: 5000 });
+    await vi.waitUntil(() => post.mock.calls.some((_call, index) => wire(index).model === 'worker'), {
+      interval: 5,
+      timeout: 5000,
+    });
     const childIndex = post.mock.calls.findIndex((_call, index) => wire(index).model === 'worker');
     finish(childIndex);
     await idle(child.id);
     await vi.waitUntil(async () => (await store.get(child.id))?.workerTask?.state.status === 'blocked', {
+      interval: 5,
       timeout: 5000,
     });
     await store.appendMessage(child.id, {
@@ -676,7 +706,7 @@ describe('role routing and task runtime compatibility', () => {
     });
     const listing = vi.spyOn(service, 'listModels').mockReturnValueOnce(pendingCatalog);
     const continuing = service.continueReply(child.id);
-    await vi.waitUntil(() => listing.mock.calls.length === 1);
+    await vi.waitUntil(() => listing.mock.calls.length === 1, { interval: 5 });
     await service.actOnTask(null, child.id, { kind: 'cancel', reason: 'User canceled during catalog validation' });
     releaseCatalog?.({ models });
     expect(await continuing).toMatchObject({ ok: true });
@@ -817,7 +847,10 @@ describe('role routing and task runtime compatibility', () => {
     await service.setSessionOrchestrate(parent.id, true);
     const child = await spawn(parent, { contract });
     if (!child) throw new Error('No child');
-    await vi.waitUntil(() => post.mock.calls.some((_call, index) => wire(index).model === 'worker'), { timeout: 5000 });
+    await vi.waitUntil(() => post.mock.calls.some((_call, index) => wire(index).model === 'worker'), {
+      interval: 5,
+      timeout: 5000,
+    });
     finish(post.mock.calls.findIndex((_call, index) => wire(index).model === 'worker'));
     await idle(child.id);
     const stored = (await store.get(child.id))?.messages.length;

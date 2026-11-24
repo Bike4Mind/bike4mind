@@ -48,6 +48,22 @@ describe('GenerationJobRepository', () => {
     expect((await generationJobRepository.findById(id))?.ownerId).toBe('u1');
   });
 
+  it('round-trips the run attribution and its budget claim, and leaves both absent without a run', async () => {
+    const run = { runId: 'run-1', role: 'root' as const, purpose: 'tool' as const, taskId: 't1' };
+    const claimed = await generationJobRepository.createJob({
+      ...newJob(),
+      run,
+      runClaim: { runId: 'run-1', credits: 120 },
+    });
+    expect(await generationJobRepository.findById(claimed.id)).toMatchObject({
+      run,
+      runClaim: { runId: 'run-1', credits: 120 },
+    });
+    const plain = await generationJobRepository.findById((await generationJobRepository.createJob(newJob())).id);
+    expect(plain).not.toHaveProperty('run');
+    expect(plain).not.toHaveProperty('runClaim');
+  });
+
   it('rejects a supplied id that is not a lowercase 24-hex ObjectId string', async () => {
     const upper = new mongoose.Types.ObjectId().toHexString().toUpperCase();
     for (const id of ['job1', '', upper]) {

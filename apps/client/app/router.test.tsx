@@ -20,6 +20,10 @@ import {
   feedbackRollupRoute,
   dataLakesRoute,
   integrationsRoute,
+  legacyQaRunRoute,
+  legacyQaSegmentlessRoutes,
+  legacyQaStatusRoute,
+  legacyQaTestRoute,
   newRoute,
   notebooksIndexRoute,
   oauthLogoutRoute,
@@ -212,14 +216,73 @@ describe('Data Lake article deep link keeps ?passage=', () => {
 describe('QA status routes', () => {
   const chain = (path: string) => router.matchRoutes(path, {}).map(m => m.routeId);
 
-  it.each(['/status', '/status/runs/abc', '/status/tests/a%2Fb'])('%s renders outside the notebook layout', path => {
+  it.each(['/admin/qa', '/admin/qa/runs/abc', '/admin/qa/tests/a%2Fb'])('%s renders in the admin layout', path => {
     const ids = chain(path);
-    expect(ids).toContain('/qa-status-layout');
+    expect(ids).toContain('/admin-layout');
     expect(ids).not.toContain('/layout');
   });
 
   it('keeps regular app pages inside the notebook layout', () => {
     expect(chain('/new')).toContain('/layout');
+  });
+});
+
+describe('legacy /status redirects', () => {
+  const run = (route: { options: { beforeLoad?: unknown } }, ctx: Record<string, unknown>) => {
+    try {
+      (route.options.beforeLoad as (c: unknown) => void)(ctx);
+    } catch (e) {
+      return (e as { options: Record<string, unknown> }).options;
+    }
+    throw new Error('did not redirect');
+  };
+  const key = 'notebook.spec.ts > saves (100% ok)/x?y#z';
+
+  it('sends /status with QA search keys to /admin/qa with the search kept', () => {
+    const search = { product: 'x', range: '7d' };
+    expect(run(legacyQaStatusRoute, { search })).toMatchObject({ to: '/admin/qa', search, replace: true });
+  });
+
+  it('sends bare /status to /admin/qa', () => {
+    expect(run(legacyQaStatusRoute, { search: {} })).toMatchObject({ to: '/admin/qa', replace: true });
+  });
+
+  it('sends /status/runs/<id> to the admin run page with params and search kept', () => {
+    expect(run(legacyQaRunRoute, { params: { id: 'r1' }, search: { product: 'x' } })).toMatchObject({
+      to: '/admin/qa/runs/$id',
+      params: { id: 'r1' },
+      search: true,
+      replace: true,
+    });
+  });
+
+  it('sends /status/tests/<key> to the admin test page', () => {
+    expect(run(legacyQaTestRoute, { params: { testKey: key }, search: {} })).toMatchObject({
+      to: '/admin/qa/tests/$testKey',
+      params: { testKey: key },
+      search: true,
+      replace: true,
+    });
+  });
+
+  it.each(legacyQaSegmentlessRoutes.map(route => [route.path, route] as const))(
+    'sends %s with no segment to /admin/qa',
+    (_path, route) => {
+      expect(run(route, {})).toMatchObject({ to: '/admin/qa', replace: true });
+    }
+  );
+
+  it('matches the old URLs and decodes the test key from one segment', () => {
+    const m = router.matchRoutes(`/status/tests/${encodeURIComponent(key)}`, {});
+    expect(m.at(-1)).toMatchObject({ routeId: '/status/tests/$testKey', params: { testKey: key } });
+    expect(router.matchRoutes('/status/runs/abc', {}).at(-1)?.routeId).toBe('/status/runs/$id');
+    expect(router.matchRoutes('/status/runs', {}).at(-1)?.routeId).toBe('/status/runs');
+    expect(router.matchRoutes('/status/', {}).at(-1)?.routeId).toBe('/status');
+  });
+
+  it('round-trips a test key through the redirect target', () => {
+    const { pathname } = router.buildLocation({ to: '/admin/qa/tests/$testKey', params: { testKey: key } });
+    expect(router.matchRoutes(pathname, {}).at(-1)).toMatchObject({ params: { testKey: key } });
   });
 });
 

@@ -110,6 +110,26 @@ export function secretPaths(): string[] {
     .map(guard => guard.path);
 }
 
+/** The spellings a guard path is compared under (paths.ts `withRealPath`). */
+export type GuardSpellings = (guardPath: string) => string[];
+
+/**
+ * `withRealPath` remembered per guard, for one decision that checks many paths: resolving every guard
+ * again for each path is most of the cost of a shell approval. Never keep one past the decision it
+ * was made for, since a link created afterwards would be missed.
+ */
+export function guardSpellingsForDecision(): GuardSpellings {
+  const known = new Map<string, string[]>();
+  return guardPath => {
+    let spellings = known.get(guardPath);
+    if (!spellings) {
+      spellings = withRealPath(guardPath);
+      known.set(guardPath, spellings);
+    }
+    return spellings;
+  };
+}
+
 /**
  * Why `candidates` may not be read or written, or undefined when nothing protects them.
  *
@@ -117,14 +137,18 @@ export function secretPaths(): string[] {
  * symlinks resolved - and each guard is compared under its own resolved spelling too, so a
  * symlink on either side cannot slip past.
  */
-export function protectionFor(candidates: readonly string[], access: 'read' | 'write'): string | undefined {
+export function protectionFor(
+  candidates: readonly string[],
+  access: 'read' | 'write',
+  spellings: GuardSpellings = withRealPath
+): string | undefined {
   // macOS and Windows volumes are case-insensitive by default, and realpath keeps the caller's
   // casing for a name that does not exist yet: `.claude/Settings.local.json` would create the
   // very file Claude Code loads. Folding everywhere only ever refuses more.
   const folded = withDriveSpellings(candidates).map(fold);
   for (const guard of guards()) {
     if (access === 'read' && guard.readable) continue;
-    for (const spelling of withRealPath(guard.path).map(fold)) {
+    for (const spelling of spellings(guard.path).map(fold)) {
       if (
         folded.some(candidate => (guard.prefix ? candidate.startsWith(spelling) : guardFormWithin(spelling, candidate)))
       ) {

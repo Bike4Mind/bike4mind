@@ -37,7 +37,7 @@ describe('githubLakeRevokeQueue', () => {
       return Number(match?.[1]);
     };
     const queue = cut(QUEUES, "const githubLakeRevokeQueue = new sst.aws.Queue('githubLakeRevokeQueue'", '\n});');
-    const sub = cut(QUEUES, 'const githubLakeRevokeQueueSubscription = githubLakeRevokeQueue.subscribe(', '\n);');
+    const sub = cut(QUEUES, 'const githubLakeRevokeQueueSubscription = subscribeUnlessPreview(', '\n);');
     const retry = Number(queue.match(/retry:\s*(\d+)/)?.[1]);
     const claim = read('packages/database/src/models/infra/integrations/OrgGitHubLakeConnectionModel.ts').match(
       /CHAINED_SYNC_CLAIM_STALE_MS = (\d+) \* 60 \* 1000/
@@ -49,7 +49,7 @@ describe('githubLakeRevokeQueue', () => {
   });
 
   it('subscribes the handler with a 10-minute timeout, the VPC, the bucket and its own queue (slice re-enqueue), one record at a time', () => {
-    const sub = cut(QUEUES, 'const githubLakeRevokeQueueSubscription = githubLakeRevokeQueue.subscribe(', '\n);');
+    const sub = cut(QUEUES, 'const githubLakeRevokeQueueSubscription = subscribeUnlessPreview(', '\n);');
     expect(sub).toMatch(/handler:\s*'apps\/workers\/src\/queueHandlers\/githubLakeRevoke\.dispatch'/);
     expect(sub).toMatch(/timeout:\s*'10 minutes'/);
     expect(sub).toMatch(/vpc:\s*lambdaVpc/);
@@ -66,7 +66,9 @@ describe('githubLakeRevokeQueue', () => {
   it("ships the revoke and ingest handlers' logs to the log monitor", () => {
     const monitor = read('infra/logMonitor.ts');
     for (const subscription of ['githubLakeRevokeQueueSubscription', 'githubLakeIngestQueueSubscription']) {
-      expect(monitor).toMatch(new RegExp(`^\\s+${subscription}\\.nodes\\.function\\.nodes\\.logGroup\\.apply\\(`, 'm'));
+      expect(monitor).toMatch(
+        new RegExp(`^\\s+${subscription}\\??\\.nodes\\.function\\.nodes\\.logGroup\\.apply\\(`, 'm')
+      );
     }
   });
 

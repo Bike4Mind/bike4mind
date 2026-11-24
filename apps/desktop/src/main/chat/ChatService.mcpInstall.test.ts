@@ -13,6 +13,10 @@ import { SessionStore } from './SessionStore';
 import type { AccessStore } from './tools/AccessStore';
 import { ApprovalGate } from './tools/ApprovalGate';
 
+vi.mock('../git/hostGitArgs', async importOriginal =>
+  (await import('./plainFolderGit.testHelper')).skipGitOutsideRepositories(await importOriginal())
+);
+
 /**
  * The assistant installing an MCP server: the card only a click answers, the secret that never
  * comes back, and the new server's tools arriving in the same turn. Every server here is a

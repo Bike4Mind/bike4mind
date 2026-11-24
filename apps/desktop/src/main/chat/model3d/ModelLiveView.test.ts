@@ -8,6 +8,11 @@ import { realpathNearest } from '../tools/paths';
 import { withPathLock } from '../tools/writeTools';
 import { isModelPaneGlb } from './glbMarker';
 
+// Conditions here hold a few promise turns in; vi.waitFor's default 50ms poll would wait each one out.
+// Under fake timers each poll also advances the clock by its interval, so those keep the default.
+const waitFor = <T>(check: () => T | Promise<T>, options: { timeout?: number; interval?: number } = {}) =>
+  vi.waitFor(check, { ...(vi.isFakeTimers() ? {} : { interval: 1 }), ...options });
+
 const fsControl = vi.hoisted(() => ({
   failMove: false,
   linkError: null as string | null,
@@ -107,7 +112,7 @@ describe('ModelLiveView', () => {
     await view.open(file);
     // FSEvents arms the watch asynchronously, so a write in the first few ms can go unseen; keep
     // writing the same text until it is noticed (an unchanged re-read never bumps the generation).
-    await vi.waitFor(
+    await waitFor(
       () => {
         writeFileSync(file, SOURCE.replace('60', '70'));
         expect(view.current().generation).toBe(2);
@@ -131,7 +136,7 @@ describe('ModelLiveView', () => {
     view.reportBuild({ generation: 1, ok: true });
     writeFileSync(file, SOURCE.replace('60', '80'));
     const pending = view.waitForBuild();
-    await vi.waitFor(() => expect(view.current().generation).toBe(2));
+    await waitFor(() => expect(view.current().generation).toBe(2));
     view.reportBuild({ generation: 2, ok: true });
     await expect(pending).resolves.toMatchObject({ generation: 2 });
   });
@@ -196,7 +201,7 @@ describe('ModelLiveView', () => {
     try {
       const pending = view.waitForBuild();
       const outcome = expect(pending).rejects.toThrow('The model view closed.');
-      await vi.waitFor(() => expect(vi.getTimerCount()).toBe(1), { interval: 5 });
+      await waitFor(() => expect(vi.getTimerCount()).toBe(1), { interval: 5 });
       view.dispose();
       await outcome;
       expect(vi.getTimerCount()).toBe(0);
@@ -357,7 +362,7 @@ describe('ModelLiveView', () => {
     await Promise.resolve();
     expect(captureRequests).toHaveLength(0);
     view.reportBuild({ generation: 1, ok: true }, WINDOW);
-    await vi.waitFor(() => expect(captureRequests).toHaveLength(1));
+    await waitFor(() => expect(captureRequests).toHaveLength(1));
     view.resolveCapture(captureRequests[0].id, { bytes: new Uint8Array([1]) });
     await expect(pending).resolves.toEqual(new Uint8Array([1]));
   });
@@ -366,7 +371,7 @@ describe('ModelLiveView', () => {
     await view.open(file);
     view.reportBuild({ generation: 1, ok: true }, WINDOW);
     const pending = view.capture(['front', 'iso']);
-    await vi.waitFor(() => expect(captureRequests).toHaveLength(1));
+    await waitFor(() => expect(captureRequests).toHaveLength(1));
     expect(captureRequests[0]).toMatchObject({ views: ['front', 'iso'] });
     view.resolveCapture(captureRequests[0].id, { bytes: new Uint8Array([1, 2]) });
     await expect(pending).resolves.toEqual(new Uint8Array([1, 2]));
@@ -376,7 +381,7 @@ describe('ModelLiveView', () => {
     await view.open(file);
     view.reportBuild({ generation: 1, ok: true }, WINDOW);
     const pending = view.recordTurntable('night');
-    await vi.waitFor(() => expect(captureRequests).toHaveLength(1));
+    await waitFor(() => expect(captureRequests).toHaveLength(1));
     expect(captureRequests[0]).toMatchObject({ kind: 'turntable', lighting: 'night' });
     view.resolveCapture(captureRequests[0].id, { bytes: new Uint8Array([26, 69]) });
     await expect(pending).resolves.toEqual(new Uint8Array([26, 69]));
@@ -386,7 +391,7 @@ describe('ModelLiveView', () => {
     await view.open(file);
     view.reportBuild({ generation: 1, ok: true }, WINDOW);
     const pending = view.recordTurntable('studio');
-    await vi.waitFor(() => expect(captureRequests).toHaveLength(1));
+    await waitFor(() => expect(captureRequests).toHaveLength(1));
     view.resolveCapture(captureRequests[0].id, { error: 'This app cannot record WebM video.' });
     await expect(pending).rejects.toThrow(/cannot record WebM/);
   });
