@@ -115,7 +115,7 @@ function ZoneOverlay({ layout, hover }: { layout: OrchestratorLayout; hover: Hov
     <Box
       aria-hidden="true"
       data-testid="orchestrator-stage-drop-zones"
-      sx={{ position: 'absolute', inset: 0, pointerEvents: 'none', zIndex: 2 }}
+      sx={{ position: 'absolute', inset: 0, pointerEvents: 'none', zIndex: 10 }}
     >
       {zones.map(zone => {
         const active = hover.zone === zone;

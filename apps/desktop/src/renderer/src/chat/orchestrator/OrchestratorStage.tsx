@@ -493,7 +493,7 @@ export function OrchestratorStage({
           </Typography>
         </Box>
       ) : (
-        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.25, px: 1.5, py: 1 }}>
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.25, px: 1.5, py: 1, minWidth: 0 }}>
           <ViewSwitcher
             layout={layout}
             onLayoutChange={onLayoutChange}
