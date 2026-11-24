@@ -19,6 +19,7 @@ import {
   useSaveSkillBundle,
   useSkillBundles,
   type SkillBundleInput,
+  type SkillBundleOwner,
   type SkillBundlesView,
 } from '@client/app/hooks/data/skillMarket';
 import { getErrorMessage } from '@client/app/utils/error';
@@ -29,9 +30,15 @@ type Candidate = SkillBundlesView['listings'][number];
  * Bundles section of the Team marketplace tab: each bundle installs several of the org's approved
  * skills as one Claude Code plugin (server/skillMarket/bundles.ts). Org admins create and edit them.
  */
-const ClaudeCodeBundles: FC<{ orgId: string; marketplace: string }> = ({ orgId, marketplace }) => {
-  const { data, isPending, isError } = useSkillBundles(orgId);
-  const remove = useDeleteSkillBundle(orgId);
+const ClaudeCodeBundles: FC<{ orgId?: string; spaceId?: string; marketplace: string }> = ({
+  orgId,
+  spaceId,
+  marketplace,
+}) => {
+  const owner: SkillBundleOwner = spaceId ? { spaceId } : { orgId: orgId ?? '' };
+  const { data, isPending, isError } = useSkillBundles(owner);
+  const remove = useDeleteSkillBundle(owner);
+  const noun = spaceId ? 'Space' : 'organization';
   // `null` = closed, `'new'` = creating, else the bundle being edited.
   const [editing, setEditing] = useState<ISkillBundle | 'new' | null>(null);
 
@@ -62,7 +69,7 @@ const ClaudeCodeBundles: FC<{ orgId: string; marketplace: string }> = ({ orgId, 
         editing !== 'new' && editing?.id === bundle.id ? (
           <BundleEditor
             key={bundle.id}
-            orgId={orgId}
+            owner={owner}
             bundle={bundle}
             listings={data.listings}
             onDone={() => setEditing(null)}
@@ -126,7 +133,7 @@ const ClaudeCodeBundles: FC<{ orgId: string; marketplace: string }> = ({ orgId, 
         )
       )}
       {editing === 'new' ? (
-        <BundleEditor orgId={orgId} listings={data.listings} onDone={() => setEditing(null)} />
+        <BundleEditor owner={owner} listings={data.listings} onDone={() => setEditing(null)} />
       ) : data.canEdit ? (
         <Button
           size="sm"
@@ -136,20 +143,20 @@ const ClaudeCodeBundles: FC<{ orgId: string; marketplace: string }> = ({ orgId, 
           onClick={() => setEditing('new')}
           data-testid="skill-claude-code-bundle-new"
         >
-          {data.listings.length ? 'New bundle' : 'New bundle (no approved organization skills yet)'}
+          {data.listings.length ? 'New bundle' : `New bundle (no approved ${noun} skills yet)`}
         </Button>
       ) : null}
     </Stack>
   );
 };
 
-const BundleEditor: FC<{ orgId: string; bundle?: ISkillBundle; listings: Candidate[]; onDone: () => void }> = ({
-  orgId,
-  bundle,
-  listings,
-  onDone,
-}) => {
-  const save = useSaveSkillBundle(orgId);
+const BundleEditor: FC<{
+  owner: SkillBundleOwner;
+  bundle?: ISkillBundle;
+  listings: Candidate[];
+  onDone: () => void;
+}> = ({ owner, bundle, listings, onDone }) => {
+  const save = useSaveSkillBundle(owner);
   const [name, setName] = useState(bundle?.name ?? '');
   const [description, setDescription] = useState(bundle?.description ?? '');
   // A member that lost approval is kept but not shown in the picker.
@@ -197,7 +204,7 @@ const BundleEditor: FC<{ orgId: string; bundle?: ISkillBundle; listings: Candida
             onChange={(_e, value) => setMembers(value)}
             getOptionLabel={o => o.name}
             isOptionEqualToValue={(a, b) => a.id === b.id}
-            placeholder="Approved organization skills"
+            placeholder={`Approved ${'spaceId' in owner ? 'Space' : 'organization'} skills`}
             slotProps={{ input: { 'data-testid': 'skill-claude-code-bundle-skills' } }}
           />
         </FormControl>

@@ -83,6 +83,12 @@ const VISIBILITY_OPTIONS: Array<{ value: SkillListingVisibility; title: string; 
     icon: <GroupsIcon />,
   },
   {
+    value: 'space',
+    title: 'Space',
+    body: 'Only members of the Space you choose can see it.',
+    icon: <GroupsIcon />,
+  },
+  {
     value: 'unlisted',
     title: 'Unlisted link',
     body: 'Hidden from browse and search. Anyone signed in with the link can import it.',
@@ -115,6 +121,7 @@ const PublishDialog: FC<PublishDialogProps> = ({ onClose, skill, ownSkills = [] 
   const [skillId, setSkillId] = useState(skill?.id ?? '');
   const [visibility, setVisibility] = useState<SkillListingVisibility>('public');
   const [organizationId, setOrganizationId] = useState('');
+  const [spaceId, setSpaceId] = useState('');
   const [editedTags, setEditedTags] = useState<string[] | null>(null);
   const [tagDraft, setTagDraft] = useState('');
   const [tagError, setTagError] = useState<string | null>(null);
@@ -134,8 +141,13 @@ const PublishDialog: FC<PublishDialogProps> = ({ onClose, skill, ownSkills = [] 
   const pending = publish.isPending || submitVersion.isPending;
 
   const orgs = me?.organizations ?? [];
+  const spaces = me?.spaces ?? [];
+  const visibilityOptions = spaces.length ? VISIBILITY_OPTIONS : VISIBILITY_OPTIONS.filter(o => o.value !== 'space');
   const canSubmit =
-    Boolean(skillId) && (Boolean(existing) || visibility !== 'organization' || Boolean(organizationId)) && !pending;
+    Boolean(skillId) &&
+    (Boolean(existing) ||
+      ((visibility !== 'organization' || Boolean(organizationId)) && (visibility !== 'space' || Boolean(spaceId)))) &&
+    !pending;
 
   const addTag = () => {
     const tag = tagDraft.trim().toLowerCase().replace(/^#/, '');
@@ -166,6 +178,7 @@ const PublishDialog: FC<PublishDialogProps> = ({ onClose, skill, ownSkills = [] 
               skillId,
               visibility,
               ...(visibility === 'organization' ? { organizationId } : {}),
+              ...(visibility === 'space' ? { spaceId } : {}),
               tags,
             })
       );
@@ -285,7 +298,7 @@ const PublishDialog: FC<PublishDialogProps> = ({ onClose, skill, ownSkills = [] 
                       onChange={e => setVisibility(e.target.value as SkillListingVisibility)}
                       sx={{ gap: 1 }}
                     >
-                      {VISIBILITY_OPTIONS.map(o => (
+                      {visibilityOptions.map(o => (
                         <Card
                           key={o.value}
                           variant={visibility === o.value ? 'soft' : 'outlined'}
@@ -325,6 +338,24 @@ const PublishDialog: FC<PublishDialogProps> = ({ onClose, skill, ownSkills = [] 
                         {orgs.map(o => (
                           <Option key={o.id} value={o.id}>
                             {o.name}
+                          </Option>
+                        ))}
+                      </Select>
+                    </FormControl>
+                  ) : null}
+
+                  {visibility === 'space' ? (
+                    <FormControl required>
+                      <FormLabel>Space</FormLabel>
+                      <Select
+                        placeholder="Choose a Space"
+                        value={spaceId || null}
+                        onChange={(_e, v) => setSpaceId(v ?? '')}
+                        slotProps={{ button: { 'data-testid': 'market-publish-space-select' } }}
+                      >
+                        {spaces.map(sp => (
+                          <Option key={sp.id} value={sp.id}>
+                            {sp.name}
                           </Option>
                         ))}
                       </Select>
