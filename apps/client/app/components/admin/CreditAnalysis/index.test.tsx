@@ -106,6 +106,27 @@ describe('CreditAnalyticsTab', () => {
     search.creditTab = undefined;
   });
 
+  it('renders the linked sub-tab first, before the effect syncs the store', () => {
+    const { setActiveTab } = useCreditAnalysisStore.getState();
+    useCreditAnalysisStore.setState({ activeTab: 'users', setActiveTab: () => {} });
+    search.creditTab = 'side-apps';
+    try {
+      render(
+        <CssVarsProvider theme={appTheme}>
+          <CreditAnalyticsTab />
+        </CssVarsProvider>
+      );
+      expect(useCreditAnalysisStore.getState().activeTab).toBe('users');
+      expect(screen.getByTestId('credit-analysis-side-apps-tab')).toHaveAttribute('aria-selected', 'true');
+      expect(screen.getByTestId('credit-analysis-users-tab')).toHaveAttribute('aria-selected', 'false');
+      expect(screen.queryByTestId('stub-user-credits')).toBeNull();
+      expect(screen.getByTestId('stub-side-apps')).toBeInTheDocument();
+    } finally {
+      search.creditTab = undefined;
+      useCreditAnalysisStore.setState({ setActiveTab });
+    }
+  });
+
   it('writes the sub-tab to the URL on selection and leaves the default out', () => {
     navigate.mockClear();
     useCreditAnalysisStore.getState().setActiveTab('users');

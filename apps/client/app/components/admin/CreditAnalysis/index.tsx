@@ -21,8 +21,8 @@ export const CreditAnalyticsTab: React.FC = () => {
   const setActiveTab = useCreditAnalysisStore(state => state.setActiveTab);
   const search = useSearch({ strict: false });
   const navigate = useNavigate();
-  const selectedTab = search.creditView === 'economy' ? 'economy' : activeTab;
   const linkedTab = parseCreditTab(search.creditTab);
+  const selectedTab = search.creditView === 'economy' ? 'economy' : (linkedTab ?? activeTab);
 
   useEffect(() => {
     if (linkedTab) setActiveTab(linkedTab);
