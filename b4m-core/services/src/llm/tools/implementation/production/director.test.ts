@@ -23,6 +23,7 @@ import {
 } from './index';
 import { createProductionAudio } from './audio';
 import { DIRECTOR_TRACK_IDS, directorClips } from './layout';
+import { STORYBOARD_MAX_SHOTS } from './storyboard';
 import { ProductionToolError, describeProductionError } from './shared';
 
 vi.mock('./audio', () => ({ createProductionAudio: vi.fn() }));
@@ -880,6 +881,37 @@ describe('production director tools', () => {
       const result = await run(productionAssembleTool, harness, { compositionId: COMPOSITION_ID });
       expect(result).toBe('Error: the production was not saved (Invalid composition: timeline.tracks.0: bad clip).');
     });
+  });
+
+  it('storyboards a 2 minute short film in the most shots one call takes, with no product photo', async () => {
+    Object.assign(harness.composition(), { template: 'short_film', timeline: defaultStudioTimeline('short_film') });
+    const beats = ['opening', 'setup', 'inciting incident', 'rising action', 'turn', 'climax', 'resolution'];
+    const shots = Array.from({ length: STORYBOARD_MAX_SHOTS }, (_, index) => ({
+      title: `Scene ${index + 1}`,
+      intent: beats[Math.min(index, beats.length - 1)],
+      prompt: `The lighthouse keeper at dusk, scene ${index + 1}`,
+      durationSeconds: 10,
+      voiceLine: `Line ${index + 1} of the story.`,
+    }));
+    const result = JSON.parse(await run(productionStoryboardTool, harness, { compositionId: COMPOSITION_ID, shots }));
+    expect(result.totalSeconds).toBe(120);
+    expect(harness.composition().shots).toHaveLength(STORYBOARD_MAX_SHOTS);
+    expect(harness.composition().brandKit.productFileIds).toEqual([]);
+
+    await expect(
+      run(productionStoryboardTool, harness, {
+        compositionId: COMPOSITION_ID,
+        shots: [...shots, { ...shots[0], prompt: 'One scene too many for a call' }],
+      })
+    ).rejects.toThrow();
+  });
+
+  it('refuses a new shot without a prompt', async () => {
+    const result = await run(productionStoryboardTool, harness, {
+      compositionId: COMPOSITION_ID,
+      shots: [{ title: 'Opening', durationSeconds: 5 }],
+    });
+    expect(result).toMatch(/^Error: a new shot needs a title, a prompt and durationSeconds/);
   });
 
   it('is unavailable without a production tool config', async () => {

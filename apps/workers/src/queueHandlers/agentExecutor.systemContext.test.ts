@@ -59,7 +59,7 @@ describe('systemContext call site in agentExecutor', () => {
     const options = runIterationOptions();
     const normalized = source.replace(/\s+/g, ' ');
     expect(normalized).toContain(
-      'const systemContext = withRecentImagesNote( withDirectedSystemContext(startPayload?.systemContext, { ...directedSession, productionToolsReady: productionConfig !== null, }), recentImagesNote );'
+      'const systemContext = withRecentImagesNote( withDirectedSystemContext(startPayload?.systemContext, { ...directedSession, productionToolsReady: productionConfig !== null, briefing: await loadDirectorBriefing(directedSession, productionConfig?.compositions, logger), }), recentImagesNote );'
     );
     expect(options).toContain('...(systemContext ? { context: systemContext } : {})');
     // Exactly one `context:` key, so nothing later in the object can overwrite the spread.
