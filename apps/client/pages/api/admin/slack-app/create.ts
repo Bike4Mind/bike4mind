@@ -3,7 +3,10 @@ import { adminApi } from '@server/middlewares/adminApi';
 import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 import { z } from 'zod';
 import { slackDevWorkspaceRepository } from '@bike4mind/database/infra';
-import { isSlackUserValidationError } from '@bike4mind/server-utils/integrations/slack/slackExportErrors';
+import {
+  isSlackConfigTokenAuthError,
+  SUBMITTED_CONFIG_TOKEN_REJECTED_MESSAGE,
+} from '@server/integrations/slack/slackConfigTokenErrors';
 import { withTransaction } from '@bike4mind/database';
 import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 
@@ -133,9 +136,9 @@ const handler = adminApi({
   if (!slackData.ok) {
     const slackError = slackData.error as string;
 
-    if (isSlackUserValidationError(slackError || '')) {
-      req.logger.warn('Slack manifest create auth error (user validation)', { error: slackError });
-      throw new BadRequestError('Configuration token is invalid or expired. Please provide a valid token.');
+    if (isSlackConfigTokenAuthError(slackError)) {
+      req.logger.warn('Slack rejected the submitted config token (apps.manifest.create)', { error: slackError });
+      throw new BadRequestError(SUBMITTED_CONFIG_TOKEN_REJECTED_MESSAGE);
     }
 
     req.logger.error('Slack API error:', { error: slackData.error, errors: slackData.errors });
