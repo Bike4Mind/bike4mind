@@ -9,6 +9,8 @@ import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.SerializationException
@@ -112,6 +114,9 @@ class MediaFirstPageStore(
     /** Bumped by [invalidate] so a response in flight at sign-out cannot repopulate the store. */
     private val epoch = AtomicInteger(0)
 
+    /** Makes the epoch check and the write one step, so a sign-out wipe cannot interleave with a save. */
+    private val writes = Mutex()
+
     /** The last page 1 seen for [kind], from memory or else disk. Null on a cold first launch. */
     suspend fun seeded(kind: MediaKind?): MediaPage? {
         latest[key(kind)]?.let { return it }
@@ -126,17 +131,21 @@ class MediaFirstPageStore(
     suspend fun refresh(kind: MediaKind?): MediaPage {
         val startedAt = epoch.get()
         val page = api.list(kind, page = 1, limit = pageSize)
-        if (startedAt != epoch.get()) return page
-        latest[key(kind)] = page
-        cache.save(page, kind)
+        writes.withLock {
+            if (startedAt != epoch.get()) return page
+            latest[key(kind)] = page
+            cache.save(page, kind)
+        }
         return page
     }
 
     /** The session ended: forget everything the previous account saw. */
     suspend fun invalidate() {
         epoch.incrementAndGet()
-        latest.clear()
-        cache.clear()
+        writes.withLock {
+            latest.clear()
+            cache.clear()
+        }
     }
 }
 
