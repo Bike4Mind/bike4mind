@@ -48,6 +48,25 @@ describe('composeToolHosts', () => {
     expect(functions.callTool).toHaveBeenCalledTimes(1);
   });
 
+  it('logs and skips a host whose listing fails, keeping the other hosts offered', async () => {
+    const functions = host('fn', 'fn');
+    vi.mocked(functions.listConnections).mockRejectedValueOnce(new Error('registry down'));
+    const offers = await composeToolHosts(functions, host('conn-1')).listConnections('u1');
+    expect(offers.map(o => o.connectionId)).toEqual(['conn-1']);
+  });
+
+  it('with the MCP server off lists only the hosts that list without it', async () => {
+    const functions = { ...host('fn', 'fn'), listsWithoutMcpServer: true };
+    const connectors = host('conn-1');
+    const composed = composeToolHosts(functions, connectors);
+    expect(composed.listsWithoutMcpServer).toBe(true);
+    expect(composeToolHosts(connectors).listsWithoutMcpServer).toBe(false);
+
+    const offers = await composed.listConnections('u1', { mcpServerOff: true });
+    expect(offers.map(o => o.connectionId)).toEqual(['fn']);
+    expect(connectors.listConnections).not.toHaveBeenCalled();
+  });
+
   it('throws for a connection no host serves', async () => {
     await expect(call(composeToolHosts(host('fn', 'fn')), 'conn-1')).rejects.toThrow(/No tool host/);
   });

@@ -53,6 +53,7 @@ const run = (
     disabledMcpConnections?: string[];
     enabledPlatformMcpConnections?: string[];
     disableUserIntegrations?: boolean;
+    enableMCPServer?: boolean;
   } = {}
 ) =>
   builder.buildMcpTools({
@@ -265,6 +266,50 @@ describe('ToolBuilder buildMcpTools - custom connectors', () => {
         disabledMcpConnections: ['fn'],
       });
       expect(Object.keys(mcpToolsByServer)).toEqual(['acme']);
+    });
+
+    it('is offered with Enable MCP Server off, listing only the hosts that list without it', async () => {
+      const host = {
+        listsWithoutMcpServer: true,
+        listConnections: vi.fn(async (_userId: string, _options?: CustomMcpListOptions) => [functions]),
+        callTool: vi.fn(),
+      };
+      const builder = builderWith(host as never);
+
+      const { mcpToolsByServer, customMcpToolNames } = await run(builder, undefined, { enableMCPServer: false });
+
+      expect(Object.keys(mcpToolsByServer)).toEqual(['fn']);
+      expect([...customMcpToolNames]).toEqual(['fn__search']);
+      expect(host.listConnections.mock.calls[0]![1]).toMatchObject({ mcpServerOff: true });
+      const builtInServers = (builder as unknown as { deps: { db: { mcpServers: { find: () => unknown } } } }).deps.db
+        .mcpServers.find;
+      expect(builtInServers).not.toHaveBeenCalled();
+    });
+
+    it('offers no connector with Enable MCP Server off from a host that does not list without it', async () => {
+      const host = hostOf();
+      const { mcpToolsByServer } = await run(builderWith(host as never), undefined, { enableMCPServer: false });
+      expect(mcpToolsByServer).toEqual({});
+      expect(host.listConnections).not.toHaveBeenCalled();
+    });
+
+    it('leaves switched-off functions out of the cap, so connector tools fill all 40 slots', async () => {
+      const manyTools = (prefix: string, count: number) =>
+        Array.from({ length: count }, (_, i) => ({ ...connection.tools[0], name: `${prefix}_${i}` }));
+      const host = {
+        listConnections: vi.fn(async () => [
+          { ...functions, tools: manyTools('fn_tool', 20) },
+          { ...connection, tools: manyTools('a', 25) },
+          { ...connection, connectionId: 'c2', slug: 'beta', tools: manyTools('b', 25) },
+        ]),
+        callTool: vi.fn(),
+      };
+      const { mcpToolsByServer } = await run(builderWith(host as never), undefined, {
+        disabledMcpConnections: ['fn'],
+      });
+      expect(mcpToolsByServer.fn).toBeUndefined();
+      expect(mcpToolsByServer.acme).toHaveLength(25);
+      expect(mcpToolsByServer.beta).toHaveLength(15);
     });
   });
 

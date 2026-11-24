@@ -1,10 +1,12 @@
 import {
+  MAX_CALLABLE_FUNCTIONS_PER_TURN,
   projectFunctionSchema,
   reviewHash,
   type CallableFunctionCallSurface,
   type ICallableFunctionOfferable,
 } from '@bike4mind/common';
 import { callableFunctionRepository } from '@bike4mind/database';
+import { Logger } from '@bike4mind/observability';
 import {
   isCustomToolOffered,
   type CustomMcpConnectionOffer,
@@ -22,7 +24,7 @@ import { listOfferedCallableFunctions } from './registry';
 export const FUNCTION_CONNECTION_ID = 'fn';
 
 /** Functions are listed first, so they get their own share of the 40 custom tools a turn may carry. */
-export const MAX_FUNCTION_TOOLS_PER_TURN = 20;
+export const MAX_FUNCTION_TOOLS_PER_TURN = MAX_CALLABLE_FUNCTIONS_PER_TURN;
 
 export type FunctionToolSurface = Extract<CallableFunctionCallSurface, 'chat' | 'agent'>;
 
@@ -86,10 +88,16 @@ export function createFunctionToolHost(
 ): CustomMcpToolHost {
   return {
     ownsConnection: connectionId => connectionId === FUNCTION_CONNECTION_ID,
+    listsWithoutMcpServer: true,
 
     async listConnections(userId, options = {}) {
       if (!(await resolveCallableFunctionsEnabled({ id: userId }))) return [];
-      const functions = (await listOfferedCallableFunctions({ id: userId }))
+      const functions = (
+        await listOfferedCallableFunctions(
+          { id: userId },
+          { limit: MAX_FUNCTION_TOOLS_PER_TURN, excludeAlwaysAsk: options.headless }
+        )
+      )
         // No one can answer a card in a headless turn, so an always-ask function would only stall it.
         .filter(fn => !(options.headless && fn.approval === 'always_ask'))
         .slice(0, MAX_FUNCTION_TOOLS_PER_TURN);
@@ -115,8 +123,16 @@ export function createFunctionToolHost(
       if (fn.approval === 'always_ask' && !approved) {
         return { result: textResult({ outcome: 'refused', reason: 'approval_required' }, true) };
       }
-      const call = await deps.dispatch({ caller: { id: userId }, functionId: fn.id, args, surface });
-      return { result: toCallResult(call) };
+      try {
+        const call = await deps.dispatch({ caller: { id: userId }, functionId: fn.id, args, surface });
+        return { result: toCallResult(call) };
+      } catch (error) {
+        Logger.warn('[callableFunctions] Function dispatch threw', {
+          slug: toolName,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        return { result: textResult({ outcome: 'error', reason: 'dispatch_failed' }, true) };
+      }
     },
   };
 }

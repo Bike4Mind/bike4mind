@@ -1,5 +1,17 @@
 import { Quest, Session } from '@bike4mind/database';
-import { MCP_ACTION_REPLACED_ERROR_CODE, PENDING_ACTION_TTL_MS } from '@bike4mind/common';
+import {
+  MCP_ACTION_REPLACED_ERROR_CODE,
+  PENDING_ACTION_TTL_MS,
+  type CustomConnectorPendingRef,
+} from '@bike4mind/common';
+import {
+  CUSTOM_MCP_AWAITING_APPROVAL_PREFIX,
+  CUSTOM_MCP_OUTPUT_TOO_LARGE_BODY,
+  customMcpResultBody,
+  customMcpResultText,
+  customMcpToolId,
+  type CustomMcpToolCallResult,
+} from '@bike4mind/services/llm';
 import type { Logger } from '@bike4mind/observability';
 import { assertMcpServerEnabled } from '@server/utils/mcpServerFlag';
 import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
@@ -20,6 +32,57 @@ import { getSelectedRepositoriesForMcp } from '@bike4mind/server-utils/integrati
 import { JIRA_UPLOAD_ATTACHMENT, CONFLUENCE_UPLOAD_ATTACHMENT } from '@bike4mind/mcp/atlassian/constants';
 
 type ActingUser = Parameters<typeof resolvePendingActionTarget>[1];
+
+/**
+ * A confirmed function returns its output on the card, capped and refused whole as the model would read it, and
+ * the same text replaces the call's held reply on the quest so the next turn replays the output.
+ */
+async function confirmedFunctionOutcome(
+  questId: string,
+  customConnector: CustomConnectorPendingRef,
+  tool: string,
+  result: CustomMcpToolCallResult,
+  logger: Logger
+): Promise<PendingActionOutcome> {
+  const output = customMcpResultBody(result);
+  const tooLarge = output === CUSTOM_MCP_OUTPUT_TOO_LARGE_BODY;
+  try {
+    await Quest.updateOne(
+      {
+        _id: questId,
+        'promptMeta.functionCalls': {
+          $elemMatch: {
+            name: customMcpToolId(customConnector.slug, tool),
+            returnValue: { $regex: `^${CUSTOM_MCP_AWAITING_APPROVAL_PREFIX}` },
+          },
+        },
+      },
+      {
+        $set: {
+          'promptMeta.functionCalls.$.returnValue': customMcpResultText(customConnector, result),
+          'promptMeta.functionCalls.$.success': !result.isError && !tooLarge,
+        },
+      },
+      { runValidators: true }
+    );
+  } catch (error) {
+    logger.warn('[MCP Pending Action] Could not record the confirmed function output', {
+      questId,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+  const failed = result.isError || tooLarge;
+  return {
+    status: 200,
+    body: {
+      success: !failed,
+      message: failed
+        ? `${customConnector.displayName}: ${tool} did not return an output`
+        : `${customConnector.displayName}: ${tool} completed`,
+      output,
+    },
+  };
+}
 
 /**
  * `reason` names the lifecycle outcomes the public API reports as stable error codes; `not_found`
@@ -150,6 +213,15 @@ export async function resolveMcpPendingAction({
         approved: true,
         platformConnectionIds: [connectionId],
       });
+      if (isFunction) {
+        return await confirmedFunctionOutcome(
+          questId,
+          pendingAction.customConnector,
+          pendingAction.tool,
+          result,
+          logger
+        );
+      }
       return {
         status: 200,
         body: result.isError

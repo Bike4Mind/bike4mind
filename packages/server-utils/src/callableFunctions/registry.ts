@@ -283,9 +283,10 @@ export async function setCallableFunctionApproval(
 
 /** The actor's functions chat may offer: live, turned on, and with their artifact still in place. */
 export async function listOfferedCallableFunctions(
-  actor: CallableFunctionActor
+  actor: CallableFunctionActor,
+  options: { limit?: number; excludeAlwaysAsk?: boolean } = {}
 ): Promise<ICallableFunctionOfferable[]> {
-  const functions = await callableFunctionRepository.listLiveForOwner(userOwner(actor));
+  const functions = await callableFunctionRepository.listLiveForOwner(userOwner(actor), options);
   const heads = await readHeads(
     actor,
     functions.map(fn => fn.pin.artifactId)

@@ -15,7 +15,7 @@ vi.mock('@server/utils/mcpServerFlag', () => ({ assertMcpServerEnabled: vi.fn() 
 
 vi.mock('@bike4mind/database', () => ({
   Session: { findById: vi.fn() },
-  Quest: { findById: vi.fn(), findByIdAndUpdate: vi.fn() },
+  Quest: { findById: vi.fn(), findByIdAndUpdate: vi.fn(), updateOne: vi.fn() },
   fabFileRepository: { shareable: { findAccessibleById: vi.fn() } },
 }));
 
@@ -663,7 +663,11 @@ describe('POST /api/mcp/confirm - function actions', () => {
   it('runs through the function host under the functions setting, with custom connectors off', async () => {
     const res = await confirm();
 
-    expect(res._getJSONData()).toEqual({ success: true, message: 'Functions: beam_midspan_deflection completed' });
+    expect(res._getJSONData()).toEqual({
+      success: true,
+      message: 'Functions: beam_midspan_deflection completed',
+      output: '',
+    });
     expect(assertCallableFunctionsEnabled).toHaveBeenCalledWith({ id: 'user-1' });
     expect(assertCustomMcpEnabled).not.toHaveBeenCalled();
     expect(isFunctionToolStillOffered).toHaveBeenCalledWith('user-1', 'beam_midspan_deflection');
@@ -679,6 +683,50 @@ describe('POST /api/mcp/confirm - function actions', () => {
       })
     );
     expect(customMcpToolHost.callTool).not.toHaveBeenCalled();
+  });
+
+  const STAMP = { function_id: 'f1', trust_label: 'unverified', surface: 'chat' };
+  const structured = (output: Record<string, unknown>) => ({
+    result: { content: [], structuredContent: output, meta: STAMP, label: 'unverified' },
+  });
+
+  it('returns the output and stamp on the card and replays them in place of the held call', async () => {
+    vi.mocked(functionHost.callTool).mockResolvedValue(structured({ deflection: 0.000406901 }));
+
+    const res = await confirm();
+
+    const body = res._getJSONData();
+    expect(body).toMatchObject({ success: true, message: 'Functions: beam_midspan_deflection completed' });
+    expect(JSON.parse(body.output)).toEqual({ output: { deflection: 0.000406901 }, stamp: STAMP });
+    expect(Quest.updateOne).toHaveBeenCalledWith(
+      {
+        _id: QUEST_ID,
+        'promptMeta.functionCalls': {
+          $elemMatch: { name: 'fn__beam_midspan_deflection', returnValue: { $regex: '^Awaiting your approval:' } },
+        },
+      },
+      {
+        $set: {
+          'promptMeta.functionCalls.$.returnValue':
+            '<untrusted_tool_result connector="fn" host="functions" label="unverified">\n' +
+            `${body.output}\n</untrusted_tool_result>`,
+          'promptMeta.functionCalls.$.success': true,
+        },
+      },
+      { runValidators: true }
+    );
+  });
+
+  it('refuses an output over the cap whole, on the card and in the replay', async () => {
+    vi.mocked(functionHost.callTool).mockResolvedValue(structured({ note: 'a'.repeat(30_000) }));
+
+    const body = (await confirm())._getJSONData();
+
+    expect(body.success).toBe(false);
+    expect(JSON.parse(body.output)).toEqual({ outcome: 'output_too_large', max_chars: 30_000 });
+    const update = vi.mocked(Quest.updateOne).mock.calls[0]![1] as { $set: Record<string, unknown> };
+    expect(update.$set['promptMeta.functionCalls.$.returnValue']).toContain('"outcome":"output_too_large"');
+    expect(update.$set['promptMeta.functionCalls.$.success']).toBe(false);
   });
 
   it('refuses before the claim when callable functions are off', async () => {

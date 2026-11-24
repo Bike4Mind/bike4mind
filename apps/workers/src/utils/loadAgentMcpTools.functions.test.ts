@@ -51,7 +51,11 @@ vi.mock('@bike4mind/database', async orig => ({
   },
 }));
 
-import { createFunctionToolHost } from '@bike4mind/server-utils/callableFunctions/functionToolHost';
+import {
+  createFunctionToolHost,
+  functionAndConnectorToolHost,
+} from '@bike4mind/server-utils/callableFunctions/functionToolHost';
+import { customMcpToolHost } from '@bike4mind/server-utils/mcpConnections/customMcpToolHost';
 
 const logger = { info: vi.fn(), warn: vi.fn(), debug: vi.fn(), error: vi.fn() } as unknown as Logger;
 
@@ -92,5 +96,24 @@ describe('loadAgentMcpTools - callable functions', () => {
       expect.objectContaining({ functionId: 'id-beam_midspan_deflection', surface: 'agent' })
     );
     expect(out).toContain('"output":{"deflection":0.004}');
+  });
+
+  it('offers functions with Enable MCP Server off, without the built-in servers or connectors', async () => {
+    h.offered = [fn('beam_midspan_deflection', 'default')];
+    const find = vi.fn(async () => []);
+    const loaded = await loadAgentMcpTools(
+      {
+        mcpServers: { find, update: vi.fn() },
+        getMcpClient: vi.fn(),
+        customMcp: functionAndConnectorToolHost('agent'),
+        logger,
+      },
+      { userId: 'u1', enableMCPServer: false }
+    );
+
+    expect(loaded.customToolNames).toEqual(['fn__beam_midspan_deflection']);
+    expect(loaded.autoApprovedCustomToolNames).toEqual(['fn__beam_midspan_deflection']);
+    expect(find).not.toHaveBeenCalled();
+    expect(customMcpToolHost.listConnections).not.toHaveBeenCalled();
   });
 });

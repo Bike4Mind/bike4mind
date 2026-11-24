@@ -164,6 +164,9 @@ export type ICallableFunctionSummary = Omit<
   pin: Omit<ICallableFunctionPin, 'source'>;
 };
 
+/** How many live functions one chat or agent turn offers, oldest first; connectors keep the rest of the tool budget. */
+export const MAX_CALLABLE_FUNCTIONS_PER_TURN = 20;
+
 /** The read chat offers from: the contract without the pinned code, server run, or promotion record. */
 export type ICallableFunctionOfferable = Omit<ICallableFunctionDocument, 'pin' | 'lastServerRun' | 'promoted'> & {
   pin: Omit<ICallableFunctionPin, 'source'>;
@@ -391,7 +394,10 @@ export interface ICallableFunctionRepository extends IBaseRepository<ICallableFu
     approval: McpToolApprovalMode
   ): Promise<ICallableFunctionDocument | null>;
   /** Live and turned on, oldest first, without the pinned code; the artifact may still be gone. */
-  listLiveForOwner(owner: CallableFunctionOwner): Promise<ICallableFunctionOfferable[]>;
+  listLiveForOwner(
+    owner: CallableFunctionOwner,
+    options?: { limit?: number; excludeAlwaysAsk?: boolean }
+  ): Promise<ICallableFunctionOfferable[]>;
   /** Compare-and-set on `pin.version === expectedVersion`; null when stale, missing, or not the owner's. */
   repin(
     id: string,

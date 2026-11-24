@@ -59,6 +59,7 @@ import {
   createFunctionToolHost,
   functionAndConnectorToolHost,
 } from './functionToolHost';
+import { listOfferedCallableFunctions } from './registry';
 
 const USER = 'owner-1';
 const parsed = parseFunctionContract({
@@ -173,6 +174,20 @@ describe('listing', () => {
     const [offer] = await createFunctionToolHost('chat').listConnections(USER);
     expect(offer!.tools).toHaveLength(MAX_FUNCTION_TOOLS_PER_TURN);
   });
+
+  it('bounds the read at the cap, leaving always-ask functions out of it for a headless turn', async () => {
+    vi.mocked(listOfferedCallableFunctions).mockClear();
+    await createFunctionToolHost('chat').listConnections(USER, { headless: true });
+    await createFunctionToolHost('chat').listConnections(USER);
+    expect(vi.mocked(listOfferedCallableFunctions).mock.calls.map(([, options]) => options)).toEqual([
+      { limit: 20, excludeAlwaysAsk: true },
+      { limit: 20, excludeAlwaysAsk: undefined },
+    ]);
+  });
+
+  it('lists with the MCP server off', () => {
+    expect(createFunctionToolHost('chat').listsWithoutMcpServer).toBe(true);
+  });
 });
 
 describe('calling', () => {
@@ -225,6 +240,17 @@ describe('calling', () => {
     h.bySlug = null;
     expect((await call(createFunctionToolHost('chat', { dispatch }))).result).toMatchObject({ isError: true });
     expect(dispatch).not.toHaveBeenCalled();
+  });
+
+  it('returns a fixed error body when the dispatcher throws', async () => {
+    const dispatch = vi.fn(async () => {
+      throw new Error('call log write failed at mongodb://internal');
+    });
+    const { result } = await call(createFunctionToolHost('chat', { dispatch }));
+    expect(result).toEqual({
+      content: [{ type: 'text', text: JSON.stringify({ outcome: 'error', reason: 'dispatch_failed' }) }],
+      isError: true,
+    });
   });
 
   it('runs an always-ask function only once approved', async () => {

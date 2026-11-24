@@ -940,6 +940,23 @@ describe('listOfferedCallableFunctions', () => {
     expect(offered[0]!.pin).not.toHaveProperty('source');
     expect(await listOfferedCallableFunctions(STRANGER)).toEqual([]);
   });
+
+  it('reads at most the limit, oldest first, and can leave always-ask functions out before the limit', async () => {
+    const first = await save();
+    await promoteDirectly(first.id);
+    await setCallableFunctionApproval(OWNER, first.id, 'always_ask');
+    for (const [artifactId, name] of [
+      ['artifact-2', 'second_tool'],
+      ['artifact-3', 'third_tool'],
+    ]) {
+      await promoteDirectly((await saveNamed(artifactId, name)).id);
+    }
+
+    const slugs = async (options: { limit?: number; excludeAlwaysAsk?: boolean }) =>
+      (await listOfferedCallableFunctions(OWNER, options)).map(fn => fn.slug);
+    expect(await slugs({ limit: 2 })).toEqual(['beam_midspan_deflection', 'second_tool']);
+    expect(await slugs({ limit: 2, excludeAlwaysAsk: true })).toEqual(['second_tool', 'third_tool']);
+  });
 });
 
 describe('setCallableFunctionApproval', () => {

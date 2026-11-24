@@ -301,10 +301,22 @@ class CallableFunctionRepository extends BaseRepository<FunctionDoc> implements 
     return result?.toJSON() ?? null;
   }
 
-  async listLiveForOwner(owner: CallableFunctionOwner): Promise<ICallableFunctionOfferable[]> {
-    const docs = await this.model
-      .find({ ...ownerFilter(owner), state: 'live', enabled: true }, OFFERABLE_PROJECTION)
+  async listLiveForOwner(
+    owner: CallableFunctionOwner,
+    { limit, excludeAlwaysAsk }: { limit?: number; excludeAlwaysAsk?: boolean } = {}
+  ): Promise<ICallableFunctionOfferable[]> {
+    const query = this.model
+      .find(
+        {
+          ...ownerFilter(owner),
+          state: 'live',
+          enabled: true,
+          ...(excludeAlwaysAsk ? { approval: { $ne: 'always_ask' } } : {}),
+        },
+        OFFERABLE_PROJECTION
+      )
       .sort({ createdAt: 1 });
+    const docs = await (limit ? query.limit(limit) : query);
     return docs.map(doc => doc.toObject() as ICallableFunctionOfferable);
   }
 
