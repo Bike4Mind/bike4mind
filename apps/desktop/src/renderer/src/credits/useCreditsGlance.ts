@@ -77,6 +77,7 @@ export function useCreditsGlance(spentAt: number, menuOpen: boolean, now: () => 
           balance: profile.credits.balance,
           burnPerDay: burnPerDay ?? 0,
           refillAt: nextRefillAt(profile.plan, profile.credits.monthlyAllowance, at),
+          expiring: profile.credits.expiring,
           now: at,
         })
       : ({ kind: 'unknown' } as const);
