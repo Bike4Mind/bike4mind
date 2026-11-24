@@ -390,7 +390,9 @@ export const setupSamlStrategy = (idp: {
             // Issuer is bound to this IdP here. The callback picks the IdP row before the
             // signature is checked; this is what makes that choice binding. The Issuer is the
             // IdP's public entity ID, so unlike the rest of the profile it is logged.
-            if (profile.issuer !== idp.samlConfig?.issuer) {
+            // Trimmed: neither node-saml nor the admin form trims, and padding is never part of an entity ID.
+            const configuredIssuer = idp.samlConfig?.issuer?.trim();
+            if (!configuredIssuer || profile.issuer?.trim() !== configuredIssuer) {
               Logger.warn('[SAML] Rejecting assertion: its Issuer is not the one configured for this IDP', {
                 idpId: idp._id,
                 expectedIssuer: idp.samlConfig?.issuer,

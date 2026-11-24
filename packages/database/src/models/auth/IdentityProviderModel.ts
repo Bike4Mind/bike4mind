@@ -212,13 +212,16 @@ class IdentityProviderRepository
     return this.model.find({ isActive: true }).sort({ emailDomain: 1 });
   }
 
-  /** Ids of the active SAML IdPs configured with this issuer (entity ID); more than one when they share an IdP. */
+  /**
+   * Ids of the active SAML IdPs configured with this issuer (entity ID); more than one when they
+   * share an IdP. Compared trimmed, like the login check in setupSamlStrategy, since the admin form
+   * stores the value as typed. Filtered here rather than in the query: there are only a few SAML IdPs.
+   */
   async findActiveSamlIdpIdsByIssuer(issuer: string): Promise<string[]> {
-    const docs = await this.model
-      .find({ type: 'saml', isActive: true, 'samlConfig.issuer': issuer })
-      .select('_id')
-      .lean();
-    return docs.map(doc => String(doc._id));
+    const wanted = issuer.trim();
+    if (!wanted) return [];
+    const docs = await this.model.find({ type: 'saml', isActive: true }).select('samlConfig.issuer').lean();
+    return docs.filter(doc => doc.samlConfig?.issuer?.trim() === wanted).map(doc => String(doc._id));
   }
 
   /**

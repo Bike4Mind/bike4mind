@@ -39,8 +39,12 @@ const SAML_CONFIG = {
  * exercises the bind on the real code path without minting signed XML. The profile carries
  * the configured issuer unless a test overrides it.
  */
-async function verifyProfile(idp: { _id: string; emailDomain: string }, profile: Record<string, unknown>) {
-  const strategyName = setupSamlStrategy({ ...idp, samlConfig: SAML_CONFIG });
+async function verifyProfile(
+  idp: { _id: string; emailDomain: string },
+  profile: Record<string, unknown>,
+  samlConfig = SAML_CONFIG
+) {
+  const strategyName = setupSamlStrategy({ ...idp, samlConfig });
   // Reaching into passport's registry is the only way to call the verify function the
   // strategy was constructed with.
   const strategy = (passport as any)._strategy(strategyName);
@@ -119,6 +123,21 @@ describe('setupSamlStrategy - IDP issuer bind', () => {
     expect(user).toBeFalsy();
     expect(info).toEqual({ reason: 'idp_issuer_mismatch' });
     expect(mockAuthenticate).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['the asserted issuer', { issuer: `\n  ${SAML_CONFIG.issuer}\n` }, SAML_CONFIG],
+    ['the configured issuer', {}, { ...SAML_CONFIG, issuer: `${SAML_CONFIG.issuer} \n` }],
+  ])('ignores whitespace around %s', async (_label, issuer, samlConfig) => {
+    mockAuthenticate.mockImplementation(async (_at, _rt, _profile, done) => done(null, { id: 'u1' }));
+
+    const { user } = await verifyProfile(
+      { _id: 'idp-a', emailDomain: 'a.example' },
+      { ...issuer, nameID: 'user@a.example', email: 'user@a.example' },
+      samlConfig
+    );
+
+    expect(user).toEqual({ id: 'u1' });
   });
 });
 

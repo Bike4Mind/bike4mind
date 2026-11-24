@@ -36,6 +36,13 @@ describe('identityProviderRepository.findActiveSamlIdpIdsByIssuer', () => {
     expect(ids.sort()).toEqual([a.id, b.id].sort());
   });
 
+  it('matches an issuer stored or asked for with surrounding whitespace', async () => {
+    const padded = await create('padded.example', {
+      samlConfig: { entryPoint: 'https://idp.example/sso', issuer: ` ${ISSUER}\n`, cert: 'PUBLIC-IDP-CERT' },
+    });
+    expect(await identityProviderRepository.findActiveSamlIdpIdsByIssuer(`${ISSUER} `)).toEqual([padded.id]);
+  });
+
   it('returns nothing for an issuer no IdP is configured with', async () => {
     await create('a.example');
     expect(await identityProviderRepository.findActiveSamlIdpIdsByIssuer('https://unknown/metadata')).toEqual([]);

@@ -17,8 +17,9 @@ export function samlResponseIssuer(samlResponse: unknown): string | undefined {
   if (typeof samlResponse !== 'string' || !samlResponse) return undefined;
   try {
     const decoded = Buffer.from(samlResponse, 'base64');
-    const xml = decoded.toString('utf8').trimStart().startsWith('<')
-      ? decoded.toString('utf8')
+    const text = decoded.toString('utf8');
+    const xml = text.trimStart().startsWith('<')
+      ? text
       : inflateRawSync(decoded, { maxOutputLength: MAX_INFLATED_BYTES }).toString('utf8');
     const silent = () => undefined;
     const doc = new DOMParser({ errorHandler: { warning: silent, error: silent, fatalError: silent } }).parseFromString(
