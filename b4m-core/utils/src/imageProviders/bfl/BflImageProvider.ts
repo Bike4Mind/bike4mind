@@ -164,6 +164,11 @@ export class BflImageProvider implements AsyncImageProvider {
     if (!isBflModel(model)) throw new Error(`${model} is not a BFL model`);
     const seed = request.seed ?? null;
     const outputFormat = outputFormatOf(request);
+    // Unset leaves BFLImageService's defaults (the tolerance cap, no upsampling).
+    const providerSettings = {
+      ...(request.safetyTolerance !== undefined && { safety_tolerance: request.safetyTolerance }),
+      ...(request.promptUpsampling !== undefined && { prompt_upsampling: request.promptUpsampling }),
+    };
     const references = inputsWithRole(inputs, 'reference').map(toBase64);
 
     if (request.mode === 'generate') {
@@ -171,6 +176,7 @@ export class BflImageProvider implements AsyncImageProvider {
       return service.buildGenerateRequest(prompt, {
         model,
         seed,
+        ...providerSettings,
         ...(outputFormat && { output_format: outputFormat }),
         ...(request.aspectRatio && { aspect_ratio: request.aspectRatio }),
         ...dimensionsOf(model, request.size),
@@ -188,6 +194,7 @@ export class BflImageProvider implements AsyncImageProvider {
       return service.buildTransformRequest(toBase64(source), prompt, {
         model,
         seed,
+        ...providerSettings,
         ...(outputFormat && { output_format: outputFormat }),
         ...(request.aspectRatio && { aspect_ratio: request.aspectRatio }),
       });
@@ -196,6 +203,7 @@ export class BflImageProvider implements AsyncImageProvider {
     return service.buildEditRequest(toBase64(source), prompt, {
       model,
       seed,
+      ...providerSettings,
       ...(outputFormat && { output_format: outputFormat }),
       ...(mask && { mask: toBase64(mask) }),
       ...(references.length > 0 && { referenceImages: references }),

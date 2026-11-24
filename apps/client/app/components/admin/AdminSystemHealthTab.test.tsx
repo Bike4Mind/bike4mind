@@ -174,6 +174,22 @@ describe('AdminSystemHealthTab', () => {
     expect(screen.queryByTestId('system-health-email-secret-hint-MAIL_PASSWORD')).not.toBeInTheDocument();
   });
 
+  it('warns when the plaintext secrets opt-out is in effect', async () => {
+    respond({ [HEALTH_URL]: () => Promise.resolve({ data: { ...HEALTH, plaintextSecretsOptOut: true } }) });
+    renderTab();
+
+    expect(await screen.findByTestId('system-health-plaintext-secrets-warning')).toHaveTextContent('unencrypted');
+  });
+
+  it('shows no plaintext secrets warning otherwise', async () => {
+    respond({ [HEALTH_URL]: () => Promise.resolve({ data: { ...HEALTH, plaintextSecretsOptOut: false } }) });
+    renderTab();
+
+    // Loaded-only element: the tab testid is also rendered while loading, before any data arrives.
+    await screen.findByTestId('system-health-database-status');
+    expect(screen.queryByTestId('system-health-plaintext-secrets-warning')).not.toBeInTheDocument();
+  });
+
   it('keeps the sst hint when not self-hosted', async () => {
     respond({ [HEALTH_URL]: () => Promise.resolve({ data: { ...HEALTH, selfHost: false } }) });
     renderTab();

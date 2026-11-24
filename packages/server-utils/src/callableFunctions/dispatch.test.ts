@@ -2,6 +2,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createHash } from 'node:crypto';
 import {
+  PYODIDE_VERSION,
   canonicalJson,
   parseFunctionContract,
   type FunctionContract,
@@ -487,6 +488,7 @@ describe('the stamp', () => {
       function_id: FUNCTION_ID,
       slug: CONTRACT.name,
       pin_version: 3,
+      pin_seq: null,
       code_hash: HASH,
       input_hash: functionInputHash(ARGS),
       runtime: { kind: 'pyodide-server', version: '0.25.1', lock_hash: LOCK },
@@ -497,10 +499,27 @@ describe('the stamp', () => {
       ],
       data: [],
       uses: [],
+      trust_label: null,
       surface: 'test',
       duration_ms: 40,
       called_at: '2026-11-23T12:00:00.000Z',
     });
+  });
+
+  it('names the promotion sequence and the label of a live function', () => {
+    const live = record({
+      state: 'live',
+      trustLabel: 'verified',
+      pin: { artifactId: 'artifact-1', version: 3, seq: 2, contentHash: HASH, source: SOURCE, pinnedAt: new Date() },
+    });
+    const stamp = buildCallableFunctionStamp({
+      fn: live as never,
+      inputHash: functionInputHash(ARGS),
+      run: ok(),
+      surface: 'test',
+      calledAt: new Date('2026-11-23T12:00:00.000Z'),
+    });
+    expect(stamp).toMatchObject({ pin_version: 3, pin_seq: 2, trust_label: 'verified' });
   });
 
   it('hashes the inputs the same whatever their key order', () => {
@@ -517,12 +536,25 @@ describe('readServerContract', () => {
     readServerContract({ caller: OWNER, fn: record() as never, surface: 'test' }, { runner, waitMs });
 
   it('reads FUNCTION through the runner with the short time limit and logs the read as its own op', async () => {
-    const runner = runnerOf({ outcome: 'ok', contract: CONTRACT, durationMs: 5, initMs: 700 });
-    await expect(read(runner)).resolves.toEqual({ ok: true, contract: CONTRACT, callId: 'call-1' });
+    const packages = [{ name: 'numpy', version: '1.26.4' }];
+    const runner = runnerOf({
+      outcome: 'ok',
+      contract: CONTRACT,
+      durationMs: 5,
+      initMs: 700,
+      runtime: { lockHash: LOCK, packages },
+    });
+    await expect(read(runner)).resolves.toEqual({
+      ok: true,
+      contract: CONTRACT,
+      callId: 'call-1',
+      runtime: { kind: 'pyodide-server', version: PYODIDE_VERSION, lockHash: LOCK, packages },
+    });
     expect(runner).toHaveBeenCalledWith(
       { op: 'read_contract', code: SOURCE, limits: { timeoutMs: 10_000 } },
       { callerUserId: OWNER.id, codeHash: HASH }
     );
+
     const row = onlyRow();
     expect(row).toMatchObject({
       op: 'read_contract',

@@ -7,6 +7,7 @@ import { installConsoleRedaction, Logger } from '@bike4mind/observability';
 import { requireConfiguredSecret } from '@bike4mind/common';
 import { Resource } from 'sst';
 import { Config } from '@bike4mind/server-utils/utils/config';
+import { warnIfPlaintextSecretsOptOut } from '@bike4mind/server-utils/security/plaintextSecretsOptOut';
 import { registerOrgAlertObserver } from '@bike4mind/server-utils/organizations/registerOrgAlertObserver';
 import { registerInternalRoutes } from './internal/route';
 import { registerExternalRoutes } from './external/sseRoute';
@@ -175,6 +176,7 @@ async function main() {
   registerProcessErrorHandlers(bootLogger, 'ChatCompletion');
 
   registerSecretsAtRest(bootLogger, Config.SECRET_ENCRYPTION_KEY, Config.SECRET_ENCRYPTION_KEY_PREVIOUS);
+  warnIfPlaintextSecretsOptOut(bootLogger);
 
   const app = createApp();
 

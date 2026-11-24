@@ -19,6 +19,7 @@ import { BackgroundJobsFeed } from '../main/chat/backgroundJobsFeed';
 import { BACKGROUND_EXIT_HOLD_MS } from '../main/chat/backgroundWake';
 import { sessionScopeForChat } from '../main/chat/sessionScope';
 import { SessionStore } from '../main/chat/SessionStore';
+import { TurnExtensionsPreference } from '../main/chat/TurnExtensionsPreference';
 import { AccessStore } from '../main/chat/tools/AccessStore';
 import { ApprovalGate } from '../main/chat/tools/ApprovalGate';
 import { BackgroundProcessRegistry } from '../main/chat/tools/BackgroundProcessRegistry';
@@ -82,6 +83,7 @@ export type HostRuntimeOptions = {
 export class HostRuntime {
   readonly store: SessionStore;
   readonly access: AccessStore;
+  readonly turnExtensions: TurnExtensionsPreference;
   readonly approvals: ApprovalGate;
   readonly approvalLog: ApprovalLog;
   readonly activity: SessionActivity;
@@ -139,6 +141,7 @@ export class HostRuntime {
     );
     keepSessionWritesIn(this.store);
     this.access = new AccessStore(join(dataDirectory, 'tool-access.json'));
+    this.turnExtensions = new TurnExtensionsPreference(join(dataDirectory, 'turn-extensions.json'));
 
     // Declared before the two things that feed it, because both take it as a constructor
     // argument: the gate reports who is waiting on the user, the service reports who is
@@ -196,6 +199,7 @@ export class HostRuntime {
       turnTiming: TURN_TIMING,
       preferredModel: PREFERRED_MODEL,
       modelMemory: modelPreference,
+      turnExtensions: () => this.turnExtensions.read(),
       approvals: this.approvals,
       approvalLog: this.approvalLog,
       background: this.background,

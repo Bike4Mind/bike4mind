@@ -35,6 +35,7 @@ describe('ChatService approval gate', () => {
   let post: ReturnType<typeof vi.fn>;
   let streams: PassThrough[];
   let root: string;
+  let deps: ConstructorParameters<typeof ChatService>[0];
 
   const toolEvents = (status: ChatToolCall['status']) =>
     events.filter(event => (event.type === 'tool-start' || event.type === 'tool-end') && event.call.status === status);
@@ -73,7 +74,7 @@ describe('ChatService approval gate', () => {
     });
     post = boundPost;
 
-    service = new ChatService({
+    deps = {
       store: new SessionStore(await mkdtemp(join(tmpdir(), 'b4m-approve-sessions-')), 'test-model'),
       access: { list: async () => [root] } as unknown as AccessStore,
       approvals,
@@ -85,7 +86,8 @@ describe('ChatService approval gate', () => {
         }) as unknown as AuthenticatedApiClient,
       getEnvironmentUrl: () => 'http://localhost:3000',
       emit: event => emitted.push(event),
-    });
+    };
+    service = new ChatService(deps);
   });
 
   it('declares bash_execute alongside the file tools', async () => {
@@ -244,6 +246,30 @@ describe('ChatService approval gate', () => {
     expect(done).toMatchObject({ stopReason: 'aborted' });
     expect(toolEvents('running')).toHaveLength(0);
   });
+
+  /** A slow reviewer is not the agent working: the card's wait must not spend the turn's time budget. */
+  it('does not count time spent waiting on an approval card toward the time budget', async () => {
+    // Long enough for a round's own work, shorter than the card wait below.
+    service = new ChatService({ ...deps, turnLimits: { wallClockMs: 1_500 } });
+    const id = await askingSession();
+    await service.send(id, 'run it');
+    await vi.waitUntil(() => streams.length === 1, { timeout: 3000, interval: 5 });
+
+    streams[0].write(bashTurn('call_1', 'echo after-a-slow-answer'));
+    streams[0].write(frame('[DONE]'));
+    const approvalId = await pendingApprovalId();
+    // Past the whole 1.5s budget, all of it on the card.
+    await new Promise(resolve => setTimeout(resolve, 2_000));
+    approvals.resolve(approvalId, { decision: 'once' });
+
+    // A second request means the turn carried on rather than stopping at turn_time_limit.
+    await vi.waitUntil(() => streams.length === 2, { timeout: 5000, interval: 10 });
+    streams[1].write(frame({ type: 'content', text: 'Done.' }));
+    streams[1].write(frame('[DONE]'));
+    const done = await vi.waitUntil(() => events.find(event => event.type === 'done'), { timeout: 3000, interval: 5 });
+    expect(done).toMatchObject({ content: 'Done.' });
+    expect(done).not.toMatchObject({ stopReason: 'turn_time_limit' });
+  }, 15_000);
 });
 
 describe('askUser', () => {

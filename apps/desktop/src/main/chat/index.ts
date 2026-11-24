@@ -828,6 +828,11 @@ export function registerChat(
   ipcMain.handle(IPC_CHANNELS.chatSetSessionPromptCacheTtl, (_event, sessionId: string, ttl: unknown) =>
     isPromptCacheTtl(ttl) ? service.setSessionPromptCacheTtl(sessionId, ttl) : null
   );
+  ipcMain.handle(IPC_CHANNELS.chatGetTurnExtensions, () => runtime.turnExtensions.read());
+  // Coerced by the preference: anything out of range is saved as the default.
+  ipcMain.handle(IPC_CHANNELS.chatSetTurnExtensions, (_event, extensions: unknown) =>
+    runtime.turnExtensions.record(extensions)
+  );
   registerGenerationIpc(ipcMain, service);
   registerModelSettingsIpc(ipcMain, modelSettings, {
     offer: (modelId, draftTokens) => local.loadOffer(modelId, draftTokens),

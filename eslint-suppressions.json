@@ -1011,11 +1011,6 @@
       "count": 1
     }
   },
-  "apps/client/app/components/commands/ImageGenerationCommand.ts": {
-    "@typescript-eslint/no-explicit-any": {
-      "count": 2
-    }
-  },
   "apps/client/app/components/commands/LLMCommand.tsx": {
     "@typescript-eslint/no-explicit-any": {
       "count": 2
@@ -4072,7 +4067,7 @@
   },
   "b4m-core/services/src/llm/ImageGeneration.test.ts": {
     "@typescript-eslint/no-explicit-any": {
-      "count": 52
+      "count": 51
     }
   },
   "b4m-core/services/src/llm/QuestMasterHistoryBudget.test.ts": {

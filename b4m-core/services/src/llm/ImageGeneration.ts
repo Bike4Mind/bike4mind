@@ -40,7 +40,8 @@ import {
   supportsBflOutputFormat,
   getMaxReferenceImages,
   isGPTImageModel,
-  rejectsTransparentBackground,
+  supportsTransparentBackgroundByCatalog,
+  transparentBackgroundUnsupportedMessage,
   isGeminiImageModel,
   isImageServeable,
   isKontextModel,
@@ -337,26 +338,12 @@ export class ImageGenerationService {
     const now = new Date();
 
     const parsedBody = GenerateImageIvokeParamsSchema.parse(body);
-    const {
-      sessionId,
-      prompt,
-      model: requestedModel,
-      questId,
-      fabFileIds,
-      promptEnhancement,
-      organizationId,
-      intent,
-      ...rest
-    } = parsedBody;
-    // Step a gpt-image-2 selection down to gpt-image-1.5 when transparency is requested:
-    // gpt-image-2 rejects background: 'transparent' outright, so sending it there would
-    // silently turn a valid request into an opaque image (OpenAIImageService's own backstop
-    // drops the field rather than erroring). Resolved before billing so credits/promptMeta
-    // key off the model actually used.
-    const model =
-      rest.background === 'transparent' && rejectsTransparentBackground(requestedModel)
-        ? ImageModels.GPT_IMAGE_1_5
-        : requestedModel;
+    const { sessionId, prompt, model, questId, fabFileIds, promptEnhancement, organizationId, intent, ...rest } =
+      parsedBody;
+    // Fail rather than quietly render opaque or on a different model than the caller picked.
+    if (rest.background === 'transparent' && !supportsTransparentBackgroundByCatalog(model)) {
+      throw new BadRequestError(transparentBackgroundUnsupportedMessage(model));
+    }
     await this.assertModelAdmission(userId, model, adminRoleWithheld, organizationId);
     const session = await this.db.sessions.findById(sessionId);
     if (!session) throw new NotFoundError('Session not found');

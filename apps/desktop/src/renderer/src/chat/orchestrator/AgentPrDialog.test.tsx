@@ -69,6 +69,12 @@ const show = (sessionId = 'agent') =>
 const click = async (id: string) => {
   await act(async () => el(id).click());
 };
+/** A plain click on the badge opens GitHub; Shift opens these in-app details. */
+const shiftClick = async (id: string) => {
+  await act(async () => {
+    el(id).dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, shiftKey: true }));
+  });
+};
 const push = async (next: PrBarState) => {
   await act(async () => listeners.forEach(listener => listener(next)));
 };
@@ -185,13 +191,13 @@ it('mounts on demand at the stage, restores focus on close and hides immediately
   expect(api.getState).not.toHaveBeenCalled();
   const badge = el('orchestrator-pr-indicator');
   act(() => badge.focus());
-  await click('orchestrator-pr-indicator');
+  await shiftClick('orchestrator-pr-indicator');
   expect(api.getState).toHaveBeenCalledWith('agent');
   expect(query('orchestrator-peek-drawer-region')).toBeNull();
   await click('orchestrator-pr-close');
   expect(query('orchestrator-pr-dialog')).toBeNull();
   expect(document.activeElement).toBe(badge);
-  await click('orchestrator-pr-indicator');
+  await shiftClick('orchestrator-pr-indicator');
   await act(async () =>
     el('orchestrator-pr-close').dispatchEvent(
       new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true })
@@ -199,7 +205,7 @@ it('mounts on demand at the stage, restores focus on close and hides immediately
   );
   expect(query('orchestrator-pr-dialog')).toBeNull();
   expect(document.activeElement).toBe(badge);
-  await click('orchestrator-pr-indicator');
+  await shiftClick('orchestrator-pr-indicator');
   await render(true);
   expect(query('orchestrator-pr-dialog')).toBeNull();
   expect(listeners.size).toBe(0);

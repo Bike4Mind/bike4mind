@@ -25,7 +25,7 @@ describe('useSendMessage - skipRapidReply reaches both dispatch paths', () => {
   });
 
   it.each([
-    ['/llm command-map dispatch', 'return await handleCommand(commandHandlers,'],
+    ['/llm command-map dispatch', 'return await dispatchSend(commandHandlers, imageSendMode,'],
     ['direct handleLLMCommand dispatch', 'return await handleLLMCommand({'],
   ])('forwards skipRapidReply on the %s', (_label, anchor) => {
     const handlerIdx = source.indexOf(anchor);

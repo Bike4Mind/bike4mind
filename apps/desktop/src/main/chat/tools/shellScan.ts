@@ -853,7 +853,7 @@ interface WordScope {
   /** The login name, the one `~name` the scan fills in. */
   user: string;
   /** `for` variables bound to the static words they loop over. */
-  bindings: ReadonlyMap<string, readonly string[]>;
+  bindings: ReadonlyMap<string, LoopBinding>;
   /** What `$(git rev-parse --show-toplevel)` prints here, or null when the scan cannot tell. */
   toplevel: string | null;
   /** Variables a plain top-level `NAME=literal` set earlier in the script, which bash expands to that text. */
@@ -1304,14 +1304,42 @@ function loginName(): string {
 /** A double-quoted word that is one variable with fixed text around it: `"$f"`, `"src/${f}.bak"`. */
 const BOUND_WORD = /^"([^"$`\\']*)\$(?:\{([A-Za-z_]\w*)\}|([A-Za-z_]\w*))([^"$`\\']*)"$/;
 
+/**
+ * An unquoted word that is one variable with plain text around it: `sub/$f`, `jobs/${id}/logs`. An unbraced name
+ * must end where the word or a non-word character does, as bash reads `$fx` as the variable `fx`.
+ */
+const UNQUOTED_BOUND_WORD = /^([\w./+@:%=-]*)\$(?:\{([A-Za-z_]\w*)\}|([A-Za-z_]\w*)(?!\w))([\w./+@:%=-]*)$/;
+
+/**
+ * A loop value bash passes unchanged through word splitting and globbing: no quote, space, glob or expansion, and
+ * no leading `-` a program would read as an option.
+ */
+const PLAIN_LOOP_VALUE = /^(?!-)[\w./+@:%=-]+$/;
+
+/**
+ * The words a `for` variable takes. `unquoted` is false when the script may set IFS, which can split an unquoted
+ * use where the scan does not; a double-quoted use is never split, so it binds either way.
+ */
+interface LoopBinding {
+  values: readonly string[];
+  unquoted: boolean;
+}
+
 /** The words a bound `for` variable stands for in `raw`, with the fixed text around it; null when `raw` is not one. */
-function boundWords(raw: string, bindings: ReadonlyMap<string, readonly string[]>): string[] | null {
+function boundWords(raw: string, bindings: ReadonlyMap<string, LoopBinding>): string[] | null {
   if (bindings.size === 0) return null;
   const match = BOUND_WORD.exec(raw);
-  const values = match ? bindings.get(match[2] ?? match[3] ?? '') : undefined;
-  if (!match || !values) return null;
-  const quoted = (text: string): string => (text ? `'${text}'` : '');
-  return values.map(value => `${quoted(match[1] ?? '')}${value}${quoted(match[4] ?? '')}`);
+  const values = match ? bindings.get(match[2] ?? match[3] ?? '')?.values : undefined;
+  if (match && values) {
+    const quoted = (text: string): string => (text ? `'${text}'` : '');
+    return values.map(value => `${quoted(match[1] ?? '')}${value}${quoted(match[4] ?? '')}`);
+  }
+  // Unquoted, bash splits and globs what the variable gives, so only values that come through both unchanged bind.
+  const plain = UNQUOTED_BOUND_WORD.exec(raw);
+  const binding = plain ? bindings.get(plain[2] ?? plain[3] ?? '') : undefined;
+  const plainValues = binding?.unquoted ? binding.values : undefined;
+  if (!plain || !plainValues || !plainValues.every(value => PLAIN_LOOP_VALUE.test(value))) return null;
+  return plainValues.map(value => `${plain[1] ?? ''}${value}${plain[4] ?? ''}`);
 }
 
 /** A POSIX, drive or UNC absolute path, which does not depend on the folder a command runs in. */
@@ -6802,7 +6830,7 @@ export async function scanShell(
     const plainCopies = new Set<number>();
     const rebound = anyName || REBINDS_HOME.test(gateText);
     const user = loginName();
-    const loopBindings = new Map<string, readonly string[]>();
+    const loopBindings = new Map<string, LoopBinding>();
     // Plain top-level `NAME=literal` assignments, bound in walk order so only later words see them.
     const literalBindings = new Map<string, string>();
     // git settings the script or this process may hand git, so what it reports from a folder is not what the scan asks.
@@ -9538,7 +9566,7 @@ export async function scanShell(
         const bind =
           loopBinds(node.text.startsWith('for'), variable, values, body?.text ?? '', functions) && !state.lost;
         const outer = loopBindings.get(variable);
-        if (bind) loopBindings.set(variable, values);
+        if (bind) loopBindings.set(variable, { values, unquoted: !/\bIFS\b/.test(gateText) });
         else loopBindings.delete(variable);
         try {
           for (const child of node.children) if (child) await visit(child);

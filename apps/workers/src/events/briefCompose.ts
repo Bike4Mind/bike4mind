@@ -1,9 +1,11 @@
 import { withEventContext } from '@workers/utils/eventContext';
 import { loadPendingBriefEmails } from './loadPendingBriefEmails';
+import { loadPendingBriefDelegations } from './loadPendingBriefDelegations';
 import { BriefEvents } from '@bike4mind/server-utils/utils/eventBus';
 import {
   agentExecutionRepository,
   assistantBriefRepository,
+  delegatedItemRepository,
   emailTriageItemRepository,
   questRepository,
   userRepository,
@@ -20,6 +22,7 @@ import { recordSessionOperationalUsage } from '@workers/events/recordSessionOper
 import { payerCanFundSessionOperation } from '@workers/events/sessionOperationalCreditGate';
 import {
   assembleBrief,
+  briefedDelegationIds,
   briefedEmailIds,
   briefPushContent,
   buildBriefPrompt,
@@ -34,7 +37,7 @@ import {
  * row and publishes the event, as does the schedule reconciler), stores it and pushes `brief_ready`.
  *
  * Composition is one pass of the platform's operations model over the user's recent agent runs, the
- * approvals and questions still waiting on them and counts of their triaged email; there is no tool loop. Failures settle the row as `failed` so a
+ * approvals and questions still waiting on them and counts of their triaged email and delegated items; there is no tool loop. Failures settle the row as `failed` so a
  * polling client stops waiting, and are never rethrown: a retry cannot fix a refused balance or a
  * malformed reply, and the user can simply compose again.
  */
@@ -64,6 +67,8 @@ export type BriefComposeDeps = {
   push(event: PushNotificationEvent): Promise<void>;
   /** `markBriefed` records the triage items a ready brief carried; the rest stay pending for the next brief. */
   emails: Pick<typeof emailTriageItemRepository, 'markBriefed' | 'storedEmailIds'>;
+  /** Records the settled delegated items a ready brief carried; pending ones stay for a later brief. */
+  delegations: Pick<typeof delegatedItemRepository, 'markBriefed'>;
   logger: LogLike;
 };
 
@@ -135,6 +140,7 @@ export async function composeBrief(
     if (!settled) return;
 
     await settleBriefedEmails(deps, input.userId, briefedEmailIds(composed), composedAt);
+    await settleBriefedDelegations(deps, input.userId, briefedDelegationIds(composed, activity), composedAt);
 
     const { body, briefAction } = briefPushContent(composed, activity);
     await deps.push({
@@ -175,6 +181,16 @@ async function settleBriefedEmails(deps: BriefComposeDeps, userId: string, email
   }
 }
 
+/** Never throws, like settleBriefedEmails: an unmarked item is carried into the next brief again rather than lost. */
+async function settleBriefedDelegations(deps: BriefComposeDeps, userId: string, ids: string[], at: Date) {
+  if (ids.length === 0) return;
+  try {
+    await deps.delegations.markBriefed(userId, ids, at);
+  } catch (error) {
+    deps.logger.error('[Brief] could not mark the briefed delegations', { userId, error });
+  }
+}
+
 async function loadActivity(brief: IAssistantBrief, now: Date): Promise<BriefActivity> {
   const { items } = await agentExecutionRepository.findByUserIdPaginated(
     brief.userId,
@@ -190,6 +206,7 @@ async function loadActivity(brief: IAssistantBrief, now: Date): Promise<BriefAct
   const questions = await questRepository.findOpenQuestionsBySessionIds(sessionIds, brief.periodStart, MAX_QUESTIONS);
   // Pending rather than windowed: an item a failed brief or a section cap left out is carried to the next brief.
   const emails = await loadPendingBriefEmails(brief.userId, brief.periodEnd);
+  const delegations = await loadPendingBriefDelegations(brief.userId, brief.periodEnd, now);
 
   return {
     periodStart: brief.periodStart,
@@ -216,6 +233,12 @@ async function loadActivity(brief: IAssistantBrief, now: Date): Promise<BriefAct
       ...(item.draftReply && {
         draftReply: { to: item.draftReply.to, subject: item.draftReply.subject, body: item.draftReply.body },
       }),
+    })),
+    delegations: delegations.map(item => ({
+      delegationId: item._id.toString(),
+      intent: item.intent,
+      status: item.status,
+      result: item.result,
     })),
   };
 }
@@ -266,6 +289,7 @@ export const handler = withEventContext(async (event, logger) => {
       },
       push: pushEvent => publishPushNotification(pushEvent, logger),
       emails: emailTriageItemRepository,
+      delegations: delegatedItemRepository,
       logger,
     },
     input

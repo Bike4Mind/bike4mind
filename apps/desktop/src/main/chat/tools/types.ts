@@ -459,6 +459,12 @@ export interface ToolContext {
   /** Absent outside the chat loop; every tool treats it as optional. */
   report?: ToolReporter;
   /**
+   * Stops the turn's time budget while a call blocks on something that is not the agent working
+   * (bash_output waiting on a background process), until the returned function is called. Absent
+   * outside the chat loop. See TurnClock in ../turnClock.
+   */
+  pauseTurnClock?: () => () => void;
+  /**
    * The approval key this call was let through under, whether the user answered the card, a
    * standing answer covered it, or the mode did. Absent for a call that was never gated. Set by
    * ChatService only, so a tool can tell what the user agreed to from what it merely ended up

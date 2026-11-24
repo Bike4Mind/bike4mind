@@ -175,7 +175,7 @@ export function OverflowStack({
               />
             </ListItemDecorator>
             <Box sx={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 260 }}>{name}</Box>
-            <AgentPrIndicator pr={agent.pr} onOpen={() => onOpenPr?.(agent.id)} compact />
+            <AgentPrIndicator agentId={agent.id} pr={agent.pr} onOpen={() => onOpenPr?.(agent.id)} compact />
           </MenuItem>
         ))}
       </Menu>

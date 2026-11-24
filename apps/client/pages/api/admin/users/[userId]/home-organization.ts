@@ -19,11 +19,12 @@ export type AdminHomeOrganization = {
   isMember: boolean;
 };
 
-const readUserId = (req: Request): string => {
-  if (!isFullAdmin(req.user)) throw new ForbiddenError("Only full administrators can manage a user's home org");
+const readAdminTarget = (req: Request): { userId: string; actor: NonNullable<Request['user']> } => {
+  const actor = req.user;
+  if (!actor || !isFullAdmin(actor)) throw new ForbiddenError("Only full administrators can manage a user's home org");
   const userId = req.query.userId;
   if (typeof userId !== 'string' || !userId) throw new BadRequestError('Invalid user ID');
-  return userId;
+  return { userId, actor };
 };
 
 /**
@@ -41,7 +42,7 @@ const handler = adminApi({
   adminPermissions: { GET: 'users:moderate', DELETE: 'users:moderate' },
 })
   .get(async (req, res) => {
-    const userId = readUserId(req);
+    const { userId } = readAdminTarget(req);
     const user = await userRepository.findById(userId);
     if (!user) throw new NotFoundError('User not found');
 
@@ -55,13 +56,13 @@ const handler = adminApi({
     return res.json(body);
   })
   .delete(async (req, res) => {
-    const userId = readUserId(req);
+    const { userId, actor } = readAdminTarget(req);
     const reason = parseAdminActionReason((req.body as { reason?: unknown } | undefined)?.reason);
 
     await withTransaction(async () => {
       const user = await userRepository.findById(userId);
       if (!user) throw new NotFoundError('User not found');
-      assertCanActOnAdminTarget(req.user, user, 'clear the home org of');
+      assertCanActOnAdminTarget(actor, user, 'clear the home org of');
 
       const before = user.organizationId?.toString() ?? null;
       // Already clear is a no-op: no write and no audit entry.
@@ -69,7 +70,7 @@ const handler = adminApi({
 
       // The pointer can name an org that was since deleted, so a missing name is not an error.
       const organization = await organizationRepository.findById(before);
-      await organizationService.clearActiveOrganization(req.user, { userId }, { db: { users: userRepository } });
+      await organizationService.clearActiveOrganization(actor, { userId }, { db: { users: userRepository } });
 
       await recordAdminActionFromRequest(req, {
         action: 'user.home_org.cleared',
