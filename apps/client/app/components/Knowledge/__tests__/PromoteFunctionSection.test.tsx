@@ -131,7 +131,24 @@ describe('sharing', () => {
       'Shared with 2 people and the members of an organization.'
     );
     fireEvent.click(screen.getByTestId('python-function-share-stop-btn'));
-    expect(h.stopSharing.mutate).toHaveBeenCalledWith('fn-1');
+    expect(h.stopSharing.mutate).toHaveBeenCalledWith('fn-1', expect.anything());
+    expect(screen.queryByTestId('python-function-share-stop-error')).toBeNull();
+  });
+
+  it("shows why Stop sharing failed, in the server's words", () => {
+    h.stopSharing.mutate.mockImplementation((_id: string, handlers: { onError: (error: unknown) => void }) =>
+      handlers.onError(axiosError(404, { error: 'Tool not found', code: 'not_found' }))
+    );
+    renderSection({ ...live('verified'), grants: { visibility: 'private', userIds: ['p-1'] } });
+    fireEvent.click(screen.getByTestId('python-function-share-stop-btn'));
+    expect(screen.getByTestId('python-function-share-stop-error').textContent).toContain('Tool not found');
+  });
+
+  it('passes the share dialog no data pins while the record has none', () => {
+    // When the record gains data pins, this fails typecheck: pass them to the dialog in place of the empty lists.
+    // @ts-expect-error the public record has no dataPins yet
+    const pins: ICallableFunctionPublic['dataPins'] = undefined;
+    expect(pins).toBeUndefined();
   });
 });
 

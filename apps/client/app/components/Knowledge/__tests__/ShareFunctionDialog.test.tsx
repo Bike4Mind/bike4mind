@@ -95,6 +95,18 @@ describe('ShareFunctionDialog', () => {
     );
   });
 
+  it('says the share follows the live version, and that a project share reaches its named people', () => {
+    renderDialog();
+    expect(screen.getByTestId('python-function-share-dialog').textContent).toContain(
+      'Shares the live version, now promotion 2; a later promotion is shared too.'
+    );
+    expect(screen.queryByTestId('python-function-share-project-note')).toBeNull();
+    fireEvent.click(screen.getByTestId('python-function-share-visibility-project'));
+    expect(screen.getByTestId('python-function-share-project-note').textContent).toBe(
+      'Reaches the people named on the project, not the groups it is shared with.'
+    );
+  });
+
   it('sends the organization chosen and the people already named', () => {
     h.share = {
       data: {

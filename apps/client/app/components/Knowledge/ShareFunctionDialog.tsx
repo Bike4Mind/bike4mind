@@ -149,18 +149,23 @@ function ShareForm({
         </RadioGroup>
       </FormControl>
       {visibility === 'project' && (
-        <Select
-          placeholder="Choose a project"
-          value={projectId}
-          onChange={(_event, value) => setProjectId(value)}
-          data-testid="python-function-share-project"
-        >
-          {(projects ?? []).map(project => (
-            <Option key={project.id} value={project.id}>
-              {project.name}
-            </Option>
-          ))}
-        </Select>
+        <Stack spacing={0.5}>
+          <Select
+            placeholder="Choose a project"
+            value={projectId}
+            onChange={(_event, value) => setProjectId(value)}
+            data-testid="python-function-share-project"
+          >
+            {(projects ?? []).map(project => (
+              <Option key={project.id} value={project.id}>
+                {project.name}
+              </Option>
+            ))}
+          </Select>
+          <Typography level="body-xs" sx={{ color: 'text.secondary' }} data-testid="python-function-share-project-note">
+            Reaches the people named on the project, not the groups it is shared with.
+          </Typography>
+        </Stack>
       )}
       {visibility === 'organization' && (
         <Select
@@ -285,7 +290,7 @@ export default function ShareFunctionDialog(props: ShareFunctionDialogProps) {
         <ModalClose />
         <Typography level="title-lg">Share {props.tool.slug}</Typography>
         <Typography level="body-sm" sx={{ color: 'text.secondary' }}>
-          Shares promotion {props.tool.pin.seq ?? ''} only. Promoting again shares the new version.
+          Shares the live version, now promotion {props.tool.pin.seq ?? ''}; a later promotion is shared too.
         </Typography>
         {isPending && <Skeleton variant="rectangular" height={120} />}
         {isError && (

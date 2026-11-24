@@ -368,6 +368,7 @@ function shareSummary(tool: ICallableFunctionPublic): string {
 
 function ShareBlock({ tool, live }: { tool: ICallableFunctionPublic; live: boolean }) {
   const [open, setOpen] = useState(false);
+  const [stopError, setStopError] = useState<string | null>(null);
   const stop = useStopSharingCallableFunction();
   return (
     <Stack spacing={1} data-testid="python-function-share-section">
@@ -392,13 +393,24 @@ function ShareBlock({ tool, live }: { tool: ICallableFunctionPublic; live: boole
             variant="plain"
             color="danger"
             loading={stop.isPending}
-            onClick={() => stop.mutate(tool.id)}
+            onClick={() => {
+              setStopError(null);
+              stop.mutate(tool.id, {
+                onError: failure =>
+                  setStopError(callableFunctionErrorMessage(failure, 'The tool could not stop being shared.')),
+              });
+            }}
             data-testid="python-function-share-stop-btn"
           >
             Stop sharing
           </Button>
         )}
       </Stack>
+      {stopError && (
+        <Alert color="danger" variant="soft" sx={dangerAlertSx} data-testid="python-function-share-stop-error">
+          {stopError}
+        </Alert>
+      )}
       {/* The record has no data pins or sources yet; the dialog lists them once it does. */}
       {open && <ShareFunctionDialog tool={tool} dataPins={[]} sources={[]} onClose={() => setOpen(false)} />}
     </Stack>
