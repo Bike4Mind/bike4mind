@@ -378,6 +378,15 @@ describe('promotion within the budget', () => {
     expect((h.recorded[0]![2] as { cases: { name: string }[] }).cases.map(entry => entry.name)).toEqual(['short span']);
   });
 
+  it('counts a case that timed out on its own limit well inside the budget as failed, not left', async () => {
+    h.caseMs = 30_000;
+    h.results = [dispatched({ outcome: 'timeout', durationMs: 30_000 })];
+    await expect(promoteCallableFunction(OWNER, FUNCTION_ID, { runner })).rejects.toMatchObject({
+      additionalInfo: { code: 'test_failed' },
+    });
+    expect(h.promoteArgs).toEqual([]);
+  });
+
   it('gives each case the run deadline and counts a budget_exhausted refusal as left, not failed', async () => {
     h.fn = { ...h.fn, examples: [EXAMPLE] };
     const deadline = Date.now() + CALLABLE_FUNCTION_TEST_RUN_BUDGET_MS;
