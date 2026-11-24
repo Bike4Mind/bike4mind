@@ -19,6 +19,7 @@ const h = vi.hoisted(() => ({
   release: vi.fn(),
   complete: vi.fn(),
   record: vi.fn(),
+  accepts: vi.fn(),
 }));
 
 vi.mock('@server/middlewares/baseApi', () => {
@@ -76,10 +77,12 @@ vi.mock('@server/skillMarket/templateFreeRun', async () => {
     loadFreeRunSettings: h.settings,
     reserveFreeRunCaps: h.reserve,
     completeFreeRun: h.complete,
+    freeRunAcceptsFiles: h.accepts,
     recordTemplateFreeRun: h.record,
   };
 });
 
+import { asUpload, makePdf, PNG_1PX } from '@server/skillMarket/templateFreeRunFile.fixtures';
 import '../run/[slug]';
 
 const SETTINGS = {
@@ -89,6 +92,8 @@ const SETTINGS = {
   globalDailyCap: 500,
   inputMaxChars: 100,
   outputMaxTokens: 1500,
+  fileMaxMb: 5,
+  fileMaxPages: 10,
 };
 
 const template = (over: Record<string, unknown> = {}) => ({
@@ -149,11 +154,12 @@ beforeEach(() => {
   h.reserve.mockResolvedValue({ ok: true, release: h.release });
   h.complete.mockResolvedValue('# Bullets\n\n- [ ] one\n- two');
   h.record.mockResolvedValue(undefined);
+  h.accepts.mockResolvedValue(true);
 });
 
 describe('POST /api/skills/template/run/[slug]', () => {
   it('is an unauthenticated POST-only route', () => {
-    expect(h.baseApiOptions).toEqual([{ auth: false, allowedMethods: ['POST'] }]);
+    expect(h.baseApiOptions).toEqual([{ auth: false, allowedMethods: ['POST'], maxBodySize: expect.any(Number) }]);
   });
 
   it('checks the blocked IP, then Turnstile, then the rate limit', async () => {
@@ -321,6 +327,107 @@ describe('POST /api/skills/template/run/[slug]', () => {
       h.settings.mockResolvedValue({ ...SETTINGS, model: 'gpt-4.1-mini', outputMaxTokens: 300 });
       await call();
       expect(h.complete).toHaveBeenCalledWith(expect.objectContaining({ model: 'gpt-4.1-mini', maxTokens: 300 }));
+    });
+  });
+
+  describe('attached file', () => {
+    const pdf = (pages: number) =>
+      asUpload(makePdf(Array.from({ length: pages }, (_, i) => `Page ${i + 1} text`)), 'brief.pdf', 'application/pdf');
+    const expectNoRun = () => {
+      expect(h.reserve).not.toHaveBeenCalled();
+      expect(h.complete).not.toHaveBeenCalled();
+    };
+
+    it('takes a body large enough for the biggest file once base64-encoded', async () => {
+      const { config } = await import('../run/[slug]');
+      const { FREE_RUN_BODY_MAX_BYTES, FREE_RUN_FILE_TRANSPORT_MAX_BYTES } = await import(
+        '@server/skillMarket/templateFreeRunFile'
+      );
+      expect(FREE_RUN_BODY_MAX_BYTES).toBeGreaterThan((FREE_RUN_FILE_TRANSPORT_MAX_BYTES * 4) / 3);
+      expect(h.baseApiOptions).toEqual([expect.objectContaining({ maxBodySize: FREE_RUN_BODY_MAX_BYTES })]);
+      expect(config.api.bodyParser.sizeLimit).toBe('6mb');
+      expect(FREE_RUN_BODY_MAX_BYTES).toBeLessThanOrEqual(6 * 1024 * 1024);
+    });
+
+    it('runs a PDF with no pasted text, its text inside the visitor block', async () => {
+      const res = await call({ turnstileToken: 'tok', file: pdf(2) });
+      expect(res.statusCode).toBe(200);
+      const args = h.complete.mock.calls[0][0];
+      expect(args.user).toMatch(/BEGIN VISITOR INPUT[\s\S]*\[Attached file "brief\.pdf"\][\s\S]*Page 1 text[\s\S]*END VISITOR/);
+      expect(args.image).toBeUndefined();
+      expect(h.accepts).toHaveBeenCalledWith('operations', expect.anything());
+      expect(res.getHeader('Set-Cookie')).toContain('b4m_template_free_run=');
+    });
+
+    it('sends an image to the model as an image next to the pasted text', async () => {
+      const res = await call({ text: 'What is this?', turnstileToken: 'tok', file: asUpload(PNG_1PX, 'a.png', 'image/png') });
+      expect(res.statusCode).toBe(200);
+      const args = h.complete.mock.calls[0][0];
+      expect(args.image).toBe(`data:image/png;base64,${PNG_1PX.toString('base64')}`);
+      expect(args.user).toContain('What is this?');
+      expect(args.user).toContain('[Attached image "a.png", sent with this message]');
+    });
+
+    it('refuses a second file with no model call', async () => {
+      const res = await call({ text: 'x', turnstileToken: 'tok', file: [pdf(1), pdf(1)] });
+      expect(res.statusCode).toBe(400);
+      expect(json(res).code).toBe('too_many_files');
+      expectNoRun();
+    });
+
+    it('refuses a file over the admin size cap with no model call', async () => {
+      h.settings.mockResolvedValue({ ...SETTINGS, fileMaxMb: 0.001 });
+      const res = await call({ turnstileToken: 'tok', file: asUpload(Buffer.alloc(2048, 0x61), 'a.txt', 'text/plain') });
+      expect(res.statusCode).toBe(413);
+      expect(json(res)).toMatchObject({ code: 'file_too_large', error: 'Attach a file under 1 KB.' });
+      expectNoRun();
+    });
+
+    it('refuses a PDF over the admin page cap with no model call', async () => {
+      h.settings.mockResolvedValue({ ...SETTINGS, fileMaxPages: 2 });
+      const res = await call({ turnstileToken: 'tok', file: pdf(3) });
+      expect(res.statusCode).toBe(400);
+      expect(json(res)).toMatchObject({ code: 'file_too_many_pages', error: 'Attach a PDF of 2 pages or fewer.' });
+      expectNoRun();
+    });
+
+    it('applies a changed page cap on the next run', async () => {
+      h.settings.mockResolvedValue({ ...SETTINGS, fileMaxPages: 2 });
+      expect((await call({ turnstileToken: 'tok', file: pdf(3) })).statusCode).toBe(400);
+      h.settings.mockResolvedValue({ ...SETTINGS, fileMaxPages: 3 });
+      expect((await call({ turnstileToken: 'tok', file: pdf(3) })).statusCode).toBe(200);
+      expect(h.settings).toHaveBeenCalledTimes(2);
+    });
+
+    it('applies a changed size cap on the next run', async () => {
+      const file = asUpload(Buffer.alloc(2048, 0x61), 'a.txt', 'text/plain');
+      h.settings.mockResolvedValue({ ...SETTINGS, fileMaxMb: 0.001 });
+      expect((await call({ turnstileToken: 'tok', file })).statusCode).toBe(413);
+      h.settings.mockResolvedValue({ ...SETTINGS, fileMaxMb: 1 });
+      expect((await call({ turnstileToken: 'tok', file })).statusCode).toBe(200);
+    });
+
+    it('refuses any file when the model takes none, and still runs text alone', async () => {
+      h.accepts.mockResolvedValue(false);
+      const res = await call({ text: 'x', turnstileToken: 'tok', file: asUpload(PNG_1PX, 'a.png', 'image/png') });
+      expect(res.statusCode).toBe(400);
+      expect(json(res).code).toBe('file_not_supported');
+      expectNoRun();
+      expect((await call()).statusCode).toBe(200);
+      expect(h.accepts).toHaveBeenCalledTimes(1);
+    });
+
+    it('refuses an unsupported file type with no model call', async () => {
+      const res = await call({ turnstileToken: 'tok', file: asUpload(Buffer.from([0, 1, 2, 3]), 'a.zip', 'application/zip') });
+      expect(res.statusCode).toBe(400);
+      expect(json(res).code).toBe('file_type_unsupported');
+      expectNoRun();
+    });
+
+    it('counts the run on the template and stores nothing of the file', async () => {
+      await call({ turnstileToken: 'tok', file: pdf(1) });
+      expect(h.record).toHaveBeenCalledWith('tpl-1');
+      expect(h.record.mock.calls[0]).toHaveLength(1);
     });
   });
 });

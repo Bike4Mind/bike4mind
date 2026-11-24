@@ -135,8 +135,26 @@ describe('renderTemplatePage', () => {
     it('keeps the script identical across pages so one CSP hash admits it', () => {
       const script = (html: string) => /<script>([\s\S]*?)<\/script>/.exec(html)?.[1];
       expect(script(renderTemplatePage({ ...view, freeRun: open }))).toBe(
-        script(renderTemplatePage({ ...view, slug: 'other', freeRun: { ...open, siteKey: 'k2', inputMaxChars: 10 } }))
+        script(
+          renderTemplatePage({
+            ...view,
+            slug: 'other',
+            freeRun: { ...open, siteKey: 'k2', inputMaxChars: 10, file: { maxBytes: 2048 } },
+          })
+        )
       );
+    });
+
+    it('renders the file picker and its cap only when the model takes files', () => {
+      const without = renderTemplatePage({ ...view, freeRun: { ...open, file: null } });
+      expect(without).not.toContain('template-page-free-run-file');
+      expect(without).not.toContain('data-file-max-bytes');
+      const html = renderTemplatePage({ ...view, freeRun: { ...open, file: { maxBytes: 3 * 1024 * 1024 } } });
+      expect(html).toContain('data-testid="template-page-free-run-file"');
+      expect(html).toContain('<input id="free-run-file" type="file"');
+      expect(html).toContain('data-file-max-bytes="3145728"');
+      expect(html).toContain('data-file-max-label="3 MB"');
+      expect(html).toContain('PDF, image or text, up to 3 MB');
     });
 
     it('shows the sign-up prompt, linking to the try route, to a visitor who already ran', () => {

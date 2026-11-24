@@ -11,6 +11,7 @@ import { findListing } from '@bike4mind/server-utils/skillMarket/market';
 import { escapeHtml } from '@bike4mind/utils/escapeHtml';
 import { prepareShareMeta } from '@server/services/publish/prepareShareMeta';
 import { isLive } from './template';
+import { FREE_RUN_FILE_ACCEPT, formatFileCap } from './templateFreeRunFile';
 
 /**
  * The public template page at `/t/<slug>` (pages/api/skills/template/serve.ts): static HTML whose only
@@ -56,7 +57,16 @@ export interface TemplatePageView {
   /** Link-preview tags; null for a page that must not unfurl (organization listings). */
   share: { canonicalUrl: string; imageUrl: string | null; siteName: string } | null;
   /** The free-run box, the sign-up prompt that replaces it once the visitor has run, or neither. */
-  freeRun?: { state: 'open'; siteKey: string; inputMaxChars: number } | { state: 'used' } | null;
+  freeRun?:
+    | {
+        state: 'open';
+        siteKey: string;
+        inputMaxChars: number;
+        /** The file picker, shown only when the free-run model takes files. */
+        file?: { maxBytes: number } | null;
+      }
+    | { state: 'used' }
+    | null;
 }
 
 export const templateTryPath = (slug: string): string => `/skills/market/try/${encodeURIComponent(slug)}`;
@@ -81,6 +91,8 @@ const PAGE_STYLE = `
   .sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
   .run{border:1px solid var(--line);border-radius:12px;background:var(--card);padding:1.25rem;margin:0 0 1.75rem}
   .run label{display:block;font-weight:600;margin:0 0 .5rem}
+  .run .file{margin:.75rem 0 0}
+  .run .file label{font-weight:400;color:var(--muted);font-size:.9rem;margin:0 0 .3rem}
   .run textarea{width:100%;min-height:8rem;font:inherit;color:var(--fg);background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:.6rem;resize:vertical}
   .run .widget{margin:.75rem 0}
   .run button{font:inherit;font-weight:600;border:0;border-radius:10px;padding:.65rem 1.3rem;background:var(--accent);color:var(--accent-fg);cursor:pointer}
@@ -124,6 +136,8 @@ const FREE_RUN_SCRIPT = `(function () {
   var status = document.getElementById('free-run-status');
   var result = document.getElementById('free-run-result');
   var signup = document.getElementById('free-run-signup');
+  var fileInput = document.getElementById('free-run-file');
+  var maxBytes = Number(box.getAttribute('data-file-max-bytes')) || 0;
   var token = null;
   var widgetId = null;
   function say(text) { status.textContent = text; }
@@ -163,19 +177,46 @@ const FREE_RUN_SCRIPT = `(function () {
       });
     }, function () {});
   }
+  function pickedFile() {
+    if (!fileInput || !fileInput.files || fileInput.files.length === 0) return null;
+    if (fileInput.files.length > 1) { say('Attach one file only.'); fileInput.value = ''; return null; }
+    var file = fileInput.files[0];
+    if (maxBytes && file.size > maxBytes) { say('Attach a file under ' + box.getAttribute('data-file-max-label') + '.'); fileInput.value = ''; return null; }
+    return file;
+  }
+  if (fileInput) fileInput.addEventListener('change', function () { say(''); pickedFile(); });
+  function readFile(file, done, failed) {
+    if (!file) { done(null); return; }
+    var reader = new FileReader();
+    reader.onload = function () {
+      var url = String(reader.result);
+      done({ name: file.name, type: file.type, data: url.slice(url.indexOf(',') + 1) });
+    };
+    reader.onerror = failed;
+    reader.readAsDataURL(file);
+  }
   form.addEventListener('submit', function (event) {
     event.preventDefault();
     var text = input.value.trim();
-    if (!text) { say('Paste some text first.'); return; }
+    var file = pickedFile();
+    if (!text && !file) { say(fileInput ? 'Paste some text or attach a file first.' : 'Paste some text first.'); return; }
     if (!token) { say('Finish the check above first.'); return; }
     keepInput();
     button.disabled = true;
     say('Running...');
+    readFile(file, function (attached) { send(text, attached); }, function () {
+      say('The file could not be read. Try another file.');
+      button.disabled = false;
+    });
+  });
+  function send(text, attached) {
+    var payload = { text: text, turnstileToken: token };
+    if (attached) payload.file = attached;
     fetch(box.getAttribute('data-run-url'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       credentials: 'same-origin',
-      body: JSON.stringify({ text: text, turnstileToken: token })
+      body: JSON.stringify(payload)
     }).then(function (res) {
       return res.json().catch(function () { return {}; }).then(function (body) { return { status: res.status, body: body }; });
     }).then(function (r) {
@@ -197,7 +238,7 @@ const FREE_RUN_SCRIPT = `(function () {
       button.disabled = false;
       resetChallenge();
     });
-  });
+  }
 })();`;
 
 /** The CSP hash that admits the free-run box script. */
@@ -218,6 +259,14 @@ function signupBlock(slug: string, brand: string, visible: boolean): string {
 </div>`;
 }
 
+function fileRow(file: { maxBytes: number } | null | undefined): string {
+  if (!file) return '';
+  return `<div class="file" data-testid="template-page-free-run-file-row">
+<label for="free-run-file">Or attach one file: PDF, image or text, up to ${escapeHtml(formatFileCap(file.maxBytes))}</label>
+<input id="free-run-file" type="file" accept="${escapeHtml(FREE_RUN_FILE_ACCEPT)}" data-testid="template-page-free-run-file">
+</div>`;
+}
+
 function freeRunBlock(view: TemplatePageView, brand: string): { html: string; script: boolean } {
   const freeRun = view.freeRun;
   if (!freeRun) return { html: '', script: false };
@@ -230,6 +279,12 @@ function freeRunBlock(view: TemplatePageView, brand: string): { html: string; sc
     ['data-turnstile-src', TURNSTILE_SCRIPT_SRC],
     ['data-mermaid-src', MERMAID_SCRIPT_SRC],
     ['data-mermaid-integrity', MERMAID_SCRIPT_INTEGRITY],
+    ...(freeRun.file
+      ? [
+          ['data-file-max-bytes', String(freeRun.file.maxBytes)],
+          ['data-file-max-label', formatFileCap(freeRun.file.maxBytes)],
+        ]
+      : []),
   ]
     .map(([name, value]) => `${name}="${escapeHtml(value)}"`)
     .join(' ');
@@ -239,6 +294,7 @@ function freeRunBlock(view: TemplatePageView, brand: string): { html: string; sc
 <form id="free-run-form" class="run" data-testid="template-page-free-run-form">
 <label for="free-run-input">Try it free</label>
 <textarea id="free-run-input" maxlength="${freeRun.inputMaxChars}" placeholder="Paste your text here" data-testid="template-page-free-run-input"></textarea>
+${fileRow(freeRun.file)}
 <div id="free-run-widget" class="widget" data-testid="template-page-free-run-widget"></div>
 <button id="free-run-btn" type="submit" data-testid="template-page-free-run-btn">Try it free</button>
 <p id="free-run-status" class="status" role="status" aria-live="polite" data-testid="template-page-free-run-status"></p>
