@@ -187,6 +187,13 @@ export const ADMIN_ONLY_USER_FIELDS = [
 export type AdminOnlyUserField = (typeof ADMIN_ONLY_USER_FIELDS)[number];
 
 /**
+ * The fields `redactUserSecretsForSelf` copies as-is: those classified as self-visible
+ * (SELF_VIEW_PASSTHROUGH_FIELDS in schemas/user.ts, which the compiler holds to IUser), plus the
+ * `_id` that toJSON() emits.
+ */
+const SELF_VIEW_COPIED_FIELDS = [...Object.keys(SELF_VIEW_PASSTHROUGH_FIELDS), '_id'];
+
+/**
  * Redact secrets from the caller's OWN full profile (self-view endpoints such as
  * users/[id] self and users/[id]/update). Like `toSafeUser` it is an allowlist, but a
  * broad one: every field classified as self-visible, plus SUBFIELD allowlists for the
@@ -211,11 +218,10 @@ export function redactUserSecretsForSelf(
     typeof (input as { toJSON?: unknown }).toJSON === 'function'
       ? (input as { toJSON: () => Partial<IUser> }).toJSON()
       : input;
-  // Allowlist: copy only the fields classified as self-visible (SELF_VIEW_PASSTHROUGH_FIELDS in
-  // schemas/user.ts, which the compiler holds to IUser), so a field nobody classified never leaves
-  // here. The integration objects below are rebuilt from their own allowlists.
+  // Allowlist: a field nobody classified never leaves here. The integration objects below are
+  // rebuilt from their own allowlists.
   const u: Record<string, unknown> = {};
-  for (const f of [...Object.keys(SELF_VIEW_PASSTHROUGH_FIELDS), '_id']) {
+  for (const f of SELF_VIEW_COPIED_FIELDS) {
     if (Object.hasOwn(user, f)) u[f] = (user as Record<string, unknown>)[f];
   }
 
