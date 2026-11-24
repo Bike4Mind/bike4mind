@@ -455,6 +455,31 @@ describe('ChatService', () => {
       expect(replies.map(event => event.type === 'done' && event.content)).toEqual(['whole reply']);
       expect(resumed.ok && resumed.events.filter(event => event.type === 'delta').map(event => event.seq)).toEqual([]);
     });
+
+    // The settle write is queued when the read starts; the snapshot must include it, since its
+    // cursor already counts the 'done' that follows.
+    it('holds the settled reply in a snapshot read while its write is still queued', async () => {
+      const { id } = await service.createSession();
+      await service.send(id, 'hello');
+      await waitFor(events, 'start');
+      stream.write(frame({ type: 'content', text: 'whole reply', stopReason: 'end_turn' }));
+      stream.write(frame('[DONE]'));
+      await waitFor(events, 'done');
+      const done = events.filter(event => event.sessionId === id).at(-1);
+
+      const write = store.appendMessage(id, {
+        id: 'queued-reply',
+        role: 'assistant',
+        content: 'queued reply',
+        createdAt: new Date().toISOString(),
+      });
+      const snapshot = service.getSession(id);
+      await write;
+
+      const read = await snapshot;
+      expect(read?.messages.map(message => message.id)).toContain('queued-reply');
+      expect(read?.eventCursor?.seq).toBe(done?.seq);
+    });
   });
 
   // Opus 5 reasons on every turn, and the server inlines that into the text between markers.
