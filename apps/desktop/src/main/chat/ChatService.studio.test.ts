@@ -106,6 +106,16 @@ describe('ChatService Studio sessions', () => {
     expect(system).not.toContain(root);
   });
 
+  it('resolves no folder for a Studio session, whatever it or the app was granted', async () => {
+    const { id } = await service.createSession('studio');
+    const own = await realpath(await mkdtemp(join(tmpdir(), 'b4m-studio-own-')));
+    await store.addGrantedDirectory(id, own);
+    expect((await service.fileLinkScope(id))?.roots).toEqual([]);
+    expect(await service.studioContextRoots(id)).toEqual([]);
+    const chat = await service.createSession();
+    expect((await service.fileLinkScope(chat.id))?.roots).toContain(root);
+  });
+
   it('keeps the Chat tool set for a Chat session in the same app', async () => {
     const { id } = await service.createSession();
     await service.send(id, 'hi');
