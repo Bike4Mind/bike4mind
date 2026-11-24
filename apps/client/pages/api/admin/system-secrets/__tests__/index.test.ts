@@ -3,6 +3,8 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 
 const h = vi.hoisted(() => ({
+  findAll: vi.fn(),
+  resolveSecret: vi.fn(),
   findBySecretName: vi.fn(),
   updateSecret: vi.fn(),
   upsertSecret: vi.fn(),
@@ -30,6 +32,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
 }));
 vi.mock('@bike4mind/database', () => ({
   systemSecretRepository: {
+    findAll: h.findAll,
     findBySecretName: h.findBySecretName,
     updateSecret: h.updateSecret,
     upsertSecret: h.upsertSecret,
@@ -39,8 +42,12 @@ vi.mock('@bike4mind/database', () => ({
 vi.mock('@server/managers/systemSecretsManager', () => ({
   clearSecretCache: h.clearSecretCache,
   getResolvableSecrets: () => ({ OPENAI_API_KEY: { category: 'llm', description: 'OpenAI key' } }),
+  RESOLVABLE_SECRETS: {
+    OPENAI_API_KEY: { category: 'llm', description: 'OpenAI key' },
+    MAIL_PASSWORD: { category: 'mail', description: 'SMTP password' },
+  },
   TIER1_SECRETS: new Set(['MONGODB_URI']),
-  resolveSecret: vi.fn(),
+  resolveSecret: h.resolveSecret,
 }));
 vi.mock('@bike4mind/server-utils/security/secretEncryption', () => ({
   encryptSecret: () => 'encrypted-blob',
@@ -105,6 +112,38 @@ describe('POST /api/admin/system-secrets admin audit', () => {
     expect(res._getStatusCode()).toBe(500);
     expect(res._getJSONData()).not.toHaveProperty('success');
     expect(h.clearSecretCache).not.toHaveBeenCalled();
+  });
+});
+
+describe('GET /api/admin/system-secrets', () => {
+  const get = async () => {
+    const { req, res } = createMocks({ method: 'GET' });
+    (req as Record<string, unknown>).user = { id: 'admin-1', isAdmin: true };
+    await (handler as unknown as (req: unknown, res: unknown) => Promise<void>)(req, res);
+    return res._getJSONData().secrets as Array<{ secretName: string; isUnused: boolean; dbRecord: unknown }>;
+  };
+
+  beforeEach(() => {
+    h.resolveSecret.mockResolvedValue({ value: 'stored-value', source: 'database', warnings: [] });
+  });
+
+  it('leaves out a setting the stage does not read when nothing is stored for it', async () => {
+    h.findAll.mockResolvedValue([]);
+
+    const secrets = await get();
+
+    expect(secrets.map(s => s.secretName)).toEqual(['OPENAI_API_KEY']);
+    expect(secrets[0].isUnused).toBe(false);
+  });
+
+  it('keeps a stored override for such a setting listed and marked unused, so it can be removed', async () => {
+    h.findAll.mockResolvedValue([{ id: 'db-9', secretName: 'MAIL_PASSWORD', source: 'gui_configured' }]);
+
+    const secrets = await get();
+
+    const stored = secrets.find(s => s.secretName === 'MAIL_PASSWORD');
+    expect(stored).toMatchObject({ isUnused: true, dbRecord: { id: 'db-9' } });
+    expect(secrets.find(s => s.secretName === 'OPENAI_API_KEY')?.isUnused).toBe(false);
   });
 });
 
