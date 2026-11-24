@@ -43,6 +43,19 @@ export const MeSubscriptionSchema = z.object({
 
 export type MeSubscription = z.infer<typeof MeSubscriptionSchema>;
 
+/**
+ * Part of the personal balance that will expire unless spent first. Spending draws the
+ * soonest-expiring grant first, so `amount` is what remains of that grant after everything
+ * spent so far. Credits not covered by any entry do not expire.
+ */
+export const MeCreditExpirySchema = z.object({
+  amount: z.number().positive(),
+  /** ISO 8601. Past for a grant that has expired but not yet been deducted. */
+  expires_at: z.string(),
+});
+
+export type MeCreditExpiry = z.infer<typeof MeCreditExpirySchema>;
+
 export const MeResponseSchema = z.object({
   /** Stable B4M user id. Safe to key an integrator's own records on. */
   id: z.string(),
@@ -53,6 +66,8 @@ export const MeResponseSchema = z.object({
   credits: CreditBalanceSchema.extend({
     /** Total monthly personal plan grants; older servers may omit this field. */
     monthly_allowance: z.number().nonnegative().nullable().optional(),
+    /** Personal balance still due to expire, soonest first; older servers may omit this field. */
+    expiring: z.array(MeCreditExpirySchema).optional(),
   }),
   /** Entitlement keys the caller currently holds, e.g. `base`. */
   entitlements: z.array(z.string()),
