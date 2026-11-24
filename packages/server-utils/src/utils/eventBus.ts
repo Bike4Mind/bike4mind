@@ -238,6 +238,16 @@ export const BriefEvents = {
   ),
 };
 
+export const DelegationEvents = {
+  Process: event(
+    'delegation.process',
+    z.object({
+      delegationId: z.string(),
+      userId: z.string(),
+    })
+  ),
+};
+
 export const SessionEvents = {
   AutoName: event(
     'session.auto_name',
