@@ -1,0 +1,274 @@
+import { describe, it, expect, vi } from 'vitest';
+import axios, { type InternalAxiosRequestConfig } from 'axios';
+import { z } from 'zod';
+import { B4mApiError } from '@bike4mind/sdk';
+import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
+import { B4mApiClient } from './b4mApiClient';
+import type { ApiClient } from '../auth/ApiClient';
+import type { ConfigStore } from '../storage/ConfigStore';
+import { registerTools } from './tools';
+
+const BASE_URL = 'https://b4m.example.com';
+const ID = 'a'.repeat(24);
+const OTHER_ID = 'b'.repeat(24);
+
+const summary = (id: string, slug: string) => ({
+  id,
+  slug,
+  description: 'Beam deflection',
+  trust_label: 'verified',
+  pin_version: 7,
+  pin_seq: 3,
+  updated_at: '2026-11-01T00:00:00.000Z',
+});
+
+const detail = (id: string, slug: string) => ({
+  ...summary(id, slug),
+  input_schema: {
+    type: 'object',
+    properties: { span: { type: 'number', unit: 'm' } },
+    required: ['span'],
+    additionalProperties: false,
+  },
+  output_schema: {
+    type: 'object',
+    properties: { deflection: { type: 'number', unit: 'm' } },
+    required: ['deflection'],
+    additionalProperties: false,
+  },
+});
+
+const stamp = { function_id: ID, slug: 'beam', pin_version: 7, code_hash: 'c'.repeat(64), surface: 'rest' };
+
+const apiError = (status: number, body: unknown, headers: Record<string, string> = {}) =>
+  new B4mApiError(status, body, new Headers(headers));
+
+const mockClient = (overrides: Record<string, unknown>): B4mApiClient =>
+  ({ baseURL: BASE_URL, ...overrides }) as unknown as B4mApiClient;
+
+const collect = (client: B4mApiClient) => {
+  const handlers = new Map<string, (args: unknown) => Promise<CallToolResult>>();
+  const schemas = new Map<string, z.ZodRawShape>();
+  const annotations = new Map<string, Record<string, unknown>>();
+  const server = {
+    registerTool: (
+      name: string,
+      config: { inputSchema: z.ZodRawShape; annotations?: Record<string, unknown> },
+      cb: (args: unknown) => Promise<CallToolResult>
+    ) => {
+      handlers.set(name, cb);
+      schemas.set(name, config.inputSchema);
+      annotations.set(name, config.annotations ?? {});
+    },
+    server: { getClientCapabilities: () => ({}) },
+  } as unknown as McpServer;
+  registerTools(server, client);
+  const call = (name: string, args: unknown) => handlers.get(name)!(args);
+  const parse = (name: string, args: unknown) => z.object(schemas.get(name)!).safeParse(args);
+  return { handlers, annotations, call, parse };
+};
+
+const text = (result: CallToolResult) => (result.content[0] as { text: string }).text;
+
+describe('function tools', () => {
+  it('registers list_functions and call_function as read-only tools', () => {
+    const { handlers, annotations, parse } = collect(mockClient({}));
+    expect(handlers.has('list_functions')).toBe(true);
+    expect(handlers.has('call_function')).toBe(true);
+    expect(annotations.get('list_functions')).toEqual({ readOnlyHint: true });
+    expect(annotations.get('call_function')).toEqual({ readOnlyHint: true });
+    expect(parse('call_function', { function: 'beam', input: { span: 4 } }).success).toBe(true);
+    expect(parse('call_function', { function: '', input: {} }).success).toBe(false);
+    expect(parse('list_functions', { limit: 26 }).success).toBe(false);
+  });
+
+  it('lists each live function with its input and output schemas', async () => {
+    const listFunctions = vi.fn().mockResolvedValue({ data: [summary(ID, 'beam')], next_cursor: 'next' });
+    const getFunction = vi.fn().mockResolvedValue(detail(ID, 'beam'));
+    const { call } = collect(mockClient({ listFunctions, getFunction }));
+
+    const result = await call('list_functions', {});
+
+    expect(result.isError).toBeUndefined();
+    expect(listFunctions).toHaveBeenCalledWith(10, undefined);
+    expect(getFunction).toHaveBeenCalledWith(ID);
+    expect(result.structuredContent).toEqual({ functions: [detail(ID, 'beam')], next_cursor: 'next' });
+  });
+
+  it('passes the page size and cursor through', async () => {
+    const listFunctions = vi.fn().mockResolvedValue({ data: [], next_cursor: null });
+    const { call } = collect(mockClient({ listFunctions, getFunction: vi.fn() }));
+    await call('list_functions', { limit: 5, cursor: 'c1' });
+    expect(listFunctions).toHaveBeenCalledWith(5, 'c1');
+  });
+
+  it('calls a function by id with its inputs and returns the output and stamp', async () => {
+    const listFunctions = vi.fn();
+    const invokeFunction = vi.fn().mockResolvedValue({ output: { deflection: 0.002 }, stamp });
+    const { call } = collect(mockClient({ listFunctions, invokeFunction }));
+
+    const result = await call('call_function', { function: ID, input: { span: 4 } });
+
+    expect(listFunctions).not.toHaveBeenCalled();
+    expect(invokeFunction).toHaveBeenCalledWith(ID, { span: 4 });
+    expect(result.structuredContent).toEqual({ output: { deflection: 0.002 }, stamp });
+    expect(JSON.parse(text(result))).toEqual({ output: { deflection: 0.002 }, stamp });
+  });
+
+  it('resolves a slug to its id across pages before calling', async () => {
+    const listFunctions = vi
+      .fn()
+      .mockResolvedValueOnce({ data: [summary(OTHER_ID, 'other')], next_cursor: 'p2' })
+      .mockResolvedValueOnce({ data: [summary(ID, 'beam')], next_cursor: null });
+    const invokeFunction = vi.fn().mockResolvedValue({ output: { deflection: 0.002 }, stamp });
+    const { call } = collect(mockClient({ listFunctions, invokeFunction }));
+
+    await call('call_function', { function: 'beam', input: { span: 4 } });
+
+    expect(listFunctions).toHaveBeenNthCalledWith(2, 100, 'p2');
+    expect(invokeFunction).toHaveBeenCalledWith(ID, { span: 4 });
+  });
+
+  it('names an unknown slug and points at list_functions', async () => {
+    const listFunctions = vi.fn().mockResolvedValue({ data: [summary(ID, 'beam')], next_cursor: null });
+    const invokeFunction = vi.fn();
+    const { call } = collect(mockClient({ listFunctions, invokeFunction }));
+
+    const result = await call('call_function', { function: 'nope', input: {} });
+
+    expect(result.isError).toBe(true);
+    expect(text(result)).toBe(
+      'No live function has the slug "nope". Call list_functions for the functions this key can call.'
+    );
+    expect(invokeFunction).not.toHaveBeenCalled();
+  });
+
+  describe('refusals', () => {
+    const refusal = async (error: unknown) => {
+      const invokeFunction = vi.fn().mockRejectedValue(error);
+      const result = await collect(mockClient({ invokeFunction })).call('call_function', { function: ID, input: {} });
+      expect(result.isError).toBe(true);
+      return text(result);
+    };
+
+    it('403 for a missing scope names the scope and how to get a key that holds it', async () => {
+      expect(
+        await refusal(
+          apiError(403, { error: 'Insufficient API key permissions', required_scopes: ['functions:invoke'] })
+        )
+      ).toBe(
+        'This API key does not hold functions:invoke. Create a key with the Functions access level in the API tab of your Bike4Mind profile and set it as B4M_API_KEY.'
+      );
+    });
+
+    it('403 with functions turned off says who can turn them on', async () => {
+      expect(await refusal(apiError(403, { error: 'Callable functions are turned off for this account.' }))).toBe(
+        'Callable functions are turned off for this account. Ask an admin to turn on callable functions for this account and its organizations.'
+      );
+    });
+
+    it('404 names the function and points at list_functions', async () => {
+      expect(await refusal(apiError(404, { name: 'NotFoundError', error: 'Function not found' }))).toBe(
+        `No live function "${ID}" belongs to this key's owner. Call list_functions for the functions this key can call. A draft or turned-off function must be promoted in Bike4Mind first.`
+      );
+    });
+
+    it('404 without the error envelope reads as a server without these routes', async () => {
+      expect(await refusal(apiError(404, 'Not Found'))).toMatch(/does not have this API route/);
+    });
+
+    it('413 asks for a smaller input', async () => {
+      expect(await refusal(apiError(413, { error: 'The input is larger than a call accepts.' }))).toBe(
+        'The input is larger than a call accepts. Send a smaller input.'
+      );
+    });
+
+    it('422 names each field that does not fit', async () => {
+      const body = {
+        error: 'Input span must be a number.',
+        problems: [
+          { path: 'span', message: 'must be a number' },
+          { path: 'load', message: 'is required' },
+        ],
+      };
+      expect(await refusal(apiError(422, body))).toBe(
+        'Input span must be a number. Fix: span must be a number; load is required. Read the input_schema from list_functions and call again.'
+      );
+    });
+
+    it('429 says when to retry', async () => {
+      expect(await refusal(apiError(429, { error: 'Too many requests' }, { 'retry-after': '12' }))).toBe(
+        'Too many function requests for this account. Retry after 12s.'
+      );
+    });
+
+    it('502 names the outcome', async () => {
+      expect(
+        await refusal(apiError(502, { error: 'The function raised an error (ValueError).', outcome: 'error' }))
+      ).toBe(
+        "The function raised an error (ValueError). (outcome: error) The inputs fit; check the function's code in Bike4Mind or call it with other inputs."
+      );
+    });
+
+    it('503 says no runtime is available', async () => {
+      expect(await refusal(apiError(503, { error: 'No function runtime is available.' }))).toBe(
+        `No function runtime is available on the Bike4Mind server at ${BASE_URL}. Try again later, or ask an admin to set one up.`
+      );
+    });
+
+    it('504 says the call was stopped and what to try', async () => {
+      expect(
+        await refusal(apiError(504, { error: 'The call ran past its time limit.', errorCode: 'REQUEST_TIMEOUT' }))
+      ).toBe(
+        'The call ran past its time limit and was stopped. Try smaller inputs, or run the function in the Bike4Mind app.'
+      );
+    });
+
+    it('a refusal while listing reads the same way', async () => {
+      const listFunctions = vi.fn().mockRejectedValue(apiError(403, { required_scopes: ['functions:invoke'] }));
+      const result = await collect(mockClient({ listFunctions })).call('list_functions', {});
+      expect(text(result)).toMatch(/^This API key does not hold functions:invoke\./);
+    });
+  });
+
+  describe('the API key', () => {
+    it('goes only to the configured host, in the x-api-key header', async () => {
+      const key = ['test', 'key', 'value'].join('-');
+      const api = new B4mApiClient(BASE_URL, {} as ConfigStore, key);
+      const seen: { url: string; key: unknown; authorization: unknown }[] = [];
+      const http = (api as unknown as { client: ApiClient }).client.getAxiosInstance();
+      http.defaults.adapter = async (config: InternalAxiosRequestConfig) => {
+        const url = axios.getUri(config);
+        seen.push({ url, key: config.headers.get('x-api-key'), authorization: config.headers.get('authorization') });
+        const body = url.includes('/invoke')
+          ? { output: { deflection: 0.002 }, stamp }
+          : url.includes(`/functions/${ID}`)
+            ? { data: detail(ID, 'beam') }
+            : { data: [summary(ID, 'beam')], next_cursor: null };
+        const headers = { 'content-type': 'application/json' };
+        return { data: JSON.stringify(body), status: 200, statusText: 'OK', headers, config };
+      };
+      const { call } = collect(api);
+
+      expect((await call('list_functions', {})).isError).toBeUndefined();
+      expect((await call('call_function', { function: 'beam', input: { span: 4 } })).structuredContent).toEqual({
+        output: { deflection: 0.002 },
+        stamp,
+      });
+
+      expect(seen.map(s => new URL(s.url).pathname)).toEqual([
+        '/api/v1/functions',
+        `/api/v1/functions/${ID}`,
+        '/api/v1/functions',
+        `/api/v1/functions/${ID}/invoke`,
+      ]);
+      for (const request of seen) {
+        expect(new URL(request.url).origin).toBe(BASE_URL);
+        expect(request.key).toBe(key);
+        expect(request.authorization).toBeFalsy();
+        expect(request.url).not.toContain(key);
+      }
+    });
+  });
+});
