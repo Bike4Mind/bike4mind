@@ -1,5 +1,5 @@
 import { app, dialog, shell, type IpcMain } from 'electron';
-import { copyFile, open } from 'node:fs/promises';
+import { copyFile, open, realpath } from 'node:fs/promises';
 import { constants } from 'node:fs';
 import { basename, join } from 'node:path';
 import { createHash } from 'node:crypto';
@@ -20,7 +20,6 @@ import type { ChatVideoJob } from '@shared/chat';
 import { MediaApiClient } from '../media/MediaApiClient';
 import { readStudioCatalog } from './StudioCatalog';
 import { planStudioCreation } from './StudioPlan';
-import { resolveWithinRoots } from '../tools/paths';
 import { StudioWorkspaceStore } from './StudioWorkspaceStore';
 import { StudioLiveService } from './StudioLiveService';
 import { StudioJobScheduler } from './StudioJobScheduler';
@@ -235,13 +234,15 @@ export function registerStudio(deps: {
     const picked = await dialog.showOpenDialog({
       title: 'Upload reference image to Files',
       buttonLabel: 'Upload image',
-      message: 'The selected image is uploaded to your account. Existing session folder permissions still apply.',
+      message: 'The selected image is uploaded to your account.',
       properties: ['openFile'],
       filters: [{ name: 'Reference image', extensions: ['png', 'jpg', 'jpeg', 'webp'] }],
     });
     if (picked.canceled || !picked.filePaths[0]) return null;
     if (scope !== sessions.scopeKey()) throw new Error('Account changed.');
-    const path = await resolveWithinRoots(picked.filePaths[0], await deps.service.studioContextRoots(sessionId));
+    // The user picked this file in the native dialog, and a Studio session has no granted folders to
+    // check it against. O_NOFOLLOW still refuses a symlink swapped in after the pick.
+    const path = await realpath(picked.filePaths[0]);
     const file = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
     let bytes: Buffer;
     try {
@@ -260,7 +261,6 @@ export function registerStudio(deps: {
     } finally {
       await file.close();
     }
-    await resolveWithinRoots(path, await deps.service.studioContextRoots(sessionId));
     if (scope !== sessions.scopeKey() || !(await sessions.get(sessionId))) throw new Error('Session changed.');
     const mime =
       bytes[0] === 0x89 && bytes.subarray(1, 4).toString() === 'PNG'
