@@ -11,6 +11,7 @@ const h = vi.hoisted(() => ({
   saved: null as unknown,
   runTests: vi.fn(),
   pending: false,
+  runtime: true,
 }));
 
 vi.mock('@client/app/contexts/ApiContext', () => ({ api: {} }));
@@ -21,6 +22,7 @@ vi.mock('@client/app/hooks/data/callableFunctions', async importOriginal => ({
   useSetCallableFunctionEnabled: () => ({ mutate: vi.fn(), isPending: false }),
   useDeleteCallableFunction: () => ({ mutate: vi.fn(), isPending: false }),
   useRunCallableFunctionTests: () => ({ mutate: h.runTests, isPending: h.pending }),
+  useCallableFunctionsServerRuntime: () => h.runtime,
 }));
 vi.mock('../SaveFunctionDialog', () => ({ default: () => <div data-testid="save-function-dialog" /> }));
 vi.mock('sonner', () => ({ toast: { error: vi.fn() } }));
@@ -91,7 +93,7 @@ const cells = (testId: string) => screen.getAllByTestId(testId).map(cell => cell
 
 /** Answers the next server run with `run`, the way react-query calls onSuccess. */
 const answerWith = (run: unknown) =>
-  h.runTests.mockImplementationOnce((_id: string, handlers: { onSuccess: (data: unknown) => void }) =>
+  h.runTests.mockImplementationOnce((_request: unknown, handlers: { onSuccess: (data: unknown) => void }) =>
     handlers.onSuccess(run)
   );
 
@@ -100,6 +102,7 @@ beforeEach(() => {
   h.runTests.mockReset();
   h.saved = savedView();
   h.pending = false;
+  h.runtime = true;
 });
 
 describe('PythonFunctionPanel server tests', () => {
@@ -122,7 +125,7 @@ describe('PythonFunctionPanel server tests', () => {
     });
     fireEvent.click(serverButton());
 
-    expect(h.runTests).toHaveBeenCalledWith('fn-1', expect.any(Object));
+    expect(h.runTests).toHaveBeenCalledWith({ id: 'fn-1' }, expect.any(Object));
     expect(
       within(section)
         .getAllByRole('columnheader')
@@ -167,7 +170,7 @@ describe('PythonFunctionPanel server tests', () => {
 
   it('shows the error the server returned', async () => {
     await renderPanel();
-    h.runTests.mockImplementationOnce((_id: string, handlers: { onError: (error: unknown) => void }) =>
+    h.runTests.mockImplementationOnce((_request: unknown, handlers: { onError: (error: unknown) => void }) =>
       handlers.onError(
         Object.assign(new Error('Request failed with status code 422'), {
           isAxiosError: true,
@@ -193,11 +196,98 @@ describe('PythonFunctionPanel server tests', () => {
       savedView({ pin: { ...savedView().pin, version: 2 } }),
       'The server runs the saved version 2. Update the tool to test this version there.',
     ],
+    [
+      'a tool whose artifact was deleted',
+      savedView({ status: 'source_deleted' }),
+      'The artifact behind this tool was deleted.',
+    ],
   ])('holds the server button for %s and says why', async (_name, saved, note) => {
     h.saved = saved;
     await renderPanel();
     expect(serverButton().disabled).toBe(true);
     expect(screen.getByTestId('python-function-tests-server-note').textContent).toBe(note);
+  });
+
+  it('holds the server button on a stage with no server runtime', async () => {
+    h.runtime = false;
+    await renderPanel();
+    expect(serverButton().disabled).toBe(true);
+    expect(screen.getByTestId('python-function-tests-server-note').textContent).toBe(
+      'Server test runs are not set up here.'
+    );
+  });
+
+  it('pairs server results with the tests by name, whatever order they come back in', async () => {
+    await renderPanel();
+    answerWith({
+      functionId: 'fn-1',
+      passed: 1,
+      failed: 1,
+      notRun: 0,
+      results: [
+        caseResult({ name: 'long span', passed: false, outcome: 'timeout', durationMs: 30_000 }),
+        caseResult({ name: 'short span', durationMs: 41 }),
+      ],
+    });
+    fireEvent.click(serverButton());
+    await waitFor(() => expect(cells('python-function-test-server-status')).toEqual(['Passed', 'Timed out']));
+    expect(screen.getByTestId('python-function-test-server-failure').textContent).toBe(
+      'long span: stopped at the time limit.'
+    );
+  });
+
+  it('shows the cases the budget left not run and runs only those on request', async () => {
+    await renderPanel();
+    answerWith({
+      functionId: 'fn-1',
+      passed: 1,
+      failed: 0,
+      notRun: 1,
+      results: [
+        caseResult({ name: 'short span', durationMs: 41 }),
+        { name: 'long span', passed: false, outcome: 'not_run', reason: 'budget_exhausted', mismatch: null },
+      ],
+    });
+    fireEvent.click(serverButton());
+    await waitFor(() => expect(cells('python-function-test-server-status')).toEqual(['Passed', 'Not run']));
+    expect(cells('python-function-test-server-status-ms')).toEqual([' (41 ms)']);
+    expect(screen.queryByTestId('python-function-test-server-failure')).toBeNull();
+    expect(screen.getByTestId('python-function-tests-server-not-run').textContent).toBe(
+      '1 test did not fit in the time for one server run.'
+    );
+
+    answerWith({
+      functionId: 'fn-1',
+      passed: 1,
+      failed: 0,
+      notRun: 0,
+      results: [caseResult({ name: 'long span', durationMs: 38, callId: 'call-2' })],
+    });
+    fireEvent.click(screen.getByTestId('python-function-tests-server-run-remaining-btn'));
+    expect(h.runTests).toHaveBeenLastCalledWith({ id: 'fn-1', tests: ['long span'] }, expect.any(Object));
+    await waitFor(() => expect(cells('python-function-test-server-status')).toEqual(['Passed', 'Passed']));
+    expect(cells('python-function-test-server-status-ms')).toEqual([' (41 ms)', ' (38 ms)']);
+    expect(screen.queryByTestId('python-function-tests-server-not-run')).toBeNull();
+  });
+
+  it('shows the runtime-starting answer as the server gave it', async () => {
+    await renderPanel();
+    h.runTests.mockImplementationOnce((_request: unknown, handlers: { onError: (error: unknown) => void }) =>
+      handlers.onError(
+        Object.assign(new Error('Request failed with status code 503'), {
+          isAxiosError: true,
+          response: {
+            status: 503,
+            data: { error: 'The runtime is starting. Try again in a minute.', code: 'runtime_starting' },
+          },
+        })
+      )
+    );
+    fireEvent.click(serverButton());
+    expect((await screen.findByTestId('python-function-tests-server-error')).textContent).toBe(
+      'The runtime is starting. Try again in a minute.'
+    );
+    expect(serverButton().disabled).toBe(false);
   });
 
   it('offers no server column without save controls', async () => {

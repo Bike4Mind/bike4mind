@@ -44,6 +44,7 @@ import {
   callableFunctionContractUnreadable,
   callableFunctionErrorMessage,
   useArtifactCallableFunction,
+  useCallableFunctionsServerRuntime,
   useDeleteCallableFunction,
   useRepinCallableFunction,
   useRunCallableFunctionTests,
@@ -485,7 +486,7 @@ function MismatchAlert({
   );
 }
 
-const SERVER_OUTCOME_TEXT: Record<Exclude<CallableFunctionTestCaseResult['outcome'], 'ok'>, string> = {
+const SERVER_OUTCOME_TEXT: Record<Exclude<CallableFunctionTestCaseResult['outcome'], 'ok' | 'not_run'>, string> = {
   timeout: 'stopped at the time limit',
   memory: 'ran out of memory',
   error: 'failed to run',
@@ -496,7 +497,7 @@ const SERVER_OUTCOME_TEXT: Record<Exclude<CallableFunctionTestCaseResult['outcom
 };
 
 function ServerTestFailure({ test, result }: { test: FunctionTestCase; result: CallableFunctionTestCaseResult }) {
-  if (result.passed) return null;
+  if (result.passed || result.outcome === 'not_run') return null;
   if (result.mismatch) {
     return <MismatchAlert test={test} mismatch={result.mismatch} testId="python-function-test-server-failure" />;
   }
@@ -535,14 +536,32 @@ interface ServerTests {
   run: CallableFunctionTestRun | null;
   error: string | null;
   onRun: () => void;
+  /** Runs only the cases the last run left not run. */
+  onRunRemaining: () => void;
 }
 
 const serverStatus = (result: CallableFunctionTestCaseResult) =>
   result.passed
     ? TEST_STATUS.passed
-    : result.outcome === 'timeout'
-      ? { label: 'Timed out', color: 'danger.plainColor' }
-      : TEST_STATUS.failed;
+    : result.outcome === 'not_run'
+      ? TEST_STATUS.not_run
+      : result.outcome === 'timeout'
+        ? { label: 'Timed out', color: 'danger.plainColor' }
+        : TEST_STATUS.failed;
+
+/** Server results pair with the declared tests by name, never by position. */
+const resultFor = (run: CallableFunctionTestRun | null | undefined, name: string) =>
+  run?.results.find(result => result.name === name);
+
+/** The earlier run with each case it left not run replaced by the later run's result for that name. */
+function mergeTestRuns(earlier: CallableFunctionTestRun, later: CallableFunctionTestRun): CallableFunctionTestRun {
+  const results = earlier.results.map(result =>
+    result.outcome === 'not_run' ? (resultFor(later, result.name) ?? result) : result
+  );
+  const passed = results.filter(result => result.passed).length;
+  const notRun = results.filter(result => result.outcome === 'not_run').length;
+  return { ...later, passed, failed: results.length - passed - notRun, notRun, results };
+}
 
 interface BrowserTestsProps {
   tests: FunctionTestCase[];
@@ -571,13 +590,16 @@ function TestsSection({
     if (running && index === outcomes.length) return 'running';
     return 'not_run';
   };
-  const serverCell = (index: number): { status: { label: string; color: string }; ms?: number } => {
-    const result = server?.run?.results[index];
-    if (result) return { status: serverStatus(result), ms: result.durationMs };
+  const serverCell = (name: string): { status: { label: string; color: string }; ms?: number } => {
+    const result = resultFor(server?.run, name);
+    if (server?.running && (!result || result.outcome === 'not_run')) return { status: TEST_STATUS.running };
+    if (result)
+      return { status: serverStatus(result), ms: result.outcome === 'not_run' ? undefined : result.durationMs };
     if (server?.running) return { status: TEST_STATUS.running };
     return { status: { label: '-', color: 'text.tertiary' } };
   };
-  const serverFailures = server?.run?.results.filter(result => !result.passed) ?? [];
+  const serverFailures = server?.run?.results.filter(result => !result.passed && result.outcome !== 'not_run') ?? [];
+  const notRun = server?.run?.notRun ?? 0;
   const failureDetails = failedAt >= 0 || serverFailures.length > 0;
   return (
     <Stack spacing={1} data-testid="python-function-tests">
@@ -633,7 +655,7 @@ function TestsSection({
                   </td>
                   {server && (
                     <td>
-                      <StatusCell {...serverCell(index)} testId="python-function-test-server-status" />
+                      <StatusCell {...serverCell(test.name)} testId="python-function-test-server-status" />
                     </td>
                   )}
                 </tr>
@@ -642,6 +664,28 @@ function TestsSection({
           </tbody>
         </Table>
       </Box>
+      {server && notRun > 0 && (
+        <Stack direction="row" spacing={2} alignItems="center" flexWrap="wrap" useFlexGap>
+          <Typography
+            level="body-sm"
+            sx={{ color: 'text.secondary' }}
+            data-testid="python-function-tests-server-not-run"
+          >
+            {notRun === 1 ? '1 test' : `${notRun} tests`} did not fit in the time for one server run.
+          </Typography>
+          <Button
+            size="sm"
+            variant="outlined"
+            color="neutral"
+            data-testid="python-function-tests-server-run-remaining-btn"
+            disabled={disabled || server.blocked !== null || server.running}
+            loading={server.running}
+            onClick={server.onRunRemaining}
+          >
+            Run remaining on the server
+          </Button>
+        </Stack>
+      )}
       {server?.error && (
         <Alert color="danger" variant="soft" data-testid="python-function-tests-server-error">
           <Typography level="body-sm">{server.error}</Typography>
@@ -658,9 +702,10 @@ function TestsSection({
           {serverFailures.length > 0 && (
             <Stack spacing={0.5} data-testid="python-function-test-server-failures">
               <Typography level="body-xs">Server</Typography>
-              {server?.run?.results.map((result, index) =>
-                tests[index] ? <ServerTestFailure key={index} test={tests[index]} result={result} /> : null
-              )}
+              {tests.map((test, index) => {
+                const result = resultFor(server?.run, test.name);
+                return result ? <ServerTestFailure key={index} test={test} result={result} /> : null;
+              })}
             </Stack>
           )}
         </Box>
@@ -677,25 +722,40 @@ function SavedTestsSection({
 }: BrowserTestsProps & { save: PythonFunctionSave; contract: FunctionContract }) {
   const { data } = useArtifactCallableFunction(save.artifactId, save.version, contract.name);
   const saved = data?.saved ?? null;
+  const serverRuntime = useCallableFunctionsServerRuntime();
   const runTests = useRunCallableFunctionTests();
   const [last, setLast] = useState<{ key: string; run?: CallableFunctionTestRun; error?: string } | null>(null);
   const key = saved ? `${saved.id}:${saved.pin.version}` : null;
-  const blocked = !saved
-    ? 'Save this version as a tool to run its tests on the server.'
-    : saved.status === 'disabled'
-      ? 'Turn the tool on to run its tests on the server.'
-      : saved.pin.version !== save.version
-        ? `The server runs the saved version ${saved.pin.version}. Update the tool to test this version there.`
-        : null;
+  const blocked = !serverRuntime
+    ? 'Server test runs are not set up here.'
+    : !saved
+      ? 'Save this version as a tool to run its tests on the server.'
+      : saved.status === 'source_deleted'
+        ? 'The artifact behind this tool was deleted.'
+        : saved.status === 'disabled'
+          ? 'Turn the tool on to run its tests on the server.'
+          : saved.pin.version !== save.version
+            ? `The server runs the saved version ${saved.pin.version}. Update the tool to test this version there.`
+            : null;
   const shown = last && last.key === key ? last : null;
-  const onRun = () => {
+  const run = (earlier: CallableFunctionTestRun | null) => {
     if (!saved || !key) return;
-    runTests.mutate(saved.id, {
-      onSuccess: run => setLast({ key, run }),
-      onError: error =>
-        setLast({ key, error: callableFunctionErrorMessage(error, 'The tests could not run on the server.') }),
-    });
+    const tests = earlier?.results.filter(result => result.outcome === 'not_run').map(result => result.name);
+    runTests.mutate(
+      { id: saved.id, ...(tests?.length ? { tests } : {}) },
+      {
+        onSuccess: next => setLast({ key, run: earlier ? mergeTestRuns(earlier, next) : next }),
+        onError: error =>
+          setLast({
+            key,
+            ...(earlier ? { run: earlier } : {}),
+            error: callableFunctionErrorMessage(error, 'The tests could not run on the server.'),
+          }),
+      }
+    );
   };
+  const onRun = () => run(null);
+  const onRunRemaining = () => run(shown?.run ?? null);
   return (
     <TestsSection
       {...browser}
@@ -705,6 +765,7 @@ function SavedTestsSection({
         run: shown?.run ?? null,
         error: shown?.error ?? null,
         onRun,
+        onRunRemaining,
       }}
     />
   );
