@@ -7,6 +7,7 @@ import {
   IOrganizationRepository,
   IUserDocument,
   isOrgServiceAccountOf,
+  type CompletionRunAttribution,
   type CompletionSource,
 } from '@bike4mind/common';
 import { notifyOrgEvent } from '../organizationService/orgEventObserver';
@@ -37,6 +38,12 @@ export interface DeductCreditsCommonParams {
   source?: CompletionSource;
   /** The UserApiKey that authenticated the charged request; undefined for JWT/internal callers. */
   apiKeyId?: string;
+  /**
+   * The completion run this charge was claimed against, recorded as `metadata.run` so the run's usage
+   * read counts it as settled (CreditTransactionRepository.completionRunSpend). Set only by a caller
+   * that checked the run's owner.
+   */
+  run?: CompletionRunAttribution;
 }
 
 /**
@@ -261,6 +268,7 @@ export async function deductCreditsWithOrgSupport(
     model,
     source,
     apiKeyId: params.apiKeyId,
+    ...(params.run && { metadata: { run: params.run } }),
   };
 
   let transactionParams: SubtractCreditsParameters;

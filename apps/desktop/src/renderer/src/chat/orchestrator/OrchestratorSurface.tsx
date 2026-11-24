@@ -24,5 +24,6 @@ export function OrchestratorSurface({
   ...stageProps
 }: OrchestratorSurfaceProps) {
   const { agents, parent } = useOrchestratorRoster(rootId, sessions, statuses, prSummaries, preparing);
-  return <OrchestratorStage agents={agents} parent={parent} rootId={rootId} {...stageProps} />;
+  const rootTitle = sessions.find(session => session.id === rootId)?.title;
+  return <OrchestratorStage agents={agents} parent={parent} rootId={rootId} rootTitle={rootTitle} {...stageProps} />;
 }

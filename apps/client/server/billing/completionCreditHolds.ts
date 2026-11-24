@@ -1,4 +1,4 @@
-import { CreditHolderType, RUN_BUDGET_EXHAUSTED_ERROR_CODE, UnprocessableEntityError } from '@bike4mind/common';
+import { CreditHolderType } from '@bike4mind/common';
 import {
   completionRunRepository,
   pendingCreditHoldRepository,
@@ -12,18 +12,11 @@ import { creditService } from '@bike4mind/services';
 import type { CompletionCreditHolds } from '@bike4mind/services/cliCompletions';
 import type { Logger } from '@bike4mind/observability';
 import { observeCreditHold, recordSettlementAfterSweep } from '@bike4mind/server-utils/billing/creditHoldTelemetry';
+import { claimRunBudget } from '@bike4mind/server-utils/billing/runBudgetClaim';
 
 // Completion holds become eligible for recovery after one hour, including requests still running.
 export const COMPLETION_CREDIT_HOLD_TTL_MS = 60 * 60_000;
 const SETTLEMENT_ATTEMPTS = 3;
-
-/** The deterministic refusal a client shows when a run has no headroom left; no model call writes it. */
-export function runBudgetExhaustedMessage(budgetCredits: number, committedCredits: number): string {
-  return (
-    `This run's credit budget is used up: ${committedCredits} of its ${budgetCredits} credits are spent or ` +
-    'reserved by requests still running. Retry once those requests finish, or raise the run budget.'
-  );
-}
 
 /**
  * One instance per completion; inference always runs outside the billing transactions. A completion
@@ -147,14 +140,4 @@ export function createCompletionCreditHolds(logger: Logger, apiKeyId?: string): 
       }
     },
   };
-}
-
-async function claimRunBudget(claim: { runId: string; wantedCredits: number; minimumCredits: number }) {
-  const outcome = await completionRunRepository.claimBudget(claim.runId, claim.wantedCredits, claim.minimumCredits);
-  if (outcome.kind === 'exhausted') {
-    throw new UnprocessableEntityError(runBudgetExhaustedMessage(outcome.budgetCredits, outcome.committedCredits), {
-      errorCode: RUN_BUDGET_EXHAUSTED_ERROR_CODE,
-    });
-  }
-  return outcome.kind === 'claimed' ? outcome.credits : undefined;
 }

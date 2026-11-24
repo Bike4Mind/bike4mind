@@ -6,7 +6,13 @@ import {
   publishedArtifactsBucket,
   slackExportBucket,
 } from './buckets';
-import { DEFAULT_LAMBDA_ENVIRONMENT, SINGLE_RECORD_BATCH, TEST_GENERATION_PROVIDER_ENVIRONMENT } from './constants';
+import {
+  DEFAULT_LAMBDA_ENVIRONMENT,
+  SINGLE_RECORD_BATCH,
+  TEST_GENERATION_PROVIDER_ENVIRONMENT,
+  isPreviewStage,
+} from './constants';
+import { subscribeUnlessPreview } from './previewQueueConsumers';
 import { imageProcessor } from './imageProcessor';
 import {
   buildQueuePair,
@@ -517,7 +523,10 @@ const whatsNewGenerationQueue = new sst.aws.Queue('whatsNewGenerationQueue', {
     },
   },
 });
-const whatsNewGenerationQueueSubscription = whatsNewGenerationQueue.subscribe(
+const whatsNewGenerationQueueSubscription = subscribeUnlessPreview(
+  isPreviewStage,
+  'whatsNewGenerationQueue',
+  whatsNewGenerationQueue,
   {
     handler: 'apps/workers/src/queueHandlers/whatsNewJob.dispatch',
     timeout: '5 minutes',
@@ -652,7 +661,10 @@ const githubWebhookQueue = new sst.aws.Queue('githubWebhookQueue', {
     },
   },
 });
-const githubWebhookQueueSubscription = githubWebhookQueue.subscribe(
+const githubWebhookQueueSubscription = subscribeUnlessPreview(
+  isPreviewStage,
+  'githubWebhookQueue',
+  githubWebhookQueue,
   {
     handler: 'apps/workers/src/queueHandlers/githubWebhook.dispatch',
     runtime: 'nodejs24.x',
@@ -744,7 +756,10 @@ const slackExportQueue = new sst.aws.Queue('slackExportQueue', {
     retry: 2, // Only retry twice - exports are expensive
   },
 });
-const slackExportQueueSubscription = slackExportQueue.subscribe(
+const slackExportQueueSubscription = subscribeUnlessPreview(
+  isPreviewStage,
+  'slackExportQueue',
+  slackExportQueue,
   {
     handler: 'apps/workers/src/queueHandlers/slackExport.dispatch',
     runtime: 'nodejs24.x',
@@ -1143,7 +1158,10 @@ const driveDisconnectPurgeQueueSubscription = driveDisconnectPurgeQueue.subscrib
   SINGLE_RECORD_BATCH
 );
 
-const githubLakeIngestQueueSubscription = githubLakeIngestQueue.subscribe(
+const githubLakeIngestQueueSubscription = subscribeUnlessPreview(
+  isPreviewStage,
+  'githubLakeIngestQueue',
+  githubLakeIngestQueue,
   {
     handler: 'apps/workers/src/queueHandlers/githubLakeIngest.dispatch',
     runtime: 'nodejs24.x',
@@ -1159,7 +1177,10 @@ const githubLakeIngestQueueSubscription = githubLakeIngestQueue.subscribe(
   SINGLE_RECORD_BATCH
 );
 
-const githubLakeRevokeQueueSubscription = githubLakeRevokeQueue.subscribe(
+const githubLakeRevokeQueueSubscription = subscribeUnlessPreview(
+  isPreviewStage,
+  'githubLakeRevokeQueue',
+  githubLakeRevokeQueue,
   {
     handler: 'apps/workers/src/queueHandlers/githubLakeRevoke.dispatch',
     runtime: 'nodejs24.x',
@@ -1310,7 +1331,10 @@ const liveOpsTriageQueue = new sst.aws.Queue('liveOpsTriageQueue', {
     retry: 2, // Retry twice to handle transient failures
   },
 });
-const liveOpsTriageQueueSubscription = liveOpsTriageQueue.subscribe(
+const liveOpsTriageQueueSubscription = subscribeUnlessPreview(
+  isPreviewStage,
+  'liveOpsTriageQueue',
+  liveOpsTriageQueue,
   {
     handler: 'apps/workers/src/cron/liveopsTriageWorker.handler',
     runtime: 'nodejs24.x',
@@ -1358,7 +1382,10 @@ const secopsTriageQueue = new sst.aws.Queue('secopsTriageQueue', {
   },
 });
 
-const secopsTriageQueueSubscription = secopsTriageQueue.subscribe(
+const secopsTriageQueueSubscription = subscribeUnlessPreview(
+  isPreviewStage,
+  'secopsTriageQueue',
+  secopsTriageQueue,
   {
     handler: 'apps/workers/src/cron/secopsTriageWorker.handler',
     runtime: 'nodejs24.x',
@@ -1375,7 +1402,7 @@ const secopsTriageQueueSubscription = secopsTriageQueue.subscribe(
         resources: ['*'],
       },
     ],
-    // Only set reserved concurrency on production/dev — ZAP scans are weekly, low volume
+    // Only set reserved concurrency on production/dev - ZAP scans are weekly, low volume
     concurrency: ['production', 'dev'].includes($app.stage)
       ? {
           reserved: 2,
@@ -1478,7 +1505,10 @@ const sreFixQueue = new sst.aws.Queue('sreFixQueue', {
     retry: 2,
   },
 });
-const sreFixQueueSubscription = sreFixQueue.subscribe(
+const sreFixQueueSubscription = subscribeUnlessPreview(
+  isPreviewStage,
+  'sreFixQueue',
+  sreFixQueue,
   {
     handler: 'apps/workers/src/queueHandlers/sreFix.dispatch',
     runtime: 'nodejs24.x',
@@ -1531,7 +1561,10 @@ const sreJobQueue = new sst.aws.Queue('sreJobQueue', {
     },
   },
 });
-const sreJobQueueSubscription = sreJobQueue.subscribe(
+const sreJobQueueSubscription = subscribeUnlessPreview(
+  isPreviewStage,
+  'sreJobQueue',
+  sreJobQueue,
   {
     handler: 'apps/workers/src/queueHandlers/sreJob.dispatch',
     runtime: 'nodejs24.x',
@@ -1562,7 +1595,7 @@ const sreJobQueueSubscription = sreJobQueue.subscribe(
     ],
     // reserved: 4 preserves the pre-merge aggregate capacity (analysis had 2 +
     // revision had 2). Note: this is now a single shared pool, NOT a per-stage
-    // partition — a sustained analysis burst can consume all 4 slots and delay
+    // partition - a sustained analysis burst can consume all 4 slots and delay
     // revisions until visibility timeouts roll. Acceptable given low SRE volume;
     // raise this if revision latency suffers under co-tenancy.
     concurrency: ['production', 'dev'].includes($app.stage)
@@ -1602,7 +1635,10 @@ const overwatchAnalyticsQueue = new sst.aws.Queue('overwatchAnalyticsQueue', {
   },
 });
 
-const overwatchAnalyticsQueueSubscription = overwatchAnalyticsQueue.subscribe(
+const overwatchAnalyticsQueueSubscription = subscribeUnlessPreview(
+  isPreviewStage,
+  'overwatchAnalyticsQueue',
+  overwatchAnalyticsQueue,
   {
     handler: 'apps/client/server/premium-generated/queueHandlers/overwatchAnalytics.dispatch',
     runtime: 'nodejs24.x',

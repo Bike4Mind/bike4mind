@@ -52,6 +52,8 @@ import {
   ImageOutputFormatSchema,
   toNonWebpOutputFormat,
   resolveGptImageGenerateSize,
+  CompletionRunAttributionSchema,
+  type CompletionRunAttribution,
 } from '@bike4mind/common';
 import {
   aiImageService,
@@ -139,6 +141,8 @@ export const ImageGenerationBodySchema = OpenAIImageGenerationInput.extend({
    * the acting user for every key.
    */
   apiKeyBillingOwnerType: z.enum([CreditHolderType.User, CreditHolderType.Organization]).optional(),
+  /** The completion run this render bills against, its owner checked by the route; the hold claims its budget. */
+  run: CompletionRunAttributionSchema.optional(),
 });
 export type ImageGenerationBody = z.infer<typeof ImageGenerationBodySchema>;
 
@@ -146,6 +150,16 @@ const IMAGE_GENERATION_FEATURE_LABEL = 'image generation';
 
 /** Re-exported so the app wires the port without a new package subpath; ImageEdit takes the same port. */
 export type { ImageCreditHolds } from './imageCreditHolds';
+
+/** A paid call's completion run, its owner already checked by the route (resolvePaidCallRun). */
+export type ImageGenerationRun = {
+  attribution: CompletionRunAttribution;
+  /**
+   * Non-claiming pre-check: throws the run's 422 `run_budget_exhausted` when `requiredCredits` cannot
+   * fit what the run has left. The claim itself is taken with the worker's credit hold.
+   */
+  assertHeadroom(requiredCredits: number): Promise<void>;
+};
 
 interface IImageGenerationServiceOptions {
   db: {
@@ -311,12 +325,14 @@ export class ImageGenerationService {
     adminRoleWithheld,
     apiKeyId,
     apiKeyBillingOwnerType,
+    run,
   }: {
     adminRoleWithheld?: boolean;
     apiKeyId?: string;
     apiKeyBillingOwnerType?: ApiKeyBillingOwnerType;
     body: z.infer<typeof GenerateImageIvokeParamsSchema>;
     userId: string;
+    run?: ImageGenerationRun;
   }) {
     const now = new Date();
 
@@ -344,6 +360,8 @@ export class ImageGenerationService {
     await this.assertModelAdmission(userId, model, adminRoleWithheld, organizationId);
     const session = await this.db.sessions.findById(sessionId);
     if (!session) throw new NotFoundError('Session not found');
+    // Before the quest exists, so the common refusal is the route's own 422 rather than a failed quest.
+    if (run) await this.assertRunHeadroom(run, { ...rest, model });
 
     // Filter out undefined values from parameters
     const imageParameters = Object.fromEntries(
@@ -490,6 +508,7 @@ export class ImageGenerationService {
           adminRoleWithheld,
           apiKeyId,
           apiKeyBillingOwnerType,
+          run: run?.attribution,
         })
       );
 
@@ -541,8 +560,38 @@ export class ImageGenerationService {
     return quest;
   }
 
+  /**
+   * Checks a run has room for the cheapest form of this render: no input images, which the worker
+   * resolves and bills later, so it never refuses a render the worker's claim would admit.
+   */
+  private async assertRunHeadroom(
+    run: ImageGenerationRun,
+    {
+      model,
+      n,
+      size,
+      quality,
+    }: Pick<z.infer<typeof GenerateImageIvokeParamsSchema>, 'model' | 'n' | 'size' | 'quality'>
+  ) {
+    const settings = await getSettingsMap(this.db, { skipCache: true });
+    if (!getSettingsValue('enforceCredits', settings)) return;
+    const { requiredCredits } = this.estimateCredits(
+      { id: model },
+      isKontextModel(model) ? 1 : (n ?? 1),
+      {
+        // The invoke params carry a free-form model id; estimateCredits rejects an unpriced one.
+        model: model as CostInput['model'],
+        size: isGPTImageModel(model) && size ? resolveGptImageGenerateSize(model, size) : size,
+        quality: resolveBilledImageQuality(model, quality),
+        inputImageCount: 0,
+      },
+      Logger.globalInstance
+    );
+    await run.assertHeadroom(requiredCredits);
+  }
+
   /** Prices a request; the balance and member-cap checks happen atomically in creditHolds.hold. */
-  private estimateCredits(modelInfo: ModelInfo, n: number = 1, input: CostInput, logger: Logger) {
+  private estimateCredits(modelInfo: { id: string }, n: number = 1, input: CostInput, logger: Logger) {
     let usdCost = 0;
     // Input images are billed once per request, outside the `* n` (see getInputImageCost).
     let inputUsd = 0;
@@ -872,6 +921,7 @@ export class ImageGenerationService {
       organizationId,
       intent = 'fresh',
       generationId,
+      run,
     } = ImageGenerationBodySchema.parse(body);
     const billedN = isKontextModel(model) ? 1 : n;
 
@@ -910,6 +960,10 @@ export class ImageGenerationService {
     let stopHeartbeat: (() => void) | undefined;
     // Cleared once settled; the finally returns a hold still set (a failure or an early return).
     let creditHold: PersistedCreditHold | undefined;
+    // A redelivery that found this generation's hold already taken: settling it is safe (settlement
+    // claims the row once), but releasing it could refund a hold the first delivery is still rendering
+    // under, so a failure leaves it to that delivery or the expired-hold sweep.
+    let holdReused = false;
 
     try {
       stopHeartbeat = await startQuestHeartbeat(this.db, quest, logger, 'image-heartbeat');
@@ -1044,7 +1098,7 @@ export class ImageGenerationService {
           logger
         );
         // An atomic decrement, not a balance read: concurrent runs cannot all pass on one balance.
-        creditHold = await this.creditHolds.hold({
+        const held = await this.creditHolds.hold({
           userId,
           organizationId: organization ? organization.id : null,
           requiredCredits,
@@ -1052,7 +1106,12 @@ export class ImageGenerationService {
           logger,
           apiKeyId,
           apiKeyBillingOwnerType,
+          ...(run && { run }),
+          ...(generationId && { holdKey: `image_generation:${generationId}` }),
         });
+        creditHold = held;
+        holdReused = held.reused === true;
+        if (holdReused) logger.warn('Image generation reusing the credit hold of an earlier delivery', { questId });
         quest.creditsUsed = requiredCredits;
         usageCostUsd = usdCost;
       } else {
@@ -1666,7 +1725,7 @@ export class ImageGenerationService {
         const creditsCharged = await this.creditHolds.settle(
           creditHold,
           settlement.credits,
-          { type: 'image_generation_usage', sessionId, questId, model, apiKeyId },
+          { type: 'image_generation_usage', sessionId, questId, model, apiKeyId, ...(run && { run }) },
           { featureLabel: IMAGE_GENERATION_FEATURE_LABEL, logger }
         );
         creditHold = undefined;
@@ -1775,7 +1834,7 @@ export class ImageGenerationService {
       // Always stop the heartbeat, on success, error, or an early return (e.g. Gemini
       // clarification). The terminal write above owns the final status.
       stopHeartbeat?.();
-      if (creditHold)
+      if (creditHold && !holdReused)
         await this.creditHolds.release(creditHold, { featureLabel: IMAGE_GENERATION_FEATURE_LABEL, logger });
     }
   }

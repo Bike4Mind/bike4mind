@@ -14,6 +14,8 @@ const {
   findSettlement,
   withTransaction,
   findActiveFreeze,
+  claimBudget,
+  releaseClaim,
 } = vi.hoisted(() => ({
   deductCredits: vi.fn(),
   userFindById: vi.fn(),
@@ -27,6 +29,8 @@ const {
   findSettlement: vi.fn(),
   withTransaction: vi.fn(async <T>(fn: () => Promise<T>): Promise<T> => fn()),
   findActiveFreeze: vi.fn(),
+  claimBudget: vi.fn(),
+  releaseClaim: vi.fn(),
 }));
 
 vi.mock('../utils/errors', () => ({
@@ -48,6 +52,7 @@ vi.mock('@bike4mind/database', () => ({
   pendingCreditHoldRepository: { record: recordHold, claim: claimHold, markSettled, findSettlement },
   usageEventRepository: {},
   spendFreezeRepository: { findActiveForSubject: findActiveFreeze },
+  completionRunRepository: { claimBudget, releaseClaim },
   withTransaction,
   warmExchangeAttribution: async () => undefined,
   // No samples and no settings rows: the spend cap reads defaults and never refuses here.
@@ -116,8 +121,8 @@ describe('reserveRequestCredits', () => {
     deductCredits.mockResolvedValue(undefined);
     pendingHolds.clear();
     let nextId = 0;
-    recordHold.mockImplementation(async (hold: object, featureLabel: string, expiresAt: Date) => {
-      const pending = { ...hold, id: `hold-${++nextId}`, featureLabel, expiresAt };
+    recordHold.mockImplementation(async (hold: object, featureLabel: string, expiresAt: Date, runClaim?: object) => {
+      const pending = { ...hold, id: `hold-${++nextId}`, featureLabel, expiresAt, ...(runClaim && { runClaim }) };
       pendingHolds.set(pending.id, pending);
       return pending;
     });
@@ -513,7 +518,9 @@ describe('reserveRequestCredits', () => {
     expect(recordHold).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({ ownerId: 'u1', reservedCredits: 3, balanceAfterHold: 97 }),
       'embeddings',
-      new Date(Date.parse('2026-10-19T12:00:00Z') + CREDIT_HOLD_TTL_MS)
+      new Date(Date.parse('2026-10-19T12:00:00Z') + CREDIT_HOLD_TTL_MS),
+      // No run claim for a call made outside a completion run.
+      undefined
     );
   });
 
@@ -816,6 +823,86 @@ describe('reserveRequestCredits', () => {
       expect(markSettled).not.toHaveBeenCalled();
       expect(userIncrement).toHaveBeenCalledExactlyOnceWith('u1', 1);
       expect(deductCredits).toHaveBeenCalledTimes(1);
+    });
+  });
+  describe('a paid call attributed to a budgeted completion run', () => {
+    const RUN_ID = '0b6f3c2e-7d4a-4f51-9a8e-2c1d5e6f7a80';
+    const run = { runId: RUN_ID, role: 'worker' as const, purpose: 'tool' as const, taskId: 'task-a' };
+    const reserveForRun = () =>
+      reserveRequestCredits({ req: userReq(), requiredCredits: 3, enforceCredits: true, featureLabel: 'sound', run });
+
+    it('claims the whole reservation from the run in the hold transaction and records it on the hold', async () => {
+      claimBudget.mockResolvedValue({ kind: 'claimed', credits: 3 });
+
+      const reservation = await reserveForRun();
+
+      expect(claimBudget).toHaveBeenCalledExactlyOnceWith(RUN_ID, 3, 3);
+      expect(withTransaction).toHaveBeenCalledTimes(1);
+      expect(recordHold).toHaveBeenCalledExactlyOnceWith(expect.anything(), 'sound', expect.any(Date), {
+        runId: RUN_ID,
+        credits: 3,
+      });
+      expect(reservation.hold?.runClaim).toEqual({ runId: RUN_ID, credits: 3 });
+    });
+
+    it('refuses with run_budget_exhausted before any balance moves when the run cannot spare it all', async () => {
+      claimBudget.mockResolvedValue({ kind: 'exhausted', budgetCredits: 10, committedCredits: 8 });
+
+      await expect(reserveForRun()).rejects.toMatchObject({
+        statusCode: 422,
+        additionalInfo: { errorCode: 'run_budget_exhausted' },
+        message: expect.stringContaining('needs 3 credits, but this run has 2 of its 10 credits left'),
+      });
+      expect(userIncrement).not.toHaveBeenCalled();
+      expect(recordHold).not.toHaveBeenCalled();
+    });
+
+    it('settles by swapping the claim for the charge, and tags the ledger row with the run', async () => {
+      claimBudget.mockResolvedValue({ kind: 'claimed', credits: 3 });
+      const reservation = await reserveForRun();
+
+      expect(await reservation.settle(1, ledger)).toBe(1);
+
+      expect(releaseClaim).toHaveBeenCalledExactlyOnceWith({ runId: RUN_ID, credits: 3 }, 1);
+      expect(deductCredits).toHaveBeenCalledWith(
+        expect.objectContaining({ credits: 1, run }),
+        expect.anything(),
+        expect.anything()
+      );
+    });
+
+    it('returns the whole claim to the run on a refund', async () => {
+      claimBudget.mockResolvedValue({ kind: 'claimed', credits: 3 });
+      const reservation = await reserveForRun();
+
+      await reservation.refund();
+
+      expect(releaseClaim).toHaveBeenCalledExactlyOnceWith({ runId: RUN_ID, credits: 3 }, 0);
+    });
+
+    it('settles a persisted hold later and still releases its claim', async () => {
+      claimBudget.mockResolvedValue({ kind: 'claimed', credits: 3 });
+      const { hold } = await reserveForRun();
+
+      expect(await settleHeldCredits(hold!, 2, ledger, { featureLabel: 'sound', logger: logger as never })).toBe(2);
+
+      expect(releaseClaim).toHaveBeenCalledExactlyOnceWith({ runId: RUN_ID, credits: 3 }, 2);
+    });
+
+    it('records no claim for an unbudgeted run, and claims nothing when credits are off', async () => {
+      claimBudget.mockResolvedValue({ kind: 'unbudgeted' });
+      const unbudgeted = await reserveForRun();
+      expect(unbudgeted.hold?.runClaim).toBeUndefined();
+
+      claimBudget.mockClear();
+      await reserveRequestCredits({
+        req: userReq(),
+        requiredCredits: 3,
+        enforceCredits: false,
+        featureLabel: 's',
+        run,
+      });
+      expect(claimBudget).not.toHaveBeenCalled();
     });
   });
 });
