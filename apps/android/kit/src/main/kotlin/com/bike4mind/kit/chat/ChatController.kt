@@ -45,8 +45,11 @@ data class ChatState(
         approvals[PendingActionTarget(questId, action.requestedAtMs)] ?: ApprovalCardState.Open
 }
 
-/** A message the server never received: shown under the transcript with a retry. Twin of the iOS failed live turn. */
-data class FailedSend(val id: String, val message: String, val fileIds: List<String>)
+/**
+ * A message the server never received: shown under the transcript with a retry. Twin of the iOS failed live turn.
+ * [reason] is the server's answer when the send got one; null means the request never completed (offline).
+ */
+data class FailedSend(val id: String, val message: String, val fileIds: List<String>, val reason: String? = null)
 
 sealed interface ChatError {
     data class Refused(val errorCode: String?, val message: String?) : ChatError
@@ -176,7 +179,8 @@ class ChatController(
             } catch (error: Exception) {
                 // The composer has already let go of the text, so the message is kept here rather than dropped.
                 onRetryAccepted[attempt.id] = onAccepted
-                mutableState.update { it.copy(sending = false, failedSends = it.failedSends + attempt) }
+                val kept = attempt.copy(reason = if (error is java.io.IOException) null else error.message)
+                mutableState.update { it.copy(sending = false, failedSends = it.failedSends + kept) }
             }
         }
     }

@@ -40,6 +40,7 @@
     <string name="chat_refused">The message was refused (%1$s)</string>
     <string name="chat_refused_unknown">unknown</string>
     <string name="chat_send_failed">Not sent. Check your connection and try again.</string>
+    <string name="chat_send_failed_reason">Not sent. %1$s</string>
     <string name="chat_reply_failed">The reply failed.</string>
     <string name="chat_reply_failed_code">The reply failed (%1$s).</string>
     <string name="chat_reply_pending" translatable="false">...</string>
