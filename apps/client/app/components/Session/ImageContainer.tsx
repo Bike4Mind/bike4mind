@@ -28,11 +28,13 @@ import { FC, useState, useEffect, useCallback } from 'react';
 import { toast } from 'sonner';
 import ImageMaskerFlux from './ImageMaskerFlux';
 import { ImageModerationPlaceholder } from './ImageModerationPlaceholder';
+import { EditMaskRejectedError, uploadEditMask } from './uploadEditMask';
 import { SendMessageOptions } from '@client/app/utils/llm';
 import { useSessionReadOnly } from './SessionReadOnlyContext';
 import { useStudioFeature } from '@client/app/components/Studio/useStudioFeature';
 import { useOpenStudioImageEdit } from '@client/app/components/ImageStudio/useOpenStudioImageEdit';
 import { blackAlpha, whiteAlpha } from '@client/app/utils/themes/colors';
+import { extractS3KeyFromUrl, isGeneratedImage } from '@client/app/utils/generatedImageUrl';
 
 // Add FabAPI interface
 interface FabAPI {
@@ -71,31 +73,6 @@ type ImageContainerProps = {
    * blocked, not null, no src yet" - so it isn't special-cased separately.
    */
   moderationStatus?: 'pending' | 'scanning' | 'clean' | 'blocked';
-};
-
-// Extract the S3 key from an image URL
-export const extractS3KeyFromUrl = (imageUrl: string): string | null => {
-  try {
-    const url = new URL(imageUrl);
-
-    // Check if it's an S3 URL (either S3 domain or presigned URL)
-    if (url.hostname.includes('generatedimagesbucket') || url.hostname.includes('s3')) {
-      // Generated keys are bare (no prefix); take the last path segment so a path-style host
-      // (bucket in the path) works too. pathname already excludes the presign query string.
-      const lastSegment = url.pathname.split('/').filter(Boolean).pop();
-      return lastSegment ? decodeURIComponent(lastSegment) : null;
-    }
-
-    return null;
-  } catch (error) {
-    console.error('Error parsing image URL:', error);
-    return null;
-  }
-};
-
-// Whether an image URL points at the generated-images bucket
-export const isGeneratedImage = (imageUrl: string): boolean => {
-  return imageUrl.includes('generatedimagesbucket');
 };
 
 // Build a sensible filename for a downloaded/saved generated asset.
@@ -197,46 +174,17 @@ const ImageContainer: FC<ImageContainerProps> = ({
   const handleImageEdit = async (sourceImageUrl: string, base64Mask: string, prompt: string) => {
     setEditing(true);
     try {
-      // Convert base64 to blob
-      const byteString = atob(base64Mask);
-      const mimeString = 'image/png';
-      const ab = new ArrayBuffer(byteString.length);
-      const ia = new Uint8Array(ab);
-
-      for (let i = 0; i < byteString.length; i++) {
-        ia[i] = byteString.charCodeAt(i);
-      }
-
-      const blob = new Blob([ab], { type: mimeString });
-
-      // Prepare the form data for Fab file
-      const formData: CreateFabFileRequestInputType = {
-        type: KnowledgeType.FILE,
-        fileName: `image_mask_${Date.now()}.png`,
-        mimeType: 'image/png',
-        fileSize: blob.size,
-      };
-
-      // Create a File object from the blob
-      const file = new File([blob], formData.fileName, { type: blob.type });
-
-      // Save as FabFile
-      const maskFabFile = await createFabFileOnServerWithUpload(formData, file);
-      // The edit is dispatched right away and the mask must be 'clean' by then; scan it now instead
-      // of racing the S3 event. 'pending' still dispatches: the server gate waits and decides.
-      if ((await moderateFabFileNow(maskFabFile.id)) === 'blocked') {
-        // No dispatch means the server's mask cleanup never runs, so drop the mask here.
-        toast.error('The edit mask was blocked by moderation. Please try again.');
-        try {
-          await deleteFileUtility(maskFabFile.id);
-        } catch (deleteError) {
-          console.error('Failed to delete blocked edit mask: ', deleteError);
-        }
+      const maskFileId = await uploadEditMask(base64Mask);
+      await onSendMessage(
+        { fabFileIds: [maskFileId], prompt },
+        // `id` is the file behind `src` only, not behind the other images this container pages through.
+        { isImageEdit: true, image: sourceImageUrl, ...(id && sourceImageUrl === src && { imageFileId: id }) }
+      );
+    } catch (error) {
+      if (error instanceof EditMaskRejectedError) {
+        toast.error(error.message);
         return;
       }
-      await onSendMessage({ fabFileIds: [maskFabFile.id], prompt }, { isImageEdit: true, image: sourceImageUrl });
-      setEditing(false);
-    } catch (error) {
       console.error('Failed to copy image: ', error);
       toast.error(`Failed to copy image: ${error instanceof Error ? error.message : 'Unknown error'}`);
     } finally {
@@ -259,7 +207,8 @@ const ImageContainer: FC<ImageContainerProps> = ({
       // The copy starts 'pending' until its upload scan; an edit job refuses a pending input, so scan it now.
       const scan = await moderateFabFileNow(file.id);
       if (scan === 'blocked') {
-        await deleteFileUtility(file.id);
+        // Only a copy this click made; the caller's own earlier copy is theirs to keep.
+        if (file.created) await deleteFileUtility(file.id);
         toast.error('This image cannot be edited.');
         return;
       }

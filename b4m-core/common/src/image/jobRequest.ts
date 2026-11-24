@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { BflEditRegionSchema } from '../llm';
 import { ImageModels } from '../models';
 import { ImageOutputFormatSchema, OpenAIImageQualitySchema, LocalImageModelIdSchema } from '../schemas/openai';
+import { BFL_SAFETY_TOLERANCE } from '../schemas/bfl';
 import { IMAGE_INPUT_ROLES, IMAGE_MODES, TEST_IMAGE_MODEL, type LocalImageModelId } from './types';
 
 export const IMAGE_JOB_PROMPT_MAX_CHARS = 4000;
@@ -39,6 +40,12 @@ export const ImageJobRequestSchema = z.strictObject({
   outputFormat: ImageOutputFormatSchema.optional(),
   transparentBackground: z.boolean().optional(),
   seed: z.number().int().nonnegative().optional(),
+  /**
+   * BFL-only provider settings, carried for the chat image path's saved selection; other providers ignore them.
+   * The tolerance can only be lowered below the hard cap (BFL_SAFETY_TOLERANCE), never raised.
+   */
+  safetyTolerance: z.number().int().min(BFL_SAFETY_TOLERANCE.MIN).max(BFL_SAFETY_TOLERANCE.MAX).optional(),
+  promptUpsampling: z.boolean().optional(),
   /**
    * Edit-only regions to change, each with its own instruction. The array is only bounded here; how many a model
    * takes is its catalog entry's editRegions.max, so an excess surfaces as unsupported_edit_regions.
