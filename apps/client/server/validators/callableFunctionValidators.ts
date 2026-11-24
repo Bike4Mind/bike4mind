@@ -18,5 +18,8 @@ export const callableFunctionPinBodySchema = z.object(pinFields).strict();
 
 export const callableFunctionPatchBodySchema = z.object({ enabled: z.boolean() }).strict();
 
+/** Empty: the tests and the contract come from the server's own read of the pinned code. */
+export const callableFunctionTestRunBodySchema = z.object({}).strict();
+
 // The same 400 `invalid_body` envelope as the connection routes.
 export { parseMcpConnectionBody as parseCallableFunctionBody } from './mcpConnectionValidators';
