@@ -257,8 +257,8 @@ export class AnthropicBackend implements ICompletionBackend {
   private lastAssistantContent: ContentBlock[] = []; // Store the complete assistant message content for tool use
   // Text the model streamed ahead of its first tool call (text after it stays out, so replay
   // never reorders it), for the non-replay path of pushToolMessages to put back on the first
-  // tool_use message of the round. Streaming rounds only: the
-  // non-streaming path never forwards that text, so replaying it would hide it from the user.
+  // tool_use message of the round. Streaming rounds only: the non-streaming path never
+  // forwards that text, so replaying it would hide it from the user.
   private pendingPreToolText: string | undefined;
   private isThinkingEnabled: boolean = false; // Track if thinking is enabled for current request
   // Opaque, non-PII end-user identifier forwarded as `metadata.user_id` so
