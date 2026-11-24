@@ -52,6 +52,7 @@ const SESSIONS = [
 
 /** What listSessions returns; a test without a Studio session drops it. */
 let listed: ChatSessionSummary[] = SESSIONS;
+let openNotice: ((event: { sessionId: string; rootId: string }) => void) | null = null;
 let createSession: Mock<(request?: { mode?: string }) => Promise<{ session: ChatSessionSummary }>>;
 
 /**
@@ -76,6 +77,7 @@ let host: HTMLElement | null = null;
 beforeEach(() => {
   window.localStorage.clear();
   listed = SESSIONS;
+  openNotice = null;
   createSession = vi.fn(async (request?: { mode?: string }) => ({
     session: summary('s-new', 'New chat', request?.mode === 'studio' ? 'studio' : 'chat', 59),
   }));
@@ -100,6 +102,12 @@ beforeEach(() => {
         getQueuedMessages: async () => [],
         getSessionStatuses: async () => [],
         listModels: async () => ({ models: [] }),
+      }),
+      attention: quietBridge({
+        onOpen: (listener: typeof openNotice) => {
+          openNotice = listener;
+          return () => undefined;
+        },
       }),
       sidebar: quietBridge({ getSections: async () => EMPTY_SIDEBAR_SECTIONS }),
       // No Studio bridge: the place frame must still draw, with the pane saying it is not connected.
@@ -235,6 +243,20 @@ describe('places on the rail', () => {
     expect(JSON.parse(window.localStorage.getItem('b4m.chat.places') ?? '{}')).toMatchObject({ studioSession: 's1' });
 
     // The conversation was left open underneath, so Chat comes back to it.
+    await act(async () => el('place-rail-chat-btn').click());
+    expect(openTitle()).toBe('Alpha chat');
+  });
+
+  it('opens a Studio session from a notification as Studio Create, not as a conversation', async () => {
+    listed = [...SESSIONS, summary('s2', 'Older poster', 'studio', 10)];
+    await mount();
+    expect(openTitle()).toBe('Alpha chat');
+    await act(async () => openNotice?.({ sessionId: 's2', rootId: 's2' }));
+    expect(el('place-rail-studio-btn').getAttribute('aria-current')).toBe('page');
+    expect(find('studio-create')).not.toBeNull();
+    // Create is bound to the opened session, not the newest one.
+    expect(JSON.parse(window.localStorage.getItem('b4m.chat.places') ?? '{}')).toMatchObject({ studioSession: 's2' });
+
     await act(async () => el('place-rail-chat-btn').click());
     expect(openTitle()).toBe('Alpha chat');
   });
