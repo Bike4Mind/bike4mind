@@ -10,7 +10,19 @@ import { isFeatureEnabled } from '../middlewares/featureFlag';
  */
 export async function resolveCallableFunctionsEnabled(user: { id: string }): Promise<boolean> {
   if (!(await isFeatureEnabled('EnableArtifacts'))) return false;
+  return resolvesOnForEveryMembership(user, 'EnableCallableFunctions');
+}
 
+/** On when callable functions are on and `EnableCallableFunctionsMcp` resolves on by the same every-organization rule. */
+export async function resolveCallableFunctionsMcpEnabled(user: { id: string }): Promise<boolean> {
+  if (!(await resolveCallableFunctionsEnabled(user))) return false;
+  return resolvesOnForEveryMembership(user, 'EnableCallableFunctionsMcp');
+}
+
+async function resolvesOnForEveryMembership(
+  user: { id: string },
+  key: 'EnableCallableFunctions' | 'EnableCallableFunctionsMcp'
+): Promise<boolean> {
   const db = { adminSettings: adminSettingsRepository, scopedSettings: scopedSettingsRepository };
   const orgIds = await organizationRepository.findMembershipOrgIds(user.id);
   const scopes =
@@ -19,9 +31,7 @@ export async function resolveCallableFunctionsEnabled(user: { id: string }): Pro
       : [scopedSettingsService.scopeForCaller({ userId: user.id })];
 
   const resolved = await Promise.all(
-    scopes.map(scope =>
-      scopedSettingsService.resolveScopedSetting('EnableCallableFunctions', scope, db, { readFailureMode: 'throw' })
-    )
+    scopes.map(scope => scopedSettingsService.resolveScopedSetting(key, scope, db, { readFailureMode: 'throw' }))
   );
   return resolved.every(setting => setting.value === true);
 }
