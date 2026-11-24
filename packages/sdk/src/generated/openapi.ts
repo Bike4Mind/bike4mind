@@ -3833,7 +3833,12 @@ export interface components {
        */
       name?: string;
       /** @enum {string} */
-      errorCode?: 'account_suspended' | 'model_requires_subscription' | 'org_model_not_allowed' | 'spend_frozen';
+      errorCode?:
+        | 'account_suspended'
+        | 'billing_organization_mismatch'
+        | 'model_requires_subscription'
+        | 'org_model_not_allowed'
+        | 'spend_frozen';
       suspension?: {
         /**
          * @description Which Terms of Service rule the account was suspended under. New categories may be added.
@@ -4120,6 +4125,8 @@ export interface components {
       };
       /** @description Your own opaque identifier for the end user this request is for (1-64 characters: letters, digits, `_`, `:`, `-`; never an email). A malformed value is refused with a 400 (`errorCode: "invalid_end_user_id"`). Accepted only on an API key holding `ai:end-user-id`, which an administrator grants to keys that serve many end users; any other credential sending it is refused with a 400 (`errorCode: "end_user_id_not_allowed"`). On models served directly by OpenAI or Anthropic, the provider then receives an identifier derived from your account and this value instead of one for your whole account; other providers receive no end-user identifier. */
       end_user_id?: string;
+      /** @description Organization whose credit pool pays for this call, or null for personal credits. Omitted: personal credits for a signed-in user; an organization-billed API key always bills its own organization. A signed-in caller who is not a member of the named organization gets a 403, and an unknown organization a 404. */
+      organization_id?: string | null;
       options?: {
         temperature?: number;
         maxTokens?: number;
@@ -17047,7 +17054,7 @@ export interface operations {
           'application/json': components['schemas']['ErrorResponse'];
         };
       };
-      /** @description The API key does not hold any of the required scopes, the account is suspended (`errorCode: "account_suspended"`), a free-tier account named a model outside the free-tier allowlist (`errorCode: "model_requires_subscription"`), or the caller's organization policy does not allow the model (`errorCode: "org_model_not_allowed"`). Also `403` (`errorCode: spend_frozen`, with `frozenScope` and `frozenAt`) when spending is paused for the account, its organization or the API key; not retryable until the pause is lifted. */
+      /** @description The API key does not hold any of the required scopes, the account is suspended (`errorCode: "account_suspended"`), a free-tier account named a model outside the free-tier allowlist (`errorCode: "model_requires_subscription"`), the caller's organization policy does not allow the model (`errorCode: "org_model_not_allowed"`), a signed-in caller named an `organization_id` they are not a member of, or an organization-billed API key named a different `organization_id` (`errorCode: "billing_organization_mismatch"`). Also `403` (`errorCode: spend_frozen`, with `frozenScope` and `frozenAt`) when spending is paused for the account, its organization or the API key; not retryable until the pause is lifted. */
       403: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */

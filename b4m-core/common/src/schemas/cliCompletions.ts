@@ -494,6 +494,15 @@ export const CompletionRequestSchema = z.object({
   sessionId: CompletionSessionIdSchema.optional(),
   run: CompletionRunAttributionSchema.optional(),
   end_user_id: EndUserIdSchema.optional(),
+  organization_id: z
+    .string()
+    .trim()
+    .min(1)
+    .nullable()
+    .optional()
+    .describe(
+      'Organization whose credit pool pays for this call, or null for personal credits. Omitted: personal credits for a signed-in user; an organization-billed API key always bills its own organization. A signed-in caller who is not a member of the named organization gets a 403, and an unknown organization a 404.'
+    ),
   options: z
     .object({
       temperature: z.number().optional(),

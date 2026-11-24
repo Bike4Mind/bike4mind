@@ -99,6 +99,9 @@ vi.mock('@bike4mind/database', () => ({
   platformEndUserRepository: { recordSeen: mockRecordPlatformEndUser },
 }));
 
+const mockResolveActiveOrg = vi.hoisted(() => vi.fn());
+vi.mock('@bike4mind/server-utils/utils/resolveActiveOrg', () => ({ resolveActiveOrg: mockResolveActiveOrg }));
+
 const mockResolveContractAuth = vi.hoisted(() => vi.fn());
 vi.mock('@bike4mind/server-utils/utils/apiKeyTrust', () => ({
   resolveUntrustedKeyLimits: async (_owner: unknown, key: { rateLimit: unknown }) => ({
@@ -146,6 +149,7 @@ vi.mock('@bike4mind/server-utils/utils/config', () => ({
 const mockEmitProcessingFailed = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 vi.mock('../processingFailedMetric', () => ({ emitProcessingFailed: mockEmitProcessingFailed }));
 
+import { userRepository } from '@bike4mind/database';
 import { registerExternalRoutes } from './sseRoute';
 import { toPlatformEndUserProviderId } from '@bike4mind/llm-adapters';
 import {
@@ -1390,6 +1394,91 @@ describe('daily cap billing target', () => {
     expect(mockExecuteCompletion).toHaveBeenCalledWith(
       expect.objectContaining({ billingOrganizationId: organizationId })
     );
+  });
+});
+
+describe('POST /api/ai/v1/completions - billing organization choice', () => {
+  const jwtUser = { id: 'user-1', isAdmin: false };
+  const asJwt = () => {
+    mockResolveContractAuth.mockResolvedValueOnce({ method: 'jwt', userId: 'user-1' });
+    vi.mocked(userRepository.findById).mockResolvedValueOnce(jwtUser as never);
+  };
+  const orgBilledKey = () =>
+    mockResolveContractAuth.mockResolvedValueOnce({
+      method: 'apiKey',
+      userId: 'user-1',
+      apiKeyInfo: { keyId: 'key-1', userId: 'user-1', organizationId: 'org-1', billingOwnerType: 'Organization' },
+    });
+  const expectBilledTo = (organizationId: string | undefined) => {
+    expect(mockExecuteCompletion).toHaveBeenCalledWith(
+      expect.objectContaining({ billingOrganizationId: organizationId })
+    );
+    expect(mockCheckFreeTierDailySpendCap).toHaveBeenCalledWith(
+      expect.objectContaining({ billingOrganizationId: organizationId })
+    );
+    expect(mockFindActiveFreeze).toHaveBeenCalledWith(
+      expect.objectContaining({ organizationId: organizationId ?? null })
+    );
+  };
+
+  it.each([
+    ['omitted', {}],
+    ['null', { organization_id: null }],
+  ])('bills a signed-in caller personally when organization_id is %s', async (_label, extra) => {
+    asJwt();
+    await (await post({ ...COMPLETION, ...extra })).text();
+
+    expectBilledTo(undefined);
+    expect(mockResolveActiveOrg).not.toHaveBeenCalled();
+  });
+
+  it('bills the named organization when the signed-in caller may use it', async () => {
+    asJwt();
+    mockResolveActiveOrg.mockResolvedValueOnce('org-2');
+    await (await post({ ...COMPLETION, organization_id: ' org-2 ' })).text();
+
+    expect(mockResolveActiveOrg).toHaveBeenCalledWith({ user: jwtUser }, 'org-2');
+    expectBilledTo('org-2');
+  });
+
+  it('refuses an organization the signed-in caller may not use before any completion', async () => {
+    asJwt();
+    mockResolveActiveOrg.mockRejectedValueOnce(
+      new ForbiddenError('You are not a member of the selected organization.')
+    );
+
+    await expectJsonError(await post({ ...COMPLETION, organization_id: 'org-9' }), 403);
+
+    expect(mockExecuteCompletion).not.toHaveBeenCalled();
+    expect(mockCheckFreeTierDailySpendCap).not.toHaveBeenCalled();
+    expect(mockFindActiveFreeze).not.toHaveBeenCalled();
+  });
+
+  it('refuses an organization-billed key that names another organization', async () => {
+    orgBilledKey();
+
+    const body = await expectJsonError(await post({ ...COMPLETION, organization_id: 'org-2' }), 403);
+
+    expect(body.errorCode).toBe('billing_organization_mismatch');
+    expect(mockExecuteCompletion).not.toHaveBeenCalled();
+  });
+
+  it('refuses an organization-billed key that asks for personal credits', async () => {
+    orgBilledKey();
+
+    await expectJsonError(await post({ ...COMPLETION, organization_id: null }), 403);
+
+    expect(mockExecuteCompletion).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['omitted', {}],
+    ["set to the key's organization", { organization_id: 'org-1' }],
+  ])('bills the key organization when organization_id is %s', async (_label, extra) => {
+    orgBilledKey();
+    await (await post({ ...COMPLETION, ...extra })).text();
+
+    expectBilledTo('org-1');
   });
 });
 

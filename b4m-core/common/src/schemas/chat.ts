@@ -538,6 +538,7 @@ export const ModelPolicyForbiddenErrorSchema = MeteredForbiddenErrorSchema.exten
   errorCode: z
     .enum([
       ACCOUNT_SUSPENDED_ERROR_CODE,
+      BILLING_ORGANIZATION_MISMATCH_ERROR_CODE,
       MODEL_REQUIRES_SUBSCRIPTION_ERROR_CODE,
       ORG_MODEL_NOT_ALLOWED_ERROR_CODE,
       SPEND_FROZEN_ERROR_CODE,
