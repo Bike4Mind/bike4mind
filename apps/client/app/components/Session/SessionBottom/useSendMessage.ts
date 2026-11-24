@@ -83,7 +83,8 @@ import { useIntentClassifier } from '@client/app/hooks/useIntentClassifier';
 import { useAdminSettings } from '@client/app/contexts/AdminSettingsContext';
 import { useEffectiveCredits } from '@client/app/hooks/useEffectiveCredits';
 import { useTokenLimits } from '@client/app/hooks/useTokenLimits';
-import { CommandKey, extractCommandAndParams, handleCommand, isImageModel } from '@client/app/utils/commands';
+import { CommandKey, chatImageSendMode, extractCommandAndParams, isImageModel } from '@client/app/utils/commands';
+import { dispatchSend } from '@client/app/components/Session/chatImageSend';
 import { validateChatInput } from '@client/app/utils/validateChatInput';
 import { effectiveDisabledTools } from '@client/app/utils/effectiveDisabledTools';
 import { recordSessionActivity } from '@client/app/utils/sessionActivityCleanup';
@@ -517,14 +518,15 @@ export function useSendMessage({
     let optimisticTmpId: string | null = null;
     const enabledFiles = workBenchFiles.map(file => file.fileName);
     const [command, params] = extractCommandAndParams(liveAI, model, INFINITE_VALUE, prompt, enabledFiles);
+    const imageSendMode = chatImageSendMode(liveAI, model, prompt);
     const userId = currentUser!.id;
     const projectId = routerProjectId;
 
     // Count a template use when a normal (non-slash-command) prompt is sent on an
     // image model whose settings match a saved template. Gate on the ORIGINAL
-    // prompt, not `command` - the send path derives a `/gen_image` command for
-    // image models, so `command` is always set here. Fire-and-forget; further
-    // gated internally (feature flag, AI toggle, image model, settings match).
+    // prompt, not `command` - `command` is always set here (`/llm` for a plain
+    // send). Fire-and-forget; further gated internally (feature flag, AI toggle,
+    // image model, settings match).
     if (isTemplateUseEligiblePrompt(prompt)) recordImageTemplateUse();
 
     // Detect agent mentions and auto-attach them before sending the message.
@@ -612,12 +614,13 @@ export function useSendMessage({
       undefined,
       sessionAgents.map(a => a.id)
     );
-    // Real slash commands (e.g. `/gen_image`, `/roll`) must run
+    // Real slash commands (e.g. `/roll`) and chat image sends must run
     // their own handler even when the Agent-mode toggle is ON - otherwise the
     // executor branch returns before `handler(sessionToSend)` is reached and
-    // the command silently never executes. `/llm` is the implicit default and
+    // the send silently never executes. `/llm` is the implicit default and
     // does NOT count as a real slash command here.
-    const isRealSlashCommand = command !== '/llm' && commandHandlers[command as CommandKey] !== undefined;
+    const isRealSlashCommand =
+      imageSendMode !== undefined || (command !== '/llm' && commandHandlers[command as CommandKey] !== undefined);
     // Gate the override on the Layer-1 flag so a stale persisted
     // `agentMode.enabled` doesn't outlive a feature-flag revocation, and skip
     // it entirely for real slash commands so they keep dispatching normally.
@@ -838,7 +841,7 @@ export function useSendMessage({
       notebook: ISessionDocument | null
     ) => Promise<{ session: ISessionDocument; quest: IChatHistoryItemDocument } | void>;
 
-    if (commandHandlers[command as CommandKey]) {
+    if (imageSendMode || commandHandlers[command as CommandKey]) {
       const sessionFileIds = workBenchFiles.map(f => f.id);
       const messageLevelFileIds = sendableMessageFileIds.filter(id => !sessionFileIds.includes(id));
 
@@ -848,12 +851,13 @@ export function useSendMessage({
         perfLogger.log('  - Message contains @:', prompt.includes('@'));
         perfLogger.log('  - Full message:', prompt);
 
-        return await handleCommand(commandHandlers, {
+        return await dispatchSend(commandHandlers, imageSendMode, {
           userId,
           username: currentUser?.username,
           userEmail: currentUser?.email ?? undefined,
           command,
-          params,
+          // An image send takes the prompt as typed, without the /llm history and context prefixes.
+          params: imageSendMode ? prompt : params,
           currentSession: notebook,
           model: model as any,
           workBenchFiles,
@@ -1228,8 +1232,8 @@ export function useSendMessage({
     // stream replaces `statusMessage` on its first update; the error path below
     // clears it if no stream ever lands.
     //
-    // Skipped for real slash commands (`/roll`, `/gen_image`,
-    // etc.) - those handlers don't emit `streamed_chat_completion` WS events,
+    // Skipped for real slash commands (`/roll`, etc.) and chat image
+    // sends - those handlers don't emit `streamed_chat_completion` WS events,
     // so the sentinel would never be overwritten on success and the Stop
     // button would stay stuck after the command returned. `handleLLMCommand`
     // is the only path the chat-completion WS subscription drives.
@@ -1261,7 +1265,7 @@ export function useSendMessage({
       data = await handler(sessionToSend);
     } catch (error: unknown) {
       console.error('Error sending message:', error);
-      // Error toasts are handled in LLMCommand.tsx / ImageGenerationCommand.ts.
+      // Error toasts are handled in LLMCommand.tsx / chatImageSend.ts.
       // Do NOT tear down the optimistic session here - `createOptimisticQuest`
       // (llm.ts) has already written a `**Error:** ...` reply into the quests
       // cache for the user to see. Previously the new-session branch removed

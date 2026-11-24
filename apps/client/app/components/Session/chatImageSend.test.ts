@@ -28,7 +28,8 @@ vi.mock('@client/app/components/Session/ImageContainer', () => ({
 import { ChatImageJobsBodySchema } from '@bike4mind/common';
 import { assertNoStrayBillingOrgKeys } from '@bike4mind/server-utils/utils/orgAccess';
 import { toast } from 'sonner';
-import { handleImageEditCommand, handleImageGenerationCommand } from './ImageGenerationCommand';
+import { terminalQuests } from '@client/app/hooks/chatCompletionState';
+import { dispatchSend, sendChatImageEdit, sendChatImageGeneration } from './chatImageSend';
 
 // The LLM settings the chat send path adds ride along on the args; only the image fields may reach the route.
 const baseArgs = (extra: Record<string, unknown> = {}) =>
@@ -64,9 +65,9 @@ beforeEach(() => {
   files.moderateFabFileNow.mockResolvedValue('clean');
 });
 
-describe('handleImageGenerationCommand', () => {
+describe('sendChatImageGeneration', () => {
   it('posts a chat image job body the route schema and the billing-key guard accept', async () => {
-    await handleImageGenerationCommand(baseArgs({ colorGrade: 'warm' }));
+    await sendChatImageGeneration(baseArgs({ colorGrade: 'warm' }));
     expect(mockPost.mock.calls[0][0]).toBe('/api/image-jobs');
     expect(ChatImageJobsBodySchema.safeParse(postedBody()).success).toBe(true);
     expect(() => assertNoStrayBillingOrgKeys(postedBody())).not.toThrow();
@@ -90,7 +91,7 @@ describe('handleImageGenerationCommand', () => {
   });
 
   it('asks for prompt enhancement when the tool is on', async () => {
-    await handleImageGenerationCommand(baseArgs({ tools: ['prompt_enhancement'] }));
+    await sendChatImageGeneration(baseArgs({ tools: ['prompt_enhancement'] }));
     expect(postedBody().promptEnhancement).toBe(true);
   });
 
@@ -100,14 +101,14 @@ describe('handleImageGenerationCommand', () => {
       response: { status: 400, data: { error: 'invalid_request', message: 'Bad size' } },
     });
     mockPost.mockRejectedValue(error);
-    await expect(handleImageGenerationCommand(baseArgs())).rejects.toBe(error);
+    await expect(sendChatImageGeneration(baseArgs())).rejects.toBe(error);
     expect(toast.error).toHaveBeenCalledWith('Invalid request: Bad size');
   });
 });
 
-describe('handleImageEditCommand', () => {
+describe('sendChatImageEdit', () => {
   it('copies a generated image into Files, scans it, and posts a masked edit', async () => {
-    await handleImageEditCommand(baseArgs({ image: GENERATED_URL }));
+    await sendChatImageEdit(baseArgs({ image: GENERATED_URL }));
     expect(files.copyGeneratedImageToFabFile).toHaveBeenCalledWith('generated/key.png', expect.any(String));
     expect(files.moderateFabFileNow).toHaveBeenCalledWith('a'.repeat(24));
     expect(mockPost.mock.calls[0][0]).toBe('/api/image-jobs');
@@ -125,7 +126,7 @@ describe('handleImageEditCommand', () => {
 
   it('keeps the caller earlier copy of a generated image: only the mask is temporary', async () => {
     files.copyGeneratedImageToFabFile.mockResolvedValue({ id: 'a'.repeat(24), created: false });
-    await handleImageEditCommand(baseArgs({ image: GENERATED_URL }));
+    await sendChatImageEdit(baseArgs({ image: GENERATED_URL }));
     expect(postedBody()).toMatchObject({ editSourceFileId: 'a'.repeat(24), temporaryFileIds: ['b'.repeat(24)] });
   });
 
@@ -133,7 +134,7 @@ describe('handleImageEditCommand', () => {
     const ownId = 'c'.repeat(24);
     files.getFabFileByIdFromServer.mockResolvedValue({ id: ownId, userId: 'user-1', moderationStatus: 'clean' });
 
-    await handleImageEditCommand(
+    await sendChatImageEdit(
       baseArgs({ image: 'https://files.example.com/upload.png', imageFileId: ownId, userId: 'user-1' })
     );
 
@@ -149,7 +150,7 @@ describe('handleImageEditCommand', () => {
   ])('copies the image when the file behind it is %s', async (_label, file) => {
     files.getFabFileByIdFromServer.mockResolvedValue({ id: 'c'.repeat(24), ...file });
 
-    await handleImageEditCommand(baseArgs({ image: GENERATED_URL, imageFileId: 'c'.repeat(24), userId: 'user-1' }));
+    await sendChatImageEdit(baseArgs({ image: GENERATED_URL, imageFileId: 'c'.repeat(24), userId: 'user-1' }));
 
     expect(files.copyGeneratedImageToFabFile).toHaveBeenCalled();
     expect(postedBody()).toMatchObject({ editSourceFileId: 'a'.repeat(24) });
@@ -157,7 +158,7 @@ describe('handleImageEditCommand', () => {
 
   it('does not post when the copied source is blocked, and removes the copy', async () => {
     files.moderateFabFileNow.mockResolvedValue('blocked');
-    await expect(handleImageEditCommand(baseArgs({ image: GENERATED_URL }))).rejects.toThrow();
+    await expect(sendChatImageEdit(baseArgs({ image: GENERATED_URL }))).rejects.toThrow();
     expect(files.deleteFileUtility).toHaveBeenCalledWith('a'.repeat(24));
     expect(mockPost).not.toHaveBeenCalled();
     expect(toast.error).toHaveBeenCalledWith('This image cannot be edited.');
@@ -166,15 +167,45 @@ describe('handleImageEditCommand', () => {
   it('does not delete the caller earlier copy when it scans blocked', async () => {
     files.copyGeneratedImageToFabFile.mockResolvedValue({ id: 'a'.repeat(24), created: false });
     files.moderateFabFileNow.mockResolvedValue('blocked');
-    await expect(handleImageEditCommand(baseArgs({ image: GENERATED_URL }))).rejects.toThrow();
+    await expect(sendChatImageEdit(baseArgs({ image: GENERATED_URL }))).rejects.toThrow();
     expect(files.deleteFileUtility).not.toHaveBeenCalled();
     expect(mockPost).not.toHaveBeenCalled();
   });
 
   it('does not post while the copied source is still being scanned', async () => {
     files.moderateFabFileNow.mockResolvedValue('pending');
-    await expect(handleImageEditCommand(baseArgs({ image: GENERATED_URL }))).rejects.toThrow();
+    await expect(sendChatImageEdit(baseArgs({ image: GENERATED_URL }))).rejects.toThrow();
     expect(mockPost).not.toHaveBeenCalled();
     expect(files.deleteFileUtility).not.toHaveBeenCalled();
+  });
+});
+
+describe('dispatchSend', () => {
+  const llmHandler = vi.fn();
+  const handlers = { '/llm': llmHandler };
+
+  it('sends an image-model send as a chat image job, not through the command map', async () => {
+    await dispatchSend(handlers, 'generate', baseArgs({ command: '/llm' }));
+    expect(llmHandler).not.toHaveBeenCalled();
+    expect(mockPost.mock.calls[0][0]).toBe('/api/image-jobs');
+    expect(postedBody()).toMatchObject({ mode: 'generate', prompt: 'a lighthouse' });
+  });
+
+  it('sends an image edit as an edit job', async () => {
+    await dispatchSend(handlers, 'edit', baseArgs({ command: '/llm', image: GENERATED_URL }));
+    expect(llmHandler).not.toHaveBeenCalled();
+    expect(postedBody()).toMatchObject({ mode: 'edit' });
+  });
+
+  it('sends a text-model send through the command handler, with no image job', async () => {
+    await dispatchSend(handlers, undefined, baseArgs({ command: '/llm', userId: 'u-1' }));
+    expect(llmHandler).toHaveBeenCalledWith(expect.objectContaining({ userId: 'u-1', params: 'a lighthouse' }));
+    expect(mockPost).not.toHaveBeenCalled();
+  });
+
+  it('clears the terminal mark of a re-run quest before the image send', async () => {
+    terminalQuests.markTerminal('quest-1');
+    await dispatchSend(handlers, 'generate', baseArgs({ command: '/llm', questId: 'quest-1' }));
+    expect(terminalQuests.isStaleFrame('quest-1', 'running')).toBe(false);
   });
 });
