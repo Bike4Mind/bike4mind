@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 
@@ -423,28 +423,27 @@ describe('TemplateEditor stale responses', () => {
       listing: { id: 'l2', name: 'other', visibility: 'public', live: true },
     });
 
-  const wrap = (listingId: string, key?: string) => (
+  const wrap = (listingId: string) => (
     <CssVarsProvider theme={appTheme}>
-      <TemplateEditor key={key} listingId={listingId} />
+      <TemplateEditor listingId={listingId} />
     </CssVarsProvider>
   );
 
-  it('shows the new listing fields when the editor is keyed by listingId', async () => {
-    const pending = deferred<typeof draftResponse>();
-    h.draft.mockImplementationOnce(() => pending.promise);
-    h.view = viewOf({ template: null, suggestedSlug: 'a-slug' });
-    const { rerender } = render(wrap('l1', 'l1'));
+  // Without the [listingId] reset effect, A's edited form would stay (the seed effect skips a set form).
+  it('resets to the new listing fields, not the edited ones of the previous listing, when listingId changes', async () => {
+    h.view = viewOf({ template: template({ headline: 'A headline', slug: 'a-slug' }) });
+    const { rerender } = render(wrap('l1'));
+    await waitFor(() => expect(byId('template-editor-headline-input')).toHaveValue('A headline'));
+    fireEvent.change(byId('template-editor-headline-input'), { target: { value: 'A edited' } });
 
     h.view = viewB();
-    rerender(wrap('l2', 'l2'));
-    await waitFor(() => expect(byId('template-editor-headline-input')).toHaveValue('B headline'));
+    rerender(wrap('l2'));
 
-    pending.resolve(draftResponse);
-    await Promise.resolve();
-    expect(byId('template-editor-headline-input')).toHaveValue('B headline');
+    await waitFor(() => expect(byId('template-editor-headline-input')).toHaveValue('B headline'));
     expect(byId('template-editor-slug-input')).toHaveValue('b-slug');
   });
 
+  // Without the isCurrent guard, A's late draft would call setForm and overwrite B's form.
   it('ignores a draft for the previous listing that resolves after the listingId changed', async () => {
     const pending = deferred<typeof draftResponse>();
     h.draft.mockImplementationOnce(() => pending.promise);
@@ -456,8 +455,9 @@ describe('TemplateEditor stale responses', () => {
     rerender(wrap('l2'));
     await waitFor(() => expect(byId('template-editor-headline-input')).toHaveValue('B headline'));
 
-    pending.resolve(draftResponse);
-    await Promise.resolve();
+    await act(async () => {
+      pending.resolve(draftResponse);
+    });
     expect(byId('template-editor-headline-input')).toHaveValue('B headline');
     expect(byId('template-editor-slug-input')).toHaveValue('b-slug');
   });

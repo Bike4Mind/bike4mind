@@ -165,6 +165,16 @@ async function attachImage(
   return plainTemplate(updated);
 }
 
+const isMissingObject = (error: unknown): boolean => {
+  const e = error as { name?: string; Code?: string; code?: string; $metadata?: { httpStatusCode?: number } } | null;
+  return (
+    e?.name === 'NoSuchKey' ||
+    e?.Code === 'NoSuchKey' ||
+    e?.code === 'NoSuchKey' ||
+    e?.$metadata?.httpStatusCode === 404
+  );
+};
+
 /** Use a screenshot the author uploaded (a file they own) as the preview image. */
 export async function setOwnTemplateImageFromUpload(
   user: MarketActor,
@@ -180,8 +190,9 @@ export async function setOwnTemplateImageFromUpload(
   }
   if (file.moderationStatus === 'blocked') throw new BadRequestError('This image cannot be used. Choose another one.');
   if (file.fileSize > SKILL_TEMPLATE_IMAGE_SOURCE_MAX_BYTES) throw tooLarge();
-  const bytes = await deps.readFile(file.filePath).catch(() => {
-    throw new ConflictError('The upload has not finished yet. Try again in a moment.');
+  const bytes = await deps.readFile(file.filePath).catch((error: unknown) => {
+    if (isMissingObject(error)) throw new ConflictError('The upload has not finished yet. Try again in a moment.');
+    throw error;
   });
   return attachImage(String(listing.id), user.id, template.slug, bytes, 'upload', deps);
 }
