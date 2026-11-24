@@ -1,5 +1,4 @@
 import { baseApi } from '@server/middlewares/baseApi';
-import { DATA_LAKE_WRITE_SCOPES, assertDataLakeWriteScope } from '@bike4mind/server-utils/dataLakes/dataLakeScopes';
 import { requireFeatureEnabled } from '@bike4mind/server-utils/middlewares/featureFlag';
 import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { isDevelopment } from '@bike4mind/server-utils/utils/config';
@@ -24,11 +23,11 @@ const undoRateLimit = rateLimit({
   bucket: 'data-lakes/config-history-undo',
 });
 
-const handler = baseApi({ requiredScopes: DATA_LAKE_WRITE_SCOPES })
+// Session-only until the public undo route exists; an API key never reaches this handler.
+const handler = baseApi({ auth: 'jwtOnly' })
   .use(requireFeatureEnabled('EnableDataLakes'))
   .use(undoRateLimit)
   .post(async (req: Request<{}, unknown, unknown, { id: string; eventId: string }>, res) => {
-    assertDataLakeWriteScope(req);
     const { id, eventId } = req.query;
     const ctx = await toAccessContext(req);
 

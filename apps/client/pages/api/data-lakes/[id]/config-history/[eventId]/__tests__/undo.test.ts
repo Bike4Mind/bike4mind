@@ -2,13 +2,14 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const h = vi.hoisted(() => ({
   undo: vi.fn(),
-  assertScope: vi.fn(),
+  baseApiOptions: undefined as unknown,
   rateLimitOptions: undefined as { limit: () => number; windowMs: number; bucket: string } | undefined,
   toAccessContext: vi.fn(async () => ({ userId: 'u1', isAdmin: false, administeredOrgIds: [] })),
 }));
 
 vi.mock('@server/middlewares/baseApi', () => ({
   baseApi: (options: unknown) => {
+    h.baseApiOptions = options;
     const routes: Record<string, (req: unknown, res: unknown) => unknown> = {};
     const chain = Object.assign((req: { method?: string }, res: unknown) => routes[req.method ?? 'POST']?.(req, res), {
       use: () => chain,
@@ -24,10 +25,6 @@ vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({
     h.rateLimitOptions = options;
     return () => {};
   },
-}));
-vi.mock('@bike4mind/server-utils/dataLakes/dataLakeScopes', () => ({
-  DATA_LAKE_WRITE_SCOPES: ['data-lakes:write'],
-  assertDataLakeWriteScope: h.assertScope,
 }));
 vi.mock('@bike4mind/server-utils/dataLakes/toAccessContext', () => ({ toAccessContext: h.toAccessContext }));
 vi.mock('@server/dataLakes/research/undoHandler', () => ({ undoLakeConfigChangeHandler: h.undo }));
@@ -50,10 +47,9 @@ describe('POST /api/data-lakes/:id/config-history/:eventId/undo', () => {
     h.undo.mockResolvedValue({ entry: null, notes: [] });
   });
 
-  it('checks the write scope, runs the undo with the ids from the path and wraps the result', async () => {
+  it('runs the undo with the ids from the path and wraps the result', async () => {
     const json = await call();
 
-    expect(h.assertScope).toHaveBeenCalled();
     expect(h.undo).toHaveBeenCalledWith(expect.anything(), 'lake1', 'evt1', expect.objectContaining({ userId: 'u1' }));
     expect(json).toHaveBeenCalledWith({ data: { entry: null, notes: [] } });
   });
@@ -67,12 +63,8 @@ describe('POST /api/data-lakes/:id/config-history/:eventId/undo', () => {
     await expect(call()).rejects.toThrow(message);
   });
 
-  it('stops before the handler when the key lacks the write scope', async () => {
-    h.assertScope.mockImplementationOnce(() => {
-      throw new Error('missing scope');
-    });
-    await expect(call()).rejects.toThrow('missing scope');
-    expect(h.undo).not.toHaveBeenCalled();
+  it('accepts a signed-in session only, never an API key', () => {
+    expect(h.baseApiOptions).toEqual({ auth: 'jwtOnly' });
   });
 
   it('rate limits in one bucket across lakes and events', () => {
