@@ -1,3 +1,4 @@
+import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import { z } from 'zod';
 import { B4mApiError } from '@bike4mind/sdk';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
@@ -15,13 +16,16 @@ export const MAX_RESULT_BYTES = 2 * 1024 * 1024;
 const OUTPUT_TOO_LARGE =
   'output_too_large: The result is over the 2 MiB limit for one tool result, so none of it is returned. Call the function with inputs that produce a smaller output.';
 
-/** Where a `list_functions` page resumes: the server's cursor, the offset of the first function not yet read, and the page size. */
+/** Where a `list_functions` page resumes: the server's cursor, the id of the last function read, and the page size. */
 const listCursorSchema = z.object({
   c: z.string().nullable(),
-  o: z.number().int().min(0),
+  a: z.string().regex(FUNCTION_ID_PATTERN).nullable(),
   n: z.number().int().min(1).max(LIST_PAGE_MAX),
 });
 type ListCursor = z.infer<typeof listCursorSchema>;
+
+const CURSOR_KEY = randomBytes(32);
+const BAD_CURSOR = 'That cursor did not come from list_functions. Call list_functions again without a cursor.';
 
 export const FUNCTION_TOOL_META: ToolMeta[] = [
   {
@@ -76,6 +80,9 @@ export function functionErrorMessage(error: unknown, baseURL: string, ref?: stri
   const body = errorBody(error);
   const message = typeof body.error === 'string' ? body.error : undefined;
   const which = ref ? `"${ref}"` : 'that function';
+  if (error.status >= 300 && error.status < 400) {
+    return `The Bike4Mind server at ${baseURL} redirected the request, and these tools do not follow redirects. Check that B4M_API_URL points at the server itself.`;
+  }
   switch (error.status) {
     case 403:
       if (Array.isArray(body.required_scopes)) return `This API key does not hold ${SCOPE}. ${KEY_FIX}`;
@@ -115,44 +122,54 @@ export function functionErrorMessage(error: unknown, baseURL: string, ref?: stri
   return mapApiError(error, baseURL, SCOPE);
 }
 
+const sign = (payload: string) => createHmac('sha256', CURSOR_KEY).update(payload).digest();
+
 function encodeListCursor(cursor: ListCursor): string {
-  return Buffer.from(JSON.stringify(cursor)).toString('base64url');
+  const payload = Buffer.from(JSON.stringify(cursor)).toString('base64url');
+  return `${payload}.${sign(payload).toString('base64url')}`;
 }
 
-/** A cursor this tool issued, or else a server cursor passed straight through. */
-function decodeListCursor(cursor: string | undefined): { server?: string; offset: number; size?: number } {
-  if (!cursor) return { offset: 0 };
+/** A cursor this process issued, or undefined for anything else. */
+function decodeListCursor(cursor: string): ListCursor | undefined {
+  const [payload, mac, ...rest] = cursor.split('.');
+  if (!payload || !mac || rest.length > 0) return undefined;
+  const expected = sign(payload);
+  const given = Buffer.from(mac, 'base64url');
+  if (given.length !== expected.length || !timingSafeEqual(given, expected)) return undefined;
   try {
-    const parsed = listCursorSchema.safeParse(JSON.parse(Buffer.from(cursor, 'base64url').toString('utf8')));
-    if (parsed.success) return { server: parsed.data.c ?? undefined, offset: parsed.data.o, size: parsed.data.n };
+    const parsed = listCursorSchema.safeParse(JSON.parse(Buffer.from(payload, 'base64url').toString('utf8')));
+    return parsed.success ? parsed.data : undefined;
   } catch {
-    // Not one of ours.
+    return undefined;
   }
-  return { server: cursor, offset: 0 };
 }
 
 /**
  * One function's detail is read at a time. A function that left live meanwhile is skipped; a rate limit ends
- * the page with a cursor at the first function not read.
+ * the page with a cursor holding the id of the last function read. The server lists by id, so a resume refetches
+ * the page and keeps the functions after that id.
  */
 export async function listFunctions(client: B4mApiClient, args: { limit?: number; cursor?: string }) {
-  const start = decodeListCursor(args.cursor);
-  const size = start.size ?? args.limit ?? LIST_PAGE_MAX;
-  const page = await client.listFunctions(size, start.server);
+  const resume = args.cursor === undefined ? undefined : decodeListCursor(args.cursor);
+  if (args.cursor !== undefined && !resume) throw new Error(BAD_CURSOR);
+  const size = resume?.n ?? args.limit ?? LIST_PAGE_MAX;
+  const page = await client.listFunctions(size, resume?.c ?? undefined);
+  const after = resume?.a;
+  const pending = after ? page.data.filter(fn => fn.id > after) : page.data;
   const functions = [];
-  for (let i = start.offset; i < page.data.length; i++) {
+  for (let i = 0; i < pending.length; i++) {
     try {
-      functions.push(await client.getFunction(page.data[i].id));
+      functions.push(await client.getFunction(pending[i].id));
     } catch (error) {
       if (!(error instanceof B4mApiError)) throw error;
       if (error.status === 404) continue;
-      if (error.status === 429 && i > start.offset) {
-        return { functions, next_cursor: encodeListCursor({ c: start.server ?? null, o: i, n: size }) };
+      if (error.status === 429 && i > 0) {
+        return { functions, next_cursor: encodeListCursor({ c: resume?.c ?? null, a: pending[i - 1].id, n: size }) };
       }
       throw error;
     }
   }
-  const next_cursor = page.next_cursor ? encodeListCursor({ c: page.next_cursor, o: 0, n: size }) : null;
+  const next_cursor = page.next_cursor ? encodeListCursor({ c: page.next_cursor, a: null, n: size }) : null;
   return { functions, next_cursor };
 }
 

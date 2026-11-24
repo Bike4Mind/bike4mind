@@ -166,6 +166,33 @@ describe('function tools', () => {
       expect(listFunctions).toHaveBeenLastCalledWith(8, 'server-next');
     });
 
+    it('resumes at the function that met the rate limit after an earlier one was dropped on a 404', async () => {
+      let gone = false;
+      const listFunctions = vi.fn(async () => ({
+        data: page.data.filter(fn => !(gone && fn.id === ids[1])),
+        next_cursor: null,
+      }));
+      let reads = 0;
+      const getFunction = vi.fn(async (id: string) => {
+        reads++;
+        if (id === ids[1]) {
+          gone = true;
+          throw apiError(404, { name: 'NotFoundError', error: 'Function not found' });
+        }
+        if (reads === 3) throw apiError(429, { error: 'Too many requests' });
+        return detail(id, 'fn');
+      });
+      const { call } = collect(mockClient({ listFunctions, getFunction }));
+
+      const first = await call('list_functions', {});
+      const firstPage = first.structuredContent as { functions: { id: string }[]; next_cursor: string };
+      expect(firstPage.functions.map(fn => fn.id)).toEqual([ids[0]]);
+
+      const second = await call('list_functions', { cursor: firstPage.next_cursor });
+      const secondPage = second.structuredContent as { functions: { id: string }[] };
+      expect(secondPage.functions.map(fn => fn.id)).toEqual(ids.slice(2));
+    });
+
     it('reports the rate limit when it hits before any function is read', async () => {
       const getFunction = vi
         .fn()
@@ -179,11 +206,62 @@ describe('function tools', () => {
     });
   });
 
-  it('passes the page size and cursor through', async () => {
+  it('passes the page size through', async () => {
     const listFunctions = vi.fn().mockResolvedValue({ data: [], next_cursor: null });
     const { call } = collect(mockClient({ listFunctions, getFunction: vi.fn() }));
-    await call('list_functions', { limit: 5, cursor: 'c1' });
-    expect(listFunctions).toHaveBeenCalledWith(5, 'c1');
+    await call('list_functions', { limit: 5 });
+    expect(listFunctions).toHaveBeenCalledWith(5, undefined);
+  });
+
+  describe('a cursor the CLI did not make', () => {
+    const REFUSAL = 'That cursor did not come from list_functions. Call list_functions again without a cursor.';
+    const issued = async () => {
+      const listFunctions = vi.fn().mockResolvedValue({ data: [summary(ID, 'beam')], next_cursor: 'server-next' });
+      const getFunction = vi.fn().mockResolvedValue(detail(ID, 'beam'));
+      const { call } = collect(mockClient({ listFunctions, getFunction }));
+      const cursor = ((await call('list_functions', {})).structuredContent as { next_cursor: string }).next_cursor;
+      listFunctions.mockClear();
+      return { call, listFunctions, cursor };
+    };
+    const edit = (cursor: string, change: (payload: Record<string, unknown>) => void) => {
+      const [payload, mac] = cursor.split('.');
+      const parsed = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8')) as Record<string, unknown>;
+      change(parsed);
+      return `${Buffer.from(JSON.stringify(parsed)).toString('base64url')}.${mac}`;
+    };
+
+    it('is refused with a fixed message and no list request: a server cursor', async () => {
+      const { call, listFunctions } = await issued();
+      const result = await call('list_functions', { cursor: 'server-next' });
+      expect(result.isError).toBe(true);
+      expect(text(result)).toBe(REFUSAL);
+      expect(listFunctions).not.toHaveBeenCalled();
+    });
+
+    it('is refused: a cursor with its contents edited', async () => {
+      const { call, listFunctions, cursor } = await issued();
+      const result = await call('list_functions', {
+        cursor: edit(cursor, payload => {
+          payload.c = 'another-server-cursor';
+        }),
+      });
+      expect(text(result)).toBe(REFUSAL);
+      expect(listFunctions).not.toHaveBeenCalled();
+    });
+
+    it('is refused: a cursor without its signature', async () => {
+      const { call, listFunctions, cursor } = await issued();
+      const result = await call('list_functions', { cursor: cursor.split('.')[0] });
+      expect(text(result)).toBe(REFUSAL);
+      expect(listFunctions).not.toHaveBeenCalled();
+    });
+
+    it('is accepted when the CLI made it', async () => {
+      const { call, listFunctions, cursor } = await issued();
+      const result = await call('list_functions', { cursor });
+      expect(result.isError).toBeUndefined();
+      expect(listFunctions).toHaveBeenCalledWith(8, 'server-next');
+    });
   });
 
   it('calls a function by id with its inputs and returns the output and stamp', async () => {
@@ -308,10 +386,11 @@ describe('function tools', () => {
       const invokeFunction = vi.fn().mockResolvedValue(resultOfSize(MAX_RESULT_BYTES + 1));
       const result = await collect(mockClient({ invokeFunction })).call('call_function', { function: ID, input: {} });
 
-      expect(result.isError).toBe(true);
-      expect(text(result)).toMatch(/^output_too_large: .*2 MiB/);
-      expect(result.structuredContent).toBeUndefined();
-      expect(text(result).length).toBeLessThan(MAX_RESULT_BYTES);
+      expect(result).toEqual({
+        content: [{ type: 'text', text: expect.stringMatching(/^output_too_large: .*2 MiB/) }],
+        isError: true,
+      });
+      expect(Buffer.byteLength(JSON.stringify(result))).toBeLessThan(1024);
     });
   });
 
@@ -410,6 +489,12 @@ describe('function tools', () => {
       );
     });
 
+    it('a redirect says the server redirected, that these tools do not follow, and to check B4M_API_URL', async () => {
+      expect(await refusal(apiError(307, ''))).toBe(
+        `The Bike4Mind server at ${BASE_URL} redirected the request, and these tools do not follow redirects. Check that B4M_API_URL points at the server itself.`
+      );
+    });
+
     it('a refusal while listing reads the same way', async () => {
       const listFunctions = vi.fn().mockRejectedValue(apiError(403, { required_scopes: ['functions:invoke'] }));
       const result = await collect(mockClient({ listFunctions })).call('list_functions', {});
@@ -494,7 +579,51 @@ describe('function tools', () => {
 
         expect(listed.isError).toBe(true);
         expect(called.isError).toBe(true);
+        expect(text(listed)).toMatch(/redirected the request.*do not follow redirects.*B4M_API_URL/);
+        expect(text(called)).toMatch(/redirected the request.*do not follow redirects.*B4M_API_URL/);
         expect(home).toEqual([key, key]);
+        expect(elsewhere).toEqual([]);
+      } finally {
+        origin.close();
+        target.close();
+      }
+    });
+
+    it('is not sent on to another host when a function detail read is redirected', async () => {
+      const key = ['test', 'key', 'value'].join('-');
+      const elsewhere: unknown[] = [];
+      const target = createServer((req, res) => {
+        elsewhere.push(req.headers['x-api-key']);
+        res.end('{}');
+      });
+      await new Promise<void>(resolve => target.listen(0, resolve));
+      const targetPort = (target.address() as AddressInfo).port;
+      const detailKeys: unknown[] = [];
+      const origin = createServer((req, res) => {
+        if (req.url?.startsWith(`/api/v1/functions/${ID}`)) {
+          detailKeys.push(req.headers['x-api-key']);
+          res.writeHead(307, { location: `http://localhost:${targetPort}${req.url}` });
+          res.end();
+          return;
+        }
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ data: [summary(ID, 'beam')], next_cursor: null }));
+      });
+      await new Promise<void>(resolve => origin.listen(0, '127.0.0.1', resolve));
+
+      try {
+        const api = new B4mApiClient(
+          `http://127.0.0.1:${(origin.address() as AddressInfo).port}`,
+          {} as ConfigStore,
+          key
+        );
+        (api as unknown as { client: ApiClient }).client.getAxiosInstance().defaults.proxy = false;
+
+        const listed = await collect(api).call('list_functions', {});
+
+        expect(listed.isError).toBe(true);
+        expect(text(listed)).toMatch(/redirected the request/);
+        expect(detailKeys).toEqual([key]);
         expect(elsewhere).toEqual([]);
       } finally {
         origin.close();
