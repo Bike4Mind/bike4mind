@@ -96,7 +96,7 @@ describe('template page free-run box', () => {
     await submit('  An article  ');
 
     expect(fetch).toHaveBeenCalledWith(
-      '/api/skills/template/article-bullets/run',
+      '/api/skills/template/run/article-bullets',
       expect.objectContaining({ method: 'POST', body: JSON.stringify({ text: 'An article', turnstileToken: 'tok' }) })
     );
     expect(byTestId('template-page-free-run-result').hidden).toBe(false);

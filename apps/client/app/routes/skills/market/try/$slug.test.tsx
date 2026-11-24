@@ -52,7 +52,7 @@ describe('SkillTemplateTryPage', () => {
       })
     );
     expect(h.post).toHaveBeenCalledTimes(1);
-    expect(h.post).toHaveBeenCalledWith('/api/skills/template/article-bullets/try');
+    expect(h.post).toHaveBeenCalledWith('/api/skills/template/try/article-bullets');
   });
 
   it("prefers the visitor's free-run text and clears it once used", async () => {

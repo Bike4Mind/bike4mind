@@ -26,7 +26,7 @@ import { getTurnstileFreeRunPolicy } from '@server/utils/auth/turnstile';
 import { ipSubject } from '@server/utils/otcLimits';
 
 /**
- * POST /api/skills/template/[slug]/run - the signed-out free run from a public template page
+ * POST /api/skills/template/run/[slug] - the signed-out free run from a public template page
  * (server/skillMarket/templateFreeRun.ts). Order as in pages/api/subscribers/create.ts: blocked IP,
  * Turnstile, then rate limits. The challenge is required whenever this route runs: with Turnstile
  * unconfigured or unverifiable the route refuses rather than skipping it.

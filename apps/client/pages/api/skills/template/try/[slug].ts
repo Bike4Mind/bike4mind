@@ -4,7 +4,7 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { tryTemplate } from '@server/skillMarket/templateTry';
 
 /**
- * POST /api/skills/template/[slug]/try - the signed-in visitor's "Try with Bike4Mind" from a template
+ * POST /api/skills/template/try/[slug] - the signed-in visitor's "Try with Bike4Mind" from a template
  * page (app route /skills/market/try/$slug): reuse or import the skill (templateTry.ts). Draws on the
  * market import allowance, since it can import.
  */

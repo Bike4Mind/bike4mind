@@ -690,7 +690,7 @@ apps/client/pages/api/settings/update.ts
 apps/client/pages/api/skills/[id]/index.ts
 apps/client/pages/api/skills/[id]/share.ts
 apps/client/pages/api/skills/index.ts
-apps/client/pages/api/skills/template/[slug]/run.ts  # deliberately unauthenticated (auth: false): the signed-out free run on a public template page; Turnstile-gated, rate limited per IP, capped per template and globally per day, reads only the approved snapshot of a published template on a live public or unlisted listing and stores nothing the visitor sends
+apps/client/pages/api/skills/template/run/[slug].ts  # deliberately unauthenticated (auth: false): the signed-out free run on a public template page; Turnstile-gated, rate limited per IP, capped per template and globally per day, reads only the approved snapshot of a published template on a live public or unlisted listing and stores nothing the visitor sends
 apps/client/pages/api/skills/template/image/[slug].ts  # deliberately unauthenticated (auth: false): link-preview fetchers load a template preview image signed out; serves only the approved image of a published template on a live public or unlisted listing, rate limited, read-only
 apps/client/pages/api/skills/template/serve.ts  # deliberately unauthenticated (auth: false): the public /t/<slug> template page loads signed out; read-only, rate limited, renders only a published template on a live listing and gates organization and space listings to signed-in members
 apps/client/pages/api/sky-greeting/index.ts

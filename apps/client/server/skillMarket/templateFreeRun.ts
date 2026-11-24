@@ -24,7 +24,7 @@ import { isPublicTemplatePage } from './templateImage';
 import type { ServableTemplate, TemplatePageView } from './templatePage';
 
 /**
- * The signed-out free run on a public template page (pages/api/skills/template/[slug]/run.ts): one
+ * The signed-out free run on a public template page (pages/api/skills/template/run/[slug].ts): one
  * stateless completion of the approved skill snapshot over the visitor's pasted text, on platform keys,
  * with no tools. Nothing the visitor sends is stored.
  */

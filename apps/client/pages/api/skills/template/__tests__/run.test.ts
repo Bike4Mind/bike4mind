@@ -79,7 +79,7 @@ vi.mock('@server/skillMarket/templateFreeRun', async () => {
   };
 });
 
-import '../[slug]/run';
+import '../run/[slug]';
 
 const SETTINGS = {
   enabled: true,
@@ -150,7 +150,7 @@ beforeEach(() => {
   h.record.mockResolvedValue(undefined);
 });
 
-describe('POST /api/skills/template/[slug]/run', () => {
+describe('POST /api/skills/template/run/[slug]', () => {
   it('is an unauthenticated POST-only route', () => {
     expect(h.baseApiOptions).toEqual([{ auth: false, allowedMethods: ['POST'] }]);
   });

@@ -209,7 +209,7 @@ export const TURNSTILE_ORIGIN = 'https://challenges.cloudflare.com';
 export const MERMAID_SCRIPT_SRC = 'https://cdn.jsdelivr.net/npm/mermaid@11.17.2/dist/mermaid.min.js';
 const MERMAID_SCRIPT_INTEGRITY = 'sha384-EOXBFmc3gx5mb+vn0vPvvGqACToJD24hhacX5Yx+8NUUQrHIle/Qi5Bg9o3zKwW2';
 
-const freeRunRunPath = (slug: string): string => `/api/skills/template/${encodeURIComponent(slug)}/run`;
+const freeRunRunPath = (slug: string): string => `/api/skills/template/run/${encodeURIComponent(slug)}`;
 
 function signupBlock(slug: string, brand: string, visible: boolean): string {
   return `<div id="free-run-signup" class="run" data-testid="template-page-free-run-signup"${visible ? '' : ' hidden'}>

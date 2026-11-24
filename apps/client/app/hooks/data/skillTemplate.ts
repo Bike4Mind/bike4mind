@@ -139,9 +139,9 @@ export const useRemoveSkillTemplateImage = (listingId: string) =>
 
 export type SkillTemplateTryResult = { skillName: string; examplePrompt: string; imported: boolean };
 
-/** Reuse or import a template page's skill for the signed-in visitor (pages/api/skills/template/[slug]/try.ts). */
+/** Reuse or import a template page's skill for the signed-in visitor (pages/api/skills/template/try/[slug].ts). */
 export const useTrySkillTemplate = () =>
   useMutation({
     mutationFn: async (slug: string) =>
-      (await api.post<SkillTemplateTryResult>(`/api/skills/template/${encodeURIComponent(slug)}/try`)).data,
+      (await api.post<SkillTemplateTryResult>(`/api/skills/template/try/${encodeURIComponent(slug)}`)).data,
   });

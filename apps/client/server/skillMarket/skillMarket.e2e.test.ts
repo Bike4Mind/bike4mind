@@ -119,7 +119,7 @@ import reviewHandler from '@pages/api/skills/market/versions/[vid]/review';
 import updateSkillHandler from '@pages/api/skills/[id]/index';
 import reviewQueueHandler from '@pages/api/skills/market/review-queue';
 import byTokenHeaderHandler from '@pages/api/skills/market/by-token/index';
-import templateTryHandler from '@pages/api/skills/template/[slug]/try';
+import templateTryHandler from '@pages/api/skills/template/try/[slug]';
 
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
 
