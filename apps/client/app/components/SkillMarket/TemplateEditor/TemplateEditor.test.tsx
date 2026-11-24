@@ -375,3 +375,90 @@ describe('TemplateEditor preview image', () => {
     await waitFor(() => expect(h.generate).toHaveBeenCalledWith('- one\n- two'));
   });
 });
+
+describe('TemplateEditor stale responses', () => {
+  const deferred = <T,>() => {
+    let resolve!: (value: T) => void;
+    const promise = new Promise<T>(r => {
+      resolve = r;
+    });
+    return { promise, resolve };
+  };
+
+  it('keeps edits made while a save is in flight', async () => {
+    const pending = deferred<ReturnType<typeof template>>();
+    h.save.mockImplementationOnce(() => pending.promise);
+    renderEditor(viewOf());
+
+    fireEvent.change(byId('template-editor-headline-input'), { target: { value: 'First edit' } });
+    fireEvent.click(byId('template-editor-save-btn'));
+    await waitFor(() => expect(h.save).toHaveBeenCalled());
+    fireEvent.change(byId('template-editor-headline-input'), { target: { value: 'Newer edit' } });
+
+    pending.resolve(template({ headline: 'First edit' }));
+    await waitFor(() => expect(toast.success).toHaveBeenCalledWith('Template saved'));
+
+    expect(byId('template-editor-headline-input')).toHaveValue('Newer edit');
+  });
+
+  it('discards a regenerated draft when the copy was edited while it drafted', async () => {
+    const pending = deferred<typeof draftResponse>();
+    h.draft.mockImplementationOnce(() => pending.promise);
+    renderEditor(viewOf());
+
+    fireEvent.click(byId('template-editor-regenerate-btn'));
+    fireEvent.click(byId('template-editor-regenerate-confirm'));
+    await waitFor(() => expect(h.draft).toHaveBeenCalled());
+    fireEvent.change(byId('template-editor-headline-input'), { target: { value: 'Mine' } });
+
+    pending.resolve(draftResponse);
+    await waitFor(() => expect(toast.error).toHaveBeenCalled());
+
+    expect(byId('template-editor-headline-input')).toHaveValue('Mine');
+  });
+
+  const viewB = () =>
+    viewOf({
+      template: template({ listingId: 'l2', slug: 'b-slug', headline: 'B headline' }),
+      listing: { id: 'l2', name: 'other', visibility: 'public', live: true },
+    });
+
+  const wrap = (listingId: string, key?: string) => (
+    <CssVarsProvider theme={appTheme}>
+      <TemplateEditor key={key} listingId={listingId} />
+    </CssVarsProvider>
+  );
+
+  it('shows the new listing fields when the editor is keyed by listingId', async () => {
+    const pending = deferred<typeof draftResponse>();
+    h.draft.mockImplementationOnce(() => pending.promise);
+    h.view = viewOf({ template: null, suggestedSlug: 'a-slug' });
+    const { rerender } = render(wrap('l1', 'l1'));
+
+    h.view = viewB();
+    rerender(wrap('l2', 'l2'));
+    await waitFor(() => expect(byId('template-editor-headline-input')).toHaveValue('B headline'));
+
+    pending.resolve(draftResponse);
+    await Promise.resolve();
+    expect(byId('template-editor-headline-input')).toHaveValue('B headline');
+    expect(byId('template-editor-slug-input')).toHaveValue('b-slug');
+  });
+
+  it('ignores a draft for the previous listing that resolves after the listingId changed', async () => {
+    const pending = deferred<typeof draftResponse>();
+    h.draft.mockImplementationOnce(() => pending.promise);
+    h.view = viewOf({ template: null, suggestedSlug: 'a-slug' });
+    const { rerender } = render(wrap('l1'));
+    await waitFor(() => expect(h.draft).toHaveBeenCalled());
+
+    h.view = viewB();
+    rerender(wrap('l2'));
+    await waitFor(() => expect(byId('template-editor-headline-input')).toHaveValue('B headline'));
+
+    pending.resolve(draftResponse);
+    await Promise.resolve();
+    expect(byId('template-editor-headline-input')).toHaveValue('B headline');
+    expect(byId('template-editor-slug-input')).toHaveValue('b-slug');
+  });
+});
