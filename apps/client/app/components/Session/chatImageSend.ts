@@ -1,5 +1,12 @@
+/**
+ * The notebook chat's image sends: a send with an image model selected, and the in-chat masked edit. Both post to
+ * POST /api/image-jobs; the send path (useSendMessage, SessionMiddle) calls them directly when chatImageSendMode
+ * (utils/commands.ts) says a send is one.
+ */
 import { api } from '@client/app/contexts/ApiContext';
 import { createOptimisticQuest, createOptimisticSessionId, updateOptimisticQuest } from '@client/app/utils/llm';
+import { terminalQuests } from '@client/app/hooks/chatCompletionState';
+import { handleCommand, type CommandArgs, type CommandHandlers } from '@client/app/utils/commands';
 import {
   KnowledgeType,
   OpenAIImageQuality,
@@ -29,7 +36,7 @@ import {
 } from '@client/app/utils/filesAPICalls';
 import { extractS3KeyFromUrl, isGeneratedImage } from '@client/app/components/Session/ImageContainer';
 
-export type ImageGenerationCommandArgs = {
+export type ChatImageSendArgs = {
   /** Prompt */
   params: string;
   currentSession: ISessionDocument | null;
@@ -39,7 +46,6 @@ export type ImageGenerationCommandArgs = {
   model: ImageModelName;
   tools: B4MLLMTools[];
   organizationId?: string | null;
-  setChatCompletion?: (updater: (prev: any) => any) => void;
   /** Message-level (paperclip) attachment ids, i.e. files NOT added as notebook context.
    * Merged into the generation input so an inline-attached image still feeds image-to-image
    * models without requiring the "Add as Notebook Context" toggle. */
@@ -50,12 +56,12 @@ export type ImageGenerationCommandArgs = {
   projectId?: string;
 } & GenerateImageToolCall;
 
-export type ImageEditCommandArgs = {
+export type ChatImageEditArgs = {
   image?: string; // Image to be edited
   /** The FabFile behind `image`, if the chat knows it; reused as the edit source when it is the caller's own. */
   imageFileId?: string;
   userId?: string;
-} & ImageGenerationCommandArgs;
+} & ChatImageSendArgs;
 
 export type AIImageSettings = {
   model?: ImageModelName;
@@ -71,7 +77,7 @@ export type AIImageSettings = {
   aspect_ratio?: string;
 };
 
-/** The saved selection fields the command receives; the server maps them onto the job request. */
+/** The saved selection fields the send receives; the server maps them onto the job request. */
 const SELECTION_FIELDS = [
   'size',
   'quality',
@@ -133,7 +139,7 @@ function optimisticImageSend(params: {
   return cb => createOptimisticQuest(queryClient, placeholderSessionId, params.placeholderPrompt ?? prompt, cb);
 }
 
-export async function handleImageGenerationCommand(args: ImageGenerationCommandArgs): Promise<void> {
+export async function sendChatImageGeneration(args: ChatImageSendArgs): Promise<void> {
   const {
     params,
     currentSession,
@@ -149,7 +155,7 @@ export async function handleImageGenerationCommand(args: ImageGenerationCommandA
     projectId,
     n,
     ...settings
-  } = args as ImageGenerationCommandArgs & { imageConfig?: GenerateImageToolCall };
+  } = args as ChatImageSendArgs & { imageConfig?: GenerateImageToolCall };
 
   const isPromptEnhancementEnabled = tools.includes('prompt_enhancement' as B4MLLMTools);
   const send = optimisticImageSend({
@@ -163,7 +169,7 @@ export async function handleImageGenerationCommand(args: ImageGenerationCommandA
 
   // Include message-level (paperclip) attachments, not just notebook-context workbench files,
   // so an image attached inline without the "Add as Notebook Context" toggle still feeds
-  // image-to-image models (Kontext/Fill). Mirrors the edit path (handleImageEditCommand).
+  // image-to-image models (Kontext/Fill). Mirrors the edit path (sendChatImageEdit).
   const fabFileIds = [...workBenchFiles.map(file => file.id), ...(promptFileIds || [])];
 
   // Use the image model from imageConfig (which has the correct image-specific model),
@@ -325,7 +331,7 @@ async function uploadImageFromUrl(imageUrl: string, fallbackName: string) {
 }
 
 /** The in-chat masked edit: `image` is the shown image's URL and the mask is the send's one attached file. */
-export async function handleImageEditCommand(args: ImageEditCommandArgs): Promise<void> {
+export async function sendChatImageEdit(args: ChatImageEditArgs): Promise<void> {
   const {
     params,
     image,
@@ -341,7 +347,7 @@ export async function handleImageEditCommand(args: ImageEditCommandArgs): Promis
     projectId,
     n,
     ...settings
-  } = args as ImageEditCommandArgs & { imageConfig?: GenerateImageToolCall };
+  } = args as ChatImageEditArgs & { imageConfig?: GenerateImageToolCall };
 
   const send = optimisticImageSend({
     queryClient,
@@ -380,4 +386,21 @@ export async function handleImageEditCommand(args: ImageEditCommandArgs): Promis
     toast.error(error instanceof EditSourceUnavailableError ? error.message : formatImageActionError(error, 'edit'));
     throw error;
   }
+}
+
+/** Runs a chat image send of the given mode (chatImageSendMode). */
+export async function sendChatImage(mode: 'generate' | 'edit', args: ChatImageEditArgs): Promise<void> {
+  // A re-run restarts an existing quest in place; its earlier terminal frame must not mark the new run's updates
+  // stale (as handleCommand does for a command).
+  if (args.questId) terminalQuests.forget(args.questId);
+  return mode === 'edit' ? sendChatImageEdit(args) : sendChatImageGeneration(args);
+}
+
+/** A send's dispatch: the chat image send `imageSendMode` names (chatImageSendMode), else the command in `args`. */
+export function dispatchSend(
+  handlers: CommandHandlers,
+  imageSendMode: 'generate' | 'edit' | undefined,
+  args: CommandArgs
+): ReturnType<typeof handleCommand> {
+  return imageSendMode ? sendChatImage(imageSendMode, args) : handleCommand(handlers, args);
 }
