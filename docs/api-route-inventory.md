@@ -36,7 +36,7 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 
 ## Summary
 
-1287 routes: 138 contracted, 11 aliases of another route, 358 with no static caller in `apps/client/app`.
+1288 routes: 138 contracted, 11 aliases of another route, 359 with no static caller in `apps/client/app`.
 
 | Area | Routes | Contracted | jwt+key | jwt | optional | handler | No static caller |
 | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -98,7 +98,7 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | keep | 1 | 0 | 0 | 1 | 0 | 0 | 1 |
 | lattice | 7 | 0 | 7 | 0 | 0 | 0 | 0 |
 | logout | 1 | 0 | 1 | 0 | 0 | 0 | 0 |
-| mcp | 5 | 0 | 5 | 0 | 0 | 0 | 0 |
+| mcp | 6 | 0 | 6 | 0 | 0 | 0 | 1 |
 | mcp-connections | 8 | 0 | 0 | 7 | 0 | 1 | 5 |
 | mcp-servers | 18 | 0 | 16 | 0 | 0 | 2 | 6 |
 | mementos | 7 | 0 | 7 | 0 | 0 | 0 | 0 |
@@ -1163,6 +1163,7 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | `/api/mcp/confirm` | POST | jwt+key | - | - | no | - | 1: `components/Session/PromptReplies.tsx` |
 | `/api/mcp/delete-attachment` | POST | jwt+key | - | - | no | - | 1: `components/Session/PromptReplies.tsx` |
 | `/api/mcp/download-attachment` | POST | jwt+key | - | - | no | - | 1: `components/Session/PromptReplies.tsx` |
+| `/api/mcp/functions` | POST | jwt+key | `functions:invoke` | - | no | - | 0 |
 | `/api/mcp/github/repositories` | GET, POST, PATCH | jwt+key | - | - | no | - | 1: `components/ProfileModal/SettingsTabContent/GitHubIntegrationSection.tsx` |
 | `/api/mcp/github/status` | POST | jwt+key | - | - | no | - | 2: `components/ProfileModal/SettingsTabContent/GitHubIntegrationSection.tsx`, `hooks/data/useGitHubConnectionStatus.ts` |
 
