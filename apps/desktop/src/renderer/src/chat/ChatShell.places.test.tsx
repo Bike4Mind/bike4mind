@@ -2,9 +2,9 @@
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { CssVarsProvider } from '@mui/joy/styles';
-import type { ChatSession, ChatSessionSummary } from '@shared/chat';
+import type { ChatSession, ChatSessionMode, ChatSessionSummary } from '@shared/chat';
 import { EMPTY_SIDEBAR_SECTIONS } from '@shared/sidebarSections';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
 import { desktopTheme } from '../theme';
 import { ChatShell } from './ChatShell';
 
@@ -30,7 +30,7 @@ window.ResizeObserver ??= class {
   disconnect() {}
 } as unknown as typeof ResizeObserver;
 
-const summary = (id: string, title: string, mode: 'chat' | 'code', minute: number): ChatSessionSummary =>
+const summary = (id: string, title: string, mode: ChatSessionMode, minute: number): ChatSessionSummary =>
   ({
     id,
     title,
@@ -40,13 +40,20 @@ const summary = (id: string, title: string, mode: 'chat' | 'code', minute: numbe
     updatedAt: `2026-10-01T00:${String(minute).padStart(2, '0')}:00.000Z`,
   }) as ChatSessionSummary;
 
-// Newest first, the order main lists them in.
+// Newest first, the order main lists them in. The Studio session is the newest of all, so a list
+// that failed to filter it out would show it first.
 const SESSIONS = [
+  summary('s1', 'Poster studio', 'studio', 55),
   summary('c1', 'Alpha chat', 'chat', 50),
   summary('k1', 'Kappa code', 'code', 40),
   summary('c2', 'Beta chat', 'chat', 30),
   summary('k2', 'Lambda code', 'code', 20),
 ];
+
+/** What listSessions returns; a test without a Studio session drops it. */
+let listed: ChatSessionSummary[] = SESSIONS;
+let openNotice: ((event: { sessionId: string; rootId: string }) => void) | null = null;
+let createSession: Mock<(request?: { mode?: string }) => Promise<{ session: ChatSessionSummary }>>;
 
 /**
  * Everything ChatShell reaches over IPC that this test does not care about: subscriptions hand
@@ -69,6 +76,11 @@ let host: HTMLElement | null = null;
 
 beforeEach(() => {
   window.localStorage.clear();
+  listed = SESSIONS;
+  openNotice = null;
+  createSession = vi.fn(async (request?: { mode?: string }) => ({
+    session: summary('s-new', 'New chat', request?.mode === 'studio' ? 'studio' : 'chat', 59),
+  }));
   Element.prototype.scrollIntoView = () => undefined;
   vi.stubGlobal(
     'IntersectionObserver',
@@ -84,11 +96,18 @@ beforeEach(() => {
   (window as unknown as { b4m: unknown }).b4m = new Proxy(
     {
       chat: quietBridge({
-        listSessions: async () => SESSIONS,
+        listSessions: async () => listed,
+        createSession: (request?: { mode?: string }) => createSession(request),
         getSession: async (id: string) => ({ ...SESSIONS.find(entry => entry.id === id), messages: [] }) as ChatSession,
         getQueuedMessages: async () => [],
         getSessionStatuses: async () => [],
         listModels: async () => ({ models: [] }),
+      }),
+      attention: quietBridge({
+        onOpen: (listener: typeof openNotice) => {
+          openNotice = listener;
+          return () => undefined;
+        },
       }),
       sidebar: quietBridge({ getSections: async () => EMPTY_SIDEBAR_SECTIONS }),
       // No Studio bridge: the place frame must still draw, with the pane saying it is not connected.
@@ -209,19 +228,67 @@ describe('places on the rail', () => {
     expect(find('studio-productions-empty')).not.toBeNull();
   });
 
-  it('draws Studio as a place: the media in the sidebar, Create saving to the open conversation', async () => {
+  it('draws Studio as a place: the media in the sidebar, Create in its own Studio session', async () => {
     await mount();
     await act(async () => el('place-rail-studio-btn').click());
     expect(find('sidebar')).toBeNull();
     expect(el('sidebar-place-title').textContent).toBe('Studio');
     expect(find('studio-sidebar-image-btn')).not.toBeNull();
     expect(el('studio-area-create').getAttribute('aria-selected')).toBe('true');
-    expect(el('studio-create-session').textContent).toBe('Saves to Alpha chat');
+    expect(find('studio-create')).not.toBeNull();
+    // Create no longer borrows the Chat conversation, so it no longer names one.
+    expect(find('studio-create-session')).toBeNull();
     expect(find('chat-composer-region')).toBeNull();
+    expect(createSession).not.toHaveBeenCalled();
+    expect(JSON.parse(window.localStorage.getItem('b4m.chat.places') ?? '{}')).toMatchObject({ studioSession: 's1' });
 
     // The conversation was left open underneath, so Chat comes back to it.
     await act(async () => el('place-rail-chat-btn').click());
     expect(openTitle()).toBe('Alpha chat');
+  });
+
+  it('opens a Studio session from a notification as Studio Create, not as a conversation', async () => {
+    listed = [...SESSIONS, summary('s2', 'Older poster', 'studio', 10)];
+    await mount();
+    expect(openTitle()).toBe('Alpha chat');
+    await act(async () => openNotice?.({ sessionId: 's2', rootId: 's2' }));
+    expect(el('place-rail-studio-btn').getAttribute('aria-current')).toBe('page');
+    expect(find('studio-create')).not.toBeNull();
+    // Create is bound to the opened session, not the newest one.
+    expect(JSON.parse(window.localStorage.getItem('b4m.chat.places') ?? '{}')).toMatchObject({ studioSession: 's2' });
+
+    await act(async () => el('place-rail-chat-btn').click());
+    expect(openTitle()).toBe('Alpha chat');
+  });
+
+  it('starts a Studio session the first time Studio opens, once, and keeps it out of the lists', async () => {
+    listed = SESSIONS.filter(session => session.mode !== 'studio');
+    await mount();
+    expect(createSession).not.toHaveBeenCalled();
+
+    await act(async () => el('place-rail-studio-btn').click());
+    expect(createSession).toHaveBeenCalledExactlyOnceWith({ mode: 'studio' });
+    expect(find('studio-create')).not.toBeNull();
+
+    // Leaving and coming back reuses it rather than starting another.
+    await act(async () => el('place-rail-chat-btn').click());
+    expect(rowTitles()).toEqual(['Alpha chat', 'Beta chat']);
+    expect(openTitle()).toBe('Alpha chat');
+    await act(async () => el('place-rail-studio-btn').click());
+    expect(createSession).toHaveBeenCalledTimes(1);
+  });
+
+  it('says so when a Studio session cannot start, and tries once per visit', async () => {
+    listed = SESSIONS.filter(session => session.mode !== 'studio');
+    createSession.mockRejectedValue(new Error('cannot start a conversation while no account is signed in'));
+    await mount();
+    await act(async () => el('place-rail-studio-btn').click());
+    expect(el('studio-create-empty').textContent).toContain('Check that you are signed in');
+    expect(createSession).toHaveBeenCalledTimes(1);
+
+    await act(async () => el('place-rail-chat-btn').click());
+    await act(async () => el('place-rail-studio-btn').click());
+    expect(createSession).toHaveBeenCalledTimes(2);
   });
 
   it('collapses the sidebar on Mod+B and keeps the rail', async () => {

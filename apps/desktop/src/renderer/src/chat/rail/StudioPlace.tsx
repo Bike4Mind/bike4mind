@@ -16,9 +16,6 @@ const AREAS: readonly { area: StudioArea; label: string }[] = [
   { area: 'productions', label: 'Productions' },
 ];
 
-/** Why Create cannot run without a conversation: the Studio workspace belongs to one. */
-export const STUDIO_NEEDS_CONVERSATION = 'Open a conversation in Chat or Code first: Studio saves what you make to it.';
-
 /**
  * The Studio place's sidebar: the media under a Create label, then Productions. Picking a medium
  * opens its form in the main pane, the same form the per-conversation Studio pane uses.
@@ -160,9 +157,9 @@ function EmptyState({ title, body, testId }: { title: string; body: string; test
 /**
  * The Studio place's main pane: a header with the area switcher, then Create or Productions.
  *
- * Create hosts the per-conversation Studio full width, bound to the conversation last open in
- * Chat or Code: the Studio workspace, its jobs and its assets all belong to a session, and a
- * Studio-only session is a later slice. Productions has no desktop backend yet, so it says so.
+ * Create hosts the per-conversation Studio full width, bound to the place's own Studio session:
+ * the Studio workspace, its jobs and its assets all belong to a session. Productions has no
+ * desktop backend yet, so it says so.
  */
 export function StudioMain({
   area,
@@ -170,7 +167,7 @@ export function StudioMain({
   kind,
   onKindChange,
   controller,
-  sessionTitle,
+  ready,
   unavailableReason,
 }: {
   area: StudioArea;
@@ -178,8 +175,8 @@ export function StudioMain({
   kind: StudioMediaKind | null;
   onKindChange: (kind: StudioMediaKind | null) => void;
   controller?: StudioController;
-  /** The conversation Create saves into, or undefined when none is open. */
-  sessionTitle?: string;
+  /** The Studio session Create saves into is bound; until then `unavailableReason` says why not. */
+  ready: boolean;
   unavailableReason?: string;
 }) {
   return (
@@ -203,8 +200,8 @@ export function StudioMain({
             body="Cut your takes into a finished piece on a timeline. Until then, Productions is on the web."
             testId="studio-productions-empty"
           />
-        ) : sessionTitle === undefined ? (
-          <EmptyState title="Nothing to create in yet" body={STUDIO_NEEDS_CONVERSATION} testId="studio-create-empty" />
+        ) : !ready ? (
+          <EmptyState title="Nothing to create in yet" body={unavailableReason ?? ''} testId="studio-create-empty" />
         ) : (
           <Stack spacing={2} sx={{ maxWidth: 640, mx: 'auto' }} data-testid="studio-create">
             <Stack direction="row" alignItems="center" spacing={1}>
@@ -221,12 +218,7 @@ export function StudioMain({
                   <ArrowLeftIcon />
                 </IconButton>
               )}
-              <Stack sx={{ minWidth: 0 }}>
-                <Typography level="title-sm">{kind ? `Create ${mediaLabel(kind)}` : 'Create'}</Typography>
-                <Typography level="body-xs" textColor="text.tertiary" noWrap data-testid="studio-create-session">
-                  Saves to {sessionTitle}
-                </Typography>
-              </Stack>
+              <Typography level="title-sm">{kind ? `Create ${mediaLabel(kind)}` : 'Create'}</Typography>
             </Stack>
             <StudioContent
               key={`${controller?.sessionId ?? ''}:${controller?.workspaceId ?? ''}`}

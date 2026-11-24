@@ -1321,11 +1321,15 @@ export interface ChatReplyStats {
  * Chat is the default and is every conversation this client had before modes existed; Code
  * adds project grounding on top of it.
  *
- * Deliberately NOT a tool switch. Both modes carry the same tools - the difference is that a
- * Code session knows which directory it is about, so its tools run there and its conversations
- * group under that project in the sidebar.
+ * Chat and Code are deliberately NOT a tool switch. Both carry the same tools - the difference is
+ * that a Code session knows which directory it is about, so its tools run there and its
+ * conversations group under that project in the sidebar.
+ *
+ * Studio is the one mode that IS a tool switch: the Studio place's own conversation, offered only
+ * the generation tools, with no folder to run anything in. It is never listed in the Chat or Code
+ * sidebar. See tools/registry.ts toolsForRequest.
  */
-export type ChatSessionMode = 'chat' | 'code';
+export type ChatSessionMode = 'chat' | 'code' | 'studio';
 
 /**
  * How much the user has agreed to be asked before a tool that runs code or changes a file

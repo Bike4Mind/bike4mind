@@ -48,9 +48,17 @@ import { Composer } from './Composer';
 import { useLoop } from './LoopBar';
 import { CustomizeScreen, useCustomizeAttention } from './CustomizePanel';
 import { PlaceRail, type RailAccountContext } from './rail/PlaceRail';
-import { isSessionPlace, readPlaceMemory, writePlaceMemory, type Place, type StudioArea } from './rail/places';
+import {
+  isSessionPlace,
+  readPlaceMemory,
+  writePlaceMemory,
+  type Place,
+  type SessionPlace,
+  type StudioArea,
+} from './rail/places';
+import { STUDIO_STARTING, useStudioSession } from './rail/studioSession';
 import { usePlaceShortcuts } from './rail/shortcuts';
-import { STUDIO_NEEDS_CONVERSATION, StudioMain, StudioSidebar } from './rail/StudioPlace';
+import { StudioMain, StudioSidebar } from './rail/StudioPlace';
 import { readSidebarWidth } from './sidebarWidth';
 import type { ModelsInUse } from '../models/InstalledTab';
 import type { ComposerFill } from './composerInput';
@@ -285,6 +293,7 @@ export function ChatShell({
     sessions,
     loading,
     reload,
+    createStudio,
     creatingCode,
     codeError,
     clearCodeError,
@@ -312,17 +321,17 @@ export function ChatShell({
   const [placeMemory] = useState(readPlaceMemory);
   const [place, setPlace] = useState<Place>(placeMemory?.place ?? remembered?.mode ?? 'chat');
   // The session mode the list filters by and New starts. A session place sets it; Studio leaves
-  // it alone, so the conversation open underneath stays open and Create can save to it.
-  const [mode, setModeOnly] = useState<ChatSessionMode>(
+  // it alone, so the conversation open underneath stays open for the return trip.
+  const [mode, setModeOnly] = useState<SessionPlace>(
     placeMemory && isSessionPlace(placeMemory.place) ? placeMemory.place : (remembered?.mode ?? 'chat')
   );
   /** Opening a session in a mode takes the user to that mode's place. */
-  const setMode = useCallback((next: ChatSessionMode) => {
+  const setMode = useCallback((next: SessionPlace) => {
     setModeOnly(next);
     setPlace(next);
   }, []);
   const onRestore = useCallback((session: ChatSessionSummary | null) => {
-    const restoredMode = session?.mode ?? 'chat';
+    const restoredMode = session && isSessionPlace(session.mode) ? session.mode : 'chat';
     setModeOnly(current => (session ? restoredMode : current));
     setPlace(current => (current === 'studio' || !session ? current : restoredMode));
     if (session) setActiveId(session.id);
@@ -426,7 +435,18 @@ export function ChatShell({
     [studioRegion]
   );
   const studioAccountKey = `${auth?.environment.url ?? ''}:${auth?.user?.id ?? ''}:${auth?.status ?? ''}`;
-  const liveStudio = useStudioController(persistedId, (studioOpen || inStudio) && !suppliedStudio, studioAccountKey);
+  // The Studio place saves into its own session; the pane beside a conversation saves into that one.
+  const studioSession = useStudioSession({
+    active: inStudio,
+    loading,
+    sessions,
+    remembered: placeMemory?.studioSession ?? null,
+    create: createStudio,
+  });
+  const studioSelect = studioSession.select;
+  const studioTarget = inStudio ? studioSession.sessionId : persistedId;
+  const studioPlaceReason = studioSession.error ?? (studioSession.sessionId ? undefined : STUDIO_STARTING);
+  const liveStudio = useStudioController(studioTarget, (studioOpen || inStudio) && !suppliedStudio, studioAccountKey);
   const studio = suppliedStudio ?? liveStudio;
   // Per conversation rather than one flag: see terminalPanelState.ts.
   const [terminalSessions, setTerminalSessions] = useState(readTerminalOpenSessions);
@@ -542,12 +562,19 @@ export function ChatShell({
     (sessionId: string) => {
       // History search spans both modes, so the owning mode follows the selected result.
       const selected = sessions.find(session => session.id === sessionId);
-      if (selected) setMode(selected.mode);
       setScreen('conversation');
+      // A Studio session is never a conversation in the list: it opens as the Studio place's Create.
+      if (selected?.mode === 'studio') {
+        studioSelect(selected.id);
+        setStudioArea('create');
+        setPlace('studio');
+        return;
+      }
+      if (selected) setMode(selected.mode);
       setActiveId(sessionId);
       markSessionViewed(sessionId);
     },
-    [sessions]
+    [sessions, studioSelect]
   );
 
   const terminalOpen = !!activeId && terminalSessions.includes(activeId);
@@ -1228,7 +1255,7 @@ export function ChatShell({
       // Reread before opening it: the shell reselects away from an open session the list lacks.
       await reload();
       if (activeIdRef.current !== origin) return;
-      setMode(result.session.mode);
+      if (isSessionPlace(result.session.mode)) setMode(result.session.mode);
       setScreen('conversation');
       setActiveId(result.session.id);
       setComposerFocus(request => request + 1);
@@ -1287,9 +1314,15 @@ export function ChatShell({
   const placeItems = useRef<{ chat?: string; code?: string }>({ chat: placeMemory?.chat, code: placeMemory?.code });
   const activeSessionMode = sessions.find(session => session.id === activeId)?.mode;
   useEffect(() => {
-    if (activeId && activeSessionMode) placeItems.current[activeSessionMode] = activeId;
-    writePlaceMemory({ place, ...placeItems.current, studio: studioArea });
-  }, [place, activeId, activeSessionMode, studioArea]);
+    if (activeId && activeSessionMode && isSessionPlace(activeSessionMode))
+      placeItems.current[activeSessionMode] = activeId;
+    writePlaceMemory({
+      place,
+      ...placeItems.current,
+      studio: studioArea,
+      ...(studioSession.sessionId ? { studioSession: studioSession.sessionId } : {}),
+    });
+  }, [place, activeId, activeSessionMode, studioArea, studioSession.sessionId]);
 
   const selectPlace = useCallback(
     (next: Place) => {
@@ -1751,8 +1784,8 @@ export function ChatShell({
             width={readSidebarWidth()}
             area={studioArea}
             kind={studioKind}
-            controller={studio?.sessionId === persistedId ? studio : undefined}
-            unavailableReason={persistedId ? undefined : STUDIO_NEEDS_CONVERSATION}
+            controller={studio && studio.sessionId === studioSession.sessionId ? studio : undefined}
+            unavailableReason={studioPlaceReason}
             onSelectKind={kind => {
               setScreen('conversation');
               setStudioArea('create');
@@ -1834,9 +1867,9 @@ export function ChatShell({
           onAreaChange={setStudioArea}
           kind={studioKind}
           onKindChange={setStudioKind}
-          controller={studio?.sessionId === persistedId ? studio : undefined}
-          sessionTitle={persistedId ? (conversation.session?.title ?? 'this conversation') : undefined}
-          unavailableReason={persistedId ? undefined : STUDIO_NEEDS_CONVERSATION}
+          controller={studio && studio.sessionId === studioSession.sessionId ? studio : undefined}
+          ready={!!studioSession.sessionId}
+          unavailableReason={studioPlaceReason}
         />
       ) : (
         <Box

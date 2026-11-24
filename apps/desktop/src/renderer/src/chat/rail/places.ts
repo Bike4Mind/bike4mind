@@ -3,11 +3,15 @@ import type { ChatSessionMode } from '@shared/chat';
 /**
  * Where the user is working: the rail picks one, and the sidebar and main pane show its contents.
  *
- * Chat and Code are the two session modes, so a place of either one filters the session list and
- * is what New starts. Studio is not a session mode: the conversation open before it stays open
- * underneath, so coming back to Chat or Code lands where the user left.
+ * Chat and Code are the session places: either one filters the session list and is what New
+ * starts. Studio keeps its own conversation (a 'studio' session, never listed) for Create to save
+ * into, and leaves the Chat or Code conversation open underneath, so coming back lands where the
+ * user left.
  */
 export type Place = 'chat' | 'code' | 'studio';
+
+/** The session modes a sidebar lists and New starts. */
+export type SessionPlace = Exclude<ChatSessionMode, 'studio'>;
 
 export type StudioArea = 'create' | 'productions';
 
@@ -19,7 +23,7 @@ export const PLACES: readonly { place: Place; label: string; digit: number }[] =
 
 export const placeLabel = (place: Place) => PLACES.find(entry => entry.place === place)?.label ?? place;
 
-export function isSessionPlace(place: Place): place is ChatSessionMode {
+export function isSessionPlace(place: Place): place is SessionPlace {
   return place === 'chat' || place === 'code';
 }
 
@@ -33,6 +37,8 @@ export interface PlaceMemory {
   chat?: string;
   code?: string;
   studio?: StudioArea;
+  /** The Studio session Create last saved into. */
+  studioSession?: string;
 }
 
 const STORAGE_KEY = 'b4m.chat.places';
@@ -45,13 +51,14 @@ export function readPlaceMemory(): PlaceMemory | null {
     if (raw === null) return null;
     const parsed: unknown = JSON.parse(raw);
     if (typeof parsed !== 'object' || parsed === null) return null;
-    const { place, chat, code, studio } = parsed as Record<string, unknown>;
+    const { place, chat, code, studio, studioSession } = parsed as Record<string, unknown>;
     if (!isPlace(place)) return null;
     return {
       place,
       ...(typeof chat === 'string' ? { chat } : {}),
       ...(typeof code === 'string' ? { code } : {}),
       ...(studio === 'create' || studio === 'productions' ? { studio } : {}),
+      ...(typeof studioSession === 'string' ? { studioSession } : {}),
     };
   } catch {
     // Storage blocked or the value unreadable: start in Chat, as a fresh install does.

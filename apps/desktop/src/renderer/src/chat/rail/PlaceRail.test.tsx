@@ -86,7 +86,8 @@ describe('the Studio place', () => {
   function Main(props: {
     area?: StudioArea;
     kind?: StudioMediaKind | null;
-    sessionTitle?: string;
+    ready?: boolean;
+    unavailableReason?: string;
     onAreaChange?: (area: StudioArea) => void;
   }) {
     return (
@@ -96,7 +97,8 @@ describe('the Studio place', () => {
         kind={props.kind ?? null}
         onKindChange={() => {}}
         controller={controller()}
-        sessionTitle={props.sessionTitle}
+        ready={props.ready ?? true}
+        unavailableReason={props.unavailableReason}
       />
     );
   }
@@ -140,26 +142,26 @@ describe('the Studio place', () => {
 
   it('heads the main pane with Create | Productions and switches between them', () => {
     const onAreaChange = vi.fn();
-    mount(<Main sessionTitle="Launch film" onAreaChange={onAreaChange} />);
+    mount(<Main onAreaChange={onAreaChange} />);
     expect(byTestId('studio-area-create')?.getAttribute('aria-selected')).toBe('true');
     act(() => byTestId('studio-area-productions')?.click());
     expect(onAreaChange).toHaveBeenCalledExactlyOnceWith('productions');
   });
 
-  it('hosts the Studio tiles full width, saying which conversation they save to', () => {
-    mount(<Main sessionTitle="Launch film" />);
-    expect(byTestId('studio-create-session')?.textContent).toBe('Saves to Launch film');
+  it('hosts the Studio tiles full width, with no borrowed conversation named', () => {
+    mount(<Main />);
     expect(byTestId('studio-creation-tiles')).not.toBeNull();
+    expect(byTestId('studio-create-session')).toBeNull();
   });
 
-  it('says what Create needs when no conversation is open', () => {
-    mount(<Main />);
-    expect(byTestId('studio-create-empty')?.textContent).toContain('Open a conversation in Chat or Code first');
+  it('says why Create is not ready while its Studio session is not bound', () => {
+    mount(<Main ready={false} unavailableReason="Getting Studio ready..." />);
+    expect(byTestId('studio-create-empty')?.textContent).toContain('Getting Studio ready...');
     expect(byTestId('studio-creation-tiles')).toBeNull();
   });
 
   it('keeps Productions a quiet coming-soon state', () => {
-    mount(<Main area="productions" sessionTitle="Launch film" />);
+    mount(<Main area="productions" />);
     expect(byTestId('studio-productions-empty')?.textContent).toContain('coming to desktop');
   });
 });
