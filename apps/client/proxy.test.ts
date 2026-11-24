@@ -210,6 +210,11 @@ describe('proxy CSP header', () => {
     expect(response.headers.get('Content-Security-Policy')).toBeNull();
   });
 
+  it('does NOT set CSP on /t/ template pages (handler sets its own CSP)', () => {
+    const response = proxy(makeRequest('https://app.bike4mind.com/t/article-bullets'));
+    expect(response.headers.get('Content-Security-Policy')).toBeNull();
+  });
+
   it('does NOT clobber Referrer-Policy on /a/ routes (handler sets no-referrer)', () => {
     const share = proxy(makeRequest('https://app.bike4mind.com/a/lHDIsomeToken'));
     expect(share.headers.get('Referrer-Policy')).toBeNull();

@@ -44,6 +44,8 @@ export interface ShareMetaInput {
   rawUrl?: string;
   /** Optional site name for og:site_name. */
   siteName?: string;
+  /** Absolute preview image URL; adds og:image and switches the card to summary_large_image. */
+  imageUrl?: string;
 }
 
 export interface ShareMetaOutput {
@@ -71,6 +73,7 @@ export function prepareShareMeta(input: ShareMetaInput): ShareMetaOutput {
   const canonicalEsc = escapeHtml(input.canonicalUrl);
   const rawEsc = input.rawUrl ? escapeHtml(input.rawUrl) : '';
   const siteEsc = input.siteName ? escapeHtml(input.siteName) : '';
+  const imageEsc = input.imageUrl ? escapeHtml(input.imageUrl) : '';
 
   // Unfurl CTA: shared links are the product's lead-gen surface (chat clients
   // render og:/twitter:description in the link card), so append a short
@@ -87,9 +90,11 @@ export function prepareShareMeta(input: ShareMetaInput): ShareMetaOutput {
     `<meta property="og:type" content="article">`,
     `<meta property="og:url" content="${canonicalEsc}">`,
     siteEsc ? `<meta property="og:site_name" content="${siteEsc}">` : '',
-    `<meta name="twitter:card" content="summary">`,
+    imageEsc ? `<meta property="og:image" content="${imageEsc}">` : '',
+    `<meta name="twitter:card" content="${imageEsc ? 'summary_large_image' : 'summary'}">`,
     `<meta name="twitter:title" content="${titleEsc}">`,
     unfurlDescEsc ? `<meta name="twitter:description" content="${unfurlDescEsc}">` : '',
+    imageEsc ? `<meta name="twitter:image" content="${imageEsc}">` : '',
     `<link rel="canonical" href="${canonicalEsc}">`,
   ]
     .filter(Boolean)

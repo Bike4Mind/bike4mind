@@ -270,12 +270,14 @@ export function proxy(request: NextRequest) {
   // The global CSP would clobber that, and `X-Frame-Options: SAMEORIGIN` would block
   // the external framing the feature exists for. Middleware matches the PRE-rewrite
   // path, hence `/embed/` here; `/api/embed/*` is already covered by the `/api/` line.
+  // `/t/*` (Skill Market template pages) rewrites to /api/skills/template/serve, which sets its own CSP.
   if (
     !pathname.startsWith('/api/') &&
     !pathname.startsWith('/p/') &&
     !pathname.startsWith('/uc/') &&
     !pathname.startsWith('/a/') &&
-    !pathname.startsWith('/embed/')
+    !pathname.startsWith('/embed/') &&
+    !pathname.startsWith('/t/')
   ) {
     response.headers.set('Content-Security-Policy', cspHeader);
     response.headers.set('X-Frame-Options', 'SAMEORIGIN');

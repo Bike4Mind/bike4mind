@@ -319,6 +319,12 @@ const nextConfig = {
         source: '/a/:path*',
         destination: '/api/publish/serve/a/:path*',
       },
+      // Skill Market template pages: static HTML with link-preview tags, served by its own handler
+      // with its own CSP (pages/api/skills/template/serve.ts).
+      {
+        source: '/t/:slug',
+        destination: '/api/skills/template/serve?slug=:slug',
+      },
       // Public embeddable chat widget. Pretty `/embed/*` URLs (the iframe src on
       // customer sites) are served by the unauth embed serve handler, which sets
       // its own per-response CSP with frame-ancestors derived from the embed

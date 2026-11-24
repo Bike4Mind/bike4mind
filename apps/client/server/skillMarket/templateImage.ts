@@ -21,6 +21,7 @@ import {
   SKILL_TEMPLATE_IMAGE_WIDTH,
   isImageServeable,
   skillTemplateFreeRunEligibility,
+  type ISkillListing,
   type ISkillListingTemplate,
   type ISkillTemplatePreviewImage,
   type SkillListingVisibility,
@@ -300,10 +301,23 @@ export async function getOwnTemplateView(
  */
 export async function findPublicTemplateImage(slug: string): Promise<ImageFile | null> {
   const template = await SkillListingTemplate.findOne({ slug, status: 'published' }).lean();
-  const image = template?.previewImage;
-  if (!template || !image?.approved) return null;
+  if (!template?.previewImage?.approved) return null;
   const listing = await findListing(template.listingId);
-  if (!listing || !isLive(listing) || !PUBLIC_PAGE_VISIBILITY.has(listing.visibility)) return null;
+  if (!listing || !isLive(listing) || !isPublicTemplatePage(listing)) return null;
+  return templatePageImageFile(template, listing);
+}
+
+/** True when anyone with the link may open the listing's template page, logged out included. */
+export const isPublicTemplatePage = (listing: Pick<ISkillListing, 'visibility'>): boolean =>
+  PUBLIC_PAGE_VISIBILITY.has(listing.visibility);
+
+/** The approved, moderation-cleared image file a template page may show, whatever the listing's visibility. */
+export async function templatePageImageFile(
+  template: Pick<ISkillListingTemplate, 'previewImage'>,
+  listing: Pick<ISkillListing, 'authorUserId'>
+): Promise<ImageFile | null> {
+  const image = template.previewImage;
+  if (!image?.approved) return null;
   const file = await ownedFile(image.fabFileId, listing.authorUserId);
   return file && imageStatus(file) === 'ready' ? file : null;
 }
