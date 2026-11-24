@@ -1,4 +1,4 @@
-import { newAccountSpendCapAdapters } from '@bike4mind/database';
+import { cacheRepository, newAccountSpendCapAdapters } from '@bike4mind/database';
 import type { creditService } from '@bike4mind/services';
 import { recordUserLimitEvent } from './userLimitEvents';
 
@@ -12,6 +12,9 @@ export const newAccountSpendCapAdaptersWithAlert: creditService.NewAccountSpendC
     return newAccountSpendCapAdapters.adminSettings;
   },
   personalSpendSince: (userId, since) => newAccountSpendCapAdapters.personalSpendSince(userId, since),
+  get interventionSpendWindow() {
+    return cacheRepository;
+  },
   // Loaded on first refusal: the Slack module reads deploy config at import, and every hold path
   // (and every suite that imports one) would otherwise pull it in.
   onRefused: async ({ userId, refusal, requestedCredits }) => {

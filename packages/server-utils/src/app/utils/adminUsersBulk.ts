@@ -128,6 +128,8 @@ export type AdminUsersBulkExecuteRequest = z.infer<typeof AdminUsersBulkExecuteR
 export const AdminUsersBulkResultSchema = z.object({
   batchId: z.string(),
   applied: z.number(),
+  /** Accounts whose database transaction committed; older cached results may omit this receipt. */
+  committedUserIds: z.array(z.string()).optional(),
   skipped: z.number(),
   failed: z.array(z.object({ userId: z.string(), error: z.string() })),
   partial: z.boolean(),

@@ -73,7 +73,7 @@ describe('deriveAgentState', () => {
     ['finished', 'done'],
     ['max-tokens', 'done'],
     ['failed', 'failed'],
-    ['turn-budget', 'stopped'],
+    ['turn-budget', 'paused'],
     ['context-limit', 'stopped'],
     ['aborted', 'stopped'],
     ['no-reply', 'idle'],
@@ -89,6 +89,15 @@ describe('deriveAgentState', () => {
     expect(deriveAgentState('needs-action', 'finished')).toBe('needs-you');
     expect(deriveAgentState('processing', 'failed')).toBe('working');
   });
+
+  it('calls a settled agent with running background jobs waiting, below a live status', () => {
+    const jobs = { running: 1, label: 'pnpm test' };
+    expect(deriveAgentState('done', 'finished', jobs)).toBe('waiting');
+    expect(deriveAgentState(undefined, 'turn-budget', jobs)).toBe('waiting');
+    expect(deriveAgentState('processing', 'finished', jobs)).toBe('working');
+    expect(deriveAgentState('needs-action', 'finished', jobs)).toBe('needs-you');
+    expect(deriveAgentState('done', 'finished', { running: 0, label: 'x' })).toBe('done');
+  });
 });
 
 describe('labels and priority', () => {
@@ -96,8 +105,10 @@ describe('labels and priority', () => {
     expect(AGENT_STATE_LABEL).toEqual({
       'needs-you': 'Needs you',
       working: 'Working',
+      waiting: 'Waiting',
       done: 'Done',
       failed: 'Failed',
+      paused: 'Paused',
       stopped: 'Stopped',
       idle: 'Idle',
     });
@@ -353,7 +364,17 @@ describe('summarizeRoster', () => {
       view('idle'),
     ]);
     expect(result.total).toBe(4);
-    expect(result.counts).toEqual({ total: 4, 'needs-you': 0, working: 1, done: 2, failed: 0, stopped: 0, idle: 1 });
+    expect(result.counts).toEqual({
+      total: 4,
+      'needs-you': 0,
+      working: 1,
+      waiting: 0,
+      done: 2,
+      failed: 0,
+      paused: 0,
+      stopped: 0,
+      idle: 1,
+    });
     expect(result.usdCost).toBeCloseTo(0.75);
     expect(result.credits).toBe(15);
     expect(result.costPartial).toBe(true);
@@ -508,7 +529,17 @@ describe('agentCounts', () => {
         1
       );
 
-      expect(stage).toEqual({ total: 10, 'needs-you': 2, working: 1, done: 5, failed: 1, stopped: 1, idle: 1 });
+      expect(stage).toEqual({
+        total: 10,
+        'needs-you': 2,
+        working: 1,
+        waiting: 0,
+        done: 5,
+        failed: 1,
+        paused: 0,
+        stopped: 1,
+        idle: 1,
+      });
       expect(toggle).toEqual(stage);
       expect(watched).toEqual(stage);
       expect(tavern).toBe('10 agents: 2 need you, 1 working, 1 failed, 1 stopped, 1 idle, 5 done');

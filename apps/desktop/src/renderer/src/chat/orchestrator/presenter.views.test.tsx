@@ -217,6 +217,7 @@ describe('presenter', () => {
     plan: { done: 1, total: 3, current: `${SECRET} current`, next: `${SECRET} next` },
     pr: { number: 4242, state: 'open', repo: `${SECRET}/repo` },
     branch: `${SECRET}-branch`,
+    background: { running: 1, label: `${SECRET} command` },
     oneClickDecision: true,
     redacted: true,
   };

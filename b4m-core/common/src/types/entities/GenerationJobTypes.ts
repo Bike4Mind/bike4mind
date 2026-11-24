@@ -172,6 +172,11 @@ export type ImageJobPayload = {
   request: StoredImageRequest;
   /** Absent for a plain render. Server-set: a client cannot ask for it on the image-jobs route. */
   purpose?: ImageJobPurpose;
+  /**
+   * Server-set, never read back by a client: inputs the request made only for this batch (the in-chat edit's mask and
+   * source copy), deleted once every job in the batch is terminal (imageJobHandler onTerminal).
+   */
+  discardInputFileIds?: string[];
   providerId: ImageProviderId;
   providerHandle?: GenerationProviderJobHandle<ImageProviderId>;
   providerOutput?: ProviderOutput;

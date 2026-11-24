@@ -969,6 +969,97 @@ describe('shellApproval with a literal variable assignment', () => {
   );
 });
 
+/** A `for` variable over plain literal words, used unquoted inside a longer word, is read as each word it takes. */
+describe('shellApproval with an unquoted loop variable inside a word', () => {
+  let root: string;
+  let outside: string;
+  let context: { roots: string[]; signal: AbortSignal; protectedPaths: string[]; workingDirectory: string };
+
+  beforeEach(async () => {
+    root = await realpath(await mkdtempOutsideTemp('b4m-loop-root-'));
+    outside = await realpath(await mkdtempOutsideTemp('b4m-loop-outside-'));
+    await mkdir(join(root, 'sub'), { recursive: true });
+    await writeFile(join(root, 'sub', 'a.txt'), 'a\n', 'utf8');
+    context = { roots: [root], signal: new AbortController().signal, protectedPaths: [], workingDirectory: root };
+  });
+
+  afterEach(async () => {
+    await rm(root, { recursive: true, force: true });
+    await rm(outside, { recursive: true, force: true });
+  });
+
+  const approval = (command: string) => shellApproval('bash_execute', { command, cwd: root }, context);
+
+  it.each([
+    'for f in a.txt; do cat sub/$f; done',
+    'for f in a.txt; do cat sub/${f}; done',
+    'for f in a.txt; do echo repos/x/$f/logs; done',
+    'for j in 1 2; do gh api repos/example-org/widgets/actions/jobs/$j/logs; done',
+    'for n in 611 612; do gh pr view $n --repo example-org/widgets --json title; done',
+    // IFS never splits a double-quoted use, so a script naming it still binds that form.
+    'for f in a.txt; do cat "sub/$f"; done; echo IFS',
+  ])('runs a read through the loop variable unasked: %s', async command => {
+    expect(runsCheckedInAuto(await approval(command))).toBe(true);
+  });
+
+  it.each([
+    ['a glob value', "for f in '*'; do cat sub/$f; done"],
+    ['a value with a space', "for f in 'a b'; do cat sub/$f; done"],
+    ['a value read as an option', 'for f in -rf; do rm sub/$f; done'],
+    ['a longer name the word runs into', 'for f in a.txt; do cat sub/$fx; done'],
+    ['an IFS the script sets', 'IFS=.; for f in a.txt; do cat sub/$f; done'],
+    ['a set inside the body', 'for f in a.txt; do f=x; cat sub/$f; done'],
+  ])('still cannot check a word whose loop variable has %s', async (_name, command) => {
+    expect(runsCheckedInAuto(await approval(command))).toBe(false);
+  });
+
+  it('still names a folder outside the shared ones that the loop value points at', async () => {
+    const prompt = await approval(`for d in ${outside}; do cp sub/a.txt $d/b.txt; done`);
+    expect(prompt.always?.writtenDirectories).toContain(outside);
+  });
+});
+
+/** A command substitution whose output is only printed names no program or path, so a read inside it is checked. */
+describe('shellApproval with a command substitution that is only printed', () => {
+  let root: string;
+  let context: { roots: string[]; signal: AbortSignal; protectedPaths: string[]; workingDirectory: string };
+
+  beforeEach(async () => {
+    root = await realpath(await mkdtempOutsideTemp('b4m-subst-root-'));
+    await mkdir(join(root, 'sub'), { recursive: true });
+    await writeFile(join(root, 'sub', 'a.txt'), 'a\n', 'utf8');
+    context = { roots: [root], signal: new AbortController().signal, protectedPaths: [], workingDirectory: root };
+  });
+
+  afterEach(async () => {
+    await rm(root, { recursive: true, force: true });
+  });
+
+  const approval = (command: string) => shellApproval('bash_execute', { command, cwd: root }, context);
+
+  it.each([
+    'echo "$(grep -n a sub/a.txt)"',
+    'echo $(wc -l < sub/a.txt)',
+    'printf "%s\\n" "$(wc -l < sub/a.txt)"',
+    'N=$(grep -c a sub/a.txt); echo $N',
+  ])('runs it unasked: %s', async command => {
+    expect(runsCheckedInAuto(await approval(command))).toBe(true);
+  });
+
+  it.each([
+    ['a path operand', 'cat $(echo sub/a.txt)'],
+    ['a path built from it', 'D=$(echo sub); cat "$D/a.txt"'],
+  ])('still cannot check a substitution used as %s', async (_name, command) => {
+    expect(runsCheckedInAuto(await approval(command))).toBe(false);
+  });
+
+  it('still gives the delete reason for a delete inside the substitution', async () => {
+    expect((await approval('echo $(rm -rf sub)')).reasons).toContain(
+      'Deletes files recursively or forcefully, which cannot be undone.'
+    );
+  });
+});
+
 describe('shellApproval for folders a command only reads', () => {
   let root: string;
   let outside: string;

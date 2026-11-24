@@ -1,4 +1,4 @@
-import type { ChatSessionStatus, ChatSessionStatusEvent, SessionSetupStep } from '@shared/chat';
+import type { ChatSessionStatus, ChatSessionStatusEvent, SessionBackgroundJobs, SessionSetupStep } from '@shared/chat';
 
 /** What each state is called, in the one place both the badge and its aria-label read it from. */
 export const STATUS_LABEL: Record<ChatSessionStatus, string> = {
@@ -81,5 +81,31 @@ export function applyUnreadReplyEvents(
     if (event.unreadReply) next.add(event.sessionId);
     else next.delete(event.sessionId);
   }
+  return next ?? current;
+}
+
+/**
+ * Fold the same pushes into each session's running wake-on-exit background jobs. Orthogonal to the
+ * status like the setup step: a 'done' session can still be waiting on them. Every event carries the
+ * full current value, so an event without `background` clears it. Returns the map it was given when
+ * nothing changed.
+ */
+export function applyBackgroundEvents(
+  current: ReadonlyMap<string, SessionBackgroundJobs>,
+  events: readonly ChatSessionStatusEvent[]
+): ReadonlyMap<string, SessionBackgroundJobs> {
+  let next: Map<string, SessionBackgroundJobs> | null = null;
+
+  for (const event of events) {
+    const soFar = next ?? current;
+    const known = soFar.get(event.sessionId);
+    const incoming = event.background;
+    if (known?.running === incoming?.running && known?.label === incoming?.label) continue;
+
+    next ??= new Map(current);
+    if (incoming) next.set(event.sessionId, { ...incoming });
+    else next.delete(event.sessionId);
+  }
+
   return next ?? current;
 }

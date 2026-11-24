@@ -12,7 +12,7 @@ import {
 } from '../utils/modelHelpers';
 import { MODEL_TIERS } from '../generation/modelRanking';
 import { MAX_BFL_EDIT_REGIONS } from '../llm';
-import { getImageModelCatalogEntry } from './catalog';
+import { getImageModelCatalogEntry, supportsTransparentBackgroundByCatalog } from './catalog';
 import { validateImageRequest, type ImageCapabilityRequest } from './validate';
 
 // The catalog is declared separately from the predicate-derived block GET /api/models advertises, which is
@@ -88,11 +88,20 @@ describe('gemini image-to-image', () => {
 });
 
 describe('transparent background', () => {
-  it('is declared unsupported on every model the request path steps down', () => {
-    const steppedDown = IMAGE_MODELS.filter(model => rejectsTransparentBackground(model));
-    expect(steppedDown).toContain(ImageModels.GPT_IMAGE_2);
-    for (const model of steppedDown) expect(getImageModelCatalogEntry(model).transparentBackground).toBe(false);
+  it('is declared unsupported on every model gpt-image-2 rejects, and supported on the 2.5 models', () => {
+    const rejecting = IMAGE_MODELS.filter(model => rejectsTransparentBackground(model));
+    expect(rejecting).toContain(ImageModels.GPT_IMAGE_2);
+    for (const model of rejecting) expect(getImageModelCatalogEntry(model).transparentBackground).toBe(false);
     expect(getImageModelCatalogEntry(ImageModels.GPT_IMAGE_2_5_FLARE).transparentBackground).toBe(true);
+  });
+
+  it('derives supportsTransparentBackgroundByCatalog from the catalog for every model', () => {
+    for (const model of IMAGE_MODELS) {
+      expect(supportsTransparentBackgroundByCatalog(model)).toBe(
+        getImageModelCatalogEntry(model).transparentBackground
+      );
+    }
+    expect(supportsTransparentBackgroundByCatalog('not-a-model')).toBe(false);
   });
 });
 

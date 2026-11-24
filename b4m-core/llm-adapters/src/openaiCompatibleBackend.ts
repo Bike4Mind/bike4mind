@@ -1,3 +1,4 @@
+import { getAbortAwareRetrySignal } from './abortAwareRetry';
 import {
   ARTIFACT_REMOVED_PLACEHOLDER,
   createThinkMarkerEscaper,
@@ -258,6 +259,9 @@ export class OpenAICompatibleBackend implements ICompletionBackend {
     callback: (text: (string | null | undefined)[], completionInfo: CompletionInfo) => Promise<void>,
     toolsUsed: Array<RecordableToolUse> = []
   ): Promise<void> {
+    if (getAbortAwareRetrySignal(options)) {
+      throw new Error('Abort-aware completion retries are not supported by local OpenAI-compatible servers');
+    }
     this.currentModel = model;
     const name = this.canonical.get(model) ?? model;
     const toolCallCount = options._internal?.toolCallCount ?? 0;

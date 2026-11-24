@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import { pathToFileURL } from 'node:url';
+import { stripVTControlCharacters } from 'node:util';
 
 export function stateFor(outcome) {
   return outcome === 'passed' ? 'success' : ['failed', 'incomplete'].includes(outcome) ? 'failure' : 'error';
@@ -7,7 +8,7 @@ export function stateFor(outcome) {
 
 export function summarize(report, { execution = 'skipped', skipped = false, cancelled = false, job = 'success' } = {}) {
   const counts = { passed: 0, flaky: 0, failed: 0, skipped: 0, not_started: 0, executed: 0, total: 0, setup_failed: 0 };
-  const lines = [];
+  const specs = [];
   function walk(suite, setup, local) {
     setup ||= /\.setup\.[cm]?[jt]s$/.test(suite.file ?? suite.title ?? '');
     for (const spec of suite.specs ?? []) {
@@ -29,8 +30,11 @@ export function summarize(report, { execution = 'skipped', skipped = false, canc
               ? 'passed'
               : 'not_started';
         counts[bucket]++;
-        if (bucket === 'passed' && test.status === 'flaky') counts.flaky++;
         local[bucket]++;
+        if (bucket === 'passed' && test.status === 'flaky') {
+          counts.flaky++;
+          local.flaky++;
+        }
         counts.total++;
         if (ran) counts.executed++;
       }
@@ -38,13 +42,9 @@ export function summarize(report, { execution = 'skipped', skipped = false, canc
     for (const child of suite.suites ?? []) walk(child, setup, local);
   }
   for (const suite of report?.suites ?? []) {
-    const local = { passed: 0, failed: 0, skipped: 0, not_started: 0 };
+    const local = { passed: 0, flaky: 0, failed: 0, skipped: 0, not_started: 0 };
     walk(suite, false, local);
-    if (Object.values(local).some(Boolean)) {
-      lines.push(
-        `${suite.title}: ${local.passed} passed, ${local.failed} failed, ${local.skipped} skipped, ${local.not_started} not started`
-      );
-    }
+    if (Object.values(local).some(Boolean)) specs.push({ name: suite.title, ...local });
   }
   let outcome;
   if (cancelled || execution === 'cancelled') outcome = 'cancelled';
@@ -73,8 +73,87 @@ export function summarize(report, { execution = 'skipped', skipped = false, canc
     label: labels[outcome],
     state: stateFor(outcome),
     summary: `${counts.passed} passed (${counts.flaky} flaky), ${counts.failed} failed, ${counts.skipped} skipped, ${counts.not_started} not started (${counts.total} test cases; ${counts.setup_failed} setup failures)`,
-    spec_summary: JSON.stringify(lines.join('\n') || 'No test case results available').slice(1, -1),
+    specs,
+    // First line only (GITHUB_OUTPUT values are single-line); Playwright keeps ANSI colors in messages.
+    error: stripVTControlCharacters(String(report?.errors?.[0]?.message ?? ''))
+      .split('\n')[0]
+      .slice(0, 300),
   };
+}
+
+const STATUS_EMOJI = {
+  passed: ':white_check_mark:',
+  skipped: ':fast_forward:',
+  incomplete: ':warning:',
+};
+
+/**
+ * Slack mrkdwn for the Status and Results fields (shortcodes render outside code blocks).
+ * The line break is a literal backslash-n: GITHUB_OUTPUT values are single-line, and e2e-run.yml
+ * splices these into a JSON payload, where it decodes to a newline.
+ */
+export function slackFields(result) {
+  return {
+    slack_status: `${STATUS_EMOJI[result.outcome] ?? ':x:'} ${result.label}`,
+    slack_results:
+      `:white_check_mark: ${result.passed} passed (${result.flaky} flaky)  :x: ${result.failed} failed  ` +
+      `:fast_forward: ${result.skipped} skipped  :no_entry_sign: ${result.not_started} not started\\n` +
+      `Total Cases: ${result.total}  Setup Failures: ${result.setup_failed}`,
+  };
+}
+
+// Code blocks do not render :shortcodes:, so row markers are Unicode escapes (keeps the source ASCII).
+const ROW_ICON = { failed: '\u{1F534}', incomplete: '\u{1F7E1}', passed: '\u{1F7E2}', skipped: '\u26AA' };
+// Slack rejects a section text over 3000 characters; a full-suite table is longer, so it is split.
+const SECTION_LIMIT = 2900;
+const NUMBER_COLUMNS = [
+  ['Pass', 'passed'],
+  ['Flaky', 'flaky'],
+  ['Fail', 'failed'],
+  ['Skip', 'skipped'],
+  ['Not started', 'not_started'],
+];
+
+function rowIcon(spec) {
+  if (spec.failed) return ROW_ICON.failed;
+  if (spec.not_started) return ROW_ICON.incomplete;
+  return spec.passed ? ROW_ICON.passed : ROW_ICON.skipped;
+}
+
+/** One table row per spec file, rendered as Slack section blocks: a JSON fragment with a leading comma. */
+export function slackSpecBlocks(specs, title, error = '') {
+  if (!specs.length) {
+    const detail = error ? `\n\`\`\`\n${error.replaceAll('`', "'")}\n\`\`\`` : '';
+    const text = `*${title}*\nNo test case results available${detail}`;
+    return `,${JSON.stringify({ type: 'section', text: { type: 'mrkdwn', text } })}`;
+  }
+  const names = specs.map(spec => spec.name.replace(/^e2e\//, '').replace(/\.spec\.[cm]?[jt]sx?$/, ''));
+  const width = Math.max('Spec'.length, ...names.map(name => name.length));
+  const cells = values => values.map(([label, value]) => String(value).padStart(label.length)).join('  ');
+  // The header's leading spaces stand in for the row icon, which Slack draws about two characters wide.
+  const header = `   ${'Spec'.padEnd(width)}  ${NUMBER_COLUMNS.map(([label]) => label).join('  ')}`;
+  const rule = `   ${'-'.repeat(width)}  ${NUMBER_COLUMNS.map(([label]) => '-'.repeat(label.length)).join('  ')}`;
+  const rows = specs.map(
+    (spec, i) => `${rowIcon(spec)} ${names[i].padEnd(width)}  ${cells(NUMBER_COLUMNS.map(([label, key]) => [label, spec[key]]))}`
+  );
+  const chunks = [];
+  let current = [];
+  for (const row of rows) {
+    const candidate = [...current, row];
+    if (current.length && [header, rule, ...candidate].join('\n').length + title.length + 20 > SECTION_LIMIT) {
+      chunks.push(current);
+      current = [row];
+    } else current = candidate;
+  }
+  chunks.push(current);
+  return chunks
+    .map((chunk, i) => {
+      const heading = i === 0 ? `*${title}*\n` : '';
+      // The newline after the fence keeps Slack from trimming the header's leading spaces.
+      const text = `${heading}\`\`\`\n${[header, rule, ...chunk].join('\n')}\n\`\`\``;
+      return `,${JSON.stringify({ type: 'section', text: { type: 'mrkdwn', text } })}`;
+    })
+    .join('');
 }
 
 export function main() {
@@ -91,10 +170,15 @@ export function main() {
     job: process.env.E2E_JOB_STATUS,
   });
   fs.writeFileSync('e2e-outcome.json', JSON.stringify(result));
+  const { specs, ...outputs } = result;
+  const suite = process.env.E2E_SUITE_NAME;
+  Object.assign(outputs, slackFields(result), {
+    slack_spec_blocks: slackSpecBlocks(specs, suite ? `${suite} Run Summary` : 'Test Run Summary', result.error),
+  });
   if (process.env.GITHUB_OUTPUT) {
     fs.appendFileSync(
       process.env.GITHUB_OUTPUT,
-      Object.entries(result)
+      Object.entries(outputs)
         .map(([key, value]) => `${key}=${value}\n`)
         .join('')
     );
