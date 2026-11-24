@@ -976,8 +976,8 @@ describe('shellApproval with an unquoted loop variable inside a word', () => {
   let context: { roots: string[]; signal: AbortSignal; protectedPaths: string[]; workingDirectory: string };
 
   beforeEach(async () => {
-    root = await realpath(await mkdtemp(join(userInfo().homedir, '.b4m-loop-root-')));
-    outside = await realpath(await mkdtemp(join(userInfo().homedir, '.b4m-loop-outside-')));
+    root = await realpath(await mkdtempOutsideTemp('b4m-loop-root-'));
+    outside = await realpath(await mkdtempOutsideTemp('b4m-loop-outside-'));
     await mkdir(join(root, 'sub'), { recursive: true });
     await writeFile(join(root, 'sub', 'a.txt'), 'a\n', 'utf8');
     context = { roots: [root], signal: new AbortController().signal, protectedPaths: [], workingDirectory: root };
@@ -1025,7 +1025,7 @@ describe('shellApproval with a command substitution that is only printed', () =>
   let context: { roots: string[]; signal: AbortSignal; protectedPaths: string[]; workingDirectory: string };
 
   beforeEach(async () => {
-    root = await realpath(await mkdtemp(join(userInfo().homedir, '.b4m-subst-root-')));
+    root = await realpath(await mkdtempOutsideTemp('b4m-subst-root-'));
     await mkdir(join(root, 'sub'), { recursive: true });
     await writeFile(join(root, 'sub', 'a.txt'), 'a\n', 'utf8');
     context = { roots: [root], signal: new AbortController().signal, protectedPaths: [], workingDirectory: root };
