@@ -34,7 +34,8 @@ import {
   isImageServeable,
   isBflImageModel,
   isGeminiImageModel,
-  rejectsTransparentBackground,
+  supportsTransparentBackgroundByCatalog,
+  transparentBackgroundUnsupportedMessage,
   isFlux2ImageModel,
   isFlux3ImageModel,
   getMaxEditReferenceImages,
@@ -42,7 +43,6 @@ import {
   supportsImageEditEndpoint,
   EDIT_SUPPORTED_IMAGE_MODELS,
   IMAGES_PER_EDIT_REQUEST,
-  ImageModels,
 } from '@bike4mind/common';
 import {
   aiImageService,
@@ -284,13 +284,11 @@ export class ImageEditService {
       throw new BadRequestError('No fabFileIds provided');
     }
 
-    // Step a gpt-image-2 selection down to gpt-image-1.5 when transparency is requested:
-    // gpt-image-2 rejects background: 'transparent' outright. Resolved here, before
-    // promptMeta is built, so the persisted model matches what actually renders and bills.
-    const model =
-      rest.background === 'transparent' && rejectsTransparentBackground(requestedModel)
-        ? ImageModels.GPT_IMAGE_1_5
-        : requestedModel;
+    // Fail rather than quietly render opaque or on a different model than the caller picked.
+    if (rest.background === 'transparent' && !supportsTransparentBackgroundByCatalog(requestedModel)) {
+      throw new BadRequestError(transparentBackgroundUnsupportedMessage(requestedModel));
+    }
+    const model = requestedModel;
 
     await this.assertModelAdmission(userId, model, adminRoleWithheld, organizationId);
     const session = await this.db.sessions.findById(sessionId);
@@ -556,14 +554,8 @@ export class ImageEditService {
       edit_regions,
       run,
     } = ImageEditBodySchema.parse(body);
-    // Step a gpt-image-2 selection down to gpt-image-1.5 when transparency is requested:
-    // gpt-image-2 rejects background: 'transparent' outright, so sending it there would
-    // silently turn a valid request into an opaque image. Resolved before billing so
-    // credits key off the model actually used.
-    const model =
-      background === 'transparent' && rejectsTransparentBackground(requestedModel)
-        ? ImageModels.GPT_IMAGE_1_5
-        : requestedModel;
+    // invoke() already refused a transparent background this model cannot render.
+    const model = requestedModel;
 
     logger.updateMetadata({ notebookId: sessionId, questId, userId });
 
