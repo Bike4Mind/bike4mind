@@ -12,8 +12,10 @@ import { dirname, resolve } from 'node:path';
  * than repo skills.
  *
  * Matching is EXACT, not prefix. Trusting ~/work/myrepo must not trust ~/work/somebody-elses,
- * and a worktree is its own path: trusting the main checkout says nothing about a branch folder
- * that a different person's pull request could have written into.
+ * and a worktree the user made is its own path. The one exception is `inheritsFrom`: a worktree
+ * this app created for a session answers with its main checkout's trust, because every session
+ * gets a fresh one and asking again each time taught nothing but to click through. Revoking the
+ * main checkout therefore revokes them all.
  *
  * Written the way AccessStore writes grants - 0600, write-then-rename - because a truncated
  * file here reads as "nothing trusted", which is the direction a corrupt read should fail in.
@@ -21,7 +23,10 @@ import { dirname, resolve } from 'node:path';
 export class ProjectTrustStore {
   private trusted: string[] | null = null;
 
-  constructor(private readonly filePath: string) {}
+  constructor(
+    private readonly filePath: string,
+    private readonly inheritsFrom?: (directory: string) => Promise<string | null>
+  ) {}
 
   async list(): Promise<string[]> {
     if (this.trusted) return this.trusted;
@@ -38,7 +43,11 @@ export class ProjectTrustStore {
   }
 
   async isTrusted(directory: string): Promise<boolean> {
-    return (await this.list()).includes(resolve(directory));
+    const absolute = resolve(directory);
+    const trusted = await this.list();
+    if (trusted.includes(absolute)) return true;
+    const owner = await this.inheritsFrom?.(absolute).catch(() => null);
+    return owner ? trusted.includes(resolve(owner)) : false;
   }
 
   async trust(directory: string): Promise<string[]> {
