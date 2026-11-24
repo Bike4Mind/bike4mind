@@ -7,7 +7,7 @@ import { getThemeConfig } from '@client/app/utils/themes';
 const mocks = vi.hoisted(() => ({ post: vi.fn() }));
 vi.mock('@client/app/contexts/ApiContext', () => ({ api: { post: mocks.post } }));
 vi.mock('sonner', () => ({ toast: { success: vi.fn() } }));
-import FeedbackBulkActions from './FeedbackBulkActions';
+import FeedbackBulkActions, { feedbackRowScrollClearance } from './FeedbackBulkActions';
 
 const theme = extendTheme({ ...getThemeConfig() });
 const ids = ['507f1f77bcf86cd799439011', '507f1f77bcf86cd799439012'];
@@ -89,5 +89,65 @@ describe('feedback bulk dialog', () => {
     await waitFor(() => expect(screen.getByTestId('feedback-bulk-error')).toHaveTextContent('Selection changed'));
     expect(screen.getByTestId('feedback-bulk-dialog-confirm-btn')).toBeDisabled();
     expect(onApplied).not.toHaveBeenCalled();
+  });
+});
+
+describe('feedback bulk bar clearance', () => {
+  it('reports the sticky bar height and resets it to 0 when the bar goes away', () => {
+    let resize: ResizeObserverCallback = () => {};
+    vi.stubGlobal(
+      'ResizeObserver',
+      class {
+        constructor(callback: ResizeObserverCallback) {
+          resize = callback;
+        }
+        observe() {}
+        disconnect() {}
+      }
+    );
+    const onHeightChange = vi.fn();
+    const { unmount } = render(
+      <CssVarsProvider theme={theme}>
+        <FeedbackBulkActions
+          selection={{ mode: 'explicit', ids }}
+          filters={{ sort: 'desc' }}
+          total={7}
+          disabled={false}
+          onSelectionChange={onSelectionChange}
+          onApplied={onApplied}
+          onHeightChange={onHeightChange}
+        />
+      </CssVarsProvider>
+    );
+    expect(screen.getByTestId('feedback-bulk-bar-wrapper')).toContainElement(
+      screen.getByTestId('admin-bulk-action-bar')
+    );
+    resize([{ contentRect: { height: 80 } } as ResizeObserverEntry], {} as ResizeObserver);
+    expect(onHeightChange).toHaveBeenLastCalledWith(80);
+    unmount();
+    expect(onHeightChange).toHaveBeenLastCalledWith(0);
+    vi.unstubAllGlobals();
+  });
+
+  it('renders no wrapper while nothing is selected', () => {
+    render(
+      <CssVarsProvider theme={theme}>
+        <FeedbackBulkActions
+          selection={{ mode: 'explicit', ids: [] }}
+          filters={{ sort: 'desc' }}
+          total={7}
+          disabled={false}
+          onSelectionChange={onSelectionChange}
+          onApplied={onApplied}
+        />
+      </CssVarsProvider>
+    );
+    expect(screen.queryByTestId('feedback-bulk-bar-wrapper')).not.toBeInTheDocument();
+  });
+
+  it('keeps focused rows above the bar when one is showing, else above the chat pill', () => {
+    expect(feedbackRowScrollClearance(0)).toBe(76);
+    expect(feedbackRowScrollClearance(40)).toBe(76);
+    expect(feedbackRowScrollClearance(120)).toBe(144);
   });
 });

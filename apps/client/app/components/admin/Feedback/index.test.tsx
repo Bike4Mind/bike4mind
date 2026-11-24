@@ -195,6 +195,16 @@ describe('FeedbackTab', () => {
     expect(getComputedStyle(screen.getByTestId('feedback-row-content-fb-help-1')).maxHeight).toBe('120px');
   });
 
+  it('gives rows a bottom scroll margin that clears the AI Chat pill when nothing is selected', () => {
+    mocks.useFeedbackOperations.mockReturnValue(makeOperationsReturn([helpFeedbackItem]));
+
+    renderFeedbackTab();
+
+    const region = screen.getByTestId('feedback-table-region');
+    expect(region.style.getPropertyValue('--feedback-row-scroll-clearance')).toBe('76px');
+    expect(screen.queryByTestId('feedback-bulk-bar-wrapper')).not.toBeInTheDocument();
+  });
+
   it('moves with j/k, opens with Enter and routes i/c through the status and resolution flow', async () => {
     const one = makeFeedbackItem({ _id: 'one', id: 'one' });
     const two = makeFeedbackItem({ _id: 'two', id: 'two' });
