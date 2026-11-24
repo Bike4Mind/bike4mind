@@ -639,7 +639,7 @@ const AdminSystemHealthTab = () => {
     );
   }
 
-  const { email, database, oauth, selfHost } = systemHealth.data || {};
+  const { email, database, oauth, selfHost, plaintextSecretsOptOut } = systemHealth.data || {};
   const integrations = integrationHealth.data?.integrations ?? [];
 
   const renderBreakerChip = (
@@ -661,6 +661,20 @@ const AdminSystemHealthTab = () => {
   return (
     <Stack gap={ADMIN_REGION_GAP} sx={{ minWidth: 0 }} data-testid="admin-system-health-tab">
       {header}
+
+      {plaintextSecretsOptOut && (
+        <Alert color="warning" variant="outlined" data-testid="system-health-plaintext-secrets-warning">
+          <Stack spacing={0.5} sx={{ color: 'text.primary' }}>
+            <Typography level="body-sm" fontWeight="bold">
+              Secrets are stored unencrypted
+            </Typography>
+            <Typography level="body-xs">
+              B4M_ALLOW_PLAINTEXT_SECRETS is set and there is no valid SECRET_ENCRYPTION_KEY. Set a 64-character hex key
+              to encrypt stored secrets (see SELF_HOST.md).
+            </Typography>
+          </Stack>
+        </Alert>
+      )}
 
       <SectionCard
         title="Email"
