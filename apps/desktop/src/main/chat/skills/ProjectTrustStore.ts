@@ -68,6 +68,18 @@ export class ProjectTrustStore {
     return this.write(current.filter(entry => entry !== absolute && !inherited.includes(entry)));
   }
 
+  /**
+   * The entry a decision about `directory` lands on, for callers that audit it: for an app
+   * worktree its main checkout (as already stored, when trusted through a symlink), else itself.
+   */
+  async recordedPath(directory: string): Promise<string> {
+    const absolute = resolve(directory);
+    const owner = await this.ownerOf(absolute);
+    if (!owner) return absolute;
+    const [stored] = await this.entriesFor(owner, await this.list());
+    return stored ?? owner;
+  }
+
   private async ownerOf(absolute: string): Promise<string | null> {
     const owner = await this.inheritsFrom?.(absolute).catch(() => null);
     return owner ? resolve(owner) : null;

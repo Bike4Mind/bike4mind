@@ -71,4 +71,10 @@ describe('ProjectTrustStore', () => {
     expect(await trust.trust(worktree)).toEqual([link]);
     expect(await trust.revoke(worktree)).toEqual([]);
   });
+
+  it('names the entry a worktree decision is recorded against', async () => {
+    const trust = await store(async directory => (directory === WORKTREE ? MAIN : null));
+    expect(await trust.recordedPath(WORKTREE)).toBe(MAIN);
+    expect(await trust.recordedPath('/work/other')).toBe('/work/other');
+  });
 });
