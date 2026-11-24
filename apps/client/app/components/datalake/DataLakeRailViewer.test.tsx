@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, fireEvent } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 
@@ -15,6 +15,9 @@ vi.mock('@client/app/components/Knowledge/KnowledgeViewer', () => ({
 
 const mockIsMobile = vi.hoisted(() => ({ value: false }));
 vi.mock('@client/app/hooks/useIsMobile', () => ({ useIsMobile: () => mockIsMobile.value }));
+
+const mockSetLayout = vi.hoisted(() => vi.fn());
+vi.mock('@client/app/hooks/useSessionLayout', () => ({ setSessionLayout: mockSetLayout }));
 
 import DataLakeRailViewer from './DataLakeRailViewer';
 
@@ -57,7 +60,24 @@ describe('DataLakeRailViewer', () => {
     );
     const el = screen.getByTestId('datalake-rail-viewer');
     expect(el).toHaveAttribute('data-presentation', 'fullscreen');
-    expect(getComputedStyle(el).position).toBe('fixed');
+    const root = el.closest('[role="presentation"]') as HTMLElement;
+    expect(getComputedStyle(root).position).toBe('fixed');
+    mockIsMobile.value = false;
+  });
+
+  it('hosts the phone viewer in a Joy Modal and Escape runs the hide write', () => {
+    mockIsMobile.value = true;
+    mockSetLayout.mockClear();
+    render(
+      <CssVarsProvider theme={appTheme}>
+        <DataLakeRailViewer />
+      </CssVarsProvider>
+    );
+    const el = screen.getByTestId('datalake-rail-viewer');
+    expect(el).toHaveAttribute('role', 'dialog');
+    expect(el.closest('[role="presentation"]')).not.toBeNull();
+    fireEvent.keyDown(el, { key: 'Escape' });
+    expect(mockSetLayout).toHaveBeenCalledWith({ layout: 'hide' });
     mockIsMobile.value = false;
   });
 });
