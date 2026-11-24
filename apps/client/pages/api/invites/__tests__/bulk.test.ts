@@ -189,7 +189,7 @@ describe('POST /api/invites/bulk', () => {
     expect(body.results[1]).toMatchObject({ id: ID_B, ok: true });
     expect(mocks.acceptInvite).not.toHaveBeenCalledWith('u1', { id: ID_A }, expect.anything());
     expect(mocks.refuseWholeInvite).not.toHaveBeenCalledWith(expect.anything(), { id: ID_A }, expect.anything());
-    expect(reserveInviteAccept).not.toHaveBeenCalledWith(ID_A);
+    expect(reserveInviteAccept).toHaveBeenCalledTimes(action === 'accept' ? 1 : 0);
   });
 
   it('still returns the committed results when the refetch notification throws', async () => {
