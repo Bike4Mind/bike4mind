@@ -931,6 +931,15 @@ const SlackWorkspacesTab: React.FC = () => {
               Export channel history
             </MenuItem>
           )}
+          {workspace.installedAt && (
+            <MenuItem
+              component="a"
+              href={`/integrations/slack/install?workspaceId=${workspace.id}`}
+              data-testid={`slack-workspace-reinstall-btn-${teamIdOrId}`}
+            >
+              Reinstall in Slack
+            </MenuItem>
+          )}
           <MenuItem
             color="danger"
             disabled={!workspace.isActive}
