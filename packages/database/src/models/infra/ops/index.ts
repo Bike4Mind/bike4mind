@@ -1,4 +1,4 @@
-import './LiveopsTriageConfigAuditLogModel';
+import '../../../legacy/registerTriageAuditLog';
 
 export * from './AdminSettingsModel';
 export * from './CacheModel';
