@@ -141,6 +141,71 @@ const payloadOf = (request: ApnsRequest) => JSON.parse(request.payload);
 describe('deliverPush', () => {
   beforeEach(() => vi.clearAllMocks());
 
+  describe('approval_needed expiry and clearing', () => {
+    const NOW_MS = 1_700_000_000_000;
+    const PENDING_TS = NOW_MS - 60_000;
+    const APPROVAL: PushNotificationEvent = {
+      userId: 'user-1',
+      category: 'approval_needed',
+      title: 'Approval needed',
+      body: 'An agent wants to run create_issue and is waiting for your confirmation.',
+      deepLink: '/notebooks/session-1',
+      collapseId: 'approval:quest-1',
+      questId: 'quest-1',
+      sessionId: 'session-1',
+      pendingActionTs: PENDING_TS,
+    };
+
+    it('expires the push at the pending action deadline, in epoch seconds', async () => {
+      const { deps, sent } = makeDeps([{ token: 'tok-a', environment: 'production' }]);
+      await deliverPush(APPROVAL, deps, logger, NOW_MS);
+      expect(sent[0].headers['apns-expiration']).toBe(String(Math.floor((PENDING_TS + 15 * 60 * 1000) / 1000)));
+    });
+
+    it('starts the window now when the event carries no pendingActionTs', async () => {
+      const { deps, sent } = makeDeps([{ token: 'tok-a', environment: 'production' }]);
+      await deliverPush({ ...APPROVAL, pendingActionTs: undefined }, deps, logger, NOW_MS);
+      expect(sent[0].headers['apns-expiration']).toBe(String((NOW_MS + 15 * 60 * 1000) / 1000));
+    });
+
+    it('sets no expiration on other categories', async () => {
+      const { deps, sent } = makeDeps([{ token: 'tok-a', environment: 'production' }]);
+      await deliverPush(EVENT, deps, logger, NOW_MS);
+      expect(sent[0].headers).not.toHaveProperty('apns-expiration');
+    });
+
+    it('sends a quiet replacement under the same collapse id, with no buttons and no sound', async () => {
+      const { deps, sent } = makeDeps([{ token: 'tok-a', environment: 'production' }]);
+      await deliverPush({ ...APPROVAL, approvalResolved: 'approved' }, deps, logger, NOW_MS);
+
+      expect(sent[0].headers['apns-collapse-id']).toBe('approval:quest-1');
+      const payload = payloadOf(sent[0]);
+      expect(payload.aps.alert).toEqual({ title: 'Approval handled', body: 'This request was approved.' });
+      expect(payload.aps['interruption-level']).toBe('passive');
+      expect(payload.aps).not.toHaveProperty('sound');
+      expect(payload.aps).not.toHaveProperty('category');
+      expect(payload).not.toHaveProperty('approval');
+      expect(payload.approvalResolved).toBe('approved');
+    });
+
+    it('keeps the approve and deny buttons and the sound on the original push', async () => {
+      const { deps, sent } = makeDeps([{ token: 'tok-a', environment: 'production' }]);
+      await deliverPush(APPROVAL, deps, logger, NOW_MS);
+      const payload = payloadOf(sent[0]);
+      expect(payload.aps.sound).toBe('default');
+      expect(payload.aps.category).toBe('approval_needed');
+      expect(payload.approval).toMatchObject({ questId: 'quest-1', pendingActionTs: PENDING_TS });
+    });
+
+    it('words an expired approval as expired, even for a redacting organization', async () => {
+      const { deps, sent } = makeDeps([{ token: 'tok-a', environment: 'production' }], {
+        loadRecipient: vi.fn(async () => ({ preferences: undefined, redactContent: true })),
+      });
+      await deliverPush({ ...APPROVAL, approvalResolved: 'lapsed' }, deps, logger, NOW_MS);
+      expect(payloadOf(sent[0]).aps.alert.title).toBe('Approval expired');
+    });
+  });
+
   it('sends a handoff only to the selected registration with no transcript or destination metadata', async () => {
     const { deps, sent } = makeDeps([
       { id: 'chosen', token: 'tok-chosen', environment: 'production' },

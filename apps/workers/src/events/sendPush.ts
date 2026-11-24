@@ -17,6 +17,7 @@ import {
   type PushTokenPlatform,
 } from '@bike4mind/database';
 import { Logger } from '@bike4mind/observability';
+import { TOKEN_EXPIRATION_MS } from '@bike4mind/slack';
 import { withEventContext } from '@workers/utils/eventContext';
 import { NotificationEvents } from '@bike4mind/server-utils/utils/eventBus';
 import { truncateForPush } from '@bike4mind/server-utils/utils/pushNotifications';
@@ -107,6 +108,15 @@ export type PushRecipient = {
   redactContent: boolean;
 };
 
+export const APPROVAL_RESOLVED_COPY: Record<
+  NonNullable<PushNotificationEvent['approvalResolved']>,
+  { title: string; body: string }
+> = {
+  approved: { title: 'Approval handled', body: 'This request was approved.' },
+  denied: { title: 'Approval handled', body: 'This request was denied.' },
+  lapsed: { title: 'Approval expired', body: 'This request expired before it was answered.' },
+};
+
 export type SendPushDeps = {
   tokens: {
     findByUser(
@@ -145,7 +155,8 @@ export type PushDeliveryResult =
 export async function deliverPush(
   event: PushNotificationEvent,
   deps: SendPushDeps,
-  logger: Pick<Logger, 'info' | 'warn' | 'error'>
+  logger: Pick<Logger, 'info' | 'warn' | 'error'>,
+  nowMs: number = Date.now()
 ): Promise<PushDeliveryResult> {
   const candidates = await deps.tokens.findByUser(event.userId, 'device');
   const storedTokens =
@@ -183,6 +194,7 @@ export async function deliverPush(
         'apns-push-type': 'alert',
         'apns-priority': '10',
         'apns-collapse-id': collapseId,
+        ...apnsExpirationHeader(event, nowMs),
       };
       const payload = JSON.stringify(buildPayload(event, recipient.redactContent, deps.appUrl));
       outcomes.push(
@@ -553,6 +565,25 @@ async function dropTokensOfEndedSessions<T extends { sid: string }>(
   }
 }
 
+/**
+ * `approval_needed` pushes (and their clearing push) expire at the pending action's own deadline,
+ * `pendingActionTs + TOKEN_EXPIRATION_MS`: the executors refuse a confirm older than that, so a phone that
+ * comes back online later would otherwise be handed an approval whose buttons can only fail. Without a
+ * `pendingActionTs` the window starts now. Other categories send no header, leaving APNs' default
+ * store-and-forward behaviour. The value is absolute epoch seconds.
+ */
+function apnsExpirationHeader(event: PushNotificationEvent, nowMs: number): Record<string, string> {
+  if (event.category !== 'approval_needed') return {};
+  const startMs = event.pendingActionTs ?? nowMs;
+  return { 'apns-expiration': String(Math.floor((startMs + TOKEN_EXPIRATION_MS) / 1000)) };
+}
+
+function copyFor(event: PushNotificationEvent, redact: boolean): { title: string; body: string } {
+  // Resolution copy names no tool, params or session, so there is nothing to redact.
+  if (event.approvalResolved) return APPROVAL_RESOLVED_COPY[event.approvalResolved];
+  return redact ? REDACTED_PUSH_COPY[event.category] : event;
+}
+
 function collapseIdFor(event: PushNotificationEvent): string {
   const id =
     event.collapseId ?? `${event.category}:${event.questId ?? event.sessionId ?? event.briefId ?? event.userId}`;
@@ -560,9 +591,10 @@ function collapseIdFor(event: PushNotificationEvent): string {
 }
 
 function buildPayload(event: PushNotificationEvent, redact: boolean, appUrl: string | undefined) {
-  const copy = redact ? REDACTED_PUSH_COPY[event.category] : event;
+  const copy = copyFor(event, redact);
   // Identifiers only, so redaction leaves them: the server re-authorizes the user on every answer.
   const approval = approvalActionsFor(event);
+  const resolved = event.approvalResolved !== undefined;
   const briefCategory = briefCategoryFor(event);
   return {
     aps: {
@@ -570,7 +602,8 @@ function buildPayload(event: PushNotificationEvent, redact: boolean, appUrl: str
         title: truncateForPush(copy.title, MAX_TITLE_LENGTH),
         body: truncateForPush(copy.body, MAX_BODY_LENGTH),
       },
-      sound: 'default',
+      // The clearing push only replaces the delivered approval, so it must not buzz or break through Focus.
+      ...(resolved ? { 'interruption-level': 'passive' } : { sound: 'default' }),
       ...(event.sessionId && { 'thread-id': event.sessionId }),
       // Selects the client's registered notification category, whose buttons are PENDING_ACTION_DECISIONS.
       ...(approval && { category: event.category }),
@@ -582,6 +615,7 @@ function buildPayload(event: PushNotificationEvent, redact: boolean, appUrl: str
     ...(event.sessionId && { sessionId: event.sessionId }),
     ...(event.briefId && { briefId: event.briefId }),
     ...(approval && { approval }),
+    ...(resolved && { approvalResolved: event.approvalResolved }),
   };
 }
 
@@ -592,7 +626,7 @@ function buildFcmMessage(
   appUrl: string | undefined,
   collapseId: string
 ): FcmMessage {
-  const copy = redact ? REDACTED_PUSH_COPY[event.category] : event;
+  const copy = copyFor(event, redact);
   return {
     notification: {
       title: truncateForPush(copy.title, MAX_TITLE_LENGTH),
@@ -604,6 +638,7 @@ function buildFcmMessage(
       ...(event.questId && { questId: event.questId }),
       ...(event.sessionId && { sessionId: event.sessionId }),
       ...(event.briefId && { briefId: event.briefId }),
+      ...(event.approvalResolved && { approvalResolved: event.approvalResolved }),
     },
     android: {
       priority: 'HIGH',
@@ -615,7 +650,8 @@ function buildFcmMessage(
 }
 
 function approvalActionsFor(event: PushNotificationEvent) {
-  if (event.category !== 'approval_needed' || !event.questId || !event.pendingActionTs) return undefined;
+  if (event.category !== 'approval_needed' || event.approvalResolved) return undefined;
+  if (!event.questId || !event.pendingActionTs) return undefined;
   return { questId: event.questId, pendingActionTs: event.pendingActionTs, actions: PENDING_ACTION_DECISIONS };
 }
 
