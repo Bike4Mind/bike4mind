@@ -63,6 +63,7 @@ export interface IIdentityProviderRepository {
   findActiveByEmailDomain: (domain: string) => Promise<IIdentityProviderDocument | null>;
   findAll: () => Promise<IIdentityProviderDocument[]>;
   findActiveIDPs: () => Promise<IIdentityProviderDocument[]>;
+  findActiveSamlIdpIdsByIssuer: (issuer: string) => Promise<string[]>;
   findByIdWithSecrets: (id: string) => Promise<IIdentityProviderDocument | null>;
   findAllWithSecrets: () => Promise<IIdentityProviderDocument[]>;
   findAllWithSecretPresence: () => Promise<IdentityProviderWithSecretPresence[]>;
@@ -209,6 +210,15 @@ class IdentityProviderRepository
 
   async findActiveIDPs(): Promise<IIdentityProviderDocument[]> {
     return this.model.find({ isActive: true }).sort({ emailDomain: 1 });
+  }
+
+  /** Ids of the active SAML IdPs configured with this issuer (entity ID); more than one when they share an IdP. */
+  async findActiveSamlIdpIdsByIssuer(issuer: string): Promise<string[]> {
+    const docs = await this.model
+      .find({ type: 'saml', isActive: true, 'samlConfig.issuer': issuer })
+      .select('_id')
+      .lean();
+    return docs.map(doc => String(doc._id));
   }
 
   /**

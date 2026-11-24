@@ -34,6 +34,7 @@ import {
   type DeletionGateUser,
 } from '@bike4mind/server-utils/auth/deletionPendingGate';
 import { emailMatchesIdpDomain, IDP_EMAIL_DOMAIN_MISMATCH } from '@server/utils/auth/idpEmailDomain';
+import { IDP_ISSUER_MISMATCH } from './samlResponseIssuer';
 
 passport.use(
   new JwtStrategy(
@@ -384,6 +385,19 @@ export const setupSamlStrategy = (idp: {
               return done(new Error('SAML profile is null'));
             }
             // The profile is the decoded assertion: never logged, at any level.
+
+            // node-saml checks `idpIssuer` on logout messages only, so the signed assertion's
+            // Issuer is bound to this IdP here. The callback picks the IdP row before the
+            // signature is checked; this is what makes that choice binding. The Issuer is the
+            // IdP's public entity ID, so unlike the rest of the profile it is logged.
+            if (profile.issuer !== idp.samlConfig?.issuer) {
+              Logger.warn('[SAML] Rejecting assertion: its Issuer is not the one configured for this IDP', {
+                idpId: idp._id,
+                expectedIssuer: idp.samlConfig?.issuer,
+                assertedIssuer: profile.issuer,
+              });
+              return done(null, undefined, { reason: IDP_ISSUER_MISMATCH });
+            }
 
             // Extract user info from SAML assertion
             const attributeMappings = idp.samlConfig?.attributeMappings || {};
