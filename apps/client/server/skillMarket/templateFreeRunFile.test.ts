@@ -50,8 +50,8 @@ describe('readFreeRunFile', () => {
   });
 
   it('reads a UTF-8 text file', async () => {
-    const result = await read(asUpload(Buffer.from('  café notes \n'), 'a.md', ''));
-    expect(result).toEqual({ ok: true, file: { kind: 'document', name: 'a.md', text: 'café notes' } });
+    const result = await read(asUpload(Buffer.from('  caf\u00e9 notes \n'), 'a.md', ''));
+    expect(result).toEqual({ ok: true, file: { kind: 'document', name: 'a.md', text: 'caf\u00e9 notes' } });
   });
 
   it.each([
