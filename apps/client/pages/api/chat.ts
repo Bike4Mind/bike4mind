@@ -257,6 +257,7 @@ async function handleChat(
     // Not on the shared defaults (surfaces without a confirm card must not offer custom tools);
     // the queued path registers it in questProcessor, so the inline wait=true path must too.
     customMcp: functionAndConnectorToolHost('chat'),
+    ...(simplifiedRequest.wait ? { customMcpDeadline: requestStartedAt + WAIT_TURN_BUDGET_MS } : {}),
     // As questProcessor: the inline wait=true path runs audio_generation itself.
     audioToolJobs: buildAudioToolJobs(),
     queue: new SQSService(), // Create per-request to ensure fresh credentials

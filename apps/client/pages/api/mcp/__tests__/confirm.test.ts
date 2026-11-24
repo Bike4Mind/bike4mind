@@ -544,6 +544,7 @@ describe('POST /api/mcp/confirm - custom connector actions', () => {
       args: { title: 't' },
       approved: true,
       platformConnectionIds: ['c1'],
+      deadline: expect.any(Number),
     });
     expect(invokeMcpHandler).not.toHaveBeenCalled();
   });
@@ -690,6 +691,8 @@ describe('POST /api/mcp/confirm - function actions', () => {
         approved: true,
       })
     );
+    // The web function's turn budget, counted from the confirm request.
+    expect(vi.mocked(functionHost.callTool).mock.calls[0]![0].deadline).toBeGreaterThan(Date.now() + 40_000);
     expect(customMcpToolHost.callTool).not.toHaveBeenCalled();
   });
 

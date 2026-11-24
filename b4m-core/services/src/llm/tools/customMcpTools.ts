@@ -41,6 +41,8 @@ export interface CustomMcpToolCallInput {
   approved: boolean;
   /** Platform connectors the user switched on, by id; a platform connector not named here is not found. */
   platformConnectionIds?: readonly string[];
+  /** When the turn must end (epoch ms), for a turn shorter than the host's own wait; unset otherwise. */
+  deadline?: number;
 }
 
 export interface CustomMcpListOptions {
@@ -90,6 +92,8 @@ export interface CustomMcpToolOptions {
   requestApproval?: (request: CustomMcpApprovalRequest) => Promise<void>;
   /** The same switched-on platform connector ids the connections were listed with. */
   platformConnectionIds?: readonly string[];
+  /** Passed to every call as `CustomMcpToolCallInput.deadline`. */
+  deadline?: number;
 }
 
 export { CUSTOM_MCP_DATA_NOTICE } from '@bike4mind/common';
@@ -190,7 +194,7 @@ export const CUSTOM_MCP_AWAITING_APPROVAL_PREFIX = 'Awaiting your approval:';
 /** Tool definitions for one connection's offered tools (see `loadCustomMcpConnections`). */
 export function generateCustomMcpTools(
   connection: CustomMcpConnectionOffer,
-  { userId, host, requestApproval, platformConnectionIds }: CustomMcpToolOptions
+  { userId, host, requestApproval, platformConnectionIds, deadline }: CustomMcpToolOptions
 ): Array<{ name: string } & ICompletionOptionTools> {
   const ref: CustomConnectorPendingRef = {
     connectionId: connection.connectionId,
@@ -220,6 +224,7 @@ export function generateCustomMcpTools(
             args,
             approved: needsApproval,
             platformConnectionIds,
+            ...(deadline === undefined ? {} : { deadline }),
           });
           return customMcpResultText(ref, result);
         },

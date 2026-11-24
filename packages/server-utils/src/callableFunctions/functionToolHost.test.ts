@@ -8,7 +8,7 @@ import {
   type FunctionContract,
 } from '@bike4mind/common';
 import { generateCustomMcpTools, loadCustomMcpConnections } from '@bike4mind/services/llm';
-import type { DispatchFunctionCallResult } from './dispatch';
+import { buildCallableFunctionStamp, type DispatchFunctionCallResult } from './dispatch';
 
 const h = vi.hoisted(() => ({
   functionsOn: true,
@@ -38,6 +38,7 @@ vi.mock('../mcpConnections/invokeRemoteMcp', () => ({ invokeRemoteMcp: vi.fn() }
 vi.mock('@bike4mind/database', async orig => ({
   ...(await orig<Record<string, unknown>>()),
   callableFunctionRepository: { findBySlugForOwner: vi.fn(async () => h.bySlug) },
+  callableFunctionCallRepository: { record: vi.fn(async () => ({ id: 'row' })) },
   mcpConnectionRepository: {
     listForUser: vi.fn(async () => [
       {
@@ -54,7 +55,9 @@ vi.mock('@bike4mind/database', async orig => ({
 }));
 
 import {
+  FUNCTION_ANSWER_RESERVE_MS,
   FUNCTION_CONNECTION_ID,
+  FUNCTION_MIN_WAIT_MS,
   MAX_FUNCTION_TOOLS_PER_TURN,
   createFunctionToolHost,
   functionAndConnectorToolHost,
@@ -249,21 +252,105 @@ describe('calling', () => {
     expect(dispatch).not.toHaveBeenCalled();
   });
 
-  it('returns a fixed error body when the dispatcher throws', async () => {
+  it('returns a fixed error body when the dispatcher throws after writing its row', async () => {
     const dispatch = vi.fn(async () => {
       throw new Error('call log write failed at mongodb://internal');
     });
-    const { result } = await call(createFunctionToolHost('chat', { dispatch }));
+    const recordRefusal = vi.fn(async () => ({ id: 'row' }));
+    const { result } = await call(createFunctionToolHost('chat', { dispatch, recordRefusal }));
     expect(result).toEqual({
       content: [{ type: 'text', text: JSON.stringify({ outcome: 'error', reason: 'dispatch_failed' }) }],
       isError: true,
     });
+    expect(JSON.stringify(result)).not.toContain('mongodb');
+    expect(recordRefusal).not.toHaveBeenCalled();
+  });
+
+  it('waits until the turn deadline less the answer reserve, and on its own cap without one', async () => {
+    const dispatch = vi.fn(async () => dispatched());
+    const deadline = Date.now() + 40_000;
+    await call(createFunctionToolHost('chat', { dispatch }), { deadline });
+    expect(dispatch).toHaveBeenLastCalledWith(expect.objectContaining({ surface: 'chat' }), {
+      deadline: deadline - FUNCTION_ANSWER_RESERVE_MS,
+      minWaitMs: FUNCTION_MIN_WAIT_MS,
+    });
+    await call(createFunctionToolHost('agent', { dispatch }));
+    expect(dispatch.mock.lastCall).toHaveLength(1);
+  });
+
+  it('reads a timeout and an exhausted budget as errors with a fixed message', async () => {
+    for (const [outcome, reason] of [
+      ['timeout', 'wait_exceeded'],
+      ['refused', 'budget_exhausted'],
+    ] as const) {
+      const dispatch = vi.fn(async () => dispatched({ outcome, reason, outputs: undefined, stamp: undefined }));
+      const { result } = await call(createFunctionToolHost('chat', { dispatch }), { deadline: Date.now() });
+      expect(result.isError).toBe(true);
+      const body = JSON.parse((result.content![0] as { text: string }).text);
+      expect(body).toEqual({ outcome, reason, message: expect.stringMatching(/this turn/) });
+    }
+  });
+
+  it('writes one refused call-log row for each refusal it makes before the dispatcher', async () => {
+    const dispatch = vi.fn(async () => dispatched());
+    const recordRefusal = vi.fn(async () => ({ id: 'row' }));
+    const host = createFunctionToolHost('chat', { dispatch, recordRefusal });
+    const caller = { id: USER };
+
+    await call(host, { connectionId: 'docs' });
+    expect(recordRefusal).toHaveBeenLastCalledWith({ caller, functionId: CONTRACT.name, surface: 'chat' }, 'not_found');
+    h.bySlug = null;
+    await call(host);
+    expect(recordRefusal).toHaveBeenLastCalledWith(
+      { caller, functionId: CONTRACT.name, surface: 'chat' },
+      'not_found',
+      undefined
+    );
+    h.bySlug = fn({ state: 'draft' });
+    await call(host);
+    expect(recordRefusal).toHaveBeenLastCalledWith(
+      { caller, functionId: '6650f0a1b2c3d4e5f6a7b8c9', surface: 'chat' },
+      'not_live',
+      h.bySlug
+    );
+    h.bySlug = fn({ approval: 'always_ask' });
+    await call(host);
+    expect(recordRefusal).toHaveBeenLastCalledWith(
+      { caller, functionId: '6650f0a1b2c3d4e5f6a7b8c9', surface: 'chat' },
+      'approval_required',
+      h.bySlug
+    );
+    expect(recordRefusal).toHaveBeenCalledTimes(4);
+    expect(dispatch).not.toHaveBeenCalled();
+
+    await call(host, { approved: true });
+    expect(dispatch).toHaveBeenCalledTimes(1);
+    expect(recordRefusal).toHaveBeenCalledTimes(4);
+  });
+
+  it("carries the record's trust label from the dispatcher's stamp to the model and the card", async () => {
+    const stamp = buildCallableFunctionStamp({
+      fn: {
+        id: 'f',
+        slug: CONTRACT.name,
+        state: 'live',
+        trustLabel: 'verified',
+        pin: { artifactId: 'artifact-1', version: 3, contentHash: 'c0de', source: '', pinnedAt: new Date() },
+      },
+      inputHash: 'in',
+      run: { durationMs: 5 },
+      surface: 'chat',
+      calledAt: new Date('2026-11-02T00:00:00Z'),
+    });
+    const host = createFunctionToolHost('chat', { dispatch: vi.fn(async () => dispatched({ stamp })) });
+    const { result } = await call(host);
+    expect(result).toMatchObject({ label: 'verified', meta: { trust_label: 'verified' } });
   });
 
   it('runs an always-ask function only once approved', async () => {
     const dispatch = vi.fn(async () => dispatched());
     h.bySlug = fn({ approval: 'always_ask' });
-    const host = createFunctionToolHost('chat', { dispatch });
+    const host = createFunctionToolHost('chat', { dispatch, recordRefusal: vi.fn(async () => ({ id: 'row' })) });
     expect((await call(host)).result.content).toEqual([
       { type: 'text', text: JSON.stringify({ outcome: 'refused', reason: 'approval_required' }) },
     ]);
@@ -292,5 +379,18 @@ describe('chat tool generation over the offer', () => {
       expect.objectContaining({ connectionId: 'fn', toolName: 'asks_first' })
     );
     expect(dispatch).toHaveBeenCalledTimes(1);
+  });
+
+  it("passes the turn's deadline from the generated tool through to the dispatcher", async () => {
+    const dispatch = vi.fn(async () => dispatched());
+    const host = createFunctionToolHost('chat', { dispatch });
+    const [offer] = await loadCustomMcpConnections(host, USER, logger);
+    const deadline = Date.now() + 45_000;
+    const [tool] = generateCustomMcpTools(offer!, { userId: USER, host, deadline });
+    await tool!.toolFn({ load: 1, span: 2 });
+    expect(dispatch).toHaveBeenCalledWith(expect.objectContaining({ surface: 'chat' }), {
+      deadline: deadline - FUNCTION_ANSWER_RESERVE_MS,
+      minWaitMs: FUNCTION_MIN_WAIT_MS,
+    });
   });
 });

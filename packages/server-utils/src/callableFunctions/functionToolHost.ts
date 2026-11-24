@@ -17,7 +17,7 @@ import {
 import { customMcpToolHost } from '../mcpConnections/customMcpToolHost';
 import { resolveCallableFunctionsEnabled } from './access';
 import { composeToolHosts } from './composeToolHosts';
-import { dispatchFunctionCall, type DispatchFunctionCallResult } from './dispatch';
+import { dispatchFunctionCall, recordCallableFunctionRefusal, type DispatchFunctionCallResult } from './dispatch';
 import { listOfferedCallableFunctions } from './registry';
 
 /** The connection id and slug of the function offer, reserved for it in `RESERVED_MCP_CONNECTION_SLUGS`. */
@@ -28,9 +28,19 @@ export const MAX_FUNCTION_TOOLS_PER_TURN = MAX_CALLABLE_FUNCTIONS_PER_TURN;
 
 export type FunctionToolSurface = Extract<CallableFunctionCallSurface, 'chat' | 'agent'>;
 
+/** Kept back from the turn's deadline so the model can still answer after a call. */
+export const FUNCTION_ANSWER_RESERVE_MS = 15_000;
+
+/** With less wait than this left, the dispatcher refuses `budget_exhausted` without running. */
+export const FUNCTION_MIN_WAIT_MS = 2_000;
+
 export interface FunctionToolHostDeps {
   dispatch: typeof dispatchFunctionCall;
+  recordRefusal: typeof recordCallableFunctionRefusal;
 }
+
+const TIMEOUT_MESSAGE = 'The function did not finish within the time this turn allows. Do not call it again this turn.';
+const BUDGET_MESSAGE = 'Too little of this turn is left to run the function. Do not call it again this turn.';
 
 async function toOfferedTool(fn: ICallableFunctionOfferable): Promise<CustomMcpOfferedTool> {
   const llm = projectFunctionSchema(fn.contract, 'llm');
@@ -59,11 +69,14 @@ const textResult = (body: unknown, isError: boolean): CustomMcpToolCallResult =>
 
 function toCallResult(call: DispatchFunctionCallResult): CustomMcpToolCallResult {
   if (call.outcome !== 'ok' || !call.outputs) {
+    const message =
+      call.outcome === 'timeout' ? TIMEOUT_MESSAGE : call.reason === 'budget_exhausted' ? BUDGET_MESSAGE : undefined;
     return textResult(
       {
         outcome: call.outcome,
         ...(call.reason ? { reason: call.reason } : {}),
         ...(call.problems?.length ? { problems: call.problems } : {}),
+        ...(message ? { message } : {}),
       },
       true
     );
@@ -84,8 +97,9 @@ function toCallResult(call: DispatchFunctionCallResult): CustomMcpToolCallResult
  */
 export function createFunctionToolHost(
   surface: FunctionToolSurface,
-  deps: FunctionToolHostDeps = { dispatch: dispatchFunctionCall }
+  deps: Partial<FunctionToolHostDeps> = {}
 ): CustomMcpToolHost {
+  const { dispatch = dispatchFunctionCall, recordRefusal = recordCallableFunctionRefusal } = deps;
   return {
     ownsConnection: connectionId => connectionId === FUNCTION_CONNECTION_ID,
     listsWithoutMcpServer: true,
@@ -114,17 +128,37 @@ export function createFunctionToolHost(
       return [offer];
     },
 
-    async callTool({ connectionId, userId, toolName, args, approved }) {
-      if (connectionId !== FUNCTION_CONNECTION_ID) return { result: textResult({ outcome: 'not_found' }, true) };
-      const fn = await callableFunctionRepository.findBySlugForOwner(toolName, { ownerType: 'user', ownerKey: userId });
-      if (!fn || fn.state !== 'live') {
-        return { result: textResult({ outcome: 'refused', reason: 'not_live' }, true) };
-      }
-      if (fn.approval === 'always_ask' && !approved) {
-        return { result: textResult({ outcome: 'refused', reason: 'approval_required' }, true) };
-      }
+    async callTool({ connectionId, userId, toolName, args, approved, deadline }) {
+      const caller = { id: userId };
       try {
-        const call = await deps.dispatch({ caller: { id: userId }, functionId: fn.id, args, surface });
+        if (connectionId !== FUNCTION_CONNECTION_ID) {
+          await recordRefusal({ caller, functionId: toolName, surface }, 'not_found');
+          return { result: textResult({ outcome: 'not_found' }, true) };
+        }
+        const fn = await callableFunctionRepository.findBySlugForOwner(toolName, {
+          ownerType: 'user',
+          ownerKey: userId,
+        });
+        if (!fn || fn.state !== 'live') {
+          await recordRefusal(
+            { caller, functionId: fn?.id ?? toolName, surface },
+            fn ? 'not_live' : 'not_found',
+            fn ?? undefined
+          );
+          return { result: textResult({ outcome: 'refused', reason: 'not_live' }, true) };
+        }
+        if (fn.approval === 'always_ask' && !approved) {
+          await recordRefusal({ caller, functionId: fn.id, surface }, 'approval_required', fn);
+          return { result: textResult({ outcome: 'refused', reason: 'approval_required' }, true) };
+        }
+        const request = { caller, functionId: fn.id, args, surface };
+        const call =
+          deadline === undefined
+            ? await dispatch(request)
+            : await dispatch(request, {
+                deadline: deadline - FUNCTION_ANSWER_RESERVE_MS,
+                minWaitMs: FUNCTION_MIN_WAIT_MS,
+              });
         return { result: toCallResult(call) };
       } catch (error) {
         Logger.warn('[callableFunctions] Function dispatch threw', {

@@ -182,6 +182,7 @@ export interface ToolBuilderConfig {
   imageProcessorLambdaName?: string;
   getMcpClient: IChatCompletionServiceOptions['getMcpClient'];
   customMcp?: IChatCompletionServiceOptions['customMcp'];
+  customMcpDeadline?: IChatCompletionServiceOptions['customMcpDeadline'];
   // State maps owned by ChatCompletionProcess. Passed by reference so mutations
   // inside tool callbacks (credit accounting, subagent telemetry) propagate back
   // without further synchronization.
@@ -980,6 +981,7 @@ export class ToolBuilder {
           host,
           requestApproval: onPendingAction,
           platformConnectionIds,
+          deadline: this.deps.customMcpDeadline,
         });
         mcpToolsByServer[connection.slug] = tools;
         tools.forEach(tool => customMcpToolNames.add(tool.name));

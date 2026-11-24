@@ -12,6 +12,7 @@ import {
   type FunctionContractProblem,
   type ICallableFunctionCall,
   type ICallableFunctionDocument,
+  type ICallableFunctionSummary,
 } from '@bike4mind/common';
 import {
   artifactRepository,
@@ -338,6 +339,40 @@ async function readHead(fn: ICallableFunctionDocument) {
   return artifact ? { version: artifact.version, deletedAt: artifact.deletedAt } : null;
 }
 
+const callRow = (
+  { caller, functionId, surface, apiKeyId }: Omit<DispatchFunctionCallRequest, 'args'>,
+  startedAt: Date
+): ICallableFunctionCall => ({
+  op: 'call',
+  functionId: functionId.slice(0, 64),
+  callerUserId: caller.id,
+  ...(apiKeyId ? { apiKeyId } : {}),
+  ...(caller.organizationId ? { organizationId: caller.organizationId } : {}),
+  surface,
+  dataHashes: [],
+  startedAt,
+  durationMs: 0,
+  outcome: 'refused',
+});
+
+/** Refusals a tool host makes before it reaches the dispatcher. */
+export type CallableFunctionHostRefusal = 'not_found' | 'not_live' | 'approval_required';
+
+/** Writes the one `refused` row for a call a tool host turned away, shaped as the dispatcher's own rows. */
+export async function recordCallableFunctionRefusal(
+  request: Omit<DispatchFunctionCallRequest, 'args'>,
+  reason: CallableFunctionHostRefusal,
+  fn?: Pick<ICallableFunctionSummary, 'userId' | 'pin'>
+): Promise<{ id: string }> {
+  const row = callRow(request, new Date());
+  if (fn) {
+    row.ownerUserId = fn.userId;
+    row.codeHash = fn.pin.contentHash;
+    if (fn.pin.seq !== undefined) row.pinSeq = fn.pin.seq;
+  }
+  return withCallRow(row, write => write({ durationMs: 0, outcome: 'refused', reason }));
+}
+
 /**
  * Checks, in order, the setting, the record, the caller (the owner only), the status, the input size, and the
  * inputs, then runs the pinned code, checks the outputs, and stamps the result. Every path, a throw included, writes
@@ -350,18 +385,7 @@ export async function dispatchFunctionCall(
 ): Promise<DispatchFunctionCallResult> {
   const { caller, functionId, args, surface, apiKeyId } = request;
   const startedAt = new Date();
-  const row: ICallableFunctionCall = {
-    op: 'call',
-    functionId: functionId.slice(0, 64),
-    callerUserId: caller.id,
-    ...(apiKeyId ? { apiKeyId } : {}),
-    ...(caller.organizationId ? { organizationId: caller.organizationId } : {}),
-    surface,
-    dataHashes: [],
-    startedAt,
-    durationMs: 0,
-    outcome: 'refused',
-  };
+  const row = callRow({ caller, functionId, surface, apiKeyId }, startedAt);
 
   return withCallRow(row, async write => {
     const finish = async (

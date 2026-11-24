@@ -14,6 +14,7 @@ import {
 } from '@bike4mind/services/llm';
 import type { Logger } from '@bike4mind/observability';
 import { assertMcpServerEnabled } from '@server/utils/mcpServerFlag';
+import { WAIT_TURN_BUDGET_MS } from '@server/utils/waitTurnDeadline';
 import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
 import { invokeMcpHandler } from '@bike4mind/server-utils/utils/invokeMcpHandler';
 import { claimPendingAction } from '@bike4mind/server-utils/utils/pendingActionExecutor';
@@ -120,6 +121,8 @@ export async function resolveMcpPendingAction({
   pendingActionTs: number;
   logger: Logger;
 }): Promise<PendingActionOutcome> {
+  // Both routes run in the web function, so a confirmed call gets the same budget as an inline turn.
+  const deadline = Date.now() + WAIT_TURN_BUDGET_MS;
   const session = isValidObjectId(sessionId) ? await Session.findById(sessionId) : null;
   if (!session) {
     logger.error('[MCP Pending Action] Session not found', { sessionId });
@@ -216,6 +219,7 @@ export async function resolveMcpPendingAction({
         args: pendingAction.params,
         approved: true,
         platformConnectionIds: [connectionId],
+        deadline,
       });
       if (isFunction) {
         return await confirmedFunctionOutcome(
