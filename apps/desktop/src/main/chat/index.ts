@@ -117,6 +117,8 @@ import { registerMediaProtocol } from './media/protocol';
 import { ModelCatalog } from './ModelCatalog';
 import { ModelPreference } from './ModelPreference';
 import { SessionActivity } from './SessionActivity';
+import { BackgroundJobsFeed } from './backgroundJobsFeed';
+import { BACKGROUND_EXIT_HOLD_MS } from './backgroundWake';
 import { SessionStore } from './SessionStore';
 import { LocalHistory } from './LocalHistory';
 import { registerHistoryIpc } from './historyIpc';
@@ -695,13 +697,18 @@ export function registerChat(
   // Output and status go out on the same channel as reply tokens: a background process is
   // still something that conversation is doing, and a renderer that reloads re-subscribes to
   // one stream rather than two.
+  // Holds Waiting across the wake's coalesce gap after a job ends on its own; see BackgroundJobsFeed.
+  const backgroundJobs = new BackgroundJobsFeed(
+    (sessionId, jobs) => activity.backgroundChanged(sessionId, jobs),
+    BACKGROUND_EXIT_HOLD_MS
+  );
   const background = new BackgroundProcessRegistry({
     output: (sessionId, processId, stream, text) =>
       broadcast({ type: 'background-output', sessionId, processId, stream, text }),
     status: (sessionId, process) => {
       broadcast({ type: 'background-status', sessionId, process });
       // Only ever fires from start/finish, after `background` below has been assigned.
-      activity.backgroundChanged(sessionId, background.wakingJobs(sessionId));
+      backgroundJobs.update(sessionId, background.wakingJobs(sessionId), process.status);
     },
     // Only ever fires once a process has run, long after `service` below exists.
     exited: (sessionId, processId) => service.backgroundExited(sessionId, processId),
