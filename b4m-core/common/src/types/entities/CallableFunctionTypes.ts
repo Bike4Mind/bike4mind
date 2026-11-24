@@ -167,8 +167,11 @@ export type ICallableFunctionSummary = Omit<
 /** How many live functions one chat or agent turn offers, oldest first; connectors keep the rest of the tool budget. */
 export const MAX_CALLABLE_FUNCTIONS_PER_TURN = 20;
 
-/** The read chat offers from: the contract without the pinned code, server run, or promotion record. */
-export type ICallableFunctionOfferable = Omit<ICallableFunctionDocument, 'pin' | 'lastServerRun' | 'promoted'> & {
+/** The read chat offers from: the contract without the pinned code, server run, promotion record, or case results. */
+export type ICallableFunctionOfferable = Omit<
+  ICallableFunctionDocument,
+  'pin' | 'lastServerRun' | 'promoted' | 'caseResults'
+> & {
   pin: Omit<ICallableFunctionPin, 'source'>;
 };
 

@@ -78,6 +78,7 @@ describe('toCallableFunctionPublic', () => {
     const view = toCallableFunctionPublic(doc(), { version: 2 });
     expect(Object.keys(view).sort()).toEqual(
       [
+        'approval',
         'createdAt',
         'description',
         'enabled',
