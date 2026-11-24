@@ -647,12 +647,20 @@ describe('POST /api/mcp/confirm - function actions', () => {
     customConnector: { connectionId: 'fn', slug: 'fn', displayName: 'Functions', urlHost: 'functions' },
   });
   const confirm = () => post({ questId: QUEST_ID, sessionId: SESSION_ID, confirmed: true, pendingActionTs: ts });
+  const held = (returnValue = 'Awaiting your approval: beam_midspan_deflection') => ({
+    name: 'fn__beam_midspan_deflection',
+    returnValue,
+  });
 
   beforeEach(() => {
     vi.clearAllMocks();
     ts = Date.now();
     vi.mocked(Session.findById).mockResolvedValue({ userId: 'user-1' } as never);
-    vi.mocked(Quest.findById).mockResolvedValue({ sessionId: SESSION_ID, pendingAction: functionAction() } as never);
+    vi.mocked(Quest.findById).mockResolvedValue({
+      sessionId: SESSION_ID,
+      pendingAction: functionAction(),
+      promptMeta: { functionCalls: [held()] },
+    } as never);
     vi.mocked(claimPendingAction).mockResolvedValue(true);
     vi.mocked(functionHost.callTool).mockResolvedValue({ result: { content: [] } });
     vi.mocked(isFunctionToolStillOffered).mockResolvedValue(true);
@@ -699,22 +707,59 @@ describe('POST /api/mcp/confirm - function actions', () => {
     expect(body).toMatchObject({ success: true, message: 'Functions: beam_midspan_deflection completed' });
     expect(JSON.parse(body.output)).toEqual({ output: { deflection: 0.000406901 }, stamp: STAMP });
     expect(Quest.updateOne).toHaveBeenCalledWith(
-      {
-        _id: QUEST_ID,
-        'promptMeta.functionCalls': {
-          $elemMatch: { name: 'fn__beam_midspan_deflection', returnValue: { $regex: '^Awaiting your approval:' } },
-        },
-      },
+      { _id: QUEST_ID, 'promptMeta.functionCalls.0.returnValue': { $regex: '^Awaiting your approval:' } },
       {
         $set: {
-          'promptMeta.functionCalls.$.returnValue':
+          'promptMeta.functionCalls.0.returnValue':
             '<untrusted_tool_result connector="fn" host="functions" label="unverified">\n' +
             `${body.output}\n</untrusted_tool_result>`,
-          'promptMeta.functionCalls.$.success': true,
+          'promptMeta.functionCalls.0.success': true,
         },
       },
       { runValidators: true }
     );
+  });
+
+  it('writes into the held call it ran when the turn holds the same function twice', async () => {
+    vi.mocked(Quest.findById).mockResolvedValue({
+      sessionId: SESSION_ID,
+      pendingAction: functionAction(),
+      promptMeta: {
+        functionCalls: [
+          held('Awaiting your approval: first'),
+          { name: 'fn__other', returnValue: 'Awaiting your approval: other' },
+          held('Awaiting your approval: second'),
+        ],
+      },
+    } as never);
+    vi.mocked(functionHost.callTool).mockResolvedValue(structured({ deflection: 2 }));
+
+    await confirm();
+
+    const [filter, update] = vi.mocked(Quest.updateOne).mock.calls[0]! as unknown as [
+      Record<string, unknown>,
+      { $set: Record<string, unknown> },
+    ];
+    expect(filter).toEqual({
+      _id: QUEST_ID,
+      'promptMeta.functionCalls.2.returnValue': { $regex: '^Awaiting your approval:' },
+    });
+    expect(Object.keys(update.$set)).toEqual([
+      'promptMeta.functionCalls.2.returnValue',
+      'promptMeta.functionCalls.2.success',
+    ]);
+  });
+
+  it('skips a same-named call that already has its output when picking the held one', async () => {
+    vi.mocked(Quest.findById).mockResolvedValue({
+      sessionId: SESSION_ID,
+      pendingAction: functionAction(),
+      promptMeta: { functionCalls: [held('Awaiting your approval: first'), held('<untrusted_tool_result>done')] },
+    } as never);
+
+    await confirm();
+
+    expect(vi.mocked(Quest.updateOne).mock.calls[0]![0]).toHaveProperty('promptMeta.functionCalls.0.returnValue');
   });
 
   it('refuses an output over the cap whole, on the card and in the replay', async () => {
@@ -725,8 +770,8 @@ describe('POST /api/mcp/confirm - function actions', () => {
     expect(body.success).toBe(false);
     expect(JSON.parse(body.output)).toEqual({ outcome: 'output_too_large', max_chars: 30_000 });
     const update = vi.mocked(Quest.updateOne).mock.calls[0]![1] as { $set: Record<string, unknown> };
-    expect(update.$set['promptMeta.functionCalls.$.returnValue']).toContain('"outcome":"output_too_large"');
-    expect(update.$set['promptMeta.functionCalls.$.success']).toBe(false);
+    expect(update.$set['promptMeta.functionCalls.0.returnValue']).toContain('"outcome":"output_too_large"');
+    expect(update.$set['promptMeta.functionCalls.0.success']).toBe(false);
   });
 
   it('refuses before the claim when callable functions are off', async () => {

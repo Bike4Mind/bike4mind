@@ -42,29 +42,33 @@ async function confirmedFunctionOutcome(
   customConnector: CustomConnectorPendingRef,
   tool: string,
   result: CustomMcpToolCallResult,
+  heldCalls: ReadonlyArray<{ name?: string; returnValue?: unknown }>,
   logger: Logger
 ): Promise<PendingActionOutcome> {
   const output = customMcpResultBody(result);
   const tooLarge = output === CUSTOM_MCP_OUTPUT_TOO_LARGE_BODY;
+  // A turn can hold the same function twice; the pending action is the last one held, so write into that slot.
+  const name = customMcpToolId(customConnector.slug, tool);
+  const index = heldCalls.findLastIndex(
+    call =>
+      call.name === name &&
+      typeof call.returnValue === 'string' &&
+      call.returnValue.startsWith(CUSTOM_MCP_AWAITING_APPROVAL_PREFIX)
+  );
   try {
-    await Quest.updateOne(
-      {
-        _id: questId,
-        'promptMeta.functionCalls': {
-          $elemMatch: {
-            name: customMcpToolId(customConnector.slug, tool),
-            returnValue: { $regex: `^${CUSTOM_MCP_AWAITING_APPROVAL_PREFIX}` },
+    if (index >= 0) {
+      const slot = `promptMeta.functionCalls.${index}`;
+      await Quest.updateOne(
+        { _id: questId, [`${slot}.returnValue`]: { $regex: `^${CUSTOM_MCP_AWAITING_APPROVAL_PREFIX}` } },
+        {
+          $set: {
+            [`${slot}.returnValue`]: customMcpResultText(customConnector, result),
+            [`${slot}.success`]: !result.isError && !tooLarge,
           },
         },
-      },
-      {
-        $set: {
-          'promptMeta.functionCalls.$.returnValue': customMcpResultText(customConnector, result),
-          'promptMeta.functionCalls.$.success': !result.isError && !tooLarge,
-        },
-      },
-      { runValidators: true }
-    );
+        { runValidators: true }
+      );
+    }
   } catch (error) {
     logger.warn('[MCP Pending Action] Could not record the confirmed function output', {
       questId,
@@ -219,6 +223,7 @@ export async function resolveMcpPendingAction({
           pendingAction.customConnector,
           pendingAction.tool,
           result,
+          quest.promptMeta?.functionCalls ?? [],
           logger
         );
       }
