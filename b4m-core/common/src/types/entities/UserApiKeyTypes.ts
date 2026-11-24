@@ -230,6 +230,12 @@ export enum ApiKeyScope {
    * grants it. Holding it does not let the key read artifacts; that stays `notebooks:read`. Not confined.
    */
   ARTIFACTS_PUBLISH = 'artifacts:publish',
+  /**
+   * List, read and call the key owner's own live functions (`/api/v1/functions/*`). Confined, so the key
+   * holds no other scope and reaches no other route; that one scope also opens the list and the read, since a
+   * confined key cannot carry a second. Calls are refused unless callable functions are on for the owner.
+   */
+  FUNCTIONS_INVOKE = 'functions:invoke',
 }
 
 /**
@@ -259,7 +265,7 @@ export const isWellFormedApiKeyScope = (value: unknown): value is ApiKeyScopeVal
 
 /**
  * Scopes bound to a single dedicated flow: bridge pairing, the embed widget,
- * Overwatch ingest, QA run ingest, release-note automation, skill reads, Slack posting. A key carrying ANY of these is *confined* and
+ * Overwatch ingest, QA run ingest, release-note automation, skill reads, Slack posting, function calls. A key carrying ANY of these is *confined* and
  * both ends of the system say the same thing about it in the same words:
  *  - at mint (createUserApiKey): a confined scope must be the key's only scope, so
  *    a confined key is never persisted alongside reach it would then lose;
@@ -277,14 +283,19 @@ export const CONFINED_API_KEY_SCOPES: readonly ApiKeyScope[] = [
   ApiKeyScope.RELEASE_NOTES_WRITE,
   ApiKeyScope.REWARDS_GRANT,
   ApiKeyScope.SLACK_POST,
+  ApiKeyScope.FUNCTIONS_INVOKE,
 ];
 
 /** Confined scopes customers mint themselves, so the public API reference documents them. */
-const CUSTOMER_MINTED_CONFINED_SCOPES: readonly ApiKeyScope[] = [ApiKeyScope.SKILLS_READ, ApiKeyScope.SLACK_POST];
+const CUSTOMER_MINTED_CONFINED_SCOPES: readonly ApiKeyScope[] = [
+  ApiKeyScope.SKILLS_READ,
+  ApiKeyScope.SLACK_POST,
+  ApiKeyScope.FUNCTIONS_INVOKE,
+];
 
 /**
  * Built-in scopes left out of the public API reference. An explicit list, not a rule: `admin:*`, the
- * confined integration scopes except the customer-minted `skills:read` and `slack:post`, and the `optihashi:*` family. Documentation only -
+ * confined integration scopes except the customer-minted `skills:read`, `slack:post` and `functions:invoke`, and the `optihashi:*` family. Documentation only -
  * it never affects which scopes a key may hold or what the runtime accepts.
  */
 export const UNDOCUMENTED_API_KEY_SCOPES: readonly ApiKeyScope[] = [
