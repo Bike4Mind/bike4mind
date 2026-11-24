@@ -72,6 +72,15 @@ describe('StudioTrail', () => {
     expect(screen.queryByTestId('studio-trail-roles-take')).not.toBeInTheDocument();
   });
 
+  it('stacks parents of the same generation under one arrow', () => {
+    render(<StudioTrail fileId="take" onRestore={vi.fn()} />, { wrapper: TestWrapper });
+
+    const generations = within(screen.getByTestId('studio-trail-ancestors')).getAllByRole('listitem');
+    expect(generations).toHaveLength(3);
+    expect(within(generations[1]).getByTestId('studio-trail-step-source')).toBeInTheDocument();
+    expect(within(generations[1]).getByTestId('studio-trail-redacted-hidden')).toBeInTheDocument();
+  });
+
   it('draws the ancestry as an ordered strip with the current take marked', () => {
     render(<StudioTrail fileId="take" onRestore={vi.fn()} />, { wrapper: TestWrapper });
 

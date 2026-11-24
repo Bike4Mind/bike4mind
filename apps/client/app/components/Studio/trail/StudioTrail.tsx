@@ -89,6 +89,9 @@ const Connector = styled('span')({
   '& svg': { fontSize: '20px' },
 });
 
+// Steps of one generation (several parents of the same take) stack, so no arrow implies one made the other.
+const Generation = styled('div')({ display: 'flex', flexDirection: 'column', gap: '8px' });
+
 const stepStyle = {
   display: 'flex',
   flexDirection: 'column',
@@ -119,7 +122,7 @@ const RestorableStep = styled('button')({
   '@media (prefers-reduced-motion: reduce)': { transition: 'none' },
 });
 
-const ThumbnailFrame = styled('div')({
+const ThumbnailFrame = styled('span')({
   position: 'relative',
   display: 'flex',
   alignItems: 'center',
@@ -340,8 +343,12 @@ const rolesInto = (edges: LineageEdge[], parentId: string, childId: string) =>
 const exportedFileIds = (lineage: FileLineage): Set<string> =>
   new Set(lineage.edges.filter(edge => edge.role === 'timeline_clip').map(edge => edge.childId));
 
-/** Oldest generation first, so the strip reads left to right in the order the take was made. */
-const stepsInOrder = (lineage: FileLineage) => [...lineage.ancestors].sort((a, b) => b.depth - a.depth);
+/** Ancestors grouped by depth, oldest generation first, so the strip reads left to right in the order the take was made. */
+const generationsInOrder = (lineage: FileLineage): LineageNode[][] => {
+  const byDepth = new Map<number, LineageNode[]>();
+  for (const node of lineage.ancestors) byDepth.set(node.depth, [...(byDepth.get(node.depth) ?? []), node]);
+  return [...byDepth.entries()].sort(([a], [b]) => b - a).map(([, nodes]) => nodes);
+};
 
 /** The files `fileId` was made from, with their roles, as its `derivedFrom` recorded them. */
 const inputsOf = (lineage: FileLineage, fileId: string) =>
@@ -361,15 +368,19 @@ const TrailBody = ({ lineage, onRestore }: { lineage: FileLineage; onRestore?: S
         <TruncatedNote data-testid="studio-trail-truncated">Earlier steps are not shown.</TruncatedNote>
       )}
       <StepStrip testId="studio-trail-ancestors" scrollToEnd>
-        {stepsInOrder(lineage).map(node => (
-          <Step
-            key={node.fileId}
-            node={node}
-            roles={rolesFrom(ancestorEdges(lineage), node.fileId)}
-            isCurrent={node.fileId === lineage.fileId}
-            onRestore={onRestore}
-            restorable={!exported.has(node.fileId)}
-          />
+        {generationsInOrder(lineage).map(nodes => (
+          <Generation key={nodes[0].depth}>
+            {nodes.map(node => (
+              <Step
+                key={node.fileId}
+                node={node}
+                roles={rolesFrom(ancestorEdges(lineage), node.fileId)}
+                isCurrent={node.fileId === lineage.fileId}
+                onRestore={onRestore}
+                restorable={!exported.has(node.fileId)}
+              />
+            ))}
+          </Generation>
         ))}
       </StepStrip>
       {lineage.children.length > 0 && (
