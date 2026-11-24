@@ -32,6 +32,7 @@ import { federatedAnthropicCredentials } from './anthropicFederation';
 import { closeThinkMarker } from './thinkMarkers';
 import { selectedWifTokenSource } from './wifTokenSource';
 import { executeToolsBatch, shouldEndTurnAfterTools, toolFailureLogLevel } from './executeToolsBatch';
+import { replayableText } from './replayPreToolText';
 import { recordToolResult, type RecordableToolUse } from './recordToolResult';
 import {
   CompletionInfo,
@@ -254,6 +255,10 @@ export class AnthropicBackend implements ICompletionBackend {
   private logger: Logger;
   public currentModel: string = '';
   private lastAssistantContent: ContentBlock[] = []; // Store the complete assistant message content for tool use
+  // Text the model streamed ahead of its tool calls, for the non-replay path of pushToolMessages
+  // to put back on the first tool_use message of the round. Streaming rounds only: the
+  // non-streaming path never forwards that text, so replaying it would hide it from the user.
+  private pendingPreToolText: string | undefined;
   private isThinkingEnabled: boolean = false; // Track if thinking is enabled for current request
   // Opaque, non-PII end-user identifier forwarded as `metadata.user_id` so
   // Anthropic can attribute abuse to an individual user and scope enforcement
@@ -2294,6 +2299,12 @@ export class AnthropicBackend implements ICompletionBackend {
                   c => c != null && !(c.type === 'text' && !c.text)
                 ) as unknown as ContentBlock[];
               }
+              this.pendingPreToolText =
+                options.executeTools === false
+                  ? undefined
+                  : collectedContent
+                      .flatMap(c => (c?.type === 'text' && typeof c.text === 'string' ? [c.text] : []))
+                      .join('');
 
               // Extract cache stats if caching was enabled and usage info is available
               let cacheStats;
@@ -2886,6 +2897,7 @@ export class AnthropicBackend implements ICompletionBackend {
 
         if ('content' in response && Array.isArray(response.content)) {
           this.lastAssistantContent = response.content as ContentBlock[];
+          this.pendingPreToolText = undefined;
           let responseFormatToolEmitted = false;
 
           for (let i = 0; i < response.content.length; i++) {
@@ -3534,9 +3546,13 @@ export class AnthropicBackend implements ICompletionBackend {
         });
         parsedInput = {};
       }
+      // Only the first tool_use of a round carries the text: later ones are parallel siblings.
+      const preToolText = replayableText(this.pendingPreToolText);
+      this.pendingPreToolText = undefined;
       messages.push({
         role: 'assistant',
         content: [
+          ...(preToolText ? [{ type: 'text' as const, text: preToolText }] : []),
           {
             type: 'tool_use',
             id: tool.id,
