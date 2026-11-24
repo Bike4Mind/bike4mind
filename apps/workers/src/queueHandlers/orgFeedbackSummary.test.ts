@@ -42,9 +42,12 @@ vi.mock('@bike4mind/common', async importOriginal => ({
 vi.mock('@bike4mind/database', () => ({
   OrgFeedbackSummaryJob: { findOne: h.findOne, updateOne: h.updateOne },
   orgFeedbackReport: h.orgFeedbackReport,
-  createBoundedOperationalUsageStore: h.createUsageStore,
   apiKeyRepository: {},
   adminSettingsRepository: { getSettingsValue: h.getSettingsValue },
+}));
+
+vi.mock('@bike4mind/database/zero-credit-operational-usage', () => ({
+  createBoundedZeroCreditOperationalUsageStore: h.createUsageStore,
 }));
 
 vi.mock('@bike4mind/database/infra', () => ({

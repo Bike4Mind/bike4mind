@@ -1,31 +1,33 @@
-import mongoose, { type Connection, type Model } from 'mongoose';
-import type { IOrganizationDocument, IUsageEventInput, IUserDocument } from '@bike4mind/common';
+import mongoose, { type Connection } from 'mongoose';
+import type { IUsageEventInput } from '@bike4mind/common';
 import { User } from '../models/auth/UserModel';
 import { Organization } from '../models/infra/admin/OrganizationModel';
 import { UsageEvent, type IUsageEventDocument } from '../models/billing/UsageEventModel';
 
-function connectedCollection(model: { db: Connection; collection: { name: string } }) {
+type CollectionModel = { db: Connection; collection: { name: string } };
+
+function connectedCollection(model: CollectionModel) {
   if (model.db.readyState !== 1 || !model.db.db) {
     throw new Error('Operational usage persistence requires an established database connection');
   }
   return model.db.db.collection(model.collection.name);
 }
 
-async function findIdentity<T>(
-  model: Model<T>,
+async function findIdentity(
+  model: CollectionModel,
   id: string,
   timeoutMS: number,
   filter: Record<string, unknown> = {}
-): Promise<T | null> {
+): Promise<{ id: string } | null> {
   if (!mongoose.isObjectIdOrHexString(id)) return null;
   const result = await connectedCollection(model).findOne(
     { ...filter, _id: new mongoose.Types.ObjectId(id) },
     { projection: { _id: 1 }, timeoutMS }
   );
-  return result ? (model.hydrate(result, { _id: 1 }).toJSON() as T) : null;
+  return result ? { id: result._id.toHexString() } : null;
 }
 
-export function createBoundedOperationalUsageStore({
+export function createBoundedZeroCreditOperationalUsageStore({
   lookupTimeoutMS,
   writeTimeoutMS,
 }: {
@@ -39,9 +41,8 @@ export function createBoundedOperationalUsageStore({
   }
 
   return {
-    findUserById: (id: string): Promise<IUserDocument | null> => findIdentity(User, id, lookupTimeoutMS),
-    findOrganizationById: (id: string): Promise<IOrganizationDocument | null> =>
-      findIdentity(Organization, id, lookupTimeoutMS, { deletedAt: null }),
+    findUserById: (id: string) => findIdentity(User, id, lookupTimeoutMS),
+    findOrganizationById: (id: string) => findIdentity(Organization, id, lookupTimeoutMS, { deletedAt: null }),
     usageEvents: {
       async record(event: IUsageEventInput): Promise<IUsageEventDocument> {
         if (event.creditsCharged !== 0)

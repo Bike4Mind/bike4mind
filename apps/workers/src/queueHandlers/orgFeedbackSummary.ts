@@ -15,9 +15,6 @@
 import { randomUUID } from 'node:crypto';
 import {
   ChatModels,
-  buildUsagePriceStamp,
-  getTextModelCost,
-  getTurnsCost,
   type ModelInfo,
   ORG_FEEDBACK_SUMMARY_JOB_TYPE,
   ORG_FEEDBACK_SUMMARY_TAG_LIMIT,
@@ -27,10 +24,10 @@ import {
   OrgFeedbackSummaryJob,
   adminSettingsRepository,
   apiKeyRepository,
-  createBoundedOperationalUsageStore,
   orgFeedbackReport,
 } from '@bike4mind/database';
 import { organizationRepository } from '@bike4mind/database/infra';
+import { createBoundedZeroCreditOperationalUsageStore } from '@bike4mind/database/zero-credit-operational-usage';
 import { S3Storage } from '@bike4mind/fab-pipeline';
 import {
   buildApiKeyTable,
@@ -42,7 +39,12 @@ import {
 } from '@bike4mind/llm-adapters';
 import { Logger } from '@bike4mind/observability';
 import { apiKeyService, recordOperationalUsage } from '@bike4mind/services';
-import { latchUsage, type CompletionUsage } from '@bike4mind/services/billing/completionMeter';
+import {
+  latchUsage,
+  priceCompletionUsage,
+  timedOutCompletionUsageFields,
+  type CompletionUsage,
+} from '@bike4mind/services/billing/completionMeter';
 import { getSettingsByNames } from '@bike4mind/utils';
 import { sendToClient } from '@bike4mind/server-utils/websocket/utils';
 import { Resource } from 'sst';
@@ -150,24 +152,9 @@ async function recordSummaryUsage({
   timedOut: boolean;
   logger: Logger;
 }): Promise<void> {
-  const turns = usage.turnUsage?.some(
-    turn => turn.inputTokens || turn.outputTokens || turn.cacheReadInputTokens || turn.cacheCreationInputTokens
-  )
-    ? usage.turnUsage
-    : undefined;
-  const zeroTokens = { inputTokens: 0, outputTokens: 0, cacheReadInputTokens: 0, cacheCreationInputTokens: 0 };
-  const totals = turns?.reduce<typeof zeroTokens>(
-    (total, turn) => ({
-      inputTokens: total.inputTokens + turn.inputTokens,
-      outputTokens: total.outputTokens + turn.outputTokens,
-      cacheReadInputTokens: total.cacheReadInputTokens + (turn.cacheReadInputTokens ?? 0),
-      cacheCreationInputTokens: total.cacheCreationInputTokens + (turn.cacheCreationInputTokens ?? 0),
-    }),
-    zeroTokens
-  );
-  const { inputTokens = 0, outputTokens = 0, cacheReadInputTokens = 0, cacheCreationInputTokens = 0 } = totals ?? usage;
-  const promptTokens = inputTokens + cacheReadInputTokens + cacheCreationInputTokens;
-  if (promptTokens + outputTokens <= 0) {
+  const priced = priceCompletionUsage(modelInfo, usage);
+  const { inputTokens, outputTokens, cachedInputTokens, cacheWriteTokens } = priced;
+  if (inputTokens + outputTokens + cachedInputTokens + cacheWriteTokens <= 0) {
     logger.warn('Organization feedback summary provider did not report token usage', { model: modelInfo.id });
     return;
   }
@@ -176,7 +163,7 @@ async function recordSummaryUsage({
     return;
   }
 
-  const store = createBoundedOperationalUsageStore({
+  const store = createBoundedZeroCreditOperationalUsageStore({
     lookupTimeoutMS: USAGE_LOOKUP_TIMEOUT_MS,
     writeTimeoutMS: USAGE_WRITE_TIMEOUT_MS,
   });
@@ -196,18 +183,6 @@ async function recordSummaryUsage({
   }
   if (failed) logger.warn('Recording reported usage after organization feedback summary provider failure');
 
-  const cacheWrite1hTokens = usage.cacheWrite1hInputTokens;
-  const costUsd = turns
-    ? getTurnsCost(modelInfo, turns)
-    : getTextModelCost(
-        modelInfo,
-        inputTokens,
-        outputTokens,
-        cacheReadInputTokens,
-        cacheCreationInputTokens,
-        promptTokens,
-        cacheWrite1hTokens
-      );
   await recordOperationalUsage(
     {
       requestId,
@@ -218,12 +193,7 @@ async function recordSummaryUsage({
       bypassCreditBilling: true,
       provider: modelInfo.backend,
       model: modelInfo.id,
-      inputTokens,
-      outputTokens,
-      cachedInputTokens: cacheReadInputTokens,
-      cacheWriteTokens: cacheCreationInputTokens,
-      costUsd,
-      priceStamp: buildUsagePriceStamp(modelInfo, { turns, tierBasisTokens: promptTokens, cacheWrite1hTokens }),
+      ...priced,
       operation: 'org_feedback_summary',
       finishReason: usage.stopReason,
       latencyMs,
@@ -232,23 +202,10 @@ async function recordSummaryUsage({
       db: {
         adminSettings: adminSettingsRepository,
         usageEvents: {
-          // A completion that outlived the abort is a timed-out attempt: keep the provider's
-          // counts as COGS and leave the local-estimate token columns that feed quotas at zero.
           record: async event => {
             try {
-              return await store.usageEvents.record(
-                timedOut
-                  ? {
-                      ...event,
-                      status: 'timeout',
-                      settledBasis: 'provider',
-                      inputTokens: 0,
-                      outputTokens: 0,
-                      providerInputTokens: event.inputTokens,
-                      ...(event.outputTokens ? { providerOutputTokens: event.outputTokens } : {}),
-                    }
-                  : event
-              );
+              const fields = timedOut ? timedOutCompletionUsageFields(priced) : undefined;
+              return await store.usageEvents.record({ ...event, ...fields });
             } catch {
               throw new Error('Organization feedback summary usage insert failed');
             }
@@ -332,8 +289,9 @@ Write 200-400 words covering:
     controller.signal.throwIfAborted();
   } catch (error) {
     failed = true;
-    timedOut = controller.signal.aborted || isLlmTimeoutError(error);
-    if ((isLlmTimeoutError(error) || error instanceof SafetyRefusalError) && error.usage) {
+    const adapterTimeout = isLlmTimeoutError(error);
+    timedOut = controller.signal.aborted || adapterTimeout;
+    if ((adapterTimeout || error instanceof SafetyRefusalError) && error.usage) {
       const { turnUsage, ...counts } = error.usage;
       latchUsage(usage, { ...counts, turnUsage: turnUsage?.slice() });
     }

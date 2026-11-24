@@ -4,7 +4,7 @@ import { CreditHolderType, type IUsageEventInput } from '@bike4mind/common';
 import { User } from '../models/auth/UserModel';
 import { Organization } from '../models/infra/admin/OrganizationModel';
 import { UsageEvent } from '../models/billing/UsageEventModel';
-import { createBoundedOperationalUsageStore } from './operationalUsagePersistence';
+import { createBoundedZeroCreditOperationalUsageStore } from './zeroCreditOperationalUsage';
 
 const userId = 'aaaaaaaaaaaaaaaaaaaaaaaa';
 const organizationId = 'bbbbbbbbbbbbbbbbbbbbbbbb';
@@ -43,7 +43,7 @@ describe('bounded operational usage persistence', () => {
   const findOrganization = vi.fn();
   const insert = vi.fn();
   const collection = vi.fn();
-  const store = () => createBoundedOperationalUsageStore({ lookupTimeoutMS: 10_000, writeTimeoutMS: 20_000 });
+  const store = () => createBoundedZeroCreditOperationalUsageStore({ lookupTimeoutMS: 10_000, writeTimeoutMS: 20_000 });
 
   beforeEach(() => {
     vi.spyOn(connection, 'readyState', 'get').mockReturnValue(1);
@@ -70,10 +70,8 @@ describe('bounded operational usage persistence', () => {
       persistence.findUserById(userId),
       persistence.findOrganizationById(organizationId),
     ]);
-    expect(user?.id).toBe(userId);
-    expect(organization?.id).toBe(organizationId);
-    expect(user).not.toHaveProperty('email');
-    expect(user).not.toHaveProperty('password');
+    expect(user).toEqual({ id: userId });
+    expect(organization).toEqual({ id: organizationId });
     expect(findUser).toHaveBeenCalledExactlyOnceWith(
       { _id: new mongoose.Types.ObjectId(userId) },
       { projection: { _id: 1 }, timeoutMS: 10_000 }
@@ -155,12 +153,12 @@ describe('bounded operational usage persistence', () => {
   });
 
   it.each([0, -1, Infinity, NaN, 1.5, Number.MAX_SAFE_INTEGER + 1])('rejects invalid operation timeout %s', timeout => {
-    expect(() => createBoundedOperationalUsageStore({ lookupTimeoutMS: timeout, writeTimeoutMS: 20_000 })).toThrow(
-      RangeError
-    );
-    expect(() => createBoundedOperationalUsageStore({ lookupTimeoutMS: 10_000, writeTimeoutMS: timeout })).toThrow(
-      RangeError
-    );
+    expect(() =>
+      createBoundedZeroCreditOperationalUsageStore({ lookupTimeoutMS: timeout, writeTimeoutMS: 20_000 })
+    ).toThrow(RangeError);
+    expect(() =>
+      createBoundedZeroCreditOperationalUsageStore({ lookupTimeoutMS: 10_000, writeTimeoutMS: timeout })
+    ).toThrow(RangeError);
     expect(collection).not.toHaveBeenCalled();
   });
 
