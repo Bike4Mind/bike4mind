@@ -419,7 +419,8 @@ function NewKeyModal({ open, onClose, onSuccess }: NewKeyModalProps) {
             >
               <Typography level="title-sm">Functions</Typography>
               <Typography level="body-sm" sx={{ color: 'text.secondary', mt: 0.5 }}>
-                Lists, reads and calls your live functions, and nothing else. A Functions key holds no other permission.
+                Lists, reads, and calls your live functions, and nothing else. A Functions key holds no other
+                permission.
               </Typography>
             </Sheet>
           ) : (

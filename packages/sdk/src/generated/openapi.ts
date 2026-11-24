@@ -15176,7 +15176,7 @@ export interface components {
       output: {
         [key: string]: unknown;
       };
-      /** @description What the call ran on: the code, inputs, runtime and packages, by hash and version. */
+      /** @description What the call ran on: the code, inputs, runtime, and packages, by hash and version. */
       stamp: {
         function_id: string;
         slug: string;
@@ -15242,7 +15242,7 @@ export interface components {
        */
       outcome:
         'ok' | 'input_invalid' | 'output_invalid' | 'error' | 'timeout' | 'memory' | 'output_too_large' | 'refused';
-      /** @description What the call ran on: the code, inputs, runtime and packages, by hash and version. */
+      /** @description What the call ran on: the code, inputs, runtime, and packages, by hash and version. */
       stamp?: {
         function_id: string;
         slug: string;
@@ -15289,7 +15289,7 @@ export interface components {
       name?: string;
       /** @enum {string} */
       errorCode: 'request_timeout';
-      /** @description What the call ran on: the code, inputs, runtime and packages, by hash and version. */
+      /** @description What the call ran on: the code, inputs, runtime, and packages, by hash and version. */
       stamp?: {
         function_id: string;
         slug: string;
@@ -46346,7 +46346,7 @@ export interface operations {
           'application/json': components['schemas']['invokeFunctionResponse502'];
         };
       };
-      /** @description No function runtime is available, or the runtime did not answer. Try again later. */
+      /** @description No function runtime is available, the runtime was slow to start, or it did not answer. Try again later. */
       503: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */

@@ -231,7 +231,7 @@ export enum ApiKeyScope {
    */
   ARTIFACTS_PUBLISH = 'artifacts:publish',
   /**
-   * List, read and call the key owner's own live functions (`/api/v1/functions/*`). Confined, so the key
+   * List, read, and call the key owner's own live functions (`/api/v1/functions/*`). Confined, so the key
    * holds no other scope and reaches no other route; that one scope also opens the list and the read, since a
    * confined key cannot carry a second. Calls are refused unless callable functions are on for the owner.
    */

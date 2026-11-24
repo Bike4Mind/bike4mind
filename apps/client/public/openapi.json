@@ -34996,7 +34996,7 @@
               "duration_ms",
               "called_at"
             ],
-            "description": "What the call ran on: the code, inputs, runtime and packages, by hash and version."
+            "description": "What the call ran on: the code, inputs, runtime, and packages, by hash and version."
           }
         },
         "required": [
@@ -35216,7 +35216,7 @@
               "duration_ms",
               "called_at"
             ],
-            "description": "What the call ran on: the code, inputs, runtime and packages, by hash and version."
+            "description": "What the call ran on: the code, inputs, runtime, and packages, by hash and version."
           }
         },
         "required": [
@@ -35389,7 +35389,7 @@
               "duration_ms",
               "called_at"
             ],
-            "description": "What the call ran on: the code, inputs, runtime and packages, by hash and version."
+            "description": "What the call ran on: the code, inputs, runtime, and packages, by hash and version."
           }
         },
         "required": [
@@ -108313,7 +108313,7 @@
             }
           },
           "503": {
-            "description": "No function runtime is available, or the runtime did not answer. Try again later.",
+            "description": "No function runtime is available, the runtime was slow to start, or it did not answer. Try again later.",
             "content": {
               "application/json": {
                 "schema": {

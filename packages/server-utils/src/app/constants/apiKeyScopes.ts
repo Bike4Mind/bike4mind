@@ -258,7 +258,7 @@ const HAND_WRITTEN_USER_API_KEY_SCOPES: ApiKeyScopeOption[] = [
     label: 'Functions',
     // Confined, so the New-Key modal offers it as its own access level rather than among the multi-select scopes.
     description:
-      'List, read and call your live functions. Confined: a functions:invoke key carries no other scope and reaches no other API route',
+      'List, read, and call your live functions. Confined: a functions:invoke key carries no other scope and reaches no other API route',
     endpoints: [],
   },
   {

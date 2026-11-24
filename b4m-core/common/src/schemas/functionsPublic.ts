@@ -82,7 +82,7 @@ export const FunctionStampSchema = z
     duration_ms: z.number(),
     called_at: z.string(),
   })
-  .describe('What the call ran on: the code, inputs, runtime and packages, by hash and version.');
+  .describe('What the call ran on: the code, inputs, runtime, and packages, by hash and version.');
 
 export const InvokeFunctionResponseSchema = z.object({
   output: z.record(z.string(), z.unknown()).describe('The outputs, checked against `output_schema`.'),
