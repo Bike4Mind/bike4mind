@@ -682,7 +682,7 @@ export function useConversation(
   // Holds the open chat's stream while its read is in flight; see StreamResumeGate.
   const streamGate = useRef(new StreamResumeGate());
   // The subscription's handler, so the session load can apply what the gate held. Set before any read can land.
-  const applyStreamEvent = useRef<(event: ChatStreamEvent) => void>(() => {});
+  const applyStreamEvent = useRef<(event: ChatStreamEvent, reflected?: boolean) => void>(() => {});
   // The chat the reset below last ran for. A share result that lands before then would be wiped by it.
   const resetFor = useRef<string | null>(null);
 
@@ -722,8 +722,8 @@ export function useConversation(
 
     let current = true;
     let settledRereads = 0;
-    const applyHeld = (events: readonly ChatStreamEvent[]): void => {
-      for (const event of events) applyStreamEvent.current(event);
+    const applyHeld = (events: readonly ChatStreamEvent[], reflected = false): void => {
+      for (const event of events) applyStreamEvent.current(event, reflected);
     };
     const load = (): void => {
       const read: SessionRead = { sessionId, stale: false };
@@ -768,7 +768,9 @@ export function useConversation(
           openRead.current = null;
           setSession(loaded);
           setMessages(loaded?.messages ?? []);
-          const unseen = loaded ? streamGate.current.resolve(loaded.eventCursor) : streamGate.current.release();
+          const { unseen, reflected } = loaded
+            ? streamGate.current.resolve(loaded.eventCursor)
+            : { unseen: streamGate.current.release(), reflected: [] };
           // A started session opened while its worktree is still being cut: no event is coming
           // to say so, the 'workspace' one went out before this window was looking.
           setPreparing(current => current ?? loaded?.preparingWorkspace ?? null);
@@ -776,7 +778,9 @@ export function useConversation(
           setTurn(
             live ? { startedAt: live.startedAt, tokens: null, messageId: live.messageId, requestAt: null } : null
           );
-          // After the snapshot's own state, so each lands on top of the read it postdates.
+          // After the snapshot's own state, so each lands on top of the read it postdates. The
+          // snapshot holds a reflected event's transcript and turn but not its side effects.
+          applyHeld(reflected, true);
           applyHeld(unseen);
         })
         .catch(failed);
@@ -918,14 +922,14 @@ export function useConversation(
       });
     };
 
-    const apply = (event: ChatStreamEvent): void => {
+    const apply = (event: ChatStreamEvent, reflected = false): void => {
       const live =
         event.type === 'delta' ||
         event.type === 'tool-start' ||
         event.type === 'tool-end' ||
         event.type === 'tool-progress';
       if (live) {
-        if (event.sessionId !== activeSessionId.current) return;
+        if (reflected || event.sessionId !== activeSessionId.current) return;
         // A folder the user just added has to show up in the chips at once - that row is where it
         // is revoked - and main pushes no summary for it.
         if (
@@ -989,6 +993,14 @@ export function useConversation(
         const at = Date.now();
         setTurn(current => (current ? { ...withPhase(current, event.phase, at), lastEventAt: at } : current));
         return;
+      }
+
+      // A reflected event's transcript and turn are already in the snapshot; only what the
+      // snapshot cannot carry (notices, a compaction's progress) still runs.
+      if (reflected) {
+        if (event.type === 'start' || event.type === 'done' || event.type === 'error') setPhase(null);
+        if (event.type !== 'auto-compact' && event.type !== 'context-notice' && event.type !== 'context-trimmed')
+          return;
       }
 
       if (event.type === 'start') {
@@ -1105,8 +1117,9 @@ export function useConversation(
     const unsubscribe = window.b4m.chat.onStreamEvent(event => {
       // Counted on arrival, held or not: an imported refresh must not land over it either way.
       if (event.sessionId === activeSessionId.current) transcriptVersion.current++;
-      if (streamGate.current.admit(event) !== 'apply') return;
-      apply(event);
+      const admission = streamGate.current.admit(event);
+      if (admission === 'hold') return;
+      apply(event, admission === 'reflected');
     });
 
     return () => {

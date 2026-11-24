@@ -1,6 +1,17 @@
 import type { ChatStreamEvent, EventCursor } from '@shared/chat';
 
-export type StreamAdmission = 'apply' | 'hold' | 'drop';
+export type StreamAdmission = 'apply' | 'hold' | 'reflected';
+
+/** What a snapshot read leaves to do with the events held during it. */
+export interface StreamResolution {
+  /** Events above the snapshot's cursor: apply them in full. */
+  unseen: ChatStreamEvent[];
+  /**
+   * Events at or below the cursor: the snapshot holds their transcript and turn, but not their
+   * side effects (notices, settled-turn counts), which still have to run.
+   */
+  reflected: ChatStreamEvent[];
+}
 
 /**
  * Joins the open chat's snapshot read to the live stream, so an event that lands while the read
@@ -34,7 +45,7 @@ export class StreamResumeGate {
   }
 
   admit(event: ChatStreamEvent): StreamAdmission {
-    if (this.reflects(event)) return 'drop';
+    if (this.reflects(event)) return 'reflected';
     if (event.sessionId !== this.sessionId || event.seq === undefined) return 'apply';
     if (!this.held) return 'apply';
     this.held.push(event);
@@ -43,14 +54,17 @@ export class StreamResumeGate {
 
   /**
    * The read landed and its snapshot is applied: returns the held events it does not reflect, in
-   * order, and from now on drops any event at or below its cursor.
+   * order, split from the ones it reflects, and from now on reports any event at or below its
+   * cursor as reflected.
    */
-  resolve(cursor: EventCursor | undefined): ChatStreamEvent[] {
+  resolve(cursor: EventCursor | undefined): StreamResolution {
     const held = this.held ?? [];
     this.held = null;
     this.cursorSeq = cursor?.seq ?? null;
     const after = this.cursorSeq;
-    return after === null ? held : held.filter(event => event.seq === undefined || event.seq > after);
+    if (after === null) return { unseen: held, reflected: [] };
+    const isUnseen = (event: ChatStreamEvent): boolean => event.seq === undefined || event.seq > after;
+    return { unseen: held.filter(isUnseen), reflected: held.filter(event => !isUnseen(event)) };
   }
 
   /**

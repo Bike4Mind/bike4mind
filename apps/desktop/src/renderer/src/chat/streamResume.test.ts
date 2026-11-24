@@ -17,8 +17,10 @@ describe('StreamResumeGate', () => {
     expect(gate.admit(delta('s1', 4))).toBe('hold');
     expect(gate.admit(delta('s1', 5))).toBe('hold');
     expect(gate.admit(delta('s1', 6))).toBe('hold');
-    expect(gate.resolve({ epoch: 'e', seq: 5 }).map(event => event.seq)).toEqual([6]);
-    expect(gate.admit(delta('s1', 5))).toBe('drop');
+    const { unseen, reflected } = gate.resolve({ epoch: 'e', seq: 5 });
+    expect(unseen.map(event => event.seq)).toEqual([6]);
+    expect(reflected.map(event => event.seq)).toEqual([4, 5]);
+    expect(gate.admit(delta('s1', 5))).toBe('reflected');
     expect(gate.admit(delta('s1', 7))).toBe('apply');
   });
 
@@ -27,7 +29,7 @@ describe('StreamResumeGate', () => {
     gate.hold('s1');
     expect(gate.admit(delta('s2', 1))).toBe('apply');
     expect(gate.admit(delta('s1', undefined))).toBe('apply');
-    expect(gate.resolve({ epoch: 'e', seq: 0 })).toEqual([]);
+    expect(gate.resolve({ epoch: 'e', seq: 0 })).toEqual({ unseen: [], reflected: [] });
   });
 
   it('keeps what it holds across a re-read of the same chat', () => {
@@ -36,10 +38,10 @@ describe('StreamResumeGate', () => {
     gate.admit(delta('s1', 3));
     gate.hold('s1');
     gate.admit(delta('s1', 4));
-    expect(gate.resolve({ epoch: 'e', seq: 3 }).map(event => event.seq)).toEqual([4]);
+    expect(gate.resolve({ epoch: 'e', seq: 3 }).unseen.map(event => event.seq)).toEqual([4]);
   });
 
-  it('hands back everything and stops dropping when released without a snapshot', () => {
+  it('hands back everything and stops reflecting when released without a snapshot', () => {
     const gate = new StreamResumeGate();
     gate.hold('s1');
     gate.resolve({ epoch: 'e', seq: 2 });
@@ -62,7 +64,7 @@ describe('StreamResumeGate', () => {
     const gate = new StreamResumeGate();
     gate.hold('s1');
     gate.admit(delta('s1', 1));
-    expect(gate.resolve(undefined).map(event => event.seq)).toEqual([1]);
+    expect(gate.resolve(undefined)).toMatchObject({ unseen: [{ seq: 1 }], reflected: [] });
     expect(gate.admit(delta('s1', 1))).toBe('apply');
   });
 });
