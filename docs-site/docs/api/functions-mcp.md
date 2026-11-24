@@ -68,5 +68,7 @@ A call that cannot run returns a result with `isError: true` and the reason in i
 
 - `Function not found`: the name is not one of your live functions. A draft, a turned-off function, and another person's function answer the same way.
 - `Input span must be a number.`: an input does not fit `inputSchema`; the text names the first field.
-- The function raised an error, ran out of memory, returned outputs that do not fit `outputSchema`, or ran past its time limit. When the function ran, `_meta.stamp` is included.
+- The function raised an error, ran out of memory, or returned outputs that do not fit `outputSchema`. When the function ran, `_meta.stamp` is included.
+- `The call ran past its time limit.`: the call passed 45 seconds, counted from the request's arrival, or too little of them was left to start it.
+- `The function runtime did not answer. Try again later.`: the function runtime failed or never replied. No stamp is included.
 - `Internal error`: the endpoint could not read your functions. `tools/list` answers the same text as a JSON-RPC error.
