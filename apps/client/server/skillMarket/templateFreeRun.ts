@@ -88,7 +88,9 @@ export async function freeRunPageState(
   if (!settings.enabled || !policy.active) return null;
   if (!skillTemplateFreeRunEligibility((await approvedSnapshotOf(listing)).snapshot).eligible) return null;
   if (hasUsedFreeRun(cookieHeader)) return { state: 'used' };
-  const file = (await freeRunAcceptsFiles(settings.model)) ? { maxBytes: freeRunFileMaxBytes(settings.fileMaxMb) } : null;
+  const file = (await freeRunAcceptsFiles(settings.model))
+    ? { maxBytes: freeRunFileMaxBytes(settings.fileMaxMb) }
+    : null;
   return { state: 'open', siteKey: policy.siteKey, inputMaxChars: settings.inputMaxChars, file };
 }
 

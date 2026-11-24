@@ -148,7 +148,7 @@ describe('renderTemplatePage', () => {
     it('renders the file picker and its cap only when the model takes files', () => {
       const without = renderTemplatePage({ ...view, freeRun: { ...open, file: null } });
       expect(without).not.toContain('template-page-free-run-file');
-      expect(without).not.toContain('data-file-max-bytes');
+      expect(without).not.toContain('data-file-max-bytes="');
       const html = renderTemplatePage({ ...view, freeRun: { ...open, file: { maxBytes: 3 * 1024 * 1024 } } });
       expect(html).toContain('data-testid="template-page-free-run-file"');
       expect(html).toContain('<input id="free-run-file" type="file"');

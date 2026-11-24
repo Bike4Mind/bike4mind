@@ -340,9 +340,8 @@ describe('POST /api/skills/template/run/[slug]', () => {
 
     it('takes a body large enough for the biggest file once base64-encoded', async () => {
       const { config } = await import('../run/[slug]');
-      const { FREE_RUN_BODY_MAX_BYTES, FREE_RUN_FILE_TRANSPORT_MAX_BYTES } = await import(
-        '@server/skillMarket/templateFreeRunFile'
-      );
+      const { FREE_RUN_BODY_MAX_BYTES, FREE_RUN_FILE_TRANSPORT_MAX_BYTES } =
+        await import('@server/skillMarket/templateFreeRunFile');
       expect(FREE_RUN_BODY_MAX_BYTES).toBeGreaterThan((FREE_RUN_FILE_TRANSPORT_MAX_BYTES * 4) / 3);
       expect(h.baseApiOptions).toEqual([expect.objectContaining({ maxBodySize: FREE_RUN_BODY_MAX_BYTES })]);
       expect(config.api.bodyParser.sizeLimit).toBe('6mb');
@@ -353,14 +352,20 @@ describe('POST /api/skills/template/run/[slug]', () => {
       const res = await call({ turnstileToken: 'tok', file: pdf(2) });
       expect(res.statusCode).toBe(200);
       const args = h.complete.mock.calls[0][0];
-      expect(args.user).toMatch(/BEGIN VISITOR INPUT[\s\S]*\[Attached file "brief\.pdf"\][\s\S]*Page 1 text[\s\S]*END VISITOR/);
+      expect(args.user).toMatch(
+        /BEGIN VISITOR INPUT[\s\S]*\[Attached file "brief\.pdf"\][\s\S]*Page 1 text[\s\S]*END VISITOR/
+      );
       expect(args.image).toBeUndefined();
       expect(h.accepts).toHaveBeenCalledWith('operations', expect.anything());
       expect(res.getHeader('Set-Cookie')).toContain('b4m_template_free_run=');
     });
 
     it('sends an image to the model as an image next to the pasted text', async () => {
-      const res = await call({ text: 'What is this?', turnstileToken: 'tok', file: asUpload(PNG_1PX, 'a.png', 'image/png') });
+      const res = await call({
+        text: 'What is this?',
+        turnstileToken: 'tok',
+        file: asUpload(PNG_1PX, 'a.png', 'image/png'),
+      });
       expect(res.statusCode).toBe(200);
       const args = h.complete.mock.calls[0][0];
       expect(args.image).toBe(`data:image/png;base64,${PNG_1PX.toString('base64')}`);
@@ -377,7 +382,10 @@ describe('POST /api/skills/template/run/[slug]', () => {
 
     it('refuses a file over the admin size cap with no model call', async () => {
       h.settings.mockResolvedValue({ ...SETTINGS, fileMaxMb: 0.001 });
-      const res = await call({ turnstileToken: 'tok', file: asUpload(Buffer.alloc(2048, 0x61), 'a.txt', 'text/plain') });
+      const res = await call({
+        turnstileToken: 'tok',
+        file: asUpload(Buffer.alloc(2048, 0x61), 'a.txt', 'text/plain'),
+      });
       expect(res.statusCode).toBe(413);
       expect(json(res)).toMatchObject({ code: 'file_too_large', error: 'Attach a file under 1 KB.' });
       expectNoRun();
@@ -418,7 +426,10 @@ describe('POST /api/skills/template/run/[slug]', () => {
     });
 
     it('refuses an unsupported file type with no model call', async () => {
-      const res = await call({ turnstileToken: 'tok', file: asUpload(Buffer.from([0, 1, 2, 3]), 'a.zip', 'application/zip') });
+      const res = await call({
+        turnstileToken: 'tok',
+        file: asUpload(Buffer.from([0, 1, 2, 3]), 'a.zip', 'application/zip'),
+      });
       expect(res.statusCode).toBe(400);
       expect(json(res).code).toBe('file_type_unsupported');
       expectNoRun();

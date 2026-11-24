@@ -56,11 +56,23 @@ describe('readFreeRunFile', () => {
 
   it.each([
     ['a second file', { files: [{}, {}] }, 'too_many_files'],
-    ['two files in one field', { file: [asUpload(PNG_1PX, 'a.png', ''), asUpload(PNG_1PX, 'b.png', '')] }, 'too_many_files'],
+    [
+      'two files in one field',
+      { file: [asUpload(PNG_1PX, 'a.png', ''), asUpload(PNG_1PX, 'b.png', '')] },
+      'too_many_files',
+    ],
     ['a malformed file', { file: { name: 'x', data: 'not base64!' } }, 'file_invalid'],
     ['a file without data', { file: { name: 'x' } }, 'file_invalid'],
-    ['a binary file', { file: asUpload(Buffer.from([0, 1, 2, 3, 4, 5]), 'x.bin', 'application/zip') }, 'file_type_unsupported'],
-    ['a text file with NUL bytes', { file: asUpload(Buffer.from('a\u0000b'), 'x.txt', 'text/plain') }, 'file_type_unsupported'],
+    [
+      'a binary file',
+      { file: asUpload(Buffer.from([0, 1, 2, 3, 4, 5]), 'x.bin', 'application/zip') },
+      'file_type_unsupported',
+    ],
+    [
+      'a text file with NUL bytes',
+      { file: asUpload(Buffer.from('a\u0000b'), 'x.txt', 'text/plain') },
+      'file_type_unsupported',
+    ],
     ['a text file that is blank', { file: asUpload(Buffer.from('  \n'), 'x.txt', 'text/plain') }, 'file_no_text'],
     [
       'a text file with too much text',

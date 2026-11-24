@@ -156,7 +156,10 @@ describe('template page free-run file picker', () => {
 
   beforeEach(async () => {
     loaded.length = 0;
-    mountPage({ ...view, freeRun: { state: 'open', siteKey: 'site-key', inputMaxChars: 8000, file: { maxBytes: 1024 } } });
+    mountPage({
+      ...view,
+      freeRun: { state: 'open', siteKey: 'site-key', inputMaxChars: 8000, file: { maxBytes: 1024 } },
+    });
     await flush();
   });
 

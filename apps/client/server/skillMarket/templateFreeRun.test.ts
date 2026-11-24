@@ -63,7 +63,7 @@ beforeEach(() => {
   h.releases.length = 0;
   h.policy.mockResolvedValue({ active: true, failClosed: true, siteKey: 'site-key', secret: 's' });
   h.snapshot.mockResolvedValue({ snapshot: { name: 'x', description: '', body: 'b' }, versionId: 'v1' });
-  h.opsModel.mockResolvedValue({ modelInfo: { id: 'ops-model', supportsVision: false }, llm: {} });
+  h.opsModel.mockResolvedValue({ modelInfo: { id: 'ops-model', backend: 'openai', supportsVision: false }, llm: {} });
 });
 
 describe('free-run admin settings', () => {
@@ -315,7 +315,7 @@ describe('freeRunPageState', () => {
 
   it('offers the file picker, capped by the transport ceiling, when the model takes images', async () => {
     enabled();
-    h.opsModel.mockResolvedValue({ modelInfo: { id: 'ops-model', supportsVision: true }, llm: {} });
+    h.opsModel.mockResolvedValue({ modelInfo: { id: 'ops-model', backend: 'openai', supportsVision: true }, llm: {} });
     await expect(freeRunPageState({ freeRunEnabled: true }, listing(), undefined)).resolves.toMatchObject({
       state: 'open',
       file: { maxBytes: 4 * 1024 * 1024 },

@@ -5,8 +5,7 @@
 
 /** What the run sends the model: an image as a `data:` URL, a PDF or text file as its text. */
 export type FreeRunFile =
-  | { kind: 'image'; name: string; dataUrl: string }
-  | { kind: 'document'; name: string; text: string };
+  { kind: 'image'; name: string; dataUrl: string } | { kind: 'document'; name: string; text: string };
 
 export type FreeRunFileRefusal = { status: number; code: string; error: string };
 
@@ -24,7 +23,8 @@ export const FREE_RUN_BODY_MAX_BYTES = Math.ceil((FREE_RUN_FILE_TRANSPORT_MAX_BY
 /** Bounds the tokens one file's text can add, about 15k tokens: ten dense pages fit. */
 export const FREE_RUN_FILE_TEXT_MAX_CHARS = 60_000;
 
-export const FREE_RUN_FILE_ACCEPT = 'application/pdf,image/png,image/jpeg,image/gif,image/webp,text/plain,.txt,.md,.csv';
+export const FREE_RUN_FILE_ACCEPT =
+  'application/pdf,image/png,image/jpeg,image/gif,image/webp,text/plain,.txt,.md,.csv';
 
 export const freeRunFileMaxBytes = (maxMb: number): number =>
   Math.min(Math.floor(maxMb * 1024 * 1024), FREE_RUN_FILE_TRANSPORT_MAX_BYTES);
@@ -39,12 +39,18 @@ const refusal = (code: string, error: string, status = 400): FreeRunFileRefusal 
 export const FILE_NOT_SUPPORTED = refusal('file_not_supported', 'This skill takes text only. Paste your text instead.');
 const TOO_MANY_FILES = refusal('too_many_files', 'Attach one file only.');
 const MALFORMED = refusal('file_invalid', 'The file could not be read. Try another file.');
-const UNSUPPORTED_TYPE = refusal('file_type_unsupported', 'Attach a PDF, an image (PNG, JPEG, GIF or WebP) or a text file.');
+const UNSUPPORTED_TYPE = refusal(
+  'file_type_unsupported',
+  'Attach a PDF, an image (PNG, JPEG, GIF or WebP) or a text file.'
+);
 const NO_TEXT = refusal('file_no_text', 'No text could be read from this file. Paste the text instead.');
 const TOO_MUCH_TEXT = refusal('file_text_too_long', 'This file has too much text for a free run. Try a shorter one.');
 
 const IMAGE_SIGNATURES: { mediaType: string; test: (b: Buffer) => boolean }[] = [
-  { mediaType: 'image/png', test: b => b.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])) },
+  {
+    mediaType: 'image/png',
+    test: b => b.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])),
+  },
   { mediaType: 'image/jpeg', test: b => b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff },
   { mediaType: 'image/gif', test: b => /^GIF8[79]a/.test(b.subarray(0, 6).toString('latin1')) },
   {
@@ -91,7 +97,10 @@ export async function readFreeRunFile(
   const padding = data.endsWith('==') ? 2 : data.endsWith('=') ? 1 : 0;
   const size = Math.floor((data.length * 3) / 4) - padding;
   if (size > limits.maxBytes) {
-    return { ok: false, refusal: refusal('file_too_large', `Attach a file under ${formatFileCap(limits.maxBytes)}.`, 413) };
+    return {
+      ok: false,
+      refusal: refusal('file_too_large', `Attach a file under ${formatFileCap(limits.maxBytes)}.`, 413),
+    };
   }
   if (!data || data.length % 4 !== 0 || !BASE64.test(data)) return { ok: false, refusal: MALFORMED };
   const bytes = Buffer.from(data, 'base64');
@@ -136,7 +145,10 @@ async function readPdf(bytes: Buffer, name: string, maxPages: number) {
     if (pdf.numPages > maxPages) {
       return {
         ok: false as const,
-        refusal: refusal('file_too_many_pages', `Attach a PDF of ${maxPages} page${maxPages === 1 ? '' : 's'} or fewer.`),
+        refusal: refusal(
+          'file_too_many_pages',
+          `Attach a PDF of ${maxPages} page${maxPages === 1 ? '' : 's'} or fewer.`
+        ),
       };
     }
     const { text } = await extractText(pdf, { mergePages: true });
