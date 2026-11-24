@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { ChatModels, CreditHolderType, ModelBackend, type IUsageEventInput, type ModelInfo } from '@bike4mind/common';
-import { SafetyRefusalError, type ICompletionBackend } from '@bike4mind/llm-adapters';
+import { LlmTimeoutError, SafetyRefusalError, type ICompletionBackend } from '@bike4mind/llm-adapters';
 
 /**
  * The org feedback summary worker. Two things here are worth a test rather than a reading:
@@ -528,7 +528,15 @@ describe('org feedback summary usage', () => {
     inFlight.resolve();
     await vi.advanceTimersByTimeAsync(0);
     expect(h.recordUsage).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({ inputTokens: 60, outputTokens: 10 })
+      expect.objectContaining({
+        inputTokens: 0,
+        outputTokens: 0,
+        providerInputTokens: 60,
+        providerOutputTokens: 10,
+        settledBasis: 'provider',
+        status: 'timeout',
+        creditsCharged: 0,
+      })
     );
     expect(outcome).not.toHaveBeenCalled();
     expect(h.updateOne).toHaveBeenCalledTimes(1);
@@ -701,6 +709,48 @@ describe('org feedback summary usage', () => {
     expect(h.complete).toHaveBeenCalledTimes(2);
     expect(h.recordUsage).toHaveBeenCalledTimes(2);
     expect(new Set(h.recordUsage.mock.calls.map(([row]) => row.requestId)).size).toBe(2);
+  });
+
+  it('prices usage carried by a provider timeout error', async () => {
+    const timeout = new LlmTimeoutError('request', 1000, 'provider timeout', {
+      usage: { inputTokens: 40, cacheReadInputTokens: 10, cacheCreationInputTokens: 0, outputTokens: 4 },
+    });
+    h.complete.mockRejectedValueOnce(timeout);
+    await expect(run()).rejects.toBe(timeout);
+    expect(h.recordUsage).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ inputTokens: 40, outputTokens: 4, cachedInputTokens: 10, creditsCharged: 0 })
+    );
+    expect(h.upload).not.toHaveBeenCalled();
+  });
+
+  it('prices a refusal that carries per-turn usage from the turns', async () => {
+    const refusal = new SafetyRefusalError(model.id, {
+      inputTokens: 18,
+      outputTokens: 2,
+      cacheReadInputTokens: 0,
+      cacheCreationInputTokens: 0,
+      turnUsage: [
+        { inputTokens: 11, outputTokens: 1 },
+        { inputTokens: 7, outputTokens: 1 },
+      ],
+    });
+    h.complete.mockRejectedValueOnce(refusal);
+    await expect(run()).rejects.toBe(refusal);
+    expect(h.recordUsage).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ inputTokens: 18, outputTokens: 2, status: 'refusal' })
+    );
+  });
+
+  it('does not record usage when the job row belongs to another organization', async () => {
+    h.findOne.mockResolvedValue({
+      summaryJobId: SUMMARY_JOB_ID,
+      organizationId: 'other-organization',
+      requestedBy: message.userId,
+      status: 'pending',
+    });
+    await run();
+    expect(h.findUsageUser).not.toHaveBeenCalled();
+    expect(h.recordUsage).not.toHaveBeenCalled();
   });
 
   it('requires the summary reserve immediately before inference', async () => {
