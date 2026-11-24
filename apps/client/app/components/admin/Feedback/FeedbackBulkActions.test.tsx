@@ -1,7 +1,7 @@
 import React from 'react';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { getThemeConfig } from '@client/app/utils/themes';
 
 const mocks = vi.hoisted(() => ({ post: vi.fn() }));
@@ -93,6 +93,10 @@ describe('feedback bulk dialog', () => {
 });
 
 describe('feedback bulk bar clearance', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
   it('reports the sticky bar height and resets it to 0 when the bar goes away', () => {
     let resize: ResizeObserverCallback = () => {};
     vi.stubGlobal(
@@ -126,7 +130,6 @@ describe('feedback bulk bar clearance', () => {
     expect(onHeightChange).toHaveBeenLastCalledWith(80);
     unmount();
     expect(onHeightChange).toHaveBeenLastCalledWith(0);
-    vi.unstubAllGlobals();
   });
 
   it('renders no wrapper while nothing is selected', () => {
@@ -145,7 +148,7 @@ describe('feedback bulk bar clearance', () => {
     expect(screen.queryByTestId('feedback-bulk-bar-wrapper')).not.toBeInTheDocument();
   });
 
-  it('keeps focused rows above the bar when one is showing, else above the chat pill', () => {
+  it('sizes the row scroll margin for the bar when one is showing, else for the chat pill', () => {
     expect(feedbackRowScrollClearance(0)).toBe(76);
     expect(feedbackRowScrollClearance(40)).toBe(76);
     expect(feedbackRowScrollClearance(120)).toBe(144);

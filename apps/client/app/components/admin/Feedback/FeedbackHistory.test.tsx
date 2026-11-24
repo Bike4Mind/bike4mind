@@ -113,7 +113,7 @@ describe('private feedback history UI', () => {
         }),
         entry('undone', {
           summary: 'undid a feedback status change: InProgress back to New',
-          changes: [{ field: 'status', before: null, after: 'Archived' }],
+          changes: [{ field: 'status', before: 'InProgress', after: 'New' }],
         }),
         entry('note', { summary: 'added note', note: 'Still InProgress upstream' }),
         entry('other', {
@@ -129,7 +129,7 @@ describe('private feedback history UI', () => {
     expect(moved).toHaveTextContent('Status: New to In progress');
     const undone = screen.getByTestId('feedback-history-entry-undone');
     expect(undone).toHaveTextContent('undid a feedback status change: In progress back to New');
-    expect(undone).toHaveTextContent('Status: None to Archived');
+    expect(undone).toHaveTextContent('Status: In progress to New');
     expect(screen.getByTestId('feedback-history-entry-note')).toHaveTextContent('Still InProgress upstream');
     expect(screen.getByTestId('feedback-history-entry-other')).toHaveTextContent('mentions InProgress');
   });

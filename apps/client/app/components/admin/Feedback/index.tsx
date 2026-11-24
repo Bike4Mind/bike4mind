@@ -494,12 +494,12 @@ const FeedbackTab: React.FC = () => {
 
   const columns: DataColumn<FeedbackRow>[] = [
     { id: 'createdAt', label: 'Created', sortable: true, width: '7.5rem', render: row => <CreatedCell row={row} /> },
-    // Table layout is fixed, so the percentage resolves against the table width: near 15rem on a wide
-    // screen, narrower at tablet width so the Feedback column keeps most of the row.
+    // cqw, not %: Chrome treats a percentage inside clamp() as auto on a fixed-layout table. The query
+    // container is the table region below; 15rem on a wide screen, narrower at tablet width.
     {
       id: 'reporter',
       label: 'Reporter',
-      width: 'clamp(9rem, 22%, 15rem)',
+      width: 'clamp(9rem, 22cqw, 15rem)',
       render: row => <ReporterCell row={row} />,
     },
     { id: 'content', label: 'Feedback', wrap: true, render: row => <ContentCell row={row} /> },
@@ -696,6 +696,7 @@ const FeedbackTab: React.FC = () => {
         }
         sx={{
           minWidth: 0,
+          containerType: 'inline-size',
           ...adminFocus,
           '& tbody tr[data-row-id]': { scrollMarginBottom: 'var(--feedback-row-scroll-clearance)' },
         }}

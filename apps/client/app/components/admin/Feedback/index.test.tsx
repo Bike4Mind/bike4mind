@@ -189,8 +189,7 @@ describe('FeedbackTab', () => {
     renderFeedbackTab();
 
     const header = (name: string) => screen.getByRole('columnheader', { name }).closest('th')!;
-    // jsdom's CSS parser drops clamp(), so this only pins that the fixed 15rem is gone; the e2e measures widths.
-    expect(header('Reporter').style.width).not.toBe('15rem');
+    // jsdom's CSS parser drops clamp(), so the Reporter width is only measurable in a real browser.
     expect(header('Feedback').style.width).toBe('');
     expect(getComputedStyle(screen.getByTestId('feedback-row-content-fb-help-1')).maxHeight).toBe('120px');
   });

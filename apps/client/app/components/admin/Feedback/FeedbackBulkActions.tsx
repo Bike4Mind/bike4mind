@@ -16,7 +16,8 @@ import type { FeedbackListFilterParams } from './types';
 import { FEEDBACK_STATUS_LABELS, FEEDBACK_STATUS_ORDER } from './constants';
 import { FEEDBACK_BULK_MAX_REPORTS, type FeedbackBulkChange, type FeedbackBulkResponse } from './feedbackBulk';
 
-// px. The fixed AI Chat pill (FloatingChatPill) sits 20 px from the bottom-right corner and is 40 px tall.
+// px. Sized for the AI Chat pill (FloatingChatPill) at its default spot, 20 px from the bottom-right corner and
+// 40 px tall; it is draggable, so a moved pill is not accounted for.
 const CHAT_PILL_BAND = 60;
 const BULK_BAR_STICKY_BOTTOM = 8;
 const ROW_SCROLL_GAP = 16;
@@ -116,7 +117,8 @@ export default function FeedbackBulkActions({
   return (
     <>
       {hasSelection && (
-        // Left-aligned and kept short of the right edge so the AI Chat pill does not cover its buttons.
+        // Left-aligned and kept short of the right edge so the AI Chat pill, at its default spot, does not
+        // cover its buttons.
         <Box
           ref={barRef}
           data-testid="feedback-bulk-bar-wrapper"
