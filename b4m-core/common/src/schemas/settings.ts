@@ -1830,7 +1830,11 @@ export const AutoContainmentConfigSchema = z.object({
         })
         .prefault({})
         .meta({ title: 'Limit spend' }),
-      verify: interventionTierConfig('Require verification'),
+      verify: interventionTierConfig('Require verification').meta({
+        title: 'Require verification',
+        description:
+          'Not used yet: no card or phone verification flow can clear a verify hold, so verify decisions run under Request review and its settings.',
+      }),
       holdGrant: interventionTierConfig('Hold signup grant'),
       review: interventionTierConfig('Request review'),
     })

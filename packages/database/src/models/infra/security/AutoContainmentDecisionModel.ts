@@ -70,6 +70,12 @@ export const AutoContainmentDecisionSchema: Schema<IAutoContainmentDecisionDocum
     { timestamps: true, versionKey: false, collection: 'AutoContainmentDecision' }
   );
 
+/** Graduated decisions whose holds may be on accounts: a failed one can have applied some before it failed. */
+const HOLDING_FILTER = {
+  tier: { $in: INTERVENTION_TIERS.filter(tier => tier !== 'contain') },
+  outcome: { $in: ['intervened', 'failed'] },
+};
+
 AutoContainmentDecisionSchema.index({ detectionId: 1, revision: 1 }, { unique: true });
 AutoContainmentDecisionSchema.index({ decidedAt: 1 }, { expireAfterSeconds: RETENTION_SECONDS });
 AutoContainmentDecisionSchema.index({ outcome: 1, decidedAt: -1 });
@@ -160,7 +166,8 @@ export class AutoContainmentDecisionRepository {
   }
 
   /**
-   * Marks an applied graduated hold released. Only an `intervened` decision not yet released moves,
+   * Marks an applied graduated hold released. Only a graduated decision that applied holds (`intervened`,
+   * or `failed` after applying some) and is not yet released moves,
    * so a repeat or a release racing expiry is a no-op; null when nothing changed.
    */
   async release(
@@ -169,7 +176,7 @@ export class AutoContainmentDecisionRepository {
   ): Promise<AutoContainmentDecisionItem | null> {
     if (!Types.ObjectId.isValid(id)) return null;
     const doc = await AutoContainmentDecisionModel.findOneAndUpdate(
-      { _id: new Types.ObjectId(id), outcome: 'intervened', releasedAt: null },
+      { _id: new Types.ObjectId(id), ...HOLDING_FILTER, releasedAt: null },
       {
         $set: {
           outcome: 'released',
@@ -189,14 +196,13 @@ export class AutoContainmentDecisionRepository {
     const objectIds = ids.filter(id => Types.ObjectId.isValid(id)).map(id => new Types.ObjectId(id));
     if (objectIds.length === 0) return 0;
     const result = await AutoContainmentDecisionModel.updateMany(
-      { _id: { $in: objectIds }, outcome: 'intervened', releasedAt: null, expiresAt: { $ne: null, $lte: now } },
+      { _id: { $in: objectIds }, ...HOLDING_FILTER, releasedAt: null, expiresAt: { $ne: null, $lte: now } },
       { $set: { outcome: 'expired', releasedAt: now, releaseCondition: 'expiry' } },
       { runValidators: true }
     );
     return result.modifiedCount;
   }
 
-  /** Every decision on the detection, any revision, oldest first. */
   async findById(id: string): Promise<AutoContainmentDecisionItem | null> {
     if (!Types.ObjectId.isValid(id)) return null;
     const doc = await AutoContainmentDecisionModel.findById(id).lean<LeanDecision>();
@@ -205,13 +211,14 @@ export class AutoContainmentDecisionRepository {
 
   /** Applied graduated decisions of one tier not yet released, oldest first (bulk rollback). */
   async listActiveByTier(tier: InterventionTier, limit: number): Promise<AutoContainmentDecisionItem[]> {
-    const docs = await AutoContainmentDecisionModel.find({ tier, outcome: 'intervened', releasedAt: null })
+    const docs = await AutoContainmentDecisionModel.find({ ...HOLDING_FILTER, tier, releasedAt: null })
       .sort({ _id: 1 })
       .limit(limit)
       .lean<LeanDecision[]>();
     return docs.map(toItem);
   }
 
+  /** Every decision on the detection, any revision, oldest first. */
   async listForDetection(detectionId: string): Promise<AutoContainmentDecisionItem[]> {
     const docs = await AutoContainmentDecisionModel.find({ detectionId }).sort({ revision: 1 }).lean<LeanDecision[]>();
     return docs.map(toItem);

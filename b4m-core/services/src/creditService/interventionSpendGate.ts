@@ -18,9 +18,10 @@ const activeHolds = (user: Pick<IUserDocument, 'interventionHolds'>, now: Date):
   (user.interventionHolds ?? []).filter(hold => isActiveInterventionHold(hold, now));
 
 /**
- * Admits AI spend against the user's graduated intervention holds. Every admission site calls it
- * AFTER its balance debit and undoes the debit when it throws, so a hold committed before the debit
- * is always seen, however late it lands after the caller's first user read. Throws 403 for an
+ * Admits AI spend against the user's graduated intervention holds. Credit-hold admission sites call it
+ * AFTER their balance debit and undo the debit when it throws, so a hold committed before the debit
+ * is always seen, however late it lands after the caller's first user read; the agent executor's
+ * per-iteration gate meters each iteration's estimate before it runs. Throws 403 for an
  * active verify/review hold, 422 insufficient_credits once a limit hold's hourly credits are spent.
  * A limit hold with no window adapter wired refuses rather than admitting unmetered spend.
  */

@@ -54,7 +54,9 @@ const decision = (id: string, userIds = ['u1']) => ({ id, detectionId: DETECTION
 beforeEach(() => {
   vi.clearAllMocks();
   h.list.mockResolvedValue([]);
-  h.release.mockImplementation(async (_decision: unknown, input: { userIds: string[] }) => input.userIds);
+  h.release.mockImplementation(async (released: { userIds: string[] }, input: { actor: { id: string } }) =>
+    released.userIds.filter(id => id !== input.actor.id)
+  );
 });
 
 describe('/api/admin/shadow-detections/decisions', () => {
@@ -71,7 +73,7 @@ describe('/api/admin/shadow-detections/decisions', () => {
     await expect(h.routes.get(req, res)).rejects.toMatchObject({ statusCode: 400 });
   });
 
-  it('releases one decision for every named account but the acting admin, auditing each', async () => {
+  it('releases one decision as the acting admin, auditing each released account', async () => {
     h.findById.mockResolvedValue(decision(DECISION_ID, ['u1', ADMIN_ID]));
     const { req, res } = request('POST', { body: { decisionId: DECISION_ID, reason: REASON } });
 
@@ -79,7 +81,12 @@ describe('/api/admin/shadow-detections/decisions', () => {
 
     expect(h.release).toHaveBeenCalledWith(
       expect.objectContaining({ id: DECISION_ID }),
-      expect.objectContaining({ userIds: ['u1'], by: ADMIN_ID, condition: 'admin_release', reason: REASON })
+      expect.objectContaining({
+        actor: expect.objectContaining({ id: ADMIN_ID }),
+        by: ADMIN_ID,
+        condition: 'admin_release',
+        reason: REASON,
+      })
     );
     expect(h.audit).toHaveBeenCalledTimes(1);
     expect(res._getJSONData()).toEqual({ released: [{ decisionId: DECISION_ID, userIds: ['u1'] }] });

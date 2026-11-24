@@ -120,7 +120,7 @@ function makeDecisions() {
     listForDetection: vi.fn(async (detectionId: string) => stored.filter(row => row.detectionId === detectionId)),
     recordOnce: vi.fn(async (input: Omit<Row, 'id'>) => {
       if (stored.some(row => row.detectionId === input.detectionId && row.revision === input.revision)) return null;
-      const row = { ...input, id: `decision-${stored.length + 1}` };
+      const row = { tier: 'contain' as const, ...input, id: `decision-${stored.length + 1}` };
       stored.push(row);
       return { ...row };
     }),
@@ -138,6 +138,11 @@ function makeDecisions() {
         return { ...row };
       }
     ),
+    release: vi.fn(async (id: string, _input: { reason: string; condition: string }) => {
+      const row = stored.find(candidate => candidate.id === id);
+      if (row) Object.assign(row, { outcome: 'released' });
+      return row ? { ...row } : null;
+    }),
     finish: vi.fn(async (id: string, patch: Pick<Row, 'outcome' | 'batchId' | 'error'>) => {
       const row = stored.find(candidate => candidate.id === id);
       if (row) Object.assign(row, patch);
@@ -154,6 +159,7 @@ function makeDeps(config: Partial<AutoContainmentConfig> = {}, slot = true, deci
     takeHourlySlot: vi.fn(async (_mode: Row['mode'], _maxPerHour: number, _tier?: string) => slot),
     contain: vi.fn(async (): Promise<typeof bulkResult | null> => bulkResult),
     applyHold: vi.fn(async (_userId: string, _hold: InterventionHold) => true),
+    releaseHold: vi.fn(async (_userId: string, _decisionId: string) => true),
     auditHold: vi.fn(async (_userId: string, _decision: Row) => undefined),
     verificationAvailable: vi.fn(async () => false),
     now: () => now,
@@ -526,5 +532,72 @@ describe('applyAutoContainment graduated tiers', () => {
     await applyAutoContainment(assessment, deps);
     expect(stored[0]).toMatchObject({ outcome: 'failed', error: expect.stringContaining('user-1: boom') });
     expect(deps.applyHold).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('applyAutoContainment Contain fallback to the limit tier', () => {
+  beforeEach(() => vi.clearAllMocks());
+  const config = {
+    mode: 'enforce',
+    tiers: { limit: { mode: 'shadow', minConfidence: 0.7, rolloutPercent: 100 } },
+  } as Partial<AutoContainmentConfig>;
+
+  it('records would_intervene on the limit tier for a contain detection judged below Contain minConfidence', async () => {
+    const { deps, stored } = makeDeps(config);
+    const run = await applyAutoContainment({ ...assessment, confidence: 0.8 }, deps);
+    expect(run).toMatchObject({
+      status: 'decided',
+      decision: { tier: 'limit', mode: 'shadow', outcome: 'would_intervene' },
+    });
+    expect(stored).toHaveLength(1);
+    expect(deps.contain).not.toHaveBeenCalled();
+    expect(deps.applyHold).not.toHaveBeenCalled();
+  });
+
+  it('still contains an account a later revision judges at Contain confidence', async () => {
+    const { deps } = makeDeps(config);
+    await applyAutoContainment({ ...assessment, confidence: 0.8 }, deps);
+    vi.mocked(deps.findDetection).mockResolvedValue({ ...detection, revision: 1 });
+    const run = await applyAutoContainment(assessment, deps);
+    expect(run).toMatchObject({
+      status: 'decided',
+      decision: { tier: 'contain', outcome: 'contained', userIds: ['user-1'] },
+    });
+    expect(deps.contain).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('applyAutoContainment graduated verdict landing mid-apply', () => {
+  beforeEach(() => vi.clearAllMocks());
+  const config = {
+    mode: 'enforce',
+    tiers: { holdGrant: { mode: 'enforce', rolloutPercent: 100 } },
+  } as Partial<AutoContainmentConfig>;
+  const holding = { ...detection, wouldAction: 'confirmHold' as const };
+
+  it('lifts the holds it just applied when a legitimate verdict landed meanwhile', async () => {
+    const { deps, stored } = makeDeps(config);
+    vi.mocked(deps.findDetection)
+      .mockResolvedValueOnce(holding)
+      .mockResolvedValueOnce(holding)
+      .mockResolvedValueOnce({ ...holding, verdict: 'legitimate_human' });
+    await applyAutoContainment(assessment, deps);
+    expect(deps.applyHold).toHaveBeenCalledTimes(1);
+    expect(deps.releaseHold).toHaveBeenCalledWith('user-1', stored[0].id);
+    expect(deps.decisions.release).toHaveBeenCalledWith(
+      stored[0].id,
+      expect.objectContaining({ condition: 'legitimate_verdict' })
+    );
+    expect(stored[0].outcome).toBe('released');
+  });
+
+  it('keeps the holds on a confirmed_abuse verdict', async () => {
+    const { deps } = makeDeps(config);
+    vi.mocked(deps.findDetection)
+      .mockResolvedValueOnce(holding)
+      .mockResolvedValueOnce(holding)
+      .mockResolvedValueOnce({ ...holding, verdict: 'confirmed_abuse' });
+    await applyAutoContainment(assessment, deps);
+    expect(deps.releaseHold).not.toHaveBeenCalled();
   });
 });

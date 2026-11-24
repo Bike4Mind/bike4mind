@@ -2632,10 +2632,14 @@ UserSchema.index(
   { 'signupMeta.ip': 1 },
   { name: 'user_signupMeta_ip', partialFilterExpression: { 'signupMeta.ip': { $type: 'string' } } }
 );
-// Expiry stamping of graduated holds (apps/workers/src/cron/abuseAssessmentSweep.ts); only unreleased holds.
+// Expiry stamping of graduated holds (apps/workers/src/cron/abuseAssessmentSweep.ts). Only accounts that
+// carry a hold: a null-equality filter would also match every account with no holds field.
 UserSchema.index(
   { 'interventionHolds.expiresAt': 1 },
-  { name: 'user_interventionHolds_expiresAt', partialFilterExpression: { 'interventionHolds.releasedAt': null } }
+  {
+    name: 'user_interventionHolds_expiresAt_held',
+    partialFilterExpression: { 'interventionHolds.expiresAt': { $exists: true } },
+  }
 );
 UserSchema.index({ 'slackSettings.slackUserId': 1 });
 UserSchema.index({ 'slackSettings.githubNotifications.githubUsername': 1 });

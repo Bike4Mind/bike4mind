@@ -74,6 +74,8 @@ import {
   isSupportedEmbeddingModel,
   libraryFlagForScope,
   readOrgModelPolicy,
+  ForbiddenError,
+  UnprocessableEntityError,
 } from '@bike4mind/common';
 import { toRetrievalFilter } from '@bike4mind/utils/retrievalExclusion';
 import {
@@ -852,6 +854,20 @@ async function readPayerBalance(payer: { organizationId?: string | null; userId:
 async function readUserAccessDenial(userId: string): Promise<string | null> {
   const user = await userRepository.findById(userId);
   return user ? aiAccessDeniedMessage(user) : 'User not found';
+}
+
+/** Meters one iteration's credits against an active limit hold; the refusal message when the hold stops it. */
+async function readInterventionSpendRefusal(userId: string, credits: number): Promise<string | null> {
+  try {
+    await creditService.assertInterventionSpendAllowed(
+      { userId, credits },
+      { users: userRepository, window: cacheRepository }
+    );
+    return null;
+  } catch (error) {
+    if (error instanceof ForbiddenError || error instanceof UnprocessableEntityError) return error.message;
+    throw error;
+  }
 }
 
 const spendFreezeReadDeps: SpendFreezeDenialDeps = {
@@ -3362,8 +3378,8 @@ async function runExecution(
             lastInputTokens,
             readBalance: () =>
               readPayerBalance({ organizationId: organization?.id, userId: (user as IUserDocument).id }),
-            checkSpendCap: requiredCredits =>
-              creditService.checkNewAccountSpendCap(
+            checkSpendCap: async requiredCredits =>
+              (await creditService.checkNewAccountSpendCap(
                 {
                   user: user as IUserDocument,
                   requestedCredits: requiredCredits,
@@ -3371,7 +3387,7 @@ async function runExecution(
                   logger,
                 },
                 newAccountSpendCapAdaptersWithAlert
-              ),
+              )) ?? readInterventionSpendRefusal((user as IUserDocument).id, requiredCredits),
             snapshot: () => {
               const checkpoint = agent.toCheckpoint();
               return { steps: checkpoint.steps, partialAnswer: extractFinalAnswer(checkpoint.steps) };

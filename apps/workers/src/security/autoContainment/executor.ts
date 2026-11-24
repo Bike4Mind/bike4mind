@@ -65,7 +65,10 @@ export type ContainRequest = {
 export type AutoContainmentDeps = {
   loadConfig: () => Promise<AutoContainmentConfig>;
   findDetection: (id: string) => Promise<ShadowDetectionItem | null>;
-  decisions: Pick<typeof autoContainmentDecisionRepository, 'listForDetection' | 'recordOnce' | 'reclaim' | 'finish'>;
+  decisions: Pick<
+    typeof autoContainmentDecisionRepository,
+    'listForDetection' | 'recordOnce' | 'reclaim' | 'finish' | 'release'
+  >;
   /** Takes one decision from the hourly window of the mode (Contain) or of the tier and mode; false when it is spent. */
   takeHourlySlot: (
     mode: AutoContainmentDecisionItem['mode'],
@@ -75,6 +78,8 @@ export type AutoContainmentDeps = {
   contain: (request: ContainRequest) => Promise<AdminUsersBulkResult | null>;
   /** Adds the hold unless that decision's hold is already on the account; false when it was not added. */
   applyHold: (userId: string, hold: InterventionHold) => Promise<boolean>;
+  /** Lifts one decision's hold from the account; false when it was not on it. */
+  releaseHold: (userId: string, decisionId: string) => Promise<boolean>;
   /** One audit row per account a graduated hold reached. */
   auditHold: (userId: string, decision: AutoContainmentDecisionItem) => Promise<void>;
   /** Whether a verification flow can clear a verify hold; without one, verify decisions become review. */
@@ -121,6 +126,8 @@ export const liveAutoContainmentDeps = (logger: Logger): AutoContainmentDeps => 
     (await cacheRepository.tryIncrementWithinLimitFixedWindow(hourlyKey(mode, tier), maxPerHour, HOUR_MS)).success,
   contain: containAsSystem(logger),
   applyHold: (userId, hold) => userRepository.addInterventionHold(userId, hold),
+  releaseHold: (userId, decisionId) =>
+    userRepository.releaseInterventionHold(userId, decisionId, { by: AUTO_CONTAINMENT_ACTOR_ID, now: new Date() }),
   auditHold: async (userId, decision) => {
     await systemAuditWriter(
       AUTO_CONTAINMENT_ACTOR,
@@ -192,7 +199,9 @@ async function claimDecision(
     });
     return reclaimed ? { decision: reclaimed, retried: current.outcome === 'pending' } : null;
   }
-  const covered = new Set(prior.flatMap(row => row.userIds));
+  // A graduated hold never stands in for Contain, so only earlier Contain rows cover an account for it.
+  const covering = decided.tier === 'contain' ? prior.filter(row => row.tier === 'contain') : prior;
+  const covered = new Set(covering.flatMap(row => row.userIds));
   const userIds = decided.userIds.filter(userId => !covered.has(userId));
   if (userIds.length === 0) return null;
   const recorded = await deps.decisions.recordOnce({
@@ -338,7 +347,8 @@ async function applyGraduatedTier(
   }
 
   // The claim stamps expiresAt; a reclaimed retry reuses the stored row, so every account gets the same window.
-  const expiresAt = decision.expiresAt ?? decided.expiresAt ?? deps.now();
+  const expiresAt = decision.expiresAt ?? decided.expiresAt;
+  if (!expiresAt) return settle({ outcome: 'failed', batchId: null, error: 'graduated decision has no expiry' });
   const hold: InterventionHold = {
     decisionId: decision.id,
     detectionId: detection.id,
@@ -371,5 +381,36 @@ async function applyGraduatedTier(
   const meta = { ...logMeta, outcome: finished.outcome, error: finished.error };
   if (finished.outcome === 'failed') deps.logger.error('[AUTO_CONTAINMENT] intervention failed', meta);
   else deps.logger.info('[AUTO_CONTAINMENT] intervention applied', meta);
-  return settle(finished);
+  const result = await settle(finished);
+  await releaseIfLegitimateVerdictLanded(decision, deps, logMeta);
+  return result;
+}
+
+/**
+ * A legitimate verdict committed while the holds went on found this decision still pending, and the
+ * verdict route releases only settled ones (apps/client/server/security/interventionRelease.ts), so
+ * the holds are lifted here. Runs after settling, so a verdict landing later sees the settled decision.
+ */
+async function releaseIfLegitimateVerdictLanded(
+  decision: AutoContainmentDecisionItem,
+  deps: AutoContainmentDeps,
+  logMeta: Record<string, unknown>
+): Promise<void> {
+  try {
+    const latest = await deps.findDetection(decision.detectionId);
+    if (!latest?.verdict?.startsWith('legitimate_')) return;
+    for (const userId of decision.userIds) await deps.releaseHold(userId, decision.id);
+    await deps.decisions.release(decision.id, {
+      by: AUTO_CONTAINMENT_ACTOR_ID,
+      reason: `Released on a ${latest.verdict} verdict that landed while the hold was applied`,
+      condition: 'legitimate_verdict',
+      now: deps.now(),
+    });
+    deps.logger.info('[AUTO_CONTAINMENT] hold released on a verdict that landed mid-apply', logMeta);
+  } catch (error) {
+    deps.logger.error('[AUTO_CONTAINMENT] releasing holds after a mid-apply verdict failed', {
+      ...logMeta,
+      error: errorText(error),
+    });
+  }
 }

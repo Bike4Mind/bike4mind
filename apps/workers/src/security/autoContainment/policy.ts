@@ -116,6 +116,12 @@ const TIER_BY_ACTION: Partial<Record<ShadowDetectionItem['wouldAction'], Interve
   verify: 'verify',
 };
 
+/**
+ * An abuse judgment on a contain detection that falls short of Contain's minConfidence is offered to
+ * this tier, which applies its own mode, minConfidence and rollout. Part of the versioned table.
+ */
+export const CONTAIN_FALLBACK_TIER: GraduatedInterventionTier = 'limit';
+
 const SCOPE_BY_TIER: Record<InterventionTier, InterventionScope> = {
   contain: 'account',
   limit: 'ai_spend',
@@ -145,13 +151,16 @@ export function decideIntervention(input: {
   /** Whether any verification flow (card or phone) can clear a verify hold; without one, verify becomes review. */
   verificationAvailable: boolean;
 }): InterventionDecision {
-  const { assessment, detection, config, now } = input;
+  const { detection, config } = input;
   const mapped = TIER_BY_ACTION[detection.wouldAction];
   if (!mapped) return { kind: 'skip', why: 'not_an_intervention_detection', tier: null };
 
   if (mapped === 'contain') {
     const decided = decideContainment(input);
-    if (decided.kind === 'skip') return { ...decided, tier: 'contain' };
+    if (decided.kind === 'skip') {
+      const fallback = decided.why === 'below_confidence' ? decideGraduated(input, CONTAIN_FALLBACK_TIER) : null;
+      return fallback?.kind === 'act' ? fallback : { ...decided, tier: 'contain' };
+    }
     return {
       kind: 'act',
       tier: 'contain',
@@ -164,6 +173,14 @@ export function decideIntervention(input: {
     };
   }
 
+  return decideGraduated(input, mapped);
+}
+
+function decideGraduated(
+  input: Parameters<typeof decideIntervention>[0],
+  mapped: GraduatedInterventionTier
+): InterventionDecision {
+  const { assessment, detection, config, now } = input;
   const tier: GraduatedInterventionTier = mapped === 'verify' && !input.verificationAvailable ? 'review' : mapped;
   const skip = (why: InterventionSkipReason): InterventionDecision => ({ kind: 'skip', why, tier });
   const tierConfig = config.tiers[tier];

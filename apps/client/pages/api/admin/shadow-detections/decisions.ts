@@ -65,10 +65,8 @@ const handler = adminApi({
       const released: InterventionReleaseResponse['released'] = [];
       for (const decision of decisions) {
         if (!decision) continue;
-        // An admin never lifts a hold on their own account (or the one impersonating them).
-        const actors = new Set([req.user.id, req.user.impersonatedBy].filter(Boolean));
         const userIds = await releaseInterventionDecision(decision, {
-          userIds: decision.userIds.filter(id => !actors.has(id)),
+          actor: req.user,
           by: req.user.id,
           reason,
           condition: 'admin_release',

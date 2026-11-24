@@ -253,4 +253,42 @@ describe('decideIntervention', () => {
       decide({ detection: { wouldAction: 'contain' }, assessment: { assessedAt: new Date(0), confidence: 0.95 } }).kind
     ).toBe('act');
   });
+
+  describe('Contain fallback', () => {
+    const withLimit = (limit: Record<string, unknown>) =>
+      AutoContainmentConfigSchema.parse({ mode: 'shadow', tiers: { limit: { rolloutPercent: 100, ...limit } } });
+    const belowContain = { detection: { wouldAction: 'contain' as const }, assessment: { confidence: 0.8 } };
+
+    it('offers an abuse judgment below Contain minConfidence to the limit tier', () => {
+      expect(decide({ ...belowContain, config: withLimit({ mode: 'shadow', minConfidence: 0.7 }) })).toMatchObject({
+        kind: 'act',
+        tier: 'limit',
+        mode: 'shadow',
+        scope: 'ai_spend',
+      });
+    });
+
+    it.each([
+      ['the tier is off (the default)', { mode: 'off', minConfidence: 0.7 }],
+      ['the judgment is below the tier minConfidence too', { mode: 'shadow', minConfidence: 0.85 }],
+      ['the account is outside the rollout', { mode: 'shadow', minConfidence: 0.7, rolloutPercent: 0 }],
+    ])('keeps the Contain skip when %s', (_label, limit) => {
+      expect(decide({ ...belowContain, config: withLimit(limit) })).toEqual({
+        kind: 'skip',
+        why: 'below_confidence',
+        tier: 'contain',
+      });
+    });
+
+    it('never falls back on a judgment that is not abuse', () => {
+      const config = withLimit({ mode: 'shadow', minConfidence: 0.7 });
+      expect(
+        decide({ ...belowContain, assessment: { confidence: 0.8, result: 'insufficient_evidence' }, config })
+      ).toEqual({
+        kind: 'skip',
+        why: 'not_abuse',
+        tier: 'contain',
+      });
+    });
+  });
 });

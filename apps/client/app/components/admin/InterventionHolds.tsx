@@ -62,7 +62,10 @@ export const holdStatus = (
 };
 
 const decisionStatus = (decision: WireDecision): InterventionRow['status'] => {
-  if (decision.outcome === 'intervened') return 'active';
+  // A failed graduated decision can have applied some holds before it failed, so it stays releasable.
+  if (decision.outcome === 'intervened' || (decision.outcome === 'failed' && decision.tier !== 'contain')) {
+    return 'active';
+  }
   if (decision.outcome === 'released' || decision.outcome === 'expired') return decision.outcome;
   return 'other';
 };
