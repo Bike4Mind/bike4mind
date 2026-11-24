@@ -1,5 +1,5 @@
 import React from 'react';
-import { act, fireEvent, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -58,7 +58,7 @@ describe('EditTagModal', () => {
     await act(async () => {
       fireEvent.click(screen.getByTestId('edit-tag-save-btn'));
     });
-    expect((screen.getByTestId('edit-tag-modal-close-btn') as HTMLButtonElement).disabled).toBe(true);
+    await waitFor(() => expect(screen.getByTestId('edit-tag-modal-close-btn')).toBeDisabled());
     fireEvent.keyDown(screen.getByTestId('edit-tag-modal'), { key: 'Escape' });
     expect(useEditAppFileTagModal.getState().targetFile).toBe(file);
   });
