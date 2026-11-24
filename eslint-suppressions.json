@@ -2940,10 +2940,7 @@
     }
   },
   "apps/client/pages/api/slack/commands.ts": {
-    "b4m/require-update-validators": { "count": 2 },
-    "@typescript-eslint/no-explicit-any": {
-      "count": 9
-    }
+    "b4m/require-update-validators": { "count": 2 }
   },
   "apps/client/pages/api/slack/events.ts": {
     "b4m/require-update-validators": { "count": 1 },
