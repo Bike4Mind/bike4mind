@@ -264,6 +264,20 @@ describe('/api/auth/mfa/passkey/register', () => {
     expect(mockFinishRegistration.mock.calls[0][1]).toHaveProperty('users');
   });
 
+  it('strips secrets and undeclared fields from the user a first-factor enrollment returns', async () => {
+    mockFindById
+      .mockResolvedValueOnce({ id: 'user-1', mfa: {} })
+      .mockResolvedValueOnce({ id: 'user-1', ...secretUserFields() });
+    mockFinishRegistration.mockResolvedValue({ credential: storedCredential, firstFactor: true, backupCodes: ['c1'] });
+    const { req, res } = makeReqRes({ response: attestation });
+
+    await registerHandler(req as never, res as never);
+
+    const body = res._getJSONData();
+    expect(body.accessToken).toBe('fresh-access');
+    expectSelfUserStripped(body.user, body, 'user-1');
+  });
+
   it('refuses a pending sign-in whose user already has a factor, before touching the ceremony', async () => {
     mockFindById.mockResolvedValue({ id: 'user-1', mfa: { passkeyEnabled: true } });
     const { req, res } = makeReqRes({ response: attestation });
