@@ -25,6 +25,7 @@ import {
   type WorkerTask,
 } from '@shared/orchestration';
 import { randomUUID } from 'node:crypto';
+import { assertEvaluationTool, evaluationContext, filterEvaluationTools } from './evaluationBudget';
 import { isUpdateOnlyTask, MISSING_TASK_RESULT_REASON } from '@shared/agentState';
 import { LOOP_HELP, parseLoop, type LoopResult, type LoopStart, type LoopState } from '@shared/loop';
 import { LoopScheduler, type LoopOutcome } from './LoopScheduler';
@@ -2966,14 +2967,15 @@ export class ChatService {
     // using a button which still displayed the old one.
     if (!root || resolve(root) !== expectedProjectDirectory) return this.listSkills(scope);
     if ('draftDirectory' in scope && (await this.workspaceBindingReason(root))) return this.listSkills(scope);
-    await this.deps.skills.setTrusted(root, trusted);
+    // For an app worktree the decision lands on its main checkout, so the audit names that too.
+    const recorded = await this.deps.skills.setTrusted(root, trusted);
     if (this.deps.capabilities) {
       if (trusted) {
         await this.deps.capabilities
           .grant({
-            subject: { kind: 'project', directory: resolve(root) },
+            subject: { kind: 'project', directory: recorded },
             capability: 'project-trust',
-            scope: { kind: 'project', value: root },
+            scope: { kind: 'project', value: recorded },
             source: 'project-trust',
           })
           .catch(error => this.deps.logger.warn(`CAPABILITIES: could not audit project trust: ${String(error)}`));
@@ -2983,7 +2985,7 @@ export class ChatService {
             grant =>
               grant.capability === 'project-trust' &&
               grant.scope.kind === 'project' &&
-              grant.scope.value === resolve(root)
+              (grant.scope.value === recorded || grant.scope.value === resolve(root))
           )
           .catch(error => this.deps.logger.warn(`CAPABILITIES: could not audit project revocation: ${String(error)}`));
       }
@@ -4673,7 +4675,7 @@ export class ChatService {
               pullRequest: session.mode === 'code' && !!this.deps.pullRequests,
             });
       const toolsFor = (granted: readonly string[]) =>
-        modelOption?.supportsTools === false ? [] : offeredTools(granted);
+        modelOption?.supportsTools === false ? [] : filterEvaluationTools(offeredTools(granted));
       let tools = toolsFor(roots);
       this.deps.approvals?.setParent(session.id, session.origin?.parentSessionId);
       const directoryTurn: DirectoryTurn = {
@@ -6169,7 +6171,14 @@ export class ChatService {
 
         // Raced against the stop rather than awaited outright: a tool that ignores the signal would
         // otherwise hold Stop and "send now" until it finished. See untilStopped.
-        const outcome = await untilStopped((async () => tool.run(call.input, context))(), signal, () => writing);
+        const outcome = await untilStopped(
+          (async () => {
+            assertEvaluationTool(request.name);
+            return tool.run(call.input, context);
+          })(),
+          signal,
+          () => writing
+        );
         let settled: ChatToolCall;
         if (outcome.kind === 'abandoned') {
           abandoned = true;
@@ -7211,6 +7220,16 @@ export class ChatService {
    * instead keeps its session for retry. The slot passes to `spawnWatch` before this returns,
    * which releases it when the seeded run ends.
    */
+  async startEvaluationWorker(parentId: string, prompt: string): Promise<string> {
+    if (!evaluationContext.getStore()) throw new Error('Evaluation context is required.');
+    assertEvaluationTool('session_spawn');
+    const parent = await this.deps.store.get(parentId);
+    if (!parent) throw new Error('Evaluation parent is unavailable.');
+    const result = await this.spawnSession(parent, prompt, 'Evaluation worker', { kind: 'local' });
+    if (!result.ok) throw new Error('Evaluation worker could not start.');
+    return result.session.id;
+  }
+
   private async spawnSession(
     parent: ChatSession,
     prompt: string,
@@ -9818,7 +9837,7 @@ const MEMORY_GUIDANCE: readonly string[] = [
 const HOST_GUIDANCE: readonly string[] = [
   'You can also work with the conversations in this project: session_list and session_read see',
   'them, session_spawn hands work to a new one, session_send speaks to one that already exists,',
-  'session_archive tidies one away and session_delete removes one permanently. Spawning,',
+  'session_archive tidies one away and session_delete removes them permanently. Spawning,',
   'archiving and deleting reach this project only, and a spawned session can read and change',
   'exactly the folders you can - it cannot be given others.',
   'session_rename names this conversation or one you started once its work is known (the issue',
@@ -9854,9 +9873,10 @@ const HOST_GUIDANCE: readonly string[] = [
   'Messages between sessions are capped: a few hops from whatever the user typed and a couple',
   'per turn. That cap is what stops two sessions messaging each other forever, so a refusal',
   'mentioning it is final - say what you have in this conversation and let the user carry it on.',
-  'Prefer session_archive over session_delete. Deleting cannot be undone, the user is asked every',
-  'single time, and you should only ever reach for it when they have asked for that particular',
-  'conversation to be deleted.',
+  'Prefer session_archive over session_delete. Deleting cannot be undone, the user is asked on',
+  'every call, and you should only ever reach for it when they have asked for those particular',
+  'conversations to be deleted. To delete several, name them all in one session_delete call (up',
+  'to 25) so the user answers once; never call it once per conversation.',
 ];
 
 /** The prompt carries the task, so a contract only has to add the outcome, role and acceptance criteria. */

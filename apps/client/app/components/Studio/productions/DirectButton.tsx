@@ -6,6 +6,7 @@ import { toast } from 'sonner';
 import {
   DIRECTOR_TOOLS,
   buildDirectorSystemContext,
+  studioDirectorBriefing,
   type IFabFileDocument,
   type IResolvedPromptDispatch,
   type StudioCompositionResponse,
@@ -30,6 +31,19 @@ const productLines = (picked: IFabFileDocument | null, brandProducts: readonly s
   return onFile ? [`Product photo: already in the brand kit (${onFile}); every shot uses it.`] : [];
 };
 
+type LaunchCopy = { piece: string; placeholder: string; productPhoto: boolean };
+
+const AD_COPY: LaunchCopy = {
+  piece: 'ad',
+  placeholder: 'A 20 second launch ad for our new running shoe',
+  productPhoto: true,
+};
+const FILM_COPY: LaunchCopy = {
+  piece: 'film',
+  placeholder: 'A lighthouse keeper finds a message in a bottle addressed to her',
+  productPhoto: false,
+};
+
 const sameBrief = (a: string, b: string): boolean => a.trim().toLowerCase() === b.trim().toLowerCase();
 
 type DirectedShot = NonNullable<StudioCompositionResponse['shots']>[number];
@@ -42,12 +56,17 @@ const isAuthoredShot = (shot: DirectedShot): boolean =>
 // A Direct launch on a production that already has shots is the user asking for a new ad; without saying so the
 // storyboard tool refuses the new lines and the director reads the brief as a follow-up that keeps every shot. The
 // replace is scoped to this message: the director carries it into later turns otherwise (a swap rebuilt the ad).
-const redirectLines = (shots: readonly DirectedShot[], brief: string, savedBrief: string | undefined): string[] => {
+const redirectLines = (
+  shots: readonly DirectedShot[],
+  brief: string,
+  savedBrief: string | undefined,
+  piece: string
+): string[] => {
   const shotCount = shots.filter(isAuthoredShot).length;
   return shotCount > 0 && !sameBrief(brief, savedBrief ?? '')
     ? [
         `It already has ${shotCount} shot${shotCount === 1 ? '' : 's'} from an earlier brief. This brief replaces ` +
-          'that ad: write a new storyboard for it with production_storyboard, passing rewriteLines: true and ' +
+          `that ${piece}: write a new storyboard for it with production_storyboard, passing rewriteLines: true and ` +
           'replace: true and no keep. That applies to this message only; on every later message keep each shot ' +
           'the user does not ask to change.',
       ]
@@ -55,7 +74,8 @@ const redirectLines = (shots: readonly DirectedShot[], brief: string, savedBrief
 };
 
 type DirectDialogProps = {
-  composition: Pick<StudioCompositionResponse, 'id' | 'brief' | 'brandKit' | 'shots'>;
+  composition: Pick<StudioCompositionResponse, 'id' | 'brief' | 'brandKit' | 'shots'> &
+    Partial<Pick<StudioCompositionResponse, 'template' | 'timeline'>>;
   open: boolean;
   onClose: () => void;
 };
@@ -70,6 +90,10 @@ export const DirectDialog = ({ composition, open, onClose }: DirectDialogProps) 
   const [creating, setCreating] = useState(false);
 
   const trimmedBrief = brief.trim();
+  const copy = composition.template === 'short_film' ? FILM_COPY : AD_COPY;
+  const { template, timeline } = composition;
+  const briefing =
+    template && timeline ? studioDirectorBriefing({ template, brief: composition.brief, timeline }) : undefined;
 
   const submit = async () => {
     if (!trimmedBrief || creating) return;
@@ -83,8 +107,8 @@ export const DirectDialog = ({ composition, open, onClose }: DirectDialogProps) 
         // second anchor the model can quote back.
         `Production id: ${composition.id}`,
         'On every turn, change it only through the production tools, and report only what their results show.',
-        ...productLines(product, composition.brandKit?.productFileIds ?? []),
-        ...redirectLines(composition.shots ?? [], trimmedBrief, composition.brief?.summary),
+        ...(copy.productPhoto ? productLines(product, composition.brandKit?.productFileIds ?? []) : []),
+        ...redirectLines(composition.shots ?? [], trimmedBrief, composition.brief?.summary, copy.piece),
       ].join('\n');
       const dispatch: IResolvedPromptDispatch = {
         promptId: 'production-direct',
@@ -93,7 +117,7 @@ export const DirectDialog = ({ composition, open, onClose }: DirectDialogProps) 
         promptName: 'Direct production',
         isHidden: false,
         requiredTools: [...DIRECTOR_TOOLS],
-        systemContext: buildDirectorSystemContext(composition.id),
+        systemContext: buildDirectorSystemContext(composition.id, briefing),
         forceAgent: true,
         sessionId: session.id,
         // Marks the notebook as directed, so a follow-up turn stays in agent mode with the production tools.
@@ -121,40 +145,42 @@ export const DirectDialog = ({ composition, open, onClose }: DirectDialogProps) 
                 minRows={3}
                 value={brief}
                 onChange={event => setBrief(event.target.value.slice(0, BRIEF_MAX_LENGTH))}
-                placeholder="A 20 second launch ad for our new running shoe"
+                placeholder={copy.placeholder}
                 slotProps={{ textarea: { 'data-testid': 'production-direct-brief-input' } }}
               />
             </FormControl>
-            <FormControl>
-              <FormLabel>Product photo (optional)</FormLabel>
-              <Stack direction="row" spacing={1} alignItems="center">
-                <Button
-                  variant="outlined"
-                  color="neutral"
-                  size="sm"
-                  onClick={() => pickerRef.current?.handleOpen()}
-                  data-testid="production-direct-product-pick-btn"
-                >
-                  {product ? 'Change photo' : 'Choose photo'}
-                </Button>
-                {product && (
-                  <>
-                    <Typography level="body-sm" data-testid="production-direct-product-name">
-                      {product.fileName}
-                    </Typography>
-                    <Button
-                      variant="plain"
-                      color="neutral"
-                      size="sm"
-                      onClick={() => setProduct(null)}
-                      data-testid="production-direct-product-clear-btn"
-                    >
-                      Clear
-                    </Button>
-                  </>
-                )}
-              </Stack>
-            </FormControl>
+            {copy.productPhoto && (
+              <FormControl>
+                <FormLabel>Product photo (optional)</FormLabel>
+                <Stack direction="row" spacing={1} alignItems="center">
+                  <Button
+                    variant="outlined"
+                    color="neutral"
+                    size="sm"
+                    onClick={() => pickerRef.current?.handleOpen()}
+                    data-testid="production-direct-product-pick-btn"
+                  >
+                    {product ? 'Change photo' : 'Choose photo'}
+                  </Button>
+                  {product && (
+                    <>
+                      <Typography level="body-sm" data-testid="production-direct-product-name">
+                        {product.fileName}
+                      </Typography>
+                      <Button
+                        variant="plain"
+                        color="neutral"
+                        size="sm"
+                        onClick={() => setProduct(null)}
+                        data-testid="production-direct-product-clear-btn"
+                      >
+                        Clear
+                      </Button>
+                    </>
+                  )}
+                </Stack>
+              </FormControl>
+            )}
             <Stack direction="row" spacing={1} justifyContent="flex-end">
               <Button
                 variant="plain"
