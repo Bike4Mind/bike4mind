@@ -21,7 +21,7 @@ import {
 import { notifyOrgEvent } from '../organizationService/orgEventObserver';
 import { isMemberCreditCapExceeded } from './memberCreditCap';
 import { assertNewAccountSpendWithinCap, type NewAccountSpendCapAdapters } from './newAccountSpendCap';
-import { assertInterventionSpendAllowed, interventionAccessRefusal } from './interventionSpendGate';
+import { assertInterventionSpendAllowed } from './interventionSpendGate';
 import { aiAccessDeniedMessage } from '../userService/accountState';
 import { assertSpendNotFrozen } from '../spendFreezeService/assertSpendNotFrozen';
 import { spendFreezeSubjectForHold } from '../spendFreezeService/spendFreezeSubjectForHold';
@@ -112,7 +112,7 @@ export async function holdCredits(
   if (!user) throw new BadRequestError('User not found');
   // Every hold reloads the user, so a queued job or continuation placing one after the account was blocked is
   // refused here, whichever path placed it. Same gate as assertAiAccessAllowed.
-  const accessDenial = aiAccessDeniedMessage(user) ?? interventionAccessRefusal(user, new Date());
+  const accessDenial = aiAccessDeniedMessage(user);
   if (accessDenial) throw new ForbiddenError(accessDenial);
   let organization: IOrganizationDocument | null = null;
   if (organizationId) {

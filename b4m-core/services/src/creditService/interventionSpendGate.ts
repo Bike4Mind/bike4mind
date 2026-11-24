@@ -8,22 +8,14 @@ import {
   type IUserRepository,
 } from '@bike4mind/common';
 
+import { interventionHoldMessage } from '../userService/accountState';
+
 const HOUR_MS = 60 * 60 * 1000;
 
 export type InterventionSpendWindow = Pick<ICacheRepository, 'tryAddWithinLimitFixedWindow'>;
 
-export const AI_ACCESS_INTERVENTION_HOLD_MESSAGE =
-  'AI usage on this account is paused pending a review. Your sign-in and data are unaffected; contact support to request a review.';
-
 const activeHolds = (user: Pick<IUserDocument, 'interventionHolds'>, now: Date): InterventionHold[] =>
   (user.interventionHolds ?? []).filter(hold => isActiveInterventionHold(hold, now));
-
-/** The refusal an active verify or review hold puts on AI spend; null when there is none. */
-export function interventionAccessRefusal(user: Pick<IUserDocument, 'interventionHolds'>, now: Date): string | null {
-  return activeHolds(user, now).some(hold => hold.tier === 'verify' || hold.tier === 'review')
-    ? AI_ACCESS_INTERVENTION_HOLD_MESSAGE
-    : null;
-}
 
 /**
  * Admits AI spend against the user's graduated intervention holds. Every admission site calls it
@@ -39,7 +31,7 @@ export async function assertInterventionSpendAllowed(
   const now = params.now ?? new Date();
   const user = await adapters.users.findById(params.userId);
   if (!user) return;
-  const refusal = interventionAccessRefusal(user, now);
+  const refusal = interventionHoldMessage(user, now);
   if (refusal) throw new ForbiddenError(refusal);
   const limits = activeHolds(user, now).filter(hold => hold.tier === 'limit');
   if (limits.length === 0) return;

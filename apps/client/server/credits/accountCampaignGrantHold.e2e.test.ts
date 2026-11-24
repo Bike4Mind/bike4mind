@@ -275,7 +275,7 @@ describe('holdGrant intervention on the staged signup grant', () => {
     expect(await grantOf(user.id)).toEqual(before);
   });
 
-  it('pays once the hold is released, and ignores an expired hold', async () => {
+  it('pays once the hold is released', async () => {
     const released = await createSignupStageUser();
     await placeHold(released.id);
     await User.updateOne(
@@ -283,7 +283,10 @@ describe('holdGrant intervention on the staged signup grant', () => {
       { $set: { 'interventionHolds.0.releasedAt': new Date(), 'interventionHolds.0.releasedBy': 'admin1' } }
     );
     expect((await unlockPhone(released.id)).creditsGranted).toBeGreaterThan(0);
+  });
 
+  // Its own test: a second signup in one test reads as an account campaign and is held for that instead.
+  it('ignores an expired hold', async () => {
     const expired = await createSignupStageUser();
     await placeHold(expired.id, new Date(Date.now() - 1000));
     expect((await unlockPhone(expired.id)).creditsGranted).toBeGreaterThan(0);
