@@ -4,8 +4,12 @@ import { callableFunctionDataKey } from './dataKeys';
 const HASH = 'a'.repeat(64);
 
 describe('callableFunctionDataKey', () => {
-  it('lays a key out as the prefix, a slash, and the hash', () => {
-    expect(callableFunctionDataKey('tenant_0-a', HASH)).toBe(`tenant_0-a/${HASH}`);
+  it('lays a key out under data/ as the prefix, a slash, and the hash', () => {
+    expect(callableFunctionDataKey('tenant_0-a', HASH)).toBe(`data/tenant_0-a/${HASH}`);
+  });
+
+  it('keeps a prefix named like another top-level segment under data/', () => {
+    expect(callableFunctionDataKey('outputs', HASH)).toBe(`data/outputs/${HASH}`);
   });
 
   it('keeps the same bytes under two prefixes apart', () => {
