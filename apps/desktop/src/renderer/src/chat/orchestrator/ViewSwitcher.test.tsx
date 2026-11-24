@@ -10,6 +10,8 @@ import {
   ORCHESTRATOR_VIEW_INFO,
   ViewSwitcher,
   RESET_LAYOUT,
+  fitMenuToViewport,
+  menuMaxHeight,
   isFocusToggle,
   isViewReset,
   stepView,
@@ -386,5 +388,41 @@ describe('ViewSwitcher', () => {
         pane.remove();
       }
     });
+  });
+});
+
+describe('menu height', () => {
+  it('fits the space beside the button, keeping a margin and a floor', () => {
+    expect(menuMaxHeight(760)).toBe(752);
+    expect(menuMaxHeight(760.4)).toBe(752);
+    expect(menuMaxHeight(10)).toBe(120);
+  });
+
+  type ModifierArgs = Parameters<NonNullable<typeof fitMenuToViewport.fn>>[0];
+  const runModifier = (placement: string) => {
+    const state = {
+      placement,
+      elements: { reference: { getBoundingClientRect: () => ({ top: 300, bottom: 330 }) } },
+      styles: { popper: { position: 'absolute' } },
+    };
+    fitMenuToViewport.fn?.({ state } as unknown as ModifierArgs);
+    return state.styles.popper;
+  };
+
+  it('caps the popper to the window below its anchor', () => {
+    expect(runModifier('bottom-start')).toEqual({
+      position: 'absolute',
+      maxHeight: `${menuMaxHeight(window.innerHeight - 330)}px`,
+    });
+  });
+
+  it('caps the popper to the window above its anchor when flipped', () => {
+    expect(runModifier('top-start')).toEqual({ position: 'absolute', maxHeight: `${menuMaxHeight(300)}px` });
+  });
+
+  it('opens the view menu as a bounded, scrollable list', async () => {
+    await themed.render(<ViewSwitcher layout={singlePaneLayout('tavern')} onLayoutChange={onLayoutChange} />);
+    act(() => el('orchestrator-view-menu-btn').click());
+    expect(getComputedStyle(el('orchestrator-view-menu')).overflowY).toBe('auto');
   });
 });
