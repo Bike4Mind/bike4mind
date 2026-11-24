@@ -11,6 +11,8 @@ export type ProductLook = {
   status: 'made' | 'pending' | `failed: ${string}` | `skipped: ${string}`;
   /** The look's job when it is still running; a re-call attaches to it instead of paying again. */
   pendingJobId?: string;
+  /** The look is still in its upload safety check, so takes wait for it to clear. */
+  checking?: boolean;
 };
 
 /**
@@ -63,13 +65,17 @@ export async function ensureProductLook(
     if (savedLooks.has(fileId)) {
       return { references: [], status: 'skipped: the look made earlier in this run is no longer in the brand kit' };
     }
+    // A look the image job would refuse (e.g. moderation-blocked) is neither saved nor referenced, so takes do not
+    // wait on it and a re-call does not keep reporting them pending.
+    const state = (await config.referenceImages([fileId])).get(fileId);
+    if (!state) return { references: [], status: 'failed: the product look cannot be used as a reference' };
     // Read again: the user may have edited the brand kit while the look was being made.
     const fresh = await config.compositions.get(composition.id);
     await config.compositions.update(composition.id, {
       brandKit: { ...fresh.brandKit, productFileIds: withProductLook(fresh.brandKit.productFileIds, fileId) },
     });
     markSaved(fileId);
-    return { references: [fileId], status: 'made' };
+    return { references: [fileId], status: 'made', checking: state === 'checking' };
   }
   const outcome = jobOutcome(job);
   if (outcome.startsWith('still')) return { references: [], status: 'pending', pendingJobId: jobId };

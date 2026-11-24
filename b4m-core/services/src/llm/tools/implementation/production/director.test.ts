@@ -529,6 +529,21 @@ describe('production director tools', () => {
       expect(harness.composition().shots.every(shot => shot.chosenFileId)).toBe(true);
     });
 
+    it('neither saves nor references a look the image job would refuse', async () => {
+      harness.config.referenceImages = async () => new Map();
+      await run(productionStoryboardTool, harness, noProduct);
+      const result = JSON.parse(
+        await run(productionGenerateShotTool, harness, { compositionId: COMPOSITION_ID, animate: false })
+      );
+
+      expect(result.productLook).toMatch(/^failed: /);
+      expect(harness.composition().brandKit.productFileIds).toEqual([]);
+      const takes = harness.imageRequests.filter(({ request }) => !isLook(request));
+      expect(takes).toHaveLength(3);
+      for (const { request } of takes) expect(inputsOf(request)).toBeUndefined();
+      for (const shot of result.shots) expect(shot.pending ?? []).toEqual([]);
+    });
+
     it('skips the look when the brief has no summary', async () => {
       await run(productionStoryboardTool, harness, noProduct);
       await harness.config.compositions.update(COMPOSITION_ID, { brief: {} });
