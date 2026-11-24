@@ -42,12 +42,15 @@ export const SELF_ASSESSED_SHADOW_DETECTORS: readonly ShadowDetector[] = ['signu
  * The action the detector's policy maps the detection to. contain/suspend/restrict match the admin
  * bulk user actions; blockIp is for actors with no signed-in account, where containing a user is not
  * possible. confirmHold/releaseHold/none are the signup domain hold assessment's outcomes (confirm the
- * hold, release it, or leave it for an admin).
+ * hold, release it, or leave it for an admin). limit/verify are graduated interventions a detector
+ * opts into (apps/workers/src/security/autoContainment/policy.ts maps each action to a tier).
  */
 export const SHADOW_DETECTION_ACTIONS = [
   'contain',
   'suspend',
   'restrict',
+  'limit',
+  'verify',
   'blockIp',
   'confirmHold',
   'releaseHold',

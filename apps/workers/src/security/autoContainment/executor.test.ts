@@ -5,6 +5,7 @@ import {
   type AbuseAssessmentItem,
   type AutoContainmentConfig,
   type AutoContainmentDecisionItem,
+  type InterventionHold,
   type ShadowDetectionItem,
 } from '@bike4mind/common';
 
@@ -20,6 +21,7 @@ vi.mock('@bike4mind/database', () => ({
   autoContainmentDecisionRepository: {},
   cacheRepository: {},
   shadowDetectionRepository: {},
+  userRepository: {},
 }));
 vi.mock('@bike4mind/server-utils/admin/usersBulk/adapters', () => ({
   usersBulkExecuteDepsFor: h.depsFor,
@@ -32,6 +34,7 @@ vi.mock('@bike4mind/server-utils/admin/usersBulk/resolve', async importOriginal 
 }));
 vi.mock('@workers/utils/systemAuditWriter', () => ({ systemAuditWriter: h.writer }));
 
+import type { AdminUsersBulkResult } from '@bike4mind/server-utils/app/utils/adminUsersBulk';
 import { cohortHashOf } from '@bike4mind/server-utils/admin/usersBulk/resolve';
 import {
   AUTO_CONTAINMENT_ACTOR,
@@ -98,6 +101,7 @@ const detection: ShadowDetectionItem = {
 const bulkResult = {
   batchId: 'batch-1',
   applied: 1,
+  committedUserIds: ['user-1'],
   skipped: 0,
   failed: [],
   partial: false,
@@ -110,15 +114,23 @@ const bulkResult = {
 
 type Row = AutoContainmentDecisionItem;
 
-/** An in-memory decisions store with the repository's claim semantics (unique pair, atomic reclaim). */
+/** An in-memory decisions store with the repository's claim semantics (unique claim class, atomic reclaim). */
 function makeDecisions() {
   const stored: Row[] = [];
   return {
     stored,
     listForDetection: vi.fn(async (detectionId: string) => stored.filter(row => row.detectionId === detectionId)),
     recordOnce: vi.fn(async (input: Omit<Row, 'id'>) => {
-      if (stored.some(row => row.detectionId === input.detectionId && row.revision === input.revision)) return null;
-      const row = { ...input, id: `decision-${stored.length + 1}` };
+      if (
+        stored.some(
+          row =>
+            row.detectionId === input.detectionId &&
+            row.revision === input.revision &&
+            (row.tier === 'contain') === ((input.tier ?? 'contain') === 'contain')
+        )
+      )
+        return null;
+      const row = { tier: 'contain' as const, ...input, id: `decision-${stored.length + 1}` };
       stored.push(row);
       return { ...row };
     }),
@@ -136,9 +148,21 @@ function makeDecisions() {
         return { ...row };
       }
     ),
-    finish: vi.fn(async (id: string, patch: Pick<Row, 'outcome' | 'batchId' | 'error'>) => {
+    release: vi.fn(async (id: string, _input: { reason: string; condition: string }) => {
       const row = stored.find(candidate => candidate.id === id);
-      if (row) Object.assign(row, patch);
+      if (row) Object.assign(row, { outcome: 'released' });
+      return row ? { ...row } : null;
+    }),
+    finish: vi.fn(async (id: string, patch: Pick<Row, 'outcome' | 'batchId' | 'error'>, decidedAt: Date) => {
+      const row = stored.find(
+        candidate =>
+          candidate.id === id &&
+          candidate.outcome === 'pending' &&
+          candidate.decidedAt.getTime() === decidedAt.getTime()
+      );
+      if (!row) return false;
+      Object.assign(row, patch);
+      return true;
     }),
   };
 }
@@ -149,8 +173,18 @@ function makeDeps(config: Partial<AutoContainmentConfig> = {}, slot = true, deci
     loadConfig: vi.fn(async () => AutoContainmentConfigSchema.parse(config)),
     findDetection: vi.fn(async (): Promise<ShadowDetectionItem | null> => detection),
     decisions,
-    takeHourlySlot: vi.fn(async (_mode: Row['mode'], _maxPerHour: number) => slot),
-    contain: vi.fn(async (): Promise<typeof bulkResult | null> => bulkResult),
+    takeHourlySlot: vi.fn(async (_mode: Row['mode'], _maxPerHour: number, _tier?: string) => slot),
+    contain: vi.fn(async (): Promise<AdminUsersBulkResult | null> => bulkResult),
+    applyHold: vi.fn(async (_userId: string, _hold: InterventionHold) => true),
+    releaseHold: vi.fn(async (_userId: string, _decisionId: string) => true),
+    releaseContainedHolds: vi.fn(async (decisionId: string, userIds: string[]) => {
+      const row = decisions.stored.find(candidate => candidate.id === decisionId);
+      if (row && row.userIds.every(userId => userIds.includes(userId))) {
+        Object.assign(row, { outcome: 'released', releasedAt: now, releaseCondition: 'contained' });
+      }
+    }),
+    auditHold: vi.fn(async (_userId: string, _decision: Row) => undefined),
+    verificationAvailable: vi.fn(async () => false),
     now: () => now,
     logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
   } satisfies AutoContainmentDeps;
@@ -381,5 +415,379 @@ describe('containAsSystem', () => {
     h.resolve.mockResolvedValue({ eligible: [] });
     expect(await containAsSystem()(request)).toBeNull();
     expect(h.execute).not.toHaveBeenCalled();
+  });
+});
+
+describe('applyAutoContainment graduated tiers', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  const holdGrantDetection: ShadowDetectionItem = {
+    ...detection,
+    wouldAction: 'confirmHold',
+    userIds: ['user-1', 'user-2'],
+  };
+  const tierConfig = (mode: 'off' | 'shadow' | 'enforce', extra: Record<string, unknown> = {}) =>
+    ({
+      mode: 'enforce',
+      tiers: { holdGrant: { mode, rolloutPercent: 100, ...extra } },
+    }) as Partial<AutoContainmentConfig>;
+  const withDetection = (deps: AutoContainmentDeps, found: ShadowDetectionItem) =>
+    vi.mocked(deps.findDetection).mockResolvedValue(found);
+
+  it('does nothing while the tier is off (the default), even with Contain enforcing', async () => {
+    const { deps, stored } = makeDeps({ mode: 'enforce' });
+    withDetection(deps, holdGrantDetection);
+    expect(await applyAutoContainment(assessment, deps)).toEqual({ status: 'skipped', reason: 'tier_off' });
+    expect(stored).toHaveLength(0);
+    expect(deps.applyHold).not.toHaveBeenCalled();
+  });
+
+  it('turns every tier off through the global kill switch', async () => {
+    const { deps } = makeDeps({ ...tierConfig('enforce'), mode: 'off' });
+    withDetection(deps, holdGrantDetection);
+    expect(await applyAutoContainment(assessment, deps)).toEqual({ status: 'skipped', reason: 'mode_off' });
+    expect(deps.findDetection).not.toHaveBeenCalled();
+  });
+
+  it('records would_intervene in shadow and writes no hold', async () => {
+    const { deps, stored } = makeDeps(tierConfig('shadow'));
+    withDetection(deps, holdGrantDetection);
+    const run = await applyAutoContainment(assessment, deps);
+    expect(run).toMatchObject({
+      status: 'decided',
+      decision: { tier: 'holdGrant', mode: 'shadow', outcome: 'would_intervene' },
+    });
+    expect(stored[0]).toMatchObject({ tier: 'holdGrant', policyVersion: 1, scope: 'signup_grant' });
+    expect(stored[0].expiresAt).toEqual(new Date(NOW.getTime() + 72 * 3_600_000));
+    expect(deps.takeHourlySlot).toHaveBeenCalledWith('shadow', 5, 'holdGrant');
+    expect(deps.applyHold).not.toHaveBeenCalled();
+    expect(deps.contain).not.toHaveBeenCalled();
+  });
+
+  it('adds one hold per account in enforce and audits each, never through the Contain path', async () => {
+    const { deps, stored } = makeDeps(tierConfig('enforce', { maxPerHour: 3 }));
+    withDetection(deps, holdGrantDetection);
+    const run = await applyAutoContainment(assessment, deps);
+    expect(run).toMatchObject({ status: 'decided', decision: { outcome: 'intervened' } });
+    expect(deps.takeHourlySlot).toHaveBeenCalledWith('enforce', 3, 'holdGrant');
+    expect(deps.applyHold).toHaveBeenCalledTimes(2);
+    expect(deps.applyHold).toHaveBeenCalledWith(
+      'user-2',
+      expect.objectContaining({
+        decisionId: stored[0].id,
+        tier: 'holdGrant',
+        releasedAt: null,
+        expiresAt: stored[0].expiresAt,
+      }),
+      stored[0].decidedAt
+    );
+    expect(deps.auditHold).toHaveBeenCalledTimes(2);
+    expect(deps.contain).not.toHaveBeenCalled();
+  });
+
+  it('snapshots the credits-per-hour limit onto a limit hold', async () => {
+    const { deps } = makeDeps({
+      mode: 'enforce',
+      tiers: { limit: { mode: 'enforce', rolloutPercent: 100, creditsPerHour: 40 } },
+    } as never);
+    withDetection(deps, { ...detection, wouldAction: 'limit' });
+    await applyAutoContainment(assessment, deps);
+    expect(deps.applyHold).toHaveBeenCalledWith(
+      'user-1',
+      expect.objectContaining({ tier: 'limit', creditsPerHour: 40 }),
+      expect.any(Date)
+    );
+  });
+
+  it('records verify as review when no verification flow is available', async () => {
+    const { deps, stored } = makeDeps({
+      mode: 'enforce',
+      tiers: { review: { mode: 'shadow', rolloutPercent: 100 } },
+    } as never);
+    withDetection(deps, { ...detection, wouldAction: 'verify' });
+    await applyAutoContainment(assessment, deps);
+    expect(stored[0].tier).toBe('review');
+  });
+
+  it('caps by the tier hourly window', async () => {
+    const { deps, stored } = makeDeps(tierConfig('enforce'), false);
+    withDetection(deps, holdGrantDetection);
+    await applyAutoContainment(assessment, deps);
+    expect(stored[0].outcome).toBe('capped');
+    expect(deps.applyHold).not.toHaveBeenCalled();
+  });
+
+  it('withdraws when an admin verdict lands before the hold', async () => {
+    const { deps, stored } = makeDeps(tierConfig('enforce'));
+    vi.mocked(deps.findDetection)
+      .mockResolvedValueOnce(holdGrantDetection)
+      .mockResolvedValueOnce({ ...holdGrantDetection, verdict: 'legitimate' } as ShadowDetectionItem);
+    await applyAutoContainment(assessment, deps);
+    expect(stored[0].outcome).toBe('withdrawn');
+    expect(deps.applyHold).not.toHaveBeenCalled();
+  });
+
+  it('lets exactly one of two concurrent runs act', async () => {
+    const { deps } = makeDeps(tierConfig('enforce'));
+    withDetection(deps, holdGrantDetection);
+    const runs = await Promise.all([applyAutoContainment(assessment, deps), applyAutoContainment(assessment, deps)]);
+    expect(runs.filter(run => run.status === 'decided')).toHaveLength(1);
+    expect(runs).toContainEqual({ status: 'skipped', reason: 'already_decided' });
+    expect(deps.applyHold).toHaveBeenCalledTimes(2);
+  });
+
+  it('retries a stale pending decision with the same decision id, so the hold is not stacked', async () => {
+    const { deps, stored, advance } = makeDeps(tierConfig('enforce'));
+    withDetection(deps, holdGrantDetection);
+    vi.mocked(deps.applyHold).mockRejectedValueOnce(new Error('write timeout'));
+    await applyAutoContainment(assessment, deps);
+    expect(stored[0].outcome).toBe('failed');
+    stored[0].outcome = 'pending';
+    advance(STALE_PENDING_MS + 1);
+    await applyAutoContainment({ ...assessment, assessedAt: new Date(NOW.getTime() + STALE_PENDING_MS) }, deps);
+    expect(stored[0].outcome).toBe('intervened');
+    const decisionIds = vi.mocked(deps.applyHold).mock.calls.map(([, hold]) => hold.decisionId);
+    expect(new Set(decisionIds)).toEqual(new Set([stored[0].id]));
+  });
+
+  it('marks the decision failed when a hold write throws, and still holds the other accounts', async () => {
+    const { deps, stored } = makeDeps(tierConfig('enforce'));
+    withDetection(deps, holdGrantDetection);
+    vi.mocked(deps.applyHold).mockRejectedValueOnce(new Error('boom'));
+    await applyAutoContainment(assessment, deps);
+    expect(stored[0]).toMatchObject({ outcome: 'failed', error: expect.stringContaining('user-1: boom') });
+    expect(deps.applyHold).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('applyAutoContainment Contain fallback to the limit tier', () => {
+  beforeEach(() => vi.clearAllMocks());
+  const config = {
+    mode: 'enforce',
+    tiers: { limit: { mode: 'shadow', minConfidence: 0.7, rolloutPercent: 100 } },
+  } as Partial<AutoContainmentConfig>;
+
+  it('keeps concurrent different graduated tiers in one claim slot', async () => {
+    const { deps, stored } = makeDeps({
+      mode: 'enforce',
+      tiers: {
+        limit: { mode: 'enforce', rolloutPercent: 100 },
+        review: { mode: 'enforce', rolloutPercent: 100 },
+      },
+    } as Partial<AutoContainmentConfig>);
+    deps.findDetection
+      .mockResolvedValueOnce({ ...detection, wouldAction: 'limit' })
+      .mockResolvedValueOnce({ ...detection, wouldAction: 'verify' });
+    const runs = await Promise.all([
+      applyAutoContainment(assessment, deps),
+      applyAutoContainment({ ...assessment, id: 'assessment-2' }, deps),
+    ]);
+    expect(stored).toHaveLength(1);
+    expect(runs.filter(run => run.status === 'decided')).toHaveLength(1);
+    expect(deps.applyHold).toHaveBeenCalledTimes(1);
+  });
+
+  it('records would_intervene on the limit tier for a contain detection judged below Contain minConfidence', async () => {
+    const { deps, stored } = makeDeps(config);
+    const run = await applyAutoContainment({ ...assessment, confidence: 0.8 }, deps);
+    expect(run).toMatchObject({
+      status: 'decided',
+      decision: { tier: 'limit', mode: 'shadow', outcome: 'would_intervene' },
+    });
+    expect(stored).toHaveLength(1);
+    expect(deps.contain).not.toHaveBeenCalled();
+    expect(deps.applyHold).not.toHaveBeenCalled();
+  });
+
+  it('still contains an account a later revision judges at Contain confidence', async () => {
+    const { deps } = makeDeps(config);
+    await applyAutoContainment({ ...assessment, confidence: 0.8 }, deps);
+    vi.mocked(deps.findDetection).mockResolvedValue({ ...detection, revision: 1 });
+    const run = await applyAutoContainment(assessment, deps);
+    expect(run).toMatchObject({
+      status: 'decided',
+      decision: { tier: 'contain', outcome: 'contained', userIds: ['user-1'] },
+    });
+    expect(deps.contain).toHaveBeenCalledTimes(1);
+  });
+
+  it('contains on the same revision once a later judgment reaches Contain confidence, lifting the limit hold', async () => {
+    const { deps, stored } = makeDeps({
+      mode: 'enforce',
+      tiers: { limit: { mode: 'enforce', minConfidence: 0.7, rolloutPercent: 100 } },
+    } as Partial<AutoContainmentConfig>);
+    await applyAutoContainment({ ...assessment, confidence: 0.8 }, deps);
+    expect(stored[0]).toMatchObject({ tier: 'limit', outcome: 'intervened' });
+    expect(deps.applyHold).toHaveBeenCalledTimes(1);
+
+    const run = await applyAutoContainment({ ...assessment, id: 'assessment-2' }, deps);
+    expect(run).toMatchObject({
+      status: 'decided',
+      decision: { id: stored[1].id, tier: 'contain', outcome: 'contained', userIds: ['user-1'] },
+    });
+    expect(deps.contain).toHaveBeenCalledTimes(1);
+    expect(deps.releaseContainedHolds).toHaveBeenCalledWith(stored[0].id, ['user-1']);
+    expect(stored[0]).toMatchObject({ tier: 'limit', outcome: 'released', releaseCondition: 'contained' });
+    expect(stored[0].expiresAt).not.toBeNull();
+    expect(stored).toHaveLength(2);
+  });
+
+  it.each(['shadow', 'capped', 'withdrawn', 'no_accounts', 'throws', 'all_failed'] as const)(
+    'preserves the original graduated hold and release history when Contain is %s',
+    async scenario => {
+      const { deps, stored } = makeDeps({
+        mode: 'enforce',
+        tiers: { limit: { mode: 'enforce', minConfidence: 0.7, rolloutPercent: 100 } },
+      } as Partial<AutoContainmentConfig>);
+      await applyAutoContainment({ ...assessment, confidence: 0.8 }, deps);
+      const original = structuredClone(stored[0]);
+      if (scenario === 'shadow')
+        deps.loadConfig.mockResolvedValue(AutoContainmentConfigSchema.parse({ mode: 'shadow' }));
+      if (scenario === 'capped') deps.takeHourlySlot.mockResolvedValue(false);
+      if (scenario === 'withdrawn') {
+        deps.findDetection
+          .mockResolvedValueOnce(detection)
+          .mockResolvedValueOnce({ ...detection, verdict: 'legitimate_human' });
+      }
+      if (scenario === 'no_accounts') deps.contain.mockResolvedValue(null);
+      if (scenario === 'throws') deps.contain.mockRejectedValue(new Error('contain unavailable'));
+      if (scenario === 'all_failed')
+        deps.contain.mockResolvedValue({
+          ...bulkResult,
+          applied: 0,
+          committedUserIds: [],
+          failed: [{ userId: 'user-1', error: 'rolled back' }],
+        });
+
+      await applyAutoContainment({ ...assessment, id: 'assessment-2' }, deps);
+
+      expect(stored[0]).toEqual(original);
+      expect(deps.releaseHold).not.toHaveBeenCalled();
+      expect(deps.releaseContainedHolds).not.toHaveBeenCalled();
+      expect(stored).toHaveLength(2);
+    }
+  );
+
+  it.each([false, true])('lifts only committed accounts from partial Contain (failed=%s)', async failed => {
+    const { deps, stored } = makeDeps({
+      mode: 'enforce',
+      tiers: { limit: { mode: 'enforce', minConfidence: 0.7, rolloutPercent: 100 } },
+    } as Partial<AutoContainmentConfig>);
+    deps.findDetection.mockResolvedValue({ ...detection, userIds: ['user-1', 'user-2'] });
+    await applyAutoContainment({ ...assessment, confidence: 0.8 }, deps);
+    const original = structuredClone(stored[0]);
+    deps.contain.mockResolvedValue({
+      ...bulkResult,
+      committedUserIds: ['user-1', 'outside-cohort'],
+      partial: !failed,
+      remaining: failed ? 0 : 1,
+      failed: failed ? [{ userId: 'user-2', error: 'rolled back' }] : [],
+    });
+    await applyAutoContainment(assessment, deps);
+    expect(deps.releaseContainedHolds).toHaveBeenCalledExactlyOnceWith(original.id, ['user-1']);
+    expect(stored[0]).toEqual(original);
+  });
+
+  it('retries a pending graduated account left outside a partial Contain receipt', async () => {
+    const { deps, stored, advance } = makeDeps({
+      mode: 'enforce',
+      tiers: { limit: { mode: 'enforce', minConfidence: 0.7, rolloutPercent: 100 } },
+    } as Partial<AutoContainmentConfig>);
+    deps.findDetection.mockResolvedValue({ ...detection, userIds: ['user-1', 'user-2'] });
+    deps.applyHold.mockResolvedValueOnce(true).mockRejectedValueOnce(new Error('worker interrupted'));
+    await applyAutoContainment({ ...assessment, confidence: 0.8 }, deps);
+    stored[0].outcome = 'pending';
+    const graduatedId = stored[0].id;
+    deps.contain.mockResolvedValue({ ...bulkResult, committedUserIds: ['user-1'], partial: true, remaining: 1 });
+    await applyAutoContainment(assessment, deps);
+    deps.applyHold.mockClear();
+    advance(STALE_PENDING_MS + 1);
+    const retried = await applyAutoContainment({ ...assessment, confidence: 0.8 }, deps);
+    expect(retried).toMatchObject({
+      status: 'decided',
+      decision: { id: graduatedId, tier: 'limit', outcome: 'intervened' },
+    });
+    expect(deps.applyHold).toHaveBeenCalledWith(
+      'user-2',
+      expect.objectContaining({ decisionId: graduatedId }),
+      expect.any(Date)
+    );
+  });
+
+  it('retains graduated holds when an older cached bulk result has no committed receipt', async () => {
+    const { deps, stored } = makeDeps({
+      mode: 'enforce',
+      tiers: { limit: { mode: 'enforce', minConfidence: 0.7, rolloutPercent: 100 } },
+    } as Partial<AutoContainmentConfig>);
+    await applyAutoContainment({ ...assessment, confidence: 0.8 }, deps);
+    const original = structuredClone(stored[0]);
+    const { committedUserIds: _receipt, ...legacy } = bulkResult;
+    deps.contain.mockResolvedValue(legacy);
+    await applyAutoContainment(assessment, deps);
+    expect(deps.releaseContainedHolds).not.toHaveBeenCalled();
+    expect(stored[0]).toEqual(original);
+  });
+
+  it('keeps the original decision available for release when automatic lifting fails', async () => {
+    const { deps, stored } = makeDeps({
+      mode: 'enforce',
+      tiers: { limit: { mode: 'enforce', minConfidence: 0.7, rolloutPercent: 100 } },
+    } as Partial<AutoContainmentConfig>);
+    await applyAutoContainment({ ...assessment, confidence: 0.8 }, deps);
+    const original = structuredClone(stored[0]);
+    deps.releaseContainedHolds.mockRejectedValue(new Error('release transaction unavailable'));
+    expect(await applyAutoContainment(assessment, deps)).toMatchObject({
+      status: 'decided',
+      decision: { outcome: 'contained' },
+    });
+    expect(stored[0]).toEqual(original);
+    expect(deps.logger.error).toHaveBeenCalled();
+  });
+
+  it('never lets a graduated run reclaim a capped Contain decision on the revision', async () => {
+    const { deps, stored, advance } = makeDeps(config, false);
+    await applyAutoContainment(assessment, deps);
+    expect(stored[0]).toMatchObject({ tier: 'contain', outcome: 'capped' });
+    vi.mocked(deps.takeHourlySlot).mockResolvedValue(true);
+    advance(2 * 60 * 60 * 1000);
+
+    const run = await applyAutoContainment({ ...assessment, confidence: 0.8 }, deps);
+    expect(run).toEqual({ status: 'skipped', reason: 'already_decided' });
+    expect(stored[0]).toMatchObject({ tier: 'contain', outcome: 'capped' });
+  });
+});
+
+describe('applyAutoContainment graduated verdict landing mid-apply', () => {
+  beforeEach(() => vi.clearAllMocks());
+  const config = {
+    mode: 'enforce',
+    tiers: { holdGrant: { mode: 'enforce', rolloutPercent: 100 } },
+  } as Partial<AutoContainmentConfig>;
+  const holding = { ...detection, wouldAction: 'confirmHold' as const };
+
+  it('lifts the holds it just applied when a legitimate verdict landed meanwhile', async () => {
+    const { deps, stored } = makeDeps(config);
+    vi.mocked(deps.findDetection)
+      .mockResolvedValueOnce(holding)
+      .mockResolvedValueOnce(holding)
+      .mockResolvedValueOnce({ ...holding, verdict: 'legitimate_human' });
+    await applyAutoContainment(assessment, deps);
+    expect(deps.applyHold).toHaveBeenCalledTimes(1);
+    expect(deps.releaseHold).toHaveBeenCalledWith('user-1', stored[0].id);
+    expect(deps.decisions.release).toHaveBeenCalledWith(
+      stored[0].id,
+      expect.objectContaining({ condition: 'legitimate_verdict' })
+    );
+    expect(stored[0].outcome).toBe('released');
+  });
+
+  it('keeps the holds on a confirmed_abuse verdict', async () => {
+    const { deps } = makeDeps(config);
+    vi.mocked(deps.findDetection)
+      .mockResolvedValueOnce(holding)
+      .mockResolvedValueOnce(holding)
+      .mockResolvedValueOnce({ ...holding, verdict: 'confirmed_abuse' });
+    await applyAutoContainment(assessment, deps);
+    expect(deps.releaseHold).not.toHaveBeenCalled();
   });
 });

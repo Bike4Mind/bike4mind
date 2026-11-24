@@ -44,6 +44,11 @@ export function createCompletionCreditHolds(logger: Logger, apiKeyId?: string): 
           withTransaction(async () => {
             const claimed = runClaim && (await claimRunBudget(runClaim));
             const holder = await debit();
+            // Inside the transaction, so a refusal aborts the debit with it.
+            await creditService.assertInterventionSpendAllowed(
+              { userId: hold.userId, credits: hold.reservedCredits },
+              { users: userRepository, window: newAccountSpendCapAdaptersWithAlert.interventionSpendWindow }
+            );
             return pendingCreditHoldRepository.record(
               { ...hold, balanceAfterHold: holder.currentCredits },
               'platform-key completion',

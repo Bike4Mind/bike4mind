@@ -30,6 +30,7 @@ import {
   ModerationReviewUser,
   ISignupRiskAutoApproval,
   ISignupRiskScore,
+  type InterventionHold,
   RISK_EVIDENCE_TRIGGERS,
   type RiskEvidenceCoverage,
   type RiskEvidenceSummary,
@@ -52,12 +53,13 @@ import {
   PaginatedResponse,
 } from '@bike4mind/common';
 import bcrypt from 'bcryptjs';
-import mongoose, { Document, Model, model, Schema, Query, type PipelineStage } from 'mongoose';
+import mongoose, { Document, Model, model, Schema, Query, type PipelineStage, type ClientSession } from 'mongoose';
 import { emailTokenStoredValues, NotFoundError } from '@bike4mind/utils';
 import { decryptAtRest, encryptAtRest, isEncrypted } from '@bike4mind/utils/security';
 import { convertIds } from '../../utils/mongo';
 import { CountersSchema } from '../infra/ops/CounterModel';
-import BaseRepository from '@bike4mind/db-core';
+import BaseRepository, { withTransaction } from '@bike4mind/db-core';
+import { AutoContainmentDecisionModel } from '../infra/security/AutoContainmentDecisionModel';
 import { executeFacetCompatible } from '../../utils/documentdb-compat';
 import { buildCollectionSearchPipeline } from '../../queries/collectionSearchQuery';
 import { NETWORK_META_FIELDS } from './networkMetaFields';
@@ -297,6 +299,22 @@ const KeywordRoutingRuleSchema = new Schema(
 
 /** Newest-first cap on the retained per-user moderation-hit log. */
 export const MODERATION_HITS_RETAINED = 50;
+
+const InterventionHoldSchema = new Schema(
+  {
+    decisionId: { type: String, required: true },
+    detectionId: { type: String, required: true },
+    tier: { type: String, enum: ['limit', 'verify', 'holdGrant', 'review'], required: true },
+    policyVersion: { type: Number, required: true },
+    reason: { type: String, required: true },
+    appliedAt: { type: Date, required: true },
+    expiresAt: { type: Date, required: true },
+    releasedAt: { type: Date, default: null },
+    releasedBy: { type: String, default: null },
+    creditsPerHour: { type: Number },
+  },
+  { _id: false }
+);
 
 const ModerationHitSchema = new Schema(
   {
@@ -1419,6 +1437,146 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
     );
   }
 
+  /**
+   * Adds a graduated hold unless one from the same decision is already there, so a retried decision
+   * never applies twice. True when this call added it.
+   */
+  async addInterventionHold(userId: string, hold: InterventionHold, session?: ClientSession): Promise<boolean> {
+    if (!mongoose.Types.ObjectId.isValid(userId)) return false;
+    const result = await this.model.updateOne(
+      {
+        _id: new mongoose.Types.ObjectId(userId),
+        isAdmin: { $ne: true },
+        isBanned: { $ne: true },
+        'interventionHolds.decisionId': { $ne: hold.decisionId },
+      },
+      { $push: { interventionHolds: hold } },
+      { runValidators: true, session }
+    );
+    return result.modifiedCount === 1;
+  }
+
+  /** Serializes a hold write with release and claim replacement on the original decision. */
+  async addClaimedInterventionHold(userId: string, hold: InterventionHold, startedAt: Date): Promise<boolean> {
+    if (!mongoose.Types.ObjectId.isValid(userId) || !mongoose.Types.ObjectId.isValid(hold.decisionId)) return false;
+    return withTransaction(async session => {
+      const claim = await AutoContainmentDecisionModel.updateOne(
+        {
+          _id: new mongoose.Types.ObjectId(hold.decisionId),
+          tier: hold.tier,
+          outcome: 'pending',
+          decidedAt: startedAt,
+          releasedAt: null,
+          containedUserIds: { $ne: userId },
+          userIds: userId,
+        },
+        { $inc: { holdWriteVersion: 1 } },
+        { session, runValidators: true }
+      );
+      if (claim.modifiedCount !== 1) return false;
+      return this.addInterventionHold(userId, hold, session);
+    });
+  }
+
+  /** Keeps a durable per-account Contain receipt and lifts only the original decision's holds. */
+  async releaseContainedInterventionHolds(
+    decisionId: string,
+    committedUserIds: string[],
+    release: { by: string; now: Date }
+  ): Promise<void> {
+    if (!mongoose.Types.ObjectId.isValid(decisionId) || committedUserIds.length === 0) return;
+    await withTransaction(async session => {
+      const decision = await AutoContainmentDecisionModel.findOne({
+        _id: new mongoose.Types.ObjectId(decisionId),
+        tier: { $ne: 'contain' },
+        outcome: { $in: ['pending', 'intervened', 'failed', 'capped'] },
+        releasedAt: null,
+      }).session(session);
+      if (!decision) return;
+      const selected = [...new Set(committedUserIds)].filter(userId => decision.userIds.includes(userId));
+      if (selected.length === 0) return;
+      // Both writers change this row in their transaction, so neither can commit from a stale snapshot.
+      await AutoContainmentDecisionModel.updateOne(
+        { _id: decision._id },
+        { $inc: { holdWriteVersion: 1 }, $addToSet: { containedUserIds: { $each: selected } } },
+        { session, runValidators: true }
+      );
+      for (const userId of selected) await this.releaseInterventionHold(userId, decisionId, release, session);
+      const contained = new Set([...(decision.containedUserIds ?? []), ...selected]);
+      if (!decision.userIds.every(userId => contained.has(userId))) return;
+      const remaining = await this.model
+        .exists({ interventionHolds: { $elemMatch: { decisionId, releasedAt: null } } })
+        .session(session);
+      if (remaining) return;
+      await AutoContainmentDecisionModel.updateOne(
+        { _id: decision._id },
+        {
+          $set: {
+            outcome: 'released',
+            releasedAt: release.now,
+            releasedBy: release.by,
+            releaseReason: 'Graduated holds replaced by committed account containment',
+            releaseCondition: 'contained',
+          },
+        },
+        { session, runValidators: true }
+      );
+    });
+  }
+
+  /**
+   * Releases only the hold that decision applied. Never touches moderation, riskScore.reviewState,
+   * signupGrantHeldReason or any other decision's hold. True when an unreleased hold was released.
+   */
+  async releaseInterventionHold(
+    userId: string,
+    decisionId: string,
+    { by, now }: { by: string; now: Date },
+    session?: ClientSession
+  ): Promise<boolean> {
+    if (!mongoose.Types.ObjectId.isValid(userId)) return false;
+    const result = await this.model.updateOne(
+      {
+        _id: new mongoose.Types.ObjectId(userId),
+        interventionHolds: { $elemMatch: { decisionId, releasedAt: null } },
+      },
+      { $set: { 'interventionHolds.$[hold].releasedAt': now, 'interventionHolds.$[hold].releasedBy': by } },
+      { arrayFilters: [{ 'hold.decisionId': decisionId, 'hold.releasedAt': null }], runValidators: true, session }
+    );
+    return result.modifiedCount === 1;
+  }
+
+  /** True while any account still carries an unreleased hold from this decision (expired or not). */
+  async hasUnreleasedInterventionHold(decisionId: string): Promise<boolean> {
+    const found = await this.model.exists({ interventionHolds: { $elemMatch: { decisionId, releasedAt: null } } });
+    return found !== null;
+  }
+
+  /**
+   * Stamps released every unreleased hold past its expiry, for audit only: the gates already ignore an
+   * expired hold. Returns the deciding decision ids so their records can be marked expired too.
+   */
+  async expireInterventionHolds(now: Date, limit = 500): Promise<string[]> {
+    const due = { releasedAt: null, expiresAt: { $lte: now } };
+    const docs = await this.model
+      .find({ interventionHolds: { $elemMatch: due } }, { interventionHolds: 1 })
+      .limit(limit)
+      .lean<Array<{ _id: mongoose.Types.ObjectId; interventionHolds?: InterventionHold[] }>>();
+    if (docs.length === 0) return [];
+    await this.model.updateMany(
+      { _id: { $in: docs.map(doc => doc._id) } },
+      { $set: { 'interventionHolds.$[hold].releasedAt': now, 'interventionHolds.$[hold].releasedBy': 'expiry' } },
+      { arrayFilters: [{ 'hold.releasedAt': null, 'hold.expiresAt': { $lte: now } }], runValidators: true }
+    );
+    const ids = new Set<string>();
+    for (const doc of docs) {
+      for (const hold of doc.interventionHolds ?? []) {
+        if (hold.releasedAt == null && hold.expiresAt.getTime() <= now.getTime()) ids.add(hold.decisionId);
+      }
+    }
+    return [...ids];
+  }
+
   async setRiskScore(userId: string, riskScore: ISignupRiskScore): Promise<void> {
     const preservedStates = ['pending', 'approved', 'banned'];
     await this.model.updateOne({ _id: userId }, [
@@ -1989,6 +2147,7 @@ export const UserSchema = new Schema<IUserDocument, IUserModel>(
     signupGrantHeldReason: { type: String, enum: ['budget_exhausted', 'risk_review', null], default: null },
     // When the tranche was last held for an exhausted budget; the activity drip ignores older holds.
     signupGrantHeldAt: { type: Date },
+    interventionHolds: { type: [InterventionHoldSchema], default: undefined },
     signupGrant: {
       type: new Schema(
         {
@@ -2547,6 +2706,15 @@ UserSchema.index({ 'signupMeta.capturedAt': 1 }, { name: 'user_signupMeta_captur
 UserSchema.index(
   { 'signupMeta.ip': 1 },
   { name: 'user_signupMeta_ip', partialFilterExpression: { 'signupMeta.ip': { $type: 'string' } } }
+);
+// Expiry stamping of graduated holds (apps/workers/src/cron/abuseAssessmentSweep.ts). Only accounts that
+// carry a hold: a null-equality filter would also match every account with no holds field.
+UserSchema.index(
+  { 'interventionHolds.expiresAt': 1 },
+  {
+    name: 'user_interventionHolds_expiresAt_held',
+    partialFilterExpression: { 'interventionHolds.expiresAt': { $exists: true } },
+  }
 );
 UserSchema.index({ 'slackSettings.slackUserId': 1 });
 UserSchema.index({ 'slackSettings.githubNotifications.githubUsername': 1 });

@@ -1,6 +1,7 @@
 import {
   CreditHolderType,
   hasPaidSignupDrip,
+  isActiveInterventionHold,
   isPaymentUnlockReason,
   isSignupGrantBlocked,
   PENDING_FREE_CREDITS_TAG,
@@ -43,6 +44,9 @@ import {
 } from './signupGrantBudget';
 
 type GrantAdapters = FreeCreditAdapters & {
+  /** Held-release job only: pays a payment unlock whose hold has reached `releaseAt` by this time. */
+  releaseHeldUnlockAt?: Date;
+
   audit?: (input: { userId: string; credits: number; creditTransactionId?: string }) => Promise<void>;
 };
 
@@ -156,6 +160,17 @@ async function isHeldForAccountCampaign(
   return (await db.signupProtection?.hasOpenAccountCampaign?.(userId)) ?? false;
 }
 
+/** An automated holdGrant intervention withholds the same releases a campaign hold does, until released or expired. */
+const isHeldByIntervention = (
+  user: Pick<IUserDocument, 'interventionHolds'>,
+  expected: SignupGrant['stage'],
+  reason: SignupGrantUnlockReason | undefined,
+  now = new Date()
+) =>
+  expected !== 'pending_email' &&
+  reason !== 'admin' &&
+  (user.interventionHolds ?? []).some(hold => hold.tier === 'holdGrant' && isActiveInterventionHold(hold, now));
+
 /** A refunded, disputed or fraud-warned payment closes every signup release except an admin's. */
 const isForfeitedRelease = (grant: SignupGrant, reason: SignupGrantUnlockReason | undefined) =>
   !!grant.unlockForfeited && reason !== 'admin';
@@ -209,7 +224,7 @@ async function releaseStage(
     }
     if (await isHeldForAccountCampaign(userId, expected, reason, db)) return { ...noGrant(), withheld: true };
     // Detection may notify reviewers; keep it outside the retried payout transaction.
-    if (await protectSignupCredits(userId, db)) {
+    if (!isHeldByIntervention(user, expected, reason) && (await protectSignupCredits(userId, db))) {
       if (expected === 'pending_email') await db.users.addTagsToUser(userId, [PENDING_FREE_CREDITS_TAG]);
       await dropBudgetHold(db.users, userId, user.signupGrantHeldReason);
       return { ...noGrant(), withheld: true };
@@ -321,6 +336,26 @@ async function releaseStage(
       }
       const amount = Math.max(0, target - grant.creditsReleased);
       if (expected !== 'pending_email' && amount === 0) return noGrant();
+      // Re-read inside the payout transaction even when optional signup protection is absent.
+      if (isHeldByIntervention(user, expected, reason)) {
+        if (reason && isPaymentUnlockReason(reason)) {
+          const scanAt = adapters.releaseHeldUnlockAt;
+          const held = grant.heldUnlock;
+          if (held && scanAt && new Date(held.releaseAt) <= scanAt) {
+            const heldUnlock = { ...held, releaseAt: new Date(scanAt.getTime() + CAMPAIGN_HOLD_RECHECK_MS) };
+            if (!(await db.users.update({ id: userId, signupGrant: { ...grant, heldUnlock } })))
+              throw new Error('Staged grant account update failed');
+          } else if (!held && !scanAt) {
+            // Valid zero-hour payments still need an automatic retry after the intervention lifts.
+            const heldAt = grantClock(db);
+            const hours = await resolvePaymentUnlockHoldHours(db.adminSettings);
+            const heldUnlock = { reason, heldAt, releaseAt: new Date(heldAt.getTime() + hours * 3_600_000) };
+            if (!(await db.users.update({ id: userId, signupGrant: { ...grant, heldUnlock } })))
+              throw new Error('Staged grant account update failed');
+          }
+        }
+        return { ...noGrant(), withheld: true };
+      }
       // The target is account-wide, not reason-wide: competing validators cannot stack grants.
       // A drip is keyed by earning window, so each window pays once whatever else was released.
       const dripDay = typeof evidence === 'object' && 'drip' in evidence ? evidence.drip.day : undefined;
@@ -539,8 +574,6 @@ const CAMPAIGN_HOLD_RECHECK_MS = 6 * 3_600_000;
 
 type UnlockAdapters = GrantAdapters & {
   validators: Partial<Record<SignupGrantUnlockReason, SignupGrantValidator>>;
-  /** Held-release job only: pays a payment unlock whose hold has reached `releaseAt` by this time. */
-  releaseHeldUnlockAt?: Date;
 };
 
 /**
@@ -568,9 +601,9 @@ export const unlockSignupGrant = (userId: string, reason: SignupGrantUnlockReaso
   };
   const deferHeldUnlock = async (due: Date): Promise<GrantFreeCreditsResult> => {
     const { users } = adapters.db;
-    await withTransaction(async () => {
+    await inCallerTransaction(async () => {
       const grant = (await users.findById(userId))?.signupGrant;
-      if (!grant?.heldUnlock) return;
+      if (!grant?.heldUnlock || new Date(grant.heldUnlock.releaseAt) > due) return;
       const heldUnlock = { ...grant.heldUnlock, releaseAt: new Date(due.getTime() + CAMPAIGN_HOLD_RECHECK_MS) };
       if (!(await users.update({ id: userId, signupGrant: { ...grant, heldUnlock } })))
         throw new Error('Staged grant account update failed');

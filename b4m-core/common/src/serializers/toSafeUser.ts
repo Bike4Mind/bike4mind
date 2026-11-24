@@ -58,6 +58,8 @@ export const USER_SECRET_FIELDS = [
   'paymentRiskEventAt',
   'riskReviewAutoCheckedAt',
   'riskEvidence',
+  // Automated holds carry the abuse evidence in `reason`; the user sees the accountState message instead.
+  'interventionHolds',
   'freeCreditClaimEmail',
   'freeQuestStartId',
   'grantPackageId',

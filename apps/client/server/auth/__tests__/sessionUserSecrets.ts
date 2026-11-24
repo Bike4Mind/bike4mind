@@ -72,6 +72,7 @@ export function secretUserFields() {
     providerEndUserId: SECRET_VALUE,
     riskScore: { score: 90, signals: [{ signal: 'quickApiKey', points: 15, reason: SECRET_VALUE }] },
     riskEvidence: { summary: { trigger: SECRET_VALUE }, refresh: { lastFailure: SECRET_VALUE } },
+    interventionHolds: [{ reason: SECRET_VALUE }],
     riskReviewAutoApproval: { policy: 'settled_payment', decidedAt: new Date(0) },
     riskReviewReopenedAt: new Date(0),
     paymentRiskEventAt: new Date(0),
