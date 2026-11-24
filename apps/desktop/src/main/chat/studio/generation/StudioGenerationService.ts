@@ -5,7 +5,6 @@ import { z } from 'zod';
 import {
   CreateMusicGenerationBodySchema,
   CreateVideoGenerationBodySchema,
-  GenerateImageRequestBodySchema,
   ImageJobRequestSchema,
   soundEffectsRequestSchema,
   ttsRequestSchema,
@@ -19,21 +18,15 @@ import {
   type StudioJob,
 } from '@shared/studio';
 import { titleFromStudioPrompt } from '@shared/studioAssetTitle';
-import { isTerminalQuest, type MediaApiClient } from '../../media/MediaApiClient';
+import type { MediaApiClient } from '../../media/MediaApiClient';
 import { MediaStore, parseMediaUrl } from '../../media/MediaStore';
-import { resolveImageUrls } from '../../media/imageGeneration';
 import type { StudioDiagnosticSink } from '../StudioDiagnostics';
 import type { StudioWorkspaceStore } from '../StudioWorkspaceStore';
 
 export const studioGenerationRequestSchema = z.discriminatedUnion('kind', [
   z.object({
     kind: z.literal('image'),
-    body: z.union([
-      ImageJobRequestSchema,
-      GenerateImageRequestBodySchema.pick({ prompt: true, model: true })
-        .extend({ size: z.string().optional() })
-        .strict(),
-    ]),
+    body: ImageJobRequestSchema,
     count: z.number().int().min(1).max(4).optional(),
   }),
   z.object({ kind: z.literal('video'), body: CreateVideoGenerationBodySchema }),
@@ -53,7 +46,6 @@ export type StudioGenerationRequest = z.input<typeof studioGenerationRequestSche
 export interface StudioGenerationConnection {
   scope: string;
   client: MediaApiClient;
-  cdnUrl: string;
 }
 
 export interface StudioGenerationDeps {
@@ -171,24 +163,19 @@ export class StudioGenerationService {
       try {
         this.assertConnection(connection);
         if (request.kind === 'image') {
-          if ('mode' in request.body) {
-            const result = await connection.client.createStudioImages(
-              request.body,
-              request.count ?? 1,
-              job.idempotencyKey
-            );
-            job = {
-              ...job,
-              state: 'queued',
-              imageBatch: true,
-              providerGroupId: result.groupId,
-              providerJobId: result.jobs[0].id,
-              providerJobIds: result.jobs.map(child => child.id),
-            };
-          } else {
-            const result = await connection.client.generateImage({ ...request.body, prompt_resolution: 'literal' });
-            job = { ...job, state: 'queued', providerJobId: result.questId };
-          }
+          const result = await connection.client.createStudioImages(
+            request.body,
+            request.count ?? 1,
+            job.idempotencyKey
+          );
+          job = {
+            ...job,
+            state: 'queued',
+            imageBatch: true,
+            providerGroupId: result.groupId,
+            providerJobId: result.jobs[0].id,
+            providerJobIds: result.jobs.map(child => child.id),
+          };
         } else if (request.kind === 'video' || request.kind === 'music') {
           const result =
             request.kind === 'video'
@@ -258,19 +245,8 @@ export class StudioGenerationService {
       }
       const outputs: { url: string; mimeType: string }[] = [];
       if (job.kind === 'image') {
-        const remote = await connection.client.getQuest(job.providerJobId);
-        this.assertConnection(connection);
-        if (remote.type === 'error')
-          job = { ...job, state: 'failed', error: remote.reply ?? 'Image generation failed.' };
-        else if (isTerminalQuest(remote)) {
-          if (remote.status === 'stopped') job = { ...job, state: 'cancelled' };
-          else {
-            outputs.push(
-              ...resolveImageUrls(remote, connection.cdnUrl).urls.map(url => ({ url, mimeType: 'image/png' }))
-            );
-            if (!outputs.length) throw new Error('The image job has no downloadable output.');
-          }
-        } else job = { ...job, state: 'running' };
+        // A non-batch image job holds a quest id from the retired quest route; it has no image-job equivalent.
+        job = { ...job, state: 'unknown', error: 'This earlier image job cannot be recovered automatically.' };
       } else if (job.kind === 'video' || job.kind === 'music') {
         const remote =
           job.kind === 'video'
