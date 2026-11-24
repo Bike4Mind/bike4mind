@@ -166,7 +166,8 @@ function createHarness(): Harness {
       },
     },
     findJobs: async ids => ids.flatMap(id => (jobs.has(id) ? [jobs.get(id) as ProductionJobView] : [])),
-    fileKinds: async ids => new Map(ids.flatMap(id => (kinds.has(id) ? [[id, kinds.get(id)] as const] : []))),
+    referenceImages: async ids =>
+      new Map(ids.flatMap(id => (kinds.get(id) === 'image' ? [[id, 'ready'] as const] : []))),
     waitTimeoutMs: 100,
     pollIntervalMs: 1,
   };
@@ -433,6 +434,37 @@ describe('production director tools', () => {
       expect(takes).toHaveLength(3);
       for (const take of takes) expect(inputsOf(take)).toEqual([look]);
       expect(harness.composition().brandKit.productFileIds).toEqual([look]);
+    });
+
+    it('does not bring back a look the user removed when a re-call replays its finished job', async () => {
+      await run(productionStoryboardTool, harness, noProduct);
+      await run(productionGenerateShotTool, harness, {
+        compositionId: COMPOSITION_ID,
+        shotIds: ['shot-1'],
+        animate: false,
+      });
+      const [look] = harness.composition().brandKit.productFileIds;
+      await harness.config.compositions.update(COMPOSITION_ID, {
+        brandKit: { ...harness.composition().brandKit, productFileIds: [] },
+      });
+      const image = harness.config.image!;
+      harness.config.image = {
+        ...image,
+        createJobs: async input =>
+          isLook(input.request)
+            ? ({ ok: true, groupId: 'group', jobs: [{ id: 'look-job', state: 'succeeded' }], created: false } as never)
+            : image.createJobs(input),
+      };
+
+      const second = JSON.parse(
+        await run(productionGenerateShotTool, harness, {
+          compositionId: COMPOSITION_ID,
+          shotIds: ['shot-2'],
+          animate: false,
+        })
+      );
+      expect(second.productLook).toMatch(/^skipped: /);
+      expect(harness.composition().brandKit.productFileIds).not.toContain(look);
     });
 
     it('starts no takes while the look is still running, and reports every shot pending on it', async () => {

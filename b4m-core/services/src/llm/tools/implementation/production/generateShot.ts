@@ -137,14 +137,15 @@ async function makeTakes(
   if (toShoot.length === 0) return { shots: [...shots] };
 
   const composition = await config.compositions.get(compositionId);
-  let references = productImageReferenceFileIds(
-    composition,
-    await config.fileKinds(productReferenceFileIds(composition))
-  );
+  const states = await config.referenceImages(productReferenceFileIds(composition));
+  let references = productImageReferenceFileIds(composition, states);
+  let referencesChecking = references.some(id => states.get(id) === 'checking');
   let look: ProductLook | undefined;
   if (references.length === 0) {
     look = await ensureProductLook(context, config, composition);
     references = look.references;
+    // A look made just now is still in its upload safety check.
+    referencesChecking = references.length > 0;
     if (look.pendingJobId) {
       for (const shot of toShoot)
         reports.set(shot.id, { id: shot.id, pending: [`product look: ${look.pendingJobId}`] });
@@ -158,7 +159,7 @@ async function makeTakes(
     const submitted = await submitShotImages(
       context,
       config,
-      { prompt, references, aspectRatio, compositionId, shotId: shot.id },
+      { prompt, references, referencesChecking, aspectRatio, compositionId, shotId: shot.id },
       takes
     );
     if (submitted.ok) started.set(shot.id, submitted.jobIds);

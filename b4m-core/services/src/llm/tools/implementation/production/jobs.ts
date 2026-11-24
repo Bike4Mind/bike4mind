@@ -20,7 +20,8 @@ import type { ProductionJobView, ProductionToolConfig } from './config';
 
 type Context = Omit<ToolContext, 'config'>;
 
-export type Submitted = { ok: true; jobIds: string[] } | { ok: false; message: string; notReady?: true };
+export type Submitted =
+  { ok: true; jobIds: string[]; alreadyDone?: true } | { ok: false; message: string; notReady?: true };
 
 const DEFAULT_WAIT_TIMEOUT_MS = 150_000;
 const DEFAULT_POLL_INTERVAL_MS = 3_000;
@@ -154,9 +155,14 @@ const MODEL_REFUSALS = new Set(['model_unavailable', 'unsupported_by_model']);
 export async function submitShotImages(
   context: Context,
   config: ProductionToolConfig,
-  shot: { prompt: string; references: readonly string[]; aspectRatio: string; compositionId: string } & (
-    { shotId: string } | { purpose: 'product-look' }
-  ),
+  shot: {
+    prompt: string;
+    references: readonly string[];
+    /** A reference is still in its upload safety check, so a refusal of it is waited out instead of reported. */
+    referencesChecking?: boolean;
+    aspectRatio: string;
+    compositionId: string;
+  } & ({ shotId: string } | { purpose: 'product-look' }),
   count: number
 ): Promise<Submitted> {
   const image = config.image;
@@ -189,9 +195,10 @@ export async function submitShotImages(
     };
     let result: Awaited<ReturnType<typeof image.createJobs>> | undefined;
     try {
-      const created = await untilInputReady(context, config, createAll);
+      // With no reference in its safety check, the refusal is permanent (not owned, deleted, blocked): report it.
+      const created = shot.referencesChecking ? await untilInputReady(context, config, createAll) : await createAll();
       if (created === 'dead') return { ok: false, message: DEAD_REPLAY_MESSAGE };
-      if (isInputNotReady(created)) {
+      if (shot.referencesChecking && isInputNotReady(created)) {
         return { ok: false, notReady: true, message: 'the product reference is not ready yet (its safety check)' };
       }
       result = created;
@@ -202,7 +209,8 @@ export async function submitShotImages(
     if (!result) continue;
     if (result.ok) {
       await context.statusUpdate({ generationJobs: result.jobs.map(job => ({ id: job.id, kind: 'image' as const })) });
-      return { ok: true, jobIds: result.jobs.map(job => job.id) };
+      const alreadyDone = !result.created && result.jobs.every(job => job.state === 'succeeded');
+      return { ok: true, jobIds: result.jobs.map(job => job.id), ...(alreadyDone && { alreadyDone: true as const }) };
     }
     if (!MODEL_REFUSALS.has(result.code)) return { ok: false, message: `${result.code}: ${result.message}` };
     lastRefusal = `${result.code}: ${result.message}`;

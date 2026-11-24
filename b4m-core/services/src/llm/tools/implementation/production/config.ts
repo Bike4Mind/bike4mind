@@ -3,7 +3,7 @@ import type {
   GenerationJobState,
   StudioCompositionContent,
   StudioCompositionUpdateInput,
-  StudioFileMediaKind,
+  ReferenceImageState,
 } from '@bike4mind/common';
 import { hasAudioToolJobs, type AudioToolJobs } from '../audioGeneration';
 import type { ImageToolConfig } from '../imageGeneration/imageJobTool';
@@ -68,8 +68,11 @@ export type ProductionToolConfig = {
   audio: ProductionAudioSettings | null;
   /** The run user's jobs among `ids`; others are left out. */
   findJobs(ids: readonly string[]): Promise<ProductionJobView[]>;
-  /** The media kind of each file among `ids` the run user can read; others are left out. */
-  fileKinds(ids: readonly string[]): Promise<ReadonlyMap<string, StudioFileMediaKind>>;
+  /**
+   * The files among `ids` an image job will take from the run user as references (referenceImageState in
+   * @bike4mind/common), with their state; others are left out.
+   */
+  referenceImages(ids: readonly string[]): Promise<ReadonlyMap<string, ReferenceImageState>>;
   /**
    * Stable across the run's Lambda handoffs (the host rebuilds this object on every resume), so per-run guards key
    * by it; without it they fall back to this object.
@@ -96,7 +99,7 @@ export const isProductionToolConfig = (value: unknown): value is ProductionToolC
   Array.isArray(value.imageModels) &&
   'findJobs' in value &&
   typeof value.findJobs === 'function' &&
-  'fileKinds' in value &&
-  typeof value.fileKinds === 'function' &&
+  'referenceImages' in value &&
+  typeof value.referenceImages === 'function' &&
   'audio' in value &&
   (value.audio === null || hasAudioToolJobs(value.audio));

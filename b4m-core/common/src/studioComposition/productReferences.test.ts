@@ -3,6 +3,7 @@ import { STUDIO_COMPOSITION_LIMITS } from './composition';
 import {
   productImageReferenceFileIds,
   productReferenceFileIds,
+  referenceImageState,
   withDirectorProduct,
   withProductLook,
 } from './productReferences';
@@ -32,10 +33,10 @@ describe('productReferenceFileIds', () => {
 });
 
 describe('productImageReferenceFileIds', () => {
+  // id(2) is the kit video: the lookup leaves out every file an image job will not take.
   const kinds = new Map([
-    [id(1), 'image' as const],
-    [id(2), 'video' as const],
-    [id(3), 'image' as const],
+    [id(1), 'ready' as const],
+    [id(3), 'checking' as const],
   ]);
 
   it('drops videos, keeping the brief photo first', () => {
@@ -52,7 +53,7 @@ describe('productImageReferenceFileIds', () => {
     expect(refs.slice(0, 1)).toEqual([id(3)]);
   });
 
-  it('drops a file whose kind is unknown', () => {
+  it('drops a file the lookup left out', () => {
     expect(
       productImageReferenceFileIds({ brief: { productFileId: id(9) }, brandKit: { productFileIds: [id(3)] } }, kinds)
     ).toEqual([id(3)]);
@@ -60,6 +61,30 @@ describe('productImageReferenceFileIds', () => {
 
   it('is empty for a kit of only videos and no brief photo', () => {
     expect(productImageReferenceFileIds({ brief: {}, brandKit: { productFileIds: [id(2)] } }, kinds)).toEqual([]);
+  });
+});
+
+describe('referenceImageState', () => {
+  const file = { userId: 'u1', mimeType: 'image/png', filePath: 'files/a', moderationStatus: 'clean' };
+
+  it('is ready for a clean PNG, JPEG or WebP the user owns, and checking while its safety check runs', () => {
+    expect(referenceImageState(file, 'u1')).toBe('ready');
+    expect(referenceImageState({ ...file, mimeType: 'image/jpeg; charset=binary' }, 'u1')).toBe('ready');
+    expect(referenceImageState({ ...file, mimeType: 'image/webp', moderationStatus: 'scanning' }, 'u1')).toBe(
+      'checking'
+    );
+    expect(referenceImageState({ ...file, moderationStatus: 'pending' }, 'u1')).toBe('checking');
+  });
+
+  it('is null for what the image job refuses', () => {
+    expect(referenceImageState(file, 'u2')).toBeNull();
+    expect(referenceImageState({ ...file, userId: null }, 'u1')).toBeNull();
+    expect(referenceImageState({ ...file, deletedAt: new Date() }, 'u1')).toBeNull();
+    expect(referenceImageState({ ...file, filePath: null }, 'u1')).toBeNull();
+    expect(referenceImageState({ ...file, mimeType: 'image/gif' }, 'u1')).toBeNull();
+    expect(referenceImageState({ ...file, mimeType: 'video/mp4' }, 'u1')).toBeNull();
+    expect(referenceImageState({ ...file, moderationStatus: 'blocked' }, 'u1')).toBeNull();
+    expect(referenceImageState({ ...file, moderationStatus: null }, 'u1')).toBeNull();
   });
 });
 

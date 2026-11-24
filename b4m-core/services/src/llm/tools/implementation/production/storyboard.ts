@@ -67,7 +67,8 @@ const schema = z.object({
     .optional()
     .describe("The one-line brief to save on the production, when the user gave one that isn't saved yet."),
   productFileId: StudioFileIdSchema.optional().describe(
-    'The product photo (a Files id) to keep in every shot; saved to the brand kit.'
+    'The product photo (a Files id) for the shots; saved to the brand kit behind a product look already there, which ' +
+      'stays the first reference.'
   ),
   shots: z.array(ShotArg).min(1).max(STORYBOARD_MAX_SHOTS),
   rewriteLines: z

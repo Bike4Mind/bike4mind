@@ -83,7 +83,7 @@ const REPRESENTATIVE_PRODUCTION_CONFIG = {
   music: REPRESENTATIVE_MUSIC_CONFIG,
   audio: REPRESENTATIVE_AUDIO_CONFIG,
   findJobs: vi.fn(),
-  fileKinds: vi.fn(),
+  referenceImages: vi.fn(),
 };
 
 function buildSchemas(enabledTools: string[]) {

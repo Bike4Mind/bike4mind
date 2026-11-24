@@ -281,6 +281,7 @@ describe('submitShotImages', () => {
 
   describe('a reference still in its safety check', () => {
     const notReady = { ok: false as const, code: 'input_image_not_found', message: 'Input image not found' };
+    const checking = (shotId: string) => ({ ...shot(shotId), referencesChecking: true });
     const timed = (createJobs: ReturnType<typeof vi.fn>, inputReadyTimeoutMs: number) =>
       ({ ...configWith(createJobs), inputReadyTimeoutMs, pollIntervalMs: 1 }) as ProductionToolConfig;
 
@@ -289,17 +290,41 @@ describe('submitShotImages', () => {
         .fn()
         .mockResolvedValueOnce(notReady)
         .mockResolvedValueOnce(replayed('fresh', 'queued', true));
-      const result = await submitShotImages(context, timed(createJobs, 1_000), shot('s1'), 1);
+      const result = await submitShotImages(context, timed(createJobs, 1_000), checking('s1'), 1);
       expect(result).toEqual({ ok: true, jobIds: ['fresh'] });
       expect(createJobs).toHaveBeenCalledTimes(2);
     });
 
     it('reports not ready, not a failure, once the wait runs out', async () => {
       const createJobs = vi.fn().mockResolvedValue(notReady);
-      const result = await submitShotImages(context, timed(createJobs, 20), shot('s1'), 1);
+      const result = await submitShotImages(context, timed(createJobs, 20), checking('s1'), 1);
       expect(result).toMatchObject({ ok: false, notReady: true });
       expect(createJobs.mock.calls.length).toBeGreaterThan(1);
     });
+
+    it('reports the refusal at once when no reference is in its safety check', async () => {
+      const createJobs = vi.fn().mockResolvedValue(notReady);
+      const result = await submitShotImages(context, timed(createJobs, 1_000), shot('s1'), 1);
+      expect(result).toEqual({ ok: false, message: 'input_image_not_found: Input image not found' });
+      expect(createJobs).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it('flags a replay of finished takes, not a running one', async () => {
+    const done = await submitShotImages(
+      context,
+      configWith(vi.fn().mockResolvedValue(replayed('j', 'succeeded', false))),
+      shot('s1'),
+      1
+    );
+    const running = await submitShotImages(
+      context,
+      configWith(vi.fn().mockResolvedValue(replayed('j', 'running', false))),
+      shot('s1'),
+      1
+    );
+    expect(done).toEqual({ ok: true, jobIds: ['j'], alreadyDone: true });
+    expect(running).toEqual({ ok: true, jobIds: ['j'] });
   });
 
   it('keys the product look apart from every shot', async () => {

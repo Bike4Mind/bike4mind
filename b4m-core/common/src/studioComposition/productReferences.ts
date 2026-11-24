@@ -1,11 +1,11 @@
+import { IMAGE_JOB_INPUT_MIME_TYPES } from '../schemas/imageJobs';
 import { STUDIO_COMPOSITION_LIMITS, type StudioBrandKit, type StudioCompositionBrief } from './composition';
-import type { StudioFileMediaKind } from './validateTimeline';
 
 /**
- * The product images every shot of a production is generated against, most authoritative first: the brief's
- * product photo, then the brand kit's product images (a saved product look sits at the front of those).
- * Order matters because several image models take a single reference (Gemini, FLUX 1.x Pro), and a caller
- * slices this list to the model's cap. Duplicates are removed, so one file never takes two reference slots.
+ * Every product file of a production, most authoritative first: the brief's product photo, then the brand kit's
+ * product files (a saved product look sits at the front of those). The kit can also hold videos, so a shot narrows
+ * this with productImageReferenceFileIds before referencing it. Duplicates are removed, so one file never takes two
+ * reference slots.
  */
 export const productReferenceFileIds = (content: {
   brief: Pick<StudioCompositionBrief, 'productFileId'>;
@@ -18,15 +18,42 @@ export const productReferenceFileIds = (content: {
   return [...new Set(ids)];
 };
 
+/** 'checking' while the file's upload safety check runs; the image job refuses it until that turns clean. */
+export type ReferenceImageState = 'ready' | 'checking';
+
 /**
- * productReferenceFileIds narrowed to images, the only kind an image model takes as a reference. The brand kit also
- * holds product videos, and a file missing from `fileKinds` (deleted, unshared, unknown) is dropped too. Filter before
- * slicing to a model's cap, so a video never takes the one slot a single-reference model has.
+ * Whether an image job will take `file` as a reference image for `userId`, or null when it never will. Mirrors the
+ * job's input gate (loadInputFabFile in packages/server-utils generationJobs/wiring.ts, and createImageJobs'
+ * mime check) and must stay in sync with it: owner only, not deleted, PNG/JPEG/WebP, not blocked by moderation.
+ */
+export const referenceImageState = (
+  file: {
+    userId?: unknown;
+    deletedAt?: Date | null;
+    mimeType?: string | null;
+    filePath?: string | null;
+    moderationStatus?: string | null;
+  },
+  userId: string
+): ReferenceImageState | null => {
+  // A stored userId may be an ObjectId or a string.
+  if (file.userId == null || String(file.userId) !== userId || file.deletedAt || !file.filePath) return null;
+  const mimeType = file.mimeType?.split(';')[0].trim().toLowerCase();
+  if (!mimeType || !IMAGE_JOB_INPUT_MIME_TYPES.has(mimeType)) return null;
+  if (file.moderationStatus === 'clean') return 'ready';
+  return file.moderationStatus === 'pending' || file.moderationStatus === 'scanning' ? 'checking' : null;
+};
+
+/**
+ * productReferenceFileIds narrowed to the files an image job will take as references (see referenceImageState):
+ * `usable` holds those, and anything missing from it (a video, a shared or deleted file, an unsupported format) is
+ * dropped. Filter before slicing to a model's cap, so an unusable file never takes the one slot a single-reference
+ * model has.
  */
 export const productImageReferenceFileIds = (
   content: Parameters<typeof productReferenceFileIds>[0],
-  fileKinds: ReadonlyMap<string, StudioFileMediaKind>
-): string[] => productReferenceFileIds(content).filter(id => fileKinds.get(id) === 'image');
+  usable: { has(id: string): boolean }
+): string[] => productReferenceFileIds(content).filter(id => usable.has(id));
 
 /**
  * Moves `fileId` to the front of the brand kit's product images, making it the production's product look.

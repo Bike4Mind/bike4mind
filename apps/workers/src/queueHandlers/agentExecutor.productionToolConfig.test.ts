@@ -222,28 +222,42 @@ describe('buildAgentProductionToolConfig', () => {
       });
     });
 
-    describe('fileKinds', () => {
-      const withFiles = (files: { id: string; mimeType: string }[]) => {
+    describe('referenceImages', () => {
+      type File = { id: string; userId: string; mimeType: string; filePath: string; moderationStatus: string };
+      const withFiles = (files: File[]) => {
         const findAccessibleInIds = vi.fn(async () => files);
         const deps = makeDeps({
           compositionAdapters: { db: { fabFiles: { findAccessibleInIds } } } as unknown as Deps['compositionAdapters'],
         });
         return { deps, findAccessibleInIds };
       };
+      const file = (id: string, overrides: Partial<File> = {}): File => ({
+        id,
+        userId: USER.id,
+        mimeType: 'image/png',
+        filePath: `files/${id}`,
+        moderationStatus: 'clean',
+        ...overrides,
+      });
 
-      it("maps each file the run user can read to its media kind, scoped to the user's access", async () => {
+      it('keeps only the files an image job takes from the run user as references', async () => {
         const { deps, findAccessibleInIds } = withFiles([
-          { id: 'photo', mimeType: 'image/png' },
-          { id: 'clip', mimeType: 'video/mp4' },
+          file('photo'),
+          file('fresh', { moderationStatus: 'pending' }),
+          file('shared', { userId: 'someone-else' }),
+          file('clip', { mimeType: 'video/mp4' }),
+          file('gif', { mimeType: 'image/gif' }),
+          file('blocked', { moderationStatus: 'blocked' }),
         ]);
         const config = await buildAgentProductionToolConfig(makeInput(), deps);
+        const ids = ['photo', 'fresh', 'shared', 'clip', 'gif', 'blocked', 'gone'];
 
-        const kinds = await config!.fileKinds(['photo', 'clip', 'gone']);
+        const states = await config!.referenceImages(ids);
 
-        expect(findAccessibleInIds).toHaveBeenCalledWith(['photo', 'clip', 'gone'], { userId: USER.id });
-        expect([...kinds]).toEqual([
-          ['photo', 'image'],
-          ['clip', 'video'],
+        expect(findAccessibleInIds).toHaveBeenCalledWith(ids, { userId: USER.id });
+        expect([...states]).toEqual([
+          ['photo', 'ready'],
+          ['fresh', 'checking'],
         ]);
       });
 
@@ -251,7 +265,7 @@ describe('buildAgentProductionToolConfig', () => {
         const { deps, findAccessibleInIds } = withFiles([]);
         const config = await buildAgentProductionToolConfig(makeInput(), deps);
 
-        expect((await config!.fileKinds([])).size).toBe(0);
+        expect((await config!.referenceImages([])).size).toBe(0);
         expect(findAccessibleInIds).not.toHaveBeenCalled();
       });
     });
