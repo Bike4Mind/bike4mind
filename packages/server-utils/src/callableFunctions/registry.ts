@@ -35,6 +35,7 @@ import {
   artifactRepository,
   callableFunctionCallRepository,
   callableFunctionRepository,
+  callableFunctionReviewRepository,
 } from '@bike4mind/database';
 import { Logger } from '@bike4mind/observability';
 
@@ -378,7 +379,8 @@ export async function summarizeCallableFunctionCalls(
   return callableFunctionCallRepository.summarizeForCaller(fn.id, actor.id, since, RECENT_CALLS);
 }
 
-/** The pinned code goes with the record; the artifact is not touched. */
+/** The pinned code and recipients' reviews go with the record; the artifact is not touched. */
 export async function deleteCallableFunction(actor: CallableFunctionActor, id: string): Promise<void> {
   if (!(await callableFunctionRepository.deleteForOwner(id, userOwner(actor)))) throw notFound();
+  await callableFunctionReviewRepository.deleteForFunction(id);
 }

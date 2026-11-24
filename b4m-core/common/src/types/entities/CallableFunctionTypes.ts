@@ -4,6 +4,7 @@ import { VisibilitySchema } from '../../schemas/artifacts';
 import type { FunctionContract, FunctionContractChange, FunctionTestTolerance } from '../../schemas/functionContract';
 import { IBaseRepository } from './BaseTypes';
 import type { CallableFunctionCallOutcome, CallableFunctionStamp } from './CallableFunctionCallTypes';
+import type { ICallableFunctionReview, ICallableFunctionReviewView } from './CallableFunctionReviewTypes';
 import { IMongoDocument } from './common';
 import type { McpToolApprovalMode } from './McpConnectionTypes';
 
@@ -227,18 +228,41 @@ export interface ICallableFunctionPublic {
   updatedAt: Date;
 }
 
+/** The list read plus the contract, for a recipient's review: still no pinned code. */
+export type ICallableFunctionSharedSource = ICallableFunctionSummary & Pick<ICallableFunctionDocument, 'contract'>;
+
+/** `pending_review` with no review or one of an earlier interface; `disabled` when the recipient turned it off. */
+export type CallableFunctionSharedStatus = 'pending_review' | 'reviewed' | 'disabled';
+
+export function callableFunctionReviewStatus(
+  review: Pick<ICallableFunctionReview, 'reviewHash' | 'enabled'> | null,
+  reviewHash: string
+): CallableFunctionSharedStatus {
+  if (!review || review.reviewHash !== reviewHash) return 'pending_review';
+  return review.enabled ? 'reviewed' : 'disabled';
+}
+
 /**
- * What a recipient reads of a function shared with them: no code, no artifact, no examples, and no grants. It stays
- * `pending_review` until the recipient has reviewed it.
+ * What a recipient reads of a function shared with them: the interface they review, never the code, the artifact,
+ * the examples, or the grants.
  */
 export interface ICallableFunctionShared {
   id: string;
   slug: string;
   description: string;
-  status: 'pending_review';
+  status: CallableFunctionSharedStatus;
   sharedVia: Exclude<CallableFunctionAccess, 'owner'>;
   pin: Pick<ICallableFunctionPin, 'version' | 'seq' | 'pinnedAt'>;
   trustLabel: CallableFunctionTrustLabel | null;
+  ownerName: string;
+  inputs: FunctionContract['inputs'];
+  outputs: FunctionContract['outputs'];
+  /** The live pin's interface hash; a review names it, so an interface changed since is not approved unseen. */
+  reviewHash: string;
+  review: ICallableFunctionReviewView | null;
+  /** Names of the data files and sources the live pin reads; the record carries none yet. */
+  dataPins: string[];
+  sources: string[];
   updatedAt: Date;
 }
 
@@ -298,15 +322,31 @@ export function toCallableFunctionPublic(
 
 /** An allowlist, like {@link toCallableFunctionPublic}, for a caller who is not the owner. */
 export function toCallableFunctionShared(
-  doc: ICallableFunctionDocument | ICallableFunctionSummary,
-  sharedVia: ICallableFunctionShared['sharedVia']
+  doc: ICallableFunctionDocument | ICallableFunctionSharedSource,
+  sharedVia: ICallableFunctionShared['sharedVia'],
+  context: { ownerName: string; reviewHash: string; review: ICallableFunctionReview | null }
 ): ICallableFunctionShared {
+  const { review, reviewHash } = context;
   return {
     id: doc.id,
     slug: doc.slug,
     description: doc.description,
-    status: 'pending_review',
+    status: callableFunctionReviewStatus(review, reviewHash),
     sharedVia,
+    ownerName: context.ownerName,
+    inputs: doc.contract.inputs,
+    outputs: doc.contract.outputs,
+    reviewHash,
+    review: review
+      ? {
+          approval: review.approval,
+          enabled: review.enabled,
+          reviewedAt: review.reviewedAt,
+          current: review.reviewHash === reviewHash,
+        }
+      : null,
+    dataPins: [],
+    sources: [],
     pin: {
       version: doc.pin.version,
       pinnedAt: doc.pin.pinnedAt,
@@ -514,12 +554,12 @@ export interface ICallableFunctionRepository extends IBaseRepository<ICallableFu
   ): Promise<ICallableFunctionDocument | null>;
   /**
    * Live, turned-on functions of other owners whose grants name `userId` or one of the projects or organizations,
-   * without the contract and the pinned code. The caller still checks each with `canCallFunction`.
+   * with the contract and without the pinned code. The caller still checks each with `canCallFunction`.
    */
   listSharedWith(reach: {
     userId: string;
     projectIds: string[];
     organizationIds: string[];
-  }): Promise<ICallableFunctionSummary[]>;
+  }): Promise<ICallableFunctionSharedSource[]>;
   deleteForOwner(id: string, owner: CallableFunctionOwner): Promise<boolean>;
 }

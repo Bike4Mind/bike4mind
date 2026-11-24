@@ -4,6 +4,7 @@ import {
   ConflictError,
   NotFoundError,
   effectiveCallableFunctionStatus,
+  reviewHash,
   toCallableFunctionPublic,
   toCallableFunctionShared,
   type CallableFunctionAccess,
@@ -16,6 +17,7 @@ import {
 import {
   artifactRepository,
   callableFunctionRepository,
+  callableFunctionReviewRepository,
   organizationRepository,
   projectRepository,
   userRepository,
@@ -107,10 +109,15 @@ export interface CallableFunctionShareView {
 }
 
 // Names only: an id in the grants must not turn into an email, and a missing account reads like a nameless one.
-async function peopleOf(userIds: string[]): Promise<CallableFunctionSharePerson[]> {
+export async function displayNamesOf(userIds: string[]): Promise<string[]> {
   const users = userIds.length > 0 ? await userRepository.find({ _id: { $in: userIds } }, { name: 1 }) : [];
   const names = new Map(users.map(user => [String(user._id), (user as { name?: string }).name]));
-  return userIds.map(id => ({ id, name: names.get(id) || 'Unnamed person' }));
+  return userIds.map(id => names.get(id) || 'Unnamed person');
+}
+
+async function peopleOf(userIds: string[]): Promise<CallableFunctionSharePerson[]> {
+  const names = await displayNamesOf(userIds);
+  return userIds.map((id, index) => ({ id, name: names[index]! }));
 }
 
 export async function getCallableFunctionShare(
@@ -188,20 +195,38 @@ export async function revokeCallableFunctionShare(
   return toCallableFunctionPublic(saved, await readHead(actor, saved.pin.artifactId));
 }
 
-/** Functions other people shared with `actor`, each as pending review: no code, no artifact, no grants. */
+/** Functions other people shared with `actor`, each with the actor's review state: no code, artifact, or grants. */
 export async function listSharedCallableFunctions(actor: CallableFunctionActor): Promise<ICallableFunctionShared[]> {
   const [projectIds, organizationIds] = await Promise.all([
     projectIdsForMember(actor.id),
     organizationRepository.findMembershipOrgIds(actor.id),
   ]);
   const candidates = await callableFunctionRepository.listSharedWith({ userId: actor.id, projectIds, organizationIds });
-  const shared: ICallableFunctionShared[] = [];
+  const reachable: { fn: (typeof candidates)[number]; access: Exclude<CallableFunctionAccess, 'owner'> }[] = [];
   for (const fn of candidates) {
     const access = await canCallFunction(actor, fn);
     if (!access || access === 'owner') continue;
     const head = await readHead({ id: fn.userId }, fn.pin.artifactId);
     if (effectiveCallableFunctionStatus(fn, head) !== 'live') continue;
-    shared.push(toCallableFunctionShared(fn, access));
+    reachable.push({ fn, access });
   }
-  return shared;
+  const ownerIds = [...new Set(reachable.map(({ fn }) => fn.userId))];
+  const [names, reviews] = await Promise.all([
+    displayNamesOf(ownerIds),
+    callableFunctionReviewRepository.findForUser(
+      actor.id,
+      reachable.map(({ fn }) => fn.id)
+    ),
+  ]);
+  const ownerNames = new Map(ownerIds.map((id, index) => [id, names[index]!]));
+  const reviewOf = new Map(reviews.map(review => [review.functionId, review]));
+  return Promise.all(
+    reachable.map(async ({ fn, access }) =>
+      toCallableFunctionShared(fn, access, {
+        ownerName: ownerNames.get(fn.userId)!,
+        reviewHash: await reviewHash(fn.contract),
+        review: reviewOf.get(fn.id) ?? null,
+      })
+    )
+  );
 }

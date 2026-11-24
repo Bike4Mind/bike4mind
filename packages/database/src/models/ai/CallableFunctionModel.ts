@@ -25,6 +25,7 @@ import {
   type ICallableFunctionGrants,
   type ICallableFunctionOfferable,
   type ICallableFunctionRepository,
+  type ICallableFunctionSharedSource,
   type McpToolApprovalMode,
   type ICallableFunctionSummary,
   type IMongoDocument,
@@ -449,7 +450,7 @@ class CallableFunctionRepository extends BaseRepository<FunctionDoc> implements 
     userId: string;
     projectIds: string[];
     organizationIds: string[];
-  }): Promise<ICallableFunctionSummary[]> {
+  }): Promise<ICallableFunctionSharedSource[]> {
     const docs = await this.model
       .find(
         {
@@ -462,13 +463,14 @@ class CallableFunctionRepository extends BaseRepository<FunctionDoc> implements 
             { 'grants.visibility': 'organization', 'grants.organizationId': { $in: reach.organizationIds } },
           ],
         },
-        SUMMARY_PROJECTION
+        // A recipient reviews the contract; the pinned code never leaves the server.
+        { 'pin.source': 0, lastServerRun: 0, promoted: 0 }
       )
       .sort({ updatedAt: -1 })
       // Capped before the caller's membership filter drops stale project/organization grants, so the cap counts them too;
       // shares past the most recent are not listed but stay callable.
       .limit(CALLABLE_FUNCTION_LIMITS.maxPerOwner);
-    return docs.map(doc => doc.toObject() as ICallableFunctionSummary);
+    return docs.map(doc => doc.toObject() as ICallableFunctionSharedSource);
   }
 
   async deleteForOwner(id: string, owner: CallableFunctionOwner): Promise<boolean> {

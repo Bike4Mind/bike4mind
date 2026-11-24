@@ -35,6 +35,10 @@ export const aiHolders = {
     // A digest of the function's source, not a credential; listed because the name matches the secret pattern.
     secretPaths: ['codeHash'],
   },
+  CallableFunctionReview: {
+    kind: 'holder',
+    references: [{ path: 'userId', matchBy: 'userId', action: 'deleteDocument' }],
+  },
   CodeAgentEvent: {
     kind: 'holder',
     references: [

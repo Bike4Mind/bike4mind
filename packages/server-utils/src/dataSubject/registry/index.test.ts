@@ -173,6 +173,11 @@ describe('account purge reconciliation', () => {
     expect(matched('CallableFunction', { ...shared, grants: { userIds: ['x'] } })).toEqual([]);
   });
 
+  it("deletes a person's reviews of functions shared with them and leaves another person's alone", () => {
+    expect(matched('CallableFunctionReview', { functionId: 'fn-1', userId })).toEqual(['deleteDocument']);
+    expect(matched('CallableFunctionReview', { functionId: 'fn-1', userId: 'other' })).toEqual([]);
+  });
+
   it("deletes the function call rows a person made, and only names the owner on someone else's call", () => {
     expect(matched('CallableFunctionCall', { callerUserId: userId, ownerUserId: userId })).toEqual([
       'deleteDocument',

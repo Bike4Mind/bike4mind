@@ -4,6 +4,8 @@ import {
   CallableFunctionProtectedFieldError,
   calculateContentHash,
   parseFunctionContract,
+  reviewHash,
+  type FunctionContract,
   type ICallableFunctionGrants,
 } from '@bike4mind/common';
 import {
@@ -11,6 +13,7 @@ import {
   ArtifactContent,
   CallableFunction,
   CallableFunctionCall,
+  CallableFunctionReview,
   Organization,
   Project,
   User,
@@ -48,6 +51,12 @@ import {
   summarizeCallableFunctionCalls,
 } from './registry';
 import { promoteCallableFunction } from './promote';
+import {
+  callableFunctionOffer,
+  hasCurrentReview,
+  reviewSharedCallableFunction,
+  updateSharedCallableFunctionReview,
+} from './reviews';
 import { runCallableFunctionTests } from './testRun';
 
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
@@ -162,6 +171,7 @@ beforeAll(async () => {
   mongoServer = await createMongoServer();
   await mongoose.connect(mongoServer.getUri());
   await CallableFunction.init();
+  await CallableFunctionReview.init();
 });
 
 afterAll(async () => {
@@ -177,19 +187,26 @@ beforeEach(async () => {
 
 afterEach(async () => {
   await Promise.all(
-    [CallableFunction, CallableFunctionCall, Artifact, ArtifactContent, User, Project, Organization].map(model =>
-      model.collection.deleteMany({})
-    )
+    [
+      CallableFunction,
+      CallableFunctionCall,
+      CallableFunctionReview,
+      Artifact,
+      ArtifactContent,
+      User,
+      Project,
+      Organization,
+    ].map(model => model.collection.deleteMany({}))
   );
 });
 
 describe('the access matrix, through the dispatcher', () => {
-  it('runs for the owner, refuses every recipient as pending review, and refuses everyone else as not a caller', async () => {
+  it('runs for the owner, refuses every unreviewed recipient, and refuses everyone else as not a caller', async () => {
     const byOrg = await seedLiveFunction({ visibility: 'organization', organizationId: ORG_ID, userIds: [PERSON.id] });
 
     expect(await callAs(OWNER, byOrg)).toMatchObject({ outcome: 'ok', outputs: { deflection: 26.04 } });
-    expect(await callAs(PERSON, byOrg)).toMatchObject({ outcome: 'refused', reason: 'pending_review' });
-    expect(await callAs(ORG_MEMBER, byOrg)).toMatchObject({ outcome: 'refused', reason: 'pending_review' });
+    expect(await callAs(PERSON, byOrg)).toMatchObject({ outcome: 'refused', reason: 'review_required' });
+    expect(await callAs(ORG_MEMBER, byOrg)).toMatchObject({ outcome: 'refused', reason: 'review_required' });
     expect(await callAs(PROJECT_MEMBER, byOrg)).toMatchObject({ outcome: 'refused', reason: 'not_found' });
     expect(await callAs(STRANGER, byOrg)).toMatchObject({ outcome: 'refused', reason: 'not_found' });
     expect(runner).toHaveBeenCalledTimes(1);
@@ -197,8 +214,8 @@ describe('the access matrix, through the dispatcher', () => {
     const rows = await CallableFunctionCall.find({ functionId: byOrg }).sort({ startedAt: 1 }).lean();
     expect(rows.map(row => [row.callerUserId, row.outcome, row.reason ?? null])).toEqual([
       [OWNER.id, 'ok', null],
-      [PERSON.id, 'refused', 'pending_review'],
-      [ORG_MEMBER.id, 'refused', 'pending_review'],
+      [PERSON.id, 'refused', 'review_required'],
+      [ORG_MEMBER.id, 'refused', 'review_required'],
       [PROJECT_MEMBER.id, 'refused', 'not_caller'],
       [STRANGER.id, 'refused', 'not_caller'],
     ]);
@@ -217,17 +234,17 @@ describe('the access matrix, through the dispatcher', () => {
 
   it('ends an organization share when the owner leaves the organization, at the next call and the next list', async () => {
     const byOrg = await seedLiveFunction({ visibility: 'organization', organizationId: ORG_ID, userIds: [PERSON.id] });
-    expect(await callAs(ORG_MEMBER, byOrg)).toMatchObject({ reason: 'pending_review' });
+    expect(await callAs(ORG_MEMBER, byOrg)).toMatchObject({ reason: 'review_required' });
 
     await Organization.collection.updateOne({ _id: new mongoose.Types.ObjectId(ORG_ID) }, { $set: { userId: oid() } });
     expect(await callAs(ORG_MEMBER, byOrg)).toMatchObject({ outcome: 'refused', reason: 'not_found' });
     expect(await listSharedCallableFunctions(ORG_MEMBER)).toEqual([]);
-    expect(await callAs(PERSON, byOrg)).toMatchObject({ reason: 'pending_review' });
+    expect(await callAs(PERSON, byOrg)).toMatchObject({ reason: 'review_required' });
   });
 
   it('ends a project share when the owner leaves the project, at the next call and the next list', async () => {
     const byProject = await seedLiveFunction({ visibility: 'project', projectId: PROJECT_ID, userIds: [] });
-    expect(await callAs(PROJECT_MEMBER, byProject)).toMatchObject({ reason: 'pending_review' });
+    expect(await callAs(PROJECT_MEMBER, byProject)).toMatchObject({ reason: 'review_required' });
     expect((await listSharedCallableFunctions(PROJECT_MEMBER)).map(fn => fn.id)).toEqual([byProject]);
 
     await Project.collection.updateOne({ _id: new mongoose.Types.ObjectId(PROJECT_ID) }, { $set: { userId: oid() } });
@@ -268,12 +285,12 @@ describe('the access matrix, through the dispatcher', () => {
       }
     );
     expect(promoted).toMatchObject({ state: 'live', grants: { visibility: 'organization', userIds: [PERSON.id] } });
-    expect(await callAs(PERSON, id)).toMatchObject({ reason: 'pending_review' });
+    expect(await callAs(PERSON, id)).toMatchObject({ reason: 'review_required' });
   });
 
   it('admits a project member, and refuses them at the next call after they leave', async () => {
     const byProject = await seedLiveFunction({ visibility: 'project', projectId: PROJECT_ID, userIds: [] });
-    expect(await callAs(PROJECT_MEMBER, byProject)).toMatchObject({ reason: 'pending_review' });
+    expect(await callAs(PROJECT_MEMBER, byProject)).toMatchObject({ reason: 'review_required' });
     expect(await callAs(ORG_MEMBER, byProject)).toMatchObject({ reason: 'not_found' });
 
     await Project.collection.updateOne({ _id: new mongoose.Types.ObjectId(PROJECT_ID) }, { $set: { users: [] } });
@@ -282,7 +299,7 @@ describe('the access matrix, through the dispatcher', () => {
 
   it('refuses a former organization member at the next call', async () => {
     const byOrg = await seedLiveFunction({ visibility: 'organization', organizationId: ORG_ID, userIds: [] });
-    expect(await callAs(ORG_MEMBER, byOrg)).toMatchObject({ reason: 'pending_review' });
+    expect(await callAs(ORG_MEMBER, byOrg)).toMatchObject({ reason: 'review_required' });
 
     await Organization.collection.updateOne({ _id: new mongoose.Types.ObjectId(ORG_ID) }, { $set: { users: [] } });
     expect(await callAs(ORG_MEMBER, byOrg)).toMatchObject({ outcome: 'refused', reason: 'not_found' });
@@ -316,7 +333,7 @@ describe('revoking', () => {
   it('takes effect on the next call and the next list', async () => {
     const id = await seedLiveFunction();
     await shareCallableFunction(OWNER, id, { visibility: 'private', userIds: [PERSON.id] });
-    expect(await callAs(PERSON, id)).toMatchObject({ reason: 'pending_review' });
+    expect(await callAs(PERSON, id)).toMatchObject({ reason: 'review_required' });
     expect((await listSharedCallableFunctions(PERSON)).map(fn => fn.id)).toEqual([id]);
 
     const revoked = await revokeCallableFunctionShare(OWNER, id);
@@ -415,13 +432,22 @@ describe('shareCallableFunction', () => {
 });
 
 describe('what a recipient can read', () => {
-  it('lists the function as pending review with no code, artifact, examples, or grants', async () => {
+  it('lists the function as pending review with its interface and owner name, and no code, artifact, or grants', async () => {
     const id = await seedLiveFunction({ visibility: 'organization', organizationId: ORG_ID, userIds: [PERSON.id] });
     const [shared] = await listSharedCallableFunctions(ORG_MEMBER);
-    expect(shared).toMatchObject({ id, status: 'pending_review', sharedVia: 'organization' });
-    expect(Object.keys(shared!).sort()).toEqual(
-      ['description', 'id', 'pin', 'sharedVia', 'slug', 'status', 'trustLabel', 'updatedAt'].sort()
-    );
+    expect(shared).toMatchObject({
+      id,
+      status: 'pending_review',
+      sharedVia: 'organization',
+      ownerName: 'Person 0',
+      inputs: CONTRACT.inputs,
+      outputs: CONTRACT.outputs,
+      reviewHash: await reviewHash(CONTRACT),
+      review: null,
+      dataPins: [],
+      sources: [],
+    });
+    expect(Object.keys(shared!)).not.toEqual(expect.arrayContaining(['contract', 'grants', 'examples', 'userId']));
     expect(Object.keys(shared!.pin).sort()).toEqual(['pinnedAt', 'seq', 'version']);
     expect(JSON.stringify(await listSharedCallableFunctions(PERSON))).not.toContain('def run');
     expect(await listSharedCallableFunctions(STRANGER)).toEqual([]);
@@ -450,5 +476,201 @@ describe('what a recipient can read', () => {
     expect(await listCallableFunctions(PERSON)).toEqual([]);
     expect(await listCallableFunctions(PERSON, { artifactId: ARTIFACT_ID })).toEqual([]);
     expect((await CallableFunction.findById(id).lean())?.grants?.userIds).toEqual([PERSON.id]);
+  });
+});
+
+describe('a recipient review', () => {
+  const OWNER_KEY = { ownerType: 'user' as const, ownerKey: OWNER.id };
+
+  /** A new pin promoted to live, as the Function tab's repin and promote leave it. */
+  async function repinLive(id: string, contract: FunctionContract, source = SOURCE) {
+    const live = await CallableFunction.findById(id).lean();
+    await callableFunctionRepository.repin(id, OWNER_KEY, live!.pin.version, {
+      pin: {
+        ...live!.pin,
+        version: live!.pin.version + 1,
+        source,
+        contentHash: calculateContentHash(source),
+        pinnedAt: new Date(),
+      },
+      contract,
+      description: contract.description,
+    });
+    await CallableFunction.updateOne({ _id: id }, { $set: { state: 'live', 'pin.seq': (live!.pin.seq ?? 0) + 1 } });
+  }
+
+  const review = async (caller: { id: string }, id: string, approval: 'default' | 'always_ask' = 'default') =>
+    reviewSharedCallableFunction(caller, id, { reviewHash: await reviewHash(CONTRACT), approval });
+
+  it('lets a recipient run only with a current, enabled review, with one call-log row per call', async () => {
+    const id = await seedLiveFunction({ visibility: 'private', userIds: [PERSON.id] });
+    expect(await callAs(PERSON, id)).toMatchObject({ outcome: 'refused', reason: 'review_required' });
+
+    const reviewed = await review(PERSON, id);
+    expect(reviewed).toMatchObject({
+      status: 'reviewed',
+      review: { approval: 'default', enabled: true, current: true },
+    });
+    expect(await callAs(PERSON, id)).toMatchObject({ outcome: 'ok', outputs: { deflection: 26.04 } });
+
+    const off = await updateSharedCallableFunctionReview(PERSON, id, { enabled: false });
+    expect(off.status).toBe('disabled');
+    expect(await callAs(PERSON, id)).toMatchObject({ outcome: 'refused', reason: 'review_required' });
+
+    expect((await updateSharedCallableFunctionReview(PERSON, id, { enabled: true })).status).toBe('reviewed');
+    expect(await callAs(PERSON, id)).toMatchObject({ outcome: 'ok' });
+
+    const rows = await CallableFunctionCall.find({ functionId: id }).sort({ startedAt: 1 }).lean();
+    expect(rows.map(row => [row.outcome, row.reason ?? null])).toEqual([
+      ['refused', 'review_required'],
+      ['ok', null],
+      ['refused', 'review_required'],
+      ['ok', null],
+    ]);
+  });
+
+  it('carries the review across a repin that changes only the code', async () => {
+    const id = await seedLiveFunction({ visibility: 'private', userIds: [PERSON.id] });
+    await review(PERSON, id);
+    await repinLive(id, CONTRACT, SOURCE.replace('/ 384', '/ 385'));
+
+    expect(await hasCurrentReview(PERSON.id, { id, contract: CONTRACT })).toBe(true);
+    expect(await callAs(PERSON, id)).toMatchObject({ outcome: 'ok' });
+    const [shared] = await listSharedCallableFunctions(PERSON);
+    expect(shared).toMatchObject({ status: 'reviewed', pin: { version: 2, seq: 2 } });
+  });
+
+  it.each<[string, FunctionContract]>([
+    ['description', { ...CONTRACT, description: 'Midspan deflection, in meters.' }],
+    ['name', { ...CONTRACT, name: 'beam_deflection' }],
+    [
+      'input schema',
+      {
+        ...CONTRACT,
+        inputs: {
+          ...CONTRACT.inputs,
+          properties: { ...CONTRACT.inputs.properties, span: { type: 'number', unit: 'mm' } },
+        },
+      },
+    ],
+    [
+      'output schema',
+      {
+        ...CONTRACT,
+        outputs: {
+          ...CONTRACT.outputs,
+          properties: { deflection: { type: 'number', unit: 'm', description: 'Sag.' } },
+        },
+      },
+    ],
+  ])('returns the recipient to review after a %s change, until they review again', async (_change, changed) => {
+    const id = await seedLiveFunction({ visibility: 'private', userIds: [PERSON.id] });
+    await review(PERSON, id);
+    await repinLive(id, changed);
+
+    expect(await callAs(PERSON, id)).toMatchObject({ outcome: 'refused', reason: 'review_required' });
+    const [shared] = await listSharedCallableFunctions(PERSON);
+    expect(shared).toMatchObject({ status: 'pending_review', review: { current: false } });
+    expect(await callAs(OWNER, id)).toMatchObject({ outcome: 'ok' });
+
+    // A review must name the interface the recipient was shown.
+    await expect(review(PERSON, id)).rejects.toMatchObject(refusal('review_conflict'));
+    await reviewSharedCallableFunction(PERSON, id, { reviewHash: shared!.reviewHash, approval: 'default' });
+    expect(await callAs(PERSON, id)).toMatchObject({ outcome: 'ok' });
+  });
+
+  it('never asks the owner for a review', async () => {
+    const id = await seedLiveFunction({ visibility: 'private', userIds: [PERSON.id] });
+    expect(await callAs(OWNER, id)).toMatchObject({ outcome: 'ok' });
+    await repinLive(id, { ...CONTRACT, description: 'Changed.' });
+    expect(await callAs(OWNER, id)).toMatchObject({ outcome: 'ok' });
+    expect(await CallableFunctionReview.countDocuments({})).toBe(0);
+  });
+
+  it('still refuses a stranger and a recipient whose grant was revoked, reviewed or not', async () => {
+    const id = await seedLiveFunction({ visibility: 'private', userIds: [PERSON.id] });
+    await review(PERSON, id);
+    expect(await callAs(STRANGER, id)).toMatchObject({ outcome: 'refused', reason: 'not_found' });
+
+    await revokeCallableFunctionShare(OWNER, id);
+    expect(await callAs(PERSON, id)).toMatchObject({ outcome: 'refused', reason: 'not_found' });
+    expect(runner).not.toHaveBeenCalled();
+    const rows = await CallableFunctionCall.find({ functionId: id }).sort({ startedAt: 1 }).lean();
+    expect(rows.map(row => [row.callerUserId, row.reason])).toEqual([
+      [STRANGER.id, 'not_caller'],
+      [PERSON.id, 'not_caller'],
+    ]);
+  });
+
+  it('answers not found to anyone the function is not shared with, the owner included', async () => {
+    const id = await seedLiveFunction({ visibility: 'private', userIds: [PERSON.id] });
+    const hash = await reviewHash(CONTRACT);
+    const attempts: [string, () => Promise<unknown>][] = [
+      ['stranger review', () => reviewSharedCallableFunction(STRANGER, id, { reviewHash: hash, approval: 'default' })],
+      ['stranger settings', () => updateSharedCallableFunctionReview(STRANGER, id, { enabled: false })],
+      ['owner review', () => reviewSharedCallableFunction(OWNER, id, { reviewHash: hash, approval: 'default' })],
+      ['owner settings', () => updateSharedCallableFunctionReview(OWNER, id, { enabled: false })],
+      [
+        'malformed id',
+        () => reviewSharedCallableFunction(PERSON, 'not-an-id', { reviewHash: hash, approval: 'default' }),
+      ],
+      ['missing id', () => updateSharedCallableFunctionReview(PERSON, oid(), { enabled: false })],
+    ];
+    for (const [name, attempt] of attempts) {
+      await expect(attempt(), name).rejects.toThrow('not found');
+    }
+
+    await revokeCallableFunctionShare(OWNER, id);
+    await expect(review(PERSON, id)).rejects.toThrow('not found');
+    await expect(updateSharedCallableFunctionReview(PERSON, id, { enabled: true })).rejects.toThrow('not found');
+    expect(await CallableFunctionReview.countDocuments({})).toBe(0);
+  });
+
+  it('refuses a settings change before any review', async () => {
+    const id = await seedLiveFunction({ visibility: 'private', userIds: [PERSON.id] });
+    await expect(updateSharedCallableFunctionReview(PERSON, id, { approval: 'always_allow' })).rejects.toMatchObject(
+      refusal('not_reviewed')
+    );
+  });
+
+  it('stores one review per function and person, and removes them with the function', async () => {
+    const id = await seedLiveFunction({ visibility: 'private', userIds: [PERSON.id] });
+    await review(PERSON, id);
+    await review(PERSON, id, 'always_ask');
+    const rows = await CallableFunctionReview.find({ functionId: id }).lean();
+    expect(rows.map(row => [row.userId, row.approval, row.enabled])).toEqual([[PERSON.id, 'always_ask', true]]);
+    await expect(CallableFunctionReview.create({ ...rows[0], _id: undefined, reviewedAt: new Date() })).rejects.toThrow(
+      /duplicate key/
+    );
+
+    await deleteCallableFunction(OWNER, id);
+    expect(await CallableFunctionReview.countDocuments({})).toBe(0);
+  });
+});
+
+describe('callableFunctionOffer, for the chat loader', () => {
+  it("offers a recipient's function only when reviewed, under their mode, and never always_ask when headless", async () => {
+    const id = await seedLiveFunction({ visibility: 'private', userIds: [PERSON.id] });
+    const fn = (await CallableFunction.findById(id))!.toJSON();
+    const offer = (caller: { id: string }, headless: boolean) => callableFunctionOffer(caller, fn, { headless });
+
+    expect(await offer(OWNER, true)).toEqual({ access: 'owner', approval: 'default' });
+    expect(await offer(PERSON, false)).toBeNull();
+    expect(await offer(STRANGER, false)).toBeNull();
+
+    await reviewSharedCallableFunction(PERSON, id, { reviewHash: await reviewHash(CONTRACT), approval: 'always_ask' });
+    expect(await offer(PERSON, false)).toEqual({ access: 'person', approval: 'always_ask' });
+    expect(await offer(PERSON, true)).toBeNull();
+
+    await updateSharedCallableFunctionReview(PERSON, id, { approval: 'always_allow' });
+    expect(await offer(PERSON, true)).toEqual({ access: 'person', approval: 'always_allow' });
+
+    await updateSharedCallableFunctionReview(PERSON, id, { enabled: false });
+    expect(await offer(PERSON, false)).toBeNull();
+
+    await updateSharedCallableFunctionReview(PERSON, id, { enabled: true });
+    expect(await offer(PERSON, false)).not.toBeNull();
+    const changed = { ...fn, contract: { ...CONTRACT, description: 'New.' } };
+    expect(await callableFunctionOffer(PERSON, changed, { headless: false })).toBeNull();
   });
 });
