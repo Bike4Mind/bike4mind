@@ -29,6 +29,12 @@ export function requiredMailSecrets(kind: MailTransportKind): MailSecretName[] {
   return kind === 'ses' ? ['MAIL_FROM'] : [...SMTP_SECRETS];
 }
 
+/** Mail settings the transport never reads, so secret lists can leave them out. */
+export function unusedMailSecrets(kind: MailTransportKind = statusTransportKind()): MailSecretName[] {
+  const required = requiredMailSecrets(kind);
+  return SMTP_SECRETS.filter(name => !required.includes(name));
+}
+
 export function isUnsetMailValue(value: string | undefined | null): boolean {
   return isPlaceholderValue(value) || !value?.trim();
 }
