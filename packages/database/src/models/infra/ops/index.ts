@@ -1,3 +1,5 @@
+import './LiveopsTriageConfigAuditLogModel';
+
 export * from './AdminSettingsModel';
 export * from './CacheModel';
 export * from './CounterLogModel';

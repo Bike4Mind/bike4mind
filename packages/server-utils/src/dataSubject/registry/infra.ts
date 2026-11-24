@@ -2,6 +2,11 @@ import type { DataHolderRegistry } from '../types';
 import { AUDIT_LOG, EMAIL_SUPPRESSION, expiresAfterTtl } from './retention';
 
 export const infraHolders = {
+  // Historical rows remain until their existing TTL, with erased actors anonymized immediately.
+  LiveopsTriageConfigAuditLog: {
+    kind: 'holder',
+    references: [{ path: 'userId', matchBy: 'userId', action: 'anonymize', alsoRedact: ['userName'] }],
+  },
   GeneratedFileCleanup: {
     kind: 'noUserData',
     note: 'Exact server-generated UUID Files paths awaiting cleanup; no account or session identifier.',
