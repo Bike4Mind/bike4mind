@@ -495,8 +495,8 @@ const FeedbackTab: React.FC = () => {
   const columns: DataColumn<FeedbackRow>[] = [
     { id: 'createdAt', label: 'Created', sortable: true, width: '7.5rem', render: row => <CreatedCell row={row} /> },
     // cqw, not %: Chrome treats a percentage inside clamp() as auto on a fixed-layout table. The query
-    // container is the table region below: 15rem once it is ~68rem wide, 7.25rem by ~48rem (a 768 px
-    // viewport), so the Feedback column stays the widest at tablet width.
+    // container is the table region below: 15rem once it is ~68rem wide, the 7.25rem floor at ~48rem and
+    // narrower (the region is narrower than that at a 768 px viewport), so Feedback stays widest on tablets.
     {
       id: 'reporter',
       label: 'Reporter',
