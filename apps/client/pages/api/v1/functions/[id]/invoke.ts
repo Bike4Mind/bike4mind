@@ -1,18 +1,23 @@
 /**
- * POST /api/v1/functions/{id}/invoke - run one live function and return `{ output, stamp }` (`invokeFunctionContract`).
+ * POST /api/v1/functions/{id}/invoke - run one live function and return `{ output, stamp }` (`invokeFunctionContract`),
+ * or with `mode: "async"` queue it and answer 202 with a `call_id` to poll at /api/v1/functions/calls/{call_id}.
  * The key's `functions:invoke` scope is the approval: the owner's own key always runs their live function.
  */
 import { invokeFunctionContract } from '@bike4mind/common';
 import { dispatchFunctionCall } from '@bike4mind/server-utils/callableFunctions/dispatch';
+import { queueFunctionCall } from '@bike4mind/server-utils/callableFunctions/asyncCalls';
+import { resolveCallableFunctionTimeLimitMs } from '@bike4mind/server-utils/callableFunctions/timeLimit';
+import { getSourceQueueUrl } from '@bike4mind/server-utils/utils/dlqRegistry';
+import { sendToQueue } from '@bike4mind/server-utils/utils/sqs';
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
 import {
   FUNCTION_INVOKE_BUDGET_MS,
   FUNCTION_INVOKE_MAX_BODY_BYTES,
-  FUNCTION_INVOKE_RUN_TIMEOUT_MS,
   assertFunctionsEnabled,
   functionsRateLimit,
   invokeAnswer,
   loadLiveFunction,
+  syncTimeoutError,
 } from '@server/callableFunctions/publicFunctions';
 
 const handler = nextRouteForContract(invokeFunctionContract, {
@@ -22,17 +27,29 @@ const handler = nextRouteForContract(invokeFunctionContract, {
   const startedAt = Date.now();
   await assertFunctionsEnabled(req.user);
   const fn = await loadLiveFunction(req.user, req.validatedParams.id);
-  const call = await dispatchFunctionCall(
-    {
-      caller: { id: req.user.id },
-      functionId: fn.id,
-      args: req.validated.input,
-      surface: 'rest',
-      ...(req.apiKeyInfo?.keyId ? { apiKeyId: req.apiKeyInfo.keyId } : {}),
-    },
-    { timeoutMs: FUNCTION_INVOKE_RUN_TIMEOUT_MS, deadline: startedAt + FUNCTION_INVOKE_BUDGET_MS }
-  );
+  const request = {
+    caller: { id: req.user.id },
+    functionId: fn.id,
+    args: req.validated.input,
+    surface: 'rest' as const,
+    ...(req.apiKeyInfo?.keyId ? { apiKeyId: req.apiKeyInfo.keyId } : {}),
+  };
+
+  if (req.validated.mode === 'async') {
+    const queued = await queueFunctionCall(request, {
+      send: job => sendToQueue(getSourceQueueUrl('callableFunctionCallQueue'), { ...job }),
+    });
+    const answer = invokeAnswer(queued);
+    return res.status(answer.status).json(answer.body);
+  }
+
+  const limitMs = await resolveCallableFunctionTimeLimitMs(req.user);
+  const call = await dispatchFunctionCall(request, {
+    timeoutMs: limitMs,
+    deadline: startedAt + FUNCTION_INVOKE_BUDGET_MS,
+  });
   const answer = invokeAnswer(call);
+  if (answer.status === 504) answer.body.error = syncTimeoutError(limitMs);
   return res.status(answer.status).json(answer.body);
 });
 
