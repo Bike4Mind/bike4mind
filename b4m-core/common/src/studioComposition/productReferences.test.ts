@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import { STUDIO_COMPOSITION_LIMITS } from './composition';
-import { productImageReferenceFileIds, productReferenceFileIds, withProductLook } from './productReferences';
+import {
+  productImageReferenceFileIds,
+  productReferenceFileIds,
+  withDirectorProduct,
+  withProductLook,
+} from './productReferences';
 
 const id = (n: number): string => n.toString(16).padStart(24, '0');
 
@@ -73,6 +78,29 @@ describe('withProductLook', () => {
     const next = withProductLook(full, id(500));
     expect(next).toHaveLength(max);
     expect(next[0]).toBe(id(500));
+    expect(next).not.toContain(full[max - 1]);
+  });
+});
+
+describe('withDirectorProduct', () => {
+  it('makes the photo the look when the brand kit has no images', () => {
+    expect(withDirectorProduct([], id(9))).toEqual([id(9)]);
+  });
+
+  it("keeps the user's look first and puts the photo second", () => {
+    expect(withDirectorProduct([id(1), id(2)], id(9))).toEqual([id(1), id(9), id(2)]);
+  });
+
+  it('leaves the list unchanged when the photo is already in it', () => {
+    expect(withDirectorProduct([id(1), id(2)], id(2))).toEqual([id(1), id(2)]);
+  });
+
+  it('stays within the cap, dropping the last image', () => {
+    const max = STUDIO_COMPOSITION_LIMITS.brandProductFilesMax;
+    const full = Array.from({ length: max }, (_, index) => id(index + 1));
+    const next = withDirectorProduct(full, id(500));
+    expect(next).toHaveLength(max);
+    expect(next.slice(0, 2)).toEqual([id(1), id(500)]);
     expect(next).not.toContain(full[max - 1]);
   });
 });

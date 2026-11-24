@@ -3,6 +3,7 @@ import {
   STUDIO_COMPOSITION_LIMITS,
   STUDIO_TIMELINE_LIMITS,
   StudioFileIdSchema,
+  withDirectorProduct,
   type StudioShot,
 } from '@bike4mind/common';
 import type { ToolContext, ToolDefinition } from '../../base/types';
@@ -372,10 +373,7 @@ export const productionStoryboardTool: ToolDefinition = {
             ...(args.brief && { brief: { ...current.brief, summary: args.brief } }),
             ...(product &&
               !products.includes(product) && {
-                brandKit: {
-                  ...current.brandKit,
-                  productFileIds: [product, ...products].slice(0, STUDIO_COMPOSITION_LIMITS.brandProductFilesMax),
-                },
+                brandKit: { ...current.brandKit, productFileIds: withDirectorProduct(products, product) },
               }),
           });
           if (reorders) markReordered(config);

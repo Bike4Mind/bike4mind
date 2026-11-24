@@ -34,3 +34,14 @@ export const productImageReferenceFileIds = (
  */
 export const withProductLook = (productFileIds: readonly string[], fileId: string): string[] =>
   [fileId, ...productFileIds.filter(id => id !== fileId)].slice(0, STUDIO_COMPOSITION_LIMITS.brandProductFilesMax);
+
+/**
+ * Adds the director's storyboard product photo to the brand kit's product images. The product look the user keeps
+ * at the front (picked in the Brand kit panel) stays first, so the photo lands second and a single-reference model
+ * still uses that look; with no images yet the photo becomes the look. A photo already in the list is not moved.
+ */
+export const withDirectorProduct = (productFileIds: readonly string[], fileId: string): string[] => {
+  if (productFileIds.includes(fileId)) return [...productFileIds];
+  if (productFileIds.length === 0) return withProductLook(productFileIds, fileId);
+  return withProductLook(withProductLook(productFileIds, fileId), productFileIds[0]);
+};
