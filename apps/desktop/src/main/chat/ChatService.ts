@@ -256,7 +256,7 @@ import type { LocalHistoryResult } from '@shared/history';
 import { findStaleResults, historyRounds, sentHistory, toolResultContent } from './contextPruning';
 import { stalePlanReminder, unfinishedPlanReminder } from './planReminder';
 import { buildExploreContext, shouldOfferExplore } from './explore';
-import { MediaApiClient } from './media/MediaApiClient';
+import { MediaApiClient, type MediaRun } from './media/MediaApiClient';
 import { type MediaStore, parseMediaUrl } from './media/MediaStore';
 import { fitToolImage, MAX_TOOL_IMAGE_INPUT_BYTES, sniffImageType } from './tools/toolImages';
 import type { VideoJobScheduler } from './media/VideoJobScheduler';
@@ -482,6 +482,9 @@ interface MidTurnArrival {
 }
 
 /** Stored on a turn the session expired under; the thread shows it as paused, not as an error. */
+// Ends a paid tool's result when the run budget refused it; reofferBudgetRefusedTools keys on it.
+const RUN_BUDGET_REFUSAL_NOTE =
+  'The run paused for its credit budget before this call ran; once it resumes, call this tool again.';
 const SESSION_PAUSED_MESSAGE = 'Your session expired before this reply finished. Sign in again, then press Continue.';
 /** A budgeted run the server no longer recognises: it is not resent unattributed, and not re-minted at zero. */
 const RUN_LOST_MESSAGE =
@@ -2291,11 +2294,31 @@ export class ChatService {
       const member = await this.deps.store.get(id);
       const last = member?.messages.at(-1);
       if (last?.role !== 'assistant' || last.stopReason !== RUN_BUDGET_STOP || this.isBusy(id)) continue;
+      await this.reofferBudgetRefusedTools(id, last, budgetCredits);
       const result = await this.continueReply(id);
       if (result.ok) resumed += 1;
       else this.deps.logger.warn(`CHAT: could not resume ${id} after a budget raise: ${result.error}`);
     }
     return { ok: true, resumed };
+  }
+
+  /**
+   * Rewrites the paused turn's budget-refused tool results before a resume. The model reads them
+   * as history, and a refusal that still names the old shortfall reads as final (seen on Haiku and
+   * Sonnet), so the result says the budget is now higher and the call should be made again.
+   */
+  private async reofferBudgetRefusedTools(
+    sessionId: string,
+    reply: ChatMessage,
+    budgetCredits: number
+  ): Promise<void> {
+    const refused = (call: ChatToolCall) => call.status === 'error' && call.error?.endsWith(RUN_BUDGET_REFUSAL_NOTE);
+    if (!reply.toolCalls?.some(refused)) return;
+    const note =
+      `This call was refused because the run's credit budget ran out, so it did not run. The budget has ` +
+      `since been raised to ${budgetCredits.toLocaleString('en-US')} credits: call this tool again now.`;
+    const toolCalls = reply.toolCalls.map(call => (refused(call) ? { ...call, error: note } : call));
+    await this.deps.store.updateMessage(sessionId, reply.id, { toolCalls });
   }
 
   /**
@@ -4524,7 +4547,14 @@ export class ChatService {
       // One reading for the tool list, the prompt and the host (buildHostContext), so none disagree.
       const orchestrating = orchestratesAgents(session);
       let { roots, listedRoots, workingDirectory } = await this.resolveToolScope(session);
-      const media = api ? this.buildMediaContext(api) : undefined;
+      // Paid tools draw on the same run as the turn's completions; see MediaApiClient.withRun.
+      const mediaRun: MediaRun | undefined = attribution
+        ? { current: () => run, budgeted: runBudgeted, onRejected: dropRun }
+        : undefined;
+      const media = api ? this.buildMediaContext(api, mediaRun) : undefined;
+      // Set by a paid tool the run's budget refused. The round still records every call's
+      // result, then the turn stops as a completion refusal would (pauseRunForBudget).
+      const budgetStop: { error?: RunBudgetExhaustedError } = {};
       // A wrapper over the client and nothing more: a turn that never searches makes no request.
       const web = api
         ? webContextFor(api, {
@@ -5233,6 +5263,7 @@ export class ChatService {
                 isLoopTurn,
                 title: session.title,
                 directories: directoryTurn,
+                budgetStop,
                 ...(deferred ? { offered: new Set(toolsFor(roots).map(tool => tool.toolSchema.name)) } : {}),
                 permissions: {
                   project: session.project?.directory ?? null,
@@ -5339,6 +5370,7 @@ export class ChatService {
           pruneScreenshots(wire, screenshotTurns);
         }
 
+        if (budgetStop.error) throw budgetStop.error;
         // Checked after a round rather than before one, so a turn is never cut between asking
         // for a tool and reporting what it returned.
         if (Date.now() >= deadline) {
@@ -5952,6 +5984,8 @@ export class ChatService {
       title: string;
       /** Absent outside a reply's own loop, where request_directory then has no turn to track. */
       directories?: DirectoryTurn;
+      /** Receives a paid tool's run-budget refusal; absent outside a reply's own loop. */
+      budgetStop?: { error?: RunBudgetExhaustedError };
       /**
        * The tool names this round offers, on a deferred-tools turn. The request also declares tools
        * it no longer offers (see declareDeferredTools), and those must not run.
@@ -6222,11 +6256,17 @@ export class ChatService {
           const err = outcome.error;
           const message = err instanceof Error ? err.message : String(err);
           this.deps.logger.debug(`CHAT: tool ${request.name} failed: ${message}`);
+          if (err instanceof RunBudgetExhaustedError && scope.budgetStop) scope.budgetStop.error ??= err;
+          // The model reads this after a raise resumes the turn; without it, it takes the refusal as final.
+          const stored =
+            err instanceof RunBudgetExhaustedError
+              ? `${message} ${RUN_BUDGET_REFUSAL_NOTE}`
+              : message;
           settled = decorate({
             ...call,
             // A refusal is its own state: the UI says "denied", not "something broke".
             status: err instanceof Error && err.name === 'PathAccessDenied' ? 'denied' : 'error',
-            error: message,
+            error: stored,
           });
         }
 
@@ -8113,13 +8153,13 @@ export class ChatService {
    *
    * Built per turn so the client is the one for this turn's signed-in session.
    */
-  private buildMediaContext(api: AuthenticatedApiClient): MediaContext | undefined {
+  private buildMediaContext(api: AuthenticatedApiClient, run?: MediaRun): MediaContext | undefined {
     const store = this.deps.media;
     const models = this.deps.models;
     if (!store) return undefined;
 
     return {
-      client: new MediaApiClient(api),
+      client: new MediaApiClient(api, run),
       store,
       listImageModels: () => models?.listImageModels() ?? Promise.resolve([]),
       listVideoModels: async () => (await models?.listVideoModels()) ?? [],

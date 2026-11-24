@@ -42,15 +42,17 @@ export const chatContract = defineEndpoint({
     'signal for the classified failure classes (an abort, a provider timeout, credit exhaustion); ' +
     '`errorCode` is an optional refinement present only when the failure has a classified ' +
     'reason. A recovered stuck quest is NOT in that list: one that still has renderable content ' +
-    'resolves as a success by design. `QUEST_ERROR_CODES` has four members: ' +
-    '`insufficient_credits`, `spend_cap_exceeded`, `spend_frozen`, and `free_quest_limit_reached`. ' +
+    'resolves as a success by design. `QUEST_ERROR_CODES` has five members: ' +
+    '`insufficient_credits`, `spend_cap_exceeded`, `spend_frozen`, `free_quest_limit_reached`, and ' +
+    '`run_budget_exhausted`. ' +
     '`insufficient_credits` and `spend_frozen` are raised as quest errorCodes on this endpoint: a ' +
     'spending pause in force when the request arrives is refused synchronously with a 403, and one ' +
     'that lands after the ACK reaches the quest. A new exhausted QuestMaster start is refused ' +
     'synchronously with 403 before a quest exists; an older queued start can instead settle as an ' +
     'error quest with `free_quest_limit_reached`. ' +
     "`spend_cap_exceeded` is thrown only by the embed chat route's pre-flight, which " +
-    'fires outside the process try/catch that would classify it onto a quest. A turn that ' +
+    'fires outside the process try/catch that would classify it onto a quest, and ' +
+    '`run_budget_exhausted` only by image generation. A turn that ' +
     'prompt moderation refuses settles as `type: "error"` with `errorCode: "content_blocked"` ' +
     'and the refusal text in `reply`, on the 200 `wait: true` body and on the polled quest alike; ' +
     'do not resend it unchanged. A ' +
@@ -120,10 +122,11 @@ export const chatContract = defineEndpoint({
           'spending pause that lands after the ACK arrives as `spend_frozen`. ' +
           'An older queued QuestMaster start can instead settle with `free_quest_limit_reached`; new ' +
           'exhausted starts are refused synchronously with 403 before a quest exists. ' +
-          '`QUEST_ERROR_CODES` has four members; its other code is `spend_cap_exceeded`, but no current ' +
+          '`QUEST_ERROR_CODES` also publishes `spend_cap_exceeded`, but no current ' +
           'throw site on this endpoint raises it as a quest errorCode: its only one, the embed ' +
           "chat route's pre-flight 422, fires outside the process try/catch that would classify " +
-          'it onto the quest. A turn that prompt moderation refuses arrives as `content_blocked`; ' +
+          'it onto the quest; `run_budget_exhausted` is raised only by image generation. A turn that ' +
+          'prompt moderation refuses arrives as `content_blocked`; ' +
           'do not resend it unchanged. Most `type: "error"` turns - an abort, a provider timeout or ' +
           'overload - have NO `errorCode`; its absence does not mean success, only that the ' +
           'failure is unclassified. A recovered stuck quest that still has renderable content is ' +

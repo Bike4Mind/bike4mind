@@ -12,7 +12,7 @@ export interface paths {
     put?: never;
     /**
      * Send a chat message
-     * @description Sends a message to the AI and creates a quest to process it. By default (async) the call returns immediately with a quest id; poll `GET /api/v1/quests/{id}` for the reply. Send `wait: true` to block until the reply is ready and receive it inline. A `wait: true` turn is bounded at about 45 seconds: one that runs longer is ended (unused credits refunded) and answered with a 504 naming the quest in `quest_id`; one whose reasoning model spends its whole output budget thinking is answered with a 422 or 502 (see those responses). Send long or tool-heavy turns (large attachments, tool calls) in the default async mode and poll instead. A tool that produced machine-readable state reports it under `toolPayloads` - an array of `{ type, payload }` entries in emission order, alongside (never instead of) the prose reply - on the `wait: true` body and on the polled quest. A turn can FAIL after the ACK - reported on the polled quest as `type: "error"`, since the ACK was already sent. A terminal `status: "stopped"` (a missing session, a user-cancelled turn) is ALSO a failure even without `type: "error"` - it carries an explanatory string in `reply`/`replies` rather than an answer. `type` is the failure signal for the classified failure classes (an abort, a provider timeout, credit exhaustion); `errorCode` is an optional refinement present only when the failure has a classified reason. A recovered stuck quest is NOT in that list: one that still has renderable content resolves as a success by design. `QUEST_ERROR_CODES` has four members: `insufficient_credits`, `spend_cap_exceeded`, `spend_frozen`, and `free_quest_limit_reached`. `insufficient_credits` and `spend_frozen` are raised as quest errorCodes on this endpoint: a spending pause in force when the request arrives is refused synchronously with a 403, and one that lands after the ACK reaches the quest. A new exhausted QuestMaster start is refused synchronously with 403 before a quest exists; an older queued start can instead settle as an error quest with `free_quest_limit_reached`. `spend_cap_exceeded` is thrown only by the embed chat route's pre-flight, which fires outside the process try/catch that would classify it onto a quest. A turn that prompt moderation refuses settles as `type: "error"` with `errorCode: "content_blocked"` and the refusal text in `reply`, on the 200 `wait: true` body and on the polled quest alike; do not resend it unchanged. A caller must treat `type: "error"` OR a terminal `status: "stopped"` as failure even when `errorCode` is absent, and must not read `reply` as an answer without checking those first. Organization-policy preflight refusals use 403 with `errorCode: "org_model_not_allowed"` or `"org_tool_not_allowed"`. An explicit-model JWT request can instead be accepted and refused during quest execution: that refusal appears on the 200 `wait: true` body or polled quest as `type: "error"`, without a policy `errorCode`. Check the quest outcome as described above. Authenticate with an API key (`b4m_live_`) or a JWT. Session resolution: pass `sessionId` to continue an existing notebook. An API-key caller that omits it gets a BRAND-NEW notebook rather than the notebook the human last had open, and `newConversation: true` forces a new notebook for any auth mode; both return the new id as `sessionId`, so the caller can continue the conversation by passing it back. A first-party JWT caller that omits `sessionId` keeps the last-opened-notebook fallback. Sending `sessionId` and `newConversation` together is a 422.
+     * @description Sends a message to the AI and creates a quest to process it. By default (async) the call returns immediately with a quest id; poll `GET /api/v1/quests/{id}` for the reply. Send `wait: true` to block until the reply is ready and receive it inline. A `wait: true` turn is bounded at about 45 seconds: one that runs longer is ended (unused credits refunded) and answered with a 504 naming the quest in `quest_id`; one whose reasoning model spends its whole output budget thinking is answered with a 422 or 502 (see those responses). Send long or tool-heavy turns (large attachments, tool calls) in the default async mode and poll instead. A tool that produced machine-readable state reports it under `toolPayloads` - an array of `{ type, payload }` entries in emission order, alongside (never instead of) the prose reply - on the `wait: true` body and on the polled quest. A turn can FAIL after the ACK - reported on the polled quest as `type: "error"`, since the ACK was already sent. A terminal `status: "stopped"` (a missing session, a user-cancelled turn) is ALSO a failure even without `type: "error"` - it carries an explanatory string in `reply`/`replies` rather than an answer. `type` is the failure signal for the classified failure classes (an abort, a provider timeout, credit exhaustion); `errorCode` is an optional refinement present only when the failure has a classified reason. A recovered stuck quest is NOT in that list: one that still has renderable content resolves as a success by design. `QUEST_ERROR_CODES` has five members: `insufficient_credits`, `spend_cap_exceeded`, `spend_frozen`, `free_quest_limit_reached`, and `run_budget_exhausted`. `insufficient_credits` and `spend_frozen` are raised as quest errorCodes on this endpoint: a spending pause in force when the request arrives is refused synchronously with a 403, and one that lands after the ACK reaches the quest. A new exhausted QuestMaster start is refused synchronously with 403 before a quest exists; an older queued start can instead settle as an error quest with `free_quest_limit_reached`. `spend_cap_exceeded` is thrown only by the embed chat route's pre-flight, which fires outside the process try/catch that would classify it onto a quest, and `run_budget_exhausted` only by image generation. A turn that prompt moderation refuses settles as `type: "error"` with `errorCode: "content_blocked"` and the refusal text in `reply`, on the 200 `wait: true` body and on the polled quest alike; do not resend it unchanged. A caller must treat `type: "error"` OR a terminal `status: "stopped"` as failure even when `errorCode` is absent, and must not read `reply` as an answer without checking those first. Organization-policy preflight refusals use 403 with `errorCode: "org_model_not_allowed"` or `"org_tool_not_allowed"`. An explicit-model JWT request can instead be accepted and refused during quest execution: that refusal appears on the 200 `wait: true` body or polled quest as `type: "error"`, without a policy `errorCode`. Check the quest outcome as described above. Authenticate with an API key (`b4m_live_`) or a JWT. Session resolution: pass `sessionId` to continue an existing notebook. An API-key caller that omits it gets a BRAND-NEW notebook rather than the notebook the human last had open, and `newConversation: true` forces a new notebook for any auth mode; both return the new id as `sessionId`, so the caller can continue the conversation by passing it back. A first-party JWT caller that omits `sessionId` keeps the last-opened-notebook fallback. Sending `sessionId` and `newConversation` together is a 422.
      */
     post: operations['sendChatMessage'];
     delete?: never;
@@ -730,7 +730,7 @@ export interface paths {
     /**
      * Generate an image
      * @deprecated
-     * @description **Deprecated, sunset 2027-02-17.** Use `/api/v1/image-jobs` instead. Queues an image generation and returns immediately with the quest that will carry the result - no image yet, and the call never blocks on the render. Poll `GET /api/v1/quests/{id}` until `status` is `"done"` (see the `generateImage200PollResult` schema). Omit `sessionId` to create a new session. The prompt is resolved against the session history first, so a follow-up such as "make it darker" binds to the previous image; `enhancedPrompt` reports the prompt actually sent to the model. Send `prompt_resolution: "literal"` to skip that step and have the prompt sent as written (apart from truncation to the model's prompt limit). `referenceImageFabFileIds` passes up to 15 already-uploaded images as style anchors, after the input image taken from `fabFileIds`. GPT-image accepts 15 references; FLUX.2 accepts 8 total input images (4 for Klein) and FLUX 3 accepts 10. For FLUX.2 and FLUX 3 the distinct ids across `fabFileIds` and `referenceImageFabFileIds` are counted together when `referenceImageFabFileIds` is set, and a request over the limit is rejected with a 400. A request over the limit with only `fabFileIds`, or with a primary picked from session history, is checked when the render runs and fails on the polled quest. Unsupported models are also rejected with a 400. FLUX 3 receives its inputs as `ref_image_1` to `ref_image_N`, in this order: the first `fabFileIds` image (so `ref_image_1` when one is attached), the remaining `fabFileIds` images, then `referenceImageFabFileIds` as listed. A repeated id, or an image with identical content, keeps only its first position, which shifts the later tags. Refer to them in the prompt, e.g. "the jacket from ref_image_2". Which `size` values a model accepts, and whether it honours `background`, `seed`, `quality`, `n` and reference images, is listed per model in the `image` block of `GET /api/v1/models`. Credits are checked when the render runs, so insufficient credits arrive on the polled quest rather than as a 422. `organization_id` is accepted as an alias of `organizationId`, for callers used to the snake_case video and music bodies; `null` bills the personal account. `POST /api/ai/generate-image` is a legacy alias of this endpoint. Authenticate with an API key (`b4m_live_`) or a JWT.
+     * @description **Deprecated, sunset 2027-02-17.** Use `/api/v1/image-jobs` instead. Queues an image generation and returns immediately with the quest that will carry the result - no image yet, and the call never blocks on the render. Poll `GET /api/v1/quests/{id}` until `status` is `"done"` (see the `generateImage200PollResult` schema). Omit `sessionId` to create a new session. The prompt is resolved against the session history first, so a follow-up such as "make it darker" binds to the previous image; `enhancedPrompt` reports the prompt actually sent to the model. Send `prompt_resolution: "literal"` to skip that step and have the prompt sent as written (apart from truncation to the model's prompt limit). `referenceImageFabFileIds` passes up to 15 already-uploaded images as style anchors, after the input image taken from `fabFileIds`. GPT-image accepts 15 references; FLUX.2 accepts 8 total input images (4 for Klein) and FLUX 3 accepts 10. For FLUX.2 and FLUX 3 the distinct ids across `fabFileIds` and `referenceImageFabFileIds` are counted together when `referenceImageFabFileIds` is set, and a request over the limit is rejected with a 400. A request over the limit with only `fabFileIds`, or with a primary picked from session history, is checked when the render runs and fails on the polled quest. Unsupported models are also rejected with a 400. FLUX 3 receives its inputs as `ref_image_1` to `ref_image_N`, in this order: the first `fabFileIds` image (so `ref_image_1` when one is attached), the remaining `fabFileIds` images, then `referenceImageFabFileIds` as listed. A repeated id, or an image with identical content, keeps only its first position, which shifts the later tags. Refer to them in the prompt, e.g. "the jacket from ref_image_2". Which `size` values a model accepts, and whether it honours `background`, `seed`, `quality`, `n` and reference images, is listed per model in the `image` block of `GET /api/v1/models`. Credits are checked when the render runs, so insufficient credits arrive on the polled quest rather than as a 422. A `run` budget is checked before queueing as well, so a run with too little left is usually a synchronous 422 (`errorCode: "run_budget_exhausted"`). `organization_id` is accepted as an alias of `organizationId`, for callers used to the snake_case video and music bodies; `null` bills the personal account. `POST /api/ai/generate-image` is a legacy alias of this endpoint. Authenticate with an API key (`b4m_live_`) or a JWT.
      *
      *     Optional `callbackUrl`: an https URL that receives a signed POST when the quest settles (success, failure, or a stop; a failed render is `type: "error"` in the body, same as the poll). The body is the `GET /api/v1/quests/{id}` response. Headers: `X-Webhook-Event-ID` (the same on every attempt for one settlement; delivery is at-least-once, so dedupe on it, and a retried quest settles again under a new one), `X-Webhook-Delivery-ID` (unique per attempt), `X-Webhook-Timestamp` (unix seconds), `X-Webhook-Signature-256` (`sha256=` + hex HMAC-SHA256 of `<timestamp>.<raw body>` keyed with the API key's callback signing secret), and `X-Event-Type: quest.settled`. Delivery makes up to 5 attempts, retrying on a 5xx, 408, 429, timeout or network error - never on any other 4xx, and redirects are not followed; your endpoint must answer 2xx within 10 seconds. Requires API-key authentication and a signing secret on that key (returned once at key creation, or via `POST /api/user-api-keys/{id}/callback-secret`). A `callbackUrl` is rejected with a 400 when the request is not API-key authenticated, the key has no signing secret, the URL resolves to a private address, or the deployment does not deliver callbacks; a URL that is not https fails request validation with a 422. Polling still works whether or not `callbackUrl` is set.
      */
@@ -753,7 +753,7 @@ export interface paths {
     /**
      * Edit an image
      * @deprecated
-     * @description **Deprecated, sunset 2027-02-17.** Use `/api/v1/image-jobs` instead. Queues an edit of an existing image and returns the quest that will carry the result, before the render runs. Poll `GET /api/v1/quests/{id}` until `status` is `"done"` (see the `editImage200PollResult` schema). `image` is the URL of the source image; `fabFileIds` must name at least one file except on FLUX.2 and FLUX 3 models, which edit from the prompt with no mask and reject `fabFileIds` with a 400; elsewhere the first is the inpainting mask. `referenceImageFabFileIds` adds reference images after the source image, so the mask always applies to the source: up to 15 on gpt-image models, 7 on FLUX.2 models other than klein, 3 on FLUX.2 klein, and 9 on FLUX 3 (the source takes one input slot). Sending any with another model, or more than the model's limit, is rejected with a 400 rather than ignored; more than 15 ids fails schema validation with a 422. Both id fields take ids from `POST /api/v1/files`: upload each file, poll `GET /api/v1/files/{id}` until `moderation_status` is `clean`, then pass its `id`. An id that is not yet `clean` fails the edit on the polled quest. `image` takes a URL rather than an id, so a source uploaded the same way is passed as its `download_url`, which must still be unexpired when the render runs. The edited image is not a file id: read it from `files[].url` on the polled quest, not from `GET /api/v1/files/{id}`. `seed` makes an edit reproducible on BFL models that support seeds; FLUX 3 Image (not Klein), gpt-image and Gemini ignore it. `edit_regions` carries region-edit bounding boxes: each entry has a `prompt` and a `bbox` of `[y_min, x_min, y_max, x_max]` in normalised [0, 1] coordinates (BFL convention, vertical axis first). At most 8 regions per request. Accepted on FLUX 3 models only (non-FLUX-3 → 400); schema-validated on ingress (422 on bad coordinates / degenerate boxes / over-cap count, or a box that collapses after rounding to the 0-1000 grid), then converted to BFL's prompt-inline edit layout (`from`, `src_bbox`, `tgt_bbox`, `desc`) before provider submission. Credits are checked when the render runs, so insufficient credits arrive on the polled quest rather than as a 422. `organization_id` is accepted as an alias of `organizationId`, for callers used to the snake_case video and music bodies; `null` bills the personal account. `POST /api/ai/edit-image` is a legacy alias of this endpoint. Authenticate with an API key (`b4m_live_`) or a JWT.
+     * @description **Deprecated, sunset 2027-02-17.** Use `/api/v1/image-jobs` instead. Queues an edit of an existing image and returns the quest that will carry the result, before the render runs. Poll `GET /api/v1/quests/{id}` until `status` is `"done"` (see the `editImage200PollResult` schema). `image` is the URL of the source image; `fabFileIds` must name at least one file except on FLUX.2 and FLUX 3 models, which edit from the prompt with no mask and reject `fabFileIds` with a 400; elsewhere the first is the inpainting mask. `referenceImageFabFileIds` adds reference images after the source image, so the mask always applies to the source: up to 15 on gpt-image models, 7 on FLUX.2 models other than klein, 3 on FLUX.2 klein, and 9 on FLUX 3 (the source takes one input slot). Sending any with another model, or more than the model's limit, is rejected with a 400 rather than ignored; more than 15 ids fails schema validation with a 422. Both id fields take ids from `POST /api/v1/files`: upload each file, poll `GET /api/v1/files/{id}` until `moderation_status` is `clean`, then pass its `id`. An id that is not yet `clean` fails the edit on the polled quest. `image` takes a URL rather than an id, so a source uploaded the same way is passed as its `download_url`, which must still be unexpired when the render runs. The edited image is not a file id: read it from `files[].url` on the polled quest, not from `GET /api/v1/files/{id}`. `seed` makes an edit reproducible on BFL models that support seeds; FLUX 3 Image (not Klein), gpt-image and Gemini ignore it. `edit_regions` carries region-edit bounding boxes: each entry has a `prompt` and a `bbox` of `[y_min, x_min, y_max, x_max]` in normalised [0, 1] coordinates (BFL convention, vertical axis first). At most 8 regions per request. Accepted on FLUX 3 models only (non-FLUX-3 → 400); schema-validated on ingress (422 on bad coordinates / degenerate boxes / over-cap count, or a box that collapses after rounding to the 0-1000 grid), then converted to BFL's prompt-inline edit layout (`from`, `src_bbox`, `tgt_bbox`, `desc`) before provider submission. Credits are checked when the render runs, so insufficient credits arrive on the polled quest rather than as a 422. A `run` budget is checked before queueing as well, so a run with too little left is usually a synchronous 422 (`errorCode: "run_budget_exhausted"`). `organization_id` is accepted as an alias of `organizationId`, for callers used to the snake_case video and music bodies; `null` bills the personal account. `POST /api/ai/edit-image` is a legacy alias of this endpoint. Authenticate with an API key (`b4m_live_`) or a JWT.
      *
      *     Optional `callbackUrl`: an https URL that receives a signed POST when the quest settles (success, failure, or a stop; a failed render is `type: "error"` in the body, same as the poll). The body is the `GET /api/v1/quests/{id}` response. Headers: `X-Webhook-Event-ID` (the same on every attempt for one settlement; delivery is at-least-once, so dedupe on it, and a retried quest settles again under a new one), `X-Webhook-Delivery-ID` (unique per attempt), `X-Webhook-Timestamp` (unix seconds), `X-Webhook-Signature-256` (`sha256=` + hex HMAC-SHA256 of `<timestamp>.<raw body>` keyed with the API key's callback signing secret), and `X-Event-Type: quest.settled`. Delivery makes up to 5 attempts, retrying on a 5xx, 408, 429, timeout or network error - never on any other 4xx, and redirects are not followed; your endpoint must answer 2xx within 10 seconds. Requires API-key authentication and a signing secret on that key (returned once at key creation, or via `POST /api/user-api-keys/{id}/callback-secret`). A `callbackUrl` is rejected with a 400 when the request is not API-key authenticated, the key has no signing secret, the URL resolves to a private address, or the deployment does not deliver callbacks; a URL that is not https fails request validation with a 422. Polling still works whether or not `callbackUrl` is set.
      */
@@ -2864,7 +2864,7 @@ export interface components {
       name?: string;
     };
     /**
-     * @description Outcome fields of the quest polled at `GET /api/v1/quests/{id}` after this ACK. A finished turn that failed is `status: "done"` with `type: "error"` and the failure text in `reply`, so a caller reading `reply` alone cannot tell a failure from an answer - check `type` first, and also treat a terminal `status: "stopped"` (a missing session, a user-cancelled turn) as failure even though it never sets `type`. `errorCode` is an optional refinement of `type: "error"`, present only for a classified failure; credit exhaustion arrives here as `insufficient_credits`, the same vocabulary the synchronous 422s on `/api/ai/music`, `/api/ai/sound-effects` and `/api/ai/tts` use, and a spending pause that lands after the ACK arrives as `spend_frozen`. An older queued QuestMaster start can instead settle with `free_quest_limit_reached`; new exhausted starts are refused synchronously with 403 before a quest exists. `QUEST_ERROR_CODES` has four members; its other code is `spend_cap_exceeded`, but no current throw site on this endpoint raises it as a quest errorCode: its only one, the embed chat route's pre-flight 422, fires outside the process try/catch that would classify it onto the quest. A turn that prompt moderation refuses arrives as `content_blocked`; do not resend it unchanged. Most `type: "error"` turns - an abort, a provider timeout or overload - have NO `errorCode`; its absence does not mean success, only that the failure is unclassified. A recovered stuck quest that still has renderable content is not a failure at all: it keeps `type: "message"` even though it did not finish, so a caller gets the content rather than an error. `fallbackInfo` is present only when the requested model failed and another model produced the reply: `fallbackModel` answered, `primaryModel` is what was asked for, and `reason` is the error from the first failed attempt on the requested model. The poll body carries further fields not modelled here, including `images`, `files`, `toolPayloads`, `promptMeta`, and the attachment report (`attachmentNotices`/`attachmentDelivery`) - only the outcome subset is modelled here.
+     * @description Outcome fields of the quest polled at `GET /api/v1/quests/{id}` after this ACK. A finished turn that failed is `status: "done"` with `type: "error"` and the failure text in `reply`, so a caller reading `reply` alone cannot tell a failure from an answer - check `type` first, and also treat a terminal `status: "stopped"` (a missing session, a user-cancelled turn) as failure even though it never sets `type`. `errorCode` is an optional refinement of `type: "error"`, present only for a classified failure; credit exhaustion arrives here as `insufficient_credits`, the same vocabulary the synchronous 422s on `/api/ai/music`, `/api/ai/sound-effects` and `/api/ai/tts` use, and a spending pause that lands after the ACK arrives as `spend_frozen`. An older queued QuestMaster start can instead settle with `free_quest_limit_reached`; new exhausted starts are refused synchronously with 403 before a quest exists. `QUEST_ERROR_CODES` also publishes `spend_cap_exceeded`, but no current throw site on this endpoint raises it as a quest errorCode: its only one, the embed chat route's pre-flight 422, fires outside the process try/catch that would classify it onto the quest; `run_budget_exhausted` is raised only by image generation. A turn that prompt moderation refuses arrives as `content_blocked`; do not resend it unchanged. Most `type: "error"` turns - an abort, a provider timeout or overload - have NO `errorCode`; its absence does not mean success, only that the failure is unclassified. A recovered stuck quest that still has renderable content is not a failure at all: it keeps `type: "message"` even though it did not finish, so a caller gets the content rather than an error. `fallbackInfo` is present only when the requested model failed and another model produced the reply: `fallbackModel` answered, `primaryModel` is what was asked for, and `reason` is the error from the first failed attempt on the requested model. The poll body carries further fields not modelled here, including `images`, `files`, `toolPayloads`, `promptMeta`, and the attachment report (`attachmentNotices`/`attachmentDelivery`) - only the outcome subset is modelled here.
      * @example {
      *       "id": "664f1c2b9a1e4d0012ab34cd",
      *       "status": "done",
@@ -2881,7 +2881,12 @@ export interface components {
       type?: 'message' | 'oob' | 'error' | 'system' | 'voice_transcript';
       /** @enum {string} */
       errorCode?:
-        'insufficient_credits' | 'spend_cap_exceeded' | 'spend_frozen' | 'free_quest_limit_reached' | 'content_blocked';
+        | 'insufficient_credits'
+        | 'spend_cap_exceeded'
+        | 'spend_frozen'
+        | 'free_quest_limit_reached'
+        | 'run_budget_exhausted'
+        | 'content_blocked';
       reply?: string | null;
       replies?: string[];
       fallbackInfo?: {
@@ -2912,7 +2917,12 @@ export interface components {
       type?: 'message' | 'oob' | 'error' | 'system' | 'voice_transcript';
       /** @enum {string} */
       errorCode?:
-        'insufficient_credits' | 'spend_cap_exceeded' | 'spend_frozen' | 'free_quest_limit_reached' | 'content_blocked';
+        | 'insufficient_credits'
+        | 'spend_cap_exceeded'
+        | 'spend_frozen'
+        | 'free_quest_limit_reached'
+        | 'run_budget_exhausted'
+        | 'content_blocked';
       reply?: string | null;
       replies?: string[];
       fallbackInfo?: {
@@ -2945,7 +2955,12 @@ export interface components {
       type?: 'message' | 'oob' | 'error' | 'system' | 'voice_transcript';
       /** @enum {string} */
       errorCode?:
-        'insufficient_credits' | 'spend_cap_exceeded' | 'spend_frozen' | 'free_quest_limit_reached' | 'content_blocked';
+        | 'insufficient_credits'
+        | 'spend_cap_exceeded'
+        | 'spend_frozen'
+        | 'free_quest_limit_reached'
+        | 'run_budget_exhausted'
+        | 'content_blocked';
       reply?: string | null;
       replies?: string[];
       fallbackInfo?: {
@@ -2975,6 +2990,7 @@ export interface components {
             | 'spend_cap_exceeded'
             | 'spend_frozen'
             | 'free_quest_limit_reached'
+            | 'run_budget_exhausted'
             | 'content_blocked';
           tools?: {
             /** @enum {string} */
@@ -3042,6 +3058,7 @@ export interface components {
             | 'spend_cap_exceeded'
             | 'spend_frozen'
             | 'free_quest_limit_reached'
+            | 'run_budget_exhausted'
             | 'content_blocked';
           tools?: {
             /** @enum {string} */
@@ -3580,7 +3597,12 @@ export interface components {
        */
       name?: string;
       /** @enum {string} */
-      errorCode?: 'insufficient_credits' | 'spend_cap_exceeded' | 'spend_frozen' | 'free_quest_limit_reached';
+      errorCode?:
+        | 'insufficient_credits'
+        | 'spend_cap_exceeded'
+        | 'spend_frozen'
+        | 'free_quest_limit_reached'
+        | 'run_budget_exhausted';
     };
     /**
      * @example {
@@ -3645,7 +3667,12 @@ export interface components {
        */
       name?: string;
       /** @enum {string} */
-      errorCode?: 'insufficient_credits' | 'spend_cap_exceeded' | 'spend_frozen' | 'free_quest_limit_reached';
+      errorCode?:
+        | 'insufficient_credits'
+        | 'spend_cap_exceeded'
+        | 'spend_frozen'
+        | 'free_quest_limit_reached'
+        | 'run_budget_exhausted';
     };
     /**
      * @example {
@@ -3768,6 +3795,7 @@ export interface components {
             | 'spend_cap_exceeded'
             | 'spend_frozen'
             | 'free_quest_limit_reached'
+            | 'run_budget_exhausted'
             | 'invalid_request'
             | 'provider_error'
             | 'provider_rejected'
@@ -4082,7 +4110,7 @@ export interface components {
          * @description What the request was for. Treated as `turn` when absent.
          * @enum {string}
          */
-        purpose?: 'turn' | 'title' | 'compaction' | 'suggestion' | 'explore' | 'review';
+        purpose?: 'turn' | 'title' | 'compaction' | 'suggestion' | 'explore' | 'review' | 'tool';
         /** @description Your own id for the worker's task within the run. */
         taskId?: string;
         /** @description Your own id for this attempt at the task; retries get new ids. */
@@ -4440,7 +4468,7 @@ export interface components {
          * @description `turn` when sent without one.
          * @enum {string}
          */
-        purpose: 'turn' | 'title' | 'compaction' | 'suggestion' | 'explore' | 'review';
+        purpose: 'turn' | 'title' | 'compaction' | 'suggestion' | 'explore' | 'review' | 'tool';
       }[];
       /** @description Grouped by the model each request asked for, which is not always the model that ran. */
       byModel: {
@@ -4728,7 +4756,9 @@ export interface components {
         | 'provider_rejected'
         | 'end_user_id_not_allowed'
         | 'invalid_end_user_id'
-        | 'request_timeout';
+        | 'request_timeout'
+        | 'run_not_found'
+        | 'run_budget_exhausted';
       jobId?: string;
       message?: string;
     };
@@ -4749,7 +4779,9 @@ export interface components {
         | 'provider_rejected'
         | 'end_user_id_not_allowed'
         | 'invalid_end_user_id'
-        | 'request_timeout';
+        | 'request_timeout'
+        | 'run_not_found'
+        | 'run_budget_exhausted';
       jobId?: string;
       message?: string;
     };
@@ -4811,7 +4843,9 @@ export interface components {
         | 'provider_rejected'
         | 'end_user_id_not_allowed'
         | 'invalid_end_user_id'
-        | 'request_timeout';
+        | 'request_timeout'
+        | 'run_not_found'
+        | 'run_budget_exhausted';
       jobId?: string;
       message?: string;
     };
@@ -4841,7 +4875,9 @@ export interface components {
         | 'provider_rejected'
         | 'end_user_id_not_allowed'
         | 'invalid_end_user_id'
-        | 'request_timeout';
+        | 'request_timeout'
+        | 'run_not_found'
+        | 'run_budget_exhausted';
       jobId?: string;
       message?: string;
     };
@@ -4862,7 +4898,9 @@ export interface components {
         | 'provider_rejected'
         | 'end_user_id_not_allowed'
         | 'invalid_end_user_id'
-        | 'request_timeout';
+        | 'request_timeout'
+        | 'run_not_found'
+        | 'run_budget_exhausted';
       jobId?: string;
       message?: string;
     };
@@ -4883,7 +4921,9 @@ export interface components {
         | 'provider_rejected'
         | 'end_user_id_not_allowed'
         | 'invalid_end_user_id'
-        | 'request_timeout';
+        | 'request_timeout'
+        | 'run_not_found'
+        | 'run_budget_exhausted';
       jobId?: string;
       message?: string;
     };
@@ -4904,7 +4944,9 @@ export interface components {
         | 'provider_rejected'
         | 'end_user_id_not_allowed'
         | 'invalid_end_user_id'
-        | 'request_timeout';
+        | 'request_timeout'
+        | 'run_not_found'
+        | 'run_budget_exhausted';
       jobId?: string;
       message?: string;
     };
@@ -4925,7 +4967,9 @@ export interface components {
         | 'provider_rejected'
         | 'end_user_id_not_allowed'
         | 'invalid_end_user_id'
-        | 'request_timeout';
+        | 'request_timeout'
+        | 'run_not_found'
+        | 'run_budget_exhausted';
       jobId?: string;
       message?: string;
     };
@@ -4952,6 +4996,30 @@ export interface components {
       organization_id?: string | null;
       /** @description Your own opaque identifier for the end user this request is for (1-64 characters: letters, digits, `_`, `:`, `-`; never an email). A malformed value is refused with a 400 (`errorCode: "invalid_end_user_id"`). Accepted only on an API key holding `ai:end-user-id`, which an administrator grants to keys that serve many end users; any other credential sending it is refused with a 400 (`errorCode: "end_user_id_not_allowed"`). On models served directly by OpenAI or Anthropic, the provider then receives an identifier derived from your account and this value instead of one for your whole account; other providers receive no end-user identifier. */
       end_user_id?: string;
+      /** @description The completion run this call is made for. Its cost is claimed against that run's budget before the provider is called, and the call is refused with 422 `run_budget_exhausted` when it does not fit. */
+      run?: {
+        /**
+         * Format: uuid
+         * @description A run id issued by `POST /api/v1/completion-runs`.
+         */
+        runId: string;
+        /**
+         * @description `root` for the session that started the run, `worker` for one it spawned.
+         * @enum {string}
+         */
+        role: 'root' | 'worker';
+        /**
+         * @description What the request was for. Treated as `turn` when absent.
+         * @enum {string}
+         */
+        purpose?: 'turn' | 'title' | 'compaction' | 'suggestion' | 'explore' | 'review' | 'tool';
+        /** @description Your own id for the worker's task within the run. */
+        taskId?: string;
+        /** @description Your own id for this attempt at the task; retries get new ids. */
+        attemptId?: string;
+        /** @description The `sessionId` of the session that spawned this one, for nested workers. */
+        parentSessionId?: string;
+      };
       /** @enum {string} */
       encoding?: 'binary' | 'base64';
       preview?: boolean;
@@ -5036,7 +5104,12 @@ export interface components {
        */
       name?: string;
       /** @enum {string} */
-      errorCode?: 'insufficient_credits' | 'spend_cap_exceeded' | 'spend_frozen' | 'free_quest_limit_reached';
+      errorCode?:
+        | 'insufficient_credits'
+        | 'spend_cap_exceeded'
+        | 'spend_frozen'
+        | 'free_quest_limit_reached'
+        | 'run_budget_exhausted';
     };
     /**
      * @example {
@@ -5210,7 +5283,12 @@ export interface components {
        */
       name?: string;
       /** @enum {string} */
-      errorCode?: 'insufficient_credits' | 'spend_cap_exceeded' | 'spend_frozen' | 'free_quest_limit_reached';
+      errorCode?:
+        | 'insufficient_credits'
+        | 'spend_cap_exceeded'
+        | 'spend_frozen'
+        | 'free_quest_limit_reached'
+        | 'run_budget_exhausted';
     };
     generateSoundEffectResponse502: {
       error: string;
@@ -5257,6 +5335,30 @@ export interface components {
       format?: string;
       /** @description The organization to bill: one you belong to, or null for your personal credits. Omitted bills your home organization, or your personal credits if you have none. An organization-billed API key always bills its own organization: omit this or set it to the key's organization; any other value, null included, is rejected with a 403 (`errorCode: billing_organization_mismatch`). */
       organization_id?: string | null;
+      /** @description The completion run this call is made for. Its cost is claimed against that run's budget before the provider is called, and the call is refused with 422 `run_budget_exhausted` when it does not fit. */
+      run?: {
+        /**
+         * Format: uuid
+         * @description A run id issued by `POST /api/v1/completion-runs`.
+         */
+        runId: string;
+        /**
+         * @description `root` for the session that started the run, `worker` for one it spawned.
+         * @enum {string}
+         */
+        role: 'root' | 'worker';
+        /**
+         * @description What the request was for. Treated as `turn` when absent.
+         * @enum {string}
+         */
+        purpose?: 'turn' | 'title' | 'compaction' | 'suggestion' | 'explore' | 'review' | 'tool';
+        /** @description Your own id for the worker's task within the run. */
+        taskId?: string;
+        /** @description Your own id for this attempt at the task; retries get new ids. */
+        attemptId?: string;
+        /** @description The `sessionId` of the session that spawned this one, for nested workers. */
+        parentSessionId?: string;
+      };
       /** @enum {string} */
       encoding?: 'binary' | 'base64';
       preview?: boolean;
@@ -6637,6 +6739,7 @@ export interface components {
           | 'spend_cap_exceeded'
           | 'spend_frozen'
           | 'free_quest_limit_reached'
+          | 'run_budget_exhausted'
           | 'content_blocked';
         reply?: string | null;
         replies?: string[];
@@ -6839,6 +6942,30 @@ export interface components {
        * @enum {string}
        */
       prompt_resolution?: 'auto' | 'literal';
+      /** @description The completion run this call is made for. Its cost is claimed against that run's budget when the render is held, and the call is refused with 422 `run_budget_exhausted` when it does not fit: synchronously when the run cannot cover even the cheapest form of the render, otherwise on the polled quest (`type: "error"`, `errorCode: "run_budget_exhausted"`). The run bills its own account. */
+      run?: {
+        /**
+         * Format: uuid
+         * @description A run id issued by `POST /api/v1/completion-runs`.
+         */
+        runId: string;
+        /**
+         * @description `root` for the session that started the run, `worker` for one it spawned.
+         * @enum {string}
+         */
+        role: 'root' | 'worker';
+        /**
+         * @description What the request was for. Treated as `turn` when absent.
+         * @enum {string}
+         */
+        purpose?: 'turn' | 'title' | 'compaction' | 'suggestion' | 'explore' | 'review' | 'tool';
+        /** @description Your own id for the worker's task within the run. */
+        taskId?: string;
+        /** @description Your own id for this attempt at the task; retries get new ids. */
+        attemptId?: string;
+        /** @description The `sessionId` of the session that spawned this one, for nested workers. */
+        parentSessionId?: string;
+      };
     };
     editImageResponse200: {
       id: string;
@@ -6848,7 +6975,12 @@ export interface components {
       type?: 'message' | 'oob' | 'error' | 'system' | 'voice_transcript';
       /** @enum {string} */
       errorCode?:
-        'insufficient_credits' | 'spend_cap_exceeded' | 'spend_frozen' | 'free_quest_limit_reached' | 'content_blocked';
+        | 'insufficient_credits'
+        | 'spend_cap_exceeded'
+        | 'spend_frozen'
+        | 'free_quest_limit_reached'
+        | 'run_budget_exhausted'
+        | 'content_blocked';
       reply?: string | null;
       replies?: string[];
       fallbackInfo?: {
@@ -6980,6 +7112,30 @@ export interface components {
        * @description Optional https URL that receives one signed POST when the job settles (success or failure). Requires API-key authentication and a callback signing secret on that key. The body is the GET /api/v1/quests/{id} response. Verify it with the `X-Webhook-Signature-256` header: `sha256=` + hex HMAC-SHA256 of `<X-Webhook-Timestamp>.<raw body>` keyed with the signing secret. Polling keeps working either way.
        */
       callbackUrl?: string;
+      /** @description The completion run this call is made for. Its cost is claimed against that run's budget when the edit is held, and the call is refused with 422 `run_budget_exhausted` when it does not fit: synchronously when the run cannot cover even the cheapest form of the edit, otherwise on the polled quest (`type: "error"`, `errorCode: "run_budget_exhausted"`). The run bills its own account. */
+      run?: {
+        /**
+         * Format: uuid
+         * @description A run id issued by `POST /api/v1/completion-runs`.
+         */
+        runId: string;
+        /**
+         * @description `root` for the session that started the run, `worker` for one it spawned.
+         * @enum {string}
+         */
+        role: 'root' | 'worker';
+        /**
+         * @description What the request was for. Treated as `turn` when absent.
+         * @enum {string}
+         */
+        purpose?: 'turn' | 'title' | 'compaction' | 'suggestion' | 'explore' | 'review' | 'tool';
+        /** @description Your own id for the worker's task within the run. */
+        taskId?: string;
+        /** @description Your own id for this attempt at the task; retries get new ids. */
+        attemptId?: string;
+        /** @description The `sessionId` of the session that spawned this one, for nested workers. */
+        parentSessionId?: string;
+      };
     };
     /**
      * @example {
@@ -7110,6 +7266,41 @@ export interface components {
       /** @description API key scopes this route also requires. Every one must be held, on top of `required_scopes`. */
       also_required_scopes?: string[];
     };
+    createImageJobResponse404: {
+      error: string;
+      request_id?: string;
+      /**
+       * @deprecated
+       * @description Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this.
+       */
+      name?: string;
+      /** @enum {string} */
+      errorCode?:
+        | 'unsupported_mode'
+        | 'missing_input'
+        | 'unexpected_input'
+        | 'unsupported_input_role'
+        | 'too_many_inputs'
+        | 'unsupported_size'
+        | 'unsupported_aspect_ratio'
+        | 'unsupported_quality'
+        | 'unsupported_style'
+        | 'unsupported_output_format'
+        | 'unsupported_output_count'
+        | 'unsupported_transparent_background'
+        | 'unsupported_seed'
+        | 'unsupported_edit_regions'
+        | 'invalid_request'
+        | 'model_unavailable'
+        | 'input_image_not_found'
+        | 'unsupported_input_image'
+        | 'insufficient_credits'
+        | 'idempotency_key_reused'
+        | 'invalid_idempotency_key'
+        | 'not_cancellable'
+        | 'run_not_found'
+        | 'run_budget_exhausted';
+    };
     createImageJobResponse422: {
       error: string;
       request_id?: string;
@@ -7141,7 +7332,9 @@ export interface components {
         | 'insufficient_credits'
         | 'idempotency_key_reused'
         | 'invalid_idempotency_key'
-        | 'not_cancellable';
+        | 'not_cancellable'
+        | 'run_not_found'
+        | 'run_budget_exhausted';
     };
     /**
      * @example {
@@ -7198,6 +7391,30 @@ export interface components {
       count?: number;
       /** @description The organization to bill: one you belong to, or null for your personal credits. Omitted bills your home organization, or your personal credits if you have none. An organization-billed API key always bills its own organization: omit this or set it to the key's organization; any other value, null included, is rejected with a 403 (`errorCode: billing_organization_mismatch`). */
       organization_id?: string | null;
+      /** @description The completion run these jobs are made for. Their whole estimated cost is claimed against that run's budget before they are queued, and the request is refused with 422 `run_budget_exhausted` when it does not fit. The jobs bill the run's account. */
+      run?: {
+        /**
+         * Format: uuid
+         * @description A run id issued by `POST /api/v1/completion-runs`.
+         */
+        runId: string;
+        /**
+         * @description `root` for the session that started the run, `worker` for one it spawned.
+         * @enum {string}
+         */
+        role: 'root' | 'worker';
+        /**
+         * @description What the request was for. Treated as `turn` when absent.
+         * @enum {string}
+         */
+        purpose?: 'turn' | 'title' | 'compaction' | 'suggestion' | 'explore' | 'review' | 'tool';
+        /** @description Your own id for the worker's task within the run. */
+        taskId?: string;
+        /** @description Your own id for this attempt at the task; retries get new ids. */
+        attemptId?: string;
+        /** @description The `sessionId` of the session that spawned this one, for nested workers. */
+        parentSessionId?: string;
+      };
     };
     /**
      * @example {
@@ -7414,7 +7631,9 @@ export interface components {
         | 'insufficient_credits'
         | 'idempotency_key_reused'
         | 'invalid_idempotency_key'
-        | 'not_cancellable';
+        | 'not_cancellable'
+        | 'run_not_found'
+        | 'run_budget_exhausted';
     };
     /**
      * @example {
@@ -7982,7 +8201,12 @@ export interface components {
        */
       name?: string;
       /** @enum {string} */
-      errorCode?: 'insufficient_credits' | 'spend_cap_exceeded' | 'spend_frozen' | 'free_quest_limit_reached';
+      errorCode?:
+        | 'insufficient_credits'
+        | 'spend_cap_exceeded'
+        | 'spend_frozen'
+        | 'free_quest_limit_reached'
+        | 'run_budget_exhausted';
     };
     createTextRefinementResponse503: {
       error: string;
@@ -8435,7 +8659,12 @@ export interface components {
       type?: 'message' | 'oob' | 'error' | 'system' | 'voice_transcript';
       /** @enum {string} */
       errorCode?:
-        'insufficient_credits' | 'spend_cap_exceeded' | 'spend_frozen' | 'free_quest_limit_reached' | 'content_blocked';
+        | 'insufficient_credits'
+        | 'spend_cap_exceeded'
+        | 'spend_frozen'
+        | 'free_quest_limit_reached'
+        | 'run_budget_exhausted'
+        | 'content_blocked';
       reply?: string | null;
       replies?: string[];
       fallbackInfo?: {
@@ -8688,6 +8917,7 @@ export interface components {
           | 'spend_cap_exceeded'
           | 'spend_frozen'
           | 'free_quest_limit_reached'
+          | 'run_budget_exhausted'
           | 'content_blocked';
         /**
          * Format: date-time
@@ -8890,7 +9120,12 @@ export interface components {
        */
       name?: string;
       /** @enum {string} */
-      errorCode?: 'insufficient_credits' | 'spend_cap_exceeded' | 'spend_frozen' | 'free_quest_limit_reached';
+      errorCode?:
+        | 'insufficient_credits'
+        | 'spend_cap_exceeded'
+        | 'spend_frozen'
+        | 'free_quest_limit_reached'
+        | 'run_budget_exhausted';
     };
     /**
      * @example {
@@ -9230,7 +9465,12 @@ export interface components {
        */
       name?: string;
       /** @enum {string} */
-      errorCode?: 'insufficient_credits' | 'spend_cap_exceeded' | 'spend_frozen' | 'free_quest_limit_reached';
+      errorCode?:
+        | 'insufficient_credits'
+        | 'spend_cap_exceeded'
+        | 'spend_frozen'
+        | 'free_quest_limit_reached'
+        | 'run_budget_exhausted';
     };
     searchDataLakeResponse503: {
       error: string;
@@ -9833,7 +10073,12 @@ export interface components {
        */
       name?: string;
       /** @enum {string} */
-      errorCode?: 'insufficient_credits' | 'spend_cap_exceeded' | 'spend_frozen' | 'free_quest_limit_reached';
+      errorCode?:
+        | 'insufficient_credits'
+        | 'spend_cap_exceeded'
+        | 'spend_frozen'
+        | 'free_quest_limit_reached'
+        | 'run_budget_exhausted';
     };
     /**
      * @example {
@@ -10608,7 +10853,9 @@ export interface components {
         | 'insufficient_credits'
         | 'input_image_not_found'
         | 'idempotency_key_reused'
-        | 'invalid_idempotency_key';
+        | 'invalid_idempotency_key'
+        | 'run_not_found'
+        | 'run_budget_exhausted';
     };
     createVideoGenerationResponse422: {
       error: string;
@@ -10637,7 +10884,9 @@ export interface components {
         | 'insufficient_credits'
         | 'input_image_not_found'
         | 'idempotency_key_reused'
-        | 'invalid_idempotency_key';
+        | 'invalid_idempotency_key'
+        | 'run_not_found'
+        | 'run_budget_exhausted';
     };
     /**
      * @example {
@@ -10678,6 +10927,30 @@ export interface components {
       draft?: boolean;
       /** @description The organization to bill: one you belong to, or null for your personal credits. Omitted bills your home organization, or your personal credits if you have none. An organization-billed API key always bills its own organization: omit this or set it to the key's organization; any other value, null included, is rejected with a 403 (`errorCode: billing_organization_mismatch`). */
       organization_id?: string | null;
+      /** @description The completion run this job is made for. Its whole estimated cost is claimed against that run's budget before the job is queued, and the request is refused with 422 `run_budget_exhausted` when it does not fit. The job bills the run's account. */
+      run?: {
+        /**
+         * Format: uuid
+         * @description A run id issued by `POST /api/v1/completion-runs`.
+         */
+        runId: string;
+        /**
+         * @description `root` for the session that started the run, `worker` for one it spawned.
+         * @enum {string}
+         */
+        role: 'root' | 'worker';
+        /**
+         * @description What the request was for. Treated as `turn` when absent.
+         * @enum {string}
+         */
+        purpose?: 'turn' | 'title' | 'compaction' | 'suggestion' | 'explore' | 'review' | 'tool';
+        /** @description Your own id for the worker's task within the run. */
+        taskId?: string;
+        /** @description Your own id for this attempt at the task; retries get new ids. */
+        attemptId?: string;
+        /** @description The `sessionId` of the session that spawned this one, for nested workers. */
+        parentSessionId?: string;
+      };
     };
     /**
      * @example {
@@ -10963,6 +11236,8 @@ export interface components {
         | 'insufficient_credits'
         | 'idempotency_key_reused'
         | 'invalid_idempotency_key'
+        | 'run_not_found'
+        | 'run_budget_exhausted'
         | 'not_cancellable';
     };
     /**
@@ -11122,6 +11397,8 @@ export interface components {
         | 'insufficient_credits'
         | 'idempotency_key_reused'
         | 'invalid_idempotency_key'
+        | 'run_not_found'
+        | 'run_budget_exhausted'
         | 'not_cancellable';
     };
     /**
@@ -11143,6 +11420,30 @@ export interface components {
       duration_seconds?: number;
       /** @description The organization to bill: one you belong to, or null for your personal credits. Omitted bills your home organization, or your personal credits if you have none. An organization-billed API key always bills its own organization: omit this or set it to the key's organization; any other value, null included, is rejected with a 403 (`errorCode: billing_organization_mismatch`). */
       organization_id?: string | null;
+      /** @description The completion run this job is made for. Its whole estimated cost is claimed against that run's budget before the job is queued, and the request is refused with 422 `run_budget_exhausted` when it does not fit. The job bills the run's account. */
+      run?: {
+        /**
+         * Format: uuid
+         * @description A run id issued by `POST /api/v1/completion-runs`.
+         */
+        runId: string;
+        /**
+         * @description `root` for the session that started the run, `worker` for one it spawned.
+         * @enum {string}
+         */
+        role: 'root' | 'worker';
+        /**
+         * @description What the request was for. Treated as `turn` when absent.
+         * @enum {string}
+         */
+        purpose?: 'turn' | 'title' | 'compaction' | 'suggestion' | 'explore' | 'review' | 'tool';
+        /** @description Your own id for the worker's task within the run. */
+        taskId?: string;
+        /** @description Your own id for this attempt at the task; retries get new ids. */
+        attemptId?: string;
+        /** @description The `sessionId` of the session that spawned this one, for nested workers. */
+        parentSessionId?: string;
+      };
     };
     /**
      * @example {
@@ -11834,7 +12135,12 @@ export interface components {
        */
       name?: string;
       /** @enum {string} */
-      errorCode?: 'insufficient_credits' | 'spend_cap_exceeded' | 'spend_frozen' | 'free_quest_limit_reached';
+      errorCode?:
+        | 'insufficient_credits'
+        | 'spend_cap_exceeded'
+        | 'spend_frozen'
+        | 'free_quest_limit_reached'
+        | 'run_budget_exhausted';
     };
     createVoiceSessionResponse503: {
       error: string;
@@ -12631,7 +12937,12 @@ export interface components {
        */
       name?: string;
       /** @enum {string} */
-      errorCode?: 'insufficient_credits' | 'spend_cap_exceeded' | 'spend_frozen' | 'free_quest_limit_reached';
+      errorCode?:
+        | 'insufficient_credits'
+        | 'spend_cap_exceeded'
+        | 'spend_frozen'
+        | 'free_quest_limit_reached'
+        | 'run_budget_exhausted';
     };
     /**
      * @example {
@@ -12696,7 +13007,12 @@ export interface components {
        */
       name?: string;
       /** @enum {string} */
-      errorCode?: 'insufficient_credits' | 'spend_cap_exceeded' | 'spend_frozen' | 'free_quest_limit_reached';
+      errorCode?:
+        | 'insufficient_credits'
+        | 'spend_cap_exceeded'
+        | 'spend_frozen'
+        | 'free_quest_limit_reached'
+        | 'run_budget_exhausted';
     };
     createTranscriptionResponse503: {
       error: string;
@@ -13149,7 +13465,12 @@ export interface components {
        */
       name?: string;
       /** @enum {string} */
-      errorCode?: 'insufficient_credits' | 'spend_cap_exceeded' | 'spend_frozen' | 'free_quest_limit_reached';
+      errorCode?:
+        | 'insufficient_credits'
+        | 'spend_cap_exceeded'
+        | 'spend_frozen'
+        | 'free_quest_limit_reached'
+        | 'run_budget_exhausted';
     };
     /** @example {} */
     generateAgentAvatarRequest: {
@@ -13203,7 +13524,12 @@ export interface components {
        */
       name?: string;
       /** @enum {string} */
-      errorCode?: 'insufficient_credits' | 'spend_cap_exceeded' | 'spend_frozen' | 'free_quest_limit_reached';
+      errorCode?:
+        | 'insufficient_credits'
+        | 'spend_cap_exceeded'
+        | 'spend_frozen'
+        | 'free_quest_limit_reached'
+        | 'run_budget_exhausted';
     };
     generateAgentSystemPromptResponse200: {
       /** @description The generated system prompt, already saved to the agent. */
@@ -13252,7 +13578,12 @@ export interface components {
        */
       name?: string;
       /** @enum {string} */
-      errorCode?: 'insufficient_credits' | 'spend_cap_exceeded' | 'spend_frozen' | 'free_quest_limit_reached';
+      errorCode?:
+        | 'insufficient_credits'
+        | 'spend_cap_exceeded'
+        | 'spend_frozen'
+        | 'free_quest_limit_reached'
+        | 'run_budget_exhausted';
     };
     enhanceAgentFieldResponse200: {
       /** @description The enhanced text. It is returned, not saved to the agent. */
@@ -13301,7 +13632,12 @@ export interface components {
        */
       name?: string;
       /** @enum {string} */
-      errorCode?: 'insufficient_credits' | 'spend_cap_exceeded' | 'spend_frozen' | 'free_quest_limit_reached';
+      errorCode?:
+        | 'insufficient_credits'
+        | 'spend_cap_exceeded'
+        | 'spend_frozen'
+        | 'free_quest_limit_reached'
+        | 'run_budget_exhausted';
     };
     /**
      * @example {
@@ -13334,7 +13670,12 @@ export interface components {
        */
       name?: string;
       /** @enum {string} */
-      errorCode?: 'insufficient_credits' | 'spend_cap_exceeded' | 'spend_frozen' | 'free_quest_limit_reached';
+      errorCode?:
+        | 'insufficient_credits'
+        | 'spend_cap_exceeded'
+        | 'spend_frozen'
+        | 'free_quest_limit_reached'
+        | 'run_budget_exhausted';
     };
     /**
      * @example {
@@ -13411,7 +13752,12 @@ export interface components {
        */
       name?: string;
       /** @enum {string} */
-      errorCode?: 'insufficient_credits' | 'spend_cap_exceeded' | 'spend_frozen' | 'free_quest_limit_reached';
+      errorCode?:
+        | 'insufficient_credits'
+        | 'spend_cap_exceeded'
+        | 'spend_frozen'
+        | 'free_quest_limit_reached'
+        | 'run_budget_exhausted';
     };
     /**
      * @example {
@@ -17659,7 +18005,7 @@ export interface operations {
           'application/json': components['schemas']['synthesizeSpeechResponse403'];
         };
       };
-      /** @description A nonexistent `organization_id`, for an admin caller; for anyone else it is `403`. */
+      /** @description A nonexistent `organization_id`, for an admin caller; for anyone else it is `403`. A `run` that does not exist or that another user or billing owner minted is `404` (`errorCode: "run_not_found"`). */
       404: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
@@ -17718,7 +18064,7 @@ export interface operations {
           'application/json': components['schemas']['synthesizeSpeechResponse413'];
         };
       };
-      /** @description Request body failed validation, the text exceeds the provider character limit, the provider cannot produce the requested `format`, the provider rejected the request (e.g. an unknown voice), or the caller cannot afford the synthesis - the last of those is the only one tagged `errorCode: "insufficient_credits"`, so match on the classifier rather than the status to tell a billing failure from a bad request. */
+      /** @description Request body failed validation, the text exceeds the provider character limit, the provider cannot produce the requested `format`, the provider rejected the request (e.g. an unknown voice), or the caller cannot afford the synthesis - the last of those is tagged `errorCode: "insufficient_credits"`, and a call whose `run` budget has no room for it is tagged `errorCode: "run_budget_exhausted"`, so match on the classifier rather than the status to tell a billing failure from a bad request. */
       422: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
@@ -18366,7 +18712,7 @@ export interface operations {
           'application/json': components['schemas']['generateSoundEffectResponse403'];
         };
       };
-      /** @description A nonexistent `organization_id`, for an admin caller; for anyone else it is `403`. */
+      /** @description A nonexistent `organization_id`, for an admin caller; for anyone else it is `403`. A `run` that does not exist or that another user or billing owner minted is `404` (`errorCode: "run_not_found"`). */
       404: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
@@ -18425,7 +18771,7 @@ export interface operations {
           'application/json': components['schemas']['generateSoundEffectResponse413'];
         };
       };
-      /** @description Request body failed validation (including a `format` whose codec the provider cannot produce), or the caller cannot afford the effect - the latter is tagged `errorCode: "insufficient_credits"` (the balance is short, or the org member credit cap is exhausted). */
+      /** @description Request body failed validation (including a `format` whose codec the provider cannot produce), or the caller cannot afford the effect - the latter is tagged `errorCode: "insufficient_credits"` (the balance is short, or the org member credit cap is exhausted), or `errorCode: "run_budget_exhausted"` when the `run` budget has no room for it. */
       422: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
@@ -20776,7 +21122,7 @@ export interface operations {
           'application/json': components['schemas']['ErrorResponse'];
         };
       };
-      /** @description The API key lacks the `ai:generate` scope, or the billing organization names one you do not belong to (or is not a valid id), or an organization-billed API key names any organization but its own (`errorCode: billing_organization_mismatch`). */
+      /** @description The API key lacks the `ai:generate` scope, or the billing organization names one you do not belong to (or is not a valid id), or an organization-billed API key names any organization but its own (`errorCode: billing_organization_mismatch`). Naming a billing organization other than the account the `run` bills is also a `403` with that errorCode. */
       403: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
@@ -20805,7 +21151,7 @@ export interface operations {
           'application/json': components['schemas']['generateImageResponse403'];
         };
       };
-      /** @description The session, or the quest being retried, does not exist or is not accessible to the caller. A nonexistent billing `organizationId` is `404` only for an admin caller; for anyone else, an invalid or inaccessible `organizationId` is `403` instead. */
+      /** @description The session, or the quest being retried, does not exist or is not accessible to the caller. A nonexistent billing `organizationId` is `404` only for an admin caller; for anyone else, an invalid or inaccessible `organizationId` is `403` instead. A `run` that does not exist or that another user or billing owner minted is `404` (`errorCode: "run_not_found"`). */
       404: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
@@ -20847,7 +21193,7 @@ export interface operations {
           'application/json': components['schemas']['ErrorResponse'];
         };
       };
-      /** @description The body is malformed, or it names the billing organization ambiguously. Both `organizationId` and `organization_id` sent with different values is a `422`; so is an empty or blank value for either (a blank is never treated as an omission, which would bill a different payer), and so is any other billing-org-shaped key such as `billing_org_id` or `payerOrgId`, which would otherwise be stripped and silently bill the caller's home organization. */
+      /** @description The body is malformed, or it names the billing organization ambiguously. Both `organizationId` and `organization_id` sent with different values is a `422`; so is an empty or blank value for either (a blank is never treated as an omission, which would bill a different payer), and so is any other billing-org-shaped key such as `billing_org_id` or `payerOrgId`, which would otherwise be stripped and silently bill the caller's home organization. A `run` whose budget cannot cover the render is `422` with `errorCode: "run_budget_exhausted"`. */
       422: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
@@ -20983,7 +21329,7 @@ export interface operations {
           'application/json': components['schemas']['ErrorResponse'];
         };
       };
-      /** @description The API key lacks the `ai:generate` scope, or the billing organization names one you do not belong to (or is not a valid id), or an organization-billed API key names any organization but its own (`errorCode: billing_organization_mismatch`). */
+      /** @description The API key lacks the `ai:generate` scope, or the billing organization names one you do not belong to (or is not a valid id), or an organization-billed API key names any organization but its own (`errorCode: billing_organization_mismatch`). Naming a billing organization other than the account the `run` bills is also a `403` with that errorCode. */
       403: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
@@ -21012,7 +21358,7 @@ export interface operations {
           'application/json': components['schemas']['editImageResponse403'];
         };
       };
-      /** @description The session, or the quest being retried, does not exist or is not accessible to the caller. A nonexistent billing `organizationId` is `404` only for an admin caller; for anyone else, an invalid or inaccessible `organizationId` is `403` instead. */
+      /** @description The session, or the quest being retried, does not exist or is not accessible to the caller. A nonexistent billing `organizationId` is `404` only for an admin caller; for anyone else, an invalid or inaccessible `organizationId` is `403` instead. A `run` that does not exist or that another user or billing owner minted is `404` (`errorCode: "run_not_found"`). */
       404: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
@@ -21054,7 +21400,7 @@ export interface operations {
           'application/json': components['schemas']['ErrorResponse'];
         };
       };
-      /** @description The body is malformed, `edit_regions` has an out-of-range coordinate or degenerate box, or it names the billing organization ambiguously. Both `organizationId` and `organization_id` sent with different values is a `422`; so is an empty or blank value for either (a blank is never treated as an omission, which would bill a different payer), and so is any other billing-org-shaped key such as `billing_org_id` or `payerOrgId`, which would otherwise be stripped and silently bill the caller's home organization. */
+      /** @description The body is malformed, `edit_regions` has an out-of-range coordinate or degenerate box, or it names the billing organization ambiguously. Both `organizationId` and `organization_id` sent with different values is a `422`; so is an empty or blank value for either (a blank is never treated as an omission, which would bill a different payer), and so is any other billing-org-shaped key such as `billing_org_id` or `payerOrgId`, which would otherwise be stripped and silently bill the caller's home organization. A `run` whose budget cannot cover the edit is `422` with `errorCode: "run_budget_exhausted"`. */
       422: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
@@ -21356,7 +21702,7 @@ export interface operations {
           'application/json': components['schemas']['createImageJobResponse403'];
         };
       };
-      /** @description A nonexistent `organization_id`, for an admin caller; for anyone else it is `403`. */
+      /** @description The `run` does not exist or another user or billing owner minted it (`errorCode: run_not_found`). A nonexistent `organization_id` is `404` only for an admin caller; for anyone else it is `403`. */
       404: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
@@ -21376,7 +21722,7 @@ export interface operations {
           [name: string]: unknown;
         };
         content: {
-          'application/json': components['schemas']['ErrorResponse'];
+          'application/json': components['schemas']['createImageJobResponse404'];
         };
       };
       /** @description The path does not serve this HTTP method. */
@@ -21392,7 +21738,7 @@ export interface operations {
           'application/json': components['schemas']['ErrorResponse'];
         };
       };
-      /** @description The request cannot run: a malformed body (`invalid_request`), something the model does not honour (`errorCode` names the first, e.g. `unsupported_size` or `missing_input`; `message` lists them all), an unknown or unavailable model (`model_unavailable`), an input file that is not yours or not found (`input_image_not_found`) or not a usable image (`unsupported_input_image`), too few credits (`insufficient_credits`), or an Idempotency-Key problem (`invalid_idempotency_key`, `idempotency_key_reused`). */
+      /** @description The request cannot run: a malformed body (`invalid_request`), something the model does not honour (`errorCode` names the first, e.g. `unsupported_size` or `missing_input`; `message` lists them all), an unknown or unavailable model (`model_unavailable`), an input file that is not yours or not found (`input_image_not_found`) or not a usable image (`unsupported_input_image`), too few credits (`insufficient_credits`), a `run` budget with too little left for every job (`run_budget_exhausted`), or an Idempotency-Key problem (`invalid_idempotency_key`, `idempotency_key_reused`). */
       422: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
@@ -30373,7 +30719,7 @@ export interface operations {
           'application/json': components['schemas']['createVideoGenerationResponse403'];
         };
       };
-      /** @description An `inputs` file (or `input_image_file_id`) does not name an image you own (`errorCode: input_image_not_found`). A nonexistent `organization_id` is `404` only for an admin caller; for anyone else it is `403`. */
+      /** @description An `inputs` file (or `input_image_file_id`) does not name an image you own (`errorCode: input_image_not_found`), or the `run` does not exist or another user or billing owner minted it (`errorCode: run_not_found`). A nonexistent `organization_id` is `404` only for an admin caller; for anyone else it is `403`. */
       404: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
@@ -30409,7 +30755,7 @@ export interface operations {
           'application/json': components['schemas']['ErrorResponse'];
         };
       };
-      /** @description The request cannot run: a body or capability violation (`errorCode` names it, e.g. `unsupported_duration`, `unsupported_keyframes`, `invalid_keyframes`, `unsupported_draft`, or `unsupported_input_role` for an input role the model does not take). Keyframe/draft errors name the field. An unknown, unavailable or retired model (`model_unavailable`; for a retired model the message names the model to use instead), a model your administrator disabled (`model_disabled`), too few credits (`insufficient_credits`), or an Idempotency-Key problem (`invalid_idempotency_key`, `idempotency_key_reused`). */
+      /** @description The request cannot run: a body or capability violation (`errorCode` names it, e.g. `unsupported_duration`, `unsupported_keyframes`, `invalid_keyframes`, `unsupported_draft`, or `unsupported_input_role` for an input role the model does not take). Keyframe/draft errors name the field. An unknown, unavailable or retired model (`model_unavailable`; for a retired model the message names the model to use instead), a model your administrator disabled (`model_disabled`), too few credits (`insufficient_credits`), a `run` budget with too little left for the whole job (`run_budget_exhausted`), or an Idempotency-Key problem (`invalid_idempotency_key`, `idempotency_key_reused`). */
       422: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
@@ -31228,7 +31574,7 @@ export interface operations {
           'application/json': components['schemas']['createMusicGenerationResponse403'];
         };
       };
-      /** @description A nonexistent `organization_id`, for an admin caller; for anyone else it is `403`. */
+      /** @description A nonexistent `organization_id`, for an admin caller (for anyone else it is `403`), or a `run` that does not exist or that another user or billing owner minted (`errorCode: run_not_found`). */
       404: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
@@ -31264,7 +31610,7 @@ export interface operations {
           'application/json': components['schemas']['ErrorResponse'];
         };
       };
-      /** @description The request cannot run: a malformed body, a capability violation (`errorCode` names it, e.g. `unsupported_duration` or `lyrics_too_long`), an unknown or unavailable model (`model_unavailable`), a model your administrator disabled (`model_disabled`), too few credits (`insufficient_credits`), or an Idempotency-Key problem (`invalid_idempotency_key`, `idempotency_key_reused`). */
+      /** @description The request cannot run: a malformed body, a capability violation (`errorCode` names it, e.g. `unsupported_duration` or `lyrics_too_long`), an unknown or unavailable model (`model_unavailable`), a model your administrator disabled (`model_disabled`), too few credits (`insufficient_credits`), a `run` budget with too little left for the whole job (`run_budget_exhausted`), or an Idempotency-Key problem (`invalid_idempotency_key`, `idempotency_key_reused`). */
       422: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */

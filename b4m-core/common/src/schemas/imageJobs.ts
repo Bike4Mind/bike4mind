@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { ModelIdSchema } from './modelId';
 import { BillingOrganizationIdSchema } from './billingOrganization';
+import { CompletionRunAttributionSchema } from './cliCompletions';
 import type { ApiErrorCode } from '../apiErrorCodes';
 import { GENERATION_OUTPUT_AVAILABILITIES } from '../generation/types';
 import { IMAGE_INPUT_ROLES, IMAGE_MODES } from '../image/types';
@@ -36,6 +37,8 @@ export const IMAGE_JOB_API_ERROR_CODES = [
   'idempotency_key_reused',
   'invalid_idempotency_key',
   'not_cancellable',
+  'run_not_found',
+  'run_budget_exhausted',
 ] as const satisfies readonly ApiErrorCode[];
 export type ImageJobApiErrorCode = (typeof IMAGE_JOB_API_ERROR_CODES)[number];
 
@@ -127,6 +130,11 @@ export const CreateImageJobBodySchema = z.strictObject({
       `Images to make, 1 to ${IMAGE_JOB_COUNT_MAX} (default 1). Each is its own job; they share a \`group_id\`.`
     ),
   organization_id: BillingOrganizationIdSchema,
+  run: CompletionRunAttributionSchema.optional().describe(
+    "The completion run these jobs are made for. Their whole estimated cost is claimed against that run's budget " +
+      'before they are queued, and the request is refused with 422 `run_budget_exhausted` when it does not fit. ' +
+      "The jobs bill the run's account."
+  ),
 });
 export type CreateImageJobBody = z.infer<typeof CreateImageJobBodySchema>;
 

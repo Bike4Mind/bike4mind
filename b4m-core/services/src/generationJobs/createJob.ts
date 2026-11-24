@@ -11,6 +11,8 @@ import {
   type IGenerationJobDocumentOf,
   type IGenerationJobOf,
   type IGenerationJobRepository,
+  type CompletionRunAttribution,
+  type RunBudgetClaim,
 } from '@bike4mind/common';
 import type { Logger } from '@bike4mind/observability';
 import { holdCredits, releaseCreditHold, type CreditHold, type CreditHoldAdapters } from '../creditService/creditHold';
@@ -18,6 +20,7 @@ import { assertSpendNotFrozen } from '../spendFreezeService/assertSpendNotFrozen
 import { spendFreezeSubjectForHold } from '../spendFreezeService/spendFreezeSubjectForHold';
 import { checkNewAccountSpendCap } from '../creditService/newAccountSpendCap';
 import type { GenerationJobEngine } from './engine';
+import type { RunBudgetAdapters } from './types';
 
 /**
  * The kind-agnostic half of creating a job (owner, idempotency, hold, persist, enqueue), shared by every kind's
@@ -29,6 +32,8 @@ export type CreateGenerationJobDeps = {
   enqueue(jobId: string, delaySeconds: number): Promise<void>;
   engine: Pick<GenerationJobEngine, 'failBeforeStart'>;
   logger: Logger;
+  /** Required for a job created with a `run`; see holdJobCredits. */
+  runBudget?: RunBudgetAdapters;
 };
 
 export type JobOwner = Pick<IGenerationJob, 'ownerType' | 'ownerId'>;
@@ -95,22 +100,31 @@ const insufficientCredits = (message: string): InsufficientCredits => ({
   message,
 });
 
+export type HeldJobCredits = { ok: true; hold: CreditHold | null; runClaim?: RunBudgetClaim };
+
+type HoldJobCreditsParams = {
+  enforceCredits: boolean;
+  user: { id: string; organizationId: string | null };
+  requiredCredits: number;
+  featureLabel: string;
+  apiKeyId?: string | null;
+  apiKeyBillingOwnerType?: ApiKeyBillingOwnerType | null;
+  /** The completion run the job is made for: the whole hold is claimed against its budget, all or nothing. */
+  run?: CompletionRunAttribution;
+};
+
 /**
  * Holds `requiredCredits` when credits are enforced; null when they are not. Insufficient credits is a value.
  * A frozen subject is refused even when credits are not enforced, and throws the 403 `spend_frozen` error
  * rather than returning a value: it is not a 402 the caller can recover from by buying credits.
+ * With a `run`, the claim is taken first and in the hold's transaction: a refused claim (a thrown 422
+ * `run_budget_exhausted`) holds nothing, and a hold that throws rolls the claim back. A refused hold returns
+ * its claim before the transaction commits.
  */
 export async function holdJobCredits(
-  params: {
-    enforceCredits: boolean;
-    user: { id: string; organizationId: string | null };
-    requiredCredits: number;
-    featureLabel: string;
-    apiKeyId?: string | null;
-    apiKeyBillingOwnerType?: ApiKeyBillingOwnerType | null;
-  },
-  deps: Pick<CreateGenerationJobDeps, 'credits' | 'logger'>
-): Promise<{ ok: true; hold: CreditHold | null } | InsufficientCredits> {
+  params: HoldJobCreditsParams,
+  deps: Pick<CreateGenerationJobDeps, 'credits' | 'logger' | 'runBudget'>
+): Promise<HeldJobCredits | InsufficientCredits> {
   if (!params.enforceCredits) {
     // holdCredits checks the freeze itself, so only the credits-off path needs it here.
     const subject = spendFreezeSubjectForHold({
@@ -121,6 +135,25 @@ export async function holdJobCredits(
     await assertSpendNotFrozen(subject, { db: { spendFreezes: deps.credits.spendFreezes } });
     return { ok: true, hold: null };
   }
+  const { run } = params;
+  if (!run) return holdOnly(params, deps);
+  const runBudget = deps.runBudget;
+  if (!runBudget) throw new Error('A job with a run needs run budget adapters (CreateGenerationJobDeps.runBudget)');
+  return runBudget.transact(async () => {
+    const runClaim = await runBudget.claim(run.runId, params.requiredCredits);
+    const held = await holdOnly(params, deps);
+    if (!held.ok) {
+      if (runClaim) await runBudget.release(runClaim, 0);
+      return held;
+    }
+    return runClaim ? { ...held, runClaim } : held;
+  });
+}
+
+async function holdOnly(
+  params: HoldJobCreditsParams,
+  deps: Pick<CreateGenerationJobDeps, 'credits' | 'logger'>
+): Promise<HeldJobCredits | InsufficientCredits> {
   try {
     const hold = await holdCredits(
       {
@@ -180,8 +213,9 @@ export type NewGenerationJob<K extends GenerationJobKind> = K extends Generation
   : never;
 
 /**
- * Persists a pending job that already owns `job.creditHold` and enqueues its first step. A failure to persist or
- * enqueue throws (a 5xx for the caller) after returning the hold; a lost idempotency race replays the winner.
+ * Persists a pending job that already owns `job.creditHold` (and its `runClaim`) and enqueues its first step. A
+ * failure to persist or enqueue throws (a 5xx for the caller) after returning the hold and the claim; a lost
+ * idempotency race replays the winner. An enqueue failure returns them through the engine's terminal settlement.
  */
 export async function persistAndEnqueueJob<K extends GenerationJobKind>(
   kind: K,
@@ -305,7 +339,12 @@ async function releaseHold<K extends GenerationJobKind>(
   { kind, job, jobId }: FailedCreate<K>,
   deps: CreateGenerationJobDeps
 ) {
-  const hold = job.creditHold;
-  if (!hold) return;
-  await runCleanup(deps, kind, { jobId, ownerId: job.ownerId }, () => releaseCreditHold(hold, deps.credits));
+  const { creditHold: hold, runClaim } = job;
+  const context = { jobId, ownerId: job.ownerId };
+  if (hold) await runCleanup(deps, kind, context, () => releaseCreditHold(hold, deps.credits));
+  if (!runClaim) return;
+  await runCleanup(deps, kind, context, async () => {
+    if (!deps.runBudget) throw new Error('No run budget adapters to release the run claim');
+    await deps.runBudget.release(runClaim, 0);
+  });
 }

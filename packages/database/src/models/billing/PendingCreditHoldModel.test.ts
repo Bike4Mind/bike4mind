@@ -85,6 +85,24 @@ describe('PendingCreditHoldModel', () => {
     expect(await pendingCreditHoldRepository.findSettlement(id)).toBe(30);
   });
 
+  it('keeps one outstanding hold per key and frees the key on settlement', async () => {
+    await PendingCreditHoldModel.createIndexes();
+    const keyed = await pendingCreditHoldRepository.record(hold, 'image generation', minutes(60), undefined, 'gen-1');
+    await pendingCreditHoldRepository.record(hold, 'image generation', minutes(60));
+    await pendingCreditHoldRepository.record(hold, 'image generation', minutes(60));
+
+    await expect(pendingCreditHoldRepository.findOutstandingByKey('gen-1')).resolves.toMatchObject({ id: keyed.id });
+    await expect(
+      pendingCreditHoldRepository.record(hold, 'image generation', minutes(60), undefined, 'gen-1')
+    ).rejects.toMatchObject({ code: 11000 });
+
+    await pendingCreditHoldRepository.markSettled(keyed.id, 5);
+    await expect(pendingCreditHoldRepository.findOutstandingByKey('gen-1')).resolves.toBeNull();
+    await expect(
+      pendingCreditHoldRepository.record(hold, 'image generation', minutes(60), undefined, 'gen-1')
+    ).resolves.toMatchObject({ holdKey: 'gen-1' });
+  });
+
   it('lets exactly one caller claim a hold', async () => {
     const { id } = await pendingCreditHoldRepository.record(hold, 'embeddings', minutes(60));
 
