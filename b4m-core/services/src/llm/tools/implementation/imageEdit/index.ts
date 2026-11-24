@@ -14,7 +14,8 @@ import {
   isImageServeable,
   isBflImageModel,
   isGeminiImageModel,
-  rejectsTransparentBackground,
+  supportsTransparentBackgroundByCatalog,
+  transparentBackgroundUnsupportedMessage,
   supportsImageEdit,
   EDIT_SUPPORTED_IMAGE_MODELS,
   IMAGES_PER_EDIT_REQUEST,
@@ -413,11 +414,8 @@ Please select a supported edit model in your image settings modal.`;
       const safety_tolerance = imageConfig?.safety_tolerance || toolSafetyTolerance;
       const output_format = toolOutputFormat ?? imageConfig?.output_format ?? 'png';
       const background = toolBackground ?? imageConfig?.background;
-      // Step any gpt-image-2 edit model down to gpt-image-1.5 when transparency is
-      // requested: gpt-image-2 rejects background: 'transparent' outright, and the
-      // client's own default edit model is gpt-image-2, so this is reachable by default.
-      if (background === 'transparent' && rejectsTransparentBackground(editModel)) {
-        editModel = ImageModels.GPT_IMAGE_1_5;
+      if (background === 'transparent' && !supportsTransparentBackgroundByCatalog(editModel)) {
+        return `Error: ${transparentBackgroundUnsupportedMessage(editModel)}`;
       }
       const refusal = await toolModelRefusal(context, await createToolModelAdmission(context), editModel, 'edit_image');
       if (refusal) return refusal;
