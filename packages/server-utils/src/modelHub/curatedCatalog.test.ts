@@ -357,7 +357,7 @@ describe('curatedServerKeyring', () => {
 
   it('derives the same test keys as the scripts and CLI copies, and the ids Desktop pins', () => {
     const ids = (keys: { keyId: string; role: string }[]) => keys.map(key => `${key.role}:${key.keyId}`);
-    // Desktop is off limits to this package; apps/desktop/src/main/models/curated/devKey.test.ts pins the same ids.
+    // Desktop is off limits to this package; apps/desktop/src/main/models/models.test.ts pins the same ids.
     const expected = ['signing:b132926cb06522d5', 'recovery:689f488b0fe321ad'];
     expect(ids(curatedDevKeys())).toEqual(expected);
     expect(ids(scriptsDevKeys())).toEqual(expected);

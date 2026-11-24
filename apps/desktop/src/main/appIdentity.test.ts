@@ -1,7 +1,9 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { applyAppIdentity, DEV_APP_NAME, DEV_USER_DATA_ENV } from './appIdentity';
+import { EventEmitter } from 'node:events';
+import { claimSingleInstance } from './singleInstance';
 
 const APP_DATA = '/Users/someone/Library/Application Support';
 
@@ -65,5 +67,28 @@ describe('applyAppIdentity', () => {
   it('is the first import in the main entry point', () => {
     const source = readFileSync(join(__dirname, 'index.ts'), 'utf8');
     expect(source.match(/^import .*$/m)?.[0]).toBe("import './bootstrapIdentity';");
+  });
+});
+
+describe('singleInstance', () => {
+  function host(locked: boolean) {
+    return Object.assign(new EventEmitter(), { requestSingleInstanceLock: vi.fn(() => locked) });
+  }
+
+  describe('claimSingleInstance', () => {
+    it('holds the lock and brings the app forward on a second launch', () => {
+      const app = host(true);
+      const onSecondLaunch = vi.fn();
+      expect(claimSingleInstance(app, onSecondLaunch)).toBe(true);
+
+      app.emit('second-instance', {}, ['/Applications/Bike4Mind.app/Contents/MacOS/Bike4Mind'], '/');
+      expect(onSecondLaunch).toHaveBeenCalledTimes(1);
+    });
+
+    it('reports a duplicate launch without listening for others', () => {
+      const app = host(false);
+      expect(claimSingleInstance(app, vi.fn())).toBe(false);
+      expect(app.listenerCount('second-instance')).toBe(0);
+    });
   });
 });

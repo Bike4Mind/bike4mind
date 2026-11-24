@@ -728,20 +728,22 @@ function SavedTestsSection({
   const runTests = useRunCallableFunctionTests();
   const [last, setLast] = useState<{ key: string; run?: CallableFunctionTestRun; error?: string } | null>(null);
   const key = saved ? `${saved.id}:${saved.pin.version}` : null;
-  const blocked = !serverRuntime
-    ? 'Server test runs are not set up here.'
-    : !saved
-      ? 'Save this version as a tool to run its tests on the server.'
-      : saved.status === 'source_deleted'
-        ? 'The artifact behind this tool was deleted.'
-        : saved.status === 'disabled'
-          ? 'Turn the tool on to run its tests on the server.'
-          : saved.pin.version !== save.version
-            ? `The server runs the saved version ${saved.pin.version}. Update the tool to test this version there.`
-            : null;
-  const shown = last && last.key === key ? last : null;
+  const blocked =
+    save.blocked ??
+    (!serverRuntime
+      ? 'Server test runs are not set up here.'
+      : !saved
+        ? 'Save this version as a tool to run its tests on the server.'
+        : saved.status === 'source_deleted'
+          ? 'The artifact behind this tool was deleted.'
+          : saved.status === 'disabled'
+            ? 'Turn the tool on to run its tests on the server.'
+            : saved.pin.version !== save.version
+              ? `The server runs the saved version ${saved.pin.version}. Update the tool to test this version there.`
+              : null);
+  const shown = blocked === null && last && last.key === key ? last : null;
   const run = (earlier: CallableFunctionTestRun | null) => {
-    if (!saved || !key) return;
+    if (blocked !== null || !saved || !key) return;
     const tests = earlier?.results.filter(result => result.outcome === 'not_run').map(result => result.name);
     runTests.mutate(
       { id: saved.id, ...(tests?.length ? { tests } : {}) },
@@ -763,7 +765,7 @@ function SavedTestsSection({
       {...browser}
       server={{
         blocked,
-        running: runTests.isPending,
+        running: blocked === null && runTests.isPending,
         run: shown?.run ?? null,
         error: shown?.error ?? null,
         onRun,

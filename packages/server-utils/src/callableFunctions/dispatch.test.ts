@@ -9,6 +9,7 @@ import {
   type ICallableFunctionCall,
 } from '@bike4mind/common';
 import type { CallableFunctionRunPayload, CallableFunctionRunResult } from './runtimeParent';
+import type { CallableFunctionTenant } from './runtimeRunner';
 
 const h = vi.hoisted(() => ({
   enabled: true,
@@ -30,7 +31,8 @@ vi.mock('./access', () => ({
     return h.enabled;
   }),
 }));
-vi.mock('@bike4mind/database', () => ({
+vi.mock('@bike4mind/database', async () => ({
+  mongoose: (await import('mongoose')).default,
   callableFunctionRepository: {
     findById: vi.fn(async () => {
       h.reads.push('record');
@@ -46,7 +48,7 @@ vi.mock('@bike4mind/database', () => ({
     }),
   },
   callableFunctionCallRepository: {
-    record: vi.fn(async (row: Record<string, unknown>) => {
+    record: vi.fn(async (row: Record<string, unknown>, _callId?: string) => {
       h.rows.push(row);
       return { ...row, id: `call-${h.rows.length}` };
     }),
@@ -124,7 +126,9 @@ const ok = (overrides: Partial<CallableFunctionRunResult> = {}): CallableFunctio
 });
 
 const runnerOf = (result: CallableFunctionRunResult | (() => Promise<CallableFunctionRunResult>)) =>
-  vi.fn(async (_payload: CallableFunctionRunPayload) => (typeof result === 'function' ? result() : result));
+  vi.fn(async (_payload: CallableFunctionRunPayload, _tenant: CallableFunctionTenant) =>
+    typeof result === 'function' ? result() : result
+  );
 
 const call = (overrides: Partial<Parameters<typeof dispatchFunctionCall>[0]> = {}) => ({
   caller: OWNER,
@@ -257,13 +261,16 @@ describe('dispatchFunctionCall outcomes', () => {
     const runner = runnerOf(ok());
     const result = await dispatchFunctionCall(call({ surface: 'chat' }), { runner });
     expect(result).toMatchObject({ outcome: 'ok', outputs: { deflection: 8381.0 }, callId: 'call-1' });
-    expect(runner).toHaveBeenCalledWith({
-      op: 'call',
-      code: SOURCE,
-      contract: CONTRACT,
-      params: ARGS,
-      limits: { timeoutMs: 30_000, outputBytes: 256 * 1024 },
-    });
+    expect(runner).toHaveBeenCalledWith(
+      {
+        op: 'call',
+        code: SOURCE,
+        contract: CONTRACT,
+        params: ARGS,
+        limits: { timeoutMs: 30_000, outputBytes: 256 * 1024 },
+      },
+      { callerUserId: OWNER.id, codeHash: HASH }
+    );
     expect(onlyRow()).toMatchObject({
       op: 'call',
       outcome: 'ok',
@@ -387,6 +394,24 @@ describe('dispatchFunctionCall outcomes', () => {
 
 describe('one row on every path', () => {
   const thrown = new Error('database unavailable');
+
+  it('retries an ambiguous write with one call id without running the guest twice', async () => {
+    const runner = runnerOf(ok());
+    const record = vi.mocked(callableFunctionCallRepository.record);
+    record.mockImplementationOnce(async (row, callId) => {
+      h.rows.push({ ...row, id: callId });
+      throw thrown;
+    });
+    record.mockImplementationOnce(async (_row, callId) => ({ ...h.rows[0], id: callId }) as never);
+    const result = await dispatchFunctionCall(call(), { runner });
+    const attempts = record.mock.calls.slice(-2);
+    expect(attempts[0][1]).toMatch(/^[0-9a-f]{24}$/);
+    expect(attempts[1][1]).toBe(attempts[0][1]);
+    expect(result.callId).toBe(attempts[0][1]);
+    expect(h.rows).toHaveLength(1);
+    expect(runner).toHaveBeenCalledTimes(1);
+    expect(runner.mock.calls[0][1]).toEqual({ callerUserId: OWNER.id, codeHash: HASH });
+  });
 
   it.each([
     ['the setting check', () => vi.mocked(resolveCallableFunctionsEnabled).mockRejectedValueOnce(thrown)],
@@ -525,7 +550,11 @@ describe('readServerContract', () => {
       callId: 'call-1',
       runtime: { kind: 'pyodide-server', version: PYODIDE_VERSION, lockHash: LOCK, packages },
     });
-    expect(runner).toHaveBeenCalledWith({ op: 'read_contract', code: SOURCE, limits: { timeoutMs: 10_000 } });
+    expect(runner).toHaveBeenCalledWith(
+      { op: 'read_contract', code: SOURCE, limits: { timeoutMs: 10_000 } },
+      { callerUserId: OWNER.id, codeHash: HASH }
+    );
+
     const row = onlyRow();
     expect(row).toMatchObject({
       op: 'read_contract',

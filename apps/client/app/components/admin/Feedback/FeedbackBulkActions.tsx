@@ -1,5 +1,5 @@
-import { useState } from 'react';
-import { Button, FormControl, FormLabel, Input, Option, Select, Stack, Typography } from '@mui/joy';
+import { useEffect, useRef, useState } from 'react';
+import { Box, Button, FormControl, FormLabel, Input, Option, Select, Stack, Typography } from '@mui/joy';
 import { toast } from 'sonner';
 import {
   FeedbackStatus,
@@ -10,10 +10,33 @@ import {
 import { api } from '@client/app/contexts/ApiContext';
 import { getErrorMessage } from '@client/app/utils/error';
 import { ActionDialog, BulkActionBar } from '../shared';
+import { adminBulkBarZIndex } from '../shared/adminStyles';
 import type { AdminSelection } from '../shared/BulkActionBar';
 import type { FeedbackListFilterParams } from './types';
 import { FEEDBACK_STATUS_LABELS, FEEDBACK_STATUS_ORDER } from './constants';
 import { FEEDBACK_BULK_MAX_REPORTS, type FeedbackBulkChange, type FeedbackBulkResponse } from './feedbackBulk';
+
+// px. Sized for the AI Chat pill (FloatingChatPill) at its default spot, 20 px from the bottom-right corner and
+// 40 px tall; it is draggable, so a moved pill is not accounted for.
+const CHAT_PILL_BAND = 60;
+const BULK_BAR_STICKY_BOTTOM = 8;
+const ROW_SCROLL_GAP = 16;
+
+/** Bottom scroll margin (px) that keeps a row focused by j/k clear of the sticky bulk bar and the chat pill. */
+export function feedbackRowScrollClearance(bulkBarHeight: number) {
+  const barBand = bulkBarHeight > 0 ? bulkBarHeight + BULK_BAR_STICKY_BOTTOM : 0;
+  return Math.max(barBand, CHAT_PILL_BAND) + ROW_SCROLL_GAP;
+}
+
+// Chrome pins a sticky box inside its scroll container's padding, so a stuck bar sits that
+// padding above the scrollport edge that a row's scroll-margin is measured from.
+function scrollerPaddingBottom(node: HTMLElement) {
+  for (let el = node.parentElement; el; el = el.parentElement) {
+    const style = getComputedStyle(el);
+    if (/auto|scroll/.test(style.overflowY)) return parseFloat(style.paddingBottom) || 0;
+  }
+  return 0;
+}
 
 export default function FeedbackBulkActions({
   selection,
@@ -22,6 +45,7 @@ export default function FeedbackBulkActions({
   disabled,
   onSelectionChange,
   onApplied,
+  onHeightChange,
 }: {
   selection: AdminSelection;
   filters: FeedbackListFilterParams;
@@ -29,7 +53,23 @@ export default function FeedbackBulkActions({
   disabled: boolean;
   onSelectionChange: (selection: AdminSelection) => void;
   onApplied: () => Promise<void>;
+  /** Reports the sticky bar's height plus its scroll container's bottom padding in px, 0 while nothing is selected. */
+  onHeightChange?: (height: number) => void;
 }) {
+  const barRef = useRef<HTMLDivElement>(null);
+  const hasSelection = selection.mode === 'allMatching' ? total > 0 : selection.ids.length > 0;
+  useEffect(() => {
+    const node = barRef.current;
+    if (!node || !onHeightChange) return;
+    const observer = new ResizeObserver(([entry]) =>
+      onHeightChange(entry.contentRect.height + scrollerPaddingBottom(node))
+    );
+    observer.observe(node);
+    return () => {
+      observer.disconnect();
+      onHeightChange(0);
+    };
+  }, [hasSelection, onHeightChange]);
   const [action, setAction] = useState<'status' | 'delete' | null>(null);
   const [status, setStatus] = useState(FeedbackStatus.Closed);
   const [resolution, setResolution] = useState<FeedbackResolution | null>(null);
@@ -88,25 +128,41 @@ export default function FeedbackBulkActions({
   };
   return (
     <>
-      <BulkActionBar
-        selection={selection}
-        totalMatching={total}
-        onSelectAllMatching={() => onSelectionChange({ mode: 'allMatching' })}
-        onClear={() => onSelectionChange({ mode: 'explicit', ids: [] })}
-      >
-        <Button disabled={disabled} onClick={() => setAction('status')} data-testid="feedback-bulk-status-btn">
-          Set status
-        </Button>
-        <Button
-          disabled={disabled}
-          variant="outlined"
-          color="danger"
-          onClick={() => setAction('delete')}
-          data-testid="feedback-bulk-delete-btn"
+      {hasSelection && (
+        // Left-aligned and kept short of the right edge so the AI Chat pill, at its default spot, does not
+        // cover its buttons.
+        <Box
+          ref={barRef}
+          data-testid="feedback-bulk-bar-wrapper"
+          sx={{
+            position: 'sticky',
+            bottom: BULK_BAR_STICKY_BOTTOM,
+            zIndex: adminBulkBarZIndex,
+            alignSelf: 'flex-start',
+            maxWidth: 'calc(100% - 9rem)',
+          }}
         >
-          Delete
-        </Button>
-      </BulkActionBar>
+          <BulkActionBar
+            selection={selection}
+            totalMatching={total}
+            onSelectAllMatching={() => onSelectionChange({ mode: 'allMatching' })}
+            onClear={() => onSelectionChange({ mode: 'explicit', ids: [] })}
+          >
+            <Button disabled={disabled} onClick={() => setAction('status')} data-testid="feedback-bulk-status-btn">
+              Set status
+            </Button>
+            <Button
+              disabled={disabled}
+              variant="outlined"
+              color="danger"
+              onClick={() => setAction('delete')}
+              data-testid="feedback-bulk-delete-btn"
+            >
+              Delete
+            </Button>
+          </BulkActionBar>
+        </Box>
+      )}
       {action && (
         <ActionDialog
           open

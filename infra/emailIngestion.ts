@@ -1,6 +1,7 @@
 import { allSecrets } from './secrets';
 import { websocketApi } from './websocket';
-import { DEFAULT_LAMBDA_ENVIRONMENT, SINGLE_RECORD_BATCH } from './constants';
+import { DEFAULT_LAMBDA_ENVIRONMENT, SINGLE_RECORD_BATCH, isPreviewStage } from './constants';
+import { subscribeUnlessPreview } from './previewQueueConsumers';
 import { lambdaVpc } from './vpc';
 import { BLOCK_ALL_PUBLIC_ACCESS, encryptBucketAtRest } from './bucketSecurity';
 import { fabFileBucket, generatedImagesBucket } from './buckets';
@@ -150,7 +151,10 @@ export const emailAnalysisQueue = new sst.aws.Queue('emailAnalysisQueue', {
  *
  * Handler: apps/workers/src/emailIngestion/emailParser.dispatch
  */
-export const emailParserQueueSubscription = emailIngestionQueue.subscribe(
+export const emailParserQueueSubscription = subscribeUnlessPreview(
+  isPreviewStage,
+  'emailIngestionQueue',
+  emailIngestionQueue,
   {
     handler: 'apps/workers/src/emailIngestion/emailParser.dispatch',
     runtime: 'nodejs24.x',
@@ -304,7 +308,10 @@ const emailIngestionBucketNotification = emailIngestionBucket.notify({
  *
  * Handler: apps/workers/src/emailIngestion/emailAnalyzer.dispatch
  */
-const emailAnalyzerQueueSubscription = emailAnalysisQueue.subscribe(
+const emailAnalyzerQueueSubscription = subscribeUnlessPreview(
+  isPreviewStage,
+  'emailAnalysisQueue',
+  emailAnalysisQueue,
   {
     handler: 'apps/workers/src/emailIngestion/emailAnalyzer.dispatch',
     runtime: 'nodejs24.x',

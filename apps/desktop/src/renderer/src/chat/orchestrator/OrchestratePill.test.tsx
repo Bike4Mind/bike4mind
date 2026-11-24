@@ -24,11 +24,16 @@ const policyWith = (roles: RootPolicy['policy']['roles']): RootPolicy => ({
 });
 
 async function hoverTooltip(): Promise<HTMLElement | null> {
-  await act(async () => {
-    el('composer-orchestrate-toggle').dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
-    // Joy's Tooltip opens after its enter delay (100ms).
-    await new Promise(resolve => setTimeout(resolve, 150));
-  });
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+  try {
+    await act(async () => {
+      el('composer-orchestrate-toggle').dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
+      // Joy's Tooltip opens after its enter delay (100ms).
+      await vi.advanceTimersByTimeAsync(150);
+    });
+  } finally {
+    vi.useRealTimers();
+  }
   return document.body.querySelector<HTMLElement>('[role="tooltip"]');
 }
 

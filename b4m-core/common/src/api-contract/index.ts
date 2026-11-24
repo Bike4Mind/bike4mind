@@ -13,6 +13,7 @@ export { searchWebContract, fetchWebPageContract, getCurrentWeatherContract } fr
 export { createCompletionContract } from './contracts/completions.contract';
 export {
   createCompletionRunContract,
+  getCompletionRunEvaluationContract,
   getCompletionRunUsageContract,
   raiseCompletionRunBudgetContract,
 } from './contracts/completionRuns.contract';

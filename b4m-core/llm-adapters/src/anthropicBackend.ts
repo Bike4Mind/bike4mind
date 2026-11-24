@@ -1,5 +1,7 @@
 import { Anthropic, RateLimitError } from '@anthropic-ai/sdk';
 import { providerFetchOptions } from './providerDispatcher';
+import { assertAnthropicEvaluationWire, anthropicEvaluationUsage } from './anthropicEvaluation';
+import { reconcileAfterDispatch } from './evaluationReconcile';
 import type {
   MessageCreateParamsBase,
   ContentBlock,
@@ -30,6 +32,7 @@ import { federatedAnthropicCredentials } from './anthropicFederation';
 import { closeThinkMarker } from './thinkMarkers';
 import { selectedWifTokenSource } from './wifTokenSource';
 import { executeToolsBatch, shouldEndTurnAfterTools, toolFailureLogLevel } from './executeToolsBatch';
+import { replayableText } from './replayPreToolText';
 import { recordToolResult, type RecordableToolUse } from './recordToolResult';
 import {
   CompletionInfo,
@@ -252,6 +255,9 @@ export class AnthropicBackend implements ICompletionBackend {
   private logger: Logger;
   public currentModel: string = '';
   private lastAssistantContent: ContentBlock[] = []; // Store the complete assistant message content for tool use
+  // Text emitted ahead of the first tool call, for pushToolMessages to replay on the first
+  // tool_use message. Text after that call stays out so replay never reorders it.
+  private pendingPreToolText: string | undefined;
   private isThinkingEnabled: boolean = false; // Track if thinking is enabled for current request
   // Opaque, non-PII end-user identifier forwarded as `metadata.user_id` so
   // Anthropic can attribute abuse to an individual user and scope enforcement
@@ -981,6 +987,11 @@ export class AnthropicBackend implements ICompletionBackend {
     toolsUsed: Array<RecordableToolUse> = []
   ): Promise<void> {
     this.currentModel = model;
+    if (options._internal?.evaluation) {
+      if (options.executeTools !== false)
+        throw new BadRequestError('Evaluation cannot execute client tools on the server.');
+      options = { ...options, stream: false };
+    }
     options = {
       temperature: 0.9,
       ...options,
@@ -2287,6 +2298,13 @@ export class AnthropicBackend implements ICompletionBackend {
                   c => c != null && !(c.type === 'text' && !c.text)
                 ) as unknown as ContentBlock[];
               }
+              const firstToolUseIndex = collectedContent.findIndex(c => c?.type === 'tool_use');
+              this.pendingPreToolText =
+                options.executeTools === false
+                  ? undefined
+                  : (firstToolUseIndex === -1 ? collectedContent : collectedContent.slice(0, firstToolUseIndex))
+                      .flatMap(c => (c?.type === 'text' && typeof c.text === 'string' ? [c.text] : []))
+                      .join('');
 
               // Extract cache stats if caching was enabled and usage info is available
               let cacheStats;
@@ -2837,14 +2855,22 @@ export class AnthropicBackend implements ICompletionBackend {
           roundStart = Date.now();
           options._internal?.turnTelemetry?.onSemaphoreWait(roundStart - slotRequestedAt);
           // Wrap with retry for transient network errors (TLS abort, fetch terminated)
+          const evaluation = options._internal?.evaluation;
+          if (evaluation) {
+            const info = this._dispatch.for(model);
+            if (!info) throw new BadRequestError('Evaluation model metadata missing.');
+            assertAnthropicEvaluationWire(apiParams, info.contextWindow);
+            await evaluation.admit(info, apiParams.model, apiParams.max_tokens);
+          }
           response = await withRetry(
             () =>
               this._api.messages.create(apiParams, {
                 signal: options.abortSignal,
+                ...(evaluation ? { maxRetries: 0 } : {}),
                 ...(requestExtraHeaders ? { headers: requestExtraHeaders } : {}),
               }),
             {
-              maxRetries: 3,
+              maxRetries: evaluation ? 0 : 3,
               initialDelayMs: 500,
               maxDelayMs: 10000,
               jitterFactor: 0.25,
@@ -2855,6 +2881,14 @@ export class AnthropicBackend implements ICompletionBackend {
             }
           ).then(r => r.result);
           requestAccepted = true;
+          if (evaluation) {
+            const answered = response;
+            await reconcileAfterDispatch(
+              evaluation,
+              () => anthropicEvaluationUsage(answered, apiParams.model),
+              this.logger
+            );
+          }
         } finally {
           release?.();
         }
@@ -2863,6 +2897,14 @@ export class AnthropicBackend implements ICompletionBackend {
 
         if ('content' in response && Array.isArray(response.content)) {
           this.lastAssistantContent = response.content as ContentBlock[];
+          const firstToolUseIndex = this.lastAssistantContent.findIndex(content => content.type === 'tool_use');
+          this.pendingPreToolText =
+            options.executeTools === false
+              ? undefined
+              : this.lastAssistantContent
+                  .slice(0, firstToolUseIndex === -1 ? undefined : firstToolUseIndex)
+                  .flatMap(content => (content.type === 'text' ? [content.text] : []))
+                  .join('');
           let responseFormatToolEmitted = false;
 
           for (let i = 0; i < response.content.length; i++) {
@@ -3310,6 +3352,7 @@ export class AnthropicBackend implements ICompletionBackend {
         !!apiParams.output_config?.format || !!apiParams.tools?.some(tool => 'strict' in tool && tool.strict === true);
       if (
         toolCallCount === 0 &&
+        !options._internal?.evaluation &&
         !requestAccepted &&
         !options._internal?.strictSchemaRetried &&
         sentStrictSchema &&
@@ -3510,9 +3553,13 @@ export class AnthropicBackend implements ICompletionBackend {
         });
         parsedInput = {};
       }
+      // Only the first tool_use of a round carries the text: later ones are parallel siblings.
+      const preToolText = replayableText(this.pendingPreToolText);
+      this.pendingPreToolText = undefined;
       messages.push({
         role: 'assistant',
         content: [
+          ...(preToolText ? [{ type: 'text' as const, text: preToolText }] : []),
           {
             type: 'tool_use',
             id: tool.id,

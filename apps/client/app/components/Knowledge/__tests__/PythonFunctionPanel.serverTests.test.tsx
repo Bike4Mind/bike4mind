@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import React from 'react';
-import { render, screen, fireEvent, within, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, within, waitFor, act } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 
@@ -79,13 +79,15 @@ const caseResult = (overrides: Record<string, unknown>) => ({
   ...overrides,
 });
 
+const panel = (code = CODE, save: PythonFunctionSave = TARGET) => (
+  <CssVarsProvider theme={appTheme}>
+    <PythonFunctionPanel code={code} packages={[]} disabled={false} save={save} />
+  </CssVarsProvider>
+);
+
 const renderPanel = async () => {
   callFunction.mockResolvedValueOnce({ success: true, contract: CONTRACT, output: '', executionTime: 4 });
-  render(
-    <CssVarsProvider theme={appTheme}>
-      <PythonFunctionPanel code={CODE} packages={[]} disabled={false} save={TARGET} />
-    </CssVarsProvider>
-  );
+  render(panel());
   return screen.findByTestId('python-function-tests', {}, { timeout: 2000 });
 };
 
@@ -107,6 +109,75 @@ beforeEach(() => {
 });
 
 describe('PythonFunctionPanel server tests', () => {
+  it('holds server tests after reading an edited contract until it is saved and repinned', async () => {
+    callFunction.mockResolvedValueOnce({ success: true, contract: CONTRACT, output: '', executionTime: 4 });
+    const view = render(panel());
+    await screen.findByTestId('python-function-tests', {}, { timeout: 2000 });
+    answerWith({
+      functionId: 'fn-1',
+      passed: 1,
+      failed: 0,
+      notRun: 1,
+      results: [
+        caseResult({ name: 'short span' }),
+        { name: 'long span', passed: false, outcome: 'not_run', reason: 'budget_exhausted', mismatch: null },
+      ],
+    });
+    fireEvent.click(serverButton());
+    await waitFor(() => expect(cells('python-function-test-server-status')).toEqual(['Passed', 'Not run']));
+    const editedCode = `${CODE}\n# edited expected value`;
+    const editedContract = {
+      ...CONTRACT,
+      tests: [{ ...CONTRACT.tests[0], expected: { deflection: 5 } }, CONTRACT.tests[1]],
+    };
+    callFunction.mockResolvedValueOnce({ success: true, contract: editedContract, output: '', executionTime: 4 });
+    const blocked = { ...TARGET, blocked: 'Save your edits before running server tests.' };
+    view.rerender(panel(editedCode, blocked));
+    await waitFor(() => expect(callFunction).toHaveBeenCalledWith(editedCode, null, []));
+    await screen.findByTestId('python-function-tests-server-run-btn', {}, { timeout: 2000 });
+    expect(serverButton().disabled).toBe(true);
+    expect(cells('python-function-test-server-status')).not.toContain('Passed');
+    expect(screen.queryByTestId('python-function-tests-server-not-run')).toBeNull();
+    expect(screen.queryByTestId('python-function-test-server-status-ms')).toBeNull();
+    fireEvent.click(serverButton());
+    expect(h.runTests).toHaveBeenCalledTimes(1);
+    await waitFor(() =>
+      expect(screen.getByTestId('python-function-tests-server-note').textContent).toBe(blocked.blocked)
+    );
+    view.rerender(panel(editedCode, { ...TARGET, version: 4 }));
+    expect(serverButton().disabled).toBe(true);
+    h.saved = savedView({ pin: { ...savedView().pin, version: 4 } });
+    view.rerender(panel(editedCode, { ...TARGET, version: 4 }));
+    expect(serverButton().disabled).toBe(false);
+    expect(cells('python-function-test-server-status')).not.toContain('Passed');
+  });
+
+  it('does not paint a pending or late saved response onto edited code', async () => {
+    callFunction.mockResolvedValueOnce({ success: true, contract: CONTRACT, output: '', executionTime: 4 });
+    const view = render(panel());
+    await screen.findByTestId('python-function-tests', {}, { timeout: 2000 });
+    let complete: ((data: unknown) => void) | undefined;
+    h.runTests.mockImplementationOnce((_request: unknown, handlers: { onSuccess: (data: unknown) => void }) => {
+      complete = handlers.onSuccess;
+    });
+    fireEvent.click(serverButton());
+    h.pending = true;
+    view.rerender(panel(CODE, { ...TARGET, blocked: 'Save your edits before running server tests.' }));
+    expect(cells('python-function-test-server-status')).not.toContain('Running');
+    expect(complete).toBeDefined();
+    act(() =>
+      complete?.({
+        functionId: 'fn-1',
+        passed: 2,
+        failed: 0,
+        results: [caseResult({ name: 'short span' }), caseResult({ name: 'long span' })],
+      })
+    );
+    expect(cells('python-function-test-server-status')).not.toContain('Passed');
+    expect(screen.queryByTestId('python-function-test-server-status-ms')).toBeNull();
+    expect(serverButton().disabled).toBe(true);
+  });
+
   it('shows the browser and server results side by side, each with its timing', async () => {
     const section = await renderPanel();
     callFunction

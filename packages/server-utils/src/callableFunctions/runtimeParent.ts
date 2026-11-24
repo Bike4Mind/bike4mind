@@ -18,6 +18,12 @@ import {
   type FunctionContract,
   type FunctionContractProblem,
 } from '@bike4mind/common';
+import {
+  CALLABLE_FUNCTION_DEFAULT_TIMEOUT_MS,
+  CALLABLE_FUNCTION_LIMITS,
+  CALLABLE_FUNCTION_START_BUDGET_MS,
+  type CallableFunctionLimits,
+} from './runtimeLimits';
 
 /**
  * The parent half of the server runtime for Python functions: one fresh child process per run,
@@ -30,48 +36,7 @@ export const CALLABLE_FUNCTION_CHILD_PATH_ENV = 'CALLABLE_FUNCTION_CHILD_PATH';
 /** Directory holding pyodide.mjs, the rest of the Pyodide core, pyodide-lock.json and the package wheels. */
 export const CALLABLE_FUNCTION_PYODIDE_DIR_ENV = 'CALLABLE_FUNCTION_PYODIDE_DIR';
 
-export interface CallableFunctionLimits {
-  /** The guest's own run (the contract read and `run`), timed from the child's run-start line. */
-  timeoutMs: number;
-  inputBytes: number;
-  outputBytes: number;
-  /** Resident memory of the child, in MB. */
-  memoryMb: number;
-  sourceBytes: number;
-  printedChars: number;
-}
-
-const MIB = 1024 * 1024;
-
-/**
- * The runtime's ceilings. A call may ask for a lower `timeoutMs`, `inputBytes`, or `outputBytes` in its
- * `limits`, never a higher one; each surface's default (chat's 256 KB output, for one) is the dispatcher's.
- */
-export const CALLABLE_FUNCTION_LIMITS: CallableFunctionLimits = {
-  timeoutMs: 825_000,
-  inputBytes: 5 * MIB,
-  outputBytes: 5 * MIB,
-  memoryMb: 1536,
-  sourceBytes: 512 * 1024,
-  printedChars: 100_000,
-};
-
-/** A call's time limit when it names none. */
-export const CALLABLE_FUNCTION_DEFAULT_TIMEOUT_MS = 30_000;
-
-/**
- * Spawn to run start: Pyodide's load and the package wheels, outside the call's time limit. Loading all five
- * baked packages took up to 26 s on a heavily loaded host; this is a little over twice that.
- */
-export const CALLABLE_FUNCTION_START_BUDGET_MS = 60_000;
-
-/** The parent's own time around a run: the input checks and the wait for the killed child's reap. */
-export const CALLABLE_FUNCTION_PARENT_MARGIN_MS = 15_000;
-
-/** The runtime Lambda's configured timeout, in seconds; Lambda allows at most 900. */
-export const CALLABLE_FUNCTION_LAMBDA_TIMEOUT_SECONDS = Math.ceil(
-  (CALLABLE_FUNCTION_LIMITS.timeoutMs + CALLABLE_FUNCTION_START_BUDGET_MS + CALLABLE_FUNCTION_PARENT_MARGIN_MS) / 1000
-);
+export * from './runtimeLimits';
 
 const CALL_LIMIT_KEYS = ['timeoutMs', 'inputBytes', 'outputBytes'] as const;
 type CallLimitKey = (typeof CALL_LIMIT_KEYS)[number];

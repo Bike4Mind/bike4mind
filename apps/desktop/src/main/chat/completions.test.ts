@@ -247,13 +247,13 @@ describe('streamCompletion', () => {
     const server = createServer((_request, response) => {
       response.writeHead(200, { 'Content-Type': 'text/event-stream' });
       response.write(': ping\n\n');
-      setTimeout(() => response.end(frame({ type: 'content', text: 'late' }) + frame('[DONE]')), 600);
+      setTimeout(() => response.end(frame({ type: 'content', text: 'late' }) + frame('[DONE]')), 225);
     });
     await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
     try {
       const { port } = server.address() as AddressInfo;
       const events: CompletionStreamEvent[] = [];
-      await streamCompletion(axios.create({ timeout: 200 }), `http://127.0.0.1:${port}/`, REQUEST, event =>
+      await streamCompletion(axios.create({ timeout: 75 }), `http://127.0.0.1:${port}/`, REQUEST, event =>
         events.push(event)
       );
       expect(events).toEqual([{ type: 'content', text: 'late' }]);

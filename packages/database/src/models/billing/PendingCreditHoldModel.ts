@@ -15,6 +15,11 @@ export type PendingCreditHold = CreditHoldRecord & {
   id: string;
   /** Released together with the hold: by settlement, refund or the expired-hold sweep. */
   runClaim?: PendingCreditHoldRunClaim;
+  /**
+   * Names the one piece of work the hold pays for (an image generation's id), so a redelivered queue
+   * message finds the hold its first delivery took instead of taking another. Cleared on settlement.
+   */
+  holdKey?: string;
   featureLabel: string;
   expiresAt: Date;
   settledAt?: Date;
@@ -46,6 +51,7 @@ const PendingCreditHoldSchema = new Schema<PendingCreditHoldDocument>(
       ),
       required: false,
     },
+    holdKey: { type: String },
   },
   { timestamps: true }
 );
@@ -57,6 +63,12 @@ PendingCreditHoldSchema.index({ userId: 1, createdAt: -1 });
 // Serves the admin billing overview's outstanding holds per owner (an organization has no userId to
 // filter on). Built by the 20260921239997_ensure-pending-credit-hold-owner-index migration.
 PendingCreditHoldSchema.index({ ownerId: 1, ownerType: 1, settledAt: 1 });
+// One outstanding hold per key; rows without a key are not indexed. Built by the
+// 20261123163611_ensure-pending-credit-hold-key-index migration.
+PendingCreditHoldSchema.index(
+  { holdKey: 1 },
+  { unique: true, partialFilterExpression: { holdKey: { $exists: true } } }
+);
 // Only completed settlements have this field: TTL never deletes an outstanding hold.
 PendingCreditHoldSchema.index({ settledAt: 1 }, { expireAfterSeconds: 7 * 24 * 60 * 60 });
 
@@ -73,6 +85,7 @@ const toPendingCreditHold = (doc: PendingCreditHoldDocument): PendingCreditHold 
   featureLabel: doc.featureLabel,
   expiresAt: doc.expiresAt,
   ...(doc.runClaim ? { runClaim: { runId: doc.runClaim.runId, credits: doc.runClaim.credits } } : {}),
+  ...(doc.holdKey ? { holdKey: doc.holdKey } : {}),
   ...(doc.settledAt ? { settledAt: doc.settledAt, settledCredits: doc.settledCredits } : {}),
 });
 
@@ -83,9 +96,16 @@ export class PendingCreditHoldRepository {
     hold: CreditHoldRecord,
     featureLabel: string,
     expiresAt: Date,
-    runClaim?: PendingCreditHoldRunClaim
+    runClaim?: PendingCreditHoldRunClaim,
+    holdKey?: string
   ): Promise<PendingCreditHold> {
-    const doc = await this.model.create({ ...hold, featureLabel, expiresAt, ...(runClaim && { runClaim }) });
+    const doc = await this.model.create({
+      ...hold,
+      featureLabel,
+      expiresAt,
+      ...(runClaim && { runClaim }),
+      ...(holdKey && { holdKey }),
+    });
     return toPendingCreditHold(doc.toObject());
   }
 
@@ -93,7 +113,7 @@ export class PendingCreditHoldRepository {
   async markSettled(id: string, settledCredits: number): Promise<boolean> {
     const result = await this.model.updateOne(
       { _id: id, settledAt: { $exists: false } },
-      { $set: { settledAt: new Date(), settledCredits } },
+      { $set: { settledAt: new Date(), settledCredits }, $unset: { holdKey: 1 } },
       { runValidators: true }
     );
     return result.modifiedCount === 1;
@@ -107,7 +127,7 @@ export class PendingCreditHoldRepository {
     const doc = await this.model
       .findOneAndUpdate(
         { _id: id, settledAt: { $exists: false } },
-        { $set: { settledAt: new Date(), settledCredits } },
+        { $set: { settledAt: new Date(), settledCredits }, $unset: { holdKey: 1 } },
         { new: true, runValidators: true }
       )
       .lean<PendingCreditHoldDocument>();
@@ -122,6 +142,12 @@ export class PendingCreditHoldRepository {
       { runValidators: true }
     );
     return result.modifiedCount === 1;
+  }
+
+  /** The unsettled hold taken under `holdKey`, if any. */
+  async findOutstandingByKey(holdKey: string): Promise<PendingCreditHold | null> {
+    const doc = await this.model.findOne({ holdKey, settledAt: { $exists: false } }).lean<PendingCreditHoldDocument>();
+    return doc ? toPendingCreditHold(doc) : null;
   }
 
   /** Reconciles a committed settlement whose transaction acknowledgement was lost. */

@@ -22,7 +22,7 @@ function statementFor(action: string): string {
 }
 
 function consumerList(): string[] {
-  const body = source.match(/const dlqConsumerFunctionArns = \[([^\]]*)\]\.map\(/)?.[1];
+  const body = source.match(/const dlqConsumerFunctionArns = \[([^\]]*)\]\.flatMap\(/)?.[1];
   expect(body, 'dlqConsumerFunctionArns list').toBeDefined();
   return (body ?? '')
     .split(',')
@@ -40,7 +40,7 @@ describe('web function DLQ consumer log permissions', () => {
     expect(statement).toMatch(/resources:\s*dlqConsumerFunctionArns\s*\}/);
     expect(statement).not.toContain('*');
     expect(source).toMatch(
-      /const dlqConsumerFunctionArns = \[[^\]]*\]\.map\(subscription => subscription\.nodes\.function\.arn\);/
+      /const dlqConsumerFunctionArns = \[[^\]]*\]\.flatMap\(subscription =>\s*\(?subscription \? \[subscription\.nodes\.function\.arn\] : \[\]\)?\);/
     );
     expect(source).toMatch(/role:\s*web\.nodes\.server\.nodes\.role\.name/);
   });
@@ -50,9 +50,16 @@ describe('web function DLQ consumer log permissions', () => {
     const infraFiles = readdirSync(path.join(REPO_ROOT, 'infra'))
       .filter(f => f.endsWith('.ts'))
       .map(f => read(`infra/${f}`));
-    const subscribeCalls = infraFiles.flatMap(src => [...src.matchAll(/\w+Queue\.subscribe\(/g)]);
+    const subscribeCalls = infraFiles.flatMap(src => [
+      ...src.matchAll(/\w+Queue\.subscribe\(|subscribeUnlessPreview\(\s*isPreviewStage/g),
+    ]);
     const expected = infraFiles.flatMap(src =>
-      [...src.matchAll(/^(?:export )?const (\w+Subscription) = \w+Queue\.subscribe\(/gm)].map(m => m[1])
+      [
+        // A preview-skipped consumer is wrapped in subscribeUnlessPreview (infra/previewQueueConsumers.ts).
+        ...src.matchAll(
+          /^(?:export )?const (\w+Subscription) = (?:subscribeUnlessPreview\(\s*isPreviewStage|\w+Queue\.subscribe\()/gm
+        ),
+      ].map(m => m[1])
     );
     expect(expected.length).toBeGreaterThan(30);
     // An unassigned subscribe cannot be listed, so its consumer would silently get no logs link.

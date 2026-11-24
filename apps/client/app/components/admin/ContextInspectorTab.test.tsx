@@ -352,6 +352,23 @@ describe('ContextInspectorTab numbers and status', () => {
 });
 
 describe('ContextInspectorTab requests and states', () => {
+  it('shows empty date labels and sends no dates until one is set, then shows the empty label again when removed', async () => {
+    renderTab();
+    await screen.findByTestId('context-inspector-entry-e1');
+    expect(screen.getByTestId('context-inspector-start-date-empty')).toHaveTextContent('Any date');
+    expect(screen.getByTestId('context-inspector-end-date-empty')).toHaveTextContent('Any date');
+    expect(telemetryCalls()).toEqual(['/api/admin/context-telemetry?limit=20']);
+
+    fireEvent.click(screen.getByTestId('context-inspector-start-date-set-btn'));
+    fireEvent.change(screen.getByTestId('context-inspector-start-date'), { target: { value: '2026-10-01' } });
+    await waitFor(() =>
+      expect(telemetryCalls().at(-1)).toBe('/api/admin/context-telemetry?startDate=2026-10-01&limit=20')
+    );
+
+    fireEvent.click(screen.getByTestId('context-inspector-start-date-clear-btn'));
+    expect(screen.getByTestId('context-inspector-start-date-empty')).toBeInTheDocument();
+  });
+
   it('requests the first page with the default filters, refreshes from the header and filters with chips', async () => {
     renderTab();
     await screen.findByTestId('context-inspector-entry-e1');

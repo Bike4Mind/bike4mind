@@ -13,6 +13,10 @@ import { ApprovalGate } from './tools/ApprovalGate';
 import { PermissionRuleSet, compileRule, parseRule } from './permissions/rules';
 import { bashExecute } from './tools/shellTools';
 
+vi.mock('../git/hostGitArgs', async importOriginal =>
+  (await import('./plainFolderGit.testHelper')).skipGitOutsideRepositories(await importOriginal())
+);
+
 function allowRules(rules: readonly string[]): PermissionRuleSet {
   return new PermissionRuleSet(
     rules.flatMap(text => {

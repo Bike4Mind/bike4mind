@@ -1,7 +1,9 @@
+import { createHash } from 'node:crypto';
 import { describe, it, expect, vi } from 'vitest';
 import type { InvokeCommand } from '@aws-sdk/client-lambda';
 import {
   callableFunctionRuntimeConfigured,
+  callableFunctionTenantId,
   createInProcessCallableFunctionRunner,
   createLambdaCallableFunctionRunner,
   parseCallableFunctionRunResult,
@@ -23,6 +25,7 @@ vi.mock('./runtimeParent', async importOriginal => {
 });
 
 const payload = { op: 'read_contract' as const, code: 'FUNCTION = {}' };
+const tenant = { callerUserId: 'user-1', codeHash: '3f2a9c' };
 const encode = (body: unknown) => new TextEncoder().encode(JSON.stringify(body));
 
 describe('createLambdaCallableFunctionRunner', () => {
@@ -37,11 +40,12 @@ describe('createLambdaCallableFunctionRunner', () => {
         extra: 'dropped',
       }),
     }));
-    const result = await createLambdaCallableFunctionRunner('runtime-fn', send)(payload);
+    const result = await createLambdaCallableFunctionRunner('runtime-fn', send)(payload, tenant);
     expect(result).toEqual({ outcome: 'error', errorClass: 'ValueError', printed: 'x', durationMs: 12, startMs: 7 });
     const input = send.mock.calls[0][0].input;
     expect(input.FunctionName).toBe('runtime-fn');
     expect(input.InvocationType).toBe('RequestResponse');
+    expect(input.TenantId).toBe(createHash('sha256').update('user-1:3f2a9c').digest('hex'));
     expect(JSON.parse(Buffer.from(input.Payload as Uint8Array).toString('utf8'))).toEqual(payload);
   });
 
@@ -57,10 +61,24 @@ describe('createLambdaCallableFunctionRunner', () => {
       async () => ({ Payload: encode({ outcome: 'ok', reason: 'guest text', durationMs: 1 }) }),
     ];
     for (const send of replies) {
-      await expect(createLambdaCallableFunctionRunner('runtime-fn', send)(payload)).rejects.toThrow(
+      await expect(createLambdaCallableFunctionRunner('runtime-fn', send)(payload, tenant)).rejects.toThrow(
         /^Callable function runtime invocation failed$/
       );
     }
+  });
+});
+
+describe('callableFunctionTenantId', () => {
+  it('is one id per caller and code hash', () => {
+    const ids = [
+      callableFunctionTenantId(tenant),
+      callableFunctionTenantId({ ...tenant }),
+      callableFunctionTenantId({ ...tenant, callerUserId: 'user-2' }),
+      callableFunctionTenantId({ ...tenant, codeHash: '3f2a9d' }),
+    ];
+    expect(ids[0]).toMatch(/^[0-9a-f]{64}$/);
+    expect(ids[1]).toBe(ids[0]);
+    expect(new Set(ids).size).toBe(3);
   });
 });
 
@@ -154,7 +172,7 @@ describe('selectCallableFunctionRunner', () => {
       CALLABLE_FUNCTION_PYODIDE_DIR: '/srv/pyodide',
     } as NodeJS.ProcessEnv);
     expect(runner).not.toBeNull();
-    await expect(runner!(payload)).rejects.toThrow(/^Callable function runtime invocation failed$/);
+    await expect(runner!(payload, tenant)).rejects.toThrow(/^Callable function runtime invocation failed$/);
     expect(lambdaSend).toHaveBeenCalledTimes(1);
     expect(lambdaSend.mock.calls[0][0].input.FunctionName).toBe('runtime-fn');
     expect(runCallableFunctionInChild).not.toHaveBeenCalled();
@@ -163,7 +181,7 @@ describe('selectCallableFunctionRunner', () => {
   it('picks the in-process runner when only the child paths are set, and none when they are not', async () => {
     vi.mocked(runCallableFunctionInChild).mockResolvedValue({ outcome: 'ok', durationMs: 1 });
     const env = { CALLABLE_FUNCTION_CHILD_PATH: '/srv/child.ts', CALLABLE_FUNCTION_PYODIDE_DIR: '/srv/pyodide' };
-    await selectCallableFunctionRunner(env as NodeJS.ProcessEnv)!(payload);
+    await selectCallableFunctionRunner(env as NodeJS.ProcessEnv)!(payload, tenant);
     expect(runCallableFunctionInChild).toHaveBeenCalledWith(payload, {
       childPath: '/srv/child.ts',
       pyodideDir: '/srv/pyodide',

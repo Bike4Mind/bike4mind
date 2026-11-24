@@ -10,6 +10,10 @@ import { SessionStore } from './SessionStore';
 import type { AccessStore } from './tools/AccessStore';
 import { ApprovalGate } from './tools/ApprovalGate';
 
+vi.mock('../git/hostGitArgs', async importOriginal =>
+  (await import('./plainFolderGit.testHelper')).skipGitOutsideRepositories(await importOriginal())
+);
+
 function frame(payload: unknown): string {
   return `data: ${typeof payload === 'string' ? payload : JSON.stringify(payload)}\n\n`;
 }
@@ -256,6 +260,47 @@ describe('ChatService app-control tools', () => {
     expect(prompts.every(call => call?.approvalIrreversible === true)).toBe(true);
   });
 
+  it('deletes a batch of conversations behind a single approval', async () => {
+    const mine = await codeSession(projectA);
+    const targets = [await codeSession(projectA), await codeSession(projectA), await codeSession(projectA)];
+    const elsewhere = await codeSession(projectB);
+    const ids = [...targets.map(target => target.id), elsewhere.id];
+
+    await service.send(mine.id, 'tidy all');
+    callTool(await awaitStreamOf('tidy all'), 'c1', 'session_delete', { session_ids: ids });
+    await vi.waitUntil(() => settled('session_delete').length === 1, { timeout: 5000, interval: 5 });
+
+    expect(asked.filter(entry => entry.toolName === 'session_delete')).toHaveLength(1);
+    for (const target of targets) expect(await store.get(target.id)).toBeNull();
+    expect(await store.get(elsewhere.id)).not.toBeNull();
+    const preview = settled('session_delete')[0]?.preview ?? '';
+    expect(preview).toContain('Deleted 3 of 4 conversations');
+    expect(preview).toContain(elsewhere.id);
+
+    const prompt = events.flatMap(event =>
+      event.type === 'tool-start' && event.call.name === 'session_delete' && event.call.approvalId ? [event.call] : []
+    )[0];
+    expect(prompt?.approvalIrreversible).toBe(true);
+    expect(prompt?.approvalDetail).toContain('these 4 conversations');
+  });
+
+  it('refuses a batch over the cap, or one naming the caller, without deleting anything', async () => {
+    const mine = await codeSession(projectA);
+    const other = await codeSession(projectA);
+
+    await service.send(mine.id, 'too many');
+    const tooMany = Array.from({ length: 26 }, (_, index) => `missing-${index}`);
+    callTool(await awaitStreamOf('too many'), 'c1', 'session_delete', { session_ids: [other.id, ...tooMany] });
+    await vi.waitUntil(() => settled('session_delete').length === 1, { timeout: 5000, interval: 5 });
+    expect(JSON.stringify(settled('session_delete')[0])).toMatch(/at most 25/);
+
+    callTool(await awaitStreamOf('too many'), 'c2', 'session_delete', { session_ids: [other.id, mine.id] });
+    await vi.waitUntil(() => settled('session_delete').length === 2, { timeout: 5000, interval: 5 });
+    expect(JSON.stringify(settled('session_delete')[1])).toMatch(/cannot delete itself/);
+    expect(asked.filter(entry => entry.toolName === 'session_delete')).toHaveLength(0);
+    expect(await store.get(other.id)).not.toBeNull();
+  });
+
   it('tells a parent that a spawned session finished, with its reply quoted as data, once the parent is idle', async () => {
     const parent = await codeSession(projectA);
     await service.send(parent.id, 'delegate it');
@@ -361,7 +406,9 @@ describe('ChatService app-control tools', () => {
       const mine = await codeSession(projectA);
 
       await service.send(mine.id, 'name yourself');
-      callTool(await awaitStreamOf('name yourself'), 'c1', 'session_rename', { title: '  #12 | PR#34 | rename tool  ' });
+      callTool(await awaitStreamOf('name yourself'), 'c1', 'session_rename', {
+        title: '  #12 | PR#34 | rename tool  ',
+      });
       await vi.waitUntil(() => settled('session_rename').length === 1, { timeout: 5000, interval: 5 });
       expect(await store.get(mine.id)).toMatchObject({
         title: '#12 | PR#34 | rename tool',

@@ -37,9 +37,9 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.READ_NOTEBOOKS, ApiKeySco
         { id: artifactId, includeContent: false, includeVersions: false },
         {
           db: {
-            artifacts: artifactRepository as any,
-            artifactContents: artifactContentRepository as any,
-            artifactVersions: artifactVersionRepository as any,
+            artifacts: artifactRepository,
+            artifactContents: artifactContentRepository,
+            artifactVersions: artifactVersionRepository,
           },
         }
       );
@@ -91,9 +91,9 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.READ_NOTEBOOKS, ApiKeySco
         { id: artifactId, includeContent: true, includeVersions: false },
         {
           db: {
-            artifacts: artifactRepository as any,
-            artifactContents: artifactContentRepository as any,
-            artifactVersions: artifactVersionRepository as any,
+            artifacts: artifactRepository,
+            artifactContents: artifactContentRepository,
+            artifactVersions: artifactVersionRepository,
           },
         }
       );
@@ -103,25 +103,21 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.READ_NOTEBOOKS, ApiKeySco
       }
 
       // Create new version by updating the artifact
-      const updateData: any = {
-        versionTag: validatedData.versionTag,
-        // If content is provided, use it; otherwise keep existing content
-        ...(validatedData.content && { content: validatedData.content }),
-      };
-
       const updatedArtifact = await artifactService.update(
         userId,
         {
           id: artifactId,
-          ...updateData,
+          versionTag: validatedData.versionTag,
+          // If content is provided, use it; otherwise keep existing content
+          ...(validatedData.content && { content: validatedData.content }),
           createNewVersion: true,
           versionMessage: validatedData.changeDescription || `Version ${artifact.artifact.version + 1}`,
         },
         {
           db: {
-            artifacts: artifactRepository as any,
-            artifactContents: artifactContentRepository as any,
-            artifactVersions: artifactVersionRepository as any,
+            artifacts: artifactRepository,
+            artifactContents: artifactContentRepository,
+            artifactVersions: artifactVersionRepository,
           },
         }
       );

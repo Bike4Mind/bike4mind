@@ -36,16 +36,21 @@ const SAML_CONFIG = {
 /**
  * Register a strategy and invoke its verify function directly with a decoded profile.
  * That is exactly what @node-saml/passport-saml does once an assertion validates, so this
- * exercises the bind on the real code path without minting signed XML.
+ * exercises the bind on the real code path without minting signed XML. The profile carries
+ * the configured issuer unless a test overrides it.
  */
-async function verifyProfile(idp: { _id: string; emailDomain: string }, profile: Record<string, unknown>) {
-  const strategyName = setupSamlStrategy({ ...idp, samlConfig: SAML_CONFIG });
+async function verifyProfile(
+  idp: { _id: string; emailDomain: string },
+  profile: Record<string, unknown>,
+  samlConfig = SAML_CONFIG
+) {
+  const strategyName = setupSamlStrategy({ ...idp, samlConfig });
   // Reaching into passport's registry is the only way to call the verify function the
   // strategy was constructed with.
   const strategy = (passport as any)._strategy(strategyName);
 
   return new Promise<{ err: unknown; user: unknown; info: any }>(resolve => {
-    strategy._signonVerify(profile, (err: unknown, user: unknown, info: unknown) => {
+    strategy._signonVerify({ issuer: SAML_CONFIG.issuer, ...profile }, (err: unknown, user: unknown, info: unknown) => {
       resolve({ err, user, info });
     });
   });
@@ -102,6 +107,37 @@ describe('setupSamlStrategy - IDP email-domain bind', () => {
       expect.any(Function),
       expect.objectContaining({ strategy: AuthStrategy.SAML, samlIdentityProviderId: 'idp-a' })
     );
+  });
+});
+
+describe('setupSamlStrategy - IDP issuer bind', () => {
+  it.each([
+    ['another IDP', 'https://idp.b.example/metadata'],
+    ['no issuer', undefined],
+  ])('refuses an assertion naming %s as its issuer, before any account lookup', async (_label, issuer) => {
+    const { user, info } = await verifyProfile(
+      { _id: 'idp-a', emailDomain: 'a.example' },
+      { issuer, nameID: 'user@a.example', email: 'user@a.example' }
+    );
+
+    expect(user).toBeFalsy();
+    expect(info).toEqual({ reason: 'idp_issuer_mismatch' });
+    expect(mockAuthenticate).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['the asserted issuer', { issuer: `\n  ${SAML_CONFIG.issuer}\n` }, SAML_CONFIG],
+    ['the configured issuer', {}, { ...SAML_CONFIG, issuer: `${SAML_CONFIG.issuer} \n` }],
+  ])('ignores whitespace around %s', async (_label, issuer, samlConfig) => {
+    mockAuthenticate.mockImplementation(async (_at, _rt, _profile, done) => done(null, { id: 'u1' }));
+
+    const { user } = await verifyProfile(
+      { _id: 'idp-a', emailDomain: 'a.example' },
+      { ...issuer, nameID: 'user@a.example', email: 'user@a.example' },
+      samlConfig
+    );
+
+    expect(user).toEqual({ id: 'u1' });
   });
 });
 
