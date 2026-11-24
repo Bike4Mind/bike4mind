@@ -790,7 +790,7 @@ describe('GitHubService', () => {
         ...(pr ? { pull_request: {} } : {}),
       });
 
-      const feedPages = (pages: unknown[][]) =>
+      const feedPages = (pages: unknown[][], lastHasNext = false) =>
         mockOctokit.paginate.mockImplementation(
           async (
             _method: unknown,
@@ -799,9 +799,11 @@ describe('GitHubService', () => {
           ) => {
             const out: unknown[] = [];
             let stopped = false;
-            for (const data of pages) {
+            for (const [i, data] of pages.entries()) {
               if (stopped) break;
-              out.push(...mapFn({ data }, () => (stopped = true)));
+              const hasNext = i < pages.length - 1 || lastHasNext;
+              const headers = hasNext ? { link: '<https://api.github.com/next>; rel="next"' } : {};
+              out.push(...mapFn({ data, headers } as never, () => (stopped = true)));
             }
             return out;
           }
@@ -832,10 +834,29 @@ describe('GitHubService', () => {
         expect(result.truncated).toBe(true);
       });
 
-      it('returns empty for a repo outside the whitelist without calling GitHub', async () => {
-        const result = await service.listAllIssues('other/repo', { state: 'open' });
+      it('reports no truncation when the last page is exactly full', async () => {
+        const full = (start: number) => Array.from({ length: 100 }, (_, i) => raw(start + i));
+        feedPages([full(1), full(101)]);
 
-        expect(result).toEqual({ issues: [], truncated: false });
+        const result = await service.listAllIssues('owner/repo', { state: 'open', maxPages: 2 });
+
+        expect(result.issues).toHaveLength(200);
+        expect(result.truncated).toBe(false);
+      });
+
+      it.each([0, -3, Number.NaN, undefined])('clamps maxPages %s so at least one page is read', async maxPages => {
+        const full = Array.from({ length: 100 }, (_, i) => raw(i + 1));
+        feedPages([full, full], true);
+
+        const result = await service.listAllIssues('owner/repo', { state: 'open', maxPages });
+
+        expect(result.issues).toHaveLength(maxPages === undefined || Number.isNaN(maxPages) ? 200 : 100);
+      });
+
+      it('throws for a repo outside the whitelist without calling GitHub', async () => {
+        await expect(service.listAllIssues('other/repo', { state: 'open' })).rejects.toBeInstanceOf(
+          GitHubRepoNotAllowedError
+        );
         expect(mockOctokit.paginate).not.toHaveBeenCalled();
       });
     });
@@ -1932,6 +1953,9 @@ describe('GitHubService', () => {
         const denied = 'other/repo';
         await expect(service.listContributors(denied)).rejects.toBeInstanceOf(GitHubRepoNotAllowedError);
         await expect(service.getCommitActivity(denied)).rejects.toBeInstanceOf(GitHubRepoNotAllowedError);
+        await expect(service.listAllIssues(denied, { state: 'open' })).rejects.toBeInstanceOf(
+          GitHubRepoNotAllowedError
+        );
         await expect(service.getPullRequest(denied, 1)).rejects.toBeInstanceOf(GitHubRepoNotAllowedError);
         await expect(service.listCommitsByAuthor(denied, { author: 'a' })).rejects.toBeInstanceOf(
           GitHubRepoNotAllowedError

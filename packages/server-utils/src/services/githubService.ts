@@ -1388,21 +1388,19 @@ export class GitHubService {
 
   /**
    * Every issue across all pages, pull requests dropped after collection. Stops at maxPages
-   * and reports `truncated` when GitHub still had a full page left. Rate limits throw typed errors.
+   * and reports `truncated` when the response still links a next page. A denied repo and
+   * rate limits throw typed errors.
    */
   async listAllIssues(
     repo: string,
     params: { state: 'open' | 'closed' | 'all'; since?: string; maxPages?: number }
   ): Promise<{ issues: GitHubIssue[]; truncated: boolean }> {
-    if (!this.isRepoAllowed(repo)) {
-      return { issues: [], truncated: false };
-    }
-
-    const { owner, repo: repoName } = this.parseRepo(repo);
     const perPage = 100;
-    const maxPages = params.maxPages ?? 50;
+    const requested = Math.floor(params.maxPages ?? NaN);
+    const maxPages = Number.isFinite(requested) ? Math.max(1, requested) : 50;
 
     return this.executeRead(async () => {
+      const { owner, repo: repoName } = this.assertRepoAllowed(repo);
       let pages = 0;
       let truncated = false;
       const items = await this.octokit.paginate(
@@ -1411,7 +1409,7 @@ export class GitHubService {
         (response, done) => {
           pages++;
           if (pages >= maxPages) {
-            truncated = response.data.length >= perPage;
+            truncated = /rel="next"/.test(String(response.headers?.link ?? ''));
             done();
           }
           return response.data;
