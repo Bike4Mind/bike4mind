@@ -27,10 +27,10 @@ vi.mock('@client/server/middlewares/baseApi', () => ({
       const handler = handlers[req.method];
       if (!handler) return res.status(405).end();
       return handler(req, res);
-    }) as Handler & Record<string, (handler: unknown) => unknown>;
+    }) as Handler & Record<string, (...handlers: unknown[]) => unknown>;
     fn.use = () => fn;
     for (const method of ['get', 'post', 'put', 'delete']) {
-      fn[method] = (handler: unknown) => ((handlers[method.toUpperCase()] = handler as Handler), fn);
+      fn[method] = (...hs: unknown[]) => ((handlers[method.toUpperCase()] = hs[hs.length - 1] as Handler), fn);
     }
     return fn;
   },
@@ -92,13 +92,24 @@ describe('template image and free-run routes', () => {
     for (const options of h.baseApiOptions) expect(options).toEqual({ auth: 'jwtOnly' });
   });
 
-  it('only generation has a rate limiter: 10 an hour in its own bucket, none for a blocked tier', async () => {
-    expect(h.rateLimitOpts.map(o => o.bucket)).toEqual(['skill-market-template-image']);
-    const [{ limit, windowMs }] = h.rateLimitOpts;
-    expect(windowMs).toBe(60 * 60 * 1000);
-    expect(await limit({ user: USER })).toBe(10);
-    h.rateTier.mockResolvedValueOnce(0);
-    expect(await limit({ user: USER })).toBe(0);
+  it('limits the costly image routes hourly in their own buckets, none for a blocked tier', async () => {
+    const byBucket = Object.fromEntries(h.rateLimitOpts.map(o => [o.bucket, o]));
+    expect(Object.keys(byBucket).sort()).toEqual([
+      'skill-market-template-image',
+      'skill-market-template-image-from-generation',
+      'skill-market-template-image-upload',
+    ]);
+    const expected: Record<string, number> = {
+      'skill-market-template-image': 10,
+      'skill-market-template-image-from-generation': 30,
+      'skill-market-template-image-upload': 30,
+    };
+    for (const [bucket, { limit, windowMs }] of Object.entries(byBucket)) {
+      expect(windowMs).toBe(60 * 60 * 1000);
+      expect(await limit({ user: USER })).toBe(expected[bucket]);
+      h.rateTier.mockResolvedValueOnce(0);
+      expect(await limit({ user: USER })).toBe(0);
+    }
   });
 
   it.each([
