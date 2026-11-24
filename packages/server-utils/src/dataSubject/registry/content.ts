@@ -95,6 +95,7 @@ export const contentHolders = {
   DelegatedItem: {
     kind: 'holder',
     references: [{ path: 'userId', matchBy: 'userId', action: 'deleteDocument' }],
+    secretPaths: ['claimToken'],
     // The person's own uploaded files, which their FabFile entries cover.
     unrelatedPaths: ['fileIds'],
   },

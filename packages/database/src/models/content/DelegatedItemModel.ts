@@ -19,8 +19,10 @@ export type IDelegatedItem = {
   failureReason: string | null;
   model: string | null;
   settledAt: Date | null;
-  /** Processing lease: while it is in the future, another delivery of the item's event skips it. */
+  /** Processing lease: while it is in the future, another delivery of the item's event retries later. */
   claimedUntil: Date | null;
+  claimToken?: string | null;
+  claimWriteVersion?: number;
   /** When a ready brief carried the settled item; null until then. */
   briefedAt: Date | null;
   createdAt: Date;
@@ -43,6 +45,8 @@ const schema = new Schema<IDelegatedItem>(
     model: { type: String, default: null },
     settledAt: { type: Date, default: null },
     claimedUntil: { type: Date, default: null },
+    claimToken: { type: String, default: null },
+    claimWriteVersion: { type: Number, default: 0 },
     briefedAt: { type: Date, default: null },
   },
   { timestamps: true, versionKey: false, collection: 'DelegatedItem' }
@@ -72,23 +76,82 @@ export const delegatedItemRepository = {
     return DelegatedItemModel.findOne({ _id: id, userId }).lean();
   },
 
-  /** Takes the processing lease on a pending item; false while another delivery holds it, or once it settled. */
-  async claim(id: string, now: Date, leaseMs: number): Promise<boolean> {
+  /** Each attempt has a stable token; expiry changes on renewal. */
+  async claim(id: string, now: Date, leaseMs: number, token: string): Promise<boolean> {
     const result = await DelegatedItemModel.updateOne(
       { _id: id, status: 'pending', $or: [{ claimedUntil: null }, { claimedUntil: { $lte: now } }] },
-      { $set: { claimedUntil: new Date(now.getTime() + leaseMs) } },
+      { $set: { claimToken: token, claimedUntil: new Date(now.getTime() + leaseMs) } },
       { runValidators: true }
     );
     return result.modifiedCount === 1;
   },
 
-  /** Releases only the lease ending at `leaseEnd`, so a slow delivery cannot clear a newer delivery's claim. */
-  async releaseClaim(id: string, leaseEnd: Date): Promise<void> {
-    await DelegatedItemModel.updateOne(
-      { _id: id, status: 'pending', claimedUntil: leaseEnd },
-      { $set: { claimedUntil: null } },
+  async renewClaim(id: string, token: string, expectedExpiry: Date, now: Date, leaseMs: number): Promise<Date | null> {
+    const expiresAt = new Date(now.getTime() + leaseMs);
+    const result = await DelegatedItemModel.updateOne(
+      { _id: id, status: 'pending', claimToken: token, claimedUntil: { $eq: expectedExpiry, $gt: now } },
+      { $set: { claimedUntil: expiresAt } },
       { runValidators: true }
     );
+    return result.matchedCount === 1 ? expiresAt : null;
+  },
+
+  async releaseClaim(id: string, leaseEnd: Date, token: string): Promise<void> {
+    await DelegatedItemModel.updateOne(
+      { _id: id, status: 'pending', claimToken: token, claimedUntil: leaseEnd },
+      { $set: { claimedUntil: null, claimToken: null } },
+      { runValidators: true }
+    );
+  },
+
+  /** Stop/drain the attempt first. Its token also covers a renewal whose acknowledgement was lost. */
+  async releaseClaimOwned(id: string, token: string): Promise<boolean> {
+    const result = await DelegatedItemModel.updateOne(
+      { _id: id, status: 'pending', claimToken: token },
+      { $set: { claimedUntil: null, claimToken: null } },
+      { runValidators: true }
+    );
+    return result.matchedCount === 1;
+  },
+
+  /** A real row write serializes paid admission with takeover in the caller's reservation transaction. */
+  async fenceClaim(id: string, token: string, at: Date, session?: mongoose.mongo.ClientSession): Promise<boolean> {
+    const result = await DelegatedItemModel.updateOne(
+      { _id: id, status: 'pending', claimToken: token, claimedUntil: { $gt: at } },
+      { $inc: { claimWriteVersion: 1 } },
+      { ...(session ? { session } : {}), runValidators: true }
+    );
+    return result.matchedCount === 1;
+  },
+
+  async markSettledOwned(
+    id: string,
+    token: string,
+    outcome: DelegatedItemOutcome,
+    at: Date,
+    session?: mongoose.mongo.ClientSession
+  ): Promise<boolean> {
+    const result = await DelegatedItemModel.updateOne(
+      { _id: id, status: 'pending', claimToken: token, claimedUntil: { $gt: at } },
+      { $set: { ...outcome, settledAt: at, claimedUntil: null, claimToken: null } },
+      { ...(session ? { session } : {}), runValidators: true }
+    );
+    return result.modifiedCount === 1;
+  },
+
+  async markFailedOwned(
+    id: string,
+    token: string,
+    failureReason: string,
+    at: Date,
+    session?: mongoose.mongo.ClientSession
+  ): Promise<boolean> {
+    const result = await DelegatedItemModel.updateOne(
+      { _id: id, status: 'pending', claimToken: token, claimedUntil: { $gt: at } },
+      { $set: { status: 'failed', failureReason, settledAt: at, claimedUntil: null, claimToken: null } },
+      { ...(session ? { session } : {}), runValidators: true }
+    );
+    return result.modifiedCount === 1;
   },
 
   /** Only a pending item settles, so a redelivered event never overwrites an outcome. */
@@ -113,7 +176,12 @@ export const delegatedItemRepository = {
   /** Fails the owner's items still pending from before `before`, so a lost event cannot pin one to every brief. */
   async failStale(userId: string, before: Date, at: Date): Promise<number> {
     const result = await DelegatedItemModel.updateMany(
-      { userId, status: 'pending', createdAt: { $lt: before } },
+      {
+        userId,
+        status: 'pending',
+        createdAt: { $lt: before },
+        $or: [{ claimedUntil: null }, { claimedUntil: { $lte: at } }],
+      },
       { $set: { status: 'failed', failureReason: 'timed_out', settledAt: at } },
       { runValidators: true }
     );

@@ -1,8 +1,11 @@
+import { randomUUID } from 'node:crypto';
+import type { ClientSession } from 'mongoose';
 import { withEventContext } from '@workers/utils/eventContext';
 import { HTTPError, HttpStatus } from '@bike4mind/common';
 import { DelegationEvents } from '@bike4mind/server-utils/utils/eventBus';
 import {
   delegatedItemRepository,
+  withTransaction,
   fabFileChunkRepository,
   fabFileRepository,
   userRepository,
@@ -16,6 +19,7 @@ import type { CompletionInfo } from '@bike4mind/llm-adapters';
 import type { Logger } from '@bike4mind/observability';
 import { recordSessionOperationalUsage } from '@workers/events/recordSessionOperationalUsage';
 import { payerCanFundSessionOperation } from '@workers/events/sessionOperationalCreditGate';
+import { DelegationOwnershipLostError, startDelegationLease } from './delegationLease';
 import { buildDelegationPrompt, parseDelegationReply, type DelegationContent } from './delegationProcess.prompt';
 
 /**
@@ -24,8 +28,8 @@ import { buildDelegationPrompt, parseDelegationReply, type DelegationContent } f
  * content, mirroring email triage; there is no tool loop, so nothing is sent or changed on the user's behalf.
  * The outcome waits for the next brief (apps/workers/src/events/briefCompose.ts).
  *
- * Failures settle the row as `failed` and are not rethrown, except content that is still being extracted:
- * that one throws so the async invoke retries, until the item is old enough to go ahead without it.
+ * Failures settle the row as `failed`. Pending busy deliveries, unfinished content and uncertain
+ * pre-provider ownership throw so the transport retries; completed provider output is never re-invoked.
  */
 
 const CONTENT_WAIT_MS = 90 * 1000; // Async Lambda retries land ~1 and ~3 minutes in, so the last one proceeds.
@@ -34,7 +38,7 @@ const FILE_CHARS = 8_000;
 const FILE_CHUNKS = 40;
 const MODEL_MAX_TOKENS = 800;
 const FETCH_TIMEOUT_MS = 60_000;
-// The Lambda timeout (infra/eventBus.ts): a run that timed out has let go by the time its retry lands.
+// Renew during healthy long-running self-host calls; a crashed attempt still expires after three minutes.
 const CLAIM_LEASE_MS = 3 * 60 * 1000;
 
 type LogLike = Pick<Logger, 'info' | 'warn' | 'error'>;
@@ -47,13 +51,31 @@ export class ContentNotReadyError extends HTTPError {
   }
 }
 
+/** Retain the transport delivery while a pending item still has a processing lease. */
+export class DelegationClaimBusyError extends HTTPError {
+  constructor(delegationId: string) {
+    super(HttpStatus.Conflict, `Delegation ${delegationId} is still being processed`);
+    this.name = 'DelegationClaimBusyError';
+  }
+}
+
 export type DelegationProcessDeps = {
   now: () => Date;
-  items: Pick<typeof delegatedItemRepository, 'findById' | 'claim' | 'releaseClaim' | 'markSettled' | 'markFailed'>;
+  items: Pick<
+    typeof delegatedItemRepository,
+    | 'findById'
+    | 'claim'
+    | 'renewClaim'
+    | 'releaseClaim'
+    | 'releaseClaimOwned'
+    | 'fenceClaim'
+    | 'markSettledOwned'
+    | 'markFailedOwned'
+  >;
   /** Whether the call may run: 'ok', or why not (AI access held, or the balance cannot cover it). */
   canRun(userId: string): Promise<'ok' | 'ai_access_held' | 'insufficient_credits'>;
   /** The page's text, billed to the user like their own web fetch. */
-  fetchPage(userId: string, url: string): Promise<string>;
+  fetchPage(userId: string, url: string, admit: (session?: ClientSession) => Promise<void>): Promise<string>;
   /** The owner's live file, or null. */
   findFile(
     id: string,
@@ -61,17 +83,32 @@ export type DelegationProcessDeps = {
   ): Promise<{ fileName: string; mimeType?: string; moderationStatus?: string } | null>;
   /** Extracted text of the file; empty until extraction has run. */
   fileText(id: string): Promise<string>;
-  complete(userId: string, delegationId: string, prompt: string): Promise<{ reply: string; model: string }>;
+  complete(
+    userId: string,
+    delegationId: string,
+    prompt: string,
+    signal: AbortSignal
+  ): Promise<{
+    reply: string;
+    model: string;
+    /** Database accounting only, executed after the owned terminal CAS in the same transaction. */
+    recordUsage: () => Promise<void>;
+  }>;
   logger: LogLike;
 };
 
 const clip = (text: string, max: number): string => (text.length > max ? `${text.slice(0, max)}\n[truncated]` : text);
 
-async function readPage(deps: DelegationProcessDeps, item: IDelegatedItem): Promise<string | null> {
+async function readPage(
+  deps: DelegationProcessDeps,
+  item: IDelegatedItem,
+  admit: (session?: ClientSession) => Promise<void>
+): Promise<string | null> {
   if (!item.url) return null;
   try {
-    return clip(await deps.fetchPage(item.userId, item.url), PAGE_CHARS);
+    return clip(await deps.fetchPage(item.userId, item.url, admit), PAGE_CHARS);
   } catch (error) {
+    if (error instanceof DelegationOwnershipLostError) throw error;
     deps.logger.warn('[Delegation] could not read the shared link', {
       delegationId: item._id.toString(),
       error: error instanceof Error ? error.message : String(error),
@@ -93,11 +130,15 @@ async function readFile(deps: DelegationProcessDeps, item: IDelegatedItem, id: s
   return { name, body: '(its text was not ready in time)' };
 }
 
-async function loadContent(deps: DelegationProcessDeps, item: IDelegatedItem): Promise<DelegationContent> {
+async function loadContent(
+  deps: DelegationProcessDeps,
+  item: IDelegatedItem,
+  admit: (session?: ClientSession) => Promise<void>
+): Promise<DelegationContent> {
   const waiting = deps.now().getTime() - item.createdAt.getTime() < CONTENT_WAIT_MS;
   const files = [];
   for (const id of item.fileIds) files.push(await readFile(deps, item, id, waiting));
-  return { url: item.url, page: await readPage(deps, item), text: item.text, files };
+  return { url: item.url, page: await readPage(deps, item, admit), text: item.text, files };
 }
 
 export async function processDelegation(
@@ -114,58 +155,129 @@ export async function processDelegation(
     logger.info('[Delegation] item already settled; skipping redelivery', { delegationId: input.delegationId });
     return;
   }
-  // EventBridge can deliver twice at once; without the lease both would run, and bill, the same work.
+  const token = randomUUID();
   const claimedAt = deps.now();
-  if (!(await items.claim(input.delegationId, claimedAt, CLAIM_LEASE_MS))) {
-    logger.info('[Delegation] another delivery holds the item; skipping', { delegationId: input.delegationId });
-    return;
+  if (!(await items.claim(input.delegationId, claimedAt, CLAIM_LEASE_MS, token))) {
+    const current = await items.findById(input.delegationId);
+    if (!current || current.userId !== input.userId || current.status !== 'pending') return;
+    // Returning here consumes the queue event, including a retry of an uncertain renewal.
+    throw new DelegationClaimBusyError(input.delegationId);
   }
-
-  try {
-    await settleClaimed(deps, input.delegationId, item);
-  } catch (error) {
-    // Hand the lease back before the retry lands, or that retry would skip the item as held by another delivery.
-    const leaseEnd = new Date(claimedAt.getTime() + CLAIM_LEASE_MS);
-    await items.releaseClaim(input.delegationId, leaseEnd).catch((releaseError: unknown) => {
-      logger.error('[Delegation] could not release the claim', { delegationId: input.delegationId, releaseError });
-    });
-    throw error;
-  }
-}
-
-async function settleClaimed(deps: DelegationProcessDeps, delegationId: string, item: IDelegatedItem): Promise<void> {
-  const { items, logger } = deps;
-  const gate = await deps.canRun(item.userId);
-  if (gate !== 'ok') {
-    await items.markFailed(delegationId, gate, deps.now());
-    return;
-  }
-
-  let billed = false;
-  try {
-    const content = await loadContent(deps, item);
-    const { reply, model } = await deps.complete(
-      item.userId,
-      delegationId,
-      buildDelegationPrompt(item.intent, content)
-    );
-    billed = true;
-    const outcome = parseDelegationReply(reply);
-    await items.markSettled(delegationId, { ...outcome, model }, deps.now());
-    logger.info('[Delegation] item settled', { delegationId, status: outcome.status });
-  } catch (error) {
-    if (error instanceof ContentNotReadyError) throw error;
-    logger.error('[Delegation] processing failed', { delegationId, error });
+  const lease = startDelegationLease({
+    id: input.delegationId,
+    token,
+    now: deps.now,
+    leaseMs: CLAIM_LEASE_MS,
+    expiresAt: new Date(claimedAt.getTime() + CLAIM_LEASE_MS),
+    renewEveryMs: 60_000,
+    renew: items.renewClaim,
+    onLost: error => logger.warn('[Delegation] processing ownership lost', { delegationId: input.delegationId, error }),
+  });
+  const assertOwner = () => lease.assertActive();
+  const admit = async (session?: ClientSession) => {
     try {
-      await items.markFailed(delegationId, 'processing_failed', deps.now());
-    } catch (markError) {
-      // Once the model has run and billed, a retry would run and bill it again; the stale sweep fails the item instead.
-      if (!billed) throw markError;
-      logger.error('[Delegation] could not record the outcome; leaving the item to the stale sweep', {
-        delegationId,
-        markError,
-      });
+      assertOwner();
+      if (!(await items.fenceClaim(input.delegationId, token, deps.now(), session))) {
+        throw new DelegationOwnershipLostError();
+      }
+      assertOwner();
+    } catch (error) {
+      lease.lose(error);
+      throw new DelegationOwnershipLostError();
     }
+  };
+  // A completed provider is never invoked again just because final database persistence failed.
+  let providerCompleted = false;
+  let failureReason = 'processing_failed';
+  let gateChecked = false;
+  let completed: Awaited<ReturnType<DelegationProcessDeps['complete']>> | undefined;
+  const finalize = async (outcome: ReturnType<typeof parseDelegationReply> | null, reason: string) => {
+    await lease.stop();
+    assertOwner();
+    return withTransaction(async session => {
+      assertOwner();
+      const changed =
+        outcome && completed
+          ? await items.markSettledOwned(
+              input.delegationId,
+              token,
+              { ...outcome, model: completed.model },
+              deps.now(),
+              session
+            )
+          : await items.markFailedOwned(input.delegationId, token, reason, deps.now(), session);
+      if (!changed) throw new DelegationOwnershipLostError();
+      // The terminal write above owns the row until commit. No network/provider work occurs here.
+      await completed?.recordUsage();
+    });
+  };
+  try {
+    const gate = await deps.canRun(item.userId);
+    gateChecked = true;
+    assertOwner();
+    if (gate !== 'ok') {
+      failureReason = gate;
+      await finalize(null, gate);
+      return;
+    }
+    const content = await loadContent(deps, item, admit);
+    assertOwner();
+    completed = await deps.complete(
+      item.userId,
+      input.delegationId,
+      buildDelegationPrompt(item.intent, content),
+      lease.signal
+    );
+    providerCompleted = true;
+    assertOwner();
+    const outcome = parseDelegationReply(completed.reply);
+    await finalize(outcome, 'processing_failed');
+    logger.info('[Delegation] item settled', { delegationId: input.delegationId, status: outcome.status });
+  } catch (error) {
+    await lease.stop();
+    if (lease.uncertain) {
+      if (providerCompleted) {
+        logger.error('[Delegation] lease uncertain after completed provider; leaving the item to the stale sweep', {
+          delegationId: input.delegationId,
+          error: lease.error,
+        });
+        return;
+      }
+      // Do not guess the expiry: the renewal may have committed before its acknowledgement failed.
+      await items.releaseClaimOwned(input.delegationId, token).catch((releaseError: unknown) => {
+        logger.error('[Delegation] could not release uncertain claim; transport must retry', {
+          delegationId: input.delegationId,
+          releaseError,
+        });
+      });
+      throw lease.error ?? error;
+    }
+    if (lease.lost || error instanceof DelegationOwnershipLostError) return;
+    if (error instanceof ContentNotReadyError || !gateChecked) {
+      await items.releaseClaim(input.delegationId, lease.expiresAt, token).catch((releaseError: unknown) => {
+        logger.error('[Delegation] could not release the claim', { delegationId: input.delegationId, releaseError });
+      });
+      throw error;
+    }
+    logger.error('[Delegation] processing failed', { delegationId: input.delegationId, error });
+    try {
+      await finalize(null, failureReason);
+    } catch (markError) {
+      if (markError instanceof DelegationOwnershipLostError || lease.lost) return;
+      if (providerCompleted) {
+        logger.error('[Delegation] could not record the outcome; leaving the item to the stale sweep', {
+          delegationId: input.delegationId,
+          markError,
+        });
+        return;
+      }
+      await items.releaseClaim(input.delegationId, lease.expiresAt, token).catch((releaseError: unknown) => {
+        logger.error('[Delegation] could not release the claim', { delegationId: input.delegationId, releaseError });
+      });
+      throw markError;
+    }
+  } finally {
+    await lease.stop();
   }
 }
 
@@ -183,12 +295,12 @@ export const handler = withEventContext(async (event, logger) => {
         const funded = await payerCanFundSessionOperation({ payerId: userId, operation: 'delegated item', logger });
         return funded ? 'ok' : 'insufficient_credits';
       },
-      fetchPage: async (userId, url) => {
+      fetchPage: async (userId, url, admit) => {
         const user = await userRepository.findById(userId);
         if (!user) throw new Error('No such user');
         const result = await billedWebFetch(
           { caller: { user, logger }, source: 'system' },
-          { url, maxTimeoutMs: FETCH_TIMEOUT_MS }
+          { url, maxTimeoutMs: FETCH_TIMEOUT_MS, admit }
         );
         return result.title ? `# ${result.title}\n\n${webFetchBody(result)}` : webFetchBody(result);
       },
@@ -197,32 +309,34 @@ export const handler = withEventContext(async (event, logger) => {
         const chunks = await fabFileChunkRepository.findTextsByFabFileId(id, { limit: FILE_CHUNKS });
         return chunks.map(chunk => chunk.text).join('\n');
       },
-      complete: async (userId, delegationId, prompt) => {
+      complete: async (userId, delegationId, prompt, signal) => {
         const startTime = Date.now();
         const { modelId, llm, modelInfo } = await OperationsModelService.getOperationsModel({ endUserId: userId });
+        if (signal.aborted) throw new DelegationOwnershipLostError();
         let reply = '';
         let completionInfo: CompletionInfo | undefined;
         await llm.complete(
           modelId,
           [{ role: 'user', content: prompt }],
-          { maxTokens: MODEL_MAX_TOKENS },
+          { maxTokens: MODEL_MAX_TOKENS, abortSignal: signal },
           async (chunks: (string | null | undefined)[], info?: CompletionInfo) => {
             reply += chunks.filter(Boolean).join('');
             if (info) completionInfo = info;
           }
         );
         // The delegation id stands in for the session id: the item belongs to no notebook, and the id keys the receipt.
-        await recordSessionOperationalUsage({
-          userId,
-          sessionId: delegationId,
-          operation: 'delegated_item',
-          modelId,
-          modelInfo,
-          completionInfo,
-          startTime,
-          logger,
-        });
-        return { reply, model: modelId };
+        const recordUsage = () =>
+          recordSessionOperationalUsage({
+            userId,
+            sessionId: delegationId,
+            operation: 'delegated_item',
+            modelId,
+            modelInfo,
+            completionInfo,
+            startTime,
+            logger,
+          });
+        return { reply, model: modelId, recordUsage };
       },
       logger,
     },
