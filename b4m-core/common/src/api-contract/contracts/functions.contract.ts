@@ -38,7 +38,7 @@ const PAGE_422 =
 
 const codeSample = { authToken: 'b4m_live_<key>', streaming: false } as const;
 
-const INVOKE_EXAMPLE = { input: { load: 2000, span: 4, elastic_modulus: 200e9, second_moment: 1e-5 } };
+const INVOKE_EXAMPLE = { input: { load: 2000, span: 4, elastic_modulus: 70e9, second_moment: 1e-5 } };
 
 export const listFunctionsContract = defineEndpoint({
   method: 'get',
