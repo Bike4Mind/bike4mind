@@ -3,6 +3,7 @@ import { Alert, Box, Button, CircularProgress, Typography } from '@mui/joy';
 import { useNavigate, useParams } from '@tanstack/react-router';
 import { useDocumentTitle } from '@client/app/hooks/useDocumentTitle';
 import { useTrySkillTemplate } from '@client/app/hooks/data/skillTemplate';
+import { NEW_NOTEBOOK_DRAFT_KEY, useChatInput } from '@client/app/hooks/useChatInput';
 import { getErrorMessage } from '@client/app/utils/error';
 import { clearFreeRunInput, readFreeRunInput, skillTemplateGoal } from '@client/app/utils/skillTemplateTry';
 
@@ -26,6 +27,8 @@ const SkillTemplateTryPage: FC = () => {
       .then(({ skillName, examplePrompt }) => {
         const goal = skillTemplateGoal(skillName, readFreeRunInput(slug) || examplePrompt);
         clearFreeRunInput(slug);
+        // A saved new-chat draft is restored after `goal` is applied (useMessageDraft) and would replace it.
+        useChatInput.getState().clearDraft(NEW_NOTEBOOK_DRAFT_KEY);
         void navigate({ to: '/new', search: { goal }, replace: true });
       })
       // Shown from the mutation's error state below.
