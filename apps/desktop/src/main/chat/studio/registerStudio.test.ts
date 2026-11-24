@@ -139,7 +139,6 @@ describe('registered Studio authorization', () => {
     expect(upload).toHaveBeenCalledWith('ref.png', 'image/png', expect.any(Buffer));
   });
 
-
   it('prepares and creates once, then refuses both review and authorization replay', async () => {
     const { integration, invoke, draft, paid, prepareText, api } = await setup();
     const submit = vi.spyOn(integration.generation, 'submit');
