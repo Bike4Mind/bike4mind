@@ -69,8 +69,10 @@ const OLLAMA_OFFER: ModelLoadOffer = {
   keepAlive: true,
 };
 
-let root: Root;
-let host: HTMLElement;
+// One root and theme provider for the file: a fresh provider per test re-inserts the theme's global styles,
+// which costs more as the document collects stylesheets. Each test keys a new dialog.
+let root: Root | null = null;
+let dialogKey = 0;
 let stored: ModelSettings;
 let unsupported: UnsupportedModelSetting[];
 let offer: ModelLoadOffer;
@@ -96,15 +98,12 @@ beforeEach(() => {
     },
     models: { getLoadedState: vi.fn(async () => loadedState) },
   };
-  host = document.createElement('div');
-  document.body.appendChild(host);
-  root = createRoot(host);
+  dialogKey += 1;
 });
 
-afterEach(async () => {
-  await act(async () => root.unmount());
-  host.remove();
-});
+const closeDialog = () => act(async () => root?.render(<CssVarsProvider theme={desktopTheme}>{null}</CssVarsProvider>));
+
+afterEach(closeDialog);
 
 const onClose = vi.fn();
 const onSaved = vi.fn();
@@ -112,10 +111,11 @@ const onSaved = vi.fn();
 async function render(option: ChatModelOption | null) {
   onClose.mockReset();
   onSaved.mockReset();
+  root ??= createRoot(document.body.appendChild(document.createElement('div')));
   await act(async () =>
-    root.render(
+    root?.render(
       <CssVarsProvider theme={desktopTheme}>
-        <ModelDefaultsDialog option={option} onClose={onClose} onSaved={onSaved} />
+        <ModelDefaultsDialog key={dialogKey} option={option} onClose={onClose} onSaved={onSaved} />
       </CssVarsProvider>
     )
   );
@@ -456,18 +456,6 @@ describe('ModelDefaultsDialog load options', () => {
     });
   });
 
-  it.each(['40', '1.5', '-1'])('marks a draft count of %s invalid and does not save it', async text => {
-    offer = OLLAMA_OFFER;
-    await render(QWEN);
-    await fill('draft', text);
-    expect(input('draft').getAttribute('aria-invalid')).toBe('true');
-    expect(byTestId('model-defaults-draft-note')?.textContent).toBe('Enter a whole number from 0 to 16.');
-    expect(byTestId<HTMLButtonElement>('model-defaults-save-btn')?.disabled).toBe(true);
-    await fill('draft', '2');
-    expect(input('draft').getAttribute('aria-invalid')).toBe('false');
-    expect(byTestId<HTMLButtonElement>('model-defaults-save-btn')?.disabled).toBe(false);
-  });
-
   it('offers the trained length as a size and stores it, with no Auto cap that repeats Auto', async () => {
     offer = {
       context: {
@@ -532,6 +520,7 @@ describe('ModelDefaultsDialog load options', () => {
     const saveDisabled = () => byTestId<HTMLButtonElement>('model-defaults-save-btn')?.disabled;
     for (const [text, invalid] of [
       ['-', true],
+      ['-1', true],
       ['1e', true],
       ['17', true],
       ['1.5', true],
@@ -541,7 +530,9 @@ describe('ModelDefaultsDialog load options', () => {
     ] as const) {
       await fill('draft', text);
       expect(field.getAttribute('aria-invalid'), text).toBe(String(invalid));
-      if (invalid) expect(saveDisabled(), text).toBe(true);
+      expect(saveDisabled(), text).toBe(invalid);
+      if (invalid)
+        expect(byTestId('model-defaults-draft-note')?.textContent, text).toBe('Enter a whole number from 0 to 16.');
     }
     await fill('draft', '-');
     await fill('draft', '');
@@ -577,8 +568,8 @@ describe('ModelDefaultsDialog load options', () => {
     stored = { context: { mode: 'auto', maxTokens: 32768 } };
     await render(QWEN);
     expect(byTestId('model-defaults-context-select')?.textContent).toBe('Auto, up to 32K tokens');
-    await act(async () => root.unmount());
-    root = createRoot(host);
+    await closeDialog();
+    dialogKey += 1;
     offer = {
       context: { kind: 'ollama', settings: 16384, sizes: [{ size: 16384, tokens: 16384, autoTokens: 16384 }] },
     };
@@ -735,11 +726,16 @@ describe('ModelDefaultsDialog load options', () => {
     await render(QWEN);
     expect(getModelLoadOffer).toHaveBeenLastCalledWith(QWEN.id, undefined);
     const before = getModelLoadOffer.mock.calls.length;
-    await fill('draft', '1');
-    await fill('draft', '12');
-    await fill('draft', '3');
-    expect(getModelLoadOffer).toHaveBeenCalledTimes(before);
-    await act(() => new Promise(resolve => setTimeout(resolve, 300)));
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      await fill('draft', '1');
+      await fill('draft', '12');
+      await fill('draft', '3');
+      expect(getModelLoadOffer).toHaveBeenCalledTimes(before);
+      await act(() => vi.advanceTimersByTimeAsync(300));
+    } finally {
+      vi.useRealTimers();
+    }
     expect(getModelLoadOffer).toHaveBeenCalledTimes(before + 1);
     expect(getModelLoadOffer).toHaveBeenLastCalledWith(QWEN.id, 3);
   });

@@ -39,6 +39,7 @@ const gradedItem = (verdict: 'confirmed_abuse' | 'legitimate_human' | null): Sha
 });
 
 const writeAudit = vi.fn();
+const releaseHolds = vi.fn();
 const logger = { error: vi.fn() } as unknown as Logger;
 
 const change = (overrides: Partial<AccountStatusChange>): AccountStatusChange => ({
@@ -51,7 +52,7 @@ const change = (overrides: Partial<AccountStatusChange>): AccountStatusChange =>
 });
 
 const run = (overrides: Partial<AccountStatusChange>) =>
-  gradeDetectionsForStatusChange(change(overrides), { writeAudit, logger });
+  gradeDetectionsForStatusChange(change(overrides), { writeAudit, logger, releaseHolds });
 
 describe('gradeDetectionsForStatusChange', () => {
   beforeEach(() => {
@@ -60,6 +61,29 @@ describe('gradeDetectionsForStatusChange', () => {
     mockGradeForReinstatement.mockResolvedValue([gradedItem('legitimate_human')]);
     mockRevertSuspensionGrades.mockResolvedValue([gradedItem(null)]);
     writeAudit.mockResolvedValue(null);
+    releaseHolds.mockResolvedValue([]);
+  });
+
+  it("releases the reinstated account's automated holds on the detections it grades legitimate", async () => {
+    releaseHolds.mockResolvedValue([{ decisionId: 'decision-1', userIds: [USER_ID] }]);
+    await run({ wasSuspended: true, isSuspended: false, reason: 'Verified customer' });
+
+    expect(releaseHolds).toHaveBeenCalledExactlyOnceWith(
+      'c'.repeat(24),
+      expect.objectContaining({ by: ADMIN_ID, userIds: [USER_ID] })
+    );
+    expect(writeAudit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: 'user.intervention_hold.released',
+        target: expect.objectContaining({ id: USER_ID }),
+      })
+    );
+  });
+
+  it('releases no hold on a suspension or an undone suspension', async () => {
+    await run({});
+    await run({ wasSuspended: true, isSuspended: false, undo: true });
+    expect(releaseHolds).not.toHaveBeenCalled();
   });
 
   it('grades the account confirmed abuse when it is suspended for abuse, citing the suspension', async () => {

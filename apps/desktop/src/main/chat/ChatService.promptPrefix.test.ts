@@ -1,17 +1,23 @@
-import { mkdir, mkdtemp, realpath } from 'node:fs/promises';
+import { mkdir, mkdtemp, realpath, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
 import type { AuthenticatedApiClient } from '@bike4mind/client-auth';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { DESKTOP_ARTIFACT_PROMPT } from './artifacts/prompt';
-import { ChatService, buildSystemMessage } from './ChatService';
+import { buildSystemMessage, ChatService, MAX_CONCURRENT_SPAWNED, worktreePreamble } from './ChatService';
 import { MessageQueue } from './MessageQueue';
 import { git } from './project/git';
 import { appWorktreeRoot } from './project/workspace';
 import { SessionStore } from './SessionStore';
 import { TITLE_INSTRUCTION } from './sessionTitle';
 import type { AccessStore } from './tools/AccessStore';
+import type { ChatStreamEvent } from '@shared/chat';
+import { WEB_SEARCH_TURN_BUDGET } from './tools/webSearchLimits';
+
+vi.mock('../git/hostGitArgs', async importOriginal =>
+  (await import('./plainFolderGit.testHelper')).skipGitOutsideRepositories(await importOriginal())
+);
 
 function frame(payload: unknown): string {
   return `data: ${typeof payload === 'string' ? payload : JSON.stringify(payload)}\n\n`;
@@ -219,5 +225,241 @@ describe('ChatService prompt prefix', () => {
     expect(leftShared).not.toContain(worktrees);
     expect(leftTail).toMatch(/^This conversation is about the project /);
     expect(leftTail).not.toBe(rightTail);
+  });
+});
+
+describe('projectContext', () => {
+  function frame(payload: unknown): string {
+    return `data: ${typeof payload === 'string' ? payload : JSON.stringify(payload)}\n\n`;
+  }
+
+  describe('ChatService project context', () => {
+    let service: ChatService;
+    let events: ChatStreamEvent[];
+    let post: ReturnType<typeof vi.fn>;
+    let streams: PassThrough[];
+    let project: string;
+    let userRoot: string;
+
+    beforeEach(async () => {
+      project = await realpath(await mkdtemp(join(tmpdir(), 'b4m-projctx-')));
+      userRoot = await realpath(await mkdtemp(join(tmpdir(), 'b4m-projctx-user-')));
+      await writeFile(join(project, 'CLAUDE.md'), 'Always update the nav map.', 'utf8');
+      await writeFile(join(project, 'first.ts'), 'x', 'utf8');
+
+      // Bound per test: a previous service replying late must not push into this test's events.
+      const emitted: ChatStreamEvent[] = [];
+      events = emitted;
+      const opened: PassThrough[] = [];
+      streams = opened;
+      const boundPost = vi.fn().mockImplementation(() => {
+        const stream = new PassThrough();
+        opened.push(stream);
+        return Promise.resolve({ data: stream, status: 200 });
+      });
+      post = boundPost;
+      service = new ChatService({
+        store: new SessionStore(await mkdtemp(join(tmpdir(), 'b4m-projctx-sessions-')), 'test-model'),
+        access: { list: async () => [] } as unknown as AccessStore,
+        logger: { debug: vi.fn(), warn: vi.fn() },
+        getApiClient: () =>
+          ({
+            get: vi.fn().mockResolvedValue({}),
+            getAxiosInstance: () => ({ post: boundPost }),
+          }) as unknown as AuthenticatedApiClient,
+        getEnvironmentUrl: () => 'http://localhost:3000',
+        userInstructionsRoot: userRoot,
+        emit: event => emitted.push(event),
+      });
+    });
+
+    async function reply(sessionId: string, text: string, expectedPosts: number): Promise<void> {
+      await service.send(sessionId, text);
+      await vi.waitUntil(() => post.mock.calls.length === expectedPosts, { timeout: 3000, interval: 5 });
+      const stream = streams[expectedPosts - 1];
+      stream.write(frame({ type: 'content', text: 'ok', stopReason: 'end_turn' }));
+      stream.write(frame('[DONE]'));
+      await vi.waitUntil(() => events.filter(event => event.type === 'done').length === expectedPosts, {
+        timeout: 3000,
+        interval: 5,
+      });
+    }
+
+    it('puts the instructions and tree in the system message and keeps it identical on the next turn', async () => {
+      const created = await service.createCodeSession({ directory: project, branch: '', workspace: false });
+      if (!created.ok) throw new Error(created.error);
+      const id = created.session.id;
+
+      await reply(id, 'first', 1);
+      const first = post.mock.calls[0][1].messages[0];
+      expect(first.role).toBe('system');
+      expect(first.content).toContain('Always update the nav map.');
+      expect(first.content).toContain('must be followed');
+      expect(first.content).toContain('first.ts');
+      expect(first.content).toContain('do not list the root');
+
+      await writeFile(join(project, 'created-mid-session.ts'), 'x', 'utf8');
+      await writeFile(join(project, 'CLAUDE.md'), 'Changed rules.', 'utf8');
+      await reply(id, 'second', 2);
+
+      expect(post.mock.calls[1][1].messages[0]).toEqual(first);
+      expect(first.content).not.toContain('created-mid-session.ts');
+    });
+
+    it('leaves a session with no project and no user file untouched', async () => {
+      const { id } = await service.createSession();
+      await service.send(id, 'hi');
+      await vi.waitUntil(() => post.mock.calls.length === 1, { timeout: 3000, interval: 5 });
+      expect(post.mock.calls[0][1].messages[0].content).not.toContain('instructions that apply');
+    });
+
+    it('gives a Chat session with no project the user instructions, which it had none of before', async () => {
+      await writeFile(join(userRoot, 'CLAUDE.md'), 'Sign off every reply with a tilde.', 'utf8');
+      const { id } = await service.createSession();
+      await service.send(id, 'hi');
+      await vi.waitUntil(() => post.mock.calls.length === 1, { timeout: 3000, interval: 5 });
+      const system = post.mock.calls[0][1].messages[0].content;
+      expect(system).toContain('Sign off every reply with a tilde.');
+      expect(system).toContain(join(userRoot, 'CLAUDE.md'));
+    });
+
+    it('puts the user instructions above the project ones in a Code session', async () => {
+      await writeFile(join(userRoot, 'CLAUDE.md'), 'User standing rule.', 'utf8');
+      const created = await service.createCodeSession({ directory: project, branch: '', workspace: false });
+      if (!created.ok) throw new Error(created.error);
+
+      await reply(created.session.id, 'first', 1);
+      const system: string = post.mock.calls[0][1].messages[0].content;
+      expect(system.indexOf('User standing rule.')).toBeLessThan(system.indexOf('Always update the nav map.'));
+    });
+  });
+});
+
+describe('gptGuidance', () => {
+  const build = (modelId: string): string =>
+    String(
+      buildSystemMessage(['/work'], false, false, false, [], undefined, [], '', false, false, false, '', true, modelId)
+        .content
+    );
+
+  describe('GPT_GUIDANCE', () => {
+    it('is included for a gpt model id, case-insensitively', () => {
+      expect(build('gpt-5')).toContain('Keep going until the task is fully handled');
+      expect(build('GPT-5-codex')).toContain('Keep going until the task is fully handled');
+    });
+
+    it('is left out for other models', () => {
+      expect(build('claude-sonnet-4')).not.toContain('Keep going until the task is fully handled');
+    });
+  });
+});
+
+describe('webGuidance', () => {
+  const build = (roots: string[], web: boolean): string =>
+    String(
+      buildSystemMessage(roots, false, false, false, [], undefined, [], '', false, false, false, '', true, '', web)
+        .content
+    );
+
+  describe('WEB_GUIDANCE', () => {
+    it.each([[['/work']], [[]]])('steers searches toward one query at a time (roots %j)', roots => {
+      const text = build(roots, true);
+      expect(text).toContain('Search with one well-formed query first, read the results, then refine');
+      expect(text).toContain(`A turn allows at most ${WEB_SEARCH_TURN_BUDGET} searches`);
+    });
+
+    it('is left out when the web tools are not declared', () => {
+      expect(build(['/work'], false)).not.toContain('well-formed query');
+    });
+  });
+});
+
+describe('planGuidance', () => {
+  const build = (roots: string[], plan: boolean): string =>
+    String(
+      buildSystemMessage(
+        roots,
+        false,
+        false,
+        false,
+        [],
+        undefined,
+        [],
+        '',
+        false,
+        false,
+        false,
+        '',
+        true,
+        '',
+        false,
+        false,
+        false,
+        false,
+        plan
+      ).content
+    );
+
+  describe('PLAN_GUIDANCE', () => {
+    it.each([[['/work']], [[]]])('steers todo_write use with or without a folder (roots %j)', roots => {
+      expect(build(roots, true)).toContain('Keep one with todo_write only when');
+    });
+
+    // A model without tools, or one whose tools were shed to fit a fixed context, has no todo_write.
+    it.each([[['/work']], [[]]])('is left out when todo_write is not declared (roots %j)', roots => {
+      expect(build(roots, false)).not.toContain('todo_write');
+    });
+  });
+});
+
+describe('orchestratorGuidance', () => {
+  const build = (roots: string[], host: boolean, orchestrate: boolean): string =>
+    String(
+      buildSystemMessage(
+        roots,
+        false,
+        host,
+        false,
+        [],
+        undefined,
+        [],
+        '',
+        false,
+        false,
+        false,
+        '',
+        true,
+        '',
+        false,
+        false,
+        false,
+        orchestrate
+      ).content
+    );
+
+  describe('ORCHESTRATOR_GUIDANCE', () => {
+    it.each([[['/work']], [[]]])('steers an orchestrating session to delegate (roots %j)', roots => {
+      const text = build(roots, true, true);
+      expect(text).toContain('you are coordinating agents');
+      expect(text).toContain(`At most ${MAX_CONCURRENT_SPAWNED} agents run at once`);
+    });
+
+    it('is left out when the session does not orchestrate', () => {
+      expect(build(['/work'], true, false)).not.toContain('coordinating agents');
+    });
+
+    it('is left out without the host tools, which are what it would steer toward', () => {
+      expect(build(['/work'], false, true)).not.toContain('coordinating agents');
+      expect(build([], false, true)).not.toContain('coordinating agents');
+    });
+  });
+
+  describe('worktreePreamble', () => {
+    it('tells a spawned agent to keep off the shared git stash', () => {
+      const text = worktreePreamble('/repo', { branch: 'agent/x', base: 'main', workingDirectory: '/wt/x' });
+      expect(text).toContain('Never use git stash');
+      expect(text).toContain('shared by every worktree');
+      expect(text.endsWith(']')).toBe(true);
+    });
   });
 });

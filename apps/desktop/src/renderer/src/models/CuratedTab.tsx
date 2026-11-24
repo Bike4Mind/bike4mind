@@ -42,7 +42,7 @@ const SLOT_LABELS: Record<CuratedSlot, string> = {
 const RATING_TEXT = { weak: 'weak', ok: 'good', strong: 'strong' } as const;
 const CHECK_FAILED = 'Could not check this model with the Models service. Try again.';
 
-function machineText(machine: MachineView): string {
+export function machineText(machine: MachineView): string {
   if (machine.memoryKind !== 'unified') return separateMemoryText(machine);
   const shared = sharedMemoryText(machine);
   return machine.gpuVendor === 'intel' ? `${shared} ${OLLAMA_SKIPS_INTEL_IGPU}` : shared;
@@ -193,7 +193,7 @@ function rowBuild(build: CuratedBuildView, rated: boolean): HubBuildView {
 }
 
 /** The hardware typed in Settings that the badges rate. */
-function enteredText(machine: MachineView, name: string): string {
+export function enteredText(machine: MachineView, name: string): string {
   const memory = formatMemory(machine.totalMemoryBytes);
   const gpu = machine.gpuMemoryBytes ? formatMemory(machine.gpuMemoryBytes) : null;
   const rated = `${name} is rated from the hardware entered in Settings:`;

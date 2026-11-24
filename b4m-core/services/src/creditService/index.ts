@@ -9,6 +9,7 @@ export { assignConsumptionFIFO, computeConsumption } from '@bike4mind/common';
 export type { AssignedCreditLot, CreditLotLike } from '@bike4mind/common';
 export * from './clawbackCreditLots';
 export * from './creditHold';
+export * from './interventionSpendGate';
 export * from './newAccountSpendCap';
 export * from './payCreditReward';
 // The reservation gate's freeze check, exposed here so hosts that stub the services namespace keep it with the rest of the gate.

@@ -247,6 +247,22 @@ describe('SystemSecretsTab', () => {
     expect(screen.getByTestId('system-secrets-row-delete-SMTP_PASSWORD')).toHaveTextContent('Delete override');
   });
 
+  it('marks a stored override the stage does not read as not used and offers only Delete', async () => {
+    const unused = {
+      ...SECRETS.secrets[1],
+      secretName: 'MAIL_PASSWORD',
+      isUnused: true,
+      dbRecord: { id: 'db-9', source: 'gui_configured' },
+    };
+    respondWith({ [SECRETS_URL]: () => Promise.resolve({ data: { ...SECRETS, secrets: [unused] } }) });
+    renderTab();
+
+    expect(await screen.findByTestId('system-secrets-unused-MAIL_PASSWORD')).toHaveTextContent('Not used');
+    openRowMenu('MAIL_PASSWORD');
+    expect(await screen.findByTestId('system-secrets-row-delete-MAIL_PASSWORD')).toHaveTextContent('Delete override');
+    expect(screen.queryByTestId('system-secrets-row-edit-MAIL_PASSWORD')).toBeNull();
+  });
+
   it('offers Delete override only on a secret with a database override', async () => {
     renderTab();
     await screen.findByTestId('system-secrets-row-GOOGLE_CLIENT_SECRET');

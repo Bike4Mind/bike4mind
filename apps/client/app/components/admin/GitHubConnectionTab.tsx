@@ -38,6 +38,8 @@ import { api } from '@client/app/contexts/ApiContext';
 import ContextHelpButton from '@client/app/components/help/ContextHelpButton';
 import { IOrgGitHubConnectionResponse } from '@bike4mind/common';
 import { useAdminGitHubRepositories } from '@client/app/hooks/data/useGitHubRepositories';
+import { OptionalDateInput } from '@client/app/components/common/OptionalDateInput';
+import { getLocalDate } from '@client/app/utils/dateUtils';
 import { sanitizeErrorMessage } from '@client/app/utils/error';
 import type { AdminStatusTone } from '@client/app/utils/themes/admin';
 import {
@@ -54,6 +56,9 @@ import {
   UpdatingBar,
 } from './shared';
 import { ADMIN_DETAIL_MAX_WIDTH, ADMIN_REGION_GAP } from './shared/adminStyles';
+
+const PAT_DEFAULT_EXPIRY_DAYS = 30;
+const PAT_MAX_EXPIRY_DAYS = 365;
 
 function extractErrorMessage(error: unknown, fallback: string): string {
   let message = fallback;
@@ -1101,12 +1106,16 @@ const GitHubConnectionTab: React.FC = () => {
 
           <FormControl>
             <FormLabel>Expiration date (optional)</FormLabel>
-            <Input
-              type="date"
+            <OptionalDateInput
               value={patExpiresAt}
-              onChange={e => setPatExpiresAt(e.target.value)}
-              disabled={connecting}
-              slotProps={{ input: { 'data-testid': 'github-pat-expiry-input' } }}
+              onChange={setPatExpiresAt}
+              emptyLabel="No expiration date"
+              setLabel="Set expiration date"
+              clearLabel="Remove expiration date"
+              initialDate={() => getLocalDate(PAT_DEFAULT_EXPIRY_DAYS)}
+              max={getLocalDate(PAT_MAX_EXPIRY_DAYS)}
+              aria-label="Expiration date"
+              testId="github-pat-expiry-input"
             />
             <Typography level="body-xs" sx={{ mt: 0.5, color: 'admin.inkMuted' }}>
               Fine-grained PATs have a maximum expiry of 1 year

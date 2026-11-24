@@ -33,6 +33,8 @@ import GitHubIcon from '@mui/icons-material/GitHub';
 import LinkIcon from '@mui/icons-material/Link';
 import PlayArrowIcon from '@mui/icons-material/PlayArrow';
 import TokenDistributionBar from '@client/app/components/common/TokenDistributionBar';
+import { OptionalDateInput } from '@client/app/components/common/OptionalDateInput';
+import { todayUtc } from '@client/app/utils/dateUtils';
 import {
   ContextTelemetryAlertsSchema,
   type ContextTelemetry,
@@ -1664,28 +1666,42 @@ export function ContextInspectorTab() {
         )}
 
         <FilterToolbar data-testid="context-inspector-filter-bar">
-          <Input
-            type="date"
-            size="sm"
-            startDecorator={<FilterInputLabel>From</FilterInputLabel>}
-            value={startDate}
-            onChange={e => {
-              setStartDate(e.target.value);
-              setPage(0);
-            }}
-            slotProps={{ input: { 'aria-label': 'Start date' } }}
-          />
-          <Input
-            type="date"
-            size="sm"
-            startDecorator={<FilterInputLabel>To</FilterInputLabel>}
-            value={endDate}
-            onChange={e => {
-              setEndDate(e.target.value);
-              setPage(0);
-            }}
-            slotProps={{ input: { 'aria-label': 'End date' } }}
-          />
+          <Stack direction="row" alignItems="center" gap={0.5}>
+            <FilterInputLabel>From</FilterInputLabel>
+            <OptionalDateInput
+              size="sm"
+              value={startDate}
+              onChange={date => {
+                setStartDate(date);
+                setPage(0);
+              }}
+              emptyLabel="Any date"
+              setLabel="Set start date"
+              clearLabel="Remove start date"
+              initialDate={() => (endDate && endDate < todayUtc() ? endDate : todayUtc())}
+              max={endDate || undefined}
+              aria-label="Start date"
+              testId="context-inspector-start-date"
+            />
+          </Stack>
+          <Stack direction="row" alignItems="center" gap={0.5}>
+            <FilterInputLabel>To</FilterInputLabel>
+            <OptionalDateInput
+              size="sm"
+              value={endDate}
+              onChange={date => {
+                setEndDate(date);
+                setPage(0);
+              }}
+              emptyLabel="Any date"
+              setLabel="Set end date"
+              clearLabel="Remove end date"
+              initialDate={() => (startDate && startDate > todayUtc() ? startDate : todayUtc())}
+              min={startDate || undefined}
+              aria-label="End date"
+              testId="context-inspector-end-date"
+            />
+          </Stack>
           <FilterChip
             id="provider"
             label="Provider"

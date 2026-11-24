@@ -513,6 +513,7 @@ function checkTests(
   if (raw.length > maxTests) {
     return report(problems, 'tests', `has ${raw.length} test cases; at most ${maxTests} are allowed`);
   }
+  const names = new Set<string>();
   for (let index = 0; index < raw.length && !isFull(problems); index++) {
     const testCase: unknown = raw[index];
     const path = join('tests', index);
@@ -524,6 +525,10 @@ function checkTests(
     const name = own(testCase, 'name');
     if (typeof name !== 'string' || !name.trim() || name.length > maxDescriptionLength) {
       report(problems, join(path, 'name'), `must be non-empty text of at most ${maxDescriptionLength} characters`);
+    } else if (names.has(name)) {
+      report(problems, join(path, 'name'), `repeats the test name "${name}"; each test needs its own`);
+    } else {
+      names.add(name);
     }
     const input = own(testCase, 'input');
     if (!isPlainObject(input)) report(problems, join(path, 'input'), 'must be an object of input values');

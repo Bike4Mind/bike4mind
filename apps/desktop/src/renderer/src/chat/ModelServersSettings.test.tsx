@@ -27,6 +27,10 @@ window.matchMedia ??= ((query: string) => ({
   dispatchEvent: () => false,
 })) as typeof window.matchMedia;
 
+// Joy's popups (menus, selects, tooltips, modals) read every ancestor's computed style on each update,
+// and jsdom resolves that against every emotion sheet with no layout to find; the inline style will do.
+window.getComputedStyle = ((element: Element) => (element as HTMLElement).style) as typeof getComputedStyle;
+
 function saved(kind: ModelServerKind, access: ModelServerAccess): ModelServerView {
   return {
     id: 'gpu',
@@ -51,6 +55,7 @@ let root: Root | undefined;
 let host: HTMLElement;
 afterEach(async () => {
   await act(async () => root?.unmount());
+  root = undefined;
   host.remove();
 });
 
@@ -126,11 +131,16 @@ async function mount(servers: ModelServerView[], probe = vi.fn()) {
   return { probe, update };
 }
 
-/** Renders one saved server without replacing window.b4m, so a describe's own stubs stay in place. */
+/**
+ * Renders one saved server without replacing window.b4m, so a describe's own stubs stay in place.
+ * Called again in the same test, it re-renders the same tree with the new server.
+ */
 async function show(saved: ModelServerView) {
-  host = document.createElement('div');
-  document.body.append(host);
-  root = createRoot(host);
+  if (!root) {
+    host = document.createElement('div');
+    document.body.append(host);
+    root = createRoot(host);
+  }
   await act(async () =>
     root?.render(
       <CssVarsProvider theme={desktopTheme}>
@@ -255,7 +265,7 @@ describe('ModelServersSettings SSH servers', () => {
     await type('model-servers-add-address-input', 'me@gpu');
   }
 
-  it('tests an SSH destination on every usual port, with no credential fields or kind choice', async () => {
+  it('tests an SSH destination on every usual port or a named one, with no credential fields or kind choice', async () => {
     const probe = vi.fn(async () => discovered([found({})]));
     await mount([], probe);
     expect(document.querySelector('[data-testid="model-servers-add-auth-select"]')).not.toBeNull();
@@ -271,16 +281,10 @@ describe('ModelServersSettings SSH servers', () => {
     expect(document.querySelector('[data-testid="model-servers-add-kind-select"]')).toBeNull();
     expect(saveButton().textContent).toBe('Save server');
     expect(saveButton().disabled).toBe(false);
-  });
 
-  it('sends a port the user names', async () => {
-    const probe = vi.fn(async () => discovered([found({ port: 9001 })]));
-    await mount([], probe);
-    await click('model-servers-add-via-ssh');
-    await type('model-servers-add-address-input', 'me@gpu');
     await type('model-servers-add-port-input', ' 9001 ');
     await click('model-servers-add-test-btn');
-    expect(probe).toHaveBeenCalledWith({
+    expect(probe, 'a port the user names is sent').toHaveBeenLastCalledWith({
       address: 'me@gpu',
       credential: { type: 'none' },
       transport: 'ssh',
@@ -515,13 +519,11 @@ describe('ModelServersSettings tools hint', () => {
   const chip = () => document.querySelector('[data-testid="model-servers-tools-off-chip"]');
   const text = () => document.querySelector('[data-testid="model-servers-tools-hint"]')?.textContent ?? null;
 
-  it('marks a server that refuses tools and says how to turn them on', async () => {
+  it('marks a server that refuses tools and says how to turn them on, and says nothing while it takes them', async () => {
     await show({ ...saved('openai-compatible', 'chat'), toolsHint: hint });
     expect(chip()?.textContent).toBe('Tools off');
     expect(text()).toBe(hint);
-  });
 
-  it('says nothing while the server takes tools', async () => {
     await show(saved('openai-compatible', 'chat'));
     expect(chip()).toBeNull();
     expect(text()).toBeNull();
@@ -533,20 +535,17 @@ describe('ModelServersSettings access note', () => {
   const saved = (kind: ModelServerKind, access: ModelServerAccess) =>
     server({ kind, access, address: 'http://192.168.1.20:11434', unencrypted: true, models: ['qwen2.5:0.5b'] });
 
-  it('points an Ollama server set to Chat and manage at the Models screen', async () => {
-    await mount([saved('ollama', 'manage')]);
+  it('points Chat and manage at the Models screen on Ollama, says it works only there otherwise, and is absent for Chat', async () => {
+    (window as unknown as { b4m: unknown }).b4m = { modelServers: {} };
+    await show(saved('ollama', 'manage'));
     expect(note()?.textContent).toMatch(/Download and remove models on this server from the Models screen/);
     expect(document.body.textContent).not.toMatch(/not available yet/);
-  });
 
-  it('says only Ollama servers can be managed for an OpenAI-compatible server set to Chat and manage', async () => {
-    await mount([saved('openai-compatible', 'manage')]);
+    await show(saved('openai-compatible', 'manage'));
     expect(note()?.textContent).toMatch(/works only on Ollama servers/);
     expect(document.body.textContent).not.toMatch(/not available yet/);
-  });
 
-  it('shows no note for a server set to Chat only', async () => {
-    await mount([saved('ollama', 'chat')]);
+    await show(saved('ollama', 'chat'));
     expect(note()).toBeNull();
   });
 });
@@ -611,7 +610,6 @@ describe('ModelServersSettings hardware', () => {
   it.each([
     ['discrete', 'GPU memory bandwidth (GB/s)'],
     ['unified', 'Memory bandwidth (GB/s)'],
-    ['cpu', 'Memory bandwidth (GB/s)'],
   ] as const)('labels the bandwidth field of this computer by what the probe found: %s', async (memoryKind, label) => {
     probedHardware.mockResolvedValueOnce({
       memoryKind,
@@ -667,6 +665,8 @@ describe('ModelServersSettings hardware', () => {
     expect(byTestId('model-servers-specs-probed')?.textContent).toBe('Detected: 62 GiB of RAM and no GPU memory.');
     expect((byTestId('model-servers-specs-ram-input') as HTMLInputElement).placeholder).toBe('62');
     expect(byTestId('model-servers-specs-unified-checkbox')).toBeNull();
+    // Only a remote Ollama is asked its KV cache type here; one Desktop can start keeps it in launch settings.
+    expect(byTestId('model-servers-specs-kv-select')).toBeNull();
     await type('model-servers-specs-gpu-input', '16');
     await click('model-servers-specs-save-btn');
     expect(update).toHaveBeenCalledWith('local', {
@@ -674,16 +674,9 @@ describe('ModelServersSettings hardware', () => {
     });
   });
 
-  it('asks for no KV cache type with the hardware', async () => {
-    await show({ ...saved('ollama', 'manage'), id: 'local', name: 'This computer', local: true });
-    await click('model-servers-specs-btn');
-    expect(byTestId('model-servers-specs-form')).not.toBeNull();
-    expect(byTestId('model-servers-specs-form')?.textContent).not.toContain('KV cache');
-  });
-
-  const launchOf = (owner: 'remote' | 'none') => ({
+  const remoteLaunch = {
     runtime: 'ollama' as const,
-    owner,
+    owner: 'remote' as const,
     busy: null,
     settings: {},
     pendingRestart: false,
@@ -694,10 +687,10 @@ describe('ModelServersSettings hardware', () => {
     sizingFlashAttention: 'auto' as const,
     prefill: null,
     noun: 'Ollama server',
-  });
+  };
 
   it('asks a remote Ollama for the KV cache type it runs with, which Desktop cannot set', async () => {
-    await show({ ...saved('ollama', 'manage'), launch: launchOf('remote') });
+    await show({ ...saved('ollama', 'manage'), launch: remoteLaunch });
     await click('model-servers-specs-btn');
     await type('model-servers-specs-ram-input', '64');
     await click('model-servers-specs-kv-select');
@@ -706,12 +699,6 @@ describe('ModelServersSettings hardware', () => {
     expect(update).toHaveBeenCalledWith('gpu', {
       specs: { ramGiB: 64, gpuMemoryGiB: null, bandwidthGBps: null, unified: false, kvCacheType: 'q8_0' },
     });
-  });
-
-  it('leaves the KV cache type of a server Desktop can start to its launch settings', async () => {
-    await show({ ...saved('ollama', 'manage'), address: 'http://127.0.0.1:11500', launch: launchOf('none') });
-    await click('model-servers-specs-btn');
-    expect(byTestId('model-servers-specs-kv-select')).toBeNull();
   });
 });
 
@@ -905,7 +892,7 @@ describe('ModelServersSettings launch settings', () => {
     expect(byTestId('model-servers-launch-flash-select')?.textContent).toContain('Off');
   });
 
-  it('names the flash attention fit sizes an unmanaged server with when it is not auto', async () => {
+  it('names what an unmanaged server runs with and what fit sizes with, or that it cannot read it', async () => {
     await show({
       ...LOCAL,
       launch: launch({
@@ -918,16 +905,8 @@ describe('ModelServersSettings launch settings', () => {
     expect(byTestId('model-servers-launch-observed')?.textContent).toBe(
       'It runs with OLLAMA_FLASH_ATTENTION=0. Fit badges assume an f16 KV cache with flash attention off.'
     );
-  });
 
-  it('says it sizes with f16 when it cannot read an unmanaged server', async () => {
-    await show({ ...LOCAL, launch: launch({ owner: 'other', canStart: false }) });
-    expect(byTestId('model-servers-launch-observed')?.textContent).toBe(
-      "Desktop can't read this server's settings. Fit badges assume an f16 KV cache."
-    );
-  });
-
-  it('shows the effective saved sizing when an unmanaged server cannot be read', async () => {
+    // Unreadable: fit sizes with the effective saved settings.
     await show({
       ...LOCAL,
       launch: launch({

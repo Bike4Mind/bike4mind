@@ -79,13 +79,21 @@ const renderAt = async (path: string) => {
       return <div data-testid="model-page">model</div>;
     },
   });
+  const qaRoute = createRoute({
+    getParentRoute: () => layoutRoute,
+    path: '/admin/qa',
+    component: () => <div data-testid="qa-page">qa</div>,
+  });
   const newRoute = createRoute({
     getParentRoute: () => rootRoute,
     path: '/new',
     component: () => <div data-testid="new-page">new</div>,
   });
   const router = createRouter({
-    routeTree: rootRoute.addChildren([layoutRoute.addChildren([consoleRoute, profileRoute, modelRoute]), newRoute]),
+    routeTree: rootRoute.addChildren([
+      layoutRoute.addChildren([consoleRoute, profileRoute, modelRoute, qaRoute]),
+      newRoute,
+    ]),
     history: createMemoryHistory({ initialEntries: [path] }),
   });
   await act(async () => {
@@ -240,6 +248,16 @@ describe('AdminLayoutRoute', () => {
     const layout = await screen.findByTestId('admin-layout');
     expect(within(layout).getByTestId('model-page')).toBeInTheDocument();
     expect(within(desktopSidebar()).getByTestId('admin-models-tab-btn')).toHaveAttribute('aria-current', 'page');
+  });
+
+  it('highlights no tab on a QA page, not even the stored one', async () => {
+    mockUseUser.mockReturnValue({ currentUser: { id: 'u1', isAdmin: true, tags: [] } });
+
+    await renderAt('/admin/qa');
+
+    const layout = await screen.findByTestId('admin-layout');
+    expect(within(layout).getByTestId('qa-page')).toBeInTheDocument();
+    expect(within(desktopSidebar()).getByTestId('admin-dashboard-tab-btn')).not.toHaveAttribute('aria-current');
   });
 
   it('renders the console inside the shell for an admin', async () => {

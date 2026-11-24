@@ -86,6 +86,16 @@ vi.mock('./mainWindowState', () => ({
   trackMainWindowState: vi.fn(),
 }));
 vi.mock('./windows', () => ({ appWindows: () => harness.windows }));
+// resetModules re-evaluates the real watch's import graph before every test, about 100ms each.
+vi.mock('./watch', () => ({
+  registerWatch: () => ({
+    observeStream: vi.fn(),
+    observeStatus: vi.fn(),
+    closeMini: vi.fn(),
+    start: async () => undefined,
+    scopeChanged: vi.fn(),
+  }),
+}));
 vi.mock('./chat/sessionScope', () => ({ sessionScopeFor: () => null, sessionScopeForChat: () => null }));
 vi.mock('./chat/browser/browserScope', () => ({ closeBrowsersOnScopeChange: vi.fn() }));
 vi.mock('./chat/tools/userPath', () => ({ resolveUserPath: vi.fn() }));

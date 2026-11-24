@@ -20,6 +20,10 @@ import { MISSING_TASK_RESULT_REASON } from '@shared/agentState';
 import type { ModelCatalog } from './ModelCatalog';
 import type { AccessStore } from './tools/AccessStore';
 
+vi.mock('../git/hostGitArgs', async importOriginal =>
+  (await import('./plainFolderGit.testHelper')).skipGitOutsideRepositories(await importOriginal())
+);
+
 const contractFor = (outcome: string): TaskContract => ({
   version: 1,
   outcome,
@@ -281,6 +285,7 @@ describe('a worker decision that only the user can make', () => {
     finish(siblingStream, 'Sibling done');
     await idle(sibling.id);
     await vi.waitUntil(async () => (await stored(root.id)).messages.some(m => String(m.content).includes(SIBLING)), {
+      interval: 5,
       timeout: 5000,
     });
     // A sibling settling does not wake the root while the asking worker waits on the user.
@@ -370,7 +375,7 @@ describe('a worker decision that only the user can make', () => {
     expect(activity.statusOf(asker.id)).toBe('done');
     await vi.waitUntil(
       async () => (await stored(root.id)).messages.some(m => String(m.content).includes('The user skipped')),
-      { timeout: 5000 }
+      { interval: 5, timeout: 5000 }
     );
     await expect(
       service.answerTaskDecision(asker.id, decision.decision.id, { status: 'skipped' })
@@ -530,7 +535,7 @@ describe('a worker decision that only the user can make', () => {
     await idle(sibling.id);
     await vi.waitUntil(
       async () => (await stored(root.id)).messages.some(message => String(message.content).includes(SIBLING)),
-      { timeout: 5000 }
+      { interval: 5, timeout: 5000 }
     );
     expect(plannerCalls()).toBe(before);
     const workerCalls = () => post.mock.calls.filter((_call, index) => wire(index).model === 'worker').length;

@@ -1017,6 +1017,37 @@ export interface ScriptVariables {
   splitsString: boolean;
 }
 
+/**
+ * `root.descendantsOfType(types)`, in the same order, each with whether an ancestor branches or repeats. One cursor
+ * walk, since `node.parent` costs the node's depth and a deeply nested script would make a parent chain quadratic.
+ */
+function descendantsUnderBranch(root: Node, types: ReadonlySet<string>): { node: Node; underBranch: boolean }[] {
+  let above = false;
+  for (let parent = root.parent; parent !== null; parent = parent.parent) {
+    if (BRANCHES.has(parent.type) || REPEATS.has(parent.type)) above = true;
+  }
+  const found: { node: Node; underBranch: boolean }[] = [];
+  const within = [above];
+  const cursor = root.walk();
+  try {
+    for (;;) {
+      const type = cursor.nodeType;
+      const underBranch = within[within.length - 1] as boolean;
+      if (types.has(type)) found.push({ node: cursor.currentNode, underBranch });
+      if (cursor.gotoFirstChild()) {
+        within.push(underBranch || BRANCHES.has(type) || REPEATS.has(type));
+        continue;
+      }
+      while (!cursor.gotoNextSibling()) {
+        if (within.length === 1 || !cursor.gotoParent()) return found;
+        within.pop();
+      }
+    }
+  } finally {
+    cursor.delete();
+  }
+}
+
 export function scriptVariables(root: Node): ScriptVariables {
   const set: VariableSet[] = [];
   let splits = false;
@@ -1040,15 +1071,11 @@ export function scriptVariables(root: Node): ScriptVariables {
     add(name, value === null || equals === -1 ? value : word.slice(equals + 1), nameref, word[equals - 1] === '+');
     if (nameref && equals !== -1) add(word.slice(equals + 1), null);
   };
-  const types = ['variable_assignment', 'expansion', 'for_statement', 'declaration_command', 'command'];
-  for (const node of root.descendantsOfType(types)) {
-    if (node === null) continue;
+  const types = new Set(['variable_assignment', 'expansion', 'for_statement', 'declaration_command', 'command']);
+  for (const { node, underBranch } of descendantsUnderBranch(root, types)) {
     startIndex = node.startIndex;
-    uncertainOrder = false;
+    uncertainOrder = underBranch;
     prefixOf = undefined;
-    for (let parent = node.parent; parent !== null; parent = parent.parent) {
-      if (BRANCHES.has(parent.type) || REPEATS.has(parent.type)) uncertainOrder = true;
-    }
     if (node.type === 'variable_assignment') {
       if (node.parent?.type === 'command') prefixOf = node.parent.startIndex;
       const name = node.childForFieldName('name');

@@ -1754,6 +1754,30 @@ export type AbuseAssessmentConfig = z.infer<typeof AbuseAssessmentConfigSchema>;
 export const AUTO_CONTAINMENT_MODES = ['off', 'shadow', 'enforce'] as const;
 export type AutoContainmentMode = (typeof AUTO_CONTAINMENT_MODES)[number];
 
+const interventionTierShape = {
+  mode: z.enum(AUTO_CONTAINMENT_MODES).prefault('off').meta({
+    title: 'Mode',
+    description: 'off: no decisions for this tier. shadow: record what would be done. enforce: apply the hold.',
+  }),
+  minConfidence: z.number().min(0.5).max(1).prefault(0.9).meta({
+    title: 'Minimum confidence',
+    description: "The judgment's confidence (0.5-1) at or above which this tier acts.",
+  }),
+  maxPerHour: z.number().int().min(0).max(100).prefault(5).meta({
+    title: 'Decisions per hour',
+    description: 'Decisions for this tier per fixed one-hour window, counted per mode.',
+  }),
+  expiryHours: z.number().int().min(1).max(720).prefault(72).meta({
+    title: 'Expiry (hours)',
+    description: 'A hold lapses on its own after this many hours unless released sooner.',
+  }),
+  rolloutPercent: z.number().int().min(0).max(100).prefault(0).meta({
+    title: 'Rollout percent',
+    description: 'Share of accounts (stable per account) this tier applies to. 0 applies it to nobody.',
+  }),
+};
+const interventionTierConfig = (title: string) => z.object(interventionTierShape).prefault({}).meta({ title });
+
 /**
  * Automated containment from abuse assessments (apps/workers/src/security/autoContainment). Acts
  * only on an `abuse` judgment at or above minConfidence, through the admin bulk Contain path.
@@ -1796,8 +1820,35 @@ export const AutoContainmentConfigSchema = z.object({
     title: 'Device-link common networks',
     description: 'A device seen on signups from this many distinct networks in 30 days is mainstream, never evidence.',
   }),
+  tiers: z
+    .object({
+      limit: z
+        .object({
+          ...interventionTierShape,
+          creditsPerHour: z.number().int().min(0).max(1_000_000).prefault(1000).meta({
+            title: 'Credits per hour',
+            description: 'AI spend admitted per fixed one-hour window while a limit hold is active.',
+          }),
+        })
+        .prefault({})
+        .meta({ title: 'Limit spend' }),
+      verify: interventionTierConfig('Require verification').meta({
+        title: 'Require verification',
+        description:
+          'Not used yet: no card or phone verification flow can clear a verify hold, so verify decisions run under Request review and its settings.',
+      }),
+      holdGrant: interventionTierConfig('Hold signup grant'),
+      review: interventionTierConfig('Request review'),
+    })
+    .prefault({})
+    .meta({
+      title: 'Intervention tiers',
+      description:
+        'Graduated interventions below Contain. Each tier is off by default; mode off above turns every tier off.',
+    }),
 });
 export type AutoContainmentConfig = z.infer<typeof AutoContainmentConfigSchema>;
+export type InterventionTierConfig = AutoContainmentConfig['tiers']['verify'];
 
 export const ADMIN_AI_MODES = ['off', 'shadow', 'recommend', 'act'] as const;
 export type AdminAiMode = (typeof ADMIN_AI_MODES)[number];
