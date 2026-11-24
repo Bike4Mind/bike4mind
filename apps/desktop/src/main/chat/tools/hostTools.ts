@@ -674,42 +674,96 @@ export const sessionRename: ToolDefinition = {
   },
 };
 
+export const SESSION_DELETE_MAX = 25;
+
+/** The distinct ids one call names. `session_id` is the single-id shape older transcripts replay. */
+function deleteTargets(input: Record<string, unknown>, context: ToolContext): string[] {
+  const raw = input.session_ids ?? input.session_id;
+  const list = typeof raw === 'string' ? [raw] : raw;
+  if (!Array.isArray(list) || list.some(id => typeof id !== 'string' || id.trim().length === 0)) {
+    throw new Error('The "session_ids" argument is required and must be a list of conversation ids.');
+  }
+  const ids = [...new Set(list.map((id: string) => id.trim()))];
+  if (ids.length === 0) throw new Error('Name at least one conversation to delete.');
+  if (ids.length > SESSION_DELETE_MAX) {
+    throw new Error(
+      `That is ${ids.length} conversations; one call deletes at most ${SESSION_DELETE_MAX}. Split them over more calls.`
+    );
+  }
+  // Refused here rather than relying on the caps: a conversation deleting itself would leave
+  // this turn writing its reply into a file that no longer exists.
+  if (context.sessionId && ids.includes(context.sessionId)) throw new Error('A conversation cannot delete itself.');
+  return ids;
+}
+
 export const sessionDelete: ToolDefinition = {
   schema: {
     name: 'session_delete',
     description:
-      'Permanently delete a conversation in this project, with its transcript, its attachments ' +
-      'and anything it generated. This CANNOT be undone and the user is asked every single ' +
-      'time. Prefer session_archive, which is reversible, and only delete when the user has ' +
-      'asked for that specific conversation to be deleted.',
+      'Permanently delete conversations in this project, each with its transcript, its attachments ' +
+      'and anything it generated. This CANNOT be undone and the user is asked on every call. ' +
+      `Name every conversation to delete in ONE call (up to ${SESSION_DELETE_MAX}) so the user ` +
+      'answers once for the whole batch, instead of calling this once per conversation. Prefer ' +
+      'session_archive, which is reversible, and only delete conversations the user has asked ' +
+      'to have deleted.',
     parameters: {
       type: 'object',
       properties: {
-        session_id: { type: 'string', description: 'The conversation to delete permanently.' },
+        session_ids: {
+          type: 'array',
+          items: { type: 'string' },
+          minItems: 1,
+          maxItems: SESSION_DELETE_MAX,
+          description: 'The conversations to delete permanently.',
+        },
       },
-      required: ['session_id'],
+      required: ['session_ids'],
       additionalProperties: false,
     },
   },
   async approval(input, context) {
-    const sessionId = requireString(input, 'session_id');
-    const name = (await requireHost(context).describeSession(sessionId)) ?? sessionId;
+    const ids = deleteTargets(input, context);
+    const host = requireHost(context);
+    const names = await Promise.all(ids.map(async id => (await host.describeSession(id)) ?? id));
     return {
-      detail: `Permanently delete the conversation "${name}", and everything in it? This cannot be undone.`,
-      key: `session_delete:${sessionId}`,
+      detail:
+        names.length === 1
+          ? `Permanently delete the conversation "${names[0]}", and everything in it? This cannot be undone.`
+          : [
+              `Permanently delete these ${names.length} conversations, and everything in them? This cannot be undone.`,
+              ...names.map(name => `- ${name}`),
+            ].join('\n'),
+      key: `session_delete:${ids.join(',')}`,
       irreversible: true,
     };
   },
   async run(input, context) {
     const host = requireHost(context);
-    const sessionId = requireString(input, 'session_id');
-    // Refused here rather than relying on the caps: a conversation deleting itself would leave
-    // this turn writing its reply into a file that no longer exists.
-    if (sessionId === context.sessionId) throw new Error('A conversation cannot delete itself.');
+    const ids = deleteTargets(input, context);
     context.beginWrite?.();
-    const deleted = await host.deleteSession(sessionId);
-    if (!deleted) return 'No conversation with that id in this project.';
-    return 'Deleted it.';
+    if (ids.length === 1) {
+      const deleted = await host.deleteSession(ids[0]);
+      return deleted ? 'Deleted it.' : 'No conversation with that id in this project.';
+    }
+
+    let deleted = 0;
+    const missing: string[] = [];
+    const failed: string[] = [];
+    // One at a time: each delete takes the workspace lease, and a failure must not hide the rest.
+    for (const id of ids) {
+      try {
+        if (await host.deleteSession(id)) deleted += 1;
+        else missing.push(id);
+      } catch (error) {
+        failed.push(`${id} (${error instanceof Error ? error.message : String(error)})`);
+      }
+    }
+    if (deleted > 0) context.report?.label(`Deleted ${deleted} ${deleted === 1 ? 'session' : 'sessions'}`);
+    const lines = [`Deleted ${deleted} of ${ids.length} conversations.`];
+    if (missing.length > 0) lines.push(`No conversation in this project with these ids: ${missing.join(', ')}`);
+    if (failed.length > 0) lines.push(`Could not delete: ${failed.join('; ')}`);
+    if (deleted === 0 && failed.length > 0) throw new Error(lines.slice(1).join('\n'));
+    return lines.join('\n');
   },
 };
 

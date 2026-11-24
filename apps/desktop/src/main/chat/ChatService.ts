@@ -9837,7 +9837,7 @@ const MEMORY_GUIDANCE: readonly string[] = [
 const HOST_GUIDANCE: readonly string[] = [
   'You can also work with the conversations in this project: session_list and session_read see',
   'them, session_spawn hands work to a new one, session_send speaks to one that already exists,',
-  'session_archive tidies one away and session_delete removes one permanently. Spawning,',
+  'session_archive tidies one away and session_delete removes them permanently. Spawning,',
   'archiving and deleting reach this project only, and a spawned session can read and change',
   'exactly the folders you can - it cannot be given others.',
   'session_rename names this conversation or one you started once its work is known (the issue',
@@ -9873,9 +9873,10 @@ const HOST_GUIDANCE: readonly string[] = [
   'Messages between sessions are capped: a few hops from whatever the user typed and a couple',
   'per turn. That cap is what stops two sessions messaging each other forever, so a refusal',
   'mentioning it is final - say what you have in this conversation and let the user carry it on.',
-  'Prefer session_archive over session_delete. Deleting cannot be undone, the user is asked every',
-  'single time, and you should only ever reach for it when they have asked for that particular',
-  'conversation to be deleted.',
+  'Prefer session_archive over session_delete. Deleting cannot be undone, the user is asked on',
+  'every call, and you should only ever reach for it when they have asked for those particular',
+  'conversations to be deleted. To delete several, name them all in one session_delete call (up',
+  'to 25) so the user answers once; never call it once per conversation.',
 ];
 
 /** The prompt carries the task, so a contract only has to add the outcome, role and acceptance criteria. */
