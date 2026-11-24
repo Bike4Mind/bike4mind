@@ -56,6 +56,14 @@ describe('buildDirectorSystemContext', () => {
     expect(context).toContain('6 to 10 shots whose lengths add up to about 60 seconds');
     expect(context).toContain('matches the mood of the story');
   });
+
+  it('asks for no more shot time than the storyboard tool can take for a very long timeline', () => {
+    const context = buildDirectorSystemContext(ID, { template: 'short_film', durationMs: 600_000 });
+    expect(context).toContain('a short film of about 600 seconds');
+    expect(context).toContain(
+      `${DIRECTOR_MAX_SHOTS} shots whose lengths add up to about ${DIRECTOR_MAX_SHOTS * 30} seconds`
+    );
+  });
 });
 
 describe('filmShotRange', () => {

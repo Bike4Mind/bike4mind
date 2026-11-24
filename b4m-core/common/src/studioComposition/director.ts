@@ -21,6 +21,8 @@ export const DIRECTOR_TOOLS: readonly B4MLLMTools[] = [
 /** Most shots one production_storyboard call takes. */
 export const DIRECTOR_MAX_SHOTS = 12;
 const FILM_MIN_SHOTS = 3;
+// The storyboard tool takes shots of up to 30 seconds, so a longer timeline cannot be filled by one call.
+const FILM_MAX_SHOTS_SECONDS = DIRECTOR_MAX_SHOTS * 30;
 // A short film cuts roughly every 6 to 10 seconds.
 const FILM_SECONDS_PER_SHOT = { min: 6, max: 10 } as const;
 
@@ -79,13 +81,14 @@ const adContext = (compositionId: string): string =>
 const filmContext = (compositionId: string, { tone, durationMs }: StudioDirectorBriefing): string => {
   const length = durationMs ?? STUDIO_COMPOSITION_TEMPLATE_DEFINITIONS.short_film.durationMs;
   const seconds = Math.round(length / 1000);
+  const shotsSeconds = Math.min(seconds, FILM_MAX_SHOTS_SECONDS);
   return (
     `${directorContextLead(compositionId)}, a short film of about ${seconds} seconds` +
     (tone ? ` in a ${JSON.stringify(tone)} tone. ` : '. ') +
     'Tell one story with a beginning (set up the character and their world), a middle (an inciting moment and a ' +
     'turn that raises the stakes) and an end (a climax and a resolution). It is not an ad: no product, no call to ' +
     'action, no hook. Use the production tools in order: ' +
-    `production_storyboard (${filmShotRange(length)} shots whose lengths add up to about ${seconds} seconds, each ` +
+    `production_storyboard (${filmShotRange(length)} shots whose lengths add up to about ${shotsSeconds} seconds, each ` +
     'with an image prompt, a length and a narration line; read in order the lines must tell the story, and every ' +
     'prompt describes the same characters, places and look so the shots match; leave productFileId out), ' +
     'production_generate_shot (call it again with the same arguments while it reports jobs still running), ' +
