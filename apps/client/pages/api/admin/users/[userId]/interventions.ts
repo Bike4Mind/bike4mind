@@ -23,7 +23,7 @@ const handler = adminApi({
   .use(csrfProtection())
   .get(
     asyncHandler(async (req, res) => {
-      const { userId } = req.query;
+      const userId = (req.query as { userId?: unknown } | undefined)?.userId;
       if (typeof userId !== 'string' || !OBJECT_ID_PATTERN.test(userId)) throw new BadRequestError('Invalid user id');
       const user = await userRepository.findById(userId);
       if (!user) throw new NotFoundError('User not found');

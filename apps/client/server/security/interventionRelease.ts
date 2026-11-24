@@ -76,7 +76,7 @@ export async function releaseForLegitimateVerdict(
  * logged rather than thrown.
  */
 export async function releaseHoldsAfterVerdict(
-  req: Request,
+  req: Request<unknown, unknown, unknown, unknown, Record<string, unknown>>,
   detectionId: string,
   verdict: ShadowDetectionVerdict,
   reason: string
