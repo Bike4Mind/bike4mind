@@ -53,7 +53,7 @@ The endpoint keeps no session. It issues no session id and ignores one sent to i
 }
 ```
 
-The limits are 5 MB in, 2 MB out, 45 seconds per call, and the same per-user rate limit as the Functions API. The output goes back twice, once as `structuredContent` and once in the text block, so an output over 2 MB returns `The function returned more than a call can carry.` instead.
+The limits are 5 MB in, 2 MB out, 45 seconds per call, and the same per-user rate limit as the Functions API. The output goes back twice, once as `structuredContent` and once in the text block, so the limit applies to the answer as sent, escaping included. An output over 2 MB, or one whose answer would pass 5 MB (text made mostly of quote characters grows the most), returns `The function returned more than a call can carry.` instead.
 
 ## Refusals
 
