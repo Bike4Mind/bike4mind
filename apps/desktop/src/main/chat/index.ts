@@ -67,6 +67,7 @@ import { createMainLogger } from '../logger';
 import { createCompletionRunMinter } from './completionRuns';
 import { ApprovalModePreference } from './ApprovalModePreference';
 import { PromptCacheTtlPreference } from './PromptCacheTtlPreference';
+import { TurnExtensionsPreference } from './TurnExtensionsPreference';
 import { LocalContextPreference } from './LocalContextPreference';
 import { SpawnLocationPreference } from './SpawnLocationPreference';
 import { registerSpawnLocationIpc } from './spawnLocationIpc';
@@ -761,6 +762,7 @@ export function registerChat(
     { available: process.platform === 'darwin' }
   );
 
+  const turnExtensions = new TurnExtensionsPreference(join(userData, 'turn-extensions.json'));
   const service = new ChatService({
     store,
     access,
@@ -776,6 +778,7 @@ export function registerChat(
     turnTiming: TURN_TIMING,
     preferredModel: PREFERRED_MODEL,
     modelMemory: modelPreference,
+    turnExtensions: () => turnExtensions.read(),
     approvals,
     permissions,
     capabilities: {
@@ -960,6 +963,11 @@ export function registerChat(
   });
   ipcMain.handle(IPC_CHANNELS.chatSetSessionPromptCacheTtl, (_event, sessionId: string, ttl: unknown) =>
     isPromptCacheTtl(ttl) ? service.setSessionPromptCacheTtl(sessionId, ttl) : null
+  );
+  ipcMain.handle(IPC_CHANNELS.chatGetTurnExtensions, () => turnExtensions.read());
+  // Coerced by the preference: anything out of range is saved as the default.
+  ipcMain.handle(IPC_CHANNELS.chatSetTurnExtensions, (_event, extensions: unknown) =>
+    turnExtensions.record(extensions)
   );
   registerGenerationIpc(ipcMain, service);
   registerModelSettingsIpc(ipcMain, modelSettings, {
