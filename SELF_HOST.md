@@ -63,14 +63,14 @@ dispatch calls are rejected until each secret holds a generated value.
 > - **Evaluation only:** set `B4M_ALLOW_PLAINTEXT_SECRETS=true` in `.env.selfhost` and leave the template `SECRET_ENCRYPTION_KEY` value in place (do not blank it: the services exit when the variable is empty). The stack starts keyless, stored secrets stay in plaintext, every process logs a warning at boot, and admin System Health shows a warning.
 > - **Move to a key (recommended):**
 >   1. Generate one: `openssl rand -hex 32`. Back it up somewhere other than this host; losing it makes everything encrypted under it unreadable.
->   2. Set it as `SECRET_ENCRYPTION_KEY` in `.env.selfhost`. The backfill below also needs a persistent `MEMORY_KEY_SECRET` (it wraps the per-user memory keys): if `.env.selfhost` has none, generate one with `openssl rand -hex 32`, add it as `MEMORY_KEY_SECRET=...`, and back it up next to the encryption key. Never change it afterwards. Take a backup (see [Backup and restore](#backup-and-restore)), then recreate the services: `docker compose -f compose.selfhost.yaml --env-file .env.selfhost up -d`.
+>   2. Set it as `SECRET_ENCRYPTION_KEY` in `.env.selfhost`. The backfill below also needs a persistent `MEMORY_KEY_SECRET` (it wraps the per-user memory keys): if `.env.selfhost` has no non-empty value for it, generate one with `openssl rand -hex 32`, set it as `MEMORY_KEY_SECRET=...` (fill in an existing empty `MEMORY_KEY_SECRET=` line rather than adding a second one), and back it up next to the encryption key. Never change it afterwards. Take a backup (see [Backup and restore](#backup-and-restore)), then recreate the services: `docker compose -f compose.selfhost.yaml --env-file .env.selfhost up -d`. If you normally start optional services with `--profile` flags (for example `agent-executor` or `render`) or `COMPOSE_PROFILES`, add the same ones here and in the restart below.
 >   3. Encrypt the rows already stored in plaintext. Stop the writers (skip any that are not running):
 >
 >      ```bash
 >      docker compose -f compose.selfhost.yaml --env-file .env.selfhost stop app worker chatcompletion ws agentexecutor render-worker subscriber-fanout
 >      ```
 >
->      Then, from the repo checkout (Node and `pnpm install`), export the values from `.env.selfhost` and run each command below. Use the same `MONGODB_URI` form as step 3 of [Rotating the encryption key](#rotating-the-encryption-key):
+>      Then, from the repo checkout (Node, then `pnpm install` and `pnpm core:build`, since the scripts import the built `@bike4mind/*` packages), export the values from `.env.selfhost` and run each command below. Use the same `MONGODB_URI` form as step 3 of [Rotating the encryption key](#rotating-the-encryption-key):
 >
 >      ```bash
 >      export SECRET_ENCRYPTION_KEY="$(grep '^SECRET_ENCRYPTION_KEY=' .env.selfhost | cut -d= -f2-)"
@@ -81,7 +81,7 @@ dispatch calls are rejected until each secret holds a generated value.
 >      pnpm --filter @bike4mind/scripts exec tsx --import ../../apps/client/server/chatCompletion/selfhostSstAlias.mjs migrate/encrypt-admin-settings-and-apikeys.ts
 >      ```
 >
->      They cover, in order: API keys, MCP server secrets, Slack dev-workspace secrets, TOTP seeds and secret rotations; Atlassian, Google Drive, Slack user and blog tokens, webhook secrets and Slack bot tokens; sensitive admin settings and per-user provider API keys. Each command skips values that are already encrypted, so it is safe to repeat. Restart the stack afterwards with the `up -d` command from step 2.
+>      They cover, in order: API keys, security-question answers (hashed), per-user memory keys (wrapped under `MEMORY_KEY_SECRET`), MCP server secrets, Slack dev-workspace secrets, TOTP seeds and secret rotations; Atlassian, Google Drive, Slack user and blog tokens, webhook secrets and Slack bot tokens; sensitive admin settings and the remaining per-user provider API keys. Each command skips values that are already encrypted, so it is safe to repeat. Restart the stack afterwards with the `up -d` command from step 2 (with your `--profile` flags).
 >
 >      **Not covered:** sign-in provider tokens (`users.authProviders[]` and `users.oauthCredentials`). They are encrypted the next time each user signs in, and stay in plaintext until then.
 >   4. `migrate:reencrypt-stored-secrets` (below) is **not** a substitute: it only moves existing ciphertext from one key to another and leaves plaintext rows as they are.

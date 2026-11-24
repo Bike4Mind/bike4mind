@@ -50,7 +50,9 @@ class ValidateSecretsTests(unittest.TestCase):
         self.assertNotIn('B4M_ALLOW_PLAINTEXT_SECRETS', strict.stderr)
 
     def test_opt_out_needs_the_flag(self):
-        self.assertEqual(self.run_script({'B4M_ALLOW_PLAINTEXT_SECRETS': 'true'}).returncode, 1)
+        env = {'SECRET_ENCRYPTION_KEY': 'change-me-openssl-rand-hex-32', 'B4M_ALLOW_PLAINTEXT_SECRETS': 'true'}
+        self.assertEqual(self.run_script(env).returncode, 1)
+        self.assertEqual(self.run_script(env, flag=True).returncode, 0)
 
     def test_opt_out_must_be_exactly_true(self):
         for value in ('1', 'TRUE', 'yes', 'false'):
