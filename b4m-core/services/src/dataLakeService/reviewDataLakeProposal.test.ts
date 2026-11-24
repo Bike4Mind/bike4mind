@@ -983,6 +983,23 @@ describe('unapproveDataLakeProposal', () => {
     });
   });
 
+  it('takes the file id from the approval event when the proposal row lost it', async () => {
+    const bare = proposal({ status: 'approved', admittedFabFileId: undefined });
+    const { deps, removeAdmittedFile, record } = unapproveDeps({
+      unapprove: vi.fn(async () => ({
+        unapproved: true,
+        previous: bare,
+        proposal: { ...bare, status: 'pending' },
+      })),
+    });
+
+    const result = await unapproveDataLakeProposal('prop-1', ctx(), deps, { admittedFabFileId: 'file-7' });
+
+    expect(result.removedFabFileId).toBe('file-7');
+    expect(removeAdmittedFile).toHaveBeenCalledWith(expect.anything(), 'lake-1', 'file-7', expect.anything());
+    expect(record.mock.calls[0][0]).toMatchObject({ admittedFabFileId: 'file-7' });
+  });
+
   it('counts a file already out of the lake as done', async () => {
     const { deps, rollbackUnapprove } = unapproveDeps({
       removeAdmittedFile: vi.fn(async () => {

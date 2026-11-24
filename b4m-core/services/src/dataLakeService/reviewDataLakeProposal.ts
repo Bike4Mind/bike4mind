@@ -640,7 +640,8 @@ export interface UnapproveAdapters extends LakeConfigAuditAdapters {
 export async function unapproveDataLakeProposal(
   proposalId: string,
   actor: ManageActor,
-  adapters: UnapproveAdapters
+  adapters: UnapproveAdapters,
+  input: { admittedFabFileId?: string } = {}
 ): Promise<{ proposal: IDataLakeProposalDocument; eventId: string; removedFabFileId: string | null }> {
   const { db, logger, audit } = adapters;
   const { proposal, lake, grants } = await resolveReviewable(proposalId, actor, { db });
@@ -665,7 +666,8 @@ export async function unapproveDataLakeProposal(
     );
   }
 
-  const fabFileId = reset.previous.admittedFabFileId ?? null;
+  // The approval event's id wins: the proposal row's pointer is best-effort and may be missing.
+  const fabFileId = input.admittedFabFileId ?? reset.previous.admittedFabFileId ?? null;
   if (fabFileId) {
     try {
       await adapters.removeAdmittedFile(actor, lake.id, fabFileId, { causedByEventId: eventId });

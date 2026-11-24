@@ -88,13 +88,18 @@ export async function undoLakeConfigChangeHandler(
           dataLakeService.declineDataLakeProposal(proposalId, actor, {}, proposals(audit)),
         restoreProposal: (proposalId, audit) =>
           dataLakeService.restoreDataLakeProposal(proposalId, actor, proposals(audit)),
-        unapproveProposal: (proposalId, audit) =>
-          dataLakeService.unapproveDataLakeProposal(proposalId, actor, {
-            ...proposals(audit),
-            removeAdmittedFile: async (removeActor, removeLakeId, fabFileId, links) => {
-              await dataLakeService.removeFileFromDataLake(removeActor, removeLakeId, fabFileId, membership, links);
+        unapproveProposal: (proposalId, audit, admittedFabFileId) =>
+          dataLakeService.unapproveDataLakeProposal(
+            proposalId,
+            actor,
+            {
+              ...proposals(audit),
+              removeAdmittedFile: async (removeActor, removeLakeId, fabFileId, links) => {
+                await dataLakeService.removeFileFromDataLake(removeActor, removeLakeId, fabFileId, membership, links);
+              },
             },
-          }),
+            { admittedFabFileId }
+          ),
         removeFile: (fabFileId, audit) =>
           dataLakeService.removeFileFromDataLake(actor, lake.id, fabFileId, membership, audit),
         addFile: (fabFileId, audit) => dataLakeService.addFileToDataLake(actor, lake.id, fabFileId, membership, audit),

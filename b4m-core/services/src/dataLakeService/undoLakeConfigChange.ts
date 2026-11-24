@@ -52,7 +52,7 @@ export interface UndoActions {
   deleteResearchConfig(configId: string, audit: UndoAudit): Promise<unknown>;
   declineProposal(proposalId: string, audit: UndoAudit): Promise<unknown>;
   restoreProposal(proposalId: string, audit: UndoAudit): Promise<unknown>;
-  unapproveProposal(proposalId: string, audit: UndoAudit): Promise<unknown>;
+  unapproveProposal(proposalId: string, audit: UndoAudit, admittedFabFileId?: string): Promise<unknown>;
   removeFile(fabFileId: string, audit: UndoAudit): Promise<unknown>;
   addFile(fabFileId: string, audit: UndoAudit): Promise<unknown>;
 }
@@ -161,6 +161,23 @@ async function assertNoLaterFileEvent(
     createdAt: { $gte: event.createdAt },
   });
   if (later > 0) throw new ConflictError('A later change touched the same file, so this one cannot be undone');
+}
+
+/** Adding or removing the approved file after the approval means unapproving would act on a changed file. */
+async function assertApprovedFileUntouched(
+  event: ILakeConfigChangeEventDocument,
+  lakeId: string,
+  db: UndoLakeConfigChangeAdapters['db']
+): Promise<void> {
+  if (!event.admittedFabFileId) return;
+  const later = await db.lakeMembershipChangeEvents.count({
+    dataLakeId: lakeId,
+    fabFileId: event.admittedFabFileId,
+    createdAt: { $gte: event.createdAt },
+  });
+  if (later > 0) {
+    throw new ConflictError('The approved file was added or removed after this approval, so it cannot be undone');
+  }
 }
 
 const SCHEDULE_LEVERS = new Set(['name', 'cadence', 'reviewBacklogLimit', 'schedulePaused']);
@@ -373,9 +390,17 @@ async function perform(
       if (!(await db.lakeMembershipRemovals.findLive(lakeId, event.fabFileId))) {
         throw new ConflictError(UNDO_FILE_EXPIRED_NOTE);
       }
-      await actions.addFile(event.fabFileId, audit);
+      try {
+        await actions.addFile(event.fabFileId, audit);
+      } catch (err) {
+        throw asRefusal(err, null);
+      }
     } else {
-      await actions.removeFile(event.fabFileId, audit);
+      try {
+        await actions.removeFile(event.fabFileId, audit);
+      } catch (err) {
+        throw asRefusal(err, null);
+      }
     }
     return [];
   }
@@ -392,8 +417,9 @@ async function perform(
       const proposal = await loadBoundProposal(event.target!.id, lakeId, db);
       if (proposal.status !== 'approved') throw new ConflictError('This proposal is no longer approved');
       await assertNoLaterConfigEvent(event, lakeId, db);
+      await assertApprovedFileUntouched(event, lakeId, db);
       try {
-        await actions.unapproveProposal(proposal.id, audit);
+        await actions.unapproveProposal(proposal.id, audit, event.admittedFabFileId);
       } catch (err) {
         throw asRefusal(err);
       }

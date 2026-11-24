@@ -476,7 +476,8 @@ describe('undoLakeConfigChange', () => {
 
       expect(ctx.actions.unapproveProposal).toHaveBeenCalledWith(
         'p1',
-        expect.objectContaining({ undoesEventId: hex(1) })
+        expect.objectContaining({ undoesEventId: hex(1) }),
+        'f1'
       );
       expect(result.notes).toHaveLength(1);
       expect(result.notes[0]).toMatch(/on hold for "Sweep"/);
@@ -502,6 +503,61 @@ describe('undoLakeConfigChange', () => {
       ctx.world.config.push(configEvent(2, { action: 'decline-proposal', target: { kind: 'proposal', id: 'p1' } }));
       await expect(undoLakeConfigChange(hex(1), LAKE, ctx.adapters)).rejects.toBeInstanceOf(ConflictError);
       expect(ctx.actions.unapproveProposal).not.toHaveBeenCalled();
+    });
+
+    describe('unapprove after file changes', () => {
+      const approval = (over: Record<string, unknown> = {}) =>
+        configEvent(1, {
+          action: 'approve-proposal',
+          target: { kind: 'proposal', id: 'p1' },
+          admittedFabFileId: 'f1',
+          ...over,
+        });
+
+      it('refuses when the approved file was added or removed after the approval', async () => {
+        ctx.world.config.push(approval());
+        ctx.world.proposals.push(proposal('approved'));
+        ctx.world.file.push(fileEvent(2, { fabFileId: 'f1', action: 'removed' }));
+
+        await expect(undoLakeConfigChange(hex(1), LAKE, ctx.adapters)).rejects.toBeInstanceOf(ConflictError);
+        expect(ctx.actions.unapproveProposal).not.toHaveBeenCalled();
+      });
+
+      it('proceeds when a later file event is for a different file', async () => {
+        ctx.world.config.push(approval());
+        ctx.world.proposals.push(proposal('approved'));
+        ctx.world.file.push(fileEvent(2, { fabFileId: 'other-file' }));
+
+        await undoLakeConfigChange(hex(1), LAKE, ctx.adapters);
+
+        expect(ctx.actions.unapproveProposal).toHaveBeenCalledWith('p1', expect.anything(), 'f1');
+      });
+
+      it('proceeds when the approval names no file', async () => {
+        ctx.world.config.push(approval({ admittedFabFileId: undefined }));
+        ctx.world.proposals.push(proposal('approved'));
+        ctx.world.file.push(fileEvent(2, { fabFileId: 'f1' }));
+
+        await undoLakeConfigChange(hex(1), LAKE, ctx.adapters);
+
+        expect(ctx.actions.unapproveProposal).toHaveBeenCalled();
+      });
+    });
+
+    it('refuses to restore a proposal that is no longer declined', async () => {
+      ctx.world.config.push(configEvent(1, { action: 'decline-proposal', target: { kind: 'proposal', id: 'p1' } }));
+      ctx.world.proposals.push(proposal('pending'));
+
+      await expect(undoLakeConfigChange(hex(1), LAKE, ctx.adapters)).rejects.toBeInstanceOf(ConflictError);
+      expect(ctx.actions.restoreProposal).not.toHaveBeenCalled();
+    });
+
+    it('refuses to decline a proposal that is no longer pending', async () => {
+      ctx.world.config.push(configEvent(1, { action: 'restore-proposal', target: { kind: 'proposal', id: 'p1' } }));
+      ctx.world.proposals.push(proposal('approved'));
+
+      await expect(undoLakeConfigChange(hex(1), LAKE, ctx.adapters)).rejects.toBeInstanceOf(ConflictError);
+      expect(ctx.actions.declineProposal).not.toHaveBeenCalled();
     });
 
     it('404s a proposal that belongs to another lake, before taking a claim', async () => {
@@ -539,6 +595,14 @@ describe('undoLakeConfigChange', () => {
 
       await expect(undoLakeConfigChange(hex(1), LAKE, ctx.adapters)).rejects.toBeInstanceOf(ConflictError);
       expect(ctx.actions.removeFile).not.toHaveBeenCalled();
+    });
+
+    it('maps a missing file on the inverse to a refusal', async () => {
+      ctx.world.file.push(fileEvent(1));
+      ctx.actions.removeFile.mockRejectedValueOnce(new NotFoundError('gone'));
+
+      await expect(undoLakeConfigChange(hex(1), LAKE, ctx.adapters)).rejects.toBeInstanceOf(ConflictError);
+      expect(ctx.world.claims.size).toBe(0);
     });
 
     it('re-adds a removed file inside the restore window', async () => {
