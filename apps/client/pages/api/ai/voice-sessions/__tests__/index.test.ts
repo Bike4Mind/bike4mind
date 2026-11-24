@@ -39,6 +39,7 @@ vi.mock('@bike4mind/database', () => ({
   withTransaction: async <T>(fn: () => Promise<T>): Promise<T> => fn(),
   creditTransactionRepository: { createTransaction: async (_type: string, row: object) => ({ id: 'tx', ...row }) },
   adminSettingsRepository: {},
+  cacheRepository: {},
   agentRepository: {},
   apiKeyRepository: {},
   sessionRepository: {
@@ -71,6 +72,7 @@ vi.mock('@bike4mind/services', () => ({
   // reserveVoiceHold's new-account spend cap; these users are never capped.
   creditService: {
     assertNewAccountSpendWithinCap: async () => {},
+    assertInterventionSpendAllowed: async () => {},
     assertSpendNotFrozen: async (
       subject: unknown,
       adapters: { db: { spendFreezes: { findActiveForSubject: (s: unknown) => Promise<unknown> } } }

@@ -291,6 +291,11 @@ export async function reserveVoiceHold(args: {
     if (args.reservedCredits) {
       const after = await userRepository.incrementCredits(args.userId, -args.reservedCredits);
       if ((after?.currentCredits ?? 0) < 0) throw args.unaffordable();
+      // Inside the transaction, so a refusal aborts the debit and the opened hold with it.
+      await creditService.assertInterventionSpendAllowed(
+        { userId: args.userId, credits: args.reservedCredits },
+        { users: userRepository, window: args.newAccountSpendCap?.interventionSpendWindow }
+      );
     }
     return true;
   }, VOICE_SETTLE_TRANSACTION_OPTIONS);

@@ -23,11 +23,11 @@ export const signupGrantAuditTarget = (userId: string, displayName: string = use
  * permission gate.
  */
 export async function readSignupGrantAdminAction(
-  req: Request,
+  req: Request<unknown, unknown, unknown, unknown, Record<string, unknown>>,
   attempted: AdminAuditAction,
   guardTargetVerb: string
 ): Promise<{ userId: string; reason: string; target: SignupGrantAuditTarget }> {
-  const queryUserId = req.query.userId;
+  const queryUserId = (req.query as { userId?: unknown } | undefined)?.userId;
   if (typeof queryUserId !== 'string' || !queryUserId) throw new BadRequestError('Invalid user ID');
   const userId = queryUserId.toLowerCase();
   if (!req.user) throw new ForbiddenError('Authentication required');

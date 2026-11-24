@@ -36,6 +36,19 @@ function inspection(over: Partial<ProjectInspection> = {}): ProjectInspection {
   };
 }
 
+// Joy's Tooltip opens after its enter delay (100ms).
+async function hoverPastTooltipDelay(node: HTMLElement): Promise<void> {
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+  try {
+    await act(async () => {
+      node.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
+      await vi.advanceTimersByTimeAsync(150);
+    });
+  } finally {
+    vi.useRealTimers();
+  }
+}
+
 const getAppInfo = async (): Promise<Partial<AppInfo>> => ({ homeDirectory: '' });
 const listRecentFolders = async (): Promise<RecentFolder[]> => [];
 
@@ -175,11 +188,7 @@ describe('the branch chip against what git answers', () => {
     await show(project({ branch: 'feat/chips', workspace: true }));
 
     const button = host.querySelector('[data-testid="session-chip-branch-btn"]') as HTMLElement;
-    await act(async () => {
-      button.parentElement?.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
-      // Joy's Tooltip opens after its enter delay (100ms).
-      await new Promise(resolve => setTimeout(resolve, 150));
-    });
+    await hoverPastTooltipDelay(button.parentElement as HTMLElement);
     const tooltip = document.body.querySelector('[role="tooltip"]')?.textContent ?? '';
     expect(tooltip).toMatch(/cut from feat\/chips/i);
     expect(tooltip).not.toMatch(/are created/i);
@@ -452,11 +461,7 @@ describe('the chip row once the session has run here', () => {
     await show(true);
 
     const chip = host.querySelector('[data-testid="session-chip-project"]') as HTMLElement;
-    await act(async () => {
-      chip.parentElement?.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
-      // Joy's Tooltip opens after its enter delay (100ms).
-      await new Promise(resolve => setTimeout(resolve, 150));
-    });
+    await hoverPastTooltipDelay(chip.parentElement as HTMLElement);
     const tooltip = document.body.querySelector('[role="tooltip"]') as HTMLElement;
 
     expect(tooltip.textContent?.split('\n')).toEqual([expect.stringMatching(/new session/i), CHECKOUT]);
@@ -494,10 +499,7 @@ describe('a branch another worktree has checked out', () => {
 
   async function hoverMark(name: string): Promise<string> {
     const node = option(name).querySelector('[data-testid="session-chip-branch-elsewhere-label"]') as HTMLElement;
-    await act(async () => {
-      node.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
-      await new Promise(resolve => setTimeout(resolve, 150));
-    });
+    await hoverPastTooltipDelay(node);
     return [...document.body.querySelectorAll('[role="tooltip"]')].map(tip => tip.textContent).join('\n');
   }
 
@@ -760,10 +762,7 @@ describe("the folder chip's recent folders", () => {
     await show(project());
     await openMenu();
 
-    await act(async () => {
-      inMenu('session-chip-project-recent')[1].dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
-      await new Promise(resolve => setTimeout(resolve, 150));
-    });
+    await hoverPastTooltipDelay(inMenu('session-chip-project-recent')[1]);
 
     const tooltips = Array.from(document.body.querySelectorAll('[role="tooltip"]')).map(node => node.textContent);
     expect(tooltips).toContain(OTHER);

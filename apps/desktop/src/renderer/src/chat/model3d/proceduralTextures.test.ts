@@ -5,6 +5,10 @@ import { boxProjectUvs, longestAxis, TEXTURE_SIZE, textureBytes, tileableNoise }
 
 const toneAt = (bytes: Uint8Array, column: number, row: number) => bytes[(row * TEXTURE_SIZE + column) * 4];
 
+// toEqual walks a megabyte typed array element by element, taking most of a second per texture.
+const firstDifference = (a: Uint8Array, b: Uint8Array) =>
+  a.length === b.length ? a.findIndex((byte, index) => byte !== b[index]) : Math.min(a.length, b.length);
+
 describe('tileableNoise', () => {
   it('repeats every period, so a tile has no seam', () => {
     for (const [x, y] of [
@@ -19,8 +23,10 @@ describe('textureBytes', () => {
   it.each(['wood', 'brushed', 'leather', 'stone', 'painted'] as const)(
     'makes the same %s every time, varied and seamless',
     kind => {
+      // Determinism does not depend on resolution, so a small texture proves it at a fraction of the cost.
+      const small = () => textureBytes(kind, undefined, 64).color;
+      expect(firstDifference(small(), small())).toBe(-1);
       const { color, roughness } = textureBytes(kind);
-      expect(color).toEqual(textureBytes(kind).color);
       const tones = new Set(Array.from({ length: 64 }, (_, index) => toneAt(color, index * 8, index * 8)));
       expect(tones.size).toBeGreaterThan(8);
       // The last column runs on into the first, and the last row into the first.
@@ -40,15 +46,19 @@ describe('textureBytes', () => {
 describe('painted wood', () => {
   it('carries the paint colour, worn through to bare wood in places', () => {
     const { color } = textureBytes('painted', [0.2, 0.4, 0.8]);
-    const texels = Array.from({ length: TEXTURE_SIZE * TEXTURE_SIZE }, (_, index) =>
-      color.slice(index * 4, index * 4 + 3)
-    );
-    // Paint: blue above red. Bare wood: red above blue.
-    const painted = texels.filter(([red, , blue]) => blue > red).length;
-    const bare = texels.filter(([red, , blue]) => red > blue + 40).length;
-    expect(painted / texels.length).toBeGreaterThan(0.6);
-    expect(bare / texels.length).toBeGreaterThan(0.01);
-    expect(bare / texels.length).toBeLessThan(0.3);
+    const texels = TEXTURE_SIZE * TEXTURE_SIZE;
+    let painted = 0;
+    let bare = 0;
+    for (let offset = 0; offset < color.length; offset += 4) {
+      const red = color[offset];
+      const blue = color[offset + 2];
+      // Paint: blue above red. Bare wood: red above blue.
+      if (blue > red) painted += 1;
+      if (red > blue + 40) bare += 1;
+    }
+    expect(painted / texels).toBeGreaterThan(0.6);
+    expect(bare / texels).toBeGreaterThan(0.01);
+    expect(bare / texels).toBeLessThan(0.3);
   });
 
   it('bakes the colour into the map and leaves the material white, one map per paint', () => {

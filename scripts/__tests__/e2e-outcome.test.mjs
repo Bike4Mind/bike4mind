@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { summarize } from '../e2e-outcome.mjs';
+import { slackFields, slackSpecBlocks, summarize } from '../e2e-outcome.mjs';
 
 const root = fileURLToPath(new URL('../../', import.meta.url));
 const pwTest = (status, results, expectedStatus = status === 'skipped' ? 'skipped' : 'passed') => ({ status, results, expectedStatus });
@@ -96,7 +96,73 @@ test('reports five skipped cases even when the spec is marked ok', () => {
   assert.equal(result.passed, 1);
   assert.equal(result.skipped, 5);
   assert.equal(result.total, 6);
-  assert.match(result.spec_summary, /1 passed, 0 failed, 5 skipped/);
+  assert.deepEqual(result.specs, [{ name: 'example.spec.ts', passed: 1, flaky: 0, failed: 0, skipped: 5, not_started: 0 }]);
+});
+
+const blocksOf = fragment => JSON.parse(`[${fragment.slice(1)}]`);
+
+test('Slack status and results carry pass/fail emoji', () => {
+  const pass = slackFields(summarize(report(passed()), { execution: 'success' }));
+  assert.equal(pass.slack_status, ':white_check_mark: Passed');
+  const fail = slackFields(summarize(report(passed(), pwTest('unexpected', [{ status: 'failed' }])), { execution: 'failure' }));
+  assert.equal(fail.slack_status, ':x: Failed');
+  assert.equal(
+    fail.slack_results,
+    ':white_check_mark: 1 passed (0 flaky)  :x: 1 failed  :fast_forward: 0 skipped  :no_entry_sign: 0 not started\\nTotal Cases: 2  Setup Failures: 0'
+  );
+  assert.doesNotMatch(fail.slack_results, /\n/);
+  assert.equal(
+    JSON.parse(`"${fail.slack_results}"`).split('\n')[1],
+    'Total Cases: 2  Setup Failures: 0'
+  );
+  const setup = summarize(report(passed()), { execution: 'failure' });
+  setup.setup_failed = 2;
+  assert.match(slackFields(setup).slack_results, /Total Cases: 1 {2}Setup Failures: 2$/);
+  assert.equal(slackFields(summarize(report(passed(), pwTest('skipped', [], 'passed')), { execution: 'success' })).slack_status, ':warning: Incomplete');
+  assert.equal(slackFields(summarize(undefined, { execution: 'failure' })).slack_status, ':x: Setup/deployment failed');
+});
+
+test('Slack spec table marks each spec and aligns its columns', () => {
+  const json = { suites: [
+    { title: 'e2e/admin.spec.ts', specs: [{ tests: [passed(), pwTest('unexpected', [{ status: 'failed' }])] }] },
+    { title: 'notebook.spec.ts', specs: [{ tests: [...Array.from({ length: 11 }, passed), pwTest('flaky', [{ status: 'failed' }, { status: 'passed' }])] }] },
+    { title: 'credits.spec.ts', specs: [{ tests: [pwTest('skipped', [{ status: 'skipped' }])] }] },
+    { title: 'teams.spec.ts', specs: [{ tests: [passed(), pwTest('skipped', [], 'passed')] }] },
+  ] };
+  const [block] = blocksOf(slackSpecBlocks(summarize(json, { execution: 'failure' }).specs, 'Core Run Summary'));
+  const lines = block.text.text.split('\n');
+  assert.equal(lines[0], '*Core Run Summary*');
+  assert.equal(lines[1], '```');
+  assert.equal(lines.at(-1), '```');
+  assert.match(lines[2], /^ {3}Spec +Pass {2}Flaky {2}Fail {2}Skip {2}Not started$/);
+  const rows = lines.slice(4, -1);
+  assert.deepEqual(rows.map(row => row.split(' ')[0]), ['\u{1F534}', '\u{1F7E2}', '\u26AA', '\u{1F7E1}']);
+  assert.match(rows[0], /admin +1 +0 +1 +0 +0$/);
+  assert.match(rows[1], /notebook +12 +1 +0 +0 +0$/);
+  assert.equal(new Set(rows.map(row => row.length - row.split(' ')[0].length)).size, 1);
+});
+
+test('a long Slack spec table splits into sections under the Slack limit', () => {
+  const suites = Array.from({ length: 80 }, (_, i) => ({ title: `feature-area-number-${i}.spec.ts`, specs: [{ tests: [passed()] }] }));
+  const blocks = blocksOf(slackSpecBlocks(summarize({ suites }, { execution: 'success' }).specs, 'Test Run Summary'));
+  assert.ok(blocks.length > 1);
+  for (const block of blocks) {
+    assert.ok(block.text.text.length <= 3000);
+    assert.match(block.text.text, /```\n {3}Spec[\s\S]*\n```$/);
+  }
+  assert.equal(blocks.map(block => block.text.text.match(/feature-area-number-/g).length).reduce((a, b) => a + b), 80);
+});
+
+test('Slack summary shows the global error when no test ran', () => {
+  const result = summarize({ suites: [], errors: [{ message: 'Error: Core data file not found\n  at stack' }] }, { execution: 'failure' });
+  assert.equal(result.outcome, 'setup_failed');
+  const [block] = blocksOf(slackSpecBlocks(result.specs, 'Test Run Summary', result.error));
+  assert.equal(block.text.text, '*Test Run Summary*\nNo test case results available\n```\nError: Core data file not found\n```');
+});
+
+test('Slack error line drops terminal color codes', () => {
+  const result = summarize({ suites: [], errors: [{ message: '\u001b[31mError: setup failed\u001b[39m\n  at x' }] }, { execution: 'failure' });
+  assert.equal(result.error, 'Error: setup failed');
 });
 
 test('CLI emits real outputs for passing, failing, and no-run commands', () => {
@@ -124,6 +190,9 @@ test('CLI emits real outputs for passing, failing, and no-run commands', () => {
       });
       assert.equal(result.status, 0, result.stderr.toString());
       assert.match(fs.readFileSync(outputs, 'utf8'), new RegExp(`^outcome=${expected}$`, 'm'));
+      const written = fs.readFileSync(outputs, 'utf8');
+      assert.doesNotMatch(written, /^specs=/m);
+      assert.ok(blocksOf(written.match(/^slack_spec_blocks=(.*)$/m)[1]).length >= 1);
       const classified = JSON.parse(fs.readFileSync(path.join(cwd, 'e2e-outcome.json'), 'utf8'));
       const guard = spawnSync(process.execPath, [
         '-e',

@@ -138,9 +138,29 @@ async function harness(
   };
 }
 
+/** Runs generate_image with the gap before its first poll skipped rather than waited out. */
+async function runGeneration(h: Harness, prompt: string): Promise<string> {
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+  try {
+    let settled = false;
+    const run = generateImageTool.run({ prompt }, h.context).finally(() => {
+      settled = true;
+    });
+    run.catch(() => undefined);
+    while (!settled) {
+      await vi.advanceTimersByTimeAsync(1_000);
+      // The tool does real file I/O around the poll, which only a real turn of the loop lets finish.
+      await new Promise(resolve => setImmediate(resolve));
+    }
+    return await run;
+  } finally {
+    vi.useRealTimers();
+  }
+}
+
 /** Run a generation and return the id it reported, the way the model would read it back. */
 async function generate(h: Harness): Promise<string> {
-  await generateImageTool.run({ prompt: 'a lantern' }, h.context);
+  await runGeneration(h, 'a lantern');
   return h.media[0].url.split('/').pop() ?? '';
 }
 
@@ -196,7 +216,7 @@ describe('generate_image', () => {
 
   it('reports the image to the UI and attaches it for the model to see', async () => {
     const h = await harness();
-    const result = await generateImageTool.run({ prompt: 'a bicycle' }, h.context);
+    const result = await runGeneration(h, 'a bicycle');
 
     expect(h.media).toHaveLength(1);
     expect(h.media[0]).toMatchObject({ kind: 'image', caption: 'a bicycle' });
@@ -210,7 +230,7 @@ describe('generate_image', () => {
 
   it('tells a model that reads no images it was not shown the result, and not to describe it', async () => {
     const h = await harness({ vision: false });
-    const result = await generateImageTool.run({ prompt: 'a bicycle' }, h.context);
+    const result = await runGeneration(h, 'a bicycle');
 
     expect(h.media).toHaveLength(1);
     expect(h.shown).toEqual([]);
