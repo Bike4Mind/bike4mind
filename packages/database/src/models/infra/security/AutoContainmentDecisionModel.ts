@@ -197,6 +197,21 @@ export class AutoContainmentDecisionRepository {
   }
 
   /** Every decision on the detection, any revision, oldest first. */
+  async findById(id: string): Promise<AutoContainmentDecisionItem | null> {
+    if (!Types.ObjectId.isValid(id)) return null;
+    const doc = await AutoContainmentDecisionModel.findById(id).lean<LeanDecision>();
+    return doc ? toItem(doc) : null;
+  }
+
+  /** Applied graduated decisions of one tier not yet released, oldest first (bulk rollback). */
+  async listActiveByTier(tier: InterventionTier, limit: number): Promise<AutoContainmentDecisionItem[]> {
+    const docs = await AutoContainmentDecisionModel.find({ tier, outcome: 'intervened', releasedAt: null })
+      .sort({ _id: 1 })
+      .limit(limit)
+      .lean<LeanDecision[]>();
+    return docs.map(toItem);
+  }
+
   async listForDetection(detectionId: string): Promise<AutoContainmentDecisionItem[]> {
     const docs = await AutoContainmentDecisionModel.find({ detectionId }).sort({ revision: 1 }).lean<LeanDecision[]>();
     return docs.map(toItem);

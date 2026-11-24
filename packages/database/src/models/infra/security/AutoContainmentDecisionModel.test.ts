@@ -145,4 +145,16 @@ describe('AutoContainmentDecisionRepository', () => {
     expect(byRevision.map(d => d.outcome)).toEqual(['expired', 'intervened', 'contained']);
     expect(byRevision[0]).toMatchObject({ releasedAt: NOW, releaseCondition: 'expiry' });
   });
+
+  it('finds a decision by id and lists applied, unreleased decisions of one tier oldest first', async () => {
+    const first = await repository.recordOnce(input({ tier: 'limit', outcome: 'intervened' }));
+    const second = await repository.recordOnce(input({ revision: 1, tier: 'limit', outcome: 'intervened' }));
+    await repository.recordOnce(input({ revision: 2, tier: 'review', outcome: 'intervened' }));
+    await repository.recordOnce(input({ revision: 3, tier: 'limit', outcome: 'would_intervene' }));
+    await repository.release(first!.id, { by: 'admin-1', reason: 'cleared', condition: 'admin_release', now: NOW });
+
+    expect((await repository.findById(second!.id))?.revision).toBe(1);
+    expect(await repository.findById('bad')).toBeNull();
+    expect((await repository.listActiveByTier('limit', 10)).map(d => d.id)).toEqual([second!.id]);
+  });
 });

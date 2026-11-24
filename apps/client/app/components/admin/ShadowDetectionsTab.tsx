@@ -88,6 +88,7 @@ import {
   type ShadowDetectionRow,
 } from '@client/app/hooks/data/shadowDetections';
 import { ShadowDetectionAssessmentPanel } from './ShadowDetectionAssessmentPanel';
+import { InterventionDecisionsPanel } from './InterventionHolds';
 import { WatchAccountsButton } from './CampaignWatches/WatchAccountsButton';
 import { CampaignWatchesPanel } from './CampaignWatches/CampaignWatchesPanel';
 import { DetectionsIntro, EnforceBarTile, TermHelp, VERDICT_GUIDES } from './shadowDetectionExplainer';
@@ -1233,6 +1234,7 @@ const VerdictDialog: React.FC<VerdictDialogProps> = ({
           initialOverriding={initialOverriding}
         />
       )}
+      <InterventionDecisionsPanel detectionId={row.id} />
       <VerdictHistory row={row} now={now} reviewers={context.reviewers} />
     </ActionDialog>
   );

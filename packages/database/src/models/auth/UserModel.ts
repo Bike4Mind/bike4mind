@@ -1471,6 +1471,37 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
     return result.modifiedCount === 1;
   }
 
+  /** True while any account still carries an unreleased hold from this decision (expired or not). */
+  async hasUnreleasedInterventionHold(decisionId: string): Promise<boolean> {
+    const found = await this.model.exists({ interventionHolds: { $elemMatch: { decisionId, releasedAt: null } } });
+    return found !== null;
+  }
+
+  /**
+   * Stamps released every unreleased hold past its expiry, for audit only: the gates already ignore an
+   * expired hold. Returns the deciding decision ids so their records can be marked expired too.
+   */
+  async expireInterventionHolds(now: Date, limit = 500): Promise<string[]> {
+    const due = { releasedAt: null, expiresAt: { $lte: now } };
+    const docs = await this.model
+      .find({ interventionHolds: { $elemMatch: due } }, { interventionHolds: 1 })
+      .limit(limit)
+      .lean<Array<{ _id: mongoose.Types.ObjectId; interventionHolds?: InterventionHold[] }>>();
+    if (docs.length === 0) return [];
+    await this.model.updateMany(
+      { _id: { $in: docs.map(doc => doc._id) } },
+      { $set: { 'interventionHolds.$[hold].releasedAt': now, 'interventionHolds.$[hold].releasedBy': 'expiry' } },
+      { arrayFilters: [{ 'hold.releasedAt': null, 'hold.expiresAt': { $lte: now } }], runValidators: true }
+    );
+    const ids = new Set<string>();
+    for (const doc of docs) {
+      for (const hold of doc.interventionHolds ?? []) {
+        if (hold.releasedAt == null && hold.expiresAt.getTime() <= now.getTime()) ids.add(hold.decisionId);
+      }
+    }
+    return [...ids];
+  }
+
   async setRiskScore(userId: string, riskScore: ISignupRiskScore): Promise<void> {
     const preservedStates = ['pending', 'approved', 'banned'];
     await this.model.updateOne({ _id: userId }, [

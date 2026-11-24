@@ -67,6 +67,35 @@ describe('UserRepository intervention holds', () => {
     expect(user?.riskScore?.reviewState).toBe('pending');
   });
 
+  it('reports whether any account still carries an unreleased hold from a decision', async () => {
+    const first = await createUser();
+    const second = await createUser();
+    await userRepository.addInterventionHold(first, hold('decision-shared'));
+    await userRepository.addInterventionHold(second, hold('decision-shared'));
+
+    await userRepository.releaseInterventionHold(first, 'decision-shared', { by: 'admin-1', now: NOW });
+    expect(await userRepository.hasUnreleasedInterventionHold('decision-shared')).toBe(true);
+    await userRepository.releaseInterventionHold(second, 'decision-shared', { by: 'admin-1', now: NOW });
+    expect(await userRepository.hasUnreleasedInterventionHold('decision-shared')).toBe(false);
+  });
+
+  it('stamps only lapsed, unreleased holds expired and returns their decisions', async () => {
+    const id = await createUser();
+    const past = new Date(NOW.getTime() - 1000);
+    await userRepository.addInterventionHold(id, hold('lapsed', { expiresAt: past }));
+    await userRepository.addInterventionHold(id, hold('active'));
+    await userRepository.addInterventionHold(id, hold('released', { expiresAt: past }));
+    await userRepository.releaseInterventionHold(id, 'released', { by: 'admin-1', now: past });
+
+    expect(await userRepository.expireInterventionHolds(NOW)).toEqual(['lapsed']);
+    expect((await holdsOf(id)).map(h => [h.decisionId, h.releasedBy])).toEqual([
+      ['lapsed', 'expiry'],
+      ['active', null],
+      ['released', 'admin-1'],
+    ]);
+    expect(await userRepository.expireInterventionHolds(NOW)).toEqual([]);
+  });
+
   it('ignores an invalid user id', async () => {
     expect(await userRepository.addInterventionHold('not-an-id', hold('decision-1'))).toBe(false);
     expect(await userRepository.releaseInterventionHold('not-an-id', 'decision-1', { by: 'a', now: NOW })).toBe(false);

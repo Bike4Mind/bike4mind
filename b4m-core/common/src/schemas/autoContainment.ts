@@ -115,3 +115,19 @@ export type InterventionHold = z.infer<typeof interventionHoldSchema>;
 /** Active = not released and not yet expired. Expiry is enforced here, not by a sweep. */
 export const isActiveInterventionHold = (hold: InterventionHold, now: Date): boolean =>
   hold.releasedAt === null && hold.expiresAt.getTime() > now.getTime();
+
+/** Most applied decisions one rollback request releases (same cap as a bulk detection verdict). */
+export const INTERVENTION_BULK_RELEASE_LIMIT = 100;
+
+export const interventionHoldListSchema = z.object({ data: z.array(interventionHoldSchema) });
+export const autoContainmentDecisionListSchema = z.object({ data: z.array(autoContainmentDecisionItemSchema) });
+
+/** Admin release of one decision's hold, or of every applied decision of one tier (rollback). */
+export const interventionReleaseRequestSchema = z.union([
+  z.object({ decisionId: z.string().regex(/^[a-f0-9]{24}$/), reason: z.string() }),
+  z.object({ tier: z.enum(INTERVENTION_TIERS).exclude(['contain']), reason: z.string() }),
+]);
+export const interventionReleaseResponseSchema = z.object({
+  released: z.array(z.object({ decisionId: z.string(), userIds: z.array(z.string()) })),
+});
+export type InterventionReleaseResponse = z.infer<typeof interventionReleaseResponseSchema>;
