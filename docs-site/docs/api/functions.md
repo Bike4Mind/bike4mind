@@ -83,5 +83,5 @@ Errors use the shared error envelope described in [Errors](./errors.md).
 - `422`: an input does not fit `input_schema`. The `error` names the first field, for example `Input span must be a number.`, and `problems` lists every field with its `path` and `message`.
 - `429`: you passed the rate limit.
 - `502`: the function raised an error, ran out of memory, returned outputs that do not fit `output_schema`, or returned too much. `outcome` names which, and `stamp` is included.
-- `503`: no function runtime is available, or the runtime did not answer. Try again later.
+- `503`: no function runtime is available, the runtime was slow to start, or it did not answer. Try again later.
 - `504`: the call ran past its time limit. `errorCode` is `request_timeout`.

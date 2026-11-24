@@ -122,7 +122,8 @@ export const invokeFunctionContract = defineEndpoint({
       schema: InvokeFunctionFailedErrorSchema,
     },
     503: {
-      description: 'No function runtime is available, or the runtime did not answer. Try again later.',
+      description:
+        'No function runtime is available, the runtime was slow to start, or it did not answer. Try again later.',
       schema: ApiErrorSchema,
     },
     504: {

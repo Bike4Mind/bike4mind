@@ -96,7 +96,10 @@ export interface InvokeAnswer {
   body: Record<string, unknown>;
 }
 
-export const FUNCTION_RUNTIME_FAULT_MESSAGE = 'The function runtime did not answer. Try again later.';
+const FUNCTION_RUNTIME_FAULT_MESSAGE = 'The function runtime did not answer. Try again later.';
+
+// Refusals about the function or its caller; any other refusal comes from the runtime.
+const FUNCTION_NOT_FOUND_REASONS = new Set(['not_found', 'not_caller', 'disabled', 'source_deleted']);
 
 const errorMessage = (errorClass?: string) => `The function raised an error${errorClass ? ` (${errorClass})` : ''}.`;
 
@@ -132,10 +135,13 @@ export function invokeAnswer(call: DispatchFunctionCallResult): InvokeAnswer {
       if (call.reason === 'runtime_unavailable') {
         return { status: 503, body: { error: 'No function runtime is available.' } };
       }
-      return { status: 404, body: { error: FUNCTION_NOT_FOUND_MESSAGE } };
+      if (call.reason && FUNCTION_NOT_FOUND_REASONS.has(call.reason)) {
+        return { status: 404, body: { error: FUNCTION_NOT_FOUND_MESSAGE } };
+      }
+      return { status: 503, body: { error: FUNCTION_RUNTIME_FAULT_MESSAGE } };
     case 'error':
-      // A runner that threw or never replied is a platform fault, not the function's own error.
-      if (call.reason === 'runtime_unavailable' || call.reason === 'no_reply') {
+      // A runner that threw, never replied, or was slow to start is a platform fault, not the function's own error.
+      if (call.reason === 'runtime_unavailable' || call.reason === 'no_reply' || call.reason === 'start_timeout') {
         return { status: 503, body: { error: FUNCTION_RUNTIME_FAULT_MESSAGE } };
       }
       return { status: 502, body: { error: errorMessage(call.errorClass), outcome: call.outcome, ...stamp } };

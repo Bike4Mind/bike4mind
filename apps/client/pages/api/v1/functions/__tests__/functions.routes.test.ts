@@ -7,7 +7,6 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 import {
   ApiKeyScope,
-  TooManyRequestsError,
   getFunctionContract,
   invokeFunctionContract,
   isZodError,
@@ -23,7 +22,6 @@ import type {
 const h = vi.hoisted(() => ({
   rateLimitOptions: [] as Array<{ bucket?: string }>,
   baseApiOptions: [] as Array<Record<string, unknown> | undefined>,
-  limited: { value: false },
   realLimiter: { value: false },
   perMin: { value: 60 },
   buckets: new Map<string, number>(),
@@ -63,7 +61,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
     return chain;
   },
 }));
-// The real limiter runs over an in-memory counter when `realLimiter` is on; otherwise `limited` decides.
+// The real limiter runs over an in-memory counter when `realLimiter` is on; otherwise requests pass.
 vi.mock('@bike4mind/server-utils/middlewares/rateLimit', async importOriginal => {
   const actual = await importOriginal<typeof import('@bike4mind/server-utils/middlewares/rateLimit')>();
   type Middleware = ReturnType<typeof actual.rateLimit>;
@@ -73,7 +71,7 @@ vi.mock('@bike4mind/server-utils/middlewares/rateLimit', async importOriginal =>
       const real = actual.rateLimit(options);
       return (...args: Parameters<Middleware>) => {
         if (h.realLimiter.value) return real(...args);
-        args[2](h.limited.value ? new TooManyRequestsError('Rate limit exceeded.') : undefined);
+        args[2]();
       };
     },
   };
@@ -221,7 +219,6 @@ const invoke = (id: string, body: unknown, as: Pick<CallOptions, 'user' | 'keyId
 
 beforeEach(() => {
   vi.clearAllMocks();
-  h.limited.value = false;
   h.realLimiter.value = false;
   h.perMin.value = 60;
   h.buckets.clear();
@@ -282,9 +279,13 @@ describe('scopes and limits', () => {
   });
 
   it('answers 429 from the limiter before the function is read or run', async () => {
-    h.limited.value = true;
+    h.realLimiter.value = true;
+    h.perMin.value = 0;
     const res = await invoke(LIVE_ID, { input: { load: 1, span: 2 } });
-    expect(res).toEqual({ status: 429, body: { error: 'Rate limit exceeded.' } });
+    expect(res).toEqual({
+      status: 429,
+      body: { error: 'Requests to this endpoint are currently blocked for your account.' },
+    });
     expect(h.runner).not.toHaveBeenCalled();
     expect(h.calls).toHaveLength(0);
   });
@@ -437,9 +438,30 @@ describe('invoke', () => {
 
   it('answers 422 for a body without input or with an unknown field', async () => {
     // The contract prelude throws here; baseApi's error handler (stubbed) writes the envelope.
-    const thrown = { status: 422, body: { error: expect.any(String) } };
-    expect(await invoke(LIVE_ID, {})).toEqual(thrown);
-    expect(await invoke(LIVE_ID, { input: { load: 1, span: 1 }, extra: true })).toEqual(thrown);
+    // The stub writes the thrown message, which is the JSON of the zod issues.
+    const answer = async (body: unknown) => {
+      const res = await invoke(LIVE_ID, body);
+      return { status: res.status, body: { error: JSON.parse(String(res.body.error)) as unknown } };
+    };
+    expect(await answer({})).toEqual({
+      status: 422,
+      body: {
+        error: [
+          {
+            expected: 'record',
+            code: 'invalid_type',
+            path: ['input'],
+            message: 'Invalid input: expected record, received undefined',
+          },
+        ],
+      },
+    });
+    expect(await answer({ input: { load: 1, span: 1 }, extra: true })).toEqual({
+      status: 422,
+      body: {
+        error: [{ code: 'unrecognized_keys', keys: ['extra'], path: [], message: 'Unrecognized key: "extra"' }],
+      },
+    });
     expect(h.runner).not.toHaveBeenCalled();
   });
 
@@ -493,6 +515,39 @@ describe('invoke', () => {
     expect(invokeAnswer({ outcome: 'error', reason: 'no_reply', durationMs: 105_000, callId: 'c' })).toEqual({
       status: 503,
       body: { error: 'The function runtime did not answer. Try again later.' },
+    });
+  });
+
+  it('answers 503 when the runtime was slow to start', () => {
+    expect(invokeAnswer({ outcome: 'error', reason: 'start_timeout', durationMs: 60_000, callId: 'c' })).toEqual({
+      status: 503,
+      body: { error: 'The function runtime did not answer. Try again later.' },
+    });
+  });
+
+  it.each(['payload_invalid', 'pyodide_version'])('answers 503 when the runtime refuses with %s', reason => {
+    expect(invokeAnswer({ outcome: 'refused', reason, durationMs: 0, callId: 'c' })).toEqual({
+      status: 503,
+      body: { error: 'The function runtime did not answer. Try again later.' },
+    });
+  });
+
+  it.each(['not_found', 'not_caller', 'disabled', 'source_deleted'])(
+    'answers 404 when the call is refused with %s',
+    reason => {
+      expect(invokeAnswer({ outcome: 'refused', reason, durationMs: 0, callId: 'c' })).toEqual({
+        status: 404,
+        body: { error: 'Function not found' },
+      });
+    }
+  );
+
+  it('answers 502 naming output_too_large when the function returns more than a call can carry', () => {
+    expect(
+      invokeAnswer({ outcome: 'output_too_large', reason: 'result_too_large', durationMs: 1, callId: 'c' })
+    ).toEqual({
+      status: 502,
+      body: { error: 'The function returned more than a call can carry.', outcome: 'output_too_large' },
     });
   });
 
