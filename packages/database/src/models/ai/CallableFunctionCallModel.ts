@@ -12,6 +12,8 @@ import BaseRepository from '@bike4mind/db-core';
 const SHA256 = /^[0-9a-f]{64}$/;
 const CODE = /^[a-z0-9_]{1,40}$/;
 const CLASS_NAME = /^[A-Za-z_][A-Za-z0-9_.]{0,99}$/;
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === 'object' && value !== null && !Array.isArray(value);
 
 const RuntimeSchema = new Schema(
   {
@@ -60,8 +62,25 @@ export const CallableFunctionCall: ICallableFunctionCallModel =
   model<ICallableFunctionCallDocument>('CallableFunctionCall', CallableFunctionCallSchema);
 
 class CallableFunctionCallRepository extends BaseRepository<ICallableFunctionCallDocument & IMongoDocument> {
-  async record(row: ICallableFunctionCall): Promise<ICallableFunctionCallDocument> {
-    return this.create(row);
+  async record(row: ICallableFunctionCall, callId?: string): Promise<ICallableFunctionCallDocument> {
+    const id = callId === undefined ? undefined : new mongoose.Types.ObjectId(callId);
+    try {
+      return await this.create({ ...row, ...(id ? { _id: id } : {}) });
+    } catch (error) {
+      if (!id || !(error instanceof mongoose.mongo.MongoServerError) || error.code !== 11000) throw error;
+      const keyPattern: unknown = error.keyPattern;
+      if (
+        keyPattern !== undefined &&
+        (!isRecord(keyPattern) || Object.keys(keyPattern).length !== 1 || keyPattern._id !== 1)
+      )
+        throw error;
+      const keyValue: unknown = error.keyValue;
+      if (keyValue !== undefined && (!isRecord(keyValue) || String(keyValue._id) !== id.toHexString())) throw error;
+      // An insert may commit before its acknowledgement is lost. Reuse that immutable row on retry.
+      const existing = await this.findById(id.toHexString());
+      if (!existing) throw error;
+      return existing;
+    }
   }
 }
 

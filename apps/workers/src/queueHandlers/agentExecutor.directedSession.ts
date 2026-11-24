@@ -1,4 +1,11 @@
-import { DIRECTOR_TOOLS, buildDirectorSystemContext } from '@bike4mind/common';
+import {
+  DIRECTOR_TOOLS,
+  buildDirectorSystemContext,
+  directorContextLead,
+  studioDirectorBriefing,
+  type StudioCompositionContent,
+  type StudioDirectorBriefing,
+} from '@bike4mind/common';
 
 /**
  * A notebook the Studio Direct button started (`session.productionCompositionId`, written by startAgentExecution
@@ -27,18 +34,46 @@ export function withDirectedSessionTools(enabledTools: string[], input: Directed
 }
 
 /**
+ * The directed production's template, tone and length, read through the production tools' owner-scoped
+ * `compositions`. Undefined for an undirected run, or when the production cannot be read, which directs it as
+ * an ad.
+ */
+export async function loadDirectorBriefing(
+  input: DirectedSessionInput,
+  compositions:
+    { get(id: string): Promise<Pick<StudioCompositionContent, 'template' | 'brief' | 'timeline'>> } | undefined,
+  logger: { warn(message: string, meta?: Record<string, unknown>): void }
+): Promise<StudioDirectorBriefing | undefined> {
+  const compositionId = directedCompositionId(input);
+  if (!compositionId || !compositions) return undefined;
+  try {
+    return studioDirectorBriefing(await compositions.get(compositionId));
+  } catch (error) {
+    logger.warn('[Director] could not read the directed production; directing it as an ad', {
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return undefined;
+  }
+}
+
+/**
  * The system context for a directed run: the director context, then the launch's own context unless it already
- * is that same text (the Direct launch sends it on its first run). Only once the production tools were actually
- * built (`productionToolsReady`), so a run without them is never told to use them.
+ * is a director context for this production (the Direct launch sends one on its first run). Only once the
+ * production tools were actually built (`productionToolsReady`), so a run without them is never told to use them.
  */
 export function withDirectedSystemContext(
   systemContext: string | undefined,
-  input: DirectedSessionInput & { productionToolsReady: boolean }
+  input: DirectedSessionInput & { productionToolsReady: boolean; briefing?: StudioDirectorBriefing }
 ): string | undefined {
   const compositionId = directedCompositionId(input);
   if (!compositionId || !input.productionToolsReady) return systemContext;
-  const directorContext = buildDirectorSystemContext(compositionId);
-  if (!systemContext || systemContext.trim() === directorContext) return directorContext;
+  const directorContext = buildDirectorSystemContext(compositionId, input.briefing);
+  if (!systemContext) return directorContext;
+  // The launch's copy was built from the client's view of the production, which can lag a brief edit; the
+  // production read here wins, and the launch's copy stands in only when that read failed.
+  if (systemContext.trim().startsWith(directorContextLead(compositionId))) {
+    return input.briefing ? directorContext : systemContext.trim();
+  }
   return `${directorContext}\n\n${systemContext}`;
 }
 

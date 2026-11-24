@@ -154,9 +154,12 @@ describe('shellApproval per part', () => {
     });
 
     it('an export that every later part inherits', async () => {
-      whole(await approve("export GIT_SSH_COMMAND='sh -c x'; git push origin HEAD"));
-      whole(await approve('GIT_SSH_COMMAND=x; git push origin HEAD'));
-      whole(await approve('for HOME in .; do git status; done; git push origin HEAD'));
+      const prompts = await Promise.all([
+        approve("export GIT_SSH_COMMAND='sh -c x'; git push origin HEAD"),
+        approve('GIT_SSH_COMMAND=x; git push origin HEAD'),
+        approve('for HOME in .; do git status; done; git push origin HEAD'),
+      ]);
+      prompts.forEach(whole);
     });
 
     it('a git setting that makes git run a program', async () => {

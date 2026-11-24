@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest';
+import { CurationArtifactType } from '@bike4mind/common';
 import {
   generateExecutiveSummaryMarkdown,
   parseConsolidatedNarrative,
@@ -68,6 +69,26 @@ describe('generateExecutiveSummaryMarkdown - consolidated single call', () => {
 
     // 1 narrative call + 1 batched artifact-description call = 2 total.
     expect(prompts).toHaveLength(2);
+  });
+
+  it('resolves artifact context from _id when a message has no id', async () => {
+    const { llm, prompts } = makeRecordingLLM(delimitedResponse);
+    const rawMessages = [
+      { _id: { toString: () => 'oid1' }, timestamp: new Date(0), prompt: 'Reverse a string', reply: 'Done.' },
+    ];
+    const artifacts = [
+      {
+        type: CurationArtifactType.CODE,
+        content: 'const r = 1;',
+        language: 'ts',
+        messageId: 'oid1',
+        timestamp: new Date(0),
+      },
+    ];
+
+    await generateExecutiveSummaryMarkdown(session, rawMessages, artifacts, llm, 'gpt-test');
+
+    expect(prompts.find(p => p.includes('[ARTIFACT 1]'))).toContain('Context: User: Reverse a string');
   });
 });
 

@@ -104,6 +104,28 @@ describe('creditService - deductCreditsWithOrgSupport', () => {
       );
     });
 
+    it('records a run attribution on the ledger row, so the run reads the charge as settled spend', async () => {
+      const run = { runId: '0b6f3c2e-7d4a-4f51-9a8e-2c1d5e6f7a80', role: 'worker' as const, purpose: 'tool' as const };
+
+      await deductCreditsWithOrgSupport(
+        {
+          type: 'sound_effects_usage',
+          user: mockUser,
+          organization: null,
+          credits: 3,
+          sessionId: 's1',
+          model: 'm',
+          run,
+        },
+        mockAdapters
+      );
+
+      expect(mockSubtractCredits).toHaveBeenCalledWith(
+        expect.objectContaining({ type: 'sound_effects_usage', metadata: { run } }),
+        expect.anything()
+      );
+    });
+
     it('should handle undefined organization the same as null', async () => {
       const params: DeductCreditsParams = {
         type: 'image_generation_usage',

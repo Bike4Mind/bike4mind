@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { InvokeCommand, LambdaClient } from '@aws-sdk/client-lambda';
 import { parseFunctionContract, type FunctionContractProblem } from '@bike4mind/common';
 import {
@@ -17,9 +18,27 @@ import {
  * Runs Python functions in an isolated runtime: the hosted Lambda (`apps/workers/src/callableFunctions/handler.ts`)
  * or, for tests and self-hosted development, the same child spawned on this host.
  */
-export type CallableFunctionRunner = (payload: CallableFunctionRunPayload) => Promise<CallableFunctionRunResult>;
+export type CallableFunctionRunner = (
+  payload: CallableFunctionRunPayload,
+  tenant: CallableFunctionTenant
+) => Promise<CallableFunctionRunResult>;
 
-export function createInProcessCallableFunctionRunner(options: CallableFunctionChildOptions): CallableFunctionRunner {
+/** Who a run is for. */
+export interface CallableFunctionTenant {
+  callerUserId: string;
+  /** The pinned artifact's content hash. */
+  codeHash: string;
+}
+
+/** The Lambda tenant id: one caller and one code hash share warm environments, and nothing else does. */
+export function callableFunctionTenantId({ callerUserId, codeHash }: CallableFunctionTenant): string {
+  return createHash('sha256').update(`${callerUserId}:${codeHash}`).digest('hex');
+}
+
+/** Ignores the tenant: every run here is a fresh child on this host. */
+export function createInProcessCallableFunctionRunner(
+  options: CallableFunctionChildOptions
+): (payload: CallableFunctionRunPayload, tenant?: CallableFunctionTenant) => Promise<CallableFunctionRunResult> {
   return payload => runCallableFunctionInChild(payload, options);
 }
 
@@ -110,21 +129,23 @@ const sendWithDefaultClient = (command: InvokeCommand) =>
 const FAILED_MESSAGE = 'Callable function runtime invocation failed';
 
 /**
- * Invokes the runtime Lambda named by configuration, RequestResponse only. Any failure is a plain
- * Error with fixed text; the cause keeps an error name for operators, never the reply body.
+ * Invokes the runtime Lambda named by configuration, RequestResponse only, under the call's tenant id (the
+ * function runs in per-tenant isolation, which refuses an invoke without one). Any failure is a plain Error
+ * with fixed text; the cause keeps an error name for operators, never the reply body.
  */
 export function createLambdaCallableFunctionRunner(
   functionName: string,
   send: (command: InvokeCommand) => Promise<{ FunctionError?: string; Payload?: Uint8Array }> = sendWithDefaultClient
 ): CallableFunctionRunner {
   const failed = (cause?: unknown) => new Error(FAILED_MESSAGE, { cause });
-  return async payload => {
+  return async (payload, tenant) => {
     let reply: { FunctionError?: string; Payload?: Uint8Array };
     try {
       reply = await send(
         new InvokeCommand({
           FunctionName: functionName,
           InvocationType: 'RequestResponse',
+          TenantId: callableFunctionTenantId(tenant),
           Payload: Buffer.from(JSON.stringify(payload)),
         })
       );

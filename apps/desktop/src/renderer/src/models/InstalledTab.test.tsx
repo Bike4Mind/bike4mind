@@ -2,11 +2,12 @@
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { CssVarsProvider } from '@mui/joy/styles';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ChatModelOption } from '@shared/chat';
 import type { LocalModelEntry } from '@shared/models';
 import { desktopTheme } from '../theme';
-import { InstalledTab } from './InstalledTab';
+import { installedCache } from './installedCache';
+import { InstalledTab, inUseWarning } from './InstalledTab';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 window.matchMedia ??= ((query: string) => ({
@@ -151,5 +152,113 @@ describe('InstalledTab model settings', () => {
       'Settings for llama3'
     );
     expect(document.querySelector('[data-testid="model-defaults-temperature-input"]')).not.toBeNull();
+  });
+});
+
+describe('InstalledTab last known list', () => {
+  const qwen: LocalModelEntry = { ...bare, name: 'qwen2.5:0.5b' };
+  const llama: LocalModelEntry = { ...bare, name: 'llama3.2:3b' };
+  const gpu = { id: 'gpu', name: 'gpu box', local: false, management: 'allowed' } as const;
+  const reachable = {
+    reachable: true,
+    version: '0.40.11',
+    url: 'http://gpu:11434',
+    error: null,
+    serverId: 'gpu',
+    serverName: 'gpu box',
+    management: 'allowed',
+  } as const;
+  const text = (testId: string) => host.querySelector(`[data-testid="${testId}"]`)?.textContent ?? null;
+
+  it('shows the last list with why it is stale, and checks again on request', async () => {
+    const onRetry = vi.fn();
+    const show = (props: Pick<Parameters<typeof InstalledTab>[0], 'status' | 'installed'>) =>
+      act(async () =>
+        root.render(
+          <CssVarsProvider theme={desktopTheme}>
+            <InstalledTab
+              {...props}
+              target={gpu}
+              lastInstalled={{ models: [qwen], listedAt: Date.now() }}
+              onRetry={onRetry}
+              onExplore={() => {}}
+            />
+          </CssVarsProvider>
+        )
+      );
+
+    await show({
+      status: { ...reachable, reachable: false, error: 'Could not reach gpu box: refused' },
+      installed: null,
+    });
+    expect(host.querySelector('[data-testid="models-installed-runtime-down"]')).toBeNull();
+    expect(host.querySelectorAll('[data-testid="models-installed-row"]')).toHaveLength(1);
+    expect(text('models-installed-stale-reason')).toBe('Could not reach gpu box: refused');
+    expect(text('models-installed-stale')).toContain('Showing the list from');
+    await act(async () => host.querySelector<HTMLElement>('[data-testid="models-installed-stale-retry-btn"]')?.click());
+    expect(onRetry).toHaveBeenCalledTimes(1);
+
+    await show({
+      status: reachable,
+      installed: { ok: false, error: { kind: 'failed', message: 'Listing timed out' } },
+    });
+    expect(host.querySelector('[data-testid="models-installed-error"]')).toBeNull();
+    expect(text('models-installed-stale-reason')).toBe('Listing timed out');
+  });
+
+  // A listing in flight across the delete may still name the model; useModelHub drops listings started before a cut.
+  it('cuts listings before and after a removal, and drops the model from the cached list', async () => {
+    installedCache.clear();
+    installedCache.set('gpu', 'identity', [qwen, llama], 1);
+    const cutsAtDelete: number[] = [];
+    (window as unknown as { b4m: unknown }).b4m = {
+      models: {
+        remove: async () => {
+          cutsAtDelete.push(installedCache.cuts('gpu'));
+          return { ok: true };
+        },
+      },
+    };
+    await act(async () =>
+      root.render(
+        <CssVarsProvider theme={desktopTheme}>
+          <InstalledTab
+            status={reachable}
+            target={gpu}
+            installed={{ ok: true, models: [qwen, llama] }}
+            onRetry={() => {}}
+            onExplore={() => {}}
+          />
+        </CssVarsProvider>
+      )
+    );
+    await act(async () =>
+      row('qwen2.5:0.5b')?.querySelector<HTMLElement>('[data-testid="models-installed-remove-btn"]')?.click()
+    );
+    await act(async () =>
+      document.querySelector<HTMLElement>('[data-testid="models-remove-dialog-confirm-btn"]')?.click()
+    );
+    expect(cutsAtDelete).toEqual([1]);
+    expect(installedCache.cuts('gpu')).toBe(2);
+    expect(installedCache.get('gpu', 'identity')?.models.map(model => model.name)).toEqual(['llama3.2:3b']);
+    installedCache.clear();
+  });
+});
+
+describe('inUseWarning', () => {
+  const qwen: LocalModelEntry = { ...bare, name: 'qwen2.5:0.5b' };
+  const on = (serverId: string, name = 'qwen2.5:0.5b') => ({ serverId, name });
+
+  it('names the open conversation first, else counts the conversations on the same server', () => {
+    expect(inUseWarning(qwen, 'local', { active: on('local'), conversations: [on('local')] })).toContain(
+      'The open conversation uses this model.'
+    );
+    expect(
+      inUseWarning(qwen, 'local', {
+        active: null,
+        conversations: [on('local'), on('local'), on('gpu'), on('local', 'llama')],
+      })
+    ).toContain('2 conversations use this model.');
+    expect(inUseWarning(qwen, 'local', { active: on('gpu'), conversations: [] })).toBeNull();
   });
 });

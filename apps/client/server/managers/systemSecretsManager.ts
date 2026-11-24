@@ -21,6 +21,8 @@ import { isPlaceholderValue } from '@bike4mind/common';
 import { isValidEncryptionKey } from '@bike4mind/server-utils/security/secretEncryption';
 import { decryptStoredSecret } from '@bike4mind/server-utils/security/tokenEncryption';
 import { Config } from '@bike4mind/server-utils/utils/config';
+import { statusTransportKind, unusedMailSecrets } from '@bike4mind/server-utils/utils/mailer/configStatus';
+import type { MailTransportKind } from '@bike4mind/server-utils/utils/mailer/transport';
 
 /**
  * Result of secret resolution for debugging/logging.
@@ -367,3 +369,12 @@ export const RESOLVABLE_SECRETS = {
 } as const;
 
 export type ResolvableSecretName = keyof typeof RESOLVABLE_SECRETS;
+
+/** RESOLVABLE_SECRETS without the mail settings the stage's transport never reads. */
+export function getResolvableSecrets(
+  transport: MailTransportKind = statusTransportKind()
+): Partial<typeof RESOLVABLE_SECRETS> {
+  const resolvable: Partial<typeof RESOLVABLE_SECRETS> = { ...RESOLVABLE_SECRETS };
+  for (const name of unusedMailSecrets(transport)) delete resolvable[name];
+  return resolvable;
+}

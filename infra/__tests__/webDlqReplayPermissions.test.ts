@@ -15,8 +15,8 @@ const REPLAY_ROUTE_ACTIONS = [
 ];
 
 const stageQueueStatements = (source: string) =>
-  [...stripComments(source).matchAll(/\{\s*actions:\s*\[([^\]]*)\],\s*resources:\s*\[stageQueueArns\b/g)].map(
-    match => [...match[1].matchAll(/'([^']+)'/g)].map(action => action[1])
+  [...stripComments(source).matchAll(/\{\s*actions:\s*\[([^\]]*)\],\s*resources:\s*\[stageQueueArns\b/g)].map(match =>
+    [...match[1].matchAll(/'([^']+)'/g)].map(action => action[1])
   );
 
 describe('web function SQS permissions for admin DLQ replay', () => {

@@ -8,6 +8,7 @@ import {
   CompletionRunUsageSchema,
   CreateCompletionRunRequestSchema,
   RaiseCompletionRunBudgetRequestSchema,
+  CompletionEvaluationStateSchema,
 } from '../../schemas/cliCompletions';
 
 /**
@@ -48,7 +49,8 @@ export const createCompletionRunContract = defineEndpoint({
   emitsRateLimitHeaders: true,
   responses: {
     201: {
-      description: 'The created run.',
+      description:
+        'The created run, or the existing evaluation for the same owner and rootSessionId. Evaluation mint retries preserve the original immutable limits and receipts.',
       schema: CompletionRunSchema,
       example: {
         runId: '0b6f3c2e-7d4a-4f51-9a8e-2c1d5e6f7a80',
@@ -56,6 +58,12 @@ export const createCompletionRunContract = defineEndpoint({
         budgetCredits: 5000,
         createdAt: '2026-11-10T12:00:00.000Z',
       },
+    },
+    400: { description: 'Evaluation requires a stable rootSessionId.', schema: ApiErrorSchema },
+    403: { description: 'Evaluation execution is not enabled for this account.', schema: ApiErrorSchema },
+    409: {
+      description: 'The evaluation identity already exists with different limits or models.',
+      schema: ApiErrorSchema,
     },
     429: { description: 'Per-user rate limit exceeded.', schema: ApiErrorSchema },
   },
@@ -113,6 +121,24 @@ export const raiseCompletionRunBudgetContract = defineEndpoint({
     429: { description: 'Per-user rate limit exceeded.', schema: ApiErrorSchema },
   },
   codeSample: { authToken: 'b4m_live_<key>', streaming: false, body: { budgetCredits: 8000 } },
+});
+
+export const getCompletionRunEvaluationContract = defineEndpoint({
+  method: 'get',
+  path: '/api/v1/completion-runs/{runId}/evaluation',
+  operationId: 'getCompletionRunEvaluation',
+  summary: 'Recover evaluation admission receipts',
+  description:
+    'Owner-scoped durable provider-priced reservations and receipts. Pending and unknown receipts retain their full bounds and block further admission. Provider-priced USD is distinct from platform credit charges. A complete receipt uses provider-reported usage and the immutable catalog rates captured at admission; it is not an invoice. Recovery never repeats a provider dispatch.',
+  tags: ['AI'],
+  auth: 'apiKeyOrJwt',
+  scopes: [ApiKeyScope.AI_CHAT, ApiKeyScope.AI_GENERATE],
+  pathParams: CompletionRunIdParamSchema,
+  responses: {
+    200: { description: 'Evaluation state and durable request receipts.', schema: CompletionEvaluationStateSchema },
+    404: { description: 'Evaluation run not found for this owner.', schema: RunNotFoundErrorSchema },
+    429: { description: 'Rate limit exceeded.', schema: ApiErrorSchema },
+  },
 });
 
 const EXAMPLE_SPEND = {

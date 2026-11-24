@@ -86,6 +86,11 @@ describe('StudioChip', () => {
     expect(onClick).toHaveBeenCalledTimes(1);
   });
 
+  it('is a plain action, not a toggle, without `selected`', () => {
+    renderInStudio(<StudioChip testId="verse">[Verse]</StudioChip>);
+    expect(screen.getByTestId('verse')).not.toHaveAttribute('aria-pressed');
+  });
+
   it('shows a swatch only when given one', () => {
     const { rerender } = renderInStudio(<StudioChip testId="scene">Dusk</StudioChip>);
     expect(screen.queryByTestId('scene-swatch')).not.toBeInTheDocument();
@@ -108,6 +113,25 @@ describe('StudioSegmentedControl', () => {
     { value: 'portrait', label: '4:5' },
     { value: 'wide', label: '16:9' },
   ] as const;
+
+  it('marks an invalid option and holds every segment while disabled', () => {
+    const onChange = vi.fn();
+    renderInStudio(
+      <StudioSegmentedControl
+        aria-label="Shape"
+        options={[...options.slice(0, 2), { value: 'wide', label: '16:9', invalid: true }]}
+        value="wide"
+        onChange={onChange}
+        disabled
+      />
+    );
+    expect(screen.getByTestId('studio-segmented-control-wide')).toHaveAttribute('data-invalid', 'true');
+    expect(screen.getByTestId('studio-segmented-control-square')).toHaveAttribute('data-invalid', 'false');
+    expect(screen.getByTestId('studio-segmented-control-square')).toBeDisabled();
+    fireEvent.click(screen.getByTestId('studio-segmented-control-square'));
+    fireEvent.keyDown(screen.getByRole('radiogroup'), { key: 'ArrowRight' });
+    expect(onChange).not.toHaveBeenCalled();
+  });
 
   it('is a radio group by default, with one checked and focusable option', () => {
     renderInStudio(<StudioSegmentedControl aria-label="Shape" options={options} value="portrait" onChange={vi.fn()} />);

@@ -1,6 +1,6 @@
 {
   "name": "@bike4mind/client",
-  "version": "0.1.106",
+  "version": "0.1.107",
   "private": true,
   "scripts": {
     "postinstall": "node scripts/copy-tavern-assets.mjs && node scripts/copy-pdf-worker.mjs && node scripts/copy-highs-wasm.mjs && node scripts/generate-premium-glue.mjs",
@@ -27,9 +27,9 @@
     "typecheck": "NODE_OPTIONS='--max-old-space-size=8192' tsc --noEmit",
     "typecheck:native": "tsgo --noEmit",
     "typecheck:fast": "tsgo --noEmit",
-    "test": "vitest run",
-    "test:integration": "CLIENT_TEST_LANE=integration vitest run",
-    "test:repo": "CLIENT_TEST_LANE=repo vitest run",
+    "test": "VITE_CONFIG_NATIVE_IGNORE_WARNING=true vitest run",
+    "test:integration": "VITE_CONFIG_NATIVE_IGNORE_WARNING=true CLIENT_TEST_LANE=integration vitest run",
+    "test:repo": "VITE_CONFIG_NATIVE_IGNORE_WARNING=true CLIENT_TEST_LANE=repo vitest run",
     "test:e2e:setup": "node scripts/setup-e2e.mjs",
     "test:e2e": "playwright test",
     "test:e2e:ui": "playwright test --ui",
@@ -126,6 +126,7 @@
     "@types/react": "^19.3.0",
     "@uiw/react-markdown-preview": "^5.2.1",
     "@uiw/react-md-editor": "^4.1.1",
+    "@xmldom/xmldom": "^0.8.15",
     "archiver": "^7.0.0",
     "async-mutex": "^0.5.0",
     "aws-jwt-verify": "^5.2.1",

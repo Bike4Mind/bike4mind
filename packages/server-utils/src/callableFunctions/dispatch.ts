@@ -12,7 +12,12 @@ import {
   type ICallableFunctionCall,
   type ICallableFunctionDocument,
 } from '@bike4mind/common';
-import { artifactRepository, callableFunctionCallRepository, callableFunctionRepository } from '@bike4mind/database';
+import {
+  artifactRepository,
+  callableFunctionCallRepository,
+  callableFunctionRepository,
+  mongoose,
+} from '@bike4mind/database';
 import { Logger } from '@bike4mind/observability';
 import { resolveCallableFunctionsEnabled } from './access';
 import {
@@ -22,7 +27,11 @@ import {
   type CallableFunctionRunPayload,
   type CallableFunctionRunResult,
 } from './runtimeParent';
-import { selectCallableFunctionRunner, type CallableFunctionRunner } from './runtimeRunner';
+import {
+  selectCallableFunctionRunner,
+  type CallableFunctionRunner,
+  type CallableFunctionTenant,
+} from './runtimeRunner';
 
 /**
  * The one way a saved function runs: every surface (the test run now; REST, chat, agent runs, and MCP later) calls
@@ -182,7 +191,8 @@ function describeRunnerError(error: unknown): { name: string; message: string; c
 async function runWithin(
   runner: CallableFunctionRunner,
   payload: CallableFunctionRunPayload,
-  waitMs: number
+  waitMs: number,
+  tenant: CallableFunctionTenant
 ): Promise<RunResult> {
   const started = Date.now();
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -194,7 +204,7 @@ async function runWithin(
   });
   try {
     return await Promise.race([
-      runner(payload).catch((error: unknown): RunResult => {
+      runner(payload, tenant).catch((error: unknown): RunResult => {
         Logger.error('[CALLABLE_FUNCTION_RUNNER_FAILED]', describeRunnerError(error));
         return { outcome: 'error', reason: 'runtime_unavailable', durationMs: Date.now() - started };
       }),
@@ -216,14 +226,15 @@ async function withCallRow<T>(
   row: ICallableFunctionCall,
   body: (write: (fields: RowFields) => Promise<{ id: string }>) => Promise<T>
 ): Promise<T> {
+  const callId = new mongoose.Types.ObjectId().toHexString();
   let written = false;
   const write = async (fields: RowFields) => {
     written = true;
     const doc: ICallableFunctionCall = { ...row, ...fields };
     try {
-      return await callableFunctionCallRepository.record(doc);
+      return await callableFunctionCallRepository.record(doc, callId);
     } catch {
-      return callableFunctionCallRepository.record(doc);
+      return callableFunctionCallRepository.record(doc, callId);
     }
   };
   try {
@@ -285,7 +296,8 @@ export async function readServerContract(
     const run = await runWithin(
       options.runner,
       { op: 'read_contract', code: fn.pin.source, limits: { timeoutMs } },
-      waitMs
+      waitMs,
+      { callerUserId: caller.id, codeHash: fn.pin.contentHash }
     );
     row.runtime = runtimeRow(run);
     if (run.initMs !== undefined) row.initMs = run.initMs;
@@ -392,7 +404,8 @@ export async function dispatchFunctionCall(
     const run = await runWithin(
       runner,
       { op: 'call', code: fn.pin.source, contract, params, limits: { timeoutMs, outputBytes: outputBytesCap } },
-      waitMs
+      waitMs,
+      { callerUserId: caller.id, codeHash: fn.pin.contentHash }
     );
     row.runtime = runtimeRow(run);
     if (run.initMs !== undefined) row.initMs = run.initMs;

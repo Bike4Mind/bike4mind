@@ -25,6 +25,7 @@ import { listOwnGenerationJobs } from '@server/generations/listOwnGenerationJobs
 import { readIdempotencyKey } from '@server/generations/readIdempotencyKey';
 import { adminRoleWithheldFor } from '@bike4mind/server-utils/auth/apiKeyAdminScope';
 import { resolveMediaBillingOrgId } from '@server/billing/resolveMediaBillingOrgId';
+import { resolvePaidCallRun } from '@server/completionRuns/paidCallRun';
 import { perUserRateLimit } from '@server/middlewares/perUserRateLimit';
 import { mapperDeps } from '@server/generations/routeDeps';
 import { IMAGE_GENERATION_PROJECTION, toPublicGenerationJob } from '@server/generations/toPublicGenerationJob';
@@ -83,8 +84,12 @@ const createRouter = nextRouteForContract(createImageJobContract, {
   const request = toDomainRequest(req.validated);
   // As in video-generations: 'studio' is any first-party session, and idempotency keys are scoped per source.
   const source: GenerationJobSource = isApiKeyAuth(req) ? 'api' : 'studio';
-  // An org-billed API key bills its org; otherwise null = personal, undefined = the caller's own org.
-  const organizationId = await resolveMediaBillingOrgId(req, req.validated.organization_id);
+  // A run bills the account it is bound to, so the charge lands where the run's usage read looks for it.
+  // Otherwise an org-billed API key bills its org; null = personal, undefined = the caller's own org.
+  const paidRun = await resolvePaidCallRun(req, req.validated.run, req.validated.organization_id);
+  const organizationId = paidRun
+    ? paidRun.billingOrganizationId
+    : await resolveMediaBillingOrgId(req, req.validated.organization_id);
   const result = await createImageJobs(
     {
       user: { id: req.user.id, organizationId, adminRoleWithheld: adminRoleWithheldFor(req.apiKeyInfo) },
@@ -92,6 +97,7 @@ const createRouter = nextRouteForContract(createImageJobContract, {
       count: req.validated.count ?? 1,
       source,
       apiKeyId: req.apiKeyInfo?.keyId,
+      ...(paidRun && { run: paidRun.attribution }),
       // The namespace is shared on purpose with the Studio image route (`studio:image:<user>:<key>`): for a JWT caller
       // that omits organization_id it is the same user, owner and createImageJobs, so a retry across the two replays
       // rather than double-bills. Naming organization_id bills another owner, and keys are scoped per owner.

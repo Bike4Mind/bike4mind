@@ -1889,7 +1889,15 @@ export type SendMessageResult =
       notice?: string;
     }
   | { ok: true; queued: true; message: ChatQueuedMessage }
-  | { ok: false; error: string };
+  | {
+      ok: false;
+      error: string;
+      /**
+       * Continue or Retry refused because a turn is already running or queued, most likely
+       * started by the same click on another surface; a card can drop itself rather than alarm.
+       */
+      busy?: true;
+    };
 
 /**
  * The answer to `/clear` and `/compact`.

@@ -1954,16 +1954,6 @@
       "count": 1
     }
   },
-  "apps/client/pages/api/artifacts/[id]/index.ts": {
-    "@typescript-eslint/no-explicit-any": {
-      "count": 12
-    }
-  },
-  "apps/client/pages/api/artifacts/[id]/versions.ts": {
-    "@typescript-eslint/no-explicit-any": {
-      "count": 10
-    }
-  },
   "apps/client/pages/api/artifacts/[id]/versions/[version].ts": {
     "@typescript-eslint/no-explicit-any": {
       "count": 5
@@ -2940,10 +2930,7 @@
     }
   },
   "apps/client/pages/api/slack/commands.ts": {
-    "b4m/require-update-validators": { "count": 2 },
-    "@typescript-eslint/no-explicit-any": {
-      "count": 9
-    }
+    "b4m/require-update-validators": { "count": 2 }
   },
   "apps/client/pages/api/slack/events.ts": {
     "b4m/require-update-validators": { "count": 1 },
@@ -4181,16 +4168,6 @@
   "b4m-core/services/src/notebookCurationService/llmMarkdownGenerator.test.ts": {
     "@typescript-eslint/no-explicit-any": {
       "count": 1
-    }
-  },
-  "b4m-core/services/src/notebookCurationService/llmMarkdownGenerator.ts": {
-    "@typescript-eslint/no-explicit-any": {
-      "count": 12
-    }
-  },
-  "b4m-core/services/src/notebookCurationService/markdownGenerator.ts": {
-    "@typescript-eslint/no-explicit-any": {
-      "count": 10
     }
   },
   "b4m-core/services/src/organizationService/addMember.test.ts": {

@@ -17,6 +17,8 @@ import {
 } from '@mui/joy';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import VisibilityIcon from '@mui/icons-material/Visibility';
+import { OptionalDateInput } from '@client/app/components/common/OptionalDateInput';
+import { todayUtc } from '@client/app/utils/dateUtils';
 import { useEmailJobHistory } from '@client/app/hooks/data/emailMarketing';
 import { EmailSendStatus, IEmailSendAttemptDocument } from '@bike4mind/common';
 
@@ -127,26 +129,38 @@ export default function EmailActivityHistory({ jobId, onViewAttempt }: EmailActi
         </FormControl>
         <FormControl sx={{ minWidth: 150 }}>
           <FormLabel>Start Date</FormLabel>
-          <Input
-            type="date"
+          <OptionalDateInput
+            size="sm"
             value={startDate}
-            onChange={e => {
-              setStartDate(e.target.value);
+            onChange={day => {
+              setStartDate(day);
               setPage(1);
             }}
-            size="sm"
+            emptyLabel="From any date"
+            setLabel="Set start date"
+            clearLabel="Remove start date"
+            initialDate={() => (endDate && endDate < todayUtc() ? endDate : todayUtc())}
+            max={endDate || undefined}
+            aria-label="Start date"
+            testId="email-activity-start-date"
           />
         </FormControl>
         <FormControl sx={{ minWidth: 150 }}>
           <FormLabel>End Date</FormLabel>
-          <Input
-            type="date"
+          <OptionalDateInput
+            size="sm"
             value={endDate}
-            onChange={e => {
-              setEndDate(e.target.value);
+            onChange={day => {
+              setEndDate(day);
               setPage(1);
             }}
-            size="sm"
+            emptyLabel="To any date"
+            setLabel="Set end date"
+            clearLabel="Remove end date"
+            initialDate={() => (startDate && startDate > todayUtc() ? startDate : todayUtc())}
+            min={startDate || undefined}
+            aria-label="End date"
+            testId="email-activity-end-date"
           />
         </FormControl>
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, minWidth: 150 }}>

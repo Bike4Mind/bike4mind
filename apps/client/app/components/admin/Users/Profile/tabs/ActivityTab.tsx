@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from 'react';
-import { Box, Button, Input, Stack, Typography } from '@mui/joy';
+import { Box, Button, Stack, Typography } from '@mui/joy';
 import { useNavigate, useSearch } from '@tanstack/react-router';
 import {
   USER_TIMELINE_CATEGORIES,
@@ -11,6 +11,8 @@ import {
 } from '@bike4mind/common';
 import { useUserTimeline } from '@client/app/hooks/data/adminUserTimeline';
 import { AuditEntryDrawer } from '@client/app/components/admin/AuditLog/shared';
+import { OptionalDateInput } from '@client/app/components/common/OptionalDateInput';
+import { todayUtc } from '@client/app/utils/dateUtils';
 import { EmptyState, ErrorState, SectionCard, ToggleChipGroup } from '../../../shared';
 import {
   activityFiltersFromSearch,
@@ -112,27 +114,29 @@ export const ActivityTimeline: React.FC<ActivityTimelineProps> = ({
           alignItems="center"
           sx={{ px: 2, py: 1, borderBottom: '1px solid', borderColor: 'admin.border' }}
         >
-          <Typography component="label" level="body-xs" htmlFor="user-timeline-from" sx={{ color: 'admin.inkMuted' }}>
-            From
-          </Typography>
-          <Input
+          <OptionalDateInput
             size="sm"
-            type="date"
             value={filters.from ?? ''}
-            onChange={event => onFiltersChange({ ...filters, from: event.target.value || undefined })}
-            slotProps={{ input: { id: 'user-timeline-from', max: filters.to } }}
-            data-testid="user-timeline-filter-from"
+            onChange={from => onFiltersChange({ ...filters, from: from || undefined })}
+            emptyLabel="From any date"
+            setLabel="Set start date"
+            clearLabel="Remove start date"
+            initialDate={() => (filters.to && filters.to < todayUtc() ? filters.to : todayUtc())}
+            max={filters.to}
+            aria-label="From"
+            testId="user-timeline-filter-from"
           />
-          <Typography component="label" level="body-xs" htmlFor="user-timeline-to" sx={{ color: 'admin.inkMuted' }}>
-            To
-          </Typography>
-          <Input
+          <OptionalDateInput
             size="sm"
-            type="date"
             value={filters.to ?? ''}
-            onChange={event => onFiltersChange({ ...filters, to: event.target.value || undefined })}
-            slotProps={{ input: { id: 'user-timeline-to', min: filters.from } }}
-            data-testid="user-timeline-filter-to"
+            onChange={to => onFiltersChange({ ...filters, to: to || undefined })}
+            emptyLabel="To any date"
+            setLabel="Set end date"
+            clearLabel="Remove end date"
+            initialDate={() => (filters.from && filters.from > todayUtc() ? filters.from : todayUtc())}
+            min={filters.from}
+            aria-label="To"
+            testId="user-timeline-filter-to"
           />
           {(filters.from || filters.to) && (
             <Button

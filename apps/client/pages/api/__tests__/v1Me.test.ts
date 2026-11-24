@@ -12,13 +12,15 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 import { ApiKeyScope, MeResponseSchema } from '@bike4mind/common';
 
-const { mockResolvePlan, mockEntitlements, mockFindActive, mockPlanByPriceId, baseApiOptions } = vi.hoisted(() => ({
-  mockResolvePlan: vi.fn(),
-  mockEntitlements: vi.fn(),
-  mockFindActive: vi.fn(),
-  mockPlanByPriceId: vi.fn(),
-  baseApiOptions: [] as unknown[],
-}));
+const { mockResolvePlan, mockEntitlements, mockFindActive, mockPlanByPriceId, mockFindLots, baseApiOptions } =
+  vi.hoisted(() => ({
+    mockResolvePlan: vi.fn(),
+    mockFindLots: vi.fn(),
+    mockEntitlements: vi.fn(),
+    mockFindActive: vi.fn(),
+    mockPlanByPriceId: vi.fn(),
+    baseApiOptions: [] as unknown[],
+  }));
 
 vi.mock('@server/middlewares/baseApi', () => ({
   baseApi: (options: unknown) => {
@@ -57,6 +59,7 @@ vi.mock('@bike4mind/server-utils/entitlements/index', () => ({
     emailVerified: user.emailVerified,
   }),
 }));
+vi.mock('@bike4mind/database', () => ({ creditLotRepository: { findByOwner: mockFindLots } }));
 vi.mock('@server/me/resolveCallerPlan', () => ({ resolveCallerPlan: mockResolvePlan }));
 vi.mock('@bike4mind/server-utils/entitlements/activeSubscriptions', () => ({
   getRequestActiveSubscriptions: mockFindActive,
@@ -112,6 +115,7 @@ beforeEach(() => {
     },
   });
   mockEntitlements.mockResolvedValue(['base']);
+  mockFindLots.mockResolvedValue([]);
 });
 
 describe('GET /api/v1/me', () => {
@@ -133,9 +137,28 @@ describe('GET /api/v1/me', () => {
         interval: 'monthly',
         current_period_ends_at: '2026-10-18T00:00:00.000Z',
       },
-      credits: { balance: 1234, monthly_allowance: 50000 },
+      credits: { balance: 1234, monthly_allowance: 50000, expiring: [] },
       entitlements: ['base'],
     });
+  });
+
+  it("lists the caller's own unspent grants due to expire, soonest first", async () => {
+    mockFindLots.mockResolvedValue([
+      { amount: 1000, expiresAt: new Date('2026-10-02T00:00:00.000Z') },
+      { amount: 1000, expiresAt: new Date('2027-01-16T00:00:00.000Z') },
+    ]);
+    const { req, res } = get();
+
+    await run(req, res);
+
+    expect(mockFindLots).toHaveBeenCalledWith('u1', 'User');
+    const body = res._getJSONData();
+    expect(MeResponseSchema.safeParse(body).success).toBe(true);
+    // 2000 granted, 1234 left: the 766 spent comes out of the soonest-expiring grant first.
+    expect(body.credits.expiring).toEqual([
+      { amount: 234, expires_at: '2026-10-02T00:00:00.000Z' },
+      { amount: 1000, expires_at: '2027-01-16T00:00:00.000Z' },
+    ]);
   });
 
   it('publishes no email, tags, or admin flag', async () => {

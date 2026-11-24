@@ -276,6 +276,18 @@ export interface ICompletionOptions {
    */
   explicitReasoning?: boolean;
   _internal?: {
+    evaluation?: {
+      admit(model: ModelInfo, wireModel: string, outputLimit: number): Promise<void>;
+      reconcile(usage: {
+        inputTokens: number;
+        outputTokens: number;
+        cacheReadTokens: number;
+        reasoningTokens?: number;
+        cacheWrite5mTokens?: number;
+        cacheWrite1hTokens?: number;
+      }): Promise<void>;
+      unknown(): Promise<void>;
+    };
     toolCallCount?: number; // Internal counter for tracking recursive tool calls (do not set manually)
     /** Set by anthropicBackend when a turn starts from another provider's tool history; keeps thinking off for its remaining rounds. */
     thinkingSuppressed?: boolean;

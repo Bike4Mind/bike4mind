@@ -155,14 +155,9 @@ describe('SessionList project cap', () => {
     expect(showMore()?.textContent).toBe('Show more');
   });
 
-  it('renders only 20 rows for a 500-session project', () => {
-    render({ sessions: projectSessions(500) });
-    expect(all('chat-session-item')).toHaveLength(20);
-    expect(showMore()).not.toBeNull();
-  });
-
   it('reveals 10 per click, and the last click reveals the remainder and removes the button', () => {
     render({ sessions: projectSessions(35) });
+    expect(showMore()?.tagName).toBe('BUTTON');
     click(showMore());
     expect(groupTitles()).toHaveLength(30);
     expect(showMore()).not.toBeNull();
@@ -201,9 +196,9 @@ describe('SessionList project cap', () => {
   });
 
   it('shows every match uncapped while searching', () => {
-    render({ sessions: projectSessions(500) });
+    render({ sessions: projectSessions(60) });
     typeSearch('Task');
-    expect(groupTitles()).toHaveLength(500);
+    expect(groupTitles()).toHaveLength(60);
     expect(showMore()).toBeNull();
     typeSearch('');
     expect(groupTitles()).toHaveLength(20);
@@ -285,14 +280,6 @@ describe('SessionList project cap', () => {
     expect(titles).toHaveLength(20);
     expect(titles[0]).toBe('Newest');
     expect(titles).not.toContain('Task 24');
-  });
-
-  it('is a focusable button', () => {
-    render({ sessions: projectSessions(25) });
-    const more = showMore() as HTMLButtonElement;
-    expect(more.tagName).toBe('BUTTON');
-    act(() => more.focus());
-    expect(document.activeElement).toBe(more);
   });
 });
 

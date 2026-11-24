@@ -34,7 +34,9 @@ function drawnText(svg: string): string {
   return svg.replace(/<style[\s\S]*?<\/style>/g, '').replace(/<[^>]+>/g, ' ');
 }
 
-beforeAll(() => {
+beforeAll(async () => {
+  // The first diagram otherwise pays mermaid's module load inside its own test.
+  await import('mermaid');
   // jsdom implements no SVG layout, so mermaid's text measurement finds nothing to call.
   // Real geometry is not what these tests are about; the boxes just need a size to be laid
   // out with, and Chromium supplies these for real in the app.

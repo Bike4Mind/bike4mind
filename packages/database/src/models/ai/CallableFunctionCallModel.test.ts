@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, afterAll, afterEach } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, afterEach, vi } from 'vitest';
 import mongoose from 'mongoose';
 import type { MongoMemoryServer } from 'mongodb-memory-server';
 import type { ICallableFunctionCall } from '@bike4mind/common';
@@ -34,6 +34,7 @@ beforeAll(async () => {
 });
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   await CallableFunctionCall.deleteMany({});
 });
 
@@ -43,6 +44,38 @@ afterAll(async () => {
 });
 
 describe('CallableFunctionCall', () => {
+  it('recovers the same immutable call after a persisted write loses its acknowledgement', async () => {
+    const callId = new mongoose.Types.ObjectId().toHexString();
+    const input = row();
+    const create = callableFunctionCallRepository.create.bind(callableFunctionCallRepository);
+    const acknowledgementError = new Error('acknowledgement lost');
+    vi.spyOn(callableFunctionCallRepository, 'create').mockImplementationOnce(async data => {
+      await create(data);
+      throw acknowledgementError;
+    });
+    await expect(callableFunctionCallRepository.record(input, callId)).rejects.toBe(acknowledgementError);
+    const original = await CallableFunctionCall.collection.findOne({ functionId: input.functionId });
+    expect(original?._id.toHexString()).toBe(callId);
+    const recovered = await callableFunctionCallRepository.record({ ...input, outcome: 'error' }, callId);
+    expect(recovered.id).toBe(callId);
+    expect(await CallableFunctionCall.collection.findOne({ _id: new mongoose.Types.ObjectId(callId) })).toEqual(
+      original
+    );
+    expect(await CallableFunctionCall.countDocuments()).toBe(1);
+  });
+
+  it('keeps distinct invocations with identical inputs and propagates nonduplicate failures', async () => {
+    const input = row();
+    const firstId = new mongoose.Types.ObjectId().toHexString();
+    const secondId = new mongoose.Types.ObjectId().toHexString();
+    expect((await callableFunctionCallRepository.record(input, firstId)).id).toBe(firstId);
+    expect((await callableFunctionCallRepository.record(input, secondId)).id).toBe(secondId);
+    expect(await CallableFunctionCall.countDocuments()).toBe(2);
+    const error = new Error('storage unavailable');
+    vi.spyOn(callableFunctionCallRepository, 'create').mockRejectedValueOnce(error);
+    await expect(callableFunctionCallRepository.record(input, firstId)).rejects.toBe(error);
+  });
+
   it('stores a call in callablefunctioncalls', async () => {
     const created = await callableFunctionCallRepository.record(row());
     expect(CallableFunctionCall.collection.collectionName).toBe('callablefunctioncalls');

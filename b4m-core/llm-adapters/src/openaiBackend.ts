@@ -15,6 +15,8 @@ import {
   type ToolStarted,
 } from '@bike4mind/common';
 import { stripToolDependentMessages } from './toolPairingUtils';
+import { assertEvaluationTextWire, assertEvaluationWireBound } from './evaluationTextWire';
+import { reconcileAfterDispatch } from './evaluationReconcile';
 import { appendCacheInclusiveTurn, cachedTokensFromUsage, splitCacheInclusiveInput } from './cacheInclusiveUsage';
 import { addReasoningTokens, reasoningTokensField, reasoningTokensFromUsage } from './reasoningTokens';
 import OpenAI from 'openai';
@@ -31,6 +33,7 @@ import type {
 import { Stream } from 'openai/streaming';
 import { Logger } from '@bike4mind/observability';
 import { executeToolsBatch, shouldEndTurnAfterTools, toolFailureLogLevel } from './executeToolsBatch';
+import { attachPreToolText } from './replayPreToolText';
 import { logToolRound, summarizeToolOutcomes } from './toolRoundTiming';
 import { recordToolResult, type RecordableToolUse } from './recordToolResult';
 import {
@@ -1284,14 +1287,25 @@ export class OpenAIBackend implements ICompletionBackend {
 
     const roundStart = Date.now();
     let firstChunkAt: number | null = null;
+    const evaluation = options._internal?.evaluation;
+    if (evaluation) {
+      const info = this._dispatch.for(model);
+      if (!info) throw new BadRequestError('Evaluation model metadata missing.');
+      parameters.stream = false;
+      delete parameters.stream_options;
+      assertEvaluationTextWire(parameters);
+      assertEvaluationWireBound(parameters, info.contextWindow);
+      await evaluation.admit(info, parameters.model, parameters.max_completion_tokens ?? parameters.max_tokens ?? 0);
+    }
     // Wrap with retry for transient network errors (TLS abort, fetch terminated)
     const response = await withRetry(
       () =>
         this._api.chat.completions.create(parameters as ChatCompletionCreateParams, {
           signal: options.abortSignal,
+          ...(evaluation ? { maxRetries: 0 } : {}),
         }),
       {
-        maxRetries: 3,
+        maxRetries: evaluation ? 0 : 3,
         initialDelayMs: 500,
         maxDelayMs: 10000,
         jitterFactor: 0.25,
@@ -1308,6 +1322,27 @@ export class OpenAIBackend implements ICompletionBackend {
     let reasoningTokens: number | undefined;
 
     if (!(response instanceof Stream)) {
+      if (evaluation) {
+        const answered = response;
+        await reconcileAfterDispatch(
+          evaluation,
+          () => {
+            const usage = answered.usage;
+            if (!usage || answered.model !== model) throw new Error('Evaluation provider identity or usage missing');
+            const cachedTokens = usage.prompt_tokens_details?.cached_tokens;
+            const reasoningTokens = usage.completion_tokens_details?.reasoning_tokens;
+            if (cachedTokens === undefined || reasoningTokens === undefined)
+              throw new Error('Evaluation cache or reasoning usage missing');
+            return {
+              inputTokens: usage.prompt_tokens,
+              outputTokens: usage.completion_tokens,
+              cacheReadTokens: cachedTokens,
+              reasoningTokens,
+            };
+          },
+          this.logger
+        );
+      }
       const streamedText: string[] = [];
       const turnCacheReadTokens = cachedTokensFromUsage(
         response.usage as unknown as Record<string, unknown> | undefined
@@ -1907,7 +1942,7 @@ export class OpenAIBackend implements ICompletionBackend {
               }
         );
 
-        // See the streaming branch above for why the shared artifactGuard exists.
+        // See the non-streaming branch above for why the shared artifactGuard exists.
         const inheritedArtifactGuard = options._internal?.artifactGuard;
         let artifactGuard = inheritedArtifactGuard;
 
@@ -1916,6 +1951,7 @@ export class OpenAIBackend implements ICompletionBackend {
         // chaining: the model needs tools available to retry or continue the chain.
         const anyMcpTool = resolvedTools.some(t => t.isMcpTool);
 
+        const roundMessagesStart = messages.length;
         for (const outcome of outcomes) {
           if (!outcome.ok) {
             if (outcome.error instanceof PermissionDeniedError) throw outcome.error;
@@ -1972,7 +2008,7 @@ export class OpenAIBackend implements ICompletionBackend {
             declaredArtifactType(options.tools, outcome.name)
           );
 
-          // Same echo guard as the streaming path above.
+          // Same echo guard as the non-streaming branch above.
           const sanitizedResult = stripToolArtifactMarkup(
             resultStr,
             thisToolHadArtifact ? ARTIFACT_DELIVERED_PLACEHOLDER : ARTIFACT_REMOVED_PLACEHOLDER
@@ -1986,6 +2022,8 @@ export class OpenAIBackend implements ICompletionBackend {
             sanitizedResult
           );
         }
+
+        attachPreToolText(messages, roundMessagesStart, streamedRoundText);
 
         const requestedToolNames = func.flatMap(tool => (tool.name ? [tool.name] : []));
         logToolRound(this.logger, {
@@ -2049,7 +2087,7 @@ export class OpenAIBackend implements ICompletionBackend {
           toolsUsed
         );
 
-        // See the streaming branch above for why only a guard this level created is flushed.
+        // See anthropicBackend for why only a guard this level created is flushed.
         if (!inheritedArtifactGuard && artifactGuard) await artifactGuard.flush();
       } else {
         // Pass tool calls through callback without executing.
@@ -2299,16 +2337,28 @@ export class OpenAIBackend implements ICompletionBackend {
     // iteration below and is not retried (mirrors the chat streaming path).
     const roundStart = Date.now();
     let firstChunkAt: number | null = null;
-    const stream = await withRetry(() => this._api.responses.create(params, { signal: options.abortSignal }), {
-      maxRetries: 3,
-      initialDelayMs: 500,
-      maxDelayMs: 10000,
-      jitterFactor: 0.25,
-      isRetryable: err => isRetryableError(err) && !isUserInitiatedAbort(err, options.abortSignal),
-      logger: this.logger,
-      abortSignal: options.abortSignal,
-      onRetry: ({ error, delayMs }) => options._internal?.turnTelemetry?.onRetry({ error, delayMs, model }),
-    }).then(r => r.result);
+    const evaluation = options._internal?.evaluation;
+    if (evaluation) {
+      const info = this._dispatch.for(model);
+      if (!info) throw new BadRequestError('Evaluation model metadata missing.');
+      assertEvaluationTextWire(params);
+      assertEvaluationWireBound(params, info.contextWindow);
+      await evaluation.admit(info, params.model ?? '', params.max_output_tokens ?? 0);
+    }
+    const stream = await withRetry(
+      () =>
+        this._api.responses.create(params, { signal: options.abortSignal, ...(evaluation ? { maxRetries: 0 } : {}) }),
+      {
+        maxRetries: evaluation ? 0 : 3,
+        initialDelayMs: 500,
+        maxDelayMs: 10000,
+        jitterFactor: 0.25,
+        isRetryable: err => isRetryableError(err) && !isUserInitiatedAbort(err, options.abortSignal),
+        logger: this.logger,
+        abortSignal: options.abortSignal,
+        onRetry: ({ error, delayMs }) => options._internal?.turnTelemetry?.onRetry({ error, delayMs, model }),
+      }
+    ).then(r => r.result);
 
     // Stream text deltas live; capture the terminal Response for usage + tool handling.
     // Usage is only known at the terminal event, so per-delta emits carry the running
@@ -2370,6 +2420,27 @@ export class OpenAIBackend implements ICompletionBackend {
       throw new ResponsesStreamTruncatedError(model);
     }
 
+    if (evaluation) {
+      const answered = finalResponse;
+      await reconcileAfterDispatch(
+        evaluation,
+        () => {
+          const usage = answered.usage;
+          if (!usage || answered.model !== model) throw new Error('Evaluation provider identity or usage missing');
+          const cachedTokens = usage.input_tokens_details?.cached_tokens;
+          const reasoningTokens = usage.output_tokens_details?.reasoning_tokens;
+          if (cachedTokens === undefined || reasoningTokens === undefined)
+            throw new Error('Evaluation cache or reasoning usage missing');
+          return {
+            inputTokens: usage.input_tokens,
+            outputTokens: usage.output_tokens,
+            cacheReadTokens: cachedTokens,
+            reasoningTokens,
+          };
+        },
+        this.logger
+      );
+    }
     inputTokens = finalResponse.usage?.input_tokens ?? 0;
     outputTokens = finalResponse.usage?.output_tokens ?? 0;
     const reasoningTokens = reasoningTokensFromUsage(finalResponse.usage);
@@ -2483,10 +2554,11 @@ export class OpenAIBackend implements ICompletionBackend {
     // know an artifact was delivered THAT way, or it can't recognize the model reconstructing the
     // same tag from the tool call's own arguments (it retains them in context) as an echo when it
     // shows up in the synthesis reply below - so markDelivered records the markup without
-    // re-sending it. See the streaming branch above for why the shared artifactGuard exists.
+    // re-sending it. See the non-streaming branch above for why the shared artifactGuard exists.
     const inheritedArtifactGuard = options._internal?.artifactGuard;
     let artifactGuard = inheritedArtifactGuard;
 
+    const roundMessagesStart = messages.length;
     for (let i = 0; i < batchOutcomes.length; i++) {
       const outcome = batchOutcomes[i];
       const r = resolved[i];
@@ -2519,6 +2591,8 @@ export class OpenAIBackend implements ICompletionBackend {
         this.pushToolMessages(messages, { id: r.callId, name: r.name, parameters: r.args }, errorMsg);
       }
     }
+
+    attachPreToolText(messages, roundMessagesStart, streamedRoundText);
 
     const anyMcpTool = resolved.some(r => r.isMcpTool);
 
@@ -2583,7 +2657,7 @@ export class OpenAIBackend implements ICompletionBackend {
       toolsUsed
     );
 
-    // See the streaming branch above for why only a guard this level created is flushed.
+    // See anthropicBackend for why only a guard this level created is flushed.
     if (!inheritedArtifactGuard && artifactGuard) await artifactGuard.flush();
   }
 }

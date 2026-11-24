@@ -1,5 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { ImageModels, ModelBackend, usdToCredits, type ModelInfo } from '@bike4mind/common';
+import {
+  ImageModels,
+  ModelBackend,
+  RUN_BUDGET_EXHAUSTED_ERROR_CODE,
+  UnprocessableEntityError,
+  usdToCredits,
+  type CompletionRunAttribution,
+  type ModelInfo,
+} from '@bike4mind/common';
 import { getAvailableModels } from '@bike4mind/llm-adapters';
 import { getSettingsValue } from '@bike4mind/utils';
 import { ImageGenerationService } from './ImageGeneration';
@@ -87,11 +95,17 @@ const makeService = (
   wallet: ReturnType<typeof makeWallet>,
   assertModelAdmission: ConstructorParameters<typeof ImageGenerationService>[0]['assertModelAdmission'] = async () => {}
 ) => {
-  const quests = new Map<string, { id: string; sessionId: string; status?: string; errorCode?: string }>();
+  const quests = new Map<
+    string,
+    { id: string; sessionId: string; status?: string; type?: string; reply?: string; errorCode?: string }
+  >();
+  const startImageGenerationProcess = vi.fn(async () => undefined);
   const service = new ImageGenerationService({
     assertModelAdmission,
+    startImageGenerationProcess,
     db: {
       spendFreezes: notFrozen,
+      sessions: { findById: vi.fn(async (id: string) => ({ id })) },
       quests: {
         findById: vi.fn(async (id: string) => {
           if (!quests.has(id)) quests.set(id, { id, sessionId: 'session1' });
@@ -118,7 +132,7 @@ const makeService = (
     wsHttpsUrl: 'https://ws.example.com',
     // eslint-disable-next-line @typescript-eslint/no-explicit-any -- a partial db fake for the billing path only
   } as any);
-  const run = (questId: string, adminRoleWithheld?: boolean) =>
+  const run = (questId: string, adminRoleWithheld?: boolean, completionRun?: CompletionRunAttribution) =>
     service.process({
       body: {
         sessionId: 'session1',
@@ -127,10 +141,11 @@ const makeService = (
         prompt: 'a red bicycle',
         model: MODEL,
         adminRoleWithheld,
+        run: completionRun,
       },
       logger: silentLogger,
     });
-  return { service, run, quests };
+  return { service, run, quests, startImageGenerationProcess };
 };
 
 describe('ImageGenerationService credit hold', () => {
@@ -217,5 +232,159 @@ describe('ImageGenerationService credit hold', () => {
     expect(quests.get('q1')?.errorCode).not.toBe('insufficient_credits');
     expect(wallet.state.balance).toBe(ONE_IMAGE_CREDITS * 2);
     expect(wallet.state.ledger).toEqual([]);
+  });
+
+  describe('on a redelivered message', () => {
+    const deliver = (service: ImageGenerationService) =>
+      service.process({
+        body: {
+          sessionId: 'session1',
+          questId: 'q1',
+          userId: 'user1',
+          prompt: 'a red bicycle',
+          model: MODEL,
+          generationId: 'generation-1',
+        },
+        logger: silentLogger,
+      });
+
+    it('keys the hold on the generation id', async () => {
+      const wallet = makeWallet(ONE_IMAGE_CREDITS * 2);
+      const hold = vi.spyOn(wallet.creditHolds, 'hold');
+      const { service } = makeService(wallet);
+
+      await deliver(service);
+
+      expect(hold).toHaveBeenCalledWith(expect.objectContaining({ holdKey: 'image_generation:generation-1' }));
+    });
+
+    it('leaves a reused hold for its first delivery when the render fails', async () => {
+      const wallet = makeWallet(ONE_IMAGE_CREDITS * 2);
+      const firstDeliveryHold = wallet.creditHolds.hold;
+      vi.spyOn(wallet.creditHolds, 'hold').mockImplementationOnce(async params => ({
+        ...(await firstDeliveryHold(params)),
+        reused: true,
+      }));
+      const release = vi.spyOn(wallet.creditHolds, 'release');
+      const { service } = makeService(wallet);
+      mockGeminiGenerate.mockRejectedValueOnce(new Error('provider down'));
+
+      await deliver(service);
+
+      expect(release).not.toHaveBeenCalled();
+    });
+
+    it('still settles a reused hold when the render succeeds', async () => {
+      const wallet = makeWallet(ONE_IMAGE_CREDITS * 2);
+      const firstDeliveryHold = wallet.creditHolds.hold;
+      vi.spyOn(wallet.creditHolds, 'hold').mockImplementationOnce(async params => ({
+        ...(await firstDeliveryHold(params)),
+        reused: true,
+      }));
+      const settle = vi.spyOn(wallet.creditHolds, 'settle');
+      const { service } = makeService(wallet);
+
+      await deliver(service);
+
+      expect(settle).toHaveBeenCalledOnce();
+    });
+  });
+
+  describe('with a completion run', () => {
+    const completionRun: CompletionRunAttribution = {
+      runId: '6f1c2a3b-4d5e-4f60-8a7b-9c0d1e2f3a4b',
+      role: 'worker',
+      purpose: 'tool',
+    };
+
+    it('claims the run with the hold and tags the settled ledger entry with it', async () => {
+      const wallet = makeWallet(ONE_IMAGE_CREDITS * 2);
+      const hold = vi.spyOn(wallet.creditHolds, 'hold');
+      const settle = vi.spyOn(wallet.creditHolds, 'settle');
+      const { run } = makeService(wallet);
+
+      await run('q1', undefined, completionRun);
+
+      expect(hold).toHaveBeenCalledWith(expect.objectContaining({ run: completionRun }));
+      expect(settle).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.any(Number),
+        expect.objectContaining({ type: 'image_generation_usage', run: completionRun }),
+        expect.anything()
+      );
+    });
+
+    it('fails the quest with run_budget_exhausted when the run cannot fit the hold', async () => {
+      const wallet = makeWallet(ONE_IMAGE_CREDITS * 2);
+      vi.spyOn(wallet.creditHolds, 'hold').mockRejectedValueOnce(
+        new UnprocessableEntityError("This run's credit budget is used up", {
+          errorCode: RUN_BUDGET_EXHAUSTED_ERROR_CODE,
+        })
+      );
+      const { run, quests } = makeService(wallet);
+
+      await run('q1', undefined, completionRun);
+
+      expect(quests.get('q1')).toEqual(
+        expect.objectContaining({
+          status: 'done',
+          type: 'error',
+          errorCode: 'run_budget_exhausted',
+          reply: "This run's credit budget is used up",
+        })
+      );
+      expect(mockGeminiGenerate).not.toHaveBeenCalled();
+      expect(wallet.state.balance).toBe(ONE_IMAGE_CREDITS * 2);
+    });
+
+    it('sends no run to the hold or the ledger without one', async () => {
+      const wallet = makeWallet(ONE_IMAGE_CREDITS * 2);
+      const hold = vi.spyOn(wallet.creditHolds, 'hold');
+      const settle = vi.spyOn(wallet.creditHolds, 'settle');
+      const { run } = makeService(wallet);
+
+      await run('q1');
+
+      expect(hold.mock.calls[0][0]).not.toHaveProperty('run');
+      expect(settle.mock.calls[0][2]).not.toHaveProperty('run');
+    });
+
+    const invokeWith = (service: ImageGenerationService, assertHeadroom: (credits: number) => Promise<void>) =>
+      service.invoke({
+        userId: 'user1',
+        body: { sessionId: 'session1', questId: 'q1', prompt: 'a red bicycle', model: MODEL },
+        run: { attribution: completionRun, assertHeadroom },
+      });
+
+    it('checks the run has room for the render before queueing it with the run', async () => {
+      const assertHeadroom = vi.fn(async () => undefined);
+      const { service, startImageGenerationProcess } = makeService(makeWallet(0));
+
+      await invokeWith(service, assertHeadroom);
+
+      expect(assertHeadroom).toHaveBeenCalledWith(ONE_IMAGE_CREDITS);
+      expect(startImageGenerationProcess).toHaveBeenCalledWith(expect.objectContaining({ run: completionRun }));
+    });
+
+    it('refuses before touching the quest or the queue when the run has no room', async () => {
+      const refusal = new UnprocessableEntityError('used up', { errorCode: RUN_BUDGET_EXHAUSTED_ERROR_CODE });
+      const { service, startImageGenerationProcess, quests } = makeService(makeWallet(0));
+
+      await expect(invokeWith(service, async () => Promise.reject(refusal))).rejects.toBe(refusal);
+
+      expect(quests.size).toBe(0);
+      expect(startImageGenerationProcess).not.toHaveBeenCalled();
+    });
+
+    it('skips the headroom check when credits are not enforced', async () => {
+      vi.mocked(getSettingsValue).mockReturnValue(undefined as never);
+      const assertHeadroom = vi.fn(async () => undefined);
+      const { service, startImageGenerationProcess } = makeService(makeWallet(0));
+
+      await invokeWith(service, assertHeadroom);
+
+      expect(assertHeadroom).not.toHaveBeenCalled();
+      expect(startImageGenerationProcess).toHaveBeenCalledWith(expect.objectContaining({ run: completionRun }));
+    });
   });
 });

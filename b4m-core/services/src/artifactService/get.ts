@@ -26,9 +26,9 @@ type GetArtifactParameters = z.infer<typeof getArtifactSchema>;
 
 interface GetArtifactAdapters {
   db: {
-    artifacts: IArtifactRepository;
-    artifactContents: IArtifactContentRepository;
-    artifactVersions: IArtifactVersionRepository;
+    artifacts: Pick<IArtifactRepository, 'findOne'>;
+    artifactContents: Pick<IArtifactContentRepository, 'findByArtifactVersion' | 'findLatestContent'>;
+    artifactVersions: Pick<IArtifactVersionRepository, 'findByArtifactId'>;
   };
 }
 

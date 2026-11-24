@@ -1,8 +1,10 @@
 import { z } from 'zod';
 import {
+  DIRECTOR_MAX_SHOTS,
   STUDIO_COMPOSITION_LIMITS,
   STUDIO_TIMELINE_LIMITS,
   StudioFileIdSchema,
+  withDirectorProduct,
   type StudioShot,
 } from '@bike4mind/common';
 import type { ToolContext, ToolDefinition } from '../../base/types';
@@ -17,7 +19,7 @@ import {
 } from './layout';
 import { CompositionIdArg, ProductionToolError, describeProductionError } from './shared';
 
-export const STORYBOARD_MAX_SHOTS = 12;
+export const STORYBOARD_MAX_SHOTS = DIRECTOR_MAX_SHOTS;
 const limits = STUDIO_COMPOSITION_LIMITS;
 
 const ShotArg = z.object({
@@ -28,8 +30,7 @@ const ShotArg = z.object({
     .optional()
     .describe(
       'A current shot id (e.g. "shot-3") to carry over with its prompt, takes, clip and voice line; omit prompt. ' +
-        'Use it for every shot you are not re-imagining; a new order moves them. Other fields default to the ' +
-        'current ones; voiceLine "" removes it.'
+        'A new order moves it. Other fields default to the current ones; voiceLine "" removes it.'
     ),
   title: z.string().trim().min(1).max(limits.shotTitleMaxLength).optional().describe('A short name, e.g. "Hook".'),
   intent: z
@@ -45,7 +46,7 @@ const ShotArg = z.object({
     .max(limits.shotPromptMaxLength)
     .optional()
     .describe(
-      'Image prompt for a new shot: subject, setting, light, camera, and the product. A new prompt makes new takes.'
+      'Image prompt for a new shot: subject, setting, light, camera, and any product. A new prompt makes new takes.'
     ),
   durationSeconds: z.number().min(1).max(30).optional().describe('Length in the cut.'),
   voiceLine: z
@@ -66,7 +67,8 @@ const schema = z.object({
     .optional()
     .describe("The one-line brief to save on the production, when the user gave one that isn't saved yet."),
   productFileId: StudioFileIdSchema.optional().describe(
-    'The product photo (a Files id) to keep in every shot; saved to the brand kit.'
+    'The product photo (a Files id) for the shots; saved to the brand kit behind a product look already there, which ' +
+      'stays the first reference.'
   ),
   shots: z.array(ShotArg).min(1).max(STORYBOARD_MAX_SHOTS),
   rewriteLines: z
@@ -88,8 +90,8 @@ type StoryboardArgs = z.infer<typeof schema>;
 
 const description =
   'Write the storyboard of a Studio production: every shot in order with its image prompt, length and voice line. ' +
-  'Carry over each current shot you are not re-imagining with keep. About 4 shots for a 15 second ad (hook, ' +
-  'product, benefit, call to action). Then call production_generate_shot.';
+  'Carry over each current shot you are not re-imagining with keep. Plan the shots as the system context says; for ' +
+  'an ad, about 4 for 15 seconds (hook, product, benefit, call to action). Then call production_generate_shot.';
 
 type ResolvedShot = { title: string; intent?: string; prompt?: string; durationMs: number; voiceLine?: string };
 
@@ -372,10 +374,7 @@ export const productionStoryboardTool: ToolDefinition = {
             ...(args.brief && { brief: { ...current.brief, summary: args.brief } }),
             ...(product &&
               !products.includes(product) && {
-                brandKit: {
-                  ...current.brandKit,
-                  productFileIds: [product, ...products].slice(0, STUDIO_COMPOSITION_LIMITS.brandProductFilesMax),
-                },
+                brandKit: { ...current.brandKit, productFileIds: withDirectorProduct(products, product) },
               }),
           });
           if (reorders) markReordered(config);
