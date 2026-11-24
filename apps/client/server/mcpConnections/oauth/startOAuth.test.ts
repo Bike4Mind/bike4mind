@@ -46,7 +46,7 @@ vi.mock('@bike4mind/server-utils/mcpConnections/oauth/oauthFetch', () => ({
 vi.mock('@bike4mind/server-utils/mcpConnections/oauth/redirectUri', () => ({
   redirectUri: () => 'https://app.example.com/integrations/mcp-oauth-callback',
 }));
-vi.mock('./revoke', () => ({ revokeConnectionGrant: h.revoke }));
+vi.mock('@bike4mind/server-utils/mcpConnections/oauth/revoke', () => ({ revokeConnectionGrant: h.revoke }));
 
 import { BadGatewayError, ConflictError, NotFoundError } from '@bike4mind/common';
 import { sha256Hex, startUserConnectionOAuth } from './startOAuth';

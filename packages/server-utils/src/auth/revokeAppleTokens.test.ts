@@ -15,7 +15,7 @@ vi.mock('@bike4mind/database', () => ({ User: { findById, updateOne } }));
 vi.mock('@bike4mind/utils/security', () => ({ decryptAtRest: (value: string) => value.replace(/^enc:/, '') }));
 vi.mock('../utils/config', () => ({ Config: config }));
 
-import { revokeAppleTokens } from './revokeAppleTokens';
+import { revokeAppleGrant, revokeAppleTokens } from './revokeAppleTokens';
 
 const lean = (user: unknown) => findById.mockReturnValue({ lean: async () => user });
 
@@ -78,6 +78,20 @@ describe('revokeAppleTokens', () => {
     fetchMock.mockResolvedValue({ ok: false, status: 400 });
 
     await expect(revokeAppleTokens('u1')).rejects.toThrow(/400/);
+    expect(updateOne).not.toHaveBeenCalled();
+  });
+
+  it('revokeAppleGrant revokes from providers already read, without touching the user row', async () => {
+    fetchMock.mockResolvedValue({ ok: true, status: 200 });
+
+    await expect(
+      revokeAppleGrant([{ strategy: 'apple', id: 'sub', encrypted: true, accessToken: 'enc:a-token' }] as never)
+    ).resolves.toEqual({ status: 'revoked' });
+
+    const body = fetchMock.mock.calls[0][1].body as URLSearchParams;
+    expect(body.get('token')).toBe('a-token');
+    expect(body.get('token_type_hint')).toBe('access_token');
+    expect(findById).not.toHaveBeenCalled();
     expect(updateOne).not.toHaveBeenCalled();
   });
 });

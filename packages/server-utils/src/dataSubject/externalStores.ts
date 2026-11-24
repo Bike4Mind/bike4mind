@@ -294,44 +294,37 @@ export const EXTERNAL_DATA_STORES: readonly ExternalDataStore[] = [
     kind: 'service',
     name: 'Notion',
     receives: "OAuth grant to the person's workspace",
-    erasure: {
-      action: 'notErased',
-      gap: 'The stored grant is deleted but not revoked at Notion, which offers a revocation endpoint',
-    },
+    erasure: { action: 'erased', erasedBy: 'revokeIntegrationGrants' },
     cannotRecall: "Nothing of ours: the pages stay in the person's own workspace",
   },
   {
     kind: 'service',
     name: 'Slack',
     receives: 'Workspace install and user tokens; messages the bot posts',
-    erasure: { action: 'notErased', gap: 'No token revocation on account deletion' },
+    // The person's user token is revoked; a workspace install token belongs to the workspace and stays.
+    erasure: { action: 'erased', erasedBy: 'revokeIntegrationGrants' },
     cannotRecall: 'Messages already posted to a workspace, which belong to that workspace',
   },
   {
     kind: 'service',
     name: 'GitHub',
     receives: 'Sign-in identity and data-lake app authorization',
-    erasure: { action: 'notErased', gap: 'No grant revocation on account deletion' },
+    // The data-lake App authorization is revoked through a live connect flow's token, the only one we hold.
+    erasure: { action: 'erased', erasedBy: 'revokeIntegrationGrants' },
     cannotRecall: 'Nothing of ours: the repositories stay with their owner',
   },
   {
     kind: 'service',
     name: 'Remote MCP servers',
     receives: 'OAuth grants to each connected server, and the tool calls made through them',
-    erasure: {
-      action: 'notErased',
-      gap: 'Account deletion drops the stored connection without the remote revoke a disconnect makes (`revokeConnectionGrant`)',
-    },
+    erasure: { action: 'erased', erasedBy: 'revokeIntegrationGrants' },
     cannotRecall: 'Tool calls already made, held by each server operator',
   },
   {
     kind: 'service',
     name: 'Sign in with Apple',
     receives: 'Sign-in identity and refresh token',
-    erasure: {
-      action: 'notErased',
-      gap: '`revokeAppleTokens` exists but account deletion does not call it',
-    },
+    erasure: { action: 'erased', erasedBy: 'revokeIntegrationGrants' },
     cannotRecall: 'Nothing beyond the grant itself',
   },
   {

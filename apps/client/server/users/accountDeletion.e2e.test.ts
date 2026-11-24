@@ -43,13 +43,10 @@ vi.mock('@bike4mind/server-utils/services/publish/purgeUserPublishedArtifacts', 
   purgeUserPublishedArtifacts: h.purgeArtifacts,
 }));
 vi.mock('@bike4mind/server-utils/skillMarket/market', () => ({ withdrawAuthorListings: h.withdrawListings }));
-vi.mock('@bike4mind/server-utils/services/purgeDeletedUserData', async () => {
-  const { User: UserModel } = await import('@bike4mind/database');
-  return {
-    readUserIntegrationGrants: (id: string) => UserModel.findById(id, 'googleDrive atlassianConnect').lean(),
-    revokeIntegrationGrants: h.revokeGrants,
-  };
-});
+vi.mock('@bike4mind/server-utils/services/purgeDeletedUserData', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/server-utils/services/purgeDeletedUserData')>()),
+  revokeIntegrationGrants: h.revokeGrants,
+}));
 vi.mock('@bike4mind/server-utils/users/accountDeletionEmail', () => ({
   sendAccountDeletionScheduledEmail: h.sendEmail,
   sendAccountDeletionCancelledEmail: h.sendCancelledEmail,
@@ -184,6 +181,27 @@ describe('requestAccountDeletion', () => {
     expect(h.sendEmail).toHaveBeenCalledWith(expect.stringContaining('@example.test'), user!.deletion.scheduledFor, {
       source: 'self',
     });
+  });
+
+  it('hands the revoke the grants it cleared, but not the sign-in identities kept for a cancel', async () => {
+    const userId = await seedAccount();
+    await User.updateOne(
+      { _id: userId },
+      {
+        $set: {
+          notionConnect: { accessToken: 'enc-notion', workspaceId: 'w', workspaceName: 'W', botId: 'b' },
+          authProviders: [{ strategy: 'apple', id: 'apple-sub', refreshToken: 'enc-apple' }],
+        },
+      }
+    );
+
+    await requestAccountDeletion(requestFor(userId));
+
+    const grants = h.revokeGrants.mock.calls[0][1];
+    expect(grants.notionConnect.accessToken).toBe('enc-notion');
+    expect(grants.slackUserToken).toBe('xoxp-test');
+    expect(grants.authProviders).toBeNull();
+    expect(Array.isArray(grants.mcpConnections)).toBe(true);
   });
 
   it('drops the trusted devices and MCP connections along with the rest of the lockdown', async () => {

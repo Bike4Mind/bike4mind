@@ -1,5 +1,7 @@
 import {
   User,
+  gitHubLakeAuthGrantRepository,
+  mcpConnectionRepository,
   authEventRepository,
   userLimitEventRepository,
   embedConversationRepository,
@@ -9,13 +11,24 @@ import {
   shadowDetectionRepository,
   campaignWatchRepository,
 } from '@bike4mind/database';
-import type { IUserDocument } from '@bike4mind/common';
+import type { IAuthProviders, IMcpConnectionDocument, IUserDocument } from '@bike4mind/common';
 import { retainDeletedSignupTraces } from '../auth/signupNetworkLimits';
 import { purgeUserPublishedArtifacts } from './publish/purgeUserPublishedArtifacts';
 import { withdrawAuthorListings } from '../skillMarket/market';
 import { decryptStoredToken, revokeDriveGrant } from '../integrations/google/drive/common';
 import { flagConnectionsStoppedByDisconnect } from '../integrations/google/drive/flagConnectionsStoppedByDisconnect';
 import { revokeAtlassianGrant } from '../integrations/jira/revokeAtlassianGrant';
+import { revokeNotionGrant } from '../integrations/notion/revokeNotionGrant';
+import { revokeSlackUserToken } from '../integrations/slack/revokeSlackUserToken';
+import { revokeGitHubLakeUserAuthorization } from '../integrations/github/dataLake/githubLakeAuthGrant';
+import { revokeAppleGrant } from '../auth/revokeAppleTokens';
+import { revokeGitHubSignInGrant } from '../auth/revokeGitHubSignInGrant';
+import { revokeConnectionGrant } from '../mcpConnections/oauth/revoke';
+import {
+  resolveCustomMcpContext,
+  resolveOwnHosts,
+  type RemoteMcpNetworkOptions,
+} from '../mcpConnections/customMcpAccess';
 
 interface MinimalLogger {
   info: (msg: string) => void;
@@ -23,15 +36,48 @@ interface MinimalLogger {
   error: (msg: string) => void;
 }
 
-/** The third-party OAuth credentials a user row holds. Read them BEFORE the delete: the row is gone after. */
-export type UserIntegrationGrants = Pick<IUserDocument, 'googleDrive' | 'atlassianConnect'>;
+/**
+ * The third-party grants a user holds, read BEFORE the delete: the row and the connections are gone after.
+ * Only the Drive and Atlassian fields are required, so a caller can build a partial snapshot.
+ */
+export type UserIntegrationGrants = Pick<IUserDocument, 'googleDrive' | 'atlassianConnect'> &
+  Partial<Pick<IUserDocument, 'notionConnect'>> & {
+    slackUserToken?: string | null;
+    /** Sign-in identities (Apple, GitHub); left out of the lockdown read, see readUserIntegrationGrants. */
+    authProviders?: IAuthProviders[] | null;
+    /** The user's own remote MCP connections that signed in with OAuth, with their encrypted tokens. */
+    mcpConnections?: IMcpConnectionDocument[];
+    /** Encrypted user tokens of live data-lake GitHub App flows. */
+    githubLakeTokens?: string[];
+  };
 
 /**
  * Read straight from the DB, not a copy captured earlier in the request: a token refresh rotates the
- * stored value, and revoking a stale copy could revoke nothing.
+ * stored value, and revoking a stale copy could revoke nothing. `signIn: false` leaves out the Apple
+ * and GitHub sign-in identities, which a deletion-pending account keeps so it can sign in and cancel.
  */
-export async function readUserIntegrationGrants(userId: string): Promise<UserIntegrationGrants | null> {
-  return User.findById(userId, 'googleDrive atlassianConnect').lean<UserIntegrationGrants>();
+export async function readUserIntegrationGrants(
+  userId: string,
+  { signIn = true }: { signIn?: boolean } = {}
+): Promise<UserIntegrationGrants | null> {
+  const user = await User.findById(
+    userId,
+    `googleDrive atlassianConnect notionConnect slackSettings.slackUserToken${signIn ? ' authProviders' : ''}`
+  ).lean<UserIntegrationGrants & { slackSettings?: { slackUserToken?: string } }>();
+  if (!user) return null;
+  const [mcpConnections, lakeGrants] = await Promise.all([
+    mcpConnectionRepository.listOAuthWithCredentialsForUser(userId),
+    gitHubLakeAuthGrantRepository.listLiveForUser(userId),
+  ]);
+  return {
+    googleDrive: user.googleDrive ?? null,
+    atlassianConnect: user.atlassianConnect ?? null,
+    notionConnect: user.notionConnect ?? null,
+    slackUserToken: user.slackSettings?.slackUserToken ?? null,
+    authProviders: signIn ? (user.authProviders ?? null) : null,
+    mcpConnections,
+    githubLakeTokens: lakeGrants.map(grant => grant.encryptedToken),
+  };
 }
 
 /** Self-serve completion summary; keep in sync with purgeAccountContent, purgeAccountFiles and the user delete. */
@@ -43,7 +89,7 @@ export const PURGED_USER_DATA: readonly string[] = [
   'Personal data lakes, agent records and connected-device credentials',
   'API keys, including the AI provider keys you saved',
   'Sign-in sessions and sign-in history',
-  'Google Drive and Atlassian connections',
+  'Google Drive, Atlassian, Notion, Slack, GitHub, Sign in with Apple and remote MCP connections',
   'Published pages',
   'Embedded chat conversations',
   'Integration requests',
@@ -161,35 +207,68 @@ export async function purgeDeletedUserData(
 /**
  * Our copy of the credentials is gone (or about to be), but the grants stay live at the provider until
  * revoked. Same policy as the profile disconnects: revoke, then flag the Drive connections that were
- * syncing on the grant (org ones copy the user's refresh token) so they stop visibly. Best-effort.
- * `subject` labels the user in the log lines.
+ * syncing on the grant (org ones copy the user's refresh token) so they stop visibly. Best-effort: each
+ * provider runs on its own, so one failing or stalling never skips another. `subject` labels the user
+ * in the log lines.
  */
 export async function revokeIntegrationGrants(
   userId: string,
-  { googleDrive, atlassianConnect }: UserIntegrationGrants,
+  {
+    googleDrive,
+    atlassianConnect,
+    notionConnect,
+    slackUserToken,
+    authProviders,
+    mcpConnections,
+    githubLakeTokens,
+  }: UserIntegrationGrants,
   logger: MinimalLogger,
   subject = 'deleted user'
 ): Promise<void> {
   const context = `${subject} ${userId}`;
-
-  try {
-    // Both: Atlassian does not document whether revoking the refresh token also kills issued access tokens.
-    await revokeAtlassianGrant(atlassianConnect?.refreshToken, context);
-    await revokeAtlassianGrant(atlassianConnect?.accessToken, context);
-  } catch (err) {
-    logger.error(`Failed to revoke the Atlassian grant for ${context}: ${String(err)}`);
-  }
-
-  if (googleDrive) {
+  const step = async (label: string, run: () => Promise<unknown>) => {
     try {
-      // The refresh token when there is one: revoking it ends the whole grant, not just one access token.
-      await revokeDriveGrant(googleDrive.refreshToken || googleDrive.accessToken, context);
-      const affected = await flagConnectionsStoppedByDisconnect(userId, decryptStoredToken(googleDrive.refreshToken));
-      logger.info(
-        `Flagged ${affected.affectedOrgConnections} org and ${affected.affectedPersonalConnections} personal Drive connection(s) for ${context}`
-      );
+      await run();
     } catch (err) {
-      logger.error(`Failed to flag the Drive connections stopped by the revoke for ${context}: ${String(err)}`);
+      logger.error(`Failed to ${label} for ${context}: ${String(err)}`);
     }
+  };
+
+  await Promise.all([
+    step('revoke the Atlassian grant', async () => {
+      // Both: Atlassian does not document whether revoking the refresh token also kills issued access tokens.
+      await revokeAtlassianGrant(atlassianConnect?.refreshToken, context);
+      await revokeAtlassianGrant(atlassianConnect?.accessToken, context);
+    }),
+    googleDrive &&
+      step('flag the Drive connections stopped by the revoke', async () => {
+        // The refresh token when there is one: revoking it ends the whole grant, not just one access token.
+        await revokeDriveGrant(googleDrive.refreshToken || googleDrive.accessToken, context);
+        const affected = await flagConnectionsStoppedByDisconnect(userId, decryptStoredToken(googleDrive.refreshToken));
+        logger.info(
+          `Flagged ${affected.affectedOrgConnections} org and ${affected.affectedPersonalConnections} personal Drive connection(s) for ${context}`
+        );
+      }),
+    notionConnect && step('revoke the Notion grant', () => revokeNotionGrant(notionConnect.accessToken, context)),
+    slackUserToken && step('revoke the Slack user token', () => revokeSlackUserToken(slackUserToken, context)),
+    authProviders && step('revoke the Sign in with Apple grant', () => revokeAppleGrant(authProviders)),
+    authProviders && step('revoke the GitHub sign-in grant', () => revokeGitHubSignInGrant(authProviders, context)),
+    ...(githubLakeTokens ?? []).map(token =>
+      step('revoke the data-lake GitHub App authorization', () => revokeGitHubLakeUserAuthorization(token, context))
+    ),
+    mcpConnections?.length &&
+      step('revoke the remote MCP grants', async () => {
+        const network = await mcpRevokeNetwork(userId);
+        await Promise.all(mcpConnections.map(connection => revokeConnectionGrant(connection, network)));
+      }),
+  ]);
+}
+
+/** The user's own network policy when it still resolves; the default (own hosts blocked) when it does not. */
+async function mcpRevokeNetwork(userId: string): Promise<RemoteMcpNetworkOptions> {
+  try {
+    return (await resolveCustomMcpContext(userId)).network;
+  } catch {
+    return { ownHosts: resolveOwnHosts() };
   }
 }

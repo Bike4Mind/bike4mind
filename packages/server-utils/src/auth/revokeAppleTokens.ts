@@ -1,9 +1,10 @@
-import { AuthStrategy } from '@bike4mind/common';
+import { AuthStrategy, type IAuthProviders } from '@bike4mind/common';
 import { User } from '@bike4mind/database';
 import { decryptAtRest } from '@bike4mind/utils/security';
 import { APPLE_ISSUER, generateAppleClientSecret, getAppleConfig } from './appleConfig';
 
 const APPLE_REVOKE_URL = `${APPLE_ISSUER}/auth/revoke`;
+const REVOKE_TIMEOUT_MS = 10_000;
 
 export type RevokeAppleTokensResult =
   | { status: 'revoked' }
@@ -19,7 +20,22 @@ export type RevokeAppleTokensResult =
  */
 export async function revokeAppleTokens(userId: string): Promise<RevokeAppleTokensResult> {
   const user = await User.findById(userId).lean();
-  const provider = user?.authProviders?.find(p => p.strategy === AuthStrategy.Apple);
+  const result = await revokeAppleGrant(user?.authProviders);
+  if (result.status !== 'revoked') return result;
+
+  await User.updateOne(
+    { _id: userId },
+    { $unset: { 'authProviders.$[apple].refreshToken': '', 'authProviders.$[apple].accessToken': '' } },
+    { arrayFilters: [{ 'apple.strategy': AuthStrategy.Apple }] }
+  );
+  return result;
+}
+
+/** The revoke alone, for a caller holding providers read before the row was deleted. Throws as revokeAppleTokens does. */
+export async function revokeAppleGrant(
+  authProviders: readonly IAuthProviders[] | null | undefined
+): Promise<RevokeAppleTokensResult> {
+  const provider = authProviders?.find(p => p.strategy === AuthStrategy.Apple);
   const stored = provider?.refreshToken || provider?.accessToken;
   if (!provider || !stored) return { status: 'no_token' };
 
@@ -38,15 +54,10 @@ export async function revokeAppleTokens(userId: string): Promise<RevokeAppleToke
       token,
       token_type_hint: provider.refreshToken ? 'refresh_token' : 'access_token',
     }),
+    signal: AbortSignal.timeout(REVOKE_TIMEOUT_MS),
   });
   if (!response.ok) {
     throw new Error(`Apple token revocation failed with status ${response.status}`);
   }
-
-  await User.updateOne(
-    { _id: userId },
-    { $unset: { 'authProviders.$[apple].refreshToken': '', 'authProviders.$[apple].accessToken': '' } },
-    { arrayFilters: [{ 'apple.strategy': AuthStrategy.Apple }] }
-  );
   return { status: 'revoked' };
 }

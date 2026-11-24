@@ -560,6 +560,14 @@ class McpConnectionRepository extends BaseRepository<ConnectionDoc> implements I
     return result.deletedCount;
   }
 
+  /** The user's own OAuth connections with their encrypted tokens, for the provider revokes on account deletion. */
+  async listOAuthWithCredentialsForUser(userId: string): Promise<IMcpConnectionDocument[]> {
+    const docs = await this.model
+      .find({ ownerType: 'user', ownerKey: userId, 'auth.kind': 'oauth' })
+      .select(WITH_CREDENTIALS);
+    return docs.map(doc => doc.toJSON());
+  }
+
   async deleteAllForUser(userId: string): Promise<number> {
     const result = await this.model.deleteMany({ ownerType: 'user', ownerKey: userId });
     return result.deletedCount;
