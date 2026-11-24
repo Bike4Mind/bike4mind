@@ -10,6 +10,11 @@ if (typeof window !== 'undefined') {
   await import('@testing-library/jest-dom/vitest');
 }
 
+// Workers share process.env across files, so a NODE_ENV left as 'development' by an earlier
+// file flips every dev-only gate (CSP unsafe-eval, pretty logs, relaxed rate limits) in the
+// next one. Reset it per file; a test that needs another value stubs it itself.
+Object.assign(process.env, { NODE_ENV: 'test' });
+
 // Stripe price IDs are account-tied and sourced from NEXT_PUBLIC_* env vars with no
 // brand fallback (issue #9306). Seed real-format dummy ids here so the staged
 // price-config modules resolve and registry.test.ts's "both stages real" guard
