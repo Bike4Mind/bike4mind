@@ -11,6 +11,7 @@ import { fireEvent, render, screen, waitFor, within } from '@testing-library/rea
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { getThemeConfig } from '@client/app/utils/themes';
 import { ADOPTION_FEATURES, ADOPTION_LABELS, type FeatureAdoption } from '@client/app/utils/featureAdoption';
+import { todayUtc } from '@client/app/utils/dateUtils';
 import { parseAdminSearch } from '../adminTabParams';
 const mocks = vi.hoisted(() => ({ get: vi.fn() }));
 vi.mock('@client/app/contexts/ApiContext', () => ({ api: { get: mocks.get } }));
@@ -123,6 +124,16 @@ describe('feature adoption view', () => {
     expect(exported.features).toEqual(data.features);
     expect(revoke).toHaveBeenCalledWith('blob:export');
     click.mockRestore();
+  });
+  it('shows a through-yesterday label and sends no end until a last day is set', async () => {
+    const router = await renderView();
+    expect(await screen.findByTestId('adoption-end-empty')).toHaveTextContent('Through yesterday');
+    expect(screen.queryByTestId('adoption-end')).not.toBeInTheDocument();
+    expect(mocks.get).toHaveBeenCalledWith('/api/admin/analytics/feature-adoption?accounts=external&client=all&days=7');
+    fireEvent.click(screen.getByTestId('adoption-end-set-btn'));
+    await waitFor(() => expect(router.state.location.search.adoptionEnd).toBe(todayUtc()));
+    fireEvent.click(screen.getByTestId('adoption-end-clear-btn'));
+    await waitFor(() => expect(router.state.location.search.adoptionEnd).toBeUndefined());
   });
   it('shows loading, failure and invalid-filter states without exporting stale numbers', async () => {
     mocks.get.mockRejectedValue(new Error('Query failed'));

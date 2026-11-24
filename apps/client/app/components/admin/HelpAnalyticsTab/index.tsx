@@ -1,5 +1,5 @@
 import React, { useMemo, useState, type ReactNode } from 'react';
-import { Box, Button, Input, Link, Sheet, Stack, Tab, TabList, TabPanel, Tabs, Tooltip, Typography } from '@mui/joy';
+import { Box, Button, Link, Sheet, Stack, Tab, TabList, TabPanel, Tabs, Tooltip, Typography } from '@mui/joy';
 import type { SxProps } from '@mui/joy/styles/types';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import {
@@ -12,6 +12,7 @@ import {
   type HelpAnalyticsSearchGap,
   type HelpAnalyticsTopArticle,
 } from '@client/app/hooks/data/helpAnalytics';
+import { OptionalDateInput } from '@client/app/components/common/OptionalDateInput';
 import { useDebounceValue } from '@client/app/hooks/useDebouncedValue';
 import ContextHelpButton from '@client/app/components/help/ContextHelpButton';
 import MarkdownViewer from '@client/app/components/Knowledge/MarkdownViewer';
@@ -473,36 +474,40 @@ const HelpAnalyticsTab: React.FC = () => {
         />
         {range === 'custom' && (
           <>
-            <Input
+            <OptionalDateInput
               size="sm"
-              type="date"
               value={filters.dateFrom ?? ''}
-              onChange={event => setFilters({ ...filters, dateFrom: event.target.value || undefined })}
-              slotProps={{
-                input: {
-                  'aria-label': 'From',
-                  min: MIN_DAY,
-                  max: filters.dateTo || MAX_DAY,
-                  'data-testid': 'help-analytics-date-from',
-                },
+              onChange={day => setFilters({ ...filters, dateFrom: day || undefined })}
+              emptyLabel="From any date"
+              setLabel="Set start date"
+              clearLabel="Remove start date"
+              initialDate={() => {
+                const today = toDateString(new Date());
+                return filters.dateTo && filters.dateTo < today ? filters.dateTo : today;
               }}
+              min={MIN_DAY}
+              max={filters.dateTo || MAX_DAY}
+              aria-label="From"
+              testId="help-analytics-date-from"
             />
             <Typography level="body-xs" sx={{ color: 'admin.inkMuted' }}>
               to
             </Typography>
-            <Input
+            <OptionalDateInput
               size="sm"
-              type="date"
               value={filters.dateTo ?? ''}
-              onChange={event => setFilters({ ...filters, dateTo: event.target.value || undefined })}
-              slotProps={{
-                input: {
-                  'aria-label': 'To',
-                  min: filters.dateFrom || MIN_DAY,
-                  max: MAX_DAY,
-                  'data-testid': 'help-analytics-date-to',
-                },
+              onChange={day => setFilters({ ...filters, dateTo: day || undefined })}
+              emptyLabel="To any date"
+              setLabel="Set end date"
+              clearLabel="Remove end date"
+              initialDate={() => {
+                const today = toDateString(new Date());
+                return filters.dateFrom && filters.dateFrom > today ? filters.dateFrom : today;
               }}
+              min={filters.dateFrom || MIN_DAY}
+              max={MAX_DAY}
+              aria-label="To"
+              testId="help-analytics-date-to"
             />
           </>
         )}

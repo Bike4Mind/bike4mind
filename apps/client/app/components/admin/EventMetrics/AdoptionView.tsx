@@ -1,6 +1,8 @@
-import { Button, Input, Stack, Typography } from '@mui/joy';
+import { Button, Stack, Typography } from '@mui/joy';
 import { useQuery } from '@tanstack/react-query';
 import { api } from '@client/app/contexts/ApiContext';
+import { OptionalDateInput } from '@client/app/components/common/OptionalDateInput';
+import { todayUtc } from '@client/app/utils/dateUtils';
 import {
   ADOPTION_CLIENTS,
   adoptionQueryParams,
@@ -84,14 +86,16 @@ export function AdoptionView() {
           }))}
           onChange={client => patch({ client: client || 'all' })}
         />
-        <Input
-          type="date"
+        <OptionalDateInput
           size="sm"
           value={filters.end || ''}
-          onChange={event => patch({ end: event.target.value })}
-          slotProps={{
-            input: { 'aria-label': 'Last complete UTC day (blank means yesterday)', 'data-testid': 'adoption-end' },
-          }}
+          onChange={end => patch({ end })}
+          emptyLabel="Through yesterday"
+          setLabel="Set last day"
+          clearLabel="Use yesterday as the last day"
+          initialDate={todayUtc}
+          aria-label="Last complete UTC day (blank means yesterday)"
+          testId="adoption-end"
         />
         <Button
           size="sm"

@@ -332,6 +332,8 @@ describe('SlackWorkspacesTab dialogs', () => {
     await openExport('T1');
     const dialog = await screen.findByTestId('slack-export-dialog');
     expect(within(dialog).getByRole('heading', { level: 2 })).toHaveTextContent('Export channel history');
+    expect(screen.getByTestId('slack-export-date-start-input-empty')).toBeInTheDocument();
+    expect(screen.getByTestId('slack-export-date-end-input-empty')).toBeInTheDocument();
     fireEvent.change(screen.getByTestId('slack-export-channel-id-input'), { target: { value: 'C0123' } });
     fireEvent.click(screen.getByTestId('slack-export-confirm-btn'));
 
@@ -339,6 +341,29 @@ describe('SlackWorkspacesTab dialogs', () => {
       expect(mocks.post).toHaveBeenCalledWith(
         '/api/slack/export/channel',
         { workspaceId: 'ws-ok', channelId: 'C0123', format: 'json', includeThreads: true, includeUserNames: true },
+        { responseType: 'blob' }
+      )
+    );
+  });
+
+  it('sends a start date only once one is set', async () => {
+    mocks.post.mockResolvedValue({ data: new Blob(['{}']), headers: {} });
+    global.URL.createObjectURL = vi.fn(() => 'blob:export');
+    global.URL.revokeObjectURL = vi.fn();
+    renderTab();
+    await loaded();
+
+    await openExport('T1');
+    await screen.findByTestId('slack-export-dialog');
+    fireEvent.click(screen.getByTestId('slack-export-date-start-input-set-btn'));
+    fireEvent.change(screen.getByTestId('slack-export-date-start-input'), { target: { value: '2026-01-02' } });
+    fireEvent.change(screen.getByTestId('slack-export-channel-id-input'), { target: { value: 'C0123' } });
+    fireEvent.click(screen.getByTestId('slack-export-confirm-btn'));
+
+    await waitFor(() =>
+      expect(mocks.post).toHaveBeenCalledWith(
+        '/api/slack/export/channel',
+        expect.objectContaining({ dateRange: { start: new Date('2026-01-02').toISOString() } }),
         { responseType: 'blob' }
       )
     );

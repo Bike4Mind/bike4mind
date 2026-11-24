@@ -75,7 +75,7 @@ export function formatDateISO(date: Date | string | null | undefined): string {
 }
 
 /**
- * Get date string for input[type="date"] value
+ * Get date string for a date input's value
  * @param date Date to format (Date, string, null, or undefined)
  * @returns Formatted date string or empty string if no date provided
  */

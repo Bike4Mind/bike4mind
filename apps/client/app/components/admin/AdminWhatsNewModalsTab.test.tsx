@@ -5,11 +5,13 @@ import { render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
+import { getLocalDate } from '@client/app/utils/dateUtils';
 
 const mocks = vi.hoisted(() => ({
   modals: vi.fn(),
   toggle: vi.fn(),
   remove: vi.fn(),
+  create: vi.fn(),
   deployment: vi.fn(),
   toggleState: {} as Record<string, unknown>,
   highlights: vi.fn(),
@@ -21,7 +23,7 @@ vi.mock('@client/app/hooks/data/whatsNewModals', () => ({
   useGetWhatsNewModals: mocks.modals,
   useDeleteWhatsNewModal: () => idleMutation(mocks.remove),
   useToggleWhatsNewModal: () => ({ ...idleMutation(mocks.toggle), ...mocks.toggleState }),
-  useCreateWhatsNewModal: () => idleMutation(),
+  useCreateWhatsNewModal: () => idleMutation(mocks.create),
   useUpdateWhatsNewModal: () => idleMutation(),
   useUpdateWhatsNewModalVariants: () => idleMutation(),
   useGetRawModalVariants: () => ({ data: undefined, isLoading: false }),
@@ -66,6 +68,7 @@ describe('AdminWhatsNewModalsTab', () => {
     mocks.modals.mockReset();
     mocks.toggle.mockReset();
     mocks.remove.mockReset();
+    mocks.create.mockReset();
     mocks.toggleState = {};
     // A fork stage hides the weekly highlights section; only the last test shows it.
     mocks.deployment.mockReturnValue({ data: { stage: 'production', isForkProduction: true } });
@@ -137,6 +140,31 @@ describe('AdminWhatsNewModalsTab', () => {
     expect(screen.getByText('No modals yet')).toBeInTheDocument();
     await userEvent.click(screen.getByTestId('whats-new-empty-create-btn'));
     expect(screen.getByTestId('whats-new-create-dialog')).toBeInTheDocument();
+  });
+
+  it('shows the create form end date as unset until a date is added', async () => {
+    mocks.modals.mockReturnValue(listResult([]));
+    renderTab();
+
+    await userEvent.click(screen.getByTestId('whats-new-empty-create-btn'));
+    expect(screen.getByTestId('whats-new-create-enddate-input-empty')).toBeInTheDocument();
+    expect(screen.queryByTestId('whats-new-create-enddate-input')).not.toBeInTheDocument();
+
+    await userEvent.click(screen.getByTestId('whats-new-create-enddate-input-set-btn'));
+    expect(screen.getByTestId('whats-new-create-enddate-input')).toHaveValue(getLocalDate(30));
+  });
+
+  it('creates a modal without an end date while the date is unset', async () => {
+    mocks.modals.mockReturnValue(listResult([]));
+    renderTab();
+
+    await userEvent.click(screen.getByTestId('whats-new-empty-create-btn'));
+    await userEvent.type(screen.getByTestId('whats-new-create-title-input'), 'Title');
+    await userEvent.type(screen.getByTestId('whats-new-create-description-input'), 'Body');
+    await userEvent.click(screen.getByTestId('whats-new-create-submit-btn'));
+
+    expect(mocks.create).toHaveBeenCalledTimes(1);
+    expect(mocks.create.mock.calls[0][0].endDate).toBeUndefined();
   });
 
   it('shows a retryable error when the modals fail to load', async () => {
