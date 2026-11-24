@@ -70,6 +70,9 @@ export const TURNSTILE_ACTION_OAUTH_START = 'oauth-start';
 /** Shared challenge action for joining the waitlist. */
 export const TURNSTILE_ACTION_SUBSCRIBE = 'subscribe';
 
+/** Shared challenge action for a signed-out free run on a public skill template page. */
+export const TURNSTILE_ACTION_SKILL_FREE_RUN = 'skill-free-run';
+
 /** Query parameter that carries the solved token to the OAuth start route. */
 export const TURNSTILE_OAUTH_TOKEN_PARAM = 'turnstileToken';
 

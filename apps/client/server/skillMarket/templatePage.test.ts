@@ -14,6 +14,8 @@ vi.mock('./template', () => ({
 }));
 
 import {
+  MERMAID_SCRIPT_SRC,
+  TEMPLATE_FREE_RUN_SCRIPT_HASH,
   TEMPLATE_LOADER_SCRIPT_HASH,
   findServableTemplate,
   recordTemplateTry,
@@ -99,6 +101,53 @@ describe('renderTemplatePage', () => {
 
   it('leaves out the inputs block when the template lists none', () => {
     expect(renderTemplatePage({ ...view, inputs: [] })).not.toContain('You bring');
+  });
+
+  describe('free run', () => {
+    const open = { state: 'open', siteKey: 'site-"key', inputMaxChars: 8000 } as const;
+
+    it('renders no box and no script when the free run is hidden', () => {
+      for (const freeRun of [undefined, null]) {
+        const html = renderTemplatePage({ ...view, freeRun });
+        expect(html).not.toContain('template-page-free-run');
+        expect(html).not.toContain('<script');
+      }
+    });
+
+    it('renders the box with its config in data attributes and only the hashed script', () => {
+      const html = renderTemplatePage({ ...view, freeRun: open });
+      expect(html).toContain('data-testid="template-page-free-run-input"');
+      expect(html).toContain('maxlength="8000"');
+      expect(html).toContain('data-testid="template-page-free-run-btn">Try it free</button>');
+      expect(html).toContain('data-run-url="/api/skills/template/article-bullets/run"');
+      expect(html).toContain('data-site-key="site-&quot;key"');
+      expect(html).toContain('data-action="skill-free-run"');
+      expect(html).toContain('data-input-key="b4m.skillTemplate.freeRunInput.article-bullets"');
+      expect(html).toContain(`data-mermaid-src="${MERMAID_SCRIPT_SRC}"`);
+      expect(html).toMatch(/data-testid="template-page-free-run-signup" hidden>/);
+      const scripts = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)].map(m => m[1]);
+      expect(scripts).toHaveLength(1);
+      expect(`'sha256-${createHash('sha256').update(scripts[0]).digest('base64')}'`).toBe(
+        TEMPLATE_FREE_RUN_SCRIPT_HASH
+      );
+    });
+
+    it('keeps the script identical across pages so one CSP hash admits it', () => {
+      const script = (html: string) => /<script>([\s\S]*?)<\/script>/.exec(html)?.[1];
+      expect(script(renderTemplatePage({ ...view, freeRun: open }))).toBe(
+        script(renderTemplatePage({ ...view, slug: 'other', freeRun: { ...open, siteKey: 'k2', inputMaxChars: 10 } }))
+      );
+    });
+
+    it('shows the sign-up prompt, linking to the try route, to a visitor who already ran', () => {
+      const html = renderTemplatePage({ ...view, freeRun: { state: 'used' } });
+      expect(html).toMatch(/data-testid="template-page-free-run-signup">/);
+      expect(html).toContain(
+        'href="/skills/market/try/article-bullets" data-testid="template-page-free-run-signup-btn"'
+      );
+      expect(html).not.toContain('template-page-free-run-input');
+      expect(html).not.toContain('<script');
+    });
   });
 });
 

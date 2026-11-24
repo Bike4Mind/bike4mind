@@ -16,6 +16,7 @@ vi.mock('@bike4mind/observability', () => ({
 
 import {
   TURNSTILE_INACTIVE_LOG_INTERVAL_MS,
+  getTurnstileFreeRunPolicy,
   getTurnstilePolicy,
   getTurnstileStepUpPolicy,
   turnstileAllowedHostnames,
@@ -105,6 +106,41 @@ describe('getTurnstileStepUpPolicy', () => {
     config.TURNSTILE_SECRET_KEY = undefined;
     settings.turnstileSiteKey = 'site';
     expect(await getTurnstileStepUpPolicy()).toMatchObject({ active: false, secret: '' });
+  });
+});
+
+describe('getTurnstileFreeRunPolicy', () => {
+  const settings: Record<string, unknown> = {};
+  beforeEach(() => {
+    findSetting.mockReset();
+    config.TURNSTILE_SECRET_KEY = 'secret';
+    Object.assign(settings, { turnstileEnabled: false, turnstileFailClosed: false, turnstileSiteKey: ' site ' });
+    findSetting.mockImplementation(async (key: string) => ({ settingValue: settings[key] }));
+  });
+
+  it('is active and fail-closed with the sign-in toggle off', async () => {
+    expect(await getTurnstileFreeRunPolicy()).toEqual({
+      active: true,
+      failClosed: true,
+      siteKey: 'site',
+      secret: 'secret',
+    });
+  });
+
+  it('is active with the sign-in toggle on too', async () => {
+    settings.turnstileEnabled = true;
+    expect(await getTurnstileFreeRunPolicy()).toMatchObject({ active: true, failClosed: true });
+  });
+
+  it('is inactive without a site key', async () => {
+    settings.turnstileSiteKey = '  ';
+    expect(await getTurnstileFreeRunPolicy()).toMatchObject({ active: false });
+  });
+
+  it('is inactive without the secret, reading no settings', async () => {
+    config.TURNSTILE_SECRET_KEY = undefined;
+    expect(await getTurnstileFreeRunPolicy()).toMatchObject({ active: false, siteKey: '' });
+    expect(findSetting).not.toHaveBeenCalled();
   });
 });
 
