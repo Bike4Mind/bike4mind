@@ -789,6 +789,37 @@ export default defineConfig([
     },
   },
 
+  // apps/desktop/src/host - the agent runtime that a headless remote host also runs, where there is
+  // no Electron to load. It may import apps/desktop/src/main/chat, so this catches a direct import
+  // only; HostRuntime.electronFree.test.ts catches one that arrives through a dependency. Repeats
+  // the B4Mv3 facade guards from the apps/** block above (no-restricted-imports is last-rule-wins).
+  {
+    files: ['apps/desktop/src/host/**/*.ts'],
+    rules: {
+      'no-restricted-imports': [
+        'error',
+        {
+          paths: [
+            ...b4mv3RestrictedPaths,
+            {
+              name: 'electron',
+              message:
+                'src/host runs headless on remote machines. Take the capability through a port in src/host/ports.ts instead.',
+            },
+          ],
+          patterns: [
+            ...b4mv3RestrictedPatterns,
+            {
+              group: ['electron/*'],
+              message:
+                'src/host runs headless on remote machines. Take the capability through a port in src/host/ports.ts instead.',
+            },
+          ],
+        },
+      ],
+    },
+  },
+
   // Freezes the interim @server/* bridge into apps/client: existing uses are baselined in
   // eslint-suppressions.json, so only new ones fail. Tests are included because vi.mock needs the alias too.
   {

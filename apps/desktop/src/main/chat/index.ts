@@ -2,9 +2,8 @@ import { z } from 'zod';
 import { registerOrchestrationIpc } from './orchestrationIpc';
 import { createStudioDiagnostics } from './studio/StudioDiagnostics';
 import { registerStudio } from './studio/registerStudio';
-import { randomUUID } from 'node:crypto';
 import { copyFile, readFile, stat, writeFile } from 'node:fs/promises';
-import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
+import { basename, isAbsolute, join, resolve } from 'node:path';
 import { PERMISSION_LISTS, type PermissionRuleLists, type PermissionScope } from '@shared/permissions';
 import {
   app,
@@ -18,15 +17,13 @@ import {
   shell,
   type WebContents,
 } from 'electron';
-import { ChatModels, isPromptCacheTtl } from '@bike4mind/common';
+import { isPromptCacheTtl } from '@bike4mind/common';
 import type {
   ChatApprovalAnswer,
   ChatApprovalMode,
   ChatArtifactPublishRequest,
   ChatAttachmentInput,
-  ChatQueueEvent,
   ChatSessionStatusEvent,
-  ChatSessionSummary,
   ChatStreamEvent,
   ProjectInspection,
   SendMessageRequest,
@@ -64,9 +61,6 @@ import type { McpMutationResult, McpServerInput, McpServersState } from '@shared
 import { NO_SKILLS } from '@shared/skills';
 import type { AuthService } from '../auth';
 import { createMainLogger } from '../logger';
-import { createCompletionRunMinter } from './completionRuns';
-import { ApprovalModePreference } from './ApprovalModePreference';
-import { PromptCacheTtlPreference } from './PromptCacheTtlPreference';
 import { LocalContextPreference } from './LocalContextPreference';
 import { SpawnLocationPreference } from './SpawnLocationPreference';
 import { registerSpawnLocationIpc } from './spawnLocationIpc';
@@ -87,7 +81,6 @@ import { registerSessionExportIpc } from './sessionExportIpc';
 import { registerLocalDataExportIpc } from './localDataExportIpc';
 import { registerSessionCreateIpc } from './sessionCreateIpc';
 import { registerSessionOrchestrateIpc } from './sessionOrchestrateIpc';
-import { archiveFromSidebar } from './sessionArchive';
 import { placeNewSession, registerSidebarIpc } from './sidebarIpc';
 import { AttachmentStore } from './AttachmentStore';
 import { BrowserManager, NO_PAGE } from './browser/BrowserManager';
@@ -101,8 +94,7 @@ import { registerModelProtocol } from './model3d/engineProtocol';
 import { ModelLiveViews } from './model3d/ModelLiveViews';
 import { ModelVersionStore } from './model3d/ModelVersionStore';
 import { modelIpcHandlers } from './model3d/modelIpc';
-import { ChatService, sessionForRenderer, type ChatServiceDeps } from './ChatService';
-import { DeferredToolsSetting, parseDeferredToolsOverride } from './DeferredToolsSetting';
+import { sessionForRenderer, type ChatService, type ChatServiceDeps } from './ChatService';
 import { logDownstream } from './devLogDownstream';
 import { McpManager } from './mcp/McpManager';
 import { McpServerStore } from './mcp/McpServerStore';
@@ -112,12 +104,9 @@ import { MediaApiClient } from './media/MediaApiClient';
 import { MediaStore } from './media/MediaStore';
 import { VideoJobScheduler } from './media/VideoJobScheduler';
 import { VideoJobStore } from './media/VideoJobStore';
-import { MessageQueue } from './MessageQueue';
 import { registerMediaProtocol } from './media/protocol';
 import { ModelCatalog } from './ModelCatalog';
-import { ModelPreference } from './ModelPreference';
-import { SessionActivity } from './SessionActivity';
-import { SessionStore } from './SessionStore';
+import type { SessionStore } from './SessionStore';
 import { LocalHistory } from './LocalHistory';
 import { registerHistoryIpc } from './historyIpc';
 import { captureHistoryPage } from './captureHistoryPage';
@@ -144,9 +133,8 @@ import {
 import { readWorkspaceChanges } from './project/workspaceChanges';
 import { accountSkillsProvider } from './skills/accountSkills';
 import { ProjectTrustStore } from './skills/ProjectTrustStore';
-import { ApprovalLog } from './permissions/ApprovalLog';
 import { formatApprovalSummary, readApprovalLog, summarizeApprovals } from './permissions/approvalSummary';
-import { ClaudeCodeSettings, MANAGED_SETTINGS_PATH } from './permissions/ClaudeCodeSettings';
+import { ClaudeCodeSettings } from './permissions/ClaudeCodeSettings';
 import { PermissionRuleStore } from './permissions/PermissionRuleStore';
 import { PermissionService } from './permissions/PermissionService';
 import { CapabilityLedger } from './capabilities/CapabilityLedger';
@@ -157,17 +145,11 @@ import {
 } from './capabilities/capabilityHandlers';
 import { SkillCatalog } from './skills/SkillCatalog';
 import { parseSkillsScope, skillsTrustTargetSchema } from './skills/scope';
-import { AccessStore } from './tools/AccessStore';
-import { ApprovalGate } from './tools/ApprovalGate';
-import { DependencyInstaller } from './project/dependencyInstall';
 import { RecentFolderStore } from './project/RecentFolderStore';
 import { appWorktreeMainCheckout, SpareWorktrees } from './project/workspace';
 import { folderToRemember } from './project/recentFolderToRecord';
-import { BackgroundProcessRegistry } from './tools/BackgroundProcessRegistry';
-import { parseReasoningEffortSetting, storedReasoningEffortSetting } from './reasoningEffort';
-import { ForegroundCommandRegistry } from './tools/ForegroundCommandRegistry';
-import { permissionProtectedLocations, toolProtectedLocations } from './protectedLocations';
-import { keepSessionWritesIn } from './tools/sessionScripts';
+import type { BackgroundProcessRegistry } from './tools/BackgroundProcessRegistry';
+import { storedReasoningEffortSetting } from './reasoningEffort';
 import { mainCheckoutOf } from './tools/shellTools';
 import type { PreparedImage } from './tools/types';
 import { desktopScreenCapturer } from './screen/desktopScreen';
@@ -178,7 +160,7 @@ import type { PrMonitor } from '../pr/PrMonitor';
 import { appWindows, focusedAppWindow } from '../windows';
 import { registerClaudeImport } from '../claudeImport';
 import type { ClaudeImportService } from '../claudeImport/ClaudeImportService';
-import { rendererNotes } from './rendererNotes';
+import { HostRuntime, hostProtectedLocations, type HostEnvironment, type HostEventSink } from '../../host';
 
 const editMessageRequestSchema = z.object({
   sessionId: z.string(),
@@ -187,8 +169,6 @@ const editMessageRequestSchema = z.object({
 });
 
 const VERBOSE = process.env.B4M_DESKTOP_VERBOSE === '1';
-/** Diagnosis only; see apps/desktop/docs/model-wait-findings.md. */
-const TURN_TIMING = process.env.B4M_DESKTOP_TURN_TIMING === '1';
 
 function sameSubject(left: CapabilitySubject, right: CapabilitySubject): boolean {
   if (left.kind !== right.kind) return false;
@@ -196,31 +176,6 @@ function sameSubject(left: CapabilitySubject, right: CapabilitySubject): boolean
   if (left.kind === 'project' && right.kind === 'project') return left.directory === right.directory;
   return left.kind === 'session' && right.kind === 'session' && left.sessionId === right.sessionId;
 }
-
-/**
- * The model a new conversation prefers until the user has picked one (see ModelPreference),
- * and when the deployment does not offer the one they picked.
- *
- * A PREFERENCE, not a list: the real set comes from the server (see ModelCatalog), and a
- * deployment that does not offer this one gets the first model it does offer instead. It is
- * also the fixed fallback for a session file with no model saved on it - deliberately not the
- * remembered pick, so an old conversation never changes model because of a choice made in
- * another one.
- */
-const PREFERRED_MODEL: string = ChatModels.CLAUDE_5_OPUS;
-
-/**
- * The reasoning effort a conversation starts on, read per launch so a benchmark can compare
- * efforts without a rebuild. The user's own choice is per session and outranks this - see
- * SessionStore - so this only reaches a conversation that has never been given one.
- */
-const REASONING_EFFORT = parseReasoningEffortSetting(process.env.B4M_DESKTOP_REASONING_EFFORT);
-
-/** Local overrides of the server's deferred tool loading setting; see parseDeferredToolsOverride. */
-const DEFERRED_TOOLS_OVERRIDE = parseDeferredToolsOverride(
-  process.env.B4M_DESKTOP_DEFERRED_TOOLS,
-  process.env.B4M_DESKTOP_DEFERRED_START_MAX_TOKENS
-);
 
 /** How much of a background process's output the panel asks for when it rejoins after a reload. */
 const PANEL_TAIL_CHARS = 20_000;
@@ -409,49 +364,14 @@ export function registerChat(
   } = {}
 ): RegisteredChat {
   const logger = createMainLogger(VERBOSE);
-  const userData = app.getPath('userData');
-  // App-wide like approval-mode.json: a record of decisions, kept after their conversations.
-  const approvalLog = new ApprovalLog(join(userData, 'approval-log.jsonl'), message => logger.warn(message));
-  // Beside approval-mode.json and app-wide like it; see ModelPreference for why.
-  const modelPreference = new ModelPreference(join(userData, 'model-preference.json'));
-  // Unconditional, unlike everything else at this level: it is the one way to check which model
-  // a launch will start conversations on without opening the picker. The read also warms the
-  // cache, so the first new conversation does not wait on the file.
-  void modelPreference
-    .read()
-    .then(remembered =>
-      logger.warn(
-        `CHAT: preferred model for new conversations: ${remembered ?? PREFERRED_MODEL} (${remembered ? 'remembered pick' : 'built-in default'})`
-      )
-    );
-  // Beside the sessions directory rather than inside it: everything in there is migrated into
-  // a scope folder on first use, and this records how the user likes to work rather than
-  // anything belonging to one conversation or one account.
-  const approvalModes = new ApprovalModePreference(join(userData, 'approval-mode.json'));
-  const deferredTools = new DeferredToolsSetting({
-    filePath: join(userData, 'deferred-tools.json'),
-    getApiClient: () => auth.getApiClient(),
-    getEnvironmentUrl: () => auth.getState().environment.url,
-    logger,
-    override: DEFERRED_TOOLS_OVERRIDE,
-  });
-  // Asked at launch so the first turn already has the server's answer.
-  void deferredTools.refresh();
-  // Scoped to the backend and the account, not just to this machine: one install reaches
-  // production and a local server, and can be signed in as a different person on each. The
-  // provider is read per operation, so a switch takes effect on the next list with nothing
-  // here to invalidate. See ./sessionScope for the key and the one-time migration.
-  const store = new SessionStore(
-    join(userData, 'sessions'),
-    PREFERRED_MODEL,
-    randomUUID(),
-    () => sessionScopeForChat(auth.getState()),
-    approvalModes,
-    REASONING_EFFORT,
-    new PromptCacheTtlPreference(join(userData, 'prompt-cache-ttl.json'))
-  );
-  keepSessionWritesIn(store);
-  const access = new AccessStore(join(userData, 'tool-access.json'));
+  const environment: HostEnvironment = {
+    dataDirectory: app.getPath('userData'),
+    homeDirectory: app.getPath('home'),
+    appName: app.getName(),
+    platform: process.platform,
+  };
+  const userData = environment.dataDirectory;
+  const protection = hostProtectedLocations(environment, logger);
   const capabilityLedger = new CapabilityLedger(join(userData, 'capability-ledger.json'));
   // App-wide like approval-mode.json; see SidebarSectionStore.
   const sidebarSections = new SidebarSectionStore(join(userData, 'sidebar-sections.json'));
@@ -465,31 +385,19 @@ export function registerChat(
   const skills = new SkillCatalog(projectTrust, accountSkillsProvider(auth, userData), logger);
   // App-wide like approval-mode.json. Claude Code's files are only ever read; the protected roots
   // are folders no allow rule may cover, since a call writing there would grant itself more.
-  const home = app.getPath('home');
+  const home = environment.homeDirectory;
   const claudeCode = new ClaudeCodeSettings({ home, logger, onChange: () => permissions.invalidate() });
-  const permissionProtected = permissionProtectedLocations(userData, home, dirname(MANAGED_SETTINGS_PATH), logger);
-  const toolProtected = toolProtectedLocations(userData, logger);
   const permissions: PermissionService = new PermissionService({
     store: new PermissionRuleStore(join(userData, 'permission-rules.json')),
     claudeCode,
     isTrusted: directory => projectTrust.isTrusted(directory),
     home,
-    protectedRoots: () => permissionProtected.paths(),
-    unresolvedProtected: () => permissionProtected.unresolved(),
+    protectedRoots: () => protection.permission.paths(),
+    unresolvedProtected: () => protection.permission.unresolved(),
     mainCheckoutOf,
     logger,
   });
   void permissions.start().catch(error => logger.warn(`PERMISSIONS: could not load rules: ${String(error)}`));
-  const capabilitiesReady = Promise.all([
-    access.list(),
-    projectTrust.list(),
-    new PermissionRuleStore(join(userData, 'permission-rules.json')).read(),
-  ])
-    .then(async ([roots, trustedProjects, stored]) => {
-      await retireSessionApprovals(capabilityLedger);
-      await capabilityLedger.migrate({ roots, trustedProjects, permissions: stored });
-    })
-    .catch(error => logger.warn(`CAPABILITIES: could not migrate grants: ${String(error)}`));
   const attachmentsDir = join(userData, 'attachments');
   const attachments = new AttachmentStore(attachmentsDir, logger, shrinkImage);
   // App-wide like sidebar-sections.json: session ids are unique across scopes.
@@ -620,16 +528,6 @@ export function registerChat(
     logger.warn(`CHAT: local history is unavailable: ${err instanceof Error ? err.message : err}`);
   }
 
-  // Built before the service so the service's tool results can bind a PR. It reaches the
-  // service only through `chat`, which is first called long after both exist.
-  const pullRequests = registerPullRequests({
-    path: join(userData, 'pull-requests.json'),
-    autoFixAttemptsPath: join(userData, 'auto-fix-attempts.json'),
-    chat: () => service,
-    store,
-    logger,
-    send,
-  });
   const broadcast = (event: ChatStreamEvent) => {
     send(IPC_CHANNELS.chatStreamEvent, event);
     if (event.type === 'tool-end') pullRequests.observeToolEnd(event.sessionId, event.call);
@@ -670,38 +568,6 @@ export function registerChat(
     progress => send(IPC_CHANNELS.chatArtifactPublishProgress, progress)
   );
 
-  // Declared before the two things that feed it, because both take it as a constructor
-  // argument: the gate reports who is waiting on the user, the service reports who is
-  // replying, and this turns the pair into the one status a sidebar row draws.
-  const activity = new SessionActivity((event: ChatSessionStatusEvent) => {
-    send(IPC_CHANNELS.chatSessionStatus, event);
-    hooks.observeSessionStatus?.(event);
-    // Only reached once a turn has run, long after pullRequests below exists.
-    if (event.status === 'done' || event.unreadReply) pullRequests.turnSettled(event.sessionId);
-    // Same: a session changes status only once `service` below exists.
-    service.sessionStatusChanged(event);
-  });
-
-  // Typed-ahead messages, on their own channel: this is per-session state that outlives any
-  // one reply, so it travels beside the status pushes rather than inside the reply stream.
-  const queue = new MessageQueue((event: ChatQueueEvent) => send(IPC_CHANNELS.chatQueueChanged, event));
-
-  const approvals = new ApprovalGate({
-    requested: sessionId => activity.approvalRequested(sessionId),
-    settled: sessionId => activity.approvalSettled(sessionId),
-  });
-
-  // Output and status go out on the same channel as reply tokens: a background process is
-  // still something that conversation is doing, and a renderer that reloads re-subscribes to
-  // one stream rather than two.
-  const background = new BackgroundProcessRegistry({
-    output: (sessionId, processId, stream, text) =>
-      broadcast({ type: 'background-output', sessionId, processId, stream, text }),
-    status: (sessionId, process) => broadcast({ type: 'background-status', sessionId, process }),
-    // Only ever fires once a process has run, long after `service` below exists.
-    exited: (sessionId, processId) => service.backgroundExited(sessionId, processId),
-  });
-
   // Encrypted for the same reason as the auth vault: an env variable holding an API key and a
   // header holding a bearer token are credentials, and neither goes to plain JSON in userData.
   const mcpServerStore = new McpServerStore(appSecretCipher(), privateFile(join(userData, 'mcp-servers.json')), logger);
@@ -711,8 +577,6 @@ export function registerChat(
   const mcp = new McpManager(mcpServerStore, logger, (state: McpServersState) =>
     send(IPC_CHANNELS.mcpServersChanged, state)
   );
-
-  const foreground = new ForegroundCommandRegistry();
 
   const browser = new BrowserManager(
     (sessionId, state) => send(IPC_CHANNELS.browserPageState, { sessionId, ...state }),
@@ -761,87 +625,90 @@ export function registerChat(
     { available: process.platform === 'darwin' }
   );
 
-  const service = new ChatService({
-    store,
-    access,
-    attachments,
-    composerDrafts,
-    models,
-    modelSettings,
-    spawnLocation,
-    logger,
-    mintCompletionRun: createCompletionRunMinter(message =>
-      logger.warn(`CHAT: could not mint a completion run: ${message}`)
-    ),
-    turnTiming: TURN_TIMING,
-    preferredModel: PREFERRED_MODEL,
-    modelMemory: modelPreference,
-    approvals,
-    permissions,
-    capabilities: {
-      grant: async input => {
-        await capabilitiesReady;
-        return capabilityLedger.grant(input);
-      },
-      revokeMatching: async match => {
-        await capabilitiesReady;
-        return capabilityLedger.revokeMatching(match);
-      },
+  const events: HostEventSink = {
+    streamEvent: broadcast,
+    sessionSummary: summary => send(IPC_CHANNELS.chatSessionSummary, summary),
+    sessionStatus: event => {
+      send(IPC_CHANNELS.chatSessionStatus, event);
+      hooks.observeSessionStatus?.(event);
+      // Only reached once a turn has run, long after pullRequests below exists.
+      if (event.status === 'done' || event.unreadReply) pullRequests.turnSettled(event.sessionId);
     },
-    approvalLog,
-    background,
-    foreground,
-    dependencies: new DependencyInstaller(background),
-    spareWorktrees,
-    media,
-    videoJobs,
-    activity,
-    sidebarSections,
-    mcp,
-    browser,
-    pullRequests,
-    screen: desktopScreenCapturer(app.getName()),
-    ...(process.platform === 'darwin' ? { simulator: { driver: simulatorDriver, view: simulatorView } } : {}),
-    model: modelViews,
-    prepareImage: prepareToolImage,
-    history,
-    local,
-    artifacts,
-    queue,
-    skills,
-    // userData holds the auth vault. Without this a user who shares their home folder would be
-    // one `cat` away from the access token, which breaks the rule that tokens never leave the main process.
-    get protectedPaths() {
-      return toolProtected.paths();
-    },
-    // Attachments sit inside userData but hold only what the user attached, so the agent may be
-    // given a folder of them to hand to another tool; the file tools still refuse every write there.
-    shareableUnderProtected: [attachmentsDir],
-    get unresolvedProtectedPaths() {
-      return toolProtected.unresolved();
-    },
-    get uncoverablePaths() {
-      return permissionProtected.paths();
-    },
-    get deferredTools() {
-      return deferredTools.current();
-    },
-    getApiClient: () => auth.getApiClient(),
-    isDeviceLocal: () => sessionScopeForChat(auth.getState())?.local === true,
-    getEnvironmentUrl: () => auth.getState().environment.url,
-    emit: event => {
-      broadcast(event);
-      try {
-        hooks.observeStream?.(event);
-      } catch {
-        logger.warn('FLEET: activity observer failed');
-      }
-    },
-    summaryChanged: (summary: ChatSessionSummary) => send(IPC_CHANNELS.chatSessionSummary, summary),
-    taskDecisionsChanged: decisions => send(IPC_CHANNELS.chatTaskDecisions, decisions),
+    queueChanged: event => send(IPC_CHANNELS.chatQueueChanged, event),
+    taskDecisions: decisions => send(IPC_CHANNELS.chatTaskDecisions, decisions),
     loopChanged: (sessionId, state) => send(IPC_CHANNELS.chatLoopChanged, { sessionId, state }),
-    sessionClosed: hooks.sessionClosed,
-    releaseSessionTerminals: hooks.releaseSessionTerminals,
+  };
+
+  const runtime = new HostRuntime({
+    environment,
+    events,
+    auth,
+    logger,
+    protection,
+    machine: {
+      browser,
+      screen: desktopScreenCapturer(environment.appName),
+      ...(environment.platform === 'darwin' ? { simulator: { driver: simulatorDriver, view: simulatorView } } : {}),
+      model: modelViews,
+      prepareImage: prepareToolImage,
+    },
+    collaborators: {
+      attachments,
+      composerDrafts,
+      models,
+      modelSettings,
+      spawnLocation,
+      permissions,
+      capabilities: {
+        grant: async input => {
+          await capabilitiesReady;
+          return capabilityLedger.grant(input);
+        },
+        revokeMatching: async match => {
+          await capabilitiesReady;
+          return capabilityLedger.revokeMatching(match);
+        },
+      },
+      spareWorktrees,
+      media,
+      videoJobs,
+      sidebarSections,
+      mcp,
+      pullRequests: () => pullRequests,
+      history,
+      local,
+      artifacts,
+      skills,
+      // Attachments sit inside userData but hold only what the user attached, so the agent may be
+      // given a folder of them to hand to another tool; the file tools still refuse every write there.
+      shareableUnderProtected: [attachmentsDir],
+    },
+    hooks: {
+      observeStream: hooks.observeStream,
+      sessionClosed: hooks.sessionClosed,
+      releaseSessionTerminals: hooks.releaseSessionTerminals,
+    },
+  });
+  const { service, store, access, approvals, approvalLog, background, foreground } = runtime;
+  const capabilitiesReady = Promise.all([
+    access.list(),
+    projectTrust.list(),
+    new PermissionRuleStore(join(userData, 'permission-rules.json')).read(),
+  ])
+    .then(async ([roots, trustedProjects, stored]) => {
+      await retireSessionApprovals(capabilityLedger);
+      await capabilityLedger.migrate({ roots, trustedProjects, permissions: stored });
+    })
+    .catch(error => logger.warn(`CAPABILITIES: could not migrate grants: ${String(error)}`));
+
+  // Reaches the service only through `chat`, which is first called long after both exist.
+  const pullRequests = registerPullRequests({
+    path: join(userData, 'pull-requests.json'),
+    autoFixAttemptsPath: join(userData, 'auto-fix-attempts.json'),
+    chat: () => service,
+    store,
+    logger,
+    send,
   });
 
   const studioIntegration = registerStudio({
@@ -861,11 +728,9 @@ export function registerChat(
   service.studioWithSessionDeletion = studioIntegration.withSessionDeletion;
 
   ipcMain.handle(IPC_CHANNELS.chatListModels, (_event, force: unknown) =>
-    service.listModels(force === 'local' ? 'local' : force === true)
+    runtime.listModels(force === 'local' ? 'local' : force === true)
   );
-  ipcMain.handle(IPC_CHANNELS.chatDraftDefaults, async () =>
-    store.defaultsForNewSession(await service.modelForNewSession())
-  );
+  ipcMain.handle(IPC_CHANNELS.chatDraftDefaults, () => runtime.draftDefaults());
   registerModelServersIpc(ipcMain, modelServers, async () => {
     const probed = await localHardware.probed();
     return probed && machineView(probed);
@@ -887,7 +752,7 @@ export function registerChat(
   ipcMain.handle(IPC_CHANNELS.chatListCreationTools, (_event, model: string) => service.listCreationTools(model));
   ipcMain.handle(IPC_CHANNELS.chatSetSessionArchived, (event, sessionId: unknown, archived: unknown) => {
     if (typeof sessionId !== 'string' || typeof archived !== 'boolean') return null;
-    return archiveFromSidebar(service, store, sessionId, archived, options => {
+    return runtime.setSessionArchived(sessionId, archived, options => {
       const window = BrowserWindow.fromWebContents(event.sender);
       return window ? dialog.showMessageBox(window, options) : dialog.showMessageBox(options);
     });
@@ -983,7 +848,7 @@ export function registerChat(
   ipcMain.handle(IPC_CHANNELS.chatSetApprovalMode, (_event, sessionId: string, mode: ChatApprovalMode) =>
     mode === 'ask' || mode === 'auto' || mode === 'full' ? service.setApprovalMode(sessionId, mode) : null
   );
-  ipcMain.handle(IPC_CHANNELS.chatListSessions, () => service.listSessions());
+  ipcMain.handle(IPC_CHANNELS.chatListSessions, () => runtime.listSessions());
   ipcMain.handle(IPC_CHANNELS.permissionsGetState, () => permissions.state());
   // Shapes checked here: this is the only door a rule comes in by besides the approval card.
   ipcMain.handle(IPC_CHANNELS.permissionsSetRules, async (_event, scope: unknown, lists: unknown) => {
@@ -1074,7 +939,7 @@ export function registerChat(
   });
   ipcMain.handle(IPC_CHANNELS.capabilitiesGetState, () => capabilityIpc.getState());
   ipcMain.handle(IPC_CHANNELS.capabilitiesRevoke, (_event, grantId: unknown) => capabilityIpc.revoke(grantId));
-  ipcMain.handle(IPC_CHANNELS.chatGetSessionStatuses, () => service.sessionStatuses());
+  ipcMain.handle(IPC_CHANNELS.chatGetSessionStatuses, () => runtime.sessionStatuses());
   const rememberFolder = (directory: string | null): void => {
     if (!directory) return;
     recentFolders
@@ -1082,7 +947,7 @@ export function registerChat(
       .catch(error => logger.warn(`CHAT: could not remember recent folder: ${String(error)}`));
   };
   registerSessionCreateIpc(ipcMain, {
-    createSession: () => service.createSession(),
+    createSession: () => runtime.createSession(),
     createCodeSession: request => service.createCodeSession(request),
     place: (sessionId, sectionId) =>
       placeNewSession(sidebarSections, sessionId, sectionId, error =>
@@ -1158,7 +1023,7 @@ export function registerChat(
     service.removeContextDirectory(sessionId, directory)
   );
   ipcMain.handle(IPC_CHANNELS.chatGetSession, async (_event, sessionId: string, viewed?: boolean) =>
-    sessionForRenderer(await service.getSession(sessionId, viewed === true))
+    sessionForRenderer(await runtime.getSession(sessionId, viewed === true))
   );
   // Keyed by session rather than by a path from the renderer, so this only ever reads the folder
   // the session's own tools run in. A failure is logged, not shown: the bar is a passive readout,
@@ -1174,7 +1039,7 @@ export function registerChat(
     }
   });
   ipcMain.handle(IPC_CHANNELS.chatRenameSession, (_event, sessionId: string, title: string) =>
-    service.renameSession(sessionId, title)
+    runtime.renameSession(sessionId, title)
   );
   ipcMain.handle(IPC_CHANNELS.chatInspectWorktreeRemoval, (_event, sessionId: unknown) => {
     if (typeof sessionId !== 'string') throw new Error('Invalid conversation id');
@@ -1214,8 +1079,7 @@ export function registerChat(
     if (typeof sessionId !== 'string' || (removeWorktree !== undefined && typeof removeWorktree !== 'boolean')) {
       throw new Error('Invalid delete request');
     }
-    await service.deleteSession(sessionId, removeWorktree === true);
-    await pullRequests.forget(sessionId);
+    await runtime.deleteSession(sessionId, removeWorktree === true);
   });
   const isKnownSession = (sessionId: string) =>
     store.get(sessionId).then(
@@ -1224,10 +1088,8 @@ export function registerChat(
     );
   registerSidebarIpc(ipcMain, sidebarSections, isKnownSession);
   registerComposerDraftsIpc(ipcMain, composerDrafts, composerDraftsLoaded, isKnownSession);
-  ipcMain.handle(IPC_CHANNELS.chatSendMessage, (_event, request: SendMessageRequest) =>
-    service.send(request.sessionId, request.text, request.attachments, { notes: rendererNotes(request.notes) })
-  );
-  ipcMain.handle(IPC_CHANNELS.chatStopReply, (_event, sessionId: string) => service.stop(sessionId));
+  ipcMain.handle(IPC_CHANNELS.chatSendMessage, (_event, request: SendMessageRequest) => runtime.sendMessage(request));
+  ipcMain.handle(IPC_CHANNELS.chatStopReply, (_event, sessionId: string) => runtime.stopReply(sessionId));
   ipcMain.handle(IPC_CHANNELS.chatLoopCommand, (_event, sessionId: string, args: string) =>
     service.loopCommand(sessionId, args)
   );
@@ -1253,16 +1115,16 @@ export function registerChat(
   ipcMain.handle(IPC_CHANNELS.chatGetRunSpend, (_event, rootSessionId: unknown) =>
     typeof rootSessionId === 'string' ? service.getRunSpend(rootSessionId) : { status: 'unattributed' }
   );
-  ipcMain.handle(IPC_CHANNELS.chatGetQueued, (_event, sessionId: string) => service.queuedMessages(sessionId));
+  ipcMain.handle(IPC_CHANNELS.chatGetQueued, (_event, sessionId: string) => runtime.queuedMessages(sessionId));
   ipcMain.handle(IPC_CHANNELS.chatCancelQueued, (_event, sessionId: string, queuedId: string) =>
-    service.cancelQueued(sessionId, queuedId)
+    runtime.cancelQueued(sessionId, queuedId)
   );
   ipcMain.handle(IPC_CHANNELS.chatGetHeldRelays, (_event, sessionId: string) => service.heldRelaysFor(sessionId));
   ipcMain.handle(IPC_CHANNELS.chatResolveHeldRelay, (_event, sessionId: string, heldId: string, deliver: boolean) =>
     service.resolveHeldRelay(sessionId, heldId, deliver === true)
   );
   ipcMain.handle(IPC_CHANNELS.chatSendQueuedNow, (_event, sessionId: string, queuedId: string) =>
-    service.sendQueuedNow(sessionId, queuedId)
+    runtime.sendQueuedNow(sessionId, queuedId)
   );
   ipcMain.handle(IPC_CHANNELS.chatStartSpawnSuggestion, (_event, request: StartSpawnSuggestionRequest) =>
     service.startSpawnSuggestion(request)
@@ -1275,7 +1137,8 @@ export function registerChat(
   );
   // The one way an approval is answered: the app's cards (this handler) and the menu-bar item and
   // mini Tavern (main/watch, via the returned `respondToApproval`) both land here.
-  const respondToApproval = (approvalId: string, answer: ChatApprovalAnswer) => approvals.resolve(approvalId, answer);
+  const respondToApproval = (approvalId: string, answer: ChatApprovalAnswer) =>
+    runtime.respondToApproval(approvalId, answer);
   ipcMain.handle(IPC_CHANNELS.chatRespondToApproval, (_event, approvalId: string, answer: ChatApprovalAnswer) =>
     respondToApproval(approvalId, answer)
   );
@@ -1351,7 +1214,7 @@ export function registerChat(
 
   registerFilePathLinkIpc(ipcMain, {
     scopeFor: sessionId => service.fileLinkScope(sessionId),
-    protectedPaths: () => toolProtected.paths(),
+    protectedPaths: () => protection.tool.paths(),
     home,
     stat: path => stat(path),
     openPath: path => shell.openPath(path),
