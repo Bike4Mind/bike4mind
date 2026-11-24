@@ -22,6 +22,15 @@ export const aiHolders = {
     kind: 'holder',
     references: [{ path: 'userId', matchBy: 'userId', action: 'deleteDocument', where: { ownerType: 'user' } }],
   },
+  CallableFunctionCall: {
+    kind: 'holder',
+    references: [
+      { path: 'callerUserId', matchBy: 'userId', action: 'deleteDocument' },
+      { path: 'ownerUserId', matchBy: 'userId', action: 'deleteDocument' },
+    ],
+    // A digest of the function's source, not a credential; listed because the name matches the secret pattern.
+    secretPaths: ['codeHash'],
+  },
   CodeAgentEvent: {
     kind: 'holder',
     references: [

@@ -9,6 +9,7 @@ import type {
   ICallableFunctionPublic,
 } from '@bike4mind/common';
 import type { CallableFunctionsStatus } from '@pages/api/callable-functions/status';
+import type { CallableFunctionTestRun } from '@pages/api/callable-functions/[id]/test-run';
 import { useAccessToken } from '@client/app/hooks/useAccessToken';
 import { CALLABLE_FUNCTIONS_LIST_QUERY_KEY, CALLABLE_FUNCTIONS_STATUS_QUERY_KEY } from './queryKeys';
 
@@ -17,8 +18,7 @@ import { CALLABLE_FUNCTIONS_LIST_QUERY_KEY, CALLABLE_FUNCTIONS_STATUS_QUERY_KEY 
 
 const COLLECTION = '/api/callable-functions';
 
-/** Whether this user may call Python artifact functions. False while loading and on any error. */
-export function useCallableFunctionsEnabled(): boolean {
+function useCallableFunctionsStatus(): CallableFunctionsStatus | undefined {
   const hasAccessToken = useAccessToken(s => !!s.accessToken);
   const { data } = useQuery({
     queryKey: CALLABLE_FUNCTIONS_STATUS_QUERY_KEY,
@@ -26,7 +26,17 @@ export function useCallableFunctionsEnabled(): boolean {
     enabled: hasAccessToken,
     staleTime: 5 * 60 * 1000,
   });
-  return data?.enabled === true;
+  return data;
+}
+
+/** Whether this user may call Python artifact functions. False while loading and on any error. */
+export function useCallableFunctionsEnabled(): boolean {
+  return useCallableFunctionsStatus()?.enabled === true;
+}
+
+/** Whether this stage can run functions on the server. False while loading and on any error. */
+export function useCallableFunctionsServerRuntime(): boolean {
+  return useCallableFunctionsStatus()?.serverRuntime === true;
 }
 
 export {
@@ -147,6 +157,21 @@ export const useSetCallableFunctionEnabled = () => {
     onSettled: invalidate,
   });
 };
+
+/**
+ * Runs the saved tool's declared tests on the server, against the pinned code, or only the named ones (those an
+ * earlier run left not run); nothing is written but the call log.
+ */
+export const useRunCallableFunctionTests = () =>
+  useMutation({
+    mutationFn: async ({ id, tests }: { id: string; tests?: string[] }) =>
+      (
+        await api.post<CallableFunctionTestRun>(
+          `${COLLECTION}/${encodeURIComponent(id)}/test-run`,
+          tests ? { tests } : {}
+        )
+      ).data,
+  });
 
 export const useDeleteCallableFunction = () => {
   const invalidate = useInvalidateCallableFunctions();
