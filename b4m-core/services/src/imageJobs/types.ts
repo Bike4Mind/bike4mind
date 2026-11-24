@@ -81,6 +81,11 @@ export type ImageJobDeps = {
    * tools bump through recordGeneratedImages. Unset where nothing reads the badge.
    */
   countNotebookImage?(questId: string): Promise<void>;
+  /**
+   * Deletes the requester's own files among `fileIds` (never unshares one they do not own), with the owner's storage
+   * refunded. Unset where no request sets ImageJobPayload.discardInputFileIds.
+   */
+  discardInputFiles?(userId: string, fileIds: readonly string[]): Promise<void>;
   now(): Date;
   logger: Logger;
 };
@@ -119,6 +124,8 @@ export type CreateImageJobsInput = {
   idempotencyKey?: string;
   /** Server-chosen only (see createCutoutJob); never read from a client body. */
   purpose?: ImageJobPurpose;
+  /** Server-chosen only: inputs this request made for the batch, deleted when it ends (ImageJobPayload). */
+  discardInputFileIds?: string[];
 };
 
 export type CreateImageJobsErrorCode =

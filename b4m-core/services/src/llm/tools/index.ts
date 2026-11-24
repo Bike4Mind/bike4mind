@@ -104,7 +104,11 @@ export {
   type ProductionToolConfig,
 } from './implementation/production';
 export {
+  buildEditJobRequest,
+  buildGenerateJobRequest,
+  clampImageCount,
   isImageJobToolConfig,
+  type ImageJobRequestDraft,
   type ImageLimitRefusal,
   type ImageToolConfig,
   type ImageToolJobsResult,

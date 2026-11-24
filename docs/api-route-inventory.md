@@ -36,7 +36,7 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 
 ## Summary
 
-1270 routes: 131 contracted, 11 aliases of another route, 351 with no static caller in `apps/client/app`.
+1271 routes: 131 contracted, 11 aliases of another route, 353 with no static caller in `apps/client/app`.
 
 | Area | Routes | Contracted | jwt+key | jwt | optional | handler | No static caller |
 | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -48,7 +48,7 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | agent-executions | 2 | 0 | 2 | 0 | 0 | 0 | 0 |
 | agent-quest | 1 | 0 | 0 | 0 | 0 | 1 | 1 |
 | agents | 10 | 0 | 10 | 0 | 0 | 0 | 0 |
-| ai | 21 | 4 | 12 | 8 | 0 | 1 | 6 |
+| ai | 21 | 4 | 12 | 8 | 0 | 1 | 8 |
 | analytics | 4 | 0 | 2 | 0 | 0 | 2 | 1 |
 | api-keys | 4 | 0 | 4 | 0 | 0 | 0 | 0 |
 | app-files | 7 | 0 | 6 | 0 | 0 | 1 | 3 |
@@ -86,7 +86,7 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | hearth | 4 | 0 | 4 | 0 | 0 | 0 | 0 |
 | help | 8 | 0 | 7 | 0 | 1 | 0 | 0 |
 | identify | 1 | 0 | 1 | 0 | 0 | 0 | 0 |
-| image-jobs | 1 | 0 | 0 | 1 | 0 | 0 | 0 |
+| image-jobs | 2 | 0 | 0 | 2 | 0 | 0 | 0 |
 | image-templates | 3 | 0 | 3 | 0 | 0 | 0 | 0 |
 | import-history | 1 | 0 | 1 | 0 | 0 | 0 | 0 |
 | import-history-jobs | 3 | 0 | 3 | 0 | 0 | 0 | 0 |
@@ -606,9 +606,9 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | `/api/ai/barkeep-chat` | POST | jwt | - | - | no | - | 0 |
 | `/api/ai/classify-intent` | POST | jwt+key | - | - | no | - | 1: `hooks/useIntentClassifier.ts` |
 | `/api/ai/context-dry-run` | POST | jwt+key | `files:read` | - | no | - | 1: `hooks/useAttachmentFitWarning.ts` |
-| `/api/ai/edit-image` | POST | jwt+key | `ai:generate` | - | yes | `/api/v1/image-edits` | 1: `components/commands/ImageGenerationCommand.ts` |
+| `/api/ai/edit-image` | POST | jwt+key | `ai:generate` | - | yes | `/api/v1/image-edits` | 0 |
 | `/api/ai/elevenlabs-voices` | GET | jwt | - | - | no | - | 1: `hooks/data/ttsVoices.ts` |
-| `/api/ai/generate-image` | POST | jwt+key | `ai:generate` | - | yes | `/api/v1/image-generations` | 1: `components/commands/ImageGenerationCommand.ts` |
+| `/api/ai/generate-image` | POST | jwt+key | `ai:generate` | - | yes | `/api/v1/image-generations` | 0 |
 | `/api/ai/generate-video` | any | handler | - | - | no | - | 0 |
 | `/api/ai/llm` | POST | jwt+key | `ai:chat` | - | no | - | 1: `components/commands/LLMCommand.tsx` |
 | `/api/ai/music` | POST | jwt+key | `ai:generate` | - | yes | - | 0 |
@@ -1056,6 +1056,7 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 
 | Route | Methods | Auth | Scopes | Permissions | Contract | Alias of | Callers |
 | --- | --- | --- | --- | --- | --- | --- | --- |
+| `/api/image-jobs` | POST | jwt | - | - | no | - | 1: `components/commands/ImageGenerationCommand.ts` |
 | `/api/image-jobs/[id]` | GET | jwt | - | - | no | - | 1: `hooks/data/imageJobs.ts` |
 
 ### image-templates

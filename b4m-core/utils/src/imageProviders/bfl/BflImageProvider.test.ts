@@ -107,6 +107,33 @@ describe('BflImageProvider.submit: request mapping', () => {
     expect(post.mock.calls[0][2]).toMatchObject({ headers: { 'x-key': 'bfl-key' } });
   });
 
+  it('forwards a saved safety tolerance and prompt upsampling on a generation', async () => {
+    await provider.submit(request({ safetyTolerance: 0, promptUpsampling: true }), {}, context());
+    expect(submittedBody()).toMatchObject({ safety_tolerance: 0, prompt_upsampling: true });
+  });
+
+  it('falls back to the default tolerance and no upsampling when the request sets neither', async () => {
+    await provider.submit(request(), {}, context());
+    expect(submittedBody()).toMatchObject({ safety_tolerance: 2, prompt_upsampling: false });
+  });
+
+  it('forwards the safety tolerance on Kontext and Fill edits', async () => {
+    const inputs: ImageInputs = { images: [image('edit_source', 'src')] };
+    await provider.submit(
+      request({ model: ImageModels.FLUX_KONTEXT_PRO, mode: 'edit', safetyTolerance: 1 }),
+      inputs,
+      context()
+    );
+    expect(submittedBody()).toMatchObject({ safety_tolerance: 1 });
+    post.mockClear();
+    await provider.submit(
+      request({ model: ImageModels.FLUX_PRO_FILL, mode: 'edit', safetyTolerance: 0 }),
+      inputs,
+      context()
+    );
+    expect(submittedBody()).toMatchObject({ safety_tolerance: 0 });
+  });
+
   it('sizes a dimensions model from the requested size', async () => {
     await provider.submit(request({ model: ImageModels.FLUX_PRO, size: '1024x576' }), {}, context());
     expect(submittedBody()).toMatchObject({ width: 1024, height: 576 });

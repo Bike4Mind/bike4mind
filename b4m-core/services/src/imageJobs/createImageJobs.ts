@@ -289,6 +289,7 @@ async function persistBatch(
             groupId,
             groupSize: input.count,
             ...(input.purpose !== undefined && { purpose: input.purpose }),
+            ...(input.discardInputFileIds?.length && { discardInputFileIds: input.discardInputFileIds }),
           },
           pollCount: 0,
           attempts: 0,
