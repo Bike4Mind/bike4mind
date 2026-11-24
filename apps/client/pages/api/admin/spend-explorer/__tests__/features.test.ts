@@ -168,6 +168,15 @@ describe('GET /api/admin/spend-explorer/features', () => {
     expect(body!.spikeMultiple).toBe(3);
   });
 
+  it('flags spikes against the saved spike multiple, not the default', async () => {
+    m.getSettingsValue.mockResolvedValue(2);
+    // A $5 last day over a $2 trailing average is a spike at 2x but not at the default 3x.
+    m.spendFeatures.mockResolvedValue([totals({ feature: 'chat', costUsd: 20, lastDayUsd: 5, trailingUsd: 14 })]);
+    const { body } = await runGet<SpendFeaturesResponse>(featuresHandler, RANGE);
+    expect(body!.spikeMultiple).toBe(2);
+    expect(body!.features[0]).toMatchObject({ trailingAvgUsd: 2, isSpike: true });
+  });
+
   it('classifies internal users with the Analytics rule for each audience', async () => {
     m.spendFeatures.mockResolvedValue([]);
     await runGet(featuresHandler, { ...RANGE, audience: 'internal' });
@@ -204,6 +213,33 @@ describe('GET /api/admin/spend-explorer/feature-users', () => {
     lastDayUsd: 0,
     trailingUsd: 0,
     ...overrides,
+  });
+
+  it('is admin-gated, first-party JWT only, with the admin API-key scope', async () => {
+    const config = (featureUsersHandler as unknown as { _config: { requiredScopes: string[]; auth: string } })._config;
+    expect(config.requiredScopes).toEqual([ApiKeyScope.ADMIN]);
+    expect(config.auth).toBe('jwtOnly');
+    m.spendFeatureUsers.mockResolvedValue(page([]));
+    const query = { ...RANGE, feature: 'music_generation' };
+    const denied = await runGet(featureUsersHandler, query, { isAdmin: false, id: 'd', adminPermissions: [] });
+    expect(denied.thrown).toMatchObject({ statusCode: 403 });
+    const allowed = await runGet(featureUsersHandler, query, {
+      isAdmin: false,
+      id: 'd',
+      adminPermissions: ['support:read'],
+    });
+    expect(allowed.thrown).toBeUndefined();
+  });
+
+  it('flags user spikes against the saved spike multiple', async () => {
+    m.getSettingsValue.mockResolvedValue(2);
+    m.spendFeatureUsers.mockResolvedValue(page([user(CUSTOMER_ID, { costUsd: 20, lastDayUsd: 5, trailingUsd: 14 })]));
+    const { body } = await runGet<SpendFeatureUsersResponse>(featureUsersHandler, {
+      ...RANGE,
+      feature: 'music_generation',
+    });
+    expect(body!.spikeMultiple).toBe(2);
+    expect(body!.users[0]).toMatchObject({ trailingAvgUsd: 2, isSpike: true });
   });
 
   it('requires a feature and caps the page size', async () => {
