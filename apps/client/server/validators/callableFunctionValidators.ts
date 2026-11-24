@@ -1,4 +1,5 @@
 import {
+  CALLABLE_FUNCTION_APPROVAL_MODES,
   CALLABLE_FUNCTION_EXAMPLE_LIMITS,
   CALLABLE_FUNCTION_GRANT_LIMITS,
   CallableFunctionGrantVisibilitySchema,
@@ -85,6 +86,25 @@ export const callableFunctionGrantsBodySchema = z
     userIds: z.array(z.string().trim().min(1).max(64)).max(CALLABLE_FUNCTION_GRANT_LIMITS.maxUserIds),
   })
   .strict();
+
+/** A recipient's review: the interface hash they were shown, and when to ask before a call. */
+export const callableFunctionReviewBodySchema = z
+  .object({
+    reviewHash: z.string().regex(/^[0-9a-f]{64}$/),
+    approval: z.enum(CALLABLE_FUNCTION_APPROVAL_MODES),
+  })
+  .strict();
+
+/** A reviewed recipient's settings: the approval mode, or turning the function off or on. */
+export const callableFunctionReviewSettingsBodySchema = z
+  .object({
+    approval: z.enum(CALLABLE_FUNCTION_APPROVAL_MODES).optional(),
+    enabled: z.boolean().optional(),
+  })
+  .strict()
+  .refine(body => body.approval !== undefined || body.enabled !== undefined, {
+    message: 'Name the approval mode or whether the tool is on.',
+  });
 
 // The same 400 `invalid_body` envelope as the connection routes.
 export { parseMcpConnectionBody as parseCallableFunctionBody } from './mcpConnectionValidators';
