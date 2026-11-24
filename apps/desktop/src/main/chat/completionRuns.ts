@@ -149,7 +149,9 @@ export async function raiseRunBudget(
   payer?: BillingPayer
 ): Promise<void> {
   try {
-    await axios.post<unknown>(runPath(serverRunId, 'budget', payer), { budgetCredits }, { timeout: USAGE_TIMEOUT_MS });
+    // The budget POST takes its payer in the body, beside budgetCredits; only the GET reads take it in the query.
+    const body = { budgetCredits, ...(payer?.organization_id ? { organization_id: payer.organization_id } : {}) };
+    await axios.post<unknown>(runPath(serverRunId, 'budget', undefined), body, { timeout: USAGE_TIMEOUT_MS });
   } catch (err) {
     if (isAxiosError(err) && err.response?.status === 409) {
       const data: unknown = err.response.data;

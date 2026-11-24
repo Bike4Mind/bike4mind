@@ -245,8 +245,19 @@ describe('run payer', () => {
       `${COMPLETION_RUNS_PATH}/${RUN.runId}/usage?organization_id=org-1`,
       `${COMPLETION_RUNS_PATH}/${RUN.runId}/usage`,
     ]);
+    // The budget route validates its payer from the body, so the query must carry none.
     expect(post).toHaveBeenCalledWith(
-      `${COMPLETION_RUNS_PATH}/${RUN.runId}/budget?organization_id=org-1`,
+      `${COMPLETION_RUNS_PATH}/${RUN.runId}/budget`,
+      { budgetCredits: 1000, organization_id: 'org-1' },
+      expect.anything()
+    );
+  });
+
+  it('raises a Personal run with no organization in the budget body', async () => {
+    const post = vi.fn().mockResolvedValue({ status: 200, data: {} });
+    await raiseRunBudget(axiosWith(post), RUN.runId, 1000, PERSONAL);
+    expect(post).toHaveBeenCalledWith(
+      `${COMPLETION_RUNS_PATH}/${RUN.runId}/budget`,
       { budgetCredits: 1000 },
       expect.anything()
     );
