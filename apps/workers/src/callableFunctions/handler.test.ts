@@ -5,7 +5,8 @@ import {
 } from '@bike4mind/server-utils/callableFunctions/runtimeParent';
 import { CALLABLE_FUNCTION_CHILD_PATH_ENV, CALLABLE_FUNCTION_PYODIDE_DIR_ENV, createHandler } from './handler';
 
-vi.mock('@bike4mind/server-utils/callableFunctions/runtimeParent', () => ({
+vi.mock('@bike4mind/server-utils/callableFunctions/runtimeParent', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/server-utils/callableFunctions/runtimeParent')>()),
   runCallableFunctionInChild: vi.fn(),
   sweepCallableFunctionChildren: vi.fn(() => 0),
 }));

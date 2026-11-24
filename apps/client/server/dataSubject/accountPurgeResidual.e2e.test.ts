@@ -176,6 +176,7 @@ async function seedAccount(source: 'self' | 'admin' = 'admin') {
   await insert('Friendship', { requester: userId, recipient: String(other) });
   await insert('McpConnection', { ownerType: 'user', ownerKey: userId, userId, slug: 'mine' });
   await insert('CallableFunction', { ownerType: 'user', ownerKey: userId, userId, slug: 'mine' });
+  await insert('CallableFunctionCall', { functionId: 'f1', callerUserId: userId, ownerUserId: userId, outcome: 'ok' });
   await insert('GenerationJob', { ownerType: 'User', ownerId: userId });
   await insert('Activity', { ownerType: 'User', ownerId: userId });
   await insert('TaskSchedule', { payload: { userId } });
