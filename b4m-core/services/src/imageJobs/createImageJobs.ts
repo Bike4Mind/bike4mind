@@ -1,6 +1,7 @@
 import { Types } from 'mongoose';
 import {
   getImageModelCatalogEntry,
+  IMAGE_JOB_INPUT_MIME_TYPES,
   ImageJobRequestSchema,
   imageJobInputs,
   resolveLegacyImageModel,
@@ -72,13 +73,12 @@ const toStoredRequest = (request: ImageJobRequest): StoredImageRequest => {
 const jobKey = (idempotencyKey: string | undefined, index: number, count: number) =>
   idempotencyKey === undefined ? undefined : `${idempotencyKey}:${index}/${count}`;
 
-// The formats both providers' edit paths accept; the mask is converted to PNG, which takes PNG or JPEG.
-const INPUT_MIME_TYPES: ReadonlySet<string> = new Set(['image/png', 'image/jpeg', 'image/webp']);
+// The mask is converted to PNG, which takes PNG or JPEG.
 const MASK_MIME_TYPES: ReadonlySet<string> = new Set(['image/png', 'image/jpeg']);
 
 const acceptsMimeType = (role: string, mimeType: string): boolean => {
   const normalized = mimeType.split(';')[0].trim().toLowerCase();
-  return (role === 'mask' ? MASK_MIME_TYPES : INPUT_MIME_TYPES).has(normalized);
+  return (role === 'mask' ? MASK_MIME_TYPES : IMAGE_JOB_INPUT_MIME_TYPES).has(normalized);
 };
 
 /**

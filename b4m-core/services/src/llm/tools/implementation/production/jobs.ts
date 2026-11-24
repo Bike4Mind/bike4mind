@@ -87,6 +87,42 @@ export function buildShotImagePrompt(prompt: string, brandColors: readonly strin
   return clip(parts.join(' '));
 }
 
+/** A product packshot drawn from the brief alone, for a production that has no product image to reference. */
+export function buildPackshotPrompt(summary: string): string {
+  return clip(
+    `Product packshot of the product in this brief: ${summary.trim()}. The whole product, centred, on a plain light ` +
+      'background, evenly lit. No text, no logos added, no people.'
+  );
+}
+
+const isInputNotReady = (result: unknown): boolean =>
+  typeof result === 'object' &&
+  result !== null &&
+  'ok' in result &&
+  result.ok === false &&
+  'code' in result &&
+  result.code === INPUT_NOT_READY;
+
+/**
+ * Re-runs `create` while its input file is still in its upload safety check, until inputReadyTimeoutMs runs out or the
+ * run aborts. A just-made file (a take, a product look) is refused as an input until that check passes.
+ */
+async function untilInputReady<R>(
+  context: Context,
+  config: Pick<ProductionToolConfig, 'inputReadyTimeoutMs' | 'pollIntervalMs'>,
+  create: () => Promise<R>
+): Promise<R> {
+  const deadline = Date.now() + (config.inputReadyTimeoutMs ?? DEFAULT_INPUT_READY_TIMEOUT_MS);
+  const interval = config.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS;
+  let result = await create();
+  while (isInputNotReady(result) && Date.now() + interval <= deadline) {
+    if (context.getAbortSignal?.()?.aborted) break;
+    await sleep(interval);
+    result = await create();
+  }
+  return result;
+}
+
 /** The first draft the model accepts; an aspect ratio it cannot make is dropped (cover-fit crops it later). */
 function imageRequestFor(
   model: string,
@@ -111,11 +147,21 @@ function imageRequestFor(
 // A refusal that is about the model, not the request: the next model may well take it.
 const MODEL_REFUSALS = new Set(['model_unavailable', 'unsupported_by_model']);
 
-/** Starts `count` takes for one shot on the best usable model that accepts the request. */
+/**
+ * Starts `count` takes for one shot on the best usable model that accepts the request. A `purpose` in place of a shot
+ * keys a production-wide image (the product look) apart from every shot's takes.
+ */
 export async function submitShotImages(
   context: Context,
   config: ProductionToolConfig,
-  shot: { prompt: string; references: readonly string[]; aspectRatio: string; compositionId: string; shotId: string },
+  shot: {
+    prompt: string;
+    references: readonly string[];
+    /** A reference is still in its upload safety check, so a refusal of it is waited out instead of reported. */
+    referencesChecking?: boolean;
+    aspectRatio: string;
+    compositionId: string;
+  } & ({ shotId: string } | { purpose: 'product-look' }),
   count: number
 ): Promise<Submitted> {
   const image = config.image;
@@ -124,10 +170,11 @@ export async function submitShotImages(
   for (const model of config.imageModels) {
     const request = imageRequestFor(model, shot.prompt, shot.references, shot.aspectRatio);
     if (!request) continue;
-    let result: Awaited<ReturnType<typeof image.createJobs>> | undefined;
-    try {
+    const target = 'shotId' in shot ? { shotId: shot.shotId } : { purpose: shot.purpose };
+    const createAll = async () => {
+      let created: Awaited<ReturnType<typeof image.createJobs>> | undefined;
       for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
-        result = await image.createJobs({
+        created = await image.createJobs({
           user: jobUser(context),
           request,
           count,
@@ -136,14 +183,24 @@ export async function submitShotImages(
           questId: context.questId,
           idempotencyKey: attemptKey(
             context,
-            { request, count, compositionId: shot.compositionId, shotId: shot.shotId },
+            { request, count, compositionId: shot.compositionId, ...target },
             attempt
           ),
         });
-        const replayed = result;
-        if (!replayed.ok || !replayed.jobs.every(job => isReplayOfDeadJob(replayed.created, job.state))) break;
-        if (attempt === MAX_ATTEMPTS - 1) return { ok: false, message: DEAD_REPLAY_MESSAGE };
+        const replayed = created;
+        if (!replayed.ok || !replayed.jobs.every(job => isReplayOfDeadJob(replayed.created, job.state))) return created;
       }
+      return 'dead' as const;
+    };
+    let result: Awaited<ReturnType<typeof image.createJobs>> | undefined;
+    try {
+      // With no reference in its safety check, the refusal is permanent (not owned, deleted, blocked): report it.
+      const created = shot.referencesChecking ? await untilInputReady(context, config, createAll) : await createAll();
+      if (created === 'dead') return { ok: false, message: DEAD_REPLAY_MESSAGE };
+      if (shot.referencesChecking && isInputNotReady(created)) {
+        return { ok: false, notReady: true, message: 'the product reference is not ready yet (its safety check)' };
+      }
+      result = created;
     } catch (error) {
       lastRefusal = paidPlanRefusalOrRethrow(context, error, model, 'production_generate_shot');
       continue;
@@ -228,14 +285,7 @@ export async function submitShotClip(
       })
     );
   try {
-    const deadline = Date.now() + (config.inputReadyTimeoutMs ?? DEFAULT_INPUT_READY_TIMEOUT_MS);
-    const interval = config.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS;
-    let result = await create();
-    while (result && !result.ok && result.code === INPUT_NOT_READY && Date.now() + interval <= deadline) {
-      if (context.getAbortSignal?.()?.aborted) break;
-      await sleep(interval);
-      result = await create();
-    }
+    const result = await untilInputReady(context, config, create);
     if (!result) return { ok: false, message: DEAD_REPLAY_MESSAGE };
     if (!result.ok && result.code === INPUT_NOT_READY) {
       return { ok: false, notReady: true, message: 'the chosen take is not ready to animate yet (its safety check)' };
