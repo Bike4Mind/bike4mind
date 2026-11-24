@@ -33,6 +33,7 @@ vi.mock('@bike4mind/database', () => ({
   adminSettingsRepository: { getSettingsValue: vi.fn(async (name: string) => m.settings[name]) },
   apiKeyRepository: {},
   usageEventRepository: {},
+  organizationRepository: { findById: vi.fn() },
   ingestedEmailRepository: { findById: m.findEmail, update: m.updateEmail },
   User: { findById: vi.fn().mockResolvedValue({ id: 'user-1' }) },
   IngestedEmailModel: { countDocuments: vi.fn().mockResolvedValue(0) },

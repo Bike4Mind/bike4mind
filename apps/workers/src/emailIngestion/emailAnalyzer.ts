@@ -29,6 +29,7 @@ import {
   emailTriageItemRepository,
   assistantBriefRepository,
   usageEventRepository,
+  organizationRepository,
 } from '@bike4mind/database';
 import { emailAnalysisService, apiKeyService, recordOperationalUsage } from '@bike4mind/services';
 import { latchUsage, type CompletionUsage } from '@bike4mind/services/billing/completionMeter';
@@ -47,6 +48,7 @@ import {
   getTextModelCost,
   getTurnsCost,
   type IUserDocument,
+  type IOrganizationDocument,
   type ModelInfo,
 } from '@bike4mind/common';
 import { triageEmail } from './emailTriage';
@@ -108,17 +110,18 @@ function parseTemperature(value: unknown, logger: Logger): number {
 }
 
 type EmailCompletionUsage = CompletionUsage & Pick<CompletionInfo, 'cacheWrite1hInputTokens' | 'stopReason'>;
+type EmailUsageOwner = { user: IUserDocument; organization?: IOrganizationDocument };
 
 async function recordEmailCompletionUsage({
   usage,
-  user,
+  resolveOwner,
   modelInfo,
   providerFailed,
   latencyMs,
   logger,
 }: {
   usage: EmailCompletionUsage;
-  user: IUserDocument;
+  resolveOwner: () => Promise<EmailUsageOwner | undefined>;
   modelInfo: ModelInfo;
   providerFailed: boolean;
   latencyMs: number;
@@ -146,6 +149,9 @@ async function recordEmailCompletionUsage({
     return;
   }
 
+  const owner = await resolveOwner();
+  if (!owner) return;
+
   if (providerFailed) logger.warn('Recording reported usage after email model failure', { model: modelInfo.id });
   const cacheWrite1hTokens = usage.cacheWrite1hInputTokens;
   const costUsd = turns
@@ -162,7 +168,7 @@ async function recordEmailCompletionUsage({
   await recordOperationalUsage(
     {
       requestId: randomUUID(),
-      user,
+      ...owner,
       feature: 'operations',
       source: 'system',
       bypassCreditBilling: true,
@@ -187,6 +193,22 @@ function meterEmailBackend(
   user: IUserDocument,
   logger: Logger
 ): ICompletionBackend {
+  let ownerPromise: Promise<EmailUsageOwner | undefined> | undefined;
+  const resolveOwner = () =>
+    (ownerPromise ??= (async () => {
+      if (!user.organizationId) return { user };
+      try {
+        const organization = await organizationRepository.findById(user.organizationId);
+        if (!organization) {
+          logger.warn('Email model usage organization is missing');
+          return undefined;
+        }
+        return { user, organization };
+      } catch {
+        logger.warn('Could not look up email model usage organization');
+        return undefined;
+      }
+    })());
   const complete: ICompletionBackend['complete'] = async (model, messages, options, callback) => {
     const usage: EmailCompletionUsage = {};
     const startedAt = Date.now();
@@ -204,7 +226,7 @@ function meterEmailBackend(
     } finally {
       await recordEmailCompletionUsage({
         usage,
-        user,
+        resolveOwner,
         modelInfo,
         providerFailed,
         latencyMs: Date.now() - startedAt,

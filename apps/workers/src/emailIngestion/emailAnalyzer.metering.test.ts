@@ -1,12 +1,14 @@
 import type { Handler, Context, SQSEvent } from 'aws-lambda';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { ChatModels, ModelBackend, type IUsageEventInput, type ModelInfo } from '@bike4mind/common';
+import { ChatModels, CreditHolderType, ModelBackend, type IUsageEventInput, type ModelInfo } from '@bike4mind/common';
 import type { ICompletionBackend } from '@bike4mind/llm-adapters';
 import { dispatch } from './emailAnalyzer';
 
 const mocks = vi.hoisted(() => ({
   settings: {} as Record<string, unknown>,
   findEmail: vi.fn(),
+  findUser: vi.fn(),
+  findOrganization: vi.fn(),
   updateEmail: vi.fn(),
   existsForEmail: vi.fn(),
   storeTriage: vi.fn(),
@@ -26,7 +28,8 @@ vi.mock('@bike4mind/database', () => ({
   adminSettingsRepository: { getSettingsValue: async (name: string) => mocks.settings[name] },
   apiKeyRepository: {},
   ingestedEmailRepository: { findById: mocks.findEmail, update: mocks.updateEmail },
-  User: { findById: async () => ({ id: 'owner-1' }) },
+  User: { findById: mocks.findUser },
+  organizationRepository: { findById: mocks.findOrganization },
   IngestedEmailModel: { countDocuments: async () => 0 },
   emailTriageItemRepository: { existsForEmail: mocks.existsForEmail, storeForLiveEmail: mocks.storeTriage },
   assistantBriefRepository: { removeEmailSourcedItems: vi.fn() },
@@ -99,6 +102,8 @@ beforeEach(() => {
   vi.resetAllMocks();
   mocks.settings = { EnableEmailAnalysis: true, EnableEmailTriage: true, EmailAnalysisModel: model.id };
   mocks.findEmail.mockResolvedValue(email);
+  mocks.findUser.mockResolvedValue({ id: 'owner-1' });
+  mocks.findOrganization.mockResolvedValue({ id: 'org-1' });
   mocks.existsForEmail.mockResolvedValue(false);
   mocks.storeTriage.mockResolvedValue({ status: 'created' });
   mocks.record.mockResolvedValue(null);
@@ -169,6 +174,82 @@ describe('email analyzer operational usage', () => {
     expect(JSON.stringify(mocks.record.mock.calls)).not.toMatch(/Example subject|Example body|example\.com|email-1/);
     expect(mocks.updateEmail).toHaveBeenCalledOnce();
     expect(mocks.storeTriage).toHaveBeenCalledOnce();
+    expect(mocks.findOrganization).not.toHaveBeenCalled();
+  });
+
+  it('attributes analysis and triage to the real organization with one lookup and no charge', async () => {
+    mocks.findUser.mockResolvedValue({ id: 'owner-1', organizationId: 'org-1' });
+    await run();
+    expect(mocks.findOrganization).toHaveBeenCalledExactlyOnceWith('org-1');
+    expect(mocks.record).toHaveBeenCalledTimes(2);
+    for (const [event] of mocks.record.mock.calls) {
+      expect(event).toMatchObject({
+        userId: 'owner-1',
+        ownerId: 'org-1',
+        ownerType: CreditHolderType.Organization,
+        creditsCharged: 0,
+      });
+    }
+  });
+
+  it('awaits organization resolution before writing usage or persisting analysis results', async () => {
+    mocks.findUser.mockResolvedValue({ id: 'owner-1', organizationId: 'org-1' });
+    const lookup = Promise.withResolvers<{ id: string }>();
+    mocks.findOrganization.mockReturnValue(lookup.promise);
+    const finished = vi.fn();
+    const pending = Promise.resolve(run()).then(finished);
+    await vi.waitFor(() => expect(mocks.findOrganization).toHaveBeenCalledOnce());
+    expect(mocks.complete).toHaveBeenCalledOnce();
+    expect(mocks.record).not.toHaveBeenCalled();
+    expect(mocks.updateEmail).not.toHaveBeenCalled();
+    expect(finished).not.toHaveBeenCalled();
+    lookup.resolve({ id: 'org-1' });
+    await pending;
+    expect(mocks.findOrganization).toHaveBeenCalledOnce();
+    expect(mocks.record).toHaveBeenCalledTimes(2);
+    expect(mocks.updateEmail).toHaveBeenCalledOnce();
+  });
+
+  it.each(['missing', 'rejected'] as const)(
+    'skips rows instead of using personal ownership when organization lookup is %s',
+    async reason => {
+      mocks.findUser.mockResolvedValue({ id: 'owner-1', organizationId: 'org-1' });
+      if (reason === 'missing') mocks.findOrganization.mockResolvedValue(null);
+      else mocks.findOrganization.mockRejectedValue(new Error('private lookup details'));
+      await expect(run()).resolves.toBeUndefined();
+      expect(mocks.findOrganization).toHaveBeenCalledOnce();
+      expect(mocks.complete).toHaveBeenCalledTimes(2);
+      expect(mocks.record).not.toHaveBeenCalled();
+      expect(mocks.updateEmail).toHaveBeenCalledOnce();
+      expect(mocks.storeTriage).toHaveBeenCalledOnce();
+      expect(mocks.logger.warn).toHaveBeenCalledWith(
+        reason === 'missing'
+          ? 'Email model usage organization is missing'
+          : 'Could not look up email model usage organization'
+      );
+      expect(JSON.stringify(mocks.logger.warn.mock.calls)).not.toContain('private lookup details');
+    }
+  );
+
+  it('awaits an unsuccessful organization lookup without replacing the original provider failure', async () => {
+    mocks.findUser.mockResolvedValue({ id: 'owner-1', organizationId: 'org-1' });
+    const providerError = new Error('provider rejected');
+    const lookup = Promise.withResolvers<null>();
+    mocks.findOrganization.mockReturnValue(lookup.promise);
+    mocks.complete.mockImplementationOnce(async (_model, _messages, _options, callback) => {
+      await callback([], aggregateUsage);
+      throw providerError;
+    });
+    const failed = vi.fn();
+    const pending = Promise.resolve(run()).catch(failed);
+    await vi.waitFor(() => expect(mocks.findOrganization).toHaveBeenCalledOnce());
+    expect(failed).not.toHaveBeenCalled();
+    lookup.reject(new Error('private lookup details'));
+    await pending;
+    expect(failed).toHaveBeenCalledWith(providerError);
+    expect(mocks.record).not.toHaveBeenCalled();
+    expect(mocks.updateEmail).not.toHaveBeenCalled();
+    expect(mocks.logger.warn).toHaveBeenCalledWith('Could not look up email model usage organization');
   });
 
   it('awaits both writes before persisting their results and completing the worker', async () => {
@@ -258,6 +339,7 @@ describe('email analyzer operational usage', () => {
     await expect(run()).resolves.toBeUndefined();
     expect(mocks.updateEmail).toHaveBeenCalledOnce();
     expect(mocks.record).not.toHaveBeenCalled();
+    expect(mocks.findOrganization).not.toHaveBeenCalled();
   });
 
   it.each(['disabled', 'already analyzed'] as const)('records no events when analysis is %s', async reason => {
