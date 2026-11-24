@@ -310,6 +310,7 @@ Write 200-400 words covering:
   const usage: SummaryUsage = {};
   let responseText = '';
   let failed = false;
+  let timedOut = false;
   try {
     await llm.complete(
       model,
@@ -331,6 +332,7 @@ Write 200-400 words covering:
     controller.signal.throwIfAborted();
   } catch (error) {
     failed = true;
+    timedOut = controller.signal.aborted || isLlmTimeoutError(error);
     if ((isLlmTimeoutError(error) || error instanceof SafetyRefusalError) && error.usage) {
       const { turnUsage, ...counts } = error.usage;
       latchUsage(usage, { ...counts, turnUsage: turnUsage?.slice() });
@@ -346,7 +348,7 @@ Write 200-400 words covering:
       modelInfo,
       latencyMs: Math.round(performance.now() - startedAt),
       failed,
-      timedOut: controller.signal.aborted,
+      timedOut,
       logger,
     }).catch(() => logger.warn('Could not record organization feedback summary usage', { model: modelInfo.id }));
   }

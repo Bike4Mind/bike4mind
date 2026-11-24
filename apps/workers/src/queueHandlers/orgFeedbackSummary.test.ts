@@ -718,9 +718,27 @@ describe('org feedback summary usage', () => {
     h.complete.mockRejectedValueOnce(timeout);
     await expect(run()).rejects.toBe(timeout);
     expect(h.recordUsage).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({ inputTokens: 40, outputTokens: 4, cachedInputTokens: 10, creditsCharged: 0 })
+      expect.objectContaining({
+        inputTokens: 0,
+        outputTokens: 0,
+        providerInputTokens: 40,
+        providerOutputTokens: 4,
+        cachedInputTokens: 10,
+        status: 'timeout',
+        settledBasis: 'provider',
+        creditsCharged: 0,
+      })
     );
     expect(h.upload).not.toHaveBeenCalled();
+  });
+
+  it('preserves the job outcome when the usage store cannot be created', async () => {
+    h.createUsageStore.mockImplementationOnce(() => {
+      throw new Error('store unavailable');
+    });
+    await run();
+    expect(h.recordUsage).not.toHaveBeenCalled();
+    expect(h.upload).toHaveBeenCalledOnce();
   });
 
   it('prices a refusal that carries per-turn usage from the turns', async () => {
