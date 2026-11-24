@@ -58,6 +58,7 @@ import { usePyodide } from '@client/app/hooks/usePyodide';
 import { PYTHON_SCRIPT_BUSY } from '@client/app/utils/pyodideManager';
 import ProblemList, { dangerAlertSx } from './FunctionProblemList';
 import BreakingChangeDialog from './BreakingChangeDialog';
+import PromoteFunctionSection from './PromoteFunctionSection';
 import SaveFunctionDialog from './SaveFunctionDialog';
 
 /** Where saving this artifact as a tool would pin it, or why it cannot be saved yet. */
@@ -776,7 +777,9 @@ function savedStatusLines(saved: ICallableFunctionPublic): string[] {
   const pinned =
     saved.updateAvailable && saved.latestVersion !== null
       ? `A newer version is available. This tool is pinned to version ${saved.pin.version}, and the artifact is at version ${saved.latestVersion}.`
-      : `Saved as a draft tool, pinned to version ${saved.pin.version}.`;
+      : saved.state === 'live'
+        ? `Live tool, pinned to version ${saved.pin.version}.`
+        : `Saved as a draft tool, pinned to version ${saved.pin.version}.`;
   return saved.enabled ? [pinned] : ['This tool is turned off.', pinned];
 }
 
@@ -974,6 +977,21 @@ function FunctionSaveSection({ save, contract }: { save: PythonFunctionSave; con
           )}
           <ToolControls key={saved.id} tool={saved} testIdPrefix="python-function" onDelete={setDeleting} />
         </Stack>
+        {saved.status !== 'source_deleted' && (
+          <Box sx={{ pt: 1 }}>
+            <PromoteFunctionSection
+              tool={saved}
+              contract={contract}
+              blocked={
+                saved.status === 'disabled'
+                  ? 'Turn the tool on to promote it.'
+                  : saved.pin.version !== save.version
+                    ? `Promotion runs the saved version ${saved.pin.version}. Update the tool to promote this version.`
+                    : null
+              }
+            />
+          </Box>
+        )}
       </Stack>
     );
   };

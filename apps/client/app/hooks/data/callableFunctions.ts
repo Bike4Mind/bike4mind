@@ -2,6 +2,8 @@ import { api } from '@client/app/contexts/ApiContext';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { isAxiosError } from 'axios';
 import type {
+  CallableFunctionCallSummary,
+  CallableFunctionExample,
   CallableFunctionSlugHolder,
   FunctionContract,
   FunctionContractChange,
@@ -10,6 +12,7 @@ import type {
 } from '@bike4mind/common';
 import type { CallableFunctionsStatus } from '@pages/api/callable-functions/status';
 import type { CallableFunctionTestRun } from '@pages/api/callable-functions/[id]/test-run';
+import type { CallableFunctionPromotion } from '@pages/api/callable-functions/[id]/promote';
 import { useAccessToken } from '@client/app/hooks/useAccessToken';
 import { CALLABLE_FUNCTIONS_LIST_QUERY_KEY, CALLABLE_FUNCTIONS_STATUS_QUERY_KEY } from './queryKeys';
 
@@ -172,6 +175,40 @@ export const useRunCallableFunctionTests = () =>
         )
       ).data,
   });
+
+const callsQueryKey = (id: string) => [...CALLABLE_FUNCTIONS_LIST_QUERY_KEY, id, 'calls'] as const;
+
+/**
+ * Promotes the saved tool to live once the server reads its contract and runs every declared test and worked example;
+ * a refusal is a 4xx whose message names the reason.
+ */
+export const usePromoteCallableFunction = () => {
+  const invalidate = useInvalidateCallableFunctions();
+  return useMutation({
+    mutationFn: async (id: string) =>
+      (await api.post<CallableFunctionPromotion>(`${COLLECTION}/${encodeURIComponent(id)}/promote`, {})).data,
+    onSettled: invalidate,
+  });
+};
+
+/** Replaces the saved tool's worked examples. */
+export const useSetCallableFunctionExamples = () => {
+  const invalidate = useInvalidateCallableFunctions();
+  return useMutation({
+    mutationFn: async ({ id, examples }: { id: string; examples: CallableFunctionExample[] }) =>
+      (await api.put<ICallableFunctionPublic>(`${COLLECTION}/${encodeURIComponent(id)}/examples`, { examples })).data,
+    onSettled: invalidate,
+  });
+};
+
+/** The owner's calls of the saved tool over the last 30 days; refetched with the list after any change to the tool. */
+export function useCallableFunctionCalls(id: string) {
+  return useQuery({
+    queryKey: callsQueryKey(id),
+    queryFn: async () =>
+      (await api.get<CallableFunctionCallSummary>(`${COLLECTION}/${encodeURIComponent(id)}/calls`)).data,
+  });
+}
 
 export const useDeleteCallableFunction = () => {
   const invalidate = useInvalidateCallableFunctions();

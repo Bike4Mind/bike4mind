@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import React from 'react';
-import { render, screen, fireEvent, within, waitFor, act } from '@testing-library/react';
+import { render, screen, fireEvent, within, waitFor, act, cleanup } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 import { PYTHON_SCRIPT_BUSY } from '@client/app/utils/pyodideManager';
@@ -37,6 +37,12 @@ vi.mock('../SaveFunctionDialog', () => ({
   },
 }));
 vi.mock('sonner', () => ({ toast: { error: fns.toastError } }));
+// Its own behavior is in PromoteFunctionSection.test.tsx; here only where it mounts and why it is blocked.
+vi.mock('../PromoteFunctionSection', () => ({
+  default: ({ blocked }: { blocked: string | null }) => (
+    <div data-testid="promote-section-stub">{blocked ?? 'ready'}</div>
+  ),
+}));
 
 import PythonFunctionPanel, { type PythonFunctionSave } from '../PythonFunctionPanel';
 
@@ -704,6 +710,35 @@ describe('PythonFunctionPanel save controls', () => {
     expect(screen.queryByTestId('python-function-repin-btn')).toBeNull();
     expect(screen.getByTestId('python-function-enable-btn').textContent).toBe('Turn off');
     expect(screen.getByTestId('python-function-delete-btn').textContent).toBe('Delete');
+  });
+
+  it('mounts promotion under a saved tool, blocked while the tool is off or pinned to another version', async () => {
+    fns.saved = { data: savedView(), isLoading: false };
+    await renderReady(TARGET);
+    expect(screen.getByTestId('promote-section-stub').textContent).toBe('ready');
+    cleanup();
+
+    fns.saved = { data: savedView({ enabled: false, status: 'disabled' }), isLoading: false };
+    await renderReady(TARGET);
+    expect(screen.getByTestId('promote-section-stub').textContent).toBe('Turn the tool on to promote it.');
+    cleanup();
+
+    fns.saved = { data: newerVersion(), isLoading: false };
+    await renderReady({ artifactId: 'artifact-1', version: 4, blocked: null });
+    expect(screen.getByTestId('promote-section-stub').textContent).toBe(
+      'Promotion runs the saved version 3. Update the tool to promote this version.'
+    );
+  });
+
+  it('live: says so in the status, and shows no promotion once the artifact is deleted', async () => {
+    fns.saved = { data: savedView({ state: 'live', status: 'live' }), isLoading: false };
+    await renderReady(TARGET);
+    expect(statusText()).toBe('Live tool, pinned to version 3.');
+    cleanup();
+
+    fns.saved = { data: savedView({ status: 'source_deleted' }), isLoading: false };
+    await renderReady(TARGET);
+    expect(screen.queryByTestId('promote-section-stub')).toBeNull();
   });
 
   it('a newer version is available: says so and Update repins to the version shown with the contract read', async () => {

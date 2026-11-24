@@ -1,0 +1,242 @@
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import React from 'react';
+import { render, screen, fireEvent, within } from '@testing-library/react';
+import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
+import { getThemeConfig } from '@client/app/utils/themes';
+import type { FunctionContract, ICallableFunctionPublic } from '@bike4mind/common';
+
+const h = vi.hoisted(() => ({
+  promote: { mutate: vi.fn(), isPending: false },
+  setExamples: { mutate: vi.fn(), isPending: false },
+  calls: { data: undefined as unknown, isError: false },
+  callsFor: vi.fn(),
+}));
+
+vi.mock('@client/app/contexts/ApiContext', () => ({ api: {} }));
+vi.mock('@client/app/hooks/data/callableFunctions', async importOriginal => ({
+  ...(await importOriginal<typeof import('@client/app/hooks/data/callableFunctions')>()),
+  usePromoteCallableFunction: () => h.promote,
+  useSetCallableFunctionExamples: () => h.setExamples,
+  useCallableFunctionCalls: (id: string) => {
+    h.callsFor(id);
+    return h.calls;
+  },
+}));
+
+import PromoteFunctionSection from '../PromoteFunctionSection';
+
+const appTheme = extendTheme({ ...getThemeConfig() });
+
+const CONTRACT: FunctionContract = {
+  name: 'beam_midspan_deflection',
+  description: 'Midspan deflection of a simply supported beam.',
+  inputs: {
+    type: 'object',
+    additionalProperties: false,
+    required: ['span'],
+    properties: { span: { type: 'number', unit: 'm' } },
+  },
+  outputs: {
+    type: 'object',
+    additionalProperties: false,
+    required: ['deflection'],
+    properties: { deflection: { type: 'number', unit: 'm' } },
+  },
+};
+
+const EXAMPLE = {
+  name: 'handbook case',
+  input: { span: 3 },
+  expected: { deflection: 6 },
+  tolerance: { rel: 1e-9 },
+  citation: 'https://data.example.com/beams/table-3',
+};
+
+const tool = (overrides: Partial<ICallableFunctionPublic> = {}): ICallableFunctionPublic =>
+  ({
+    id: 'fn-1',
+    slug: CONTRACT.name,
+    description: CONTRACT.description,
+    status: 'draft',
+    state: 'draft',
+    enabled: true,
+    pin: { artifactId: 'artifact-1', version: 3, contentHash: 'a'.repeat(64), pinnedAt: new Date() },
+    latestVersion: 3,
+    updateAvailable: false,
+    trustLabel: null,
+    examples: [],
+    createdAt: new Date(),
+    updatedAt: new Date(),
+    ...overrides,
+  }) as ICallableFunctionPublic;
+
+const live = (trustLabel: 'verified' | 'unverified', seq = 2) =>
+  tool({
+    state: 'live',
+    status: 'live',
+    trustLabel,
+    pin: { artifactId: 'artifact-1', version: 3, contentHash: 'a'.repeat(64), pinnedAt: new Date(), seq },
+  });
+
+const renderSection = (view: ICallableFunctionPublic, blocked: string | null = null) =>
+  render(
+    <CssVarsProvider theme={appTheme}>
+      <PromoteFunctionSection tool={view} contract={CONTRACT} blocked={blocked} />
+    </CssVarsProvider>
+  );
+
+const axiosError = (status: number, data: Record<string, unknown>) =>
+  Object.assign(new Error(`Request failed with status code ${status}`), {
+    isAxiosError: true,
+    response: { status, data },
+  });
+
+const type = (testId: string, value: string) => fireEvent.change(screen.getByTestId(testId), { target: { value } });
+
+beforeEach(() => {
+  h.promote = { mutate: vi.fn(), isPending: false };
+  h.setExamples = { mutate: vi.fn(), isPending: false };
+  h.calls = { data: { since: new Date(), total: 0, outcomes: {}, recent: [] }, isError: false };
+  h.callsFor.mockReset();
+});
+
+describe('PromoteFunctionSection', () => {
+  it('a draft shows Promote and no label; Promote promotes this tool', () => {
+    renderSection(tool());
+    expect(screen.queryByTestId('python-function-trust-chip')).toBeNull();
+    expect(screen.getByTestId('python-function-promote-status').textContent).toContain('A draft.');
+    const promote = screen.getByTestId('python-function-promote-btn');
+    expect(promote.textContent).toBe('Promote');
+    fireEvent.click(promote);
+    expect(h.promote.mutate).toHaveBeenCalledWith('fn-1', expect.anything());
+  });
+
+  it("shows a refusal's reason, naming the field", () => {
+    h.promote.mutate.mockImplementation((_id: string, handlers: { onError: (error: unknown) => void }) =>
+      handlers.onError(
+        axiosError(409, {
+          error:
+            'Output stress was removed since promotion 1, which could break callers of the tool. Save this version as a new tool instead.',
+          code: 'breaking_change',
+        })
+      )
+    );
+    renderSection(tool());
+    fireEvent.click(screen.getByTestId('python-function-promote-btn'));
+    const refusal = screen.getByTestId('python-function-promote-refusal');
+    expect(refusal.textContent).toContain('Not promoted');
+    expect(refusal.textContent).toContain('Output stress was removed since promotion 1');
+  });
+
+  it.each([
+    ['verified', 'A cited worked example passed on the server.'],
+    ['unverified', 'Only declared tests ran on the server.'],
+  ] as const)('a live tool shows the %s chip and its promotion', (label, help) => {
+    renderSection(live(label));
+    expect(screen.getByTestId('python-function-trust-chip').textContent).toBe(label);
+    const status = screen.getByTestId('python-function-promote-status').textContent;
+    expect(status).toContain('Live at promotion 2.');
+    expect(status).toContain(help);
+    expect(screen.getByTestId('python-function-promote-btn').textContent).toBe('Promote again');
+  });
+
+  it('a blocked tool keeps Promote disabled and says why', () => {
+    renderSection(tool(), 'Turn the tool on to promote it.');
+    expect((screen.getByTestId('python-function-promote-btn') as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.getByTestId('python-function-promote-blocked').textContent).toBe('Turn the tool on to promote it.');
+  });
+
+  it("lists the owner's calls of the last 30 days: the count, the outcomes, and the latest with time and outcome", () => {
+    h.calls = {
+      isError: false,
+      data: {
+        since: new Date(),
+        total: 3,
+        outcomes: { ok: 2, timeout: 1 },
+        recent: [
+          { id: 'c1', startedAt: '2026-11-23T10:00:00.000Z', outcome: 'ok', surface: 'test' },
+          { id: 'c2', startedAt: '2026-11-22T10:00:00.000Z', outcome: 'timeout', surface: 'test' },
+        ],
+      },
+    };
+    renderSection(live('verified'));
+    expect(h.callsFor).toHaveBeenCalledWith('fn-1');
+    expect(screen.getByTestId('python-function-calls-total').textContent).toBe('3 calls: Returned 2, Timed out 1.');
+    const rows = screen.getAllByTestId('python-function-call-row');
+    expect(rows.map(row => within(row).getAllByRole('cell')[1]!.textContent)).toEqual(['Returned', 'Timed out']);
+    expect(rows[0]!.textContent).toContain('2026');
+  });
+
+  it('says so when there are no calls', () => {
+    renderSection(tool());
+    expect(screen.getByTestId('python-function-calls-total').textContent).toBe('No calls.');
+    expect(screen.queryByTestId('python-function-calls-recent')).toBeNull();
+  });
+
+  it('adds a cited worked example to the ones already saved', () => {
+    renderSection(tool({ examples: [EXAMPLE] }));
+    fireEvent.click(screen.getByTestId('python-function-example-add-btn'));
+    type('python-function-example-name', '4 m beam');
+    type('python-function-example-input', '{"span": 4}');
+    type('python-function-example-expected', '{"deflection": 8}');
+    type('python-function-example-rel', '0.001');
+    type('python-function-example-citation', 'https://data.example.com/beams/table-4');
+    fireEvent.click(screen.getByTestId('python-function-example-save-btn'));
+    expect(h.setExamples.mutate).toHaveBeenCalledWith(
+      {
+        id: 'fn-1',
+        examples: [
+          EXAMPLE,
+          {
+            name: '4 m beam',
+            input: { span: 4 },
+            expected: { deflection: 8 },
+            tolerance: { rel: 0.001 },
+            citation: 'https://data.example.com/beams/table-4',
+          },
+        ],
+      },
+      expect.anything()
+    );
+  });
+
+  it('will not save an example without a citation', () => {
+    renderSection(tool());
+    fireEvent.click(screen.getByTestId('python-function-example-add-btn'));
+    type('python-function-example-name', '4 m beam');
+    fireEvent.click(screen.getByTestId('python-function-example-save-btn'));
+    expect(screen.getByTestId('python-function-example-problem').textContent).toBe(
+      'Cite a source a reader can check the expected output against.'
+    );
+    expect(h.setExamples.mutate).not.toHaveBeenCalled();
+  });
+
+  it('edits and removes a saved example', () => {
+    renderSection(tool({ examples: [EXAMPLE] }));
+    expect(screen.getByTestId('python-function-example-citation-text').textContent).toBe(EXAMPLE.citation);
+    fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+    type('python-function-example-expected', '{"deflection": 6.5}');
+    fireEvent.click(screen.getByTestId('python-function-example-save-btn'));
+    expect(h.setExamples.mutate).toHaveBeenLastCalledWith(
+      { id: 'fn-1', examples: [{ ...EXAMPLE, expected: { deflection: 6.5 } }] },
+      expect.anything()
+    );
+    fireEvent.click(screen.getByTestId('python-function-example-remove-btn'));
+    expect(h.setExamples.mutate).toHaveBeenLastCalledWith({ id: 'fn-1', examples: [] }, expect.anything());
+  });
+
+  it("lists the server's problems with an example", () => {
+    h.setExamples.mutate.mockImplementation((_body: unknown, handlers: { onError: (error: unknown) => void }) =>
+      handlers.onError(
+        axiosError(400, {
+          error: 'The worked examples have problems.',
+          code: 'invalid_examples',
+          problems: [{ path: 'examples.0.expected.peak', message: 'is not an output of the contract' }],
+        })
+      )
+    );
+    renderSection(tool({ examples: [EXAMPLE] }));
+    fireEvent.click(screen.getByTestId('python-function-example-remove-btn'));
+    expect(screen.getByText(/examples\.0\.expected\.peak/)).toBeTruthy();
+  });
+});
