@@ -1942,7 +1942,7 @@ export class OpenAIBackend implements ICompletionBackend {
               }
         );
 
-        // See the streaming branch above for why the shared artifactGuard exists.
+        // See the non-streaming branch above for why the shared artifactGuard exists.
         const inheritedArtifactGuard = options._internal?.artifactGuard;
         let artifactGuard = inheritedArtifactGuard;
 
