@@ -769,6 +769,7 @@ describe('CreditTransactionRepository.completionRunSpend', () => {
     await seed([
       completionRow(40, { role: 'root' }),
       toolRow('image_generation_usage', 25),
+      toolRow('image_edit_usage', 6),
       toolRow('video_generation_usage', 15),
       toolRow('music_generation_usage', 8),
       toolRow('text_to_speech_usage', 4),
@@ -777,11 +778,11 @@ describe('CreditTransactionRepository.completionRunSpend', () => {
 
     const spend = await creditTransactionRepository.completionRunSpend(RUN, OWNER);
 
-    expect(spend.settled.creditsCharged).toBe(94);
-    expect(spend.settled.requests).toBe(6);
+    expect(spend.settled.creditsCharged).toBe(100);
+    expect(spend.settled.requests).toBe(7);
     expect(spend.settled.inputTokens).toBe(100);
     expect(spend.byPurpose.map(r => [r.purpose, r.creditsCharged])).toEqual([
-      ['tool', 54],
+      ['tool', 60],
       ['turn', 40],
     ]);
   });

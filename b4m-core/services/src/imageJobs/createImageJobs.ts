@@ -247,26 +247,41 @@ async function holdBatch(
 
 async function releaseHolds(holds: readonly Held[], deps: CreateImageJobsDeps): Promise<void> {
   for (const { hold, runClaim } of holds) {
+    const logHoldFailure = (hold: NonNullable<Held['hold']>, error: unknown) =>
+      // No sweep refunds a create-time hold, so the log carries what to return by hand; never mask the refusal.
+      deps.logger.error('image_job_create_hold_release_failed', {
+        ownerId: hold.ownerId,
+        ownerType: hold.ownerType,
+        reservedCredits: hold.reservedCredits,
+        error,
+      });
+    const runBudget = deps.runBudget;
+    if (runClaim && runBudget) {
+      let releasing: 'hold' | 'claim' = 'hold';
+      try {
+        await runBudget.transact(async () => {
+          if (hold) await releaseCreditHold(hold, deps.credits);
+          releasing = 'claim';
+          await runBudget.release(runClaim, 0);
+        });
+      } catch (error) {
+        if (releasing === 'hold' && hold) logHoldFailure(hold, error);
+        deps.logger.error('image_job_create_run_claim_release_failed', { runClaim, error });
+      }
+      continue;
+    }
     if (hold) {
       try {
         await releaseCreditHold(hold, deps.credits);
       } catch (error) {
-        // No sweep refunds a create-time hold, so the log carries what to return by hand; never mask the refusal.
-        deps.logger.error('image_job_create_hold_release_failed', {
-          ownerId: hold.ownerId,
-          ownerType: hold.ownerType,
-          reservedCredits: hold.reservedCredits,
-          error,
-        });
+        logHoldFailure(hold, error);
       }
     }
     if (!runClaim) continue;
-    try {
-      if (!deps.runBudget) throw new Error('No run budget adapters to release the run claim');
-      await deps.runBudget.release(runClaim, 0);
-    } catch (error) {
-      deps.logger.error('image_job_create_run_claim_release_failed', { runClaim, error });
-    }
+    deps.logger.error('image_job_create_run_claim_release_failed', {
+      runClaim,
+      error: new Error('No run budget adapters to release the run claim'),
+    });
   }
 }
 

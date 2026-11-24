@@ -198,6 +198,7 @@ CreditTransactionSchema.index(
 const RUN_SPEND_TRANSACTION_TYPES = [
   'completion_api_usage',
   'image_generation_usage',
+  'image_edit_usage',
   'video_generation_usage',
   'music_generation_usage',
   'text_to_speech_usage',

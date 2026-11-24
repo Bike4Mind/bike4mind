@@ -682,6 +682,57 @@ describe('createImageJobs with a completion run', () => {
     expect(deps.enqueue).not.toHaveBeenCalled();
   });
 
+  it('releases each hold and its claim together inside one transaction when the batch is refused', async () => {
+    const probe = createFakeRunBudget();
+    const sized = await create(makeDeps({ runBudget: probe.adapters }).deps);
+    const reserved = sized.ok ? (sized.jobs[0].creditHold?.reservedCredits ?? 0) : 0;
+    vi.clearAllMocks();
+    vi.mocked(holdCredits).mockImplementation(async params => fakeHold(params));
+
+    const budget = createFakeRunBudget({ budgetCredits: reserved + 1 });
+    const events: string[] = [];
+    const baseTransact = budget.adapters.transact;
+    budget.adapters.transact = vi.fn((async (work: () => Promise<unknown>) => {
+      events.push('begin');
+      try {
+        return await baseTransact(work);
+      } finally {
+        events.push('end');
+      }
+    }) as typeof baseTransact);
+    vi.mocked(releaseCreditHold).mockImplementation(async () => {
+      events.push('hold-released');
+    });
+    vi.mocked(budget.adapters.release).mockImplementationOnce(async claim => {
+      events.push('claim-released');
+      budget.state.committedCredits -= claim.credits;
+    });
+
+    const { deps } = makeDeps({ runBudget: budget.adapters });
+    await expect(create(deps, 2)).rejects.toMatchObject({ additionalInfo: { errorCode: 'run_budget_exhausted' } });
+
+    const release = events.slice(events.lastIndexOf('begin'));
+    expect(release).toEqual(['begin', 'hold-released', 'claim-released', 'end']);
+  });
+
+  it('logs a failed claim release and still returns the refusal', async () => {
+    const probe = createFakeRunBudget();
+    const sized = await create(makeDeps({ runBudget: probe.adapters }).deps);
+    const reserved = sized.ok ? (sized.jobs[0].creditHold?.reservedCredits ?? 0) : 0;
+    vi.clearAllMocks();
+    vi.mocked(holdCredits).mockImplementation(async params => fakeHold(params));
+
+    const budget = createFakeRunBudget({ budgetCredits: reserved + 1 });
+    const { deps } = makeDeps({ runBudget: budget.adapters });
+    const logged = vi.spyOn(deps.logger, 'error');
+    vi.mocked(budget.adapters.release).mockRejectedValueOnce(new Error('mongo down'));
+    await expect(create(deps, 2)).rejects.toMatchObject({ additionalInfo: { errorCode: 'run_budget_exhausted' } });
+    expect(logged).toHaveBeenCalledWith(
+      'image_job_create_run_claim_release_failed',
+      expect.objectContaining({ error: expect.any(Error) })
+    );
+  });
+
   it('returns the claim when a job fails, and keeps only the charge when one succeeds', async () => {
     const budget = createFakeRunBudget();
     const { deps } = makeDeps({ runBudget: budget.adapters });
