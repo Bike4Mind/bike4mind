@@ -279,6 +279,18 @@ describe('AgentPeekDrawer', () => {
     expect(el('orchestrator-peek-load-error').textContent).toBe('Sign in to regenerate this reply.');
   });
 
+  it('offers no Regenerate on a finished worker, which would set its task running again', async () => {
+    chat.getSession.mockResolvedValue({
+      messages: [
+        { id: 'p', role: 'user', content: 'go', createdAt: '2026-10-01T00:00:00.000Z' },
+        { id: 'r', role: 'assistant', content: 'done', createdAt: '2026-10-01T00:00:00.000Z' },
+      ],
+    });
+    await renderDrawer(agentFixture('a1', 'done'));
+    expect(query('chat-message-assistant')).not.toBeNull();
+    expect(query('chat-message-assistant-regenerate-btn')).toBeNull();
+  });
+
   it('sends the reply to the agent session', async () => {
     await renderDrawer(agentFixture('a1'));
     await typeAndSend('hello');

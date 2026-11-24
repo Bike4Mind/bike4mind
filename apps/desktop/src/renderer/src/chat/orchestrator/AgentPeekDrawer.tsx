@@ -136,7 +136,7 @@ export function refreshKeyOf(agent: AgentView): string {
  * through the same `respondToApproval` call. An answered card goes at once rather than waiting for
  * the status push, so a second click can never answer it twice.
  */
-export function PendingRequests({ calls }: { calls: ChatToolCall[] }) {
+export function PendingRequests({ calls, onAnswered }: { calls: ChatToolCall[]; onAnswered?(): void }) {
   const [answered, setAnswered] = useState<ReadonlySet<string>>(() => new Set());
   const [error, setError] = useState<string | null>(null);
   const open = calls.filter(call => call.approvalId && !answered.has(call.approvalId));
@@ -144,7 +144,7 @@ export function PendingRequests({ calls }: { calls: ChatToolCall[] }) {
   const respond = (approvalId: string, answer: ChatApprovalAnswer) => {
     setError(null);
     setAnswered(current => new Set(current).add(approvalId));
-    window.b4m.chat.respondToApproval(approvalId, answer).catch((caught: unknown) => {
+    window.b4m.chat.respondToApproval(approvalId, answer).then(onAnswered, (caught: unknown) => {
       setAnswered(current => {
         const next = new Set(current);
         next.delete(approvalId);
@@ -464,7 +464,8 @@ export function AgentPeekDrawer({ agent, onClose, actions, skin, visible = true 
               .then(refresh, error => setActionError(errorText(error)));
           }}
           onContinue={() => rerun(window.b4m.chat.continueReply)}
-          onRegenerate={() => rerun(window.b4m.chat.regenerateReply)}
+          // Only on a failed turn: regenerating a finished worker would set its task running again.
+          {...(agent.state === 'failed' && { onRegenerate: () => rerun(window.b4m.chat.regenerateReply) })}
         />
       </Box>
 

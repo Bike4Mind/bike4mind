@@ -36,6 +36,13 @@ function errorText(error: unknown): string {
  */
 export function DecisionCard({ decision, asker, onOpenDetails, onSettled }: DecisionCardProps) {
   const { sessionId } = decision;
+  // An answered approval goes at once, so no empty shell waits on the refetch.
+  const [answered, setAnswered] = useState(false);
+  if (answered) return null;
+  const settleAnswered = () => {
+    setAnswered(true);
+    onSettled?.();
+  };
   return (
     <Stack
       spacing={0.75}
@@ -65,12 +72,24 @@ export function DecisionCard({ decision, asker, onOpenDetails, onSettled }: Deci
           Details
         </Button>
       </Box>
-      <DecisionBody decision={decision} asker={asker} onOpenDetails={onOpenDetails} onSettled={onSettled} />
+      <DecisionBody
+        decision={decision}
+        asker={asker}
+        onOpenDetails={onOpenDetails}
+        onSettled={onSettled}
+        onAnswered={settleAnswered}
+      />
     </Stack>
   );
 }
 
-function DecisionBody({ decision, asker, onOpenDetails, onSettled }: DecisionCardProps) {
+function DecisionBody({
+  decision,
+  asker,
+  onOpenDetails,
+  onSettled,
+  onAnswered,
+}: DecisionCardProps & { onAnswered(): void }) {
   const { sessionId } = decision;
   switch (decision.kind) {
     case 'approval':
@@ -96,7 +115,7 @@ function DecisionBody({ decision, asker, onOpenDetails, onSettled }: DecisionCar
           </Sheet>
         );
       }
-      return <PendingRequests calls={[decision.call]} />;
+      return <PendingRequests calls={[decision.call]} onAnswered={onAnswered} />;
     case 'question':
       return <TaskDecisionCard sessionId={sessionId} title={asker.name} decision={decision.decision} />;
     case 'held-relay':

@@ -59,7 +59,24 @@ describe('DecisionCard', () => {
     });
     await act(async () => el('chat-tool-approve-once').click());
     expect(chat.respondToApproval).toHaveBeenCalledWith('ap1', { decision: 'once' });
-    expect(query('chat-tool-approval')).toBeNull();
+    expect(query('decision-card')).toBeNull();
+    expect(onSettled).toHaveBeenCalled();
+  });
+
+  it('keeps the card with the error when the approval cannot be delivered', async () => {
+    chat.respondToApproval.mockRejectedValue(new Error('gate gone'));
+    await render({
+      kind: 'approval',
+      sessionId: 'g',
+      decisionId: 'approval:ap1',
+      approvalId: 'ap1',
+      call: call('bash_execute'),
+      collectsSecrets: false,
+    });
+    await act(async () => el('chat-tool-approve-once').click());
+    expect(el('orchestrator-peek-pending-error').textContent).toBe('gate gone');
+    expect(query('decision-card')).not.toBeNull();
+    expect(onSettled).not.toHaveBeenCalled();
   });
 
   it('sends a request that collects secrets to the agent details instead of drawing the fields', async () => {

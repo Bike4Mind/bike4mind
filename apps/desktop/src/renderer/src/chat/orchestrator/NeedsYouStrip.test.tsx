@@ -85,15 +85,39 @@ describe('NeedsYouStrip', () => {
     expect(query('orchestrator-needs-you-strip')).toBeNull();
   });
 
-  it('picks up a held relay pushed while the agent already needs the user', async () => {
+  it('picks up a held relay pushed while the agent already needs the user, reading only that agent', async () => {
     chat.getHeldRelays.mockResolvedValue([]);
-    await render([grandchild]);
+    await render([grandchild, failed]);
     await flush();
-    expect(query('orchestrator-needs-you-strip')).toBeNull();
+    expect(document.querySelector('[data-decision-id="held:h2"]')).toBeNull();
+    chat.getHeldRelays.mockClear();
+    chat.getSession.mockClear();
     chat.getHeldRelays.mockResolvedValue([heldFor('g', 'h2')]);
     await act(async () => streamListener?.({ type: 'held-relays', sessionId: 'g', held: [heldFor('g', 'h2')] }));
     await flush();
-    expect(el('decision-card').dataset.decisionId).toBe('held:h2');
+    expect(document.querySelector('[data-decision-id="held:h2"]')).not.toBeNull();
+    expect(chat.getHeldRelays.mock.calls).toEqual([['g']]);
+    expect(chat.getSession.mock.calls).toEqual([['g', false]]);
+  });
+
+  it('hides what was read under an older state until the refetch lands', async () => {
+    await render([grandchild]);
+    await flush();
+    expect(el('decision-card').dataset.decisionId).toBe('held:h1');
+    chat.getHeldRelays.mockReturnValue(new Promise<ChatHeldRelay[]>(() => undefined));
+    await render([{ ...grandchild, updatedAt: '2026-10-02T00:00:00.000Z' }]);
+    await flush();
+    expect(query('decision-card')).toBeNull();
+  });
+
+  it('clears a read failure once no agent is waiting', async () => {
+    chat.getSession.mockRejectedValue(new Error('disk gone'));
+    await render([grandchild]);
+    await flush();
+    expect(el('orchestrator-needs-you-strip-error').textContent).toBe('disk gone');
+    await render([{ ...grandchild, state: 'working' }]);
+    await flush();
+    expect(query('orchestrator-needs-you-strip')).toBeNull();
   });
 
   it('uses the persona name the stage gives an agent', async () => {

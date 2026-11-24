@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ChatHeldRelay, ChatMessage } from '@shared/chat';
 import { pendingDecisionsOf, type PendingDecision } from '@shared/pendingDecisions';
 import { refreshKeyOf } from './AgentPeekDrawer';
@@ -7,7 +7,9 @@ import type { AgentState, AgentView } from './roster';
 /** The states a decision can sit behind; the transcript of any other agent is never read. */
 const WAITING_STATES: ReadonlySet<AgentState> = new Set(['needs-you', 'failed', 'stopped']);
 
-type LoadedSource = { messages: readonly ChatMessage[]; held: readonly ChatHeldRelay[] };
+/** One agent's transcript and held list, with the refreshKeyOf it was read under. */
+type LoadedSource = { key: string; messages: readonly ChatMessage[]; held: readonly ChatHeldRelay[] };
+type Waiting = ReadonlyArray<readonly [id: string, key: string]>;
 
 export interface TreeDecisions {
   /** Each agent with something open, in roster order. */
@@ -15,6 +17,21 @@ export interface TreeDecisions {
   loadError: string | null;
   /** Read again now, after a resolve that may have left nothing to refetch on. */
   refresh(): void;
+}
+
+async function loadSource(id: string, key: string): Promise<LoadedSource> {
+  const [session, held] = await Promise.all([window.b4m.chat.getSession(id, false), window.b4m.chat.getHeldRelays(id)]);
+  return { key, messages: session?.messages ?? [], held };
+}
+
+function parseWaiting(serialized: string): Waiting {
+  const parsed: unknown = JSON.parse(serialized);
+  if (!Array.isArray(parsed)) return [];
+  return parsed.flatMap((entry: unknown) =>
+    Array.isArray(entry) && typeof entry[0] === 'string' && typeof entry[1] === 'string'
+      ? [[entry[0], entry[1]] as const]
+      : []
+  );
 }
 
 /**
@@ -25,58 +42,83 @@ export interface TreeDecisions {
 export function useTreeDecisions(agents: readonly AgentView[], enabled = true): TreeDecisions {
   const [revision, setRevision] = useState(0);
   const [loaded, setLoaded] = useState<ReadonlyMap<string, LoadedSource>>(() => new Map());
-  const [loadError, setLoadError] = useState<string | null>(null);
+  const [errors, setErrors] = useState<ReadonlyMap<string, string>>(() => new Map());
   const refresh = useCallback(() => setRevision(value => value + 1), []);
 
-  const waiting = agents.filter(agent => !agent.redacted && WAITING_STATES.has(agent.state));
-  const waitingKey = waiting.map(agent => `${agent.id}\t${refreshKeyOf(agent)}`).join('\n');
-  const waitingIds = useMemo(() => waiting.map(agent => agent.id), [waitingKey]);
+  // Serialized so the effects below re-run on what was read changing, not on every roster object.
+  const waitingKey = JSON.stringify(
+    agents
+      .filter(agent => !agent.redacted && WAITING_STATES.has(agent.state))
+      .map(agent => [agent.id, refreshKeyOf(agent)])
+  );
+  const waiting = useMemo(() => parseWaiting(waitingKey), [waitingKey]);
+  const currentKeys = useRef(new Map<string, string>());
+  currentKeys.current = new Map(waiting);
 
   useEffect(() => {
-    if (!enabled || waitingIds.length === 0) {
+    if (!enabled || waiting.length === 0) {
       setLoaded(new Map());
+      setErrors(new Map());
       return;
     }
     let stale = false;
     const load = async () => {
-      const results = await Promise.allSettled(
-        waitingIds.map(async id => {
-          const [session, held] = await Promise.all([
-            window.b4m.chat.getSession(id, false),
-            window.b4m.chat.getHeldRelays(id),
-          ]);
-          return [id, { messages: session?.messages ?? [], held }] as const;
-        })
-      );
+      const results = await Promise.allSettled(waiting.map(([id, key]) => loadSource(id, key)));
       if (stale) return;
-      const failed = results.find((result): result is PromiseRejectedResult => result.status === 'rejected');
-      setLoadError(failed ? errorText(failed.reason) : null);
-      setLoaded(new Map(results.flatMap(result => (result.status === 'fulfilled' ? [result.value] : []))));
+      const nextLoaded = new Map<string, LoadedSource>();
+      const nextErrors = new Map<string, string>();
+      results.forEach((result, index) => {
+        const id = waiting[index][0];
+        if (result.status === 'fulfilled') nextLoaded.set(id, result.value);
+        else nextErrors.set(id, errorText(result.reason));
+      });
+      setLoaded(nextLoaded);
+      setErrors(nextErrors);
     };
     void load();
     return () => {
       stale = true;
     };
-  }, [enabled, waitingIds, revision]);
+  }, [enabled, waiting, revision]);
 
   // A held relay can arrive while the agent already needs the user, which moves nothing on the roster.
   useEffect(() => {
-    if (!enabled || waitingIds.length === 0) return;
-    const ids = new Set(waitingIds);
-    return window.b4m.chat.onStreamEvent(event => {
-      if (event.type === 'held-relays' && ids.has(event.sessionId)) refresh();
+    if (!enabled || waiting.length === 0) return;
+    const ids = new Set(waiting.map(([id]) => id));
+    let unmounted = false;
+    const unsubscribe = window.b4m.chat.onStreamEvent(event => {
+      if (event.type !== 'held-relays' || !ids.has(event.sessionId)) return;
+      const id = event.sessionId;
+      const key = currentKeys.current.get(id);
+      if (key === undefined) return;
+      loadSource(id, key).then(
+        source => {
+          if (unmounted) return;
+          setLoaded(current => new Map(current).set(id, source));
+          setErrors(current => withoutKey(current, id));
+        },
+        (error: unknown) => {
+          if (!unmounted) setErrors(current => new Map(current).set(id, errorText(error)));
+        }
+      );
     });
-  }, [enabled, waitingIds, refresh]);
+    return () => {
+      unmounted = true;
+      unsubscribe();
+    };
+  }, [enabled, waiting]);
 
   const byId = useMemo(() => {
     const tree = new Map<string, PendingDecision[]>();
     if (!enabled) return tree;
     for (const agent of agents) {
       if (agent.redacted) continue;
-      const source = WAITING_STATES.has(agent.state) ? loaded.get(agent.id) : undefined;
+      const read = WAITING_STATES.has(agent.state) ? loaded.get(agent.id) : undefined;
+      // Read under an older state: wait for the refetch rather than show what may already be resolved.
+      const source = read?.key === refreshKeyOf(agent) ? read : undefined;
       const decisions = pendingDecisionsOf({
         session: agent,
-        ...source,
+        ...(source && { messages: source.messages, held: source.held }),
         processing: agent.state === 'working',
       });
       if (decisions.length > 0) tree.set(agent.id, decisions);
@@ -84,7 +126,15 @@ export function useTreeDecisions(agents: readonly AgentView[], enabled = true): 
     return tree;
   }, [enabled, agents, loaded]);
 
+  const loadError = waiting.map(([id]) => errors.get(id)).find(error => error !== undefined) ?? null;
   return { byId, loadError, refresh };
+}
+
+function withoutKey<T>(map: ReadonlyMap<string, T>, key: string): ReadonlyMap<string, T> {
+  if (!map.has(key)) return map;
+  const next = new Map(map);
+  next.delete(key);
+  return next;
 }
 
 function errorText(error: unknown): string {

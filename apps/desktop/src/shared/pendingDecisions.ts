@@ -124,6 +124,7 @@ function lastTurnDecision(
   return { kind: 'error', sessionId, decisionId: `error:${last.id}`, messageId: last.id, error: last.error };
 }
 
+// Not used by the flat strip (which reads the roster); kept for the nested Agent-view tree's roll-up.
 /**
  * Every descendant of `rootId` with something open, shallowest first, keyed by session. The root
  * itself is left out: its own decisions are already in its own conversation.
