@@ -1,8 +1,4 @@
 # Constrained paths written by update calls
-| AutoContainmentDecision | `outcome` | enum | `infra/security/AutoContainmentDecisionModel.ts#AutoContainmentDecisionRepository.supersedeWithContain` | schema | `runValidators` | writes "pending" |
-| AutoContainmentDecision | `releaseCondition` | enum | `infra/security/AutoContainmentDecisionModel.ts#AutoContainmentDecisionRepository.supersedeWithContain` | schema | `runValidators` | writes null |
-| AutoContainmentDecision | `scope` | enum | `infra/security/AutoContainmentDecisionModel.ts#AutoContainmentDecisionRepository.supersedeWithContain` | schema | `runValidators` | writes "account" |
-| AutoContainmentDecision | `tier` | enum | `infra/security/AutoContainmentDecisionModel.ts#AutoContainmentDecisionRepository.supersedeWithContain` | schema | `runValidators` | writes "contain" |
 
 Mongoose runs schema validators (`enum`, `maxlength`, `minlength`, `min`, `max`, `match`) on `create` and
 `save` only. An update (`findOneAndUpdate`, `updateOne`, `updateMany`, `findByIdAndUpdate`) reaches them only
@@ -119,8 +115,12 @@ The table below remains the literal-update inventory, not proof that all databas
 | AutoContainmentDecision | `outcome` | enum | `infra/security/AutoContainmentDecisionModel.ts#AutoContainmentDecisionRepository.reclaim` | repository-check | `literal` | writes "pending" |
 | AutoContainmentDecision | `outcome` | enum | `infra/security/AutoContainmentDecisionModel.ts#AutoContainmentDecisionRepository.markExpired` | schema | `runValidators` | writes "expired" |
 | AutoContainmentDecision | `outcome` | enum | `infra/security/AutoContainmentDecisionModel.ts#AutoContainmentDecisionRepository.release` | schema | `runValidators` | writes "released" |
+| AutoContainmentDecision | `outcome` | enum | `infra/security/AutoContainmentDecisionModel.ts#AutoContainmentDecisionRepository.supersedeWithContain` | schema | `runValidators` | writes "pending" |
 | AutoContainmentDecision | `releaseCondition` | enum | `infra/security/AutoContainmentDecisionModel.ts#AutoContainmentDecisionRepository.markExpired` | schema | `runValidators` | writes "expiry" |
 | AutoContainmentDecision | `releaseCondition` | enum | `infra/security/AutoContainmentDecisionModel.ts#AutoContainmentDecisionRepository.release` | schema | `runValidators` | caller passes a typed InterventionReleaseCondition |
+| AutoContainmentDecision | `releaseCondition` | enum | `infra/security/AutoContainmentDecisionModel.ts#AutoContainmentDecisionRepository.supersedeWithContain` | schema | `runValidators` | writes null |
+| AutoContainmentDecision | `scope` | enum | `infra/security/AutoContainmentDecisionModel.ts#AutoContainmentDecisionRepository.supersedeWithContain` | schema | `runValidators` | writes "account" |
+| AutoContainmentDecision | `tier` | enum | `infra/security/AutoContainmentDecisionModel.ts#AutoContainmentDecisionRepository.supersedeWithContain` | schema | `runValidators` | writes "contain" |
 | BillingMismatch | `resolvedBy` | enum | `billing/BillingMismatchModel.ts#BillingMismatchRepository.resolveForSubscription` | route-schema | `apps/client/pages/api/admin/subscriptions/[id]/sync.ts#handler` | Only caller passes the literal 'sync' |
 | BillingMismatch | `resolvedBy` | enum | `billing/BillingMismatchModel.ts#BillingMismatchRepository.resolveMissing` | repository-check | `literal` | writes "reconciliation" |
 | BillingMismatch | `status` | enum | `billing/BillingMismatchModel.ts#BillingMismatchRepository.resolveForSubscription` | repository-check | `literal` | writes "resolved" |
