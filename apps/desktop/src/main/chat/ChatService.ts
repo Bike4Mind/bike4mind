@@ -2967,14 +2967,15 @@ export class ChatService {
     // using a button which still displayed the old one.
     if (!root || resolve(root) !== expectedProjectDirectory) return this.listSkills(scope);
     if ('draftDirectory' in scope && (await this.workspaceBindingReason(root))) return this.listSkills(scope);
-    await this.deps.skills.setTrusted(root, trusted);
+    // For an app worktree the decision lands on its main checkout, so the audit names that too.
+    const recorded = await this.deps.skills.setTrusted(root, trusted);
     if (this.deps.capabilities) {
       if (trusted) {
         await this.deps.capabilities
           .grant({
-            subject: { kind: 'project', directory: resolve(root) },
+            subject: { kind: 'project', directory: recorded },
             capability: 'project-trust',
-            scope: { kind: 'project', value: root },
+            scope: { kind: 'project', value: recorded },
             source: 'project-trust',
           })
           .catch(error => this.deps.logger.warn(`CAPABILITIES: could not audit project trust: ${String(error)}`));
@@ -2984,7 +2985,7 @@ export class ChatService {
             grant =>
               grant.capability === 'project-trust' &&
               grant.scope.kind === 'project' &&
-              grant.scope.value === resolve(root)
+              (grant.scope.value === recorded || grant.scope.value === resolve(root))
           )
           .catch(error => this.deps.logger.warn(`CAPABILITIES: could not audit project revocation: ${String(error)}`));
       }
