@@ -14,8 +14,10 @@ import {
   useCallableFunctionCalls,
   usePromoteCallableFunction,
   useSetCallableFunctionExamples,
+  useStopSharingCallableFunction,
 } from '@client/app/hooks/data/callableFunctions';
 import ProblemList, { dangerAlertSx } from './FunctionProblemList';
+import ShareFunctionDialog from './ShareFunctionDialog';
 
 const OUTCOME_LABELS: Record<CallableFunctionCallOutcome, string> = {
   ok: 'Returned',
@@ -351,6 +353,58 @@ function CallsBlock({ tool }: { tool: ICallableFunctionPublic }) {
   );
 }
 
+function shareSummary(tool: ICallableFunctionPublic): string {
+  const grants = tool.grants;
+  if (!grants) return 'Not shared.';
+  const parts = [
+    ...(grants.userIds.length > 0
+      ? [`${grants.userIds.length} ${grants.userIds.length === 1 ? 'person' : 'people'}`]
+      : []),
+    ...(grants.visibility === 'project' ? ['the members of a project'] : []),
+    ...(grants.visibility === 'organization' ? ['the members of an organization'] : []),
+  ];
+  return `Shared with ${parts.join(' and ')}.`;
+}
+
+function ShareBlock({ tool, live }: { tool: ICallableFunctionPublic; live: boolean }) {
+  const [open, setOpen] = useState(false);
+  const stop = useStopSharingCallableFunction();
+  return (
+    <Stack spacing={1} data-testid="python-function-share-section">
+      <Typography level="title-sm">Sharing</Typography>
+      <Typography level="body-xs" sx={{ color: 'text.secondary' }} data-testid="python-function-share-status">
+        {live ? shareSummary(tool) : 'Promote the tool to share it. A share covers the live version.'}
+      </Typography>
+      <Stack direction="row" spacing={1}>
+        <Button
+          size="sm"
+          variant="outlined"
+          color="neutral"
+          disabled={!live}
+          onClick={() => setOpen(true)}
+          data-testid="python-function-share-btn"
+        >
+          {tool.grants ? 'Edit share' : 'Share'}
+        </Button>
+        {tool.grants && (
+          <Button
+            size="sm"
+            variant="plain"
+            color="danger"
+            loading={stop.isPending}
+            onClick={() => stop.mutate(tool.id)}
+            data-testid="python-function-share-stop-btn"
+          >
+            Stop sharing
+          </Button>
+        )}
+      </Stack>
+      {/* The record has no data pins or sources yet; the dialog lists them once it does. */}
+      {open && <ShareFunctionDialog tool={tool} dataPins={[]} sources={[]} onClose={() => setOpen(false)} />}
+    </Stack>
+  );
+}
+
 /**
  * Promote, the trust label once live, the worked examples, and the owner's recent calls for one saved tool.
  * `blocked` says why promotion cannot run now, such as an artifact version newer than the pin.
@@ -441,6 +495,7 @@ export default function PromoteFunctionSection({
           </Alert>
         )}
       </Stack>
+      <ShareBlock tool={tool} live={live} />
       <ExamplesBlock tool={tool} contract={contract} />
       <CallsBlock tool={tool} />
     </Stack>
