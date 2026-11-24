@@ -1,4 +1,4 @@
-import { join } from 'node:path';
+import { isAbsolute, join } from 'node:path';
 
 /**
  * The name a dev run (`pnpm dev`) takes instead of the packaged app's. Electron derives the
@@ -7,6 +7,13 @@ import { join } from 'node:path';
  * app's refresh token, sessions and every preference.
  */
 export const DEV_APP_NAME = 'Bike4Mind Dev';
+
+/**
+ * Dev-only: an absolute folder to use as userData instead of the shared dev profile, so a second
+ * dev run (a throwaway profile for screenshots, say) cannot touch the one another session drives.
+ * Ignored by packaged builds.
+ */
+export const DEV_USER_DATA_ENV = 'B4M_DESKTOP_DEV_USER_DATA';
 
 type AppIdentityHost = {
   readonly isPackaged: boolean;
@@ -23,10 +30,11 @@ type AppIdentityHost = {
  * Must run before anything reads userData or touches safeStorage, which is why index.ts imports
  * this module ahead of everything else.
  */
-export function applyAppIdentity(host: AppIdentityHost): void {
+export function applyAppIdentity(host: AppIdentityHost, env: NodeJS.ProcessEnv = process.env): void {
   if (host.isPackaged) return;
   host.setName(DEV_APP_NAME);
+  const override = env[DEV_USER_DATA_ENV]?.trim();
   // Explicit rather than relying on setName: userData is resolved lazily from the name, and
   // anything that read it first would have pinned the shared folder.
-  host.setPath('userData', join(host.getPath('appData'), DEV_APP_NAME));
+  host.setPath('userData', override && isAbsolute(override) ? override : join(host.getPath('appData'), DEV_APP_NAME));
 }

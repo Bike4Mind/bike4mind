@@ -53,18 +53,12 @@ import type { WebSearchTurn } from './webSearchLimits';
 export interface MediaContext {
   client: MediaApiClient;
   store: MediaStore;
-  /** Base for generated-file URLs, from serverConfig. Relative on self-host, absolute on a CDN. */
-  cdnUrl: string;
-  /** Names the notebook the server creates for this conversation's first generation. */
-  notebookName: string;
   /** Image models this deployment offers. Lazy: a turn with no image generation never asks. */
   listImageModels(): Promise<string[]>;
   /** Video models this caller can use; cached, and read at turn start to decide whether to offer the tool. */
   listVideoModels(): Promise<VideoModel[]>;
   /** Records and follows a created video job. Absent where nothing can follow one. */
   videoJobs?: Pick<VideoJobScheduler, 'track'>;
-  getRemoteSessionId(): string | undefined;
-  setRemoteSessionId(remoteSessionId: string): Promise<void>;
 }
 
 /**
@@ -534,9 +528,24 @@ export interface HostSessionView {
   spawnedBy?: string;
   /** Present-tense state, the same one the sidebar row draws. */
   status: 'processing' | 'needs-action' | 'done';
+  /** What a 'needs-action' session waits on; absent otherwise. */
+  waitingOn?: 'approval' | 'decision' | 'message';
   /** The project folder's name; absent for a conversation with no project. */
   project?: string;
+  /** The branch of a session in a worktree of its own. */
+  branch?: string;
+  /** How its last assistant turn ended, and a one-line excerpt of it; see summarizeSession. */
+  lastOutcome?: string;
+  lastSnippet?: string;
 }
+
+/**
+ * What session_rename got back. 'out-of-scope' covers a session outside this project as well as
+ * one in it that is neither the caller nor a child of it, so the model cannot probe either.
+ */
+export type HostRenameOutcome =
+  | { ok: true; session: HostSessionView }
+  | { ok: false; reason: 'out-of-scope' | 'user-title' };
 
 /** A spawn that did not happen, and which of the caps or preconditions stopped it. */
 export interface SpawnRejected {
@@ -634,7 +643,12 @@ export interface HostContext {
    * Sessions newest first, flagging archived ones. 'project' is this one's project; 'all' is every
    * conversation of the signed-in account, which is as far as the session store reaches.
    */
-  listSessions(options: { includeArchived: boolean; scope: 'project' | 'all' }): Promise<HostSessionView[]>;
+  listSessions(options: {
+    includeArchived: boolean;
+    scope: 'project' | 'all';
+    /** Only the sessions the calling conversation started, in any project. */
+    childrenOnly?: boolean;
+  }): Promise<HostSessionView[]>;
   /**
    * One session's transcript as plain text. `ref` is an id, a unique id prefix or an exact title.
    * Outside this project only for a session the user mentioned here or that messaged this one:
@@ -644,6 +658,11 @@ export interface HostContext {
   readSession(ref: string): Promise<string>;
   /** Reversible; the row moves to the sidebar's Archived section. Null when not addressable. */
   setArchived(sessionId: string, archived: boolean): Promise<HostSessionView | null>;
+  /**
+   * Retitle this conversation or one it started, and lock the title against the generator.
+   * Refused for any other session, and for a title the user chose by hand; see agentMayRetitle.
+   */
+  renameSession(sessionId: string, title: string): Promise<HostRenameOutcome>;
   /** Irreversible. False when the id names nothing this session may address. */
   deleteSession(sessionId: string): Promise<boolean>;
   /**
@@ -716,6 +735,11 @@ export interface SpawnSuggestionHost {
 export interface ApprovalPrompt {
   /** Shown to the user verbatim. */
   detail: string;
+  /**
+   * The model's own few words on what a shell command does, shown beside `detail`. Display
+   * only: it can be wrong, so it never feeds `key`, `reasons`, rules or refusals.
+   */
+  summary?: string;
   /**
    * Why the gate stops for this call, each already a paragraph of `detail`. Kept apart as well so a
    * surface that shows less than the full card (the menu bar, the mini window) can tell the call

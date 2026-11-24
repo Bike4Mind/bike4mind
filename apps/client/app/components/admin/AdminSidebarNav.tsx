@@ -29,7 +29,11 @@ import {
   type SidebarSection,
 } from './adminSidebarConfig';
 import { adminTabToSlug } from './adminTabSlugs';
-import { ADMIN_ACTION_COUNT_LABELS, formatAdminActionCount, type AdminActionCounts } from './adminActionCounts';
+import {
+  ADMIN_ACTION_COUNT_LABELS,
+  formatAdminActionCount,
+  type AdminActionCounts,
+} from '@bike4mind/server-utils/app/components/admin/adminActionCounts';
 import { useAdminSidebarMore } from './useAdminSidebarState';
 
 /** The signed-in admin shown in the sidebar footer. */

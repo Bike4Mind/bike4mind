@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { ChatProject, ChatSessionSummary } from '@shared/chat';
+import { prAttentionRank } from '@shared/prAttention';
+import type { PrSummary } from '@shared/pullRequest';
 import {
   descendantsOf,
   groupSessions,
@@ -458,5 +460,47 @@ describe('nested sub-sessions', () => {
     );
     expect(orderedSessions(grouped).map(entry => entry.id)).toEqual(['root', 'next']);
     expect(orderedSessions(grouped, { isOpen: () => true }).map(entry => entry.id)).toEqual(['root', 'kid', 'next']);
+  });
+});
+
+describe('needs-attention order', () => {
+  const repo = project('/r/one', 'one');
+  const sessions = [
+    session({ id: 'quiet', mode: 'code', project: repo }),
+    session({ id: 'merged', mode: 'code', project: repo }),
+    session({ id: 'ready', mode: 'code', project: repo }),
+    session({ id: 'failing', mode: 'code', project: repo }),
+    session({ id: 'draft', mode: 'code', project: repo }),
+    session({ id: 'conflict', mode: 'code', project: repo }),
+    session({ id: 'also-failing', mode: 'code', project: repo }),
+    session({ id: 'chat-a', mode: 'chat' }),
+  ];
+  const prs = new Map<string, PrSummary>([
+    ['merged', { number: 1, state: 'merged' }],
+    ['ready', { number: 2, state: 'open', attention: 'ready' }],
+    ['failing', { number: 3, state: 'open', attention: 'ciFailed' }],
+    ['draft', { number: 4, state: 'draft' }],
+    ['conflict', { number: 5, state: 'open', attention: 'conflict' }],
+    ['also-failing', { number: 6, state: 'open', attention: 'ciFailed' }],
+  ]);
+  const rank = (entry: ChatSessionSummary) => prAttentionRank(prs.get(entry.id));
+  const ids = (sections: ReturnType<typeof groupSessions>) => sections.projects[0]?.sessions.map(entry => entry.id);
+
+  it('puts the worst PR first within a group, ties keeping activity order, no PR and finished last', () => {
+    expect(ids(groupSessions(sessions, 'code', undefined, false, false, rank))).toEqual([
+      'conflict',
+      'failing',
+      'also-failing',
+      'ready',
+      'draft',
+      'quiet',
+      'merged',
+    ]);
+  });
+
+  it('leaves the order exactly as before when off', () => {
+    expect(ids(groupSessions(sessions, 'code'))).toEqual(
+      sessions.filter(entry => entry.mode === 'code').map(entry => entry.id)
+    );
   });
 });

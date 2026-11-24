@@ -5,6 +5,7 @@ import { DEFAULT_LAMBDA_ENVIRONMENT, runsScheduledJobs } from './constants';
 import { emailJobQueue } from './emailMarketing';
 import { allSecrets } from './secrets';
 import { providerAdminKeyCronAccess, providerAdminKeyStore } from './providerAdminKeys';
+import { providerSpendScopeCronAccess } from './providerSpendScope';
 import { eventBus } from './bus';
 import {
   researchEngineQueue,
@@ -631,6 +632,31 @@ const voiceHoldSweepCron = runsScheduledJobs
             resources: ['*'],
           },
         ],
+        logging: {
+          retention: '1 week',
+        },
+      },
+    })
+  : undefined;
+
+// Brief Schedule Reconcile - starts the scheduled assistant briefs that have come due, through the same
+// brief.compose event as POST /api/v1/briefs (its rule carries the DLQ). Each due user is claimed by a
+// compare-and-set on nextBriefAt, so overlapping runs start a slot once. A start that throws hands its
+// slot back, so later runs retry it for up to an hour (RETRY_WINDOW_MS). Self-host twin:
+// apps/workers/src/selfhost/briefScheduleReconcile.ts; keep the schedules in step.
+const briefScheduleReconcileCron = runsScheduledJobs
+  ? new sst.aws.Cron('briefScheduleReconcile', {
+      schedule: 'rate(5 minutes)',
+      function: {
+        vpc: lambdaVpc,
+        handler: 'apps/workers/src/cron/briefScheduleReconcile.handler',
+        runtime: 'nodejs24.x',
+        timeout: '2 minutes',
+        retries: 0,
+        link: [...allSecrets, eventBus],
+        environment: {
+          ...DEFAULT_LAMBDA_ENVIRONMENT,
+        },
         logging: {
           retention: '1 week',
         },
@@ -1274,6 +1300,8 @@ const agentExecutionAbandonedSweepCron = runsScheduledJobs
 // Provider admin keys come from the secret store in infra/providerAdminKeys.ts where it exists; the
 // linked Config secrets remain the source for stages and self-host deploys without it.
 const providerAdminKeyAccess = providerAdminKeyCronAccess(providerAdminKeyStore);
+// Both spend crons read the same per-stage scope, so the hourly and nightly figures cover the same spend.
+const providerSpendScopeAccess = providerSpendScopeCronAccess();
 
 // Spend Reconciliation -- fetches authoritative billing from Anthropic/OpenAI
 // admin APIs and compares against internal COGS estimates.
@@ -1289,6 +1317,7 @@ const spendReconciliationCron = runsScheduledJobs
         environment: {
           ...DEFAULT_LAMBDA_ENVIRONMENT,
           ...providerAdminKeyAccess.environment,
+          ...providerSpendScopeAccess.environment,
         },
         // PutMetricData publishes the drift and nothing-reconciled metrics alarmed in infra/providerSpend.ts.
         permissions: [
@@ -1297,6 +1326,7 @@ const spendReconciliationCron = runsScheduledJobs
             resources: ['*'],
           },
           ...providerAdminKeyAccess.permissions,
+          ...providerSpendScopeAccess.permissions,
         ],
       },
     })
@@ -1320,6 +1350,7 @@ const providerUsagePollCron = runsScheduledJobs
         environment: {
           ...DEFAULT_LAMBDA_ENVIRONMENT,
           ...providerAdminKeyAccess.environment,
+          ...providerSpendScopeAccess.environment,
           ...modelPriceSnapshotAccess.environment,
         },
         permissions: [
@@ -1329,6 +1360,7 @@ const providerUsagePollCron = runsScheduledJobs
           },
           ...modelPriceSnapshotAccess.read,
           ...providerAdminKeyAccess.permissions,
+          ...providerSpendScopeAccess.permissions,
         ],
       },
     })
@@ -1735,6 +1767,7 @@ export {
   completionSequenceSweepCron,
   creditLotSweepCron,
   voiceHoldSweepCron,
+  briefScheduleReconcileCron,
   creditHoldSweepCron,
   referralRewardReleaseCron,
   sreStaleDispatchCron,

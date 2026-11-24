@@ -63,7 +63,6 @@
   "apps/client/pages/api/v1/sessions/index.ts": { "b4m/require-update-validators": { "count": 1 } },
   "apps/client/server/admin/adminRoles/adapters.ts": { "b4m/require-update-validators": { "count": 1 } },
   "apps/client/server/admin/ai/feedbackTriage.ts": { "b4m/require-update-validators": { "count": 1 } },
-  "apps/client/server/admin/ai/runAdminAi.ts": { "b4m/require-update-validators": { "count": 1 } },
   "apps/client/server/admin/campaignWatches.ts": { "b4m/require-update-validators": { "count": 2 } },
   "apps/client/server/admin/stripeWrite/adminStripeWrite.ts": { "b4m/require-update-validators": { "count": 1 } },
   "apps/client/server/agents/deleteAgent.ts": { "b4m/require-update-validators": { "count": 1 } },
@@ -74,7 +73,7 @@
   "apps/client/server/auth/withAccountNotPurging.ts": { "b4m/require-update-validators": { "count": 1 } },
   "apps/client/server/credits/orgInviteBonus.ts": { "b4m/require-update-validators": { "count": 2 } },
   "apps/client/server/credits/recordActiveSession.ts": { "b4m/require-update-validators": { "count": 1 } },
-  "apps/client/server/dataSubject/subjectErasureExecutor.ts": { "b4m/require-update-validators": { "count": 2 } },
+  "packages/server-utils/src/dataSubject/subjectErasureExecutor.ts": { "b4m/require-update-validators": { "count": 2 } },
   "apps/client/server/feedback/bulk.ts": { "b4m/require-update-validators": { "count": 1 } },
   "apps/client/server/integrations/slack/reactionFeedback.ts": { "b4m/require-update-validators": { "count": 3 } },
   "apps/client/server/integrations/stripe/attachOrgStripeCustomer.ts": { "b4m/require-update-validators": { "count": 1 } },
@@ -184,7 +183,7 @@
   "packages/database/src/models/auth/SignupProtectionModel.ts": { "b4m/require-update-validators": { "count": 9 } },
   "packages/database/src/models/auth/SubscriberModel.ts": { "b4m/require-update-validators": { "count": 2 } },
   "packages/database/src/models/auth/TrustedDeviceModel.ts": { "b4m/require-update-validators": { "count": 2 } },
-  "packages/database/src/models/auth/UserModel.ts": { "b4m/require-update-validators": { "count": 51 } },
+  "packages/database/src/models/auth/UserModel.ts": { "b4m/require-update-validators": { "count": 50 } },
   "packages/database/src/models/auth/UserUsagePatternSignalsModel.ts": { "b4m/require-update-validators": { "count": 2 } },
   "packages/database/src/models/auth/WsConnectTicketModel.ts": { "b4m/require-update-validators": { "count": 1 } },
   "packages/database/src/models/auth/oauthClientAdmin.ts": { "b4m/require-update-validators": { "count": 2 } },
@@ -229,7 +228,7 @@
   "packages/database/src/models/infra/admin/OrgAdminNotificationPrefModel.ts": { "b4m/require-update-validators": { "count": 1 } },
   "packages/database/src/models/infra/admin/OrgAlertNotificationModel.ts": { "b4m/require-update-validators": { "count": 1 } },
   "packages/database/src/models/infra/admin/OrgDomainClaimModel.ts": { "b4m/require-update-validators": { "count": 4 } },
-  "packages/database/src/models/infra/admin/OrganizationModel.ts": { "b4m/require-update-validators": { "count": 15 } },
+  "packages/database/src/models/infra/admin/OrganizationModel.ts": { "b4m/require-update-validators": { "count": 14 } },
   "packages/database/src/models/infra/admin/SpaceModel.ts": { "b4m/require-update-validators": { "count": 3 } },
   "packages/database/src/models/infra/email/EmailJobModel.ts": { "b4m/require-update-validators": { "count": 4 } },
   "packages/database/src/models/infra/email/EmailPreferencesModel.ts": { "b4m/require-update-validators": { "count": 4 } },
@@ -378,6 +377,7 @@
   "packages/scripts/src/clearStaleOrganizationPointers.ts": { "b4m/require-update-validators": { "count": 1 } },
   "packages/scripts/src/migrateSignupGrantSchedule.ts": { "b4m/require-update-validators": { "count": 1 } },
   "packages/scripts/src/trimAiEditVersions.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/server-utils/src/admin/ai/runAdminAi.ts": { "b4m/require-update-validators": { "count": 1 } },
   "packages/server-utils/src/admin/blockedEmailDomains.ts": { "b4m/require-update-validators": { "count": 1 } },
   "packages/server-utils/src/admin/usersBulk/adapters.ts": { "b4m/require-update-validators": { "count": 3 } },
   "packages/server-utils/src/analytics/analyticsRollup.ts": { "b4m/require-update-validators": { "count": 3 } },
@@ -1954,16 +1954,6 @@
       "count": 1
     }
   },
-  "apps/client/pages/api/artifacts/[id]/index.ts": {
-    "@typescript-eslint/no-explicit-any": {
-      "count": 12
-    }
-  },
-  "apps/client/pages/api/artifacts/[id]/versions.ts": {
-    "@typescript-eslint/no-explicit-any": {
-      "count": 10
-    }
-  },
   "apps/client/pages/api/artifacts/[id]/versions/[version].ts": {
     "@typescript-eslint/no-explicit-any": {
       "count": 5
@@ -2940,10 +2930,7 @@
     }
   },
   "apps/client/pages/api/slack/commands.ts": {
-    "b4m/require-update-validators": { "count": 2 },
-    "@typescript-eslint/no-explicit-any": {
-      "count": 9
-    }
+    "b4m/require-update-validators": { "count": 2 }
   },
   "apps/client/pages/api/slack/events.ts": {
     "b4m/require-update-validators": { "count": 1 },
@@ -3542,26 +3529,6 @@
       "count": 23
     }
   },
-  "apps/workers/src/cron/accountDeletionSweep.test.ts": {
-    "b4m/no-workers-server-bridge": {
-      "count": 1
-    }
-  },
-  "apps/workers/src/cron/accountDeletionSweep.ts": {
-    "b4m/no-workers-server-bridge": {
-      "count": 1
-    }
-  },
-  "apps/workers/src/cron/adminMorningBrief.test.ts": {
-    "b4m/no-workers-server-bridge": {
-      "count": 1
-    }
-  },
-  "apps/workers/src/cron/adminMorningBrief.ts": {
-    "b4m/no-workers-server-bridge": {
-      "count": 1
-    }
-  },
   "apps/workers/src/events/sessionSummarization.ts": {
     "@typescript-eslint/no-explicit-any": {
       "count": 1
@@ -3609,41 +3576,6 @@
   },
   "apps/workers/src/organizations/retentionCleanup.ts": {
     "b4m/require-update-validators": { "count": 7 }
-  },
-  "apps/workers/src/organizations/retentionErasure.e2e.test.ts": {
-    "b4m/no-workers-server-bridge": {
-      "count": 1
-    }
-  },
-  "apps/workers/src/queueHandlers/accountDataExport.test.ts": {
-    "b4m/no-workers-server-bridge": {
-      "count": 1
-    }
-  },
-  "apps/workers/src/queueHandlers/accountDataExport.ts": {
-    "b4m/no-workers-server-bridge": {
-      "count": 1
-    }
-  },
-  "apps/workers/src/queueHandlers/accountDataExportCollections.test.ts": {
-    "b4m/no-workers-server-bridge": {
-      "count": 1
-    }
-  },
-  "apps/workers/src/queueHandlers/accountErasure.test.ts": {
-    "b4m/no-workers-server-bridge": {
-      "count": 1
-    }
-  },
-  "apps/workers/src/queueHandlers/accountErasure.ts": {
-    "b4m/no-workers-server-bridge": {
-      "count": 1
-    }
-  },
-  "apps/workers/src/queueHandlers/agentExecutor.ts": {
-    "b4m/no-workers-server-bridge": {
-      "count": 1
-    }
   },
   "apps/workers/src/queueHandlers/emailJobOrchestrator.ts": {
     "@typescript-eslint/no-explicit-any": {
@@ -4236,16 +4168,6 @@
   "b4m-core/services/src/notebookCurationService/llmMarkdownGenerator.test.ts": {
     "@typescript-eslint/no-explicit-any": {
       "count": 1
-    }
-  },
-  "b4m-core/services/src/notebookCurationService/llmMarkdownGenerator.ts": {
-    "@typescript-eslint/no-explicit-any": {
-      "count": 12
-    }
-  },
-  "b4m-core/services/src/notebookCurationService/markdownGenerator.ts": {
-    "@typescript-eslint/no-explicit-any": {
-      "count": 10
     }
   },
   "b4m-core/services/src/organizationService/addMember.test.ts": {

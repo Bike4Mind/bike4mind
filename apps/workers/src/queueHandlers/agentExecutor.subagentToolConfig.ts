@@ -14,7 +14,14 @@
 import type { ApiKeyTable } from '@bike4mind/llm-adapters';
 import type { GenerateImageToolCall, AudioGenerationToolCall } from '@bike4mind/common';
 import type { BuildSharedToolsOptions } from '@bike4mind/services/llm';
-import type { AudioToolJobs, ImageToolConfig, MusicToolConfig, VideoToolConfig } from '@bike4mind/services/llm/tools';
+import {
+  PRODUCTION_TOOL_NAMES,
+  type AudioToolJobs,
+  type ImageToolConfig,
+  type MusicToolConfig,
+  type ProductionToolConfig,
+  type VideoToolConfig,
+} from '@bike4mind/services/llm/tools';
 
 export interface BuildSubagentToolConfigInput {
   model?: string;
@@ -56,6 +63,8 @@ export interface BuildSubagentToolConfigInput {
   videoConfig?: VideoToolConfig | null;
   /** Built per invocation by agentExecutor.musicToolConfig.ts, like videoConfig. Null/omitted leaves it unoffered. */
   musicConfig?: MusicToolConfig | null;
+  /** Built per invocation by agentExecutor.productionToolConfig.ts; one config serves all four production tools. */
+  productionConfig?: ProductionToolConfig | null;
   /**
    * Signs web_search image URLs for this subagent - see WebSearchToolConfig.imageUrlSigningSecret.
    * Omit only when the caller genuinely has no secret (performWebSearch then degrades to plain
@@ -74,6 +83,7 @@ export function buildSubagentToolConfig({
   imageJobConfig,
   videoConfig,
   musicConfig,
+  productionConfig,
   imageUrlSigningSecret,
 }: BuildSubagentToolConfigInput): NonNullable<BuildSharedToolsOptions['config']> {
   return {
@@ -95,5 +105,6 @@ export function buildSubagentToolConfig({
     ...((audioConfig || audioJobs) && { audio_generation: { ...audioConfig, ...(audioJobs && { jobs: audioJobs }) } }),
     ...(videoConfig && { video_generation: videoConfig }),
     ...(musicConfig && { music_generation: musicConfig }),
+    ...(productionConfig && Object.fromEntries(PRODUCTION_TOOL_NAMES.map(name => [name, productionConfig]))),
   };
 }

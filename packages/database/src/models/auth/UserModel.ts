@@ -9,6 +9,8 @@ import {
   DEFAULT_STORAGE_LIMIT_MB,
   USER_ACCOUNT_SEGMENTS,
   type UserAccountSegment,
+  type BriefSchedule,
+  ConflictError,
 } from '@bike4mind/common';
 import { toProviderEndUserId } from '@bike4mind/llm-adapters';
 import {
@@ -22,6 +24,10 @@ import {
   IUserRepository,
   IUserNote,
   IModerationHit,
+  IUserModeration,
+  MODERATION_REVIEW_STATUSES,
+  MODERATION_SEVERE_CATEGORIES,
+  ModerationReviewUser,
   ISignupRiskAutoApproval,
   ISignupRiskScore,
   RISK_EVIDENCE_TRIGGERS,
@@ -204,6 +210,19 @@ const UserPreferencesSchema = new Schema(
           agent_message: { type: Boolean },
           session_handoff: { type: Boolean },
           brief_ready: { type: Boolean },
+        },
+        { _id: false }
+      ),
+    },
+    // Validated by BriefScheduleSchema (@bike4mind/common) in PUT /api/v1/briefs/schedule. The general user
+    // update rewrites the whole preferences object, so it can carry a stale copy back; see IUserPreferences.
+    briefSchedule: {
+      type: new Schema(
+        {
+          enabled: { type: Boolean },
+          timeOfDay: { type: String },
+          days: { type: [Number], default: undefined },
+          timeZone: { type: String },
         },
         { _id: false }
       ),
@@ -1213,36 +1232,63 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
   }
 
   async setPlanStorageLimit(userId: string, planStorageLimitMb: number): Promise<boolean> {
+    return this.writePlanStorageLimit(userId, planStorageLimitMb);
+  }
+
+  /**
+   * Drops the plan allowance once the subscription that granted it has ended, so the enforced
+   * `storageLimit` falls back to the manual override, or to DEFAULT_STORAGE_LIMIT_MB without one.
+   * Files already stored are untouched: a user left over the new limit can still read and delete,
+   * and the upload checks refuse anything that would add to the usage.
+   */
+  async clearPlanStorageLimit(userId: string): Promise<boolean> {
+    return this.writePlanStorageLimit(userId, null);
+  }
+
+  private async writePlanStorageLimit(userId: string, planStorageLimitMb: number | null): Promise<boolean> {
     if (!mongoose.isValidObjectId(userId)) return false;
-    const fieldMissing = (field: string) => ({ $eq: [{ $type: field }, 'missing'] });
-    const res = await this.model.updateOne({ _id: userId }, [
-      // A row without the override field (pre-backfill, or an OAuth signup) gets the override
-      // resolveUserStorageLimit would derive for it, since a defined plan limit retires that fallback.
-      {
-        $set: {
-          storageLimitOverride: {
-            $cond: [
-              fieldMissing('$storageLimitOverride'),
-              {
-                $cond: [
-                  { $in: ['$storageLimit', [null, DEFAULT_STORAGE_LIMIT_MB]] },
-                  null,
-                  { $cond: [fieldMissing('$storageLimit'), null, '$storageLimit'] },
-                ],
-              },
-              '$storageLimitOverride',
-            ],
+    type StorageSnapshot = {
+      storageLimitOverride?: number | null;
+      planStorageLimit?: number | null;
+      storageLimit?: number | null;
+      __v?: number;
+    };
+    const fields = ['storageLimitOverride', 'planStorageLimit', 'storageLimit', '__v'] as const;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const snapshot = await this.model
+        .findById(userId, { storageLimitOverride: 1, planStorageLimit: 1, storageLimit: 1, __v: 1 })
+        .lean<StorageSnapshot>();
+      if (!snapshot) return false;
+      // Preserve a legacy custom limit before retiring the missing-override fallback. Field
+      // presence matters: an explicit null means use the plan, and zero is a manual override.
+      const override = Object.hasOwn(snapshot, 'storageLimitOverride')
+        ? (snapshot.storageLimitOverride ?? null)
+        : snapshot.storageLimit == null || snapshot.storageLimit === DEFAULT_STORAGE_LIMIT_MB
+          ? null
+          : snapshot.storageLimit;
+      const result = await this.model.updateOne(
+        {
+          _id: userId,
+          $and: fields.map(field => ({
+            [field]: Object.hasOwn(snapshot, field) ? { $eq: snapshot[field], $exists: true } : { $exists: false },
+          })),
+        },
+        {
+          $set: {
+            storageLimitOverride: override,
+            planStorageLimit: planStorageLimitMb,
+            storageLimit: override ?? planStorageLimitMb ?? DEFAULT_STORAGE_LIMIT_MB,
           },
+          // Even an equal-quantity grant must write: this fences a concurrent release's
+          // subscription snapshot. Timestamp changes alone can be elided in the same millisecond.
+          $inc: { __v: 1 },
         },
-      },
-      {
-        $set: {
-          planStorageLimit: planStorageLimitMb,
-          storageLimit: { $ifNull: ['$storageLimitOverride', planStorageLimitMb] },
-        },
-      },
-    ]);
-    return res.matchedCount === 1;
+        { runValidators: true }
+      );
+      if (result.matchedCount === 1) return true;
+      // Native transaction errors deliberately propagate so the entire transaction can retry.
+    }
+    throw new ConflictError('Storage allowance changed concurrently; retry the operation');
   }
 
   async findCurrentStorageSize(userId: string): Promise<number | null> {
@@ -1358,14 +1404,14 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
   async setModerationStatus(
     userId: string,
     status: UserModerationStatus,
-    options?: { throttledUntil?: Date | null }
+    options?: { throttledUntil?: Date | null; automatic?: boolean }
   ): Promise<IUserDocument | null> {
     return this.model.findOneAndUpdate(
       { _id: userId },
       {
         $set: {
           'moderation.status': status,
-          'moderation.statusChangedAt': new Date(),
+          ...(options?.automatic ? {} : { 'moderation.statusChangedAt': new Date() }),
           'moderation.throttledUntil': status === 'throttled' ? (options?.throttledUntil ?? null) : null,
         },
       },
@@ -1644,6 +1690,168 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
     );
   }
 
+  /** The review list's membership: an escalated status, or a severe hit newer than the last admin decision. */
+  private moderationReviewFilter() {
+    const severe = [...MODERATION_SEVERE_CATEGORIES];
+    // The newest retained severe hit is after the last status change, so no admin has acted on it yet.
+    const latestSevereHitAt = {
+      $max: {
+        $map: {
+          input: {
+            $filter: {
+              input: { $ifNull: ['$moderation.hits', []] },
+              as: 'hit',
+              cond: { $gt: [{ $size: { $setIntersection: [{ $ifNull: ['$$hit.categories', []] }, severe] } }, 0] },
+            },
+          },
+          as: 'hit',
+          in: '$$hit.at',
+        },
+      },
+    };
+    const lastStatusChange = { $ifNull: ['$moderation.statusChangedAt', new Date(0)] };
+    return {
+      $or: [
+        { 'moderation.status': { $in: [...MODERATION_REVIEW_STATUSES] } },
+        {
+          'moderation.hits.categories': { $in: severe },
+          $expr: { $gt: [latestSevereHitAt, lastStatusChange] },
+        },
+      ],
+    };
+  }
+
+  async countModerationReviewQueue(options: { limit?: number } = {}): Promise<number> {
+    return this.model.countDocuments(this.moderationReviewFilter(), { limit: options.limit }).maxTimeMS(5000).exec();
+  }
+
+  async findModerationReviewQueue(limit: number): Promise<ModerationReviewUser[]> {
+    const severe = [...MODERATION_SEVERE_CATEGORIES];
+    const docs = await this.model
+      .find(this.moderationReviewFilter())
+      .select('name email createdAt moderation')
+      .sort({ 'moderation.lastHitAt': -1, _id: -1 })
+      .limit(limit)
+      .maxTimeMS(5000)
+      .lean();
+    return docs.map(doc => {
+      const moderation = doc.moderation as IUserModeration;
+      const statusChangedAt = moderation.statusChangedAt ? new Date(moderation.statusChangedAt).getTime() : 0;
+      return {
+        id: String(doc._id),
+        name: doc.name ?? null,
+        email: doc.email ?? null,
+        createdAt: doc.createdAt ?? null,
+        moderation,
+        hasUnreviewedSevereHit: (moderation.hits ?? []).some(
+          hit =>
+            new Date(hit.at).getTime() > statusChangedAt && hit.categories?.some(category => severe.includes(category))
+        ),
+      };
+    });
+  }
+
+  /**
+   * Replaces the brief schedule and its due time together. A null `nextBriefAt` (schedule off) removes the field and drops the user from the
+   * reconciler's index.
+   */
+  async setBriefSchedule(userId: string, schedule: BriefSchedule, nextBriefAt: Date | null): Promise<void> {
+    await this.ensurePreferencesObject(userId);
+    await this.model.updateOne(
+      { _id: userId },
+      nextBriefAt
+        ? { $set: { 'preferences.briefSchedule': schedule, nextBriefAt } }
+        : { $set: { 'preferences.briefSchedule': schedule }, $unset: { nextBriefAt: 1 } },
+      { runValidators: true }
+    );
+  }
+
+  /** A dotted `$set` under `preferences` fails while the field is null (its schema default). */
+  private async ensurePreferencesObject(userId: string): Promise<void> {
+    await this.model.updateOne(
+      { _id: userId, preferences: null },
+      { $set: { preferences: {} } },
+      { runValidators: true }
+    );
+  }
+
+  async getBriefSchedule(userId: string): Promise<{ schedule: BriefSchedule | null; nextBriefAt: Date | null }> {
+    const user = await this.model
+      .findById(userId, { 'preferences.briefSchedule': 1, nextBriefAt: 1 })
+      .lean<Pick<IUserDocument, 'preferences' | 'nextBriefAt'>>();
+    return { schedule: user?.preferences?.briefSchedule ?? null, nextBriefAt: user?.nextBriefAt ?? null };
+  }
+
+  /**
+   * Users whose scheduled brief is due, earliest first. The `$type` term is what lets the planner use the
+   * `user_nextBriefAt` partial index; without it the scan is a COLLSCAN plus an in-memory sort.
+   */
+  async findDueBriefSchedules(
+    now: Date,
+    limit: number
+  ): Promise<{ id: string; schedule: BriefSchedule | null; nextBriefAt: Date }[]> {
+    const users = await this.model
+      .find({ nextBriefAt: { $type: 'date', $lte: now } }, { 'preferences.briefSchedule': 1, nextBriefAt: 1 })
+      .sort({ nextBriefAt: 1 })
+      .limit(limit)
+      .lean<(Pick<IUserDocument, 'preferences'> & { _id: unknown; nextBriefAt: Date })[]>();
+    return users.map(user => ({
+      id: String(user._id),
+      schedule: user.preferences?.briefSchedule ?? null,
+      nextBriefAt: user.nextBriefAt,
+    }));
+  }
+
+  /**
+   * Moves a due user to its next slot (or off the schedule with null), only while `nextBriefAt` still holds
+   * the value the caller read. That compare-and-set is the claim: false means another run took this slot.
+   */
+  async advanceNextBriefAt(userId: string, expected: Date, next: Date | null): Promise<boolean> {
+    const result = await this.model.updateOne(
+      { _id: userId, nextBriefAt: expected },
+      next ? { $set: { nextBriefAt: next } } : { $unset: { nextBriefAt: 1 } },
+      { runValidators: true }
+    );
+    return result.modifiedCount === 1;
+  }
+
+  /**
+   * Claims the shared brief-start debounce when no brief started within `minGapMs` of `now`, returning the
+   * replaced value for releaseBriefStart; null when refused. A stored value in the future counts as recent.
+   */
+  async claimBriefStart(userId: string, now: Date, minGapMs: number): Promise<{ previous: Date | null } | null> {
+    const before = await this.model
+      .findOneAndUpdate(
+        {
+          _id: userId,
+          $or: [
+            { lastBriefStartedAt: { $exists: false } },
+            { lastBriefStartedAt: null },
+            { lastBriefStartedAt: { $lte: new Date(now.getTime() - minGapMs) } },
+          ],
+        },
+        { $set: { lastBriefStartedAt: now } },
+        { new: false, projection: { lastBriefStartedAt: 1 }, runValidators: true }
+      )
+      .lean<{ lastBriefStartedAt?: Date | null }>()
+      .exec();
+    return before ? { previous: before.lastBriefStartedAt ?? null } : null;
+  }
+
+  /**
+   * Gives back a claim by restoring the value it replaced, only while `lastBriefStartedAt` still holds this
+   * caller's `claimedAt`. Restoring rather than unsetting matters because the scheduled and event paths
+   * claim with different gaps: an unset would let an event start ignore an earlier event brief.
+   */
+  async releaseBriefStart(userId: string, claimedAt: Date, previous: Date | null): Promise<boolean> {
+    const result = await this.model.updateOne(
+      { _id: userId, lastBriefStartedAt: claimedAt },
+      previous ? { $set: { lastBriefStartedAt: previous } } : { $unset: { lastBriefStartedAt: 1 } },
+      { runValidators: true }
+    );
+    return result.modifiedCount === 1;
+  }
+
   /**
    * Find a user by their Slack user ID
    * Used for OAuth user linking to prevent duplicate Slack ID associations
@@ -1845,6 +2053,8 @@ export const UserSchema = new Schema<IUserDocument, IUserModel>(
     riskSignals: { type: [UserRiskSignalSchema], required: false, default: undefined },
     disputePending: { type: Boolean, required: false, default: false },
     deletion: { type: UserDeletionSchema, required: false, default: undefined },
+    nextBriefAt: { type: Date },
+    lastBriefStartedAt: { type: Date },
     accountFilePurge: {
       type: new Schema(
         {
@@ -1900,6 +2110,9 @@ export const UserSchema = new Schema<IUserDocument, IUserModel>(
     numReferralsAvailable: { type: Number, default: 0 },
     regInvites: [{ type: Schema.Types.ObjectId, ref: 'User' }],
     referredByUserId: { type: Schema.Types.ObjectId, ref: 'User', default: null },
+    referredViaLinkAt: { type: Date, default: null },
+    // No default: the unique index below only covers string values, so accounts without a code never collide.
+    referralCode: { type: String },
     signupInvite: {
       type: new Schema(
         {
@@ -2348,6 +2561,11 @@ UserSchema.index({ createdAt: -1, _id: -1 }, { name: 'user_createdAt_id' });
 UserSchema.index({ lastActiveAt: -1, _id: -1 }, { name: 'user_lastActiveAt_id' });
 UserSchema.index({ currentCredits: -1, _id: -1 }, { name: 'user_currentCredits_id' });
 UserSchema.index({ isBanned: 1 }, { partialFilterExpression: { isBanned: true }, name: 'user_isBanned_true' });
+// Serve findModerationReviewQueue, one per $or branch. Not partial: a partial index is only chosen when
+// the query provably implies its filter, which an $in does not; sparse keeps users with no moderation
+// state out. Built by the ensure-user-moderation-review-indexes migration.
+UserSchema.index({ 'moderation.status': 1 }, { sparse: true, name: 'user_moderation_status' });
+UserSchema.index({ 'moderation.hits.categories': 1 }, { sparse: true, name: 'user_moderation_hit_categories' });
 // The persona caps and expiry sweep read only persona accounts, a handful among all users.
 UserSchema.index(
   { isPersona: 1, personaExpiresAt: 1 },
@@ -2382,10 +2600,21 @@ UserSchema.index(
 );
 // Serves the inviter's referral counts (invited, active). Built by the ensure-referral-inviter-indexes migration.
 UserSchema.index({ referredByUserId: 1 }, { name: 'user_referredByUserId' });
+// Resolves a share-link visit to its owner and keeps two accounts from minting the same code. Built by the
+// ensure-referral-code-index migration.
+UserSchema.index(
+  { referralCode: 1 },
+  { unique: true, partialFilterExpression: { referralCode: { $type: 'string' } }, name: 'user_referralCode' }
+);
 // Serves the account deletion purge job's scan for grace periods that have ended.
 UserSchema.index(
   { 'deletion.scheduledFor': 1 },
   { partialFilterExpression: { 'deletion.scheduledFor': { $type: 'date' } }, name: 'user_deletion_scheduledFor' }
+);
+// Serves the brief-schedule reconciler's due scan; only users with a schedule on carry the field.
+UserSchema.index(
+  { nextBriefAt: 1 },
+  { partialFilterExpression: { nextBriefAt: { $type: 'date' } }, name: 'user_nextBriefAt' }
 );
 // platformEmailAddress index is already created by the 'unique: true' option in the schema definition
 

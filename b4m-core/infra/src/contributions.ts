@@ -1,4 +1,5 @@
 import type { BuildQueuePairOptions } from './queueFactory.js';
+import type { DlqDescriptor } from './types.js';
 
 // Infra resources an overlay declares as plain data in its package.json
 // (`b4mContributions.infraResources`). Codegen copies them into
@@ -34,6 +35,14 @@ export interface ContributedQueueSpec extends BuildQueuePairOptions {
   displayName: string;
   /** Application tag for CloudWatch grouping. */
   application: string;
+  // Operator help copied into the pair's admin DLQ registry entry, as a core entry carries it.
+  /** One line: what the consumer does. */
+  description?: string;
+  replay?: DlqDescriptor['replay'];
+  /** The guard (or its absence) the replay value rests on. */
+  replayNote?: string;
+  /** An area name, never a person. */
+  owner?: string;
 }
 
 export interface InfraResourceContributions {
@@ -162,6 +171,30 @@ function isValidVisibilityTimeout(value: unknown): boolean {
 
 const isIntBetween = (value: unknown, min: number, max: number): boolean =>
   typeof value === 'number' && Number.isInteger(value) && value >= min && value <= max;
+
+// Mirrored by QUEUE_HELP_MAX in apps/client/scripts/generate-premium-glue.mjs; keep in sync.
+const QUEUE_HELP_MAX = { description: 200, replayNote: 400, owner: 64 } as const;
+// One line, no control characters, no leading or trailing whitespace.
+const QUEUE_HELP_PATTERN = /^\S(?:[^\p{Cc}\p{Zl}\p{Zp}]*\S)?$/u;
+const QUEUE_REPLAY_VALUES: Record<NonNullable<ContributedQueueSpec['replay']>, true> = {
+  safe: true,
+  'side-effects': true,
+  unsafe: true,
+};
+
+const isOptionalHelpText = (value: unknown, max: number): boolean =>
+  value === undefined ||
+  (typeof value === 'string' && value.length <= max && QUEUE_HELP_PATTERN.test(value) && !/\p{Cc}/u.test(value));
+
+function isValidQueueHelp(spec: ContributedQueueSpec): boolean {
+  return (
+    isOptionalHelpText(spec.description, QUEUE_HELP_MAX.description) &&
+    isOptionalHelpText(spec.replayNote, QUEUE_HELP_MAX.replayNote) &&
+    isOptionalHelpText(spec.owner, QUEUE_HELP_MAX.owner) &&
+    (spec.replay === undefined || (typeof spec.replay === 'string' && Object.hasOwn(QUEUE_REPLAY_VALUES, spec.replay)))
+  );
+}
+
 // infra/dlqAlarms.ts names the alarm pipeline's own DLQ alarms as if this were a label.
 const RESERVED_DLQ_LABELS = new Set(['alarm-handler-dlq']);
 
@@ -247,11 +280,13 @@ export function partitionContributedQueues(
       names.every(n => typeof n === 'string' && QUEUE_NAME_PATTERN.test(n)) &&
       names[0] !== names[1] &&
       isValidVisibilityTimeout(spec.visibilityTimeout) &&
+      (spec.dlqVisibilityTimeout === undefined || isValidVisibilityTimeout(spec.dlqVisibilityTimeout)) &&
       (spec.retry === undefined || isIntBetween(spec.retry, 1, 1000)) &&
       (spec.dlqMessageRetentionSeconds === undefined || isIntBetween(spec.dlqMessageRetentionSeconds, 60, 1209600)) &&
       typeof label === 'string' &&
       DLQ_LABEL_PATTERN.test(label) &&
-      !RESERVED_DLQ_LABELS.has(label);
+      !RESERVED_DLQ_LABELS.has(label) &&
+      isValidQueueHelp(spec);
     if (!valid) {
       result.rejected.push(id);
       continue;

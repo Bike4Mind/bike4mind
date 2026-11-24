@@ -20,6 +20,7 @@ import {
   signupDomainHoldTriageCron,
   spendMonitor,
   voiceHoldSweepCron,
+  briefScheduleReconcileCron,
   personaExpirySweepCron,
 } from './cron';
 import { whatsNewGenerationQueueSubscription, webhookDeliveryQueueSubscription } from './queues';
@@ -275,26 +276,29 @@ if (isMonitoredStage) {
    * Monitors the Lambda function itself for execution errors.
    * Complements the application-level failure metric.
    */
-  new aws.cloudwatch.MetricAlarm('whatsNewLambdaErrors', {
-    name: `${$app.name}-${$app.stage}-whats-new-lambda-errors`,
-    alarmDescription: "What's New Lambda (release notes and highlights) has errors",
-    comparisonOperator: 'GreaterThanThreshold',
-    evaluationPeriods: 1,
-    metricName: 'Errors',
-    namespace: 'AWS/Lambda',
-    period: 300,
-    statistic: 'Sum',
-    threshold: 0,
-    treatMissingData: 'notBreaching',
-    dimensions: {
-      FunctionName: whatsNewGenerationQueueSubscription.nodes.function.name,
-    },
-    alarmActions: [dlqAlarmTopic.arn],
-    tags: {
-      Application: 'WhatsNewGeneration',
-      Severity: 'High',
-    },
-  });
+  // Undefined on a preview, which never runs this consumer (infra/previewQueueConsumers.ts).
+  if (whatsNewGenerationQueueSubscription) {
+    new aws.cloudwatch.MetricAlarm('whatsNewLambdaErrors', {
+      name: `${$app.name}-${$app.stage}-whats-new-lambda-errors`,
+      alarmDescription: "What's New Lambda (release notes and highlights) has errors",
+      comparisonOperator: 'GreaterThanThreshold',
+      evaluationPeriods: 1,
+      metricName: 'Errors',
+      namespace: 'AWS/Lambda',
+      period: 300,
+      statistic: 'Sum',
+      threshold: 0,
+      treatMissingData: 'notBreaching',
+      dimensions: {
+        FunctionName: whatsNewGenerationQueueSubscription.nodes.function.name,
+      },
+      alarmActions: [dlqAlarmTopic.arn],
+      tags: {
+        Application: 'WhatsNewGeneration',
+        Severity: 'High',
+      },
+    });
+  }
 
   /**
    * Alarm: Anthropic API Rate Limit Errors
@@ -1988,6 +1992,32 @@ if (isMonitoredStage) {
       alarmActions: [dlqAlarmTopic.arn],
       tags: {
         Application: 'Voice',
+        Severity: 'High',
+      },
+    });
+  }
+
+  /**
+   * The brief schedule reconciler throws when any due user failed to start, and a timeout or crash lands
+   * here too. Only on scheduled stages, where the cron exists.
+   */
+  if (briefScheduleReconcileCron) {
+    new aws.cloudwatch.MetricAlarm('briefScheduleReconcileLambdaErrors', {
+      name: `${$app.name}-${$app.stage}-brief-schedule-reconcile-lambda-errors`,
+      alarmDescription: 'The scheduled brief reconciler Lambda is erroring (start failures, timeout, OOM or crash)',
+      comparisonOperator: 'GreaterThanThreshold',
+      evaluationPeriods: 3,
+      datapointsToAlarm: 2,
+      metricName: 'Errors',
+      namespace: 'AWS/Lambda',
+      period: 300,
+      statistic: 'Sum',
+      threshold: 0,
+      treatMissingData: 'notBreaching',
+      dimensions: { FunctionName: briefScheduleReconcileCron.nodes.function.name },
+      alarmActions: [dlqAlarmTopic.arn],
+      tags: {
+        Application: 'Briefs',
         Severity: 'High',
       },
     });

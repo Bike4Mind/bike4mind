@@ -68,6 +68,9 @@ import { createCompletionRunMinter } from './completionRuns';
 import { ApprovalModePreference } from './ApprovalModePreference';
 import { PromptCacheTtlPreference } from './PromptCacheTtlPreference';
 import { LocalContextPreference } from './LocalContextPreference';
+import { SpawnLocationPreference } from './SpawnLocationPreference';
+import { registerSpawnLocationIpc } from './spawnLocationIpc';
+import { SPAWN_LOCATION_FILE_NAME } from '@shared/spawnLocation';
 import { createLateReload } from './lateReload';
 import { registerGenerationIpc } from './generationIpc';
 import { modelSettingsChanged, registerModelSettingsIpc } from './modelSettingsIpc';
@@ -100,7 +103,7 @@ import { ModelVersionStore } from './model3d/ModelVersionStore';
 import { modelIpcHandlers } from './model3d/modelIpc';
 import { ChatService, sessionForRenderer, type ChatServiceDeps } from './ChatService';
 import { DeferredToolsSetting, parseDeferredToolsOverride } from './DeferredToolsSetting';
-import { CHAT_STREAM_TAG } from './devLogTag';
+import { logDownstream } from './devLogDownstream';
 import { McpManager } from './mcp/McpManager';
 import { McpServerStore } from './mcp/McpServerStore';
 import { privateFile } from '../privateFile';
@@ -158,7 +161,7 @@ import { AccessStore } from './tools/AccessStore';
 import { ApprovalGate } from './tools/ApprovalGate';
 import { DependencyInstaller } from './project/dependencyInstall';
 import { RecentFolderStore } from './project/RecentFolderStore';
-import { SpareWorktrees } from './project/workspace';
+import { appWorktreeMainCheckout, SpareWorktrees } from './project/workspace';
 import { folderToRemember } from './project/recentFolderToRecord';
 import { BackgroundProcessRegistry } from './tools/BackgroundProcessRegistry';
 import { parseReasoningEffortSetting, storedReasoningEffortSetting } from './reasoningEffort';
@@ -170,7 +173,6 @@ import type { PreparedImage } from './tools/types';
 import { desktopScreenCapturer } from './screen/desktopScreen';
 import { parsePaneInput, SimulatorLiveView } from './simulator/SimulatorLiveView';
 import { XcodeSimulatorDriver } from './simulator/XcodeSimulatorDriver';
-import { devLog } from '../devlog/DevLogSink';
 import { registerPullRequests } from '../pr';
 import type { PrMonitor } from '../pr/PrMonitor';
 import { appWindows, focusedAppWindow } from '../windows';
@@ -368,37 +370,6 @@ function paneBounds(value: unknown): BrowserPaneBounds | null {
 }
 
 /**
- * Publish one renderer-bound push to the developer log.
- *
- * The downstream half of the chat stream, and a different thing from the upstream SSE frames
- * logged in completions.ts: these are what the UI is actually told, after the agent loop has
- * folded tool calls, reasoning and queue changes into it. Same source, so the same single tag -
- * the direction is a field. Seeing both texts side by side is the point: a delta that differs
- * from the frame it came from is the agent loop having rewritten it.
- *
- * Fields are named one at a time, never spread: a payload carries whatever a session put in it,
- * and an allowlist is the only reason this cannot start carrying something it should not.
- */
-function logDownstream(channel: string, payload: unknown): void {
-  devLog.publish(() => {
-    const event = (payload ?? {}) as { type?: unknown; sessionId?: unknown; text?: unknown; status?: unknown };
-    // The event's own kind, or the channel's name without its namespace.
-    const kind = typeof event.type === 'string' ? event.type : (channel.split(':')[1] ?? channel);
-    const text = typeof event.text === 'string' ? event.text : '';
-    return {
-      tags: [CHAT_STREAM_TAG],
-      message: `downstream ${kind}${text ? `: ${text}` : ''}`,
-      fields: {
-        channel,
-        ...(text ? { chars: text.length } : {}),
-        ...(typeof event.sessionId === 'string' ? { session: event.sessionId } : {}),
-        ...(typeof event.status === 'string' ? { status: event.status } : {}),
-      },
-    };
-  });
-}
-
-/**
  * Where every picker in this file opens.
  *
  * Read from Electron rather than taken from a caller: a starting folder is the one dialog
@@ -488,7 +459,9 @@ export function registerChat(
   const spareWorktrees = new SpareWorktrees();
   // The trust file is its own file beside tool-access.json, and for the same reason: both record
   // a consent the user gave once and should not be asked for again on every launch.
-  const projectTrust = new ProjectTrustStore(join(userData, 'project-skill-trust.json'));
+  const projectTrust = new ProjectTrustStore(join(userData, 'project-skill-trust.json'), directory =>
+    appWorktreeMainCheckout(directory, mainCheckoutOf)
+  );
   const skills = new SkillCatalog(projectTrust, accountSkillsProvider(auth, userData), logger);
   // App-wide like approval-mode.json. Claude Code's files are only ever read; the protected roots
   // are folders no allow rule may cover, since a call writing there would grant itself more.
@@ -543,6 +516,7 @@ export function registerChat(
     logger,
   });
   const localContext = new LocalContextPreference(join(userData, 'local-context.json'));
+  const spawnLocation = new SpawnLocationPreference(join(userData, SPAWN_LOCATION_FILE_NAME));
   const localSizing = localContextSizing({
     setting: () => localContext.read(),
     pinnedProjectors: () => hooks.pinnedProjectors?.() ?? new Map(),
@@ -703,7 +677,9 @@ export function registerChat(
     send(IPC_CHANNELS.chatSessionStatus, event);
     hooks.observeSessionStatus?.(event);
     // Only reached once a turn has run, long after pullRequests below exists.
-    if (event.status === 'done') pullRequests.turnSettled(event.sessionId);
+    if (event.status === 'done' || event.unreadReply) pullRequests.turnSettled(event.sessionId);
+    // Same: a session changes status only once `service` below exists.
+    service.sessionStatusChanged(event);
   });
 
   // Typed-ahead messages, on their own channel: this is per-session state that outlives any
@@ -792,6 +768,7 @@ export function registerChat(
     composerDrafts,
     models,
     modelSettings,
+    spawnLocation,
     logger,
     mintCompletionRun: createCompletionRunMinter(message =>
       logger.warn(`CHAT: could not mint a completion run: ${message}`)
@@ -902,6 +879,10 @@ export function registerChat(
       models.forgetLocal();
     },
     fit: () => local.contextFit(),
+  });
+  registerSpawnLocationIpc(ipcMain, {
+    preference: spawnLocation,
+    broadcast: location => send(IPC_CHANNELS.chatSpawnLocation, location),
   });
   ipcMain.handle(IPC_CHANNELS.chatListCreationTools, (_event, model: string) => service.listCreationTools(model));
   ipcMain.handle(IPC_CHANNELS.chatSetSessionArchived, (event, sessionId: unknown, archived: unknown) => {

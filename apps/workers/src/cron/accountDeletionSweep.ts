@@ -18,7 +18,7 @@ import {
   drainDeletionNotices,
   type DeletionNoticeDrainResult,
 } from '@bike4mind/server-utils/users/accountDeletionNotice';
-import { erasureRegistry } from '@server/dataSubject/erasureRegistry';
+import { erasureRegistry } from '@bike4mind/server-utils/dataSubject/erasureRegistry';
 
 const sweepLogger = new Logger({ metadata: { service: 'accountDeletionSweep' } });
 

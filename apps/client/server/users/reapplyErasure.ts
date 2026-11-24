@@ -15,8 +15,8 @@ import type { Logger } from '@bike4mind/observability';
 import { purgeDeletedUserData } from '@bike4mind/server-utils/services/purgeDeletedUserData';
 import { purgeAccountContent } from '@bike4mind/server-utils/users/purgeAccountContent';
 import { purgeAccountFiles } from '@bike4mind/server-utils/users/purgeAccountFiles';
-import { erasureRegistry } from '../dataSubject/erasureRegistry';
-import { assertContributedRegistryValid } from '../dataSubject/registry';
+import { erasureRegistry } from '@bike4mind/server-utils/dataSubject/erasureRegistry';
+import { assertContributedRegistryValid } from '@bike4mind/server-utils/dataSubject/registry/index';
 
 type ReapplyLogger = Pick<Logger, 'info' | 'warn' | 'error'>;
 

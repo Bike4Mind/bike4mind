@@ -22,6 +22,9 @@ const chat = {
     };
   }),
   getSession: vi.fn(),
+  getHeldRelays: vi.fn(),
+  resolveHeldRelay: vi.fn(),
+  regenerateReply: vi.fn(),
   sendMessage: vi.fn(),
   cancelQueuedMessage: vi.fn(),
   sendQueuedMessageNow: vi.fn(),
@@ -128,6 +131,8 @@ beforeEach(() => {
   chat.sendQueuedMessageNow.mockResolvedValue(undefined);
   chat.respondToApproval.mockResolvedValue(undefined);
   chat.listModels.mockResolvedValue({ models: [] });
+  chat.getHeldRelays.mockResolvedValue([]);
+  chat.resolveHeldRelay.mockResolvedValue(undefined);
   (window as unknown as { b4m: unknown }).b4m = { chat };
 });
 
@@ -137,7 +142,7 @@ afterEach(() => {
 });
 
 describe('AgentPeekDrawer', () => {
-  it('acknowledges a focused opening once, not refreshes or stream events', async () => {
+  it('acknowledges visible refreshed replies but not hidden content', async () => {
     vi.spyOn(document, 'hasFocus').mockReturnValue(true);
     vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('visible');
     function Messages({ refreshKey, visible }: { refreshKey: string; visible: boolean }) {
@@ -146,7 +151,8 @@ describe('AgentPeekDrawer', () => {
     }
     await themed.render(<Messages refreshKey="first" visible />);
     const acknowledgements = () => chat.getSession.mock.calls.filter(([, viewed]) => viewed === true);
-    expect(acknowledgements()).toHaveLength(1);
+    expect(acknowledgements().length).toBeGreaterThan(0);
+    const opened = acknowledgements().length;
     await themed.render(<Messages refreshKey="next" visible />);
     vi.useFakeTimers();
     try {
@@ -154,14 +160,17 @@ describe('AgentPeekDrawer', () => {
         queueListener?.({ sessionId: 'a1', queued: [] });
         await vi.advanceTimersByTimeAsync(200);
       });
-      expect(acknowledgements()).toHaveLength(1);
-      expect(chat.getSession).toHaveBeenLastCalledWith('a1', false);
+      expect(acknowledgements().length).toBeGreaterThan(opened);
+      expect(chat.getSession).toHaveBeenCalledWith('a1', true);
     } finally {
       vi.useRealTimers();
     }
     await themed.render(<Messages refreshKey="next" visible={false} />);
+    const hidden = acknowledgements().length;
+    await themed.render(<Messages refreshKey="hidden-update" visible={false} />);
+    expect(acknowledgements()).toHaveLength(hidden);
     await themed.render(<Messages refreshKey="next" visible />);
-    expect(acknowledgements()).toHaveLength(2);
+    expect(acknowledgements().length).toBeGreaterThan(hidden);
   });
 
   it('keeps the task title and state without a redundant persona subtitle', async () => {
@@ -233,6 +242,53 @@ describe('AgentPeekDrawer', () => {
     chat.getSession.mockRejectedValue(new Error('disk gone'));
     await renderDrawer(agentFixture('a1'));
     expect(el('orchestrator-peek-load-error').textContent).toBe('disk gone');
+  });
+
+  it('shows a held relay and resolves it for the agent, not the open conversation', async () => {
+    chat.getHeldRelays.mockResolvedValue([
+      {
+        id: 'h1',
+        sessionId: 'a1',
+        text: 'please merge',
+        heldAt: '2026-10-01T00:00:00.000Z',
+        reason: 'other-project',
+        relay: { fromSessionId: 'x', fromTitle: 'Sender', hops: 1 },
+      },
+    ]);
+    await renderDrawer(agentFixture('a1', 'needs-you'));
+    expect(el('orchestrator-peek-held-relays').textContent).toContain('please merge');
+    await act(async () => el('held-relay-deliver-btn').click());
+    expect(chat.resolveHeldRelay).toHaveBeenCalledWith('a1', 'h1', true);
+  });
+
+  it('retries a failed turn, and says nothing when another surface already started it', async () => {
+    chat.getSession.mockResolvedValue({
+      messages: [
+        { id: 'p', role: 'user', content: 'go', createdAt: '2026-10-01T00:00:00.000Z' },
+        { id: 'r', role: 'assistant', content: '', error: 'Network down', createdAt: '2026-10-01T00:00:00.000Z' },
+      ],
+    });
+    chat.regenerateReply.mockResolvedValue({ ok: false, error: 'This conversation is still replying.', busy: true });
+    await renderDrawer(agentFixture('a1', 'failed'));
+    await act(async () => el('chat-message-assistant-regenerate-btn').click());
+    expect(chat.regenerateReply).toHaveBeenCalledWith('a1');
+    expect(query('orchestrator-peek-load-error')).toBeNull();
+
+    chat.regenerateReply.mockResolvedValue({ ok: false, error: 'Sign in to regenerate this reply.' });
+    await act(async () => el('chat-message-assistant-regenerate-btn').click());
+    expect(el('orchestrator-peek-load-error').textContent).toBe('Sign in to regenerate this reply.');
+  });
+
+  it('offers no Regenerate on a finished worker, which would set its task running again', async () => {
+    chat.getSession.mockResolvedValue({
+      messages: [
+        { id: 'p', role: 'user', content: 'go', createdAt: '2026-10-01T00:00:00.000Z' },
+        { id: 'r', role: 'assistant', content: 'done', createdAt: '2026-10-01T00:00:00.000Z' },
+      ],
+    });
+    await renderDrawer(agentFixture('a1', 'done'));
+    expect(query('chat-message-assistant')).not.toBeNull();
+    expect(query('chat-message-assistant-regenerate-btn')).toBeNull();
   });
 
   it('sends the reply to the agent session', async () => {

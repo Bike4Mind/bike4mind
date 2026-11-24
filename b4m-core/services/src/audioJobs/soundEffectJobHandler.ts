@@ -1,5 +1,6 @@
 import { usdToCreditsStochastic, type SoundGenerationVendor } from '@bike4mind/common';
 import { ProviderRateLimitError } from '@bike4mind/utils';
+import { isQuotaExhaustedResult } from '@bike4mind/utils/audioProviders';
 import type { ProviderContext, ProviderTerminalResult } from '@bike4mind/utils/generationProviders';
 import { isUsableApiKey } from '../generationJobs/apiKey';
 import { releaseJobHold, settleJobHold } from '../generationJobs/settlement';
@@ -186,6 +187,14 @@ export function createSoundEffectJobHandler(deps: SoundEffectJobDeps): Generatio
         case 'blocked':
           return contentBlocked(result.raw);
         case 'failed':
+          if (isQuotaExhaustedResult(result)) {
+            // An operational state (credits need a top-up), not a fault: the hold is still released in onTerminal.
+            deps.logger.warn('sound effect provider quota exhausted', {
+              jobId: job.id,
+              providerId,
+              reason: result.message,
+            });
+          }
           return providerFailedStep(result);
       }
     },

@@ -1,9 +1,8 @@
 name: E2E Tests (Core)
 
-# Thin caller for the Core promote-gate. Runs the curated Core project subset and
-# posts the e2e/core commit status the prod-promotion console gates on. All shared
-# plumbing lives in e2e-run.yml; this file only maps the Core-specific parameters.
-# Core set graduates over time — see apps/client/e2e/README.md ("Core gate").
+# Core staging caller and explicit advisory preview dispatch receiver.
+# Preview runs select PR-eligible projects; staging keeps the curated Core subset.
+# Shared execution plumbing lives in e2e-run.yml.
 
 on:
   workflow_dispatch:
@@ -28,7 +27,125 @@ on:
         required: false
 
 jobs:
+  prepare-preview:
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.pr_number != ''
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+      statuses: read
+    outputs:
+      ready: ${{ steps.preview.outputs.ready }}
+      pr_number: ${{ steps.preview.outputs.pr_number }}
+      head_sha: ${{ steps.preview.outputs.head_sha }}
+      base_sha: ${{ steps.preview.outputs.base_sha }}
+      deploy_id: ${{ steps.preview.outputs.deploy_id }}
+      full: ${{ steps.preview.outputs.full }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - id: preview
+        uses: actions/github-script@v8
+        env:
+          PR_NUMBER: ${{ inputs.pr_number }}
+        with:
+          script: |
+            await require('./.github/scripts/preview-e2e.cjs').prepare({ github, context, core });
+
+  select-preview:
+    needs: prepare-preview
+    if: needs.prepare-preview.outputs.ready == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      playwright_args: ${{ steps.select.outputs.playwright_args }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Verify trusted checkout
+        env:
+          TRUSTED_SHA: ${{ github.sha }}
+        run: |
+          test "$(git rev-parse HEAD)" = "$TRUSTED_SHA"
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+      - uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v5
+      - run: pnpm install --frozen-lockfile --ignore-scripts
+      - id: select
+        env:
+          E2E_BASE_SHA: ${{ needs.prepare-preview.outputs.base_sha }}
+          E2E_HEAD_SHA: ${{ needs.prepare-preview.outputs.head_sha }}
+          E2E_FULL: ${{ needs.prepare-preview.outputs.full }}
+          AI_LATENCY_RUN: 'false'
+          EXPORT_BYTES_RUN: 'false'
+        run: |
+          git fetch --no-tags origin "$E2E_BASE_SHA" "$E2E_HEAD_SHA" || echo "::warning::Diff refs unavailable; selection will widen"
+          if ! pnpm --filter @bike4mind/client exec tsx e2e/select-projects.ts; then
+            echo "::warning::Selector failed; running full PR-eligible configuration"
+            echo 'playwright_args=' >> "$GITHUB_OUTPUT"
+          fi
+
+  preview:
+    needs: [prepare-preview, select-preview]
+    if: always() && !cancelled() && needs.prepare-preview.outputs.ready == 'true'
+    permissions:
+      contents: read
+      pull-requests: read
+      statuses: write
+      id-token: write
+    uses: ./.github/workflows/e2e-run.yml
+    secrets: inherit
+    with:
+      pr_number: ${{ needs.prepare-preview.outputs.pr_number }}
+      preview_head_sha: ${{ needs.prepare-preview.outputs.head_sha }}
+      preview_deploy_id: ${{ needs.prepare-preview.outputs.deploy_id }}
+      pr_eligible_only: true
+      playwright_args: ${{ needs.select-preview.outputs.playwright_args }}
+      status_context: 'e2e/preview-advisory'
+      suite_name: 'PR selected'
+      artifact_suffix: 'preview'
+      timeout_minutes: 45
+      global_timeout_minutes: 15
+      execution_timeout_minutes: 17
+      stamp_promotable: false
+      trigger_label: 'Verified preview'
+      concurrency_group: preview-e2e-${{ needs.prepare-preview.outputs.pr_number }}
+      cancel_in_progress: true
+
+  report-preview:
+    needs: [prepare-preview, select-preview, preview]
+    if: always() && needs.prepare-preview.outputs.ready == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+      statuses: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/github-script@v8
+        env:
+          PR_NUMBER: ${{ needs.prepare-preview.outputs.pr_number }}
+          HEAD_SHA: ${{ needs.prepare-preview.outputs.head_sha }}
+          DEPLOY_ID: ${{ needs.prepare-preview.outputs.deploy_id }}
+          PROJECTS: ${{ needs.select-preview.outputs.playwright_args }}
+          OUTCOME: ${{ needs.preview.outputs.outcome }}
+          JOB_RESULT: ${{ needs.preview.result }}
+        with:
+          script: |
+            await require('./.github/scripts/preview-e2e.cjs').report({ github, context, core });
+
   core:
+    if: github.event_name == 'workflow_dispatch' && inputs.pr_number == ''
     # Grant the reusable workflow the token scopes it needs: id-token for OIDC AWS
     # auth and statuses for the e2e/core commit status. A called workflow's
     # permissions can only be downgraded from the caller's, and this repo's default
@@ -36,6 +153,7 @@ jobs:
     # tests run) and can't stamp e2e/core (silent gate death).
     permissions:
       contents: read
+      pull-requests: read
       id-token: write
       statuses: write
     uses: ./.github/workflows/e2e-run.yml
@@ -50,6 +168,7 @@ jobs:
       suite_name:         'Core'
       artifact_suffix:    'core'
       timeout_minutes:    60
+      execution_timeout_minutes: 28
       stamp_promotable:   ${{ inputs.pr_number == '' }}
       wait_for_deploy:    ${{ inputs.pr_number == '' }}
       show_credits:       false

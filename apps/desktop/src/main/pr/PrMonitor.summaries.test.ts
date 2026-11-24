@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { ChatToolCall } from '@shared/chat';
 import type { PrSummaryEvent } from '@shared/pullRequest';
 import type { PrMonitorDeps } from './PrMonitor';
-import { REF, TrackedMonitor, collector, fakeGithub, quietLogger, snapshot, tempStore } from './prTestSupport';
+import { REF, TrackedMonitor, check, collector, fakeGithub, quietLogger, snapshot, tempStore } from './prTestSupport';
 
 const SESSION = 'session-1';
 
@@ -51,8 +51,8 @@ describe('PrMonitor sidebar summaries', () => {
     await store.set('never-read', bound);
 
     expect(await monitor.summaries()).toEqual([
-      { sessionId: 'open', summary: { number: 611, state: 'open', repo: 'example-org/widgets' } },
-      { sessionId: 'draft', summary: { number: 7, state: 'draft', repo: 'example-org/widgets' } },
+      { sessionId: 'open', summary: { number: 611, state: 'open', stale: true, repo: 'example-org/widgets' } },
+      { sessionId: 'draft', summary: { number: 7, state: 'draft', stale: true, repo: 'example-org/widgets' } },
       { sessionId: 'merged', summary: { number: 611, state: 'merged', repo: 'example-org/widgets' } },
     ]);
     await monitor.idle();
@@ -66,7 +66,10 @@ describe('PrMonitor sidebar summaries', () => {
     await monitor.bindManual(SESSION, REF.url);
     await monitor.idle();
     expect(pushed).toEqual([
-      { sessionId: SESSION, summary: { number: 611, state: 'open', repo: 'example-org/widgets' } },
+      {
+        sessionId: SESSION,
+        summary: { number: 611, state: 'open', attention: 'awaitingReview', repo: 'example-org/widgets' },
+      },
     ]);
 
     await monitor.refresh(SESSION);
@@ -130,7 +133,7 @@ describe('PrMonitor sidebar summaries', () => {
     await monitor.idle();
     expect(pushed[pushed.length - 1]).toEqual({
       sessionId: SESSION,
-      summary: { number: 611, state: 'open', repo: 'example-org/widgets' },
+      summary: { number: 611, state: 'open', attention: 'awaitingReview', repo: 'example-org/widgets' },
     });
 
     await monitor.dismiss(SESSION);
@@ -138,7 +141,7 @@ describe('PrMonitor sidebar summaries', () => {
     await monitor.idle();
     expect(pushed[pushed.length - 1]).toEqual({
       sessionId: SESSION,
-      summary: { number: 700, state: 'open', repo: 'example-org/widgets' },
+      summary: { number: 700, state: 'open', attention: 'awaitingReview', repo: 'example-org/widgets' },
     });
     monitor.dispose();
   });
@@ -193,8 +196,82 @@ describe('PrMonitor sidebar summaries', () => {
 
     const relaunched = new TrackedMonitor(first.deps);
     expect(await relaunched.summaries()).toEqual([
-      { sessionId: SESSION, summary: { number: 611, state: 'open', repo: 'example-org/widgets' } },
+      {
+        sessionId: SESSION,
+        // Last seen in the queue, so the stored auto-merge badge stands in for the queued state.
+        summary: {
+          number: 611,
+          state: 'open',
+          attention: 'awaitingReview',
+          autoMerge: true,
+          stale: true,
+          repo: 'example-org/widgets',
+        },
+      },
     ]);
     relaunched.dispose();
+  });
+
+  it('pushes when what the PR waits on changes, even with its state unchanged', async () => {
+    const { fake, monitor, pushed } = setup();
+    await monitor.bindManual(SESSION, REF.url);
+    await monitor.idle();
+
+    fake.answer(snapshot({ checks: [check('build', 'fail')] }));
+    await monitor.refresh(SESSION);
+    fake.answer(snapshot({ reviewDecision: 'APPROVED', mergeStateStatus: 'BEHIND' }));
+    await monitor.refresh(SESSION);
+    fake.answer(snapshot({ reviewDecision: 'APPROVED', mergeStateStatus: 'BEHIND' }));
+    await monitor.refresh(SESSION);
+
+    expect(pushed.map(event => event.summary?.attention)).toEqual(['awaitingReview', 'ciFailed', 'ready']);
+    expect(pushed[pushed.length - 1]?.summary).toMatchObject({ state: 'open', behind: true });
+    monitor.dispose();
+  });
+
+  it('serves the last attention and badges after a relaunch, marked stale, without reading GitHub', async () => {
+    const first = setup();
+    first.fake.answer(snapshot({ mergeable: 'CONFLICTING', mergeStateStatus: 'BEHIND', autoMergeArmed: true }));
+    await first.monitor.bindManual(SESSION, REF.url);
+    await first.monitor.idle();
+    expect(await first.store.get(SESSION)).toMatchObject({
+      lastAttention: 'conflict',
+      lastBehind: true,
+      lastAutoMerge: true,
+    });
+    first.monitor.dispose();
+
+    const relaunched = new TrackedMonitor(first.deps);
+    const callsBefore = first.fake.calls.length;
+    expect(await relaunched.summaries()).toEqual([
+      {
+        sessionId: SESSION,
+        summary: {
+          number: 611,
+          state: 'open',
+          attention: 'conflict',
+          behind: true,
+          autoMerge: true,
+          stale: true,
+          repo: 'example-org/widgets',
+        },
+      },
+    ]);
+    expect(first.fake.calls.length).toBe(callsBefore);
+    relaunched.dispose();
+  });
+
+  it('clears the stored badges once a read no longer finds them', async () => {
+    const { fake, store, monitor } = setup();
+    fake.answer(snapshot({ mergeStateStatus: 'BEHIND', autoMergeArmed: true }));
+    await monitor.bindManual(SESSION, REF.url);
+    await monitor.idle();
+    fake.answer(snapshot());
+    await monitor.refresh(SESSION);
+    const stored = await store.get(SESSION);
+    expect(stored).toMatchObject({ lastAttention: 'awaitingReview' });
+    expect(stored).not.toHaveProperty('lastBehind');
+    expect(stored).not.toHaveProperty('lastAutoMerge');
+    monitor.dispose();
   });
 });

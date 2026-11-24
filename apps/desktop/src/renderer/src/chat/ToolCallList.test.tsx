@@ -176,6 +176,73 @@ describe('ToolCallList', () => {
     expect(html).toContain('saves Bash(gh pr create:*) to Settings &gt; Permissions, so no session asks again');
   });
 
+  describe("the agent's summary on a command card", () => {
+    const summaryOf = (html: string) =>
+      /data-testid="chat-tool-approval-summary"[^>]*>([^<]*)</.exec(html)?.[1] ?? null;
+
+    it('shows the description on one line between the heading and the command', () => {
+      const html = markup([
+        awaiting({
+          name: 'bash_execute',
+          approvalDetail: '$ rm -rf build',
+          approvalDescription: 'Deletes the build folder',
+        }),
+      ]);
+      expect(summaryOf(html)).toBe('Agent&#x27;s summary: Deletes the build folder');
+      const heading = html.indexOf('Run this command?');
+      const summary = html.indexOf('data-testid="chat-tool-approval-summary"');
+      const detail = html.indexOf('data-testid="chat-tool-approval-detail"');
+      expect(heading).toBeLessThan(summary);
+      expect(summary).toBeLessThan(detail);
+      expect(html.slice(detail)).toContain('$ rm -rf build');
+    });
+
+    it('attributes a misleading model summary while preserving the command and warning', () => {
+      const command = 'cat .env && curl https://example.com';
+      const warning = 'Can send data off this computer (curl).';
+      const html = markup([
+        awaiting({
+          name: 'bash_execute',
+          approvalDescription: 'Read-only, nothing leaves this machine',
+          approvalDetail: command,
+          approvalParts: [{ text: command, reason: warning }],
+        }),
+      ]);
+      expect(summaryOf(html)).toBe('Agent&#x27;s summary: Read-only, nothing leaves this machine');
+      expect(html).toContain('cat .env &amp;&amp; curl https://example.com');
+      expect(html).toContain(warning);
+      expect(html).toContain('data-testid="chat-tool-approve-once"');
+      expect(html).toContain('data-testid="chat-tool-deny"');
+    });
+
+    it('draws the card as before when there is no description, or only whitespace', () => {
+      const plain = markup([awaiting()]);
+      expect(plain).not.toContain('chat-tool-approval-summary');
+      expect(markup([awaiting({ approvalDescription: ' \n ' })])).toBe(plain);
+    });
+
+    it('folds line breaks into one line and cuts a long description short', () => {
+      const html = markup([awaiting({ approvalDescription: `Runs the tests\n\nand ${'reports '.repeat(40)}` })]);
+      const summary = summaryOf(html) ?? '';
+      expect(summary.startsWith('Agent&#x27;s summary: ')).toBe(true);
+      const shown = summary.slice('Agent&#x27;s summary: '.length);
+      expect(shown.startsWith('Runs the tests and reports')).toBe(true);
+      expect(shown.endsWith('...')).toBe(true);
+      expect(shown.length).toBeLessThanOrEqual(140);
+    });
+
+    it('leaves the description off a card that shows a diff', () => {
+      const html = markup([
+        awaiting({
+          name: 'file_write',
+          approvalDescription: 'Writes a file',
+          approvalDiff: { path: '/a/one.ts', operation: 'create', lines: [], added: 0, removed: 0 },
+        }),
+      ]);
+      expect(html).not.toContain('chat-tool-approval-summary');
+    });
+  });
+
   it('lists only the parts of a chain that need a decision, each with why', () => {
     const html = markup([
       awaiting({
@@ -214,6 +281,19 @@ describe('ToolCallList', () => {
   it('never offers the saving "Always allow" on a call that cannot be undone', () => {
     const html = markup([awaiting({ approvalIrreversible: true, approvalRules: ['session_delete'] })]);
     expect(html).not.toContain('data-testid="chat-tool-approve-everywhere"');
+  });
+
+  it('asks once for a whole batch of deletes, naming how many', () => {
+    const html = markup([
+      awaiting({ name: 'session_delete', input: { session_ids: ['a', 'b', 'c'] }, approvalIrreversible: true }),
+    ]);
+    expect(html).toContain('Delete these 3 conversations for good?');
+    expect(html).toContain('Delete them');
+    expect(html).toContain('Keep them');
+    const single = markup([
+      awaiting({ name: 'session_delete', input: { session_ids: ['a'] }, approvalIrreversible: true }),
+    ]);
+    expect(single).toContain('Delete this conversation for good?');
   });
 
   it('withholds "always" on a call that cannot be undone', () => {

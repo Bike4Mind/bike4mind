@@ -1,7 +1,7 @@
 import type { ChartRange } from './chartData';
 
 /**
- * Calendar-day ranges for /status. The URL holds inclusive local days (YYYY-MM-DD); the API gets
+ * Calendar-day ranges for /admin/qa. The URL holds inclusive local days (YYYY-MM-DD); the API gets
  * the instants that bound them, so "Today" is the viewer's day. Server twin: server/qa/filters.ts.
  */
 

@@ -675,6 +675,32 @@ describe('finding a session by issue or PR number', () => {
     expect(query('sidebar-ref-matches')).toBeNull();
   });
 
+  it('focuses the search on the modifier plus Shift+F, unless another view already took the chord', async () => {
+    await mount(refSessions());
+    const chord = () =>
+      new KeyboardEvent('keydown', {
+        key: 'F',
+        code: 'KeyF',
+        metaKey: true,
+        ctrlKey: true,
+        shiftKey: true,
+        bubbles: true,
+        cancelable: true,
+      });
+    const taken = (event: KeyboardEvent) => event.preventDefault();
+    window.addEventListener('keydown', taken, true);
+    act(() => {
+      window.dispatchEvent(chord());
+    });
+    window.removeEventListener('keydown', taken, true);
+    expect(document.activeElement).not.toBe(el('chat-search-input'));
+
+    act(() => {
+      window.dispatchEvent(chord());
+    });
+    expect(document.activeElement).toBe(el('chat-search-input'));
+  });
+
   it('focuses the search on the modifier plus K', async () => {
     await mount(refSessions());
     act(() => {

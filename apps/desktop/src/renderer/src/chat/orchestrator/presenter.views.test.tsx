@@ -61,6 +61,7 @@ beforeEach(() => {
   (window as unknown as { b4m: unknown }).b4m = {
     chat: {
       getSession: vi.fn().mockResolvedValue(null),
+      getHeldRelays: vi.fn().mockResolvedValue([]),
       getRunSpend: vi.fn().mockResolvedValue({ status: 'unattributed' }),
       onQueueChanged: vi.fn(() => () => undefined),
       onStreamEvent: vi.fn(() => () => undefined),

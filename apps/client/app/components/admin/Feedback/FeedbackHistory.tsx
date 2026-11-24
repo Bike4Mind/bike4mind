@@ -3,8 +3,14 @@ import { Alert, Button, Stack, Textarea, Typography } from '@mui/joy';
 import { useInfiniteQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { addFeedbackNoteOnServer, getFeedbackHistoryFromServer } from '@client/app/utils/feedbackAPICalls';
 import { getErrorMessage } from '@client/app/utils/error';
-import { ADMIN_NOTE_MAX_LENGTH, FEEDBACK_RESOLUTION_LABELS, type FeedbackResolution } from '@bike4mind/common';
+import {
+  ADMIN_NOTE_MAX_LENGTH,
+  FEEDBACK_RESOLUTION_LABELS,
+  type FeedbackResolution,
+  type FeedbackStatus,
+} from '@bike4mind/common';
 import { SectionCard, LoadingState, ErrorState } from '../shared';
+import { FEEDBACK_STATUS_LABELS, FEEDBACK_STATUS_ORDER } from './constants';
 
 const FIELD_LABELS: Record<string, string> = {
   status: 'Status',
@@ -12,10 +18,24 @@ const FIELD_LABELS: Record<string, string> = {
   resolutionDuplicateId: 'Duplicate of',
 };
 
-const changeValue = (field: string, value: unknown) =>
-  field === 'resolution' && typeof value === 'string'
-    ? (FEEDBACK_RESOLUTION_LABELS[value as FeedbackResolution] ?? value)
-    : String(value ?? 'None');
+const changeValue = (field: string, value: unknown) => {
+  if (typeof value !== 'string') return String(value ?? 'None');
+  if (field === 'resolution') return FEEDBACK_RESOLUTION_LABELS[value as FeedbackResolution] ?? value;
+  if (field === 'status') return FEEDBACK_STATUS_LABELS[value as FeedbackStatus] ?? value;
+  return value;
+};
+
+const RELABELED_STATUSES = FEEDBACK_STATUS_ORDER.filter(status => FEEDBACK_STATUS_LABELS[status] !== status);
+
+/**
+ * Status-change summaries are written server-side with raw status tokens (`InProgress`), and stored
+ * rows keep them, so the labels are swapped in at display time. Notes are free text and never pass here.
+ */
+export const formatHistorySummary = (summary: string) =>
+  RELABELED_STATUSES.reduce(
+    (text, status) => text.replace(new RegExp(`\\b${status}\\b`, 'g'), FEEDBACK_STATUS_LABELS[status]),
+    summary
+  );
 
 export default function FeedbackHistory({ id }: { id: string }) {
   const client = useQueryClient();
@@ -53,7 +73,10 @@ export default function FeedbackHistory({ id }: { id: string }) {
                     {item.author} - {new Date(item.occurredAt).toLocaleString()}
                   </Typography>
                   <Typography level="body-sm" sx={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>
-                    {item.note ?? item.summary}
+                    {item.note ??
+                      (item.changes?.some(change => change.field === 'status')
+                        ? formatHistorySummary(item.summary)
+                        : item.summary)}
                   </Typography>
                   {item.reason && <Typography level="body-xs">Reason: {item.reason}</Typography>}
                   {item.changes?.map(change => (

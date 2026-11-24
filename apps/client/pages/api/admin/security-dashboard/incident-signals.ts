@@ -1,7 +1,10 @@
 import type { Request, Response } from 'express';
 import { adminApi } from '@server/middlewares/adminApi';
-import { getIncidentSignals } from '@server/security/incidentSignals';
-import { INCIDENT_RANGES, type IncidentRange } from '@client/app/components/admin/SecurityDashboard/incidentTypes';
+import { getIncidentSignals } from '@bike4mind/server-utils/security/incidentSignals';
+import {
+  INCIDENT_RANGES,
+  type IncidentRange,
+} from '@bike4mind/server-utils/app/components/admin/SecurityDashboard/incidentTypes';
 
 const isIncidentRange = (value: unknown): value is IncidentRange => INCIDENT_RANGES.includes(value as IncidentRange);
 

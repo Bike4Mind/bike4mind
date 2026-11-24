@@ -33,6 +33,7 @@ public actor CaptureEngine {
   private let now: @Sendable () -> Date
   private let sleep: @Sendable (Duration) async -> Void
   private let configuration: Configuration
+  private let didSendToSession: (@Sendable (String) async -> Void)?
   private let logger = Logger(subsystem: "com.bike4mind.app", category: "capture")
 
   private var uploaders: [String: any BackgroundUploading] = [:]
@@ -50,7 +51,8 @@ public actor CaptureEngine {
     makeUploader: @escaping @Sendable (String) -> any BackgroundUploading,
     now: @escaping @Sendable () -> Date = Date.init,
     sleep: @escaping @Sendable (Duration) async -> Void = { try? await Task.sleep(for: $0) },
-    configuration: Configuration = Configuration()
+    configuration: Configuration = Configuration(),
+    didSendToSession: (@Sendable (String) async -> Void)? = nil
   ) {
     self.store = store
     self.api = api
@@ -59,6 +61,7 @@ public actor CaptureEngine {
     self.now = now
     self.sleep = sleep
     self.configuration = configuration
+    self.didSendToSession = didSendToSession
   }
 
   // MARK: - Observing
@@ -125,8 +128,16 @@ public actor CaptureEngine {
 
   /// App launch / foreground: retry lost uploads, push every unfinished job forward, prune old results.
   public func resume() async {
-    await reconcile()
     prune()
+    // The share extension sends into sessions from its own process, so the app's cached transcripts for
+    // those sessions can only be dropped here, when the app next comes forward.
+    var sessionIDs = Set<String>()
+    for job in jobs() where job.stage == .done {
+      if case .session(let sessionID, _) = job.destination { sessionIDs.insert(sessionID) }
+    }
+    for sessionID in sessionIDs { await didSendToSession?(sessionID) }
+    // Reconciliation and scan polling can wait; completed sends must invalidate history first.
+    await reconcile()
     for job in jobs() where !job.stage.isTerminal { await advance(job.id) }
   }
 
@@ -304,6 +315,7 @@ public actor CaptureEngine {
         let jobID = job.id
         logger.notice(
           "Capture job \(jobID, privacy: .public) already reached quest \(questID, privacy: .public); not resending")
+        await didSendToSession?(sessionID)
         return
       case .notFound:
         break
@@ -316,6 +328,7 @@ public actor CaptureEngine {
     job.sendAttemptedAt = now()
     guard persist(job) else { throw StoreUnavailable() }
     try await api.sendSessionMessage(sessionID: sessionID, message: message, fileIDs: fileIDs)
+    await didSendToSession?(sessionID)
   }
 
   private func waitUntilClean(fileID: String) async throws -> Bool {

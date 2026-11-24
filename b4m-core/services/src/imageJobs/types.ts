@@ -1,21 +1,24 @@
-import type {
-  ApiKeyBillingOwnerType,
-  GeneratedAssetLineageEntry,
-  GeneratedAssetMetadata,
-  GenerationJobDelivery,
-  GenerationJobSource,
-  IGenerationJobDocumentOf,
-  IGenerationJobRepository,
-  ImageJobPurpose,
-  ImageProviderId,
-  ImageValidationFailure,
-  StorageLimitErrorInfo,
-  UsageEventStatus,
+import {
+  IMAGE_JOB_COUNT_MAX,
+  type ApiKeyBillingOwnerType,
+  type CompletionRunAttribution,
+  type GeneratedAssetLineageEntry,
+  type GeneratedAssetMetadata,
+  type GenerationJobDelivery,
+  type GenerationJobSource,
+  type IGenerationJobDocumentOf,
+  type IGenerationJobRepository,
+  type ImageJobPurpose,
+  type ImageProviderId,
+  type ImageValidationFailure,
+  type StorageLimitErrorInfo,
+  type UsageEventStatus,
 } from '@bike4mind/common';
 import type { Logger } from '@bike4mind/observability';
 import type { ImageProviderRegistry } from '@bike4mind/utils/imageProviders';
 import type { CreditHoldAdapters } from '../creditService/creditHold';
 import type { GenerationJobEngine } from '../generationJobs/engine';
+import type { RunBudgetAdapters } from '../generationJobs/types';
 import type { OutputModerationVerdict } from '../generationJobs/storeOutput';
 import type { SaveGeneratedAssetResult } from '../generatedAssets';
 
@@ -24,7 +27,7 @@ import type { SaveGeneratedAssetResult } from '../generatedAssets';
 export const IMAGE_JOB_MAX_WALL_CLOCK_MS = 10 * 60_000;
 
 // Most jobs one "make N" request creates.
-export const IMAGE_JOB_BATCH_MAX = 4;
+export const IMAGE_JOB_BATCH_MAX = IMAGE_JOB_COUNT_MAX;
 
 // A generous single-image size (a large PNG), for the create-time storage check.
 export const IMAGE_JOB_OUTPUT_BYTES_ESTIMATE = 16 * 1024 * 1024;
@@ -80,6 +83,8 @@ export type ImageJobDeps = {
    * tools bump through recordGeneratedImages. Unset where nothing reads the badge.
    */
   countNotebookImage?(questId: string): Promise<void>;
+  /** Claims and releases a job's share of a completion run's budget; required to create a job with a `run`. */
+  runBudget?: RunBudgetAdapters;
   now(): Date;
   logger: Logger;
 };
@@ -118,6 +123,8 @@ export type CreateImageJobsInput = {
   idempotencyKey?: string;
   /** Server-chosen only (see createCutoutJob); never read from a client body. */
   purpose?: ImageJobPurpose;
+  /** The completion run the batch is made for: each job's hold is claimed against its budget (resolvePaidCallRun). */
+  run?: CompletionRunAttribution;
 };
 
 export type CreateImageJobsErrorCode =

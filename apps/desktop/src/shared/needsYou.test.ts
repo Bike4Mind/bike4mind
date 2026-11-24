@@ -4,6 +4,7 @@ import type { ChatMessage, ChatSessionStatus, ChatSessionSummary } from './chat'
 import {
   alertableSessions,
   enteredNeedsYou,
+  needsYouBadgeCount,
   needsYouBody,
   needsYouCount,
   needsYouTitle,
@@ -46,7 +47,7 @@ describe('needsYouCount', () => {
     expect(needsYouCount(new Map(), listed)).toBe(0);
   });
 
-  it('counts a worker task waiting on a decision, but not a queued or running one', () => {
+  it('counts task attention only while its sidebar status needs action', () => {
     const task = (state: object, id: string) =>
       ({ ...session(id, 'root'), workerTask: { state } }) as unknown as ChatSessionSummary;
     const sessions = [
@@ -56,7 +57,8 @@ describe('needsYouCount', () => {
       task({ status: 'queued' }, 'queued'),
       task({ status: 'running' }, 'running'),
     ];
-    expect(needsYouCount(statuses({}), sessions)).toBe(1);
+    expect(needsYouCount(statuses({}), sessions)).toBe(0);
+    expect(needsYouCount(statuses({ 'done-unaccepted': 'needs-action' }), sessions)).toBe(1);
   });
 
   it('skips plain sessions, archived ones, those under an archived agent, and unlisted ones', () => {
@@ -105,6 +107,21 @@ describe('needsYouCount', () => {
     expect(needsYouCount(statuses({ chat: 'needs-action' }), sessions, 'all')).toBe(1);
     expect(needsYouCount(statuses({ chat: 'needs-action' }), sessions, 'agents')).toBe(0);
     expect(needsYouCount(statuses({ chat: 'processing' }), sessions, 'all')).toBe(0);
+  });
+});
+
+describe('needsYouBadgeCount', () => {
+  it('counts a waiting plain session that the default notify scope leaves out', () => {
+    const sessions = [session('chat'), session('root'), session('agent', 'root')];
+    const waiting = statuses({ chat: 'needs-action', agent: 'needs-action' });
+    expect(needsYouCount(waiting, sessions)).toBe(1);
+    expect(needsYouBadgeCount(waiting, sessions)).toBe(2);
+  });
+
+  it('leaves archived and deleted sessions out', () => {
+    const sessions = [{ ...session('shelved'), archived: true }, session('live')];
+    const waiting = statuses({ shelved: 'needs-action', live: 'needs-action', gone: 'needs-action' });
+    expect(needsYouBadgeCount(waiting, sessions)).toBe(1);
   });
 });
 

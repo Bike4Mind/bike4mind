@@ -72,7 +72,7 @@ describe('NeedsYouMonitor with no window open', () => {
     expect(setBadge).toHaveBeenLastCalledWith(1);
   });
 
-  it('recounts the badge when a worker task finishes unaccepted, without a notice', async () => {
+  it('counts completed task attention only when the session status needs action', async () => {
     sessions = [
       session('root'),
       session('agent', 'root', {
@@ -82,8 +82,14 @@ describe('NeedsYouMonitor with no window open', () => {
     monitor.observe({ sessionId: 'agent', status: 'processing' });
     monitor.observe({ sessionId: 'agent', status: 'done' });
     await monitor.settled();
-    expect(setBadge).toHaveBeenLastCalledWith(1);
+    expect(setBadge).toHaveBeenLastCalledWith(0);
     expect(notices).toEqual([]);
+    monitor.observe({ sessionId: 'agent', status: 'needs-action', unreadReply: true });
+    await monitor.settled();
+    expect(setBadge).toHaveBeenLastCalledWith(1);
+    monitor.observe({ sessionId: 'agent', status: 'done' });
+    await monitor.settled();
+    expect(setBadge).toHaveBeenLastCalledWith(0);
   });
 
   it('announces once per entry, and again after the session left needs-action', async () => {
@@ -95,18 +101,27 @@ describe('NeedsYouMonitor with no window open', () => {
     expect(notices).toHaveLength(2);
   });
 
+  it('badges an unread finished reply without a notice, and still announces a request that lands on it', async () => {
+    monitor.observe({ sessionId: 'agent', status: 'needs-action', unreadReply: true });
+    await monitor.settled();
+    expect(notices).toEqual([]);
+    expect(setBadge).toHaveBeenLastCalledWith(1);
+    await enter('agent');
+    expect(notices).toHaveLength(1);
+  });
+
   it('names the parent by its title when the parent is the one waiting', async () => {
     await enter('root');
     expect(notices[0]).toMatchObject({ sessionId: 'root', rootId: 'root', title: 'Session root needs you' });
   });
 
-  it('stays quiet for plain, archived and deleted sessions, and leaves them out of the badge', async () => {
+  it('stays quiet for plain, archived and deleted sessions; only the plain one counts on the badge', async () => {
     sessions = [...sessions, session('shelved', undefined, { archived: true }), session('under', 'shelved')];
     await enter('plain');
     await enter('under');
     await enter('gone');
     expect(notices).toEqual([]);
-    expect(setBadge).toHaveBeenLastCalledWith(0);
+    expect(setBadge).toHaveBeenLastCalledWith(1);
   });
 
   it('with the all scope, announces and counts a plain session, but not an archived one', async () => {

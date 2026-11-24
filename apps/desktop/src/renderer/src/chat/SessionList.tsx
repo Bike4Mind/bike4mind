@@ -43,6 +43,7 @@ import { useHasComposerDraft } from './composerDrafts';
 import { useLocalHistory } from './localHistory';
 import { refLabel } from '@shared/githubRefs';
 import { findSessionsByRef } from './sessionRefSearch';
+import { prAttentionRank } from '@shared/prAttention';
 import type { PrSummary } from '@shared/pullRequest';
 import { pendingDecisionOf } from '@shared/orchestration';
 import { sectionOf, type SidebarSection, type SidebarSectionsState } from '@shared/sidebarSections';
@@ -57,6 +58,7 @@ import {
 } from './grouping';
 import { ImportedBadge } from './ImportedBadge';
 import { useImportedInline } from './importedInline';
+import { usePrAttentionSort } from './prAttentionSort';
 import { keepMenuOpen } from './keepMenuOpen';
 import { MessageSessionDialog } from './MessageSessionDialog';
 import {
@@ -77,6 +79,7 @@ import { ResizeHandle } from './ResizeHandle';
 import { SectionNameDialog, type SectionNameRequest } from './SectionNameDialog';
 import { thinScrollbarSx } from './layout';
 import { SessionBadge } from './SessionBadge';
+import { WORKING_COLOR_VAR } from './sessionStatus';
 import { PREPARING_WORKTREE } from './chipState';
 import {
   clampSidebarWidth,
@@ -213,11 +216,7 @@ function railSx(depth: number, first: boolean, last: boolean, guides: string, he
   // The elbow into a branch holding working or waiting sessions lights up in the fold pill's colours,
   // so a deep tree shows where the activity is, even folded, and every ancestor on the path glows.
   const elbowColor =
-    heat === 'needs-action'
-      ? 'var(--joy-palette-warning-400)'
-      : heat === 'processing'
-        ? 'var(--joy-palette-primary-400)'
-        : RAIL_COLOR;
+    heat === 'needs-action' ? 'var(--joy-palette-warning-400)' : heat === 'processing' ? WORKING_COLOR_VAR : RAIL_COLOR;
   return {
     marginInlineStart: `${indent}px`,
     // Above the button, so a selected or hovered row's fill does not paint over its own elbow.
@@ -568,7 +567,6 @@ const SessionRow = memo(function SessionRow({
       : status === 'processing' || subActivity === 'processing'
         ? 'processing'
         : undefined;
-  const needsAction = status === 'needs-action';
   // Main pushes the project once the worktree exists, which is what ends this.
   const preparing = status === 'processing' && awaitsWorktree(session.project);
   const { ref: titleRef, clipped } = useTitleClipped(session.title, editing);
@@ -761,14 +759,18 @@ const SessionRow = memo(function SessionRow({
           // Paired with the opacity the button fades in on, so the title's edge travels with
           // the button instead of snapping the moment the pointer lands.
           transition: 'padding-inline-end 120ms',
-          ...(needsAction && { boxShadow: 'inset 2px 0 0 var(--joy-palette-warning-400)' }),
         }}
         data-testid="chat-session-item"
         data-session-status={status}
         data-session-pr-state={pr?.state}
       >
         <Stack direction="row" spacing={1.25} sx={{ alignItems: 'center', minWidth: 0, width: '100%' }}>
-          <SessionBadge status={status} pr={pr} deciding={pendingDecisionOf(session.workerTask) !== undefined} />
+          <SessionBadge
+            status={status}
+            pr={pr}
+            outcome={session.lastOutcome}
+            deciding={pendingDecisionOf(session.workerTask) !== undefined}
+          />
           {editing ? (
             <RenameInput title={session.title} onDone={onRenameDone} />
           ) : (
@@ -1213,6 +1215,9 @@ export function SessionList({
   const [importedOpen, setImportedOpen] = useState(false);
   const [importedInline] = useImportedInline();
   const [nested] = useNestedSessions();
+  const sortByAttention = usePrAttentionSort(state => state.sortByAttention);
+  // Only a dependency while the sort is on, so PR updates do not regroup the default sidebar.
+  const rankedPrs = sortByAttention ? prSummaries : null;
   const foldedIds = useFoldedParents();
 
   // `section` is set when the right-click landed in a user section, which then offers a new session in
@@ -1230,10 +1235,13 @@ export function SessionList({
   const searching = query.trim() !== '';
   const sections = useMemo(() => {
     // A search lists matches flat: a tree would hide a match inside a parent that did not match.
-    const grouped = groupSessions(matching, mode, userSections, importedInline, nested && !searching);
+    const attentionRank = rankedPrs
+      ? (session: ChatSessionSummary) => prAttentionRank(rankedPrs.get(session.id))
+      : undefined;
+    const grouped = groupSessions(matching, mode, userSections, importedInline, nested && !searching, attentionRank);
     // An empty section under a search is only noise; with no query it stays so it can be found.
     return searching ? { ...grouped, custom: grouped.custom.filter(group => group.sessions.length > 0) } : grouped;
-  }, [matching, mode, userSections, searching, importedInline, nested]);
+  }, [matching, mode, userSections, searching, importedInline, nested, rankedPrs]);
 
   // Strings, not the hint objects, reach the memoised rows, so an unrelated session update leaves them be.
   // No hints with nesting off: the setting brings back the plain flat list.
@@ -1370,7 +1378,18 @@ export function SessionList({
    */
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      if (!(event.metaKey || event.ctrlKey) || event.altKey || event.shiftKey) return;
+      if (!(event.metaKey || event.ctrlKey) || event.altKey) return;
+
+      // Mod+Shift+F as well as Mod+K: it is where find-across-everything sits in an editor, and
+      // Mod+F alone finds in the open conversation. The orchestrator's focus toggle takes the
+      // chord first while that view is up (see ViewSwitcher), and marks it handled.
+      if (event.shiftKey) {
+        if (event.code !== 'KeyF' || event.defaultPrevented) return;
+        event.preventDefault();
+        if (target.current.collapsed) target.current.onToggleCollapsed();
+        setFocusRequest(request => request + 1);
+        return;
+      }
 
       if (event.key === 'b' || event.key === 'B') {
         event.preventDefault();

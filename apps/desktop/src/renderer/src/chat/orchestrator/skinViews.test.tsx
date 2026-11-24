@@ -70,6 +70,9 @@ const SKINNED: Record<OrchestratorViewId, () => void> = {
   table: () => {
     expect(styleOf('orchestrator-state-chip-working').backgroundColor).toContain('--b4m-skin-state-working-soft');
   },
+  plan: () => {
+    expect(el('plan-view-root')).toBeDefined();
+  },
   'tile-wall': () => {
     expect(styleOf('orchestrator-tile-w').backgroundColor).toContain('--b4m-skin-card');
     const dot = el('orchestrator-tile-w').querySelector<HTMLElement>('[data-testid="orchestrator-tile-dot"]');

@@ -10,7 +10,7 @@ on:
   push:
     branches: [main]
   pull_request:
-    types: [opened, synchronize, reopened, ready_for_review, labeled, unlabeled]
+    types: [opened, synchronize, reopened, ready_for_review]
     # NOTE: no workflow-level paths-ignore. The `changes` gate below evaluates
     # the per-PR (merge-base) diff and skips the build/test legs on non-deployable
     # changes, while still reporting the required CI Complete/Run Tests checks (a
@@ -24,11 +24,14 @@ env:
 # concurrency (jobs were waiting ~15 min for a runner while executing in ~3 min).
 # PR-only: pushes to main are NEVER cancelled.
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}-${{ (github.event.action == 'labeled' || github.event.action == 'unlabeled') && github.event.label.name != 'ci:full' && github.run_id || 'tests' }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' && (github.event.action != 'labeled' && github.event.action != 'unlabeled' || github.event.label.name == 'ci:full') }}
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
-# Ignored label runs use separate check names so their skipped jobs cannot replace
-# results from real validation. Keep canonical names for source and ci:full events.
+# No labeled/unlabeled trigger: a label-event run on the same head SHA becomes the
+# latest CI run, and GitHub then reads the required Run Tests / CI Complete checks
+# from it alone. A skipped or renamed job there leaves them "Expected" and blocks
+# the merge. ci:full is read from the PR's labels, so it takes effect on the next
+# push (or a re-run of the latest CI run).
 jobs:
   # Changes gate: evaluate the changeset that fired this run (whole-PR
   # merge-base diff on pull_request, push range on push) and emit three
@@ -47,8 +50,6 @@ jobs:
   # re-runs the whole workflow on the real signals. The secret and leak-shape scans
   # are ungated and still run on drafts.
   changes:
-    name: ${{ (github.event.action == 'labeled' || github.event.action == 'unlabeled') && github.event.label.name != 'ci:full' && 'Ignored label / ' || '' }}changes
-    if: github.event.action != 'labeled' && github.event.action != 'unlabeled' || github.event.label.name == 'ci:full'
     # Root of the whole DAG.
     runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
     permissions:
@@ -89,7 +90,7 @@ jobs:
     needs: changes
     if: needs.changes.outputs.deployable == 'true'
     runs-on: ${{ vars.RUNNER_LABEL_MEDIUM || 'ubuntu-latest-m' }}
-    name: ${{ (github.event.action == 'labeled' || github.event.action == 'unlabeled') && github.event.label.name != 'ci:full' && 'Ignored label / ' || '' }}Core Build
+    name: Core Build
     timeout-minutes: 15
     permissions:
       contents: read
@@ -121,7 +122,7 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
 
       - name: Setup pnpm
-        uses: pnpm/action-setup@v5
+        uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v5
 
       - name: Cache pnpm dependencies
         uses: actions/cache@v5
@@ -179,7 +180,7 @@ jobs:
     needs: changes
     if: needs.changes.outputs.deployable == 'true'
     runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
-    name: ${{ (github.event.action == 'labeled' || github.event.action == 'unlabeled') && github.event.label.name != 'ci:full' && 'Ignored label / ' || '' }}Repo Guards
+    name: Repo Guards
     timeout-minutes: 10
     permissions:
       contents: read
@@ -302,7 +303,7 @@ jobs:
   # paths a pasted credential lands in. checkSecretScanJobWired.test.ts pins this.
   secret-scan:
     runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
-    name: ${{ (github.event.action == 'labeled' || github.event.action == 'unlabeled') && github.event.label.name != 'ci:full' && 'Ignored label / ' || '' }}Secret Scan
+    name: Secret Scan
     timeout-minutes: 10
     permissions:
       contents: read
@@ -359,7 +360,7 @@ jobs:
   # is skipped and the Restricted Terms workflow remains the authority for it.
   leak-shapes:
     runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
-    name: ${{ (github.event.action == 'labeled' || github.event.action == 'unlabeled') && github.event.label.name != 'ci:full' && 'Ignored label / ' || '' }}Leak Shapes
+    name: Leak Shapes
     timeout-minutes: 10
     permissions:
       contents: read
@@ -388,7 +389,7 @@ jobs:
     # TypeScript program, so ESLint needs 3-4 GB of heap - past Node's RAM-derived default on a
     # 2-core runner. The heap is pinned in the root lint:* scripts, not inherited from the runner.
     runs-on: ${{ vars.RUNNER_LABEL_MEDIUM || 'ubuntu-latest-m' }}
-    name: ${{ (github.event.action == 'labeled' || github.event.action == 'unlabeled') && github.event.label.name != 'ci:full' && 'Ignored label / ' || '' }}Lint
+    name: Lint
     timeout-minutes: 15
     permissions:
       contents: read
@@ -407,7 +408,7 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
 
       - name: Setup pnpm
-        uses: pnpm/action-setup@v5
+        uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v5
 
       - name: Cache pnpm dependencies
         uses: actions/cache@v5
@@ -460,7 +461,7 @@ jobs:
     needs: changes
     if: needs.changes.outputs.deployable == 'true'
     runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
-    name: ${{ (github.event.action == 'labeled' || github.event.action == 'unlabeled') && github.event.label.name != 'ci:full' && 'Ignored label / ' || '' }}OpenAPI Spec
+    name: OpenAPI Spec
     timeout-minutes: 10
     permissions:
       contents: read
@@ -479,7 +480,7 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
 
       - name: Setup pnpm
-        uses: pnpm/action-setup@v5
+        uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v5
 
       - name: Cache pnpm dependencies
         uses: actions/cache@v5
@@ -563,7 +564,7 @@ jobs:
     # leg here marked `tier: light` (none today: the integration lanes ride medium legs).
     # Size full-pool worker budgets for 4 cores.
     runs-on: ${{ matrix.shard.tier == 'light' && (vars.RUNNER_LABEL || 'ubuntu-latest-m') || (vars.RUNNER_LABEL_MEDIUM || 'ubuntu-latest-m') }}
-    name: ${{ (github.event.action == 'labeled' || github.event.action == 'unlabeled') && github.event.label.name != 'ci:full' && 'Ignored label / ' || '' }}Run Tests (${{ matrix.shard.name }})
+    name: Run Tests (${{ matrix.shard.name }})
     # Hard ceiling, not a budget: it costs nothing when a shard finishes early, and its only
     # job is to kill a genuine hang. It was 20, which the client shard's own runtime drifted
     # into - the job was cancelled during cleanup AFTER every test had passed, so a green
@@ -705,7 +706,7 @@ jobs:
 
       - name: Setup pnpm
         if: steps.select.outputs.setup == 'true'
-        uses: pnpm/action-setup@v5
+        uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v5
 
       - name: Cache pnpm dependencies
         if: steps.select.outputs.setup == 'true'
@@ -965,7 +966,7 @@ jobs:
       # the naming.
       - name: Run repo-scan tests
         if: ${{ !cancelled() && matrix.shard.name == 'misc' && steps.codegen.outcome == 'success' }}
-        run: pnpm --recursive --if-present run test:repo
+        run: pnpm --recursive --if-present --workspace-concurrency=1 run test:repo
         env:
           CI: true
           VITEST_MAX_WORKERS: ${{ matrix.shard.workers }}
@@ -1035,7 +1036,7 @@ jobs:
   # names ("Run Tests (client 1/3)", …), so this job re-exposes the exact required
   # context and passes only when every shard succeeded.
   test:
-    name: ${{ (github.event.action == 'labeled' || github.event.action == 'unlabeled') && github.event.label.name != 'ci:full' && 'Ignored label / ' || '' }}Run Tests
+    name: Run Tests
     needs: [changes, test-shards]
     # Run whenever the gate said deployable (!cancelled() within that, so a failed
     # shard is still caught by the assertion below). On a non-deployable run the
@@ -1070,7 +1071,7 @@ jobs:
   # can't slip through by silently skipping. This is the gate that protects the
   # packages/cli/src/index.tsx decomposition (#8554).
   cli-e2e:
-    name: ${{ (github.event.action == 'labeled' || github.event.action == 'unlabeled') && github.event.label.name != 'ci:full' && 'Ignored label / ' || '' }}CLI e2e harness
+    name: CLI e2e harness
     needs: core-build
     # Standard runner: builds the CLI and runs the bundle-baseline harness — a
     # light, I/O-bound leg. Off the capped ubuntu-latest-m pool to free a slot.
@@ -1092,7 +1093,7 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
 
       - name: Setup pnpm
-        uses: pnpm/action-setup@v5
+        uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v5
 
       - name: Cache pnpm dependencies
         uses: actions/cache@v5
@@ -1177,7 +1178,7 @@ jobs:
   # the help guards could go missing on a green docs PR. The fallback build covers that case.
   # Keep the block scalar: a bare `if: !cancelled() && ...` is a YAML tag indicator, not text.
   help-docs:
-    name: ${{ (github.event.action == 'labeled' || github.event.action == 'unlabeled') && github.event.label.name != 'ci:full' && 'Ignored label / ' || '' }}Help Docs Guards
+    name: Help Docs Guards
     needs: [changes, core-build]
     if: |
       !cancelled() &&
@@ -1201,7 +1202,7 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
 
       - name: Setup pnpm
-        uses: pnpm/action-setup@v5
+        uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v5
 
       - name: Cache pnpm dependencies
         uses: actions/cache@v5
@@ -1254,7 +1255,7 @@ jobs:
   # Type-checks the packed @bike4mind/* declarations as a consumer would (see
   # scripts/check-published-dts.mjs). Needs core-build for the dist/ it packs.
   published-dts:
-    name: ${{ (github.event.action == 'labeled' || github.event.action == 'unlabeled') && github.event.label.name != 'ci:full' && 'Ignored label / ' || '' }}Published Declarations
+    name: Published Declarations
     needs: [changes, core-build]
     if: needs.changes.outputs.published-changed == 'true'
     runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
@@ -1276,7 +1277,7 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
 
       - name: Setup pnpm
-        uses: pnpm/action-setup@v5
+        uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v5
 
       - name: Cache pnpm dependencies
         uses: actions/cache@v5
@@ -1319,7 +1320,7 @@ jobs:
         run: node scripts/check-published-dts.mjs
 
   verify-docs-build:
-    name: ${{ (github.event.action == 'labeled' || github.event.action == 'unlabeled') && github.event.label.name != 'ci:full' && 'Ignored label / ' || '' }}Verify Docs Build
+    name: Verify Docs Build
     needs: changes
     if: needs.changes.outputs.docs-changed == 'true'
     uses: ./.github/workflows/_verify-docs-build.yml
@@ -1332,7 +1333,7 @@ jobs:
   # required status that only some PRs ever receive would block every other PR. Push runs skip it
   # (the PR head was already gated). Fails closed if the status never arrives.
   docs-scan-gate:
-    name: ${{ (github.event.action == 'labeled' || github.event.action == 'unlabeled') && github.event.label.name != 'ci:full' && 'Ignored label / ' || '' }}Docs Sensitive Scan
+    name: Docs Sensitive Scan
     needs: changes
     if: needs.changes.outputs.docs-changed == 'true' && github.event_name == 'pull_request'
     runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
@@ -1396,7 +1397,7 @@ jobs:
   # job hangs every PR.
   # =====================================================
   ci-complete:
-    name: ${{ (github.event.action == 'labeled' || github.event.action == 'unlabeled') && github.event.label.name != 'ci:full' && 'Ignored label / ' || '' }}CI Complete
+    name: CI Complete
     needs:
       - changes
       - core-build

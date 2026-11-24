@@ -20,6 +20,7 @@ const PURPOSE_LABELS: Record<Purpose, string> = {
   compaction: 'Summaries',
   suggestion: 'Suggestions',
   review: 'Reviews',
+  tool: 'Paid tools',
 };
 
 const credits = (value: number) => formatAgentCost(undefined, value);

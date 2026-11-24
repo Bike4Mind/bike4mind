@@ -40,9 +40,14 @@
     <string name="chat_send">Send</string>
     <string name="chat_refused">The message was refused (%1$s)</string>
     <string name="chat_refused_unknown">unknown</string>
+    <string name="chat_send_failed">Not sent. Check your connection and try again.</string>
+    <string name="chat_send_failed_reason">Not sent. %1$s</string>
     <string name="chat_reply_failed">The reply failed.</string>
     <string name="chat_reply_failed_code">The reply failed (%1$s).</string>
     <string name="chat_reply_pending" translatable="false">...</string>
+    <string name="chat_agent_toggle">Agent</string>
+    <string name="chat_agent_placeholder">Describe a task for the agent</string>
+    <string name="chat_agent_no_attachments">An agent run cannot take attachments. Remove them, or turn off Agent.</string>
 
     <!-- Chat approval card -->
     <string name="approval_approve">Approve</string>
@@ -263,4 +268,9 @@
 
     <!-- Notifications -->
     <string name="notification_channel_default">@string/app_name</string>
+    <string name="notification_channel_agent_runs">Running agents</string>
+    <string name="agent_run_working">Working</string>
+    <string name="agent_run_iteration">Step %1$d</string>
+    <string name="agent_run_chip">Agent</string>
+    <string name="agent_run_needs_you">Needs you</string>
 </resources>

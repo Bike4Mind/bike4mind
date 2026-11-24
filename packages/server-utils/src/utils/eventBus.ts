@@ -225,13 +225,15 @@ export const StripeEvents = {
   ),
 };
 
-/** Published by POST /api/v1/briefs; consumed by apps/workers/src/events/briefCompose.ts. */
+/** Published by POST /api/v1/briefs and the schedule reconciler; consumed by apps/workers/src/events/briefCompose.ts. */
 export const BriefEvents = {
   Compose: event(
     'brief.compose',
     z.object({
       briefId: z.string(),
       userId: z.string(),
+      /** Set by the schedule reconciler: an empty window or a refused gate is discarded instead of delivered. */
+      scheduled: z.boolean().optional(),
     })
   ),
 };
@@ -548,6 +550,22 @@ export const TelemetryEvents = {
       telemetry: ContextTelemetrySchema,
       alertConfig: ContextTelemetryAlertsSchema,
       requestId: z.string().optional(), // Quest ID for correlation
+    })
+  ),
+};
+
+export const ModerationEvents = {
+  // A user entering suspend_pending, or any severe-category hit. Published fire-and-forget from the
+  // chat path; apps/workers/src/events/moderationEscalationAlert.ts posts it to the abuse alarm channel.
+  // Mirrors ModerationEscalationAlert in b4m-core/services/src/userService/moderationPolicy.ts.
+  Escalation: event(
+    'moderation.escalation',
+    z.object({
+      userId: z.string(),
+      reasons: z.array(z.enum(['suspend_pending', 'severe_category'])).min(1),
+      categories: z.array(z.string()),
+      source: z.enum(['openai', 'bedrock', 'provider']),
+      hitsInWindow: z.number().int().min(0),
     })
   ),
 };

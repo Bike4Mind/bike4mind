@@ -319,6 +319,147 @@ describe('the composer command menu', () => {
   });
 });
 
+describe('IME composition', () => {
+  function pressComposing(key: string): void {
+    act(() => {
+      input().dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true, isComposing: true }));
+    });
+  }
+
+  // Enter while an IME is composing confirms the candidate word; it must not send the draft.
+  it('does not send on an Enter that confirms a composition', () => {
+    const send = vi.fn();
+    mount({ onSend: send });
+    type('konnichiwa');
+    pressComposing('Enter');
+
+    expect(send).not.toHaveBeenCalled();
+    expect(input().value).toBe('konnichiwa');
+
+    press('Enter');
+    expect(send).toHaveBeenCalledWith('konnichiwa');
+  });
+
+  it('does not stop a live turn on an Escape that cancels a composition', () => {
+    const stop = vi.fn();
+    mount({ onStop: stop, streaming: true });
+    type('kanji');
+    pressComposing('Escape');
+
+    expect(stop).not.toHaveBeenCalled();
+  });
+});
+
+describe('markdown code in the composer', () => {
+  function pressWith(key: string, init: KeyboardEventInit): void {
+    act(() => {
+      input().dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true, ...init }));
+    });
+  }
+
+  it('breaks the line instead of sending inside an open fenced block', () => {
+    const send = vi.fn();
+    mount({ onSend: send });
+    type('```ts\nconst a = 1');
+    press('Enter');
+
+    expect(send).not.toHaveBeenCalled();
+    expect(input().value).toBe('```ts\nconst a = 1\n');
+  });
+
+  it('closes a freshly opened fence on Enter', () => {
+    const send = vi.fn();
+    mount({ onSend: send });
+    type('```');
+    press('Enter');
+
+    expect(send).not.toHaveBeenCalled();
+    expect(input().value).toBe('```\n\n```');
+  });
+
+  it('sends the raw markdown on Cmd+Enter from inside a block', () => {
+    const send = vi.fn();
+    mount({ onSend: send });
+    type('```\nfoo');
+    pressWith('Enter', { metaKey: true });
+
+    expect(send).toHaveBeenCalledWith('```\nfoo');
+  });
+
+  it('still sends on Enter once the block is closed', () => {
+    const send = vi.fn();
+    mount({ onSend: send });
+    type('```\nfoo\n```');
+    press('Enter');
+
+    expect(send).toHaveBeenCalledWith('```\nfoo\n```');
+  });
+
+  it('shows the way-out hint only while the caret is in a block', () => {
+    mount();
+    type('plain');
+    expect(host?.querySelector('[data-testid="composer-code-hint"]')).toBeNull();
+    type('```\nfoo');
+    expect(host?.querySelector('[data-testid="composer-code-hint"]')).not.toBeNull();
+  });
+
+  it('paints a code background behind an inline span', () => {
+    mount();
+    type('run `ls` now');
+    expect(host?.querySelector('[data-code-kind="inline"]')?.textContent).toBe('`ls`');
+  });
+
+  it('indents on Tab inside a block and outdents on Shift+Tab', () => {
+    mount();
+    type('```\nfoo');
+    pressWith('Tab', {});
+    expect(input().value).toBe('```\nfoo  ');
+    type('```\n  foo');
+    pressWith('Tab', { shiftKey: true });
+    expect(input().value).toBe('```\nfoo');
+  });
+
+  it('leaves the block on Escape then Shift+Tab, even with the Shift keydown between', () => {
+    mount();
+    type('```\n  foo');
+    pressWith('Escape', {});
+    pressWith('Shift', { shiftKey: true });
+    const tab = new KeyboardEvent('keydown', { key: 'Tab', shiftKey: true, bubbles: true, cancelable: true });
+    act(() => {
+      input().dispatchEvent(tab);
+    });
+
+    expect(tab.defaultPrevented).toBe(false);
+    expect(input().value).toBe('```\n  foo');
+  });
+
+  it('does not swallow Tab outside a block', () => {
+    mount();
+    type('plain');
+    const tab = new KeyboardEvent('keydown', { key: 'Tab', bubbles: true, cancelable: true });
+    act(() => {
+      input().dispatchEvent(tab);
+    });
+
+    expect(tab.defaultPrevented).toBe(false);
+  });
+
+  it('does not send on Alt+Enter inside an open block', () => {
+    const send = vi.fn();
+    mount({ onSend: send });
+    type('```\nfoo');
+    pressWith('Enter', { altKey: true });
+
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it('keeps the command menu shut for a slash inside code', () => {
+    mount({ onRunCommand: () => {} });
+    type('```\n/');
+    expect(rows()).toHaveLength(0);
+  });
+});
+
 describe('skills mid-sentence', () => {
   const skills = {
     skills: [

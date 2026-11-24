@@ -42,6 +42,7 @@ import {
 } from '../constants/knowledgeBaseSearch';
 import { BULK_CHANGE_SHARE_PCT_DEFAULT } from '../constants/lakeConvergence';
 import { THINKING_VISIBILITY_LEVELS } from '../utils/streamVisibility';
+import { parseReferralMilestones } from '../utils/referralMilestones';
 import {
   ADMIN_AUDIT_DEFAULT_CRITICAL_GRANT_CREDITS,
   ADMIN_AUDIT_DEFAULT_DAILY_GRANT_CREDITS,
@@ -62,6 +63,7 @@ import {
   VoyageAIEmbeddingModel,
 } from './embedding';
 import { SreAgentConfigSchema } from '../types/entities/SreTypes';
+import { DEFAULT_FEATURE_SPIKE_MULTIPLE } from '../types/entities/SpendExplorerTypes';
 import {
   hasNestedSecretValue,
   isValidNestedSecretGroups,
@@ -394,8 +396,10 @@ export const SettingKeySchema = z.enum([
   'ReferralFirstAnswerCredits',
   'ReferralFirstPaymentCredits',
   'ReferralSecondPaymentCredits',
+  'ReferralMilestones',
   'ReferralHoldDays',
   'ReferralInvitesPerUser',
+  'ReferralLinkSignupsPerMonth',
   'ReferralAlertRewardsPerDay',
   'BedrockNewsPuzzleCredits5',
   'BedrockNewsPuzzleCredits6',
@@ -561,6 +565,7 @@ export const SettingKeySchema = z.enum([
   'spendMonitorSlackEnabled',
   'spendMonitorPlatformSpikeRatio',
   'spendMonitorPlatformCriticalRatio',
+  'spendExplorerFeatureSpikeMultiple',
   'spendMonitorPlatformSpikeFloorCredits',
   'spendMonitorPlatformCostFloorUsd',
   'spendMonitorAccountSpikeRatio',
@@ -721,6 +726,9 @@ export const SettingKeySchema = z.enum([
   'elevenLabsServerApiKey',
   'elevenLabsMusicConcurrencyLimit',
   'elevenLabsSoundConcurrencyLimit',
+  'elevenLabsPlanCycleStartDay',
+  'elevenLabsPlanMonthlyCredits',
+  'elevenLabsPlanAgentMinutes',
   'voiceSessionAiVoice',
   'voiceSessionTranscriptionModel',
   'voiceSessionVadType',
@@ -937,6 +945,12 @@ export const OrchestrationDefaultsSchema = z.object({
     'excel_generation',
     // Only offered when the run gets a video config, which enforces agentVideoClipsPerRun.
     'video_generation',
+    // Only offered when the run gets a production config: the Productions flag and its audience rule must open to
+    // the run's user (never an API-key run). Each writes only a composition the user owns; every take is a capped job.
+    'production_storyboard',
+    'production_generate_shot',
+    'production_add_audio',
+    'production_assemble',
     // Inline visualization artifacts: these emit an <artifact> block in the
     // tool result and write nothing - no storage, no user-data mutation - so
     // they are strictly safer than the storage-backed tools above. Without
@@ -2648,6 +2662,9 @@ export const API_SERVICE_GROUPS = {
       { key: 'elevenLabsServerApiKey', order: 7 },
       { key: 'elevenLabsMusicConcurrencyLimit', order: 8 },
       { key: 'elevenLabsSoundConcurrencyLimit', order: 9 },
+      { key: 'elevenLabsPlanCycleStartDay', order: 10 },
+      { key: 'elevenLabsPlanMonthlyCredits', order: 11 },
+      { key: 'elevenLabsPlanAgentMinutes', order: 12 },
     ],
   },
   XAI: {
@@ -2902,6 +2919,7 @@ export const API_SERVICE_GROUPS = {
       { key: 'spendMonitorSlackEnabled', order: 19.42 },
       { key: 'spendMonitorPlatformSpikeRatio', order: 19.43 },
       { key: 'spendMonitorPlatformCriticalRatio', order: 19.44 },
+      { key: 'spendExplorerFeatureSpikeMultiple', order: 19.445 },
       { key: 'spendMonitorPlatformSpikeFloorCredits', order: 19.45 },
       { key: 'spendMonitorPlatformCostFloorUsd', order: 19.46 },
       { key: 'spendMonitorAccountSpikeRatio', order: 19.47 },
@@ -4656,6 +4674,20 @@ export const settingsMap = {
       "Credits the inviter earns on the invited friend's second full-price Professional payment, usable after the hold. 0 turns this reward off. Payments made while both payment rewards are 0 are not counted.",
     category: 'Referrals',
   }),
+  ReferralMilestones: {
+    ...makeStringSetting({
+      key: 'ReferralMilestones',
+      name: 'Referral Reward: Milestones',
+      defaultValue: '',
+      description:
+        'Credits an inviter earns once a number of the friends they referred are active (a verified email and a first answer), as friends:credits pairs separated by commas, e.g. 5:500, 10:1500. Each milestone pays once. An inviter already past a milestone is paid it when their next friend becomes active. Empty turns milestones off.',
+      category: 'Referrals',
+    }),
+    schema: z.string().refine(value => parseReferralMilestones(value) !== null, {
+      message:
+        'Use friends:credits pairs separated by commas, e.g. 5:500, 10:1500. At most 10, each friend count once, 1 to 10,000 friends and 1 to 100,000,000 credits.',
+    }),
+  },
   ReferralHoldDays: makeNumberSetting({
     key: 'ReferralHoldDays',
     name: 'Referral Reward Hold (days)',
@@ -4676,6 +4708,17 @@ export const settingsMap = {
     max: 1000,
     description:
       'Invites a user starts with when they register by email code. Existing users keep theirs; OAuth sign-ups start with 0 and admin-created accounts with 3.',
+    category: 'Referrals',
+  }),
+  ReferralLinkSignupsPerMonth: makeNumberSetting({
+    key: 'ReferralLinkSignupsPerMonth',
+    name: 'Referral Link Signups Per Month',
+    defaultValue: 10,
+    int: true,
+    min: 0,
+    max: 1000,
+    description:
+      "Most signups a user's share link can be credited with in any 30 days. Signups past it still create the account but credit nobody, so they earn no referral reward. 0 stops share links from crediting anyone.",
     category: 'Referrals',
   }),
   ReferralAlertRewardsPerDay: makeNumberSetting({
@@ -6070,6 +6113,17 @@ export const settingsMap = {
     min: 1,
     description:
       'Ratio. Escalates a platform spike to critical when platform-wide credit spend in the last 15-minute window is at least this multiple of the baseline. Minimum 1.',
+    group: API_SERVICE_GROUPS.CREDITS.id,
+    category: 'SecOps',
+  }),
+  spendExplorerFeatureSpikeMultiple: makeNumberSetting({
+    key: 'spendExplorerFeatureSpikeMultiple',
+    name: 'Spend Explorer: Feature Spike Multiple',
+    defaultValue: DEFAULT_FEATURE_SPIKE_MULTIPLE,
+    int: false,
+    min: 1,
+    description:
+      'Ratio. The Spend explorer flags a feature, or a user of a feature, as a spike when its cost on the last complete UTC day of the range is above this multiple of its average daily cost over the 7 days before. Display only; nothing alerts on it. Changes show within 5 minutes (the explorer caches its results). Minimum 1.',
     group: API_SERVICE_GROUPS.CREDITS.id,
     category: 'SecOps',
   }),
@@ -8150,6 +8204,45 @@ export const settingsMap = {
     category: 'AI',
     group: API_SERVICE_GROUPS.VOICE_SESSION.id,
     order: 13,
+  }),
+  // Plan allowance and billing cycle for the ElevenLabs usage admin view (api/admin/elevenlabs-usage).
+  // 0 means "not configured": the view shows usage without a percentage of plan.
+  elevenLabsPlanCycleStartDay: makeNumberSetting({
+    key: 'elevenLabsPlanCycleStartDay',
+    name: 'ElevenLabs Billing Cycle Start Day',
+    defaultValue: 1,
+    min: 1,
+    max: 31,
+    int: true,
+    description:
+      'Day of the month (UTC) the ElevenLabs subscription renews and its credit quota resets. In shorter months a later day falls on the last day of the month. Used by the ElevenLabs usage view under Credits.',
+    category: 'AI',
+    group: API_SERVICE_GROUPS.VOICE_SESSION.id,
+    order: 14,
+  }),
+  elevenLabsPlanMonthlyCredits: makeNumberSetting({
+    key: 'elevenLabsPlanMonthlyCredits',
+    name: 'ElevenLabs Plan Monthly Credits',
+    defaultValue: 0,
+    min: 0,
+    int: true,
+    description:
+      'Credits the ElevenLabs plan includes per billing cycle (text to speech, sound effects and music draw from this pool). 0 leaves the allowance unset. Used by the ElevenLabs usage view under Credits.',
+    category: 'AI',
+    group: API_SERVICE_GROUPS.VOICE_SESSION.id,
+    order: 15,
+  }),
+  elevenLabsPlanAgentMinutes: makeNumberSetting({
+    key: 'elevenLabsPlanAgentMinutes',
+    name: 'ElevenLabs Plan Agent Minutes',
+    defaultValue: 0,
+    min: 0,
+    int: true,
+    description:
+      'Conversational agent call minutes the ElevenLabs plan includes per billing cycle (agents are billed by minute, not from the credit pool). 0 leaves the allowance unset. Used by the ElevenLabs usage view under Credits.',
+    category: 'AI',
+    group: API_SERVICE_GROUPS.VOICE_SESSION.id,
+    order: 16,
   }),
   voiceSessionAiVoice: makeStringSetting({
     key: 'voiceSessionAiVoice',

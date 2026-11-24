@@ -13,7 +13,7 @@ extension QuestActivityContentState {
   public static let previewRunningNoProgress = QuestActivityContentState(
     phase: .running, stageLabel: "Reading the quarterly report")
   public static let previewApproval = QuestActivityContentState(
-    phase: .approvalNeeded, stageLabel: QuestActivityMapping.approvalLabel)
+    phase: .approvalNeeded, stageLabel: QuestActivityMapping.approvalLabel, pendingActionTs: 1_700_000_000_000)
   public static let previewPaused = QuestActivityContentState(
     phase: .paused, stageLabel: QuestActivityMapping.pausedLabel)
   public static let previewCompleted = QuestActivityContentState(phase: .completed)

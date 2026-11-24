@@ -389,6 +389,33 @@ describe('ChatService queued messages', () => {
     ]);
   });
 
+  it('stores the structured report on the message so the thread can draw a card', async () => {
+    const { id } = await service.createSession();
+    const structured = {
+      sessionId: 'child-1',
+      title: 'Tidy imports',
+      outcome: 'finished' as const,
+      branch: 'agent/tidy-imports',
+      headSha: 'abc1234',
+      reply: 'Done: removed three unused imports.',
+    };
+    const internals = service as unknown as {
+      deliverChildReport(
+        sessionId: string,
+        report: { content: string; display: string; structured?: typeof structured }
+      ): Promise<void>;
+    };
+    await internals.deliverChildReport(id, {
+      content: 'a spawned session finished',
+      display: 'The session "Tidy imports" has finished.',
+      structured,
+    });
+
+    const report = (await service.getSession(id))?.messages.at(-1);
+    expect(report?.system).toBe(true);
+    expect(report?.childReport).toEqual(structured);
+  });
+
   /**
    * "Send now": the explicit exception to the rule the rest of this file pins down.
    *

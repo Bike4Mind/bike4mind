@@ -46,6 +46,7 @@ const cases: AdminPermissionCase[] = [
   { file: '../embedding-limits', method: 'GET', permission: 'settings:manage', allowedMethods: ['GET'] },
   { file: '../system-health', method: 'GET', permission: 'settings:manage', allowedMethods: ['GET'] },
   { file: '../liveops-triage-env', method: 'GET', permission: 'settings:manage', allowedMethods: ['GET'] },
+  { file: '../deployment-info', method: 'GET', permission: 'settings:manage', allowedMethods: ['GET'] },
   { file: '../system-secrets/tier1-status', method: 'GET', permission: 'settings:manage', allowedMethods: ['GET'] },
   { file: '../system-secrets/index', method: 'GET', permission: 'settings:manage', allowedMethods: ['GET', 'POST'] },
   { file: '../system-secrets/[id]', method: 'GET', permission: 'settings:manage', allowedMethods: ['GET', 'DELETE'] },

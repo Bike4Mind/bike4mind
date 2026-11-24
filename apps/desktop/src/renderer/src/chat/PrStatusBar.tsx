@@ -6,13 +6,14 @@ import Stack from '@mui/joy/Stack';
 import Tooltip from '@mui/joy/Tooltip';
 import Typography from '@mui/joy/Typography';
 import { useTheme } from '@mui/joy/styles';
-import { prDisplayState, type PrActionResult, type PrBarState, type PrOption } from '@shared/pullRequest';
+import { prIconStatus } from '@shared/prAttention';
+import type { PrActionResult, PrBarState, PrOption } from '@shared/pullRequest';
 import { DiffCount } from './DiffCount';
 import { CloseIcon, ExternalLinkIcon, PullRequestIcon, ReloadIcon } from './icons';
 import { ghFixLine, lifecycleLabel, middleTruncate, timeAgo } from './prBarModel';
 import { PrAutomations, autoFixDescription, autoMergeDescription } from './PrAutomations';
 import { PrCiMenu } from './PrCiMenu';
-import { PrStateIcon, prStateColor } from './prStateStyle';
+import { PrStateIcon, prIconLabel, prStateColor } from './prStateStyle';
 import { SYSTEM_BROWSER_HINT, openInSystemBrowser, routePrLink, type BuiltInBrowserOpener } from './prLinks';
 
 const BRANCH_MAX_CHARS = 36;
@@ -26,8 +27,13 @@ function StateIcon({ state }: { state: PrBarState }) {
       </Box>
     );
   }
-  const display = prDisplayState(snapshot.state, snapshot.isDraft, !!state.autoMerge.queued);
-  return <PrStateIcon state={display} testId={`pr-bar-${display}-icon`} />;
+  const status = prIconStatus(snapshot, {
+    queued: !!state.autoMerge.queued,
+    appAutoMerge: state.autoMerge.mode !== null,
+  });
+  return (
+    <PrStateIcon status={status} label={prIconLabel(snapshot.number, status)} testId={`pr-bar-${status.state}-icon`} />
+  );
 }
 
 /**

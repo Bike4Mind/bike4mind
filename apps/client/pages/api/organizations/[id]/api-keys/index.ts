@@ -1,7 +1,7 @@
 // GET/POST /api/organizations/:id/api-keys
 // The org's org-owned API keys: held by its service account, billed to the org, and unaffected by any
 // member leaving (server/organizations/orgApiKeys.ts). Owner, current manager or platform admin
-// (verifyOrgAccess). POST returns the key's secret once.
+// (manageKeys). POST returns the key's secret once.
 
 import {
   CreditHolderType,
@@ -27,7 +27,8 @@ import {
   toOrgApiKeyView,
 } from '@server/organizations/orgApiKeys';
 import { assertApiKeyAccessAllowed } from '@bike4mind/server-utils/utils/apiKeyAccessGate';
-import { verifyOrgAccess } from '@bike4mind/server-utils/utils/orgAccess';
+import { verifyOrgPermission } from '@bike4mind/server-utils/utils/orgAccess';
+import { recordOrganizationRead } from '@server/utils/orgReadAudit';
 import { z } from 'zod';
 
 const CreateOrgApiKeyBodySchema = z.object({
@@ -49,10 +50,11 @@ const orgIdOf = (query: { id?: string }): string => (typeof query.id === 'string
 // Session only: a key must never be able to mint, list or replace the org's keys.
 const handler = baseApi({ auth: 'jwtOnly' })
   .get(
-    asyncHandler<{}, IOrgApiKeyView[], unknown, { id?: string; includeDisabled?: string }>(async (req, res) => {
-      const org = await verifyOrgAccess(req.user!, orgIdOf(req.query));
+    asyncHandler<{}, unknown, unknown, { id?: string; includeDisabled?: string }>(async (req, res) => {
+      const org = await verifyOrgPermission(req.user!, orgIdOf(req.query), 'manageKeys');
+      await recordOrganizationRead(req, [org], { view: 'api_keys' });
       const serviceAccount = await findServiceAccount(org.id);
-      if (!serviceAccount) return res.json([]);
+      if (!serviceAccount) return res.json([] satisfies IOrgApiKeyView[]);
 
       const keys = await userApiKeyService.listUserApiKeys(
         serviceAccount.id,
@@ -61,13 +63,13 @@ const handler = baseApi({ auth: 'jwtOnly' })
       );
       const orgKeys = keys.filter(key => key.orgOwned && key.organizationId === org.id);
       const creatorNames = await resolveCreatorNames(orgKeys);
-      return res.json(orgKeys.map(key => toOrgApiKeyView(key, creatorNames)));
+      return res.json(orgKeys.map(key => toOrgApiKeyView(key, creatorNames)) satisfies IOrgApiKeyView[]);
     })
   )
   .post(
     asyncHandler<{}, unknown, unknown, { id?: string }>(async (req, res) => {
       const user = req.user!;
-      const org = await verifyOrgAccess(user, orgIdOf(req.query));
+      const org = await verifyOrgPermission(user, orgIdOf(req.query), 'manageKeys');
       const body = parseOrBadRequest(CreateOrgApiKeyBodySchema, req.body);
       await assertOrgApiKeyScopesOffered(org.id, body.scopes);
       const grants = await normalizeOrgApiKeyGrants(org.id, body.grants);
@@ -83,7 +85,7 @@ const handler = baseApi({ auth: 'jwtOnly' })
       const serviceAccount = await getOrCreateServiceAccount(org);
       // The key and its strict audit row commit together, so a failed audit leaves no live key behind.
       const created = await withTransaction(async () => {
-        // Conflicts with a concurrent org delete, so a delete that lands after verifyOrgAccess either
+        // Conflicts with a concurrent org delete, so a delete that lands after verifyOrgPermission either
         // aborts this mint or retries and revokes the key it made.
         if (!(await organizationRepository.touchIfLive(org.id))) throw new NotFoundError('Organization not found');
         const minted = await userApiKeyService.createUserApiKey(

@@ -27,7 +27,7 @@ jobs:
           github.event_name == 'pull_request' &&
           github.actor != 'dependabot[bot]' &&
           !startsWith(github.head_ref, 'changeset-release/')
-        uses: amannn/action-semantic-pull-request@v5
+        uses: amannn/action-semantic-pull-request@e32d7e603df1aa1ba07e981f2a23455dee596825 # v5
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:

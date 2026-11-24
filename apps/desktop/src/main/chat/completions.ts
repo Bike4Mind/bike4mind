@@ -5,6 +5,7 @@ import { createParser } from 'eventsource-parser';
 import { isAxiosError, type AxiosInstance, type AxiosResponse } from 'axios';
 import {
   isToolChangeMessage,
+  RUN_BUDGET_EXHAUSTED_ERROR_CODE,
   type CompletionRunAttribution,
   type PromptCacheTtl,
   type ReasoningEffort,
@@ -12,8 +13,10 @@ import {
 import type { ChatModelOption, ChatRole } from '@shared/chat';
 import type { GenerationSettings } from '@shared/generation';
 import { devLog } from '../devlog/DevLogSink';
+import { ERRORS_TAG } from '../devlog/tags';
 import { CHAT_STREAM_TAG } from './devLogTag';
 import { parseStreamEvent, type CompletionStreamEvent } from './streamEvents';
+import { evaluationContext } from './evaluationBudget';
 
 /** Same-origin default; a self-host stack overrides it with `sseCompletionsUrl` from serverConfig. */
 export const DEFAULT_COMPLETIONS_PATH = '/api/ai/v1/completions';
@@ -195,7 +198,10 @@ export async function streamCompletion(
   options: StreamOptions = {}
 ): Promise<void> {
   try {
-    await streamOnce(axiosInstance, endpoint, request, onEvent, signal, options);
+    const evaluation = evaluationContext.getStore();
+    const send = () => streamOnce(axiosInstance, endpoint, request, onEvent, signal, options);
+    if (evaluation) await evaluation.serialize(send);
+    else await send();
   } catch (err) {
     if (!isConnectionDrop(err)) throw err;
     if (signal?.aborted) return;
@@ -241,58 +247,120 @@ async function streamOnce(
 ): Promise<void> {
   if (signal?.aborted) return;
 
-  let response: AxiosResponse;
-  try {
-    response = await axiosInstance.post(
-      endpoint,
-      {
-        model: request.model,
-        messages: wireMessages(request.messages),
-        ...(request.maxTokens ? { max_tokens: request.maxTokens } : {}),
-        ...(request.sessionId ? { sessionId: request.sessionId } : {}),
-        ...(request.run ? { run: request.run } : {}),
-        // The tool loop on this endpoint belongs to the CALLER: the model emits tool_use and
-        // this client executes it locally, then sends the result back as another turn.
-        options: {
-          stream: true,
-          tools: request.tools ?? [],
-          ...(request.generation?.temperature !== undefined ? { temperature: request.generation.temperature } : {}),
-          ...(request.thinking
-            ? {
-                thinking: {
-                  enabled: true,
-                  ...(request.generation?.thinkingBudgetTokens !== undefined
-                    ? { budget_tokens: request.generation.thinkingBudgetTokens }
-                    : {}),
-                },
-              }
-            : {}),
-          ...(request.reasoningEffort ? { reasoningEffort: request.reasoningEffort } : {}),
-          ...(request.cacheTtl ? { cacheTtl: request.cacheTtl } : {}),
-        },
-      },
-      {
-        responseType: 'stream',
-        signal,
-        timeout: COMPLETION_HEADER_TIMEOUT_MS,
-        // Fresh per HTTP request, never reused: the server keys the request's ledger charge on it,
-        // so a resend under the same id would read as the same charge.
-        headers: { 'X-Request-ID': randomUUID() },
-      }
-    );
-  } catch (err) {
-    if (signal?.aborted || (isAxiosError(err) && err.code === 'ERR_CANCELED')) return;
-    const body = await readErrorBody(err);
-    if (isRunNotFound(err, body)) throw new RunNotFoundError(body?.message);
-    throw toRequestError(err, body?.message);
-  }
-
-  releaseRequestTimeout(response);
-  await readSseStream(response, onEvent, signal, {
+  // Fresh per HTTP request, never reused: the server keys the request's ledger charge on it,
+  // so a resend under the same id would read as the same charge.
+  const context: StreamContext = {
     model: request.model,
     sessionId: request.sessionId,
     idleTimeoutMs: options.idleTimeoutMs ?? STREAM_IDLE_TIMEOUT_MS,
-  });
+    requestId: randomUUID(),
+  };
+  const requestId = context.requestId;
+  const evaluation = evaluationContext.getStore();
+  evaluation?.assertTransportOpen();
+  await evaluation?.reconcile();
+  const events: CompletionStreamEvent[] = [];
+  const release = evaluation?.reserve(requestId, request, evaluationModel(axiosInstance, request.model));
+  let failed = true;
+  try {
+    const evaluationWire = evaluation?.wire(requestId);
+    evaluation?.measure(requestId, request);
+    let response: AxiosResponse;
+    try {
+      response = await axiosInstance.post(
+        endpoint,
+        {
+          model: request.model,
+          messages: wireMessages(request.messages),
+          ...(request.maxTokens ? { max_tokens: request.maxTokens } : {}),
+          ...(request.sessionId ? { sessionId: request.sessionId } : {}),
+          ...(request.run ? { run: request.run } : {}),
+          ...(evaluationWire
+            ? {
+                evaluation: evaluationWire.evaluation,
+                run: {
+                  ...request.run,
+                  ...evaluationWire.run,
+                  role: request.run?.role ?? 'root',
+                  purpose: request.run?.purpose ?? 'turn',
+                },
+              }
+            : {}),
+          // The tool loop on this endpoint belongs to the CALLER: the model emits tool_use and
+          // this client executes it locally, then sends the result back as another turn.
+          options: {
+            stream: true,
+            tools: request.tools ?? [],
+            ...(request.generation?.temperature !== undefined ? { temperature: request.generation.temperature } : {}),
+            ...(request.thinking
+              ? {
+                  thinking: {
+                    enabled: true,
+                    ...(request.generation?.thinkingBudgetTokens !== undefined
+                      ? { budget_tokens: request.generation.thinkingBudgetTokens }
+                      : {}),
+                  },
+                }
+              : {}),
+            ...(request.reasoningEffort ? { reasoningEffort: request.reasoningEffort } : {}),
+            ...(request.cacheTtl ? { cacheTtl: request.cacheTtl } : {}),
+          },
+        },
+        {
+          responseType: 'stream',
+          signal,
+          timeout: COMPLETION_HEADER_TIMEOUT_MS,
+          headers: { 'X-Request-ID': requestId },
+        }
+      );
+    } catch (err) {
+      if (signal?.aborted || (isAxiosError(err) && err.code === 'ERR_CANCELED')) return;
+      const body = await readErrorBody(err);
+      if (isRunNotFound(err, body)) throw new RunNotFoundError(body?.message);
+      if (isRunBudgetExhausted(err, body)) throw new RunBudgetExhaustedError(body?.message);
+      const failure = toRequestError(err, body?.message);
+      logError(failure, 'request', context, {
+        ...(isAxiosError(err) && err.response?.status ? { status: err.response.status } : {}),
+        ...(isAxiosError(err) && !err.response?.status && err.code ? { code: err.code } : {}),
+        ...(body?.errorCode ? { errorCode: body.errorCode } : {}),
+      });
+      throw failure;
+    }
+
+    releaseRequestTimeout(response);
+    await readSseStream(
+      response,
+      event => {
+        if (evaluation) {
+          if (event.type === 'meta' || event.type === 'settled') events.push(event);
+          else if ('usage' in event && event.usage) events.push({ type: 'content', usage: event.usage });
+        }
+        onEvent(event);
+      },
+      signal,
+      context
+    );
+    failed = signal?.aborted ?? false;
+  } finally {
+    try {
+      evaluation?.record(requestId, events, failed);
+      await evaluation?.reconcile();
+    } finally {
+      release?.();
+    }
+  }
+}
+
+const evaluationModels = new WeakMap<AxiosInstance, Map<string, ChatModelOption>>();
+
+export function bindEvaluationModel(axios: AxiosInstance, model: ChatModelOption): void {
+  const models = evaluationModels.get(axios) ?? new Map<string, ChatModelOption>();
+  models.set(model.id, model);
+  evaluationModels.set(axios, models);
+}
+
+function evaluationModel(axios: AxiosInstance, id: string): ChatModelOption {
+  return evaluationModels.get(axios)?.get(id) ?? { id, name: id };
 }
 
 /**
@@ -319,6 +387,34 @@ interface StreamContext {
   sessionId?: string;
   /** See STREAM_IDLE_TIMEOUT_MS. In ms. */
   idleTimeoutMs: number;
+  /** The X-Request-ID sent with the POST; the key the server's own logs use. */
+  requestId: string;
+}
+
+/**
+ * Publish one failure to the developer log, retained even with the window closed.
+ *
+ * `message` is the text the user sees (never a response body: readErrorBody already reduced that
+ * to `message` and `errorCode`). `extra` is named by the caller, never spread from a response.
+ */
+function logError(
+  error: Error,
+  source: 'request' | 'stream' | 'transport',
+  context: StreamContext,
+  extra: Readonly<Record<string, string | number>> = {}
+): void {
+  devLog.publishError(() => ({
+    tags: [CHAT_STREAM_TAG, ERRORS_TAG],
+    message: error.message,
+    fields: {
+      source,
+      operation: 'completion',
+      ...extra,
+      requestId: context.requestId,
+      model: context.model,
+      ...(context.sessionId ? { session: context.sessionId } : {}),
+    },
+  }));
 }
 
 /**
@@ -332,7 +428,9 @@ interface StreamContext {
  * truncated one.
  */
 function logUpstream(event: CompletionStreamEvent, context: StreamContext): void {
-  devLog.publish(() => {
+  // A provider failure delivered inside a 200 stream: kept even with the window closed.
+  const publish = event.type === 'error' ? devLog.publishError.bind(devLog) : devLog.publish.bind(devLog);
+  publish(() => {
     const text = 'text' in event ? (event.text ?? '') : '';
     const detail =
       event.type === 'tool_use'
@@ -341,10 +439,12 @@ function logUpstream(event: CompletionStreamEvent, context: StreamContext): void
           ? (event.message ?? 'no message')
           : text;
     return {
-      tags: [CHAT_STREAM_TAG],
+      tags: event.type === 'error' ? [CHAT_STREAM_TAG, ERRORS_TAG] : [CHAT_STREAM_TAG],
       message: `upstream ${event.type}${detail ? `: ${detail}` : ''}`,
       fields: {
         model: context.model,
+        requestId: context.requestId,
+        ...(event.type === 'error' ? { source: 'stream', operation: 'completion' } : {}),
         ...(text ? { chars: text.length } : {}),
         ...(context.sessionId ? { session: context.sessionId } : {}),
         ...('stopReason' in event && event.stopReason ? { stopReason: event.stopReason } : {}),
@@ -376,7 +476,7 @@ function readSseStream(
           setImmediate(() => {
             if (settled) return;
             const quiet = Date.now() - lastByteAt;
-            if (quiet >= context.idleTimeoutMs) fail(new StreamIdleError(quiet));
+            if (quiet >= context.idleTimeoutMs) failTransport(new StreamIdleError(quiet));
             else armIdle(context.idleTimeoutMs - quiet);
           }),
         delay
@@ -402,6 +502,11 @@ function readSseStream(
       cleanup();
       stream.destroy();
       reject(error);
+    };
+
+    const failTransport = (error: Error) => {
+      if (!settled) logError(error, 'transport', context);
+      fail(error);
     };
 
     const parser = createParser({
@@ -439,7 +544,7 @@ function readSseStream(
     // Ending without [DONE] is still an end: the caller keeps whatever text arrived.
     const onEnd = () => finish();
     // A socket error caused by our own abort is benign; anything else is a real failure.
-    const onError = (error: Error) => (signal?.aborted ? finish() : fail(error));
+    const onError = (error: Error) => (signal?.aborted ? finish() : failTransport(error));
     const onAbort = () => finish();
 
     stream.on('data', onData);
@@ -462,25 +567,46 @@ export class RunNotFoundError extends Error {
   }
 }
 
-function isRunNotFound(error: unknown, body: ErrorBody | undefined): boolean {
+export function isRunNotFound(error: unknown, body: ErrorBody | undefined): boolean {
   return isAxiosError(error) && error.response?.status === 404 && body?.errorCode === 'run_not_found';
+}
+
+/**
+ * The request's `run` has no budget left (422 run_budget_exhausted). Refused before the provider
+ * was called, so nothing was charged; the run resumes once its budget is raised.
+ */
+export class RunBudgetExhaustedError extends Error {
+  readonly errorCode = RUN_BUDGET_EXHAUSTED_ERROR_CODE;
+  constructor(message?: string) {
+    super(message || 'This orchestration run has used its credit budget.');
+    this.name = 'RunBudgetExhaustedError';
+  }
+}
+
+export function isRunBudgetExhausted(error: unknown, body: ErrorBody | undefined): boolean {
+  return isAxiosError(error) && error.response?.status === 422 && body?.errorCode === RUN_BUDGET_EXHAUSTED_ERROR_CODE;
 }
 
 /**
  * Send `request` with `run`, and once more without it if the server refuses the run, so a stale
  * or foreign run id costs the turn nothing. `onRejected` runs before the resend, to forget the id.
  * Safe to resend: a refused run fails before the provider is called, so nothing was billed.
+ *
+ * A `budgeted` run is never resent without `run`: that would spend outside the cap the user set.
+ * Its refusal still runs `onRejected` and then rethrows.
  */
 export async function withRunFallback<T>(
   run: CompletionRunAttribution | undefined,
   send: (run: CompletionRunAttribution | undefined) => Promise<T>,
-  onRejected: (error: RunNotFoundError) => void | Promise<void>
+  onRejected: (error: RunNotFoundError) => void | Promise<void>,
+  options: { budgeted?: boolean } = {}
 ): Promise<T> {
   try {
     return await send(run);
   } catch (err) {
     if (!run || !(err instanceof RunNotFoundError)) throw err;
     await onRejected(err);
+    if (options.budgeted) throw err;
     return send(undefined);
   }
 }

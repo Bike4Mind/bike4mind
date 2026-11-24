@@ -21,6 +21,8 @@ import {
   IPlatformUsageParams,
   IPlatformUsageSummary,
   IProviderMonthCogs,
+  IProviderUnitsParams,
+  IProviderUnitsRow,
   ISessionModelUsage,
   ISessionQuestUsage,
   ISessionUsageSummary,
@@ -38,16 +40,24 @@ import {
   USAGE_EVENT_FEATURES,
   USAGE_EVENT_OPERATIONS,
   USAGE_EVENT_STATUSES,
+  USAGE_KEY_SOURCES,
   USAGE_FUNDING_SOURCES,
   USAGE_PRICE_SOURCES,
   attributeChargeToFundingSources,
   type IUsageFundingBreakdown,
   type SpendBreakdown,
   type SpendBreakdownParams,
+  type SpendActorScanParams,
+  type SpendFeatureAggregate,
+  type SpendFeaturesParams,
+  type SpendFeatureUsersPage,
+  type SpendFeatureUsersParams,
+  type SpendFeatureTotals,
   type SpendTimelineParams,
   type SpendTimelineRow,
 } from '@bike4mind/common';
 import { EXECUTED_MODEL_GROUP_KEY, spendBreakdownPipeline, spendTimelinePipeline } from './spendExplorerPipelines';
+import { spendActorIdsPipeline, spendFeaturesPipeline, spendFeatureUsersPipeline } from './spendFeaturePipelines';
 import { loadCreditHolderFundingSnapshot, type LoadCreditHolderFundingSnapshot } from './creditHolderFundingSnapshot';
 
 export type IUsageEventDocument = IUsageEvent & IMongoDocument;
@@ -112,6 +122,7 @@ const UsageEventSchema = new Schema<IUsageEventDocument>(
     // into the UNCLASSIFIED_SOURCE bucket in aggregation.
     source: { type: String, required: false, enum: [...COMPLETION_SOURCES] },
     apiKeyId: { type: String, required: false },
+    keySource: { type: String, enum: [...USAGE_KEY_SOURCES], required: false },
 
     // Price stamp (see UsageEventTypes). All optional: older rows and non-text features leave
     // them unset. turnUsage defaults to undefined, not [], so a single-turn row stays without it.
@@ -560,6 +571,49 @@ export class UsageEventRepository extends BaseRepository<IUsageEventDocument> im
     ]);
   }
 
+  // Served by the { provider, model, createdAt } index: the provider prefix bounds the scan and the
+  // createdAt range is checked on index keys.
+  async providerUnitsBreakdown({
+    provider,
+    from,
+    to,
+    defaultUnits,
+  }: IProviderUnitsParams): Promise<IProviderUnitsRow[]> {
+    return this.model.aggregate<IProviderUnitsRow>([
+      { $match: { provider, createdAt: { $gte: from, $lt: to } } },
+      {
+        $group: {
+          _id: {
+            day: { $dateToString: { format: '%Y-%m-%d', date: '$createdAt', timezone: 'UTC' } },
+            feature: '$feature',
+            model: '$model',
+            userId: '$userId',
+            keySource: { $ifNull: ['$keySource', null] },
+            status: '$status',
+            atDefaultUnits: defaultUnits === undefined ? { $literal: false } : { $eq: ['$units', defaultUnits] },
+          },
+          requests: { $sum: 1 },
+          units: { $sum: { $ifNull: ['$units', 0] } },
+        },
+      },
+      {
+        $project: {
+          _id: 0,
+          day: '$_id.day',
+          feature: '$_id.feature',
+          model: '$_id.model',
+          userId: '$_id.userId',
+          keySource: '$_id.keySource',
+          status: '$_id.status',
+          atDefaultUnits: '$_id.atDefaultUnits',
+          requests: 1,
+          units: 1,
+        },
+      },
+      { $sort: { day: 1 } },
+    ]);
+  }
+
   // Requires MongoDB 7.0+ for the $percentile accumulator (latency facet) and uses
   // $facet like the sibling summaries here - both unsupported under DocumentDB
   // (USE_DOCUMENTDB_COMPATIBILITY), which those methods already assume against.
@@ -719,6 +773,49 @@ export class UsageEventRepository extends BaseRepository<IUsageEventDocument> im
       bySegment: result?.bySegment ?? [],
       topActors: result?.topActors ?? [],
     };
+  }
+
+  async spendFeatures(params: SpendFeaturesParams): Promise<SpendFeatureAggregate[]> {
+    const [result] = await this.model
+      .aggregate<{
+        totals: Array<SpendFeatureTotals & { feature: string; distinctUsers: number }>;
+        daily: Array<{ feature: string; day: string; costUsd: number }>;
+      }>(spendFeaturesPipeline(params))
+      .allowDiskUse(true)
+      .option({ maxTimeMS: SPEND_EXPLORER_MAX_TIME_MS });
+    const dailyByFeature = new Map<string, Array<{ day: string; costUsd: number }>>();
+    for (const row of result?.daily ?? []) {
+      const days = dailyByFeature.get(row.feature) ?? [];
+      days.push({ day: row.day, costUsd: row.costUsd });
+      dailyByFeature.set(row.feature, days);
+    }
+    return (result?.totals ?? []).map(row => ({
+      ...row,
+      daily: (dailyByFeature.get(row.feature) ?? []).sort((a, b) => a.day.localeCompare(b.day)),
+    }));
+  }
+
+  async spendFeatureUsers(params: SpendFeatureUsersParams): Promise<SpendFeatureUsersPage> {
+    const [result] = await this.model
+      .aggregate<{
+        summary: Array<{ users: number; costUsd: number }>;
+        page: SpendFeatureUsersPage['users'];
+      }>(spendFeatureUsersPipeline(params))
+      .allowDiskUse(true)
+      .option({ maxTimeMS: SPEND_EXPLORER_MAX_TIME_MS });
+    return {
+      users: result?.page ?? [],
+      totalUsers: result?.summary?.[0]?.users ?? 0,
+      featureCostUsd: result?.summary?.[0]?.costUsd ?? 0,
+    };
+  }
+
+  async spendActorIds(params: SpendActorScanParams): Promise<string[]> {
+    const rows = await this.model
+      .aggregate<{ _id: string }>(spendActorIdsPipeline(params))
+      .allowDiskUse(true)
+      .option({ maxTimeMS: SPEND_EXPLORER_MAX_TIME_MS });
+    return rows.map(row => row._id);
   }
 
   async settlementBreakdown(days: number = 30): Promise<ISettlementBreakdown[]> {

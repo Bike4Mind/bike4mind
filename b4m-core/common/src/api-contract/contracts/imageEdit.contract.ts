@@ -10,7 +10,7 @@ import {
 } from '../../schemas/billingOrganization';
 
 import { ImageQuestSchema } from '../../schemas/imageApi';
-import { imageQuestPollResult } from './imageGeneration.contract';
+import { IMAGE_QUEST_ROUTES_DEPRECATION, imageQuestPollResult } from './imageGeneration.contract';
 import {
   GENERATION_CALLBACK_DESCRIPTION,
   GENERATION_CALLBACK_REJECTED_DESCRIPTION,
@@ -48,13 +48,16 @@ export const editImageContract = defineEndpoint({
     "over-cap count, or a box that collapses after rounding to the 0-1000 grid), then converted to BFL's " +
     'prompt-inline edit layout (`from`, `src_bbox`, `tgt_bbox`, `desc`) before provider submission. ' +
     'Credits are checked when ' +
-    'the render runs, so insufficient credits arrive on the polled quest rather than as a 422. ' +
+    'the render runs, so insufficient credits arrive on the polled quest rather than as a 422. A `run` budget ' +
+    'is checked before queueing as well, so a run with too little left is usually a synchronous 422 ' +
+    '(`errorCode: "run_budget_exhausted"`). ' +
     '`organization_id` is accepted as an alias of `organizationId`, for callers used to the snake_case ' +
     'video and music bodies; `null` bills the personal account. ' +
     '`POST /api/ai/edit-image` is a legacy alias of this endpoint. Authenticate with an API key ' +
     '(`b4m_live_`) or a JWT.\n\n' +
     GENERATION_CALLBACK_DESCRIPTION,
   tags: ['Images'],
+  deprecated: IMAGE_QUEST_ROUTES_DEPRECATION,
   auth: 'apiKeyOrJwt',
   scopes: [ApiKeyScope.AI_GENERATE],
   request: EditImageRequestBodySchema,
@@ -82,14 +85,17 @@ export const editImageContract = defineEndpoint({
       schema: ApiErrorSchema,
     },
     403: {
-      description: `The API key lacks the \`ai:generate\` scope, or ${BILLING_ORGANIZATION_FORBIDDEN_DESCRIPTION}`,
+      description:
+        `The API key lacks the \`ai:generate\` scope, or ${BILLING_ORGANIZATION_FORBIDDEN_DESCRIPTION} ` +
+        'Naming a billing organization other than the account the `run` bills is also a `403` with that errorCode.',
       schema: BillingOrganizationForbiddenErrorSchema,
     },
     404: {
       description:
         'The session, or the quest being retried, does not exist or is not accessible to the caller. A ' +
         'nonexistent billing `organizationId` is `404` only for an admin caller; for anyone else, an ' +
-        'invalid or inaccessible `organizationId` is `403` instead.',
+        'invalid or inaccessible `organizationId` is `403` instead. A `run` that does not exist or that ' +
+        'another user or billing owner minted is `404` (`errorCode: "run_not_found"`).',
       schema: ApiErrorSchema,
     },
     422: {
@@ -98,7 +104,8 @@ export const editImageContract = defineEndpoint({
         '`organization_id` sent with different values is a `422`; so is an empty or blank value for either ' +
         '(a blank is never treated as an omission, which would bill a different payer), and so is any other ' +
         'billing-org-shaped key such as `billing_org_id` or `payerOrgId`, which would otherwise be stripped ' +
-        "and silently bill the caller's home organization.",
+        "and silently bill the caller's home organization. A `run` whose budget cannot cover the " +
+        'edit is `422` with `errorCode: "run_budget_exhausted"`.',
       schema: ApiErrorSchema,
     },
   },

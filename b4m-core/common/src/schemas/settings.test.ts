@@ -1543,6 +1543,7 @@ describe('spend monitor settings', () => {
     spendMonitorAutoPauseStandardMinCredits: 10_000,
     spendMonitorAutoPausePaidMinCredits: 0,
     spendMonitorAutoPauseTrustedMinCredits: 0,
+    spendExplorerFeatureSpikeMultiple: 3,
   } as const;
 
   it.each(Object.entries(expectedDefaults))('%s defaults to %s and belongs to the CREDITS group', (key, expected) => {
@@ -1733,5 +1734,20 @@ describe('changesCustomerPrice', () => {
     expect(settingsMap.freeTierDailySystemCostCapUsd.changesCustomerPrice).toBeUndefined();
     expect(settingsMap.lowCreditsThreshold.changesCustomerPrice).toBeUndefined();
     expect(settingsMap.teamPlanMaxSeats.changesCustomerPrice).toBeUndefined();
+  });
+});
+
+describe('ReferralMilestones', () => {
+  const { schema } = settingsMap.ReferralMilestones;
+
+  it('saves an empty value or friends:credits pairs', () => {
+    expect(schema.safeParse('').success).toBe(true);
+    expect(schema.safeParse('5:500, 10:1500').success).toBe(true);
+  });
+
+  it('refuses a value the reward could not read', () => {
+    expect(schema.safeParse('5 friends: 500').success).toBe(false);
+    expect(schema.safeParse('5:500, 5:900').success).toBe(false);
+    expect(schema.safeParse(500).success).toBe(false);
   });
 });

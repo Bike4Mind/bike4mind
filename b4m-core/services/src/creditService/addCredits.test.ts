@@ -11,6 +11,11 @@ import { BadRequestError } from '@bike4mind/utils';
 import { createMockCreditTransactionRepository } from '../__tests__/utils/testUtils';
 import { MockedObject } from 'vitest';
 
+vi.mock('@bike4mind/db-core', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/db-core')>()),
+  withTransaction: <T>(fn: () => Promise<T>) => fn(),
+}));
+
 describe('creditService - addCredits', () => {
   // Mock credit holder responses
   const mockUser: ICreditHolder = {

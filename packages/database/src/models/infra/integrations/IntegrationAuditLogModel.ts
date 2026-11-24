@@ -51,6 +51,8 @@ export interface CustomMcpAuditMetadata {
   toolCount?: number;
   droppedCount?: number;
   changedCount?: number;
+  /** A description edit records the new length (0 when cleared), never the text. */
+  descriptionLength?: number;
 }
 
 /**

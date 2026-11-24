@@ -856,8 +856,26 @@ interface WordScope {
   bindings: ReadonlyMap<string, readonly string[]>;
   /** What `$(git rev-parse --show-toplevel)` prints here, or null when the scan cannot tell. */
   toplevel: string | null;
+  /** Variables a plain top-level `NAME=literal` set earlier in the script, which bash expands to that text. */
+  assigned?: ReadonlyMap<string, string>;
   homeUsed(): void;
 }
+
+/** `$NAME` or `${NAME}` alone, the one expansion form `WordScope.assigned` fills in. */
+const ASSIGNED_VARIABLE = /^\$(?:\{([A-Za-z_]\w*)\}|([A-Za-z_]\w*))$/;
+
+/** A value word bash leaves as written: no quotes, expansion, glob, space or tilde, and no leading `-` an option parse would read. */
+const LITERAL_VALUE = /^(?!-)[\w./+@-]+$/;
+
+/**
+ * Names a binding must not model: those whose value changes how bash expands words or folders, and those bash keeps
+ * itself, where an assignment is ignored, refused or overwritten (`$BASH_COMMAND` is the running command's text).
+ */
+const UNBOUND_NAMES =
+  /^(HOME|PWD|OLDPWD|CDPATH|IFS|BASH\w*|DIRSTACK|FUNCNAME|GROUPS|UID|EUID|PPID|SHELLOPTS|LINENO|SECONDS|S?RANDOM|EPOCH\w+|HISTCMD|COMP_\w+)$/;
+
+/** Script text that may unset, rebind or reinterpret a variable the walk cannot see: `unset`, `eval`, sourcing, IFS. */
+const MAY_UNBIND = /(^|[^\w-])(unset|eval|source|trap|alias|IFS)\b|(^|[\s;&|(])\.\s/;
 
 /** The one command substitution the scan fills in, as `cd "$(git rev-parse --show-toplevel)"` is common. */
 const TOPLEVEL = /^\$\(\s*git\s+rev-parse\s+--show-toplevel\s*\)$/;
@@ -1323,6 +1341,12 @@ function resolveWord(pieces: readonly WordPiece[], scope: WordScope): OperandWor
       active.push(piece.active);
       continue;
     }
+    const named = ASSIGNED_VARIABLE.exec(piece.expansion);
+    const assignedValue = named ? scope.assigned?.get(named[1] ?? named[2] ?? '') : undefined;
+    if (assignedValue !== undefined) {
+      literal(assignedValue);
+      continue;
+    }
     const known = KNOWN_VARIABLE.exec(piece.expansion);
     const variable = scope.rebound ? undefined : (known?.[1] ?? known?.[2]);
     if (variable === 'HOME') {
@@ -1593,7 +1617,7 @@ const UNPACKS = new Set(['tar', 'bsdtar', 'unzip', '7z', '7za', '7zz', 'cpio']);
 
 // The leading letters of each short-option word, so a cluster ending in a glued value (`-rt..`) still counts its flags.
 const shortFlags = (args: readonly string[]): string =>
-  args.map(arg => /^-([A-Za-z]+)/.exec(unquote(arg))?.[1] ?? '').join('');
+  args.map(arg => /^-([A-Za-z]+)/.exec(wordValue(arg))?.[1] ?? '').join('');
 
 /** Short options of the copying programs whose value is the rest of their word, or the next word when they end it. */
 const COPY_VALUE_LETTERS = new Map([
@@ -1903,7 +1927,8 @@ const mayNameSettings = (pattern: string): boolean =>
  * (`-exec`, `-ok`, and the `dir` forms) is `untrackable` unless its other operands are static, which are returned
  * in `reads`, and it only reads or is an `-exec`; none is a shell, even behind a wrapper. Such a `writer` writes
  * what find prints. `runs` holds each program's words, which are judged as a command of their own would be.
- * `removes` is set by any `-delete` or `rm {}`, narrowed or not.
+ * `removes` is set by any `-delete`, any `rm` it runs past wrappers, or a program that deletesFiles counts, narrowed
+ * or not.
  */
 export function findActions(args: readonly string[]): {
   reach: Reach;
@@ -1947,6 +1972,7 @@ export function findActions(args: readonly string[]): {
         runsOpaqueScript(programName(unquote(program)), programArgs);
       runs.push(inner);
       const writing = word === '-exec';
+      if (programName(wordValue(program)) === 'rm' || deletesFiles(inner)) removes = true;
       if (opaque) untrackable = true;
       else if (programName(values[0] ?? '') === 'rm' && operands.every(value => value === '{}')) deletes();
       else if (plain && (reading || writing)) {
@@ -1976,6 +2002,102 @@ export function findActions(args: readonly string[]): {
     }
   }
   return { reach: write ? 'write' : 'read', untrackable, writer, removes, reads, runs };
+}
+
+/** Programs that delete each operand's whole tree, as `rm -rf` does. */
+const TREE_REMOVERS: ReadonlySet<string> = new Set(['rimraf']);
+
+/** rsync options that delete files at the destination or the source. */
+const RSYNC_DELETES = /^--(del|delete(-[a-z-]+)?|remove-source-files)(=|$)/;
+
+/** The text a word opens with, as bash hands it over, up to its first `$` or backquote expansion. */
+function leadingText(word: string): string {
+  let quote: '"' | "'" | null = null;
+  for (let at = 0; at < word.length; at++) {
+    const char = word[at];
+    if (quote === "'") {
+      if (char === "'") quote = null;
+    } else if (char === '\\') at++;
+    else if (char === '$' || char === '`') return wordValue(word.slice(0, at));
+    else if (quote === '"' && char === '"') quote = null;
+    else if (quote === null && (char === '"' || char === "'")) quote = char;
+  }
+  return wordValue(word);
+}
+
+/** An expansion that opens a word, or follows only a `-`, may hand the program an option the scan cannot see. */
+const mayExpandToOption = (word: string): boolean => isDynamic(word) && /^-?$/.test(leadingText(word));
+
+/**
+ * Whether rm's arguments ask for a recursive or forced delete. Each word is read as bash hands it over (`"-"rf`,
+ * `\-rf`), a short-option word counts any `r`, `R` or `f` (rm takes no option values) or a glob or brace that may
+ * expand to one, and so does a word an expansion may turn into an option; nothing after a plain `--` is an option.
+ */
+function rmRecursesOrForces(args: readonly string[]): boolean {
+  for (const arg of args) {
+    if (mayExpandToOption(arg)) return true;
+    const value = wordValue(arg);
+    if (value === '--') return false;
+    if (/^-[^-]/.test(value) && /[rRf*?[{]/.test(value.slice(1))) return true;
+    // A brace with an alternative that opens with `-` (`{-r,x}`) expands to an option word.
+    if (/^\{(-|[^}]*,-)[^}]*\}/.test(value)) return true;
+    // GNU rm takes any unambiguous prefix of a long option, e.g. `--rec`.
+    const long = /^--([^=]+)/.exec(value)?.[1];
+    if (long !== undefined && ['recursive', 'force'].some(full => full.startsWith(long))) return true;
+  }
+  return false;
+}
+
+/**
+ * Whether a command line handed over as text (`sh -c`, `eval`, GNU parallel, `npm exec -c`) holds a delete. The
+ * text is split at blanks and shell operators and every position is tried as a command start, so a form the split
+ * misreads errs toward counting it.
+ */
+function textDeletes(args: readonly string[], depth: number): boolean {
+  if (depth > 4) return true;
+  const words = args
+    .map(wordValue)
+    .join(' ')
+    .split(/[\s;&|()]+/)
+    .filter(Boolean);
+  return words.some((_, at) => deletesFiles(words.slice(at), depth + 1));
+}
+
+/**
+ * Whether a command deletes files recursively or forcefully, which the approval card says and which keeps it off
+ * one-click surfaces. The program is read past its wrappers (`sudo`, `env`, `command`, `builtin`, `timeout`, `xargs`)
+ * and through what runs another command: package launchers (`pnpm exec`, `npx`), shells given `-c`, `eval`, GNU
+ * parallel and `find -exec`. A launcher whose operands the scan cannot place is read as text, so it fails closed.
+ */
+export function deletesFiles(tokens: readonly string[], depth = 0): boolean {
+  const words = withoutWrappers(tokens);
+  const [first = '', ...args] = words;
+  const name = programName(wordValue(first));
+  if (name === 'builtin') return deletesFiles(args, depth);
+  if (name === 'rm') return rmRecursesOrForces(args);
+  if (TREE_REMOVERS.has(name)) return true;
+  if (name === 'find') return findActions(args).removes;
+  if (name === 'rsync') return args.some(arg => mayExpandToOption(arg) || RSYNC_DELETES.test(wordValue(arg)));
+  if (name === 'git') {
+    const values = args.map(wordValue);
+    const git = gitSubcommand(values, '.');
+    if (git?.unread) return values.includes('clean');
+    // `-e` takes the rest of its word (or, ending it, the next word), so an `n` there is the pattern, not `-n`.
+    return (
+      git?.sub === 'clean' &&
+      !git.rest.some(
+        (arg, at) =>
+          /^(-[A-Za-df-z]*n|--dry-run$)/.test(arg) && !/^(-[A-Za-z]*e|--exclude)$/.test(git.rest[at - 1] ?? '')
+      )
+    );
+  }
+  if (name === 'eval' || name === 'parallel') return textDeletes(args, depth);
+  if (XARGS_SHELLS.has(name)) {
+    return args.some(arg => /^-[A-Za-z]*c/.test(wordValue(arg))) && textDeletes(args, depth);
+  }
+  const launched = packageCommand(words);
+  if (launched === null) return false;
+  return launched.unread ? textDeletes(args, depth) : deletesFiles(words.slice(launched.at), depth);
 }
 
 /** find primaries that act rather than test. */
@@ -2420,6 +2542,13 @@ interface WrapperOptions {
   long?: readonly string[];
 }
 
+const TIMEOUT_WRAPPER: Wrapper = {
+  values: 'ks',
+  long: ['kill-after', 'signal'],
+  flags: ['foreground', 'help', 'preserve-status', 'verbose', 'version'],
+  operands: 1,
+};
+
 const WRAPPERS: ReadonlyMap<string, Wrapper> = new Map([
   [
     'sudo',
@@ -2504,15 +2633,9 @@ const WRAPPERS: ReadonlyMap<string, Wrapper> = new Map([
     },
   ],
   ['nice', { values: 'n', long: ['adjustment'], flags: ['help', 'version'] }],
-  [
-    'timeout',
-    {
-      values: 'ks',
-      long: ['kill-after', 'signal'],
-      flags: ['foreground', 'help', 'preserve-status', 'verbose', 'version'],
-      operands: 1,
-    },
-  ],
+  ['timeout', TIMEOUT_WRAPPER],
+  // Homebrew's coreutils name for GNU timeout.
+  ['gtimeout', TIMEOUT_WRAPPER],
   [
     'xargs',
     {
@@ -6653,6 +6776,8 @@ export async function scanShell(
     const rebound = anyName || REBINDS_HOME.test(gateText);
     const user = loginName();
     const loopBindings = new Map<string, readonly string[]>();
+    // Plain top-level `NAME=literal` assignments, bound in walk order so only later words see them.
+    const literalBindings = new Map<string, string>();
     // git settings the script or this process may hand git, so what it reports from a folder is not what the scan asks.
     const gitEnvironment =
       anyName ||
@@ -6820,6 +6945,7 @@ export async function scanShell(
         rebound,
         user,
         bindings: loopBindings,
+        assigned: literalBindings,
         toplevel: state.lost ? null : (toplevels.get(state.cwd) ?? null),
         homeUsed: () => {
           if (!homeKnown) homeGuessed = true;
@@ -8675,18 +8801,7 @@ export async function scanShell(
         const envFile = arg.startsWith('-') ? null : noteEnvFile(arg);
         if (envFile) (entry.envFiles ??= []).push(envFile);
       }
-      if (
-        name === 'rm'
-          ? /[rRf]/.test(shortFlags(wrappedRest)) ||
-            wrappedRest.some(arg => {
-              const option = unquote(arg);
-              // GNU rm takes any unambiguous prefix of a long option, e.g. `--rec`.
-              return option.length > 2 && ['--recursive', '--force'].some(full => full.startsWith(option));
-            })
-          : findRun?.removes
-      ) {
-        entry.deletes = true;
-      }
+      if (deletesFiles(tokens)) entry.deletes = true;
       for (const directory of directoryOptionValues(tokens)) await check(directory, state.cwd);
       const trees = treeOperands(name, wrappedRest);
       if (findRun) {
@@ -9341,6 +9456,26 @@ export async function scanShell(
       await check(target.text, state.cwd);
     };
 
+    /**
+     * Binds a top-level `NAME=literal` the script sets nowhere else, so a later `$NAME/x` reads as the path bash
+     * builds. A set the scan cannot pin (quoted or expanded value, a second or conditional set, a subshell or list,
+     * unset, eval, sourcing, IFS) stays unbound, so a word using it stays unread.
+     */
+    const bindLiteral = (node: Node): void => {
+      if (node.type !== 'variable_assignment' || node.parent?.type !== 'program') return;
+      if (branching > 0 || sourced || state.lost || MAY_UNBIND.test(gateText)) return;
+      // `NAME=x &` sets it in a subshell, so later words see the variable unset.
+      if (backgrounded || node.nextSibling?.type === '&') return;
+      if (node.children.some(child => child?.type === '+=')) return;
+      const name = node.childForFieldName('name');
+      const value = node.childForFieldName('value');
+      if (name?.type !== 'variable_name' || UNBOUND_NAMES.test(name.text)) return;
+      if (!value || !LITERAL_VALUE.test(value.text)) return;
+      const sets = variables.set.filter(each => each.name.replace(/\[[^]*$/, '') === name.text);
+      if (sets.length !== 1 || sets[0]?.uncertainOrder || sets[0]?.prefixOf !== undefined) return;
+      literalBindings.set(name.text, value.text);
+    };
+
     const visitNode = async (node: Node): Promise<void> => {
       if (!state.lost) visited.add(state.cwd);
       if (node.type === 'command') return run(node);
@@ -9356,6 +9491,7 @@ export async function scanShell(
         potentialOutbound = true;
         setsEnvironment = true;
         for (const child of node.children) if (child) await visit(child);
+        bindLiteral(node);
         return;
       }
       // `select` parses as a for_statement too; its header rebinds a variable that may be

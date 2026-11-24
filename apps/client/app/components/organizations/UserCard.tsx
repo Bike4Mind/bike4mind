@@ -1,4 +1,13 @@
-import { IUserDocument, Permission, IOrganizationDocument, orgAclRowConfersMembership } from '@bike4mind/common';
+import {
+  ASSIGNABLE_ORG_ROLES,
+  AssignableOrgRole,
+  IUserDocument,
+  Permission,
+  IOrganizationDocument,
+  canAssignOrgRole,
+  orgAclRowConfersMembership,
+  organizationMemberRole,
+} from '@bike4mind/common';
 import { useConfirmation } from '@client/app/hooks/useConfirmation';
 import { getAppFileUrl } from '@client/app/utils/s3';
 import { visuallyHidden } from '@client/app/utils/a11yStyles';
@@ -18,6 +27,7 @@ import {
   Tooltip,
 } from '@mui/joy';
 import MoreVertIcon from '@mui/icons-material/MoreVert';
+import ArrowDropDownIcon from '@mui/icons-material/ArrowDropDown';
 import { useIsMobile } from '@client/app/hooks/useIsMobile';
 import { FC, useCallback, useState } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -25,7 +35,7 @@ import { useUser } from '@client/app/contexts/UserContext';
 import {
   useLeaveOrganization,
   useSetMemberCreditOverride,
-  useSetOrganizationManager,
+  useSetOrganizationMemberRole,
 } from '@client/app/hooks/data/organizations';
 import { useNavigate } from '@tanstack/react-router';
 import { formatAccountAge, formatLastActiveTitle } from '@client/app/components/admin/Users/formatAccountAge';
@@ -44,8 +54,6 @@ interface OrganizationUserCardProps {
   canRevokeMembers: boolean;
   /** Viewer may set this member's monthly credit limit (`canManageMemberCreditBudgets`). */
   canManageCreditBudgets: boolean;
-  /** Viewer may make or remove managers (`isOrgOwnerOrPlatformAdmin`, the manager route's gate). */
-  canManageManagers: boolean;
   /** The roster has a selection column; must match the header's `rosterGridColumns` argument. */
   selectable?: boolean;
   /** The roster has an Email column; must match the header's `rosterGridColumns` argument. */
@@ -99,7 +107,6 @@ const OrganizationUserCard: FC<OrganizationUserCardProps> = ({
   user,
   canRevokeMembers,
   canManageCreditBudgets,
-  canManageManagers,
   selectable = false,
   showEmails,
   selected = false,
@@ -112,7 +119,8 @@ const OrganizationUserCard: FC<OrganizationUserCardProps> = ({
   const { id: organizationId } = organization;
   const avatarUrl = user.photoUrl ? getAppFileUrl({ key: user.photoUrl }) : '';
   const isOwner = user.role === 'owner';
-  const isManager = user.role === 'manager';
+  // Derived from the org lists: the roster's server-side `role` cannot carry 'billingManager'.
+  const memberRole = organizationMemberRole(organization, user.id);
   const isSelf = currentUser?.id === user.id;
   const { mutateAsync: leaveOrganization } = useLeaveOrganization();
 
@@ -138,12 +146,16 @@ const OrganizationUserCard: FC<OrganizationUserCardProps> = ({
   // the pool is capped like anyone's. Your own row offers Leave team, never Remove member.
   const canRevoke = canRevokeMembers && !isOwner && !isSelf;
   const canLeave = !isOwner && isSelf;
-  // Appointing needs an active member row (setOrganizationManager); removal is always allowed.
-  const canToggleManager =
-    canManageManagers && !isOwner && (isManager || (!user.isBanned && orgAclRowConfersMembership(user)));
-  const setManager = useSetOrganizationManager();
+  // Roles above Member need an active member row (setOrganizationMemberRole); moving to Member is
+  // always allowed so a deactivated manager can still be demoted.
+  const isAssignableRole = (role: AssignableOrgRole) =>
+    canAssignOrgRole(currentUser ?? { id: '' }, organization, user.id, role) &&
+    (role === 'member' || (!user.isBanned && orgAclRowConfersMembership(user)));
+  const selectableRoles = ASSIGNABLE_ORG_ROLES.filter(role => role !== memberRole && isAssignableRole(role));
+  const canChangeRole = !isOwner && !organization.personal && selectableRoles.length > 0;
+  const setRole = useSetOrganizationMemberRole();
   const canSetCreditLimit = canManageCreditBudgets;
-  const hasOtherActions = canSetCreditLimit || canToggleManager || canRevoke;
+  const hasOtherActions = canSetCreditLimit || canRevoke;
 
   const [editingLimit, setEditingLimit] = useState(false);
   const setOverride = useSetMemberCreditOverride();
@@ -191,17 +203,49 @@ const OrganizationUserCard: FC<OrganizationUserCardProps> = ({
     </>
   );
 
-  const roleChip = (
-    <Chip
-      size="sm"
-      variant="soft"
-      color={isOwner ? 'primary' : isManager ? 'success' : 'neutral'}
-      // The neutral soft fill is close to the surface in both themes; one step up keeps the chip visible.
-      sx={!isOwner && !isManager ? { bgcolor: 'neutral.softHoverBg' } : undefined}
-      data-testid={`organization-user-card-${user.role}-chip`}
-    >
-      {t(`organization.roles.${user.role}`)}
-    </Chip>
+  const roleChip =
+    memberRole === 'billingManager' ? (
+      <Chip size="sm" variant="outlined" color="success" data-testid="organization-user-card-billing-manager-chip">
+        {t('organization.roles.billingManager')}
+      </Chip>
+    ) : (
+      <Chip
+        size="sm"
+        variant="soft"
+        color={isOwner ? 'primary' : memberRole === 'manager' ? 'success' : 'neutral'}
+        // The neutral soft fill is close to the surface in both themes; one step up keeps the chip visible.
+        sx={!isOwner && memberRole !== 'manager' ? { bgcolor: 'neutral.softHoverBg' } : undefined}
+        data-testid={`organization-user-card-${user.role}-chip`}
+      >
+        {t(`organization.roles.${user.role}`)}
+      </Chip>
+    );
+
+  const roleSelect = canChangeRole && (
+    <Dropdown>
+      <MenuButton
+        size="sm"
+        variant="outlined"
+        endDecorator={<ArrowDropDownIcon />}
+        loading={setRole.isPending}
+        data-testid="organization-user-card-role-select"
+      >
+        {t('organization.roles.label')}
+      </MenuButton>
+      <Menu placement="bottom-end" sx={{ zIndex: 9999 }}>
+        {ASSIGNABLE_ORG_ROLES.filter(role => role === memberRole || selectableRoles.includes(role)).map(role => (
+          <MenuItem
+            key={role}
+            selected={role === memberRole}
+            disabled={setRole.isPending || role === memberRole}
+            onClick={() => setRole.mutate({ organizationId, userId: user.id, role })}
+            data-testid={`organization-user-card-role-option-${role}`}
+          >
+            {t(`organization.roles.${role}`)}
+          </MenuItem>
+        ))}
+      </Menu>
+    </Dropdown>
   );
 
   const selectCell = selectable && (
@@ -232,15 +276,6 @@ const OrganizationUserCard: FC<OrganizationUserCardProps> = ({
         {canSetCreditLimit && (
           <MenuItem onClick={() => setEditingLimit(true)} data-testid="organization-user-card-set-limit">
             Set monthly limit
-          </MenuItem>
-        )}
-        {canToggleManager && (
-          <MenuItem
-            onClick={() => setManager.mutate({ organizationId, userId: user.id, isManager: !isManager })}
-            disabled={setManager.isPending}
-            data-testid={isManager ? 'organization-user-card-remove-manager' : 'organization-user-card-make-manager'}
-          >
-            {isManager ? 'Remove manager' : 'Make manager'}
           </MenuItem>
         )}
         {canRevoke && (
@@ -331,7 +366,10 @@ const OrganizationUserCard: FC<OrganizationUserCardProps> = ({
               </Stack>
             </Stack>
           </Stack>
-          <Box sx={{ flexShrink: 0 }}>{actionsMenu}</Box>
+          <Stack direction="row" spacing={1} sx={{ flexShrink: 0 }}>
+            {roleSelect}
+            {actionsMenu}
+          </Stack>
         </Stack>
         {creditLimitModal}
         {offboardDialog}
@@ -437,6 +475,7 @@ const OrganizationUserCard: FC<OrganizationUserCardProps> = ({
       <Box
         className="organization-user-card-actions"
         display="flex"
+        gap="8px"
         justifyContent="flex-end"
         sx={{
           gridArea: 'actions',
@@ -444,6 +483,7 @@ const OrganizationUserCard: FC<OrganizationUserCardProps> = ({
           [ROSTER_TABLE_QUERY]: { gridArea: 'auto', alignSelf: 'center' },
         }}
       >
+        {roleSelect}
         {actionsMenu}
       </Box>
       {creditLimitModal}

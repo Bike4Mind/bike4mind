@@ -60,7 +60,6 @@ import { StudioPane } from './studio/StudioPane';
 import type { StudioController } from './studio/controller';
 import { useStudioController } from './studio/useStudioController';
 import { studioPaneLayout } from './studio/layout';
-import { ProjectSubtitleLine } from './ProjectSubtitleLine';
 import { railFitsBesideThread, replyStatsToggleTitle, setReplyStatsRail, useReplyStatsPrefs } from './replyStatsPrefs';
 import { MessageThread } from './MessageThread';
 import {
@@ -101,6 +100,8 @@ import { HeldRelayCard } from './HeldRelayCard';
 import { SessionOpenerContext } from './SessionLink';
 import { clampQuote, quotedMessage } from './quotedReply';
 import { SpawnSuggestionTray } from './SpawnSuggestionTray';
+import { ChildrenStrip } from './ChildrenStrip';
+import { useSpawnLocation } from './spawnLocationSetting';
 import { useHeldRelays } from './useHeldRelays';
 import { TaskDecisionCards, decisionsFor, useTaskDecisions } from './TaskDecisionCards';
 import { pendingDecisionOf } from '@shared/orchestration';
@@ -157,6 +158,7 @@ import { ThreadDock, type ThreadDockMode } from './orchestrator/ThreadDock';
 import { useOrchestratorPrefs } from './orchestrator/useOrchestrator';
 import { useNeedsYouAlerts } from './orchestrator/useNeedsYouAlerts';
 import { SidebarSyncHints } from './SyncHints';
+import { useNewChatRequests } from '../appMenu/newChatRequests';
 import type { ClaudeImportKind } from '@shared/claudeImport';
 
 /** How long the orchestrator's "Read the report" keeps the summary highlighted (ms). */
@@ -228,7 +230,8 @@ type ChatScreen = 'conversation' | 'artifacts' | 'customize' | 'skill-market' | 
  * component knows the turn state, and the account strip knows where a glyph goes in its own
  * row. Handing the finished dot down keeps both where they belong - see TurnDot.
  */
-export type AccountStrip = (status: ReactNode) => ReactNode;
+/** `spentAt` ticks when a turn settles, for anything in the strip that reads the balance. */
+export type AccountStrip = (status: ReactNode, spentAt: number) => ReactNode;
 
 /** How long the first-run tavern intro plays before it is marked seen (ms). */
 const ORCHESTRATOR_INTRO_MS = 1500;
@@ -267,7 +270,7 @@ export function ChatShell({
 }: {
   auth?: AuthState | null;
   account?: AccountStrip;
-  updateNotice?: (panelShown: boolean) => ReactNode;
+  updateNotice?: ReactNode;
   onOpenModelServers?: () => void;
   /** Settings > Import, scrolled to one source; the sidebar's sync hints are shown only with it. */
   onOpenImportSettings?: (focus: ClaudeImportKind) => void;
@@ -339,6 +342,7 @@ export function ChatShell({
   const chatSettingsLocked = !activeId || settling || conversation.session?.id !== activeId;
   const openFailed = !!activeId && conversation.openFailedFor === activeId && conversation.session?.id !== activeId;
   const spawnSuggestions = useSpawnSuggestions(conversation.session);
+  const [spawnLocation] = useSpawnLocation();
   const heldRelays = useHeldRelays(persistedId);
   const taskDecisions = useTaskDecisions();
   const markSessionStart = useSessionStartTiming(sessions);
@@ -365,7 +369,7 @@ export function ChatShell({
   const noLocal = localMode ? noLocalModels(catalog) : null;
   const modelServers = useModelServers();
   const savedServers = useMemo(() => modelServers?.filter(server => !server.local), [modelServers]);
-  const { statuses, preparing, loaded: statusesLoaded } = useSessionStatusFeed();
+  const { statuses, preparing, unreadReplies, loaded: statusesLoaded } = useSessionStatusFeed();
   const prSummaries = usePrSummaries();
   const [collapsed, setCollapsed] = useState(false);
   const [screen, setScreen] = useState<ChatScreen>('conversation');
@@ -576,6 +580,16 @@ export function ChatShell({
     [activeId, showBrowserPane]
   );
   const artifactsInSession = useMemo(() => sessionArtifacts(conversation.messages), [conversation.messages]);
+  const reportedChildIds = useMemo(
+    () =>
+      new Set(
+        conversation.messages.flatMap(message => {
+          const id = message.reportedChildId ?? message.childReport?.sessionId;
+          return id ? [id] : [];
+        })
+      ),
+    [conversation.messages]
+  );
   const openSessionArtifact = useCallback(
     ({ key, artifact }: SessionArtifact) =>
       openArtifactInSessionBrowser(
@@ -768,8 +782,11 @@ export function ChatShell({
    */
   const sessionStatus = activeId ? statuses.get(activeId) : undefined;
   const awaitingDecision = pendingDecisionOf(activeSummary?.workerTask) !== undefined;
+  const unreadReply = !!activeId && unreadReplies.has(activeId);
   const turnOpen =
-    conversation.streaming || sessionStatus === 'processing' || (sessionStatus === 'needs-action' && !awaitingDecision);
+    conversation.streaming ||
+    sessionStatus === 'processing' ||
+    (sessionStatus === 'needs-action' && !awaitingDecision && !unreadReply);
   const plan = useMemo(() => activeTodos(conversation.messages, turnOpen), [conversation.messages, turnOpen]);
   const sentPrompts = useMemo(() => promptHistory(conversation.messages), [conversation.messages]);
 
@@ -957,6 +974,17 @@ export function ChatShell({
     [sendToConversation, modelSessionId, conversationId, modelOption]
   );
   const dockVisible = orchestratorPrefs.dockOpen && !ambient.settled;
+  useEffect(() => {
+    if (!persistedId || screen !== 'conversation' || (orchestrating && !dockVisible)) return;
+    const acknowledge = () => markSessionViewed(persistedId);
+    acknowledge();
+    window.addEventListener('focus', acknowledge);
+    document.addEventListener('visibilitychange', acknowledge);
+    return () => {
+      window.removeEventListener('focus', acknowledge);
+      document.removeEventListener('visibilitychange', acknowledge);
+    };
+  }, [persistedId, screen, unreadReply, orchestrating, dockVisible]);
   const toggleParentChat = () => {
     const agentDetailsOpen = threadHost.current?.parentElement?.querySelector('[data-agent-details-open="true"]');
     wakeAmbient();
@@ -1014,7 +1042,14 @@ export function ChatShell({
     else if (alertableSessions(sessions, 'agents').has(rootId)) setDockOpen(true);
   };
   // Only the conversation screen shows the session asking; Artifacts, Models and the rest hide it.
-  useNeedsYouAlerts(sessions, statuses, statusesLoaded, openNotice, screen === 'conversation' ? activeId : null);
+  useNeedsYouAlerts(
+    sessions,
+    statuses,
+    statusesLoaded,
+    openNotice,
+    screen === 'conversation' ? activeId : null,
+    unreadReplies
+  );
   const clearAgentFocus = useCallback(() => setAgentFocus(null), []);
   const pickExampleQuest = useCallback(
     (prompt: string) => {
@@ -1249,6 +1284,8 @@ export function ChatShell({
     if (created) setActiveId(created);
     setComposerFocus(request => request + 1);
   }, [startSession, markSessionStart]);
+  // The app menu's New Chat (Cmd+N), once the last conversation is restored.
+  useNewChatRequests(onCreate, !settling);
 
   const shareFolderTo = conversation.addContextDirectoryTo;
   const addingFolder = useRef(false);
@@ -1451,6 +1488,7 @@ export function ChatShell({
                   // after React drops it.
                   key={`thread-${activeId ?? 'none'}`}
                   messages={conversation.messages}
+                  findable
                   sessionId={activeId}
                   // What stands in for the transcript when there is no session to have one. It is the
                   // only control on screen that starts one from here, so it is a button and not a
@@ -1662,11 +1700,14 @@ export function ChatShell({
             : undefined
         }
         footer={account?.(
-          <TurnDot state={turnState({ streaming: turnOpen, disabled: !activeId || creatingCode, notReady: unbound })} />
+          <TurnDot
+            state={turnState({ streaming: turnOpen, disabled: !activeId || creatingCode, notReady: unbound })}
+          />,
+          conversation.settledTurns
         )}
       />
 
-      {screen !== 'conversation' && updateNotice?.(false)}
+      {screen !== 'conversation' && updateNotice}
       {screen === 'artifacts' ? (
         <ArtifactLibraryPanel onClose={() => setScreen('conversation')} />
       ) : screen === 'models' ? (
@@ -1717,15 +1758,12 @@ export function ChatShell({
                         Orchestrator
                       </Typography>
                     ) : (
-                      <>
-                        <SessionHeader
-                          title={activeSummary?.title ?? conversation.session.title}
-                          onRename={title =>
-                            void (activeSummary ? rename(activeSummary, title) : conversation.rename(title))
-                          }
-                        />
-                        {conversation.session.project && <ProjectSubtitleLine project={conversation.session.project} />}
-                      </>
+                      <SessionHeader
+                        title={activeSummary?.title ?? conversation.session.title}
+                        onRename={title =>
+                          void (activeSummary ? rename(activeSummary, title) : conversation.rename(title))
+                        }
+                      />
                     )
                   ) : opening ? null : (
                     <Typography level="title-sm" textColor="text.tertiary">
@@ -1888,6 +1926,7 @@ export function ChatShell({
                     layout={orchestratorLayout}
                     onLayoutChange={changeOrchestratorLayout}
                     actions={agentActions}
+                    onOpenPrLink={(_sessionId, url) => openInBrowserPane(url)}
                     introPlaying={introPhase === 'playing'}
                     renderView={renderOrchestratorView}
                     onParentFocus={focusParentChat}
@@ -2000,7 +2039,7 @@ export function ChatShell({
                 />
               )}
               {/* A modal panel leaves no room for a second card; Home keeps the update controller mounted. */}
-              {(!panelShown || panelDocked) && updateNotice?.(panelShown)}
+              {(!panelShown || panelDocked) && updateNotice}
             </Box>
 
             {ambient.settled && (
@@ -2143,6 +2182,16 @@ export function ChatShell({
                     suggestions={spawnSuggestions.suggestions}
                     onStart={onStartSuggestion}
                     onDismiss={spawnSuggestions.dismiss}
+                    onOpenSession={selectSession}
+                    location={spawnLocation}
+                  />
+
+                  <ChildrenStrip
+                    sessions={sessions}
+                    statuses={statuses}
+                    parentId={persistedId}
+                    reportedIds={reportedChildIds}
+                    onOpenSession={selectSession}
                   />
                 </>
               )}
@@ -2259,7 +2308,7 @@ export function ChatShell({
                         policy={conversation.session?.orchestrationPolicy}
                         planner={conversation.session?.model}
                         models={catalog.models}
-                        onChange={on => void setOrchestrate(on)}
+                        onChange={(on, budgetCredits) => void setOrchestrate(on, budgetCredits)}
                       />
                     )}
                   </>

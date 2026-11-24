@@ -1,6 +1,6 @@
 import type { AuthenticatedApiClient } from '@bike4mind/client-auth';
 import { describe, expect, it, vi } from 'vitest';
-import { AccountService, readBalance, readMonthlyAllowance, readPlan, readTier } from './AccountService';
+import { AccountService, readBalance, readExpiring, readMonthlyAllowance, readPlan, readTier } from './AccountService';
 
 function service(get: ReturnType<typeof vi.fn>, signedIn = true) {
   return new AccountService({
@@ -36,6 +36,46 @@ describe('readMonthlyAllowance', () => {
     expect(readMonthlyAllowance({ credits: { monthly_allowance: -1 } })).toBeNull();
     expect(readMonthlyAllowance({ credits: { monthly_allowance: '50000' } })).toBeNull();
     expect(readMonthlyAllowance(null)).toBeNull();
+  });
+});
+
+describe('readExpiring', () => {
+  it('reads the schedule soonest first, as epoch ms', () => {
+    expect(
+      readExpiring({
+        credits: {
+          expiring: [
+            { amount: 300, expires_at: '2027-01-16T00:00:00.000Z' },
+            { amount: 120, expires_at: '2026-12-02T00:00:00.000Z' },
+          ],
+        },
+      })
+    ).toEqual([
+      { amount: 120, expiresAt: Date.parse('2026-12-02T00:00:00.000Z') },
+      { amount: 300, expiresAt: Date.parse('2027-01-16T00:00:00.000Z') },
+    ]);
+  });
+
+  it('reads an empty schedule as nothing expiring, not as unknown', () => {
+    expect(readExpiring({ credits: { expiring: [] } })).toEqual([]);
+  });
+
+  it('is null when the server stated no schedule', () => {
+    expect(readExpiring({ credits: { balance: 10 } })).toBeNull();
+    expect(readExpiring(null)).toBeNull();
+  });
+
+  it('drops the whole schedule when any entry is malformed, rather than understate what expires', () => {
+    for (const bad of [
+      { amount: 'many', expires_at: '2026-12-02T00:00:00.000Z' },
+      { amount: 0, expires_at: '2026-12-02T00:00:00.000Z' },
+      { amount: 10, expires_at: 'soon' },
+      null,
+    ]) {
+      expect(
+        readExpiring({ credits: { expiring: [{ amount: 5, expires_at: '2026-12-01T00:00:00.000Z' }, bad] } })
+      ).toBeNull();
+    }
   });
 });
 
@@ -109,6 +149,17 @@ describe('AccountService', () => {
   it('retains the allowance when the response omits its balance', async () => {
     const get = vi.fn().mockResolvedValue({ credits: { monthly_allowance: 50_000 } });
     await expect(service(get).credits()).resolves.toMatchObject({ balance: null, monthlyAllowance: 50_000 });
+  });
+
+  it('forwards the expiry schedule with the personal balance', async () => {
+    const get = vi.fn().mockResolvedValue({
+      credits: { balance: 500, expiring: [{ amount: 200, expires_at: '2026-12-02T00:00:00.000Z' }] },
+    });
+    await expect(service(get).credits()).resolves.toEqual({
+      balance: 500,
+      monthlyAllowance: null,
+      expiring: [{ amount: 200, expiresAt: Date.parse('2026-12-02T00:00:00.000Z') }],
+    });
   });
 
   it('reports the balance from the account endpoint', async () => {

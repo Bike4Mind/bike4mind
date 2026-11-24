@@ -46,7 +46,7 @@ async function withinEventLimit(properties: EmailSendDetail, mail: QueuedMail): 
  * On a hosted stage the mail is published as an email.send event and the worker
  * (apps/workers/src/events/sendEmail.ts) is the one process that holds the transport. Self-host
  * has no event bus, so the mail goes to the SMTP mailer in this process and the result is the
- * delivery result. packages/scripts/src/checkMailSendSites.test.ts keeps direct sends from
+ * delivery result. packages/scripts/src/checkMailSendSites.repo.test.ts keeps direct sends from
  * coming back.
  */
 export const queuedMailer = {

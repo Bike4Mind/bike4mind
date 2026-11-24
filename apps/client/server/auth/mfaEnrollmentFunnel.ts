@@ -6,7 +6,7 @@ import {
   type MfaEnrollmentEventPayload,
 } from '@bike4mind/common';
 import { mfaService } from '@bike4mind/services';
-import { readEnforceMfa } from '@bike4mind/server-utils/auth/mfaEnforcement';
+import { isMfaEnrollmentRequired } from '@bike4mind/server-utils/auth/mfaEnforcement';
 import { logEvent } from '@bike4mind/server-utils/utils/analyticsLog';
 import type { SignInOrigin } from '@server/auth/signInSecondFactor';
 
@@ -21,7 +21,7 @@ type RequestCredential = { mfaPending?: unknown; impersonatedBy?: unknown; mfaSi
  * Where this request's user is being made to enroll, or null when enrollment is not forced on
  * them (voluntary setup from the profile, an enrolled user, an admin impersonating). Mirrors the
  * sign-in gate (resolveSecondFactor: a pending token without a factor exists only under
- * enforcement) and the session gate (isMfaEnrollmentOwed).
+ * a requirement) and the session gate (isMfaEnrollmentOwed).
  */
 export async function forcedEnrollmentSurface(
   user: IUserDocument,
@@ -31,7 +31,7 @@ export async function forcedEnrollmentSurface(
     return null;
   }
   if (credential.mfaPending) return 'signin';
-  const enforced = isMfaForcedForUser(user) || (await readEnforceMfa({ skipCache: false }));
+  const enforced = isMfaForcedForUser(user) || (await isMfaEnrollmentRequired(user));
   return enforced ? 'session' : null;
 }
 

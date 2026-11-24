@@ -29,7 +29,7 @@ vi.mock('@bike4mind/database/infra', () => ({
 }));
 vi.mock('@bike4mind/server-utils/utils/config', () => ({ Config: h.config }));
 vi.mock('@bike4mind/server-utils/utils/orgAccess', () => ({
-  verifyOrgOwner: vi.fn(async () => ({ id: 'org-1', name: 'Org' })),
+  verifyOrgPermission: vi.fn(async () => ({ id: 'org-1', name: 'Org' })),
 }));
 vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({ recordAdminActionFromRequest: vi.fn(async () => null) }));
 

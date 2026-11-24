@@ -65,8 +65,10 @@ compute per-run and per-day USD caps) and settings that only toggle a feature.
 | `preferenceArenaLifetimeCreditCap` | Growth and Pricing > Preference arena | The same arena vote judge. Default 0 earns nothing. | no. A limit. | Usage limits |
 | `ReferralFirstPaymentCredits` | Invite Center > Rewards | The reward held for the inviter on the invited friend's first full-price Professional payment (`packages/server-utils/src/referrals/subscriptionReward.ts`), locked when the payment is recorded. Payments made while both payment rewards are 0 are not counted, so after activation the next eligible payment takes the first step. Default 0 (off). | no. A free grant. | Signup and starter credits |
 | `ReferralSecondPaymentCredits` | Invite Center > Rewards | The reward held for the inviter on the invited friend's second full-price Professional payment (`packages/server-utils/src/referrals/subscriptionReward.ts`), locked when the payment is recorded. Payments made while both payment rewards are 0 are not counted, so after activation the next eligible payment takes the first step. Default 0 (off). | no. A free grant. | Signup and starter credits |
+| `ReferralMilestones` | Invite Center > Rewards | Credits an inviter earns once that many of their referred friends are active (a verified email and a first answer), as `friends:credits` pairs, e.g. `5:500, 10:1500`. Parsed by `parseReferralMilestones` (`b4m-core/common/src/utils/referralMilestones.ts`), paid once per milestone by `packages/server-utils/src/referrals/milestoneReward.ts` when a friend becomes active, and shown as progress in the referral modal (`apps/client/server/referrals/inviterSummary.ts`). Default empty (off). | no. A free grant. | Signup and starter credits |
 | `ReferralHoldDays` | Invite Center > Rewards | Days a payment reward is held before the release job credits it (`packages/server-utils/src/referrals/subscriptionReward.ts`, `apps/workers/src/cron/referralRewardRelease.ts`). | no. A hold period. | Signup and starter credits |
 | `ReferralInvitesPerUser` | Invite Center > Rewards | The starting invite count at registration (`register.ts`). New signups only. | no. A limit. | Usage limits |
+| `ReferralLinkSignupsPerMonth` | Invite Center > Rewards | The most signups one user's share link is credited with in any 30 days (`apps/client/server/referrals/shareLink.ts`). A signup past it still creates the account but credits nobody. 0 stops share links from crediting anyone. Default 10. | no. A limit. | Usage limits |
 | `ReferralAlertRewardsPerDay` | Invite Center > Rewards | The 24-hour reward-count alert in `packages/server-utils/src/referrals/firstAnswerReward.ts`, also checked when a held reward is released (`packages/server-utils/src/referrals/subscriptionReward.ts`). | no. An alert threshold. | Usage limits |
 | `blockDisposableEmails` | Admin Settings > User Management > Credits System | `shouldBlockDisposableEmail` (`b4m-core/services/src/userService/disposableEmail.ts`), called from registration, the email-verified grant (`apps/client/server/auth/emailVerifiedGrants.ts`) and the OAuth starting-grant backfill. | no. Stops free-credit farming. | Signup and starter credits |
 | `blockedEmailDomains` | Admin Settings > User Management > Credits System | `isAdminBlockedEmailDomain` inside `shouldBlockDisposableEmail` (`b4m-core/services/src/userService/disposableEmail.ts`), so the same readers as `blockDisposableEmails`. Entries are normalized and validated on save in `apps/client/pages/api/settings/update.ts`. | no. Stops free-credit farming from domains the disposable list misses. | Signup and starter credits |
@@ -175,6 +177,15 @@ files (`AdminGrowthPricingTab.tsx`, `AdminSettingsTab.tsx`, `settingHomes.ts`) a
 
 </details>
 
+<details><summary><code>ReferralMilestones</code> (4 files)</summary>
+
+- `apps/client/app/components/admin/AdminGrowthPricingTab.tsx`
+- `apps/client/app/components/admin/settingHomes.ts`
+- `apps/client/server/referrals/inviterSummary.ts`
+- `packages/server-utils/src/referrals/firstAnswerReward.ts`
+
+</details>
+
 <details><summary><code>ReferralHoldDays</code> (2 files)</summary>
 
 - `apps/client/app/components/admin/settingHomes.ts`
@@ -186,6 +197,13 @@ files (`AdminGrowthPricingTab.tsx`, `AdminSettingsTab.tsx`, `settingHomes.ts`) a
 
 - `apps/client/app/components/admin/settingHomes.ts`
 - `b4m-core/services/src/userService/register.ts`
+
+</details>
+
+<details><summary><code>ReferralLinkSignupsPerMonth</code> (2 files)</summary>
+
+- `apps/client/app/components/admin/settingHomes.ts`
+- `apps/client/server/referrals/shareLink.ts`
 
 </details>
 

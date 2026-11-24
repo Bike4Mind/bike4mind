@@ -174,20 +174,26 @@ describe('payCreditReward', () => {
     expect(await signupGrantBudgetRepository.getSpent(trickleKey())).toBe(0);
   });
 
-  it('keeps the draw spent when the payout throws after its ledger row committed', async () => {
+  it('rolls back the ledger row and refunds the draw when the balance write fails, then pays once on retry', async () => {
     const user = await makeUser();
+    const paying = reward(user.id, 'projects');
     const creditHolderMethods = {
-      ...userRepository,
       incrementCredits: async () => {
         throw new Error('balance write failed');
       },
-    } as unknown as typeof userRepository;
-    await expect(
-      creditService.payCreditReward(reward(user.id, 'projects'), { ...adapters, creditHolderMethods })
-    ).rejects.toThrow('balance write failed');
-    expect(await CreditTransaction.countDocuments({ transactionId: reward(user.id, 'projects').transactionId })).toBe(
-      1
+    };
+
+    await expect(creditService.payCreditReward(paying, { ...adapters, creditHolderMethods })).rejects.toThrow(
+      'balance write failed'
     );
+    expect(await CreditTransaction.countDocuments({ transactionId: paying.transactionId })).toBe(0);
+    expect(await balance(user.id)).toBe(0);
+    expect(await signupGrantBudgetRepository.getSpent(trickleKey())).toBe(0);
+
+    expect((await creditService.payCreditReward(paying, adapters)).outcome).toBe('paid');
+    expect((await creditService.payCreditReward(paying, adapters)).outcome).toBe('duplicate');
+    expect(await CreditTransaction.countDocuments({ transactionId: paying.transactionId })).toBe(1);
+    expect(await balance(user.id)).toBe(100);
     expect(await signupGrantBudgetRepository.getSpent(trickleKey())).toBe(100);
   });
 

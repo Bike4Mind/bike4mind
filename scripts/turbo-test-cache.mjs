@@ -42,15 +42,8 @@ export const CONTEXT_ENV = ['TZ', 'TMPDIR', 'NODE_OPTIONS', 'VITEST_MAX_WORKERS'
 // scripts/__tests__/turbo-test-cache.test.mjs finds such a read in its tests. The cheaper way out
 // is to name those tests `*.repo.test.*` and run them from a `test:repo` script, which CI runs
 // uncached ("Run repo-scan tests" in ci.yml); apps/client does that.
-export const WHOLE_REPO_TEST_PACKAGES = [
-  '@bike4mind/database',
-  '@bike4mind/infra',
-  '@bike4mind/resource',
-  '@bike4mind/scripts',
-  '@bike4mind/server-utils',
-  '@bike4mind/services-core',
-  '@bike4mind/workers',
-];
+// scripts still has dynamic external reads in workflow, source and packaging guards.
+export const WHOLE_REPO_TEST_PACKAGES = ['@bike4mind/scripts'];
 
 const NO_SCRIPT = '<NONEXISTENT>';
 

@@ -18,6 +18,8 @@ const harness = vi.hoisted(() => {
     cookies: { clearOnQuit: shutdown() },
     spareWorktrees: { dispose: shutdown() },
     stopLocalServers: shutdown(),
+    initialize: shutdown(),
+    runLiveEvaluation: vi.fn(async () => undefined),
     quit: vi.fn(),
     windows: [] as EventEmitter[],
   };
@@ -33,6 +35,7 @@ vi.mock('electron', async () => {
       whenReady: async () => undefined,
       getPath: () => '/unused',
       isPackaged: true,
+      getVersion: () => '0.0.0',
       quit: harness.quit,
     }),
     BrowserWindow: class extends EventEmitter {
@@ -44,15 +47,17 @@ vi.mock('electron', async () => {
       loadFile = vi.fn();
     },
     ipcMain: { handle: vi.fn() },
+    screen: { getAllDisplays: () => [] },
     shell: {},
     dialog: { showMessageBox: harness.showMessageBox },
   };
 });
 vi.mock('./account', () => ({ registerAccount: vi.fn() }));
 vi.mock('./auth', () => ({
-  registerAuth: () => ({ getState: () => ({}), initialize: vi.fn() }),
+  registerAuth: () => ({ getState: () => ({}), initialize: harness.initialize }),
   onAuthStateChanged: vi.fn(),
 }));
+vi.mock('./chat/liveEvaluation', () => ({ runLiveEvaluation: harness.runLiveEvaluation }));
 vi.mock('./attention', () => ({
   registerAttention: () => ({ watchNeedsYou: () => ({}) }),
 }));
@@ -69,6 +74,17 @@ vi.mock('./devlog', () => ({
   closeDevLogWindow: vi.fn(),
 }));
 vi.mock('./logFile', () => ({ persistConsoleWarnings: vi.fn() }));
+vi.mock('./appMenu', () => ({ registerAppMenu: vi.fn() }));
+vi.mock('./rendererErrors', () => ({ registerRendererErrorLog: vi.fn() }));
+vi.mock('./singleInstance', () => ({ claimSingleInstance: () => true }));
+vi.mock('./mainWindowState', () => ({
+  MainWindowStateStore: class {
+    load = vi.fn(async () => undefined);
+    current = () => ({ bounds: null, maximized: false });
+  },
+  initialMainWindowPlacement: () => ({ bounds: { width: 1280, height: 860 }, maximized: false }),
+  trackMainWindowState: vi.fn(),
+}));
 vi.mock('./windows', () => ({ appWindows: () => harness.windows }));
 vi.mock('./chat/sessionScope', () => ({ sessionScopeFor: () => null, sessionScopeForChat: () => null }));
 vi.mock('./chat/browser/browserScope', () => ({ closeBrowsersOnScopeChange: vi.fn() }));
@@ -78,6 +94,15 @@ vi.mock('./chat/model3d/engineProtocol', () => ({ registerModelScheme: vi.fn() }
 vi.mock('./chat/media/protocol', () => ({ registerMediaScheme: vi.fn() }));
 vi.mock('./mods/skinProtocol', () => ({ registerSkinScheme: vi.fn() }));
 vi.mock('./mods', () => ({ registerSkins: vi.fn() }));
+vi.mock('./orchestrateMini', () => ({
+  registerOrchestrateMini: () => ({
+    isOpen: () => false,
+    toggle: vi.fn(),
+    close: vi.fn(),
+    onOpenChanged: vi.fn(),
+    start: async () => undefined,
+  }),
+}));
 vi.mock('./chat', () => ({
   registerChat: () => ({
     service: { sessionStatuses: harness.sessionStatuses },
@@ -107,6 +132,8 @@ describe('application quit', () => {
   beforeEach(async () => {
     vi.resetModules();
     harness.quit.mockReset();
+    harness.initialize.mockReset().mockResolvedValue(undefined);
+    harness.runLiveEvaluation.mockReset().mockResolvedValue(undefined);
     harness.windows.length = 0;
     harness.sessionStatuses.mockReset().mockReturnValue([]);
     harness.registerUpdates.mockReset();
@@ -121,6 +148,8 @@ describe('application quit', () => {
     vi.spyOn(process, 'on').mockReturnValue(process);
     vi.useFakeTimers({ toFake: ['setImmediate'] });
     await import('./index');
+    // The window opens once its saved placement has loaded, a few promise turns into whenReady.
+    await vi.waitFor(() => expect(harness.windows.length).toBeGreaterThan(0));
   });
 
   afterEach(() => {
@@ -135,6 +164,22 @@ describe('application quit', () => {
     app.emit('before-quit', event);
     return event;
   }
+
+  it('restores authentication before bootstrapping with evaluation disabled', async () => {
+    await vi.waitFor(() => expect(harness.runLiveEvaluation).toHaveBeenCalledOnce());
+    expect(harness.initialize).toHaveBeenCalledOnce();
+    expect(harness.runLiveEvaluation).toHaveBeenCalledWith(
+      expect.objectContaining({ initialize: harness.initialize }),
+      expect.any(String),
+      false,
+      undefined,
+      { finalPhase: false, recoverRunId: undefined }
+    );
+    expect(harness.initialize.mock.invocationCallOrder[0]).toBeLessThan(
+      harness.runLiveEvaluation.mock.invocationCallOrder[0]
+    );
+    expect(harness.quit).not.toHaveBeenCalled();
+  });
 
   it('resumes a single quit on a new event-loop turn after cleanup', async () => {
     const cleanup = Promise.withResolvers<void>();

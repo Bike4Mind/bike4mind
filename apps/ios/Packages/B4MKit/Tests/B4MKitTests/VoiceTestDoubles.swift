@@ -51,9 +51,11 @@ actor FakeSpeaker: SpeechSpeaking {
   private(set) var spoken: [String] = []
   private(set) var stopCount = 0
   var holding = false
+  var stopDelay: Duration?
   private var playing: CheckedContinuation<Void, Never>?
 
   func setHolding(_ holding: Bool) { self.holding = holding }
+  func setStopDelay(_ delay: Duration) { stopDelay = delay }
 
   func speak(_ text: String) async {
     spoken.append(text)
@@ -61,9 +63,10 @@ actor FakeSpeaker: SpeechSpeaking {
     await withCheckedContinuation { playing = $0 }
   }
 
-  func stop() {
+  func stop() async {
     stopCount += 1
     finishCurrent()
+    if let stopDelay { try? await Task.sleep(for: stopDelay) }
   }
 
   func finishCurrent() {

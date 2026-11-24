@@ -33,6 +33,7 @@ const electron = vi.hoisted(() => {
     appListeners: new Map<string, (event: unknown, created: unknown) => void>(),
     app: {
       dock: { setBadge: vi.fn() },
+      setBadgeCount: vi.fn(),
       on: vi.fn((name: string, listener: (event: unknown, created: unknown) => void) => {
         electron.appListeners.set(name, listener);
       }),
@@ -219,10 +220,19 @@ describe('the dock badge', () => {
     expect(electron.app.dock.setBadge).toHaveBeenCalledWith('');
   });
 
-  it('does nothing off macOS', () => {
+  it('sets the launcher count on Linux, clearing it at zero', () => {
     setPlatform('linux');
     call(IPC_CHANNELS.attentionSetBadge, 2);
+    call(IPC_CHANNELS.attentionSetBadge, 0);
+    expect(electron.app.setBadgeCount.mock.calls).toEqual([[2], [0]]);
     expect(electron.app.dock.setBadge).not.toHaveBeenCalled();
+  });
+
+  it('does nothing on Windows', () => {
+    setPlatform('win32');
+    call(IPC_CHANNELS.attentionSetBadge, 2);
+    expect(electron.app.dock.setBadge).not.toHaveBeenCalled();
+    expect(electron.app.setBadgeCount).not.toHaveBeenCalled();
   });
 });
 

@@ -96,7 +96,7 @@ export async function buildTimeline(query: TimelineQuery): Promise<SpendTimeline
 type AccountInfo = { name: string; createdAt: Date | null };
 
 /** Names and creation times for the actors and their payers, keyed by id. */
-async function resolveAccountInfo(
+export async function resolveAccountInfo(
   accounts: Array<{ id: string; type: CreditHolderType }>
 ): Promise<Map<string, AccountInfo>> {
   const idsOf = (type: CreditHolderType) =>

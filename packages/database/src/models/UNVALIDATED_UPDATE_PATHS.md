@@ -88,7 +88,7 @@ The table below remains the literal-update inventory, not proof that all databas
 | AdminAccessReview | `decisions.decision` | enum | `infra/admin/AdminAccessReviewModel.ts#AdminAccessReviewRepository.recordDecision` | schema | `runValidators` | update call passes runValidators |
 | AdminAccessReview | `decisions.decision` | enum | `infra/admin/AdminAccessReviewModel.ts#AdminAccessReviewRepository.upsert` | schema | `runValidators` | update call passes runValidators |
 | AdminMorningBrief | `delivery` | enum | `infra/admin/AdminMorningBriefModel.ts#claimDelivery` | repository-check | `literal` | writes "sending" |
-| AdminMorningBrief | `delivery` | enum | `infra/admin/AdminMorningBriefModel.ts#finishDelivery` | route-schema | `apps/client/server/admin/morningBrief.ts#outcome` | Only caller sets literal union; Slack helper returns sent/unconfigured/failed literals only |
+| AdminMorningBrief | `delivery` | enum | `infra/admin/AdminMorningBriefModel.ts#finishDelivery` | route-schema | `apps/workers/src/admin/morningBrief.ts#outcome` | Only caller sets literal union; Slack helper returns sent/unconfigured/failed literals only |
 | AssistantBrief | `status` | enum | `content/AssistantBriefModel.ts#markFailed` | schema | `runValidators` | update call passes runValidators |
 | AssistantBrief | `status` | enum | `content/AssistantBriefModel.ts#markReady` | schema | `runValidators` | update call passes runValidators |
 | AdminMorningBrief | `delivery` | enum | `infra/admin/AdminMorningBriefModel.ts#saveOnce` | repository-check | `literal` | writes "ready" |
@@ -117,6 +117,9 @@ The table below remains the literal-update inventory, not proof that all databas
 | BillingMismatch | `resolvedBy` | enum | `billing/BillingMismatchModel.ts#BillingMismatchRepository.resolveMissing` | repository-check | `literal` | writes "reconciliation" |
 | BillingMismatch | `status` | enum | `billing/BillingMismatchModel.ts#BillingMismatchRepository.resolveForSubscription` | repository-check | `literal` | writes "resolved" |
 | BillingMismatch | `status` | enum | `billing/BillingMismatchModel.ts#BillingMismatchRepository.resolveMissing` | repository-check | `literal` | writes "resolved" |
+| CallableFunction | `description` | maxlength | `ai/CallableFunctionModel.ts#CallableFunctionRepository.repin` | schema | `runValidators` | update call passes runValidators |
+| CallableFunction | `pin.contentHash` | match | `ai/CallableFunctionModel.ts#CallableFunctionRepository.repin` | schema | `runValidators` | update call passes runValidators |
+| CallableFunction | `pin.version` | min | `ai/CallableFunctionModel.ts#CallableFunctionRepository.repin` | schema | `runValidators` | update call passes runValidators |
 | CompletionRun | `budgetCredits` | min | `billing/CompletionRunModel.ts#CompletionRunRepository.raiseBudget` | schema | `runValidators` | Passes runValidators; the sole caller (POST completion-runs/{runId}/budget) also validates the body as an int of at least 1. |
 | CreditTransaction | `reversalReason` | enum | `billing/CreditTransactionModel.ts#CreditTransactionRepository.markPurchaseReversed` | route-schema | `apps/client/pages/api/stripe/webhook.ts#reversePurchaseStanding` | Webhook and reconcile script pass literals refunded or dispute_lost only |
 | CreditTransaction | `status` | enum | `billing/CreditTransactionModel.ts#CreditTransactionRepository.updateTransactionStatus` | route-schema | `apps/client/pages/api/stripe/webhook.ts#CreditPurchaseStatus.Failed` | Sole caller passes enum constant CreditPurchaseStatus.Failed |
@@ -347,6 +350,11 @@ The table below remains the literal-update inventory, not proof that all databas
 | User | `riskScore.reviewState` | enum | `auth/UserModel.ts#UserRepository.setRiskScore` | route-schema | `b4m-core/services/src/userService/refreshSignupRiskScore.ts#refreshSignupRiskScore` | Caller uses ternary pending/none; writer cond otherwise keeps stored value |
 | User | `riskScore.signals.signal` | enum | `auth/UserModel.ts#UserRepository.setRiskScore` | route-schema | `b4m-core/services/src/userService/signupRiskScore.ts#scoreSignupRisk` | Signals built only via add() with literal signal names |
 | User | `signupGrant.inviteBonusPaid` | min | `auth/UserModel.ts#UserRepository.markInviteBonusPaid` | route-schema | `b4m-core/services/src/userService/inviteBonus.ts#payInviteBonus` | Callers pass 0 or amount checked safe integer > 0 |
+| User | `preferences.agentModeDefault` | enum | `auth/UserModel.ts#UserRepository.ensurePreferencesObject` | schema | `runValidators` | Update call passes runValidators; initializes null preferences |
+| User | `preferences.contextTelemetryLevel` | enum | `auth/UserModel.ts#UserRepository.ensurePreferencesObject` | schema | `runValidators` | Update call passes runValidators; initializes null preferences |
+| User | `preferences.fileBrowserViewMode` | enum | `auth/UserModel.ts#UserRepository.ensurePreferencesObject` | schema | `runValidators` | Update call passes runValidators; initializes null preferences |
+| User | `preferences.promptCacheTtl` | enum | `auth/UserModel.ts#UserRepository.ensurePreferencesObject` | schema | `runValidators` | Update call passes runValidators; initializes null preferences |
+| User | `preferences.rechartsDisplayMode` | enum | `auth/UserModel.ts#UserRepository.ensurePreferencesObject` | schema | `runValidators` | Update call passes runValidators; initializes null preferences |
 | UserApiKey | `status` | enum | `auth/CcBridgeDeviceModel.ts#revoke` | repository-check | `packages/database/src/models/auth/CcBridgeDeviceModel.ts#revoke` | Writer sets the constant ApiKeyStatus.DISABLED |
 | UserApiKey | `status` | enum | `auth/UserApiKeyModel.ts#UserApiKeyRepository.deactivateAllByUserId` | repository-check | `packages/database/src/models/auth/UserApiKeyModel.ts#UserApiKeyRepository.deactivateAllByUserId` | Writer sets the constant ApiKeyStatus.DISABLED |
 | UserApiKey | `status` | enum | `auth/UserApiKeyModel.ts#UserApiKeyRepository.reactivateByIds` | route-schema | `apps/client/server/admin/usersBulk/ports.ts#RevokedApiKeySchema` | Undo snapshot parsed by UndoRecordSchema; status is z.enum(ApiKeyStatus) |

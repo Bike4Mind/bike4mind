@@ -177,3 +177,101 @@ final class ThumbnailCacheTests: XCTestCase {
     }
   }
 }
+
+final class ThumbnailCacheDiskTests: XCTestCase {
+  private let url = URL(string: "https://s3.example/files/f1.png?X-Amz-Signature=aaa&X-Amz-Date=1")!
+  private let resigned = URL(string: "https://s3.example/files/f1.png?X-Amz-Signature=bbb&X-Amz-Date=2")!
+  private var directory: URL!
+
+  override func setUpWithError() throws {
+    directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+  }
+
+  override func tearDownWithError() throws {
+    try? FileManager.default.removeItem(at: directory)
+  }
+
+  private func store(byteLimit: Int = 10 * 1024 * 1024) -> ImageDiskStore {
+    ImageDiskStore(directory: directory, byteLimit: byteLimit)
+  }
+
+  func testAFreshMemoryTierReadsBytesAnEarlierOneStoredUnderAResignedURL() async throws {
+    let png = try pngData(width: 40, height: 20)
+    let first = CountingDownloader(result: .success(png))
+    _ = try await ThumbnailCache(downloader: first, disk: store()).image(for: url)
+
+    // A new instance stands in for a relaunch or an evicted memory tier.
+    let second = CountingDownloader(result: .success(png))
+    let image = try await ThumbnailCache(downloader: second, disk: store()).image(for: resigned)
+
+    XCTAssertEqual(first.calls, 1)
+    XCTAssertEqual(second.calls, 0)
+    XCTAssertEqual(image.width, 40)
+  }
+
+  func testBytesThatDoNotDecodeAreNotStored() async throws {
+    let disk = store()
+    let cache = ThumbnailCache(downloader: CountingDownloader(result: .success(Data("hello".utf8))), disk: disk)
+    _ = try? await cache.image(for: url)
+    XCTAssertNil(disk.data(for: ThumbnailCache.key(for: url)))
+  }
+
+  func testUndecodableStoredBytesAreDroppedAndRefetched() async throws {
+    let disk = store()
+    let key = ThumbnailCache.key(for: url)
+    disk.store(Data("corrupt".utf8), for: key, generation: disk.generation)
+    let downloader = CountingDownloader(result: .success(try pngData(width: 10, height: 10)))
+
+    _ = try await ThumbnailCache(downloader: downloader, disk: disk).image(for: url)
+
+    XCTAssertEqual(downloader.calls, 1)
+    XCTAssertNotEqual(disk.data(for: key), Data("corrupt".utf8))
+  }
+
+  func testRemoveAllWipesTheDiskLayer() async throws {
+    let disk = store()
+    let cache = ThumbnailCache(
+      downloader: CountingDownloader(result: .success(try pngData(width: 10, height: 10))), disk: disk)
+    _ = try await cache.image(for: url)
+    XCTAssertNotNil(disk.data(for: ThumbnailCache.key(for: url)))
+
+    cache.removeAll()
+
+    XCTAssertNil(disk.data(for: ThumbnailCache.key(for: url)))
+    XCTAssertFalse(FileManager.default.fileExists(atPath: directory.path))
+  }
+
+  func testAWriteStartedBeforeRemoveAllIsDropped() {
+    let disk = store()
+    let generation = disk.generation
+    disk.removeAll()
+    disk.store(Data("bytes".utf8), for: "k", generation: generation)
+    XCTAssertNil(disk.data(for: "k"))
+  }
+
+  func testTrimEvictsTheLeastRecentlyReadFirst() throws {
+    let disk = store(byteLimit: 25)
+    let ten = Data(repeating: 1, count: 10)
+    disk.store(ten, for: "a", generation: disk.generation)
+    disk.store(ten, for: "b", generation: disk.generation)
+    // Backdate both so the read below is unambiguously the most recent touch.
+    for name in try FileManager.default.contentsOfDirectory(atPath: directory.path) {
+      try FileManager.default.setAttributes(
+        [.modificationDate: Date(timeIntervalSinceNow: -60)],
+        ofItemAtPath: directory.appendingPathComponent(name).path)
+    }
+    XCTAssertNotNil(disk.data(for: "a"))
+
+    disk.store(ten, for: "c", generation: disk.generation)
+
+    XCTAssertNotNil(disk.data(for: "a"))
+    XCTAssertNil(disk.data(for: "b"))
+    XCTAssertNotNil(disk.data(for: "c"))
+  }
+
+  func testAFileLargerThanTheWholeStoreIsNotKept() {
+    let disk = store(byteLimit: 5)
+    disk.store(Data(repeating: 1, count: 10), for: "big", generation: disk.generation)
+    XCTAssertNil(disk.data(for: "big"))
+  }
+}

@@ -256,7 +256,13 @@ import { resolveToolConfigSafely } from './resolveToolConfigSafely';
 import type { VideoToolConfig } from './tools/implementation/videoGeneration';
 import type { MusicToolConfig } from './tools/implementation/musicGeneration';
 import type { ImageToolConfig } from './tools/implementation/imageGeneration';
-import { applyModerationHit, MODERATION_POLICY, moderationThrottleKey } from '../userService/moderationPolicy';
+import {
+  applyModerationHit,
+  MODERATION_POLICY,
+  moderationEscalationAlert,
+  moderationThrottleKey,
+  type ModerationEscalationAlert,
+} from '../userService/moderationPolicy';
 import { ToolDefinition } from './tools/base/types';
 import { ServerAgentStore } from './agents/ServerAgentStore';
 import { createStreamingStatusSender } from './streamingStatusSender';
@@ -345,7 +351,12 @@ import {
   buildInjectedBlockDetails,
   sortDetailsByDeliveryOrder,
 } from './systemPromptFloorTelemetry';
-import { buildArtifactEmissionMessages, resolveArtifactsEnabled, withArtifactDataOrigins } from './artifactGating';
+import {
+  buildArtifactEmissionMessages,
+  resolveArtifactsEnabled,
+  resolveCallableFunctionsSafely,
+  withArtifactDataOrigins,
+} from './artifactGating';
 import {
   resolveStickyAutoAddedTools,
   shouldOfferBlogTools,
@@ -362,6 +373,7 @@ import {
   sanitizeTelemetryError,
   mapMimeTypeToArtifactType,
   ARTIFACT_EMISSION_PROMPT,
+  withCallableFunctions,
   HELP_CENTER_PROMPT,
   ABSTENTION_PROMPT,
   ELISION_WARNING,
@@ -604,6 +616,8 @@ const SESSION_LENGTH_WARNING_THRESHOLD = 100;
 
 const questSaveMutex = new Mutex();
 // Identity and server-owned keys; `deletedAt` belongs to soft delete, never to a turn's save.
+// `lakeSaveCount` moves only by claimLakeSaveSlot's atomic $inc; writing the in-memory copy back
+// would reset the count to what it was when the turn loaded the quest.
 const QUEST_FIELDS_NEVER_SAVED: ReadonlySet<string> = new Set([
   'id',
   '_id',
@@ -611,6 +625,7 @@ const QUEST_FIELDS_NEVER_SAVED: ReadonlySet<string> = new Set([
   'createdAt',
   'updatedAt',
   'deletedAt',
+  'lakeSaveCount',
 ]);
 
 interface ProcessInitContext {
@@ -1134,6 +1149,7 @@ export class ChatCompletionProcess {
   public logEvent: IChatCompletionServiceOptions['logEvent'];
   public queue: IChatCompletionServiceOptions['queue'];
   public autoNameSession: IChatCompletionServiceOptions['autoNameSession'];
+  public notifyModerationEscalation: IChatCompletionServiceOptions['notifyModerationEscalation'];
   public summarizeSession: IChatCompletionServiceOptions['summarizeSession'];
   public contextSummarizeSession: IChatCompletionServiceOptions['contextSummarizeSession'];
   public slackWebhookUrl: string;
@@ -1396,6 +1412,7 @@ export class ChatCompletionProcess {
     this.logEvent = options.logEvent;
     this.queue = options.queue;
     this.autoNameSession = options.autoNameSession;
+    this.notifyModerationEscalation = options.notifyModerationEscalation;
     this.summarizeSession = options.summarizeSession;
     this.contextSummarizeSession = options.contextSummarizeSession;
     this.wsHttpsUrl = options.wsHttpsUrl;
@@ -2210,6 +2227,7 @@ export class ChatCompletionProcess {
     musicToolConfigResolver,
     imageJobsResolver,
     imageJobFilesResolver,
+    callableFunctionsResolver,
     abortSignal,
   }: {
     body: z.infer<typeof QuestStartBodySchema>;
@@ -2239,6 +2257,11 @@ export class ChatCompletionProcess {
       jobIds: string[];
       userId: string;
     }) => Promise<{ jobId: string; fileId: string }[]>;
+    /**
+     * Whether callable functions are on for the requester; when true, the artifact prompt tells the model how to
+     * write one. Only invoked while artifacts are on; no resolver leaves the note out.
+     */
+    callableFunctionsResolver?: () => Promise<boolean>;
     /**
      * Caller-side cancellation (e.g. the wait=true request deadline). Aborts the turn the same
      * way the cancel watcher does: process() releases or reconciles its own credit reservation,
@@ -4401,10 +4424,14 @@ export class ChatCompletionProcess {
       // Admin-editable via the `ArtifactEmissionPrompt` setting (general AI settings); falls back
       // to the built-in ARTIFACT_EMISSION_PROMPT default when unset/cleared, so a blank value can
       // never strip artifact guidance from completions.
-      // Names the admin-listed Python data origins when there are any; byte-identical otherwise.
-      const artifactEmissionContent = withArtifactDataOrigins(
-        getSettingsValue('ArtifactEmissionPrompt', defaultAdminSettings, ARTIFACT_EMISSION_PROMPT),
-        getSettingsValue('pythonArtifactDataOrigins', defaultAdminSettings)
+      // Names the admin-listed Python data origins when there are any, and says how to write a callable function
+      // when that is on for the requester; byte-identical otherwise.
+      const artifactEmissionContent = withCallableFunctions(
+        withArtifactDataOrigins(
+          getSettingsValue('ArtifactEmissionPrompt', defaultAdminSettings, ARTIFACT_EMISSION_PROMPT),
+          getSettingsValue('pythonArtifactDataOrigins', defaultAdminSettings)
+        ),
+        artifactsEnabled && (await resolveCallableFunctionsSafely(callableFunctionsResolver, logger))
       );
       // Admin-editable via the `HelpCenterPrompt` setting; a blank value falls back to the built-in
       // default so the nudge can never be silently stripped.
@@ -9123,16 +9150,14 @@ When using tools that require file IDs (like edit_image), use the ID shown above
     logger: Logger
   ): Promise<void> {
     try {
-      const decision = await applyModerationHit({
-        users: this.db.users,
-        userId: this.user.id,
-        hit: { at: new Date(), categories, source, questId },
-      });
+      const hit = { at: new Date(), categories, source, questId };
+      const decision = await applyModerationHit({ users: this.db.users, userId: this.user.id, hit });
       logger.warn(
         `[Moderation] User ${this.user.id} flagged by ${source}` +
           (categories.length ? ` (${categories.join(', ')})` : '') +
           `; ${decision.hitsInWindow} hit(s) in window -> status ${decision.status}`
       );
+      this.sendModerationEscalationAlert(moderationEscalationAlert(this.user.id, hit, decision), logger);
     } catch (recordError) {
       logger.error(`[Moderation] Failed to record ${source} moderation hit for user ${this.user.id}:`, recordError);
     }
@@ -9165,6 +9190,17 @@ When using tools that require file IDs (like edit_image), use the ID shown above
       apiKeyId: this.turnApiKeyId,
     });
     return true;
+  }
+
+  /** Fire-and-forget: alert delivery never delays or fails the chat request. */
+  private sendModerationEscalationAlert(alert: ModerationEscalationAlert | null, logger: Logger): void {
+    const notify = this.notifyModerationEscalation;
+    if (!alert || !notify) return;
+    void Promise.resolve()
+      .then(() => notify(alert))
+      .catch(alertError =>
+        logger.warn(`[Moderation] Failed to send the escalation alert for user ${this.user.id}:`, alertError)
+      );
   }
 
   private getBedrockGuardrailsService(

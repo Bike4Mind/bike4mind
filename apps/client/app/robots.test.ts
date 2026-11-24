@@ -1,6 +1,6 @@
 // @vitest-environment node
 // A build-step metadata route; it only lives under app/ because Next requires it there.
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 // CANONICAL_ORIGIN is read at module scope, so each case re-imports against its own mock.
 async function loadRobotsModule(canonicalOrigin: string, overlays: unknown[] = []) {
@@ -16,7 +16,30 @@ async function loadRobots(canonicalOrigin: string, overlays: unknown[] = []) {
   return (await loadRobotsModule(canonicalOrigin, overlays)).default();
 }
 
-afterEach(() => vi.doUnmock('@client/config/general'));
+// The stage is read when robots() runs; pin it so a stray shell value cannot flip the policy.
+beforeEach(() => vi.stubEnv('NEXT_PUBLIC_SEED_STAGE_NAME', ''));
+afterEach(() => {
+  vi.doUnmock('@client/config/general');
+  vi.unstubAllEnvs();
+});
+
+describe('robots.txt per stage', () => {
+  it.each(['dev', 'pr1234', 'someone'])('disallows everything on the %s stage', async stage => {
+    vi.stubEnv('NEXT_PUBLIC_SEED_STAGE_NAME', stage);
+    const result = await loadRobots('https://example.test', [{ sitemapPaths: ['/x'], disallowPaths: [] }]);
+
+    expect(result).toEqual({ rules: [{ userAgent: '*', disallow: '/' }] });
+  });
+
+  it.each(['production', ''])('publishes the crawl policy on stage %j', async stage => {
+    vi.stubEnv('NEXT_PUBLIC_SEED_STAGE_NAME', stage);
+    const result = await loadRobots('https://example.test');
+    const rule = Array.isArray(result.rules) ? result.rules[0] : result.rules;
+
+    expect(rule?.allow).toBe('/');
+    expect(rule?.disallow).toContain('/admin');
+  });
+});
 
 describe('robots.txt', () => {
   it('allows the site and disallows the core private surfaces', async () => {
