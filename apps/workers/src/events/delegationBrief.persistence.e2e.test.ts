@@ -12,7 +12,7 @@ import {
   MONGO_TEST_TIMEOUT_MS,
 } from '../../../../packages/database/src/__test__/createMongoServer';
 import { composeBrief, type BriefComposeDeps } from './briefCompose';
-import { processDelegation, type DelegationProcessDeps } from './delegationProcess';
+import { DelegationClaimBusyError, processDelegation, type DelegationProcessDeps } from './delegationProcess';
 import { loadPendingBriefDelegations } from './loadPendingBriefDelegations';
 import indexMigration from '../../../../packages/scripts/migrate/migrations/20261119042525_ensure-delegated-item-indexes';
 
@@ -107,18 +107,25 @@ it('runs the model once when the same event is delivered twice at once', async (
   const id = await createItem('Summarize');
   const started = Promise.withResolvers<void>();
   const release = Promise.withResolvers<void>();
-  const complete = vi.fn(async () => {
+  const recordUsage = vi.fn(async () => undefined);
+  const complete = vi.fn<DelegationProcessDeps['complete']>(async () => {
     started.resolve();
     await release.promise;
-    return { reply: '{"outcome":"handled","result":"Summary."}', model: 'fake-model' };
+    return { reply: '{"outcome":"handled","result":"Summary."}', model: 'fake-model', recordUsage };
   });
   const first = processDelegation(processDeps(complete), { delegationId: id, userId });
   await started.promise;
-  await processDelegation(processDeps(complete), { delegationId: id, userId });
-  release.resolve();
-  await first;
+  try {
+    await expect(processDelegation(processDeps(complete), { delegationId: id, userId })).rejects.toBeInstanceOf(
+      DelegationClaimBusyError
+    );
+  } finally {
+    release.resolve();
+    await first;
+  }
 
   expect(complete).toHaveBeenCalledOnce();
+  expect(recordUsage).toHaveBeenCalledOnce();
   expect(await delegatedItemRepository.findById(id)).toMatchObject({ status: 'handled', result: 'Summary.' });
 });
 
@@ -130,10 +137,13 @@ it('carries a pending item until it settles, then its outcome exactly once', asy
   expect((await delegatedItemRepository.findById(id))?.briefedAt).toBeNull();
 
   const reply = '{"outcome":"needs_decision","result":"Approve the quote?"}';
+  const recordUsage = vi.fn(async () => undefined);
   await processDelegation(
-    processDeps(async () => ({ reply, model: 'fake-model' })),
+    processDeps(async () => ({ reply, model: 'fake-model', recordUsage })),
     { delegationId: id, userId }
   );
+
+  expect(recordUsage).toHaveBeenCalledOnce();
 
   const failed = await composeNextBrief(async () => 'not json');
   expect(failed.status).toBe('failed');
