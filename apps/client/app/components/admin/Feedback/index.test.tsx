@@ -183,6 +183,18 @@ describe('FeedbackTab', () => {
     expect(screen.getByTestId('feedback-help-outdated-chip')).toBeInTheDocument();
   });
 
+  it('lets the feedback column take the spare width and shows more of the text', () => {
+    mocks.useFeedbackOperations.mockReturnValue(makeOperationsReturn([helpFeedbackItem]));
+
+    renderFeedbackTab();
+
+    const header = (name: string) => screen.getByRole('columnheader', { name }).closest('th')!;
+    // jsdom's CSS parser drops clamp(), so this only pins that the fixed 15rem is gone; the e2e measures widths.
+    expect(header('Reporter').style.width).not.toBe('15rem');
+    expect(header('Feedback').style.width).toBe('');
+    expect(getComputedStyle(screen.getByTestId('feedback-row-content-fb-help-1')).maxHeight).toBe('120px');
+  });
+
   it('moves with j/k, opens with Enter and routes i/c through the status and resolution flow', async () => {
     const one = makeFeedbackItem({ _id: 'one', id: 'one' });
     const two = makeFeedbackItem({ _id: 'two', id: 'two' });

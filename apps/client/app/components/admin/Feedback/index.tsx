@@ -213,7 +213,8 @@ const ContentCell = ({ row }: { row: FeedbackRow }) => (
     )}
     <Typography
       level="body-sm"
-      sx={{ maxWidth: '100%', maxHeight: 80, overflowY: 'auto', whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}
+      data-testid={`feedback-row-content-${row._id}`}
+      sx={{ maxWidth: '100%', maxHeight: 120, overflowY: 'auto', whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}
     >
       {getFeedbackDisplayContent(row, '') || (
         <Typography component="span" sx={{ color: 'admin.inkMuted' }}>
@@ -492,7 +493,14 @@ const FeedbackTab: React.FC = () => {
 
   const columns: DataColumn<FeedbackRow>[] = [
     { id: 'createdAt', label: 'Created', sortable: true, width: '7.5rem', render: row => <CreatedCell row={row} /> },
-    { id: 'reporter', label: 'Reporter', width: '15rem', render: row => <ReporterCell row={row} /> },
+    // Table layout is fixed, so the percentage resolves against the table width: near 15rem on a wide
+    // screen, narrower at tablet width so the Feedback column keeps most of the row.
+    {
+      id: 'reporter',
+      label: 'Reporter',
+      width: 'clamp(9rem, 22%, 15rem)',
+      render: row => <ReporterCell row={row} />,
+    },
     { id: 'content', label: 'Feedback', wrap: true, render: row => <ContentCell row={row} /> },
     {
       id: 'status',
