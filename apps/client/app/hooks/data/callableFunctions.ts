@@ -9,6 +9,7 @@ import type {
   ICallableFunctionPublic,
 } from '@bike4mind/common';
 import type { CallableFunctionsStatus } from '@pages/api/callable-functions/status';
+import type { CallableFunctionTestRun } from '@pages/api/callable-functions/[id]/test-run';
 import { useAccessToken } from '@client/app/hooks/useAccessToken';
 import { CALLABLE_FUNCTIONS_LIST_QUERY_KEY, CALLABLE_FUNCTIONS_STATUS_QUERY_KEY } from './queryKeys';
 
@@ -147,6 +148,13 @@ export const useSetCallableFunctionEnabled = () => {
     onSettled: invalidate,
   });
 };
+
+/** Runs the saved tool's declared tests on the server, against the pinned code; nothing is written but the call log. */
+export const useRunCallableFunctionTests = () =>
+  useMutation({
+    mutationFn: async (id: string) =>
+      (await api.post<CallableFunctionTestRun>(`${COLLECTION}/${encodeURIComponent(id)}/test-run`, {})).data,
+  });
 
 export const useDeleteCallableFunction = () => {
   const invalidate = useInvalidateCallableFunctions();

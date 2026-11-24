@@ -46,8 +46,13 @@ import {
   useArtifactCallableFunction,
   useDeleteCallableFunction,
   useRepinCallableFunction,
+  useRunCallableFunctionTests,
   useSetCallableFunctionEnabled,
 } from '@client/app/hooks/data/callableFunctions';
+import type {
+  CallableFunctionTestCaseResult,
+  CallableFunctionTestRun,
+} from '@pages/api/callable-functions/[id]/test-run';
 import { usePyodide } from '@client/app/hooks/usePyodide';
 import { PYTHON_SCRIPT_BUSY } from '@client/app/utils/pyodideManager';
 import ProblemList, { dangerAlertSx } from './FunctionProblemList';
@@ -94,11 +99,12 @@ type CallOutcome =
     }
   | { status: 'failed'; error: string; output: string; executionTime: number };
 
-type TestOutcome =
+type TestOutcome = (
   | { status: 'passed' }
   | { status: 'mismatch'; mismatch: FunctionOutputMismatch }
   | { status: 'invalid'; problems: FunctionContractProblem[] }
-  | { status: 'failed'; error: string };
+  | { status: 'failed'; error: string }
+) & { ms?: number };
 
 type FormValues = Record<string, string | boolean>;
 
@@ -453,11 +459,23 @@ function TestFailure({ test, outcome }: { test: FunctionTestCase; outcome: TestO
     );
   }
   if (outcome.status === 'failed') return <FailureBlock error={`${test.name}: ${outcome.error}`} output="" />;
-  const { path, expected, actual } = outcome.mismatch;
+  return <MismatchAlert test={test} mismatch={outcome.mismatch} testId="python-function-test-failure" />;
+}
+
+function MismatchAlert({
+  test,
+  mismatch,
+  testId,
+}: {
+  test: FunctionTestCase;
+  mismatch: FunctionOutputMismatch;
+  testId: string;
+}) {
+  const { path, expected, actual } = mismatch;
   // Quoted, so an empty or blank expected string is still visible.
   const shown = (value: unknown) => (typeof value === 'string' ? JSON.stringify(value) : formatValue(value));
   return (
-    <Alert color="danger" variant="soft" data-testid="python-function-test-failure" sx={{ alignItems: 'flex-start' }}>
+    <Alert color="danger" variant="soft" data-testid={testId} sx={{ alignItems: 'flex-start' }}>
       <Typography level="body-sm" sx={{ wordBreak: 'break-word' }}>
         {test.name}: output <code>{path || 'result'}</code> expected <code>{shown(expected)}</code>, got{' '}
         <code>{actual === undefined ? 'nothing' : shown(actual)}</code>
@@ -467,20 +485,85 @@ function TestFailure({ test, outcome }: { test: FunctionTestCase; outcome: TestO
   );
 }
 
-/** The contract's declared cases, run one at a time through `run`; the run stops at the first failure. */
+const SERVER_OUTCOME_TEXT: Record<Exclude<CallableFunctionTestCaseResult['outcome'], 'ok'>, string> = {
+  timeout: 'stopped at the time limit',
+  memory: 'ran out of memory',
+  error: 'failed to run',
+  output_invalid: 'returned values that do not match the contract',
+  output_too_large: 'returned more than the output size limit',
+  input_invalid: 'has inputs that do not match the contract',
+  refused: 'was refused',
+};
+
+function ServerTestFailure({ test, result }: { test: FunctionTestCase; result: CallableFunctionTestCaseResult }) {
+  if (result.passed) return null;
+  if (result.mismatch) {
+    return <MismatchAlert test={test} mismatch={result.mismatch} testId="python-function-test-server-failure" />;
+  }
+  const text =
+    result.outcome === 'ok'
+      ? 'did not match'
+      : result.outcome === 'error' && result.errorClass
+        ? `raised ${result.errorClass}`
+        : SERVER_OUTCOME_TEXT[result.outcome];
+  return (
+    <Alert color="danger" variant="soft" data-testid="python-function-test-server-failure">
+      <Typography level="body-sm" sx={{ wordBreak: 'break-word' }}>
+        {test.name}: {text}.
+      </Typography>
+    </Alert>
+  );
+}
+
+function StatusCell({ status, ms, testId }: { status: { label: string; color: string }; ms?: number; testId: string }) {
+  return (
+    <Typography level="body-sm" sx={{ color: status.color }}>
+      <span data-testid={testId}>{status.label}</span>
+      {ms !== undefined && (
+        <Typography component="span" sx={{ color: 'text.tertiary' }} data-testid={`${testId}-ms`}>
+          {` (${Math.round(ms)} ms)`}
+        </Typography>
+      )}
+    </Typography>
+  );
+}
+
+/** The saved tool's server run: why it cannot run (null when it can), and its last result or error. */
+interface ServerTests {
+  blocked: string | null;
+  running: boolean;
+  run: CallableFunctionTestRun | null;
+  error: string | null;
+  onRun: () => void;
+}
+
+const serverStatus = (result: CallableFunctionTestCaseResult) =>
+  result.passed
+    ? TEST_STATUS.passed
+    : result.outcome === 'timeout'
+      ? { label: 'Timed out', color: 'danger.plainColor' }
+      : TEST_STATUS.failed;
+
+interface BrowserTestsProps {
+  tests: FunctionTestCase[];
+  outcomes: TestOutcome[];
+  running: boolean;
+  disabled: boolean;
+  onRun: () => void;
+}
+
+/**
+ * The contract's declared cases, run one at a time through `run`; the browser run stops at the first failure. With a
+ * saved tool, the server column runs every case against the pinned code.
+ */
 function TestsSection({
   tests,
   outcomes,
   running,
   disabled,
   onRun,
-}: {
-  tests: FunctionTestCase[];
-  outcomes: TestOutcome[];
-  running: boolean;
-  disabled: boolean;
-  onRun: () => void;
-}) {
+  server,
+}: BrowserTestsProps & { server?: ServerTests }) {
   const failedAt = outcomes.findIndex(outcome => outcome.status !== 'passed');
   const started = running || outcomes.length > 0;
   const statusOf = (index: number): keyof typeof TEST_STATUS => {
@@ -488,6 +571,14 @@ function TestsSection({
     if (running && index === outcomes.length) return 'running';
     return 'not_run';
   };
+  const serverCell = (index: number): { status: { label: string; color: string }; ms?: number } => {
+    const result = server?.run?.results[index];
+    if (result) return { status: serverStatus(result), ms: result.durationMs };
+    if (server?.running) return { status: TEST_STATUS.running };
+    return { status: { label: '-', color: 'text.tertiary' } };
+  };
+  const serverFailures = server?.run?.results.filter(result => !result.passed) ?? [];
+  const failureDetails = failedAt >= 0 || serverFailures.length > 0;
   return (
     <Stack spacing={1} data-testid="python-function-tests">
       <Stack direction="row" spacing={2} alignItems="center" flexWrap="wrap" useFlexGap>
@@ -503,13 +594,32 @@ function TestsSection({
         >
           Run tests
         </Button>
+        {server && (
+          <Button
+            size="sm"
+            variant="outlined"
+            color="neutral"
+            data-testid="python-function-tests-server-run-btn"
+            disabled={disabled || server.blocked !== null || server.running}
+            loading={server.running}
+            onClick={server.onRun}
+          >
+            Run tests on the server
+          </Button>
+        )}
       </Stack>
+      {server?.blocked && (
+        <Typography level="body-xs" sx={{ color: 'text.secondary' }} data-testid="python-function-tests-server-note">
+          {server.blocked}
+        </Typography>
+      )}
       <Box sx={{ overflowX: 'auto' }} aria-live="polite" data-testid="python-function-test-results">
         <Table size="sm" borderAxis="xBetween" sx={{ tableLayout: 'auto' }}>
           <thead>
             <tr>
               <th>Test</th>
-              <th>Result</th>
+              <th>{server ? 'Browser' : 'Result'}</th>
+              {server && <th>Server</th>}
             </tr>
           </thead>
           <tbody>
@@ -519,18 +629,84 @@ function TestsSection({
                 <tr key={index} data-testid="python-function-test-row">
                   <td>{test.name}</td>
                   <td>
-                    <Typography level="body-sm" sx={{ color: status.color }} data-testid="python-function-test-status">
-                      {status.label}
-                    </Typography>
+                    <StatusCell status={status} ms={outcomes[index]?.ms} testId="python-function-test-status" />
                   </td>
+                  {server && (
+                    <td>
+                      <StatusCell {...serverCell(index)} testId="python-function-test-server-status" />
+                    </td>
+                  )}
                 </tr>
               );
             })}
           </tbody>
         </Table>
       </Box>
-      {failedAt >= 0 && <TestFailure test={tests[failedAt]} outcome={outcomes[failedAt]} />}
+      {server?.error && (
+        <Alert color="danger" variant="soft" data-testid="python-function-tests-server-error">
+          <Typography level="body-sm">{server.error}</Typography>
+        </Alert>
+      )}
+      {failureDetails && (
+        <Box sx={{ display: 'grid', gap: 1, gridTemplateColumns: 'repeat(auto-fit, minmax(min(240px, 100%), 1fr))' }}>
+          {failedAt >= 0 && (
+            <Stack spacing={0.5} data-testid="python-function-test-browser-failures">
+              {server && <Typography level="body-xs">Browser</Typography>}
+              <TestFailure test={tests[failedAt]} outcome={outcomes[failedAt]} />
+            </Stack>
+          )}
+          {serverFailures.length > 0 && (
+            <Stack spacing={0.5} data-testid="python-function-test-server-failures">
+              <Typography level="body-xs">Server</Typography>
+              {server?.run?.results.map((result, index) =>
+                tests[index] ? <ServerTestFailure key={index} test={tests[index]} result={result} /> : null
+              )}
+            </Stack>
+          )}
+        </Box>
+      )}
     </Stack>
+  );
+}
+
+/** Tests for the owner's artifact: the server column runs the saved tool when it pins this version. */
+function SavedTestsSection({
+  save,
+  contract,
+  ...browser
+}: BrowserTestsProps & { save: PythonFunctionSave; contract: FunctionContract }) {
+  const { data } = useArtifactCallableFunction(save.artifactId, save.version, contract.name);
+  const saved = data?.saved ?? null;
+  const runTests = useRunCallableFunctionTests();
+  const [last, setLast] = useState<{ key: string; run?: CallableFunctionTestRun; error?: string } | null>(null);
+  const key = saved ? `${saved.id}:${saved.pin.version}` : null;
+  const blocked = !saved
+    ? 'Save this version as a tool to run its tests on the server.'
+    : saved.status === 'disabled'
+      ? 'Turn the tool on to run its tests on the server.'
+      : saved.pin.version !== save.version
+        ? `The server runs the saved version ${saved.pin.version}. Update the tool to test this version there.`
+        : null;
+  const shown = last && last.key === key ? last : null;
+  const onRun = () => {
+    if (!saved || !key) return;
+    runTests.mutate(saved.id, {
+      onSuccess: run => setLast({ key, run }),
+      onError: error =>
+        setLast({ key, error: callableFunctionErrorMessage(error, 'The tests could not run on the server.') }),
+    });
+  };
+  return (
+    <TestsSection
+      {...browser}
+      server={{
+        blocked,
+        running: runTests.isPending,
+        run: shown?.run ?? null,
+        error: shown?.error ?? null,
+        onRun,
+      }}
+    />
   );
 }
 
@@ -918,11 +1094,12 @@ const PythonFunctionPanel: React.FC<PythonFunctionPanelProps> = ({ code, package
   const runTest = async (contract: FunctionContract, source: string, test: FunctionTestCase): Promise<TestOutcome> => {
     try {
       const result = await callFunction(source, test.input, packages);
-      if (!result.success) return { status: 'failed', error: result.error ?? 'The call failed.' };
+      const ms = result.executionTime;
+      if (!result.success) return { status: 'failed', error: result.error ?? 'The call failed.', ms };
       const problems = outputProblems(contract.outputs, result.value, result.outputProblems ?? []);
-      if (problems.length > 0) return { status: 'invalid', problems };
+      if (problems.length > 0) return { status: 'invalid', problems, ms };
       const mismatch = compareFunctionOutput(test.expected, result.value, test.tolerance);
-      return mismatch ? { status: 'mismatch', mismatch } : { status: 'passed' };
+      return mismatch ? { status: 'mismatch', mismatch, ms } : { status: 'passed', ms };
     } catch (error) {
       return { status: 'failed', error: errorMessage(error) };
     }
@@ -1002,15 +1179,27 @@ const PythonFunctionPanel: React.FC<PythonFunctionPanelProps> = ({ code, package
               </Typography>
               <ContractTable schema={contract.outputs} testId="python-function-contract-outputs" />
             </Box>
-            {contract.tests && contract.tests.length > 0 && (
-              <TestsSection
-                tests={contract.tests}
-                outcomes={testOutcomes}
-                running={testing}
-                disabled={controlsDisabled}
-                onRun={() => void handleRunTests(contract, described.code)}
-              />
-            )}
+            {contract.tests &&
+              contract.tests.length > 0 &&
+              (save && current ? (
+                <SavedTestsSection
+                  save={save}
+                  contract={contract}
+                  tests={contract.tests}
+                  outcomes={testOutcomes}
+                  running={testing}
+                  disabled={controlsDisabled}
+                  onRun={() => void handleRunTests(contract, described.code)}
+                />
+              ) : (
+                <TestsSection
+                  tests={contract.tests}
+                  outcomes={testOutcomes}
+                  running={testing}
+                  disabled={controlsDisabled}
+                  onRun={() => void handleRunTests(contract, described.code)}
+                />
+              ))}
 
             <Box
               sx={{
