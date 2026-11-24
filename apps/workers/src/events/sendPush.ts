@@ -566,15 +566,17 @@ async function dropTokensOfEndedSessions<T extends { sid: string }>(
 }
 
 /**
- * `approval_needed` pushes (and their clearing push) expire at the pending action's own deadline,
+ * An actionable `approval_needed` push expires at the pending action's own deadline,
  * `pendingActionTs + TOKEN_EXPIRATION_MS`: the executors refuse a confirm older than that, so a phone that
  * comes back online later would otherwise be handed an approval whose buttons can only fail. Without a
- * `pendingActionTs` the window starts now. Other categories send no header, leaving APNs' default
- * store-and-forward behaviour. The value is absolute epoch seconds.
+ * `pendingActionTs` the window starts now. The clearing push gets a fresh window from now instead: a
+ * `lapsed` resolution is only published after the original deadline, so reusing it would send the
+ * replacement already expired and leave the stale notification on the lock screen. Other categories send
+ * no header, leaving APNs' default store-and-forward behaviour. The value is absolute epoch seconds.
  */
 function apnsExpirationHeader(event: PushNotificationEvent, nowMs: number): Record<string, string> {
   if (event.category !== 'approval_needed') return {};
-  const startMs = event.pendingActionTs ?? nowMs;
+  const startMs = event.approvalResolved ? nowMs : (event.pendingActionTs ?? nowMs);
   return { 'apns-expiration': String(Math.floor((startMs + TOKEN_EXPIRATION_MS) / 1000)) };
 }
 

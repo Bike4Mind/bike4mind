@@ -174,6 +174,13 @@ describe('deliverPush', () => {
       expect(sent[0].headers).not.toHaveProperty('apns-expiration');
     });
 
+    it('gives the clearing push a fresh window even when the original deadline has passed', async () => {
+      const { deps, sent } = makeDeps([{ token: 'tok-a', environment: 'production' }]);
+      const lapsedTs = NOW_MS - 20 * 60 * 1000;
+      await deliverPush({ ...APPROVAL, pendingActionTs: lapsedTs, approvalResolved: 'lapsed' }, deps, logger, NOW_MS);
+      expect(sent[0].headers['apns-expiration']).toBe(String((NOW_MS + 15 * 60 * 1000) / 1000));
+    });
+
     it('sends a quiet replacement under the same collapse id, with no buttons and no sound', async () => {
       const { deps, sent } = makeDeps([{ token: 'tok-a', environment: 'production' }]);
       await deliverPush({ ...APPROVAL, approvalResolved: 'approved' }, deps, logger, NOW_MS);
