@@ -36,6 +36,19 @@ async function resolvesOnForEveryMembership(
   return resolved.every(setting => setting.value === true);
 }
 
+/** Whether `EnableCallableFunctions` resolves on for one organization, as its members read it. Read failures throw. */
+export async function resolveOrganizationCallableFunctionsEnabled(
+  user: { id: string },
+  organizationId: string
+): Promise<boolean> {
+  const db = { adminSettings: adminSettingsRepository, scopedSettings: scopedSettingsRepository };
+  const scope = scopedSettingsService.scopeForCaller({ userId: user.id, organizationId });
+  const setting = await scopedSettingsService.resolveScopedSetting('EnableCallableFunctions', scope, db, {
+    readFailureMode: 'throw',
+  });
+  return setting.value === true;
+}
+
 /** Throws 403 unless callable functions are on for this person (the `assertCustomMcpEnabled` convention). */
 export async function assertCallableFunctionsEnabled(user: { id: string }): Promise<void> {
   if (!(await resolveCallableFunctionsEnabled(user))) {

@@ -167,6 +167,12 @@ describe('account purge reconciliation', () => {
     expect(matched('CallableFunction', { ownerType: 'user', ownerKey: 'other', userId: 'other' })).toEqual([]);
   });
 
+  it("removes a person from the grants of another person's shared function", () => {
+    const shared = { ownerType: 'user', ownerKey: 'other', userId: 'other' };
+    expect(matched('CallableFunction', { ...shared, grants: { userIds: ['x', userId] } })).toEqual(['pullFromArray']);
+    expect(matched('CallableFunction', { ...shared, grants: { userIds: ['x'] } })).toEqual([]);
+  });
+
   it("deletes the function call rows a person made or whose function was called, and no one else's", () => {
     expect(matched('CallableFunctionCall', { callerUserId: userId, ownerUserId: userId })).toEqual([
       'deleteDocument',

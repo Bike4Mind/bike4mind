@@ -20,7 +20,10 @@ export const aiHolders = {
   },
   CallableFunction: {
     kind: 'holder',
-    references: [{ path: 'userId', matchBy: 'userId', action: 'deleteDocument', where: { ownerType: 'user' } }],
+    references: [
+      { path: 'userId', matchBy: 'userId', action: 'deleteDocument', where: { ownerType: 'user' } },
+      { path: 'grants.userIds', matchBy: 'userId', action: 'pullFromArray' },
+    ],
   },
   CallableFunctionCall: {
     kind: 'holder',
