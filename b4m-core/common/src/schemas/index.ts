@@ -58,6 +58,7 @@ export * from './personas';
 export * from './pendingActions';
 export * from './brief';
 export * from './assistantInstruction';
+export * from './delegation';
 export * from './pushNotification';
 export * from './studioJobCompleted';
 export * from './liveActivityPush';

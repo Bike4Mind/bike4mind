@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { BRIEF_LIMITS } from '@bike4mind/common';
 import {
   assembleBrief,
+  briefedDelegationIds,
   briefedEmailIds,
   briefPushBody,
   buildBriefPrompt,
@@ -28,6 +29,7 @@ const baseActivity = (): BriefActivity => ({
   ],
   questions: [],
   emails: [],
+  delegations: [],
 });
 
 const question = (n: number) => ({
@@ -226,5 +228,74 @@ describe('emptyBrief and briefPushBody', () => {
   it('pushes a decision count when decisions wait', () => {
     const brief = assembleBrief(JSON.stringify({ headline: 'h' }), baseActivity());
     expect(briefPushBody(brief)).toBe('2 decisions need you.');
+  });
+});
+
+const delegationActivity = (): BriefActivity => ({
+  ...baseActivity(),
+  runs: [],
+  approvals: [],
+  delegations: [
+    { delegationId: 'g1', intent: 'Summarize for the team', status: 'handled', result: 'The report says Q3 is up.' },
+    { delegationId: 'g2', intent: 'Handle this', status: 'needs_decision', result: 'Approve the quote of $40?' },
+    { delegationId: 'g3', intent: 'Read this later', status: 'pending', result: null },
+    { delegationId: 'g4', intent: 'Book it', status: 'failed', result: null },
+  ],
+});
+
+describe('delegated items in the brief', () => {
+  const reply = JSON.stringify({ headline: 'Delegations.', happened: [], handled: [], decisions: [] });
+
+  it('counts as activity and reaches the prompt as counts only', () => {
+    const activity = delegationActivity();
+    expect(hasActivity(activity)).toBe(true);
+    const prompt = buildBriefPrompt(activity);
+    expect(prompt).toContain('{"pending":1,"handled":1,"needs_decision":1,"failed":1}');
+    expect(prompt).not.toContain('Q3 is up');
+  });
+
+  it('places each item by status with a delegation source, from the stored record', () => {
+    const brief = assembleBrief(reply, delegationActivity());
+    const source = (delegationId: string) => ({ kind: 'delegation', delegationId });
+    expect(brief.handled).toEqual([{ id: 'x1', text: 'The report says Q3 is up.', source: source('g1') }]);
+    expect(brief.decisions).toEqual([{ id: 'd1', text: 'Approve the quote of $40?', source: source('g2') }]);
+    expect(brief.happened).toEqual([
+      { id: 'h1', text: 'Working on: "Read this later"', source: source('g3') },
+      { id: 'h2', text: 'Could not finish: "Book it"', source: source('g4') },
+    ]);
+  });
+
+  it('marks only the settled items the brief carries as briefed', () => {
+    const activity = delegationActivity();
+    const brief = assembleBrief(reply, activity);
+    expect(briefedDelegationIds(brief, activity).sort()).toEqual(['g1', 'g2', 'g4']);
+
+    const capped = { ...brief, handled: [] };
+    expect(briefedDelegationIds(capped, activity).sort()).toEqual(['g2', 'g4']);
+  });
+});
+
+describe('brief edge wording', () => {
+  it('carries a run error and finish time, clips long text and falls back on an empty headline', () => {
+    const activity: BriefActivity = {
+      ...baseActivity(),
+      approvals: [],
+      runs: [
+        {
+          id: 'r1',
+          query: 'Sync',
+          status: 'failed',
+          finishedAt: new Date('2026-11-16T12:00:00Z'),
+          errorMessage: 'timeout',
+        },
+      ],
+    };
+    const prompt = buildBriefPrompt(activity);
+    expect(prompt).toContain('"finishedAt":"2026-11-16T12:00:00.000Z","error":"timeout"');
+
+    const brief = assembleBrief(JSON.stringify({ headline: '  ', handled: ['z'.repeat(1000)] }), activity);
+    expect(brief.headline).toBe('Your brief');
+    expect(brief.handled[0].text).toHaveLength(BRIEF_LIMITS.itemText);
+    expect(brief.handled[0].text.endsWith('...')).toBe(true);
   });
 });
