@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-10-29T04:53:56.000Z",
+  "generatedAt": "2026-11-24T11:44:51.940Z",
   "entries": [
     {
       "modelId": "anthropic.claude-3-5-sonnet-20240620-v1:0",
@@ -416,6 +416,17 @@
         "1048576": {
           "input": 0.0000015,
           "output": 0.000009,
+          "cache_read": 1.5e-7
+        }
+      }
+    },
+    {
+      "modelId": "gemini-4-neon",
+      "unit": "per_token",
+      "pricing": {
+        "1048576": {
+          "input": 0.000003,
+          "output": 0.000015,
           "cache_read": 1.5e-7
         }
       }
