@@ -310,23 +310,6 @@ describe('submitShotImages', () => {
     });
   });
 
-  it('flags a replay of finished takes, not a running one', async () => {
-    const done = await submitShotImages(
-      context,
-      configWith(vi.fn().mockResolvedValue(replayed('j', 'succeeded', false))),
-      shot('s1'),
-      1
-    );
-    const running = await submitShotImages(
-      context,
-      configWith(vi.fn().mockResolvedValue(replayed('j', 'running', false))),
-      shot('s1'),
-      1
-    );
-    expect(done).toEqual({ ok: true, jobIds: ['j'], alreadyDone: true });
-    expect(running).toEqual({ ok: true, jobIds: ['j'] });
-  });
-
   it('keys the product look apart from every shot', async () => {
     const createJobs = vi.fn().mockResolvedValue(replayed('j', 'queued', true));
     const config = configWith(createJobs);

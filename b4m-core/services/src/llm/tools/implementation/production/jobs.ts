@@ -20,8 +20,7 @@ import type { ProductionJobView, ProductionToolConfig } from './config';
 
 type Context = Omit<ToolContext, 'config'>;
 
-export type Submitted =
-  { ok: true; jobIds: string[]; alreadyDone?: true } | { ok: false; message: string; notReady?: true };
+export type Submitted = { ok: true; jobIds: string[] } | { ok: false; message: string; notReady?: true };
 
 const DEFAULT_WAIT_TIMEOUT_MS = 150_000;
 const DEFAULT_POLL_INTERVAL_MS = 3_000;
@@ -209,8 +208,7 @@ export async function submitShotImages(
     if (!result) continue;
     if (result.ok) {
       await context.statusUpdate({ generationJobs: result.jobs.map(job => ({ id: job.id, kind: 'image' as const })) });
-      const alreadyDone = !result.created && result.jobs.every(job => job.state === 'succeeded');
-      return { ok: true, jobIds: result.jobs.map(job => job.id), ...(alreadyDone && { alreadyDone: true as const }) };
+      return { ok: true, jobIds: result.jobs.map(job => job.id) };
     }
     if (!MODEL_REFUSALS.has(result.code)) return { ok: false, message: `${result.code}: ${result.message}` };
     lastRefusal = `${result.code}: ${result.message}`;

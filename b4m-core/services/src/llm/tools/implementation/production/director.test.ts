@@ -50,13 +50,17 @@ type Harness = {
   imageRequests: { request: unknown; count: number }[];
   /** The state each new image job lands in; a job that is not succeeded saves no file. */
   imageState: { next: (request: unknown) => 'succeeded' | 'running' | 'failed' };
+  /** Finishes every running image job with a new file, as the job runner would after a call stopped waiting. */
+  finishRunningImages(): void;
   /** A new file the user can read, of the given kind. */
   addFile(kind: StudioFileMediaKind): string;
 };
 
 /** An in-memory production: the real validator guards every write, as the real composition service does. */
+// File ids stay unique across tests: product look bookkeeping in productLook.ts is module-level, keyed by file id.
+let nextFile = 1;
+
 function createHarness(): Harness {
-  let nextFile = 1;
   const newFileId = () => (nextFile++).toString(16).padStart(24, '0');
   const knownFileIds = new Set<string>([PRODUCT_FILE_ID]);
   const kinds = new Map<string, StudioFileMediaKind>([[PRODUCT_FILE_ID, 'image']]);
@@ -95,13 +99,29 @@ function createHarness(): Harness {
     timeline: defaultStudioTimeline('blank'),
   };
 
+  // Replays a key it has seen, as the real image job service does.
+  const imageJobsByKey = new Map<string, string[]>();
   const image: ImageToolConfig = {
     selection: undefined,
     createJobs: async input => {
+      const key = input.idempotencyKey;
+      const replayed = key ? imageJobsByKey.get(key) : undefined;
+      if (replayed) {
+        const replayJobs = replayed.map(id => ({ id, state: (jobs.get(id) as ProductionJobView).state }));
+        return { ok: true, groupId: 'group', jobs: replayJobs, created: false } as never;
+      }
       imageRequests.push({ request: input.request, count: input.count });
       const ids = Array.from({ length: input.count }, () => startJob('image', undefined, input.request));
+      if (key) imageJobsByKey.set(key, ids);
       return { ok: true, groupId: 'group', jobs: ids.map(id => ({ id })), created: true } as never;
     },
+  };
+  const finishRunningImages = () => {
+    for (const job of jobs.values()) {
+      if (job.id.startsWith('job-image-') && job.state === 'running') {
+        jobs.set(job.id, { ...job, state: 'succeeded', fileId: makeFile('image') });
+      }
+    }
   };
   const video: VideoToolConfig = {
     usableModels: ['test-video'],
@@ -191,6 +211,7 @@ function createHarness(): Harness {
     imageRequests,
     addFile: makeFile,
     imageState,
+    finishRunningImages,
   };
 }
 
@@ -447,15 +468,6 @@ describe('production director tools', () => {
       await harness.config.compositions.update(COMPOSITION_ID, {
         brandKit: { ...harness.composition().brandKit, productFileIds: [] },
       });
-      const image = harness.config.image!;
-      harness.config.image = {
-        ...image,
-        createJobs: async input =>
-          isLook(input.request)
-            ? ({ ok: true, groupId: 'group', jobs: [{ id: 'look-job', state: 'succeeded' }], created: false } as never)
-            : image.createJobs(input),
-      };
-
       const second = JSON.parse(
         await run(productionGenerateShotTool, harness, {
           compositionId: COMPOSITION_ID,
@@ -465,6 +477,29 @@ describe('production director tools', () => {
       );
       expect(second.productLook).toMatch(/^skipped: /);
       expect(harness.composition().brandKit.productFileIds).not.toContain(look);
+      expect(harness.imageRequests.filter(({ request }) => isLook(request))).toHaveLength(1);
+    });
+
+    it('saves a look that finished after the call stopped waiting, and references it on the re-call', async () => {
+      harness.imageState.next = request => (isLook(request) ? 'running' : 'succeeded');
+      await run(productionStoryboardTool, harness, noProduct);
+      const first = JSON.parse(
+        await run(productionGenerateShotTool, harness, { compositionId: COMPOSITION_ID, animate: false })
+      );
+      expect(first.productLook).toBe('pending');
+      harness.finishRunningImages();
+
+      const second = JSON.parse(
+        await run(productionGenerateShotTool, harness, { compositionId: COMPOSITION_ID, animate: false })
+      );
+      expect(second.productLook).toBe('made');
+      const [look] = harness.composition().brandKit.productFileIds;
+      expect(look).toBeDefined();
+      const requests = harness.imageRequests.map(({ request }) => request);
+      expect(requests.filter(isLook)).toHaveLength(1);
+      const takes = requests.filter(request => !isLook(request));
+      expect(takes).toHaveLength(3);
+      for (const take of takes) expect(inputsOf(take)).toEqual([look]);
     });
 
     it('starts no takes while the look is still running, and reports every shot pending on it', async () => {
