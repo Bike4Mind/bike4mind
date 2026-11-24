@@ -29,7 +29,7 @@ export function placeShortcutLabel(digit: number, mac = isMac): string {
 }
 
 export function sidebarShortcutLabel(mac = isMac): string {
-  return mac ? '⌘B' : 'Ctrl+B';
+  return mac ? '\u2318B' : 'Ctrl+B';
 }
 
 export function matchPlaceShortcut(event: Chord, mac = isMac): Place | null {
