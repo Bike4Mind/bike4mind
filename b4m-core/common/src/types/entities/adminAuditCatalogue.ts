@@ -200,6 +200,8 @@ export const ADMIN_AUDIT_CATALOGUE = {
   'user.internal.marked': { category: 'account', severity: 'notice', write: 'strict' },
   'user.internal.unmarked': { category: 'account', severity: 'notice', write: 'strict' },
   'user.segment.changed': { category: 'account', severity: 'notice', write: 'strict' },
+  // The home-org pointer (user.organizationId): billing fallback and org-scoped access context.
+  'user.home_org.cleared': { category: 'account', severity: 'notice', write: 'strict' },
   'user.email.unverified': { category: 'identity', severity: 'info', write: 'bestEffort' },
   'user.email.verification_resent': { category: 'identity', severity: 'info', write: 'bestEffort' },
   'user.email.change_resent': { category: 'identity', severity: 'info', write: 'bestEffort' },
