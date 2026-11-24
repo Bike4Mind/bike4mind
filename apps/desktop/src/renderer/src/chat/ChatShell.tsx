@@ -60,7 +60,6 @@ import { StudioPane } from './studio/StudioPane';
 import type { StudioController } from './studio/controller';
 import { useStudioController } from './studio/useStudioController';
 import { studioPaneLayout } from './studio/layout';
-import { ProjectSubtitleLine } from './ProjectSubtitleLine';
 import { railFitsBesideThread, replyStatsToggleTitle, setReplyStatsRail, useReplyStatsPrefs } from './replyStatsPrefs';
 import { MessageThread } from './MessageThread';
 import {
@@ -1759,15 +1758,12 @@ export function ChatShell({
                         Orchestrator
                       </Typography>
                     ) : (
-                      <>
-                        <SessionHeader
-                          title={activeSummary?.title ?? conversation.session.title}
-                          onRename={title =>
-                            void (activeSummary ? rename(activeSummary, title) : conversation.rename(title))
-                          }
-                        />
-                        {conversation.session.project && <ProjectSubtitleLine project={conversation.session.project} />}
-                      </>
+                      <SessionHeader
+                        title={activeSummary?.title ?? conversation.session.title}
+                        onRename={title =>
+                          void (activeSummary ? rename(activeSummary, title) : conversation.rename(title))
+                        }
+                      />
                     )
                   ) : opening ? null : (
                     <Typography level="title-sm" textColor="text.tertiary">

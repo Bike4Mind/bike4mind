@@ -3,7 +3,7 @@ import { OFFICE_ROOMS, type OfficeRoom } from './officeLayout';
 
 const ROOM_BY_STATE: Record<AgentState, OfficeRoom> = {
   working: 'desks',
-  'needs-you': 'manager-door',
+  'needs-you': 'conference-room',
   done: 'break-room',
   failed: 'conference-room',
   stopped: 'conference-room',
@@ -18,5 +18,7 @@ export function officeRoomFor(agent: Pick<AgentView, 'state' | 'preparing'>): Of
 export function groupOfficeAgents(agents: readonly AgentView[]): ReadonlyMap<OfficeRoom, readonly AgentView[]> {
   const rooms = new Map<OfficeRoom, AgentView[]>(OFFICE_ROOMS.map(room => [room.id, []]));
   for (const agent of agents) rooms.get(officeRoomFor(agent))?.push(agent);
+  // Agents waiting on the user take the front seats of the meeting room.
+  rooms.get('conference-room')?.sort((a, b) => Number(b.state === 'needs-you') - Number(a.state === 'needs-you'));
   return rooms;
 }
