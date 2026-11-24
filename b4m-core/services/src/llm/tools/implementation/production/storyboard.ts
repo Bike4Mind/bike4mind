@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import {
+  DIRECTOR_MAX_SHOTS,
   STUDIO_COMPOSITION_LIMITS,
   STUDIO_TIMELINE_LIMITS,
   StudioFileIdSchema,
@@ -17,7 +18,7 @@ import {
 } from './layout';
 import { CompositionIdArg, ProductionToolError, describeProductionError } from './shared';
 
-export const STORYBOARD_MAX_SHOTS = 12;
+export const STORYBOARD_MAX_SHOTS = DIRECTOR_MAX_SHOTS;
 const limits = STUDIO_COMPOSITION_LIMITS;
 
 const ShotArg = z.object({
@@ -45,7 +46,7 @@ const ShotArg = z.object({
     .max(limits.shotPromptMaxLength)
     .optional()
     .describe(
-      'Image prompt for a new shot: subject, setting, light, camera, and the product. A new prompt makes new takes.'
+      'Image prompt for a new shot: subject, setting, light, camera, and any product. A new prompt makes new takes.'
     ),
   durationSeconds: z.number().min(1).max(30).optional().describe('Length in the cut.'),
   voiceLine: z
@@ -88,8 +89,8 @@ type StoryboardArgs = z.infer<typeof schema>;
 
 const description =
   'Write the storyboard of a Studio production: every shot in order with its image prompt, length and voice line. ' +
-  'Carry over each current shot you are not re-imagining with keep. About 4 shots for a 15 second ad (hook, ' +
-  'product, benefit, call to action). Then call production_generate_shot.';
+  'Carry over each current shot you are not re-imagining with keep. Plan the shots as the system context says; for ' +
+  'an ad, about 4 for 15 seconds (hook, product, benefit, call to action). Then call production_generate_shot.';
 
 type ResolvedShot = { title: string; intent?: string; prompt?: string; durationMs: number; voiceLine?: string };
 

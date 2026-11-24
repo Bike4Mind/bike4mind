@@ -2820,6 +2820,25 @@
       "createCompletionRequest": {
         "type": "object",
         "properties": {
+          "evaluation": {
+            "type": "object",
+            "properties": {
+              "version": {
+                "type": "number",
+                "enum": [
+                  1
+                ]
+              },
+              "requestId": {
+                "type": "string",
+                "format": "uuid"
+              }
+            },
+            "required": [
+              "version",
+              "requestId"
+            ]
+          },
           "model": {
             "type": "string",
             "minLength": 1,
@@ -3666,6 +3685,237 @@
       "createCompletionRunResponse201": {
         "type": "object",
         "properties": {
+          "evaluation": {
+            "type": "object",
+            "properties": {
+              "version": {
+                "type": "number",
+                "enum": [
+                  1
+                ]
+              },
+              "limits": {
+                "type": "object",
+                "properties": {
+                  "version": {
+                    "type": "number",
+                    "enum": [
+                      1
+                    ]
+                  },
+                  "maxProviderUsd": {
+                    "type": "number",
+                    "exclusiveMinimum": 0,
+                    "maximum": 150
+                  },
+                  "maxTokens": {
+                    "type": "integer",
+                    "exclusiveMinimum": 0,
+                    "maximum": 1000000000
+                  },
+                  "maxRequests": {
+                    "type": "integer",
+                    "exclusiveMinimum": 0,
+                    "maximum": 10000
+                  },
+                  "modelIds": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 128
+                    },
+                    "minItems": 1,
+                    "maxItems": 20
+                  }
+                },
+                "required": [
+                  "version",
+                  "maxProviderUsd",
+                  "maxTokens",
+                  "maxRequests",
+                  "modelIds"
+                ]
+              },
+              "revision": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "committedProviderUsd": {
+                "type": "number",
+                "minimum": 0
+              },
+              "committedTokens": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "committedRequests": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "receipts": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "version": {
+                      "type": "number",
+                      "enum": [
+                        1
+                      ]
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "attemptId": {
+                      "type": "string"
+                    },
+                    "status": {
+                      "type": "string",
+                      "enum": [
+                        "pending",
+                        "complete",
+                        "rejected-before-dispatch",
+                        "unknown"
+                      ]
+                    },
+                    "revision": {
+                      "type": "integer",
+                      "exclusiveMinimum": 0
+                    },
+                    "modelId": {
+                      "type": "string"
+                    },
+                    "backend": {
+                      "type": "string"
+                    },
+                    "pricingRevision": {
+                      "type": "string"
+                    },
+                    "maxProviderUsd": {
+                      "type": "number",
+                      "minimum": 0
+                    },
+                    "maxTokens": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "maxInputTokens": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "maxOutputTokens": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "providerUsd": {
+                      "type": "number",
+                      "minimum": 0
+                    },
+                    "inputTokens": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "tierBasisTokens": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "outputTokens": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "cacheReadTokens": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "reasoningTokens": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "cacheWrite5mTokens": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "cacheWrite1hTokens": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "platformUsd": {
+                      "type": "number",
+                      "minimum": 0
+                    },
+                    "platformCredits": {
+                      "type": "number",
+                      "minimum": 0
+                    },
+                    "provenance": {
+                      "type": "string",
+                      "enum": [
+                        "provider-reported-usage/catalog-rates"
+                      ]
+                    },
+                    "rates": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "tier": {
+                            "type": "number"
+                          },
+                          "input": {
+                            "type": "number"
+                          },
+                          "output": {
+                            "type": "number"
+                          },
+                          "cacheRead": {
+                            "type": "number"
+                          },
+                          "cacheWrite5m": {
+                            "type": "number"
+                          },
+                          "cacheWrite1h": {
+                            "type": "number"
+                          }
+                        },
+                        "required": [
+                          "tier",
+                          "input",
+                          "output",
+                          "cacheRead"
+                        ]
+                      }
+                    }
+                  },
+                  "required": [
+                    "version",
+                    "requestId",
+                    "attemptId",
+                    "status",
+                    "revision",
+                    "modelId",
+                    "backend",
+                    "pricingRevision",
+                    "maxProviderUsd",
+                    "maxTokens",
+                    "maxInputTokens",
+                    "maxOutputTokens",
+                    "rates"
+                  ]
+                }
+              }
+            },
+            "required": [
+              "version",
+              "limits",
+              "revision",
+              "committedProviderUsd",
+              "committedTokens",
+              "committedRequests",
+              "receipts"
+            ]
+          },
           "runId": {
             "type": "string",
             "format": "uuid",
@@ -3698,6 +3948,49 @@
       "createCompletionRunRequest": {
         "type": "object",
         "properties": {
+          "evaluation": {
+            "type": "object",
+            "properties": {
+              "version": {
+                "type": "number",
+                "enum": [
+                  1
+                ]
+              },
+              "maxProviderUsd": {
+                "type": "number",
+                "exclusiveMinimum": 0,
+                "maximum": 150
+              },
+              "maxTokens": {
+                "type": "integer",
+                "exclusiveMinimum": 0,
+                "maximum": 1000000000
+              },
+              "maxRequests": {
+                "type": "integer",
+                "exclusiveMinimum": 0,
+                "maximum": 10000
+              },
+              "modelIds": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 128
+                },
+                "minItems": 1,
+                "maxItems": 20
+              }
+            },
+            "required": [
+              "version",
+              "maxProviderUsd",
+              "maxTokens",
+              "maxRequests",
+              "modelIds"
+            ]
+          },
           "rootSessionId": {
             "type": "string",
             "minLength": 1,
@@ -3715,6 +4008,263 @@
           "rootSessionId": "session-42",
           "budgetCredits": 5000
         }
+      },
+      "getCompletionRunEvaluationResponse200": {
+        "type": "object",
+        "properties": {
+          "version": {
+            "type": "number",
+            "enum": [
+              1
+            ]
+          },
+          "limits": {
+            "type": "object",
+            "properties": {
+              "version": {
+                "type": "number",
+                "enum": [
+                  1
+                ]
+              },
+              "maxProviderUsd": {
+                "type": "number",
+                "exclusiveMinimum": 0,
+                "maximum": 150
+              },
+              "maxTokens": {
+                "type": "integer",
+                "exclusiveMinimum": 0,
+                "maximum": 1000000000
+              },
+              "maxRequests": {
+                "type": "integer",
+                "exclusiveMinimum": 0,
+                "maximum": 10000
+              },
+              "modelIds": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 128
+                },
+                "minItems": 1,
+                "maxItems": 20
+              }
+            },
+            "required": [
+              "version",
+              "maxProviderUsd",
+              "maxTokens",
+              "maxRequests",
+              "modelIds"
+            ]
+          },
+          "revision": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "committedProviderUsd": {
+            "type": "number",
+            "minimum": 0
+          },
+          "committedTokens": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "committedRequests": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "receipts": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "version": {
+                  "type": "number",
+                  "enum": [
+                    1
+                  ]
+                },
+                "requestId": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "attemptId": {
+                  "type": "string"
+                },
+                "status": {
+                  "type": "string",
+                  "enum": [
+                    "pending",
+                    "complete",
+                    "rejected-before-dispatch",
+                    "unknown"
+                  ]
+                },
+                "revision": {
+                  "type": "integer",
+                  "exclusiveMinimum": 0
+                },
+                "modelId": {
+                  "type": "string"
+                },
+                "backend": {
+                  "type": "string"
+                },
+                "pricingRevision": {
+                  "type": "string"
+                },
+                "maxProviderUsd": {
+                  "type": "number",
+                  "minimum": 0
+                },
+                "maxTokens": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "maxInputTokens": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "maxOutputTokens": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "providerUsd": {
+                  "type": "number",
+                  "minimum": 0
+                },
+                "inputTokens": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "tierBasisTokens": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "outputTokens": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "cacheReadTokens": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "reasoningTokens": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "cacheWrite5mTokens": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "cacheWrite1hTokens": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "platformUsd": {
+                  "type": "number",
+                  "minimum": 0
+                },
+                "platformCredits": {
+                  "type": "number",
+                  "minimum": 0
+                },
+                "provenance": {
+                  "type": "string",
+                  "enum": [
+                    "provider-reported-usage/catalog-rates"
+                  ]
+                },
+                "rates": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "tier": {
+                        "type": "number"
+                      },
+                      "input": {
+                        "type": "number"
+                      },
+                      "output": {
+                        "type": "number"
+                      },
+                      "cacheRead": {
+                        "type": "number"
+                      },
+                      "cacheWrite5m": {
+                        "type": "number"
+                      },
+                      "cacheWrite1h": {
+                        "type": "number"
+                      }
+                    },
+                    "required": [
+                      "tier",
+                      "input",
+                      "output",
+                      "cacheRead"
+                    ]
+                  }
+                }
+              },
+              "required": [
+                "version",
+                "requestId",
+                "attemptId",
+                "status",
+                "revision",
+                "modelId",
+                "backend",
+                "pricingRevision",
+                "maxProviderUsd",
+                "maxTokens",
+                "maxInputTokens",
+                "maxOutputTokens",
+                "rates"
+              ]
+            }
+          }
+        },
+        "required": [
+          "version",
+          "limits",
+          "revision",
+          "committedProviderUsd",
+          "committedTokens",
+          "committedRequests",
+          "receipts"
+        ]
+      },
+      "getCompletionRunEvaluationResponse404": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "string"
+          },
+          "request_id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string",
+            "deprecated": true,
+            "description": "Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this."
+          },
+          "errorCode": {
+            "type": "string",
+            "enum": [
+              "run_not_found"
+            ]
+          }
+        },
+        "required": [
+          "error",
+          "errorCode"
+        ]
       },
       "getCompletionRunUsageResponse200": {
         "type": "object",
@@ -4120,6 +4670,237 @@
       "raiseCompletionRunBudgetResponse200": {
         "type": "object",
         "properties": {
+          "evaluation": {
+            "type": "object",
+            "properties": {
+              "version": {
+                "type": "number",
+                "enum": [
+                  1
+                ]
+              },
+              "limits": {
+                "type": "object",
+                "properties": {
+                  "version": {
+                    "type": "number",
+                    "enum": [
+                      1
+                    ]
+                  },
+                  "maxProviderUsd": {
+                    "type": "number",
+                    "exclusiveMinimum": 0,
+                    "maximum": 150
+                  },
+                  "maxTokens": {
+                    "type": "integer",
+                    "exclusiveMinimum": 0,
+                    "maximum": 1000000000
+                  },
+                  "maxRequests": {
+                    "type": "integer",
+                    "exclusiveMinimum": 0,
+                    "maximum": 10000
+                  },
+                  "modelIds": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 128
+                    },
+                    "minItems": 1,
+                    "maxItems": 20
+                  }
+                },
+                "required": [
+                  "version",
+                  "maxProviderUsd",
+                  "maxTokens",
+                  "maxRequests",
+                  "modelIds"
+                ]
+              },
+              "revision": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "committedProviderUsd": {
+                "type": "number",
+                "minimum": 0
+              },
+              "committedTokens": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "committedRequests": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "receipts": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "version": {
+                      "type": "number",
+                      "enum": [
+                        1
+                      ]
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "attemptId": {
+                      "type": "string"
+                    },
+                    "status": {
+                      "type": "string",
+                      "enum": [
+                        "pending",
+                        "complete",
+                        "rejected-before-dispatch",
+                        "unknown"
+                      ]
+                    },
+                    "revision": {
+                      "type": "integer",
+                      "exclusiveMinimum": 0
+                    },
+                    "modelId": {
+                      "type": "string"
+                    },
+                    "backend": {
+                      "type": "string"
+                    },
+                    "pricingRevision": {
+                      "type": "string"
+                    },
+                    "maxProviderUsd": {
+                      "type": "number",
+                      "minimum": 0
+                    },
+                    "maxTokens": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "maxInputTokens": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "maxOutputTokens": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "providerUsd": {
+                      "type": "number",
+                      "minimum": 0
+                    },
+                    "inputTokens": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "tierBasisTokens": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "outputTokens": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "cacheReadTokens": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "reasoningTokens": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "cacheWrite5mTokens": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "cacheWrite1hTokens": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "platformUsd": {
+                      "type": "number",
+                      "minimum": 0
+                    },
+                    "platformCredits": {
+                      "type": "number",
+                      "minimum": 0
+                    },
+                    "provenance": {
+                      "type": "string",
+                      "enum": [
+                        "provider-reported-usage/catalog-rates"
+                      ]
+                    },
+                    "rates": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "tier": {
+                            "type": "number"
+                          },
+                          "input": {
+                            "type": "number"
+                          },
+                          "output": {
+                            "type": "number"
+                          },
+                          "cacheRead": {
+                            "type": "number"
+                          },
+                          "cacheWrite5m": {
+                            "type": "number"
+                          },
+                          "cacheWrite1h": {
+                            "type": "number"
+                          }
+                        },
+                        "required": [
+                          "tier",
+                          "input",
+                          "output",
+                          "cacheRead"
+                        ]
+                      }
+                    }
+                  },
+                  "required": [
+                    "version",
+                    "requestId",
+                    "attemptId",
+                    "status",
+                    "revision",
+                    "modelId",
+                    "backend",
+                    "pricingRevision",
+                    "maxProviderUsd",
+                    "maxTokens",
+                    "maxInputTokens",
+                    "maxOutputTokens",
+                    "rates"
+                  ]
+                }
+              }
+            },
+            "required": [
+              "version",
+              "limits",
+              "revision",
+              "committedProviderUsd",
+              "committedTokens",
+              "committedRequests",
+              "receipts"
+            ]
+          },
           "runId": {
             "type": "string",
             "format": "uuid",
@@ -38022,6 +38803,24 @@
               }
             }
           },
+          "409": {
+            "description": "Evaluation receipt already exists or another evaluation request remains unresolved. Recover the owner-scoped run evaluation receipts before continuing.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
           "413": {
             "description": "Request body over 25 MB.",
             "content": {
@@ -38188,11 +38987,65 @@
         },
         "responses": {
           "201": {
-            "description": "The created run.",
+            "description": "The created run, or the existing evaluation for the same owner and rootSessionId. Evaluation mint retries preserve the original immutable limits and receipts.",
             "content": {
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/createCompletionRunResponse201"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-RateLimit-Limit-Minute": {
+                "description": "Request quota per minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Minute": {
+                "description": "Requests remaining in the current minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Minute": {
+                "description": "Unix epoch (seconds) when the minute window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Limit-Day": {
+                "description": "Request quota per day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Day": {
+                "description": "Requests remaining in the current day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Day": {
+                "description": "Unix epoch (seconds) when the day window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Evaluation requires a stable rootSessionId.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
                 }
               }
             },
@@ -38260,11 +39113,11 @@
             }
           },
           "403": {
-            "description": "The API key does not hold any of the required scopes, or the account is suspended (`errorCode: account_suspended`).",
+            "description": "Evaluation execution is not enabled for this account.",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ScopeForbiddenResponse"
+                  "$ref": "#/components/schemas/ErrorResponse"
                 }
               }
             },
@@ -38273,6 +39126,42 @@
                 "description": "Correlation id for this request; safe to log and quote in support requests.",
                 "schema": {
                   "type": "string"
+                }
+              },
+              "X-RateLimit-Limit-Minute": {
+                "description": "Request quota per minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Minute": {
+                "description": "Requests remaining in the current minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Minute": {
+                "description": "Unix epoch (seconds) when the minute window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Limit-Day": {
+                "description": "Request quota per day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Day": {
+                "description": "Requests remaining in the current day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Day": {
+                "description": "Unix epoch (seconds) when the day window resets.",
+                "schema": {
+                  "type": "integer"
                 }
               }
             }
@@ -38297,6 +39186,60 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The evaluation identity already exists with different limits or models.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-RateLimit-Limit-Minute": {
+                "description": "Request quota per minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Minute": {
+                "description": "Requests remaining in the current minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Minute": {
+                "description": "Unix epoch (seconds) when the minute window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Limit-Day": {
+                "description": "Request quota per day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Day": {
+                "description": "Requests remaining in the current day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Day": {
+                "description": "Unix epoch (seconds) when the day window resets.",
+                "schema": {
+                  "type": "integer"
                 }
               }
             }
@@ -38484,6 +39427,193 @@
             "label": "requests",
             "source": "import requests\n\nres = requests.post(\n    \"https://your-deployment.example.com/api/v1/completion-runs\",\n    headers={\"Authorization\": \"Bearer b4m_live_<key>\"},\n    json={\n        \"rootSessionId\": \"session-42\",\n        \"budgetCredits\": 5000\n    },\n)"
           }
+        ]
+      }
+    },
+    "/api/v1/completion-runs/{runId}/evaluation": {
+      "get": {
+        "operationId": "getCompletionRunEvaluation",
+        "summary": "Recover evaluation admission receipts",
+        "description": "Owner-scoped durable provider-priced reservations and receipts. Pending and unknown receipts retain their full bounds and block further admission. Provider-priced USD is distinct from platform credit charges. A complete receipt uses provider-reported usage and the immutable catalog rates captured at admission; it is not an invoice. Recovery never repeats a provider dispatch.",
+        "tags": [
+          "AI"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "apiKeyAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "description": "A run id issued by `POST /api/v1/completion-runs`."
+            },
+            "required": true,
+            "description": "A run id issued by `POST /api/v1/completion-runs`.",
+            "name": "runId",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Evaluation state and durable request receipts.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/getCompletionRunEvaluationResponse200"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid credentials.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The API key does not hold any of the required scopes, or the account is suspended (`errorCode: account_suspended`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScopeForbiddenResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Evaluation run not found for this owner.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/getCompletionRunEvaluationResponse404"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "405": {
+            "description": "The path does not serve this HTTP method.",
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Allow": {
+                "description": "The methods this path serves. GET implies HEAD.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Request failed validation.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "426": {
+            "description": "The request declared a client build (`X-Client-Name` + `X-Client-Version`) older than the minimum this API still serves for that client. Upgrade to `minimum_version` or later. Never sent to a request that omits either header.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UpgradeRequiredResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limit exceeded.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "x-required-scopes": [
+          "ai:chat",
+          "ai:generate"
         ]
       }
     },
