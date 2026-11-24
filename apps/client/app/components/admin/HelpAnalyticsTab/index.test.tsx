@@ -125,6 +125,10 @@ describe('HelpAnalyticsTab page anatomy', () => {
   });
 });
 
+const setDay = (testId: string, value: string) => {
+  fireEvent.change(screen.getByTestId(testId), { target: { value } });
+};
+
 describe('HelpAnalyticsTab date range', () => {
   it('puts the range in one wrapping row and applies a preset when it is picked', async () => {
     renderTab();
@@ -147,8 +151,16 @@ describe('HelpAnalyticsTab date range', () => {
       fireEvent.click(screen.getByTestId('admin-filter-help-range'));
       fireEvent.click(screen.getByTestId('admin-filter-help-range-custom'));
       expect(screen.getByTestId('help-analytics-range-week')).toHaveAttribute('aria-pressed', 'false');
-      fireEvent.change(screen.getByTestId('help-analytics-date-from'), { target: { value: '2026-10-01' } });
-      fireEvent.change(screen.getByTestId('help-analytics-date-to'), { target: { value: '2026-10-31' } });
+      fireEvent.click(screen.getByTestId('help-analytics-date-from-clear-btn'));
+      fireEvent.click(screen.getByTestId('help-analytics-date-to-clear-btn'));
+      expect(screen.getByTestId('help-analytics-date-from-empty')).toHaveTextContent('From any date');
+      expect(screen.getByTestId('help-analytics-date-to-empty')).toHaveTextContent('To any date');
+      act(() => vi.advanceTimersByTime(SEARCH_TERM_URL_DEBOUNCE_MS));
+      expect(lastFilters()).toEqual({});
+      fireEvent.click(screen.getByTestId('help-analytics-date-from-set-btn'));
+      fireEvent.click(screen.getByTestId('help-analytics-date-to-set-btn'));
+      setDay('help-analytics-date-from', '2026-10-01');
+      setDay('help-analytics-date-to', '2026-10-31');
       act(() => vi.advanceTimersByTime(SEARCH_TERM_URL_DEBOUNCE_MS - 1));
       expect(lastFilters()).not.toEqual({ dateFrom: '2026-10-01', dateTo: '2026-10-31' });
       act(() => vi.advanceTimersByTime(1));
@@ -164,8 +176,8 @@ describe('HelpAnalyticsTab date range', () => {
       renderTab();
       fireEvent.click(screen.getByTestId('admin-filter-help-range'));
       fireEvent.click(screen.getByTestId('admin-filter-help-range-custom'));
-      fireEvent.change(screen.getByTestId('help-analytics-date-from'), { target: { value: '2026-10-31' } });
-      fireEvent.change(screen.getByTestId('help-analytics-date-to'), { target: { value: '2026-10-01' } });
+      setDay('help-analytics-date-from', '2026-10-31');
+      setDay('help-analytics-date-to', '2026-10-01');
       act(() => vi.advanceTimersByTime(SEARCH_TERM_URL_DEBOUNCE_MS));
       expect(lastFilters()).toEqual({ dateFrom: '2026-10-01', dateTo: '2026-10-31' });
       expect(screen.getByTestId('help-analytics-date-from')).toHaveValue('2026-10-31');

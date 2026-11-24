@@ -125,17 +125,10 @@ describe('ProfileScreen local usage', () => {
     expect(find('profile-local-error')?.textContent).toBe('Could not read local model usage: channel closed');
   });
 
-  it('gives a reason for a rejection that carries none', async () => {
-    const { find } = await render(() => Promise.reject('gone'));
-    expect(find('profile-local-error')?.textContent).toBe(
-      'Could not read local model usage: the request to the app failed'
-    );
-  });
-
-  it('gives a reason for an error with an empty or blank message', async () => {
-    for (const message of ['', '   ']) {
-      const { find } = await render(() => Promise.reject(new Error(message)));
-      expect(find('profile-local-error')?.textContent).toBe(
+  it('gives a reason for a rejection that carries none, or an empty or blank message', async () => {
+    for (const reason of ['gone', new Error(''), new Error('   ')]) {
+      const { find } = await render(() => Promise.reject(reason));
+      expect(find('profile-local-error')?.textContent, String(reason)).toBe(
         'Could not read local model usage: the request to the app failed'
       );
     }

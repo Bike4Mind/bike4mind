@@ -1,9 +1,9 @@
 import { mkdtemp, realpath } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { BackgroundProcessRegistry } from './BackgroundProcessRegistry';
-import { bashBackground, bashKill, bashList, bashOutput } from './backgroundTools';
+import { bashBackground, bashKill, bashList, bashOutput, SETTLE_MS } from './backgroundTools';
 import { ForegroundCommandRegistry } from './ForegroundCommandRegistry';
 import { bashExecute } from './shellTools';
 import type { ToolContext } from './types';
@@ -25,7 +25,28 @@ describe('background tools', () => {
     };
   });
 
-  afterEach(() => registry.shutdown());
+  afterEach(() => {
+    vi.useRealTimers();
+    return registry.shutdown();
+  });
+
+  /**
+   * bash_background always waits out its settle period on a command that keeps running. Once
+   * `ready` holds, that wait has nothing left to show, so it is skipped on a fake clock.
+   */
+  async function startInBackground(command: string, ready: () => boolean): Promise<string> {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      const pending = bashBackground.run({ command }, context);
+      await vi.waitFor(() => expect(ready()).toBe(true), { timeout: 8_000, interval: 20 });
+      await vi.advanceTimersByTimeAsync(SETTLE_MS);
+      return await pending;
+    } finally {
+      vi.useRealTimers();
+    }
+  }
+
+  const listed = (command: string) => () => registry.list('session-a').some(info => info.command === command);
 
   /**
    * Approving a 60-second `npm run dev` must not silently also approve leaving it running all
@@ -61,7 +82,9 @@ describe('background tools', () => {
   });
 
   it('starts a process, lists it, reads from it and stops it', async () => {
-    const started = await bashBackground.run({ command: 'echo up; sleep 20' }, context);
+    const started = await startInBackground('echo up; sleep 20', () =>
+      registry.list('session-a').some(info => info.bufferedChars > 0)
+    );
     expect(started).toContain('up');
     expect(started).toContain('still running');
 
@@ -108,7 +131,7 @@ describe('background tools', () => {
   }, 30_000);
 
   it('waits inside the call for a process to exit when asked, then reads its output', async () => {
-    const started = await bashBackground.run({ command: 'sleep 3; echo installed' }, context);
+    const started = await startInBackground('sleep 0.2; echo installed', listed('sleep 0.2; echo installed'));
     const id = /\[([0-9a-f]{8})\]/.exec(started)?.[1];
 
     const result = await bashOutput.run({ id, wait_seconds: 20 }, context);
@@ -119,18 +142,22 @@ describe('background tools', () => {
   }, 30_000);
 
   it('returns at the wait cap with the process still running, and says so', async () => {
-    const started = await bashBackground.run({ command: 'sleep 20' }, context);
+    const started = await startInBackground('sleep 20', listed('sleep 20'));
     const id = /\[([0-9a-f]{8})\]/.exec(started)?.[1];
 
     const startedAt = Date.now();
-    const result = await bashOutput.run({ id, wait_seconds: 1 }, context);
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const pending = bashOutput.run({ id, wait_seconds: 1 }, context);
+    await vi.advanceTimersByTimeAsync(1_000);
+    const result = await pending;
+    vi.useRealTimers();
 
     expect(Date.now() - startedAt).toBeLessThan(5_000);
     expect(result).toContain('still running after waiting 1s');
   }, 30_000);
 
   it('stops waiting as soon as the turn is stopped', async () => {
-    const started = await bashBackground.run({ command: 'sleep 20' }, context);
+    const started = await startInBackground('sleep 20', listed('sleep 20'));
     const id = /\[([0-9a-f]{8})\]/.exec(started)?.[1];
     const turn = new AbortController();
 

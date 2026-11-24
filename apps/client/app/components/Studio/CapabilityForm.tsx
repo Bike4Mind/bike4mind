@@ -30,6 +30,13 @@ import {
 import ImageFieldPreview from './ImageFieldPreview';
 import { insertSnippet } from './insertSnippet';
 import ReferenceChip from './ReferenceChip';
+import {
+  StudioCapabilityLayout,
+  StudioFieldGroup,
+  StudioInvalidReason,
+  StudioJoyField,
+  studioControlFor,
+} from './StudioCapabilityControls';
 import StudioModelPicker from './StudioModelPicker';
 import type { StudioModelCard } from './studioModelCard';
 
@@ -271,12 +278,23 @@ const InvalidReason = ({ field, testId }: { field: CapabilityControl; testId: st
   );
 };
 
-const FieldControl = ({ field, testId }: { field: CapabilityControl; testId: string }) => (
-  <Box>
-    <Control field={field} testId={testId} />
-    <InvalidReason field={field} testId={testId} />
-  </Box>
-);
+// `studio`: Create v2, which draws the prompt, choice and chip fields with the Studio primitives.
+const FieldControl = ({ field, testId, studio }: { field: CapabilityControl; testId: string; studio: boolean }) => {
+  const studioControl = studio ? studioControlFor(field, testId) : null;
+  return (
+    <Box>
+      {studioControl ??
+        (studio ? (
+          <StudioJoyField>
+            <Control field={field} testId={testId} />
+          </StudioJoyField>
+        ) : (
+          <Control field={field} testId={testId} />
+        ))}
+      {studio ? <StudioInvalidReason field={field} testId={testId} /> : <InvalidReason field={field} testId={testId} />}
+    </Box>
+  );
+};
 
 const Control = ({ field, testId }: { field: CapabilityControl; testId: string }) => {
   switch (field.kind) {
@@ -422,7 +440,8 @@ const Control = ({ field, testId }: { field: CapabilityControl; testId: string }
  * `-toggle` and `-<value>-btn` (segmented), `-select`, `-slider` (range), `-switch`, `-note`, `-pick-btn`, `-name`,
  * `-preview`, `-clear-btn` and `-hint` (image), `-<value>-btn` (aspect), `-add-btn`, `-file-<id>` and
  * `-remove-<id>-btn` (references), `-chips` and `-<value>-chip` (chips). A field holding a value the model does not
- * take adds `-invalid` and, with a fix, `-fix-btn`, and holds submit.
+ * take adds `-invalid` and, with a fix, `-fix-btn`, and holds submit. With `modelCards` (Create v2) the form takes the
+ * Studio layout from StudioCapabilityControls; the legacy Studio tabs keep the Joy layout below.
  */
 const CapabilityForm = ({
   testIdPrefix,
@@ -440,37 +459,73 @@ const CapabilityForm = ({
   children,
 }: CapabilityFormProps) => {
   const testIdOf = (id: string) => `${testIdPrefix}-${id}`;
+  const studio = modelCards !== undefined;
+  const submitDisabled = !canSubmit || hasInvalidField(fields);
+  const fieldControls = fields.map(field =>
+    field.kind === 'group' ? (
+      studio ? (
+        <StudioFieldGroup key={field.id}>
+          {field.fields.map(member => (
+            <FieldControl key={member.id} field={member} testId={testIdOf(member.id)} studio />
+          ))}
+        </StudioFieldGroup>
+      ) : (
+        <Stack key={field.id} direction={{ xs: 'column', sm: 'row' }} gap={2}>
+          {field.fields.map(member => (
+            <Box key={member.id} sx={{ flex: 1 }}>
+              <FieldControl field={member} testId={testIdOf(member.id)} studio={false} />
+            </Box>
+          ))}
+        </Stack>
+      )
+    ) : (
+      <FieldControl key={field.id} field={field} testId={testIdOf(field.id)} studio={studio} />
+    )
+  );
 
-  return (
-    <Stack gap={2} data-testid={testIdPrefix}>
-      {modelCards ? (
-        <FormControl>
-          <FormLabel>Model</FormLabel>
+  if (modelCards) {
+    return (
+      <StudioCapabilityLayout
+        testIdPrefix={testIdPrefix}
+        modelPicker={
           <StudioModelPicker
             testIdPrefix={testIdPrefix}
             cards={modelCards}
             selectedId={modelId}
             onSelect={onModelChange}
           />
-        </FormControl>
-      ) : (
-        <FormControl>
-          <FormLabel>Model</FormLabel>
-          <Select
-            value={modelId}
-            onChange={(_event, value) => {
-              if (models && isOption(models, value)) onModelChange(value);
-            }}
-            slotProps={{ button: { 'data-testid': testIdOf('model-select') } }}
-          >
-            {models?.map(model => (
-              <Option key={model.value} value={model.value}>
-                {model.label}
-              </Option>
-            ))}
-          </Select>
-        </FormControl>
-      )}
+        }
+        changes={changes}
+        fieldControls={fieldControls}
+        estimateCredits={estimateCredits}
+        submitLabel={submitLabel}
+        submitDisabled={submitDisabled}
+        isSubmitting={isSubmitting}
+        onSubmit={onSubmit}
+      >
+        {children}
+      </StudioCapabilityLayout>
+    );
+  }
+
+  return (
+    <Stack gap={2} data-testid={testIdPrefix}>
+      <FormControl>
+        <FormLabel>Model</FormLabel>
+        <Select
+          value={modelId}
+          onChange={(_event, value) => {
+            if (models && isOption(models, value)) onModelChange(value);
+          }}
+          slotProps={{ button: { 'data-testid': testIdOf('model-select') } }}
+        >
+          {models?.map(model => (
+            <Option key={model.value} value={model.value}>
+              {model.label}
+            </Option>
+          ))}
+        </Select>
+      </FormControl>
 
       {changes.length > 0 && (
         <Alert color="warning" variant="soft" data-testid={testIdOf('changes')}>
@@ -484,19 +539,7 @@ const CapabilityForm = ({
         </Alert>
       )}
 
-      {fields.map(field =>
-        field.kind === 'group' ? (
-          <Stack key={field.id} direction={{ xs: 'column', sm: 'row' }} gap={2}>
-            {field.fields.map(member => (
-              <Box key={member.id} sx={{ flex: 1 }}>
-                <FieldControl field={member} testId={testIdOf(member.id)} />
-              </Box>
-            ))}
-          </Stack>
-        ) : (
-          <FieldControl key={field.id} field={field} testId={testIdOf(field.id)} />
-        )
-      )}
+      {fieldControls}
 
       <Stack direction="row" justifyContent="space-between" alignItems="center" gap={2}>
         <Typography level="body-sm" data-testid={testIdOf('estimate')}>
@@ -506,7 +549,7 @@ const CapabilityForm = ({
         </Typography>
         <Button
           loading={isSubmitting}
-          disabled={!canSubmit || hasInvalidField(fields)}
+          disabled={submitDisabled}
           onClick={onSubmit}
           data-testid={testIdOf('submit-btn')}
         >

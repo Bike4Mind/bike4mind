@@ -3,7 +3,7 @@ import { app } from 'electron';
 /**
  * This run's version. An unpackaged run would report package.json's baseline, so it reports the one baked in
  * from the local checkout instead (scripts/dev-version.cjs). Every main-process reader goes through here
- * rather than app.getVersion(), which appVersion.test.ts enforces.
+ * rather than app.getVersion(), which electronMain.test.ts enforces.
  */
 export function currentVersion(): string {
   if (app.isPackaged || !__B4M_DEV_VERSION__) return app.getVersion();

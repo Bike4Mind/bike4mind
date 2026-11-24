@@ -14,6 +14,19 @@ import { resetCreationToolsCache } from './useCreationTools';
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 vi.mock('./CustomizePanel', () => ({ CustomizeNavItem: () => null, CustomizeScreen: () => null }));
+// The 3D engine's iframe would make jsdom boot a whole extra window on every mount.
+vi.mock('./model3d/modelEngineFrame', async importOriginal => ({
+  ...(await importOriginal<typeof import('./model3d/modelEngineFrame')>()),
+  ModelEngineFrame: class {
+    warm() {
+      return this;
+    }
+    dispose() {}
+    async build() {
+      return null;
+    }
+  },
+}));
 
 window.matchMedia ??= ((query: string) => ({
   matches: false,
@@ -25,6 +38,14 @@ window.matchMedia ??= ((query: string) => ({
   removeEventListener: () => {},
   dispatchEvent: () => false,
 })) as typeof window.matchMedia;
+
+// Joy's autosizing textarea measures itself on every render, and jsdom resolves that against every
+// emotion sheet in the document and every ancestor, with no layout to measure in the end.
+const realGetComputedStyle = window.getComputedStyle.bind(window);
+window.getComputedStyle = ((element: Element, pseudo?: string | null) =>
+  element instanceof HTMLTextAreaElement
+    ? element.style
+    : realGetComputedStyle(element, pseudo)) as typeof getComputedStyle;
 
 window.ResizeObserver ??= class {
   observe() {}
@@ -201,9 +222,12 @@ describe('the blank chat', () => {
     expect(cards().map(card => card.dataset.category)).toEqual(['write', 'ask']);
   });
 
-  it('renders a card for each offered category', async () => {
+  // Which categories show for which tools is blankChatSuggestions.test.ts's; this is the wiring.
+  it("renders a card for each offered category, asking for the tools of the conversation's own model", async () => {
     stubBridge({ tools: ALL_TOOLS });
     await openBlankSession();
+
+    expect(listCreationTools).toHaveBeenCalledWith(HOSTED);
 
     expect(document.querySelector('[data-testid="chat-empty-greeting"]')?.textContent).toBe(
       'What do you want to make?'
@@ -216,21 +240,23 @@ describe('the blank chat', () => {
     }
   });
 
-  it('hides video when generate_video is not offered', async () => {
-    stubBridge({ tools: ALL_TOOLS.filter(t => t.name !== 'generate_video') });
-    await openBlankSession();
-
-    expect(cards().map(card => card.dataset.category)).not.toContain('video');
-    expect(document.querySelector('[data-testid="chat-empty-subline"]')?.textContent).not.toMatch(/video/);
-  });
-
-  it('fills the composer with the prompt on click, caret at the end, without sending', async () => {
+  // jsdom does not synthesize a native button's Enter/Space activation, so this pins what makes
+  // the browser do it - a focusable, enabled <button type="button"> - and then activates it the
+  // way the browser would.
+  it('fills the composer with the prompt from a keyboard-reachable card, caret at the end, without sending', async () => {
     stubBridge({ tools: ALL_TOOLS });
     await openBlankSession();
 
     const music = cards().find(card => card.dataset.category === 'music');
-    const prompt = music?.querySelector('[data-testid="chat-empty-suggestion-prompt"]')?.textContent ?? '';
-    await act(async () => music?.click());
+    if (!music) throw new Error('no music card');
+    expect(music.tagName).toBe('BUTTON');
+    expect(music.type).toBe('button');
+    expect(music.disabled).toBe(false);
+    expect(music.tabIndex).toBe(0);
+    act(() => music.focus());
+    expect(document.activeElement).toBe(music);
+    const prompt = music.querySelector('[data-testid="chat-empty-suggestion-prompt"]')?.textContent ?? '';
+    await act(async () => music.click());
 
     const input = composer();
     expect(input?.value).toBe(prompt);
@@ -259,34 +285,6 @@ describe('the blank chat', () => {
 
     expect(composer()).not.toBeNull();
     expect(composer()?.value).toBe('');
-  });
-
-  // jsdom does not synthesize a native button's Enter/Space activation, so this pins what makes
-  // the browser do it - a focusable, enabled <button type="button"> - and then activates it the
-  // way the browser would.
-  it('is reachable and activated from the keyboard', async () => {
-    stubBridge({ tools: ALL_TOOLS });
-    await openBlankSession();
-
-    const card = cards()[0];
-    expect(card.tagName).toBe('BUTTON');
-    expect(card.type).toBe('button');
-    expect(card.disabled).toBe(false);
-    expect(card.tabIndex).toBe(0);
-    act(() => card.focus());
-    expect(document.activeElement).toBe(card);
-
-    const prompt = card.querySelector('[data-testid="chat-empty-suggestion-prompt"]')?.textContent ?? '';
-    await act(async () => card.click());
-    expect(composer()?.value).toBe(prompt);
-    expect(sendMessage).not.toHaveBeenCalled();
-  });
-
-  it("asks for the tools of the conversation's own model", async () => {
-    stubBridge({ tools: ALL_TOOLS });
-    await openBlankSession();
-
-    expect(listCreationTools).toHaveBeenCalledWith(HOSTED);
   });
 
   it('shows no media cards on a local model, without asking main', async () => {
@@ -327,32 +325,12 @@ describe('the context ring cold dot', () => {
   const LOCAL = 'local:ollama:qwen3:8b';
   const user: ChatMessage = { id: 'u1', role: 'user', content: 'Hi', createdAt: '2026-10-01T00:00:01.000Z' };
   const reply: ChatMessage = { id: 'a1', role: 'assistant', content: 'Hello', createdAt: '2026-10-01T00:00:02.000Z' };
-  const boundary: ChatMessage = {
-    id: 'b1',
-    role: 'user',
-    system: true,
-    content: '',
-    createdAt: '2026-10-01T00:00:03.000Z',
-    boundary: { kind: 'clear' },
-  };
   const dot = () => document.querySelector('[data-testid="composer-context-cold"]');
 
+  // A clear or compact boundary leaving no reply is latestReply's own test (statusLine.test.ts).
   it('shows for an unloaded local model once the conversation has a reply', async () => {
     stubBridge({ tools: [], model: LOCAL, messages: [user, reply], loadedState: { kind: 'unloaded' } });
     await openBlankSession();
     expect(dot()).not.toBeNull();
-  });
-
-  it('does not show right after a clear, which leaves no reply to be warm from', async () => {
-    stubBridge({ tools: [], model: LOCAL, messages: [user, reply, boundary], loadedState: { kind: 'unloaded' } });
-    await openBlankSession();
-    expect(dot()).toBeNull();
-  });
-
-  it('does not show right after a compact either', async () => {
-    const compact: ChatMessage = { ...boundary, content: 'summary', boundary: { kind: 'compact' } };
-    stubBridge({ tools: [], model: LOCAL, messages: [user, reply, compact], loadedState: { kind: 'unloaded' } });
-    await openBlankSession();
-    expect(dot()).toBeNull();
   });
 });

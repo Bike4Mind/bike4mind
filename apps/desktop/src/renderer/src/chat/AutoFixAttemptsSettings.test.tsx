@@ -18,6 +18,10 @@ window.matchMedia ??= ((query: string) => ({
   dispatchEvent: () => false,
 })) as typeof window.matchMedia;
 
+// Joy's popups (menus, selects, tooltips, modals) read every ancestor's computed style on each update,
+// and jsdom resolves that against every emotion sheet with no layout to find; the inline style will do.
+window.getComputedStyle = ((element: Element) => (element as HTMLElement).style) as typeof getComputedStyle;
+
 const getAutoFixAttempts = vi.fn<() => Promise<number>>();
 const setAutoFixAttempts = vi.fn<(attempts: number) => Promise<number>>();
 

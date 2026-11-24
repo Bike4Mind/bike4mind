@@ -16,6 +16,7 @@ import { useSearchOrganizations } from '@client/app/hooks/data/organizations';
 import { useDebounceValue } from '@client/app/hooks/useDebouncedValue';
 import { useSnackbar } from '@client/app/contexts/SnackbarContext';
 import { useUser } from '@client/app/contexts/UserContext';
+import { OptionalDateInput } from '@client/app/components/common/OptionalDateInput';
 import UserSelector from '@client/app/components/admin/shared/UserSelector';
 
 const ANY = 'any';
@@ -41,6 +42,8 @@ export const isoToDateInput = (iso: string | undefined): string => {
   const day = String(date.getDate()).padStart(2, '0');
   return `${date.getFullYear()}-${month}-${day}`;
 };
+
+const localToday = (): string => isoToDateInput(new Date().toISOString());
 
 type OrgOption = { id: string; name: string };
 
@@ -275,20 +278,40 @@ export const AuditFilterBar: React.FC<AuditFilterBarProps> = ({ filters, onChang
       </FormControl>
       <FormControl size="sm">
         <FormLabel>From</FormLabel>
-        <Input
-          type="date"
+        <OptionalDateInput
+          size="sm"
           value={isoToDateInput(filters.from)}
-          onChange={event => onChange({ from: dateInputToIso(event.target.value, 'start') })}
-          slotProps={{ input: { 'data-testid': 'audit-filter-from' } }}
+          onChange={date => onChange({ from: dateInputToIso(date, 'start') })}
+          emptyLabel="From any date"
+          setLabel="Set start date"
+          clearLabel="Remove start date"
+          initialDate={() => {
+            const to = isoToDateInput(filters.to);
+            const today = localToday();
+            return to && to < today ? to : today;
+          }}
+          max={isoToDateInput(filters.to) || undefined}
+          aria-label="From"
+          testId="audit-filter-from"
         />
       </FormControl>
       <FormControl size="sm">
         <FormLabel>To</FormLabel>
-        <Input
-          type="date"
+        <OptionalDateInput
+          size="sm"
           value={isoToDateInput(filters.to)}
-          onChange={event => onChange({ to: dateInputToIso(event.target.value, 'end') })}
-          slotProps={{ input: { 'data-testid': 'audit-filter-to' } }}
+          onChange={date => onChange({ to: dateInputToIso(date, 'end') })}
+          emptyLabel="To any date"
+          setLabel="Set end date"
+          clearLabel="Remove end date"
+          initialDate={() => {
+            const from = isoToDateInput(filters.from);
+            const today = localToday();
+            return from > today ? from : today;
+          }}
+          min={isoToDateInput(filters.from) || undefined}
+          aria-label="To"
+          testId="audit-filter-to"
         />
       </FormControl>
       <Button size="sm" variant="plain" color="neutral" onClick={onClear} data-testid="audit-filter-clear-btn">

@@ -30,8 +30,7 @@ const ShotArg = z.object({
     .optional()
     .describe(
       'A current shot id (e.g. "shot-3") to carry over with its prompt, takes, clip and voice line; omit prompt. ' +
-        'Use it for every shot you are not re-imagining; a new order moves them. Other fields default to the ' +
-        'current ones; voiceLine "" removes it.'
+        'A new order moves it. Other fields default to the current ones; voiceLine "" removes it.'
     ),
   title: z.string().trim().min(1).max(limits.shotTitleMaxLength).optional().describe('A short name, e.g. "Hook".'),
   intent: z
