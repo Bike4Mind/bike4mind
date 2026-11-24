@@ -45,6 +45,8 @@ const NOT_A_REWRITE = new Set([
   'apps/workers/src/cron/modelPriceSnapshotWriter.ts',
   'b4m-core/services/src/fabFileService/create.ts',
   'b4m-core/services/src/fabFileService/createByUrl.ts',
+  // Stores a skill template preview image as a new FabFile through createFabFile; never rewrites one.
+  'apps/client/server/skillMarket/templateImage.ts',
   // Stages an admin audit-log CSV under exports/ (no FabFile row); nothing to invalidate.
   'apps/client/server/utils/adminAuditExportStorage.ts',
   // Writes its status object and MP4 under studio-render/ in the generated media bucket (no FabFile row);

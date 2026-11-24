@@ -126,6 +126,14 @@ describe('template scan claim and verdict', () => {
     expect((await find()).firstPublishedAt).toEqual(first);
   });
 
+  it('refuses a claim whose extra filter no longer matches', async () => {
+    await create({ previewImage: { fabFileId: 'img-new', source: 'upload', approved: false } });
+    const claim = (fabFileId: string) =>
+      claimSkillTemplateScan('listing-1', new Date(), ['draft'], {}, { 'previewImage.fabFileId': fabFileId });
+    expect(await claim('img-old')).toBeNull();
+    expect(await claim('img-new')).not.toBeNull();
+  });
+
   it('refuses a claim from a status the caller did not name', async () => {
     await create({ status: 'published' });
     expect(await claimSkillTemplateScan('listing-1', new Date(), ['draft'])).toBeNull();

@@ -6,7 +6,7 @@ import TemplateEditor from '@client/app/components/SkillMarket/TemplateEditor/Te
 const SkillTemplateEditorPage: FC = () => {
   const { listingId } = useParams({ strict: false }) as { listingId: string };
   useDocumentTitle('Template page');
-  return <TemplateEditor listingId={listingId} />;
+  return <TemplateEditor key={listingId} listingId={listingId} />;
 };
 
 export default SkillTemplateEditorPage;

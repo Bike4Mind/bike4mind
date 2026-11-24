@@ -14,6 +14,7 @@ const IMAGE_STATUS_POLL_MS = 3000;
 const MAX_IMAGE_STATUS_POLLS = 100;
 const GENERATION_POLL_MS = 3000;
 const MAX_GENERATION_POLLS = 100;
+const MAX_CONSECUTIVE_POLL_ERRORS = 3;
 
 type TemplateResponse = { template: ISkillListingTemplate };
 
@@ -34,13 +35,26 @@ type GenerationQuest = { images?: string[]; type?: string; status?: string };
 
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
-/** Polls an image generation until it has an image; throws when it fails or never finishes. */
+/**
+ * Polls an image generation until it has an image; throws when it fails or never finishes. A failed
+ * poll request is retried, so one network blip does not lose a paid generation.
+ */
 export async function waitForGeneratedImage(
   questId: string,
   { intervalMs = GENERATION_POLL_MS, maxPolls = MAX_GENERATION_POLLS } = {}
 ): Promise<void> {
+  let consecutiveErrors = 0;
   for (let poll = 0; poll < maxPolls; poll += 1) {
-    const { data } = await api.get<GenerationQuest>(`/api/quests/${questId}`);
+    let data: GenerationQuest;
+    try {
+      data = (await api.get<GenerationQuest>(`/api/quests/${questId}`)).data;
+      consecutiveErrors = 0;
+    } catch (error) {
+      consecutiveErrors += 1;
+      if (consecutiveErrors >= MAX_CONSECUTIVE_POLL_ERRORS) throw error;
+      await sleep(intervalMs);
+      continue;
+    }
     if (data.images?.length) return;
     if (data.type === 'error' || data.status === 'error' || data.status === 'failed') {
       throw new Error('The image generation failed. Try again.');
