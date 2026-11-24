@@ -503,6 +503,27 @@ describe('OpenAICompatibleBackend tool rounds and usage', () => {
     expect(messages.at(-2)?.tool_calls?.[0].id).toBe('call_0_0');
   });
 
+  it('replays the text streamed ahead of a tool call on the next request', async () => {
+    const server = await fakeServer({
+      'POST /v1/chat/completions': (req, res) =>
+        bodyOf(req).messages?.at(-1)?.role === 'tool'
+          ? sse(res, [{ content: 'Done.' }])
+          : sse(res, [
+              { content: 'Checking the weather. ' },
+              {
+                tool_calls: [
+                  { index: 0, id: 'call-1', function: { name: 'get_weather', arguments: '{"city":"Paris"}' } },
+                ],
+              },
+            ]),
+    });
+    const { backend } = make(server.baseUrl, null);
+    expect((await run(backend, 'm', [weatherTool(async () => '21C')])).text).toBe('Checking the weather. Done.');
+    const messages = chats(server)[1].messages as { role: string; content?: string | null; tool_calls?: unknown[] }[];
+    expect(messages.at(-2)).toMatchObject({ role: 'assistant', content: 'Checking the weather. ' });
+    expect(messages.at(-2)?.tool_calls).toHaveLength(1);
+  });
+
   it.each([
     { label: 'an expected refusal at warn', error: new ExpectedToolError('refused'), level: 'warn' as const },
     { label: 'an unexpected failure at error', error: new Error('boom'), level: 'error' as const },

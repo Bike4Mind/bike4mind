@@ -232,27 +232,23 @@ const TEXELS: Record<ModelTexture, (u: number, v: number) => Texel> = {
 const BARE_WOOD = [0.56, 0.41, 0.27] as const;
 
 /**
- * The three maps of a texture, as RGBA bytes, TEXTURE_SIZE square. Roughness rides in green, as glTF
+ * The three maps of a texture, as RGBA bytes, `size` square. Roughness rides in green, as glTF
  * reads it. `paint` (sRGB 0..1) is painted wood's coat; every other kind's colour map is a grey tone.
  */
 export function textureBytes(
   kind: ModelTexture,
-  paint: readonly [number, number, number] = [1, 1, 1]
+  paint: readonly [number, number, number] = [1, 1, 1],
+  size = TEXTURE_SIZE
 ): { color: Uint8Array; roughness: Uint8Array; height: Uint8Array } {
   const texel = TEXELS[kind];
-  const count = TEXTURE_SIZE * TEXTURE_SIZE;
+  const count = size * size;
   const color = new Uint8Array(count * 4);
   const roughness = new Uint8Array(count * 4);
   const height = new Uint8Array(count * 4);
-  for (let row = 0; row < TEXTURE_SIZE; row += 1) {
-    for (let column = 0; column < TEXTURE_SIZE; column += 1) {
-      const {
-        tone,
-        roughness: rough,
-        height: bump,
-        bare,
-      } = texel((column + 0.5) / TEXTURE_SIZE, (row + 0.5) / TEXTURE_SIZE);
-      const offset = (row * TEXTURE_SIZE + column) * 4;
+  for (let row = 0; row < size; row += 1) {
+    for (let column = 0; column < size; column += 1) {
+      const { tone, roughness: rough, height: bump, bare } = texel((column + 0.5) / size, (row + 0.5) / size);
+      const offset = (row * size + column) * 4;
       if (bare === undefined) color.fill(Math.round(tone * 255), offset, offset + 3);
       else
         for (let channel = 0; channel < 3; channel += 1)

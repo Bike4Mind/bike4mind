@@ -156,7 +156,8 @@ export type PublicUserProfile = z.infer<typeof publicUserProfileResponseSchema>;
  */
 type SelfViewPassthroughField = Exclude<keyof IUserDocument, (typeof USER_SECRET_FIELDS)[number]>;
 
-const SELF_VIEW_PASSTHROUGH_FIELDS = {
+/** The fields a self-view copies as-is. `redactUserSecretsForSelf` builds its output from this list too. */
+export const SELF_VIEW_PASSTHROUGH_FIELDS = {
   id: true,
   createdAt: true,
   updatedAt: true,

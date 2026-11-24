@@ -17,7 +17,8 @@ import {
   parseRule,
 } from './rules';
 
-const HOME = '/home/someone';
+// Not under /home: macOS automounts it, and every realpath the guards take there waits on autofs.
+const HOME = '/Users/someone';
 const PROJECT = '/work/project';
 const SOURCE: RuleSource = { id: 'test', label: 'Test' };
 
@@ -424,7 +425,7 @@ describe('PermissionRuleSet', () => {
   });
 
   it('applies no allow rule while a protected folder is unresolved', () => {
-    let unresolved: readonly string[] = ['/home/someone/.claude'];
+    let unresolved: readonly string[] = [`${HOME}/.claude`];
     const rules = ['Edit(**)', 'Bash(git status:*)'].map(text => {
       const compiled = compileRule(parsed(text, true), 'allow', SOURCE, { home: HOME, root: PROJECT, cwd: PROJECT });
       if (!compiled) throw new Error('Expected the rule to compile');

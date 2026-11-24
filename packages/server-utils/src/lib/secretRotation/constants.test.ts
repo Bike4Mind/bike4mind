@@ -25,11 +25,13 @@ describe('secret rotation registry', () => {
   beforeEach(() => {
     vi.resetModules();
     vi.doMock('@bike4mind/observability', () => ({ Logger: { warn: vi.fn() } }));
+    vi.doMock('../../utils/config', () => ({ Config: {} }));
   });
 
   afterEach(() => {
     vi.doUnmock('../../premium-generated/infraResources.generated');
     vi.restoreAllMocks();
+    vi.unstubAllEnvs();
   });
 
   it('returns exactly the core config when nothing is declared', async () => {
@@ -39,6 +41,26 @@ describe('secret rotation registry', () => {
     });
     expect(getSecretRotationConfig()).toEqual(SECRET_ROTATION_CONFIG);
     expect(getUnregisteredContributedRotations()).toEqual([]);
+  });
+
+  it('leaves out the SMTP settings on an SES stage and keeps the sender', async () => {
+    vi.stubEnv('MAIL_STATUS_TRANSPORT', 'ses');
+    const { getSecretRotationConfig, SECRET_ROTATION_CONFIG } = await load({ secrets: [], rotations: [] });
+    const config = getSecretRotationConfig();
+    for (const name of ['MAIL_HOST', 'MAIL_PORT', 'MAIL_USERNAME', 'MAIL_PASSWORD']) {
+      expect(config).not.toHaveProperty(name);
+    }
+    expect(config.MAIL_FROM).toEqual(SECRET_ROTATION_CONFIG.MAIL_FROM);
+    expect(config.JWT_SECRET).toEqual(SECRET_ROTATION_CONFIG.JWT_SECRET);
+  });
+
+  it('keeps every mail setting on self-host, which sends over SMTP', async () => {
+    vi.stubEnv('B4M_SELF_HOST', 'true');
+    vi.stubEnv('MAIL_STATUS_TRANSPORT', 'ses');
+    const { getSecretRotationConfig } = await load({ secrets: [], rotations: [] });
+    expect(Object.keys(getSecretRotationConfig())).toEqual(
+      expect.arrayContaining(['MAIL_HOST', 'MAIL_PORT', 'MAIL_USERNAME', 'MAIL_PASSWORD', 'MAIL_FROM'])
+    );
   });
 
   it('never asks for the signing secret sooner than its previous value has to be honoured', async () => {

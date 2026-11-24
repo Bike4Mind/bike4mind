@@ -1,8 +1,9 @@
 import { mkdir, mkdtemp, readFile, realpath, symlink, writeFile } from 'node:fs/promises';
-import { homedir, tmpdir } from 'node:os';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
+import { sandboxedHome } from '../../../../vitest.tempRoot';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MAX_INSTRUCTIONS_BYTES, loadInstructions } from './instructions';
 import {
@@ -170,8 +171,8 @@ describe('path containment', () => {
     'refuses a memory store inside the prefix-protected ~/.claude/%s',
     async folder => {
       const protectedStore: MemoryStore = {
-        directory: join(homedir(), '.claude', folder, 'memory'),
-        userInstructionsRoot: join(homedir(), '.claude'),
+        directory: join(sandboxedHome(), '.claude', folder, 'memory'),
+        userInstructionsRoot: join(sandboxedHome(), '.claude'),
       };
       await mkdir(protectedStore.directory, { recursive: true });
 
@@ -182,7 +183,7 @@ describe('path containment', () => {
   );
 
   it('allows normal memory writes under ~/.claude/projects despite its tool write protection', async () => {
-    const homeStore = await store(join(homedir(), '.claude'));
+    const homeStore = await store(join(sandboxedHome(), '.claude'));
 
     await save(homeStore, 'a-fact', 'intended memory write');
     expect(await readFile(join(homeStore.directory, 'a-fact.md'), 'utf8')).toBe('intended memory write\n');

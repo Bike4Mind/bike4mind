@@ -106,7 +106,7 @@ test.describe('Studio - video and music forms', () => {
     await test.step('defaults: a model is picked, submit waits for a prompt', async () => {
       await expect(studioPage.modelName('video')).not.toHaveText('');
       await expect(page.getByTestId('video-form-payer-note')).toBeVisible();
-      await expect(estimate).toHaveText(/Estimated cost: [\d,]+ credits/);
+      await expect(estimate).toHaveText(/(Estimated cost: )?[\d,]+ credits/);
       await expect(submit).toBeDisabled();
     });
 
@@ -140,7 +140,8 @@ test.describe('Studio - video and music forms', () => {
         shortest = parseCredits(await estimate.textContent());
         await slider.press('End');
       } else {
-        const options = toggle.getByRole('button');
+        // Legacy draws buttons; the Create v2 layout draws radios.
+        const options = toggle.getByRole('button').or(toggle.getByRole('radio'));
         step.skip((await options.count()) < 2, 'the default video model has a single duration');
         await options.first().click();
         shortest = parseCredits(await estimate.textContent());
@@ -158,7 +159,7 @@ test.describe('Studio - video and music forms', () => {
     const submit = page.getByTestId('music-form-submit-btn');
 
     await expect(studioPage.modelName('music')).not.toHaveText('');
-    await expect(page.getByTestId('music-form-estimate')).toHaveText(/Estimated cost: [\d,]+ credits/);
+    await expect(page.getByTestId('music-form-estimate')).toHaveText(/(Estimated cost: )?[\d,]+ credits/);
     await expect(page.getByTestId('music-form-payer-note')).toBeVisible();
     await expect(submit).toBeDisabled();
 

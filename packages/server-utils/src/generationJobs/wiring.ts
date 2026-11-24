@@ -328,6 +328,7 @@ const resolveImageApiKey: ImageJobDeps['resolveApiKey'] = async (providerId, use
 export const loadInputImage: VideoJobDeps['loadInputImage'] = async (userId, ref) =>
   ref.kind === 'file' ? loadInputFabFile(userId, ref.id) : loadInputGeneratedImage(userId, ref.key);
 
+// referenceImageState (@bike4mind/common studioComposition/productReferences.ts) mirrors this gate; keep them in sync.
 const loadInputFabFile = async (userId: string, fileId: string) => {
   // The id is caller-supplied; a malformed one would throw a CastError from the query instead of reading as missing.
   if (!isValidObjectId(fileId)) return null;

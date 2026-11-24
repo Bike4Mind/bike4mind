@@ -1,4 +1,5 @@
 import { ExtractedArtifact, CurationArtifactType as ArtifactType } from '@bike4mind/common';
+import type { CurationSession, CurationMessage } from './markdownGenerator';
 import { stripToolOutputMarker } from '@bike4mind/utils/artifactParser';
 
 /**
@@ -68,8 +69,8 @@ export const DECISIONS_DELIMITER = '===DECISIONS_AND_ACTIONS===';
  * ~5000-char sample). Artifact descriptions remain a separate batched call.
  */
 export async function generateExecutiveSummaryMarkdown(
-  session: any,
-  messages: any[],
+  session: CurationSession,
+  messages: CurationMessage[],
   artifacts: ExtractedArtifact[],
   llmContext: LLMContext,
   model: string,
@@ -136,7 +137,11 @@ export async function generateExecutiveSummaryMarkdown(
 /**
  * Generate executive-style header
  */
-function generateExecutiveHeader(session: any, messages: any[], artifacts: ExtractedArtifact[]): string {
+function generateExecutiveHeader(
+  session: CurationSession,
+  messages: CurationMessage[],
+  artifacts: ExtractedArtifact[]
+): string {
   const created = session.firstCreated ? new Date(session.firstCreated).toLocaleDateString() : 'Unknown';
   const updated = session.lastUpdated ? new Date(session.lastUpdated).toLocaleDateString() : 'Unknown';
 
@@ -172,8 +177,8 @@ function generateExecutiveTOC(): string {
  * sections, which parseConsolidatedNarrative splits back apart.
  */
 async function generateAIConsolidatedNarrative(
-  session: any,
-  messages: any[],
+  session: CurationSession,
+  messages: CurationMessage[],
   generateText: GenerateTextFn
 ): Promise<{ summary: string; insights: string; decisions: string; inputTokens: number; outputTokens: number }> {
   const conversationSample = sampleConversation(messages, 5000); // ~5000 chars max
@@ -262,7 +267,7 @@ export function parseConsolidatedNarrative(text: string): { summary: string; ins
  */
 async function generateAIArtifactsSection(
   artifacts: ExtractedArtifact[],
-  messages: any[],
+  messages: CurationMessage[],
   generateText: GenerateTextFn
 ): Promise<{ markdown: string; inputTokens: number; outputTokens: number }> {
   const sections: string[] = ['## Code & Artifacts\n'];
@@ -325,7 +330,7 @@ async function generateAIArtifactsSection(
  */
 async function generateBatchedArtifactDescriptions(
   artifacts: ExtractedArtifact[],
-  messages: any[],
+  messages: CurationMessage[],
   generateText: GenerateTextFn
 ): Promise<{ descriptions: string[]; inputTokens: number; outputTokens: number }> {
   // If no artifacts, return empty
@@ -437,8 +442,8 @@ function formatArtifactWithDescription(artifact: ExtractedArtifact, index: numbe
  * Generate executive metadata footer
  */
 function generateExecutiveMetadata(
-  session: any,
-  messages: any[],
+  session: CurationSession,
+  messages: CurationMessage[],
   artifacts: ExtractedArtifact[],
   tokensUsed: number
 ): string {
@@ -475,7 +480,7 @@ function generateExecutiveMetadata(
 /**
  * Sample conversation to fit within token budget
  */
-function sampleConversation(messages: any[], maxChars: number): string {
+function sampleConversation(messages: CurationMessage[], maxChars: number): string {
   const samples: string[] = [];
   let currentChars = 0;
 
@@ -523,7 +528,7 @@ function sampleIndices(length: number, count: number): number[] {
 /**
  * Find conversation context around an artifact
  */
-function findArtifactContext(artifact: ExtractedArtifact, messages: any[]): string {
+function findArtifactContext(artifact: ExtractedArtifact, messages: CurationMessage[]): string {
   // Find the message containing this artifact
   const message = messages.find(m => m.id === artifact.messageId || m._id?.toString() === artifact.messageId);
 

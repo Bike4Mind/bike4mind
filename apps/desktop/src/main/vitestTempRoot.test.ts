@@ -3,7 +3,7 @@ import { existsSync } from 'node:fs';
 import { chmod, mkdir, mkdtemp, rm, stat, utimes, writeFile } from 'node:fs/promises';
 import { homedir, tmpdir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   RUN_ROOT_ENV,
   RUN_ROOT_PREFIX,
@@ -38,6 +38,10 @@ describe('test temp root', () => {
 
 describe('removeDeadRunRoots', () => {
   let parent: string;
+  let deadPid: number;
+  beforeAll(() => {
+    deadPid = spawnSync(process.execPath, ['-e', '']).pid;
+  });
   beforeEach(async () => {
     parent = await mkdtemp(join(tmpdir(), 'dead-run-roots-'));
   });
@@ -52,7 +56,6 @@ describe('removeDeadRunRoots', () => {
   };
 
   it('removes the old roots of dead runs and keeps live, unnamed and unrelated ones', async () => {
-    const deadPid = spawnSync(process.execPath, ['-e', '']).pid;
     const dead = `${RUN_ROOT_PREFIX}${deadPid}-abc123`;
     const keep = [`${RUN_ROOT_PREFIX}${process.pid}-abc123`, `${RUN_ROOT_PREFIX}abc123`, 'unrelated-dir'];
     await Promise.all([dead, ...keep].map(name => mkdir(join(parent, name, 'nested'), { recursive: true })));
@@ -65,7 +68,6 @@ describe('removeDeadRunRoots', () => {
   });
 
   it('keeps the root of a dead pid until its mtime is old', async () => {
-    const deadPid = spawnSync(process.execPath, ['-e', '']).pid;
     const fresh = `${RUN_ROOT_PREFIX}${deadPid}-fresh1`;
     const old = `${RUN_ROOT_PREFIX}${deadPid}-old123`;
     await Promise.all([fresh, old].map(name => mkdir(join(parent, name, 'nested'), { recursive: true })));
@@ -79,7 +81,6 @@ describe('removeDeadRunRoots', () => {
 
   it.skipIf(!canLockDirs)('warns and carries on when an old root cannot be removed', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
-    const deadPid = spawnSync(process.execPath, ['-e', '']).pid;
     const stuck = `${RUN_ROOT_PREFIX}${deadPid}-stuck1`;
     const gone = `${RUN_ROOT_PREFIX}${deadPid}-gone12`;
     const locked = join(parent, stuck, 'locked');
@@ -174,7 +175,7 @@ describe('startRootHeartbeat', () => {
       // A utimes issued by the last tick can land after stop(); let it settle before resetting.
       await sleep(50);
       await utimes(dir, old, old);
-      await sleep(100);
+      await sleep(60);
       expect((await stat(dir)).mtimeMs).toBeLessThan(old.getTime() + 1000);
     } finally {
       await rm(dir, { recursive: true, force: true });

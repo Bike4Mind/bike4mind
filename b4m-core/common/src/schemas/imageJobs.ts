@@ -27,6 +27,9 @@ import { PaginationQuerySchema, paginatedResponseSchema } from './pagination';
 // Also the batch cap createImageJobs enforces (IMAGE_JOB_BATCH_MAX in @bike4mind/services/imageJobs).
 export const IMAGE_JOB_COUNT_MAX = 4;
 
+// The formats both providers' edit paths accept for a non-mask input image (createImageJobs refuses any other).
+export const IMAGE_JOB_INPUT_MIME_TYPES: ReadonlySet<string> = new Set(['image/png', 'image/jpeg', 'image/webp']);
+
 export const IMAGE_JOB_API_ERROR_CODES = [
   ...IMAGE_VALIDATION_ERROR_CODES,
   'invalid_request',
