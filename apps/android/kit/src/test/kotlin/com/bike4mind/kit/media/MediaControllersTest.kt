@@ -184,6 +184,41 @@ class MediaGalleryControllerTest {
     }
 
     @Test
+    fun aRefreshDuringALoadMoreDoesNotSkipAPage() = runTest {
+        val api = FakeMediaApi().apply { pages[null] = listOf(page("a", hasMore = true), page("b", hasMore = true), page("c")) }
+        val gallery = gallery(api)
+        gallery.load()
+        runCurrent()
+
+        val pageTwo = CompletableDeferred<Unit>()
+        api.pageGates[2] = pageTwo
+        gallery.loadMoreIfNeeded(index = 0)
+        runCurrent()
+        gallery.refresh()
+        runCurrent()
+        gallery.loadMoreIfNeeded(index = 0)
+        runCurrent()
+        pageTwo.complete(Unit)
+        runCurrent()
+        gallery.loadMoreIfNeeded(index = 0)
+        runCurrent()
+
+        assertEquals(listOf("a", "b", "c"), gallery.state.value.items.map { it.id })
+    }
+
+    @Test
+    fun anEmptyLaterPageFetchesTheNextOne() = runTest {
+        val api = FakeMediaApi().apply { pages[null] = listOf(page("a", hasMore = true), page(hasMore = true), page("b")) }
+        val gallery = gallery(api)
+        gallery.load()
+        runCurrent()
+        gallery.loadMoreIfNeeded(index = 0)
+        runCurrent()
+
+        assertEquals(listOf("a", "b"), gallery.state.value.items.map { it.id })
+    }
+
+    @Test
     fun selectingTheSameFilterDoesNothing() = runTest {
         val api = FakeMediaApi().apply { pages[null] = listOf(page("a")) }
         val gallery = gallery(api)

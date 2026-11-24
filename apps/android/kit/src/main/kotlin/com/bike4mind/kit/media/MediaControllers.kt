@@ -5,6 +5,7 @@ import java.time.Instant
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -95,7 +96,8 @@ class MediaGalleryController(
         try {
             val page = firstPages.refresh(kind)
             if (requested != generation) return
-            loadMoreJob?.cancel()
+            // Join so the cancelled load's cleanup cannot clear the flag of a load started after this refresh.
+            loadMoreJob?.cancelAndJoin()
             apply(page)
             // A tall screen shows every cell of page 1 at once, so no later cell appears to ask for page 2; a page of
             // only skipped rows has no cells at all. Ask again now that the refresh is over.

@@ -159,12 +159,14 @@ internal class FakeMediaApi : MediaApi {
 
     /** Holds the answers for one kind, ahead of [gate]. */
     val kindGates = mutableMapOf<MediaKind?, CompletableDeferred<Unit>>()
+    /** Holds the answers for one page number, ahead of [kindGates] and [gate]. */
+    val pageGates = mutableMapOf<Int, CompletableDeferred<Unit>>()
     val listCalls = mutableListOf<Pair<MediaKind?, Int>>()
     val itemCalls = mutableListOf<String>()
 
     override suspend fun list(kind: MediaKind?, page: Int, limit: Int): MediaPage {
         listCalls += kind to page
-        (kindGates[kind] ?: gate)?.await()
+        (pageGates[page] ?: kindGates[kind] ?: gate)?.await()
         failure?.let { throw it }
         return pages[kind]?.getOrNull(page - 1) ?: MediaPage(emptyList(), hasMore = false)
     }
