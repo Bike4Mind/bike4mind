@@ -221,6 +221,54 @@ describe('buildAgentProductionToolConfig', () => {
         expect(studioCompositionService.updateComposition).toHaveBeenCalledWith(USER.id, adapters, 'c1', patch);
       });
     });
+
+    describe('referenceImages', () => {
+      type File = { id: string; userId: string; mimeType: string; filePath: string; moderationStatus: string };
+      const withFiles = (files: File[]) => {
+        const findAccessibleInIds = vi.fn(async () => files);
+        const deps = makeDeps({
+          compositionAdapters: { db: { fabFiles: { findAccessibleInIds } } } as unknown as Deps['compositionAdapters'],
+        });
+        return { deps, findAccessibleInIds };
+      };
+      const file = (id: string, overrides: Partial<File> = {}): File => ({
+        id,
+        userId: USER.id,
+        mimeType: 'image/png',
+        filePath: `files/${id}`,
+        moderationStatus: 'clean',
+        ...overrides,
+      });
+
+      it('keeps only the files an image job takes from the run user as references', async () => {
+        const { deps, findAccessibleInIds } = withFiles([
+          file('photo'),
+          file('fresh', { moderationStatus: 'pending' }),
+          file('shared', { userId: 'someone-else' }),
+          file('clip', { mimeType: 'video/mp4' }),
+          file('gif', { mimeType: 'image/gif' }),
+          file('blocked', { moderationStatus: 'blocked' }),
+        ]);
+        const config = await buildAgentProductionToolConfig(makeInput(), deps);
+        const ids = ['photo', 'fresh', 'shared', 'clip', 'gif', 'blocked', 'gone'];
+
+        const states = await config!.referenceImages(ids);
+
+        expect(findAccessibleInIds).toHaveBeenCalledWith(ids, { userId: USER.id });
+        expect([...states]).toEqual([
+          ['photo', 'ready'],
+          ['fresh', 'checking'],
+        ]);
+      });
+
+      it('reads nothing for no ids', async () => {
+        const { deps, findAccessibleInIds } = withFiles([]);
+        const config = await buildAgentProductionToolConfig(makeInput(), deps);
+
+        expect((await config!.referenceImages([])).size).toBe(0);
+        expect(findAccessibleInIds).not.toHaveBeenCalled();
+      });
+    });
   });
 });
 

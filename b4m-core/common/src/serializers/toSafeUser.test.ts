@@ -346,6 +346,16 @@ describe('redactUserSecretsForSelf', () => {
     expect('riskScore' in toSafeUser(scored, 'self')!).toBe(false);
   });
 
+  it('drops a field no list classifies, without relying on the response schema', () => {
+    const self = redactUserSecretsForSelf({ ...fullUser, futureCredential: 'x' } as Partial<IUser>)!;
+    expect(self).not.toHaveProperty('futureCredential');
+  });
+
+  it("keeps toJSON()'s _id and id, drops __v", () => {
+    const self = redactUserSecretsForSelf({ _id: 'oid', id: 'oid', __v: 3 } as Partial<IUser>)!;
+    expect(self).toEqual({ _id: 'oid', id: 'oid' });
+  });
+
   it('drops every non-rebuilt USER_SECRET_FIELDS entry present on the input', () => {
     const self = redactUserSecretsForSelf(fullUser)!;
     const rebuilt = new Set<string>(USER_SUBFIELD_REDACTED_FIELDS);

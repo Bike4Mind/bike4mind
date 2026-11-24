@@ -76,6 +76,20 @@ describe('portable declaration inventory', () => {
     expect(items[0]).toMatchObject({ id: 'queue:infra/test.ts:jobs', handlers: ['apps/workers/jobs.dispatch'] });
   });
 
+  it('folds a preview-gated subscription into its queue and skips the gate body', () => {
+    const items = discoverParityInventory({
+      'infra/test.ts':
+        "const jobs = new sst.aws.Queue('jobs', {}); const sub = subscribeUnlessPreview(isPreviewStage, 'jobs', jobs, {handler:'apps/workers/jobs.dispatch'});",
+      'infra/gate.ts':
+        'export function subscribeUnlessPreview(isPreview, name, queue, ...args) { return isPreview ? undefined : queue.subscribe(...args); }',
+    });
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({ id: 'queue:infra/test.ts:jobs', handlers: ['apps/workers/jobs.dispatch'] });
+    expect(() =>
+      discoverParityInventory(sources("subscribeUnlessPreview(isPreviewStage, 'jobs', unknown, {handler:'x.y'});"))
+    ).toThrow(/unresolved subscription/i);
+  });
+
   it('fingerprints declared cadence helpers referenced by hosted schedules', () => {
     const before = "function cadence() { return 'rate(1 day)'; } new sst.aws.Cron('daily', {schedule:cadence()});";
     const after = before.replace('1 day', '2 days');

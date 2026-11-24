@@ -4,7 +4,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { CssVarsProvider } from '@mui/joy/styles';
 import type { AuthState } from '@shared/auth';
 import { initialUpdateState, reduceUpdate, type UpdateBusyReport, type UpdateInstallResult } from '@shared/update';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { desktopTheme } from '../theme';
 import { Home } from './Home';
 import { writeSessionPanelOpen } from '../chat/sessionPanelState';
@@ -64,7 +64,7 @@ let root: Root | null = null;
 let host: HTMLElement | null = null;
 let install = vi.fn<(force: boolean) => Promise<UpdateInstallResult>>();
 
-beforeEach(() => {
+function stubWindow() {
   window.localStorage.clear();
   Element.prototype.scrollIntoView = () => undefined;
   vi.stubGlobal(
@@ -99,7 +99,46 @@ beforeEach(() => {
       return name in target ? target[name] : quietBridge({});
     },
   });
+}
+
+function stubLoopSession() {
+  const session = {
+    id: 'with-loop',
+    title: 'Loop session',
+    mode: 'chat' as const,
+    model: 'test-model',
+    approvalMode: 'auto' as const,
+    reasoningEffort: 'default' as const,
+    messageCount: 1,
+    createdAt: '2026-10-01T00:00:00.000Z',
+    updatedAt: '2026-10-01T00:00:00.000Z',
+  };
+  window.b4m.chat.listSessions = vi.fn(async () => [session]);
+  window.b4m.chat.getSession = vi.fn(async () => ({ ...session, messages: [] }));
+  window.b4m.chat.getLoop = vi.fn(async () => ({
+    sessionId: session.id,
+    prompt: 'Check',
+    intervalMs: 30000,
+    phase: 'scheduled' as const,
+    nextRunAt: null,
+  }));
+}
+
+// The first mount of Home and of its session view is several times slower than any later one (measured,
+// over the per-test budget); paid once here instead of inside whichever test runs first.
+beforeAll(async () => {
+  stubWindow();
+  stubLoopSession();
+  await mount();
+  await act(async () => byTestId('chat-session-item')?.click());
+  act(() => root?.unmount());
+  host?.remove();
+  root = null;
+  host = null;
+  vi.unstubAllGlobals();
 });
+
+beforeEach(stubWindow);
 
 afterEach(() => {
   act(() => root?.unmount());
@@ -137,29 +176,25 @@ const expectCornerAnchored = (el: HTMLElement) => {
 };
 
 describe('the update card in the signed-in window', () => {
+  it('anchors above the composer whether the sidebar is open or collapsed', async () => {
+    await mount();
+    expect(byTestId('sidebar')).not.toBeNull();
+    expect(notices()).toHaveLength(1);
+    expectCornerAnchored(notices()[0]);
+    expect(byTestId('chat-update-notice-region')?.nextElementSibling).toBe(byTestId('chat-composer-region'));
+    expect(byTestId('sidebar')?.contains(notices()[0])).toBe(false);
+
+    await act(async () => byTestId('sidebar-toggle-btn')?.click());
+    expect(byTestId('sidebar')).toBeNull();
+    expect(byTestId('place-rail')).not.toBeNull();
+    expect(notices()).toHaveLength(1);
+    expectCornerAnchored(notices()[0]);
+  });
+
   it('stays at the thread bottom-right and below the docked session panel', async () => {
     writeSessionPanelOpen(false);
     vi.spyOn(Element.prototype, 'getBoundingClientRect').mockImplementation(() => new DOMRect(0, 0, 1280, 720));
-    const session = {
-      id: 'with-loop',
-      title: 'Loop session',
-      mode: 'chat' as const,
-      model: 'test-model',
-      approvalMode: 'auto' as const,
-      reasoningEffort: 'default' as const,
-      messageCount: 1,
-      createdAt: '2026-10-01T00:00:00.000Z',
-      updatedAt: '2026-10-01T00:00:00.000Z',
-    };
-    window.b4m.chat.listSessions = vi.fn(async () => [session]);
-    window.b4m.chat.getSession = vi.fn(async () => ({ ...session, messages: [] }));
-    window.b4m.chat.getLoop = vi.fn(async () => ({
-      sessionId: session.id,
-      prompt: 'Check',
-      intervalMs: 30000,
-      phase: 'scheduled' as const,
-      nextRunAt: null,
-    }));
+    stubLoopSession();
     await mount();
     await act(async () => byTestId('chat-session-item')?.click());
     expect(byTestId('chat-toggle-session-panel-btn')).not.toBeNull();
@@ -185,26 +220,7 @@ describe('the update card in the signed-in window', () => {
         disconnect() {}
       }
     );
-    const session = {
-      id: 'with-loop',
-      title: 'Loop session',
-      mode: 'chat' as const,
-      model: 'test-model',
-      approvalMode: 'auto' as const,
-      reasoningEffort: 'default' as const,
-      messageCount: 1,
-      createdAt: '2026-10-01T00:00:00.000Z',
-      updatedAt: '2026-10-01T00:00:00.000Z',
-    };
-    window.b4m.chat.listSessions = vi.fn(async () => [session]);
-    window.b4m.chat.getSession = vi.fn(async () => ({ ...session, messages: [] }));
-    window.b4m.chat.getLoop = vi.fn(async () => ({
-      sessionId: session.id,
-      prompt: 'Check',
-      intervalMs: 30000,
-      phase: 'scheduled' as const,
-      nextRunAt: null,
-    }));
+    stubLoopSession();
     await mount();
     await act(async () => byTestId('chat-session-item')?.click());
     await act(async () => byTestId('place-rail-account-btn')?.click());
@@ -221,35 +237,6 @@ describe('the update card in the signed-in window', () => {
     expect(byTestId('session-panel')).toBeNull();
     expect(notices()).toHaveLength(1);
     expect(byTestId('update-busy-alert')?.textContent).toContain('1 session is still working.');
-    await act(async () => byTestId('update-force-install-btn')?.click());
-    expect(install).toHaveBeenLastCalledWith(true);
-  });
-
-  it('anchors above the composer whether the sidebar is open or collapsed', async () => {
-    await mount();
-    expect(byTestId('sidebar')).not.toBeNull();
-    expect(notices()).toHaveLength(1);
-    expectCornerAnchored(notices()[0]);
-    expect(byTestId('chat-update-notice-region')?.nextElementSibling).toBe(byTestId('chat-composer-region'));
-    expect(byTestId('sidebar')?.contains(notices()[0])).toBe(false);
-
-    await act(async () => byTestId('sidebar-toggle-btn')?.click());
-    expect(byTestId('sidebar')).toBeNull();
-    expect(byTestId('place-rail')).not.toBeNull();
-    expect(notices()).toHaveLength(1);
-    expectCornerAnchored(notices()[0]);
-  });
-
-  it('confirms in the card a restart the account label asked for while work is running', async () => {
-    await mount();
-
-    await act(async () => byTestId('place-rail-account-btn')?.click());
-    await act(async () => byTestId('account-attention-chip')?.querySelector('button')?.click());
-    expect(install).toHaveBeenCalledWith(false);
-    expect(notices()[0].querySelector('[data-testid="update-busy-alert"]')?.textContent).toContain(
-      '1 session is still working.'
-    );
-
     await act(async () => byTestId('update-force-install-btn')?.click());
     expect(install).toHaveBeenLastCalledWith(true);
   });

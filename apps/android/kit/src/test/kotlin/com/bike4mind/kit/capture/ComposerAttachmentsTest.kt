@@ -170,4 +170,28 @@ class ComposerAttachmentsTest {
         assertTrue(attachments.state.value.isEmpty())
         assertFalse(local.exists())
     }
+
+    @Test
+    fun clearWithFileIdsDropsOnlyThoseSentFiles() = runTest {
+        val attachments = attachments(FakeApi())
+        attachments.add(file("a.png"), "a.png", "image/png")
+        attachments.add(file("b.png"), "b.png", "image/png")
+        advanceUntilIdle()
+
+        attachments.clear(listOf("file-1"))
+
+        assertEquals(ComposerAttachment.Phase.Ready("file-2"), attachments.state.value.single().phase)
+    }
+
+    @Test
+    fun clearWithFileIdsKeepsAnAttachmentStillUploading() = runTest {
+        val attachments = attachments(FakeApi())
+        attachments.add(file("a.png"), "a.png", "image/png")
+        advanceUntilIdle()
+        attachments.add(file("b.png"), "b.png", "image/png")
+
+        attachments.clear(listOf("file-1"))
+
+        assertEquals(ComposerAttachment.Phase.Uploading, attachments.state.value.single().phase)
+    }
 }

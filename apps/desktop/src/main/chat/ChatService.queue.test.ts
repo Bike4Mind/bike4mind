@@ -19,6 +19,10 @@ import { ApprovalGate } from './tools/ApprovalGate';
 import type { BackgroundProcessRegistry } from './tools/BackgroundProcessRegistry';
 import { MAX_CONSECUTIVE_WAKES } from './backgroundWake';
 
+vi.mock('../git/hostGitArgs', async importOriginal =>
+  (await import('./plainFolderGit.testHelper')).skipGitOutsideRepositories(await importOriginal())
+);
+
 function frame(payload: unknown): string {
   return `data: ${typeof payload === 'string' ? payload : JSON.stringify(payload)}\n\n`;
 }
@@ -698,7 +702,10 @@ describe('ChatService queued messages', () => {
       expect(queueEvents.some(event => event.returned)).toBe(false);
 
       await finishReply(1, 'docker images');
-      await vi.waitUntil(() => events.filter(event => event.type === 'done').length === 2, { timeout: 2000 });
+      await vi.waitUntil(() => events.filter(event => event.type === 'done').length === 2, {
+        interval: 5,
+        timeout: 2000,
+      });
 
       // Exactly one request per round: no extra turn was started for the delivered message.
       await new Promise(resolve => setTimeout(resolve, 50));
@@ -727,7 +734,10 @@ describe('ChatService queued messages', () => {
       askForTool(0);
       await waitForPost(2);
       await finishReply(1, 'docker images');
-      await vi.waitUntil(() => events.filter(event => event.type === 'done').length === 2, { timeout: 2000 });
+      await vi.waitUntil(() => events.filter(event => event.type === 'done').length === 2, {
+        interval: 5,
+        timeout: 2000,
+      });
 
       await service.send(id, 'thanks');
       await waitForPost(3);
@@ -768,7 +778,9 @@ describe('ChatService queued messages', () => {
 
       askForTool(0);
       await waitForEvent('error');
-      await vi.waitUntil(async () => (await store.get(id))?.messages.filter(message => message.relay).length === 2);
+      await vi.waitUntil(async () => (await store.get(id))?.messages.filter(message => message.relay).length === 2, {
+        interval: 5,
+      });
 
       expect(queueEvents.find(event => event.returned)?.returned).toMatchObject({
         reason: 'failed',
@@ -805,7 +817,9 @@ describe('ChatService queued messages', () => {
 
         askForTool(0);
         await waitForEvent('error');
-        await vi.waitUntil(async () => (await store.get(id))?.messages.filter(message => message.relay).length === 2);
+        await vi.waitUntil(async () => (await store.get(id))?.messages.filter(message => message.relay).length === 2, {
+          interval: 5,
+        });
 
         const messages = (await store.get(id))?.messages ?? [];
         expect(messages.filter(message => message.relay).map(message => message.content)).toEqual([
@@ -870,7 +884,10 @@ describe('ChatService queued messages', () => {
       });
 
       await finishReply(1);
-      await vi.waitUntil(() => events.filter(event => event.type === 'done').length === 2, { timeout: 2000 });
+      await vi.waitUntil(() => events.filter(event => event.type === 'done').length === 2, {
+        interval: 5,
+        timeout: 2000,
+      });
       await new Promise(resolve => setTimeout(resolve, 50));
       expect(post).toHaveBeenCalledTimes(2);
       const stored = (await service.getSession(id))?.messages[2];
@@ -979,7 +996,10 @@ describe('ChatService queued messages', () => {
       await waitForPost(2);
 
       service.stop(id);
-      await vi.waitUntil(() => events.filter(event => event.type === 'done').length === 2, { timeout: 2000 });
+      await vi.waitUntil(() => events.filter(event => event.type === 'done').length === 2, {
+        interval: 5,
+        timeout: 2000,
+      });
 
       // Already sent, so a stop has nothing to hand back to the composer.
       expect(queueEvents.some(event => event.returned)).toBe(false);
@@ -1149,7 +1169,10 @@ describe('ChatService queued messages', () => {
       const last = (post.mock.calls[1][1].messages as { content: { text: string }[] }[]).at(-1);
       expect(last?.content[0].text).toContain('[aaaa1111] $ docker build .');
       await finishReply(1);
-      await vi.waitUntil(() => events.filter(event => event.type === 'done').length === 2, { timeout: 2000 });
+      await vi.waitUntil(() => events.filter(event => event.type === 'done').length === 2, {
+        interval: 5,
+        timeout: 2000,
+      });
       await new Promise(resolve => setTimeout(resolve, 40));
       expect(post).toHaveBeenCalledTimes(2);
       const session = await woken.getSession(id);
@@ -1193,7 +1216,10 @@ describe('ChatService queued messages', () => {
         exited(`proc${wake}`, id);
         await waitForPost(wake + 1);
         await finishReply(wake);
-        await vi.waitUntil(() => events.filter(event => event.type === 'done').length === wake + 1, { timeout: 2000 });
+        await vi.waitUntil(() => events.filter(event => event.type === 'done').length === wake + 1, {
+          interval: 5,
+          timeout: 2000,
+        });
       }
       exited('one-more', id);
       await new Promise(resolve => setTimeout(resolve, 80));
@@ -1203,6 +1229,7 @@ describe('ChatService queued messages', () => {
       await waitForPost(MAX_CONSECUTIVE_WAKES + 1);
       await finishReply(MAX_CONSECUTIVE_WAKES);
       await vi.waitUntil(() => events.filter(event => event.type === 'done').length === MAX_CONSECUTIVE_WAKES + 1, {
+        interval: 5,
         timeout: 2000,
       });
       exited('after-reply', id);

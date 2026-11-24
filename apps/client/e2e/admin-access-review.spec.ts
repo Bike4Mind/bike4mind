@@ -1,7 +1,7 @@
 import type { APIRequestContext } from '@playwright/test';
 import { test, expect } from './fixtures';
 import { apiCreateTestUser, apiGetMfaCode } from './helpers/api';
-import { getE2ETestId, getTestRunId, getTestUsers } from './helpers/test-users';
+import { getE2ETestId, getTestRunId, getTestUsers, type TestUser } from './helpers/test-users';
 import { AdminPage } from './pages/AdminPage';
 
 /**
@@ -10,7 +10,9 @@ import { AdminPage } from './pages/AdminPage';
  */
 
 const baseURL = process.env.API_URL || 'http://localhost:3000';
-const auth = (token: string) => ({ Authorization: `Bearer ${token}` });
+// The admin project's storage state puts a session cookie on `request`, so csrfProtection routes
+// need a same-origin Origin header; without it they 403 before reaching the handler.
+const auth = (token: string) => ({ Authorization: `Bearer ${token}`, Origin: new URL(baseURL).origin });
 const PASSWORD = 'E2eAccessReviewPass123!';
 
 type ReportRow = { userId: string; fullAdmin: boolean; permissions: string[]; dormant: boolean; noMfa: boolean };
@@ -47,25 +49,27 @@ async function createUser(
 test.describe('Admin access review', () => {
   test.describe.configure({ mode: 'serial' });
 
-  const adminA = getTestUsers().admin;
+  // Resolved in beforeAll: core.setup.ts has not written the core data yet when the file loads.
+  let adminA: TestUser;
   let adminB: string;
   let delegateC: string;
   let role: { id: string; name: string };
 
   test.beforeAll(async ({ request }) => {
+    adminA = getTestUsers().admin;
     adminB = await createUser(request, 'access-review-b', true, { mfa: 'unenrolled' });
     delegateC = await createUser(request, 'access-review-c', false);
     await stepUp(request, adminA);
     const grant = await request.put(`${baseURL}/api/admin/users/${delegateC}/permissions`, {
       headers: auth(adminA.accessToken),
-      data: { before: [], adminPermissions: ['users:read'], reason: 'access review e2e setup' },
+      data: { before: [], adminPermissions: ['support:read'], reason: 'access review e2e setup' },
     });
-    expect(grant.ok(), `delegate grant failed: ${grant.status()}`).toBe(true);
+    expect(grant.ok(), `delegate grant failed: ${grant.status()} ${await grant.text()}`).toBe(true);
     const created = await request.post(`${baseURL}/api/admin/admin-roles`, {
       headers: auth(adminA.accessToken),
       data: { name: `access-review-role-${test.info().retry}-${getTestRunId()}`, permissions: ['support:read'] },
     });
-    expect(created.ok(), `role create failed: ${created.status()}`).toBe(true);
+    expect(created.ok(), `role create failed: ${created.status()} ${await created.text()}`).toBe(true);
     role = (await created.json()) as { id: string; name: string };
   });
 
@@ -81,7 +85,7 @@ test.describe('Admin access review', () => {
     const b = body.admins.find(row => row.userId === adminB);
     const c = body.admins.find(row => row.userId === delegateC);
     expect(b).toMatchObject({ fullAdmin: true, dormant: true, noMfa: true });
-    expect(c).toMatchObject({ fullAdmin: false, permissions: ['users:read'] });
+    expect(c).toMatchObject({ fullAdmin: false, permissions: ['support:read'] });
 
     const self = await request.post(`${baseURL}/api/admin/access-review/decisions`, {
       headers: auth(adminA.accessToken),

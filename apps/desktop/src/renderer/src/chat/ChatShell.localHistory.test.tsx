@@ -12,6 +12,19 @@ import { ChatShell } from './ChatShell';
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 vi.mock('./CustomizePanel', () => ({ CustomizeScreen: () => null, useCustomizeAttention: () => undefined }));
+// The 3D engine's iframe would make jsdom boot a whole extra window on every mount.
+vi.mock('./model3d/modelEngineFrame', async importOriginal => ({
+  ...(await importOriginal<typeof import('./model3d/modelEngineFrame')>()),
+  ModelEngineFrame: class {
+    warm() {
+      return this;
+    }
+    dispose() {}
+    async build() {
+      return null;
+    }
+  },
+}));
 // The panel's own behaviour is TerminalPanel.test.tsx's; here it only has to say whose it is.
 vi.mock('./TerminalPanel', () => ({
   TerminalPanel: ({ sessionId }: { sessionId: string }) => <div data-testid="terminal-panel">{sessionId}</div>,
@@ -44,6 +57,14 @@ window.matchMedia ??= ((query: string) => ({
   removeEventListener: () => {},
   dispatchEvent: () => false,
 })) as typeof window.matchMedia;
+
+// Joy's autosizing textarea measures itself on every render, and jsdom resolves that against every
+// emotion sheet in the document and every ancestor, with no layout to measure in the end.
+const realGetComputedStyle = window.getComputedStyle.bind(window);
+window.getComputedStyle = ((element: Element, pseudo?: string | null) =>
+  element instanceof HTMLTextAreaElement
+    ? element.style
+    : realGetComputedStyle(element, pseudo)) as typeof getComputedStyle;
 
 window.ResizeObserver ??= class {
   observe() {}
@@ -152,6 +173,7 @@ afterEach(() => {
   host?.remove();
   root = null;
   host = null;
+  vi.useRealTimers();
   vi.unstubAllGlobals();
 });
 
@@ -160,6 +182,14 @@ const el = (testId: string) => {
   if (!found) throw new Error(`no ${testId}`);
   return found;
 };
+
+/** Types into the sidebar search and waits out its history-search debounce. */
+async function searchHistory(needle: string) {
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+  await act(async () => typeInto('chat-search-input', needle));
+  await act(async () => vi.advanceTimersByTimeAsync(150));
+  vi.useRealTimers();
+}
 
 const openBrowser = async () => {
   await act(async () => el('chat-panes-menu-btn').click());
@@ -193,13 +223,6 @@ function typeInto(testId: string, value: string) {
 }
 
 describe('local model and history reachability', () => {
-  it('keeps web conversations out of the primary Chat and Code navigation', async () => {
-    await renderShell();
-    expect(document.querySelector('[data-testid="handoff-server-conversations-btn"]')).toBeNull();
-    expect(host?.textContent).not.toContain('Server conversations / handoff');
-    expect(host?.textContent).not.toContain('Open web conversations');
-  });
-
   it.each([true, false])(
     'allows an offline local prompt while keeping hosted expiry blocked (local: %s)',
     async local => {
@@ -214,21 +237,13 @@ describe('local model and history reachability', () => {
     }
   );
 
-  it('opens a Code history result while the sidebar is in Chat mode', async () => {
-    await renderShell();
-    expect(el('chat-session-title').textContent).toBe('First');
-    await act(async () => typeInto('chat-search-input', 'needle'));
-    await act(async () => {
-      await new Promise(resolve => setTimeout(resolve, 150));
-    });
-    await act(async () => el('local-history-result').click());
-    await act(async () => undefined);
-    expect(el('chat-session-title').textContent).toBe('Second');
-  });
-
   it('keeps the consent switch out of the header and hands it to the browser pane', async () => {
     await renderShell();
     expect(document.querySelector('[data-testid="chat-history-switch"]')).toBeNull();
+    // The Panes menu shows a history status only while history is on.
+    await openPanesMenu();
+    expect(document.querySelector('[data-testid="chat-history-indicator"]')).toBeNull();
+    await act(async () => el('chat-panes-menu-btn').click());
     await openBrowser();
     expect(el('browser-pane-history').dataset.enabled).toBe('false');
     await act(async () => el('browser-pane-history').click());
@@ -236,8 +251,12 @@ describe('local model and history reachability', () => {
     expect(el('browser-pane-history').dataset.enabled).toBe('true');
   });
 
-  it('hides the previous consent switch until a selected history result has loaded', async () => {
+  it('opens a Code history result from Chat mode, hiding the previous consent switch until it has loaded', async () => {
     await renderShell();
+    expect(el('chat-session-title').textContent).toBe('First');
+    // Web conversations stay out of the primary Chat and Code navigation.
+    expect(document.querySelector('[data-testid="handoff-server-conversations-btn"]')).toBeNull();
+    expect(host?.textContent).not.toContain('Open web conversations');
     await openBrowser();
     expect(el('browser-pane-history').dataset.enabled).toBe('false');
     let resolveSession!: (session: ChatSession) => void;
@@ -246,31 +265,14 @@ describe('local model and history reachability', () => {
         resolveSession = resolve;
       })
     );
-    await act(async () => typeInto('chat-search-input', 'needle'));
-    await act(async () => {
-      await new Promise(resolve => setTimeout(resolve, 150));
-    });
+    await searchHistory('needle');
     await act(async () => el('local-history-result').click());
     expect(el('browser-pane-history').dataset.enabled).toBe('null');
     await act(async () =>
       resolveSession({ ...SESSIONS[1], model, messages: [], historyEnabled: true } as unknown as ChatSession)
     );
     expect(el('browser-pane-history').dataset.enabled).toBe('true');
-  });
-
-  it.each([true, false])('shows the history status in the Panes menu only while history is on (on: %s)', async on => {
-    getSession.mockImplementation(
-      async id =>
-        ({
-          ...SESSIONS.find(entry => entry.id === id),
-          model,
-          messages: [],
-          historyEnabled: on,
-        }) as unknown as ChatSession
-    );
-    await renderShell();
-    await openPanesMenu();
-    expect(document.querySelector('[data-testid="chat-history-indicator"]') !== null).toBe(on);
+    expect(el('chat-session-title').textContent).toBe('Second');
   });
 
   it('hides the history status while a picked session is loading', async () => {
@@ -288,10 +290,7 @@ describe('local model and history reachability', () => {
     expect(el('chat-history-indicator')).toBeTruthy();
     await act(async () => el('chat-panes-menu-btn').click());
     getSession.mockReturnValue(new Promise(() => undefined));
-    await act(async () => typeInto('chat-search-input', 'needle'));
-    await act(async () => {
-      await new Promise(resolve => setTimeout(resolve, 150));
-    });
+    await searchHistory('needle');
     await act(async () => el('local-history-result').click());
     await openPanesMenu();
     expect(document.querySelector('[data-testid="chat-history-indicator"]')).toBeNull();

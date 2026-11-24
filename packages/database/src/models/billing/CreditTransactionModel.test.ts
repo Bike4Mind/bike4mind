@@ -759,6 +759,34 @@ describe('CreditTransactionRepository.completionRunSpend', () => {
     expect(spend.settled.requests).toBe(1);
   });
 
+  it('counts paid tool rows attributed to the run as settled spend, under the tool purpose', async () => {
+    const toolRow = (type: string, credits: number) => ({
+      type,
+      credits: -credits,
+      model: 'tool-model',
+      metadata: { run: { runId: RUN, role: 'worker', purpose: 'tool', taskId: 'task-a' } },
+    });
+    await seed([
+      completionRow(40, { role: 'root' }),
+      toolRow('image_generation_usage', 25),
+      toolRow('image_edit_usage', 6),
+      toolRow('video_generation_usage', 15),
+      toolRow('music_generation_usage', 8),
+      toolRow('text_to_speech_usage', 4),
+      toolRow('sound_effects_usage', 2),
+    ]);
+
+    const spend = await creditTransactionRepository.completionRunSpend(RUN, OWNER);
+
+    expect(spend.settled.creditsCharged).toBe(100);
+    expect(spend.settled.requests).toBe(7);
+    expect(spend.settled.inputTokens).toBe(100);
+    expect(spend.byPurpose.map(r => [r.purpose, r.creditsCharged])).toEqual([
+      ['tool', 60],
+      ['turn', 40],
+    ]);
+  });
+
   it('reports zero spend and empty breakdowns for a run with nothing settled', async () => {
     const spend = await creditTransactionRepository.completionRunSpend(RUN, OWNER);
 
