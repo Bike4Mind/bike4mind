@@ -30,7 +30,7 @@ const PERSONA_SESSION_ORIGINS: ReadonlySet<AuthSessionCreatedVia> = new Set([
   'oauth-token',
   'ios',
   'device',
-  // Redeemed from a Desktop ('device') session, so it is held to the same bar as that session.
+  // Redeemed from the Desktop client's session, so it is held to the same bar as that session.
   'desktop-handoff',
 ]);
 

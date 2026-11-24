@@ -3,7 +3,7 @@ import { authSessionRepository, oauthAuthorizationCodeRepository } from '@bike4m
 
 /**
  * Single-use codes that let B4M Desktop open the web app already signed in, so its embedded
- * "Server conversations" window never runs the web sign-in (and its Turnstile challenge) itself.
+ * web conversations window never runs the web sign-in (and its Turnstile challenge) itself.
  *
  * The codes live in the OAuth authorization-code store under a client id that is never registered,
  * so /api/oauth/token rejects them at validateClient before it looks a code up. Only a SHA-256 of

@@ -11,6 +11,7 @@ const h = vi.hoisted(() => ({
   readRefreshCookie: vi.fn(),
   findBySid: vi.fn(),
   findById: vi.fn(),
+  logSignInSuccess: vi.fn(),
 }));
 
 vi.mock('@server/middlewares/baseApi', () => ({
@@ -40,6 +41,7 @@ vi.mock('@bike4mind/services', () => ({
   },
 }));
 vi.mock('@server/auth/issueSession', () => ({ issueBrowserSession: h.issueBrowserSession }));
+vi.mock('@server/auth/signInSecondFactor', () => ({ logSignInSuccess: h.logSignInSuccess }));
 vi.mock('@server/auth/desktopWebSession', () => ({ redeemDesktopWebSessionCode: h.redeemDesktopWebSessionCode }));
 
 await import('../redeem');
@@ -53,7 +55,11 @@ async function run(input: { body?: unknown; headers?: Record<string, string> } =
   const { req, res } = createMocks({
     method: 'POST',
     body: (input.body ?? { code: 'the-code' }) as Record<string, unknown>,
-    headers: input.headers ?? { 'sec-fetch-site': 'none' },
+    // req.is() treats a request with no content-length as bodiless, so every case declares one.
+    headers: {
+      'content-length': '20',
+      ...(input.headers ?? { 'sec-fetch-site': 'none', 'content-type': 'application/json' }),
+    },
   });
   Object.assign(req, { logger });
   await h.route!(req, res);
@@ -88,10 +94,20 @@ describe('POST /api/auth/desktop-web-session/redeem', () => {
       tokenVersion: 4,
     });
     expect(res.getHeader('Cache-Control')).toBe('no-store');
+    expect(h.logSignInSuccess).toHaveBeenCalledExactlyOnceWith(expect.anything(), {
+      userId: USER_ID,
+      strategy: 'desktop-handoff',
+      trustedDevice: null,
+    });
   });
 
-  it.each(['cross-site', 'same-site'])('refuses a %s POST before spending the code (login CSRF)', async site => {
-    const res = await run({ headers: { 'sec-fetch-site': site } });
+  it.each([
+    ['a cross-site', { 'sec-fetch-site': 'cross-site', 'content-type': 'application/json' }],
+    ['a same-site', { 'sec-fetch-site': 'same-site', 'content-type': 'application/json' }],
+    ['a Fetch-Metadata-less', { 'content-type': 'application/json' }],
+    ['a form-encoded', { 'sec-fetch-site': 'none', 'content-type': 'application/x-www-form-urlencoded' }],
+  ])('refuses %s POST before spending the code (login CSRF)', async (_label, headers) => {
+    const res = await run({ headers });
 
     expect(res.statusCode).toBe(403);
     expect(h.redeemDesktopWebSessionCode).not.toHaveBeenCalled();
@@ -121,6 +137,7 @@ describe('POST /api/auth/desktop-web-session/redeem', () => {
     expectLanding(res);
     expect(h.findBySid).toHaveBeenCalledWith('web-sid');
     expect(h.issueBrowserSession).not.toHaveBeenCalled();
+    expect(h.logSignInSuccess).not.toHaveBeenCalled();
   });
 
   it.each([

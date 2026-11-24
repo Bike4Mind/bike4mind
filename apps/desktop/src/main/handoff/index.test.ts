@@ -5,6 +5,7 @@ import type { AuthService } from '../auth';
 
 type WindowFixture = {
   close(): void;
+  crash(): void;
   isDestroyed(): boolean;
   show: ReturnType<typeof vi.fn>;
   focus: ReturnType<typeof vi.fn>;
@@ -46,6 +47,10 @@ vi.mock('electron', () => ({
       h.close();
       this.destroyed = true;
       this.closed?.();
+    }
+    /** Destroyed without the `closed` event having run yet, so the companion slot still points here. */
+    crash() {
+      this.destroyed = true;
     }
   },
 }));
@@ -306,6 +311,47 @@ describe('desktop server conversations handoff surface', () => {
 
       expect(h.close).toHaveBeenCalledOnce();
       expect(h.loadURL).not.toHaveBeenCalled();
+    });
+
+    it('loads nothing when the window is destroyed while the code is being minted', async () => {
+      const minted = deferred();
+      const api = { post: vi.fn(() => minted.promise.then(() => ({ code: 'one-time-code' }))) };
+      registerSessionHandoff(authFor(initialState(), api));
+      const opening = open();
+      await vi.waitFor(() => expect(api.post).toHaveBeenCalled());
+
+      h.windows[0].crash();
+      minted.resolve();
+      await opening;
+
+      expect(h.loadURL).not.toHaveBeenCalled();
+    });
+
+    it('loads only the replacement window when the window is closed and reopened mid-mint', async () => {
+      const firstMint = deferred();
+      const secondMint = deferred();
+      const api = {
+        post: vi
+          .fn()
+          .mockImplementationOnce(() => firstMint.promise.then(() => ({ code: 'stale-code' })))
+          .mockImplementationOnce(() => secondMint.promise.then(() => ({ code: 'fresh-code' }))),
+      };
+      registerSessionHandoff(authFor(initialState(), api));
+      const firstOpening = open();
+      await vi.waitFor(() => expect(api.post).toHaveBeenCalledTimes(1));
+
+      h.windows[0].close();
+      const secondOpening = open();
+      await vi.waitFor(() => expect(api.post).toHaveBeenCalledTimes(2));
+      firstMint.resolve();
+      await firstOpening;
+      expect(h.loadURL).not.toHaveBeenCalled();
+
+      secondMint.resolve();
+      await secondOpening;
+      expect(h.windows).toHaveLength(2);
+      expect(h.loadURL).toHaveBeenCalledOnce();
+      expect(h.loadURL.mock.calls[0][1].postData[0].bytes.toString()).toContain('fresh-code');
     });
   });
 });

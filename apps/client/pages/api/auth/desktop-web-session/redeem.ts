@@ -1,7 +1,7 @@
 /**
  * POST /api/auth/desktop-web-session/redeem  {code}
  *
- * The first navigation of B4M Desktop's "Server conversations" window: Desktop loads this URL as a
+ * The first navigation of B4M Desktop's web conversations window: Desktop loads this URL as a
  * POST carrying a code from ./index.ts, so the code never appears in a URL, history or access log.
  * A valid code sets the HttpOnly refresh cookie for a new web session; the SPA then boots signed in
  * from that cookie (sessionBootstrap). Every outcome redirects to the notebooks page, so a spent or
@@ -18,12 +18,16 @@ import { readRefreshCookie } from '@bike4mind/server-utils/auth/refreshCookie';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { issueBrowserSession } from '@server/auth/issueSession';
+import { logSignInSuccess } from '@server/auth/signInSecondFactor';
 import { redeemDesktopWebSessionCode } from '@server/auth/desktopWebSession';
 
 const RedeemBodySchema = z.strictObject({ code: z.string().min(1).max(64) });
 const DESKTOP_WEB_SESSION_LANDING_PATH = '/notebooks';
 
-/** True when this browser already holds a live web session for `userId`, so no new one is needed. */
+/**
+ * True when this browser already holds a live web session for `userId`, so no new one is needed.
+ * Any origin qualifies: the window's storage partition is Desktop-only, and it is the same user.
+ */
 async function hasLiveSessionFor(req: Request, userId: string): Promise<boolean> {
   const presented = readRefreshCookie(req);
   const sid = presented ? authSessionService.parseRefreshToken(presented)?.sid : undefined;
@@ -38,10 +42,11 @@ const handler = baseApi({ auth: false, allowedMethods: ['POST'] })
     asyncHandler(async (req: Request, res: Response) => {
       res.setHeader('Cache-Control', 'no-store');
       res.setHeader('Referrer-Policy', 'no-referrer');
-      // Desktop's own navigation reports `none`. A page on another site must not be able to sign this
-      // browser in to an account of its choosing (login CSRF), so any cross-site POST is refused.
+      // A page on another site must not be able to sign this browser in to an account of its choosing
+      // (login CSRF). Desktop's own navigation reports `none` and posts JSON, which a plain cross-site
+      // form cannot send, so a missing Fetch Metadata header or any other body type is refused too.
       const fetchSite = req.headers['sec-fetch-site'];
-      if (fetchSite !== undefined && fetchSite !== 'none' && fetchSite !== 'same-origin') {
+      if ((fetchSite !== 'none' && fetchSite !== 'same-origin') || !req.is('application/json')) {
         return res.status(403).json({ error: 'Cross-site sign-in is not allowed' });
       }
       const land = () => res.redirect(303, DESKTOP_WEB_SESSION_LANDING_PATH);
@@ -66,6 +71,7 @@ const handler = baseApi({ auth: false, allowedMethods: ['POST'] })
         createdVia: 'desktop-handoff',
         tokenVersion: user.tokenVersion ?? 0,
       });
+      await logSignInSuccess(req, { userId: user.id, strategy: 'desktop-handoff', trustedDevice: null });
       return land();
     })
   );

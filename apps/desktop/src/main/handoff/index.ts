@@ -111,7 +111,7 @@ export function registerSessionHandoff(auth: AuthService): void {
     const opened = new BrowserWindow({
       width: 1100,
       height: 800,
-      title: 'Server conversations - sign in to continue',
+      title: 'Web conversations',
       webPreferences: {
         sandbox: true,
         contextIsolation: true,

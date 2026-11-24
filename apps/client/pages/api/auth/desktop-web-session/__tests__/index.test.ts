@@ -8,6 +8,7 @@ const h = vi.hoisted(() => ({
   baseApiOptions: undefined as unknown,
   admitsOptionalAuthSession: vi.fn(),
   mintDesktopWebSessionCode: vi.fn(),
+  findBySid: vi.fn(),
 }));
 
 vi.mock('@server/middlewares/baseApi', () => ({
@@ -23,6 +24,7 @@ vi.mock('@server/middlewares/asyncHandler', () => ({
   asyncHandler: (fn: (req: unknown, res: unknown) => unknown) => fn,
 }));
 vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({ rateLimit: () => undefined }));
+vi.mock('@bike4mind/database', () => ({ authSessionRepository: { findBySid: h.findBySid } }));
 vi.mock('@server/middlewares/oauthRouteGate', () => ({ admitsOptionalAuthSession: h.admitsOptionalAuthSession }));
 vi.mock('@server/auth/desktopWebSession', () => ({
   DESKTOP_WEB_SESSION_CODE_TTL_SECONDS: 60,
@@ -44,6 +46,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   h.admitsOptionalAuthSession.mockResolvedValue(true);
   h.mintDesktopWebSessionCode.mockResolvedValue('minted-code');
+  h.findBySid.mockResolvedValue({ sid: USER.sid, clientId: 'b4m-desktop', createdVia: 'device' });
 });
 
 describe('POST /api/auth/desktop-web-session', () => {
@@ -58,6 +61,19 @@ describe('POST /api/auth/desktop-web-session', () => {
     expect(res._getJSONData()).toEqual({ code: 'minted-code', expiresInSeconds: 60 });
     expect(res.getHeader('Cache-Control')).toBe('no-store');
     expect(h.mintDesktopWebSessionCode).toHaveBeenCalledWith({ userId: USER.id, parentSid: USER.sid });
+    expect(h.findBySid).toHaveBeenCalledWith(USER.sid);
+  });
+
+  it.each([
+    ['a web browser', { clientId: null, createdVia: 'login' }],
+    ['the CLI', { clientId: 'b4m-cli', createdVia: 'device' }],
+    ['a missing', null],
+  ])('refuses %s session, since only the Desktop client may trade itself in', async (_label, session) => {
+    h.findBySid.mockResolvedValue(session);
+    const res = await run(USER);
+
+    expect(res.statusCode).toBe(403);
+    expect(h.mintDesktopWebSessionCode).not.toHaveBeenCalled();
   });
 
   it('refuses a session that is impersonated, pre-MFA, deletion-pending or owes enrollment', async () => {
