@@ -48,6 +48,9 @@ class MediaGalleryController(
     private var refreshJob: Job? = null
     private var loadMoreJob: Job? = null
 
+    /** The furthest cell reported by [loadMoreIfNeeded], re-checked when a refresh ends so paging cannot stall. */
+    private var lastNear = -1
+
     /** First open: the seed, then the network. Later calls do nothing; use [refresh]. */
     fun load() {
         if (started) return
@@ -62,6 +65,7 @@ class MediaGalleryController(
         refreshJob?.cancel()
         loadMoreJob?.cancel()
         nextPage = 1
+        lastNear = -1
         generation++
         mutableState.value = MediaGalleryState(kind = kind)
         restart()
@@ -93,6 +97,10 @@ class MediaGalleryController(
             if (requested != generation) return
             loadMoreJob?.cancel()
             apply(page)
+            // A tall screen shows every cell of page 1 at once, so no later cell appears to ask for page 2; a page of
+            // only skipped rows has no cells at all. Ask again now that the refresh is over.
+            mutableState.update { it.copy(refreshing = false) }
+            if (lastNear >= 0 || page.items.isEmpty()) loadMoreIfNeeded(lastNear)
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (upgrade: UpgradeRequiredException) {
@@ -114,24 +122,31 @@ class MediaGalleryController(
 
     /** Call as each cell appears; fetches the next page when the cell is near the end of what is loaded. */
     fun loadMoreIfNeeded(index: Int) {
+        lastNear = maxOf(lastNear, index)
         if (index >= state.value.items.size - PREFETCH_DISTANCE) loadMore()
     }
 
     fun loadMore() {
         if (!state.value.canLoadMore) return
         val kind = state.value.kind
-        val page = nextPage
         val requested = generation
         mutableState.update { it.copy(loadingMore = true, loadMoreError = null) }
         loadMoreJob = scope.launch {
             try {
-                val next = api.list(kind, page, firstPages.pageSize)
-                if (requested != generation) return@launch
-                nextPage = page + 1
-                mutableState.update { current ->
-                    val known = current.items.mapTo(HashSet()) { it.id }
-                    current.copy(items = current.items + next.items.filterNot { it.id in known }, hasMore = next.hasMore)
-                }
+                var attempts = 0
+                do {
+                    val next = api.list(kind, nextPage, firstPages.pageSize)
+                    if (requested != generation) return@launch
+                    nextPage++
+                    var added = 0
+                    mutableState.update { current ->
+                        val known = current.items.mapTo(HashSet()) { it.id }
+                        val fresh = next.items.filterNot { it.id in known }
+                        added = fresh.size
+                        current.copy(items = current.items + fresh, hasMore = next.hasMore)
+                    }
+                    // Rows the gallery cannot draw are dropped, so a whole page can add nothing; keep going rather than stall.
+                } while (added == 0 && next.hasMore && ++attempts < MAX_EMPTY_PAGES)
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (upgrade: UpgradeRequiredException) {
@@ -147,6 +162,7 @@ class MediaGalleryController(
 
     private companion object {
         const val PREFETCH_DISTANCE = 6
+        const val MAX_EMPTY_PAGES = 5
     }
 }
 

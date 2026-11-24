@@ -131,24 +131,56 @@ class MediaGalleryControllerTest {
 
     @Test
     fun aSlowAnswerForTheOldFilterNeverLandsOnTheNewOne() = runTest {
-        val gate = CompletableDeferred<Unit>()
         val api = FakeMediaApi().apply {
             pages[null] = listOf(page("all"))
             pages[MediaKind.AUDIO] = listOf(page("song", kind = MediaKind.AUDIO))
-            this.gate = gate
+            kindGates[null] = CompletableDeferred()
+            kindGates[MediaKind.AUDIO] = CompletableDeferred()
         }
         val gallery = gallery(api)
         gallery.load()
         runCurrent()
 
         gallery.select(MediaKind.AUDIO)
-        gate.complete(Unit)
+        api.kindGates.getValue(MediaKind.AUDIO).complete(Unit)
+        runCurrent()
+        api.kindGates.getValue(null).complete(Unit)
         runCurrent()
 
         val state = gallery.state.value
         assertEquals(MediaKind.AUDIO, state.kind)
         assertEquals(listOf("song"), state.items.map { it.id })
         assertFalse(state.refreshing)
+    }
+
+    @Test
+    fun pagingResumesWhenARefreshEndsAfterEveryCellWasAlreadyReported() = runTest {
+        val gate = CompletableDeferred<Unit>()
+        val api = FakeMediaApi().apply {
+            pages[null] = listOf(page("a", "b", hasMore = true), page("c"))
+            this.gate = gate
+        }
+        val gallery = gallery(api, InMemoryMediaListCache().apply { save(page("a", "b", hasMore = true), null) })
+        gallery.load()
+        runCurrent()
+
+        gallery.loadMoreIfNeeded(index = 1)
+        assertEquals(1, api.listCalls.size)
+
+        gate.complete(Unit)
+        runCurrent()
+        assertEquals(listOf("a", "b", "c"), gallery.state.value.items.map { it.id })
+    }
+
+    @Test
+    fun aPageOfOnlySkippedRowsFetchesTheNextOne() = runTest {
+        val api = FakeMediaApi().apply { pages[null] = listOf(page(hasMore = true), page("a")) }
+        val gallery = gallery(api)
+        gallery.load()
+        runCurrent()
+
+        assertEquals(listOf("a"), gallery.state.value.items.map { it.id })
+        assertEquals(listOf<Pair<MediaKind?, Int>>(null to 1, null to 2), api.listCalls)
     }
 
     @Test
@@ -231,6 +263,27 @@ class MediaDetailControllerTest {
         runCurrent()
         assertEquals(3, api.itemCalls.size)
         assertNull(detail.state.value.error)
+    }
+
+    @Test
+    fun aFailedRefetchIsAnErrorAndRetryRecovers() = runTest {
+        val api = FakeMediaApi().apply {
+            items["a"] = ArrayDeque(listOf(mediaItem("a").copy(url = "https://u/fresh")))
+            failure = IOException("offline")
+        }
+        val detail = detail(mediaItem("a").copy(url = "https://u/old", urlExpiresAt = now.plusSeconds(30)), api)
+
+        detail.prepare()
+        runCurrent()
+        assertEquals(MediaError.Offline, detail.state.value.error)
+        assertNull(detail.state.value.playableUrl)
+        assertFalse(detail.state.value.refreshing)
+
+        api.failure = null
+        detail.retry()
+        runCurrent()
+        assertNull(detail.state.value.error)
+        assertEquals("https://u/fresh", detail.state.value.playableUrl)
     }
 
     @Test

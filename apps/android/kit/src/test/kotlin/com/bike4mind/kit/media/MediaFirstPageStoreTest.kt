@@ -104,6 +104,26 @@ class MediaFirstPageStoreTest {
         assertNull(cache.load(null))
     }
 
+    @Test
+    fun invalidateWipesMemoryAndDiskForEveryKind() = runTest {
+        val api = FakeMediaApi().apply {
+            pages[null] = listOf(PAGE)
+            pages[MediaKind.IMAGE] = listOf(FRESH)
+        }
+        val cache = InMemoryMediaListCache()
+        val store = MediaFirstPageStore(api, cache)
+        store.refresh(null)
+        store.refresh(MediaKind.IMAGE)
+        assertEquals(PAGE, cache.load(null))
+
+        store.invalidate()
+
+        assertNull(store.seeded(null))
+        assertNull(store.seeded(MediaKind.IMAGE))
+        assertNull(cache.load(null))
+        assertNull(cache.load(MediaKind.IMAGE))
+    }
+
     private companion object {
         val STAGING = ServerEnvironment.Custom("https://staging.example.test")
         val PAGE = MediaPage(
@@ -136,12 +156,15 @@ internal class FakeMediaApi : MediaApi {
     val items = mutableMapOf<String, ArrayDeque<MediaItem>>()
     var failure: Exception? = null
     var gate: CompletableDeferred<Unit>? = null
+
+    /** Holds the answers for one kind, ahead of [gate]. */
+    val kindGates = mutableMapOf<MediaKind?, CompletableDeferred<Unit>>()
     val listCalls = mutableListOf<Pair<MediaKind?, Int>>()
     val itemCalls = mutableListOf<String>()
 
     override suspend fun list(kind: MediaKind?, page: Int, limit: Int): MediaPage {
         listCalls += kind to page
-        gate?.await()
+        (kindGates[kind] ?: gate)?.await()
         failure?.let { throw it }
         return pages[kind]?.getOrNull(page - 1) ?: MediaPage(emptyList(), hasMore = false)
     }

@@ -99,7 +99,7 @@ fun MediaGalleryScreen(graph: AppGraph, onBack: () -> Unit) {
             KindFilter(selected = state.kind, onSelect = controller::select)
             Box(modifier = Modifier.fillMaxSize()) {
                 when {
-                    state.items.isEmpty() && state.loading -> Centered(tag = "media-loading") {
+                    state.items.isEmpty() && (state.loading || state.loadingMore) -> Centered(tag = "media-loading") {
                         Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(Spacing.m)) {
                             CircularProgressIndicator()
                             Text(stringResource(R.string.media_loading))
