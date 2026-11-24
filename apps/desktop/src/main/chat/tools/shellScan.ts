@@ -1277,14 +1277,32 @@ function loginName(): string {
 /** A double-quoted word that is one variable with fixed text around it: `"$f"`, `"src/${f}.bak"`. */
 const BOUND_WORD = /^"([^"$`\\']*)\$(?:\{([A-Za-z_]\w*)\}|([A-Za-z_]\w*))([^"$`\\']*)"$/;
 
+/**
+ * An unquoted word that is one variable with plain text around it: `sub/$f`, `jobs/${id}/logs`. An unbraced name
+ * must end where the word or a non-word character does, as bash reads `$fx` as the variable `fx`.
+ */
+const UNQUOTED_BOUND_WORD = /^([\w./+@:%=-]*)\$(?:\{([A-Za-z_]\w*)\}|([A-Za-z_]\w*)(?!\w))([\w./+@:%=-]*)$/;
+
+/**
+ * A loop value bash passes unchanged through word splitting and globbing: no quote, space, glob or expansion, and
+ * no leading `-` a program would read as an option.
+ */
+const PLAIN_LOOP_VALUE = /^(?!-)[\w./+@:%=-]+$/;
+
 /** The words a bound `for` variable stands for in `raw`, with the fixed text around it; null when `raw` is not one. */
 function boundWords(raw: string, bindings: ReadonlyMap<string, readonly string[]>): string[] | null {
   if (bindings.size === 0) return null;
   const match = BOUND_WORD.exec(raw);
   const values = match ? bindings.get(match[2] ?? match[3] ?? '') : undefined;
-  if (!match || !values) return null;
-  const quoted = (text: string): string => (text ? `'${text}'` : '');
-  return values.map(value => `${quoted(match[1] ?? '')}${value}${quoted(match[4] ?? '')}`);
+  if (match && values) {
+    const quoted = (text: string): string => (text ? `'${text}'` : '');
+    return values.map(value => `${quoted(match[1] ?? '')}${value}${quoted(match[4] ?? '')}`);
+  }
+  // Unquoted, bash splits and globs what the variable gives, so only values that come through both unchanged bind.
+  const plain = UNQUOTED_BOUND_WORD.exec(raw);
+  const plainValues = plain ? bindings.get(plain[2] ?? plain[3] ?? '') : undefined;
+  if (!plain || !plainValues || !plainValues.every(value => PLAIN_LOOP_VALUE.test(value))) return null;
+  return plainValues.map(value => `${plain[1] ?? ''}${value}${plain[4] ?? ''}`);
 }
 
 /** A POSIX, drive or UNC absolute path, which does not depend on the folder a command runs in. */
@@ -9508,8 +9526,11 @@ export async function scanShell(
           setsEnvironment = true;
         }
         const values = node.childrenForFieldName('value').map(value => value?.text ?? '');
+        // An IFS the script sets may split an unquoted loop value where the scan does not.
         const bind =
-          loopBinds(node.text.startsWith('for'), variable, values, body?.text ?? '', functions) && !state.lost;
+          loopBinds(node.text.startsWith('for'), variable, values, body?.text ?? '', functions) &&
+          !state.lost &&
+          !/\bIFS\b/.test(gateText);
         const outer = loopBindings.get(variable);
         if (bind) loopBindings.set(variable, values);
         else loopBindings.delete(variable);

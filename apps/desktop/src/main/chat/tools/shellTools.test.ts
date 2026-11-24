@@ -925,6 +925,54 @@ describe('shellApproval with a literal variable assignment', () => {
   );
 });
 
+/** A `for` variable over plain literal words, used unquoted inside a longer word, is read as each word it takes. */
+describe('shellApproval with an unquoted loop variable inside a word', () => {
+  let root: string;
+  let outside: string;
+  let context: { roots: string[]; signal: AbortSignal; protectedPaths: string[]; workingDirectory: string };
+
+  beforeEach(async () => {
+    root = await realpath(await mkdtemp(join(userInfo().homedir, '.b4m-loop-root-')));
+    outside = await realpath(await mkdtemp(join(userInfo().homedir, '.b4m-loop-outside-')));
+    await mkdir(join(root, 'sub'), { recursive: true });
+    await writeFile(join(root, 'sub', 'a.txt'), 'a\n', 'utf8');
+    context = { roots: [root], signal: new AbortController().signal, protectedPaths: [], workingDirectory: root };
+  });
+
+  afterEach(async () => {
+    await rm(root, { recursive: true, force: true });
+    await rm(outside, { recursive: true, force: true });
+  });
+
+  const approval = (command: string) => shellApproval('bash_execute', { command, cwd: root }, context);
+
+  it.each([
+    'for f in a.txt; do cat sub/$f; done',
+    'for f in a.txt; do cat sub/${f}; done',
+    'for f in a.txt; do echo repos/x/$f/logs; done',
+    'for j in 1 2; do gh api repos/example-org/widgets/actions/jobs/$j/logs; done',
+    'for n in 611 612; do gh pr view $n --repo example-org/widgets --json title; done',
+  ])('runs a read through the loop variable unasked: %s', async command => {
+    expect(runsCheckedInAuto(await approval(command))).toBe(true);
+  });
+
+  it.each([
+    ['a glob value', "for f in '*'; do cat sub/$f; done"],
+    ['a value with a space', "for f in 'a b'; do cat sub/$f; done"],
+    ['a value read as an option', 'for f in -rf; do rm sub/$f; done'],
+    ['a longer name the word runs into', 'for f in a.txt; do cat sub/$fx; done'],
+    ['an IFS the script sets', 'IFS=.; for f in a.txt; do cat sub/$f; done'],
+    ['a set inside the body', 'for f in a.txt; do f=x; cat sub/$f; done'],
+  ])('still cannot check a word whose loop variable has %s', async (_name, command) => {
+    expect(runsCheckedInAuto(await approval(command))).toBe(false);
+  });
+
+  it('still names a folder outside the shared ones that the loop value points at', async () => {
+    const prompt = await approval(`for d in ${outside}; do cp sub/a.txt $d/b.txt; done`);
+    expect(prompt.always?.writtenDirectories).toContain(outside);
+  });
+});
+
 describe('shellApproval for folders a command only reads', () => {
   let root: string;
   let outside: string;
