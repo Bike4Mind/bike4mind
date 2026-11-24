@@ -28,6 +28,16 @@ export function feedbackRowScrollClearance(bulkBarHeight: number) {
   return Math.max(barBand, CHAT_PILL_BAND) + ROW_SCROLL_GAP;
 }
 
+// Chrome pins a sticky box inside its scroll container's padding, so a stuck bar sits that
+// padding above the scrollport edge that a row's scroll-margin is measured from.
+function scrollerPaddingBottom(node: HTMLElement) {
+  for (let el = node.parentElement; el; el = el.parentElement) {
+    const style = getComputedStyle(el);
+    if (/auto|scroll/.test(style.overflowY)) return parseFloat(style.paddingBottom) || 0;
+  }
+  return 0;
+}
+
 export default function FeedbackBulkActions({
   selection,
   filters,
@@ -43,7 +53,7 @@ export default function FeedbackBulkActions({
   disabled: boolean;
   onSelectionChange: (selection: AdminSelection) => void;
   onApplied: () => Promise<void>;
-  /** Reports the sticky bar's rendered height in px, 0 while nothing is selected. */
+  /** Reports the sticky bar's height plus its scroll container's bottom padding in px, 0 while nothing is selected. */
   onHeightChange?: (height: number) => void;
 }) {
   const barRef = useRef<HTMLDivElement>(null);
@@ -51,7 +61,9 @@ export default function FeedbackBulkActions({
   useEffect(() => {
     const node = barRef.current;
     if (!node || !onHeightChange) return;
-    const observer = new ResizeObserver(([entry]) => onHeightChange(entry.contentRect.height));
+    const observer = new ResizeObserver(([entry]) =>
+      onHeightChange(entry.contentRect.height + scrollerPaddingBottom(node))
+    );
     observer.observe(node);
     return () => {
       observer.disconnect();

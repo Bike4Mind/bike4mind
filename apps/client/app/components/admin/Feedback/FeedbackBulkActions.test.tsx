@@ -132,6 +132,40 @@ describe('feedback bulk bar clearance', () => {
     expect(onHeightChange).toHaveBeenLastCalledWith(0);
   });
 
+  it('adds the scroll container bottom padding the stuck bar sits above', () => {
+    let resize: ResizeObserverCallback = () => {};
+    vi.stubGlobal(
+      'ResizeObserver',
+      class {
+        constructor(callback: ResizeObserverCallback) {
+          resize = callback;
+        }
+        observe() {}
+        disconnect() {}
+      }
+    );
+    const onHeightChange = vi.fn();
+    render(
+      <CssVarsProvider theme={theme}>
+        <div style={{ overflowY: 'auto', paddingBottom: '64px' }}>
+          <div>
+            <FeedbackBulkActions
+              selection={{ mode: 'explicit', ids }}
+              filters={{ sort: 'desc' }}
+              total={7}
+              disabled={false}
+              onSelectionChange={onSelectionChange}
+              onApplied={onApplied}
+              onHeightChange={onHeightChange}
+            />
+          </div>
+        </div>
+      </CssVarsProvider>
+    );
+    resize([{ contentRect: { height: 70 } } as ResizeObserverEntry], {} as ResizeObserver);
+    expect(onHeightChange).toHaveBeenLastCalledWith(134);
+  });
+
   it('renders no wrapper while nothing is selected', () => {
     render(
       <CssVarsProvider theme={theme}>
