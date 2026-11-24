@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
-import { AdminTab } from './adminSidebarConfig';
+import { AdminTab, SIDEBAR_SECTIONS } from './adminSidebarConfig';
 import type { AdminActivitySummary } from '@client/shared/adminActivitySummary';
 import type { PremiumRouteDescriptor } from '@client/app/premiumContract';
 
@@ -71,6 +71,19 @@ describe('AdminDashboardTab', () => {
       isError: false,
       refetch,
     });
+  });
+
+  it('opens with the shared page header, named like its sidebar item, as the only h1', () => {
+    render(<AdminDashboardTab onNavigate={vi.fn()} />, { wrapper: Wrapper });
+
+    const header = screen.getByTestId('admin-page-header');
+    const title = screen.getByRole('heading', { level: 1 });
+    expect(screen.getByTestId('admin-dashboard').firstElementChild).toBe(header);
+    expect(screen.getAllByRole('heading')[0]).toBe(title);
+    expect(header).toContainElement(title);
+    expect(title).toHaveAccessibleName('Dashboard');
+    expect(SIDEBAR_SECTIONS.flatMap(s => s.items).find(i => i.tab === AdminTab.Dashboard)?.label).toBe('Dashboard');
+    expect(header).toHaveTextContent('See how Bike4Mind is being used and jump into the tools behind the numbers.');
   });
 
   it('does not show an extension section when no routes contribute a dashboard', () => {

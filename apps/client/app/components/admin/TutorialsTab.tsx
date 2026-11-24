@@ -5,7 +5,8 @@ import { CORE_TUTORIALS_API_BASE } from '@client/app/components/tutorial/Tutoria
 import TutorialDraftsCard from '@client/app/components/tutorial/admin/TutorialDraftsCard';
 import TutorialModulesCard from '@client/app/components/tutorial/admin/TutorialModulesCard';
 import TutorialsSwitchCard from '@client/app/components/tutorial/admin/TutorialsSwitchCard';
-import { SectionCard } from './shared';
+import { AdminPageHeader, SectionCard } from './shared';
+import { ADMIN_REGION_GAP } from './shared/adminStyles';
 import { useTutorialOwners, useTutorialOwnerSummary } from '@client/app/hooks/tutorials/useTutorialOwners';
 
 const CORE_OWNER = 'core';
@@ -76,7 +77,11 @@ export const TutorialsTab: React.FC = () => {
   const owners = useTutorialOwners();
 
   return (
-    <Stack gap={3} data-testid="tutorials-tab">
+    <Stack gap={ADMIN_REGION_GAP} data-testid="tutorials-tab">
+      <AdminPageHeader
+        title="Tutorials"
+        description="Manage core tutorials and see the tutorials other features contribute."
+      />
       <Stack gap={1.5} data-testid="tutorials-core-section">
         <Typography level="title-lg">Core</Typography>
         <TutorialsSwitchCard apiBase={CORE_TUTORIALS_API_BASE} />

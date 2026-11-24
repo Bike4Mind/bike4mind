@@ -22,6 +22,8 @@ import { toast } from 'sonner';
 import { buildMigratedUsersCsv } from '@client/app/utils/migratedUsersCsv';
 import ContextHelpButton from '@client/app/components/help/ContextHelpButton';
 import SingleOrganizationSelector from '../common/SingleOrganizationSelector';
+import { AdminPageHeader } from './shared/AdminPageHeader';
+import { ADMIN_REGION_GAP } from './shared/adminStyles';
 
 const MigrateUsersTab: React.FC = () => {
   const organizations = useGetAllOrganizations({ filters: { personal: false } });
@@ -118,12 +120,18 @@ const MigrateUsersTab: React.FC = () => {
   const secondOption = false;
 
   return (
-    <Sheet sx={{ overflow: 'hidden', width: '100%' }}>
+    <Stack sx={{ gap: ADMIN_REGION_GAP }}>
+      <AdminPageHeader
+        title="Migration"
+        description="Import a list of users by name and email, optionally into an organization."
+        actions={
+          <>
+            <ContextHelpButton helpId="admin/user-migration" tooltipText="User Migration Help" />
+            <Button onClick={() => (window.location.href = '/developer/migration')}>Migration Tutorial</Button>
+          </>
+        }
+      />
       <Stack spacing={2}>
-        <Stack direction="row" alignItems="center" spacing={1}>
-          <Typography level="h1">Migrate Users</Typography>
-          <ContextHelpButton helpId="admin/user-migration" tooltipText="User Migration Help" />
-        </Stack>
         <FormControl>
           <Checkbox
             label="Send Welcome Email to Users"
@@ -147,7 +155,6 @@ const MigrateUsersTab: React.FC = () => {
           </FormControl>
         )}
 
-        <Button onClick={() => (window.location.href = '/developer/migration')}>Migration Tutorial</Button>
         <Textarea
           minRows={10}
           placeholder="Enter user list (name, email) separated by commas and new lines"
@@ -275,7 +282,7 @@ const MigrateUsersTab: React.FC = () => {
           </Stack>
         </Sheet>
       </Modal>
-    </Sheet>
+    </Stack>
   );
 };
 

@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes/themePrimitives';
-import { AdminTab } from './adminSidebarConfig';
+import { AdminTab, SIDEBAR_SECTIONS } from './adminSidebarConfig';
 import { canOpenAdminTab } from './adminTabPermissions';
 import { canRenderAdminTab } from './adminTabRenderability';
 import { adminTabToSlug } from './adminTabSlugs';
@@ -52,6 +52,20 @@ describe('TutorialsTab', () => {
     vi.clearAllMocks();
     owners.value = loaded([]);
     summaries.byBase = {};
+  });
+
+  it('opens with the shared page header, named like its sidebar item, as the only h1', () => {
+    owners.value = loaded([OWNER_A]);
+    summaries.byBase[OWNER_A.adminBase] = loaded([{ id: 't1', title: 'Tour', enabled: true }]);
+    renderTab();
+
+    const header = screen.getByTestId('admin-page-header');
+    const title = screen.getByRole('heading', { level: 1 });
+    expect(screen.getByTestId('tutorials-tab').firstElementChild).toBe(header);
+    expect(screen.getAllByRole('heading')[0]).toBe(title);
+    expect(header).toContainElement(title);
+    expect(title).toHaveAccessibleName('Tutorials');
+    expect(SIDEBAR_SECTIONS.flatMap(s => s.items).find(i => i.tab === AdminTab.Tutorials)?.label).toBe('Tutorials');
   });
 
   it('renders the Core section with the cards against the core base', () => {

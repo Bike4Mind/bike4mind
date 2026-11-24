@@ -74,6 +74,8 @@ import ForumIcon from '@mui/icons-material/Forum';
 
 // Components
 import ContextHelpButton from '@client/app/components/help/ContextHelpButton';
+import { AdminPageHeader } from './shared/AdminPageHeader';
+import { ADMIN_REGION_GAP } from './shared/adminStyles';
 
 // Template variable docs
 import { TEMPLATE_VARIABLE_DOCS } from '@bike4mind/server-utils/services/liveopsTriagePrompt';
@@ -587,24 +589,38 @@ export const AdminLiveOpsTriageMultiConfigTab: React.FC = () => {
   const activeRuns = runsData?.runs.filter(r => r.status === 'queued' || r.status === 'processing') || [];
   const recentRuns = runsData?.runs.filter(r => r.status === 'complete' || r.status === 'failed').slice(0, 5) || [];
 
+  const pageHeader = (
+    <AdminPageHeader
+      title="LiveOps triage"
+      description="Configure and monitor the automated triage of error alerts from Slack."
+    />
+  );
+
   if (configsLoading) {
     return (
-      <Box sx={{ display: 'flex', justifyContent: 'center' }}>
-        <CircularProgress />
+      <Box sx={{ display: 'flex', flexDirection: 'column', gap: ADMIN_REGION_GAP }}>
+        {pageHeader}
+        <Box sx={{ display: 'flex', justifyContent: 'center' }}>
+          <CircularProgress />
+        </Box>
       </Box>
     );
   }
 
   if (configsError) {
     return (
-      <Alert color="danger" variant="outlined">
-        Failed to load configurations. Please try again.
-      </Alert>
+      <Box sx={{ display: 'flex', flexDirection: 'column', gap: ADMIN_REGION_GAP }}>
+        {pageHeader}
+        <Alert color="danger" variant="outlined">
+          Failed to load configurations. Please try again.
+        </Alert>
+      </Box>
     );
   }
 
   return (
-    <Box sx={{ display: 'flex', flexDirection: 'column', height: '100%', gap: 2 }}>
+    <Box sx={{ display: 'flex', flexDirection: 'column', height: '100%', gap: ADMIN_REGION_GAP }}>
+      {pageHeader}
       {/* Active Runs Panel */}
       <Card variant="outlined" sx={{ p: 2 }}>
         <Box
