@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   CALLABLE_FUNCTION_SLUG_PATTERN,
+  callableFunctionTrustLabel,
   effectiveCallableFunctionStatus,
   toCallableFunctionDetail,
   toCallableFunctionPublic,
@@ -80,18 +81,33 @@ describe('toCallableFunctionPublic', () => {
         'createdAt',
         'description',
         'enabled',
+        'examples',
         'id',
         'latestVersion',
         'pin',
         'slug',
         'state',
         'status',
+        'trustLabel',
         'updateAvailable',
         'updatedAt',
       ].sort()
     );
     expect(Object.keys(view.pin).sort()).toEqual(['artifactId', 'contentHash', 'pinnedAt', 'version']);
     expect(JSON.stringify(view)).not.toContain('def run');
+  });
+
+  it('shows the label and the promotion sequence only while live, and never the server run or runtime', () => {
+    const promoted = {
+      trustLabel: 'verified' as const,
+      lastServerRun: { at: new Date(), passed: 1, failed: 0, results: [] },
+      pin: { ...doc().pin, seq: 2, runtime: { kind: 'pyodide-server', version: '0.25.1', packages: [] } },
+    };
+    const live = toCallableFunctionPublic(doc({ ...promoted, state: 'live' }), { version: 2 });
+    expect(live).toMatchObject({ trustLabel: 'verified', pin: { seq: 2 } });
+    expect(live).not.toHaveProperty('lastServerRun');
+    expect(live.pin).not.toHaveProperty('runtime');
+    expect(toCallableFunctionPublic(doc({ ...promoted, state: 'draft' }), { version: 2 }).trustLabel).toBeNull();
   });
 
   it('reports a newer artifact version as an available update', () => {
@@ -125,5 +141,23 @@ describe('toCallableFunctionDetail', () => {
     expect(detail).not.toHaveProperty('ownerKey');
     expect(detail).not.toHaveProperty('userId');
     expect(detail.pin).not.toHaveProperty('source');
+  });
+});
+
+describe('callableFunctionTrustLabel', () => {
+  it('is verified only when a worked example passed', () => {
+    expect(callableFunctionTrustLabel([{ kind: 'example', passed: true }])).toBe('verified');
+    expect(
+      callableFunctionTrustLabel([
+        { kind: 'test', passed: true },
+        { kind: 'example', passed: true },
+      ])
+    ).toBe('verified');
+  });
+
+  it('is unverified with declared tests only, with no cases, or with no passing example', () => {
+    expect(callableFunctionTrustLabel([{ kind: 'test', passed: true }])).toBe('unverified');
+    expect(callableFunctionTrustLabel([])).toBe('unverified');
+    expect(callableFunctionTrustLabel([{ kind: 'example', passed: false }])).toBe('unverified');
   });
 });

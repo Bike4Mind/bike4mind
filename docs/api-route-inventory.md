@@ -36,7 +36,7 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 
 ## Summary
 
-1277 routes: 132 contracted, 11 aliases of another route, 356 with no static caller in `apps/client/app`.
+1282 routes: 134 contracted, 11 aliases of another route, 358 with no static caller in `apps/client/app`.
 
 | Area | Routes | Contracted | jwt+key | jwt | optional | handler | No static caller |
 | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -59,7 +59,7 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | blog-integration | 1 | 0 | 1 | 0 | 0 | 0 | 0 |
 | briefcase | 3 | 0 | 3 | 0 | 0 | 0 | 0 |
 | business-links | 5 | 0 | 5 | 0 | 0 | 0 | 0 |
-| callable-functions | 5 | 0 | 0 | 5 | 0 | 0 | 0 |
+| callable-functions | 8 | 0 | 0 | 8 | 0 | 0 | 0 |
 | cc-bridge | 6 | 0 | 5 | 0 | 0 | 1 | 4 |
 | chat | 1 | 1 | 1 | 0 | 0 | 0 | 0 |
 | chat-completion-status | 1 | 0 | 1 | 0 | 0 | 0 | 0 |
@@ -154,7 +154,7 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | user | 2 | 0 | 1 | 1 | 0 | 0 | 0 |
 | user-api-keys | 8 | 0 | 7 | 1 | 0 | 0 | 1 |
 | users | 36 | 0 | 27 | 9 | 0 | 0 | 5 |
-| v1 | 130 | 126 | 111 | 12 | 0 | 7 | 116 |
+| v1 | 132 | 128 | 113 | 12 | 0 | 7 | 118 |
 | voice | 6 | 0 | 5 | 0 | 0 | 1 | 2 |
 | webhooks | 12 | 0 | 7 | 0 | 0 | 5 | 5 |
 | websocket | 1 | 0 | 0 | 1 | 0 | 0 | 0 |
@@ -757,7 +757,10 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | `/api/callable-functions` | GET, POST | jwt | - | - | no | - | 1: `hooks/data/callableFunctions.ts` |
 | `/api/callable-functions/[id]` | GET, PATCH, DELETE | jwt | - | - | no | - | 1: `hooks/data/callableFunctions.ts` |
+| `/api/callable-functions/[id]/calls` | GET | jwt | - | - | no | - | 1: `hooks/data/callableFunctions.ts` |
+| `/api/callable-functions/[id]/examples` | PUT | jwt | - | - | no | - | 1: `hooks/data/callableFunctions.ts` |
 | `/api/callable-functions/[id]/pin` | POST | jwt | - | - | no | - | 1: `hooks/data/callableFunctions.ts` |
+| `/api/callable-functions/[id]/promote` | POST | jwt | - | - | no | - | 1: `hooks/data/callableFunctions.ts` |
 | `/api/callable-functions/[id]/test-run` | POST | jwt | - | - | no | - | 1: `hooks/data/callableFunctions.ts` |
 | `/api/callable-functions/status` | GET | jwt | - | - | no | - | 1: `hooks/data/callableFunctions.ts` |
 
@@ -1905,6 +1908,8 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | `/api/v1/data-lakes/[id]/search` | POST | jwt+key | `datalake:query` | - | yes | - | 0 |
 | `/api/v1/decision-models` | GET | jwt+key | `ai:decide`, `ai:generate` | - | yes | - | 0 |
 | `/api/v1/decisions` | POST | jwt+key | `ai:decide`, `ai:generate` | - | yes | - | 0 |
+| `/api/v1/delegations` | POST | jwt+key | `ai:chat`, `ai:generate` | - | yes | - | 0 |
+| `/api/v1/delegations/[id]` | GET | jwt+key | `ai:chat`, `ai:generate` | - | yes | - | 0 |
 | `/api/v1/docs` | GET | handler | - | - | no | - | 1: `utils/externalLinks.ts` |
 | `/api/v1/embedding-models` | GET | jwt+key | `ai:generate` | - | yes | - | 0 |
 | `/api/v1/embeddings` | POST | jwt+key | `ai:generate` | - | yes | - | 0 |

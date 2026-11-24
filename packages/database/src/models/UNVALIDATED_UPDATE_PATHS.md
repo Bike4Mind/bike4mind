@@ -126,6 +126,22 @@ The table below remains the literal-update inventory, not proof that all databas
 | CallableFunction | `description` | maxlength | `ai/CallableFunctionModel.ts#CallableFunctionRepository.repin` | schema | `runValidators` | update call passes runValidators |
 | CallableFunction | `pin.contentHash` | match | `ai/CallableFunctionModel.ts#CallableFunctionRepository.repin` | schema | `runValidators` | update call passes runValidators |
 | CallableFunction | `pin.version` | min | `ai/CallableFunctionModel.ts#CallableFunctionRepository.repin` | schema | `runValidators` | update call passes runValidators |
+| CallableFunction | `examples.citation` | maxlength | `ai/CallableFunctionModel.ts#CallableFunctionRepository.setExamples` | schema | `runValidators` | update call passes runValidators |
+| CallableFunction | `examples.name` | maxlength | `ai/CallableFunctionModel.ts#CallableFunctionRepository.setExamples` | schema | `runValidators` | update call passes runValidators |
+| CallableFunction | `examples.tolerance.abs` | min | `ai/CallableFunctionModel.ts#CallableFunctionRepository.setExamples` | schema | `runValidators` | update call passes runValidators |
+| CallableFunction | `examples.tolerance.rel` | min | `ai/CallableFunctionModel.ts#CallableFunctionRepository.setExamples` | schema | `runValidators` | update call passes runValidators |
+| CallableFunction | `pin.runtime.kind` | maxlength | `ai/CallableFunctionModel.ts#CallableFunctionRepository.promote` | schema | `runValidators` | update call passes runValidators |
+| CallableFunction | `pin.runtime.kind` | maxlength | `ai/CallableFunctionModel.ts#CallableFunctionRepository.repin` | schema | `runValidators` | update call passes runValidators |
+| CallableFunction | `pin.runtime.lockHash` | match | `ai/CallableFunctionModel.ts#CallableFunctionRepository.promote` | schema | `runValidators` | update call passes runValidators |
+| CallableFunction | `pin.runtime.lockHash` | match | `ai/CallableFunctionModel.ts#CallableFunctionRepository.repin` | schema | `runValidators` | update call passes runValidators |
+| CallableFunction | `pin.runtime.version` | maxlength | `ai/CallableFunctionModel.ts#CallableFunctionRepository.promote` | schema | `runValidators` | update call passes runValidators |
+| CallableFunction | `pin.runtime.version` | maxlength | `ai/CallableFunctionModel.ts#CallableFunctionRepository.repin` | schema | `runValidators` | update call passes runValidators |
+| CallableFunction | `pin.seq` | min | `ai/CallableFunctionModel.ts#CallableFunctionRepository.promote` | schema | `runValidators` | update call passes runValidators |
+| CallableFunction | `pin.seq` | min | `ai/CallableFunctionModel.ts#CallableFunctionRepository.repin` | schema | `runValidators` | update call passes runValidators |
+| CallableFunction | `promoted.seq` | min | `ai/CallableFunctionModel.ts#CallableFunctionRepository.promote` | schema | `runValidators` | update call passes runValidators |
+| CallableFunction | `state` | enum | `ai/CallableFunctionModel.ts#CallableFunctionRepository.promote` | schema | `runValidators` | update call passes runValidators |
+| CallableFunction | `state` | enum | `ai/CallableFunctionModel.ts#CallableFunctionRepository.repin` | schema | `runValidators` | update call passes runValidators |
+| CallableFunction | `trustLabel` | enum | `ai/CallableFunctionModel.ts#CallableFunctionRepository.promote` | schema | `runValidators` | update call passes runValidators |
 | CompletionRun | `budgetCredits` | min | `billing/CompletionRunModel.ts#CompletionRunRepository.raiseBudget` | schema | `runValidators` | Passes runValidators; the sole caller (POST completion-runs/{runId}/budget) also validates the body as an int of at least 1. |
 | CreditTransaction | `reversalReason` | enum | `billing/CreditTransactionModel.ts#CreditTransactionRepository.markPurchaseReversed` | route-schema | `apps/client/pages/api/stripe/webhook.ts#reversePurchaseStanding` | Webhook and reconcile script pass literals refunded or dispute_lost only |
 | CreditTransaction | `status` | enum | `billing/CreditTransactionModel.ts#CreditTransactionRepository.updateTransactionStatus` | route-schema | `apps/client/pages/api/stripe/webhook.ts#CreditPurchaseStatus.Failed` | Sole caller passes enum constant CreditPurchaseStatus.Failed |
@@ -155,6 +171,9 @@ The table below remains the literal-update inventory, not proof that all databas
 | DataLakeResearchRun | `status` | enum | `ai/DataLakeResearchRunModel.ts#DataLakeResearchRunRepository.claimForExecution` | repository-check | `literal` | writes "running" |
 | DataLakeSpendNotification | `kind` | enum | `ai/DataLakeSpendNotificationModel.ts#DataLakeSpendNotificationRepository.claimNotification` | route-schema | `b4m-core/services/src/dataLakeService/renderSpendNotificationEmail.ts#renderSpendNotificationEmail` | Sole caller renders first; the renderer throws on an unhandled kind/scope pair |
 | DataLakeSpendNotification | `scope` | enum | `ai/DataLakeSpendNotificationModel.ts#DataLakeSpendNotificationRepository.claimNotification` | route-schema | `b4m-core/services/src/dataLakeService/renderSpendNotificationEmail.ts#renderSpendNotificationEmail` | Sole caller renders first; the renderer throws on an unhandled kind/scope pair |
+| DelegatedItem | `status` | enum | `content/DelegatedItemModel.ts#failStale` | schema | `runValidators` | writes "failed" |
+| DelegatedItem | `status` | enum | `content/DelegatedItemModel.ts#markFailed` | schema | `runValidators` | writes "failed" |
+| DelegatedItem | `status` | enum | `content/DelegatedItemModel.ts#markFailedOwned` | schema | `runValidators` | writes "failed" |
 | DeviceAuthorization | `status` | enum | `auth/DeviceAuthorizationModel.ts#DeviceAuthorizationRepository.claimApproved` | repository-check | `literal` | writes "consumed" |
 | DlqReplayLog | `status` | enum | `infra/webhooks/DlqReplayLogModel.ts#DlqReplayLogRepository.finalizeDiscard` | route-schema | `apps/client/pages/api/admin/dlq/discard.ts#handler` | Caller uses a ternary between the literals 'discarded' and 'failed' |
 | DlqTriageDelivery | `state` | enum | `infra/webhooks/DlqTriageDeliveryModel.ts#delivered` | repository-check | `literal` | writes "delivered" |
