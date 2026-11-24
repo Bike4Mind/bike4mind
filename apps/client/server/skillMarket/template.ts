@@ -18,7 +18,9 @@ import {
   type ISkillScanFinding,
   type ISkillSnapshot,
   type ISkillTemplatePreviewImage,
+  type SkillListingTemplateSummary,
   type SkillTemplateUpdate,
+  skillTemplateFreeRunEligibility,
 } from '@bike4mind/common';
 import { isDuplicateKeyError } from '@bike4mind/server-utils/utils/isDuplicateKeyError';
 import {
@@ -48,7 +50,7 @@ const SLUG_CREATE_ATTEMPTS = 5;
 
 const staleBefore = () => new Date(Date.now() - SCAN_STALE_MS);
 
-const plainTemplate = (doc: ISkillListingTemplateDocument): ISkillListingTemplate =>
+export const plainTemplate = (doc: ISkillListingTemplateDocument): ISkillListingTemplate =>
   doc.toJSON() as unknown as ISkillListingTemplate;
 
 export async function requireOwnListing(user: MarketActor, listingId: string): Promise<ISkillListing> {
@@ -59,11 +61,11 @@ export async function requireOwnListing(user: MarketActor, listingId: string): P
 }
 
 /** Template pages exist only for a listing the market currently serves. */
-function requireLiveListing(listing: ISkillListing): void {
+export function requireLiveListing(listing: ISkillListing): void {
   if (!isLive(listing)) throw new ConflictError('Only an approved listing can have a template page');
 }
 
-const isLive = (listing: ISkillListing): boolean =>
+export const isLive = (listing: ISkillListing): boolean =>
   listing.status === 'approved' && !!listing.currentApprovedVersionId && !listing.hiddenByReports;
 
 async function reload(listingId: string): Promise<ISkillListingTemplate> {
@@ -76,23 +78,52 @@ const duplicateKeyOn = (error: unknown, field: string): boolean =>
   isDuplicateKeyError(error) &&
   Boolean((error as { keyPattern?: Record<string, unknown> }).keyPattern?.[field] !== undefined);
 
-export async function getOwnTemplate(user: MarketActor, listingId: string): Promise<ISkillListingTemplate | null> {
-  const listing = await requireOwnListing(user, listingId);
-  const doc = await SkillListingTemplate.findOne({ listingId: String(listing.id) });
-  return doc ? plainTemplate(doc) : null;
+/** A live listing's approved version snapshot, the only content a template may be built or judged from. */
+export async function approvedSnapshotOf(
+  listing: ISkillListing
+): Promise<{ snapshot: ISkillSnapshot; versionId: string }> {
+  const versionId = String(listing.currentApprovedVersionId);
+  const version = await SkillListingVersion.findById(versionId).lean();
+  if (!version || version.listingId !== String(listing.id)) throw new NotFoundError('Approved version not found');
+  return { snapshot: version.snapshot, versionId };
 }
 
-/** The listing's approved version snapshot, the only content a draft may be built from. */
 export async function approvedSnapshotForDraft(
   user: MarketActor,
   listingId: string
 ): Promise<{ snapshot: ISkillSnapshot; versionId: string }> {
   const listing = await requireOwnListing(user, listingId);
   requireLiveListing(listing);
-  const versionId = String(listing.currentApprovedVersionId);
-  const version = await SkillListingVersion.findById(versionId).lean();
-  if (!version || version.listingId !== String(listing.id)) throw new NotFoundError('Approved version not found');
-  return { snapshot: version.snapshot, versionId };
+  return approvedSnapshotOf(listing);
+}
+
+/** The skill name in slug form, with the first free numeric suffix when another template holds it. */
+export async function suggestTemplateSlug(listingName: string): Promise<string> {
+  const base = templateSlugBase(listingName);
+  // `base` is [a-z0-9-] only, so it needs no regex escaping.
+  const clashes = await SkillListingTemplate.find({ slug: { $regex: `^${base}(-[0-9]+)?$` } })
+    .select('slug')
+    .lean();
+  return firstFreeTemplateSlug(base, new Set(clashes.map(t => t.slug)));
+}
+
+/**
+ * The author's template, which must be a draft: preview image changes are only allowed there. The
+ * scan covers the copy only; image moderation (isImageServeable, the approval gate) guards the image.
+ */
+export async function requireDraftTemplate(
+  user: MarketActor,
+  listingId: string,
+  { live }: { live: boolean }
+): Promise<{ listing: ISkillListing; template: ISkillListingTemplate }> {
+  const listing = await requireOwnListing(user, listingId);
+  if (live) requireLiveListing(listing);
+  const id = String(listing.id);
+  await releaseStaleSkillTemplateScan(id, staleBefore());
+  const doc = await SkillListingTemplate.findOne({ listingId: id });
+  if (!doc) throw new NotFoundError('Save the template first');
+  if (doc.status !== 'draft') throw new ConflictError('Unpublish the template to change its image');
+  return { listing, template: plainTemplate(doc) };
 }
 
 function copyPatch(input: SkillTemplateUpdate): SkillTemplateCopyPatch {
@@ -121,16 +152,8 @@ async function createTemplate(
   slug: string | undefined
 ): Promise<ISkillListingTemplateDocument> {
   const listingId = String(listing.id);
-  const base = templateSlugBase(listing.name);
   for (let attempt = 0; attempt < SLUG_CREATE_ATTEMPTS; attempt += 1) {
-    let candidate = slug;
-    if (candidate === undefined) {
-      // `base` is [a-z0-9-] only, so it needs no regex escaping.
-      const clashes = await SkillListingTemplate.find({ slug: { $regex: `^${base}(-[0-9]+)?$` } })
-        .select('slug')
-        .lean();
-      candidate = firstFreeTemplateSlug(base, new Set(clashes.map(t => t.slug)));
-    }
+    const candidate = slug ?? (await suggestTemplateSlug(listing.name));
     try {
       return await SkillListingTemplate.create({ listingId, slug: candidate, ...patch });
     } catch (error) {
@@ -232,11 +255,56 @@ export async function publishOwnTemplate(
   if (doc.status === 'published') throw new ConflictError('The template is already published');
   if (doc.status === 'in_review') throw new ConflictError('The template is already being scanned');
   if (!doc.headline.trim()) throw new BadRequestError('Add a headline before publishing');
+  if (doc.previewImage && !doc.previewImage.approved) {
+    throw new BadRequestError('Approve the preview image before publishing');
+  }
 
   const claimedAt = new Date();
-  const claimed = await claimSkillTemplateScan(id, claimedAt, ['draft']);
+  // Pins the image checked above so a concurrent image change makes the claim fail.
+  const imageGuard = doc.previewImage
+    ? { 'previewImage.fabFileId': doc.previewImage.fabFileId, 'previewImage.approved': true }
+    : { previewImage: { $exists: false } };
+  const claimed = await claimSkillTemplateScan(id, claimedAt, ['draft'], {}, imageGuard);
   if (!claimed) throw new ConflictError('The template changed while publishing. Reload and try again.');
   return runTemplateScan(listing, plainTemplate(claimed), claimedAt, deps);
+}
+
+/**
+ * Switch the free run on or off. Turning it on needs a live listing whose approved version can run
+ * without tools or files (skillTemplateFreeRunEligibility); turning it off is always allowed.
+ */
+export async function setOwnTemplateFreeRun(
+  user: MarketActor,
+  listingId: string,
+  enabled: boolean
+): Promise<ISkillListingTemplate> {
+  const listing = await requireOwnListing(user, listingId);
+  const id = String(listing.id);
+  if (enabled) {
+    requireLiveListing(listing);
+    const eligibility = skillTemplateFreeRunEligibility((await approvedSnapshotOf(listing)).snapshot);
+    if (!eligibility.eligible) throw new ConflictError(eligibility.reason);
+  }
+  await releaseStaleSkillTemplateScan(id, staleBefore());
+  const updated = await SkillListingTemplate.findOneAndUpdate(
+    { listingId: id, status: { $ne: 'in_review' } },
+    { $set: { freeRunEnabled: enabled } },
+    { new: true, runValidators: true }
+  );
+  if (updated) return plainTemplate(updated);
+  if (!(await SkillListingTemplate.exists({ listingId: id }))) throw new NotFoundError('Template not found');
+  throw new ConflictError('The template is being scanned. Try again in a moment.');
+}
+
+/** Each listing's template slug and status in one query; a listing with no template is absent. */
+export async function templateSummariesByListing(
+  listingIds: string[]
+): Promise<Map<string, SkillListingTemplateSummary>> {
+  if (listingIds.length === 0) return new Map();
+  const rows = await SkillListingTemplate.find({ listingId: { $in: listingIds } })
+    .select('listingId slug status')
+    .lean();
+  return new Map(rows.map(row => [row.listingId, { slug: row.slug, status: row.status }]));
 }
 
 export async function unpublishOwnTemplate(user: MarketActor, listingId: string): Promise<ISkillListingTemplate> {

@@ -20,7 +20,7 @@ import UploadIcon from '@mui/icons-material/Upload';
 import DownloadIcon from '@mui/icons-material/Download';
 import { useNavigate } from '@tanstack/react-router';
 import { toast } from 'sonner';
-import type { ISkillListingVersion, SkillListingStatus } from '@bike4mind/common';
+import { skillTemplatePagePath, type ISkillListingVersion, type SkillListingStatus } from '@bike4mind/common';
 import { useDocumentTitle } from '@client/app/hooks/useDocumentTitle';
 import { useGetSkills } from '@client/app/hooks/data/skills';
 import { useUser } from '@client/app/contexts/UserContext';
@@ -98,6 +98,7 @@ const ListingRow: FC<{ listing: MyListing }> = ({ listing }) => {
   const open = listing.status !== 'withdrawn' && listing.status !== 'delisted';
   const deletable = listing.status === 'withdrawn' && !listing.hiddenByReports;
   const waiting = listing.versions.some(v => v.reviewStatus === 'pending');
+  const publishedTemplateSlug = listing.template?.status === 'published' ? listing.template.slug : null;
 
   const resubmit = async () => {
     try {
@@ -182,6 +183,32 @@ const ListingRow: FC<{ listing: MyListing }> = ({ listing }) => {
               onClick={() => navigate({ to: '/skills/market/$listingId', params: { listingId: listing.id } })}
             >
               View
+            </Button>
+          ) : null}
+          {listing.status === 'approved' ? (
+            <Button
+              size="sm"
+              variant="plain"
+              onClick={() => navigate({ to: '/skills/market/$listingId/template', params: { listingId: listing.id } })}
+              data-testid={`market-mine-template-${listing.name}`}
+            >
+              View as template
+            </Button>
+          ) : null}
+          {publishedTemplateSlug ? (
+            <Button
+              size="sm"
+              variant="plain"
+              color="neutral"
+              startDecorator={<ContentCopyIcon />}
+              onClick={() =>
+                void navigator.clipboard
+                  .writeText(`${window.location.origin}${skillTemplatePagePath(publishedTemplateSlug)}`)
+                  .then(() => toast.success('Template link copied'))
+              }
+              data-testid={`market-mine-copy-template-link-${listing.name}`}
+            >
+              Copy template link
             </Button>
           ) : null}
           {listing.visibility === 'unlisted' && listing.shareToken ? (

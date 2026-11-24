@@ -36,7 +36,7 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 
 ## Summary
 
-1273 routes: 131 contracted, 11 aliases of another route, 354 with no static caller in `apps/client/app`.
+1279 routes: 131 contracted, 11 aliases of another route, 352 with no static caller in `apps/client/app`.
 
 | Area | Routes | Contracted | jwt+key | jwt | optional | handler | No static caller |
 | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -135,7 +135,7 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | security | 5 | 0 | 4 | 1 | 0 | 0 | 1 |
 | sessions | 30 | 1 | 27 | 2 | 0 | 1 | 4 |
 | settings | 7 | 0 | 4 | 0 | 0 | 3 | 1 |
-| skills | 25 | 0 | 3 | 22 | 0 | 0 | 3 |
+| skills | 31 | 0 | 3 | 27 | 0 | 1 | 1 |
 | sky-greeting | 1 | 0 | 0 | 0 | 0 | 1 | 0 |
 | slack | 16 | 0 | 7 | 1 | 0 | 8 | 8 |
 | spaces | 13 | 0 | 0 | 13 | 0 | 0 | 13 |
@@ -1482,7 +1482,7 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 
 | Route | Methods | Auth | Scopes | Permissions | Contract | Alias of | Callers |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| `/api/quests/[id]` | GET | jwt+key | `ai:chat`, `ai:generate`, `notebooks:read` | - | yes | `/api/v1/quests/[id]` | 1: `components/Session/VoiceSessionModal/voiceToolExecutor.ts` |
+| `/api/quests/[id]` | GET | jwt+key | `ai:chat`, `ai:generate`, `notebooks:read` | - | yes | `/api/v1/quests/[id]` | 2: `components/Session/VoiceSessionModal/voiceToolExecutor.ts`, `hooks/data/skillTemplate.ts` |
 | `/api/quests/[id]/check-timeout` | POST | jwt+key | - | - | no | - | 1: `utils/sessionsAPICalls.ts` |
 | `/api/quests/[id]/client-timing` | POST | jwt+key | - | - | no | - | 1: `hooks/useStreamingMetrics.ts` |
 | `/api/quests/[id]/context` | GET | jwt | - | - | no | - | 1: `hooks/data/quests.ts` |
@@ -1609,9 +1609,14 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | `/api/skills/market/[id]/permanent` | DELETE | jwt | - | - | no | - | 1: `hooks/data/skillMarket.ts` |
 | `/api/skills/market/[id]/rating` | PUT | jwt | - | - | no | - | 1: `hooks/data/skillMarket.ts` |
 | `/api/skills/market/[id]/report` | POST | jwt | - | - | no | - | 1: `hooks/data/skillMarket.ts` |
-| `/api/skills/market/[id]/template` | GET, PUT, DELETE | jwt | - | - | no | - | 0 |
-| `/api/skills/market/[id]/template/draft` | POST | jwt | - | - | no | - | 0 |
-| `/api/skills/market/[id]/template/publish` | POST, DELETE | jwt | - | - | no | - | 0 |
+| `/api/skills/market/[id]/template` | GET, PUT, DELETE | jwt | - | - | no | - | 1: `hooks/data/skillTemplate.ts` |
+| `/api/skills/market/[id]/template/draft` | POST | jwt | - | - | no | - | 1: `hooks/data/skillTemplate.ts` |
+| `/api/skills/market/[id]/template/free-run` | PUT | jwt | - | - | no | - | 1: `hooks/data/skillTemplate.ts` |
+| `/api/skills/market/[id]/template/image` | PUT, DELETE | jwt | - | - | no | - | 1: `hooks/data/skillTemplate.ts` |
+| `/api/skills/market/[id]/template/image/approve` | POST | jwt | - | - | no | - | 1: `hooks/data/skillTemplate.ts` |
+| `/api/skills/market/[id]/template/image/from-generation` | POST | jwt | - | - | no | - | 1: `hooks/data/skillTemplate.ts` |
+| `/api/skills/market/[id]/template/image/generate` | POST | jwt | - | - | no | - | 1: `hooks/data/skillTemplate.ts` |
+| `/api/skills/market/[id]/template/publish` | POST, DELETE | jwt | - | - | no | - | 1: `hooks/data/skillTemplate.ts` |
 | `/api/skills/market/[id]/versions` | POST | jwt | - | - | no | - | 1: `hooks/data/skillMarket.ts` |
 | `/api/skills/market/bundles` | GET, POST | jwt | - | - | no | - | 1: `hooks/data/skillMarket.ts` |
 | `/api/skills/market/bundles/[id]` | PUT, DELETE | jwt | - | - | no | - | 1: `hooks/data/skillMarket.ts` |
@@ -1624,6 +1629,7 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | `/api/skills/market/suggest-tags` | POST | jwt | - | - | no | - | 1: `hooks/data/skillMarket.ts` |
 | `/api/skills/market/versions/[vid]/rescan` | POST | jwt | - | - | no | - | 1: `hooks/data/skillMarket.ts` |
 | `/api/skills/market/versions/[vid]/review` | POST | jwt | - | - | no | - | 1: `hooks/data/skillMarket.ts` |
+| `/api/skills/template/image/[slug]` | GET | handler | - | - | no | - | 0 |
 
 ### sky-greeting
 

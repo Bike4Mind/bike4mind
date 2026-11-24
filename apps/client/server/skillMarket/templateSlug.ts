@@ -3,8 +3,8 @@ import {
   claudeSkillNameFor,
   SKILL_TEMPLATE_RESERVED_SLUGS,
   SKILL_TEMPLATE_SLUG_MAX,
+  skillTemplateSlugProblem,
 } from '@bike4mind/common';
-import { SKILL_NAME_PATTERN } from '@server/utils/skillValidation';
 
 /** Room kept under SKILL_TEMPLATE_SLUG_MAX for a `-<n>` clash suffix. */
 const SUFFIX_ROOM = 6;
@@ -13,12 +13,8 @@ export const isReservedTemplateSlug = (slug: string): boolean => SKILL_TEMPLATE_
 
 /** An author-chosen slug: the skill-name shape, and not a reserved word. */
 export function validateTemplateSlug(slug: string): string {
-  if (slug.length > SKILL_TEMPLATE_SLUG_MAX || !SKILL_NAME_PATTERN.test(slug)) {
-    throw new BadRequestError(
-      'The link name must be lowercase letters, digits and hyphens, and cannot start or end with a hyphen'
-    );
-  }
-  if (isReservedTemplateSlug(slug)) throw new BadRequestError('That link name is reserved');
+  const problem = skillTemplateSlugProblem(slug);
+  if (problem) throw new BadRequestError(problem);
   return slug;
 }
 

@@ -77,9 +77,9 @@ describe('SkillListingTemplate', () => {
     expect((await find()).inputs).toEqual([{ label: 'Article text', required: false }]);
   });
 
-  it('stores a preview image reference with its source', async () => {
+  it('stores a preview image reference with its source, unapproved by default', async () => {
     await create({ previewImage: { fabFileId: 'file-1', source: 'upload' } });
-    expect((await find()).previewImage).toEqual({ fabFileId: 'file-1', source: 'upload' });
+    expect((await find()).previewImage).toEqual({ fabFileId: 'file-1', source: 'upload', approved: false });
     await expect(
       create({ listingId: 'listing-2', slug: 'other', previewImage: { fabFileId: 'f', source: 'stock' } })
     ).rejects.toThrow(/source/);
@@ -124,6 +124,14 @@ describe('template scan claim and verdict', () => {
     await claimSkillTemplateScan('listing-1', claimedAt, ['published'], { headline: 'edited' });
     await writeSkillTemplateScanVerdict('listing-1', claimedAt, { scanStatus: 'passed', scanFindings: [] }, true);
     expect((await find()).firstPublishedAt).toEqual(first);
+  });
+
+  it('refuses a claim whose extra filter no longer matches', async () => {
+    await create({ previewImage: { fabFileId: 'img-new', source: 'upload', approved: false } });
+    const claim = (fabFileId: string) =>
+      claimSkillTemplateScan('listing-1', new Date(), ['draft'], {}, { 'previewImage.fabFileId': fabFileId });
+    expect(await claim('img-old')).toBeNull();
+    expect(await claim('img-new')).not.toBeNull();
   });
 
   it('refuses a claim from a status the caller did not name', async () => {

@@ -1,4 +1,4 @@
-import mongoose, { Document, Model, Schema, model } from 'mongoose';
+import mongoose, { Document, FilterQuery, Model, Schema, model } from 'mongoose';
 import {
   SKILL_TEMPLATE_EXAMPLE_PROMPT_MAX,
   SKILL_TEMPLATE_HEADLINE_MAX,
@@ -46,6 +46,7 @@ const SkillListingTemplateSchema = new Schema<ISkillListingTemplateDocument>(
         {
           fabFileId: { type: String, required: true },
           source: { type: String, required: true, enum: ['upload', 'generated'] },
+          approved: { type: Boolean, default: false },
         },
         { _id: false }
       ),
@@ -93,16 +94,18 @@ export type SkillTemplateCopyPatch = Partial<
 
 /**
  * Move the template from one of `from` to `in_review` for a publish scan, writing `copy` in the same
- * update so a live page never shows unscanned copy. Null when it is no longer in one of `from`.
+ * update so a live page never shows unscanned copy. Null when it is no longer in one of `from` or
+ * `extraFilter` (e.g. the preview image the caller checked) no longer matches.
  */
 export async function claimSkillTemplateScan(
   listingId: string,
   claimedAt: Date,
   from: ReadonlyArray<'draft' | 'published'>,
-  copy: SkillTemplateCopyPatch = {}
+  copy: SkillTemplateCopyPatch = {},
+  extraFilter: FilterQuery<ISkillListingTemplateDocument> = {}
 ) {
   return SkillListingTemplate.findOneAndUpdate(
-    { listingId, status: { $in: from } },
+    { ...extraFilter, listingId, status: { $in: from } },
     {
       $set: { ...copy, status: 'in_review', scanStatus: 'scanning', scanClaimedAt: claimedAt, scanFindings: [] },
       $unset: { scanError: 1, scanModel: 1, riskTier: 1 },

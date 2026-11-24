@@ -11,7 +11,8 @@ import ListingDetail from './ListingDetail';
 const toast = vi.hoisted(() => ({ success: vi.fn(), error: vi.fn() }));
 vi.mock('sonner', () => ({ toast }));
 
-vi.mock('@tanstack/react-router', () => ({ useNavigate: () => vi.fn() }));
+const nav = vi.hoisted(() => ({ navigate: vi.fn() }));
+vi.mock('@tanstack/react-router', () => ({ useNavigate: () => nav.navigate }));
 
 const hooks = vi.hoisted(() => ({
   detail: vi.fn(),
@@ -246,5 +247,33 @@ describe('ListingDetail report dialog Escape handling', () => {
     await openReportDialog(user);
     await user.keyboard('{Escape}');
     await waitFor(() => expect(screen.queryByTestId('market-report-dialog')).not.toBeInTheDocument());
+  });
+});
+
+describe('ListingDetail "View as template"', () => {
+  const author = (overrides: Partial<ListingDetailData['listing']> = {}) => {
+    const base = makeData();
+    return makeData({
+      listing: { ...base.listing, ...overrides },
+      viewer: { ...base.viewer, isAuthor: true, canImport: false },
+    });
+  };
+
+  it('opens the template editor for the author of a live listing', () => {
+    renderListing(author());
+    fireEvent.click(screen.getByTestId('market-view-template-btn'));
+    expect(nav.navigate).toHaveBeenCalledWith({
+      to: '/skills/market/$listingId/template',
+      params: { listingId: 'l1' },
+    });
+  });
+
+  it.each([
+    ['a visitor', makeData()],
+    ['the author of a listing in review', author({ status: 'in_review' })],
+    ['the author of a hidden listing', author({ hiddenByReports: true })],
+  ])('is not offered to %s', (_label, data) => {
+    renderListing(data);
+    expect(screen.queryByTestId('market-view-template-btn')).not.toBeInTheDocument();
   });
 });

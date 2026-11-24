@@ -225,7 +225,15 @@ describe('access', () => {
 
   it('the author reads, updates and deletes the template', async () => {
     const listingId = await makeListing();
-    expect((await call(templateHandler, 'GET', listingId)).body).toEqual({ template: null });
+    expect((await call(templateHandler, 'GET', listingId)).body).toMatchObject({
+      template: null,
+      suggestedSlug: 'summarize',
+      currentApprovedVersionId: expect.any(String),
+      eligibility: { eligible: true },
+      listing: { id: listingId, name: 'summarize', visibility: 'public', live: true },
+      previewImageUrl: null,
+      previewImageStatus: null,
+    });
 
     const created = await call(templateHandler, 'PUT', listingId, AUTHOR, copy);
     expect(created.status).toBe(200);
@@ -238,7 +246,7 @@ describe('access', () => {
     });
 
     expect((await call(templateHandler, 'DELETE', listingId)).status).toBe(204);
-    expect((await call(templateHandler, 'GET', listingId)).body).toEqual({ template: null });
+    expect((await call(templateHandler, 'GET', listingId)).body).toMatchObject({ template: null });
     expect((await call(templateHandler, 'DELETE', listingId)).status).toBe(404);
   });
 
