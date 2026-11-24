@@ -74,9 +74,10 @@ describe('DELETE /api/invites/[id]', () => {
     resolveAddressedInvite.mockResolvedValue({ id: '507f1f77bcf86cd799439021', type: 'Space' });
     const { req, res } = createMocks({ method: 'DELETE', query: { id: '507f1f77bcf86cd799439021' } });
     Object.assign(req, { user: { id: 'u1' } });
-    await mockRefs.deleteHandler!(req, res);
-
-    expect(res._getStatusCode()).toBe(404);
+    await expect(mockRefs.deleteHandler!(req, res)).rejects.toMatchObject({
+      statusCode: 404,
+      message: 'Invite not found',
+    });
     expect(cancelInviteById).not.toHaveBeenCalled();
   });
 

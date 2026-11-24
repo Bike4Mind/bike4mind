@@ -56,9 +56,10 @@ describe('POST /api/invites/[id]/refuse', () => {
     resolveAddressedInvite.mockResolvedValue({ id: 'inv-1', type: 'Space' });
     const { req, res } = createMocks({ method: 'POST', query: { id: 'inv-1' }, body: {} });
     Object.assign(req, { user: { id: 'u1', email: 'u1@example.com' } });
-    await mockRefs.postHandler!(req, res);
-
-    expect(res._getStatusCode()).toBe(404);
+    await expect(mockRefs.postHandler!(req, res)).rejects.toMatchObject({
+      statusCode: 404,
+      message: 'Invite not found',
+    });
     expect(refuseWholeInvite).not.toHaveBeenCalled();
     expect(sendToClient).not.toHaveBeenCalled();
   });

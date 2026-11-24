@@ -108,7 +108,10 @@ export function useDeleteSpace(id: string) {
     mutationFn: async () => {
       await api.delete(base(id));
     },
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: spacesKey }),
+    onSuccess: () => {
+      queryClient.removeQueries({ queryKey: spaceKey(id) });
+      queryClient.invalidateQueries({ queryKey: [...spacesKey, 'mine'] });
+    },
     onError: error => toast.error(getErrorMessage(error)),
   });
 }
@@ -119,7 +122,10 @@ export function useLeaveSpace(id: string) {
     mutationFn: async () => {
       await api.post(`${base(id)}/leave`);
     },
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: spacesKey }),
+    onSuccess: () => {
+      queryClient.removeQueries({ queryKey: spaceKey(id) });
+      queryClient.invalidateQueries({ queryKey: [...spacesKey, 'mine'] });
+    },
     onError: error => toast.error(getErrorMessage(error)),
   });
 }

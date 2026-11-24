@@ -168,7 +168,7 @@ export function useAcceptDocument({
           break;
         case InviteType.Space:
           queryClient.invalidateQueries({ queryKey: ['spaces'] });
-          toast.success('Space invite accepted');
+          if (result.acceptOutcome !== 'already-member') toast.success('Space invite accepted');
           break;
         default:
           toast.success('Document share accepted successfully');

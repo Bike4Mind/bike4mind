@@ -1,17 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import {
-  Alert,
-  Box,
-  Button,
-  CircularProgress,
-  Input,
-  Stack,
-  Tabs,
-  TabList,
-  TabPanel,
-  Textarea,
-  Typography,
-} from '@mui/joy';
+import { Box, Button, CircularProgress, Input, Stack, Tabs, TabList, TabPanel, Textarea, Typography } from '@mui/joy';
 import { useNavigate, useParams, useSearch } from '@tanstack/react-router';
 import { SPACE_DESCRIPTION_MAX, SPACE_NAME_MAX } from '@bike4mind/common';
 import NotFound from '@client/app/components/NotFound';
@@ -169,7 +157,6 @@ const SpaceDetailPage: React.FC = () => {
             </Button>
           )}
         </Box>
-        {leave.isError && <Alert color="danger">You could not leave this space.</Alert>}
         <Tabs
           value={selected}
           onChange={(_e, value) =>

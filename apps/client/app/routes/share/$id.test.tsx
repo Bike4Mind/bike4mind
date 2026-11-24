@@ -350,6 +350,24 @@ describe('SharePage', () => {
 
       expect(navigateMock).toHaveBeenCalledWith({ to: '/spaces/$id', params: { id: 'space-1' } });
     });
+
+    it('tells an existing member they already belong to the space, not the organization', async () => {
+      vi.mocked(fetchInvite).mockResolvedValue(spaceLink);
+      inviteMutations.accept.mockResolvedValue({
+        id: 'abc',
+        type: 'Space',
+        documentId: 'space-1',
+        acceptOutcome: 'already-member',
+      });
+      renderPage();
+
+      fireEvent.click(await screen.findByLabelText('Accept'));
+
+      const modal = await screen.findByTestId('share-accept-already-member-modal');
+      expect(modal.textContent).toContain('You already belong to this space.');
+      expect(modal.textContent).not.toContain('organization');
+      expect(navigateMock).not.toHaveBeenCalled();
+    });
   });
 
   it('still goes home on an unmapped accept failure', async () => {

@@ -180,7 +180,7 @@ const SharePage = () => {
         ? null
         : outcome.status === 'rejected'
           ? describeAcceptFailure(outcome.reason)
-          : acceptOutcomeScreen(outcome.value);
+          : acceptOutcomeScreen(outcome.value, validInvites[0].invite?.type);
       if (screen) {
         setAcceptScreen({
           ...screen,

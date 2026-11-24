@@ -17,7 +17,8 @@ const h = vi.hoisted(() => {
   };
 });
 
-vi.mock('@server/utils/inviteAcceptLimits', () => ({ reserveInviteAccept: vi.fn() }));
+const reserveInviteAccept = vi.hoisted(() => vi.fn());
+vi.mock('@server/utils/inviteAcceptLimits', () => ({ reserveInviteAccept }));
 vi.mock('@server/credits/orgInviteBonus', () => ({ payOrgInviteBonus: vi.fn() }));
 vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEvent: vi.fn() }));
 vi.mock('@bike4mind/server-utils/websocket/utils', () => ({ sendToClient: vi.fn() }));
@@ -103,9 +104,13 @@ describe('acceptInviteForUser (Space link)', () => {
 
   it('refuses with the flag off and spends nothing', async () => {
     h.settings.EnableSpaces = false;
-    await expect(acceptInviteForUser({ user: h.state.user, logger: undefined } as never, 'tok1')).rejects.toThrow(
-      'Feature not available'
+    await expect(acceptInviteForUser({ user: h.state.user, logger: undefined } as never, 'tok1')).rejects.toMatchObject(
+      {
+        statusCode: 404,
+        message: 'Invite not found',
+      }
     );
+    expect(reserveInviteAccept).not.toHaveBeenCalled();
     expect(h.addMember).not.toHaveBeenCalled();
     expect(h.acceptRecipient).not.toHaveBeenCalled();
   });
@@ -129,8 +134,9 @@ describe('Space invites with EnableSpaces off', () => {
 
   it('refuse answers not found and writes nothing', async () => {
     h.settings.EnableSpaces = false;
-    const result = await refuseInviteForUser({ user: h.state.user, logger: undefined } as never, 'named1');
-    expect(result).toBeNull();
+    await expect(
+      refuseInviteForUser({ user: h.state.user, logger: undefined } as never, 'named1')
+    ).rejects.toMatchObject({ statusCode: 404, message: 'Invite not found' });
     expect(h.refusePending).not.toHaveBeenCalled();
   });
 
