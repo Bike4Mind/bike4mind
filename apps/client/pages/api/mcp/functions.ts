@@ -26,8 +26,12 @@ import {
   listLiveFunctions,
   loadLiveFunction,
   loadLiveFunctionBySlug,
+  OUTPUT_TOO_LARGE_MESSAGE,
   withinBudget,
 } from '@server/callableFunctions/publicFunctions';
+
+// Under the 6 MB Lambda response limit, which the answer reaches escaped a second time.
+const MAX_ANSWER_BYTES = 5 * 1024 * 1024;
 
 const SERVER_INFO = { name: 'bike4mind-functions', version: '1.0.0' };
 
@@ -93,12 +97,17 @@ async function callTool(caller: Caller, name: string, args: unknown): Promise<Ca
   const answer = invokeAnswer(call);
   if (answer.status !== 200) return toolError(String(answer.body.error), answer.body.stamp);
   const output = call.outputs ?? {};
-  return {
+  const result: CallToolResult = {
     // The output alone, so it matches the tool's outputSchema; the stamp rides in _meta and the text block.
     structuredContent: output,
     content: [{ type: 'text', text: JSON.stringify({ output, stamp: call.stamp }) }],
     _meta: { stamp: call.stamp },
   };
+  // The body travels as an escaped string inside the Lambda payload, so measure it stringified twice.
+  if (Buffer.byteLength(JSON.stringify(JSON.stringify(result))) > MAX_ANSWER_BYTES) {
+    return toolError(OUTPUT_TOO_LARGE_MESSAGE, call.stamp);
+  }
+  return result;
 }
 
 const INTERNAL_ERROR_MESSAGE = 'Internal error';

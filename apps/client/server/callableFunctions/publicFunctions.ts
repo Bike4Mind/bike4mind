@@ -113,10 +113,12 @@ const FUNCTION_NOT_FOUND_REASONS = new Set(['not_found', 'not_caller', 'disabled
 
 const errorMessage = (errorClass?: string) => `The function raised an error${errorClass ? ` (${errorClass})` : ''}.`;
 
+export const OUTPUT_TOO_LARGE_MESSAGE = 'The function returned more than a call can carry.';
+
 const FAILURE_MESSAGES: Record<string, string> = {
   memory: 'The function ran out of memory.',
   output_invalid: 'The function returned outputs that do not fit its output schema.',
-  output_too_large: 'The function returned more than a call can carry.',
+  output_too_large: OUTPUT_TOO_LARGE_MESSAGE,
 };
 
 /** The HTTP answer for one dispatcher result. Refusals the route did not catch first still map to their status. */

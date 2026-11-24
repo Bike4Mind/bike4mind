@@ -324,7 +324,7 @@ describe('tools/list', () => {
     await client.close();
   });
 
-  it('lists up to the 100-function cap, in the order the functions were created', async () => {
+  it('lists the 100 functions a person can create at most, in the order they were created', async () => {
     const count = 100;
     h.functions = Array.from({ length: count }, (_, i) =>
       fnDoc(`6b${String(i).padStart(22, '0')}`, {
@@ -464,13 +464,32 @@ describe('tools/call', () => {
       await client.close();
     });
 
-    it('carries an output just under 2 MiB twice and stays under the 6 MB response limit', async () => {
-      h.runner.mockImplementation(async () => textOutput(2080));
+    // Quotes are escaped once in the text block and again in the Lambda payload, so 1000 of them make about 12 KB of payload.
+    const quoteOutput = (lines: number) => okRun({ lines: Array.from({ length: lines }, () => '"'.repeat(1000)) });
+    const LAMBDA_PAYLOAD_CAP = 5 * 1024 * 1024;
+    const payloadBytes = (result: unknown) => Buffer.byteLength(JSON.stringify(JSON.stringify(result)));
+
+    it('answers a quote-heavy output under 2 MiB, whose escaped answer would pass 5 MiB, with the too-large text and the stamp', async () => {
+      h.runner.mockImplementation(async () => quoteOutput(1046));
+      const client = await connect();
+      const result = callResult(await client.callTool({ name: 'echo_text', arguments: {} }));
+      expect(result).toEqual({
+        isError: true,
+        content: [{ type: 'text', text: 'The function returned more than a call can carry.' }],
+        _meta: { stamp: expect.objectContaining({ slug: 'echo_text', surface: 'mcp' }) },
+      });
+      expect(h.calls).toEqual([expect.objectContaining({ surface: 'mcp', outcome: 'ok' })]);
+      await client.close();
+    });
+
+    it('carries a quote-heavy output whose escaped answer is just under 5 MiB', async () => {
+      h.runner.mockImplementation(async () => quoteOutput(430));
       const client = await connect();
       const result = callResult(await client.callTool({ name: 'echo_text', arguments: {} }));
       expect(result.isError).toBeUndefined();
-      expect((result.structuredContent as { lines: string[] }).lines).toHaveLength(2080);
-      expect(Buffer.byteLength(JSON.stringify(result))).toBeLessThan(6 * 1000 * 1000);
+      expect((result.structuredContent as { lines: string[] }).lines).toHaveLength(430);
+      expect(payloadBytes(result)).toBeLessThan(LAMBDA_PAYLOAD_CAP);
+      expect(payloadBytes(result)).toBeGreaterThan(LAMBDA_PAYLOAD_CAP - 150 * 1024);
       await client.close();
     });
   });
@@ -479,13 +498,19 @@ describe('tools/call', () => {
     vi.useFakeTimers();
     try {
       h.runner.mockImplementation(() => new Promise(() => {}));
+      let settled = false;
       const answer = post({
         jsonrpc: '2.0',
         id: 3,
         method: 'tools/call',
         params: { name: 'beam_midspan_deflection', arguments: { load: 2, span: 4 } },
+      }).finally(() => {
+        settled = true;
       });
-      await vi.advanceTimersByTimeAsync(45_000);
+      await vi.advanceTimersByTimeAsync(44_999);
+      expect(settled).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      await vi.waitFor(() => expect(settled).toBe(true));
       expect((await answer).json).toEqual({
         jsonrpc: '2.0',
         id: 3,
@@ -542,7 +567,6 @@ describe('a store failure', () => {
     const answer = await post(message);
     expect(answer.status).toBe(200);
     expect(answer.json).toEqual(expected);
-    expect(JSON.stringify(answer.json)).not.toContain('example.net');
     expect(logger.error).toHaveBeenCalledTimes(1);
     expect(logger.error).toHaveBeenCalledWith(`[mcp/functions] ${method} failed`, {
       name: 'Error',
