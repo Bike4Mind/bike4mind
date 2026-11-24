@@ -66,7 +66,8 @@ export class SessionEventLog {
   since(sessionId: string, after: EventCursor): EventsSinceResult {
     const log = this.sessions.get(sessionId);
     const lastSeq = log?.lastSeq ?? 0;
-    if (after.epoch !== this.epoch || after.seq > lastSeq) return { ok: false, reason: 'snapshot-required' };
+    if (after.epoch !== this.epoch || !Number.isInteger(after.seq) || after.seq < 0 || after.seq > lastSeq)
+      return { ok: false, reason: 'snapshot-required' };
     if (after.seq === lastSeq) return { ok: true, events: [] };
     // lastSeq > after.seq >= 0 here, so the log exists. Retained events are contiguous and end at
     // lastSeq, so the first one is the earliest seq that can still be replayed.

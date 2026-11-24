@@ -169,6 +169,12 @@ describe('SessionEventLog', () => {
     expect(log.since(session, { epoch: 'e', seq: 1 })).toEqual({ ok: false, reason: 'snapshot-required' });
   });
 
+  it.each([Number.NaN, -1, 1.5, Number.POSITIVE_INFINITY])('asks for a snapshot from a cursor seq of %s', seq => {
+    const log = new SessionEventLog({ epoch: 'e' });
+    turn.forEach(event => log.append(event));
+    expect(log.since(session, { epoch: 'e', seq })).toEqual({ ok: false, reason: 'snapshot-required' });
+  });
+
   it('starts a forgotten session over', () => {
     const log = new SessionEventLog({ epoch: 'e' });
     turn.forEach(event => log.append(event));

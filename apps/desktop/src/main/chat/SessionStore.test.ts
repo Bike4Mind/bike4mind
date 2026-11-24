@@ -55,6 +55,15 @@ describe('SessionStore', () => {
     expect((await new SessionStore(directory, MODEL).get(created.id))?.historyEnabled).toBe(true);
   });
 
+  it('reads after a write already queued for the session', async () => {
+    const { id } = await store.create();
+    const message = { id: 'm1', role: 'user', content: 'hello', createdAt: new Date().toISOString() } as const;
+    const write = store.appendMessage(id, message);
+    const read = store.getAfterWrites(id);
+    await write;
+    expect((await read)?.messages.map(stored => stored.id)).toEqual(['m1']);
+  });
+
   it('keeps a title given at creation over the first prompt, in one write', async () => {
     const { id } = await store.create(MODEL, { title: 'Tidy imports' });
     await store.appendMessage(id, {

@@ -407,6 +407,16 @@ describe('ChatService', () => {
       expect(service.eventsSince(id, cursorOf(settled))).toEqual({ ok: true, events: [] });
     });
 
+    it('starts the sequence over when the conversation is deleted', async () => {
+      const { id } = await service.createSession();
+      await service.send(id, 'hello');
+      await waitFor(events, 'start');
+      const cursor = (await service.getSession(id))?.eventCursor;
+      expect(cursor?.seq).toBeGreaterThan(0);
+      await service.deleteSession(id);
+      expect(service.eventsSince(id, cursor as EventCursor)).toEqual({ ok: false, reason: 'snapshot-required' });
+    });
+
     it('hands out a cursor for a conversation with no turn yet', async () => {
       const { id } = await service.createSession();
       const opened = await service.getSession(id);

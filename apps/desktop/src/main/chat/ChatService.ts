@@ -123,7 +123,7 @@ import { carriedNotes, isTypedPrompt, regenerableReply } from '@shared/threadRew
 import { estimateContextOverhead, type ContextSnapshot } from '@shared/contextBreakdown';
 import { requestGeneration, type GenerationSettings } from '@shared/generation';
 import type { ModelSettings } from '@shared/modelSettings';
-import { applyLiveEvent, startReply } from '@shared/liveReply';
+import { applyLiveEvent, mergeDelta, startReply } from '@shared/liveReply';
 import { SessionEventLog, type EventsSinceResult } from './SessionEventLog';
 import { serverIdOfRuntime } from '@shared/modelServers';
 import { findSessionMentions, mentionTitle } from '@shared/sessionMention';
@@ -3032,7 +3032,9 @@ export class ChatService {
    */
   async getSession(sessionId: string, viewed = false): Promise<ChatSession | null> {
     if (viewed) this.deps.activity?.viewed(sessionId);
-    let session = await this.deps.store.get(sessionId);
+    // Ordered behind any write already queued, so a reply that settles during the read is in it
+    // when the cursor below says the 'done' is reflected.
+    let session = await this.deps.store.getAfterWrites(sessionId);
     const task = session?.workerTask;
     if (viewed && task && !task.attentionViewed && isUpdateOnlyTask(task.state)) {
       const updated = await this.deps.store.updateWorkerTask(sessionId, current => {
@@ -3040,7 +3042,7 @@ export class ChatService {
         return { ...current, attentionViewed: true };
       });
       if (updated) this.emitSummary(updated);
-      session = await this.deps.store.get(sessionId);
+      session = await this.deps.store.getAfterWrites(sessionId);
     }
     // From here to each return there is no await: the cursor must name exactly the events the
     // live fold below reflects, or a client resuming from it would lose or repeat one.
@@ -3142,8 +3144,8 @@ export class ChatService {
       // Merged, so a long reply is a handful of entries rather than one per token.
       const last = events[events.length - 1];
       if (last?.type === 'delta' && last.messageId === event.messageId) {
-        // Takes the newer seq: the merged entry stands for every delta up to this one.
-        events[events.length - 1] = { ...last, text: last.text + event.text, seq: event.seq };
+        // The merged entry stands for every delta up to this one, so it takes the newer seq.
+        events[events.length - 1] = mergeDelta(last, event);
         return;
       }
     }
@@ -3371,7 +3373,7 @@ export class ChatService {
     // Once the serialized delete has finished, no later append can resurrect the session.
     this.deps.history?.removeSession(sessionId, historyScope);
     this.deps.activity?.forget(sessionId);
-    if (deleteStoredSession) this.eventLog.forget(sessionId);
+    this.eventLog.forget(sessionId);
     this.waitingTasks.delete(sessionId);
     if (this.decisionIndex.delete(sessionId)) this.announceTaskDecisions();
     this.deps.queue?.forget(sessionId);
