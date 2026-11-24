@@ -388,6 +388,20 @@ describe('production director tools', () => {
 
       for (const { request } of harness.imageRequests) expect(inputsOf(request)).toEqual([kitImage]);
     });
+
+    it("keeps the user's look first when the storyboard adds a product photo, so a one-reference take uses it", async () => {
+      harness.config.imageModels = [singleReferenceModel];
+      await run(productionStoryboardTool, harness, { ...STORYBOARD, productFileId: undefined });
+      const look = harness.addFile('image');
+      await harness.config.compositions.update(COMPOSITION_ID, {
+        brandKit: { ...harness.composition().brandKit, productFileIds: [look] },
+      });
+      await run(productionStoryboardTool, harness, STORYBOARD);
+      expect(harness.composition().brandKit.productFileIds).toEqual([look, PRODUCT_FILE_ID]);
+
+      await run(productionGenerateShotTool, harness, { compositionId: COMPOSITION_ID, animate: false });
+      for (const { request } of harness.imageRequests) expect(inputsOf(request)).toEqual([look]);
+    });
   });
 
   describe('product look', () => {
