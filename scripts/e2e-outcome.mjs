@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import { pathToFileURL } from 'node:url';
+import { stripVTControlCharacters } from 'node:util';
 
 export function stateFor(outcome) {
   return outcome === 'passed' ? 'success' : ['failed', 'incomplete'].includes(outcome) ? 'failure' : 'error';
@@ -73,8 +74,10 @@ export function summarize(report, { execution = 'skipped', skipped = false, canc
     state: stateFor(outcome),
     summary: `${counts.passed} passed (${counts.flaky} flaky), ${counts.failed} failed, ${counts.skipped} skipped, ${counts.not_started} not started (${counts.total} test cases; ${counts.setup_failed} setup failures)`,
     specs,
-    // First line only: GITHUB_OUTPUT values must be single-line.
-    error: String(report?.errors?.[0]?.message ?? '').split('\n')[0].slice(0, 300),
+    // First line only (GITHUB_OUTPUT values are single-line); Playwright keeps ANSI colors in messages.
+    error: stripVTControlCharacters(String(report?.errors?.[0]?.message ?? ''))
+      .split('\n')[0]
+      .slice(0, 300),
   };
 }
 

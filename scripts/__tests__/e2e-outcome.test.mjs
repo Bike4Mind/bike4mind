@@ -160,6 +160,11 @@ test('Slack summary shows the global error when no test ran', () => {
   assert.equal(block.text.text, '*Test Run Summary*\nNo test case results available\n```\nError: Core data file not found\n```');
 });
 
+test('Slack error line drops terminal color codes', () => {
+  const result = summarize({ suites: [], errors: [{ message: '\u001b[31mError: setup failed\u001b[39m\n  at x' }] }, { execution: 'failure' });
+  assert.equal(result.error, 'Error: setup failed');
+});
+
 test('CLI emits real outputs for passing, failing, and no-run commands', () => {
   const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'e2e-outcome-'));
   try {
