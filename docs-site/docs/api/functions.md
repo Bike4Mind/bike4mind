@@ -67,10 +67,36 @@ The body carries the inputs under `input`, shaped by `input_schema`. A successfu
 
 The stamp records which pinned version ran, the hashes of its code and your input, and the runtime and packages it ran on, so you can tell later exactly what produced a result. `input_hash` does not change with key order.
 
+## Run a long call
+
+A call made as above waits for the result and stops at 45 seconds. For a function that runs longer, send `"mode": "async"`:
+
+```bash
+curl https://app.bike4mind.com/api/v1/functions/<function-id>/invoke \
+  -H 'Authorization: Bearer <your-api-key>' \
+  -H 'Content-Type: application/json' \
+  -d '{"input":{"load":2000,"span":4},"mode":"async"}'
+```
+
+Every check a waiting call makes (the key, the function, the inputs, and their size) runs before the call is queued, so a refused call answers with the same error either way. An accepted call answers `202`:
+
+```json
+{ "call_id": "<call-id>", "status": "queued" }
+```
+
+Poll the call with the same key:
+
+```bash
+curl https://app.bike4mind.com/api/v1/functions/calls/<call-id> \
+  -H 'Authorization: Bearer <your-api-key>'
+```
+
+`status` is `queued`, then `running`, then `finished`. A finished call carries `outcome`. When `outcome` is `ok`, the answer has `output` and `stamp`, as a waiting call does. Any other outcome carries `error`, and `stamp` when the function ran. A call is readable only by the user who made it, for 24 hours. After that, or for any other id, the poll answers `404`.
+
 ## Limits
 
-- The input may be up to 5 MB. An output too large to return answers `502` with `outcome` set to `output_too_large`.
-- A call has 45 seconds to finish. The function itself runs for at most 30 seconds.
+- The input may be up to 5 MB, and so may the output. An output too large to return answers `502` with `outcome` set to `output_too_large`.
+- The function runs for at most 30 seconds unless your organization sets a longer **Callable Function Time Limit** (up to 825 seconds). A call that waits for its result still has 45 seconds to finish; use `"mode": "async"` to run to the full limit.
 - Requests are rate limited per user and per route, at your account's per-minute limit. Each response carries the rate-limit headers.
 
 ## Errors
@@ -78,10 +104,10 @@ The stamp records which pinned version ran, the hashes of its code and your inpu
 Errors use the shared error envelope described in [Errors](./errors.md).
 
 - `403`: the key does not hold `functions:invoke`, or callable functions are turned off for your account.
-- `404`: the function is not one of your live functions.
+- `404`: the function is not one of your live functions, or a polled call is not yours or has expired.
 - `413`: the input is larger than 5 MB.
 - `422`: an input does not fit `input_schema`. The `error` names the first field, for example `Input span must be a number.`, and `problems` lists every field with its `path` and `message`.
 - `429`: you passed the rate limit.
 - `502`: the function raised an error, ran out of memory, returned outputs that do not fit `output_schema`, or returned too much. `outcome` names which, and `stamp` is included.
-- `503`: no function runtime is available, the runtime was slow to start, or it did not answer. Try again later.
-- `504`: the call ran past its time limit. `errorCode` is `request_timeout`.
+- `503`: no function runtime is available, the runtime was slow to start or did not answer, or the call could not be queued. Try again later.
+- `504`: the call ran past its time limit. `errorCode` is `request_timeout`. When your time limit is longer than 45 seconds, the `error` says to send `"mode": "async"`.
