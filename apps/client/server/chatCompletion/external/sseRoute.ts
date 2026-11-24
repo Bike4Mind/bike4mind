@@ -55,6 +55,7 @@ import {
 import type { CompletionSettlement } from '@bike4mind/services/cliCompletions';
 import { checkRateLimit, checkApiKeyRateLimitOrThrow, type ApiKeyInfo } from '@bike4mind/server-utils/cli/auth';
 import { resolveContractAuth } from '@bike4mind/server-utils/cli/resolveContractAuth';
+import { completionFailureCode } from '@server/utils/completionFailureCode';
 import { logCompletionAnalytics } from '@server/utils/logCompletionAnalytics';
 import { findCallerCompletionRun, type CompletionRunCaller } from '@server/completionRuns/callerCompletionRun';
 import { Config } from '@bike4mind/server-utils/utils/config';
@@ -279,6 +280,7 @@ export function registerExternalRoutes(app: Express, track: (p: Promise<void>) =
     };
 
     let completionOutcome: ApiCompletionOutcome = 'unknown';
+    let failureCode: string | undefined;
     let body: z.infer<typeof CompletionRequestSchema> | undefined;
     let userId: string | undefined;
     let apiKeyInfo: ApiKeyInfo | undefined;
@@ -334,7 +336,12 @@ export function registerExternalRoutes(app: Express, track: (p: Promise<void>) =
           endpoint: COMPLETIONS_ENDPOINT,
           source,
           startTime,
-          completion: { requestId, requestedModel: body.model, outcome: () => completionOutcome },
+          completion: {
+            requestId,
+            requestedModel: body.model,
+            outcome: () => completionOutcome,
+            failureCode: () => failureCode,
+          },
           logger,
           track,
         });
@@ -516,6 +523,7 @@ export function registerExternalRoutes(app: Express, track: (p: Promise<void>) =
           : jsonError.status < 500
             ? 'rejected'
             : 'failed';
+      if (completionOutcome === 'failed') failureCode = completionFailureCode(error).errorCode;
       // Budget exhaustion is expected, not an operator fault, whoever chose the budget (same policy as
       // /api/chat); emitProcessingFailed already skips it via isOperatorFault. Only a positive
       // max_tokens counts as the caller's: resolveOutputMaxTokens discards the rest.

@@ -400,6 +400,18 @@ describe('API-key completion outcome evidence', () => {
       })
     );
   });
+
+  it('records the failure code when a provider error fails the request', async () => {
+    mockExecuteCompletion.mockRejectedValueOnce(Object.assign(new Error('provider failed'), { status: 503 }));
+    const res = await post();
+    expect(res.status).toBe(500);
+    await res.text();
+    expect(mockApiUsage.logUsage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        completionObservation: expect.objectContaining({ outcome: 'failed', failureCode: 'http_503' }),
+      })
+    );
+  });
 });
 
 /** Every JSON `data:` frame in an SSE body, `[DONE]` excluded. */
