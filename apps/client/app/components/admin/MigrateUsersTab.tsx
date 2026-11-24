@@ -123,7 +123,7 @@ const MigrateUsersTab: React.FC = () => {
     <Stack gap={ADMIN_REGION_GAP} sx={{ maxWidth: ADMIN_DETAIL_MAX_WIDTH }}>
       <AdminPageHeader
         title="Migrate users"
-        description="Add people to an organization in bulk from a pasted name and email list, and optionally send them a welcome email."
+        description="Add people to an organization in bulk from a pasted list, with an optional welcome email."
         actions={<ContextHelpButton helpId="admin/user-migration" tooltipText="User migration help" />}
       />
       <Stack spacing={2}>

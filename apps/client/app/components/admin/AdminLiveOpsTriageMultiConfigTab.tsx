@@ -36,6 +36,7 @@ import {
   Radio,
   Textarea,
   Tooltip,
+  Stack,
 } from '@mui/joy';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '@client/app/contexts/ApiContext';
@@ -223,7 +224,7 @@ const getDefaultConfig = (): Partial<LiveopsTriageConfig> => ({
 
 const POLL_INTERVAL_MS = 3000;
 
-const PAGE_ROOT_SX = { display: 'flex', flexDirection: 'column', height: '100%', gap: ADMIN_REGION_GAP } as const;
+const PAGE_ROOT_SX = { height: '100%' } as const;
 
 const LiveOpsTriagePageHeader = () => (
   <AdminPageHeader
@@ -600,28 +601,28 @@ export const AdminLiveOpsTriageMultiConfigTab: React.FC = () => {
 
   if (configsLoading) {
     return (
-      <Box sx={PAGE_ROOT_SX}>
+      <Stack gap={ADMIN_REGION_GAP} sx={PAGE_ROOT_SX}>
         <LiveOpsTriagePageHeader />
         <Box sx={{ display: 'flex', justifyContent: 'center' }}>
           <CircularProgress />
         </Box>
-      </Box>
+      </Stack>
     );
   }
 
   if (configsError) {
     return (
-      <Box sx={PAGE_ROOT_SX}>
+      <Stack gap={ADMIN_REGION_GAP} sx={PAGE_ROOT_SX}>
         <LiveOpsTriagePageHeader />
         <Alert color="danger" variant="outlined">
           Failed to load configurations. Please try again.
         </Alert>
-      </Box>
+      </Stack>
     );
   }
 
   return (
-    <Box sx={PAGE_ROOT_SX}>
+    <Stack gap={ADMIN_REGION_GAP} sx={PAGE_ROOT_SX}>
       <LiveOpsTriagePageHeader />
       {/* Active Runs Panel */}
       <Card variant="outlined" sx={{ p: 2 }}>
@@ -1857,7 +1858,7 @@ export const AdminLiveOpsTriageMultiConfigTab: React.FC = () => {
           )}
         </ModalDialog>
       </Modal>
-    </Box>
+    </Stack>
   );
 };
 
