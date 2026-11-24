@@ -31,7 +31,9 @@ import { railButtonSx, RailTooltipTitle, type RailAccountContext } from '../chat
 import type { AppUpdateController } from '../chat/useAppUpdate';
 import { RuntimeInfo } from '../components/RuntimeInfo';
 import { CreditsAvatarDot, CreditsMenuHeader } from '../credits/CreditsGlance';
+import { useAccountSelection } from '../credits/useAccountSelection';
 import { useCreditsGlance } from '../credits/useCreditsGlance';
+import { AccountSwitcher } from './AccountSwitcher';
 import { SendFeedbackDialog } from './SendFeedbackDialog';
 
 /** What a click on the update chip does, or undefined in a state with no next step to take. */
@@ -179,7 +181,8 @@ export function SignedInRailAccount({
 }) {
   const [feedbackOpen, setFeedbackOpen] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
-  const credits = useCreditsGlance(context.spentAt ?? 0, menuOpen);
+  const accountSelection = useAccountSelection(menuOpen, context.spentAt ?? 0);
+  const credits = useCreditsGlance(context.spentAt ?? 0, menuOpen, accountSelection.selection?.selected ?? null);
   const navigate = useNavigate();
   const settingsAttention = updateAttention(update.state);
   const user = state.user;
@@ -212,6 +215,7 @@ export function SignedInRailAccount({
       >
         {/* Balance and runway first, so they are one click from anywhere. */}
         <CreditsMenuHeader glance={credits} onTopUp={() => void navigate({ to: '/billing' })} />
+        <AccountSwitcher controller={accountSelection} />
         <Stack spacing={0.75} sx={{ px: 1.5, pt: 1, pb: 1 }} data-testid="account-menu-header">
           <Stack direction="row" spacing={1} alignItems="center">
             <Stack sx={{ flex: 1, minWidth: 0 }}>

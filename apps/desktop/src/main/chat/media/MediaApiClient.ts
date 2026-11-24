@@ -27,7 +27,9 @@ import {
   type TtsBase64Response,
   type CompletionRunAttribution,
 } from '@bike4mind/common';
+import type { BillingPayer } from '@shared/account';
 import type { ChatToolNotice } from '@shared/chat';
+import { currentBillingPayer } from '../../account/billingPayer';
 import {
   isRunBudgetExhausted,
   isRunNotFound,
@@ -54,6 +56,8 @@ export interface MediaRun {
   current: () => CompletionRunAttribution | undefined;
   /** A budgeted run is never resent unattributed: that would spend outside the cap. */
   budgeted: boolean;
+  /** The payer the run was minted for. Every call this client makes for the run bills it, not the selection. */
+  payer?: BillingPayer;
   /** Runs when the server no longer knows the run, before any resend. See withRunFallback. */
   onRejected: () => Promise<void>;
 }
@@ -146,6 +150,14 @@ export function isTerminalQuest(quest: QuestPoll): boolean {
 }
 
 /**
+ * The payer each Idempotency-Key was first sent with. The server scopes a key to the billed account,
+ * so a retry that re-read a since-switched payer would start a second, differently billed job.
+ * Module-wide because callers build a fresh client per submit; bounded, oldest evicted first.
+ */
+const PAYER_BY_IDEMPOTENCY_KEY = new Map<string, BillingPayer>();
+const PAYER_BY_IDEMPOTENCY_KEY_LIMIT = 500;
+
+/**
  * The b4m generation endpoints this client calls, over the app's authenticated session.
  *
  * Shaped after packages/cli/src/mcp/b4mApiClient.ts: one typed method per route, with the
@@ -154,9 +166,11 @@ export function isTerminalQuest(quest: QuestPoll): boolean {
  * the CLI's own ApiClient and config store; this one takes the desktop app's AuthenticatedApiClient.
  */
 export class MediaApiClient {
+  /** `getPayer` is read per submit (see `payer()`), so a switch applies to this client's next call. */
   constructor(
     private readonly api: AuthenticatedApiClient,
-    private readonly run?: MediaRun
+    private readonly run?: MediaRun,
+    private readonly getPayer: () => BillingPayer | Promise<BillingPayer> = currentBillingPayer
   ) {}
 
   /**
@@ -180,8 +194,13 @@ export class MediaApiClient {
     );
   }
 
+  /** The route takes `organization_id` beside `{ count, request }` and bills that account. */
   async createStudioImages(request: ImageJobRequest, count: number, key: string) {
-    const body = { request: ImageJobRequestSchema.parse(request), count: z.number().int().min(1).max(4).parse(count) };
+    const body = {
+      request: ImageJobRequestSchema.parse(request),
+      count: z.number().int().min(1).max(4).parse(count),
+      ...(await this.payer('/api/studio/image-jobs', key)),
+    };
     return z.object({ groupId: z.string(), jobs: z.array(studioImageJobSchema).min(1).max(4) }).parse(
       await this.api.post<unknown>('/api/studio/image-jobs', body, {
         timeout: TIMEOUT_MS.submit,
@@ -203,10 +222,11 @@ export class MediaApiClient {
    */
   async createImageJob(body: CreateImageJobBody, idempotencyKey: string): Promise<PublicImageJob[]> {
     try {
+      const payer = await this.payer('/api/v1/image-jobs', idempotencyKey);
       const response = await this.withRun(run =>
         this.api.post<unknown>(
           '/api/v1/image-jobs',
-          { ...body, ...run },
+          { ...body, ...payer, ...run },
           { timeout: TIMEOUT_MS.submit, headers: { 'Idempotency-Key': idempotencyKey } }
         )
       );
@@ -222,10 +242,11 @@ export class MediaApiClient {
    */
   async generateImage(request: GenerateImageRequest): Promise<{ questId: string; remoteSessionId?: string }> {
     try {
+      const payer = await this.payer();
       const response = await this.withRun(run =>
         this.api.post<{ quest?: { id?: string }; session?: { id?: string } }>(
           '/api/ai/generate-image',
-          { ...request, ...run },
+          { ...request, ...payer, ...run },
           { timeout: TIMEOUT_MS.submit }
         )
       );
@@ -301,10 +322,11 @@ export class MediaApiClient {
    */
   async createVideoGeneration(body: CreateVideoGenerationBody, idempotencyKey: string): Promise<VideoGeneration> {
     try {
+      const payer = await this.payer('/api/v1/video-generations', idempotencyKey);
       const response = await this.withRun(run =>
         this.api.post<unknown>(
           '/api/v1/video-generations',
-          { ...body, ...run },
+          { ...body, ...payer, ...run },
           { timeout: TIMEOUT_MS.submit, headers: { 'Idempotency-Key': idempotencyKey } }
         )
       );
@@ -410,8 +432,13 @@ export class MediaApiClient {
    */
   async synthesizeSpeech(request: Omit<TTSRequest, 'encoding'>): Promise<TtsBase64Response> {
     try {
+      const payer = await this.payer();
       const body = await this.withRun(run =>
-        this.api.post<unknown>('/api/ai/tts', { ...request, ...run, encoding: 'base64' }, { timeout: TIMEOUT_MS.audio })
+        this.api.post<unknown>(
+          '/api/ai/tts',
+          { ...request, ...payer, ...run, encoding: 'base64' },
+          { timeout: TIMEOUT_MS.audio }
+        )
       );
       return ttsBase64ResponseSchema.parse(body);
     } catch (error) {
@@ -419,8 +446,12 @@ export class MediaApiClient {
     }
   }
 
-  generateSoundEffect(request: SoundEffectsRequest): Promise<GeneratedAudio> {
-    return this.postForAudio('/api/ai/sound-effects', request, 'Sound-effect generation');
+  async generateSoundEffect(request: SoundEffectsRequest): Promise<GeneratedAudio> {
+    return this.postForAudio(
+      '/api/ai/sound-effects',
+      { ...request, ...(await this.payer()) },
+      'Sound-effect generation'
+    );
   }
 
   /** Music models this caller can use right now, in the server's order. */
@@ -442,10 +473,11 @@ export class MediaApiClient {
    */
   async createMusicGeneration(body: CreateMusicGenerationBody, idempotencyKey: string): Promise<MusicGeneration> {
     try {
+      const payer = await this.payer('/api/v1/music-generations', idempotencyKey);
       const response = await this.withRun(run =>
         this.api.post<unknown>(
           '/api/v1/music-generations',
-          { ...body, ...run },
+          { ...body, ...payer, ...run },
           { timeout: TIMEOUT_MS.submit, headers: { 'Idempotency-Key': idempotencyKey } }
         )
       );
@@ -478,6 +510,25 @@ export class MediaApiClient {
     } catch (error) {
       throw toMediaError(error, 'Cancelling the song');
     }
+  }
+
+  /**
+   * Null is stated, never omitted: an omitted payer bills the home organization on most media routes.
+   * With an Idempotency-Key, the payer the key was first sent with is reused for its retries.
+   */
+  private async payer(path?: string, idempotencyKey?: string): Promise<BillingPayer> {
+    const keyed = path && idempotencyKey ? `${path}|${idempotencyKey}` : null;
+    const remembered = keyed ? PAYER_BY_IDEMPOTENCY_KEY.get(keyed) : undefined;
+    if (remembered) return remembered;
+    const payer: BillingPayer = { organization_id: (this.run?.payer ?? (await this.getPayer())).organization_id };
+    if (keyed) {
+      PAYER_BY_IDEMPOTENCY_KEY.set(keyed, payer);
+      if (PAYER_BY_IDEMPOTENCY_KEY.size > PAYER_BY_IDEMPOTENCY_KEY_LIMIT) {
+        const oldest = PAYER_BY_IDEMPOTENCY_KEY.keys().next().value;
+        if (oldest !== undefined) PAYER_BY_IDEMPOTENCY_KEY.delete(oldest);
+      }
+    }
+    return payer;
   }
 
   /**
