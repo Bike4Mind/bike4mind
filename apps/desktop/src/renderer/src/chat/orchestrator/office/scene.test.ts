@@ -1,5 +1,7 @@
+// @vitest-environment jsdom
 import { describe, expect, it } from 'vitest';
 import type { AgentState } from '../roster';
+import { agentFixture } from '../testUtils';
 import { OFFICE_CAST, OFFICE_PARENT, assignOfficeCast } from './officeCast';
 import { OFFICE_ROOMS } from './officeLayout';
 import { groupOfficeAgents, officeRoomFor } from './scene';
@@ -9,13 +11,22 @@ const subject = (id: string, createdAt = '2026-10-01T00:00:00.000Z') => ({ id, c
 describe('Office scene', () => {
   it.each<[AgentState, string]>([
     ['working', 'desks'],
-    ['needs-you', 'manager-door'],
+    ['needs-you', 'conference-room'],
     ['done', 'break-room'],
     ['failed', 'conference-room'],
     ['stopped', 'conference-room'],
     ['idle', 'conference-room'],
   ])('routes %s agents to %s', (state, room) => {
     expect(officeRoomFor({ state })).toBe(room);
+  });
+
+  it('seats agents waiting on the user at the front of the meeting room', () => {
+    const rooms = groupOfficeAgents([
+      agentFixture('idle', 'idle'),
+      agentFixture('broke', 'failed'),
+      agentFixture('asking', 'needs-you'),
+    ]);
+    expect(rooms.get('conference-room')?.map(agent => agent.id)).toEqual(['asking', 'idle', 'broke']);
   });
 
   it('provides every room for an empty scene', () => {
