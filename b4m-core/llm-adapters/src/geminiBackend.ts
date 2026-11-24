@@ -48,9 +48,10 @@ import { DispatchModel } from './dispatchModel';
 import { normalizeGeminiFinishReason } from './stopReason';
 import { appendIdentityReminder, buildIdentityReminder, shouldOmitIdentityReminder } from './identityReminder';
 
-// Gemini 3 and later require a thought_signature on replayed function calls and take thinkingLevel.
+// Gemini 3 and 4 require a thought_signature on replayed function calls and take thinkingLevel.
+// A new major opts in here deliberately once its request shape is confirmed.
 // Matches gemini-3-pro-preview, gemini-3.5-flash, gemini-4-neon, but not a future gemini-30/40 family.
-const isGemini3OrLater = (modelId: string) => /^gemini-[34](\D|$)/.test(modelId);
+const isGemini3Or4 = (modelId: string) => /^gemini-[34](\D|$)/.test(modelId);
 
 type ToolCall = {
   id: string;
@@ -1515,7 +1516,7 @@ export class GeminiBackend implements ICompletionBackend {
           // former so the guard cannot silently swallow a block this same completion chain just
           // generated.
           const isReplayed = !toolUseBlocks.some(t => liveToolUseIds.has(t.id));
-          if (isReplayed && isGemini3OrLater(this.currentModel) && !toolUseBlocks[0]?.thought_signature) {
+          if (isReplayed && isGemini3Or4(this.currentModel) && !toolUseBlocks[0]?.thought_signature) {
             this.logger.warn(
               '[Gemini] Dropping replayed tool_use block(s) with no thought_signature on the first call:',
               { names: toolUseBlocks.map(t => t.name), messageRole: message.role }
@@ -1709,7 +1710,7 @@ export class GeminiBackend implements ICompletionBackend {
     // Bound thinking only when the caller's cap binds; otherwise keep Google's default.
     // Only 3.x and 4.x take thinkingLevel; the -latest aliases track Google's newest 3.x Flash / Flash-Lite.
     // Other ids get the cap alone.
-    return isGemini3OrLater(model.id) || /^gemini-flash(-lite)?-latest$/.test(model.id)
+    return isGemini3Or4(model.id) || /^gemini-flash(-lite)?-latest$/.test(model.id)
       ? { maxOutputTokens, thinkingConfig: { thinkingLevel: ThinkingLevel.LOW } }
       : { maxOutputTokens };
   }
