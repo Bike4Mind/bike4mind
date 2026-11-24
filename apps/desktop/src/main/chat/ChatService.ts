@@ -481,6 +481,9 @@ interface MidTurnArrival {
 }
 
 /** Stored on a turn the session expired under; the thread shows it as paused, not as an error. */
+// Ends a paid tool's result when the run budget refused it; reofferBudgetRefusedTools keys on it.
+const RUN_BUDGET_REFUSAL_NOTE =
+  'The run paused for its credit budget before this call ran; once it resumes, call this tool again.';
 const SESSION_PAUSED_MESSAGE = 'Your session expired before this reply finished. Sign in again, then press Continue.';
 /** A budgeted run the server no longer recognises: it is not resent unattributed, and not re-minted at zero. */
 const RUN_LOST_MESSAGE =
@@ -2290,11 +2293,31 @@ export class ChatService {
       const member = await this.deps.store.get(id);
       const last = member?.messages.at(-1);
       if (last?.role !== 'assistant' || last.stopReason !== RUN_BUDGET_STOP || this.isBusy(id)) continue;
+      await this.reofferBudgetRefusedTools(id, last, budgetCredits);
       const result = await this.continueReply(id);
       if (result.ok) resumed += 1;
       else this.deps.logger.warn(`CHAT: could not resume ${id} after a budget raise: ${result.error}`);
     }
     return { ok: true, resumed };
+  }
+
+  /**
+   * Rewrites the paused turn's budget-refused tool results before a resume. The model reads them
+   * as history, and a refusal that still names the old shortfall reads as final (seen on Haiku and
+   * Sonnet), so the result says the budget is now higher and the call should be made again.
+   */
+  private async reofferBudgetRefusedTools(
+    sessionId: string,
+    reply: ChatMessage,
+    budgetCredits: number
+  ): Promise<void> {
+    const refused = (call: ChatToolCall) => call.status === 'error' && call.error?.endsWith(RUN_BUDGET_REFUSAL_NOTE);
+    if (!reply.toolCalls?.some(refused)) return;
+    const note =
+      `This call was refused because the run's credit budget ran out, so it did not run. The budget has ` +
+      `since been raised to ${budgetCredits.toLocaleString('en-US')} credits: call this tool again now.`;
+    const toolCalls = reply.toolCalls.map(call => (refused(call) ? { ...call, error: note } : call));
+    await this.deps.store.updateMessage(sessionId, reply.id, { toolCalls });
   }
 
   /**
@@ -6202,7 +6225,7 @@ export class ChatService {
           // The model reads this after a raise resumes the turn; without it, it takes the refusal as final.
           const stored =
             err instanceof RunBudgetExhaustedError
-              ? `${message} The run paused for its credit budget before this call ran; once it resumes, call this tool again.`
+              ? `${message} ${RUN_BUDGET_REFUSAL_NOTE}`
               : message;
           settled = decorate({
             ...call,

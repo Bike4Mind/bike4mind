@@ -500,6 +500,10 @@ describe('orchestration run budget', () => {
     await expect(service.raiseRunBudget(root.id, 1500)).resolves.toEqual({ ok: true, resumed: 1 });
     await waitStream(1);
     expect(wire(1).run?.runId).toBe(RUN_A);
+    // The resumed request tells the model the budget is higher, not the stale shortfall.
+    const resent = JSON.stringify(completions.mock.calls[1][1]);
+    expect(resent).toContain('raised to 1,500 credits: call this tool again now');
+    expect(resent).not.toContain('once it resumes');
     finish(1, 'Carried on');
     await idle(root.id);
     expect((await lastReply(root.id))?.stopReason).not.toBe(RUN_BUDGET_STOP);
