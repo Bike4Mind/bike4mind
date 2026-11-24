@@ -12,6 +12,7 @@ import {
   Artifact,
   ArtifactContent,
   CallableFunction,
+  CallableFunctionCall,
   artifactContentRepository,
   artifactRepository,
   callableFunctionRepository,
@@ -25,6 +26,8 @@ import {
   listCallableFunctions,
   repinCallableFunction,
   setCallableFunctionEnabled,
+  setCallableFunctionExamples,
+  summarizeCallableFunctionCalls,
 } from './registry';
 
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
@@ -540,5 +543,199 @@ describe('ownership', () => {
     expect(await CallableFunction.countDocuments({})).toBe(0);
     expect(await artifactRepository.findOne({ id: 'artifact-1' })).toMatchObject({ version: 1 });
     await expect(deleteCallableFunction(OWNER, view.id)).rejects.toMatchObject({ statusCode: 404 });
+  });
+});
+
+const OWNER_KEY = { ownerType: 'user' as const, ownerKey: OWNER.id };
+
+/** Promotes through the repository method the promotion service uses. */
+async function promoteDirectly(id: string, seq = 1) {
+  const fn = await callableFunctionRepository.findByIdForOwner(id, OWNER_KEY);
+  const promoted = await callableFunctionRepository.promote(
+    id,
+    OWNER_KEY,
+    { updatedAt: fn!.updatedAt },
+    {
+      seq,
+      runtime: { kind: 'pyodide-server', version: '0.25.1', packages: [] },
+      lastServerRun: { at: new Date(), passed: 1, failed: 0, results: [] },
+      trustLabel: 'verified',
+      contract: fn!.contract,
+    }
+  );
+  expect(promoted).toMatchObject({ state: 'live', trustLabel: 'verified', pin: { seq } });
+}
+
+const EXAMPLE = {
+  name: 'handbook case',
+  input: { load: 1000, span: 4 },
+  expected: { deflection: 10.4 },
+  tolerance: { rel: 0.01 },
+  citation: '  https://data.example.com/beams/table-3  ',
+};
+
+describe('repinning a promoted function', () => {
+  it('returns a live function to draft and drops its label, keeping the promotion record', async () => {
+    const view = await save();
+    await promoteDirectly(view.id);
+    const version = await addVersion('artifact-1', code('# tuned\n'));
+
+    const repinned = await repinCallableFunction(OWNER, view.id, { expectedVersion: version, contract: contract() });
+    expect(repinned).toMatchObject({ state: 'draft', trustLabel: null });
+    expect(repinned.pin.seq).toBeUndefined();
+    const record = await stored(view.id);
+    expect(record?.trustLabel).toBeUndefined();
+    expect(record?.promoted).toMatchObject({ seq: 1 });
+  });
+
+  it('accepts a breaking contract once promoted, leaving the refusal to the next promotion', async () => {
+    const view = await save();
+    await promoteDirectly(view.id);
+    const version = await addVersion('artifact-1', code('# reworked\n'));
+    const next = contract({
+      outputs: { type: 'object', additionalProperties: false, required: [], properties: {} },
+    });
+
+    const repinned = await repinCallableFunction(OWNER, view.id, { expectedVersion: version, contract: next });
+    expect(repinned).toMatchObject({ state: 'draft', pin: { version: 2 } });
+  });
+});
+
+describe('setCallableFunctionExamples', () => {
+  it('stores the examples with the citation trimmed, and the label waits for a promotion', async () => {
+    const view = await save();
+    const saved = await setCallableFunctionExamples(OWNER, view.id, [EXAMPLE]);
+    expect(saved.examples).toEqual([{ ...EXAMPLE, citation: 'https://data.example.com/beams/table-3' }]);
+    expect(saved.trustLabel).toBeNull();
+    expect((await stored(view.id))?.examples).toHaveLength(1);
+  });
+
+  it('refuses an example without a citation, or one that does not fit the contract, and changes nothing', async () => {
+    const view = await save();
+    await expect(
+      setCallableFunctionExamples(OWNER, view.id, [
+        { ...EXAMPLE, citation: '   ' },
+        { ...EXAMPLE, name: 'bad', input: { load: -1, span: 4 }, expected: { peak: 1 } },
+      ])
+    ).rejects.toMatchObject({
+      statusCode: 400,
+      additionalInfo: {
+        code: 'invalid_examples',
+        problems: expect.arrayContaining([
+          expect.objectContaining({ path: 'examples.0.citation' }),
+          expect.objectContaining({ path: 'examples.1.input.load' }),
+          expect.objectContaining({ path: 'examples.1.expected.peak', message: 'is not an output of the contract' }),
+        ]),
+      },
+    });
+    expect((await stored(view.id))?.examples).toBeUndefined();
+  });
+
+  it("answers 404 for another owner's function", async () => {
+    const view = await save();
+    await expect(setCallableFunctionExamples(STRANGER, view.id, [EXAMPLE])).rejects.toMatchObject({
+      statusCode: 404,
+    });
+  });
+});
+
+describe('callableFunctionRepository.promote', () => {
+  it('writes nothing when the record changed since it was read', async () => {
+    const view = await save();
+    const read = await callableFunctionRepository.findByIdForOwner(view.id, OWNER_KEY);
+    await setCallableFunctionExamples(OWNER, view.id, [EXAMPLE]);
+    const before = await stored(view.id);
+    const promoted = await callableFunctionRepository.promote(
+      view.id,
+      OWNER_KEY,
+      { updatedAt: read!.updatedAt },
+      {
+        seq: 1,
+        runtime: { kind: 'pyodide-server', version: '0.25.1', packages: [] },
+        lastServerRun: { at: new Date(), passed: 1, failed: 0, results: [] },
+        trustLabel: 'unverified',
+        contract: read!.contract,
+      }
+    );
+    expect(promoted).toBeNull();
+    expect(await stored(view.id)).toEqual(before);
+  });
+});
+
+describe('the protected fields', () => {
+  it.each([
+    ['state', { state: 'live' }],
+    ['trustLabel', { trustLabel: 'verified' }],
+    ['lastServerRun', { lastServerRun: { passed: 9 } }],
+    ['promoted', { promoted: { seq: 9 } }],
+    ['examples', { examples: [] }],
+    ['pin', { 'pin.seq': 9 }],
+    ['pin', { 'pin.runtime': { kind: 'x', version: '1', packages: [] } }],
+  ])('a generic update cannot write %s', async (field, data) => {
+    const view = await save();
+    const before = await stored(view.id);
+    await expect(callableFunctionRepository.update({ id: view.id, ...data } as never)).rejects.toMatchObject({
+      name: 'CallableFunctionProtectedFieldError',
+      field,
+    });
+    await expect(callableFunctionRepository.updateMany({ _id: view.id }, data as never)).rejects.toMatchObject({
+      field,
+    });
+    expect(await stored(view.id)).toEqual(before);
+  });
+});
+
+describe('summarizeCallableFunctionCalls', () => {
+  const NOW = new Date('2026-11-23T12:00:00.000Z');
+  const DAY = 24 * 60 * 60 * 1000;
+  const row = (functionId: string, daysAgo: number, outcome: 'ok' | 'error' | 'timeout', caller = OWNER.id) =>
+    CallableFunctionCall.create({
+      functionId,
+      ownerUserId: OWNER.id,
+      callerUserId: caller,
+      surface: 'test',
+      inputHash: 'b'.repeat(64),
+      dataHashes: [],
+      startedAt: new Date(NOW.getTime() - daysAgo * DAY),
+      durationMs: 10,
+      outcome,
+    });
+
+  afterEach(async () => {
+    await CallableFunctionCall.deleteMany({});
+  });
+
+  it("counts the owner's calls of the last 30 days by outcome and lists the latest five, without inputs", async () => {
+    const view = await save();
+    for (const [days, outcome] of [
+      [1, 'ok'],
+      [2, 'ok'],
+      [3, 'error'],
+      [4, 'ok'],
+      [5, 'timeout'],
+      [6, 'ok'],
+      [29.9, 'ok'],
+    ] as const) {
+      await row(view.id, days, outcome);
+    }
+    await row(view.id, 31, 'ok');
+    await row(view.id, 1, 'ok', STRANGER.id);
+    await row('6650f0a1b2c3d4e5f6a7b8c9', 1, 'ok');
+
+    const summary = await summarizeCallableFunctionCalls(OWNER, view.id, NOW);
+    expect(summary).toMatchObject({ since: new Date(NOW.getTime() - 30 * DAY), total: 7 });
+    expect(summary.outcomes).toEqual({ ok: 5, error: 1, timeout: 1 });
+    expect(summary.recent.map(call => call.outcome)).toEqual(['ok', 'ok', 'error', 'ok', 'timeout']);
+    expect(summary.recent[0]).toEqual({
+      id: expect.any(String),
+      startedAt: new Date(NOW.getTime() - DAY),
+      outcome: 'ok',
+      surface: 'test',
+    });
+  });
+
+  it("answers 404 for another owner's function", async () => {
+    const view = await save();
+    await expect(summarizeCallableFunctionCalls(STRANGER, view.id, NOW)).rejects.toMatchObject({ statusCode: 404 });
   });
 });

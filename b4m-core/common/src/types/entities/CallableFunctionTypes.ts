@@ -1,6 +1,7 @@
 import { ConflictError } from '../../errors';
-import type { FunctionContract, FunctionContractChange } from '../../schemas/functionContract';
+import type { FunctionContract, FunctionContractChange, FunctionTestTolerance } from '../../schemas/functionContract';
 import { IBaseRepository } from './BaseTypes';
+import type { CallableFunctionCallOutcome, CallableFunctionStamp } from './CallableFunctionCallTypes';
 import { IMongoDocument } from './common';
 
 /**
@@ -12,9 +13,66 @@ import { IMongoDocument } from './common';
 export const CALLABLE_FUNCTION_OWNER_TYPES = ['user'] as const;
 export type CallableFunctionOwnerType = (typeof CALLABLE_FUNCTION_OWNER_TYPES)[number];
 
-/** `live` is reserved for promotion and not written yet. Turning a function off is `enabled`, not a state. */
+/** `live` is written only by a promotion; any repin returns the function to `draft`. Turning it off is `enabled`. */
 export const CALLABLE_FUNCTION_STATES = ['draft', 'live'] as const;
 export type CallableFunctionState = (typeof CALLABLE_FUNCTION_STATES)[number];
+
+/** `verified` when at least one cited worked example passed on the server at promotion; otherwise `unverified`. */
+export const CALLABLE_FUNCTION_TRUST_LABELS = ['verified', 'unverified'] as const;
+export type CallableFunctionTrustLabel = (typeof CALLABLE_FUNCTION_TRUST_LABELS)[number];
+
+export const CALLABLE_FUNCTION_EXAMPLE_LIMITS = {
+  maxExamples: 20,
+  maxCitationLength: 500,
+} as const;
+
+/**
+ * A case the owner adds in the Function tab, never read from the code, with a source a reader can check the
+ * expected output against.
+ */
+export interface CallableFunctionExample {
+  name: string;
+  input: Record<string, unknown>;
+  expected: Record<string, unknown>;
+  tolerance?: FunctionTestTolerance;
+  citation: string;
+}
+
+/** The server runtime that ran the promotion, so a later call can tell whether it runs on the same one. */
+export interface CallableFunctionRuntimePin {
+  kind: string;
+  version: string;
+  lockHash?: string;
+  packages: { name: string; version: string }[];
+}
+
+export interface CallableFunctionServerRunCase {
+  name: string;
+  kind: 'test' | 'example';
+  passed: boolean;
+  outcome: CallableFunctionCallOutcome;
+  reason?: string;
+  durationMs: number;
+  /** The call-log row this case wrote. */
+  callId: string;
+}
+
+/** The server run that promoted the function. */
+export interface CallableFunctionServerRun {
+  at: Date;
+  passed: number;
+  failed: number;
+  results: CallableFunctionServerRunCase[];
+  /** The first case's stamp: the code, runtime, and packages every case ran on. */
+  stamp?: CallableFunctionStamp;
+}
+
+/** The last promotion, kept across repins so the next promotion can refuse a breaking change against it. */
+export interface CallableFunctionPromotion {
+  seq: number;
+  contract: FunctionContract;
+  at: Date;
+}
 
 /** Computed at read by {@link effectiveCallableFunctionStatus}, so deleting the artifact needs no sweep. */
 export type CallableFunctionStatus = CallableFunctionState | 'disabled' | 'source_deleted';
@@ -45,6 +103,9 @@ export interface ICallableFunctionPin {
   /** The code at `version`, copied so that later edits to the artifact, or its deletion, leave the function as saved. */
   source: string;
   pinnedAt: Date;
+  /** Set when this pin is promoted: 1 for the function's first promotion, then one more for each. */
+  seq?: number;
+  runtime?: CallableFunctionRuntimePin;
 }
 
 export interface ICallableFunction {
@@ -60,12 +121,19 @@ export interface ICallableFunction {
   pin: ICallableFunctionPin;
   /** Display data only: every call reads `FUNCTION` from the code again. */
   contract: FunctionContract;
+  examples?: CallableFunctionExample[];
+  trustLabel?: CallableFunctionTrustLabel;
+  lastServerRun?: CallableFunctionServerRun;
+  promoted?: CallableFunctionPromotion;
 }
 
 export interface ICallableFunctionDocument extends ICallableFunction, IMongoDocument {}
 
-/** The list read: no contract and no pinned code. */
-export type ICallableFunctionSummary = Omit<ICallableFunctionDocument, 'contract' | 'pin'> & {
+/** The list read: no contract, pinned code, server run, or promotion record. */
+export type ICallableFunctionSummary = Omit<
+  ICallableFunctionDocument,
+  'contract' | 'pin' | 'lastServerRun' | 'promoted'
+> & {
   pin: Omit<ICallableFunctionPin, 'source'>;
 };
 
@@ -82,10 +150,13 @@ export interface ICallableFunctionPublic {
   status: CallableFunctionStatus;
   state: CallableFunctionState;
   enabled: boolean;
-  pin: Omit<ICallableFunctionPin, 'source'>;
+  pin: Pick<ICallableFunctionPin, 'artifactId' | 'version' | 'contentHash' | 'pinnedAt' | 'seq'>;
   latestVersion: number | null;
   /** The artifact has a newer version than the pinned one. */
   updateAvailable: boolean;
+  /** Null unless the function is live. */
+  trustLabel: CallableFunctionTrustLabel | null;
+  examples: CallableFunctionExample[];
   createdAt: Date;
   updatedAt: Date;
 }
@@ -93,6 +164,7 @@ export interface ICallableFunctionPublic {
 export interface ICallableFunctionDetail extends ICallableFunctionPublic {
   contract: FunctionContract;
   source: string;
+  lastServerRun: CallableFunctionServerRun | null;
 }
 
 export function effectiveCallableFunctionStatus(
@@ -123,9 +195,12 @@ export function toCallableFunctionPublic(
       version: doc.pin.version,
       contentHash: doc.pin.contentHash,
       pinnedAt: doc.pin.pinnedAt,
+      ...(doc.pin.seq !== undefined ? { seq: doc.pin.seq } : {}),
     },
     latestVersion: head?.version ?? null,
     updateAvailable: live !== null && live.version > doc.pin.version,
+    trustLabel: doc.state === 'live' ? (doc.trustLabel ?? null) : null,
+    examples: doc.examples ?? [],
     createdAt: doc.createdAt,
     updatedAt: doc.updatedAt,
   };
@@ -135,12 +210,25 @@ export function toCallableFunctionDetail(
   doc: ICallableFunctionDocument,
   head: CallableFunctionHead | null
 ): ICallableFunctionDetail {
-  return { ...toCallableFunctionPublic(doc, head), contract: doc.contract, source: doc.pin.source };
+  return {
+    ...toCallableFunctionPublic(doc, head),
+    contract: doc.contract,
+    source: doc.pin.source,
+    lastServerRun: doc.lastServerRun ?? null,
+  };
+}
+
+/** Promotion's label: `verified` only when a worked example ran and passed. */
+export function callableFunctionTrustLabel(
+  results: Pick<CallableFunctionServerRunCase, 'kind' | 'passed'>[]
+): CallableFunctionTrustLabel {
+  return results.some(result => result.kind === 'example' && result.passed) ? 'verified' : 'unverified';
 }
 
 /**
  * Top-level fields the generic `update`/`updateGuarded`/`updateMany` refuse. The owner fields never change; the
- * slug, description, pin, and contract move together through `repin`.
+ * slug, description, pin, and contract move together through `repin`; `pin.seq`, `pin.runtime`, the state, the
+ * label, the server run, and the promotion record only through `promote`; the examples only through `setExamples`.
  */
 export const CALLABLE_FUNCTION_PROTECTED_FIELDS = [
   'ownerType',
@@ -151,6 +239,10 @@ export const CALLABLE_FUNCTION_PROTECTED_FIELDS = [
   'pin',
   'contract',
   'state',
+  'trustLabel',
+  'lastServerRun',
+  'promoted',
+  'examples',
 ] as const;
 
 export class CallableFunctionProtectedFieldError extends Error {
@@ -211,6 +303,14 @@ export interface CallableFunctionRepin {
   description: string;
 }
 
+export interface CallableFunctionPromote {
+  seq: number;
+  runtime: CallableFunctionRuntimePin;
+  lastServerRun: CallableFunctionServerRun;
+  trustLabel: CallableFunctionTrustLabel;
+  contract: FunctionContract;
+}
+
 export interface ICallableFunctionRepository extends IBaseRepository<ICallableFunctionDocument> {
   /**
    * Creates only if the owner stays within `cap`: inserts, re-counts, and deletes its own insert when over, so
@@ -232,6 +332,21 @@ export interface ICallableFunctionRepository extends IBaseRepository<ICallableFu
     owner: CallableFunctionOwner,
     expectedVersion: number,
     update: CallableFunctionRepin
+  ): Promise<ICallableFunctionDocument | null>;
+  setExamples(
+    id: string,
+    owner: CallableFunctionOwner,
+    examples: CallableFunctionExample[]
+  ): Promise<ICallableFunctionDocument | null>;
+  /**
+   * Writes `pin.seq`, `pin.runtime`, the server run, the label, the promotion record, and `state: 'live'`, only if
+   * the record is unchanged since `expected.updatedAt` was read; null when it changed or is not the owner's.
+   */
+  promote(
+    id: string,
+    owner: CallableFunctionOwner,
+    expected: { updatedAt: Date },
+    update: CallableFunctionPromote
   ): Promise<ICallableFunctionDocument | null>;
   deleteForOwner(id: string, owner: CallableFunctionOwner): Promise<boolean>;
 }

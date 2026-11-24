@@ -462,6 +462,7 @@ describe('the stamp', () => {
       function_id: FUNCTION_ID,
       slug: CONTRACT.name,
       pin_version: 3,
+      pin_seq: null,
       code_hash: HASH,
       input_hash: functionInputHash(ARGS),
       runtime: { kind: 'pyodide-server', version: '0.25.1', lock_hash: LOCK },
@@ -472,10 +473,27 @@ describe('the stamp', () => {
       ],
       data: [],
       uses: [],
+      trust_label: null,
       surface: 'test',
       duration_ms: 40,
       called_at: '2026-11-23T12:00:00.000Z',
     });
+  });
+
+  it('names the promotion sequence and the label of a live function', () => {
+    const live = record({
+      state: 'live',
+      trustLabel: 'verified',
+      pin: { artifactId: 'artifact-1', version: 3, seq: 2, contentHash: HASH, source: SOURCE, pinnedAt: new Date() },
+    });
+    const stamp = buildCallableFunctionStamp({
+      fn: live as never,
+      inputHash: functionInputHash(ARGS),
+      run: ok(),
+      surface: 'test',
+      calledAt: new Date('2026-11-23T12:00:00.000Z'),
+    });
+    expect(stamp).toMatchObject({ pin_version: 3, pin_seq: 2, trust_label: 'verified' });
   });
 
   it('hashes the inputs the same whatever their key order', () => {

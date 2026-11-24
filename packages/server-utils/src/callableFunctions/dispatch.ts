@@ -7,6 +7,7 @@ import {
   validateFunctionValue,
   type CallableFunctionCallOutcome,
   type CallableFunctionCallSurface,
+  type CallableFunctionStamp,
   type FunctionContract,
   type FunctionContractProblem,
   type ICallableFunctionCall,
@@ -99,21 +100,7 @@ export interface CallableFunctionDispatchOptions {
   minWaitMs?: number;
 }
 
-/** Room for output hashes beside `data` later; nothing here assumes every output is inline. */
-export interface CallableFunctionStamp {
-  function_id: string;
-  slug: string;
-  pin_version: number;
-  code_hash: string;
-  input_hash: string;
-  runtime: { kind: string; version: string; lock_hash: string | null };
-  packages: { name: string; version: string }[];
-  data: never[];
-  uses: never[];
-  surface: CallableFunctionCallSurface;
-  duration_ms: number;
-  called_at: string;
-}
+export type { CallableFunctionStamp };
 
 export interface DispatchFunctionCallResult {
   outcome: CallableFunctionCallOutcome;
@@ -137,7 +124,7 @@ export const functionInputHash = (inputs: unknown): string =>
   createHash('sha256').update(canonicalJson(inputs), 'utf8').digest('hex');
 
 export function buildCallableFunctionStamp(input: {
-  fn: Pick<ICallableFunctionDocument, 'id' | 'slug' | 'pin'>;
+  fn: Pick<ICallableFunctionDocument, 'id' | 'slug' | 'pin' | 'state' | 'trustLabel'>;
   inputHash: string;
   run: Pick<CallableFunctionRunResult, 'runtime' | 'durationMs'>;
   surface: CallableFunctionCallSurface;
@@ -150,12 +137,14 @@ export function buildCallableFunctionStamp(input: {
     function_id: input.fn.id,
     slug: input.fn.slug,
     pin_version: input.fn.pin.version,
+    pin_seq: input.fn.pin.seq ?? null,
     code_hash: input.fn.pin.contentHash,
     input_hash: input.inputHash,
     runtime: { kind: RUNTIME_KIND, version: PYODIDE_VERSION, lock_hash: input.run.runtime?.lockHash ?? null },
     packages,
     data: [],
     uses: [],
+    trust_label: input.fn.state === 'live' ? (input.fn.trustLabel ?? null) : null,
     surface: input.surface,
     duration_ms: input.run.durationMs,
     called_at: input.calledAt.toISOString(),
@@ -359,6 +348,7 @@ export async function dispatchFunctionCall(
     if (!fn) return refuse('not_found');
     row.ownerUserId = fn.userId;
     row.codeHash = fn.pin.contentHash;
+    if (fn.pin.seq !== undefined) row.pinSeq = fn.pin.seq;
 
     if (fn.ownerType !== 'user' || fn.ownerKey !== caller.id) {
       return finish({ outcome: 'refused', reason: 'not_found' }, 'not_caller');

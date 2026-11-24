@@ -2,6 +2,8 @@ import {
   CALLABLE_FUNCTION_CALL_OPS,
   CALLABLE_FUNCTION_CALL_OUTCOMES,
   CALLABLE_FUNCTION_CALL_SURFACES,
+  type CallableFunctionCallOutcome,
+  type CallableFunctionCallSummary,
   type ICallableFunctionCall,
   type ICallableFunctionCallDocument,
   type IMongoDocument,
@@ -62,6 +64,40 @@ export const CallableFunctionCall: ICallableFunctionCallModel =
 class CallableFunctionCallRepository extends BaseRepository<ICallableFunctionCallDocument & IMongoDocument> {
   async record(row: ICallableFunctionCall): Promise<ICallableFunctionCallDocument> {
     return this.create(row);
+  }
+
+  /** One caller's calls of one function since `since`, read through `callablefncall_function_started`. */
+  async summarizeForCaller(
+    functionId: string,
+    callerUserId: string,
+    since: Date,
+    recentLimit: number
+  ): Promise<CallableFunctionCallSummary> {
+    const match = { functionId, callerUserId, startedAt: { $gte: since } };
+    const [counts, recent] = await Promise.all([
+      this.model.aggregate<{ _id: CallableFunctionCallOutcome; count: number }>([
+        { $match: match },
+        { $group: { _id: '$outcome', count: { $sum: 1 } } },
+      ]),
+      this.model
+        .find(match, { startedAt: 1, outcome: 1, surface: 1 })
+        .sort({ startedAt: -1 })
+        .limit(recentLimit)
+        .lean(),
+    ]);
+    const outcomes: CallableFunctionCallSummary['outcomes'] = {};
+    for (const { _id, count } of counts) outcomes[_id] = count;
+    return {
+      since,
+      total: counts.reduce((sum, { count }) => sum + count, 0),
+      outcomes,
+      recent: recent.map(row => ({
+        id: String(row._id),
+        startedAt: row.startedAt,
+        outcome: row.outcome,
+        surface: row.surface,
+      })),
+    };
   }
 }
 
