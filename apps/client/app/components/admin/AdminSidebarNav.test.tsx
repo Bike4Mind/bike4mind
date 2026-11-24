@@ -21,16 +21,9 @@ const Wrapper = ({ children }: { children: React.ReactNode }) => (
 
 const renderNav = (props: Partial<SidebarNavProps> = {}) => {
   const onTabSelect = vi.fn();
-  render(
-    <SidebarNav
-      activeTab={AdminTab.Dashboard}
-      showLiveOpsTriageTab={false}
-      hiddenNotifications={[]}
-      onTabSelect={onTabSelect}
-      {...props}
-    />,
-    { wrapper: Wrapper }
-  );
+  render(<SidebarNav activeTab={AdminTab.Dashboard} hiddenNotifications={[]} onTabSelect={onTabSelect} {...props} />, {
+    wrapper: Wrapper,
+  });
   return { onTabSelect };
 };
 
@@ -72,13 +65,7 @@ describe('SidebarNav', () => {
       'badges %s when its count is above zero and hides it at zero',
       (key, tab) => {
         const { unmount } = render(
-          <SidebarNav
-            activeTab={tab}
-            showLiveOpsTriageTab={false}
-            hiddenNotifications={[]}
-            onTabSelect={vi.fn()}
-            actionCounts={{ [key]: 3 }}
-          />,
+          <SidebarNav activeTab={tab} hiddenNotifications={[]} onTabSelect={vi.fn()} actionCounts={{ [key]: 3 }} />,
           { wrapper: Wrapper }
         );
         const badge = screen.getByTestId(`admin-sidebar-${key}-badge`);
@@ -228,15 +215,13 @@ describe('SidebarNav', () => {
       fireEvent.click(screen.getByTestId('admin-sidebar-more-people-btn'));
 
       expect(screen.queryByRole('link', { name: 'Migration' })).toBeNull();
-      expect(screen.queryByRole('link', { name: 'LiveOps triage' })).toBeNull();
     });
 
     it('shows gated tabs when their gate is on', () => {
-      renderNav({ enableUserMigration: true, showLiveOpsTriageTab: true });
+      renderNav({ enableUserMigration: true });
       fireEvent.click(screen.getByTestId('admin-sidebar-more-people-btn'));
 
       expect(screen.getByRole('link', { name: 'Migration' })).toBeInTheDocument();
-      expect(screen.getByRole('link', { name: 'LiveOps triage' })).toBeInTheDocument();
     });
   });
 
@@ -473,7 +458,6 @@ describe('SidebarNav', () => {
       const onTabSelect = vi.fn();
       const props = {
         activeTab: AdminTab.Dashboard,
-        showLiveOpsTriageTab: false,
         hiddenNotifications: [],
         onTabSelect,
         onToggleCollapsed: vi.fn(),
@@ -499,17 +483,16 @@ describe('SidebarNav', () => {
 });
 
 describe('filterSidebarSections', () => {
-  const allOpen = { userMigration: true, liveOpsTriage: true };
+  const allOpen = { userMigration: true };
 
   it('returns every section unfiltered for a blank query', () => {
     expect(filterSidebarSections(SIDEBAR_SECTIONS, allOpen, '  ')).toHaveLength(SIDEBAR_SECTIONS.length);
   });
 
   it('drops gated items whose gate is off', () => {
-    const sections = filterSidebarSections(SIDEBAR_SECTIONS, { userMigration: false, liveOpsTriage: false }, '');
+    const sections = filterSidebarSections(SIDEBAR_SECTIONS, { userMigration: false }, '');
     const tabs = sections.flatMap(section => section.items.map(item => item.tab));
     expect(tabs).not.toContain(AdminTab.Migrate);
-    expect(tabs).not.toContain(AdminTab.LiveOpsTriage);
   });
 
   it('is case-insensitive and omits empty sections', () => {
@@ -739,7 +722,6 @@ describe('SidebarNav contributed pages', () => {
     ])('renders the %s sidebar markup for markup as the static sections do', (_, collapsed) => {
       const base = {
         activeTab: AdminTab.Users,
-        showLiveOpsTriageTab: false,
         hiddenNotifications: [],
         onTabSelect: vi.fn(),
         collapsed,

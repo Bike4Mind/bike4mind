@@ -14,28 +14,6 @@ import type {
 import type { SignupAnomalySnapshot } from '@bike4mind/server-utils/app/utils/signupAnomaly';
 import type { SecopsTriageStatusResponse } from '@client/pages/api/admin/secops-triage/status';
 
-export interface LiveOpsTriageEnv {
-  stage: string;
-  isForkProduction: boolean;
-  isSourceDeployment: boolean;
-  isPreviewEnvironment: boolean;
-  isLocalDevelopment: boolean;
-  showTab: boolean;
-}
-
-/** Whether the LiveOps Triage tab is shown. One query key, so AdminPage and AdminLayout share a request. */
-export function useLiveOpsTriageEnv(enabled = true) {
-  return useQuery({
-    queryKey: ['liveops-triage', 'env'],
-    queryFn: async () => {
-      const { data } = await api.get<LiveOpsTriageEnv>('/api/admin/liveops-triage-env');
-      return data;
-    },
-    enabled,
-    staleTime: 1000 * 60 * 60, // environment does not change
-  });
-}
-
 export interface DeploymentInfo {
   stage: string;
   isForkProduction: boolean;

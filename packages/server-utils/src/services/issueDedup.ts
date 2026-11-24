@@ -2,7 +2,7 @@
  * Shared Issue Deduplication Utilities
  *
  * Provides common deduplication and regression detection logic for GitHub issues.
- * Used by both LiveOps Triage and Context Telemetry systems.
+ * Used by the Context Telemetry system.
  */
 
 // Types
@@ -182,8 +182,6 @@ export function isRegressionCandidate(closedIssue: IssueForDedup, gracePeriodHou
  * 1. LLM matched the alert to a closed issue by semantic understanding
  * 2. The closed issue doesn't have an embedded fingerprint (legacy issue)
  * 3. We need to determine if this is a regression or just a delayed alert
- *
- * Extracted from liveopsTriageService.checkLLMMatchedClosedIssueRegression()
  *
  * @param matchedIssueNumber - The issue number matched by LLM
  * @param recentlyClosedIssues - List of recently closed issues

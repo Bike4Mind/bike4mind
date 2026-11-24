@@ -4,7 +4,7 @@ import { IMongoDocument } from './common';
 /**
  * Organization-level Jira API connection.
  *
- * Enables org-scoped Jira access for automation features like LiveOps Triage,
+ * Enables org-scoped Jira access for automation features,
  * replacing the system-level ATLASSIAN_* environment configuration for
  * multi-tenant deployments. Follows the same shape as IOrgGitHubConnection:
  * one connection per organization, plus an optional system default.

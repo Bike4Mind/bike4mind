@@ -157,7 +157,6 @@ export const DEFAULT_MANIFEST = {
   // (`EnableLakeModelInconsistencyDetection`), so a basic install never sets it, and with no URL
   // configured the route refuses the run outright rather than accepting work nothing will consume.
   lakeInconsistencyModelQueue: { kind: 'queue', optional: true },
-  liveOpsTriageQueue: { kind: 'queue' },
   notebookCurationQueue: { kind: 'queue', optional: true },
   questExportQueue: { kind: 'queue', optional: true },
   accountDataExportQueue: { kind: 'queue', optional: true },

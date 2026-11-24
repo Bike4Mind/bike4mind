@@ -1119,7 +1119,7 @@ function WeeklyHighlightsSection() {
     }
   }, [configData]);
 
-  // Computed dirty tracking (same pattern as Daily Gen and LiveOps)
+  // Computed dirty tracking (same pattern as Daily Gen)
   const isDirty = configData
     ? JSON.stringify({ enabled, slackChannelId, slackTeamId, llmModel, promptTemplate, attachMarkdownFile }) !==
       JSON.stringify({

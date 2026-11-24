@@ -115,8 +115,6 @@ The four handlers declared in `infra/queues.ts` whose source is generated outsid
 | `apps/workers/src/cron/lakeConnectorOrphanReap.handler` | `infra/cron.ts` | MongoDB; linked: `allSecrets`, `githubLakeRevokeQueue` | Yes | Connects to MongoDB. |
 | `apps/workers/src/cron/lakeHealthSweep.handler` | `infra/cron.ts` | MongoDB; linked: `allSecrets` | Yes | Connects to MongoDB. |
 | `apps/workers/src/cron/lakeInconsistencySweep.handler` | `infra/cron.ts` | MongoDB; linked: `allSecrets` | Yes | Connects to MongoDB. |
-| `apps/workers/src/cron/liveopsTriageDispatcher.handler` | `infra/cron.ts` | MongoDB; linked: `allSecrets`, `liveOpsTriageQueue` | Yes | Connects to MongoDB. |
-| `apps/workers/src/cron/liveopsTriageWorker.handler` | `infra/queues.ts` | MongoDB; linked: `allSecrets`, `websocketApi`, `fabFileBucket`, `generatedImagesBucket`, `appFilesBucket`, `eventBus`, `mcpHandler` | Yes | Connects to MongoDB. |
 | `apps/workers/src/cron/modelDiscovery.handler` | `infra/cron.ts` | MongoDB; linked: `allSecrets` | Yes | Connects to MongoDB. |
 | `apps/workers/src/cron/modelDiscoveryStaleness.handler` | `infra/cron.ts` | MongoDB; linked: `allSecrets` | Yes | Connects to MongoDB. |
 | `apps/workers/src/cron/oauthAbuseAutoBlock.handler` | `infra/cron.ts` | MongoDB; linked: `allSecrets` | Yes | Connects to MongoDB. |
