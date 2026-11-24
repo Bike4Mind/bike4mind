@@ -13,7 +13,7 @@ import { isLive } from './template';
 
 export type ServableTemplate = Pick<
   ISkillListingTemplate,
-  'listingId' | 'slug' | 'headline' | 'inputs' | 'previewImage'
+  'listingId' | 'slug' | 'headline' | 'inputs' | 'previewImage' | 'examplePrompt'
 > & { _id: unknown };
 
 /** A published template whose listing the market still serves, or null (the page 404s). */
@@ -21,7 +21,7 @@ export async function findServableTemplate(
   slug: string
 ): Promise<{ template: ServableTemplate; listing: ISkillListing } | null> {
   const template = await SkillListingTemplate.findOne({ slug, status: 'published' })
-    .select('listingId slug headline inputs previewImage')
+    .select('listingId slug headline inputs previewImage examplePrompt')
     .lean<ServableTemplate>();
   if (!template) return null;
   const listing = await findListing(template.listingId);
@@ -31,6 +31,10 @@ export async function findServableTemplate(
 
 export async function recordTemplateView(template: ServableTemplate): Promise<void> {
   await SkillListingTemplate.updateOne({ _id: template._id }, { $inc: { viewCount: 1 } }, { runValidators: true });
+}
+
+export async function recordTemplateTry(template: ServableTemplate): Promise<void> {
+  await SkillListingTemplate.updateOne({ _id: template._id }, { $inc: { tryCount: 1 } }, { runValidators: true });
 }
 
 export interface TemplatePageView {

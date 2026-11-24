@@ -358,6 +358,12 @@ export function skillTemplateFreeRunEligibility(
 export const skillTemplatePagePath = (slug: string): string => `/t/${encodeURIComponent(slug)}`;
 
 /**
+ * `localStorage` key for the text a visitor typed into a template page's free run. The page writes it
+ * and the try route (`/skills/market/try/$slug`) reads it as the chat prompt, then removes it.
+ */
+export const skillTemplateFreeRunInputKey = (slug: string): string => `b4m.skillTemplate.freeRunInput.${slug}`;
+
+/**
  * The public, cacheable preview image URL. The file id busts link-preview and CDN caches when the
  * author replaces the image.
  */
