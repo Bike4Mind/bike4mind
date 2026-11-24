@@ -1,4 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
+import { createServer } from 'node:http';
+import type { AddressInfo } from 'node:net';
 import axios, { type InternalAxiosRequestConfig } from 'axios';
 import { z } from 'zod';
 import { B4mApiError } from '@bike4mind/sdk';
@@ -8,6 +10,7 @@ import { B4mApiClient } from './b4mApiClient';
 import type { ApiClient } from '../auth/ApiClient';
 import type { ConfigStore } from '../storage/ConfigStore';
 import { registerTools } from './tools';
+import { MAX_RESULT_BYTES } from './functionTools';
 
 const BASE_URL = 'https://b4m.example.com';
 const ID = 'a'.repeat(24);
@@ -80,7 +83,8 @@ describe('function tools', () => {
     expect(annotations.get('call_function')).toEqual({ readOnlyHint: true });
     expect(parse('call_function', { function: 'beam', input: { span: 4 } }).success).toBe(true);
     expect(parse('call_function', { function: '', input: {} }).success).toBe(false);
-    expect(parse('list_functions', { limit: 26 }).success).toBe(false);
+    expect(parse('list_functions', { limit: 8 }).success).toBe(true);
+    expect(parse('list_functions', { limit: 9 }).success).toBe(false);
   });
 
   it('lists each live function with its input and output schemas', async () => {
@@ -91,9 +95,88 @@ describe('function tools', () => {
     const result = await call('list_functions', {});
 
     expect(result.isError).toBeUndefined();
-    expect(listFunctions).toHaveBeenCalledWith(10, undefined);
+    expect(listFunctions).toHaveBeenCalledWith(8, undefined);
     expect(getFunction).toHaveBeenCalledWith(ID);
-    expect(result.structuredContent).toEqual({ functions: [detail(ID, 'beam')], next_cursor: 'next' });
+    const listed = result.structuredContent as { functions: unknown[]; next_cursor: string };
+    expect(listed.functions).toEqual([detail(ID, 'beam')]);
+
+    await call('list_functions', { cursor: listed.next_cursor });
+    expect(listFunctions).toHaveBeenLastCalledWith(8, 'next');
+  });
+
+  describe('a page of functions', () => {
+    const ids = Array.from({ length: 8 }, (_, i) => `${i}`.repeat(24));
+    const page = { data: ids.map((id, i) => summary(id, `fn-${i}`)), next_cursor: 'server-next' };
+
+    it('reads the details one at a time', async () => {
+      const listFunctions = vi.fn().mockResolvedValue(page);
+      let running = 0;
+      let busiest = 0;
+      const getFunction = vi.fn(async (id: string) => {
+        running++;
+        busiest = Math.max(busiest, running);
+        await new Promise(resolve => setTimeout(resolve, 1));
+        running--;
+        return detail(id, 'fn');
+      });
+      const { call } = collect(mockClient({ listFunctions, getFunction }));
+
+      const result = await call('list_functions', { limit: 8 });
+
+      expect(getFunction.mock.calls.map(c => c[0])).toEqual(ids);
+      expect(busiest).toBe(1);
+      expect((result.structuredContent as { functions: unknown[] }).functions).toHaveLength(8);
+    });
+
+    it('drops a function whose detail answers 404', async () => {
+      const getFunction = vi.fn(async (id: string) => {
+        if (id === ids[1]) throw apiError(404, { name: 'NotFoundError', error: 'Function not found' });
+        return detail(id, 'fn');
+      });
+      const { call } = collect(mockClient({ listFunctions: vi.fn().mockResolvedValue(page), getFunction }));
+
+      const result = await call('list_functions', {});
+
+      expect(result.isError).toBeUndefined();
+      const listed = (result.structuredContent as { functions: { id: string }[] }).functions;
+      expect(listed.map(fn => fn.id)).toEqual(ids.filter(id => id !== ids[1]));
+    });
+
+    it('ends on a 429 with what was read and a cursor that resumes at the next function', async () => {
+      const listFunctions = vi.fn().mockResolvedValue(page);
+      let reads = 0;
+      const getFunction = vi.fn(async (id: string) => {
+        if (++reads === 3) throw apiError(429, { error: 'Too many requests' });
+        return detail(id, 'fn');
+      });
+      const { call } = collect(mockClient({ listFunctions, getFunction }));
+
+      const first = await call('list_functions', {});
+      const firstPage = first.structuredContent as { functions: { id: string }[]; next_cursor: string };
+      expect(first.isError).toBeUndefined();
+      expect(firstPage.functions.map(fn => fn.id)).toEqual([ids[0], ids[1]]);
+
+      const second = await call('list_functions', { cursor: firstPage.next_cursor });
+      const secondPage = second.structuredContent as { functions: { id: string }[]; next_cursor: string };
+      expect(listFunctions).toHaveBeenLastCalledWith(8, undefined);
+      expect(secondPage.functions[0].id).toBe(ids[2]);
+      expect(secondPage.functions.map(fn => fn.id)).toEqual(ids.slice(2));
+
+      await call('list_functions', { cursor: secondPage.next_cursor });
+      expect(listFunctions).toHaveBeenLastCalledWith(8, 'server-next');
+    });
+
+    it('reports the rate limit when it hits before any function is read', async () => {
+      const getFunction = vi
+        .fn()
+        .mockRejectedValue(apiError(429, { error: 'Too many requests' }, { 'retry-after': '9' }));
+      const { call } = collect(mockClient({ listFunctions: vi.fn().mockResolvedValue(page), getFunction }));
+
+      const result = await call('list_functions', {});
+
+      expect(result.isError).toBe(true);
+      expect(text(result)).toBe('Too many function requests for this account. Retry after 9s.');
+    });
   });
 
   it('passes the page size and cursor through', async () => {
@@ -128,6 +211,108 @@ describe('function tools', () => {
 
     expect(listFunctions).toHaveBeenNthCalledWith(2, 100, 'p2');
     expect(invokeFunction).toHaveBeenCalledWith(ID, { span: 4 });
+  });
+
+  it('matches a slug exactly, not by its prefix', async () => {
+    const listFunctions = vi.fn().mockResolvedValue({
+      data: [summary(OTHER_ID, 'beam-long'), summary(ID, 'beam')],
+      next_cursor: null,
+    });
+    const invokeFunction = vi.fn().mockResolvedValue({ output: {}, stamp });
+    const { call } = collect(mockClient({ listFunctions, invokeFunction }));
+
+    await call('call_function', { function: 'beam', input: {} });
+
+    expect(invokeFunction).toHaveBeenCalledWith(ID, {});
+  });
+
+  it('stops paging for a slug when next_cursor is null', async () => {
+    const listFunctions = vi.fn().mockResolvedValue({ data: [summary(ID, 'beam')], next_cursor: null });
+    const { call } = collect(mockClient({ listFunctions, invokeFunction: vi.fn() }));
+
+    const result = await call('call_function', { function: 'nope', input: {} });
+
+    expect(result.isError).toBe(true);
+    expect(listFunctions).toHaveBeenCalledTimes(1);
+  });
+
+  it('remembers a resolved slug, so the second call makes no list request', async () => {
+    const listFunctions = vi.fn().mockResolvedValue({ data: [summary(ID, 'beam')], next_cursor: null });
+    const invokeFunction = vi.fn().mockResolvedValue({ output: {}, stamp });
+    const { call } = collect(mockClient({ listFunctions, invokeFunction }));
+
+    await call('call_function', { function: 'beam', input: { span: 4 } });
+    await call('call_function', { function: 'beam', input: { span: 5 } });
+
+    expect(listFunctions).toHaveBeenCalledTimes(1);
+    expect(invokeFunction).toHaveBeenNthCalledWith(2, ID, { span: 5 });
+  });
+
+  it('drops a remembered id that answers 404 and resolves the slug once more', async () => {
+    const listFunctions = vi
+      .fn()
+      .mockResolvedValueOnce({ data: [summary(ID, 'beam')], next_cursor: null })
+      .mockResolvedValueOnce({ data: [summary(OTHER_ID, 'beam')], next_cursor: null });
+    const invokeFunction = vi
+      .fn()
+      .mockResolvedValueOnce({ output: {}, stamp })
+      .mockRejectedValueOnce(apiError(404, { name: 'NotFoundError', error: 'Function not found' }))
+      .mockResolvedValue({ output: { again: true }, stamp });
+    const { call } = collect(mockClient({ listFunctions, invokeFunction }));
+
+    await call('call_function', { function: 'beam', input: {} });
+    const result = await call('call_function', { function: 'beam', input: {} });
+
+    expect(listFunctions).toHaveBeenCalledTimes(2);
+    expect(invokeFunction).toHaveBeenNthCalledWith(3, OTHER_ID, {});
+    expect(result.structuredContent).toEqual({ output: { again: true }, stamp });
+  });
+
+  it('forgets a remembered id that is gone, so the next call does not try it again', async () => {
+    const listFunctions = vi
+      .fn()
+      .mockResolvedValueOnce({ data: [summary(ID, 'beam')], next_cursor: null })
+      .mockResolvedValueOnce({ data: [], next_cursor: null })
+      .mockResolvedValueOnce({ data: [summary(OTHER_ID, 'beam')], next_cursor: null });
+    let live = true;
+    const invokeFunction = vi.fn(async (id: string) => {
+      if (id === ID && !live) throw apiError(404, { name: 'NotFoundError', error: 'Function not found' });
+      return { output: {}, stamp };
+    });
+    const { call } = collect(mockClient({ listFunctions, invokeFunction }));
+
+    await call('call_function', { function: 'beam', input: {} });
+    live = false;
+    expect((await call('call_function', { function: 'beam', input: {} })).isError).toBe(true);
+    const result = await call('call_function', { function: 'beam', input: {} });
+
+    expect(result.isError).toBeUndefined();
+    expect(invokeFunction.mock.calls.map(c => c[0])).toEqual([ID, ID, OTHER_ID]);
+  });
+
+  describe('a result over the output cap', () => {
+    const resultOfSize = (bytes: number) => {
+      const shell = JSON.stringify({ output: { data: '' }, stamp }, null, 2).length;
+      return { output: { data: 'x'.repeat(bytes - shell) }, stamp };
+    };
+
+    it('is returned whole at the cap', async () => {
+      const invokeFunction = vi.fn().mockResolvedValue(resultOfSize(MAX_RESULT_BYTES));
+      const result = await collect(mockClient({ invokeFunction })).call('call_function', { function: ID, input: {} });
+
+      expect(result.isError).toBeUndefined();
+      expect(text(result)).toHaveLength(MAX_RESULT_BYTES);
+    });
+
+    it('is refused with output_too_large one byte over, and neither field carries the data', async () => {
+      const invokeFunction = vi.fn().mockResolvedValue(resultOfSize(MAX_RESULT_BYTES + 1));
+      const result = await collect(mockClient({ invokeFunction })).call('call_function', { function: ID, input: {} });
+
+      expect(result.isError).toBe(true);
+      expect(text(result)).toMatch(/^output_too_large: .*2 MiB/);
+      expect(result.structuredContent).toBeUndefined();
+      expect(text(result).length).toBeLessThan(MAX_RESULT_BYTES);
+    });
   });
 
   it('names an unknown slug and points at list_functions', async () => {
@@ -236,11 +421,17 @@ describe('function tools', () => {
     it('goes only to the configured host, in the x-api-key header', async () => {
       const key = ['test', 'key', 'value'].join('-');
       const api = new B4mApiClient(BASE_URL, {} as ConfigStore, key);
-      const seen: { url: string; key: unknown; authorization: unknown }[] = [];
+      const seen: { url: string; key: unknown; authorization: unknown; body: unknown }[] = [];
       const http = (api as unknown as { client: ApiClient }).client.getAxiosInstance();
       http.defaults.adapter = async (config: InternalAxiosRequestConfig) => {
         const url = axios.getUri(config);
-        seen.push({ url, key: config.headers.get('x-api-key'), authorization: config.headers.get('authorization') });
+        const requestBody: unknown = typeof config.data === 'string' ? JSON.parse(config.data) : config.data;
+        seen.push({
+          url,
+          key: config.headers.get('x-api-key'),
+          authorization: config.headers.get('authorization'),
+          body: requestBody,
+        });
         const body = url.includes('/invoke')
           ? { output: { deflection: 0.002 }, stamp }
           : url.includes(`/functions/${ID}`)
@@ -268,6 +459,46 @@ describe('function tools', () => {
         expect(request.key).toBe(key);
         expect(request.authorization).toBeFalsy();
         expect(request.url).not.toContain(key);
+      }
+      expect(seen[3].body).toEqual({ input: { span: 4 } });
+    });
+
+    it('is not sent on to another host when the configured host redirects', async () => {
+      const key = ['test', 'key', 'value'].join('-');
+      const elsewhere: unknown[] = [];
+      const target = createServer((req, res) => {
+        elsewhere.push(req.headers['x-api-key']);
+        res.end('{}');
+      });
+      await new Promise<void>(resolve => target.listen(0, resolve));
+      const targetPort = (target.address() as AddressInfo).port;
+      const home: unknown[] = [];
+      const origin = createServer((req, res) => {
+        home.push(req.headers['x-api-key']);
+        res.writeHead(307, { location: `http://localhost:${targetPort}${req.url}` });
+        res.end();
+      });
+      await new Promise<void>(resolve => origin.listen(0, '127.0.0.1', resolve));
+
+      try {
+        const api = new B4mApiClient(
+          `http://127.0.0.1:${(origin.address() as AddressInfo).port}`,
+          {} as ConfigStore,
+          key
+        );
+        (api as unknown as { client: ApiClient }).client.getAxiosInstance().defaults.proxy = false;
+        const { call } = collect(api);
+
+        const listed = await call('list_functions', {});
+        const called = await call('call_function', { function: ID, input: { span: 4 } });
+
+        expect(listed.isError).toBe(true);
+        expect(called.isError).toBe(true);
+        expect(home).toEqual([key, key]);
+        expect(elsewhere).toEqual([]);
+      } finally {
+        origin.close();
+        target.close();
       }
     });
   });

@@ -9,6 +9,19 @@ const SCOPE = 'functions:invoke';
 const FUNCTION_ID_PATTERN = /^[a-f0-9]{24}$/i;
 const SLUG_PAGE_SIZE = 100;
 const SLUG_MAX_PAGES = 10;
+// Each listed function costs one detail request, and the detail route allows 10 a minute on the lowest plan.
+const LIST_PAGE_MAX = 8;
+export const MAX_RESULT_BYTES = 2 * 1024 * 1024;
+const OUTPUT_TOO_LARGE =
+  'output_too_large: The result is over the 2 MiB limit for one tool result, so none of it is returned. Call the function with inputs that produce a smaller output.';
+
+/** Where a `list_functions` page resumes: the server's cursor, the offset of the first function not yet read, and the page size. */
+const listCursorSchema = z.object({
+  c: z.string().nullable(),
+  o: z.number().int().min(0),
+  n: z.number().int().min(1).max(LIST_PAGE_MAX),
+});
+type ListCursor = z.infer<typeof listCursorSchema>;
 
 export const FUNCTION_TOOL_META: ToolMeta[] = [
   {
@@ -32,7 +45,13 @@ export const FUNCTION_TOOL_META: ToolMeta[] = [
 ];
 
 const listFunctionsShape = {
-  limit: z.number().int().min(1).max(25).optional().describe('Functions per page (default 10).'),
+  limit: z
+    .number()
+    .int()
+    .min(1)
+    .max(LIST_PAGE_MAX)
+    .optional()
+    .describe(`Functions per page (default ${LIST_PAGE_MAX}).`),
   cursor: z.string().optional().describe('The `next_cursor` of the previous page.'),
 };
 
@@ -96,39 +115,101 @@ export function functionErrorMessage(error: unknown, baseURL: string, ref?: stri
   return mapApiError(error, baseURL, SCOPE);
 }
 
+function encodeListCursor(cursor: ListCursor): string {
+  return Buffer.from(JSON.stringify(cursor)).toString('base64url');
+}
+
+/** A cursor this tool issued, or else a server cursor passed straight through. */
+function decodeListCursor(cursor: string | undefined): { server?: string; offset: number; size?: number } {
+  if (!cursor) return { offset: 0 };
+  try {
+    const parsed = listCursorSchema.safeParse(JSON.parse(Buffer.from(cursor, 'base64url').toString('utf8')));
+    if (parsed.success) return { server: parsed.data.c ?? undefined, offset: parsed.data.o, size: parsed.data.n };
+  } catch {
+    // Not one of ours.
+  }
+  return { server: cursor, offset: 0 };
+}
+
+/**
+ * One function's detail is read at a time. A function that left live meanwhile is skipped; a rate limit ends
+ * the page with a cursor at the first function not read.
+ */
 export async function listFunctions(client: B4mApiClient, args: { limit?: number; cursor?: string }) {
-  const page = await client.listFunctions(args.limit ?? 10, args.cursor);
-  const functions = await Promise.all(page.data.map(fn => client.getFunction(fn.id)));
-  return { functions, next_cursor: page.next_cursor };
+  const start = decodeListCursor(args.cursor);
+  const size = start.size ?? args.limit ?? LIST_PAGE_MAX;
+  const page = await client.listFunctions(size, start.server);
+  const functions = [];
+  for (let i = start.offset; i < page.data.length; i++) {
+    try {
+      functions.push(await client.getFunction(page.data[i].id));
+    } catch (error) {
+      if (!(error instanceof B4mApiError)) throw error;
+      if (error.status === 404) continue;
+      if (error.status === 429 && i > start.offset) {
+        return { functions, next_cursor: encodeListCursor({ c: start.server ?? null, o: i, n: size }) };
+      }
+      throw error;
+    }
+  }
+  const next_cursor = page.next_cursor ? encodeListCursor({ c: page.next_cursor, o: 0, n: size }) : null;
+  return { functions, next_cursor };
 }
 
 /** An id as given; a slug looked up among the owner's live functions, since the API addresses functions by id. */
-export async function resolveFunctionId(client: B4mApiClient, ref: string): Promise<string> {
+export async function resolveFunctionId(
+  client: B4mApiClient,
+  ref: string,
+  slugs: Map<string, string> = new Map()
+): Promise<string> {
   if (FUNCTION_ID_PATTERN.test(ref)) return ref;
   let cursor: string | undefined;
   for (let i = 0; i < SLUG_MAX_PAGES; i++) {
     const page = await client.listFunctions(SLUG_PAGE_SIZE, cursor);
     const match = page.data.find(fn => fn.slug === ref);
-    if (match) return match.id;
+    if (match) {
+      slugs.set(ref, match.id);
+      return match.id;
+    }
     if (!page.next_cursor) break;
     cursor = page.next_cursor;
   }
   throw new Error(`No live function has the slug "${ref}". ${LIST_FIX}`);
 }
 
-export async function callFunction(client: B4mApiClient, args: { function: string; input: Record<string, unknown> }) {
-  const id = await resolveFunctionId(client, args.function);
+/** `slugs` keeps each resolved slug for the server's life: a slug is fixed and unique per owner. */
+export async function callFunction(
+  client: B4mApiClient,
+  args: { function: string; input: Record<string, unknown> },
+  slugs: Map<string, string> = new Map()
+) {
+  const cached = slugs.get(args.function);
+  if (cached) {
+    try {
+      const { output, stamp } = await client.invokeFunction(cached, args.input);
+      return { output, stamp };
+    } catch (error) {
+      if (!(error instanceof B4mApiError && error.status === 404)) throw error;
+      slugs.delete(args.function);
+    }
+  }
+  const id = await resolveFunctionId(client, args.function, slugs);
   const { output, stamp } = await client.invokeFunction(id, args.input);
   return { output, stamp };
 }
 
 export function registerFunctionTools(server: McpServer, client: B4mApiClient): void {
+  const slugs = new Map<string, string>();
   const meta = (name: string) => FUNCTION_TOOL_META.find(t => t.name === name)!;
   // Result shapes match toResult and errorResult in tools.ts, which imports this module.
   const run = async (fn: () => Promise<Record<string, unknown>>, ref?: string): Promise<CallToolResult> => {
     try {
       const value = await fn();
-      return { content: [{ type: 'text', text: JSON.stringify(value, null, 2) }], structuredContent: value };
+      const text = JSON.stringify(value, null, 2);
+      if (Buffer.byteLength(text) > MAX_RESULT_BYTES) {
+        return { content: [{ type: 'text', text: OUTPUT_TOO_LARGE }], isError: true };
+      }
+      return { content: [{ type: 'text', text }], structuredContent: value };
     } catch (error) {
       const text = functionErrorMessage(error, client.baseURL, ref);
       return { content: [{ type: 'text', text }], isError: true };
@@ -153,6 +234,6 @@ export function registerFunctionTools(server: McpServer, client: B4mApiClient): 
       inputSchema: callFunctionShape,
       annotations: { readOnlyHint: true },
     },
-    args => run(() => callFunction(client, args), args.function)
+    args => run(() => callFunction(client, args, slugs), args.function)
   );
 }
