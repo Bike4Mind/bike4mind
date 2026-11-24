@@ -1,3 +1,4 @@
+import { getAbortAwareRetrySignal, reportUsageOnAbort, retryAbortAware } from './abortAwareRetry';
 import {
   ARTIFACT_REMOVED_PLACEHOLDER,
   ChatModels,
@@ -212,6 +213,7 @@ export class KimiBackend implements ICompletionBackend {
     callback: (text: (string | null | undefined)[], completionInfo: CompletionInfo) => Promise<void>,
     toolsUsed: Array<RecordableToolUse> = []
   ): Promise<void> {
+    const retrySignal = getAbortAwareRetrySignal(options);
     this.currentModel = model;
 
     const toolCallCount = options._internal?.toolCallCount ?? 0;
@@ -314,11 +316,31 @@ export class KimiBackend implements ICompletionBackend {
     // the adapter exists to read `usage.cached_tokens` back out.
     const cacheStrategy = options.cacheStrategy;
 
-    const response = await this._api.chat.completions.create(parameters, { signal: options.abortSignal });
+    const create = () =>
+      this._api.chat.completions.create(parameters, {
+        signal: options.abortSignal,
+        ...(retrySignal ? { maxRetries: 0 } : {}),
+      });
+    const response = retrySignal ? await retryAbortAware(create, retrySignal) : await create();
     let inputTokens = 0;
     let outputTokens = 0;
 
     if (!(response instanceof Stream)) {
+      if (retrySignal?.aborted) {
+        await reportUsageOnAbort(
+          retrySignal,
+          callback,
+          response.usage
+            ? {
+                ...splitCacheInclusiveInput(
+                  response.usage.prompt_tokens,
+                  cachedTokensFromUsage(response.usage as unknown as Record<string, unknown>)
+                ),
+                outputTokens: response.usage.completion_tokens,
+              }
+            : undefined
+        );
+      }
       const streamedText: string[] = [];
       // The empty guard keys on prose produced, not on streamedText: the monologue
       // is wrapped into streamedText too, so a guard keyed there cannot tell a
@@ -342,7 +364,7 @@ export class KimiBackend implements ICompletionBackend {
         // they are the agentic models most likely to call something.
         const reasoningContent = (c.message as any).reasoning_content as string | undefined;
 
-        if (c.message.tool_calls && c.message.tool_calls.length > 0) {
+        if (!retrySignal && c.message.tool_calls && c.message.tool_calls.length > 0) {
           for (const toolCall of c.message.tool_calls) {
             if (toolCall.type !== 'function') continue;
             if (toolCall.function.arguments) {
@@ -595,6 +617,7 @@ export class KimiBackend implements ICompletionBackend {
         ...(nativeFormat ? { responseFormatMode: 'native' as const } : {}),
         ...(finishReason ? { stopReason: finishReason } : {}),
       });
+      retrySignal?.throwIfAborted();
       return;
     }
 

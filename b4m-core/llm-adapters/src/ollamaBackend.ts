@@ -1,3 +1,4 @@
+import { getAbortAwareRetrySignal, reportUsageOnAbort } from './abortAwareRetry';
 import {
   ARTIFACT_REMOVED_PLACEHOLDER,
   CONTEXT_WINDOW_SAFETY_BUFFER_TOKENS,
@@ -293,9 +294,9 @@ export class OllamaBackend implements ICompletionBackend {
    * "qwen2.context_length"). Returns safe defaults on any error so a transient
    * show() failure degrades gracefully instead of dropping the whole list.
    */
-  private async getModelDetails(model: string): Promise<OllamaModelDetails> {
+  private async getModelDetails(model: string, api = this._api, signal?: AbortSignal): Promise<OllamaModelDetails> {
     try {
-      const info = await this._api.show({ model });
+      const info = await api.show({ model });
       const capabilities = info.capabilities ?? [];
 
       // model_info is typed as a Map but arrives as a plain object over JSON;
@@ -322,6 +323,7 @@ export class OllamaBackend implements ICompletionBackend {
         },
       };
     } catch (error) {
+      signal?.throwIfAborted();
       this._logger.debug(`[OllamaBackend] Could not fetch details for ${model}:`, error);
       this._detailsFailed.add(model);
       return {
@@ -386,7 +388,11 @@ export class OllamaBackend implements ICompletionBackend {
     model: string,
     options: Partial<ICompletionOptions>
   ): Promise<Pick<ChatRequest, 'options' | 'keep_alive' | 'think'>> {
-    const details = await this.getModelDetailsCached(model);
+    const retrySignal = getAbortAwareRetrySignal(options);
+    const details = retrySignal
+      ? await this.getModelDetails(model, this.createClient(retrySignal), retrySignal)
+      : await this.getModelDetailsCached(model);
+    retrySignal?.throwIfAborted();
     const settings = await this.requestSettings(model, details);
     const numCtx = this.sentNumCtx(model, settings.numCtx ?? ollamaNumCtx(details.contextWindow));
     const maxTokens = options.maxTokens ?? settings.maxOutputTokens;
@@ -414,6 +420,10 @@ export class OllamaBackend implements ICompletionBackend {
     options: Partial<ICompletionOptions>,
     callback: (text: (string | null | undefined)[], completionInfo?: CompletionInfo) => Promise<void>
   ): Promise<void> {
+    const retrySignal = getAbortAwareRetrySignal(options);
+    if (retrySignal && this._requestSettings) {
+      throw new Error('Abort-aware completion retries do not support custom Ollama request settings');
+    }
     this.currentModel = model;
 
     const toolCallCount = options._internal?.toolCallCount ?? 0;
@@ -456,6 +466,7 @@ export class OllamaBackend implements ICompletionBackend {
       ...(formattedTools.length > 0 && { tools: formattedTools }),
     };
 
+    retrySignal?.throwIfAborted();
     try {
       // Buffer this round's text on tool-eligible rounds: a tool-call round's
       // "content" is either empty or (for smaller models) the tool call itself as
@@ -488,6 +499,7 @@ export class OllamaBackend implements ICompletionBackend {
           ...(toolsUsed.length > 0 && { toolsUsed }),
           ...(round.completionInfo.stopReason ? { stopReason: round.completionInfo.stopReason } : {}),
         });
+        retrySignal?.throwIfAborted();
         return;
       }
 
@@ -758,8 +770,21 @@ export class OllamaBackend implements ICompletionBackend {
         }
       }
     } else {
+      const retrySignal = getAbortAwareRetrySignal(options);
       const response = await api.chat({ ...baseRequest, stream: false as const });
-      if (response.message.tool_calls?.length) {
+      if (retrySignal?.aborted) {
+        const stopReason = normalizeOllamaDoneReason(response.done_reason);
+        const usage =
+          response.prompt_eval_count !== undefined || response.eval_count !== undefined
+            ? {
+                inputTokens: response.prompt_eval_count,
+                outputTokens: response.eval_count,
+                ...(stopReason ? { stopReason } : {}),
+              }
+            : undefined;
+        await reportUsageOnAbort(retrySignal, callback, usage);
+      }
+      if (!retrySignal && response.message.tool_calls?.length) {
         toolCalls.push(...response.message.tool_calls);
       }
       // Prepend reasoning (from the separate thinking field) as a <think> block
@@ -771,6 +796,7 @@ export class OllamaBackend implements ICompletionBackend {
       doneReason = response.done_reason;
       if (!buffer) {
         await callback([content], { inputTokens, outputTokens });
+        retrySignal?.throwIfAborted();
       }
     }
 

@@ -1,3 +1,4 @@
+import { getAbortAwareRetrySignal, reportUsageOnAbort, retryAbortAware } from './abortAwareRetry';
 import {
   BadRequestError,
   ChatModels,
@@ -184,6 +185,46 @@ function keepToolsForNextRound(
   return anyMcpTool || (!priorToolFailure && toolsUsed.some(t => t.success === false));
 }
 
+async function consumeAbortAwareChatStream(
+  stream: AsyncIterable<ChatCompletionChunk>,
+  signal: AbortSignal,
+  callback: (text: string[], info: CompletionInfo) => Promise<void>
+): Promise<void> {
+  const texts: string[] = [];
+  let usage: ChatCompletionChunk['usage'];
+  let stopReason: string | undefined;
+  const completionInfo = (): CompletionInfo => {
+    if (!usage) return stopReason ? { stopReason } : {};
+    const cacheReads = cachedTokensFromUsage(usage as unknown as Record<string, unknown>);
+    return {
+      ...splitCacheInclusiveInput(usage.prompt_tokens, cacheReads),
+      outputTokens: usage.completion_tokens,
+      turnUsage: appendCacheInclusiveTurn(undefined, usage.prompt_tokens, cacheReads, usage.completion_tokens),
+      ...reasoningTokensField(reasoningTokensFromUsage(usage)),
+      ...(stopReason ? { stopReason } : {}),
+    };
+  };
+
+  try {
+    for await (const chunk of stream) {
+      if (chunk.usage) usage = chunk.usage;
+      for (const choice of chunk.choices) {
+        stopReason = normalizeOpenAIFinishReason(choice.finish_reason) ?? stopReason;
+        if (!signal.aborted && choice.delta.content) {
+          texts[choice.index] = (texts[choice.index] ?? '') + choice.delta.content;
+        }
+      }
+    }
+  } catch (error) {
+    if (usage) await callback([], completionInfo()).catch(() => undefined);
+    throw error;
+  }
+
+  if (signal.aborted) await reportUsageOnAbort(signal, callback, usage ? completionInfo() : undefined);
+  await callback(texts, completionInfo());
+  signal.throwIfAborted();
+}
+
 export class OpenAIBackend implements ICompletionBackend {
   private _api: OpenAI;
   private logger: Logger;
@@ -192,10 +233,12 @@ export class OpenAIBackend implements ICompletionBackend {
   // OpenAI can attribute abuse to an individual user and scope enforcement to
   // them rather than the whole shared platform key. See `toProviderEndUserId`.
   private readonly _endUserId?: string;
+  private readonly usesFederatedCredentials: boolean;
   /** Catalog view of the model being completed; see DispatchModel. */
   private readonly _dispatch = new DispatchModel();
 
   constructor(apiKey: string | typeof OPENAI_FEDERATED_KEY, logger?: Logger, endUserId?: string) {
+    this.usesFederatedCredentials = apiKey === OPENAI_FEDERATED_KEY;
     this._api =
       apiKey === OPENAI_FEDERATED_KEY
         ? federatedOpenAIClient()
@@ -1068,6 +1111,10 @@ export class OpenAIBackend implements ICompletionBackend {
     toolsUsed: Array<RecordableToolUse> = []
   ): Promise<void> {
     const priorToolFailure = toolsUsed.some(t => t.success === false);
+    const retrySignal = getAbortAwareRetrySignal(options);
+    if (retrySignal && this.usesFederatedCredentials) {
+      throw new Error('Abort-aware completion retries do not support federated credentials');
+    }
     this.currentModel = model;
     options = {
       temperature: 0.9,
@@ -1297,23 +1344,38 @@ export class OpenAIBackend implements ICompletionBackend {
       await evaluation.admit(info, parameters.model, parameters.max_completion_tokens ?? parameters.max_tokens ?? 0);
     }
     // Wrap with retry for transient network errors (TLS abort, fetch terminated)
-    const response = await withRetry(
-      () =>
-        this._api.chat.completions.create(parameters as ChatCompletionCreateParams, {
-          signal: options.abortSignal,
-          ...(evaluation ? { maxRetries: 0 } : {}),
-        }),
-      {
-        maxRetries: evaluation ? 0 : 3,
-        initialDelayMs: 500,
-        maxDelayMs: 10000,
-        jitterFactor: 0.25,
-        isRetryable: err => isRetryableError(err) && !isUserInitiatedAbort(err, options.abortSignal),
-        logger: this.logger,
-        abortSignal: options.abortSignal,
-        onRetry: ({ error, delayMs }) => options._internal?.turnTelemetry?.onRetry({ error, delayMs, model }),
-      }
-    ).then(r => r.result);
+    const response = retrySignal
+      ? await retryAbortAware(
+          () =>
+            this._api.chat.completions.create(parameters as ChatCompletionCreateParams, {
+              signal: retrySignal,
+              maxRetries: 0,
+            }),
+          retrySignal
+        )
+      : await withRetry(
+          () =>
+            this._api.chat.completions.create(parameters as ChatCompletionCreateParams, {
+              signal: options.abortSignal,
+              ...(evaluation ? { maxRetries: 0 } : {}),
+            }),
+          {
+            maxRetries: evaluation ? 0 : 3,
+            initialDelayMs: 500,
+            maxDelayMs: 10000,
+            jitterFactor: 0.25,
+            isRetryable: err => isRetryableError(err) && !isUserInitiatedAbort(err, options.abortSignal),
+            logger: this.logger,
+            abortSignal: options.abortSignal,
+            onRetry: ({ error, delayMs }) => options._internal?.turnTelemetry?.onRetry({ error, delayMs, model }),
+          }
+        ).then(r => r.result);
+    if (retrySignal && response instanceof Stream) {
+      // Reasoning models can use an internal stream even with stream:false.
+      await consumeAbortAwareChatStream(response, retrySignal, callback);
+      return;
+    }
+
     // Non-streaming: the full response is back here. Streaming: reassigned once the stream is drained.
     let modelDoneAt = Date.now();
     let inputTokens = 0;
@@ -1321,6 +1383,21 @@ export class OpenAIBackend implements ICompletionBackend {
     let reasoningTokens: number | undefined;
 
     if (!(response instanceof Stream)) {
+      if (retrySignal?.aborted) {
+        await reportUsageOnAbort(
+          retrySignal,
+          callback,
+          response.usage
+            ? {
+                ...splitCacheInclusiveInput(
+                  response.usage.prompt_tokens,
+                  cachedTokensFromUsage(response.usage as unknown as Record<string, unknown>)
+                ),
+                outputTokens: response.usage.completion_tokens,
+              }
+            : undefined
+        );
+      }
       if (evaluation) {
         const answered = response;
         await reconcileAfterDispatch(
@@ -1356,7 +1433,7 @@ export class OpenAIBackend implements ICompletionBackend {
       for (const c of response.choices) {
         if (!c.message) continue;
 
-        if (c.message.tool_calls && c.message.tool_calls.length > 0) {
+        if (!retrySignal && c.message.tool_calls && c.message.tool_calls.length > 0) {
           // Track all tools first
           for (const toolCall of c.message.tool_calls) {
             if (toolCall.type !== 'function') continue;
@@ -1682,6 +1759,7 @@ export class OpenAIBackend implements ICompletionBackend {
         ...(finishReason ? { stopReason: finishReason } : {}),
       };
       await callback(streamedText, completionInfo);
+      retrySignal?.throwIfAborted();
       return;
     }
 
