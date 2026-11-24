@@ -71,12 +71,12 @@ const handler = baseApi()
             includeContent: includeContent !== false, // Default to true for backward compatibility
             includeVersions,
             version,
-          } as any, // Temporary type assertion to bypass strict typing
+          },
           {
             db: {
-              artifacts: artifactRepository as any,
-              artifactContents: artifactContentRepository as any,
-              artifactVersions: artifactVersionRepository as any,
+              artifacts: artifactRepository,
+              artifactContents: artifactContentRepository,
+              artifactVersions: artifactVersionRepository,
             },
           }
         )
@@ -102,12 +102,12 @@ const handler = baseApi()
               includeContent: includeContent !== false,
               includeVersions,
               version,
-            } as any,
+            },
             {
               db: {
-                artifacts: artifactRepository as any,
-                artifactContents: artifactContentRepository as any,
-                artifactVersions: artifactVersionRepository as any,
+                artifacts: artifactRepository,
+                artifactContents: artifactContentRepository,
+                artifactVersions: artifactVersionRepository,
               },
             }
           );
@@ -145,9 +145,9 @@ const handler = baseApi()
         { id: artifactId, ...validatedData },
         {
           db: {
-            artifacts: artifactRepository as any,
-            artifactContents: artifactContentRepository as any,
-            artifactVersions: artifactVersionRepository as any,
+            artifacts: artifactRepository,
+            artifactContents: artifactContentRepository,
+            artifactVersions: artifactVersionRepository,
           },
         }
       );
@@ -177,7 +177,7 @@ const handler = baseApi()
         { id: artifactId, hardDelete: false },
         {
           db: {
-            artifacts: artifactRepository as any,
+            artifacts: artifactRepository,
           },
         }
       );
