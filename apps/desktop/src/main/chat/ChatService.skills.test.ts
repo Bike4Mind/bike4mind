@@ -15,6 +15,10 @@ import { SkillCatalog, type RemoteSkills } from './skills/SkillCatalog';
 import type { AccessStore } from './tools/AccessStore';
 import { ApprovalGate } from './tools/ApprovalGate';
 
+vi.mock('../git/hostGitArgs', async importOriginal =>
+  (await import('./plainFolderGit.testHelper')).skipGitOutsideRepositories(await importOriginal())
+);
+
 // Skill authorization tests must not depend on the user's login-shell startup.
 vi.mock('./tools/userPath', async importOriginal => ({
   ...(await importOriginal<typeof import('./tools/userPath')>()),
@@ -35,7 +39,7 @@ async function skill(project: string, name: string, lines: readonly string[]): P
 /**
  * The half the renderer never sees: what the MODEL is told about skills, and what it may call.
  *
- * Expansion itself is covered by expand.test.ts and the gate by SkillCatalog.test.ts; what is
+ * Expansion itself is covered by skills.test.ts and the gate by SkillCatalog.test.ts; what is
  * proven here is that the two reach a real turn - the list in the system prompt and the tool in
  * the declared set - and that neither carries a project the user has not trusted.
  */

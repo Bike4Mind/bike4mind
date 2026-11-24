@@ -13,7 +13,7 @@ node apps/desktop/scripts/controlled-cost-evaluation.cjs --dry-run
 node --test apps/desktop/scripts/test_controlled_cost_evaluation.cjs
 ```
 
-The first command runs `ChatService.controlledCost.test.ts`, using real Desktop
+The first command runs the `controlledCost` tests in `ChatService.usage.test.ts`, using real Desktop
 ChatService assembly, SessionStore, local file_read, warm replay, service recreation
 and forced compaction. Only the authenticated transport and model catalog are
 scripted. No direct provider/proxy HTTP call substitutes for Desktop. Both user

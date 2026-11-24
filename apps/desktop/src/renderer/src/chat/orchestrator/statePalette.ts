@@ -6,7 +6,7 @@ import { NEEDS_YOU_AMBER, contrastRatio, looksLikeNeedsYou } from '@shared/needs
 /**
  * The one place an agent state gets its colour. `joy` drives chips and tiles; `lamp` is the raw hex for
  * scene lamps, tokens and note pins, which cannot take a Joy palette name. Views import this rather than
- * keep their own map (statePalette.test.ts scans for strays), so a skin overrides the palette in one spot.
+ * keep their own map (skinViews.test.tsx scans for strays), so a skin overrides the palette in one spot.
  */
 export interface StateColor {
   joy: ColorPaletteProp;

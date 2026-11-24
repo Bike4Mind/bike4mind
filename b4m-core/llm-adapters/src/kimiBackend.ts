@@ -19,6 +19,7 @@ import { ChatCompletionChunk, ChatCompletionCreateParams } from 'openai/resource
 import { Stream } from 'openai/streaming';
 import { Logger } from '@bike4mind/observability';
 import { executeToolsBatch, shouldEndTurnAfterTools, toolFailureLogLevel } from './executeToolsBatch';
+import { replayableText } from './replayPreToolText';
 import { recordToolResult, type RecordableToolUse } from './recordToolResult';
 import {
   declaredArtifactType,
@@ -847,7 +848,7 @@ export class KimiBackend implements ICompletionBackend {
             });
           }
         }
-        this.pushToolRound(messages, roundResults, streamedReasoning || undefined);
+        this.pushToolRound(messages, roundResults, streamedReasoning || undefined, streamedRoundText);
 
         const requestedToolNames = func.flatMap(tool => (tool.name ? [tool.name] : []));
         if (shouldEndTurnAfterTools(requestedToolNames, options.tools, streamedRoundText)) {
@@ -944,11 +945,16 @@ export class KimiBackend implements ICompletionBackend {
    * DeepSeekBackend; formatMessages opts into the converter's
    * `preserveReasoningContent` so the field survives formatting.
    */
-  private pushToolRound(messages: IMessage[], round: ToolRoundResult[], reasoningContent: string | undefined) {
+  private pushToolRound(
+    messages: IMessage[],
+    round: ToolRoundResult[],
+    reasoningContent: string | undefined,
+    assistantText?: string
+  ) {
     if (round.length === 0) return;
 
     messages.push({
-      content: null,
+      content: replayableText(assistantText) ?? null,
       role: 'assistant',
       ...(reasoningContent ? { reasoning_content: reasoningContent } : {}),
       tool_calls: round.map(({ tool }) => ({

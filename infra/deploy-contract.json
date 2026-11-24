@@ -18,6 +18,11 @@
       "dockerfile": "apps/workers/Dockerfile.renderworker",
       "env": "RENDER_WORKER_IMAGE",
       "retentionDays": 21
+    },
+    {
+      "name": "callable-function-runtime",
+      "dockerfile": "apps/workers/Dockerfile.callablefunction",
+      "env": "CALLABLE_FUNCTION_RUNTIME_IMAGE"
     }
   ],
   "externalImages": [
@@ -47,6 +52,7 @@
     "BLOG_HOST",
     "BUSINESS_METRIC_ALERTS_ENABLED",
     "BUSINESS_METRIC_THRESHOLDS",
+    "CALLABLE_FUNCTION_SUBNET_IDS",
     "CANONICAL_ORIGIN",
     "CHAT_COMPLETION_PUBLIC_URL",
     "CI",
