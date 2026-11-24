@@ -63,6 +63,7 @@ import {
   VoyageAIEmbeddingModel,
 } from './embedding';
 import { SreAgentConfigSchema } from '../types/entities/SreTypes';
+import { DEFAULT_FEATURE_SPIKE_MULTIPLE } from '../types/entities/SpendExplorerTypes';
 import {
   hasNestedSecretValue,
   isValidNestedSecretGroups,
@@ -564,6 +565,7 @@ export const SettingKeySchema = z.enum([
   'spendMonitorSlackEnabled',
   'spendMonitorPlatformSpikeRatio',
   'spendMonitorPlatformCriticalRatio',
+  'spendExplorerFeatureSpikeMultiple',
   'spendMonitorPlatformSpikeFloorCredits',
   'spendMonitorPlatformCostFloorUsd',
   'spendMonitorAccountSpikeRatio',
@@ -2916,6 +2918,7 @@ export const API_SERVICE_GROUPS = {
       { key: 'spendMonitorSlackEnabled', order: 19.42 },
       { key: 'spendMonitorPlatformSpikeRatio', order: 19.43 },
       { key: 'spendMonitorPlatformCriticalRatio', order: 19.44 },
+      { key: 'spendExplorerFeatureSpikeMultiple', order: 19.445 },
       { key: 'spendMonitorPlatformSpikeFloorCredits', order: 19.45 },
       { key: 'spendMonitorPlatformCostFloorUsd', order: 19.46 },
       { key: 'spendMonitorAccountSpikeRatio', order: 19.47 },
@@ -6109,6 +6112,17 @@ export const settingsMap = {
     min: 1,
     description:
       'Ratio. Escalates a platform spike to critical when platform-wide credit spend in the last 15-minute window is at least this multiple of the baseline. Minimum 1.',
+    group: API_SERVICE_GROUPS.CREDITS.id,
+    category: 'SecOps',
+  }),
+  spendExplorerFeatureSpikeMultiple: makeNumberSetting({
+    key: 'spendExplorerFeatureSpikeMultiple',
+    name: 'Spend Explorer: Feature Spike Multiple',
+    defaultValue: DEFAULT_FEATURE_SPIKE_MULTIPLE,
+    int: false,
+    min: 1,
+    description:
+      'Ratio. The Spend explorer flags a feature, or a user of a feature, as a spike when its cost on the last complete UTC day of the range is above this multiple of its average daily cost over the 7 days before. Display only; nothing alerts on it. Changes show within 5 minutes (the explorer caches its results). Minimum 1.',
     group: API_SERVICE_GROUPS.CREDITS.id,
     category: 'SecOps',
   }),

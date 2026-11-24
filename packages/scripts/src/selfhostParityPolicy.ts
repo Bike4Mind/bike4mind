@@ -361,7 +361,7 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   ),
   gapBecause(
     'queue:infra/emailIngestion.ts:emailAnalysisQueue',
-    '8d9530e6a23e006c53e48ac9cb08ac1e75a823c9945541299b073514202756ff',
+    '66b5fb7d5467d359d9705225e6e149fc8104f623c422f9121e43e004a0cbc2ef',
     'Enqueued only by the inbound-email parser, which consumes emailIngestionQueue, so nothing produces it on self-host. Wire both together if inbound email is ever supported.',
     ['bedrock:InvokeModel']
   ),
@@ -371,7 +371,7 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   ),
   gapBecause(
     'queue:infra/emailIngestion.ts:emailIngestionQueue',
-    '83064348d61e40b8846828284fa9dce1613c827ff01746b55ffd5c87d2c08d36',
+    '0abe22687df3eb5c77b0b53cbf4fb3281348aeb1b682ce8c1c1ae339a21a34a8',
     'Filled only by the SES inbound-mail bucket notification, which self-host has no equivalent of. Registered in the manifest, but nothing produces or consumes it locally.',
     ['bedrock:*']
   ),
@@ -381,7 +381,7 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   ),
   gapBecause(
     'queue:infra/emailMarketing.ts:emailBatchQueue',
-    '5d45d7e1d42dae22ac7c21a370b9f2e007cdc0d633b4537bc428617c56cdfe1b',
+    '41369e944edc92787993e32ca3e47d72839008182df771a2a88bc3a24db8df4d',
     'Fed only by the email job orchestrator (the emailJobQueue consumer), so it stays empty until emailJobQueue is wired. Wire the two together.'
   ),
   broker(
@@ -390,7 +390,7 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   ),
   gapBecause(
     'queue:infra/emailMarketing.ts:emailJobQueue',
-    '95ca3d63d4c4950608d7e94b9c04318ae0bde26e7f38f786f1fdc654f119a32b',
+    'b88ef16199363841a4936939f80279e1919e225c21485c738f2236b3b0481936',
     'The admin email-job start and send routes enqueue here, but no self-host consumer runs the email job orchestrator, so a started job never sends. Needs a consumer and an outbound mail provider decision.'
   ),
   broker(
@@ -580,7 +580,7 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   ),
   wired(
     'queue:infra/queues.ts:githubLakeIngestQueue',
-    '5991bc2614a68d8d7a45c8db5361eca1d80a1f52053ee29bc879093903636a28',
+    'd5bf9dcf09ef16cf0bea531a9d03eceb4e58f8c7a35e95e219f94cdabd59236c',
     {
       source: 'apps/workers/src/selfhost/main.ts',
       symbol: 'queue:githubLakeIngestQueue',
@@ -593,7 +593,7 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   ),
   wired(
     'queue:infra/queues.ts:githubLakeRevokeQueue',
-    'e813340095aa304e65e8f0176a6f16b9189282f8ca12fa623f17628bd6c655cc',
+    '70755d8fb0016af113da6842cc1335e83461923fedffb0ef0835501f6ed90e54',
     {
       source: 'apps/workers/src/selfhost/main.ts',
       symbol: 'queue:githubLakeRevokeQueue',
@@ -613,7 +613,7 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
     'queue:infra/queues.ts:generatedMediaPurgeQueueDLQ',
     'c2d58c32249e95e85b54c27855e71c6dc8512ff1fc4965a78013fd5eee539abc'
   ),
-  gap('queue:infra/queues.ts:githubWebhookQueue', '72684acab9efbf0efebee843b28926a7b94e7817cc558d1f9e6b6a9f717f2eaf', [
+  gap('queue:infra/queues.ts:githubWebhookQueue', '0c4aebd343626fd564fa19c5b9a6713524fb539c300e65d686300d98508cc41a', [
     'import:@aws-sdk/client-cloudwatch',
   ]),
   broker(
@@ -701,7 +701,7 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   ),
   gap(
     'queue:infra/queues.ts:overwatchAnalyticsQueue',
-    '8ec6d78db33072b1c167a6bade35f2f169a64ae64d7b335e62652a37ab8f6992',
+    '9cb823c8171933b2ca00cd9023fde24c5bcb4faa73db7965b29d60bed7737b22',
     ['cloudwatch:PutMetricData']
   ),
   broker(
@@ -794,7 +794,7 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   ),
   gapBecause(
     'queue:infra/queues.ts:secopsTriageQueue',
-    '39410fdba252b1ee915d7775d7e667be6221fcfebaad0258f4512ceb0ae2f884',
+    'fea6f0e8a658e19e6e59e7ba9a6bf4369acb6d8f5220c0367839422cf4d4a14c',
     'Not registered. The admin security-dashboard ingest routes enqueue here; triage works on Prowler and AWS security findings that self-host does not produce.',
     ['cloudwatch:PutMetricData', 'import:@aws-sdk/client-cloudwatch']
   ),
@@ -802,20 +802,20 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
     'queue:infra/queues.ts:secopsTriageQueueDLQ',
     '5dae60c15cdbc4e123e5ffaafcfdfecbe658a3ac123be20c976beab0dd4f3c2a'
   ),
-  gap('queue:infra/queues.ts:slackExportQueue', '88177f4b85d6e7d7b11b8ab96d7c58b135b35122d0b8a0ec08a1e5b06824966e'),
+  gap('queue:infra/queues.ts:slackExportQueue', '68f38e363a04f80f675d884ee4a292ff84353add86a6efc0018ebcff9ea5cc29'),
   broker(
     'queue:infra/queues.ts:slackExportQueueDLQ',
     'e6f709c7a77ad92a6420578b8802c7199d3580045da4a245ec379dca2b2f2a84'
   ),
   gapBecause(
     'queue:infra/queues.ts:sreFixQueue',
-    '8105f1b3043f3f0d5c48cb53a593c61a5d9539176905f4e1e256248b8c4ddfbd',
+    '64900b939f9aa0cd7b750efeb1cdda2e374a2aeef2e08aaffd8f23dc4cd20aa2',
     'Reached from the SRE Slack approval path and, on hosted, an EventBridge rule. Part of the SRE pipeline with sreJobQueue, which self-host does not run; decide the two together.'
   ),
   broker('queue:infra/queues.ts:sreFixQueueDLQ', '209afa13455584e3d213f4664f8bb372f97c4047b441a13c140c10a2d3b9950c'),
   gapBecause(
     'queue:infra/queues.ts:sreJobQueue',
-    '0ffc1da5c9159cdc60c036e0e8cb0a7d490fff538c68fa7aa4fb6009e9b90e8a',
+    'dcedce8d2a640076d0a90810734ad6368f78257b091c93fcf76e0b8eb20e8096',
     'Not registered. The admin SRE rerun/retry routes and the GitHub SRE webhook enqueue here; the handler needs Bedrock and CloudWatch, which self-host does not provide.',
     ['bedrock:InvokeModel', 'cloudwatch:PutMetricData']
   ),
@@ -837,7 +837,7 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   ),
   gapBecause(
     'queue:infra/queues.ts:whatsNewGenerationQueue',
-    'c98623ce70559d3364f761f889ecc81077e07ac52f3219c01d1ee1eab3911050',
+    '235245848c15e940229884146d1cb811139d034deb10813936101c0435ff8ce5',
     'Not registered. whatsNewJob.dispatch consumes release notes and admin-triggered highlights; self-host has no release-notes pipeline or highlights consumer.',
     [
       'bedrock:InvokeModel',

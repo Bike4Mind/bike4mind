@@ -190,6 +190,11 @@ export const DATA_NAMED_QUEUES: readonly { file: string; name: string; reason: s
 
 const HOSTED_CONSTRUCTOR = /^(?:sst\.aws\.\w+|aws\.\w+\.\w+)$/;
 const TRIGGER_METHODS = new Set(['subscribe', 'subscribeQueue', 'notify']);
+// infra/previewQueueConsumers.ts: `subscribeUnlessPreview(gate, name, queue, ...subscribeArgs)` is
+// `queue.subscribe(...subscribeArgs)` on every stage but a preview, so it folds in like that call.
+// Its own body forwards to a parameter's subscribe(), which no declaration owns.
+const PREVIEW_GATED_SUBSCRIBE = 'subscribeUnlessPreview';
+const PREVIEW_GATED_RECEIVER_INDEX = 2;
 /** Option keys whose `<resource>.arn` value is the compute or queue a trigger delivers to. */
 const TARGET_KEYS = new Set(['job', 'function', 'destinationArn', 'endpoint', 'arn', 'queue']);
 /**
@@ -241,6 +246,14 @@ function parse(file: string, text: string): ts.SourceFile {
 function walk(node: ts.Node, visit: (node: ts.Node) => void): void {
   visit(node);
   ts.forEachChild(node, child => walk(child, visit));
+}
+
+/** True inside the body of the preview gate itself, whose generic forward has no owning declaration. */
+function insidePreviewGate(node: ts.Node): boolean {
+  for (let current = node.parent; current; current = current.parent) {
+    if (ts.isFunctionDeclaration(current) && current.name?.text === PREVIEW_GATED_SUBSCRIBE) return true;
+  }
+  return false;
 }
 
 function canonical(node: ts.Node): string {
@@ -565,18 +578,27 @@ function discoverMethodTriggers(index: InfraIndex, byNode: Map<ts.NewExpression,
   for (const source of index.parsed) {
     const file = source.fileName;
     walk(source, node => {
-      if (!ts.isCallExpression(node) || !ts.isPropertyAccessExpression(node.expression)) return;
-      const method = node.expression.name.text;
+      if (!ts.isCallExpression(node)) return;
+      const gated = ts.isIdentifier(node.expression) && node.expression.text === PREVIEW_GATED_SUBSCRIBE;
+      if (!gated && !ts.isPropertyAccessExpression(node.expression)) return;
+      if (!gated && insidePreviewGate(node)) return;
+      const method = ts.isPropertyAccessExpression(node.expression) ? node.expression.name.text : 'subscribe';
       if (!TRIGGER_METHODS.has(method)) return;
-      const receiver = unwrap(node.expression.expression);
+      const receiverExpression = ts.isPropertyAccessExpression(node.expression)
+        ? node.expression.expression
+        : node.arguments[PREVIEW_GATED_RECEIVER_INDEX];
+      if (!receiverExpression) throw new Error(`${file}: ${PREVIEW_GATED_SUBSCRIBE}() without a queue`);
+      const receiver = unwrap(receiverExpression);
+      const args = gated ? node.arguments.slice(PREVIEW_GATED_RECEIVER_INDEX + 1) : node.arguments;
       const target = ts.isIdentifier(receiver) ? index.resolve(file, receiver.text) : undefined;
       if (!target) throw new Error(`${file}: unresolved subscription receiver ${receiver.getText()}`);
       const unsupported = () => new Error(`${file}: unsupported ${method}() on ${target.type} ${receiver.getText()}`);
+      if (gated && target.type !== 'Queue') throw unsupported();
       if (target.type === 'Queue') {
         const owner = byNode.get(target.node);
         if (method !== 'subscribe' || !owner) throw unsupported();
         owner.nodes.push(node);
-        if (node.arguments[0]) owner.subscribers.push(node.arguments[0]);
+        if (args[0]) owner.subscribers.push(args[0]);
       } else if (target.type === 'Bus') {
         if (method === 'notify') throw unsupported();
         const subscriber = node.arguments[1];

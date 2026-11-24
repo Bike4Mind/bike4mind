@@ -161,7 +161,7 @@ import { AccessStore } from './tools/AccessStore';
 import { ApprovalGate } from './tools/ApprovalGate';
 import { DependencyInstaller } from './project/dependencyInstall';
 import { RecentFolderStore } from './project/RecentFolderStore';
-import { SpareWorktrees } from './project/workspace';
+import { appWorktreeMainCheckout, SpareWorktrees } from './project/workspace';
 import { folderToRemember } from './project/recentFolderToRecord';
 import { BackgroundProcessRegistry } from './tools/BackgroundProcessRegistry';
 import { parseReasoningEffortSetting, storedReasoningEffortSetting } from './reasoningEffort';
@@ -459,7 +459,9 @@ export function registerChat(
   const spareWorktrees = new SpareWorktrees();
   // The trust file is its own file beside tool-access.json, and for the same reason: both record
   // a consent the user gave once and should not be asked for again on every launch.
-  const projectTrust = new ProjectTrustStore(join(userData, 'project-skill-trust.json'));
+  const projectTrust = new ProjectTrustStore(join(userData, 'project-skill-trust.json'), directory =>
+    appWorktreeMainCheckout(directory, mainCheckoutOf)
+  );
   const skills = new SkillCatalog(projectTrust, accountSkillsProvider(auth, userData), logger);
   // App-wide like approval-mode.json. Claude Code's files are only ever read; the protected roots
   // are folders no allow rule may cover, since a call writing there would grant itself more.

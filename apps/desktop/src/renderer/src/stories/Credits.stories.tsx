@@ -6,7 +6,7 @@ import Divider from '@mui/joy/Divider';
 import Sheet from '@mui/joy/Sheet';
 import Stack from '@mui/joy/Stack';
 import Typography from '@mui/joy/Typography';
-import type { AccountProfile } from '@shared/account';
+import type { AccountProfile, CreditExpiry } from '@shared/account';
 import { CreditsAvatarDot, CreditsMenuHeader } from '../credits/CreditsGlance';
 import { creditOutlook, DAY_MS, nextRefillAt } from '../credits/creditOutlook';
 import type { CreditsGlance } from '../credits/useCreditsGlance';
@@ -19,7 +19,8 @@ function glance(
   balance: number,
   burnPerDay: number,
   refillInDays: number | null,
-  tier: AccountProfile['tier'] = 'pro'
+  tier: AccountProfile['tier'] = 'pro',
+  expiring: CreditExpiry[] | undefined = undefined
 ): CreditsGlance {
   const plan =
     refillInDays === null
@@ -29,7 +30,11 @@ function glance(
           interval: 'monthly' as const,
           currentPeriodEndsAt: new Date(NOW + refillInDays * DAY_MS).toISOString(),
         };
-  const profile: AccountProfile = { credits: { balance, monthlyAllowance: plan ? 10_000 : null }, plan, tier };
+  const profile: AccountProfile = {
+    credits: { balance, monthlyAllowance: plan ? 10_000 : null, ...(expiring ? { expiring } : {}) },
+    plan,
+    tier,
+  };
   return {
     profile,
     burnPerDay,
@@ -38,6 +43,7 @@ function glance(
       balance,
       burnPerDay,
       refillAt: nextRefillAt(plan, profile.credits.monthlyAllowance, NOW),
+      expiring,
       now: NOW,
     }),
   };
@@ -45,6 +51,17 @@ function glance(
 
 const CASES: { title: string; glance: CreditsGlance }[] = [
   { title: 'Banked balance', glance: glance(312_480, 2100, 7) },
+  {
+    title: 'Banked, expiry known',
+    glance: glance(312_480, 2100, 7, 'pro', [
+      { amount: 40_000, expiresAt: NOW + 50 * DAY_MS },
+      { amount: 200_000, expiresAt: NOW + 300 * DAY_MS },
+    ]),
+  },
+  {
+    title: 'Grant expiring before the refill',
+    glance: glance(2000, 100, 7, 'pro', [{ amount: 1800, expiresAt: NOW + 3 * DAY_MS }]),
+  },
   { title: 'Covered to the refill', glance: glance(6200, 260, 7) },
   { title: 'Short of the refill', glance: glance(1400, 310, 7) },
   { title: 'Almost out', glance: glance(180, 300, 7) },

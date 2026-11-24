@@ -276,26 +276,29 @@ if (isMonitoredStage) {
    * Monitors the Lambda function itself for execution errors.
    * Complements the application-level failure metric.
    */
-  new aws.cloudwatch.MetricAlarm('whatsNewLambdaErrors', {
-    name: `${$app.name}-${$app.stage}-whats-new-lambda-errors`,
-    alarmDescription: "What's New Lambda (release notes and highlights) has errors",
-    comparisonOperator: 'GreaterThanThreshold',
-    evaluationPeriods: 1,
-    metricName: 'Errors',
-    namespace: 'AWS/Lambda',
-    period: 300,
-    statistic: 'Sum',
-    threshold: 0,
-    treatMissingData: 'notBreaching',
-    dimensions: {
-      FunctionName: whatsNewGenerationQueueSubscription.nodes.function.name,
-    },
-    alarmActions: [dlqAlarmTopic.arn],
-    tags: {
-      Application: 'WhatsNewGeneration',
-      Severity: 'High',
-    },
-  });
+  // Undefined on a preview, which never runs this consumer (infra/previewQueueConsumers.ts).
+  if (whatsNewGenerationQueueSubscription) {
+    new aws.cloudwatch.MetricAlarm('whatsNewLambdaErrors', {
+      name: `${$app.name}-${$app.stage}-whats-new-lambda-errors`,
+      alarmDescription: "What's New Lambda (release notes and highlights) has errors",
+      comparisonOperator: 'GreaterThanThreshold',
+      evaluationPeriods: 1,
+      metricName: 'Errors',
+      namespace: 'AWS/Lambda',
+      period: 300,
+      statistic: 'Sum',
+      threshold: 0,
+      treatMissingData: 'notBreaching',
+      dimensions: {
+        FunctionName: whatsNewGenerationQueueSubscription.nodes.function.name,
+      },
+      alarmActions: [dlqAlarmTopic.arn],
+      tags: {
+        Application: 'WhatsNewGeneration',
+        Severity: 'High',
+      },
+    });
+  }
 
   /**
    * Alarm: Anthropic API Rate Limit Errors

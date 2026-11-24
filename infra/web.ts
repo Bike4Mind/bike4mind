@@ -803,7 +803,7 @@ export const dlqConsumerFunctionArns = [
   emailParserQueueSubscription,
   emailAnalyzerQueueSubscription,
   agentContinuationQueueSubscription,
-].map(subscription => subscription.nodes.function.arn);
+].flatMap(subscription => (subscription ? [subscription.nodes.function.arn] : []));
 
 if (web.nodes.server) {
   const dlqConsumerLogsPolicy = new aws.iam.Policy('WebDlqConsumerLogsPolicy', {

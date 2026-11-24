@@ -1,5 +1,6 @@
 import type {
   ApiKeyBillingOwnerType,
+  CompletionRunAttribution,
   GeneratedAssetMetadata,
   GenerationJobSource,
   IGenerationJobDocumentOf,
@@ -14,6 +15,7 @@ import type { Logger } from '@bike4mind/observability';
 import type { MusicProviderRegistry } from '@bike4mind/utils/musicProviders';
 import type { CreditHoldAdapters } from '../creditService/creditHold';
 import type { GenerationJobEngine } from '../generationJobs/engine';
+import type { RunBudgetAdapters } from '../generationJobs/types';
 import type { SaveGeneratedAssetResult } from '../generatedAssets';
 
 // Stamped on the job as deadlineAt at create; the engine fails a pending job past it.
@@ -60,6 +62,8 @@ export type MusicJobDeps = {
      */
     status: Extract<UsageEventStatus, 'ok' | 'refusal' | 'error' | 'timeout'>;
   }): Promise<void>;
+  /** Claims and releases a job's share of a completion run's budget; required to create a job with a `run`. */
+  runBudget?: RunBudgetAdapters;
   now(): Date;
   logger: Logger;
 };
@@ -96,6 +100,8 @@ export type CreateMusicJobInput = {
   /** The notebook and message the song belongs to, for in-chat producers. */
   sessionId?: string;
   questId?: string;
+  /** The completion run the job is made for: its hold is claimed against the run's budget (resolvePaidCallRun). */
+  run?: CompletionRunAttribution;
 };
 
 export type CreateMusicJobErrorCode =

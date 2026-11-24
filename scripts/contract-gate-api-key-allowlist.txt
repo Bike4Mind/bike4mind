@@ -273,6 +273,7 @@ apps/client/pages/api/artifacts/search.ts
 apps/client/pages/api/artifacts/types.ts
 apps/client/pages/api/auth/[strategy]/callback.ts
 apps/client/pages/api/auth/[strategy]/index.ts
+apps/client/pages/api/auth/desktop-web-session/redeem.ts  # deliberately unauthenticated (auth: false): the single-use code minted by POST /api/auth/desktop-web-session (jwtOnly) is the credential; stored hashed, 60-second expiry, bound to a live Desktop session, consumed atomically, cross-site refused, rate limited
 apps/client/pages/api/auth/github/authorize.ts
 apps/client/pages/api/auth/github/disconnect.ts
 apps/client/pages/api/auth/github/mcp-callback.ts

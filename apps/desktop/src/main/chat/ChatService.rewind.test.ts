@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
 import type { AuthenticatedApiClient } from '@bike4mind/client-auth';
-import type { ChatMessage, ChatStreamEvent } from '@shared/chat';
+import { SESSION_EXPIRED_STOP, type ChatMessage, type ChatStreamEvent } from '@shared/chat';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { formatModelEditNote, modelEditSummary } from '@shared/modelEdit';
 import { AttachmentStore } from './AttachmentStore';
@@ -258,6 +258,54 @@ describe('ChatService rewind', () => {
       await store.appendMessage(id, prompt);
       expect(await service.regenerateReply(id)).toMatchObject({ ok: false });
       expect(await thread(id)).toEqual(['user:hi']);
+    });
+  });
+
+  describe('re-run guard', () => {
+    it('starts one turn when Retry is clicked from two surfaces at once', async () => {
+      const id = await twoTurns();
+
+      const results = await Promise.all([service.regenerateReply(id), service.regenerateReply(id)]);
+
+      expect(results.filter(result => result.ok)).toHaveLength(1);
+      expect(results.find(result => !result.ok)).toMatchObject({
+        busy: true,
+        error: expect.stringMatching(/replying/i),
+      });
+      await answer(2, 'reply two, again');
+      expect(replyCalls()).toHaveLength(3);
+    });
+
+    it('starts one turn when Continue is clicked from two surfaces at once', async () => {
+      const { id } = await service.createSession();
+      sessionIdOf = id;
+      const now = new Date().toISOString();
+      await store.appendMessage(id, { id: 'p1', role: 'user', content: 'go', createdAt: now });
+      await store.appendMessage(id, {
+        id: 'a1',
+        role: 'assistant',
+        content: 'partial',
+        createdAt: now,
+        stopReason: SESSION_EXPIRED_STOP,
+      });
+
+      const results = await Promise.all([service.continueReply(id), service.continueReply(id)]);
+
+      expect(results.filter(result => result.ok)).toHaveLength(1);
+      expect(results.find(result => !result.ok)).toMatchObject({
+        busy: true,
+        error: expect.stringMatching(/replying/i),
+      });
+      await vi.waitUntil(() => replyCalls().length > 0, { timeout: 2000, interval: 5 });
+      expect(replyCalls()).toHaveLength(1);
+    });
+
+    it('refuses Continue while a Retry is running', async () => {
+      const id = await twoTurns();
+      expect(await service.regenerateReply(id)).toMatchObject({ ok: true });
+
+      expect(await service.continueReply(id)).toMatchObject({ ok: false, error: expect.stringMatching(/replying/i) });
+      await answer(2, 'reply two, again');
     });
   });
 });
