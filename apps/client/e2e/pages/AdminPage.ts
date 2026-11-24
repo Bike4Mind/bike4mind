@@ -121,6 +121,14 @@ export class AdminPage extends BasePage {
     });
   }
 
+  async navigateToHeldSignupGrants() {
+    await this.expandUserOps();
+    await (await this.revealSidebarItem('admin-waitlist-tab-btn', 'people')).click();
+    await this.page.getByTestId('invite-center-sections-pending-btn').click();
+    await this.page.getByTestId('invite-center-open-held-grants-btn').click();
+    await expect(this.page.getByTestId('held-signup-grants-table')).toBeVisible({ timeout: TIMEOUTS.VISIBLE });
+  }
+
   async switchToInviteCodesTab() {
     await this.page.getByTestId('invite-center-codes-tab').click();
   }

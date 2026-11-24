@@ -259,6 +259,7 @@ const config = defineConfig({
         storageState: adminAuthFile,
       },
       dependencies: ['setup-core', 'unauthenticated'],
+      // signup-grants rides here for the admin session; it registers its own accounts through OTC.
       testMatch: [
         /(?:^|\/)admin\.spec\.ts$/,
         /(?:^|\/)admin-access-review\.spec\.ts$/,
