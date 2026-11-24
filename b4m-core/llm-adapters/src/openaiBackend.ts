@@ -2008,7 +2008,7 @@ export class OpenAIBackend implements ICompletionBackend {
             declaredArtifactType(options.tools, outcome.name)
           );
 
-          // Same echo guard as the streaming path above.
+          // Same echo guard as the non-streaming branch above.
           const sanitizedResult = stripToolArtifactMarkup(
             resultStr,
             thisToolHadArtifact ? ARTIFACT_DELIVERED_PLACEHOLDER : ARTIFACT_REMOVED_PLACEHOLDER
@@ -2087,7 +2087,7 @@ export class OpenAIBackend implements ICompletionBackend {
           toolsUsed
         );
 
-        // See the streaming branch above for why only a guard this level created is flushed.
+        // See anthropicBackend for why only a guard this level created is flushed.
         if (!inheritedArtifactGuard && artifactGuard) await artifactGuard.flush();
       } else {
         // Pass tool calls through callback without executing.
@@ -2554,7 +2554,7 @@ export class OpenAIBackend implements ICompletionBackend {
     // know an artifact was delivered THAT way, or it can't recognize the model reconstructing the
     // same tag from the tool call's own arguments (it retains them in context) as an echo when it
     // shows up in the synthesis reply below - so markDelivered records the markup without
-    // re-sending it. See the streaming branch above for why the shared artifactGuard exists.
+    // re-sending it. See the non-streaming branch above for why the shared artifactGuard exists.
     const inheritedArtifactGuard = options._internal?.artifactGuard;
     let artifactGuard = inheritedArtifactGuard;
 
@@ -2657,7 +2657,7 @@ export class OpenAIBackend implements ICompletionBackend {
       toolsUsed
     );
 
-    // See the streaming branch above for why only a guard this level created is flushed.
+    // See anthropicBackend for why only a guard this level created is flushed.
     if (!inheritedArtifactGuard && artifactGuard) await artifactGuard.flush();
   }
 }
