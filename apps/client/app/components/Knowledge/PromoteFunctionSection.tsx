@@ -366,6 +366,9 @@ function shareSummary(tool: ICallableFunctionPublic): string {
   return `Shared with ${parts.join(' and ')}.`;
 }
 
+// Fails typecheck once the public record gains `dataPins`: pass those and its sources to the dialog instead.
+const NO_DATA_PINS: 'dataPins' extends keyof ICallableFunctionPublic ? never : string[] = [];
+
 function ShareBlock({ tool, live }: { tool: ICallableFunctionPublic; live: boolean }) {
   const [open, setOpen] = useState(false);
   const [stopError, setStopError] = useState<string | null>(null);
@@ -374,7 +377,11 @@ function ShareBlock({ tool, live }: { tool: ICallableFunctionPublic; live: boole
     <Stack spacing={1} data-testid="python-function-share-section">
       <Typography level="title-sm">Sharing</Typography>
       <Typography level="body-xs" sx={{ color: 'text.secondary' }} data-testid="python-function-share-status">
-        {live ? shareSummary(tool) : 'Promote the tool to share it. A share covers the live version.'}
+        {live
+          ? shareSummary(tool)
+          : tool.grants
+            ? 'Paused until the next promotion, which shares it again.'
+            : 'Promote the tool to share it. A share covers the live version.'}
       </Typography>
       <Stack direction="row" spacing={1}>
         <Button
@@ -411,8 +418,7 @@ function ShareBlock({ tool, live }: { tool: ICallableFunctionPublic; live: boole
           {stopError}
         </Alert>
       )}
-      {/* The record has no data pins or sources yet; the dialog lists them once it does. */}
-      {open && <ShareFunctionDialog tool={tool} dataPins={[]} sources={[]} onClose={() => setOpen(false)} />}
+      {open && <ShareFunctionDialog tool={tool} dataPins={NO_DATA_PINS} sources={[]} onClose={() => setOpen(false)} />}
     </Stack>
   );
 }

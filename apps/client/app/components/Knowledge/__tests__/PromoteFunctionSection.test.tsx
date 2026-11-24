@@ -144,11 +144,18 @@ describe('sharing', () => {
     expect(screen.getByTestId('python-function-share-stop-error').textContent).toContain('Tool not found');
   });
 
-  it('passes the share dialog no data pins while the record has none', () => {
-    // When the record gains data pins, this fails typecheck: pass them to the dialog in place of the empty lists.
-    // @ts-expect-error the public record has no dataPins yet
-    const pins: ICallableFunctionPublic['dataPins'] = undefined;
-    expect(pins).toBeUndefined();
+  it('a repinned draft that still has a share says promoting shares it again', () => {
+    renderSection(tool({ grants: { visibility: 'private', userIds: ['p-1'] } }));
+    expect(screen.getByTestId('python-function-share-status').textContent).toBe(
+      'Paused until the next promotion, which shares it again.'
+    );
+  });
+
+  it('a draft with no share keeps the promote line', () => {
+    renderSection(tool({ grants: null }));
+    expect(screen.getByTestId('python-function-share-status').textContent).toBe(
+      'Promote the tool to share it. A share covers the live version.'
+    );
   });
 });
 
