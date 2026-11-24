@@ -6,16 +6,10 @@ import type { AuthState } from '@shared/auth';
 import type { ChatSessionSummary } from '@shared/chat';
 import { HostRuntime, hostProtectedLocations, type HostEnvironment, type HostEventSink } from '.';
 
-// A headless host has no Electron to load, so any import of it from src/host fails here.
+// A headless host has no Electron to load: any import of it from src/host, direct or through a
+// dependency, fails the file here, whether or not the importer ever touches what it imported.
 vi.mock('electron', () => {
-  return new Proxy(
-    {},
-    {
-      get(_target, property) {
-        throw new Error(`src/host reached Electron (read "${String(property)}")`);
-      },
-    }
-  );
+  throw new Error('src/host loaded electron');
 });
 
 const signedOut: AuthState = {

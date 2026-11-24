@@ -41,8 +41,8 @@ export type HostMachineTools = {
 
 /**
  * The folders the agent's tools may never touch. Required rather than optional: the data
- * directory holds the auth vault, so a runtime built without them would expose the token.
- * Build them with hostProtectedLocations.
+ * directory holds the auth vault, so every runtime protects it. Build them with
+ * hostProtectedLocations.
  */
 export type HostProtection = {
   /** Folders no tool may read or write. */
