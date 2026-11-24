@@ -19,6 +19,9 @@ const COLUMNS: ReadonlyArray<{ id: ColumnId; label: string; states: readonly Age
   { id: 'failed', label: 'Failed', states: ['failed'] },
 ];
 
+/** Settled states that share the Done column with finished agents, so their card names which one it is. */
+const QUIET_CHIP: ReadonlySet<AgentState> = new Set(['paused', 'stopped', 'idle']);
+
 const FLIP_MS = 250;
 // Columns with cards share their row's width and shrink to this before the board wraps them into
 // another row; an empty column folds to its header, about EMPTY_COLUMN_WIDTH wide.
@@ -216,8 +219,10 @@ function BoardCard({
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75, flexWrap: 'wrap' }}>
         {agent.decision ? (
           <AgentStateChip state={agent.state} deciding />
+        ) : agent.state === 'waiting' ? (
+          <AgentStateChip state="waiting" backgroundJobs={agent.background?.running} />
         ) : (
-          (agent.state === 'stopped' || agent.state === 'idle') && <AgentStateChip state={agent.state} muted />
+          QUIET_CHIP.has(agent.state) && <AgentStateChip state={agent.state} muted />
         )}
         {costKnown && (
           <Typography level="body-xs" textColor="text.tertiary">
