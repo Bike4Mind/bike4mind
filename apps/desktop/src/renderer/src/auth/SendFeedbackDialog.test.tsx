@@ -68,24 +68,15 @@ describe('SendFeedbackDialog', () => {
     expect(el('send-feedback-close-btn')?.textContent).toBe('Close');
   });
 
-  it('keeps the draft and offers a retry after an error', async () => {
+  it('keeps the draft and offers a retry after an error, without claiming it was saved', async () => {
     const { sendFeedback } = mount(async () => ({ ok: false, error: 'Try again' }));
     type('My report');
     await act(async () => el('send-feedback-submit-btn')?.click());
     expect(el('send-feedback-notice')?.textContent).toContain('Try again');
     expect((el('send-feedback-textarea') as HTMLTextAreaElement).value).toBe('My report');
-    expect(el('send-feedback-submit-btn')).not.toBeNull();
-    expect(sendFeedback).toHaveBeenCalledTimes(1);
-  });
-
-  it('retains the draft for retry when the message text was not saved', async () => {
-    mount(async () => ({ ok: false, error: 'We could not save the message text - please try again.' }));
-    type('My report');
-    await act(async () => el('send-feedback-submit-btn')?.click());
-    expect(el('send-feedback-notice')?.textContent).toContain('could not save');
-    expect((el('send-feedback-textarea') as HTMLTextAreaElement).value).toBe('My report');
     expect(el('send-feedback-submit-btn')?.hasAttribute('disabled')).toBe(false);
     expect(el('send-feedback-dialog')?.textContent).not.toContain('Feedback saved');
+    expect(sendFeedback).toHaveBeenCalledTimes(1);
   });
 
   it('shows a warning when the report is saved but delivery fails', async () => {

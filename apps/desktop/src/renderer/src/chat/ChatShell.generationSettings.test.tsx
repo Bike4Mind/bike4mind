@@ -12,6 +12,19 @@ import { ChatShell } from './ChatShell';
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 vi.mock('./CustomizePanel', () => ({ CustomizeNavItem: () => null, CustomizeScreen: () => null }));
+// The 3D engine's iframe would make jsdom boot a whole extra window on every mount.
+vi.mock('./model3d/modelEngineFrame', async importOriginal => ({
+  ...(await importOriginal<typeof import('./model3d/modelEngineFrame')>()),
+  ModelEngineFrame: class {
+    warm() {
+      return this;
+    }
+    dispose() {}
+    async build() {
+      return null;
+    }
+  },
+}));
 
 window.matchMedia ??= ((query: string) => ({
   matches: false,
@@ -23,6 +36,14 @@ window.matchMedia ??= ((query: string) => ({
   removeEventListener: () => {},
   dispatchEvent: () => false,
 })) as typeof window.matchMedia;
+
+// Joy's autosizing textarea measures itself on every render, and jsdom resolves that against every
+// emotion sheet in the document and every ancestor, with no layout to measure in the end.
+const realGetComputedStyle = window.getComputedStyle.bind(window);
+window.getComputedStyle = ((element: Element, pseudo?: string | null) =>
+  element instanceof HTMLTextAreaElement
+    ? element.style
+    : realGetComputedStyle(element, pseudo)) as typeof getComputedStyle;
 
 window.ResizeObserver ??= class {
   observe() {}
@@ -278,27 +299,32 @@ describe('Composer chat settings across a chat switch', () => {
     'setApprovalMode',
   ] as const;
 
-  it.each([
-    ['approval-mode-btn', 'approval-mode-option-'],
-    ['model-picker-btn', 'model-picker-option'],
-    ['effort-picker-btn', 'effort-picker-option'],
-    ['prompt-cache-ttl-picker-btn', 'prompt-cache-ttl-picker-option-'],
-  ])('closes the open %s menu on Mod+2 and calls no setter', async (button, option) => {
-    const setters = SETTERS.map(name => vi.fn(async () => null));
+  // One mount, switching back and forth: each menu must close on the switch away from its chat.
+  it('closes each open settings menu on a Mod+digit chat switch and calls no setter', async () => {
+    const setters = SETTERS.map(() => vi.fn(async () => null));
     const chat = window.b4m.chat as unknown as Record<string, unknown>;
     SETTERS.forEach((name, index) => (chat[name] = setters[index]));
     chat.listModels = async () => ({ models: [MODEL, OPUS] });
     chat.getSession = async (id: string) =>
       ({ ...SESSIONS.find(entry => entry.id === id), model: OPUS.id, messages: [] }) as unknown as ChatSession;
     await renderShell();
-    await act(async () => el('composer-tune-btn').click());
-    await act(async () => el(button).click());
-    const open = () => document.querySelector(`[data-testid^="${option}"]`);
-    expect(open()).not.toBeNull();
+    const menus = [
+      ['approval-mode-btn', 'approval-mode-option-'],
+      ['model-picker-btn', 'model-picker-option'],
+      ['effort-picker-btn', 'effort-picker-option'],
+      ['prompt-cache-ttl-picker-btn', 'prompt-cache-ttl-picker-option-'],
+    ] as const;
+    for (const [index, [button, option]] of menus.entries()) {
+      const [digit, title] = index % 2 === 0 ? ['2', 'Second'] : ['1', 'First'];
+      if (!find(button)) await act(async () => el('composer-tune-btn').click());
+      await act(async () => el(button).click());
+      const open = () => document.querySelector(`[data-testid^="${option}"]`);
+      expect(open(), button).not.toBeNull();
 
-    await press(el(button), { key: '2', code: 'Digit2', ctrlKey: true });
-    expect(el('chat-session-title').textContent).toBe('Second');
-    expect(open()).toBeNull();
+      await press(el(button), { key: digit, code: `Digit${digit}`, ctrlKey: true });
+      expect(el('chat-session-title').textContent).toBe(title);
+      expect(open(), button).toBeNull();
+    }
     for (const setter of setters) expect(setter).not.toHaveBeenCalled();
   });
 });

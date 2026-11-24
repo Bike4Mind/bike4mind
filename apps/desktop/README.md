@@ -826,7 +826,7 @@ every pre-existing conversation is. A file claiming `code` with an unusable proj
 downgraded to Chat rather than trusted, because a Code session with no working directory would
 send its tools to whatever the first global grant happens to be.
 
-`SessionStore.modes.test.ts` runs against a session file captured from the pre-change code,
+`SessionStore.test.ts` runs against a session file captured from the pre-change code,
 not a hand-written approximation.
 
 ### Sidebar

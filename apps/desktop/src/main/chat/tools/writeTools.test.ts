@@ -1,7 +1,8 @@
 import { realpathSync } from 'node:fs';
 import { mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises';
-import { homedir, tmpdir } from 'node:os';
+import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
+import { sandboxedHome } from '../../../../vitest.tempRoot';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { PathAccessDenied, physicalTarget, resolveWithinRoots, withRealPath } from './paths';
 import type { ToolContext } from './types';
@@ -85,10 +86,13 @@ describe('write tools', () => {
 
     it('names a relative path by the file it resolves to', async () => {
       const absolute = await fileEdit.approval?.({ path: notes(), oldText: 'beta', newText: 'B' }, context);
-      const relative = await fileEdit.approval?.({ path: 'notes.md', oldText: 'beta', newText: 'B' }, {
-        ...context,
-        workingDirectory: root,
-      });
+      const relative = await fileEdit.approval?.(
+        { path: 'notes.md', oldText: 'beta', newText: 'B' },
+        {
+          ...context,
+          workingDirectory: root,
+        }
+      );
 
       expect(relative?.chatKey).toBe(absolute?.chatKey);
     });
@@ -837,7 +841,7 @@ describe('write tools', () => {
     let project: string;
 
     beforeEach(async () => {
-      claude = join(await realpath(homedir()), '.claude');
+      claude = join(await realpath(sandboxedHome()), '.claude');
       await mkdir(join(claude, 'skills', 'x'), { recursive: true });
       await writeFile(join(claude, 'skills', 'x', 'SKILL.md'), 'old\n', 'utf8');
       await writeFile(join(claude, 'settings.json'), '{}\n', 'utf8');
