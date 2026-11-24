@@ -1,7 +1,7 @@
 import { withTransaction } from '@bike4mind/db-core';
 import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from 'vitest';
 import mongoose from 'mongoose';
-import { createMongoReplSet, MONGO_TEST_TIMEOUT_MS } from '../../__test__/createMongoServer';
+import { createMongoReplSet, settleAutoIndexBuilds, MONGO_TEST_TIMEOUT_MS } from '../../__test__/createMongoServer';
 import { DelegatedItemModel, delegatedItemRepository, type DelegatedItemInput } from './DelegatedItemModel';
 
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
@@ -11,6 +11,7 @@ let server: Awaited<ReturnType<typeof createMongoReplSet>>;
 beforeAll(async () => {
   server = await createMongoReplSet();
   await mongoose.connect(server.getUri(), { monitorCommands: true });
+  await settleAutoIndexBuilds(mongoose);
   await DelegatedItemModel.syncIndexes();
 });
 afterAll(async () => {
