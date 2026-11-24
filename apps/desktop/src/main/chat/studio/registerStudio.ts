@@ -240,8 +240,8 @@ export function registerStudio(deps: {
     });
     if (picked.canceled || !picked.filePaths[0]) return null;
     if (scope !== sessions.scopeKey()) throw new Error('Account changed.');
-    // The user picked this file in the native dialog, and a Studio session has no granted folders to
-    // check it against. O_NOFOLLOW still refuses a symlink swapped in after the pick.
+    // The native-dialog pick is the user's consent, so this upload is not checked against folder grants
+    // (those scope the agent, in any session). O_NOFOLLOW still refuses a symlink swapped in after the pick.
     const path = await realpath(picked.filePaths[0]);
     const file = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
     let bytes: Buffer;
