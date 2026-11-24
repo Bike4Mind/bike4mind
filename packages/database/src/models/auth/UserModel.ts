@@ -310,6 +310,7 @@ const InterventionHoldSchema = new Schema(
     expiresAt: { type: Date, required: true },
     releasedAt: { type: Date, default: null },
     releasedBy: { type: String, default: null },
+    creditsPerHour: { type: Number },
   },
   { _id: false }
 );

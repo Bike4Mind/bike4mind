@@ -107,6 +107,8 @@ export const interventionHoldSchema = z.object({
   expiresAt: z.date(),
   releasedAt: z.date().nullable(),
   releasedBy: z.string().nullable(),
+  /** Limit holds only: AI spend admitted per fixed hour, snapshotted so a later config change does not move it. */
+  creditsPerHour: z.number().int().min(0).optional(),
 });
 export type InterventionHold = z.infer<typeof interventionHoldSchema>;
 

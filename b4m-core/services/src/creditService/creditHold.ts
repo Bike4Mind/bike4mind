@@ -21,6 +21,7 @@ import {
 import { notifyOrgEvent } from '../organizationService/orgEventObserver';
 import { isMemberCreditCapExceeded } from './memberCreditCap';
 import { assertNewAccountSpendWithinCap, type NewAccountSpendCapAdapters } from './newAccountSpendCap';
+import { assertInterventionSpendAllowed, interventionAccessRefusal } from './interventionSpendGate';
 import { aiAccessDeniedMessage } from '../userService/accountState';
 import { assertSpendNotFrozen } from '../spendFreezeService/assertSpendNotFrozen';
 import { spendFreezeSubjectForHold } from '../spendFreezeService/spendFreezeSubjectForHold';
@@ -111,7 +112,7 @@ export async function holdCredits(
   if (!user) throw new BadRequestError('User not found');
   // Every hold reloads the user, so a queued job or continuation placing one after the account was blocked is
   // refused here, whichever path placed it. Same gate as assertAiAccessAllowed.
-  const accessDenial = aiAccessDeniedMessage(user);
+  const accessDenial = aiAccessDeniedMessage(user) ?? interventionAccessRefusal(user, new Date());
   if (accessDenial) throw new ForbiddenError(accessDenial);
   let organization: IOrganizationDocument | null = null;
   if (organizationId) {
@@ -185,6 +186,23 @@ export async function holdCredits(
     throw insufficientCreditsError(
       holdInsufficientCreditsMessage(featureLabel, availableCredits, requiredCredits, Boolean(organization))
     );
+  }
+
+  try {
+    await assertInterventionSpendAllowed(
+      { userId, credits: requiredCredits },
+      { users: adapters.users, window: adapters.newAccountSpendCap.interventionSpendWindow }
+    );
+  } catch (refusal) {
+    await holderMethods.incrementCredits(ownerId, requiredCredits).catch((err: unknown) =>
+      logger.error(`${featureLabel} intervention rollback failed - owner debited with no charge`, {
+        ownerId,
+        ownerType,
+        requiredCredits,
+        error: err instanceof Error ? err.message : 'Unknown error',
+      })
+    );
+    throw refusal;
   }
 
   return {

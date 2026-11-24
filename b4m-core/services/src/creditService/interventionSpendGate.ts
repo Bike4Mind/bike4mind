@@ -1,0 +1,62 @@
+import {
+  ForbiddenError,
+  insufficientCreditsError,
+  isActiveInterventionHold,
+  type ICacheRepository,
+  type InterventionHold,
+  type IUserDocument,
+  type IUserRepository,
+} from '@bike4mind/common';
+
+const HOUR_MS = 60 * 60 * 1000;
+
+export type InterventionSpendWindow = Pick<ICacheRepository, 'tryAddWithinLimitFixedWindow'>;
+
+export const AI_ACCESS_INTERVENTION_HOLD_MESSAGE =
+  'AI usage on this account is paused pending a review. Your sign-in and data are unaffected; contact support to request a review.';
+
+const activeHolds = (user: Pick<IUserDocument, 'interventionHolds'>, now: Date): InterventionHold[] =>
+  (user.interventionHolds ?? []).filter(hold => isActiveInterventionHold(hold, now));
+
+/** The refusal an active verify or review hold puts on AI spend; null when there is none. */
+export function interventionAccessRefusal(user: Pick<IUserDocument, 'interventionHolds'>, now: Date): string | null {
+  return activeHolds(user, now).some(hold => hold.tier === 'verify' || hold.tier === 'review')
+    ? AI_ACCESS_INTERVENTION_HOLD_MESSAGE
+    : null;
+}
+
+/**
+ * Admits AI spend against the user's graduated intervention holds. Every admission site calls it
+ * AFTER its balance debit and undoes the debit when it throws, so a hold committed before the debit
+ * is always seen, however late it lands after the caller's first user read. Throws 403 for an
+ * active verify/review hold, 422 insufficient_credits once a limit hold's hourly credits are spent.
+ * A limit hold with no window adapter wired refuses rather than admitting unmetered spend.
+ */
+export async function assertInterventionSpendAllowed(
+  params: { userId: string; credits: number; now?: Date },
+  adapters: { users: Pick<IUserRepository, 'findById'>; window?: InterventionSpendWindow }
+): Promise<void> {
+  const now = params.now ?? new Date();
+  const user = await adapters.users.findById(params.userId);
+  if (!user) return;
+  const refusal = interventionAccessRefusal(user, now);
+  if (refusal) throw new ForbiddenError(refusal);
+  const limits = activeHolds(user, now).filter(hold => hold.tier === 'limit');
+  if (limits.length === 0) return;
+  const creditsPerHour = Math.min(...limits.map(hold => hold.creditsPerHour ?? 0));
+  const admitted =
+    adapters.window &&
+    (
+      await adapters.window.tryAddWithinLimitFixedWindow(
+        `intervention:spend:${params.userId}`,
+        Math.ceil(params.credits),
+        creditsPerHour,
+        HOUR_MS,
+        { outsideTransaction: true }
+      )
+    ).success;
+  if (!admitted)
+    throw insufficientCreditsError(
+      `This account's AI spend is limited to ${creditsPerHour} credits per hour for now. Try again after the hour resets, or contact support.`
+    );
+}

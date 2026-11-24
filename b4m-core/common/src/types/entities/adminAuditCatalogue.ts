@@ -84,6 +84,8 @@ export const ADMIN_AUDIT_CATALOGUE = {
   'user.moderation_status.changed': { category: 'access', severity: 'critical', write: 'strict' },
   'user.restricted': { category: 'access', severity: 'notice', write: 'strict' },
   'user.restriction_lifted': { category: 'access', severity: 'notice', write: 'strict' },
+  // A graduated automated intervention (limit, verify, review, holdGrant) placed on one account by auto-containment.
+  'user.intervention_hold.applied': { category: 'access', severity: 'notice', write: 'strict' },
   // The linked-account propagation run once for accounts an admin suspended together
   // (apps/client/pages/api/admin/users/linked-suspend-propagation.ts). bestEffort: it is written after the
   // locks it reports, which have already happened.

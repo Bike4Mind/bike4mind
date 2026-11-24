@@ -1,6 +1,7 @@
 import {
   CreditHolderType,
   hasPaidSignupDrip,
+  isActiveInterventionHold,
   isPaymentUnlockReason,
   isSignupGrantBlocked,
   PENDING_FREE_CREDITS_TAG,
@@ -156,6 +157,17 @@ async function isHeldForAccountCampaign(
   return (await db.signupProtection?.hasOpenAccountCampaign?.(userId)) ?? false;
 }
 
+/** An automated holdGrant intervention withholds the same releases a campaign hold does, until released or expired. */
+const isHeldByIntervention = (
+  user: Pick<IUserDocument, 'interventionHolds'>,
+  expected: SignupGrant['stage'],
+  reason: SignupGrantUnlockReason | undefined,
+  now = new Date()
+) =>
+  expected !== 'pending_email' &&
+  reason !== 'admin' &&
+  (user.interventionHolds ?? []).some(hold => hold.tier === 'holdGrant' && isActiveInterventionHold(hold, now));
+
 /** A refunded, disputed or fraud-warned payment closes every signup release except an admin's. */
 const isForfeitedRelease = (grant: SignupGrant, reason: SignupGrantUnlockReason | undefined) =>
   !!grant.unlockForfeited && reason !== 'admin';
@@ -208,6 +220,7 @@ async function releaseStage(
       return noGrant();
     }
     if (await isHeldForAccountCampaign(userId, expected, reason, db)) return { ...noGrant(), withheld: true };
+    if (isHeldByIntervention(user, expected, reason)) return { ...noGrant(), withheld: true };
     // Detection may notify reviewers; keep it outside the retried payout transaction.
     if (await protectSignupCredits(userId, db)) {
       if (expected === 'pending_email') await db.users.addTagsToUser(userId, [PENDING_FREE_CREDITS_TAG]);

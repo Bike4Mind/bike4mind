@@ -2,9 +2,16 @@ import {
   type AbuseAssessmentItem,
   type AutoContainmentConfig,
   type AutoContainmentDecisionItem,
+  type GraduatedInterventionTier,
+  type InterventionHold,
   type ShadowDetectionItem,
 } from '@bike4mind/common';
-import { autoContainmentDecisionRepository, cacheRepository, shadowDetectionRepository } from '@bike4mind/database';
+import {
+  autoContainmentDecisionRepository,
+  cacheRepository,
+  shadowDetectionRepository,
+  userRepository,
+} from '@bike4mind/database';
 import type { Logger } from '@bike4mind/observability';
 import { loadAutoContainmentConfig } from '@bike4mind/server-utils/security/autoContainment/config';
 import type { AdminUsersBulkResult } from '@bike4mind/server-utils/app/utils/adminUsersBulk';
@@ -12,7 +19,7 @@ import { usersBulkExecuteDepsFor, usersBulkResolveDeps } from '@bike4mind/server
 import { executeAdminUsersBulk } from '@bike4mind/server-utils/admin/usersBulk/execute';
 import { cohortHashOf, resolveAdminUsersBulk } from '@bike4mind/server-utils/admin/usersBulk/resolve';
 import { systemAuditWriter } from '@workers/utils/systemAuditWriter';
-import { decideContainment, type AutoContainmentSkipReason } from './policy';
+import { decideIntervention, type InterventionDecision, type InterventionSkipReason } from './policy';
 
 /**
  * Automated containment: turns an `abuse` judgment on a shadow detection into the admin bulk Contain
@@ -32,12 +39,16 @@ import { decideContainment, type AutoContainmentSkipReason } from './policy';
  *   is reclaimed and retried with the same idempotency key; the bulk path skips users already contained.
  * - Reversal is the user profile's Unsuspend; keys stay revoked (the user mints new ones), as after
  *   any suspension.
+ * - Graduated tiers (limit, verify, review, holdGrant) share the claim, the per-(tier, mode) hourly cap
+ *   and the verdict recheck, but only add a per-decision hold to each account (users.interventionHolds).
+ *   They never revoke keys, remove balance, or touch moderation, review state or a manual grant hold.
  */
 
 const HOUR_MS = 60 * 60 * 1000;
 // ms. Past the bulk path's IDEMPOTENCY_TTL_MS (10 min), so a retry re-executes rather than replaying a partial result.
 export const STALE_PENDING_MS = 15 * 60 * 1000;
-const hourlyKey = (mode: AutoContainmentDecisionItem['mode']) => `autoContainment:decisions:${mode}`;
+const hourlyKey = (mode: AutoContainmentDecisionItem['mode'], tier?: GraduatedInterventionTier) =>
+  tier ? `autoContainment:decisions:${tier}:${mode}` : `autoContainment:decisions:${mode}`;
 export const AUTO_CONTAINMENT_ACTOR = 'auto-containment';
 // Stands in for the admin id the bulk path records (revokedBy, ledger metadata, undo record).
 export const AUTO_CONTAINMENT_ACTOR_ID = `system:${AUTO_CONTAINMENT_ACTOR}`;
@@ -55,15 +66,25 @@ export type AutoContainmentDeps = {
   loadConfig: () => Promise<AutoContainmentConfig>;
   findDetection: (id: string) => Promise<ShadowDetectionItem | null>;
   decisions: Pick<typeof autoContainmentDecisionRepository, 'listForDetection' | 'recordOnce' | 'reclaim' | 'finish'>;
-  /** Takes one decision from the mode's hourly window; false when it is spent. */
-  takeHourlySlot: (mode: AutoContainmentDecisionItem['mode'], maxPerHour: number) => Promise<boolean>;
+  /** Takes one decision from the hourly window of the mode (Contain) or of the tier and mode; false when it is spent. */
+  takeHourlySlot: (
+    mode: AutoContainmentDecisionItem['mode'],
+    maxPerHour: number,
+    tier?: GraduatedInterventionTier
+  ) => Promise<boolean>;
   contain: (request: ContainRequest) => Promise<AdminUsersBulkResult | null>;
+  /** Adds the hold unless that decision's hold is already on the account; false when it was not added. */
+  applyHold: (userId: string, hold: InterventionHold) => Promise<boolean>;
+  /** One audit row per account a graduated hold reached. */
+  auditHold: (userId: string, decision: AutoContainmentDecisionItem) => Promise<void>;
+  /** Whether a verification flow can clear a verify hold; without one, verify decisions become review. */
+  verificationAvailable: () => Promise<boolean>;
   now: () => Date;
   logger: Pick<Logger, 'info' | 'warn' | 'error'>;
 };
 
 export type AutoContainmentRunResult =
-  | { status: 'skipped'; reason: AutoContainmentSkipReason | 'detection_not_found' | 'already_decided' }
+  | { status: 'skipped'; reason: InterventionSkipReason | 'detection_not_found' | 'already_decided' }
   | { status: 'decided'; decision: AutoContainmentDecisionItem };
 
 // Re-exported so the rule modules beside this one keep one import site for the containment policy.
@@ -95,10 +116,33 @@ export const liveAutoContainmentDeps = (logger: Logger): AutoContainmentDeps => 
   loadConfig: loadAutoContainmentConfig,
   findDetection: id => shadowDetectionRepository.findById(id),
   decisions: autoContainmentDecisionRepository,
-  takeHourlySlot: async (mode, maxPerHour) =>
+  takeHourlySlot: async (mode, maxPerHour, tier) =>
     maxPerHour > 0 &&
-    (await cacheRepository.tryIncrementWithinLimitFixedWindow(hourlyKey(mode), maxPerHour, HOUR_MS)).success,
+    (await cacheRepository.tryIncrementWithinLimitFixedWindow(hourlyKey(mode, tier), maxPerHour, HOUR_MS)).success,
   contain: containAsSystem(logger),
+  applyHold: (userId, hold) => userRepository.addInterventionHold(userId, hold),
+  auditHold: async (userId, decision) => {
+    await systemAuditWriter(
+      AUTO_CONTAINMENT_ACTOR,
+      AUDIT_ROUTE,
+      logger
+    )({
+      action: 'user.intervention_hold.applied',
+      target: { kind: 'user', id: userId, displayName: userId },
+      summary: `Automated ${decision.tier} hold (policy v${decision.policyVersion})`,
+      reason: decision.reason,
+      details: {
+        decisionId: decision.id,
+        detectionId: decision.detectionId,
+        tier: decision.tier,
+        policyVersion: decision.policyVersion,
+        scope: decision.scope,
+        expiresAt: decision.expiresAt?.toISOString() ?? null,
+      },
+    });
+  },
+  // No card or phone verification flow calls unlockSignupGrant yet, so a verify decision is recorded as review.
+  verificationAvailable: async () => false,
   now: () => new Date(),
   logger,
 });
@@ -132,7 +176,7 @@ const finishedFrom = (result: AdminUsersBulkResult | null): Finished => {
 async function claimDecision(
   assessment: AbuseAssessmentItem,
   detection: ShadowDetectionItem,
-  decided: { userIds: string[]; reason: string },
+  decided: Extract<InterventionDecision, { kind: 'act' }>,
   mode: AutoContainmentDecisionItem['mode'],
   deps: AutoContainmentDeps
 ): Promise<{ decision: AutoContainmentDecisionItem; retried: boolean } | null> {
@@ -163,6 +207,15 @@ async function claimDecision(
     batchId: null,
     error: null,
     decidedAt: now,
+    // Contain keeps the record it wrote before tiers existed.
+    ...(decided.tier === 'contain'
+      ? {}
+      : {
+          tier: decided.tier,
+          policyVersion: decided.policyVersion,
+          scope: decided.scope,
+          expiresAt: decided.expiresAt,
+        }),
   });
   return recorded ? { decision: recorded, retried: false } : null;
 }
@@ -177,8 +230,15 @@ export async function applyAutoContainment(
   const detection = await deps.findDetection(assessment.detectionId);
   if (!detection) return { status: 'skipped', reason: 'detection_not_found' };
 
-  const decided = decideContainment({ assessment, detection, config });
+  const decided = decideIntervention({
+    assessment,
+    detection,
+    config,
+    now: deps.now(),
+    verificationAvailable: await deps.verificationAvailable(),
+  });
   if (decided.kind === 'skip') return { status: 'skipped', reason: decided.why };
+  if (decided.tier !== 'contain') return applyGraduatedTier(assessment, detection, decided, config, deps);
 
   const mode = config.mode;
   const claim = await claimDecision(assessment, detection, decided, mode, deps);
@@ -232,5 +292,84 @@ export async function applyAutoContainment(
   if (finished.outcome === 'failed') deps.logger.error('[AUTO_CONTAINMENT] containment failed', meta);
   else if (finished.outcome === 'pending') deps.logger.warn('[AUTO_CONTAINMENT] containment ran out of time', meta);
   else deps.logger.info('[AUTO_CONTAINMENT] accounts contained', meta);
+  return settle(finished);
+}
+
+/** A graduated tier: same claim, cap and verdict recheck as Contain, then one hold per account. */
+async function applyGraduatedTier(
+  assessment: AbuseAssessmentItem,
+  detection: ShadowDetectionItem,
+  decided: Extract<InterventionDecision, { kind: 'act' }>,
+  config: AutoContainmentConfig,
+  deps: AutoContainmentDeps
+): Promise<AutoContainmentRunResult> {
+  const tier = decided.tier as GraduatedInterventionTier;
+  const { mode } = decided;
+  const claim = await claimDecision(assessment, detection, decided, mode, deps);
+  if (!claim) return { status: 'skipped', reason: 'already_decided' };
+  const { decision } = claim;
+  const logMeta = {
+    detectionId: detection.id,
+    revision: detection.revision,
+    tier,
+    mode,
+    accounts: decision.userIds.length,
+  };
+  if (claim.retried) deps.logger.warn('[AUTO_CONTAINMENT] retrying a decision a run left pending', logMeta);
+
+  const settle = async (finished: Finished): Promise<AutoContainmentRunResult> => {
+    await deps.decisions.finish(decision.id, finished);
+    return { status: 'decided', decision: { ...decision, ...finished } };
+  };
+
+  if (!(await deps.takeHourlySlot(mode, config.tiers[tier].maxPerHour, tier))) {
+    deps.logger.warn('[AUTO_CONTAINMENT] decision capped by the hourly limit', { ...logMeta, outcome: 'capped' });
+    return settle({ outcome: 'capped', batchId: null, error: null });
+  }
+  if (mode === 'shadow') {
+    deps.logger.info('[AUTO_CONTAINMENT] decision recorded', { ...logMeta, outcome: 'would_intervene' });
+    return settle({ outcome: 'would_intervene', batchId: null, error: null });
+  }
+
+  const latest = await deps.findDetection(detection.id);
+  if (!latest || latest.verdict !== null) {
+    deps.logger.info('[AUTO_CONTAINMENT] decision withdrawn by an admin verdict', { ...logMeta, outcome: 'withdrawn' });
+    return settle({ outcome: 'withdrawn', batchId: null, error: null });
+  }
+
+  // The claim stamps expiresAt; a reclaimed retry reuses the stored row, so every account gets the same window.
+  const expiresAt = decision.expiresAt ?? decided.expiresAt ?? deps.now();
+  const hold: InterventionHold = {
+    decisionId: decision.id,
+    detectionId: detection.id,
+    tier,
+    policyVersion: decision.policyVersion ?? decided.policyVersion,
+    reason: decision.reason,
+    appliedAt: deps.now(),
+    expiresAt,
+    releasedAt: null,
+    releasedBy: null,
+    ...(tier === 'limit' ? { creditsPerHour: config.tiers.limit.creditsPerHour } : {}),
+  };
+  const failures: string[] = [];
+  for (const userId of decision.userIds) {
+    try {
+      // Idempotent by decisionId, so a retried pending decision never stacks a second hold.
+      if (await deps.applyHold(userId, hold)) await deps.auditHold(userId, decision);
+    } catch (error) {
+      failures.push(`${userId}: ${errorText(error)}`);
+    }
+  }
+  const finished: Finished =
+    failures.length > 0
+      ? {
+          outcome: 'failed',
+          batchId: null,
+          error: `${failures.length} account(s) failed: ${failures[0]}`.slice(0, 300),
+        }
+      : { outcome: 'intervened', batchId: null, error: null };
+  const meta = { ...logMeta, outcome: finished.outcome, error: finished.error };
+  if (finished.outcome === 'failed') deps.logger.error('[AUTO_CONTAINMENT] intervention failed', meta);
+  else deps.logger.info('[AUTO_CONTAINMENT] intervention applied', meta);
   return settle(finished);
 }
