@@ -497,7 +497,7 @@ function Sprite({
       />
       {agent.pr && (
         <Box sx={{ position: 'absolute', top: '100%', left: '50%', transform: 'translateX(-50%)' }}>
-          <AgentPrIndicator pr={agent.pr} onOpen={() => onOpenPr?.(agent.id)} compact scene />
+          <AgentPrIndicator agentId={agent.id} pr={agent.pr} onOpen={() => onOpenPr?.(agent.id)} compact scene />
         </Box>
       )}
     </Box>

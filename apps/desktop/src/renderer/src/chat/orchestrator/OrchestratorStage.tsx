@@ -368,6 +368,7 @@ export function OrchestratorStage({
         actions={actions}
         skin={detailsInScene ? ORCHESTRATOR_VIEW_INFO[view].detailsSkin : undefined}
         visible={!settled}
+        onOpenPr={openPr}
       />
     </Box>
   );
