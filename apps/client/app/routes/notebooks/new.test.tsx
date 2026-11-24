@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render } from '@testing-library/react';
+import { NEW_NOTEBOOK_DRAFT_KEY, useChatInput } from '@client/app/hooks/useChatInput';
 
 // Controlled at call time by the router mock.
 let mockSearch: Record<string, unknown> = {};
@@ -51,6 +52,15 @@ beforeEach(() => {
 });
 
 describe('NewNotebookPage quest launch', () => {
+  it('replaces a saved new-chat draft with the goal so the restore shows the goal', () => {
+    useChatInput.getState().setDraft(NEW_NOTEBOOK_DRAFT_KEY, 'an older unsent prompt');
+    mockSearch = { goal: 'hello' };
+
+    render(<NewNotebookPage />);
+
+    expect(useChatInput.getState().getDraft(NEW_NOTEBOOK_DRAFT_KEY)).toBe('hello');
+  });
+
   it('does NOT auto-submit a goal that arrives via URL with no in-app launch', () => {
     // External /new?goal=...&questmaster=true (or a post-login redirect replay):
     // no trust flag armed, so the goal pre-fills at most - autoSubmit stays false.

@@ -185,7 +185,7 @@ const ListingRow: FC<{ listing: MyListing }> = ({ listing }) => {
               View
             </Button>
           ) : null}
-          {listing.status === 'approved' ? (
+          {listing.status === 'approved' && !listing.hiddenByReports ? (
             <Button
               size="sm"
               variant="plain"

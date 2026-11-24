@@ -3,6 +3,7 @@ import { SkillListingTemplate } from '@bike4mind/database';
 import {
   TURNSTILE_ACTION_SKILL_FREE_RUN,
   skillTemplateFreeRunInputKey,
+  skillTemplatePagePath,
   type ISkillListing,
   type ISkillListingTemplate,
   type ISkillTemplateInput,
@@ -400,7 +401,8 @@ export const TEMPLATE_LOADER_SCRIPT_HASH = `'sha256-${createHash('sha256').updat
  * page signs the visitor in from their session cookie and swaps in the member render. It holds no
  * template data, so a visitor outside the organization learns nothing from it.
  */
-export function renderTemplateLoaderShell(): string {
+export function renderTemplateLoaderShell(slug: string): string {
+  const signInHref = escapeHtml(`/login?redirectTo=${encodeURIComponent(skillTemplatePagePath(slug))}`);
   return `<!doctype html>
 <html lang="en">
 <head>
@@ -412,8 +414,16 @@ export function renderTemplateLoaderShell(): string {
 </head>
 <body>
 <main><p id="t-msg" data-testid="template-page-loader">Loading...</p></main>
-<noscript><main>Sign in to view this skill page. <a href="/login">Sign in</a></main></noscript>
+<noscript><main>Sign in to view this skill page. <a href="${signInHref}">Sign in</a></main></noscript>
 <script>${LOADER_SCRIPT}</script>
 </body>
 </html>`;
+}
+
+const LINK_PREVIEW_FETCHER =
+  /facebookexternalhit|Facebot|Twitterbot|Slackbot|Slack-ImgProxy|LinkedInBot|Discordbot|WhatsApp|TelegramBot|SkypeUriPreview|Iframely|Embedly|redditbot|Pinterestbot|Applebot|Googlebot|bingbot|Mastodon|Cardyb|Bluesky|vkShare|Viber|Snapchat|Google-PageRenderer/i;
+
+/** True for link-unfurl and search crawlers, whose fetches should not count as page views. */
+export function isLinkPreviewFetcher(userAgent: string | undefined): boolean {
+  return !!userAgent && LINK_PREVIEW_FETCHER.test(userAgent);
 }

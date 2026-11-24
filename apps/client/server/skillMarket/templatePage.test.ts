@@ -18,6 +18,7 @@ import {
   TEMPLATE_FREE_RUN_SCRIPT_HASH,
   TEMPLATE_LOADER_SCRIPT_HASH,
   findServableTemplate,
+  isLinkPreviewFetcher,
   recordTemplateTry,
   recordTemplateView,
   renderTemplateLoaderShell,
@@ -171,10 +172,33 @@ describe('renderTemplatePage', () => {
 
 describe('renderTemplateLoaderShell', () => {
   it('carries no template data and only the script its CSP hash admits', () => {
-    const html = renderTemplateLoaderShell();
+    const html = renderTemplateLoaderShell('article-bullets');
     const script = /<script>([\s\S]*)<\/script>/.exec(html)?.[1] ?? '';
     expect(`'sha256-${createHash('sha256').update(script).digest('base64')}'`).toBe(TEMPLATE_LOADER_SCRIPT_HASH);
     expect(html).toContain('<meta name="robots" content="noindex,nofollow">');
     expect(html).not.toMatch(/og:|twitter:/);
+  });
+
+  it('sends the no-script sign-in link back to the page after login', () => {
+    expect(renderTemplateLoaderShell('article-bullets')).toContain('href="/login?redirectTo=%2Ft%2Farticle-bullets"');
+  });
+});
+
+describe('isLinkPreviewFetcher', () => {
+  it.each([
+    'Slackbot-LinkExpanding 1.0 (+https://api.slack.com/robots)',
+    'facebookexternalhit/1.1',
+    'Twitterbot/1.0',
+    'Mozilla/5.0 (compatible; Discordbot/2.0; +https://discordapp.com)',
+  ])('flags %s', ua => {
+    expect(isLinkPreviewFetcher(ua)).toBe(true);
+  });
+
+  it.each([
+    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Safari/605.1.15',
+    undefined,
+  ])('does not flag %s', ua => {
+    expect(isLinkPreviewFetcher(ua)).toBe(false);
   });
 });

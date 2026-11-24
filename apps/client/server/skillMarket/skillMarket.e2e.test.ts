@@ -2069,15 +2069,30 @@ describe('template pages: try route and lifecycle (real mongod)', () => {
     expect((await SkillListingTemplate.findOne({ listingId: listing.id }))!.status).toBe('draft');
   });
 
-  it('deleting a withdrawn listing leaves its template unpublished with no free run', async () => {
+  it('deleting a withdrawn listing deletes its template and frees the slug', async () => {
     const { listing } = await publish(await makeSkill(AUTHOR, 'Rewrite as bullets.'), 'public');
     await call(detailHandler, 'DELETE', AUTHOR, { id: listing.id });
-    // Published again after the withdraw, so this checks the delete path's own unpublish.
     await publishedTemplate(listing);
 
     expect((await call(permanentHandler, 'DELETE', AUTHOR, { id: listing.id }))._getStatusCode()).toBe(204);
-    const template = (await SkillListingTemplate.findOne({ listingId: listing.id }))!;
-    expect(template.status).toBe('draft');
+    expect(await SkillListingTemplate.countDocuments({ listingId: listing.id })).toBe(0);
+
+    const other = await publish(await makeSkill(OTHER, 'Another body.'), 'public');
+    await expect(publishedTemplate(other.listing)).resolves.toBeTruthy();
+  });
+
+  it('a moderator delist unpublishes the template and switches free run off; restore does not republish', async () => {
+    const { listing } = await publish(await makeSkill(AUTHOR, 'Rewrite as bullets.'), 'public');
+    await publishedTemplate(listing);
+
+    await call(moderateHandler, 'POST', ADMIN, { id: listing.id }, { action: 'delist', reason: 'malware' }, true);
+    let template = (await SkillListingTemplate.findOne({ listingId: listing.id }))!;
+    expect(template.status).not.toBe('published');
+    expect(template.freeRunEnabled).toBe(false);
+
+    await call(moderateHandler, 'POST', ADMIN, { id: listing.id }, { action: 'restore' }, true);
+    template = (await SkillListingTemplate.findOne({ listingId: listing.id }))!;
+    expect(template.status).not.toBe('published');
     expect(template.freeRunEnabled).toBe(false);
   });
 });

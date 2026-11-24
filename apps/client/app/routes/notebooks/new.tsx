@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useRef } from 'react';
 import { useNavigate, useSearch } from '@tanstack/react-router';
 import { useSessions, useWorkBenchActions } from '@client/app/contexts/SessionsContext';
+import { NEW_NOTEBOOK_DRAFT_KEY, useChatInput } from '@client/app/hooks/useChatInput';
 import { setSessionLayout } from '@client/app/hooks/useSessionLayout';
 import { useDocumentTitle } from '@client/app/hooks/useDocumentTitle';
 import { useQuestPreparation } from '@client/app/hooks/useQuestPreparation';
@@ -31,6 +32,8 @@ const NewNotebookPage = () => {
       // redirectTo replay carries no trust flag, so it only pre-fills the composer
       // and never issues a request without a click.
       const trusted = consumeTrustedQuestLaunch();
+      // useMessageDraft restores this draft after the goal is applied; seeding it keeps the goal.
+      useChatInput.getState().setDraft(NEW_NOTEBOOK_DRAFT_KEY, search.goal);
       setQuestLaunchIntent({
         goal: search.goal,
         autoSubmit: trusted,

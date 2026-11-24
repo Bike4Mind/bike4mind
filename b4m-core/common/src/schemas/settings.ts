@@ -4218,7 +4218,7 @@ export const settingsMap = {
   SkillTemplateFreeRunFileMaxMb: makeNumberSetting({
     key: 'SkillTemplateFreeRunFileMaxMb',
     name: 'Skill Template Free Run File Size Cap (MB)',
-    defaultValue: 5,
+    defaultValue: 4,
     min: 0.1,
     description:
       'Largest file (PDF, image or plain text) a visitor may attach to a free run; larger files are refused. A hosted request body tops out near 6 MB, so files over 4 MB are refused whatever this says.',

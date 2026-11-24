@@ -3,10 +3,10 @@ import {
   SkillListing,
   SkillListingImport,
   SkillListingReport,
+  SkillListingTemplate,
   SkillListingVersion,
   markListingTemplateStale,
   skillRepository,
-  unpublishListingTemplate,
 } from '@bike4mind/database';
 import {
   BadRequestError,
@@ -263,7 +263,7 @@ export async function deleteOwnWithdrawnListing(userId: string, listingId: strin
     SkillListingImport.deleteMany({ listingId: id }),
     SkillListingReport.deleteMany({ listingId: id }),
     SkillBundle.updateMany({ listingIds: id }, { $pull: { listingIds: id } }),
-    unpublishListingTemplate(id),
+    SkillListingTemplate.deleteMany({ listingId: id }),
   ]);
 }
 
