@@ -185,7 +185,8 @@ describe('AdminSystemHealthTab', () => {
     respond({ [HEALTH_URL]: () => Promise.resolve({ data: { ...HEALTH, plaintextSecretsOptOut: false } }) });
     renderTab();
 
-    await screen.findByTestId('admin-system-health-tab');
+    // Loaded-only element: the tab testid is also rendered while loading, before any data arrives.
+    await screen.findByTestId('system-health-database-status');
     expect(screen.queryByTestId('system-health-plaintext-secrets-warning')).not.toBeInTheDocument();
   });
 
