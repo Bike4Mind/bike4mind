@@ -180,7 +180,7 @@ const SHORTCUT_HINT = isMac ? '\u2318\u21E7[ ]' : 'Ctrl+Shift+[ ]';
 const FOCUS_SHORTCUT = isMac ? '\u2318\u21E7F' : 'Ctrl+Shift+F';
 const RESET_SHORTCUT = isMac ? '\u2318\u21E7Esc' : 'Ctrl+Shift+Esc';
 
-/** Gap kept between a menu's bottom edge and the window's, in px. */
+/** Window space a menu leaves free, in px; Joy Menu's 4px offset comes out of it, leaving a 4px gap. */
 const MENU_VIEWPORT_MARGIN = 8;
 /** Below this many px the menu stops shrinking, so a button at the very bottom still shows a few items. */
 const MENU_MIN_HEIGHT = 120;
