@@ -28,6 +28,7 @@ import { AttachmentRow } from './Attachments';
 import { QuoteChip } from './QuoteChip';
 import { findCommand, matchCommands, type ComposerCommand } from './commands';
 import { ComposerHighlight, type HighlightToken } from './ComposerHighlight';
+import { caretInCode, caretInFencedBlock, codeRanges, fenceKeyAction, type ComposerEdit } from './composerMarkdown';
 import {
   appendToDraft,
   attachShortcut,
@@ -62,6 +63,7 @@ import {
   type MentionableSession,
   type RecordedMention,
 } from './sessionMentionMenu';
+import { composerDrafts, useComposerDraftsHydrated } from './composerDrafts';
 import { SkillPicker } from './SkillPicker';
 import {
   allowanceArc,
@@ -249,23 +251,28 @@ export function Composer({
   onSuggestionDismissed?: () => void;
 }) {
   const showDollars = useShowDollarCosts();
-  const [text, setText] = useState('');
+  // Starts from the saved draft: an empty first render would reach the save effect below and clear
+  // it on disk until the restored text is saved again.
+  const [text, setText] = useState(() => (sessionId && composerDrafts.state.getState().drafts[sessionId]) || '');
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   // Where the caret is, so the `/` menu answers the token being typed wherever it sits in the draft.
   const [caret, setCaret] = useState(0);
-  // A caret position to restore once a programmatic draft change has rendered.
-  const pendingCaret = useRef<number | null>(null);
+  // A selection to restore once a programmatic draft change has rendered.
+  const pendingCaret = useRef<{ start: number; end: number } | null>(null);
 
   // Per-conversation draft: this component is not keyed on the session (unlike the thread beside
   // it), so it saves and restores text across switches. Cmd+1-9 (SessionList) has no text-field
-  // guard, so switching mid-draft is routine. Attachments deliberately do not work this way; see
+  // guard, so switching mid-draft is routine. The text is also saved to disk (./composerDrafts),
+  // so it survives a quit, a reload or a crash. Attachments deliberately do not work this way; see
   // useAttachmentDraft.
-  const drafts = useRef(new Map<string, string>());
   const latest = useRef(text);
   latest.current = text;
+  const draftSessionId = useRef(sessionId);
+  draftSessionId.current = sessionId;
+  const draftsHydrated = useComposerDraftsHydrated();
 
   useLayoutEffect(() => {
-    const kept = (sessionId && drafts.current.get(sessionId)) || '';
+    const kept = (sessionId && composerDrafts.state.getState().drafts[sessionId]) || '';
     setText(kept);
     setCaret(kept.length);
     pendingCaret.current = null;
@@ -273,16 +280,51 @@ export function Composer({
     // the last keystroke that went into it.
     return () => {
       if (!sessionId) return;
-      if (latest.current) drafts.current.set(sessionId, latest.current);
-      else drafts.current.delete(sessionId);
+      composerDrafts.update(sessionId, latest.current);
     };
   }, [sessionId]);
 
+  // Saved drafts are read in asynchronously at launch; one that lands after this conversation
+  // opened is restored unless the user has already started typing.
+  useLayoutEffect(() => {
+    if (!draftsHydrated || !sessionId || latest.current !== '') return;
+    const kept = composerDrafts.state.getState().drafts[sessionId];
+    if (!kept) return;
+    setText(kept);
+    setCaret(kept.length);
+    pendingCaret.current = { start: kept.length, end: kept.length };
+  }, [draftsHydrated, sessionId]);
+
+  // Keyed on the text alone and reading the session through a ref: on a switch the first render
+  // still holds the previous conversation's text, which must not be written under the new id.
+  useEffect(() => {
+    if (draftSessionId.current) composerDrafts.update(draftSessionId.current, text);
+  }, [text]);
+
   /** Replace the draft and put the caret at `at` (the end by default), as typing would have. */
-  const replaceDraft = (next: string, at: number = next.length) => {
+  const replaceDraft = (next: string, at: number = next.length, selectionEnd: number = at) => {
     setText(next);
     setCaret(at);
-    pendingCaret.current = at;
+    pendingCaret.current = { start: at, end: selectionEnd };
+  };
+
+  /**
+   * Make a fence helper's edit (see composerMarkdown.ts). Through `insertText` where the browser
+   * has it, so the edit lands on the native undo stack and Cmd+Z takes it back like a keystroke;
+   * it also fires the input event, so onChange picks up the new text as usual.
+   */
+  const applyEdit = (target: HTMLTextAreaElement, edit: ComposerEdit) => {
+    target.setSelectionRange(edit.start, edit.end);
+    const inserted =
+      typeof document.execCommand === 'function' && document.execCommand('insertText', false, edit.insert);
+    if (!inserted) {
+      // jsdom, or a browser that refuses the command: same text, without the undo entry.
+      const next = target.value.slice(0, edit.start) + edit.insert + target.value.slice(edit.end);
+      replaceDraft(next, edit.selectionStart, edit.selectionEnd);
+      return;
+    }
+    target.setSelectionRange(edit.selectionStart, edit.selectionEnd);
+    setCaret(edit.selectionStart);
   };
 
   // What Up-arrow last put in the draft; see recallPromptAction.
@@ -292,7 +334,7 @@ export function Composer({
     const target = pendingCaret.current;
     if (target === null) return;
     pendingCaret.current = null;
-    textareaRef.current?.setSelectionRange(target, target);
+    textareaRef.current?.setSelectionRange(target.start, target.end);
   }, [text]);
 
   const hasContent = text.trim().length > 0 || attachments.attachments.length > 0;
@@ -397,7 +439,11 @@ export function Composer({
   // Which session each chosen `@Title` in the draft stands for; see the `@` menu below.
   const [mentions, setMentions] = useState<RecordedMention[]>([]);
 
-  const token = (skills || onRunCommand) && !disabled ? skillQuery(text, caret) : null;
+  // A `/path` or an `@decorator` in code is code, not a request for a skill or a session.
+  const code = useMemo(() => codeRanges(text), [text]);
+  const inBlock = caretInFencedBlock(text, caret);
+  const inCode = caretInCode(text, caret, code, inBlock);
+  const token = (skills || onRunCommand) && !disabled && !inCode ? skillQuery(text, caret) : null;
   const query = token?.query ?? null;
   const offerCommands = !!onRunCommand && !!token?.wholeDraft;
   const commandMatches = useMemo(
@@ -495,7 +541,7 @@ export function Composer({
     () => (mentionSessions ? mentionableSessions(mentionSessions, sessionId) : []),
     [mentionSessions, sessionId]
   );
-  const mentionToken = mentionSessions && !disabled ? mentionQuery(text, caret) : null;
+  const mentionToken = mentionSessions && !disabled && !inCode ? mentionQuery(text, caret) : null;
   const mentionQueryText = mentionToken?.query;
   const mentionMatches = useMemo(
     () => (mentionQueryText === undefined ? [] : matchSessions(candidates, mentionQueryText)),
@@ -545,7 +591,16 @@ export function Composer({
    * either condition cannot quietly make Tab do the wrong one. Escape genuinely is contested,
    * and its precedence is decided in one place rather than by where the branches happen to sit.
    */
+  const escapedLast = useRef(false);
   const onKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
+    // While an IME is composing (Japanese, Chinese, Korean), Enter confirms the candidate and
+    // Escape cancels it: the keys belong to the input method, not to send, stop or the menus.
+    if (event.nativeEvent.isComposing) return;
+    // Escape then Tab leaves a fenced block, where Tab otherwise indents; see fenceKeyAction.
+    const tabReleased = escapedLast.current;
+    // A modifier keydown (the Shift before Shift+Tab) must not cancel the Escape-then-Tab release.
+    if (!['Shift', 'Control', 'Alt', 'Meta'].includes(event.key)) escapedLast.current = event.key === 'Escape';
+
     if (event.key === 'Escape') {
       const escape = composerEscapeAction({ pickerOpen: pickerOpen || mentionOpen, streaming });
       if (escape === 'default') return;
@@ -577,6 +632,18 @@ export function Composer({
       recall.current = recalled.recall;
       // Caret at the start, so the next Up goes further back.
       replaceDraft(recalled.text, 0);
+      return;
+    }
+
+    const fence = fenceKeyAction(
+      event,
+      { text, selectionStart: target.selectionStart, selectionEnd: target.selectionEnd },
+      tabReleased
+    );
+    if (fence.kind !== 'default') {
+      event.preventDefault();
+      if (fence.kind === 'submit') submit();
+      else if (fence.kind === 'edit') applyEdit(target, fence.edit);
       return;
     }
 
@@ -762,7 +829,22 @@ export function Composer({
 
       {mentionOpen && <SessionMentionPicker sessions={mentionMatches} activeIndex={activeIndex} onPick={pickMention} />}
 
-      <Box sx={{ ...contentColumnSx, pt: 1.5 }}>
+      <Box sx={{ ...contentColumnSx, pt: 1.5, position: 'relative' }}>
+        {/* Tab indents inside a block, so the way out has to be said. Floated above the box
+            rather than given a row, so the composer does not jump as the caret enters a block. */}
+        {inBlock && !disabled && (
+          <Typography
+            id="composer-code-hint"
+            level="body-xs"
+            textColor="text.tertiary"
+            data-testid="composer-code-hint"
+            sx={{ position: 'absolute', bottom: '100%', right: 0, pointerEvents: 'none' }}
+          >
+            {isMac
+              ? '\u2318Enter to send \u00b7 Esc then Tab to leave'
+              : 'Ctrl+Enter to send \u00b7 Esc then Tab to leave'}
+          </Typography>
+        )}
         {/* The button rides INSIDE the input rather than beside it. As a sibling in a row it
             took its own width out of the column, so the input's right edge stopped ~74px short
             of where the transcript ends while every other composer row reached it. */}
@@ -793,8 +875,8 @@ export function Composer({
           // `position: relative` anchors the skill highlight, which is laid over the textarea.
           sx={{ flexDirection: 'row', alignItems: 'flex-end', fontSize: 'sm', position: 'relative' }}
           startDecorator={
-            highlights.length > 0 ? (
-              <ComposerHighlight text={text} tokens={highlights} textareaRef={textareaRef} />
+            highlights.length > 0 || code.length > 0 ? (
+              <ComposerHighlight text={text} tokens={highlights} code={code} textareaRef={textareaRef} />
             ) : undefined
           }
           endDecorator={
@@ -862,6 +944,7 @@ export function Composer({
               // So the hint is distinguishable from the ordinary placeholder without reading
               // the text, and so a screen reader is told Tab does something here.
               ...(shown ? { 'data-suggested-prompt': shown, 'aria-keyshortcuts': 'Tab' } : {}),
+              ...(inBlock && !disabled ? { 'aria-describedby': 'composer-code-hint' } : {}),
             },
           }}
         />

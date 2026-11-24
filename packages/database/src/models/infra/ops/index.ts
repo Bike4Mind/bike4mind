@@ -1,12 +1,11 @@
+import '../../../legacy/registerTriageAuditLog';
+
 export * from './AdminSettingsModel';
 export * from './CacheModel';
 export * from './CounterLogModel';
 export * from './CounterModel';
 export * from './FallbackLakeSettingModel';
 export * from './HelpEventModel';
-export * from './LiveopsTriageConfigAuditLogModel';
-export * from './LiveopsTriageConfigModel';
-export * from './LiveopsTriageRunModel';
 export * from './MarketingReportModel';
 export * from './MarketingReportReadModel';
 export * from './MigrationModel';

@@ -8,11 +8,24 @@ import { EventEmitter } from 'events';
 import { createMocks } from 'node-mocks-http';
 import type { NextApiRequest, NextApiResponse } from 'next';
 
-const { mockResolve, perUserBuckets, limiter } = vi.hoisted(() => ({
+const { mockResolve, perUserBuckets, limiter, session, validateApiKey } = vi.hoisted(() => ({
   mockResolve: vi.fn(),
   perUserBuckets: [] as string[],
   limiter: { limited: false },
+  session: { attachUser: true },
+  validateApiKey: vi.fn(),
 }));
+
+vi.mock('@bike4mind/services', async orig => {
+  const actual = await orig<Record<string, unknown>>();
+  return {
+    ...actual,
+    userApiKeyService: {
+      ...(actual.userApiKeyService as object),
+      validateUserApiKey: (...args: unknown[]) => validateApiKey(...args),
+    },
+  };
+});
 
 vi.mock('@bike4mind/server-utils/callableFunctions/access', () => ({
   resolveCallableFunctionsEnabled: (...args: unknown[]) => mockResolve(...args),
@@ -45,7 +58,7 @@ vi.mock('@server/auth/auth', async orig => {
       next: () => void
     ) => {
       if (!req.headers?.authorization) return res.status(401).json({ error: 'Unauthorized' });
-      if (!req.user) req.user = JWT_USER;
+      if (session.attachUser && !req.user) req.user = JWT_USER;
       next();
     },
   };
@@ -55,12 +68,12 @@ import handler from '../status';
 
 type HandlerArgs = Parameters<typeof handler>;
 
-function fire(bearer?: string) {
+function fire(bearer?: string, extraHeaders: Record<string, string> = {}) {
   const { req, res } = createMocks<NextApiRequest, NextApiResponse>(
     {
       method: 'GET',
       url: '/api/callable-functions/status',
-      headers: bearer ? { authorization: `Bearer ${bearer}` } : {},
+      headers: { ...(bearer ? { authorization: `Bearer ${bearer}` } : {}), ...extraHeaders },
     },
     { eventEmitter: EventEmitter }
   );
@@ -73,10 +86,31 @@ describe('GET /api/callable-functions/status', () => {
     mockResolve.mockReset();
     mockResolve.mockResolvedValue(false);
     limiter.limited = false;
+    session.attachUser = true;
+    validateApiKey.mockReset();
+    validateApiKey.mockResolvedValue({ isValid: false, reason: 'not_found' });
+  });
+
+  it('answers 401 to an API key without validating it, since the route takes a session only', async () => {
+    const { res, call } = fire(undefined, { 'x-api-key': 'b4m_live_0123456789abcdef0123456789abcdef' });
+    await call();
+
+    expect(res._getStatusCode()).toBe(401);
+    expect(validateApiKey).not.toHaveBeenCalled();
+    expect(mockResolve).not.toHaveBeenCalled();
   });
 
   it('answers 401 without a session and never reads the setting', async () => {
     const { res, call } = fire();
+    await call();
+
+    expect(res._getStatusCode()).toBe(401);
+    expect(mockResolve).not.toHaveBeenCalled();
+  });
+
+  it('answers 401 if the session middleware leaves the request without an identity', async () => {
+    session.attachUser = false;
+    const { res, call } = fire('live-jwt');
     await call();
 
     expect(res._getStatusCode()).toBe(401);
@@ -88,18 +122,31 @@ describe('GET /api/callable-functions/status', () => {
     await call();
 
     expect(res._getStatusCode()).toBe(200);
-    expect(res._getJSONData()).toEqual({ enabled: false });
+    expect(res._getJSONData()).toMatchObject({ enabled: false });
     expect(mockResolve).toHaveBeenCalledWith(expect.objectContaining({ id: 'jwt-user' }));
     expect(perUserBuckets).toEqual(['GET /api/callable-functions/status']);
   });
 
-  it('answers { enabled: true } when the resolver says so', async () => {
+  it('answers { enabled: true } when the resolver says so, and no server runtime on a stage without one', async () => {
+    vi.stubEnv('CALLABLE_FUNCTION_RUNTIME_FUNCTION_NAME', '');
+    vi.stubEnv('CALLABLE_FUNCTION_CHILD_PATH', '');
     mockResolve.mockResolvedValue(true);
     const { res, call } = fire('live-jwt');
     await call();
+    vi.unstubAllEnvs();
 
     expect(res._getStatusCode()).toBe(200);
-    expect(res._getJSONData()).toEqual({ enabled: true });
+    expect(res._getJSONData()).toEqual({ enabled: true, serverRuntime: false });
+  });
+
+  it('reports the server runtime when the stage names one', async () => {
+    vi.stubEnv('CALLABLE_FUNCTION_RUNTIME_FUNCTION_NAME', 'runtime-fn');
+    mockResolve.mockResolvedValue(true);
+    const { res, call } = fire('live-jwt');
+    await call();
+    vi.unstubAllEnvs();
+
+    expect(res._getJSONData()).toEqual({ enabled: true, serverRuntime: true });
   });
 
   it('runs the per-user limiter before reading the setting', async () => {

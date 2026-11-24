@@ -1,6 +1,5 @@
 export default {
   'AdminDashboardTab.tsx': [[3, '230f0025f26e9c84']],
-  'AdminLiveOpsTriageMultiConfigTab.tsx': [[9, 'dc8a25326b09e153']],
   'AdminModalTab.tsx': [
     [2, '43dca498ff9a0de5'],
     [22, '68e1a4506bbca636'],
@@ -16,7 +15,6 @@ export default {
   'EventMetrics/UserActivity/filters/MetadataFilterPanel.tsx': [[2, 'b522c36076f32b47']],
   'EventMetrics/UserActivity/UserActivityTab.tsx': [[2, '7fe9553a65056a2a']],
   'FilesTab/EditTagModal.tsx': [[3, 'e29b446aa5957de4']],
-  'GitHubConnectionTab.tsx': [[8, '1fd7087d06a0ddbe']],
   'IntegrationDemandTab.tsx': [[3, '33c84625c2e68e9d']],
   'IntegrationHealth/components/IntegrationDetailPanel.tsx': [[2, '9c638f58c4fefb44']],
   'MigrateUsersTab.tsx': [[4, '655b890fff77d8be']],
@@ -31,7 +29,6 @@ export default {
   'InviteCenter/InviteCodes/components/DeleteConfirmModal.tsx': [[2, '56babe87ab4ebac2']],
   'ScopedOverridesByScope.tsx': [[9, '3599e2aac9a178b8']],
   'SlackMetrics/SlackMetricsTab.tsx': [[2, 'e2ae0a0feb2b939a']],
-  'SlackWorkspacesTab.tsx': [[2, '533bd942dfb864f5']],
   'SreAgentTab.tsx': [[11, '5f9ffda28ac67420']],
   'Team/index.tsx': [[1, '78a3901c08799aeb']],
   'Users/BulkAbuseResponseModal.tsx': [[26, 'c70df252992eb367']],
@@ -40,10 +37,9 @@ export default {
   'Users/Details/CountersDetails.tsx': [[2, 'f212e3583e33dd41']],
   'Users/MigrationDetails.tsx': [[1, 'b8abb7928748f7fe']],
   'Users/Views/RecentActivityView.tsx': [[1, '4761ad3c8a441a88']],
-  'WebhookAuditLogs/index.tsx': [[3, '22653ab828d91b71']],
   'email/EmailActivityHistory.tsx': [[2, '5d7be40ee2063946']],
   'email/EmailJobDetail.tsx': [[2, '81717d4fa42f09a7']],
-  'email/EmailJobsPanel.tsx': [[2, '5d95c7fb7773210d']],
+  'email/EmailJobsPanel.tsx': [[2, '101fad654099d594']],
   'email/EmailPreviewModal.tsx': [[2, '68f4e2bf66b2c474']],
   'email/EmailTemplatesPanel.tsx': [[2, 'f9c81b2ddcc066d8']],
 };

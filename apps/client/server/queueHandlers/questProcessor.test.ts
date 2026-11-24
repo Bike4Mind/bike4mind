@@ -10,6 +10,7 @@ const mockCapCheck = vi.hoisted(() => vi.fn());
 const mockFindActiveFreeze = vi.hoisted(() => vi.fn(async (): Promise<unknown> => null));
 const mockRecordFirstChatValue = vi.hoisted(() => vi.fn(async () => false));
 const mockLiveActivityEnd = vi.hoisted(() => vi.fn(async () => undefined));
+const mockResolveCallableFunctions = vi.hoisted(() => vi.fn(async (_user: unknown) => true));
 
 // This exercises only the db-adapter assembly in getStaticOptions: the surface
 // save_content_to_data_lake (-> saveContentAdapters in adapters.ts) reads from. Mocks mirror
@@ -50,6 +51,7 @@ vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
 vi.mock('@bike4mind/server-utils/utils/chatCompletionDefaults', () => ({
   getSharedTokenizer: () => ({}),
   publishTelemetryAlertCallback: vi.fn(),
+  publishModerationEscalation: vi.fn(),
 }));
 
 vi.mock('@bike4mind/services/llm', async () => {
@@ -91,6 +93,10 @@ vi.mock('./questProcessor.push', async importOriginal => ({
 }));
 
 vi.mock('@server/analytics/funnel', () => ({ recordFirstChatValue: mockRecordFirstChatValue }));
+
+vi.mock('@bike4mind/server-utils/callableFunctions/access', () => ({
+  resolveCallableFunctionsEnabled: mockResolveCallableFunctions,
+}));
 
 vi.mock('@bike4mind/server-utils/billing/freeTierDailyCapGate', async importOriginal => ({
   ...(await importOriginal<typeof import('@bike4mind/server-utils/billing/freeTierDailyCapGate')>()),
@@ -216,6 +222,34 @@ describe('processQuest', () => {
     expect(mockProcess).toHaveBeenCalledWith(
       expect.objectContaining({ body: expect.objectContaining({ authOrigin: 'apiKey', apiKeyId: 'k1' }) })
     );
+  }, 120_000);
+
+  it('hands process() a resolver that asks whether callable functions are on for the turn owner', async () => {
+    const { processQuest } = await import('./questProcessor');
+    const logger = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn(), updateMetadata: vi.fn() };
+    const params = { userId: 'user-1', sessionId: 'session-1', questId: 'quest-1', params: {} };
+
+    await processQuest(params as never, logger as never);
+    const { callableFunctionsResolver } = mockProcess.mock.lastCall?.[0] as {
+      callableFunctionsResolver: () => Promise<boolean>;
+    };
+    const { user } = processOptions.mock.lastCall?.[0] as { user: unknown };
+
+    await expect(callableFunctionsResolver()).resolves.toBe(true);
+    expect(mockResolveCallableFunctions).toHaveBeenCalledWith(user);
+  }, 120_000);
+
+  it('wires the moderation escalation notifier', async () => {
+    const { processQuest } = await import('./questProcessor');
+    const { publishModerationEscalation } = await import('@bike4mind/server-utils/utils/chatCompletionDefaults');
+    const logger = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn(), updateMetadata: vi.fn() };
+
+    await processQuest(
+      { userId: 'user-1', sessionId: 'session-1', questId: 'quest-1', params: {} } as never,
+      logger as never
+    );
+
+    expect(processOptions.mock.calls.at(-1)?.[0].notifyModerationEscalation).toBe(publishModerationEscalation);
   }, 120_000);
 
   it("hands the queued turn's key to the QuestMaster completion meter", async () => {

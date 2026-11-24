@@ -3,8 +3,9 @@ import Button from '@mui/joy/Button';
 import Chip from '@mui/joy/Chip';
 import Typography from '@mui/joy/Typography';
 import { keyframes } from '@mui/system';
-import { useEffect, useMemo, useRef, type ReactNode, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, type ReactNode, useState } from 'react';
 import { AgentPeekDrawer } from './AgentPeekDrawer';
+import { AgentPrDialog } from './AgentPrDialog';
 import { playSoundEvent } from './chime';
 import { useAgentSoundEvents } from './soundEvents';
 import { activeSoundPack, resolveEventSound } from './soundPacks';
@@ -13,8 +14,15 @@ import { FinaleBanner } from './FinaleBanner';
 import { FocusPanel } from './FocusPanel';
 import { useRunSpend } from './runSpend';
 import { NeedsYouCard } from './NeedsYouCard';
+import { NeedsYouStrip } from './NeedsYouStrip';
+import { toMiniPayload, useOrchestrateMiniWindow, usePublishOrchestrateMini } from './orchestrateMini';
 import { numberAgents, redactForPresenter, restorePresentedAction, type PresentedStage } from './presenter';
 import type { OrchestratorViewId } from './orchestratorPrefs';
+import type { OrchestratorLayout, OrchestratorPane } from './orchestratorLayout';
+import { StageLayout } from './StageLayout';
+import { StageDropZones } from './StageDropZones';
+import { pinLabel, resolvePaneSession } from './panePins';
+import { PinnedPane, type PaneSessionSource } from './PinnedPane';
 import { assignPersonas, type AgentPersona } from '@shared/agentPersona';
 import { formatRosterCost, summarizeRoster, type AgentView, type ParentView } from './roster';
 import { TableView } from './TableView';
@@ -37,6 +45,7 @@ export interface OrchestratorViewProps {
   /** The orchestrating session, for a view built on the snapshot (snapshotView.tsx). */
   rootId?: string;
   onSelect(id: string): void;
+  onOpenPr?(id: string): void;
   selectedId: string | null;
   introPlaying: boolean;
   personas: ReadonlyMap<string, AgentPersona>;
@@ -95,12 +104,15 @@ export interface StageAmbient {
 
 export interface OrchestratorStageProps {
   agents: readonly AgentView[];
+  selection?: { id: string | null; onChange(id: string | null): void };
   parent?: ParentView;
   /** Bring the parent's own conversation forward for an attention action. */
   onParentFocus?(): void;
   onParentToggle?(): void;
   /** The orchestrating session; scopes the remembered finale. Without it the finale never plays. */
   rootId?: string;
+  /** The orchestrating session's title, at the head of the path each Needs-you card shows. */
+  rootTitle?: string;
   /** The parent's closing summary, once its transcript ends on one; the finale waits for it. */
   report?: ParentReport;
   /** The finale's "Read the report": show that summary. */
@@ -110,11 +122,16 @@ export interface OrchestratorStageProps {
   onFocusAgentConsumed?(): void;
   /** An example quest picked on the empty stage: put its prompt in the composer. */
   onExampleQuest?(prompt: string): void;
-  view: OrchestratorViewId;
-  onViewChange(view: OrchestratorViewId): void;
+  /** The panes and the view in each (orchestratorLayout.ts); one pane is the stage as a single view. */
+  layout: OrchestratorLayout;
+  onLayoutChange(layout: OrchestratorLayout): void;
   actions: AgentActions;
+  onOpenPrLink?(sessionId: string, url: string): void;
   introPlaying: boolean;
-  /** Lets the Board and Tavern views register without the stage importing them; Table is the fallback for every id. */
+  /**
+   * Lets the Board and Tavern views register without the stage importing them; Table is the fallback for every
+   * id. Every pane is drawn through this with the same props, so redaction, palette and skin reach each one.
+   */
   renderView?(view: OrchestratorViewId, props: OrchestratorViewProps): ReactNode;
   /** Rendered at the end of the header row. */
   dockControl?: ReactNode;
@@ -124,13 +141,18 @@ export interface OrchestratorStageProps {
   /** Showing the parent conversation takes precedence over an agent peek. */
   conversationRequest?: number;
   presenter?: StagePresenter;
+  /**
+   * The shell's sessions, so a pane in a split can be pinned to another session (panePins.ts) and draw its
+   * roster. Without it every pane shows this stage's roster.
+   */
+  paneSessions?: PaneSessionSource;
 }
 
 const NO_PARENT: ParentView = {};
 const NO_NUMBERS: ReadonlyMap<string, number> = new Map();
 
 /** Presenter mode's agent numbers: given in roster order as agents first show, kept until the mode is turned off. */
-function usePresenterNumbers(on: boolean, agents: readonly AgentView[]): ReadonlyMap<string, number> {
+export function usePresenterNumbers(on: boolean, agents: readonly AgentView[]): ReadonlyMap<string, number> {
   const numbers = useRef(NO_NUMBERS);
   // Written during render on purpose: numberAgents is deterministic and idempotent, so a double render is
   // harmless, and moving it to an effect would flash the real titles for a frame.
@@ -145,17 +167,20 @@ const pulse = keyframes`
 
 export function OrchestratorStage({
   agents: rosterAgents,
+  selection,
   parent: rosterParent = NO_PARENT,
   onParentFocus,
   onParentToggle,
   rootId,
+  rootTitle,
   report,
   onReadReport,
   focusAgent = null,
   onFocusAgentConsumed,
-  view,
-  onViewChange,
+  layout,
+  onLayoutChange,
   actions,
+  onOpenPrLink,
   introPlaying,
   renderView,
   dockControl,
@@ -164,8 +189,16 @@ export function OrchestratorStage({
   focus,
   conversationRequest,
   presenter,
+  paneSessions,
 }: OrchestratorStageProps) {
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [prAgentId, setPrAgentId] = useState<string | null>(null);
+  const [localSelectedId, setLocalSelectedId] = useState<string | null>(null);
+  const selectedId = selection ? selection.id : localSelectedId;
+  const onSelectionChange = selection?.onChange;
+  const setSelectedId = useCallback(
+    (id: string | null) => (onSelectionChange ? onSelectionChange(id) : setLocalSelectedId(id)),
+    [onSelectionChange]
+  );
   const focused = focus?.on === true && rootId !== undefined && rosterAgents.length > 0;
   const rosterApprovals = useQuickApprovals(focused, rootId, rosterAgents, rosterParent);
 
@@ -178,8 +211,20 @@ export function OrchestratorStage({
     return presenting ? redactForPresenter(real, presenterNumbers) : real;
   }, [presenting, presenterNumbers, rosterAgents, rosterParent, rosterApprovals, rosterDesk]);
   const { agents, parent, approvals, desk } = shown;
+  const prAgent = !presenting && agents.find(agent => agent.id === prAgentId && agent.pr);
+  useEffect(() => {
+    if (!prAgent) setPrAgentId(null);
+  }, [prAgent]);
+  useEffect(() => setPrAgentId(null), [rootId]);
+  const openPr = (id: string) => {
+    if (!presenting && agents.some(agent => agent.id === id && agent.pr)) setPrAgentId(id);
+  };
   const restoreAction = presenting ? (action: ViewAction) => restorePresentedAction(action, rosterAgents) : undefined;
 
+  // Scene-only extras (a banner or agent details placed in the artwork, the Innkeeper's empty stage) belong to
+  // a stage showing one view; in a split they fall back to the stage's own, shared by every pane.
+  const view = layout.panes[0].view;
+  const split = layout.panes.length > 1;
   // Keyed on ids, creation times and titles so status churn does not recompute names; the seed prompt
   // feeds only the epithet and is fixed once an agent is created.
   const personaKey = agents.map(agent => `${agent.id}@${agent.createdAt}@${agent.title}`).join('\n');
@@ -197,23 +242,25 @@ export function OrchestratorStage({
     if (!hasSelection || settled) return;
     const onClick = (event: MouseEvent) => {
       if (handledDetailsClicks.current.has(event)) return;
+      // Sidebar selections share this drawer and must not be dismissed by the same click.
+      if (event.target instanceof Element && event.target.closest('[data-testid="chat-session-item"]')) return;
       if (event.target instanceof Element && event.target.closest('[role="menu"], [role="listbox"], [role="dialog"]'))
         return;
       setSelectedId(null);
     };
     window.addEventListener('click', onClick);
     return () => window.removeEventListener('click', onClick);
-  }, [hasSelection, settled]);
+  }, [hasSelection, settled, setSelectedId]);
 
   useEffect(() => {
     if (conversationRequest) setSelectedId(null);
-  }, [conversationRequest]);
+  }, [conversationRequest, setSelectedId]);
 
   useEffect(() => {
     if (!focusAgent) return;
     setSelectedId(focusAgent);
     onFocusAgentConsumed?.();
-  }, [focusAgent]);
+  }, [focusAgent, setSelectedId]);
 
   useEffect(() => {
     if (!hasSelection || settled) return;
@@ -226,7 +273,7 @@ export function OrchestratorStage({
     };
     document.addEventListener('keydown', onKeyDown);
     return () => document.removeEventListener('keydown', onKeyDown);
-  }, [hasSelection, settled]);
+  }, [hasSelection, settled, setSelectedId]);
 
   // The parent waiting on an approval counts too, as it does on the app badge.
   const rosterSummary = summarizeRoster(agents, parent);
@@ -269,7 +316,7 @@ export function OrchestratorStage({
   }, [finale.shown]);
   useAgentSoundEvents(agents, parentNeedsYou);
 
-  const parentScene = view === 'tavern' || view === 'office';
+  const parentScene = !split && (view === 'tavern' || view === 'office');
   const bannerInScene = parentScene && renderView !== undefined && agents.length > 0 && !focused;
   const banner = finale.shown && report && (
     <FinaleBanner
@@ -286,7 +333,7 @@ export function OrchestratorStage({
   );
 
   const detailsInScene =
-    (parentScene || view === 'aquarium') && renderView !== undefined && agents.length > 0 && !focused;
+    (parentScene || (!split && view === 'aquarium')) && renderView !== undefined && agents.length > 0 && !focused;
   const detailsPosition = useAvatarDetailsPosition(selected?.id, detailsInScene && !settled, view);
   const detailsOverlay = selected && (
     // Stay mounted while settled so waking restores the draft and selection.
@@ -321,6 +368,7 @@ export function OrchestratorStage({
         actions={actions}
         skin={detailsInScene ? ORCHESTRATOR_VIEW_INFO[view].detailsSkin : undefined}
         visible={!settled}
+        onOpenPr={openPr}
       />
     </Box>
   );
@@ -329,6 +377,7 @@ export function OrchestratorStage({
     agents,
     rootId,
     onSelect: setSelectedId,
+    onOpenPr: openPr,
     selectedId,
     introPlaying,
     personas,
@@ -342,16 +391,53 @@ export function OrchestratorStage({
     restoreAction,
   };
 
+  // A pane pinned to another session draws that session's roster; the stage's selection, drawer, finale and
+  // desk stay the active session's, so a click there opens the agent's session instead.
+  const renderPane = (pane: OrchestratorPane) => {
+    if (!renderView) return null;
+    const pinned =
+      paneSessions && resolvePaneSession(pane, { activeId: rootId, sessions: paneSessions.sessions, split });
+    if (!paneSessions || !pinned) return renderView(pane.view, viewProps);
+    return (
+      <PinnedPane
+        key={pinned.id}
+        rootId={pinned.id}
+        view={pane.view}
+        label={pinLabel(pinned, rootId, paneSessions.sessions, { presenting })}
+        source={paneSessions}
+        renderView={renderView}
+        onOpenSession={actions.open}
+        presenting={presenting}
+        settled={settled}
+      />
+    );
+  };
+
+  const isListedSession = (id: string) => paneSessions?.sessions.some(session => session.id === id) === true;
+
   const snapshot = useMemo(
     () => (focused && rootId !== undefined ? toViewSnapshot(rootId, agents, parent, approvals) : undefined),
     [focused, rootId, agents, parent, approvals]
   );
+  // The mini window draws from the same (possibly redacted) roster as the views, never the real one.
+  const miniWindow = useOrchestrateMiniWindow();
+  const miniOpen = miniWindow?.on === true;
+  const miniPayload = useMemo(
+    () =>
+      miniOpen && rootId !== undefined && agents.length > 0
+        ? toMiniPayload(toViewSnapshot(rootId, agents, parent), skin, presenting)
+        : null,
+    [miniOpen, rootId, agents, parent, skin, presenting]
+  );
+  usePublishOrchestrateMini(miniPayload, miniOpen);
+
   // Through the same gate a view that does not ship with the app will go through.
   const onViewAction = async (action: ViewAction) => {
     const accepted = snapshot && acceptViewAction(snapshot, action);
     if (!accepted) return;
     await runViewAction(restoreAction ? restoreAction(accepted) : accepted, {
       openAgent: setSelectedId,
+      openPr,
       openRoot: () => onParentFocus?.(),
       stop: actions.stop,
     });
@@ -387,6 +473,7 @@ export function OrchestratorStage({
         if (!hasSelection || settled || !(event.target instanceof Element)) return;
         if (!event.currentTarget.contains(event.target)) return;
         if (event.target.closest('[data-agent-details-panel]')) return;
+        if (event.target.closest('[data-pr-number], [role="dialog"]')) return;
         setSelectedId(null);
       }}
       data-skin={skin.id ?? 'default'}
@@ -411,13 +498,15 @@ export function OrchestratorStage({
           </Typography>
         </Box>
       ) : (
-        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.25, px: 1.5, py: 1 }}>
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.25, px: 1.5, py: 1, minWidth: 0 }}>
           <ViewSwitcher
-            view={view}
-            onViewChange={onViewChange}
+            layout={layout}
+            onLayoutChange={onLayoutChange}
             ambient={ambient && { on: ambient.on, onToggle: ambient.onToggle }}
             focus={focus}
             presenter={presenter}
+            miniWindow={miniWindow}
+            paneSessions={paneSessions && { activeId: rootId, sessions: paneSessions.sessions, presenting }}
           />
           {presenting && <PresentingBadge />}
           <Typography
@@ -461,6 +550,10 @@ export function OrchestratorStage({
           {dockControl}
         </Box>
       )}
+      {!settled && !presenting && (
+        // Off in Presenter mode: its cards would show the real requests the redacted stage hides.
+        <NeedsYouStrip agents={rosterAgents} personas={personas} rootTitle={rootTitle} onOpenDetails={setSelectedId} />
+      )}
       <Box
         data-testid="orchestrator-scene-viewport"
         sx={{ position: 'relative', isolation: 'isolate', display: 'flex', flex: 1, minWidth: 0, minHeight: 0 }}
@@ -484,8 +577,17 @@ export function OrchestratorStage({
             />
           ) : snapshot ? (
             <FocusPanel snapshot={snapshot} onAction={onViewAction} />
+          ) : renderView && paneSessions ? (
+            <StageDropZones
+              layout={layout}
+              onLayoutChange={onLayoutChange}
+              activeId={rootId}
+              isListed={isListedSession}
+            >
+              <StageLayout layout={layout} onLayoutChange={onLayoutChange} renderPane={renderPane} />
+            </StageDropZones>
           ) : renderView ? (
-            renderView(view, viewProps)
+            <StageLayout layout={layout} onLayoutChange={onLayoutChange} renderPane={renderPane} />
           ) : (
             <TableView {...viewProps} />
           )}
@@ -493,6 +595,15 @@ export function OrchestratorStage({
         </Box>
         {!detailsInScene && detailsOverlay}
       </Box>
+      {prAgent && (
+        <AgentPrDialog
+          key={prAgent.id}
+          sessionId={prAgent.id}
+          title={prAgent.title}
+          onClose={() => setPrAgentId(null)}
+          onOpenLink={onOpenPrLink && (url => onOpenPrLink(prAgent.id, url))}
+        />
+      )}
     </Box>
   );
 }

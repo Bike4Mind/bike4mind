@@ -1,5 +1,5 @@
 import type { ElementType } from 'react';
-import type { AdminActionCountKey } from './adminActionCounts';
+import type { AdminActionCountKey } from '@bike4mind/server-utils/app/components/admin/adminActionCounts';
 import {
   Activity,
   AppWindow,
@@ -22,6 +22,7 @@ import {
   Database,
   FileText,
   Fingerprint,
+  ChartCandlestick,
   Gauge,
   GraduationCap,
   Gavel,
@@ -31,6 +32,7 @@ import {
   Handshake,
   Hash,
   ImageOff,
+  MessageSquareWarning,
   HeartPulse,
   Inbox,
   Key,
@@ -55,7 +57,6 @@ import {
   ClipboardCheck,
   Settings,
   ShieldCheck,
-  Siren,
   Sparkles,
   SquareTerminal,
   Tag,
@@ -76,7 +77,7 @@ export enum AdminTab {
   AdminSettings = 1,
   Feedback = 2,
   Analytics = 3,
-  // 4, 11, 16 and 17 were tabs that no longer exist; never reuse them.
+  // 4, 11, 16, 17 and 35 were tabs that no longer exist; never reuse them.
   /** Retired page; keep the persisted value and URL redirect. */
   RegistrationInvites = 5,
   Migrate = 6,
@@ -105,7 +106,6 @@ export enum AdminTab {
   WhatsNewModals = 32,
   SlackMetrics = 33,
   SystemSecrets = 34,
-  LiveOpsTriage = 35,
   EmailMarketing = 36,
   WebhookAuditLogs = 37,
   GitHubConnection = 38,
@@ -155,13 +155,15 @@ export enum AdminTab {
   Roles = 80,
   AccessReview = 81,
   SpendExplorer = 82,
+  SpendMonitor = 83,
+  TextModerationReview = 84,
 }
 
 /**
  * Conditional-visibility gate keys. An item with a `gate` only renders when the
  * matching boolean (derived from SidebarNav props) is true.
  */
-export type SidebarGate = 'userMigration' | 'liveOpsTriage';
+export type SidebarGate = 'userMigration';
 
 /**
  * An item's end marker: the count of its queue (an AdminActionCountKey), or the Subscriptions
@@ -297,6 +299,7 @@ export const SIDEBAR_SECTIONS: SidebarSection[] = [
         label: 'Spend explorer',
         testid: 'admin-spend-explorer-btn',
       },
+      { Icon: ChartCandlestick, tab: AdminTab.SpendMonitor, label: 'Spend monitor', testid: 'admin-spend-monitor-btn' },
       { Icon: CreditCard, tab: AdminTab.Subscriptions, label: 'Subscriptions', badge: 'newSubscriptions' },
       { Icon: Tag, tab: AdminTab.GrowthPricing, label: 'Pricing', testid: 'admin-growth-pricing-btn' },
     ],
@@ -313,6 +316,13 @@ export const SIDEBAR_SECTIONS: SidebarSection[] = [
         label: 'Moderation review',
         testid: 'admin-moderation-incidents-btn',
         badge: 'moderationReview',
+      },
+      {
+        Icon: MessageSquareWarning,
+        tab: AdminTab.TextModerationReview,
+        label: 'Text moderation review',
+        testid: 'admin-text-moderation-review-btn',
+        badge: 'textModerationReview',
       },
       {
         Icon: ScrollText,
@@ -381,7 +391,6 @@ export const SIDEBAR_SECTIONS: SidebarSection[] = [
     Icon: Workflow,
     label: 'Platform',
     items: [
-      { Icon: Siren, tab: AdminTab.LiveOpsTriage, label: 'LiveOps triage', gate: 'liveOpsTriage' },
       { Icon: Radar, tab: AdminTab.SreAgent, label: 'SRE agent', testid: 'admin-sre-agent-btn', badge: 'sreAgent' },
       { Icon: Plug, tab: AdminTab.IntegrationHealth, label: 'Integrations', testid: 'admin-integration-health-btn' },
       {
@@ -393,8 +402,13 @@ export const SIDEBAR_SECTIONS: SidebarSection[] = [
       },
       { Icon: Gauge, tab: AdminTab.RateLimits, label: 'Rate limits', testid: 'admin-rate-limits-btn' },
       { Icon: Hash, tab: AdminTab.SlackWorkspaces, label: 'Slack workspaces' },
-      { Icon: GitBranch, tab: AdminTab.GitHubConnection, label: 'GitHub', testid: 'admin-github-connection-btn' },
-      { Icon: Webhook, tab: AdminTab.WebhookAuditLogs, label: 'Webhook logs' },
+      {
+        Icon: GitBranch,
+        tab: AdminTab.GitHubConnection,
+        label: 'GitHub connection',
+        testid: 'admin-github-connection-btn',
+      },
+      { Icon: Webhook, tab: AdminTab.WebhookAuditLogs, label: 'Webhook audit logs', aliases: ['Webhook logs'] },
       { Icon: MessagesSquare, tab: AdminTab.SlackMetrics, label: 'Slack metrics' },
       {
         Icon: TrendingUp,

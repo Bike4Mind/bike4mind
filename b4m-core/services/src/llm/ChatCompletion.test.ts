@@ -68,6 +68,7 @@ import {
 import {
   ADAPTIVE_THINKING_MAX_TOKENS_FLOOR,
   ADMIN_ASSISTANT_TOOL_NAMES,
+  CALLABLE_FUNCTIONS_PROMPT_NOTE,
   ChatModels,
   CreditHolderType,
   DATA_LAKE_TOOL_NAMES,
@@ -106,11 +107,16 @@ import { AiAccessRefusedError, insufficientCreditsError } from '@bike4mind/commo
 import { FlaggedContentError, BedrockGuardrailsService, OpenaiModerationsService } from '@bike4mind/utils';
 import { applyModerationHit } from '../userService/moderationPolicy';
 
-vi.mock('../userService/moderationPolicy', () => ({
-  applyModerationHit: vi.fn().mockResolvedValue({ hitsInWindow: 1, status: 'active' }),
-  MODERATION_POLICY: {},
-  moderationThrottleKey: vi.fn(),
-}));
+vi.mock('../userService/moderationPolicy', async importOriginal => {
+  const actual = await importOriginal<typeof import('../userService/moderationPolicy')>();
+  return {
+    applyModerationHit: vi.fn().mockResolvedValue({ hitsInWindow: 1, status: 'active', transitionedTo: null }),
+    MODERATION_POLICY: {},
+    moderationThrottleKey: vi.fn(),
+    // Real: the alert decision is pure, and these tests assert which hits raise one.
+    moderationEscalationAlert: actual.moderationEscalationAlert,
+  };
+});
 
 vi.mock('@bike4mind/llm-adapters', async importOriginal => {
   const actual = await importOriginal<typeof import('@bike4mind/llm-adapters')>();
@@ -337,7 +343,11 @@ describe('ChatCompletionProcess', () => {
         create: vi.fn(),
       },
       mcpServers: { find: vi.fn().mockResolvedValue([]) },
-      users: { update: vi.fn() },
+      users: { update: vi.fn(), findById: vi.fn().mockResolvedValue(mockUser) },
+      newAccountSpendCap: {
+        adminSettings: { findAll: async () => [], findBySettingNames: async () => [] },
+        personalSpendSince: async () => [],
+      },
       fabfiles: {},
       fabfilechunks: {},
       adminSettings: {},
@@ -806,6 +816,23 @@ describe('ChatCompletionProcess', () => {
       const final = JSON.parse(JSON.stringify(mockQuest));
       for (const key of ['deletedAt', 'createdAt', 'updatedAt']) delete final[key];
       expect(persisted).toEqual(final);
+    });
+
+    it('never write lakeSaveCount back, so a retried turn cannot reset the count its tools claimed', async () => {
+      mockSession.userId = 'user1';
+      mockQuest.lakeSaveCount = 2;
+      const writes: Record<string, unknown>[] = [];
+      const record = async (patch: Record<string, unknown>) => {
+        writes.push(JSON.parse(JSON.stringify(patch)));
+        return patch;
+      };
+      mockDb.quests.update.mockImplementation(record);
+      mockDb.quests.updateIfUnfinished.mockImplementation(record);
+
+      await service.process({ body: wireMinimalTurn(), logger: mockLogger });
+
+      expect(writes.length).toBeGreaterThan(0);
+      for (const w of writes) expect(w).not.toHaveProperty('lakeSaveCount');
     });
   });
 
@@ -11846,6 +11873,7 @@ describe('ChatCompletionProcess', () => {
       enabledTools: string[];
       videoToolConfigResolver?: () => Promise<VideoToolConfig | null>;
       musicToolConfigResolver?: () => Promise<MusicToolConfig | null>;
+      callableFunctionsResolver?: () => Promise<boolean>;
       /** Rebuilds the service with these constructor options layered over baseOptions. */
       serviceOptions?: Record<string, unknown>;
     }) => {
@@ -11905,6 +11933,7 @@ describe('ChatCompletionProcess', () => {
           logger: mockLogger,
           videoToolConfigResolver: opts.videoToolConfigResolver,
           musicToolConfigResolver: opts.musicToolConfigResolver,
+          callableFunctionsResolver: opts.callableFunctionsResolver,
         });
         return buildToolsSpy.mock.calls[0]?.[0] as BuildToolsArgs | undefined;
       } finally {
@@ -11941,6 +11970,41 @@ describe('ChatCompletionProcess', () => {
       const passed = await runWithResolvers({ enabledTools: [], videoToolConfigResolver: resolver });
       expect(resolver).not.toHaveBeenCalled();
       expect(passed?.config?.video_generation).toBeUndefined();
+    });
+
+    describe('callable-function note', () => {
+      const systemText = () =>
+        ((mockedBuildAndSortMessages.mock.calls.at(-1)?.[1] ?? []) as IMessage[])
+          .map(m => String(m.content))
+          .join('\n');
+
+      beforeEach(() => mockedBuildAndSortMessages.mockClear());
+
+      it('appends the note to the artifact prompt when the resolver says on', async () => {
+        enableAdminFlags('EnableArtifacts');
+        const resolver = vi.fn().mockResolvedValue(true);
+        await runWithResolvers({ enabledTools: [], callableFunctionsResolver: resolver });
+        expect(resolver).toHaveBeenCalledTimes(1);
+        expect(systemText()).toContain(CALLABLE_FUNCTIONS_PROMPT_NOTE);
+      });
+
+      it.each([
+        ['says off', vi.fn().mockResolvedValue(false)],
+        ['fails', vi.fn().mockRejectedValue(new Error('settings unavailable'))],
+        ['is not given', undefined],
+      ])('leaves the note out when the resolver %s', async (_label, resolver) => {
+        enableAdminFlags('EnableArtifacts');
+        await runWithResolvers({ enabledTools: [], callableFunctionsResolver: resolver });
+        expect(mockedBuildAndSortMessages).toHaveBeenCalled();
+        expect(systemText()).not.toContain('CALLABLE FUNCTIONS:');
+      });
+
+      it('does not ask while artifacts are off', async () => {
+        const resolver = vi.fn().mockResolvedValue(true);
+        await runWithResolvers({ enabledTools: [], callableFunctionsResolver: resolver });
+        expect(resolver).not.toHaveBeenCalled();
+        expect(systemText()).not.toContain('CALLABLE FUNCTIONS:');
+      });
     });
 
     // The web_search signing key reaches the tool config only through this call site, so a dropped
@@ -15922,6 +15986,110 @@ describe('prompt moderation', () => {
     expect(quest?.type).toBe('error');
     expect(quest?.errorCode).toBeUndefined();
     expect(applyModerationHit).not.toHaveBeenCalled();
+  });
+
+  describe('escalation alerts', () => {
+    const blockWith = (categories: string[]) => {
+      wireModMocks({ openaiKey: null, guardrailId: 'my-guardrail' });
+      enableAdminFlags('ModerationEnabled');
+      vi.mocked(BedrockGuardrailsService).mockImplementation(function (this: { checkPrompt: unknown }) {
+        this.checkPrompt = vi.fn().mockRejectedValue(new FlaggedContentError('blocked', categories));
+      } as unknown as typeof BedrockGuardrailsService);
+    };
+
+    it('sends an alert for a severe-category hit', async () => {
+      blockWith(['sexual/minors']);
+      const notify = vi.fn().mockResolvedValue(undefined);
+      service.notifyModerationEscalation = notify;
+
+      await service.process({ body: startParams, logger: mockLogger });
+
+      await vi.waitFor(() =>
+        expect(notify).toHaveBeenCalledWith(
+          expect.objectContaining({ reasons: ['severe_category'], categories: ['sexual/minors'], source: 'bedrock' })
+        )
+      );
+    });
+
+    it('sends an alert when the hit moves the user into suspend_pending', async () => {
+      blockWith(['violence']);
+      vi.mocked(applyModerationHit).mockResolvedValueOnce({
+        hitsInWindow: 5,
+        action: 'suspend_pending',
+        status: 'suspend_pending',
+        transitionedTo: 'suspend_pending',
+      });
+      const notify = vi.fn().mockResolvedValue(undefined);
+      service.notifyModerationEscalation = notify;
+
+      await service.process({ body: startParams, logger: mockLogger });
+
+      await vi.waitFor(() =>
+        expect(notify).toHaveBeenCalledWith(expect.objectContaining({ reasons: ['suspend_pending'], hitsInWindow: 5 }))
+      );
+    });
+
+    it('sends nothing for an ordinary hit', async () => {
+      blockWith(['violence']);
+      const notify = vi.fn().mockResolvedValue(undefined);
+      service.notifyModerationEscalation = notify;
+
+      await service.process({ body: startParams, logger: mockLogger });
+
+      expect(applyModerationHit).toHaveBeenCalled();
+      expect(notify).not.toHaveBeenCalled();
+    });
+
+    it('keeps the request outcome when the alert fails, and warns', async () => {
+      blockWith(['sexual/minors']);
+      const notify = vi.fn().mockRejectedValue(new Error('event bus down'));
+      service.notifyModerationEscalation = notify;
+
+      await service.process({ body: startParams, logger: mockLogger });
+
+      await vi.waitFor(() =>
+        expect(mockLogger.warn).toHaveBeenCalledWith(
+          expect.stringContaining('Failed to send the escalation alert'),
+          expect.any(Error)
+        )
+      );
+    });
+
+    it('keeps the request outcome when the notifier throws synchronously', async () => {
+      blockWith(['sexual/minors']);
+      service.notifyModerationEscalation = () => {
+        throw new Error('not wired');
+      };
+
+      await service.process({ body: startParams, logger: mockLogger });
+
+      await vi.waitFor(() =>
+        expect(mockLogger.warn).toHaveBeenCalledWith(
+          expect.stringContaining('Failed to send the escalation alert'),
+          expect.objectContaining({ message: 'not wired' })
+        )
+      );
+    });
+
+    it('does not wait for a notifier that never settles', async () => {
+      blockWith(['sexual/minors']);
+      const notify = vi.fn().mockReturnValue(new Promise(() => undefined));
+      service.notifyModerationEscalation = notify;
+
+      await service.process({ body: startParams, logger: mockLogger });
+
+      expect(notify).toHaveBeenCalledTimes(1);
+    });
+
+    it('runs without a notifier and does not warn about one', async () => {
+      blockWith(['sexual/minors']);
+      service.notifyModerationEscalation = undefined;
+
+      await service.process({ body: startParams, logger: mockLogger });
+
+      expect(applyModerationHit).toHaveBeenCalled();
+      expect(mockLogger.warn).not.toHaveBeenCalledWith(expect.stringContaining('escalation alert'), expect.anything());
+    });
   });
 
   it('records a provider moderation hit (Hook A) when the Anthropic safety classifier throws', async () => {

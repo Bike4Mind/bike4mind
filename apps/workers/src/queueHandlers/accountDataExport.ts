@@ -43,11 +43,10 @@ import {
   adminDataExportKey,
   isMissingObjectError,
 } from '@bike4mind/server-utils/utils/accountDataExport';
-// Registered outside the `@bike4mind/database` barrel: unregistered, the registry walk cannot query
-// them and the index would list both as omitted.
-import '@bike4mind/server-utils/models/Subscription';
-import '@bike4mind/server-utils/models/UserSubscription';
-import { SubjectRecordExport, assertEveryModelClassified } from '@server/dataSubject/subjectRecordExport';
+import {
+  SubjectRecordExport,
+  assertEveryModelClassified,
+} from '@bike4mind/server-utils/dataSubject/subjectRecordExport';
 import { createKeyProvider } from '@bike4mind/server-utils/memory/factCipher';
 import { createLedgerMemoryStore } from '@bike4mind/server-utils/memory/ledgerMemoryStore';
 import { EmailEvents } from '@bike4mind/server-utils/utils/eventBus';
@@ -621,7 +620,7 @@ async function writeModelRecords(
 }
 
 /**
- * The registry walk (apps/client/server/dataSubject): each model goes to a scratch file first, so a
+ * The registry walk (packages/server-utils/src/dataSubject): each model goes to a scratch file first, so a
  * model that fails is listed as omitted without corrupting the zip entry being written.
  */
 async function writeRegistryRecords(

@@ -158,6 +158,8 @@ export default $config({
       wafWebAclArn,
       contributedQueues,
       dlqAlarmTopic,
+      forwardErrorLogs,
+      callableFunctionSubnetIds,
     } = await import('./infra');
 
     // Contribute premium package infra (crons, alarms, Slack fan-out, EventBridge
@@ -267,11 +269,12 @@ export default $config({
     });
 
     // Same generated-glue pattern as the overlays above: a no-op when the overlay is absent.
-    // Also handed the shared bus, the package-declared queue pairs (infra/queues.ts) and the alarm
-    // topic, so a package can subscribe consumers and attach rules and alarms from its own infra.
-    // alarmTopic is undefined on a stage without monitoring (infra/dlqAlarms.ts).
+    // Also handed the shared resources and core wiring a package's own functions need: the bus, the
+    // package-declared queue pairs (infra/queues.ts), buckets, mail body grants, the alarm topic
+    // (undefined on a stage without monitoring) and ERROR log forwarding (infra/logMonitor.ts).
     const { contributeInfra: contributeSentinelInfra } =
       await import('./infra/premium-generated/sentinel-infra.generated');
+    const { mailBodyEnvironment, mailBodyPutPermission } = await import('./infra/mailBodyOffload');
     const infrastructureContext = {
       lambdaVpc,
       allSecrets,
@@ -279,6 +282,16 @@ export default $config({
       eventBus,
       contributedQueues,
       alarmTopic: dlqAlarmTopic,
+      websocketApi,
+      fabFileBucket,
+      generatedImagesBucket,
+      appFilesBucket,
+      mcpHandler,
+      mailBody: {
+        environment: mailBodyEnvironment(appFilesBucket),
+        permission: mailBodyPutPermission(appFilesBucket),
+      },
+      forwardErrorLogs,
     };
     contributeSentinelInfra(infrastructureContext);
 
@@ -307,6 +320,7 @@ export default $config({
       websocketEndpoint: websocketApi.managementEndpoint,
       subscriberFanout: subscriberFanout.urn,
       scheduleTaskCron: scheduleTaskCron.urn,
+      callableFunctionSubnetIds,
     };
   },
 });

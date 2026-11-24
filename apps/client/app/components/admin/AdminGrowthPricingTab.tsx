@@ -10,6 +10,7 @@ import {
   formatUsdPerCredit,
   isEnforceCreditsLocked,
   MIN_PRICE_PER_CREDIT_USD,
+  parseReferralMilestones,
   resolveTeamPlanSettings,
   SETTING_TABS,
   settingsMap,
@@ -122,7 +123,7 @@ export const GROWTH_PRICING_LINKS = [
     id: 'invite-center-rewards',
     title: 'Referral rewards for inviters',
     description:
-      'What an inviter earns when an invited friend becomes active or subscribes, plus the hold, starting-invite and alert settings. Edited in the Invite Center.',
+      'What an inviter earns when an invited friend becomes active or subscribes, plus milestones and the hold, starting-invite, share-link limit and alert settings. Edited in the Invite Center.',
     linkLabel: 'Open Invite Center rewards',
   },
 ] as const;
@@ -144,6 +145,13 @@ export const describeDerivedValue = (key: SettingKey, value: unknown): string | 
     case 'ReferralSecondPaymentCredits':
       if (!Number.isFinite(amount)) return null;
       return `${amount.toLocaleString('en-US')} credits = ${formatUsdAmount(creditsToUsdAtFloor(amount))} at the ${floor}`;
+    case 'ReferralMilestones': {
+      const milestones = typeof value === 'string' ? parseReferralMilestones(value) : null;
+      if (!milestones || milestones.length === 0) return null;
+      const total = milestones.reduce((sum, milestone) => sum + milestone.credits, 0);
+      const count = milestones.length === 1 ? '1 milestone' : `${milestones.length} milestones`;
+      return `${count}, ${total.toLocaleString('en-US')} credits per inviter in all = ${formatUsdAmount(creditsToUsdAtFloor(total))} at the ${floor}`;
+    }
     case 'pricePerCredit':
       return Number.isFinite(amount)
         ? `${formatUsdPerCredit(amount)} per credit (USD) - ${floor}`

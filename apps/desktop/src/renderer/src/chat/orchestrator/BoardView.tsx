@@ -1,10 +1,10 @@
 import Box from '@mui/joy/Box';
-import Chip from '@mui/joy/Chip';
 import Typography from '@mui/joy/Typography';
 import { useCallback, useEffect, useLayoutEffect, useRef } from 'react';
 import { useElementWidth } from '../sessionPanelState';
 import { agentNowText } from './activity';
 import { AgentStateChip } from './AgentStateChip';
+import { AgentPrIndicator } from './AgentPrIndicator';
 import { SKIN_CARD_VARIABLE } from './statePalette';
 import { prefersReducedMotion } from './motion';
 import type { OrchestratorViewProps } from './OrchestratorStage';
@@ -14,10 +14,13 @@ type ColumnId = 'needs-you' | 'working' | 'done' | 'failed';
 
 const COLUMNS: ReadonlyArray<{ id: ColumnId; label: string; states: readonly AgentState[] }> = [
   { id: 'needs-you', label: 'Needs you', states: ['needs-you'] },
-  { id: 'working', label: 'Working', states: ['working'] },
-  { id: 'done', label: 'Done', states: ['done', 'stopped', 'idle'] },
+  { id: 'working', label: 'Working', states: ['working', 'waiting'] },
+  { id: 'done', label: 'Done', states: ['done', 'paused', 'stopped', 'idle'] },
   { id: 'failed', label: 'Failed', states: ['failed'] },
 ];
+
+/** Settled states that share the Done column with finished agents, so their card names which one it is. */
+const QUIET_CHIP: ReadonlySet<AgentState> = new Set(['paused', 'stopped', 'idle']);
 
 const FLIP_MS = 250;
 // Columns with cards share their row's width and shrink to this before the board wraps them into
@@ -160,6 +163,7 @@ function BoardCard({
   via,
   selected,
   onSelect,
+  onOpenPr,
   cardRef,
 }: {
   agent: AgentView;
@@ -167,6 +171,7 @@ function BoardCard({
   via?: string;
   selected: boolean;
   onSelect(id: string): void;
+  onOpenPr?(id: string): void;
   cardRef(node: HTMLElement | null): void;
 }) {
   const now = agentNowText(agent);
@@ -214,15 +219,17 @@ function BoardCard({
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75, flexWrap: 'wrap' }}>
         {agent.decision ? (
           <AgentStateChip state={agent.state} deciding />
+        ) : agent.state === 'waiting' ? (
+          <AgentStateChip state="waiting" backgroundJobs={agent.background?.running} />
         ) : (
-          (agent.state === 'stopped' || agent.state === 'idle') && <AgentStateChip state={agent.state} muted />
+          QUIET_CHIP.has(agent.state) && <AgentStateChip state={agent.state} muted />
         )}
         {costKnown && (
           <Typography level="body-xs" textColor="text.tertiary">
             {formatAgentCost(agent.usdCost, agent.credits)}
           </Typography>
         )}
-        {agent.pr && <Chip size="sm" variant="outlined">{`#${agent.pr.number} ${agent.pr.state}`}</Chip>}
+        <AgentPrIndicator agentId={agent.id} pr={agent.pr} onOpen={() => onOpenPr?.(agent.id)} />
       </Box>
     </Box>
   );
@@ -232,7 +239,7 @@ function columnCards(agents: readonly AgentView[], states: readonly AgentState[]
   return agents.filter(agent => states.includes(agent.state));
 }
 
-export function BoardView({ agents, onSelect, selectedId }: OrchestratorViewProps) {
+export function BoardView({ agents, onSelect, onOpenPr, selectedId }: OrchestratorViewProps) {
   const [measureRef, boardWidth] = useElementWidth<HTMLDivElement>();
   const rows = packBoardRows(
     COLUMNS.map(column => {
@@ -317,6 +324,7 @@ export function BoardView({ agents, onSelect, selectedId }: OrchestratorViewProp
                     via={spawnerName(agent, agents)}
                     selected={agent.id === selectedId}
                     onSelect={onSelect}
+                    onOpenPr={onOpenPr}
                     cardRef={refFor(agent.id)}
                   />
                 ))}

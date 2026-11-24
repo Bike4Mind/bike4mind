@@ -13,6 +13,7 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
@@ -24,8 +25,10 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
@@ -36,16 +39,22 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.bike4mind.app.AppGraph
 import com.bike4mind.app.R
 import com.bike4mind.kit.approvals.PendingActionDecision
+import com.bike4mind.kit.capture.readyFileIds
 import com.bike4mind.kit.chat.ChatError
 import com.bike4mind.kit.chat.ChatState
+import com.bike4mind.kit.chat.FailedSend
 import com.bike4mind.kit.sessions.PendingAction
 import com.bike4mind.kit.sessions.Quest
 
 class ChatViewModel(graph: AppGraph, sessionId: String?) : ViewModel() {
     val controller = graph.chat(sessionId, viewModelScope).also { it.start() }
+    val attachments = graph.composerAttachments(viewModelScope)
+    val dictation = graph.dictation(viewModelScope)
 
     override fun onCleared() {
         controller.stop()
+        dictation.cancel()
+        attachments.clear()
     }
 }
 
@@ -55,12 +64,25 @@ fun ChatScreen(graph: AppGraph, sessionId: String?, onBack: () -> Unit) {
     // Scoped by AppRoot's ScreenScope: cleared (and the controller stopped) when this chat closes.
     val model = viewModel { ChatViewModel(graph, sessionId) }
     val state by model.controller.state.collectAsStateWithLifecycle()
+    val attachments by model.attachments.state.collectAsStateWithLifecycle()
+    val dictation by model.dictation.state.collectAsStateWithLifecycle()
     var draft by rememberSaveable { mutableStateOf("") }
+    var problem by remember { mutableStateOf<String?>(null) }
     val list = rememberLazyListState()
+    val fileIds = attachments.readyFileIds()
+    val attachedMessage = stringResource(R.string.capture_attached_message, attachments.joinToString(", ") { it.name })
 
-    LaunchedEffect(state.turns.size) {
-        if (state.turns.isNotEmpty()) list.animateScrollToItem(state.turns.lastIndex)
+    val rows = state.turns.size + state.failedSends.size
+    LaunchedEffect(rows) {
+        if (rows > 0) list.animateScrollToItem(rows - 1)
     }
+
+    DictationDialog(
+        state = dictation,
+        onDone = { model.dictation.finish { text -> draft = if (draft.isBlank()) text else "$draft $text" } },
+        onCancel = model.dictation::cancel,
+        onDismissFailure = model.dictation::dismissFailure,
+    )
 
     Scaffold(
         topBar = {
@@ -80,6 +102,9 @@ fun ChatScreen(graph: AppGraph, sessionId: String?, onBack: () -> Unit) {
                 items(state.turns, key = { it.id }) { turn ->
                     Turn(turn, state) { action, decision -> model.controller.respond(turn.id, action, decision) }
                 }
+                items(state.failedSends, key = { it.id }) { failed ->
+                    FailedSendRow(failed, retryEnabled = !state.sending) { model.controller.retry(failed.id) }
+                }
             }
             state.statusMessage?.let {
                 Text(it, style = MaterialTheme.typography.labelMedium, modifier = Modifier.padding(horizontal = Spacing.m))
@@ -94,22 +119,74 @@ fun ChatScreen(graph: AppGraph, sessionId: String?, onBack: () -> Unit) {
                     modifier = Modifier.padding(horizontal = Spacing.m),
                 )
             }
+            problem?.let {
+                Text(it, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(horizontal = Spacing.m))
+            }
+            // The agent-executions route takes no files (ChatController refuses the same send).
+            val agentRunWithFiles = state.sendsAsAgentRun && attachments.isNotEmpty()
+            if (agentRunWithFiles) {
+                Text(
+                    stringResource(R.string.chat_agent_no_attachments),
+                    color = MaterialTheme.colorScheme.error,
+                    modifier = Modifier.padding(horizontal = Spacing.m).testTag("chat-composer-agent-no-attachments"),
+                )
+            }
+            AttachmentList(attachments, onRemove = model.attachments::remove, onRetry = model.attachments::retry)
             Row(
                 modifier = Modifier.fillMaxWidth().padding(Spacing.m),
                 horizontalArrangement = Arrangement.spacedBy(Spacing.s),
+                verticalAlignment = Alignment.CenterVertically,
             ) {
+                AttachMenu(
+                    onPicked = { picked ->
+                        problem = null
+                        model.attachments.add(picked.file, picked.name, picked.mimeType)
+                    },
+                    onDictate = {
+                        problem = null
+                        model.dictation.start()
+                    },
+                    onProblem = { problem = it },
+                    enabled = !state.sending,
+                )
+                // An agent run reports progress in its notification (push/AgentRunNotifications.kt), not here.
+                if (model.controller.canStartAgentRun(state)) {
+                    FilterChip(
+                        selected = state.sendsAsAgentRun,
+                        onClick = { model.controller.setSendsAsAgentRun(!state.sendsAsAgentRun) },
+                        label = { Text(stringResource(R.string.chat_agent_toggle)) },
+                        modifier = Modifier.testTag("chat-composer-agent-toggle"),
+                    )
+                }
                 OutlinedTextField(
                     value = draft,
                     onValueChange = { draft = it },
                     modifier = Modifier.weight(1f).testTag("chat-composer-field"),
-                    placeholder = { Text(stringResource(R.string.chat_message_placeholder)) },
+                    placeholder = { Text(stringResource(if (state.sendsAsAgentRun) R.string.chat_agent_placeholder else R.string.chat_message_placeholder)) },
                 )
-                Button(modifier = Modifier.testTag("chat-composer-send"), enabled = draft.isNotBlank() && !state.sending, onClick = {
-                    model.controller.send(draft)
+                val canSend = !state.sending && !agentRunWithFiles && fileIds != null && (draft.isNotBlank() || attachments.isNotEmpty())
+                Button(modifier = Modifier.testTag("chat-composer-send"), enabled = canSend, onClick = {
+                    // A turn needs words; files sent on their own go out named.
+                    val message = draft.ifBlank { attachedMessage }
+                    val sentFileIds = fileIds.orEmpty()
+                    model.controller.send(message, sentFileIds) { model.attachments.clear(sentFileIds) }
                     draft = ""
                 }) {
                     Text(stringResource(R.string.chat_send))
                 }
+            }
+        }
+    }
+}
+
+@Composable
+private fun FailedSendRow(failed: FailedSend, retryEnabled: Boolean, onRetry: () -> Unit) {
+    Column(modifier = Modifier.fillMaxWidth().padding(horizontal = Spacing.m).testTag("chat-failed-send")) {
+        Card(modifier = Modifier.testTag("message-failed")) { Text(failed.message, modifier = Modifier.padding(Spacing.m)) }
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(failed.reason?.let { stringResource(R.string.chat_send_failed_reason, it) } ?: stringResource(R.string.chat_send_failed), color = MaterialTheme.colorScheme.error, modifier = Modifier.weight(1f))
+            TextButton(onClick = onRetry, enabled = retryEnabled, modifier = Modifier.testTag("chat-failed-send-retry-btn")) {
+                Text(stringResource(R.string.action_try_again))
             }
         }
     }

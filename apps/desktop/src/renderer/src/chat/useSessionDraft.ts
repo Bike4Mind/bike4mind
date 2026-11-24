@@ -22,6 +22,8 @@ export function useSessionDraft(onCreated: (id: string) => void, onListChanged: 
   current.current = session;
   const placement = useRef<SessionPlacement | undefined>(undefined);
   const sending = useRef(false);
+  // Applied when the draft's session is created and Orchestrate turns on there.
+  const orchestrateBudget = useRef<number | undefined>(undefined);
   const defaultsVersion = useRef(0);
   const explicitDefaults = useRef(new Set<keyof NewSessionDefaults>());
   const [busy, setBusy] = useState(false);
@@ -214,7 +216,14 @@ export function useSessionDraft(onCreated: (id: string) => void, onListChanged: 
         if (draft.generation) requireSaved(await window.b4m.chat.setSessionGeneration(id, draft.generation));
         if (draft.historyEnabled !== undefined)
           requireSaved(await window.b4m.chat.setSessionHistory(id, draft.historyEnabled));
-        if (draft.orchestrate) requireSaved(await window.b4m.chat.setSessionOrchestrate(id, true));
+        if (draft.orchestrate) {
+          const budget = orchestrateBudget.current;
+          requireSaved(
+            await (budget === undefined
+              ? window.b4m.chat.setSessionOrchestrate(id, true)
+              : window.b4m.chat.setSessionOrchestrate(id, true, budget))
+          );
+        }
         for (const path of draft.project?.contextDirectories ?? draft.grantedDirectories ?? []) {
           const result = await window.b4m.chat.addContextDirectory(id, path);
           if (result.status === 'refused') throw new Error(result.error);
@@ -283,7 +292,10 @@ export function useSessionDraft(onCreated: (id: string) => void, onListChanged: 
         return true;
       },
       setHistory: historyEnabled => patch({ historyEnabled }),
-      setOrchestrate: orchestrate => patch({ orchestrate }),
+      setOrchestrate: (orchestrate, budgetCredits) => {
+        orchestrateBudget.current = orchestrate ? budgetCredits : undefined;
+        return patch({ orchestrate });
+      },
       settleLocalModel: async () => undefined,
       addContextDirectoryTo: async (_target, path) => {
         await share(path);

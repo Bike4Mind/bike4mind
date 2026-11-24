@@ -50,12 +50,12 @@ export function Home() {
         <ChatShell
           key={chatScope.current}
           auth={state}
-          updateNotice={panelShown => <AppUpdateNotice controller={update} contained panelShown={panelShown} />}
+          updateNotice={<AppUpdateNotice controller={update} contained />}
           onOpenModelServers={() => void navigate({ to: '/settings', search: { section: 'servers' } })}
           onOpenImportSettings={focus => void navigate({ to: '/settings', search: { section: 'import', focus } })}
-          account={status =>
+          account={(status, spentAt) =>
             state?.status === 'signed-in' || state?.reauthRequired ? (
-              <SignedInPanel state={state} status={status} update={update} />
+              <SignedInPanel state={state} status={status} update={update} spentAt={spentAt} />
             ) : (
               <Stack spacing={1} sx={{ p: 1.5 }}>
                 <Button

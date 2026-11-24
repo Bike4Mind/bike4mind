@@ -27,6 +27,11 @@ concurrency:
   group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
+# No labeled/unlabeled trigger: a label-event run on the same head SHA becomes the
+# latest CI run, and GitHub then reads the required Run Tests / CI Complete checks
+# from it alone. A skipped or renamed job there leaves them "Expected" and blocks
+# the merge. ci:full is read from the PR's labels, so it takes effect on the next
+# push (or a re-run of the latest CI run).
 jobs:
   # Changes gate: evaluate the changeset that fired this run (whole-PR
   # merge-base diff on pull_request, push range on push) and emit three
@@ -50,10 +55,11 @@ jobs:
     permissions:
       contents: read
     outputs:
-      deployable: ${{ github.event.pull_request.draft == true && 'false' || steps.filter.outputs.deployable }}
+      deployable: ${{ github.event.pull_request.draft == true && 'false' || contains(github.event.pull_request.labels.*.name, 'ci:full') && 'true' || steps.filter.outputs.deployable }}
       docs-changed: ${{ github.event.pull_request.draft == true && 'false' || steps.filter.outputs.docs-changed }}
       published-changed: ${{ steps.filter.outputs.published-changed }}
       changed-files: ${{ steps.changed-files.outputs.files }}
+      related-safe: ${{ steps.changed-files.outputs.related-safe }}
     steps:
       - uses: actions/checkout@v6
         with:
@@ -71,17 +77,8 @@ jobs:
         env:
           PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
           PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-        run: |
-          files=''
-          if merge_base=$(git merge-base "$PR_BASE_SHA" "$PR_HEAD_SHA") \
-            && list=$(git -c core.quotePath=false diff --no-renames --name-only "$merge_base" "$PR_HEAD_SHA"); then
-            count=$(printf '%s' "$list" | grep -c '' || true)
-            echo "${count} file(s) changed since ${merge_base}"
-            if [ "$count" -le 3000 ]; then
-              files=$(printf '%s\n' "$list" | jq -Rsc 'split("\n") | map(select(length > 0))')
-            fi
-          fi
-          echo "files=${files}" >> "$GITHUB_OUTPUT"
+          FORCE_FULL: ${{ contains(github.event.pull_request.labels.*.name, 'ci:full') }}
+        run: node scripts/ci-related-tests.mjs diff
 
   # Build the core packages once and publish their dist/ as an artifact. The
   # gating jobs below (lint, the test shards - one of which also carries the
@@ -125,7 +122,7 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
 
       - name: Setup pnpm
-        uses: pnpm/action-setup@v5
+        uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v5
 
       - name: Cache pnpm dependencies
         uses: actions/cache@v5
@@ -148,6 +145,7 @@ jobs:
         continue-on-error: true
         env:
           CHANGED_FILES: ${{ needs.changes.outputs.changed-files }}
+          RELATED_SAFE: ${{ needs.changes.outputs.related-safe }}
         run: node scripts/ci-affected-tests.mjs plan
 
       - name: Build bike4mind core packages
@@ -410,7 +408,7 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
 
       - name: Setup pnpm
-        uses: pnpm/action-setup@v5
+        uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v5
 
       - name: Cache pnpm dependencies
         uses: actions/cache@v5
@@ -482,7 +480,7 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
 
       - name: Setup pnpm
-        uses: pnpm/action-setup@v5
+        uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v5
 
       - name: Cache pnpm dependencies
         uses: actions/cache@v5
@@ -550,6 +548,10 @@ jobs:
   # selection-code changes test everything, as do push runs and any failure to decide. A leg left
   # with nothing skips its setup and passes in seconds. misc (root-level and repo-scan tests) and
   # the typecheck leg always run.
+  # Client-only source PRs additionally use Vitest's related graph in both client lanes,
+  # retaining the unit shards. Reader/dynamic-import modules seed conservative inclusion.
+  # External files, deletes, config/setup/mocks, unknown graph edges and ci:full keep full
+  # client runs. Related runs bypass turbo entirely; main/push still tests the full graph.
   # The `test` job below aggregates these shards into the required "Run Tests"
   # status check.
   test-shards:
@@ -704,7 +706,7 @@ jobs:
 
       - name: Setup pnpm
         if: steps.select.outputs.setup == 'true'
-        uses: pnpm/action-setup@v5
+        uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v5
 
       - name: Cache pnpm dependencies
         if: steps.select.outputs.setup == 'true'
@@ -839,6 +841,7 @@ jobs:
           SELECTED_FILTER: ${{ steps.select.outputs.unit-filter }}
           SHARD_SCRIPT: 'test'
           SHARD_ARGS: ${{ matrix.shard.args }}
+          CLIENT_RELATED: ${{ steps.select.outputs.client-related }}
         run: |
           # Split each env var on whitespace into a real argv array, so every token arrives at
           # pnpm as its own argument. The matrix values stay in `env:` and are never interpolated
@@ -868,6 +871,10 @@ jobs:
           # packages (database, scripts) ended up alone on a pool capped at a quarter of the box.
           # Serial with full pools measured faster on the data and misc legs, with no
           # oversubscription by construction. vitestWorkerBudget.test.ts pins this.
+          if [ "$SELECTED_FILTER" = '--filter @bike4mind/client' ] && [ "$CLIENT_RELATED" != '{"mode":"full"}' ]; then
+            node scripts/ci-related-tests.mjs run
+            exit $?
+          fi
           node scripts/turbo-test-cache.mjs context "$SHARD_SCRIPT" "${filter_args[@]}"
           status=0
           pnpm exec turbo run "$SHARD_SCRIPT" "${filter_args[@]}" --only --concurrency=1 --continue=always --env-mode=loose --ui=stream --cache-dir=.turbo/cache --summarize --output-logs=new-only -- "${script_args[@]}" || status=$?
@@ -889,6 +896,7 @@ jobs:
           SHARD_FILTER: ${{ matrix.shard.integration-filter }}
           SELECTED_FILTER: ${{ steps.select.outputs.integration-filter }}
           SHARD_SCRIPT: 'test:integration'
+          CLIENT_RELATED: ${{ steps.select.outputs.client-related }}
         run: |
           read -ra shard_filter_args <<< "$SHARD_FILTER"
           read -ra filter_args <<< "$SELECTED_FILTER"
@@ -897,6 +905,10 @@ jobs:
           if [ "$matched" -eq 0 ]; then
             echo "::error title=Empty test shard::The ${SHARD_NAME} leg's integration-filter matches no workspace package, so it would run no tests. Check the --filter tokens in the matrix."
             exit 1
+          fi
+          if [ "$SELECTED_FILTER" = '--filter @bike4mind/client' ] && [ "$CLIENT_RELATED" != '{"mode":"full"}' ]; then
+            node scripts/ci-related-tests.mjs run
+            exit $?
           fi
           node scripts/turbo-test-cache.mjs context "$SHARD_SCRIPT" "${filter_args[@]}"
           status=0
@@ -954,7 +966,7 @@ jobs:
       # the naming.
       - name: Run repo-scan tests
         if: ${{ !cancelled() && matrix.shard.name == 'misc' && steps.codegen.outcome == 'success' }}
-        run: pnpm --recursive --if-present run test:repo
+        run: pnpm --recursive --if-present --workspace-concurrency=1 run test:repo
         env:
           CI: true
           VITEST_MAX_WORKERS: ${{ matrix.shard.workers }}
@@ -1081,7 +1093,7 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
 
       - name: Setup pnpm
-        uses: pnpm/action-setup@v5
+        uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v5
 
       - name: Cache pnpm dependencies
         uses: actions/cache@v5
@@ -1190,7 +1202,7 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
 
       - name: Setup pnpm
-        uses: pnpm/action-setup@v5
+        uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v5
 
       - name: Cache pnpm dependencies
         uses: actions/cache@v5
@@ -1265,7 +1277,7 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
 
       - name: Setup pnpm
-        uses: pnpm/action-setup@v5
+        uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v5
 
       - name: Cache pnpm dependencies
         uses: actions/cache@v5

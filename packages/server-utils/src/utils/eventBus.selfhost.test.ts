@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { EmailSendDetail } from './eventBus';
 
 const { sendToQueueMock, sendEmailMock, hostedSend, recordOutcomeMock } = vi.hoisted(() => ({
   sendToQueueMock: vi.fn(),
@@ -66,6 +67,33 @@ describe('EmailEvents.Send schema', () => {
 
     expect(EmailEvents.Send.schema.parse(detail)).toEqual(detail);
   });
+
+  const bodyRef = { key: 'queued-mail/0b6f8a52-3c1e-4f7d-9a0b-2d4c6e8f1a3b.json' };
+  const accepts = (detail: object) => EmailEvents.Send.schema.safeParse(detail).success;
+
+  it('accepts a stored body reference in place of the body', () => {
+    expect(accepts({ to: 'a@b.com', subject: 'Hi', bodyRef })).toBe(true);
+  });
+
+  it('accepts an empty body', () => {
+    expect(accepts({ to: 'a@b.com', subject: 'Hi', body: '' })).toBe(true);
+  });
+
+  it('rejects mail with both a body and a reference, or with neither', () => {
+    expect(accepts({ to: 'a@b.com', subject: 'Hi', body: '<p>hello</p>', bodyRef })).toBe(false);
+    expect(accepts({ to: 'a@b.com', subject: 'Hi' })).toBe(false);
+  });
+
+  it('rejects a text alternative next to a reference, since the stored body carries it', () => {
+    expect(accepts({ to: 'a@b.com', subject: 'Hi', bodyRef, text: 'hello' })).toBe(false);
+  });
+
+  it('rejects a reference outside the mail body prefix', () => {
+    expect(accepts({ to: 'a@b.com', subject: 'Hi', bodyRef: { key: 'queued-mail/../profile-photos/x.json' } })).toBe(
+      false
+    );
+    expect(accepts({ to: 'a@b.com', subject: 'Hi', bodyRef: { key: 'transcripts/0b6f8a52.json' } })).toBe(false);
+  });
 });
 
 describe('eventBus publishSelfHost', () => {
@@ -97,6 +125,30 @@ describe('eventBus publishSelfHost', () => {
     );
     expect(sendEmailMock.mock.calls[0][1]).not.toHaveProperty('text');
     expect(sendToQueueMock).not.toHaveBeenCalled();
+  });
+
+  it('types a publish with neither or both of body and bodyRef as an error, as the schema rejects them', () => {
+    const bodyRef = { key: 'queued-mail/0b6f8a52-3c1e-4f7d-9a0b-2d4c6e8f1a3b.json' };
+    // @ts-expect-error neither body nor bodyRef
+    const neither: EmailSendDetail = { to: 'a@b.com', subject: 'Hi' };
+    // @ts-expect-error both body and bodyRef
+    const both: EmailSendDetail = { to: 'a@b.com', subject: 'Hi', body: 'x', bodyRef };
+    // @ts-expect-error text travels in the stored body
+    const textWithRef: EmailSendDetail = { to: 'a@b.com', subject: 'Hi', text: 't', bodyRef };
+    for (const detail of [neither, both, textWithRef]) {
+      expect(EmailEvents.Send.schema.safeParse(detail).success).toBe(false);
+    }
+  });
+
+  it('refuses a stored body reference instead of mailing an empty body', async () => {
+    await expect(
+      EmailEvents.Send.publish({
+        to: 'a@b.com',
+        subject: 'Hi',
+        bodyRef: { key: 'queued-mail/0b6f8a52-3c1e-4f7d-9a0b-2d4c6e8f1a3b.json' },
+      })
+    ).rejects.toThrow('email.send needs an inline body on self-host: bodyRef is hosted-only');
+    expect(sendEmailMock).not.toHaveBeenCalled();
   });
 
   it('passes the plain-text body and the send options through to the mailer', async () => {

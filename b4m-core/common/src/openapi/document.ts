@@ -82,8 +82,8 @@ export function infoDescription(scopes: readonly string[] = PUBLIC_DOC_API_KEY_S
       'opens its event stream. ' +
       '`GET /api/v1/me`, `GET /api/v1/credits`, `GET /api/v1/models`, `GET /api/v1/image-models`, ' +
       '`GET /api/v1/video-models`, ' +
-      '`GET /api/v1/music-models`, the `GET` list endpoints for `/api/v1/sessions`, `/api/v1/video-generations` ' +
-      'and `/api/v1/music-generations`, and the poll endpoints listed under ' +
+      '`GET /api/v1/music-models`, the `GET` list endpoints for `/api/v1/sessions`, `/api/v1/video-generations`, ' +
+      '`/api/v1/music-generations` and `/api/v1/image-jobs`, and the poll endpoints listed under ' +
       'Async jobs are exempt from the per-day ceiling: a poll consumes no daily slot, and only the per-minute ' +
       'limit applies. A request refused at the route scope gate (`403`) or for a bad key (`401`) never reaches ' +
       'the limiter and carries no rate-limit headers.',
@@ -113,7 +113,7 @@ export function infoDescription(scopes: readonly string[] = PUBLIC_DOC_API_KEY_S
     '',
     '## Async jobs',
     'Work that is not provably fast is queued and polled rather than held open:',
-    '- **Chat** (`POST /api/chat`) and **image generation/editing** (`POST /api/v1/image-generations`, ' +
+    '- **Chat** (`POST /api/chat`) and the deprecated quest-based image routes (`POST /api/v1/image-generations`, ' +
       '`POST /api/v1/image-edits`) return a quest. Poll `GET /api/v1/quests/{id}` until `status` is `done` or `stopped`; ' +
       'chat text arrives in `reply`, generated images in `images`, edited images in `files[].url`. Check for ' +
       'failure before reading results: a job that ends `done` with `type: "error"` failed (the reason is in ' +
@@ -123,6 +123,8 @@ export function infoDescription(scopes: readonly string[] = PUBLIC_DOC_API_KEY_S
       'the reply is ready.',
     '- **Agent runs** (`POST /api/v1/agent-executions`) return `202`. Poll ' +
       '`GET /api/v1/agent-executions/{id}` until `status` is `completed`, `failed` or `aborted`.',
+    '- **Image generation and editing** (`POST /api/v1/image-jobs`) returns `202` with one job per image. ' +
+      'Poll `GET /api/v1/image-jobs/{id}` until `state` is `succeeded`, `failed`, `blocked` or `cancelled`.',
     '- **Video generation** (`POST /api/v1/video-generations`) returns `202`. Poll ' +
       '`GET /api/v1/video-generations/{id}` until `state` is `succeeded`, `failed`, `blocked` or `cancelled`.',
     '- **Music generation** (`POST /api/v1/music-generations`) returns `202`. Poll ' +
@@ -135,6 +137,8 @@ export function infoDescription(scopes: readonly string[] = PUBLIC_DOC_API_KEY_S
       '`executionId` of the agent run your reply started. Poll `GET /api/v1/agent-executions/{id}` with it.',
     '- **Research runs** (`POST /api/v1/data-lakes/{id}/research/runs`) return `202`. Poll ' +
       '`GET /api/v1/data-lakes/{id}/research/runs/{run_id}` until `status` is `completed` or `failed`.',
+    '- **Delegations** (`POST /api/v1/delegations`) return `202`. Poll ' +
+      '`GET /api/v1/delegations/{id}` until `status` is `handled`, `needs_decision` or `failed`.',
     '- **File uploads** (`POST /api/v1/files`) return a presigned `upload_url`; after the `PUT`, poll ' +
       '`GET /api/v1/files/{id}` until `moderation_status` is `clean` before passing the id elsewhere.',
     '- **Audio** endpoints are synchronous and return the result directly. A text-to-speech ' +
@@ -389,7 +393,12 @@ export function buildOpenApiDocument(version: string): Record<string, unknown> {
         'A video and a music track composed into one shareable clip, queued with `202` and polled at ' +
         '`GET /api/v1/scene-compositions/{id}`.',
     },
-    { name: 'Images', description: 'Image generation and editing, queued and polled as quests.' },
+    {
+      name: 'Images',
+      description:
+        'Image generation and editing, queued with `202` and polled at `GET /api/v1/image-jobs/{id}`. ' +
+        '`/api/v1/image-generations` and `/api/v1/image-edits` are deprecated.',
+    },
     {
       name: 'Transcriptions',
       description: 'Speech-to-text: upload an audio file, then transcribe it.',

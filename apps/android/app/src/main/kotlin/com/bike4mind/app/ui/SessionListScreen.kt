@@ -108,6 +108,7 @@ fun SessionListScreen(
     onOpen: (String) -> Unit,
     onNewChat: () -> Unit,
     onOpenBrief: () -> Unit,
+    onOpenStudio: () -> Unit,
     onOpenSettings: () -> Unit,
 ) {
     // Scoped by AppRoot's ScreenScope: a sign-out clears it, so the next account never sees this list.
@@ -120,6 +121,7 @@ fun SessionListScreen(
                 title = { Text(stringResource(R.string.sessions_title)) },
                 actions = {
                     TextButton(onClick = onOpenBrief, modifier = Modifier.testTag("sessions-brief-btn")) { Text(stringResource(R.string.sessions_brief)) }
+                    TextButton(onClick = onOpenStudio, modifier = Modifier.testTag("sessions-studio-btn")) { Text(stringResource(R.string.sessions_studio)) }
                     TextButton(onClick = model::refresh) { Text(stringResource(R.string.action_refresh)) }
                     TextButton(onClick = onOpenSettings, modifier = Modifier.testTag("sessions-settings-btn")) { Text(stringResource(R.string.sessions_settings)) }
                 },
@@ -131,6 +133,7 @@ fun SessionListScreen(
     ) { padding ->
         Box(modifier = Modifier.fillMaxSize().padding(padding)) {
             LazyColumn(modifier = Modifier.fillMaxSize().testTag("sessions-list")) {
+                item(key = "pending-shares") { PendingShares(graph) }
                 state.defaultModel?.let { defaultModel ->
                     item {
                         Text(

@@ -125,7 +125,7 @@ the [generated API docs](/api/v1/docs) (raw spec: \`/api/v1/openapi.json\`, whic
 use to build a typed client). They are deliberately not repeated here, so the two cannot disagree.
 
 - Chat and quests: \`/api/chat\`, \`/api/v1/quests/{id}\`, \`/api/v1/quests/{id}/files\`,
-  \`/api/v1/agent-executions[/{id}]\`
+  \`/api/v1/agent-executions[/{id}]\`, \`/api/v1/delegations[/{id}]\`
 - Sessions: \`/api/v1/sessions\`, \`/api/v1/sessions/{id}\`, \`/api/sessions/{id}\`, \`/api/v1/sessions/{id}/clone\`,
   \`/api/v1/sessions/{id}/files\`, \`/api/v1/sessions/semantic-search\`,
   \`/api/v1/sessions/{id}/messages/{messageId}\`
@@ -143,12 +143,13 @@ use to build a typed client). They are deliberately not repeated here, so the tw
 - Files and data lakes: \`/api/v1/files[?search=]\` (list, upload), \`/api/v1/files/{id}\` (get, update,
   delete), \`/api/v1/files/{id}/chunk\`, \`/api/v1/files/search\`, \`/api/v1/files/by-ids\`, \`/api/v1/files/{id}/lineage\`,
   \`/api/v1/files/bulk-delete\`, \`/api/v1/data-lakes\`, \`/api/v1/data-lakes/*\`
-- Generation: \`/api/v1/image-generations\`, \`/api/v1/image-edits\`, \`/api/v1/video-*\`,
+- Generation: \`/api/v1/image-jobs\`, \`/api/v1/image-models\`, \`/api/v1/video-*\`,
   \`/api/v1/music-*\`, \`/api/v1/scene-compositions\`, \`/api/v1/voice/*\`, \`/api/ai/tts\`, \`/api/ai/sound-effects\`,
-  \`/api/ai/music\` (deprecated, sunset 2027-01-15; use \`/api/v1/music-generations\`)
+  \`/api/v1/image-generations\` and \`/api/v1/image-edits\` (deprecated, sunset 2027-02-17; use
+  \`/api/v1/image-jobs\`), \`/api/ai/music\` (deprecated, sunset 2027-01-15; use \`/api/v1/music-generations\`)
 - Transcription: \`/api/v1/transcriptions/uploads\`, \`/api/v1/transcriptions\`
 - Completions, embeddings, text refinement and tools: \`/api/ai/v1/*\`, \`/api/v1/completion-runs\`,
-  \`/api/v1/completion-runs/{runId}/usage\`,
+  \`/api/v1/completion-runs/{runId}/usage\`, \`/api/v1/completion-runs/{runId}/budget\`,
   \`/api/v1/embeddings\`, \`/api/v1/embedding-models\`, \`/api/v1/text-refinements\`
 - Web tools (search, page fetch, weather): \`/api/v1/tools/web-search\`, \`/api/v1/tools/web-fetch\`,
   \`/api/v1/tools/weather\`

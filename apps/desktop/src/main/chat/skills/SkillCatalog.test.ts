@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, realpath, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { CustomCommandStore, RemoteSkillSource } from '@bike4mind/cli/skills';
@@ -178,9 +178,24 @@ describe('SkillCatalog cache', () => {
     await store.setTrusted(project, true);
   });
 
-  // FSEvents starts a new watch asynchronously, so a write in the same few milliseconds can be
-  // missed. A user edits a skill long after the scan that set the watch up; the tests wait as well.
-  const watchSettled = () => new Promise(resolve => setTimeout(resolve, 500));
+  /**
+   * Repeats `change` until a rescan lists `name`. FSEvents starts a new watch asynchronously, so a
+   * change made in the first few milliseconds can be missed, where a user's edit comes long after
+   * the scan that set the watch up; repeating it stands in for that wait. inotify and Windows
+   * watches are live once watch() returns. The watch event stays real; only the rescan's debounce
+   * (WATCH_DEBOUNCE_MS in SkillCatalog) is stepped over.
+   */
+  async function untilListed(directory: string, name: string, change: () => Promise<void>): Promise<void> {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    await vi.waitUntil(
+      async () => {
+        await change();
+        vi.advanceTimersByTime(200);
+        return (await store.state(directory)).skills.some(skill => skill.name === name);
+      },
+      { timeout: 5000, interval: 20 }
+    );
+  }
 
   afterEach(() => {
     store.dispose();
@@ -202,14 +217,8 @@ describe('SkillCatalog cache', () => {
   it('rescans once a skill file changes, without moving the revision', async () => {
     await store.state(project);
     const revision = store.revision;
-    await watchSettled();
 
-    await writeSkill('review', 'Look it over');
-
-    await vi.waitUntil(async () => (await store.state(project)).skills.some(skill => skill.name === 'review'), {
-      timeout: 5000,
-      interval: 50,
-    });
+    await untilListed(project, 'review', () => writeSkill('review', 'Look it over'));
     expect(store.revision).toBe(revision);
   });
 
@@ -218,16 +227,15 @@ describe('SkillCatalog cache', () => {
     await mkdir(fresh, { recursive: true });
     await store.setTrusted(fresh, true);
     expect((await store.state(fresh)).skills.some(skill => skill.name === 'first')).toBe(false);
-    await watchSettled();
 
-    const dir = join(fresh, '.claude', 'skills', 'first');
-    await mkdir(dir, { recursive: true });
-    await writeFile(join(dir, 'SKILL.md'), ['---', 'description: The first', '---', '', 'Body.'].join('\n'), 'utf8');
-
+    // Removed and made again each time, so a creation the watch missed is a fresh creation.
+    const created = join(fresh, '.claude');
     // Well inside the 60s TTL, so only the watch on the folder above can have caught it.
-    await vi.waitUntil(async () => (await store.state(fresh)).skills.some(skill => skill.name === 'first'), {
-      timeout: 5000,
-      interval: 50,
+    await untilListed(fresh, 'first', async () => {
+      await rm(created, { recursive: true, force: true });
+      const dir = join(created, 'skills', 'first');
+      await mkdir(dir, { recursive: true });
+      await writeFile(join(dir, 'SKILL.md'), ['---', 'description: The first', '---', '', 'Body.'].join('\n'), 'utf8');
     });
   });
 

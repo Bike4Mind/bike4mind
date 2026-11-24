@@ -20,7 +20,7 @@ type AdminIdentity = Parameters<typeof hasAdminPermission>[0];
  */
 export const DELEGATED_ADMIN_TAB_PERMISSIONS: Readonly<Partial<Record<AdminTab, AdminPermissionRequirement>>> = {
   // The modal endpoints' CASL rules grant read and write on settings:manage; What's new adds its
-  // variants, highlights and LiveOps routes, all declared settings:manage.
+  // variants, highlights and deployment-info routes, all declared settings:manage.
   [AdminTab.Modals]: 'settings:manage',
   [AdminTab.WhatsNewModals]: 'settings:manage',
   [AdminTab.AiOperations]: 'settings:manage',
@@ -42,6 +42,8 @@ export const DELEGATED_ADMIN_TAB_PERMISSIONS: Readonly<Partial<Record<AdminTab, 
   [AdminTab.SpendExplorer]: 'support:read',
   [AdminTab.ApiKeyScopePreflight]: 'support:read',
   [AdminTab.LegacyApiKeys]: 'support:read',
+  // Its overview and freeze-list GETs accept support:read; freezing and lifting need credits:adjust.
+  [AdminTab.SpendMonitor]: 'support:read',
   [AdminTab.IntegrationDemand]: 'support:read',
   [AdminTab.AuditLog]: 'support:read',
   [AdminTab.Approvals]: 'support:read',
@@ -75,6 +77,7 @@ export const DELEGATED_ADMIN_TAB_PERMISSIONS: Readonly<Partial<Record<AdminTab, 
   [AdminTab.SignupRiskReview]: MODERATION_PAGE_READ,
   [AdminTab.RateLimits]: MODERATION_PAGE_READ,
   [AdminTab.PublishedPages]: MODERATION_PAGE_READ,
+  [AdminTab.TextModerationReview]: MODERATION_PAGE_READ,
 };
 
 export function canOpenAdminTab(user: AdminIdentity, tab: AdminTab): boolean {

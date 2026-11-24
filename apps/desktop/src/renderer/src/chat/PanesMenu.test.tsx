@@ -78,11 +78,8 @@ describe('PanesMenu', () => {
   });
 
   it('explicitly labels Studio and Browser and preserves disabled reasons separately', async () => {
-    await mount([
-      pane('terminal'),
-      pane('studio'),
-      pane('browser', { unavailableReason: 'Open a conversation first.' }),
-    ]);
+    const unavailable = pane('browser', { unavailableReason: 'Open a conversation first.' });
+    await mount([pane('terminal'), pane('studio'), unavailable]);
     await openMenu();
     expect(get('chat-panes-menu-studio-item').getAttribute('aria-label')).toBe('Studio');
     expect(get('chat-panes-menu-terminal-item').getAttribute('aria-label')).toBe('Terminal (Ctrl+`)');
@@ -92,25 +89,19 @@ describe('PanesMenu', () => {
     expect(reasonId).toBeTruthy();
     expect(document.getElementById(reasonId!)?.textContent).toBe('Open a conversation first.');
     expect(browser.getAttribute('aria-disabled')).toBe('true');
+    expect(browser.textContent).toContain('Open a conversation first.');
+    await act(async () => browser.click());
+    expect(unavailable.onToggle).not.toHaveBeenCalled();
   });
 
   it('toggles a pane from its row', async () => {
     const browser = pane('browser');
     await mount([pane('terminal'), browser]);
     await openMenu();
+    // History is off here, so the menu carries no history line.
+    expect(find('chat-history-indicator')).toBeNull();
     await act(async () => get('chat-panes-menu-browser-item').click());
     expect(browser.onToggle).toHaveBeenCalledTimes(1);
-  });
-
-  it('shows an unavailable pane disabled, with the reason', async () => {
-    const terminal = pane('terminal', { unavailableReason: 'Open a conversation to use the terminal.' });
-    await mount([terminal]);
-    await openMenu();
-    const row = get('chat-panes-menu-terminal-item');
-    expect(row.getAttribute('aria-disabled')).toBe('true');
-    expect(row.textContent).toContain('Open a conversation to use the terminal.');
-    await act(async () => row.click());
-    expect(terminal.onToggle).not.toHaveBeenCalled();
   });
 
   it('carries the local history status as a line, not an action, only while it is on', async () => {
@@ -121,12 +112,6 @@ describe('PanesMenu', () => {
     expect(status.textContent).toContain('Local history is on');
     expect(status.getAttribute('role')).toBe('note');
     expect(status.closest('[role^="menuitem"]')).toBeNull();
-  });
-
-  it('has no history line while history is off', async () => {
-    await mount([pane('terminal')]);
-    await openMenu();
-    expect(find('chat-history-indicator')).toBeNull();
   });
 });
 

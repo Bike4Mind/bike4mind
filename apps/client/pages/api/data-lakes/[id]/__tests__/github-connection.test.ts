@@ -10,7 +10,7 @@ import {
 // Unit test of the per-lake GitHub connection status/install/disconnect route. Repo + auth gate +
 // the githubLakeConnection lib (which has its own dedicated unit tests) are mocked.
 const h = vi.hoisted(() => ({
-  verifyOrgAccess: vi.fn(),
+  verifyOrgPermission: vi.fn(),
   verifyOrgAdminRead: vi.fn(),
   dlFindById: vi.fn(),
   connFindByDataLakeIdAny: vi.fn(),
@@ -57,7 +57,7 @@ vi.mock('@bike4mind/server-utils/middlewares/featureFlag', () => ({
   requireFeatureEnabled: (flag: string) => h.requireFeatureEnabled(flag),
 }));
 vi.mock('@bike4mind/server-utils/utils/orgAccess', () => ({
-  verifyOrgAccess: h.verifyOrgAccess,
+  verifyOrgPermission: h.verifyOrgPermission,
   verifyOrgAdminRead: h.verifyOrgAdminRead,
 }));
 vi.mock('@bike4mind/server-utils/integrations/github/dataLake/lakeAppClient', () => ({
@@ -120,7 +120,7 @@ describe('/api/data-lakes/[id]/github-connection', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     h.dlFindById.mockResolvedValue({ id: 'lake1', organizationId: 'orgA' });
-    h.verifyOrgAccess.mockResolvedValue({ id: 'orgA' });
+    h.verifyOrgPermission.mockResolvedValue({ id: 'orgA' });
     h.verifyOrgAdminRead.mockResolvedValue({ org: { id: 'orgA' }, canManage: true });
     h.requireGitHubLakeAppConfig.mockImplementation(config => {
       if (!config) throw new InternalServerError('The data-lake GitHub App is not configured');
@@ -142,7 +142,7 @@ describe('/api/data-lakes/[id]/github-connection', () => {
       await run(makeReq('GET'), res);
       expect(json).toHaveBeenCalledWith({ connection: { id: 'conn1', fileCount: 3 }, canManage: true });
       expect(h.verifyOrgAdminRead).not.toHaveBeenCalled();
-      expect(h.verifyOrgAccess).not.toHaveBeenCalled();
+      expect(h.verifyOrgPermission).not.toHaveBeenCalled();
     });
 
     it('resolves null with canManage true when the creator has no connection on a personal lake', async () => {
@@ -202,7 +202,7 @@ describe('/api/data-lakes/[id]/github-connection', () => {
       const { res, json } = makeRes();
       await run(makeReq('GET'), res);
       expect(h.verifyOrgAdminRead).toHaveBeenCalledWith(expect.anything(), 'orgA');
-      expect(h.verifyOrgAccess).not.toHaveBeenCalled();
+      expect(h.verifyOrgPermission).not.toHaveBeenCalled();
       expect(json).toHaveBeenCalledWith({ connection: { id: 'conn1' }, canManage: false });
     });
 
@@ -509,7 +509,7 @@ describe('/api/data-lakes/[id]/github-connection', () => {
       expect(h.requestGitHubLakeDisconnect).toHaveBeenCalledWith(conn, undefined);
       expect(status).toHaveBeenCalledWith(202);
       expect(json).toHaveBeenCalledWith({ success: true, queued: true });
-      expect(h.verifyOrgAccess).not.toHaveBeenCalled();
+      expect(h.verifyOrgPermission).not.toHaveBeenCalled();
     });
 
     it('404s a personal lake for a non-creator, even a platform admin, disconnecting nothing', async () => {
@@ -520,7 +520,7 @@ describe('/api/data-lakes/[id]/github-connection', () => {
         NotFoundError
       );
       expect(h.requestGitHubLakeDisconnect).not.toHaveBeenCalled();
-      expect(h.verifyOrgAccess).not.toHaveBeenCalled();
+      expect(h.verifyOrgPermission).not.toHaveBeenCalled();
     });
   });
 });

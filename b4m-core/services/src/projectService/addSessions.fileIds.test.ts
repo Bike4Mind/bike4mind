@@ -80,7 +80,7 @@ beforeEach(() => {
   // the soft-deleted row is dropped by softDeletePlugin and the foreign one by the access
   // predicate, leaving only the live file.
   (fabFiles.shareable.findAllAccessibleByIds as ReturnType<typeof vi.fn>).mockResolvedValue([
-    { id: LIVE_ID } as unknown as IFabFileDocument,
+    { id: LIVE_ID, userId: USER_ID } as unknown as IFabFileDocument,
   ]);
 });
 

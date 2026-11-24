@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { AuthState } from '@shared/auth';
 import { initialUpdateState, reduceUpdate, type UpdateStatus } from '@shared/update';
 import type { AppUpdateController } from '../chat/useAppUpdate';
+import { ExternalLinkIcon } from '../chat/icons';
 import { AccountMenu, SignedInPanel, updateNextStep } from './SignedInPanel';
 
 vi.mock('@tanstack/react-router', () => ({ useNavigate: () => vi.fn() }));
@@ -66,6 +67,7 @@ describe('the account strip', () => {
 
   it('keeps the menu shut until it is asked for', () => {
     expect(html).not.toContain('data-testid="account-menu"');
+    expect(html).not.toContain('Open web conversations');
   });
 });
 
@@ -77,6 +79,15 @@ describe('the account menu', () => {
   it('offers Send Feedback in the avatar menu', () => {
     expect(html).toContain('data-testid="account-feedback-btn"');
     expect(html).toContain('Send Feedback');
+  });
+
+  it('offers web conversations in the account menu with the external-window icon', () => {
+    const menu = document.createElement('div');
+    menu.innerHTML = html;
+    const row = menu.querySelector('[data-testid="account-web-conversations-btn"]');
+    expect(row?.textContent).toBe('Open web conversations');
+    expect(row?.querySelector('svg')?.outerHTML).toBe(renderToStaticMarkup(<ExternalLinkIcon />));
+    expect(html).not.toContain('Server conversations / handoff');
   });
 
   /**
@@ -127,6 +138,15 @@ describe('the account strip with an update waiting', () => {
   });
 
   function mount(update: AppUpdateController) {
+    // The strip reads the credits glance on mount; these tests are about the update chip, so
+    // those reads stay pending unless a test brought its own.
+    const pending = () => new Promise(() => {});
+    const current = (window as unknown as { b4m?: Record<string, unknown> }).b4m ?? {};
+    (window as unknown as { b4m: unknown }).b4m = {
+      account: { getProfile: pending },
+      usage: { getHistory: pending },
+      ...current,
+    };
     host = document.createElement('div');
     document.body.appendChild(host);
     root = createRoot(host);
@@ -177,6 +197,29 @@ describe('the account strip with an update waiting', () => {
     expect(byTestId('update-notice')).toBeNull();
   });
 
+  it('opens the existing web-conversation window action from the account menu', () => {
+    const openServerSessions = vi.fn(async () => {});
+    (window as unknown as { b4m: unknown }).b4m = {
+      getAppInfo: () => new Promise(() => {}),
+      attention: { openServerSessions },
+    };
+    mount(controllerIn('idle'));
+    expect(byTestId('account-web-conversations-btn')).toBeNull();
+    act(() => byTestId('account-menu-btn')?.click());
+
+    const row = byTestId('account-web-conversations-btn');
+    expect(byTestId('account-menu')?.contains(row)).toBe(true);
+    expect(row?.textContent).toBe('Open web conversations');
+    expect(byTestId('account-web-conversations-description')).toBeNull();
+    expect(byTestId('account-menu')?.textContent).not.toContain(
+      'Opens web conversations in a separate window. Local desktop chats stay on this device.'
+    );
+    expect(row?.hasAttribute('aria-describedby')).toBe(false);
+    expect(openServerSessions).not.toHaveBeenCalled();
+    act(() => row?.click());
+    expect(openServerSessions).toHaveBeenCalledExactlyOnceWith();
+  });
+
   describe('the next step the label takes', () => {
     it('downloads an offer and restarts into a downloaded update', () => {
       const offer = controllerIn('available');
@@ -195,5 +238,80 @@ describe('the account strip with an update waiting', () => {
         expect(updateNextStep(controllerIn(status))).toBeUndefined();
       }
     );
+  });
+});
+
+describe('the credits glance', () => {
+  let root: Root | null = null;
+  let host: HTMLElement | null = null;
+
+  afterEach(() => {
+    act(() => root?.unmount());
+    host?.remove();
+    root = null;
+    host = null;
+  });
+
+  async function mountWith(balance: number, creditsSpent: number) {
+    const day = new Date();
+    day.setHours(0, 0, 0, 0);
+    (window as unknown as { b4m: unknown }).b4m = {
+      getAppInfo: () => new Promise(() => {}),
+      account: {
+        getProfile: async () => ({
+          credits: { balance, monthlyAllowance: 10_000 },
+          plan: {
+            name: 'Pro',
+            interval: 'monthly',
+            currentPeriodEndsAt: new Date(Date.now() + 10 * 86_400_000).toISOString(),
+          },
+          tier: 'pro',
+        }),
+      },
+      usage: {
+        getHistory: async () => ({
+          ok: true,
+          usage: {
+            bars: [{ startsAt: new Date(day.getTime() - 86_400_000).toISOString(), creditsSpent, requests: 1 }],
+          },
+        }),
+      },
+    };
+    host = document.createElement('div');
+    document.body.appendChild(host);
+    root = createRoot(host);
+    await act(async () => {
+      root?.render(
+        <CssVarsProvider>
+          <SignedInPanel state={signedIn} update={controllerIn('idle')} />
+        </CssVarsProvider>
+      );
+    });
+  }
+
+  const byTestId = (id: string) => document.querySelector<HTMLElement>(`[data-testid="${id}"]`);
+
+  it('shows nothing extra on the strip while credits are fine', async () => {
+    await mountWith(300_000, 1000);
+    expect(byTestId('credits-avatar-dot')).toBeNull();
+    expect(byTestId('credits-glance')).toBeNull();
+  });
+
+  it('opens with the balance and runway at the top of the account menu', async () => {
+    await mountWith(300_000, 1000);
+    await act(async () => byTestId('account-menu-btn')?.click());
+    const glance = byTestId('credits-glance');
+    expect(byTestId('account-menu')?.firstElementChild).toBe(glance);
+    expect(byTestId('credits-balance')?.textContent).toBe(`${(300_000).toLocaleString()} credits`);
+    expect(byTestId('credits-verdict')?.textContent).toBe("More than a month left at last week's pace.");
+    expect(byTestId('credits-top-up-btn')).toBeNull();
+  });
+
+  it('puts a dot on the avatar and offers a top-up when credits run out before the refill', async () => {
+    await mountWith(4000, 1000);
+    expect(byTestId('credits-avatar-dot')?.getAttribute('aria-label')).toBe('Credits running low');
+    await act(async () => byTestId('account-menu-btn')?.click());
+    expect(byTestId('credits-verdict')?.textContent).toMatch(/^Runs out /);
+    expect(byTestId('credits-top-up-btn')).not.toBeNull();
   });
 });

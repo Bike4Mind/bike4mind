@@ -49,9 +49,10 @@ import {
   usePythonArtifactDataOrigins,
 } from '@client/app/hooks/usePythonArtifactDataOrigins';
 import { useCallableFunctionsEnabled } from '@client/app/hooks/data/callableFunctions';
+import { useArtifact } from '@client/app/hooks/data/artifacts';
 import { hasFunctionEntryPoint } from '@client/app/utils/pythonFunctionEntry';
 import FunctionIcon from '@mui/icons-material/Functions';
-import PythonFunctionPanel from './PythonFunctionPanel';
+import PythonFunctionPanel, { type PythonFunctionSave } from './PythonFunctionPanel';
 
 interface PythonArtifactViewerProps {
   artifact: PythonArtifact;
@@ -103,6 +104,8 @@ const PythonArtifactViewer: React.FC<PythonArtifactViewerProps> = ({ artifact, o
   // Version state
   const [currentVersion, setCurrentVersion] = useState<number>(artifact.version || 1);
   const [isViewingDifferentVersion, setIsViewingDifferentVersion] = useState(false);
+  // The stored head read is cached for a while, so a version saved here can be newer than it.
+  const [savedVersion, setSavedVersion] = useState(0);
 
   // Syntax highlighting for Python
   const highlightCode = useCallback((code: string) => {
@@ -151,6 +154,26 @@ const PythonArtifactViewer: React.FC<PythonArtifactViewerProps> = ({ artifact, o
   // Adjusted during render, so the viewer never paints an empty tab panel.
   if (!showFunctionTab && activeTab === 2) setActiveTab(0);
 
+  // A chat artifact carries no owner, so ownership comes from the server's read; its id is also the one a save uses.
+  const { data: stored } = useArtifact(showFunctionTab && onSave && isPersisted ? artifact.id : null);
+  const owned = stored?.access === 'owner' ? stored.artifact : null;
+  const functionSave = ((): PythonFunctionSave | null => {
+    if (!onSave) return null;
+    if (!isPersisted) {
+      return { artifactId: artifact.id, version: currentVersion, blocked: 'Save the artifact to make it a tool.' };
+    }
+    if (!owned) return null;
+    // A chat artifact reopens at the version it was created with, so compare with the stored head. A viewer ahead
+    // of it has just saved a new version that the head read has not caught up with.
+    const behindHead = currentVersion < Math.max(owned.version, savedVersion);
+    const blocked = hasChanges
+      ? 'Save your changes to make this a tool.'
+      : behindHead
+        ? 'Switch to the latest version to make this a tool.'
+        : null;
+    return { artifactId: owned.id, version: currentVersion, blocked };
+  })();
+
   const handleRun = useCallback(async () => {
     setExecutionError(null);
     setExecutionOutput('');
@@ -187,6 +210,7 @@ const PythonArtifactViewer: React.FC<PythonArtifactViewerProps> = ({ artifact, o
       const newVersion = result?.artifact?.version ?? result?.version;
       if (newVersion && typeof newVersion === 'number' && newVersion !== currentVersion) {
         setCurrentVersion(newVersion);
+        setSavedVersion(previous => Math.max(previous, newVersion));
         saveArtifactVersionToLocalStorage(artifact.id, newVersion, editableCode);
       }
 
@@ -659,6 +683,7 @@ const PythonArtifactViewer: React.FC<PythonArtifactViewerProps> = ({ artifact, o
                 code={editableCode}
                 packages={detectedPackages}
                 disabled={isPyodideLoading || isExecuting || !isReady()}
+                save={functionSave}
               />
             </TabPanel>
           )}

@@ -7,7 +7,15 @@ import type { ReactNode } from 'react';
  * adding one to draw seven shapes would pull a few thousand more into the bundle. They inherit
  * `currentColor`, so a Joy button's own colour and variant still decide how they look.
  */
-function Glyph({ children, size = 16 }: { children: ReactNode; size?: number }) {
+function Glyph({
+  children,
+  size = 16,
+  strokeWidth = 1.5,
+}: {
+  children: ReactNode;
+  size?: number;
+  strokeWidth?: number;
+}) {
   return (
     <svg
       width={size}
@@ -15,7 +23,7 @@ function Glyph({ children, size = 16 }: { children: ReactNode; size?: number }) 
       viewBox="0 0 16 16"
       fill="none"
       stroke="currentColor"
-      strokeWidth="1.5"
+      strokeWidth={strokeWidth}
       strokeLinecap="round"
       strokeLinejoin="round"
       aria-hidden="true"
@@ -56,6 +64,15 @@ export function ChevronIcon({ open }: { open: boolean }) {
   return (
     <Glyph>
       <path d={open ? 'M4 10l4-4 4 4' : 'M6 4l4 4-4 4'} />
+    </Glyph>
+  );
+}
+
+/** A find step: up to the previous match, or down to the next. */
+export function FindStepIcon({ direction }: { direction: 'up' | 'down' }) {
+  return (
+    <Glyph>
+      <path d={direction === 'up' ? 'M4 10l4-4 4 4' : 'M4 6l4 4 4-4'} />
     </Glyph>
   );
 }
@@ -193,6 +210,18 @@ export function ArtifactIcon() {
   );
 }
 
+/** Mission Control: every orchestration at a glance, as a dashboard of uneven tiles (lucide layout-dashboard). */
+export function MissionControlIcon() {
+  return (
+    <Glyph>
+      <rect x="2.25" y="2.25" width="5" height="6" rx="1" />
+      <rect x="8.75" y="2.25" width="5" height="3.5" rx="1" />
+      <rect x="8.75" y="7.25" width="5" height="6.5" rx="1" />
+      <rect x="2.25" y="10" width="5" height="3.75" rx="1" />
+    </Glyph>
+  );
+}
+
 /** The three approval modes, in the order the popover offers them, and the selected marker. */
 export function HandIcon() {
   return (
@@ -218,6 +247,17 @@ export function WarningIcon() {
       <path d="M7.14 2.4a1 1 0 0 1 1.72 0l5.4 9.35a1 1 0 0 1-.86 1.5H2.6a1 1 0 0 1-.86-1.5Z" />
       <path d="M8 6v3.25" />
       <circle cx="8" cy="11.25" r="0.75" fill="currentColor" stroke="none" />
+    </Glyph>
+  );
+}
+
+/** Time running out: credits that expire unless spent first. */
+export function HourglassIcon({ size }: { size?: number } = {}) {
+  return (
+    <Glyph size={size}>
+      <path d="M4 1.75h8M4 14.25h8" />
+      <path d="M5 1.75v2.1c0 1.1.6 2 1.6 2.6L8 7.4l1.4-.95c1-.6 1.6-1.5 1.6-2.6v-2.1" />
+      <path d="M5 14.25v-2.1c0-1.1.6-2 1.6-2.6L8 8.6l1.4.95c1 .6 1.6 1.5 1.6 2.6v2.1" />
     </Glyph>
   );
 }
@@ -310,6 +350,15 @@ export function TableIcon() {
     <Glyph>
       <rect x="2" y="3" width="12" height="10" rx="2" />
       <path d="M2 6.5h12M2 9.75h12M6 6.5v6.5" />
+    </Glyph>
+  );
+}
+
+/** The Plan view: a checked item and two pending ones. */
+export function PlanIcon() {
+  return (
+    <Glyph>
+      <path d="M2.5 4.25l1 1 1.75-2M2.5 9l1 1 1.75-2M7.5 4h6M7.5 8.75h6M2.5 13h2.75M7.5 13h6" />
     </Glyph>
   );
 }
@@ -635,6 +684,44 @@ export function PullRequestClosedIcon({ size }: { size?: number } = {}) {
       <circle cx="4.5" cy="12.2" r="1.6" />
       <circle cx="11.5" cy="12.2" r="1.6" />
       <path d="M4.5 5.4v5.2M11.5 7.5v3.1M10 2.5l3 3M13 2.5l-3 3" />
+    </Glyph>
+  );
+}
+
+export type PrCornerGlyphKind =
+  'conflict' | 'ciFailed' | 'changesRequested' | 'ciRunning' | 'approvedBlocked' | 'ready' | 'behind' | 'autoMerge';
+
+const PR_CORNER_PATHS: Record<PrCornerGlyphKind, ReactNode> = {
+  conflict: (
+    <>
+      <path d="M7.1 2.3a1 1 0 0 1 1.8 0l5.5 9.6a1 1 0 0 1-.9 1.5H2.5a1 1 0 0 1-.9-1.5Z" />
+      <path d="M8 6.5v2.5" />
+    </>
+  ),
+  ciFailed: <path d="M4 4l8 8M12 4l-8 8" />,
+  changesRequested: (
+    <path d="M3 3.5h10a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1H8l-3 2.5v-2.5H3a1 1 0 0 1-1-1v-6a1 1 0 0 1 1-1Z" />
+  ),
+  ciRunning: <path d="M8 2.5a5.5 5.5 0 1 1-5.5 5.5" />,
+  approvedBlocked: (
+    <>
+      <rect x="3" y="7.5" width="10" height="6.5" rx="1" />
+      <path d="M5.5 7.5V5.5a2.5 2.5 0 0 1 5 0v2" />
+    </>
+  ),
+  ready: <path d="m3 8.5 3.25 3.25L13 4.5" />,
+  behind: <path d="M8 2.5v11M3.5 9 8 13.5 12.5 9" />,
+  autoMerge: <path d="M9.5 1.5 3.5 9h4.5l-1.5 5.5 6-7.5H8Z" />,
+};
+
+/**
+ * The small marks a PR icon carries in its corners (see PrStateIcon). Drawn heavier than the
+ * 16px set, since they render at 6-8px where a 1.5 stroke disappears.
+ */
+export function PrCornerGlyph({ kind, size = 8 }: { kind: PrCornerGlyphKind; size?: number }) {
+  return (
+    <Glyph size={size} strokeWidth={2.5}>
+      {PR_CORNER_PATHS[kind]}
     </Glyph>
   );
 }

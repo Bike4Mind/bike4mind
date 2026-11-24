@@ -80,8 +80,14 @@ export const ADMIN_AUDIT_CATALOGUE = {
   // Single-user counterparts of user.bulk.suspended / user.bulk.restricted, written by PUT /api/users/[id]/update.
   'user.suspended': { category: 'access', severity: 'critical', write: 'strict' },
   'user.reinstated': { category: 'access', severity: 'notice', write: 'strict' },
+  // The text-moderation escalation state (moderation.status), set by PUT /api/users/[id]/update.
+  'user.moderation_status.changed': { category: 'access', severity: 'critical', write: 'strict' },
   'user.restricted': { category: 'access', severity: 'notice', write: 'strict' },
   'user.restriction_lifted': { category: 'access', severity: 'notice', write: 'strict' },
+  // A graduated automated intervention (limit, verify, review, holdGrant) placed on one account by auto-containment.
+  'user.intervention_hold.applied': { category: 'access', severity: 'notice', write: 'strict' },
+  // An admin release, legitimate verdict or rollback lifting one decision's graduated hold from one account.
+  'user.intervention_hold.released': { category: 'access', severity: 'notice', write: 'strict' },
   // The linked-account propagation run once for accounts an admin suspended together
   // (apps/client/pages/api/admin/users/linked-suspend-propagation.ts). bestEffort: it is written after the
   // locks it reports, which have already happened.
@@ -194,6 +200,8 @@ export const ADMIN_AUDIT_CATALOGUE = {
   'user.internal.marked': { category: 'account', severity: 'notice', write: 'strict' },
   'user.internal.unmarked': { category: 'account', severity: 'notice', write: 'strict' },
   'user.segment.changed': { category: 'account', severity: 'notice', write: 'strict' },
+  // The home-org pointer (user.organizationId): billing fallback and org-scoped access context.
+  'user.home_org.cleared': { category: 'account', severity: 'notice', write: 'strict' },
   'user.email.unverified': { category: 'identity', severity: 'info', write: 'bestEffort' },
   'user.email.verification_resent': { category: 'identity', severity: 'info', write: 'bestEffort' },
   'user.email.change_resent': { category: 'identity', severity: 'info', write: 'bestEffort' },

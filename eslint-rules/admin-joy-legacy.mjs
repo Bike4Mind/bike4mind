@@ -2,7 +2,6 @@
 // swapping primitives alone would change form, dialog and table behavior. Remove entries as migrated.
 const componentsByFile = {
   'AdminDashboardTab.tsx': ['Card'],
-  'AdminLiveOpsTriageMultiConfigTab.tsx': ['Card', 'Modal'],
   'AdminModalTab.tsx': ['Card', 'Table'],
   'AdminModalTabNew.tsx': ['Modal', 'Card'],
   'AdminWhatsNewModalsTab.tsx': ['Modal'],
@@ -15,7 +14,6 @@ const componentsByFile = {
   'EventMetrics/UserActivity/filters/MetadataFilterPanel.tsx': ['Card'],
   'EventMetrics/UserActivity/UserActivityTab.tsx': ['Card'],
   'FilesTab/EditTagModal.tsx': ['Modal'],
-  'GitHubConnectionTab.tsx': ['Card', 'Modal'],
   'IntegrationDemandTab.tsx': ['Table'],
   'IntegrationHealth/components/IntegrationDetailPanel.tsx': ['Table'],
   'MigrateUsersTab.tsx': ['Card', 'Modal'],
@@ -30,7 +28,6 @@ const componentsByFile = {
   'InviteCenter/InviteCodes/components/DeleteConfirmModal.tsx': ['Modal'],
   'ScopedOverridesByScope.tsx': ['Card'],
   'SlackMetrics/SlackMetricsTab.tsx': ['Card'],
-  'SlackWorkspacesTab.tsx': ['Card', 'Modal', 'Table'],
   'SreAgentTab.tsx': ['Card', 'Modal', 'Table'],
   'Team/index.tsx': ['Card', 'Modal'],
   'Users/BulkAbuseResponseModal.tsx': ['Modal'],
@@ -39,7 +36,6 @@ const componentsByFile = {
   'Users/Details/CountersDetails.tsx': ['Modal'],
   'Users/MigrationDetails.tsx': ['Card', 'Modal'],
   'Users/Views/RecentActivityView.tsx': ['Card'],
-  'WebhookAuditLogs/index.tsx': ['Card', 'Table'],
   'email/EmailActivityHistory.tsx': ['Table'],
   'email/EmailJobDetail.tsx': ['Table', 'Modal'],
   'email/EmailJobsPanel.tsx': ['Table'],

@@ -9,15 +9,25 @@ import {
 import { ecsEnvSecret, ecsResourceSecrets, ecsSecretsVersion } from './ecsSecrets';
 import { eventBus } from './eventBus';
 import { imageProcessor } from './imageProcessor';
+import { withDirectPathSourceIp } from './listenerRuleConditions';
 import { mcpHandler } from './mcp';
 import { remoteMcpHandler } from './remoteMcp';
 import { providerFederation } from './providerFederation';
 import { generationJobQueue } from './queues';
-import { cdnUrlForLambdaEnv, domain, managedAppDomain, originVerifySecret, router, routePrefix } from './router';
+import {
+  cdnUrlForLambdaEnv,
+  domain,
+  managedAppDomain,
+  ORIGIN_VERIFY_HEADER,
+  originVerifySecret,
+  router,
+  routePrefix,
+} from './router';
 import { searxngUrl } from './searxng';
 import { allSecrets, contributedSecretEnvironment, secrets } from './secrets';
 import { cluster, resolvedVpcId, vpc, vpcId } from './vpc';
 import { websocketApi } from './websocket';
+import { mailBodyEnvironment, mailBodyPutPermission } from './mailBodyOffload';
 
 /**
  * Quest Processor Service
@@ -201,6 +211,60 @@ const originCertificateArn = originDomain
   ? (sharedOriginCertificateArn ?? issueOriginCertificate(originDomain))
   : undefined;
 
+// NAT public IP(s) as /32 CIDRs: a managed NAT Gateway in the shared env VPC (VPC_ID set), or the
+// EC2 NAT instance's Elastic IP in a self-provisioned VPC (VPC_ID unset). See infra/vpc.ts. Lazy
+// because `sst dev` has no load balancer to use it.
+let natEgressCidrsCache: $util.Output<string[]> | undefined;
+function natEgressCidrs() {
+  natEgressCidrsCache ??= vpcId
+    ? aws.ec2
+        .getNatGatewaysOutput({ filters: [{ name: 'vpc-id', values: [resolvedVpcId] }] })
+        .ids.apply(ids => $util.all(ids.map(id => aws.ec2.getNatGatewayOutput({ id }).publicIp)))
+        .apply(ips => ips.map(ip => `${ip}/32`))
+    : vpc!.nodes.elasticIps.apply(eips => $util.all(eips.map(e => e.publicIp))).apply(ips => ips.map(ip => `${ip}/32`));
+  return natEgressCidrsCache;
+}
+
+// Paths callers reach on the load balancer directly rather than through CloudFront: the quest
+// dispatch (dispatchQuest.ts, from the frontend and worker Lambdas) and the status probe
+// (pages/api/chat-completion-status.ts). Both leave through the VPC NAT.
+const DIRECT_PATHS = ['/process', '/health'] as const;
+const forwardListen = originDomain ? ('443/https' as const) : ('80/http' as const);
+
+// With origin verification on, the forwarding listener has no unconditional rule, so SST gives it
+// a fixed 403 default action. It forwards a request only when it carries this stage's CloudFront
+// origin header (stamped in infra/router.ts), or when it is for a direct path and comes from the
+// NAT egress IPs (added to those rules by the transform below). The container checks the same
+// header again (apps/client/server/chatCompletion/originVerify.ts).
+const forwardRules = originVerifyEnabled
+  ? [
+      {
+        listen: forwardListen,
+        forward: '8080/http' as const,
+        // Unsecret so SST's rule normalization does not turn the whole load balancer config (and
+        // the service URL derived from it) secret; the transform below re-secrets the condition.
+        conditions: {
+          header: { name: ORIGIN_VERIFY_HEADER, values: [$util.unsecret(originVerifySecret.result)] },
+        },
+      },
+      ...DIRECT_PATHS.map(path => ({ listen: forwardListen, forward: '8080/http' as const, conditions: { path } })),
+    ]
+  : [{ listen: forwardListen, forward: '8080/http' as const }];
+
+// SST names the listener rules it creates `ChatCompletionListener<protocol><port>Rule<hash>` and
+// exposes no other handle on them. ALB rules accept at most five condition values, so a direct
+// path rule fits up to four NAT IPs.
+if (originVerifyEnabled) {
+  $transform(aws.lb.ListenerRule, (args, _opts, name) => {
+    if (!name.startsWith('ChatCompletionListener')) return;
+    args.conditions = $util.secret(
+      $util
+        .all([args.conditions, natEgressCidrs()])
+        .apply(([conditions, cidrs]) => withDirectPathSourceIp(conditions, cidrs))
+    );
+  });
+}
+
 export const chatCompletion = new sst.aws.Service('ChatCompletion', {
   cluster,
   // Prebuilt image referenced by URI (built & pushed by CI — see note above). Building
@@ -215,6 +279,8 @@ export const chatCompletion = new sst.aws.Service('ChatCompletion', {
   // below) to exactly CloudFront's edge (completions) + the VPC NAT egress IP (the frontend
   // Lambda's /process dispatch, which hairpins out through NAT to the ALB's public DNS). The
   // CHAT_COMPLETION_INTERNAL_SECRET bearer checked in internal/route.ts is then defense-in-depth.
+  // The forwarding listener's rules (forwardRules above) then admit only CloudFront requests that
+  // carry this stage's origin header, plus the direct paths from the NAT IPs.
   // With an origin domain the service URL is https://<originDomain>/, so both callers use the
   // HTTPS listener. Port 80 has a redirect action but is blocked by the security group below.
   loadBalancer: {
@@ -222,12 +288,7 @@ export const chatCompletion = new sst.aws.Service('ChatCompletion', {
     ...(originDomain && originCertificateArn
       ? { domain: { name: originDomain, cert: originCertificateArn, dns: false } }
       : {}),
-    rules: originDomain
-      ? [
-          { listen: '443/https', forward: '8080/http' },
-          { listen: '80/http', redirect: '443/https' },
-        ]
-      : [{ listen: '80/http', forward: '8080/http' }],
+    rules: originDomain ? [...forwardRules, { listen: '80/http', redirect: '443/https' }] : forwardRules,
     health: {
       '8080/http': {
         path: '/health',
@@ -259,6 +320,7 @@ export const chatCompletion = new sst.aws.Service('ChatCompletion', {
   ],
   ssm: ecsSecretParameters,
   permissions: [
+    mailBodyPutPermission(appFilesBucket),
     { actions: ['bedrock:*'], resources: ['*'] },
     // Content moderation for images produced by the image_generation/edit_image tools
     // (closes an agent-tool moderation bypass; the queue-handler imageGeneration/
@@ -293,6 +355,7 @@ export const chatCompletion = new sst.aws.Service('ChatCompletion', {
     // First, so a core variable of the same name always wins.
     ...contributedSecretEnvironment(),
     ...DEFAULT_LAMBDA_ENVIRONMENT,
+    ...mailBodyEnvironment(appFilesBucket),
     ...TEST_GENERATION_PROVIDER_ENVIRONMENT,
     NEXT_PUBLIC_CDN_URL: cdnUrlForLambdaEnv(),
     // External instance-service, consumed by a premium overlay tool that reads these as
@@ -339,17 +402,7 @@ export const chatCompletion = new sst.aws.Service('ChatCompletion', {
       const cloudfrontPrefixListId = aws.ec2.getManagedPrefixListOutput({
         name: 'com.amazonaws.global.cloudfront.origin-facing',
       }).id;
-
-      // NAT public IP(s): a managed NAT Gateway in the shared env VPC (VPC_ID set), or the EC2
-      // NAT instance's Elastic IP in a self-provisioned VPC (VPC_ID unset). See infra/vpc.ts.
-      const natCidrs = vpcId
-        ? aws.ec2
-            .getNatGatewaysOutput({ filters: [{ name: 'vpc-id', values: [resolvedVpcId] }] })
-            .ids.apply(ids => $util.all(ids.map(id => aws.ec2.getNatGatewayOutput({ id }).publicIp)))
-            .apply(ips => ips.map(ip => `${ip}/32`))
-        : vpc!.nodes.elasticIps
-            .apply(eips => $util.all(eips.map(e => e.publicIp)))
-            .apply(ips => ips.map(ip => `${ip}/32`));
+      const natCidrs = natEgressCidrs();
 
       // Only the port that forwards is admitted. The CloudFront prefix list counts its full entry
       // limit against the group's rule quota for every rule that references it, so a second rule

@@ -184,6 +184,18 @@ describe('GET /api/image-jobs/[id]', () => {
     expect(mocks.sign).not.toHaveBeenCalled();
   });
 
+  it('passes an internal-only error code through to the chat card, with its own copy', async () => {
+    mocks.findJob.mockResolvedValue(
+      job({
+        state: 'failed',
+        error: { code: 'account_blocked', message: 'stored wording' },
+        payload: { ...job().payload, output: undefined },
+      } as Partial<IGenerationJobDocumentOf<'image'>>)
+    );
+    const { body } = await call();
+    expect(body.error).toEqual({ code: 'account_blocked', message: 'This account cannot generate images.' });
+  });
+
   it('answers 404 for a job the caller cannot see', async () => {
     mocks.findJob.mockResolvedValue(null);
     const { status } = await call();

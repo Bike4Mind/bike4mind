@@ -151,6 +151,7 @@ const McpConnectionSchema = new Schema<IMcpConnectionDocument>(
       validate: { validator: isValidMcpConnectionSlug, message: 'This slug is reserved' },
     },
     displayName: { type: String, required: true, maxlength: MCP_CONNECTION_LIMITS.displayNameLength },
+    description: { type: String, maxlength: MCP_CONNECTION_LIMITS.descriptionLength },
     urlEnc: { type: String, required: true, select: false },
     displayUrl: { type: String, required: true },
     // Host-policy patterns are lowercase with no trailing dot, so store the host the same way:
@@ -610,7 +611,10 @@ class McpConnectionRepository extends BaseRepository<ConnectionDoc> implements I
     }
 
     const set: Record<string, unknown> = {};
+    const unset: Record<string, 1> = {};
     if (update.displayName !== undefined) set.displayName = update.displayName;
+    if (update.description) set.description = update.description;
+    else if (update.description === '') unset.description = 1;
     if (update.enabled !== undefined) set.enabled = update.enabled;
     const arrayFilters: Record<string, string>[] = [];
     const versionGuards: Record<string, unknown>[] = [];
@@ -628,12 +632,18 @@ class McpConnectionRepository extends BaseRepository<ConnectionDoc> implements I
     const ownerFilter = { _id: id, ownerType: owner.ownerType, ownerKey: owner.ownerKey };
     const filter = versionGuards.length > 0 ? { ...ownerFilter, $and: versionGuards } : ownerFilter;
     const touchesTools = arrayFilters.length > 0;
+    const hasSet = Object.keys(set).length > 0;
+    const hasUnset = Object.keys(unset).length > 0;
     const result =
-      Object.keys(set).length === 0
+      !hasSet && !hasUnset
         ? await this.model.findOne(filter)
         : await this.model.findOneAndUpdate(
             filter,
-            { $set: set, ...(touchesTools ? { $inc: { toolsRevision: 1 } } : {}) },
+            {
+              ...(hasSet ? { $set: set } : {}),
+              ...(hasUnset ? { $unset: unset } : {}),
+              ...(touchesTools ? { $inc: { toolsRevision: 1 } } : {}),
+            },
             { new: true, runValidators: true, ...(touchesTools ? { arrayFilters } : {}) }
           );
     if (result) return result.toJSON();

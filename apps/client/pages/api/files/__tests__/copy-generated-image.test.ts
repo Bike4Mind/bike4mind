@@ -103,7 +103,24 @@ describe('POST /api/files/copy-generated-image object-level authz', () => {
     );
     expect(h.download).toHaveBeenCalledWith(KEY);
     expect(h.saveGeneratedAsset).toHaveBeenCalled();
-    expect(json).toHaveBeenCalledWith({ id: 'file-1' });
+    expect(json).toHaveBeenCalledWith({ id: 'file-1', created: true });
+  });
+
+  it('answers created: false with the caller existing copy, so the client never deletes it', async () => {
+    h.findSessionIdsByImage.mockResolvedValue(['s1']);
+    h.findAllAccessibleByIds.mockResolvedValue([{ id: 's1' }]);
+    h.findOne.mockResolvedValue({
+      id: 'file-own',
+      userId: 'me',
+      sourceMetadata: { generation: { generator: 'image', provider: 'openai', prompt: 'a lighthouse' } },
+    });
+    h.findById.mockResolvedValue({ id: 'file-own' });
+
+    const { res, json } = makeRes();
+    await handler(req('me'), res);
+
+    expect(h.saveGeneratedAsset).not.toHaveBeenCalled();
+    expect(json).toHaveBeenCalledWith({ id: 'file-own', created: false });
   });
 
   it('spends one unit of the allowance for the copy', async () => {
@@ -234,6 +251,7 @@ describe('copied file signing', () => {
       expiresIn: 3600,
       audience: 'browser',
       signingDate: expect.any(Date),
+      ResponseContentType: 'image/png',
     });
   });
 
@@ -338,7 +356,7 @@ describe('copied file provenance', () => {
     expect(h.saveGeneratedAsset).not.toHaveBeenCalled();
     expect(h.consumeFileUploadBudget).not.toHaveBeenCalled();
     expect(h.download).not.toHaveBeenCalled();
-    expect(json).toHaveBeenCalledWith({ id: 'file-1' });
+    expect(json).toHaveBeenCalledWith({ id: 'file-1', created: false });
   });
 
   it('carries the original request under a fresh job for a share recipient, without lineage', async () => {

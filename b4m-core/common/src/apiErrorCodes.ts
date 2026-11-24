@@ -20,6 +20,8 @@ export const ACCOUNT_SUSPENDED_ERROR_CODE = 'account_suspended';
 export const RUN_NOT_FOUND_ERROR_CODE = 'run_not_found';
 export const ORG_MODEL_NOT_ALLOWED_ERROR_CODE = 'org_model_not_allowed';
 export const ORG_TOOL_NOT_ALLOWED_ERROR_CODE = 'org_tool_not_allowed';
+export const RUN_BUDGET_EXHAUSTED_ERROR_CODE = 'run_budget_exhausted';
+export const RUN_BUDGET_NOT_RAISED_ERROR_CODE = 'run_budget_not_raised';
 export const MCP_ACTION_REPLACED_ERROR_CODE = 'action_replaced';
 export const PENDING_ACTION_EXPIRED_ERROR_CODE = 'action_expired';
 export const PENDING_ACTION_ALREADY_RESOLVED_ERROR_CODE = 'action_already_resolved';
@@ -95,6 +97,20 @@ export const API_ERROR_CODES = [
   ORG_MODEL_NOT_ALLOWED_ERROR_CODE,
   /** A 403: the request names a built-in tool the caller's organization policy does not allow. */
   ORG_TOOL_NOT_ALLOWED_ERROR_CODE,
+  /** A 422: the completion's `run` has no budget left for it; remediation is raising the run budget (POST /api/v1/completion-runs/{runId}/budget), not buying credits. */
+  RUN_BUDGET_EXHAUSTED_ERROR_CODE,
+  /** A 409: a run budget change that is not a raise - the new budget is not above the current one, or the run was minted without one. */
+  RUN_BUDGET_NOT_RAISED_ERROR_CODE,
+  /** A 403: evaluation runs are not enabled for this account by the deployment. Not retryable. */
+  'evaluation_not_enabled',
+  /** A 409: an evaluation run already exists for this owner and rootSessionId with different limits or models. */
+  'evaluation_identity_conflict',
+  /** A 409: this evaluation requestId already has a receipt; recover it from GET /api/v1/completion-runs/{runId}/evaluation. */
+  'evaluation_request_exists',
+  /** A 409: another evaluation receipt on the run is pending or unknown; recover it before admitting more. */
+  'evaluation_receipt_outstanding',
+  /** A 422: the evaluation run's provider budget, token or request limit is used up, or the model is not in its limits. */
+  'evaluation_budget_exhausted',
   /** A 409: the pending action the caller answered was replaced by a newer one; review the new one. */
   MCP_ACTION_REPLACED_ERROR_CODE,
   /** A 409: the pending action lapsed before it was answered; it is cleared and the agent must ask again. */
@@ -140,6 +156,20 @@ export const API_ERROR_CODES = [
   // the codes it shares with video and music are listed above.
   /** A 404: an input file id is not one of the caller's readable files. */
   'input_file_not_found',
+  // Image jobs (POST /api/v1/image-jobs). Must stay in sync with IMAGE_JOB_API_ERROR_CODES; the codes it shares with
+  // video and music are listed above.
+  'missing_input',
+  'unexpected_input',
+  'too_many_inputs',
+  'unsupported_size',
+  'unsupported_quality',
+  'unsupported_style',
+  'unsupported_output_format',
+  'unsupported_output_count',
+  'unsupported_transparent_background',
+  'unsupported_seed',
+  'unsupported_edit_regions',
+  'unsupported_input_image',
   // Decisions (POST /api/v1/decisions); see DECISIONS_ERROR_CODES.
   /** The provider stayed overloaded or timed out through our one retry; the response carries Retry-After. */
   'provider_overloaded',

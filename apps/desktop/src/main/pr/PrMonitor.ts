@@ -34,6 +34,7 @@ import { SHELL_TOOLS, autoFixBudget, planAutoFix } from './autoFix';
 import { desktopMergeReadiness } from './autoMerge';
 import { MAX_BATCH, mergeMethodFor } from './github';
 import { POLL_MS, alignToTick, pollDelay } from './pollSchedule';
+import { prIconStatus, type PrIconStatus } from '@shared/prAttention';
 
 /** Branches a PR lookup is never made for: a PR "for main" is someone else's fork, not this session's work. */
 const UNOWNED_BRANCHES = new Set(['main', 'master', 'develop', 'HEAD']);
@@ -49,6 +50,9 @@ const AFTER_PUSH_MS = 15_000;
 
 /** A missing or signed-out gh is re-tried on opening a conversation at most this often. */
 const GH_RETRY_MS = 60_000;
+
+/** Leave room for the GitHub response time before the dialog's next 30s tick. */
+const SELECTED_AGENT_STALE_MS = 25_000;
 
 /**
  * How long after enqueueing a PR missing from the queue with no removal recorded is still
@@ -245,6 +249,15 @@ export class PrMonitor {
     return this.state(sessionId, binding);
   }
 
+  /** Inspect a selected agent without changing the window's conversation watch. */
+  async getState(sessionId: string): Promise<PrBarState | null> {
+    if (this.gh !== 'ok' && this.now() - this.ghFailedAt > GH_RETRY_MS) this.gh = 'ok';
+    const binding = await this.deps.store.get(sessionId);
+    if (!binding || binding.dismissed) return null;
+    if (this.wantsRead(sessionId, binding, SELECTED_AGENT_STALE_MS)) void this.read(sessionId);
+    return this.state(sessionId, binding);
+  }
+
   /** A window closed. */
   unwatch(viewer: number): void {
     const previous = this.onScreen.get(viewer);
@@ -253,11 +266,11 @@ export class PrMonitor {
   }
 
   /** Whether opening this conversation should start a read: nothing in hand, or it went stale. */
-  protected wantsRead(sessionId: string, binding: PrBinding): boolean {
+  protected wantsRead(sessionId: string, binding: PrBinding, staleMs: number = POLL_MS.onScreenActive): boolean {
     if (this.gh !== 'ok' || this.now() < this.pausedUntil) return false;
     const snapshot = this.live.get(sessionId)?.snapshot ?? binding.finalSnapshot;
     if (!snapshot) return true;
-    return snapshot.state === 'OPEN' && this.now() - snapshot.fetchedAt > POLL_MS.onScreenActive;
+    return snapshot.state === 'OPEN' && this.now() - snapshot.fetchedAt > staleMs;
   }
 
   /**
@@ -884,13 +897,22 @@ export class PrMonitor {
     const archiving = shouldAutoArchive(current, snapshot.state);
     const finished = isFinishedState(snapshot.state);
     const draftChanged = (current.lastDraft === true) !== snapshot.isDraft;
-    if (current.lastState !== snapshot.state || draftChanged || archiving || finished || current.finalSnapshot) {
-      const { finalSnapshot: _previous, ...rest } = current;
+    const icon = storedIcon(snapshot);
+    if (
+      current.lastState !== snapshot.state ||
+      draftChanged ||
+      !sameStoredIcon(current, icon) ||
+      archiving ||
+      finished ||
+      current.finalSnapshot
+    ) {
+      const { finalSnapshot: _previous, lastAttention: _a, lastBehind: _b, lastAutoMerge: _m, ...rest } = current;
       // Recorded before archiving, so a crash in between errs toward not archiving twice.
       await this.deps.store.set(sessionId, {
         ...rest,
         lastState: snapshot.state,
         lastDraft: snapshot.isDraft,
+        ...icon,
         ...(archiving ? { archivedOnClose: true } : {}),
         // Without checks: a finished bar draws none, and every launch reads this file whole.
         ...(finished ? { finalSnapshot: { ...forTheBar(snapshot), checks: [] } } : {}),
@@ -1047,10 +1069,13 @@ export class PrMonitor {
     // stored flag would keep a row the app has not re-read queued long after it left.
     const queued = !!this.live.get(sessionId)?.queued;
     const repo = `${binding.owner}/${binding.repo}`;
-    if (snapshot)
-      return { number: binding.number, state: prDisplayState(snapshot.state, snapshot.isDraft, queued), repo };
+    const appAutoMerge = binding.autoMerge === true;
+    if (snapshot) return { number: binding.number, ...prIconStatus(snapshot, { queued, appAutoMerge }), repo };
     if (!binding.lastState) return null;
-    return { number: binding.number, state: prDisplayState(binding.lastState, binding.lastDraft), repo };
+    const state = prDisplayState(binding.lastState, binding.lastDraft);
+    // A finished PR will not change again, so its stored state is not merely last known.
+    if (isFinishedState(binding.lastState)) return { number: binding.number, state, repo };
+    return { number: binding.number, state, ...storedExtras(binding, state === 'open'), stale: true, repo };
   }
 
   private async sidebarSummaries(): Promise<Map<string, PrSummary>> {
@@ -1084,6 +1109,35 @@ export class PrMonitor {
     this.deps.emit(await this.state(sessionId, binding));
     await this.pushSummary(sessionId, binding);
   }
+}
+
+type StoredIcon = Pick<PrBinding, 'lastAttention' | 'lastBehind' | 'lastAutoMerge'>;
+
+/** The icon extras a read found, as the binding file keeps them: absent rather than false. */
+function storedIcon(snapshot: PrSnapshot): StoredIcon {
+  const icon = prIconStatus(snapshot, { queued: false, appAutoMerge: false });
+  return {
+    ...(icon.attention ? { lastAttention: icon.attention } : {}),
+    ...(icon.behind ? { lastBehind: true } : {}),
+    ...(icon.autoMerge ? { lastAutoMerge: true } : {}),
+  };
+}
+
+function storedExtras(binding: PrBinding, open: boolean): Omit<PrIconStatus, 'state' | 'stale'> {
+  if (!open) return {};
+  return {
+    ...(binding.lastAttention ? { attention: binding.lastAttention } : {}),
+    ...(binding.lastBehind ? { behind: true } : {}),
+    ...(binding.lastAutoMerge || binding.autoMerge ? { autoMerge: true } : {}),
+  };
+}
+
+function sameStoredIcon(binding: PrBinding, icon: StoredIcon): boolean {
+  return (
+    binding.lastAttention === icon.lastAttention &&
+    binding.lastBehind === icon.lastBehind &&
+    binding.lastAutoMerge === icon.lastAutoMerge
+  );
 }
 
 function forTheBar(snapshot: PrSnapshot): PrBarSnapshot {

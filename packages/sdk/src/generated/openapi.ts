@@ -12,7 +12,7 @@ export interface paths {
     put?: never;
     /**
      * Send a chat message
-     * @description Sends a message to the AI and creates a quest to process it. By default (async) the call returns immediately with a quest id; poll `GET /api/v1/quests/{id}` for the reply. Send `wait: true` to block until the reply is ready and receive it inline. A `wait: true` turn is bounded at about 45 seconds: one that runs longer is ended (unused credits refunded) and answered with a 504 naming the quest in `quest_id`; one whose reasoning model spends its whole output budget thinking is answered with a 422 or 502 (see those responses). Send long or tool-heavy turns (large attachments, tool calls) in the default async mode and poll instead. A tool that produced machine-readable state reports it under `toolPayloads` - an array of `{ type, payload }` entries in emission order, alongside (never instead of) the prose reply - on the `wait: true` body and on the polled quest. A turn can FAIL after the ACK - reported on the polled quest as `type: "error"`, since the ACK was already sent. A terminal `status: "stopped"` (a missing session, a user-cancelled turn) is ALSO a failure even without `type: "error"` - it carries an explanatory string in `reply`/`replies` rather than an answer. `type` is the failure signal for the classified failure classes (an abort, a provider timeout, credit exhaustion); `errorCode` is an optional refinement present only when the failure has a classified reason. A recovered stuck quest is NOT in that list: one that still has renderable content resolves as a success by design. `QUEST_ERROR_CODES` has four members: `insufficient_credits`, `spend_cap_exceeded`, `spend_frozen`, and `free_quest_limit_reached`. `insufficient_credits` and `spend_frozen` are raised as quest errorCodes on this endpoint: a spending pause in force when the request arrives is refused synchronously with a 403, and one that lands after the ACK reaches the quest. A new exhausted QuestMaster start is refused synchronously with 403 before a quest exists; an older queued start can instead settle as an error quest with `free_quest_limit_reached`. `spend_cap_exceeded` is thrown only by the embed chat route's pre-flight, which fires outside the process try/catch that would classify it onto a quest. A turn that prompt moderation refuses settles as `type: "error"` with `errorCode: "content_blocked"` and the refusal text in `reply`, on the 200 `wait: true` body and on the polled quest alike; do not resend it unchanged. A caller must treat `type: "error"` OR a terminal `status: "stopped"` as failure even when `errorCode` is absent, and must not read `reply` as an answer without checking those first. Organization-policy preflight refusals use 403 with `errorCode: "org_model_not_allowed"` or `"org_tool_not_allowed"`. An explicit-model JWT request can instead be accepted and refused during quest execution: that refusal appears on the 200 `wait: true` body or polled quest as `type: "error"`, without a policy `errorCode`. Check the quest outcome as described above. Authenticate with an API key (`b4m_live_`) or a JWT. Session resolution: pass `sessionId` to continue an existing notebook. An API-key caller that omits it gets a BRAND-NEW notebook rather than the notebook the human last had open, and `newConversation: true` forces a new notebook for any auth mode; both return the new id as `sessionId`, so the caller can continue the conversation by passing it back. A first-party JWT caller that omits `sessionId` keeps the last-opened-notebook fallback. Sending `sessionId` and `newConversation` together is a 422.
+     * @description Sends a message to the AI and creates a quest to process it. By default (async) the call returns immediately with a quest id; poll `GET /api/v1/quests/{id}` for the reply. Send `wait: true` to block until the reply is ready and receive it inline. A `wait: true` turn is bounded at about 45 seconds: one that runs longer is ended (unused credits refunded) and answered with a 504 naming the quest in `quest_id`; one whose reasoning model spends its whole output budget thinking is answered with a 422 or 502 (see those responses). Send long or tool-heavy turns (large attachments, tool calls) in the default async mode and poll instead. A tool that produced machine-readable state reports it under `toolPayloads` - an array of `{ type, payload }` entries in emission order, alongside (never instead of) the prose reply - on the `wait: true` body and on the polled quest. A turn can FAIL after the ACK - reported on the polled quest as `type: "error"`, since the ACK was already sent. A terminal `status: "stopped"` (a missing session, a user-cancelled turn) is ALSO a failure even without `type: "error"` - it carries an explanatory string in `reply`/`replies` rather than an answer. `type` is the failure signal for the classified failure classes (an abort, a provider timeout, credit exhaustion); `errorCode` is an optional refinement present only when the failure has a classified reason. A recovered stuck quest is NOT in that list: one that still has renderable content resolves as a success by design. `QUEST_ERROR_CODES` has five members: `insufficient_credits`, `spend_cap_exceeded`, `spend_frozen`, `free_quest_limit_reached`, and `run_budget_exhausted`. `insufficient_credits` and `spend_frozen` are raised as quest errorCodes on this endpoint: a spending pause in force when the request arrives is refused synchronously with a 403, and one that lands after the ACK reaches the quest. A new exhausted QuestMaster start is refused synchronously with 403 before a quest exists; an older queued start can instead settle as an error quest with `free_quest_limit_reached`. `spend_cap_exceeded` is thrown only by the embed chat route's pre-flight, which fires outside the process try/catch that would classify it onto a quest, and `run_budget_exhausted` only by image generation. A turn that prompt moderation refuses settles as `type: "error"` with `errorCode: "content_blocked"` and the refusal text in `reply`, on the 200 `wait: true` body and on the polled quest alike; do not resend it unchanged. A caller must treat `type: "error"` OR a terminal `status: "stopped"` as failure even when `errorCode` is absent, and must not read `reply` as an answer without checking those first. Organization-policy preflight refusals use 403 with `errorCode: "org_model_not_allowed"` or `"org_tool_not_allowed"`. An explicit-model JWT request can instead be accepted and refused during quest execution: that refusal appears on the 200 `wait: true` body or polled quest as `type: "error"`, without a policy `errorCode`. Check the quest outcome as described above. Authenticate with an API key (`b4m_live_`) or a JWT. Session resolution: pass `sessionId` to continue an existing notebook. An API-key caller that omits it gets a BRAND-NEW notebook rather than the notebook the human last had open, and `newConversation: true` forces a new notebook for any auth mode; both return the new id as `sessionId`, so the caller can continue the conversation by passing it back. A first-party JWT caller that omits `sessionId` keeps the last-opened-notebook fallback. Sending `sessionId` and `newConversation` together is a 422.
      */
     post: operations['sendChatMessage'];
     delete?: never;
@@ -208,7 +208,7 @@ export interface paths {
      *
      *     TOOL SEARCH. On a model whose `GET /api/v1/models` row has `supports_tool_search: true` (`backend` `"anthropic"` or `"bedrock"`), a `tools` entry may set `toolSchema.defer_loading: true`, and a `{ "serverTool": { "type": "tool_search_tool_regex_20251119", "name": "tool_search_tool_regex" } }` (or the `bm25` pair) entry adds Anthropic's tool search, so deferred definitions load only when the model searches for them. The stream then carries `provider_block` events (`{ type, provider: "anthropic", block }`) for the server-run search; echo each block back verbatim, in order, in the assistant `messages` content of the next request, and never answer one with a `tool_result`. When the server-run search loop hits its iteration limit the stream ends with `stopReason: "pause_turn"`; continue by re-sending the conversation with that assistant turn's provider blocks echoed. A client-side search may return `{ "type": "tool_reference", "tool_name": "..." }` blocks inside a `tool_result`'s content. On every other model `defer_loading` is ignored (every tool is sent as usual) and a server tool, a `tool_reference` or an echoed tool search block is refused with a `400` rather than run without it.
      *
-     *     ERRORS. Everything checked before the model provider is called fails with a JSON error body and a real HTTP status, before any stream opens: an empty `messages` array, a conversation with no non-empty user or assistant message (system-only, or only blank content), a malformed request, or an unknown `model` `400` (`errorCode: "unknown_model"` for an unknown model), a bad credential `401`, a key without a required scope `403` (with `required_scopes`), a free-tier account calling a model outside the free-tier allowlist `403` with `errorCode: "model_requires_subscription"` (upgrade the plan or pick a free-tier model), a model the caller's organization policy does not allow `403` with `errorCode: "org_model_not_allowed"`, paused spending `403` with `errorCode: "spend_frozen"`, a body over 25 MB `413`, any other body that fails schema validation `422`, insufficient credits `422` with `errorCode: "insufficient_credits"` (personal or org balance, or an org per-member credit cap), a rate limit `429` with `Retry-After`, a `run` that does not exist or that another user or billing owner minted `404` with `errorCode: "run_not_found"`, and a catalogued model whose provider is not configured on this deployment, or a model that could only come from a self-hosted model server (Ollama, local image) that is currently unreachable, `503` with `errorCode: "provider_not_configured"` (retryable). A provider rejection of caller input that happens before the stream opens is also a JSON `400`, with `errorCode: "invalid_request"` (do not retry it unchanged). Once the stream has opened the status stays `200` and a failure arrives as one terminal in-band `error` event. Branch on that event's `code`, never on `message`, which is prose and may change: `insufficient_credits` (buy credits) when credits run out mid-generation, `invalid_request` when the provider rejects caller input (do not retry it unchanged), `provider_rejected` when the model provider refused our credentials, `content_blocked` when the model declined the request (do not retry it unchanged), `output_budget_exhausted` when a reasoning model spent your whole `max_tokens` thinking and wrote no answer (raise `max_tokens` or omit it; do not retry it unchanged), and `provider_error` for any other provider failure. Treat `code` as optional.
+     *     ERRORS. Everything checked before the model provider is called fails with a JSON error body and a real HTTP status, before any stream opens: an empty `messages` array, a conversation with no non-empty user or assistant message (system-only, or only blank content), a malformed request, or an unknown `model` `400` (`errorCode: "unknown_model"` for an unknown model), a bad credential `401`, a key without a required scope `403` (with `required_scopes`), a free-tier account calling a model outside the free-tier allowlist `403` with `errorCode: "model_requires_subscription"` (upgrade the plan or pick a free-tier model), a model the caller's organization policy does not allow `403` with `errorCode: "org_model_not_allowed"`, paused spending `403` with `errorCode: "spend_frozen"`, a body over 25 MB `413`, any other body that fails schema validation `422`, insufficient credits `422` with `errorCode: "insufficient_credits"` (personal or org balance, or an org per-member credit cap), a `run` minted with a budget that has too little left for even a short answer `422` with `errorCode: "run_budget_exhausted"` (retry once in-flight requests on the run settle, or raise the run budget; buying credits does not), a rate limit `429` with `Retry-After`, a `run` that does not exist or that another user or billing owner minted `404` with `errorCode: "run_not_found"`, and a catalogued model whose provider is not configured on this deployment, or a model that could only come from a self-hosted model server (Ollama, local image) that is currently unreachable, `503` with `errorCode: "provider_not_configured"` (retryable). A provider rejection of caller input that happens before the stream opens is also a JSON `400`, with `errorCode: "invalid_request"` (do not retry it unchanged). Once the stream has opened the status stays `200` and a failure arrives as one terminal in-band `error` event. Branch on that event's `code`, never on `message`, which is prose and may change: `insufficient_credits` (buy credits) when credits run out mid-generation, `invalid_request` when the provider rejects caller input (do not retry it unchanged), `provider_rejected` when the model provider refused our credentials, `content_blocked` when the model declined the request (do not retry it unchanged), `output_budget_exhausted` when a reasoning model spent your whole `max_tokens` thinking and wrote no answer (raise `max_tokens` or omit it; do not retry it unchanged), and `provider_error` for any other provider failure. Treat `code` as optional.
      */
     post: operations['createCompletion'];
     delete?: never;
@@ -229,8 +229,30 @@ export interface paths {
     /**
      * Create a completion run
      * @description Mints a run id that groups the spend of several `POST /api/ai/v1/completions` requests, such as a root session and the workers it spawns. Send the returned `runId` as `run.runId` on each of those requests. The run is bound to the credential that minted it: the same user and the same billing owner (the organization for an organization-billed API key, otherwise the user), and a completion naming a run minted by anyone else is refused with `404` (`errorCode: "run_not_found"`). Minting a run charges nothing, and attributing a completion to it never charges that completion twice.
+     *
+     *     With `budgetCredits`, the run also caps admission: what its completions may claim together. Before calling the model, each completion claims what its first round can cost at its full output budget (less, down to what a short answer costs, when the run has less left) and is capped to that claim, so concurrent completions can never together be admitted past the budget. The claim is priced from an estimate of the input, so a completion that costs more than it claimed is still charged its actual cost, up to what the balance can pay; the run counts that cost and refuses later claims it can no longer cover. A run can go over its budget by at most that miss for each completion in flight. A completion that runs server-side tools claims more the same way before each further round, and ends with `stopReason: "max_tokens"` when the run cannot cover one. A completion the budget cannot cover is refused with `422` (`errorCode: "run_budget_exhausted"`) before anything is charged. Claims return to the run when their completion settles, fails or is abandoned. The account balance and any organization member caps still apply on their own, and buying credits does not raise a run budget. The budget bounds charged credits, so a deployment that does not charge for completions counts nothing against it.
      */
     post: operations['createCompletionRun'];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/v1/completion-runs/{runId}/evaluation': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * Recover evaluation admission receipts
+     * @description Owner-scoped durable provider-priced reservations and receipts. Pending and unknown receipts retain their full bounds and block further admission. Provider-priced USD is distinct from platform credit charges. A complete receipt uses provider-reported usage and the immutable catalog rates captured at admission; it is not an invoice. Recovery never repeats a provider dispatch.
+     */
+    get: operations['getCompletionRunEvaluation'];
+    put?: never;
+    post?: never;
     delete?: never;
     options?: never;
     head?: never;
@@ -247,10 +269,32 @@ export interface paths {
     /**
      * Get a completion run's spend
      * @description Returns what a run has cost so far: every `POST /api/ai/v1/completions` request sent with this `run.runId` whose credits have settled, summed once per request from the credit ledger, with breakdowns by role, purpose, model and task attempt. `creditsCharged` is the sum of the amounts each request's `settled` stream event reports, so a client can reconcile its own totals against it. Only settled charges count: a request still running, one whose credits never settled, and one sent without `run` are not included. Readable only with a credential of the same user and billing owner that minted the run; any other run id, including one that does not exist, gets `404` (`errorCode: "run_not_found"`).
+     *
+     *     A run minted with a budget also returns `budget`: the ceiling, what is committed against it (settled charges plus the claims of completions still running), the unsettled part of that, and what is left.
      */
     get: operations['getCompletionRunUsage'];
     put?: never;
     post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/v1/completion-runs/{runId}/budget': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /**
+     * Raise a completion run's budget
+     * @description Sets a higher `budgetCredits` on a run minted with one, so completions refused with `errorCode: "run_budget_exhausted"` can be admitted again. A budget is only ever raised: a value at or below the current budget, or a run minted without a budget, is refused with `409` (`errorCode: "run_budget_not_raised"`). Raising it charges nothing, and buying credits never raises it. Only a credential of the same user and billing owner that minted the run can raise it; any other run id, including one that does not exist, gets `404` (`errorCode: "run_not_found"`).
+     */
+    post: operations['raiseCompletionRunBudget'];
     delete?: never;
     options?: never;
     head?: never;
@@ -327,7 +371,7 @@ export interface paths {
     };
     /**
      * Get the authenticated caller
-     * @description Returns the authenticated caller: stable id, display name, plan tier, personal credit balance, and entitlement keys. The subject is always the credential holder - this endpoint accepts no user id, owner id, or impersonation parameter of any kind, so a key can only ever read its own owner. `credits.balance` is the caller's personal ledger; a call billed to an organization draws on a pool this number does not describe. `credits.monthly_allowance` totals monthly personal plan grants, including custom grants; it is null when unavailable and may be omitted by older servers. Gate on `tier != "free"` for "does this caller hold a paid plan (own or org seat)" and on `subscription.price_id` for which product - the `basic`/`pro` rungs come from an internal plan ladder and do not track a plan's marketing name. An org seat (a Team plan held by the caller's organization) confers that org plan's tier and `subscription`, even when the caller pays nothing personally, so `tier != "free"` does not by itself mean the caller is billed. Responses are never cacheable. Authenticate with an API key (`b4m_live_`) carrying `me:read`, or a JWT.
+     * @description Returns the authenticated caller: stable id, display name, plan tier, personal credit balance, and entitlement keys. The subject is always the credential holder - this endpoint accepts no user id, owner id, or impersonation parameter of any kind, so a key can only ever read its own owner. `credits.balance` is the caller's personal ledger; a call billed to an organization draws on a pool this number does not describe. `credits.monthly_allowance` totals monthly personal plan grants, including custom grants; it is null when unavailable and may be omitted by older servers. `credits.expiring` lists the part of the personal balance due to expire, soonest first. Each `amount` is what remains of that grant once the balance has fallen below the grants' total: credits no entry covers are spent first and do not expire. It may be omitted by older servers. Gate on `tier != "free"` for "does this caller hold a paid plan (own or org seat)" and on `subscription.price_id` for which product - the `basic`/`pro` rungs come from an internal plan ladder and do not track a plan's marketing name. An org seat (a Team plan held by the caller's organization) confers that org plan's tier and `subscription`, even when the caller pays nothing personally, so `tier != "free"` does not by itself mean the caller is billed. Responses are never cacheable. Authenticate with an API key (`b4m_live_`) carrying `me:read`, or a JWT.
      */
     get: operations['getMe'];
     put?: never;
@@ -462,6 +506,30 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  '/api/v1/briefs/schedule': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * Get your brief schedule
+     * @description Reads when scheduled briefs are composed for you and when the next one is due. Authenticate with a JWT access token of the signed-in user. The schedule is the caller's own; scheduled briefs are composed only when there was activity since the last one.
+     */
+    get: operations['getBriefSchedule'];
+    /**
+     * Set your brief schedule
+     * @description Replaces your brief schedule and returns it with the next due time. `timeOfDay` and `days` are read in `timeZone`, so a time skipped by a daylight-saving change runs at the shifted time and a repeated one runs once. Authenticate with a JWT access token of the signed-in user. The schedule is the caller's own; scheduled briefs are composed only when there was activity since the last one.
+     */
+    put: operations['putBriefSchedule'];
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   '/api/v1/assistant/instructions': {
     parameters: {
       query?: never;
@@ -520,6 +588,66 @@ export interface paths {
      * @description Answers a decision item that carries a `question`: the reply is sent to the agent as your next message in that notebook, starting an agent run. A question can be answered from the brief once; a second reply, or one after the conversation moved on (`state` other than `open`), is `409` with `errorCode: "question_closed"`. A decision that is an approval is `404` here; answer it through the pending-actions endpoints. Authenticate with a JWT access token of the signed-in user. A brief is readable only by the user it was composed for; anyone else gets `404`, exactly like a missing brief. Nothing in a push notification authorizes this call.
      */
     post: operations['replyToBriefDecision'];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/v1/pending-decisions': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * Count decisions waiting on you
+     * @description The number of decisions waiting on you, for a badge or a lock-screen widget: the agent approvals still open in your notebooks plus the other decisions in your latest ready brief. Read-only and cheap; it composes nothing. Authenticate with a JWT access token of the signed-in user; only your own notebooks and briefs are counted.
+     */
+    get: operations['getPendingDecisionCount'];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/v1/delegations': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /**
+     * Delegate an item to the assistant
+     * @description Hands a link, some text and/or files you uploaded to the assistant with one line of intent ("handle this", "summarize for the team"). Send at least one of `url`, `text` or `file_ids`; with none the call is a `422`. The work is asynchronous: the response is the delegation in `pending` status, and polling `GET /api/v1/delegations/{id}` shows it settle as `handled`, `needs_decision` or `failed`. Either way it appears in your next brief: still-pending items as in progress, settled ones once. Authenticate with an API key (`b4m_live_`) or a JWT.
+     */
+    post: operations['createDelegation'];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/v1/delegations/{id}': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * Get a delegation
+     * @description Reads one delegation and its outcome. Only the user who created it can read it; anyone else gets `404`, exactly like a missing one.
+     */
+    get: operations['getDelegation'];
+    put?: never;
+    post?: never;
     delete?: never;
     options?: never;
     head?: never;
@@ -641,7 +769,8 @@ export interface paths {
     put?: never;
     /**
      * Generate an image
-     * @description Queues an image generation and returns immediately with the quest that will carry the result - no image yet, and the call never blocks on the render. Poll `GET /api/v1/quests/{id}` until `status` is `"done"` (see the `generateImage200PollResult` schema). Omit `sessionId` to create a new session. The prompt is resolved against the session history first, so a follow-up such as "make it darker" binds to the previous image; `enhancedPrompt` reports the prompt actually sent to the model. Send `prompt_resolution: "literal"` to skip that step and have the prompt sent as written (apart from truncation to the model's prompt limit). `referenceImageFabFileIds` passes up to 15 already-uploaded images as style anchors, after the input image taken from `fabFileIds`. GPT-image accepts 15 references; FLUX.2 accepts 8 total input images (4 for Klein) and FLUX 3 accepts 10. For FLUX.2 and FLUX 3 the distinct ids across `fabFileIds` and `referenceImageFabFileIds` are counted together when `referenceImageFabFileIds` is set, and a request over the limit is rejected with a 400. A request over the limit with only `fabFileIds`, or with a primary picked from session history, is checked when the render runs and fails on the polled quest. Unsupported models are also rejected with a 400. FLUX 3 receives its inputs as `ref_image_1` to `ref_image_N`, in this order: the first `fabFileIds` image (so `ref_image_1` when one is attached), the remaining `fabFileIds` images, then `referenceImageFabFileIds` as listed. A repeated id, or an image with identical content, keeps only its first position, which shifts the later tags. Refer to them in the prompt, e.g. "the jacket from ref_image_2". Which `size` values a model accepts, and whether it honours `background`, `seed`, `quality`, `n` and reference images, is listed per model in the `image` block of `GET /api/v1/models`. Credits are checked when the render runs, so insufficient credits arrive on the polled quest rather than as a 422. `organization_id` is accepted as an alias of `organizationId`, for callers used to the snake_case video and music bodies; `null` bills the personal account. `POST /api/ai/generate-image` is a legacy alias of this endpoint. Authenticate with an API key (`b4m_live_`) or a JWT.
+     * @deprecated
+     * @description **Deprecated, sunset 2027-02-17.** Use `/api/v1/image-jobs` instead. Queues an image generation and returns immediately with the quest that will carry the result - no image yet, and the call never blocks on the render. Poll `GET /api/v1/quests/{id}` until `status` is `"done"` (see the `generateImage200PollResult` schema). Omit `sessionId` to create a new session. The prompt is resolved against the session history first, so a follow-up such as "make it darker" binds to the previous image; `enhancedPrompt` reports the prompt actually sent to the model. Send `prompt_resolution: "literal"` to skip that step and have the prompt sent as written (apart from truncation to the model's prompt limit). `referenceImageFabFileIds` passes up to 15 already-uploaded images as style anchors, after the input image taken from `fabFileIds`. GPT-image accepts 15 references; FLUX.2 accepts 8 total input images (4 for Klein) and FLUX 3 accepts 10. For FLUX.2 and FLUX 3 the distinct ids across `fabFileIds` and `referenceImageFabFileIds` are counted together when `referenceImageFabFileIds` is set, and a request over the limit is rejected with a 400. A request over the limit with only `fabFileIds`, or with a primary picked from session history, is checked when the render runs and fails on the polled quest. Unsupported models are also rejected with a 400. FLUX 3 receives its inputs as `ref_image_1` to `ref_image_N`, in this order: the first `fabFileIds` image (so `ref_image_1` when one is attached), the remaining `fabFileIds` images, then `referenceImageFabFileIds` as listed. A repeated id, or an image with identical content, keeps only its first position, which shifts the later tags. Refer to them in the prompt, e.g. "the jacket from ref_image_2". Which `size` values a model accepts, and whether it honours `background`, `seed`, `quality`, `n` and reference images, is listed per model in the `image` block of `GET /api/v1/models`. Credits are checked when the render runs, so insufficient credits arrive on the polled quest rather than as a 422. A `run` budget is checked before queueing as well, so a run with too little left is usually a synchronous 422 (`errorCode: "run_budget_exhausted"`). `organization_id` is accepted as an alias of `organizationId`, for callers used to the snake_case video and music bodies; `null` bills the personal account. `POST /api/ai/generate-image` is a legacy alias of this endpoint. Authenticate with an API key (`b4m_live_`) or a JWT.
      *
      *     Optional `callbackUrl`: an https URL that receives a signed POST when the quest settles (success, failure, or a stop; a failed render is `type: "error"` in the body, same as the poll). The body is the `GET /api/v1/quests/{id}` response. Headers: `X-Webhook-Event-ID` (the same on every attempt for one settlement; delivery is at-least-once, so dedupe on it, and a retried quest settles again under a new one), `X-Webhook-Delivery-ID` (unique per attempt), `X-Webhook-Timestamp` (unix seconds), `X-Webhook-Signature-256` (`sha256=` + hex HMAC-SHA256 of `<timestamp>.<raw body>` keyed with the API key's callback signing secret), and `X-Event-Type: quest.settled`. Delivery makes up to 5 attempts, retrying on a 5xx, 408, 429, timeout or network error - never on any other 4xx, and redirects are not followed; your endpoint must answer 2xx within 10 seconds. Requires API-key authentication and a signing secret on that key (returned once at key creation, or via `POST /api/user-api-keys/{id}/callback-secret`). A `callbackUrl` is rejected with a 400 when the request is not API-key authenticated, the key has no signing secret, the URL resolves to a private address, or the deployment does not deliver callbacks; a URL that is not https fails request validation with a 422. Polling still works whether or not `callbackUrl` is set.
      */
@@ -663,11 +792,76 @@ export interface paths {
     put?: never;
     /**
      * Edit an image
-     * @description Queues an edit of an existing image and returns the quest that will carry the result, before the render runs. Poll `GET /api/v1/quests/{id}` until `status` is `"done"` (see the `editImage200PollResult` schema). `image` is the URL of the source image; `fabFileIds` must name at least one file except on FLUX.2 and FLUX 3 models, which edit from the prompt with no mask and reject `fabFileIds` with a 400; elsewhere the first is the inpainting mask. `referenceImageFabFileIds` adds reference images after the source image, so the mask always applies to the source: up to 15 on gpt-image models, 7 on FLUX.2 models other than klein, 3 on FLUX.2 klein, and 9 on FLUX 3 (the source takes one input slot). Sending any with another model, or more than the model's limit, is rejected with a 400 rather than ignored; more than 15 ids fails schema validation with a 422. Both id fields take ids from `POST /api/v1/files`: upload each file, poll `GET /api/v1/files/{id}` until `moderation_status` is `clean`, then pass its `id`. An id that is not yet `clean` fails the edit on the polled quest. `image` takes a URL rather than an id, so a source uploaded the same way is passed as its `download_url`, which must still be unexpired when the render runs. The edited image is not a file id: read it from `files[].url` on the polled quest, not from `GET /api/v1/files/{id}`. `seed` makes an edit reproducible on BFL models that support seeds; FLUX 3 Image (not Klein), gpt-image and Gemini ignore it. `edit_regions` carries region-edit bounding boxes: each entry has a `prompt` and a `bbox` of `[y_min, x_min, y_max, x_max]` in normalised [0, 1] coordinates (BFL convention, vertical axis first). At most 8 regions per request. Accepted on FLUX 3 models only (non-FLUX-3 → 400); schema-validated on ingress (422 on bad coordinates / degenerate boxes / over-cap count, or a box that collapses after rounding to the 0-1000 grid), then converted to BFL's prompt-inline edit layout (`from`, `src_bbox`, `tgt_bbox`, `desc`) before provider submission. Credits are checked when the render runs, so insufficient credits arrive on the polled quest rather than as a 422. `organization_id` is accepted as an alias of `organizationId`, for callers used to the snake_case video and music bodies; `null` bills the personal account. `POST /api/ai/edit-image` is a legacy alias of this endpoint. Authenticate with an API key (`b4m_live_`) or a JWT.
+     * @deprecated
+     * @description **Deprecated, sunset 2027-02-17.** Use `/api/v1/image-jobs` instead. Queues an edit of an existing image and returns the quest that will carry the result, before the render runs. Poll `GET /api/v1/quests/{id}` until `status` is `"done"` (see the `editImage200PollResult` schema). `image` is the URL of the source image; `fabFileIds` must name at least one file except on FLUX.2 and FLUX 3 models, which edit from the prompt with no mask and reject `fabFileIds` with a 400; elsewhere the first is the inpainting mask. `referenceImageFabFileIds` adds reference images after the source image, so the mask always applies to the source: up to 15 on gpt-image models, 7 on FLUX.2 models other than klein, 3 on FLUX.2 klein, and 9 on FLUX 3 (the source takes one input slot). Sending any with another model, or more than the model's limit, is rejected with a 400 rather than ignored; more than 15 ids fails schema validation with a 422. Both id fields take ids from `POST /api/v1/files`: upload each file, poll `GET /api/v1/files/{id}` until `moderation_status` is `clean`, then pass its `id`. An id that is not yet `clean` fails the edit on the polled quest. `image` takes a URL rather than an id, so a source uploaded the same way is passed as its `download_url`, which must still be unexpired when the render runs. The edited image is not a file id: read it from `files[].url` on the polled quest, not from `GET /api/v1/files/{id}`. `seed` makes an edit reproducible on BFL models that support seeds; FLUX 3 Image (not Klein), gpt-image and Gemini ignore it. `edit_regions` carries region-edit bounding boxes: each entry has a `prompt` and a `bbox` of `[y_min, x_min, y_max, x_max]` in normalised [0, 1] coordinates (BFL convention, vertical axis first). At most 8 regions per request. Accepted on FLUX 3 models only (non-FLUX-3 → 400); schema-validated on ingress (422 on bad coordinates / degenerate boxes / over-cap count, or a box that collapses after rounding to the 0-1000 grid), then converted to BFL's prompt-inline edit layout (`from`, `src_bbox`, `tgt_bbox`, `desc`) before provider submission. Credits are checked when the render runs, so insufficient credits arrive on the polled quest rather than as a 422. A `run` budget is checked before queueing as well, so a run with too little left is usually a synchronous 422 (`errorCode: "run_budget_exhausted"`). `organization_id` is accepted as an alias of `organizationId`, for callers used to the snake_case video and music bodies; `null` bills the personal account. `POST /api/ai/edit-image` is a legacy alias of this endpoint. Authenticate with an API key (`b4m_live_`) or a JWT.
      *
      *     Optional `callbackUrl`: an https URL that receives a signed POST when the quest settles (success, failure, or a stop; a failed render is `type: "error"` in the body, same as the poll). The body is the `GET /api/v1/quests/{id}` response. Headers: `X-Webhook-Event-ID` (the same on every attempt for one settlement; delivery is at-least-once, so dedupe on it, and a retried quest settles again under a new one), `X-Webhook-Delivery-ID` (unique per attempt), `X-Webhook-Timestamp` (unix seconds), `X-Webhook-Signature-256` (`sha256=` + hex HMAC-SHA256 of `<timestamp>.<raw body>` keyed with the API key's callback signing secret), and `X-Event-Type: quest.settled`. Delivery makes up to 5 attempts, retrying on a 5xx, 408, 429, timeout or network error - never on any other 4xx, and redirects are not followed; your endpoint must answer 2xx within 10 seconds. Requires API-key authentication and a signing secret on that key (returned once at key creation, or via `POST /api/user-api-keys/{id}/callback-secret`). A `callbackUrl` is rejected with a 400 when the request is not API-key authenticated, the key has no signing secret, the URL resolves to a private address, or the deployment does not deliver callbacks; a URL that is not https fails request validation with a 422. Polling still works whether or not `callbackUrl` is set.
      */
     post: operations['editImage'];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/v1/image-jobs': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * List your image jobs
+     * @description Your image jobs from every surface (this API, Studio and chat), newest first, optionally filtered by `state` and `source`. Cursor-paginated (see the pagination convention): pass `next_cursor` back as `cursor` until it is `null`.
+     */
+    get: operations['listImageJobs'];
+    put?: never;
+    /**
+     * Start an image generation or edit
+     * @description Queues `count` images (default 1), one job each, and returns `202` with the jobs and their shared `group_id`. Poll `GET /api/v1/image-jobs/{id}` for each job until `state` is `succeeded`, `failed`, `blocked` or `cancelled`. `mode: "generate"` renders from the prompt; `mode: "edit"` changes the `edit_source` input, optionally within a `mask` or `edit_regions`. Input images are files you uploaded (`POST /api/v1/files`). The prompt is sent as written. Check the request against the model in `GET /api/v1/image-models`: an unsupported size, aspect ratio, quality, input or option is a 422 naming it, never silently adjusted. A finished image is saved to your Files with the `generated` tag (if that save fails it is kept outside Files and `output.file_id` is null). On success, `output.availability` says whether it can be downloaded: `ready` means `output.url` is a signed download URL valid for 15 minutes (re-fetch the job for a fresh one); `pending_scan` means the saved file is still being scanned, so keep re-fetching the job; `unavailable` means the file was blocked or deleted, so stop polling. Credits for the model's price are reserved up front per image and settled on completion; a failed or cancelled job is not charged. A `blocked` job is not charged either, unless the provider rendered the image before it was rejected and billed it: then `credits.settled` shows the charge. Send an `Idempotency-Key` header (1-255 printable ASCII characters) to make retries safe: a repeat with the same key and body returns the original jobs, and the same key with a different body is a 422 `idempotency_key_reused`. Keys are scoped to the billed account and to `count`, so the same key sent with a different `count` or `organization_id` starts new jobs, which are charged. Set `organization_id` to bill an organization you belong to, or `null` to bill your personal credits; omitted, the jobs bill your home organization (or your personal credits if you have none). An organization-billed API key always bills its own organization (see `organization_id`). This replaces `POST /api/v1/image-generations` and `POST /api/v1/image-edits`.
+     */
+    post: operations['createImageJob'];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/v1/image-jobs/{id}': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * Get an image job
+     * @description Returns one job you requested. Each read signs a fresh `output.url` (valid 15 minutes, see `expires_at`).
+     */
+    get: operations['getImageJob'];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/v1/image-jobs/{id}/cancel': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /**
+     * Cancel an image job
+     * @description Requests cancellation and returns the job. A job still `pending` moves to `cancelled` shortly after and its reserved credits are returned. Most models render an image in one provider call that cannot be interrupted and is billed once it starts, so a `running` job of such a model is refused with a 409 (`not_cancellable`) and runs to its end. A finished job is returned unchanged.
+     */
+    post: operations['cancelImageJob'];
     delete?: never;
     options?: never;
     head?: never;
@@ -1371,7 +1565,7 @@ export interface paths {
     };
     /**
      * List the image models you can use
-     * @description Returns the image models that are offered to the caller, served by this deployment and backed by a usable provider key, best first, with their capabilities per mode and an indicative credit price. The capabilities and prices are those of image jobs, which refuse an unsupported size, aspect ratio, quality or input image rather than adjust it. `POST /api/v1/image-generations` and `POST /api/v1/image-edits` do not run as image jobs yet and may adapt a request to the model, for example by rendering a transparent background on a model that supports it.
+     * @description Returns the image models that are offered to the caller, served by this deployment and backed by a usable provider key, best first, with their capabilities per mode and an indicative credit price. The capabilities and prices are those of image jobs (`POST /api/v1/image-jobs`), which refuse an unsupported size, aspect ratio, quality or input image rather than adjust it. The deprecated `POST /api/v1/image-generations` and `POST /api/v1/image-edits` do not run as image jobs and may adapt a request to the model, for example by rendering a transparent background on a model that supports it.
      */
     get: operations['listImageModels'];
     put?: never;
@@ -2710,7 +2904,7 @@ export interface components {
       name?: string;
     };
     /**
-     * @description Outcome fields of the quest polled at `GET /api/v1/quests/{id}` after this ACK. A finished turn that failed is `status: "done"` with `type: "error"` and the failure text in `reply`, so a caller reading `reply` alone cannot tell a failure from an answer - check `type` first, and also treat a terminal `status: "stopped"` (a missing session, a user-cancelled turn) as failure even though it never sets `type`. `errorCode` is an optional refinement of `type: "error"`, present only for a classified failure; credit exhaustion arrives here as `insufficient_credits`, the same vocabulary the synchronous 422s on `/api/ai/music`, `/api/ai/sound-effects` and `/api/ai/tts` use, and a spending pause that lands after the ACK arrives as `spend_frozen`. An older queued QuestMaster start can instead settle with `free_quest_limit_reached`; new exhausted starts are refused synchronously with 403 before a quest exists. `QUEST_ERROR_CODES` has four members; its other code is `spend_cap_exceeded`, but no current throw site on this endpoint raises it as a quest errorCode: its only one, the embed chat route's pre-flight 422, fires outside the process try/catch that would classify it onto the quest. A turn that prompt moderation refuses arrives as `content_blocked`; do not resend it unchanged. Most `type: "error"` turns - an abort, a provider timeout or overload - have NO `errorCode`; its absence does not mean success, only that the failure is unclassified. A recovered stuck quest that still has renderable content is not a failure at all: it keeps `type: "message"` even though it did not finish, so a caller gets the content rather than an error. `fallbackInfo` is present only when the requested model failed and another model produced the reply: `fallbackModel` answered, `primaryModel` is what was asked for, and `reason` is the error from the first failed attempt on the requested model. The poll body carries further fields not modelled here, including `images`, `files`, `toolPayloads`, `promptMeta`, and the attachment report (`attachmentNotices`/`attachmentDelivery`) - only the outcome subset is modelled here.
+     * @description Outcome fields of the quest polled at `GET /api/v1/quests/{id}` after this ACK. A finished turn that failed is `status: "done"` with `type: "error"` and the failure text in `reply`, so a caller reading `reply` alone cannot tell a failure from an answer - check `type` first, and also treat a terminal `status: "stopped"` (a missing session, a user-cancelled turn) as failure even though it never sets `type`. `errorCode` is an optional refinement of `type: "error"`, present only for a classified failure; credit exhaustion arrives here as `insufficient_credits`, the same vocabulary the synchronous 422s on `/api/ai/music`, `/api/ai/sound-effects` and `/api/ai/tts` use, and a spending pause that lands after the ACK arrives as `spend_frozen`. An older queued QuestMaster start can instead settle with `free_quest_limit_reached`; new exhausted starts are refused synchronously with 403 before a quest exists. `QUEST_ERROR_CODES` also publishes `spend_cap_exceeded`, but no current throw site on this endpoint raises it as a quest errorCode: its only one, the embed chat route's pre-flight 422, fires outside the process try/catch that would classify it onto the quest; `run_budget_exhausted` is raised only by image generation. A turn that prompt moderation refuses arrives as `content_blocked`; do not resend it unchanged. Most `type: "error"` turns - an abort, a provider timeout or overload - have NO `errorCode`; its absence does not mean success, only that the failure is unclassified. A recovered stuck quest that still has renderable content is not a failure at all: it keeps `type: "message"` even though it did not finish, so a caller gets the content rather than an error. `fallbackInfo` is present only when the requested model failed and another model produced the reply: `fallbackModel` answered, `primaryModel` is what was asked for, and `reason` is the error from the first failed attempt on the requested model. The poll body carries further fields not modelled here, including `images`, `files`, `toolPayloads`, `promptMeta`, and the attachment report (`attachmentNotices`/`attachmentDelivery`) - only the outcome subset is modelled here.
      * @example {
      *       "id": "664f1c2b9a1e4d0012ab34cd",
      *       "status": "done",
@@ -2727,7 +2921,12 @@ export interface components {
       type?: 'message' | 'oob' | 'error' | 'system' | 'voice_transcript';
       /** @enum {string} */
       errorCode?:
-        'insufficient_credits' | 'spend_cap_exceeded' | 'spend_frozen' | 'free_quest_limit_reached' | 'content_blocked';
+        | 'insufficient_credits'
+        | 'spend_cap_exceeded'
+        | 'spend_frozen'
+        | 'free_quest_limit_reached'
+        | 'run_budget_exhausted'
+        | 'content_blocked';
       reply?: string | null;
       replies?: string[];
       fallbackInfo?: {
@@ -2758,7 +2957,12 @@ export interface components {
       type?: 'message' | 'oob' | 'error' | 'system' | 'voice_transcript';
       /** @enum {string} */
       errorCode?:
-        'insufficient_credits' | 'spend_cap_exceeded' | 'spend_frozen' | 'free_quest_limit_reached' | 'content_blocked';
+        | 'insufficient_credits'
+        | 'spend_cap_exceeded'
+        | 'spend_frozen'
+        | 'free_quest_limit_reached'
+        | 'run_budget_exhausted'
+        | 'content_blocked';
       reply?: string | null;
       replies?: string[];
       fallbackInfo?: {
@@ -2791,7 +2995,12 @@ export interface components {
       type?: 'message' | 'oob' | 'error' | 'system' | 'voice_transcript';
       /** @enum {string} */
       errorCode?:
-        'insufficient_credits' | 'spend_cap_exceeded' | 'spend_frozen' | 'free_quest_limit_reached' | 'content_blocked';
+        | 'insufficient_credits'
+        | 'spend_cap_exceeded'
+        | 'spend_frozen'
+        | 'free_quest_limit_reached'
+        | 'run_budget_exhausted'
+        | 'content_blocked';
       reply?: string | null;
       replies?: string[];
       fallbackInfo?: {
@@ -2821,6 +3030,7 @@ export interface components {
             | 'spend_cap_exceeded'
             | 'spend_frozen'
             | 'free_quest_limit_reached'
+            | 'run_budget_exhausted'
             | 'content_blocked';
           tools?: {
             /** @enum {string} */
@@ -2888,6 +3098,7 @@ export interface components {
             | 'spend_cap_exceeded'
             | 'spend_frozen'
             | 'free_quest_limit_reached'
+            | 'run_budget_exhausted'
             | 'content_blocked';
           tools?: {
             /** @enum {string} */
@@ -3426,7 +3637,12 @@ export interface components {
        */
       name?: string;
       /** @enum {string} */
-      errorCode?: 'insufficient_credits' | 'spend_cap_exceeded' | 'spend_frozen' | 'free_quest_limit_reached';
+      errorCode?:
+        | 'insufficient_credits'
+        | 'spend_cap_exceeded'
+        | 'spend_frozen'
+        | 'free_quest_limit_reached'
+        | 'run_budget_exhausted';
     };
     /**
      * @example {
@@ -3491,7 +3707,12 @@ export interface components {
        */
       name?: string;
       /** @enum {string} */
-      errorCode?: 'insufficient_credits' | 'spend_cap_exceeded' | 'spend_frozen' | 'free_quest_limit_reached';
+      errorCode?:
+        | 'insufficient_credits'
+        | 'spend_cap_exceeded'
+        | 'spend_frozen'
+        | 'free_quest_limit_reached'
+        | 'run_budget_exhausted';
     };
     /**
      * @example {
@@ -3614,6 +3835,7 @@ export interface components {
             | 'spend_cap_exceeded'
             | 'spend_frozen'
             | 'free_quest_limit_reached'
+            | 'run_budget_exhausted'
             | 'invalid_request'
             | 'provider_error'
             | 'provider_rejected'
@@ -3696,7 +3918,12 @@ export interface components {
        */
       name?: string;
       /** @enum {string} */
-      errorCode?: 'insufficient_credits' | 'spend_cap_exceeded' | 'spend_frozen' | 'free_quest_limit_reached';
+      errorCode?:
+        | 'insufficient_credits'
+        | 'spend_cap_exceeded'
+        | 'spend_frozen'
+        | 'free_quest_limit_reached'
+        | 'run_budget_exhausted';
     };
     createCompletionResponse503: {
       error: string;
@@ -3722,6 +3949,12 @@ export interface components {
      *     }
      */
     createCompletionRequest: {
+      evaluation?: {
+        /** @enum {number} */
+        version: 1;
+        /** Format: uuid */
+        requestId: string;
+      };
       model: string;
       messages: {
         /** @enum {string} */
@@ -3917,7 +4150,7 @@ export interface components {
          * @description What the request was for. Treated as `turn` when absent.
          * @enum {string}
          */
-        purpose?: 'turn' | 'title' | 'compaction' | 'suggestion' | 'explore' | 'review';
+        purpose?: 'turn' | 'title' | 'compaction' | 'suggestion' | 'explore' | 'review' | 'tool';
         /** @description Your own id for the worker's task within the run. */
         taskId?: string;
         /** @description Your own id for this attempt at the task; retries get new ids. */
@@ -4011,27 +4244,158 @@ export interface components {
      * @example {
      *       "runId": "0b6f3c2e-7d4a-4f51-9a8e-2c1d5e6f7a80",
      *       "rootSessionId": "session-42",
+     *       "budgetCredits": 5000,
      *       "createdAt": "2026-11-10T12:00:00.000Z"
      *     }
      */
     createCompletionRunResponse201: {
+      evaluation?: {
+        /** @enum {number} */
+        version: 1;
+        limits: {
+          /** @enum {number} */
+          version: 1;
+          maxProviderUsd: number;
+          maxTokens: number;
+          maxRequests: number;
+          modelIds: string[];
+        };
+        revision: number;
+        committedProviderUsd: number;
+        committedTokens: number;
+        committedRequests: number;
+        receipts: {
+          /** @enum {number} */
+          version: 1;
+          /** Format: uuid */
+          requestId: string;
+          attemptId: string;
+          /** @enum {string} */
+          status: 'pending' | 'complete' | 'rejected-before-dispatch' | 'unknown';
+          revision: number;
+          modelId: string;
+          backend: string;
+          pricingRevision: string;
+          maxProviderUsd: number;
+          maxTokens: number;
+          maxInputTokens: number;
+          maxOutputTokens: number;
+          providerUsd?: number;
+          inputTokens?: number;
+          tierBasisTokens?: number;
+          outputTokens?: number;
+          cacheReadTokens?: number;
+          reasoningTokens?: number;
+          cacheWrite5mTokens?: number;
+          cacheWrite1hTokens?: number;
+          platformUsd?: number;
+          platformCredits?: number;
+          /** @enum {string} */
+          provenance?: 'provider-reported-usage/catalog-rates';
+          rates: {
+            tier: number;
+            input: number;
+            output: number;
+            cacheRead: number;
+            cacheWrite5m?: number;
+            cacheWrite1h?: number;
+          }[];
+        }[];
+      };
       /**
        * Format: uuid
        * @description A run id issued by `POST /api/v1/completion-runs`.
        */
       runId: string;
       rootSessionId?: string;
+      /** @description The run budget; absent for a run without one. */
+      budgetCredits?: number;
       /** Format: date-time */
       createdAt: string;
     };
     /**
      * @example {
-     *       "rootSessionId": "session-42"
+     *       "rootSessionId": "session-42",
+     *       "budgetCredits": 5000
      *     }
      */
     createCompletionRunRequest: {
+      evaluation?: {
+        /** @enum {number} */
+        version: 1;
+        maxProviderUsd: number;
+        maxTokens: number;
+        maxRequests: number;
+        modelIds: string[];
+      };
       /** @description Your own id for the conversation that starts the run. A conversation can start many runs; each gets its own id. */
       rootSessionId?: string;
+      /** @description Caps what its completions may claim, in credits; an estimate miss can take the run slightly over. Omit it and the run draws only on the account balance, as before. A budget can be raised later but never added to a run minted without one. */
+      budgetCredits?: number;
+    };
+    getCompletionRunEvaluationResponse200: {
+      /** @enum {number} */
+      version: 1;
+      limits: {
+        /** @enum {number} */
+        version: 1;
+        maxProviderUsd: number;
+        maxTokens: number;
+        maxRequests: number;
+        modelIds: string[];
+      };
+      revision: number;
+      committedProviderUsd: number;
+      committedTokens: number;
+      committedRequests: number;
+      receipts: {
+        /** @enum {number} */
+        version: 1;
+        /** Format: uuid */
+        requestId: string;
+        attemptId: string;
+        /** @enum {string} */
+        status: 'pending' | 'complete' | 'rejected-before-dispatch' | 'unknown';
+        revision: number;
+        modelId: string;
+        backend: string;
+        pricingRevision: string;
+        maxProviderUsd: number;
+        maxTokens: number;
+        maxInputTokens: number;
+        maxOutputTokens: number;
+        providerUsd?: number;
+        inputTokens?: number;
+        tierBasisTokens?: number;
+        outputTokens?: number;
+        cacheReadTokens?: number;
+        reasoningTokens?: number;
+        cacheWrite5mTokens?: number;
+        cacheWrite1hTokens?: number;
+        platformUsd?: number;
+        platformCredits?: number;
+        /** @enum {string} */
+        provenance?: 'provider-reported-usage/catalog-rates';
+        rates: {
+          tier: number;
+          input: number;
+          output: number;
+          cacheRead: number;
+          cacheWrite5m?: number;
+          cacheWrite1h?: number;
+        }[];
+      }[];
+    };
+    getCompletionRunEvaluationResponse404: {
+      error: string;
+      request_id?: string;
+      /**
+       * @deprecated
+       * @description Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this.
+       */
+      name?: string;
+      /** @enum {string} */
+      errorCode: 'run_not_found';
     };
     /**
      * @example {
@@ -4090,7 +4454,13 @@ export interface components {
      *           "cacheWriteTokens": 6400
      *         }
      *       ],
-     *       "byAttemptTruncated": false
+     *       "byAttemptTruncated": false,
+     *       "budget": {
+     *         "budgetCredits": 5000,
+     *         "committedCredits": 1012,
+     *         "reservedCredits": 600,
+     *         "remainingCredits": 3988
+     *       }
      *     }
      */
     getCompletionRunUsageResponse200: {
@@ -4138,7 +4508,7 @@ export interface components {
          * @description `turn` when sent without one.
          * @enum {string}
          */
-        purpose: 'turn' | 'title' | 'compaction' | 'suggestion' | 'explore' | 'review';
+        purpose: 'turn' | 'title' | 'compaction' | 'suggestion' | 'explore' | 'review' | 'tool';
       }[];
       /** @description Grouped by the model each request asked for, which is not always the model that ran. */
       byModel: {
@@ -4169,6 +4539,16 @@ export interface components {
       }[];
       /** @description True when the run has more attempts than `byAttempt` lists; `settled` still counts all of them. */
       byAttemptTruncated: boolean;
+      /** @description Present only for a run minted with a budget. */
+      budget?: {
+        budgetCredits: number;
+        /** @description Settled charges plus the claims of completions still running: what new completions are admitted against. Can sit above `settled.creditsCharged` until those completions settle. */
+        committedCredits: number;
+        /** @description The part of `committedCredits` not yet settled: claims of completions still running, or waiting for the expired-hold sweep. */
+        reservedCredits: number;
+        /** @description `budgetCredits` minus `committedCredits`, never below zero. */
+        remainingCredits: number;
+      };
     };
     getCompletionRunUsageResponse404: {
       error: string;
@@ -4180,6 +4560,110 @@ export interface components {
       name?: string;
       /** @enum {string} */
       errorCode: 'run_not_found';
+    };
+    /**
+     * @example {
+     *       "runId": "0b6f3c2e-7d4a-4f51-9a8e-2c1d5e6f7a80",
+     *       "rootSessionId": "session-42",
+     *       "budgetCredits": 8000,
+     *       "createdAt": "2026-11-10T12:00:00.000Z"
+     *     }
+     */
+    raiseCompletionRunBudgetResponse200: {
+      evaluation?: {
+        /** @enum {number} */
+        version: 1;
+        limits: {
+          /** @enum {number} */
+          version: 1;
+          maxProviderUsd: number;
+          maxTokens: number;
+          maxRequests: number;
+          modelIds: string[];
+        };
+        revision: number;
+        committedProviderUsd: number;
+        committedTokens: number;
+        committedRequests: number;
+        receipts: {
+          /** @enum {number} */
+          version: 1;
+          /** Format: uuid */
+          requestId: string;
+          attemptId: string;
+          /** @enum {string} */
+          status: 'pending' | 'complete' | 'rejected-before-dispatch' | 'unknown';
+          revision: number;
+          modelId: string;
+          backend: string;
+          pricingRevision: string;
+          maxProviderUsd: number;
+          maxTokens: number;
+          maxInputTokens: number;
+          maxOutputTokens: number;
+          providerUsd?: number;
+          inputTokens?: number;
+          tierBasisTokens?: number;
+          outputTokens?: number;
+          cacheReadTokens?: number;
+          reasoningTokens?: number;
+          cacheWrite5mTokens?: number;
+          cacheWrite1hTokens?: number;
+          platformUsd?: number;
+          platformCredits?: number;
+          /** @enum {string} */
+          provenance?: 'provider-reported-usage/catalog-rates';
+          rates: {
+            tier: number;
+            input: number;
+            output: number;
+            cacheRead: number;
+            cacheWrite5m?: number;
+            cacheWrite1h?: number;
+          }[];
+        }[];
+      };
+      /**
+       * Format: uuid
+       * @description A run id issued by `POST /api/v1/completion-runs`.
+       */
+      runId: string;
+      rootSessionId?: string;
+      /** @description The run budget; absent for a run without one. */
+      budgetCredits?: number;
+      /** Format: date-time */
+      createdAt: string;
+    };
+    raiseCompletionRunBudgetResponse404: {
+      error: string;
+      request_id?: string;
+      /**
+       * @deprecated
+       * @description Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this.
+       */
+      name?: string;
+      /** @enum {string} */
+      errorCode: 'run_not_found';
+    };
+    raiseCompletionRunBudgetResponse409: {
+      error: string;
+      request_id?: string;
+      /**
+       * @deprecated
+       * @description Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this.
+       */
+      name?: string;
+      /** @enum {string} */
+      errorCode: 'run_budget_not_raised';
+    };
+    /**
+     * @example {
+     *       "budgetCredits": 8000
+     *     }
+     */
+    raiseCompletionRunBudgetRequest: {
+      /** @description The run's new budget, in credits. Must be above the current one: a budget is only ever raised. */
+      budgetCredits: number;
     };
     /**
      * @example {
@@ -4312,7 +4796,9 @@ export interface components {
         | 'provider_rejected'
         | 'end_user_id_not_allowed'
         | 'invalid_end_user_id'
-        | 'request_timeout';
+        | 'request_timeout'
+        | 'run_not_found'
+        | 'run_budget_exhausted';
       jobId?: string;
       message?: string;
     };
@@ -4333,7 +4819,9 @@ export interface components {
         | 'provider_rejected'
         | 'end_user_id_not_allowed'
         | 'invalid_end_user_id'
-        | 'request_timeout';
+        | 'request_timeout'
+        | 'run_not_found'
+        | 'run_budget_exhausted';
       jobId?: string;
       message?: string;
     };
@@ -4395,7 +4883,9 @@ export interface components {
         | 'provider_rejected'
         | 'end_user_id_not_allowed'
         | 'invalid_end_user_id'
-        | 'request_timeout';
+        | 'request_timeout'
+        | 'run_not_found'
+        | 'run_budget_exhausted';
       jobId?: string;
       message?: string;
     };
@@ -4425,7 +4915,9 @@ export interface components {
         | 'provider_rejected'
         | 'end_user_id_not_allowed'
         | 'invalid_end_user_id'
-        | 'request_timeout';
+        | 'request_timeout'
+        | 'run_not_found'
+        | 'run_budget_exhausted';
       jobId?: string;
       message?: string;
     };
@@ -4446,7 +4938,9 @@ export interface components {
         | 'provider_rejected'
         | 'end_user_id_not_allowed'
         | 'invalid_end_user_id'
-        | 'request_timeout';
+        | 'request_timeout'
+        | 'run_not_found'
+        | 'run_budget_exhausted';
       jobId?: string;
       message?: string;
     };
@@ -4467,7 +4961,32 @@ export interface components {
         | 'provider_rejected'
         | 'end_user_id_not_allowed'
         | 'invalid_end_user_id'
-        | 'request_timeout';
+        | 'request_timeout'
+        | 'run_not_found'
+        | 'run_budget_exhausted';
+      jobId?: string;
+      message?: string;
+    };
+    synthesizeSpeechResponse503: {
+      error: string;
+      request_id?: string;
+      /**
+       * @deprecated
+       * @description Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this.
+       */
+      name?: string;
+      /** @enum {string} */
+      provider?: 'openai' | 'elevenlabs';
+      /** @enum {string} */
+      errorCode?:
+        | 'insufficient_credits'
+        | 'provider_not_configured'
+        | 'provider_rejected'
+        | 'end_user_id_not_allowed'
+        | 'invalid_end_user_id'
+        | 'request_timeout'
+        | 'run_not_found'
+        | 'run_budget_exhausted';
       jobId?: string;
       message?: string;
     };
@@ -4488,7 +5007,9 @@ export interface components {
         | 'provider_rejected'
         | 'end_user_id_not_allowed'
         | 'invalid_end_user_id'
-        | 'request_timeout';
+        | 'request_timeout'
+        | 'run_not_found'
+        | 'run_budget_exhausted';
       jobId?: string;
       message?: string;
     };
@@ -4515,6 +5036,30 @@ export interface components {
       organization_id?: string | null;
       /** @description Your own opaque identifier for the end user this request is for (1-64 characters: letters, digits, `_`, `:`, `-`; never an email). A malformed value is refused with a 400 (`errorCode: "invalid_end_user_id"`). Accepted only on an API key holding `ai:end-user-id`, which an administrator grants to keys that serve many end users; any other credential sending it is refused with a 400 (`errorCode: "end_user_id_not_allowed"`). On models served directly by OpenAI or Anthropic, the provider then receives an identifier derived from your account and this value instead of one for your whole account; other providers receive no end-user identifier. */
       end_user_id?: string;
+      /** @description The completion run this call is made for. Its cost is claimed against that run's budget before the provider is called, and the call is refused with 422 `run_budget_exhausted` when it does not fit. */
+      run?: {
+        /**
+         * Format: uuid
+         * @description A run id issued by `POST /api/v1/completion-runs`.
+         */
+        runId: string;
+        /**
+         * @description `root` for the session that started the run, `worker` for one it spawned.
+         * @enum {string}
+         */
+        role: 'root' | 'worker';
+        /**
+         * @description What the request was for. Treated as `turn` when absent.
+         * @enum {string}
+         */
+        purpose?: 'turn' | 'title' | 'compaction' | 'suggestion' | 'explore' | 'review' | 'tool';
+        /** @description Your own id for the worker's task within the run. */
+        taskId?: string;
+        /** @description Your own id for this attempt at the task; retries get new ids. */
+        attemptId?: string;
+        /** @description The `sessionId` of the session that spawned this one, for nested workers. */
+        parentSessionId?: string;
+      };
       /** @enum {string} */
       encoding?: 'binary' | 'base64';
       preview?: boolean;
@@ -4599,7 +5144,12 @@ export interface components {
        */
       name?: string;
       /** @enum {string} */
-      errorCode?: 'insufficient_credits' | 'spend_cap_exceeded' | 'spend_frozen' | 'free_quest_limit_reached';
+      errorCode?:
+        | 'insufficient_credits'
+        | 'spend_cap_exceeded'
+        | 'spend_frozen'
+        | 'free_quest_limit_reached'
+        | 'run_budget_exhausted';
     };
     /**
      * @example {
@@ -4773,7 +5323,12 @@ export interface components {
        */
       name?: string;
       /** @enum {string} */
-      errorCode?: 'insufficient_credits' | 'spend_cap_exceeded' | 'spend_frozen' | 'free_quest_limit_reached';
+      errorCode?:
+        | 'insufficient_credits'
+        | 'spend_cap_exceeded'
+        | 'spend_frozen'
+        | 'free_quest_limit_reached'
+        | 'run_budget_exhausted';
     };
     generateSoundEffectResponse502: {
       error: string;
@@ -4820,6 +5375,30 @@ export interface components {
       format?: string;
       /** @description The organization to bill: one you belong to, or null for your personal credits. Omitted bills your home organization, or your personal credits if you have none. An organization-billed API key always bills its own organization: omit this or set it to the key's organization; any other value, null included, is rejected with a 403 (`errorCode: billing_organization_mismatch`). */
       organization_id?: string | null;
+      /** @description The completion run this call is made for. Its cost is claimed against that run's budget before the provider is called, and the call is refused with 422 `run_budget_exhausted` when it does not fit. */
+      run?: {
+        /**
+         * Format: uuid
+         * @description A run id issued by `POST /api/v1/completion-runs`.
+         */
+        runId: string;
+        /**
+         * @description `root` for the session that started the run, `worker` for one it spawned.
+         * @enum {string}
+         */
+        role: 'root' | 'worker';
+        /**
+         * @description What the request was for. Treated as `turn` when absent.
+         * @enum {string}
+         */
+        purpose?: 'turn' | 'title' | 'compaction' | 'suggestion' | 'explore' | 'review' | 'tool';
+        /** @description Your own id for the worker's task within the run. */
+        taskId?: string;
+        /** @description Your own id for this attempt at the task; retries get new ids. */
+        attemptId?: string;
+        /** @description The `sessionId` of the session that spawned this one, for nested workers. */
+        parentSessionId?: string;
+      };
       /** @enum {string} */
       encoding?: 'binary' | 'base64';
       preview?: boolean;
@@ -4837,7 +5416,17 @@ export interface components {
      *       },
      *       "credits": {
      *         "balance": 31667,
-     *         "monthly_allowance": 50000
+     *         "monthly_allowance": 50000,
+     *         "expiring": [
+     *           {
+     *             "amount": 12000,
+     *             "expires_at": "2026-10-02T00:00:00.000Z"
+     *           },
+     *           {
+     *             "amount": 19667,
+     *             "expires_at": "2027-01-16T00:00:00.000Z"
+     *           }
+     *         ]
      *       },
      *       "entitlements": [
      *         "base"
@@ -4859,6 +5448,10 @@ export interface components {
       credits: {
         balance: number;
         monthly_allowance?: number | null;
+        expiring?: {
+          amount: number;
+          expires_at: string;
+        }[];
       };
       entitlements: string[];
     };
@@ -5542,36 +6135,57 @@ export interface components {
         id: string;
         text: string;
         /** @description The record the item came from, when it was not agent activity. */
-        source?: {
-          /** @enum {string} */
-          kind: 'email';
-          /** @description The ingested email the item was triaged from. */
-          emailId: string;
-        };
+        source?:
+          | {
+              /** @enum {string} */
+              kind: 'email';
+              /** @description The ingested email the item was triaged from. */
+              emailId: string;
+            }
+          | {
+              /** @enum {string} */
+              kind: 'delegation';
+              /** @description The item you delegated; read it with `GET /api/v1/delegations/{id}`. */
+              delegationId: string;
+            };
       }[];
       handled: {
         /** @description Stable within the brief. */
         id: string;
         text: string;
         /** @description The record the item came from, when it was not agent activity. */
-        source?: {
-          /** @enum {string} */
-          kind: 'email';
-          /** @description The ingested email the item was triaged from. */
-          emailId: string;
-        };
+        source?:
+          | {
+              /** @enum {string} */
+              kind: 'email';
+              /** @description The ingested email the item was triaged from. */
+              emailId: string;
+            }
+          | {
+              /** @enum {string} */
+              kind: 'delegation';
+              /** @description The item you delegated; read it with `GET /api/v1/delegations/{id}`. */
+              delegationId: string;
+            };
       }[];
       decisions: {
         /** @description Stable within the brief. */
         id: string;
         text: string;
         /** @description The record the item came from, when it was not agent activity. */
-        source?: {
-          /** @enum {string} */
-          kind: 'email';
-          /** @description The ingested email the item was triaged from. */
-          emailId: string;
-        };
+        source?:
+          | {
+              /** @enum {string} */
+              kind: 'email';
+              /** @description The ingested email the item was triaged from. */
+              emailId: string;
+            }
+          | {
+              /** @enum {string} */
+              kind: 'delegation';
+              /** @description The item you delegated; read it with `GET /api/v1/delegations/{id}`. */
+              delegationId: string;
+            };
         /** @description Present when the decision is an agent approval. `state` reflects the approval at fetch time; the pending-actions endpoints stay authoritative for a decision racing this read. */
         approval?: {
           questId: string;
@@ -5627,36 +6241,57 @@ export interface components {
           id: string;
           text: string;
           /** @description The record the item came from, when it was not agent activity. */
-          source?: {
-            /** @enum {string} */
-            kind: 'email';
-            /** @description The ingested email the item was triaged from. */
-            emailId: string;
-          };
+          source?:
+            | {
+                /** @enum {string} */
+                kind: 'email';
+                /** @description The ingested email the item was triaged from. */
+                emailId: string;
+              }
+            | {
+                /** @enum {string} */
+                kind: 'delegation';
+                /** @description The item you delegated; read it with `GET /api/v1/delegations/{id}`. */
+                delegationId: string;
+              };
         }[];
         handled: {
           /** @description Stable within the brief. */
           id: string;
           text: string;
           /** @description The record the item came from, when it was not agent activity. */
-          source?: {
-            /** @enum {string} */
-            kind: 'email';
-            /** @description The ingested email the item was triaged from. */
-            emailId: string;
-          };
+          source?:
+            | {
+                /** @enum {string} */
+                kind: 'email';
+                /** @description The ingested email the item was triaged from. */
+                emailId: string;
+              }
+            | {
+                /** @enum {string} */
+                kind: 'delegation';
+                /** @description The item you delegated; read it with `GET /api/v1/delegations/{id}`. */
+                delegationId: string;
+              };
         }[];
         decisions: {
           /** @description Stable within the brief. */
           id: string;
           text: string;
           /** @description The record the item came from, when it was not agent activity. */
-          source?: {
-            /** @enum {string} */
-            kind: 'email';
-            /** @description The ingested email the item was triaged from. */
-            emailId: string;
-          };
+          source?:
+            | {
+                /** @enum {string} */
+                kind: 'email';
+                /** @description The ingested email the item was triaged from. */
+                emailId: string;
+              }
+            | {
+                /** @enum {string} */
+                kind: 'delegation';
+                /** @description The item you delegated; read it with `GET /api/v1/delegations/{id}`. */
+                delegationId: string;
+              };
           /** @description Present when the decision is an agent approval. `state` reflects the approval at fetch time; the pending-actions endpoints stay authoritative for a decision racing this read. */
           approval?: {
             questId: string;
@@ -5711,36 +6346,57 @@ export interface components {
         id: string;
         text: string;
         /** @description The record the item came from, when it was not agent activity. */
-        source?: {
-          /** @enum {string} */
-          kind: 'email';
-          /** @description The ingested email the item was triaged from. */
-          emailId: string;
-        };
+        source?:
+          | {
+              /** @enum {string} */
+              kind: 'email';
+              /** @description The ingested email the item was triaged from. */
+              emailId: string;
+            }
+          | {
+              /** @enum {string} */
+              kind: 'delegation';
+              /** @description The item you delegated; read it with `GET /api/v1/delegations/{id}`. */
+              delegationId: string;
+            };
       }[];
       handled: {
         /** @description Stable within the brief. */
         id: string;
         text: string;
         /** @description The record the item came from, when it was not agent activity. */
-        source?: {
-          /** @enum {string} */
-          kind: 'email';
-          /** @description The ingested email the item was triaged from. */
-          emailId: string;
-        };
+        source?:
+          | {
+              /** @enum {string} */
+              kind: 'email';
+              /** @description The ingested email the item was triaged from. */
+              emailId: string;
+            }
+          | {
+              /** @enum {string} */
+              kind: 'delegation';
+              /** @description The item you delegated; read it with `GET /api/v1/delegations/{id}`. */
+              delegationId: string;
+            };
       }[];
       decisions: {
         /** @description Stable within the brief. */
         id: string;
         text: string;
         /** @description The record the item came from, when it was not agent activity. */
-        source?: {
-          /** @enum {string} */
-          kind: 'email';
-          /** @description The ingested email the item was triaged from. */
-          emailId: string;
-        };
+        source?:
+          | {
+              /** @enum {string} */
+              kind: 'email';
+              /** @description The ingested email the item was triaged from. */
+              emailId: string;
+            }
+          | {
+              /** @enum {string} */
+              kind: 'delegation';
+              /** @description The item you delegated; read it with `GET /api/v1/delegations/{id}`. */
+              delegationId: string;
+            };
         /** @description Present when the decision is an agent approval. `state` reflects the approval at fetch time; the pending-actions endpoints stay authoritative for a decision racing this read. */
         approval?: {
           questId: string;
@@ -5775,6 +6431,60 @@ export interface components {
           body: string;
         };
       }[];
+    };
+    getBriefScheduleResponse200: {
+      /** @description Null until a schedule has been saved. */
+      schedule: {
+        /** @description Whether scheduled briefs are composed. Disabling keeps the rest of the schedule. */
+        enabled: boolean;
+        /** @description Local wall-clock time in `timeZone`, 24-hour `HH:mm`. */
+        timeOfDay: string;
+        /** @description Local weekdays the brief is composed on, 0 = Sunday through 6 = Saturday. */
+        days: number[];
+        /** @description IANA time zone name, e.g. `America/New_York`. Send the device zone on every save. */
+        timeZone: string;
+      } | null;
+      /** @description ISO 8601 instant of the next scheduled brief; null when the schedule is off or unset. */
+      nextBriefAt: string | null;
+    };
+    putBriefScheduleResponse200: {
+      /** @description Null until a schedule has been saved. */
+      schedule: {
+        /** @description Whether scheduled briefs are composed. Disabling keeps the rest of the schedule. */
+        enabled: boolean;
+        /** @description Local wall-clock time in `timeZone`, 24-hour `HH:mm`. */
+        timeOfDay: string;
+        /** @description Local weekdays the brief is composed on, 0 = Sunday through 6 = Saturday. */
+        days: number[];
+        /** @description IANA time zone name, e.g. `America/New_York`. Send the device zone on every save. */
+        timeZone: string;
+      } | null;
+      /** @description ISO 8601 instant of the next scheduled brief; null when the schedule is off or unset. */
+      nextBriefAt: string | null;
+    };
+    /**
+     * @example {
+     *       "enabled": true,
+     *       "timeOfDay": "08:00",
+     *       "days": [
+     *         1,
+     *         2,
+     *         3,
+     *         4,
+     *         5
+     *       ],
+     *       "timeZone": "America/New_York"
+     *     }
+     */
+    putBriefScheduleRequest: {
+      /** @description Whether scheduled briefs are composed. Disabling keeps the rest of the schedule. */
+      enabled: boolean;
+      /** @description Local wall-clock time in `timeZone`, 24-hour `HH:mm`. */
+      timeOfDay: string;
+      /** @description Local weekdays the brief is composed on, 0 = Sunday through 6 = Saturday. */
+      days: number[];
+      /** @description IANA time zone name, e.g. `America/New_York`. Send the device zone on every save. */
+      timeZone: string;
     };
     listAssistantInstructionsResponse200: {
       /** @description Oldest first. */
@@ -5822,6 +6532,68 @@ export interface components {
       text: string;
       /** @description Index into the question `options` when the reply picks one of them; recorded on the question. */
       choiceIndex?: number;
+    };
+    getPendingDecisionCountResponse200: {
+      /** @description Decisions waiting on you: `approvals` plus `briefDecisions`. Nothing is counted twice. */
+      count: number;
+      /** @description Agent approvals still open in your notebooks: raised within the last 15 minutes and not yet answered. */
+      approvals: number;
+      /** @description Decisions in your latest ready brief that are not agent approvals. An approval decision in the brief is counted under `approvals` while it is open, and not at all once it was answered or lapsed. */
+      briefDecisions: number;
+      /** @description The latest ready brief `briefDecisions` comes from; null when there is none. */
+      briefId: string | null;
+    };
+    createDelegationResponse202: {
+      id: string;
+      /**
+       * @description `pending` while the assistant works on it; `handled` when it is done; `needs_decision` when it needs your answer; `failed` when it could not be handled.
+       * @enum {string}
+       */
+      status: 'pending' | 'handled' | 'needs_decision' | 'failed';
+      intent: string;
+      url: string | null;
+      text: string | null;
+      file_ids: string[];
+      /** @description What the assistant did, or the decision it needs; null while pending or after a failure. */
+      result: string | null;
+      /** @description ISO 8601 timestamp. */
+      created_at: string;
+      /** @description ISO 8601 timestamp; null while pending. */
+      settled_at: string | null;
+    };
+    /**
+     * @example {
+     *       "intent": "Summarize this for the team",
+     *       "url": "https://example.com/report"
+     *     }
+     */
+    createDelegationRequest: {
+      /** @description One line telling the assistant what to do with the item, e.g. "summarize for the team". */
+      intent: string;
+      /** @description A shared link. The assistant reads the page. */
+      url?: string;
+      /** @description Shared plain text. */
+      text?: string;
+      /** @description Files you uploaded with `POST /api/v1/files`. Each must be yours. */
+      file_ids?: string[];
+    };
+    getDelegationResponse200: {
+      id: string;
+      /**
+       * @description `pending` while the assistant works on it; `handled` when it is done; `needs_decision` when it needs your answer; `failed` when it could not be handled.
+       * @enum {string}
+       */
+      status: 'pending' | 'handled' | 'needs_decision' | 'failed';
+      intent: string;
+      url: string | null;
+      text: string | null;
+      file_ids: string[];
+      /** @description What the assistant did, or the decision it needs; null while pending or after a failure. */
+      result: string | null;
+      /** @description ISO 8601 timestamp. */
+      created_at: string;
+      /** @description ISO 8601 timestamp; null while pending. */
+      settled_at: string | null;
     };
     /**
      * @example {
@@ -6122,6 +6894,7 @@ export interface components {
           | 'spend_cap_exceeded'
           | 'spend_frozen'
           | 'free_quest_limit_reached'
+          | 'run_budget_exhausted'
           | 'content_blocked';
         reply?: string | null;
         replies?: string[];
@@ -6254,6 +7027,10 @@ export interface components {
             | 'music_generation'
             | 'audio_generation'
             | 'video_generation'
+            | 'production_storyboard'
+            | 'production_generate_shot'
+            | 'production_add_audio'
+            | 'production_assemble'
             | 'weather_info'
             | 'web_search'
             | 'web_fetch'
@@ -6320,6 +7097,30 @@ export interface components {
        * @enum {string}
        */
       prompt_resolution?: 'auto' | 'literal';
+      /** @description The completion run this call is made for. Its cost is claimed against that run's budget when the render is held, and the call is refused with 422 `run_budget_exhausted` when it does not fit: synchronously when the run cannot cover even the cheapest form of the render, otherwise on the polled quest (`type: "error"`, `errorCode: "run_budget_exhausted"`). The run bills its own account. */
+      run?: {
+        /**
+         * Format: uuid
+         * @description A run id issued by `POST /api/v1/completion-runs`.
+         */
+        runId: string;
+        /**
+         * @description `root` for the session that started the run, `worker` for one it spawned.
+         * @enum {string}
+         */
+        role: 'root' | 'worker';
+        /**
+         * @description What the request was for. Treated as `turn` when absent.
+         * @enum {string}
+         */
+        purpose?: 'turn' | 'title' | 'compaction' | 'suggestion' | 'explore' | 'review' | 'tool';
+        /** @description Your own id for the worker's task within the run. */
+        taskId?: string;
+        /** @description Your own id for this attempt at the task; retries get new ids. */
+        attemptId?: string;
+        /** @description The `sessionId` of the session that spawned this one, for nested workers. */
+        parentSessionId?: string;
+      };
     };
     editImageResponse200: {
       id: string;
@@ -6329,7 +7130,12 @@ export interface components {
       type?: 'message' | 'oob' | 'error' | 'system' | 'voice_transcript';
       /** @enum {string} */
       errorCode?:
-        'insufficient_credits' | 'spend_cap_exceeded' | 'spend_frozen' | 'free_quest_limit_reached' | 'content_blocked';
+        | 'insufficient_credits'
+        | 'spend_cap_exceeded'
+        | 'spend_frozen'
+        | 'free_quest_limit_reached'
+        | 'run_budget_exhausted'
+        | 'content_blocked';
       reply?: string | null;
       replies?: string[];
       fallbackInfo?: {
@@ -6461,6 +7267,528 @@ export interface components {
        * @description Optional https URL that receives one signed POST when the job settles (success or failure). Requires API-key authentication and a callback signing secret on that key. The body is the GET /api/v1/quests/{id} response. Verify it with the `X-Webhook-Signature-256` header: `sha256=` + hex HMAC-SHA256 of `<X-Webhook-Timestamp>.<raw body>` keyed with the signing secret. Polling keeps working either way.
        */
       callbackUrl?: string;
+      /** @description The completion run this call is made for. Its cost is claimed against that run's budget when the edit is held, and the call is refused with 422 `run_budget_exhausted` when it does not fit: synchronously when the run cannot cover even the cheapest form of the edit, otherwise on the polled quest (`type: "error"`, `errorCode: "run_budget_exhausted"`). The run bills its own account. */
+      run?: {
+        /**
+         * Format: uuid
+         * @description A run id issued by `POST /api/v1/completion-runs`.
+         */
+        runId: string;
+        /**
+         * @description `root` for the session that started the run, `worker` for one it spawned.
+         * @enum {string}
+         */
+        role: 'root' | 'worker';
+        /**
+         * @description What the request was for. Treated as `turn` when absent.
+         * @enum {string}
+         */
+        purpose?: 'turn' | 'title' | 'compaction' | 'suggestion' | 'explore' | 'review' | 'tool';
+        /** @description Your own id for the worker's task within the run. */
+        taskId?: string;
+        /** @description Your own id for this attempt at the task; retries get new ids. */
+        attemptId?: string;
+        /** @description The `sessionId` of the session that spawned this one, for nested workers. */
+        parentSessionId?: string;
+      };
+    };
+    /**
+     * @example {
+     *       "group_id": "664f1c2b9a1e4d0012ab34ff",
+     *       "data": [
+     *         {
+     *           "id": "664f1c2b9a1e4d0012ab34cd",
+     *           "object": "image_generation",
+     *           "state": "pending",
+     *           "model": "gpt-image-1",
+     *           "mode": "generate",
+     *           "prompt": "A watercolor lighthouse at dusk",
+     *           "group_id": "664f1c2b9a1e4d0012ab34ff",
+     *           "source": "api",
+     *           "error": null,
+     *           "output": null,
+     *           "credits": {
+     *             "reserved": 12,
+     *             "settled": null
+     *           },
+     *           "created_at": "2026-11-17T00:00:00.000Z",
+     *           "updated_at": "2026-11-17T00:00:00.000Z"
+     *         }
+     *       ]
+     *     }
+     */
+    createImageJobResponse202: {
+      group_id: string;
+      /** @description One job per image, in request order. */
+      data: {
+        id: string;
+        /** @enum {string} */
+        object: 'image_generation';
+        /** @enum {string} */
+        state: 'pending' | 'running' | 'storing' | 'succeeded' | 'failed' | 'blocked' | 'cancelled';
+        model: string;
+        /** @enum {string} */
+        mode: 'generate' | 'edit';
+        prompt: string;
+        /** @description Shared by the jobs one request created. */
+        group_id: string | null;
+        /** @enum {string} */
+        source: 'api' | 'studio' | 'agent';
+        error: {
+          /** @enum {string} */
+          code:
+            | 'content_blocked'
+            | 'provider_timeout'
+            | 'provider_error'
+            | 'region_unavailable'
+            | 'output_too_large'
+            | 'input_image_not_found'
+            | 'cancelled';
+          message: string;
+        } | null;
+        output: {
+          /**
+           * @description `ready`: url is set. `pending_scan`: the saved file is still being scanned; re-fetch the job until it changes (self-hosted installs can stay here for up to ~30 minutes). `unavailable`: the file was blocked by the scan or deleted and url will never be set; stop polling.
+           * @enum {string}
+           */
+          availability: 'ready' | 'pending_scan' | 'unavailable';
+          /** @description Signed download URL, valid until expires_at; re-fetch the job for a fresh one. Set only when availability is `ready`, otherwise null. */
+          url: string | null;
+          /** @description ISO 8601. When url stops working; null whenever url is. */
+          expires_at: string | null;
+          content_type: string;
+          /** @description The Files entry, or null when the image was stored outside Files. */
+          file_id: string | null;
+        } | null;
+        credits: {
+          reserved: number | null;
+          settled: number | null;
+        };
+        created_at: string;
+        updated_at: string;
+      }[];
+    };
+    createImageJobResponse400: {
+      error: string;
+      request_id?: string;
+      /**
+       * @deprecated
+       * @description Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this.
+       */
+      name?: string;
+      /**
+       * @description Stable refusal code: `storage_limit_exceeded` (your total storage), `org_storage_limit_exceeded` (the organization limit), or `file_too_large` (the per-file size limit). Branch on this, not on the message.
+       * @enum {string}
+       */
+      errorCode?: 'storage_limit_exceeded' | 'org_storage_limit_exceeded' | 'file_too_large';
+      /** @description Bytes already stored against the limit. 0 for `org_storage_limit_exceeded` and `file_too_large`. */
+      used_bytes?: number;
+      /** @description The limit, in bytes, that the request ran into. */
+      limit_bytes?: number;
+      /** @description Size of the refused upload, in bytes. */
+      requested_bytes?: number;
+      /**
+       * @description Whose limit was hit: `user` or `org`. Always `user` for `file_too_large`, a platform-wide cap.
+       * @enum {string}
+       */
+      owner?: 'user' | 'org';
+    };
+    createImageJobResponse403: {
+      error: string;
+      request_id?: string;
+      /**
+       * @deprecated
+       * @description Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this.
+       */
+      name?: string;
+      /** @enum {string} */
+      errorCode?:
+        'account_suspended' | 'billing_organization_mismatch' | 'org_model_not_allowed' | 'org_tool_not_allowed';
+      suspension?: {
+        /**
+         * @description Which Terms of Service rule the account was suspended under. New categories may be added.
+         * @enum {string}
+         */
+        reason_category:
+          'multiple_accounts' | 'automated_misuse' | 'payment_fraud' | 'prohibited_content' | 'terms_violation';
+        /** @description The policy page for this category. Absent on self-hosted deployments. */
+        terms_url?: string;
+        /** @description Where to appeal the suspension. Absent on self-hosted deployments. */
+        appeal_url?: string;
+      };
+      /** @description API key scopes this route accepts. Holding any one of them satisfies it. */
+      required_scopes?: string[];
+      /** @description API key scopes this route also requires. Every one must be held, on top of `required_scopes`. */
+      also_required_scopes?: string[];
+    };
+    createImageJobResponse404: {
+      error: string;
+      request_id?: string;
+      /**
+       * @deprecated
+       * @description Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this.
+       */
+      name?: string;
+      /** @enum {string} */
+      errorCode?:
+        | 'unsupported_mode'
+        | 'missing_input'
+        | 'unexpected_input'
+        | 'unsupported_input_role'
+        | 'too_many_inputs'
+        | 'unsupported_size'
+        | 'unsupported_aspect_ratio'
+        | 'unsupported_quality'
+        | 'unsupported_style'
+        | 'unsupported_output_format'
+        | 'unsupported_output_count'
+        | 'unsupported_transparent_background'
+        | 'unsupported_seed'
+        | 'unsupported_edit_regions'
+        | 'invalid_request'
+        | 'model_unavailable'
+        | 'input_image_not_found'
+        | 'unsupported_input_image'
+        | 'insufficient_credits'
+        | 'idempotency_key_reused'
+        | 'invalid_idempotency_key'
+        | 'not_cancellable'
+        | 'run_not_found'
+        | 'run_budget_exhausted';
+    };
+    createImageJobResponse422: {
+      error: string;
+      request_id?: string;
+      /**
+       * @deprecated
+       * @description Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this.
+       */
+      name?: string;
+      /** @enum {string} */
+      errorCode?:
+        | 'unsupported_mode'
+        | 'missing_input'
+        | 'unexpected_input'
+        | 'unsupported_input_role'
+        | 'too_many_inputs'
+        | 'unsupported_size'
+        | 'unsupported_aspect_ratio'
+        | 'unsupported_quality'
+        | 'unsupported_style'
+        | 'unsupported_output_format'
+        | 'unsupported_output_count'
+        | 'unsupported_transparent_background'
+        | 'unsupported_seed'
+        | 'unsupported_edit_regions'
+        | 'invalid_request'
+        | 'model_unavailable'
+        | 'input_image_not_found'
+        | 'unsupported_input_image'
+        | 'insufficient_credits'
+        | 'idempotency_key_reused'
+        | 'invalid_idempotency_key'
+        | 'not_cancellable'
+        | 'run_not_found'
+        | 'run_budget_exhausted';
+    };
+    /**
+     * @example {
+     *       "model": "gpt-image-1",
+     *       "mode": "generate",
+     *       "prompt": "A watercolor lighthouse at dusk",
+     *       "size": "1024x1024"
+     *     }
+     */
+    createImageJobRequest: {
+      /** @description A model id from GET /api/v1/image-models. */
+      model: string;
+      /**
+       * @description `generate` renders from the prompt; `edit` changes an `edit_source` input. See the model `modes`.
+       * @enum {string}
+       */
+      mode: 'generate' | 'edit';
+      /** @description Sent to the model as written. */
+      prompt: string;
+      /** @description Input images, each used once. Which roles and how many a mode takes is the model's `input_roles`. */
+      inputs?: {
+        /**
+         * @description `edit_source`: the image to edit. `mask`: where to edit it. `reference`: a style or subject anchor.
+         * @enum {string}
+         */
+        role: 'edit_source' | 'mask' | 'reference';
+        /** @description A file you uploaded (POST /api/v1/files) whose `moderation_status` is `clean`. */
+        file_id: string;
+      }[];
+      /** @description A size the model's `sizing` accepts, e.g. `1024x1024`. */
+      size?: string;
+      /** @description A `W:H` ratio within the mode's `aspect_ratios`. */
+      aspect_ratio?: string;
+      /**
+       * @description One of the model's `qualities`.
+       * @enum {string}
+       */
+      quality?: 'standard' | 'hd' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'auto';
+      /**
+       * @description One of the mode's `output_formats`.
+       * @enum {string}
+       */
+      output_format?: 'png' | 'jpeg' | 'webp';
+      /** @description true for real alpha; only for models whose `transparent_background` is true. */
+      transparent_background?: boolean;
+      /** @description Only for models whose `seed` is true. */
+      seed?: number;
+      /** @description Edit mode only: regions to change, each with its own instruction, on models that take them. */
+      edit_regions?: {
+        prompt: string;
+        bbox: [number, number, number, number];
+      }[];
+      /** @description Images to make, 1 to 4 (default 1). Each is its own job; they share a `group_id`. */
+      count?: number;
+      /** @description The organization to bill: one you belong to, or null for your personal credits. Omitted bills your home organization, or your personal credits if you have none. An organization-billed API key always bills its own organization: omit this or set it to the key's organization; any other value, null included, is rejected with a 403 (`errorCode: billing_organization_mismatch`). */
+      organization_id?: string | null;
+      /** @description The completion run these jobs are made for. Their whole estimated cost is claimed against that run's budget before they are queued, and the request is refused with 422 `run_budget_exhausted` when it does not fit. The jobs bill the run's account. */
+      run?: {
+        /**
+         * Format: uuid
+         * @description A run id issued by `POST /api/v1/completion-runs`.
+         */
+        runId: string;
+        /**
+         * @description `root` for the session that started the run, `worker` for one it spawned.
+         * @enum {string}
+         */
+        role: 'root' | 'worker';
+        /**
+         * @description What the request was for. Treated as `turn` when absent.
+         * @enum {string}
+         */
+        purpose?: 'turn' | 'title' | 'compaction' | 'suggestion' | 'explore' | 'review' | 'tool';
+        /** @description Your own id for the worker's task within the run. */
+        taskId?: string;
+        /** @description Your own id for this attempt at the task; retries get new ids. */
+        attemptId?: string;
+        /** @description The `sessionId` of the session that spawned this one, for nested workers. */
+        parentSessionId?: string;
+      };
+    };
+    /**
+     * @example {
+     *       "id": "664f1c2b9a1e4d0012ab34cd",
+     *       "object": "image_generation",
+     *       "state": "pending",
+     *       "model": "gpt-image-1",
+     *       "mode": "generate",
+     *       "prompt": "A watercolor lighthouse at dusk",
+     *       "group_id": "664f1c2b9a1e4d0012ab34ff",
+     *       "source": "api",
+     *       "error": null,
+     *       "output": null,
+     *       "credits": {
+     *         "reserved": 12,
+     *         "settled": null
+     *       },
+     *       "created_at": "2026-11-17T00:00:00.000Z",
+     *       "updated_at": "2026-11-17T00:00:00.000Z"
+     *     }
+     */
+    getImageJobResponse200: {
+      id: string;
+      /** @enum {string} */
+      object: 'image_generation';
+      /** @enum {string} */
+      state: 'pending' | 'running' | 'storing' | 'succeeded' | 'failed' | 'blocked' | 'cancelled';
+      model: string;
+      /** @enum {string} */
+      mode: 'generate' | 'edit';
+      prompt: string;
+      /** @description Shared by the jobs one request created. */
+      group_id: string | null;
+      /** @enum {string} */
+      source: 'api' | 'studio' | 'agent';
+      error: {
+        /** @enum {string} */
+        code:
+          | 'content_blocked'
+          | 'provider_timeout'
+          | 'provider_error'
+          | 'region_unavailable'
+          | 'output_too_large'
+          | 'input_image_not_found'
+          | 'cancelled';
+        message: string;
+      } | null;
+      output: {
+        /**
+         * @description `ready`: url is set. `pending_scan`: the saved file is still being scanned; re-fetch the job until it changes (self-hosted installs can stay here for up to ~30 minutes). `unavailable`: the file was blocked by the scan or deleted and url will never be set; stop polling.
+         * @enum {string}
+         */
+        availability: 'ready' | 'pending_scan' | 'unavailable';
+        /** @description Signed download URL, valid until expires_at; re-fetch the job for a fresh one. Set only when availability is `ready`, otherwise null. */
+        url: string | null;
+        /** @description ISO 8601. When url stops working; null whenever url is. */
+        expires_at: string | null;
+        content_type: string;
+        /** @description The Files entry, or null when the image was stored outside Files. */
+        file_id: string | null;
+      } | null;
+      credits: {
+        reserved: number | null;
+        settled: number | null;
+      };
+      created_at: string;
+      updated_at: string;
+    };
+    listImageJobsResponse200: {
+      data: {
+        id: string;
+        /** @enum {string} */
+        object: 'image_generation';
+        /** @enum {string} */
+        state: 'pending' | 'running' | 'storing' | 'succeeded' | 'failed' | 'blocked' | 'cancelled';
+        model: string;
+        /** @enum {string} */
+        mode: 'generate' | 'edit';
+        prompt: string;
+        /** @description Shared by the jobs one request created. */
+        group_id: string | null;
+        /** @enum {string} */
+        source: 'api' | 'studio' | 'agent';
+        error: {
+          /** @enum {string} */
+          code:
+            | 'content_blocked'
+            | 'provider_timeout'
+            | 'provider_error'
+            | 'region_unavailable'
+            | 'output_too_large'
+            | 'input_image_not_found'
+            | 'cancelled';
+          message: string;
+        } | null;
+        output: {
+          /**
+           * @description `ready`: url is set. `pending_scan`: the saved file is still being scanned; re-fetch the job until it changes (self-hosted installs can stay here for up to ~30 minutes). `unavailable`: the file was blocked by the scan or deleted and url will never be set; stop polling.
+           * @enum {string}
+           */
+          availability: 'ready' | 'pending_scan' | 'unavailable';
+          /** @description Signed download URL, valid until expires_at; re-fetch the job for a fresh one. Set only when availability is `ready`, otherwise null. */
+          url: string | null;
+          /** @description ISO 8601. When url stops working; null whenever url is. */
+          expires_at: string | null;
+          content_type: string;
+          /** @description The Files entry, or null when the image was stored outside Files. */
+          file_id: string | null;
+        } | null;
+        credits: {
+          reserved: number | null;
+          settled: number | null;
+        };
+        created_at: string;
+        updated_at: string;
+      }[];
+      next_cursor: string | null;
+    };
+    /**
+     * @example {
+     *       "id": "664f1c2b9a1e4d0012ab34cd",
+     *       "object": "image_generation",
+     *       "state": "pending",
+     *       "model": "gpt-image-1",
+     *       "mode": "generate",
+     *       "prompt": "A watercolor lighthouse at dusk",
+     *       "group_id": "664f1c2b9a1e4d0012ab34ff",
+     *       "source": "api",
+     *       "error": null,
+     *       "output": null,
+     *       "credits": {
+     *         "reserved": 12,
+     *         "settled": null
+     *       },
+     *       "created_at": "2026-11-17T00:00:00.000Z",
+     *       "updated_at": "2026-11-17T00:00:00.000Z"
+     *     }
+     */
+    cancelImageJobResponse200: {
+      id: string;
+      /** @enum {string} */
+      object: 'image_generation';
+      /** @enum {string} */
+      state: 'pending' | 'running' | 'storing' | 'succeeded' | 'failed' | 'blocked' | 'cancelled';
+      model: string;
+      /** @enum {string} */
+      mode: 'generate' | 'edit';
+      prompt: string;
+      /** @description Shared by the jobs one request created. */
+      group_id: string | null;
+      /** @enum {string} */
+      source: 'api' | 'studio' | 'agent';
+      error: {
+        /** @enum {string} */
+        code:
+          | 'content_blocked'
+          | 'provider_timeout'
+          | 'provider_error'
+          | 'region_unavailable'
+          | 'output_too_large'
+          | 'input_image_not_found'
+          | 'cancelled';
+        message: string;
+      } | null;
+      output: {
+        /**
+         * @description `ready`: url is set. `pending_scan`: the saved file is still being scanned; re-fetch the job until it changes (self-hosted installs can stay here for up to ~30 minutes). `unavailable`: the file was blocked by the scan or deleted and url will never be set; stop polling.
+         * @enum {string}
+         */
+        availability: 'ready' | 'pending_scan' | 'unavailable';
+        /** @description Signed download URL, valid until expires_at; re-fetch the job for a fresh one. Set only when availability is `ready`, otherwise null. */
+        url: string | null;
+        /** @description ISO 8601. When url stops working; null whenever url is. */
+        expires_at: string | null;
+        content_type: string;
+        /** @description The Files entry, or null when the image was stored outside Files. */
+        file_id: string | null;
+      } | null;
+      credits: {
+        reserved: number | null;
+        settled: number | null;
+      };
+      created_at: string;
+      updated_at: string;
+    };
+    cancelImageJobResponse409: {
+      error: string;
+      request_id?: string;
+      /**
+       * @deprecated
+       * @description Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this.
+       */
+      name?: string;
+      /** @enum {string} */
+      errorCode?:
+        | 'unsupported_mode'
+        | 'missing_input'
+        | 'unexpected_input'
+        | 'unsupported_input_role'
+        | 'too_many_inputs'
+        | 'unsupported_size'
+        | 'unsupported_aspect_ratio'
+        | 'unsupported_quality'
+        | 'unsupported_style'
+        | 'unsupported_output_format'
+        | 'unsupported_output_count'
+        | 'unsupported_transparent_background'
+        | 'unsupported_seed'
+        | 'unsupported_edit_regions'
+        | 'invalid_request'
+        | 'model_unavailable'
+        | 'input_image_not_found'
+        | 'unsupported_input_image'
+        | 'insufficient_credits'
+        | 'idempotency_key_reused'
+        | 'invalid_idempotency_key'
+        | 'not_cancellable'
+        | 'run_not_found'
+        | 'run_budget_exhausted';
     };
     /**
      * @example {
@@ -7028,7 +8356,12 @@ export interface components {
        */
       name?: string;
       /** @enum {string} */
-      errorCode?: 'insufficient_credits' | 'spend_cap_exceeded' | 'spend_frozen' | 'free_quest_limit_reached';
+      errorCode?:
+        | 'insufficient_credits'
+        | 'spend_cap_exceeded'
+        | 'spend_frozen'
+        | 'free_quest_limit_reached'
+        | 'run_budget_exhausted';
     };
     createTextRefinementResponse503: {
       error: string;
@@ -7481,7 +8814,12 @@ export interface components {
       type?: 'message' | 'oob' | 'error' | 'system' | 'voice_transcript';
       /** @enum {string} */
       errorCode?:
-        'insufficient_credits' | 'spend_cap_exceeded' | 'spend_frozen' | 'free_quest_limit_reached' | 'content_blocked';
+        | 'insufficient_credits'
+        | 'spend_cap_exceeded'
+        | 'spend_frozen'
+        | 'free_quest_limit_reached'
+        | 'run_budget_exhausted'
+        | 'content_blocked';
       reply?: string | null;
       replies?: string[];
       fallbackInfo?: {
@@ -7734,6 +9072,7 @@ export interface components {
           | 'spend_cap_exceeded'
           | 'spend_frozen'
           | 'free_quest_limit_reached'
+          | 'run_budget_exhausted'
           | 'content_blocked';
         /**
          * Format: date-time
@@ -7936,7 +9275,12 @@ export interface components {
        */
       name?: string;
       /** @enum {string} */
-      errorCode?: 'insufficient_credits' | 'spend_cap_exceeded' | 'spend_frozen' | 'free_quest_limit_reached';
+      errorCode?:
+        | 'insufficient_credits'
+        | 'spend_cap_exceeded'
+        | 'spend_frozen'
+        | 'free_quest_limit_reached'
+        | 'run_budget_exhausted';
     };
     /**
      * @example {
@@ -8276,7 +9620,12 @@ export interface components {
        */
       name?: string;
       /** @enum {string} */
-      errorCode?: 'insufficient_credits' | 'spend_cap_exceeded' | 'spend_frozen' | 'free_quest_limit_reached';
+      errorCode?:
+        | 'insufficient_credits'
+        | 'spend_cap_exceeded'
+        | 'spend_frozen'
+        | 'free_quest_limit_reached'
+        | 'run_budget_exhausted';
     };
     searchDataLakeResponse503: {
       error: string;
@@ -8879,7 +10228,12 @@ export interface components {
        */
       name?: string;
       /** @enum {string} */
-      errorCode?: 'insufficient_credits' | 'spend_cap_exceeded' | 'spend_frozen' | 'free_quest_limit_reached';
+      errorCode?:
+        | 'insufficient_credits'
+        | 'spend_cap_exceeded'
+        | 'spend_frozen'
+        | 'free_quest_limit_reached'
+        | 'run_budget_exhausted';
     };
     /**
      * @example {
@@ -9425,7 +10779,7 @@ export interface components {
             };
         /** @description Accepted `quality` tiers; empty when it takes none. */
         qualities: ('standard' | 'hd' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'auto')[];
-        /** @description Whether `background: 'transparent'` yields real alpha. */
+        /** @description Whether `transparent_background: true` yields real alpha. */
         transparent_background: boolean;
         seed: boolean;
         /** @description Credits for one image at the model's default quality and size with no input images; null when unpriced. Quality, size and input images change the price. */
@@ -9654,7 +11008,9 @@ export interface components {
         | 'insufficient_credits'
         | 'input_image_not_found'
         | 'idempotency_key_reused'
-        | 'invalid_idempotency_key';
+        | 'invalid_idempotency_key'
+        | 'run_not_found'
+        | 'run_budget_exhausted';
     };
     createVideoGenerationResponse422: {
       error: string;
@@ -9683,7 +11039,9 @@ export interface components {
         | 'insufficient_credits'
         | 'input_image_not_found'
         | 'idempotency_key_reused'
-        | 'invalid_idempotency_key';
+        | 'invalid_idempotency_key'
+        | 'run_not_found'
+        | 'run_budget_exhausted';
     };
     /**
      * @example {
@@ -9724,6 +11082,30 @@ export interface components {
       draft?: boolean;
       /** @description The organization to bill: one you belong to, or null for your personal credits. Omitted bills your home organization, or your personal credits if you have none. An organization-billed API key always bills its own organization: omit this or set it to the key's organization; any other value, null included, is rejected with a 403 (`errorCode: billing_organization_mismatch`). */
       organization_id?: string | null;
+      /** @description The completion run this job is made for. Its whole estimated cost is claimed against that run's budget before the job is queued, and the request is refused with 422 `run_budget_exhausted` when it does not fit. The job bills the run's account. */
+      run?: {
+        /**
+         * Format: uuid
+         * @description A run id issued by `POST /api/v1/completion-runs`.
+         */
+        runId: string;
+        /**
+         * @description `root` for the session that started the run, `worker` for one it spawned.
+         * @enum {string}
+         */
+        role: 'root' | 'worker';
+        /**
+         * @description What the request was for. Treated as `turn` when absent.
+         * @enum {string}
+         */
+        purpose?: 'turn' | 'title' | 'compaction' | 'suggestion' | 'explore' | 'review' | 'tool';
+        /** @description Your own id for the worker's task within the run. */
+        taskId?: string;
+        /** @description Your own id for this attempt at the task; retries get new ids. */
+        attemptId?: string;
+        /** @description The `sessionId` of the session that spawned this one, for nested workers. */
+        parentSessionId?: string;
+      };
     };
     /**
      * @example {
@@ -10009,6 +11391,8 @@ export interface components {
         | 'insufficient_credits'
         | 'idempotency_key_reused'
         | 'invalid_idempotency_key'
+        | 'run_not_found'
+        | 'run_budget_exhausted'
         | 'not_cancellable';
     };
     /**
@@ -10168,6 +11552,8 @@ export interface components {
         | 'insufficient_credits'
         | 'idempotency_key_reused'
         | 'invalid_idempotency_key'
+        | 'run_not_found'
+        | 'run_budget_exhausted'
         | 'not_cancellable';
     };
     /**
@@ -10189,6 +11575,30 @@ export interface components {
       duration_seconds?: number;
       /** @description The organization to bill: one you belong to, or null for your personal credits. Omitted bills your home organization, or your personal credits if you have none. An organization-billed API key always bills its own organization: omit this or set it to the key's organization; any other value, null included, is rejected with a 403 (`errorCode: billing_organization_mismatch`). */
       organization_id?: string | null;
+      /** @description The completion run this job is made for. Its whole estimated cost is claimed against that run's budget before the job is queued, and the request is refused with 422 `run_budget_exhausted` when it does not fit. The job bills the run's account. */
+      run?: {
+        /**
+         * Format: uuid
+         * @description A run id issued by `POST /api/v1/completion-runs`.
+         */
+        runId: string;
+        /**
+         * @description `root` for the session that started the run, `worker` for one it spawned.
+         * @enum {string}
+         */
+        role: 'root' | 'worker';
+        /**
+         * @description What the request was for. Treated as `turn` when absent.
+         * @enum {string}
+         */
+        purpose?: 'turn' | 'title' | 'compaction' | 'suggestion' | 'explore' | 'review' | 'tool';
+        /** @description Your own id for the worker's task within the run. */
+        taskId?: string;
+        /** @description Your own id for this attempt at the task; retries get new ids. */
+        attemptId?: string;
+        /** @description The `sessionId` of the session that spawned this one, for nested workers. */
+        parentSessionId?: string;
+      };
     };
     /**
      * @example {
@@ -10880,7 +12290,12 @@ export interface components {
        */
       name?: string;
       /** @enum {string} */
-      errorCode?: 'insufficient_credits' | 'spend_cap_exceeded' | 'spend_frozen' | 'free_quest_limit_reached';
+      errorCode?:
+        | 'insufficient_credits'
+        | 'spend_cap_exceeded'
+        | 'spend_frozen'
+        | 'free_quest_limit_reached'
+        | 'run_budget_exhausted';
     };
     createVoiceSessionResponse503: {
       error: string;
@@ -11677,7 +13092,12 @@ export interface components {
        */
       name?: string;
       /** @enum {string} */
-      errorCode?: 'insufficient_credits' | 'spend_cap_exceeded' | 'spend_frozen' | 'free_quest_limit_reached';
+      errorCode?:
+        | 'insufficient_credits'
+        | 'spend_cap_exceeded'
+        | 'spend_frozen'
+        | 'free_quest_limit_reached'
+        | 'run_budget_exhausted';
     };
     /**
      * @example {
@@ -11742,7 +13162,12 @@ export interface components {
        */
       name?: string;
       /** @enum {string} */
-      errorCode?: 'insufficient_credits' | 'spend_cap_exceeded' | 'spend_frozen' | 'free_quest_limit_reached';
+      errorCode?:
+        | 'insufficient_credits'
+        | 'spend_cap_exceeded'
+        | 'spend_frozen'
+        | 'free_quest_limit_reached'
+        | 'run_budget_exhausted';
     };
     createTranscriptionResponse503: {
       error: string;
@@ -12195,7 +13620,12 @@ export interface components {
        */
       name?: string;
       /** @enum {string} */
-      errorCode?: 'insufficient_credits' | 'spend_cap_exceeded' | 'spend_frozen' | 'free_quest_limit_reached';
+      errorCode?:
+        | 'insufficient_credits'
+        | 'spend_cap_exceeded'
+        | 'spend_frozen'
+        | 'free_quest_limit_reached'
+        | 'run_budget_exhausted';
     };
     /** @example {} */
     generateAgentAvatarRequest: {
@@ -12249,7 +13679,12 @@ export interface components {
        */
       name?: string;
       /** @enum {string} */
-      errorCode?: 'insufficient_credits' | 'spend_cap_exceeded' | 'spend_frozen' | 'free_quest_limit_reached';
+      errorCode?:
+        | 'insufficient_credits'
+        | 'spend_cap_exceeded'
+        | 'spend_frozen'
+        | 'free_quest_limit_reached'
+        | 'run_budget_exhausted';
     };
     generateAgentSystemPromptResponse200: {
       /** @description The generated system prompt, already saved to the agent. */
@@ -12298,7 +13733,12 @@ export interface components {
        */
       name?: string;
       /** @enum {string} */
-      errorCode?: 'insufficient_credits' | 'spend_cap_exceeded' | 'spend_frozen' | 'free_quest_limit_reached';
+      errorCode?:
+        | 'insufficient_credits'
+        | 'spend_cap_exceeded'
+        | 'spend_frozen'
+        | 'free_quest_limit_reached'
+        | 'run_budget_exhausted';
     };
     enhanceAgentFieldResponse200: {
       /** @description The enhanced text. It is returned, not saved to the agent. */
@@ -12347,7 +13787,12 @@ export interface components {
        */
       name?: string;
       /** @enum {string} */
-      errorCode?: 'insufficient_credits' | 'spend_cap_exceeded' | 'spend_frozen' | 'free_quest_limit_reached';
+      errorCode?:
+        | 'insufficient_credits'
+        | 'spend_cap_exceeded'
+        | 'spend_frozen'
+        | 'free_quest_limit_reached'
+        | 'run_budget_exhausted';
     };
     /**
      * @example {
@@ -12380,7 +13825,12 @@ export interface components {
        */
       name?: string;
       /** @enum {string} */
-      errorCode?: 'insufficient_credits' | 'spend_cap_exceeded' | 'spend_frozen' | 'free_quest_limit_reached';
+      errorCode?:
+        | 'insufficient_credits'
+        | 'spend_cap_exceeded'
+        | 'spend_frozen'
+        | 'free_quest_limit_reached'
+        | 'run_budget_exhausted';
     };
     /**
      * @example {
@@ -12457,7 +13907,12 @@ export interface components {
        */
       name?: string;
       /** @enum {string} */
-      errorCode?: 'insufficient_credits' | 'spend_cap_exceeded' | 'spend_frozen' | 'free_quest_limit_reached';
+      errorCode?:
+        | 'insufficient_credits'
+        | 'spend_cap_exceeded'
+        | 'spend_frozen'
+        | 'free_quest_limit_reached'
+        | 'run_budget_exhausted';
     };
     /**
      * @example {
@@ -15782,6 +17237,17 @@ export interface operations {
           'application/json': components['schemas']['ErrorResponse'];
         };
       };
+      /** @description Evaluation receipt already exists or another evaluation request remains unresolved. Recover the owner-scoped run evaluation receipts before continuing. */
+      409: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
       /** @description Request body over 25 MB. */
       413: {
         headers: {
@@ -15793,7 +17259,7 @@ export interface operations {
           'application/json': components['schemas']['ErrorResponse'];
         };
       };
-      /** @description The body failed schema validation, or the caller cannot afford the request (`errorCode: "insufficient_credits"`: personal or org balance, or an org per-member credit cap). */
+      /** @description The body failed schema validation, or the caller cannot afford the request (`errorCode: "insufficient_credits"`: personal or org balance, or an org per-member credit cap), or the `run` budget has too little left (`errorCode: "run_budget_exhausted"`). */
       422: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
@@ -15865,7 +17331,7 @@ export interface operations {
       };
     };
     responses: {
-      /** @description The created run. */
+      /** @description The created run, or the existing evaluation for the same owner and rootSessionId. Evaluation mint retries preserve the original immutable limits and receipts. */
       201: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
@@ -15888,6 +17354,29 @@ export interface operations {
           'application/json': components['schemas']['createCompletionRunResponse201'];
         };
       };
+      /** @description Evaluation requires a stable rootSessionId. */
+      400: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
       /** @description Missing or invalid credentials. */
       401: {
         headers: {
@@ -15899,15 +17388,27 @@ export interface operations {
           'application/json': components['schemas']['ErrorResponse'];
         };
       };
-      /** @description The API key does not hold any of the required scopes, or the account is suspended (`errorCode: account_suspended`). */
+      /** @description Evaluation execution is not enabled for this account. */
       403: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
           'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
           [name: string]: unknown;
         };
         content: {
-          'application/json': components['schemas']['ScopeForbiddenResponse'];
+          'application/json': components['schemas']['ErrorResponse'];
         };
       };
       /** @description The path does not serve this HTTP method. */
@@ -15917,6 +17418,29 @@ export interface operations {
           'X-Request-ID'?: string;
           /** @description The methods this path serves. GET implies HEAD. */
           Allow?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The evaluation identity already exists with different limits or models. */
+      409: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
           [name: string]: unknown;
         };
         content: {
@@ -15986,6 +17510,110 @@ export interface operations {
           'X-RateLimit-Remaining-Day'?: number;
           /** @description Unix epoch (seconds) when the day window resets. */
           'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+    };
+  };
+  getCompletionRunEvaluation: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        /** @description A run id issued by `POST /api/v1/completion-runs`. */
+        runId: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Evaluation state and durable request receipts. */
+      200: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['getCompletionRunEvaluationResponse200'];
+        };
+      };
+      /** @description Missing or invalid credentials. */
+      401: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The API key does not hold any of the required scopes, or the account is suspended (`errorCode: account_suspended`). */
+      403: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ScopeForbiddenResponse'];
+        };
+      };
+      /** @description Evaluation run not found for this owner. */
+      404: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['getCompletionRunEvaluationResponse404'];
+        };
+      };
+      /** @description The path does not serve this HTTP method. */
+      405: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description The methods this path serves. GET implies HEAD. */
+          Allow?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Request failed validation. */
+      422: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The request declared a client build (`X-Client-Name` + `X-Client-Version`) older than the minimum this API still serves for that client. Upgrade to `minimum_version` or later. Never sent to a request that omits either header. */
+      426: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['UpgradeRequiredResponse'];
+        };
+      };
+      /** @description Rate limit exceeded. */
+      429: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
           [name: string]: unknown;
         };
         content: {
@@ -16085,6 +17713,197 @@ export interface operations {
         };
         content: {
           'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Request failed validation. */
+      422: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The request declared a client build (`X-Client-Name` + `X-Client-Version`) older than the minimum this API still serves for that client. Upgrade to `minimum_version` or later. Never sent to a request that omits either header. */
+      426: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['UpgradeRequiredResponse'];
+        };
+      };
+      /** @description Per-user rate limit exceeded. */
+      429: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+    };
+  };
+  raiseCompletionRunBudget: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        /** @description A run id issued by `POST /api/v1/completion-runs`. */
+        runId: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['raiseCompletionRunBudgetRequest'];
+      };
+    };
+    responses: {
+      /** @description The run with its raised budget. */
+      200: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['raiseCompletionRunBudgetResponse200'];
+        };
+      };
+      /** @description Missing or invalid credentials. */
+      401: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The API key does not hold any of the required scopes, or the account is suspended (`errorCode: account_suspended`). */
+      403: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ScopeForbiddenResponse'];
+        };
+      };
+      /** @description The run does not exist, or another user or billing owner minted it (`errorCode: "run_not_found"`). */
+      404: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['raiseCompletionRunBudgetResponse404'];
+        };
+      };
+      /** @description The path does not serve this HTTP method. */
+      405: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description The methods this path serves. GET implies HEAD. */
+          Allow?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The new budget is not above the current one, or the run was minted without a budget (`errorCode: "run_budget_not_raised"`). */
+      409: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['raiseCompletionRunBudgetResponse409'];
         };
       };
       /** @description Request failed validation. */
@@ -16341,7 +18160,7 @@ export interface operations {
           'application/json': components['schemas']['synthesizeSpeechResponse403'];
         };
       };
-      /** @description A nonexistent `organization_id`, for an admin caller; for anyone else it is `403`. */
+      /** @description A nonexistent `organization_id`, for an admin caller; for anyone else it is `403`. A `run` that does not exist or that another user or billing owner minted is `404` (`errorCode: "run_not_found"`). */
       404: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
@@ -16400,7 +18219,7 @@ export interface operations {
           'application/json': components['schemas']['synthesizeSpeechResponse413'];
         };
       };
-      /** @description Request body failed validation, the text exceeds the provider character limit, the provider cannot produce the requested `format`, the provider rejected the request (e.g. an unknown voice), or the caller cannot afford the synthesis - the last of those is the only one tagged `errorCode: "insufficient_credits"`, so match on the classifier rather than the status to tell a billing failure from a bad request. */
+      /** @description Request body failed validation, the text exceeds the provider character limit, the provider cannot produce the requested `format`, the provider rejected the request (e.g. an unknown voice), or the caller cannot afford the synthesis - the last of those is tagged `errorCode: "insufficient_credits"`, and a call whose `run` budget has no room for it is tagged `errorCode: "run_budget_exhausted"`, so match on the classifier rather than the status to tell a billing failure from a bad request. */
       422: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
@@ -16490,6 +18309,29 @@ export interface operations {
         };
         content: {
           'application/json': components['schemas']['synthesizeSpeechResponse502'];
+        };
+      };
+      /** @description Every candidate provider is out of quota, so speech is temporarily unavailable. */
+      503: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['synthesizeSpeechResponse503'];
         };
       };
       /** @description The speech took longer than this request can wait. Tagged `errorCode: "request_timeout"`. Two cases. (1) It would not be saved to the file browser (a `preview` call, or a storage quota with no room for it), so it could never be retrieved: the generation is cancelled and its credits returned, unless the provider had already started it, in which case that one finishes and is billed, and the response carries `jobId` (also `X-B4M-Generation-Job-Id`) and a `message`. Retrying generates a new clip. (2) It is being saved to the file browser but the request did not send `Prefer: respond-async`: the generation is NOT cancelled and carries on, the audio lands in the file browser when it finishes, and it is billed only if it succeeds. Do not retry, which would generate and bill a second clip. The body carries `jobId`, also sent as `X-B4M-Generation-Job-Id`. */
@@ -16833,7 +18675,7 @@ export interface operations {
           'application/json': components['schemas']['ErrorResponse'];
         };
       };
-      /** @description No provider API key is configured for this deployment. */
+      /** @description The provider is unavailable: no API key is configured for this deployment, or the provider account is out of quota. Reserved credits are refunded. */
       503: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
@@ -17025,7 +18867,7 @@ export interface operations {
           'application/json': components['schemas']['generateSoundEffectResponse403'];
         };
       };
-      /** @description A nonexistent `organization_id`, for an admin caller; for anyone else it is `403`. */
+      /** @description A nonexistent `organization_id`, for an admin caller; for anyone else it is `403`. A `run` that does not exist or that another user or billing owner minted is `404` (`errorCode: "run_not_found"`). */
       404: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
@@ -17084,7 +18926,7 @@ export interface operations {
           'application/json': components['schemas']['generateSoundEffectResponse413'];
         };
       };
-      /** @description Request body failed validation (including a `format` whose codec the provider cannot produce), or the caller cannot afford the effect - the latter is tagged `errorCode: "insufficient_credits"` (the balance is short, or the org member credit cap is exhausted). */
+      /** @description Request body failed validation (including a `format` whose codec the provider cannot produce), or the caller cannot afford the effect - the latter is tagged `errorCode: "insufficient_credits"` (the balance is short, or the org member credit cap is exhausted), or `errorCode: "run_budget_exhausted"` when the `run` budget has no room for it. */
       422: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
@@ -17178,7 +19020,7 @@ export interface operations {
           'application/json': components['schemas']['generateSoundEffectResponse502'];
         };
       };
-      /** @description No provider API key is configured for this deployment. */
+      /** @description The provider is unavailable: no API key is configured for this deployment, or the provider account is out of quota. Reserved credits are refunded. */
       503: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
@@ -18024,6 +19866,190 @@ export interface operations {
       };
     };
   };
+  getBriefSchedule: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Your brief schedule. */
+      200: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['getBriefScheduleResponse200'];
+        };
+      };
+      /** @description Missing or invalid JWT. */
+      401: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The account is suspended (`errorCode: account_suspended`). */
+      403: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ScopeForbiddenResponse'];
+        };
+      };
+      /** @description The path does not serve this HTTP method. */
+      405: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description The methods this path serves. GET implies HEAD. */
+          Allow?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The request declared a client build (`X-Client-Name` + `X-Client-Version`) older than the minimum this API still serves for that client. Upgrade to `minimum_version` or later. Never sent to a request that omits either header. */
+      426: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['UpgradeRequiredResponse'];
+        };
+      };
+      /** @description Per-user rate limit exceeded. */
+      429: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+    };
+  };
+  putBriefSchedule: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['putBriefScheduleRequest'];
+      };
+    };
+    responses: {
+      /** @description The saved schedule. */
+      200: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['putBriefScheduleResponse200'];
+        };
+      };
+      /** @description Malformed JSON request body. */
+      400: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Missing or invalid JWT. */
+      401: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The account is suspended (`errorCode: account_suspended`). */
+      403: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ScopeForbiddenResponse'];
+        };
+      };
+      /** @description The path does not serve this HTTP method. */
+      405: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description The methods this path serves. GET implies HEAD. */
+          Allow?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Request failed validation. */
+      422: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The request declared a client build (`X-Client-Name` + `X-Client-Version`) older than the minimum this API still serves for that client. Upgrade to `minimum_version` or later. Never sent to a request that omits either header. */
+      426: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['UpgradeRequiredResponse'];
+        };
+      };
+      /** @description Per-user rate limit exceeded. */
+      429: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+    };
+  };
   listAssistantInstructions: {
     parameters: {
       query?: never;
@@ -18442,6 +20468,305 @@ export interface operations {
       };
       /** @description The agent run could not be started. When the dispatch could not be confirmed either way the question stays answered so the reply can never run twice; open the conversation to see whether it went through. Otherwise nothing was sent and the question stays open for another reply. */
       502: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+    };
+  };
+  getPendingDecisionCount: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description The count. */
+      200: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['getPendingDecisionCountResponse200'];
+        };
+      };
+      /** @description Missing or invalid JWT. */
+      401: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The account is suspended (`errorCode: account_suspended`). */
+      403: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ScopeForbiddenResponse'];
+        };
+      };
+      /** @description The path does not serve this HTTP method. */
+      405: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description The methods this path serves. GET implies HEAD. */
+          Allow?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The request declared a client build (`X-Client-Name` + `X-Client-Version`) older than the minimum this API still serves for that client. Upgrade to `minimum_version` or later. Never sent to a request that omits either header. */
+      426: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['UpgradeRequiredResponse'];
+        };
+      };
+      /** @description Per-user rate limit exceeded. */
+      429: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+    };
+  };
+  createDelegation: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['createDelegationRequest'];
+      };
+    };
+    responses: {
+      /** @description Accepted; the assistant is working on it. */
+      202: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['createDelegationResponse202'];
+        };
+      };
+      /** @description Missing or invalid credentials. */
+      401: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The API key does not hold any of the required scopes, or the account is suspended (`errorCode: account_suspended`). */
+      403: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ScopeForbiddenResponse'];
+        };
+      };
+      /** @description A `file_ids` entry names no file of yours. Another user's file is reported the same way. */
+      404: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The path does not serve this HTTP method. */
+      405: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description The methods this path serves. GET implies HEAD. */
+          Allow?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Request failed validation. */
+      422: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The request declared a client build (`X-Client-Name` + `X-Client-Version`) older than the minimum this API still serves for that client. Upgrade to `minimum_version` or later. Never sent to a request that omits either header. */
+      426: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['UpgradeRequiredResponse'];
+        };
+      };
+      /** @description Per-user rate limit exceeded. */
+      429: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The work could not be dispatched. The delegation is marked `failed`, so a retry is safe. */
+      502: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+    };
+  };
+  getDelegation: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        /** @description The delegation id returned by `POST /api/v1/delegations`. */
+        id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description The delegation. */
+      200: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['getDelegationResponse200'];
+        };
+      };
+      /** @description Missing or invalid credentials. */
+      401: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The API key does not hold any of the required scopes, or the account is suspended (`errorCode: account_suspended`). */
+      403: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ScopeForbiddenResponse'];
+        };
+      };
+      /** @description No such delegation, or it is not yours. */
+      404: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The path does not serve this HTTP method. */
+      405: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description The methods this path serves. GET implies HEAD. */
+          Allow?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Request failed validation. */
+      422: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The request declared a client build (`X-Client-Name` + `X-Client-Version`) older than the minimum this API still serves for that client. Upgrade to `minimum_version` or later. Never sent to a request that omits either header. */
+      426: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['UpgradeRequiredResponse'];
+        };
+      };
+      /** @description Per-user rate limit exceeded. */
+      429: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
           'X-Request-ID'?: string;
@@ -19108,6 +21433,12 @@ export interface operations {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
           'X-Request-ID'?: string;
+          /** @description RFC 9745: when this endpoint was deprecated. Always `@1794873600` on this endpoint. */
+          Deprecation?: string;
+          /** @description RFC 8594: the first day this endpoint may stop being served. Always `Wed, 17 Feb 2027 00:00:00 GMT` on this endpoint. */
+          Sunset?: string;
+          /** @description RFC 8288: the replacement endpoint (`rel="successor-version"`). Always `</api/v1/image-jobs>; rel="successor-version"` on this endpoint. */
+          Link?: string;
           /** @description Request quota per minute. */
           'X-RateLimit-Limit-Minute'?: number;
           /** @description Requests remaining in the current minute. */
@@ -19131,6 +21462,12 @@ export interface operations {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
           'X-Request-ID'?: string;
+          /** @description RFC 9745: when this endpoint was deprecated. Always `@1794873600` on this endpoint. */
+          Deprecation?: string;
+          /** @description RFC 8594: the first day this endpoint may stop being served. Always `Wed, 17 Feb 2027 00:00:00 GMT` on this endpoint. */
+          Sunset?: string;
+          /** @description RFC 8288: the replacement endpoint (`rel="successor-version"`). Always `</api/v1/image-jobs>; rel="successor-version"` on this endpoint. */
+          Link?: string;
           /** @description Request quota per minute. */
           'X-RateLimit-Limit-Minute'?: number;
           /** @description Requests remaining in the current minute. */
@@ -19160,11 +21497,17 @@ export interface operations {
           'application/json': components['schemas']['ErrorResponse'];
         };
       };
-      /** @description The API key lacks the `ai:generate` scope, or the billing organization names one you do not belong to (or is not a valid id), or an organization-billed API key names any organization but its own (`errorCode: billing_organization_mismatch`). */
+      /** @description The API key lacks the `ai:generate` scope, or the billing organization names one you do not belong to (or is not a valid id), or an organization-billed API key names any organization but its own (`errorCode: billing_organization_mismatch`). Naming a billing organization other than the account the `run` bills is also a `403` with that errorCode. */
       403: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
           'X-Request-ID'?: string;
+          /** @description RFC 9745: when this endpoint was deprecated. Always `@1794873600` on this endpoint. */
+          Deprecation?: string;
+          /** @description RFC 8594: the first day this endpoint may stop being served. Always `Wed, 17 Feb 2027 00:00:00 GMT` on this endpoint. */
+          Sunset?: string;
+          /** @description RFC 8288: the replacement endpoint (`rel="successor-version"`). Always `</api/v1/image-jobs>; rel="successor-version"` on this endpoint. */
+          Link?: string;
           /** @description Request quota per minute. */
           'X-RateLimit-Limit-Minute'?: number;
           /** @description Requests remaining in the current minute. */
@@ -19183,11 +21526,17 @@ export interface operations {
           'application/json': components['schemas']['generateImageResponse403'];
         };
       };
-      /** @description The session, or the quest being retried, does not exist or is not accessible to the caller. A nonexistent billing `organizationId` is `404` only for an admin caller; for anyone else, an invalid or inaccessible `organizationId` is `403` instead. */
+      /** @description The session, or the quest being retried, does not exist or is not accessible to the caller. A nonexistent billing `organizationId` is `404` only for an admin caller; for anyone else, an invalid or inaccessible `organizationId` is `403` instead. A `run` that does not exist or that another user or billing owner minted is `404` (`errorCode: "run_not_found"`). */
       404: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
           'X-Request-ID'?: string;
+          /** @description RFC 9745: when this endpoint was deprecated. Always `@1794873600` on this endpoint. */
+          Deprecation?: string;
+          /** @description RFC 8594: the first day this endpoint may stop being served. Always `Wed, 17 Feb 2027 00:00:00 GMT` on this endpoint. */
+          Sunset?: string;
+          /** @description RFC 8288: the replacement endpoint (`rel="successor-version"`). Always `</api/v1/image-jobs>; rel="successor-version"` on this endpoint. */
+          Link?: string;
           /** @description Request quota per minute. */
           'X-RateLimit-Limit-Minute'?: number;
           /** @description Requests remaining in the current minute. */
@@ -19219,11 +21568,17 @@ export interface operations {
           'application/json': components['schemas']['ErrorResponse'];
         };
       };
-      /** @description The body is malformed, or it names the billing organization ambiguously. Both `organizationId` and `organization_id` sent with different values is a `422`; so is an empty or blank value for either (a blank is never treated as an omission, which would bill a different payer), and so is any other billing-org-shaped key such as `billing_org_id` or `payerOrgId`, which would otherwise be stripped and silently bill the caller's home organization. */
+      /** @description The body is malformed, or it names the billing organization ambiguously. Both `organizationId` and `organization_id` sent with different values is a `422`; so is an empty or blank value for either (a blank is never treated as an omission, which would bill a different payer), and so is any other billing-org-shaped key such as `billing_org_id` or `payerOrgId`, which would otherwise be stripped and silently bill the caller's home organization. A `run` whose budget cannot cover the render is `422` with `errorCode: "run_budget_exhausted"`. */
       422: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
           'X-Request-ID'?: string;
+          /** @description RFC 9745: when this endpoint was deprecated. Always `@1794873600` on this endpoint. */
+          Deprecation?: string;
+          /** @description RFC 8594: the first day this endpoint may stop being served. Always `Wed, 17 Feb 2027 00:00:00 GMT` on this endpoint. */
+          Sunset?: string;
+          /** @description RFC 8288: the replacement endpoint (`rel="successor-version"`). Always `</api/v1/image-jobs>; rel="successor-version"` on this endpoint. */
+          Link?: string;
           /** @description Request quota per minute. */
           'X-RateLimit-Limit-Minute'?: number;
           /** @description Requests remaining in the current minute. */
@@ -19285,6 +21640,12 @@ export interface operations {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
           'X-Request-ID'?: string;
+          /** @description RFC 9745: when this endpoint was deprecated. Always `@1794873600` on this endpoint. */
+          Deprecation?: string;
+          /** @description RFC 8594: the first day this endpoint may stop being served. Always `Wed, 17 Feb 2027 00:00:00 GMT` on this endpoint. */
+          Sunset?: string;
+          /** @description RFC 8288: the replacement endpoint (`rel="successor-version"`). Always `</api/v1/image-jobs>; rel="successor-version"` on this endpoint. */
+          Link?: string;
           /** @description Request quota per minute. */
           'X-RateLimit-Limit-Minute'?: number;
           /** @description Requests remaining in the current minute. */
@@ -19308,6 +21669,12 @@ export interface operations {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
           'X-Request-ID'?: string;
+          /** @description RFC 9745: when this endpoint was deprecated. Always `@1794873600` on this endpoint. */
+          Deprecation?: string;
+          /** @description RFC 8594: the first day this endpoint may stop being served. Always `Wed, 17 Feb 2027 00:00:00 GMT` on this endpoint. */
+          Sunset?: string;
+          /** @description RFC 8288: the replacement endpoint (`rel="successor-version"`). Always `</api/v1/image-jobs>; rel="successor-version"` on this endpoint. */
+          Link?: string;
           /** @description Request quota per minute. */
           'X-RateLimit-Limit-Minute'?: number;
           /** @description Requests remaining in the current minute. */
@@ -19337,11 +21704,17 @@ export interface operations {
           'application/json': components['schemas']['ErrorResponse'];
         };
       };
-      /** @description The API key lacks the `ai:generate` scope, or the billing organization names one you do not belong to (or is not a valid id), or an organization-billed API key names any organization but its own (`errorCode: billing_organization_mismatch`). */
+      /** @description The API key lacks the `ai:generate` scope, or the billing organization names one you do not belong to (or is not a valid id), or an organization-billed API key names any organization but its own (`errorCode: billing_organization_mismatch`). Naming a billing organization other than the account the `run` bills is also a `403` with that errorCode. */
       403: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
           'X-Request-ID'?: string;
+          /** @description RFC 9745: when this endpoint was deprecated. Always `@1794873600` on this endpoint. */
+          Deprecation?: string;
+          /** @description RFC 8594: the first day this endpoint may stop being served. Always `Wed, 17 Feb 2027 00:00:00 GMT` on this endpoint. */
+          Sunset?: string;
+          /** @description RFC 8288: the replacement endpoint (`rel="successor-version"`). Always `</api/v1/image-jobs>; rel="successor-version"` on this endpoint. */
+          Link?: string;
           /** @description Request quota per minute. */
           'X-RateLimit-Limit-Minute'?: number;
           /** @description Requests remaining in the current minute. */
@@ -19360,11 +21733,17 @@ export interface operations {
           'application/json': components['schemas']['editImageResponse403'];
         };
       };
-      /** @description The session, or the quest being retried, does not exist or is not accessible to the caller. A nonexistent billing `organizationId` is `404` only for an admin caller; for anyone else, an invalid or inaccessible `organizationId` is `403` instead. */
+      /** @description The session, or the quest being retried, does not exist or is not accessible to the caller. A nonexistent billing `organizationId` is `404` only for an admin caller; for anyone else, an invalid or inaccessible `organizationId` is `403` instead. A `run` that does not exist or that another user or billing owner minted is `404` (`errorCode: "run_not_found"`). */
       404: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
           'X-Request-ID'?: string;
+          /** @description RFC 9745: when this endpoint was deprecated. Always `@1794873600` on this endpoint. */
+          Deprecation?: string;
+          /** @description RFC 8594: the first day this endpoint may stop being served. Always `Wed, 17 Feb 2027 00:00:00 GMT` on this endpoint. */
+          Sunset?: string;
+          /** @description RFC 8288: the replacement endpoint (`rel="successor-version"`). Always `</api/v1/image-jobs>; rel="successor-version"` on this endpoint. */
+          Link?: string;
           /** @description Request quota per minute. */
           'X-RateLimit-Limit-Minute'?: number;
           /** @description Requests remaining in the current minute. */
@@ -19396,7 +21775,145 @@ export interface operations {
           'application/json': components['schemas']['ErrorResponse'];
         };
       };
-      /** @description The body is malformed, `edit_regions` has an out-of-range coordinate or degenerate box, or it names the billing organization ambiguously. Both `organizationId` and `organization_id` sent with different values is a `422`; so is an empty or blank value for either (a blank is never treated as an omission, which would bill a different payer), and so is any other billing-org-shaped key such as `billing_org_id` or `payerOrgId`, which would otherwise be stripped and silently bill the caller's home organization. */
+      /** @description The body is malformed, `edit_regions` has an out-of-range coordinate or degenerate box, or it names the billing organization ambiguously. Both `organizationId` and `organization_id` sent with different values is a `422`; so is an empty or blank value for either (a blank is never treated as an omission, which would bill a different payer), and so is any other billing-org-shaped key such as `billing_org_id` or `payerOrgId`, which would otherwise be stripped and silently bill the caller's home organization. A `run` whose budget cannot cover the edit is `422` with `errorCode: "run_budget_exhausted"`. */
+      422: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description RFC 9745: when this endpoint was deprecated. Always `@1794873600` on this endpoint. */
+          Deprecation?: string;
+          /** @description RFC 8594: the first day this endpoint may stop being served. Always `Wed, 17 Feb 2027 00:00:00 GMT` on this endpoint. */
+          Sunset?: string;
+          /** @description RFC 8288: the replacement endpoint (`rel="successor-version"`). Always `</api/v1/image-jobs>; rel="successor-version"` on this endpoint. */
+          Link?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The request declared a client build (`X-Client-Name` + `X-Client-Version`) older than the minimum this API still serves for that client. Upgrade to `minimum_version` or later. Never sent to a request that omits either header. */
+      426: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['UpgradeRequiredResponse'];
+        };
+      };
+    };
+  };
+  listImageJobs: {
+    parameters: {
+      query?: {
+        limit?: number;
+        cursor?: string;
+        state?: 'pending' | 'running' | 'storing' | 'succeeded' | 'failed' | 'blocked' | 'cancelled';
+        source?: 'api' | 'studio' | 'agent';
+      };
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description A page of jobs. */
+      200: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['listImageJobsResponse200'];
+        };
+      };
+      /** @description Missing or invalid credentials. */
+      401: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The API key lacks the `ai:generate` scope. */
+      403: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ScopeForbiddenResponse'];
+        };
+      };
+      /** @description The path does not serve this HTTP method. */
+      405: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description The methods this path serves. GET implies HEAD. */
+          Allow?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description A malformed `cursor`, `limit`, `state` or `source`. */
       422: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
@@ -19440,6 +21957,602 @@ export interface operations {
         };
         content: {
           'application/json': components['schemas']['UpgradeRequiredResponse'];
+        };
+      };
+      /** @description Per-user rate limit exceeded. */
+      429: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+    };
+  };
+  createImageJob: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['createImageJobRequest'];
+      };
+    };
+    responses: {
+      /** @description Accepted; the jobs are queued (or replayed for a repeated Idempotency-Key). */
+      202: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['createImageJobResponse202'];
+        };
+      };
+      /** @description Your Files storage has no room for the images (`storage_limit_exceeded`, as on the Files upload routes). The body carries `used_bytes`, `limit_bytes`, `requested_bytes` and `owner`, always together; `requested_bytes` is an upper estimate, not the final size. An organization-billed API key bills an organization that no longer exists, or one its owner is no longer a member of; re-mint the key. */
+      400: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['createImageJobResponse400'];
+        };
+      };
+      /** @description Missing or invalid credentials. */
+      401: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The API key lacks the `ai:generate` scope, the model is not allowed for you or your organization, or the billing organization names one you do not belong to (or is not a valid id), or an organization-billed API key names any organization but its own (`errorCode: billing_organization_mismatch`). */
+      403: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['createImageJobResponse403'];
+        };
+      };
+      /** @description The `run` does not exist or another user or billing owner minted it (`errorCode: run_not_found`). A nonexistent `organization_id` is `404` only for an admin caller; for anyone else it is `403`. */
+      404: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['createImageJobResponse404'];
+        };
+      };
+      /** @description The path does not serve this HTTP method. */
+      405: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description The methods this path serves. GET implies HEAD. */
+          Allow?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The request cannot run: a malformed body (`invalid_request`), something the model does not honour (`errorCode` names the first, e.g. `unsupported_size` or `missing_input`; `message` lists them all), an unknown or unavailable model (`model_unavailable`), an input file that is not yours or not found (`input_image_not_found`) or not a usable image (`unsupported_input_image`), too few credits (`insufficient_credits`), a `run` budget with too little left for every job (`run_budget_exhausted`), or an Idempotency-Key problem (`invalid_idempotency_key`, `idempotency_key_reused`). */
+      422: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['createImageJobResponse422'];
+        };
+      };
+      /** @description The request declared a client build (`X-Client-Name` + `X-Client-Version`) older than the minimum this API still serves for that client. Upgrade to `minimum_version` or later. Never sent to a request that omits either header. */
+      426: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['UpgradeRequiredResponse'];
+        };
+      };
+      /** @description Per-user rate limit exceeded. */
+      429: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+    };
+  };
+  getImageJob: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description The job. */
+      200: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['getImageJobResponse200'];
+        };
+      };
+      /** @description Missing or invalid credentials. */
+      401: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The API key lacks the `ai:generate` scope. */
+      403: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ScopeForbiddenResponse'];
+        };
+      };
+      /** @description No image job with that id was requested by the caller (a malformed id is also a 404). */
+      404: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The path does not serve this HTTP method. */
+      405: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description The methods this path serves. GET implies HEAD. */
+          Allow?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Request failed validation. */
+      422: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The request declared a client build (`X-Client-Name` + `X-Client-Version`) older than the minimum this API still serves for that client. Upgrade to `minimum_version` or later. Never sent to a request that omits either header. */
+      426: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['UpgradeRequiredResponse'];
+        };
+      };
+      /** @description Per-user rate limit exceeded. */
+      429: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+    };
+  };
+  cancelImageJob: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description The job after the cancel request. */
+      200: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['cancelImageJobResponse200'];
+        };
+      };
+      /** @description Missing or invalid credentials. */
+      401: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The API key lacks the `ai:generate` scope. */
+      403: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ScopeForbiddenResponse'];
+        };
+      };
+      /** @description No image job with that id was requested by the caller (a malformed id is also a 404). */
+      404: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The path does not serve this HTTP method. */
+      405: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description The methods this path serves. GET implies HEAD. */
+          Allow?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The image is already rendering (`running`); `errorCode` is `not_cancellable`. */
+      409: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['cancelImageJobResponse409'];
+        };
+      };
+      /** @description Request failed validation. */
+      422: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The request declared a client build (`X-Client-Name` + `X-Client-Version`) older than the minimum this API still serves for that client. Upgrade to `minimum_version` or later. Never sent to a request that omits either header. */
+      426: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['UpgradeRequiredResponse'];
+        };
+      };
+      /** @description Per-user rate limit exceeded. */
+      429: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
         };
       };
     };
@@ -27981,7 +31094,7 @@ export interface operations {
           'application/json': components['schemas']['createVideoGenerationResponse403'];
         };
       };
-      /** @description An `inputs` file (or `input_image_file_id`) does not name an image you own (`errorCode: input_image_not_found`). A nonexistent `organization_id` is `404` only for an admin caller; for anyone else it is `403`. */
+      /** @description An `inputs` file (or `input_image_file_id`) does not name an image you own (`errorCode: input_image_not_found`), or the `run` does not exist or another user or billing owner minted it (`errorCode: run_not_found`). A nonexistent `organization_id` is `404` only for an admin caller; for anyone else it is `403`. */
       404: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
@@ -28017,7 +31130,7 @@ export interface operations {
           'application/json': components['schemas']['ErrorResponse'];
         };
       };
-      /** @description The request cannot run: a body or capability violation (`errorCode` names it, e.g. `unsupported_duration`, `unsupported_keyframes`, `invalid_keyframes`, `unsupported_draft`, or `unsupported_input_role` for an input role the model does not take). Keyframe/draft errors name the field. An unknown, unavailable or retired model (`model_unavailable`; for a retired model the message names the model to use instead), a model your administrator disabled (`model_disabled`), too few credits (`insufficient_credits`), or an Idempotency-Key problem (`invalid_idempotency_key`, `idempotency_key_reused`). */
+      /** @description The request cannot run: a body or capability violation (`errorCode` names it, e.g. `unsupported_duration`, `unsupported_keyframes`, `invalid_keyframes`, `unsupported_draft`, or `unsupported_input_role` for an input role the model does not take). Keyframe/draft errors name the field. An unknown, unavailable or retired model (`model_unavailable`; for a retired model the message names the model to use instead), a model your administrator disabled (`model_disabled`), too few credits (`insufficient_credits`), a `run` budget with too little left for the whole job (`run_budget_exhausted`), or an Idempotency-Key problem (`invalid_idempotency_key`, `idempotency_key_reused`). */
       422: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
@@ -28836,7 +31949,7 @@ export interface operations {
           'application/json': components['schemas']['createMusicGenerationResponse403'];
         };
       };
-      /** @description A nonexistent `organization_id`, for an admin caller; for anyone else it is `403`. */
+      /** @description A nonexistent `organization_id`, for an admin caller (for anyone else it is `403`), or a `run` that does not exist or that another user or billing owner minted (`errorCode: run_not_found`). */
       404: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
@@ -28872,7 +31985,7 @@ export interface operations {
           'application/json': components['schemas']['ErrorResponse'];
         };
       };
-      /** @description The request cannot run: a malformed body, a capability violation (`errorCode` names it, e.g. `unsupported_duration` or `lyrics_too_long`), an unknown or unavailable model (`model_unavailable`), a model your administrator disabled (`model_disabled`), too few credits (`insufficient_credits`), or an Idempotency-Key problem (`invalid_idempotency_key`, `idempotency_key_reused`). */
+      /** @description The request cannot run: a malformed body, a capability violation (`errorCode` names it, e.g. `unsupported_duration` or `lyrics_too_long`), an unknown or unavailable model (`model_unavailable`), a model your administrator disabled (`model_disabled`), too few credits (`insufficient_credits`), a `run` budget with too little left for the whole job (`run_budget_exhausted`), or an Idempotency-Key problem (`invalid_idempotency_key`, `idempotency_key_reused`). */
       422: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */

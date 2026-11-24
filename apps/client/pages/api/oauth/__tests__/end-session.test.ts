@@ -10,6 +10,7 @@ import type { Request, Response } from 'express';
 
 const h = vi.hoisted(() => ({
   handler: null as null | ((req: Request, res: Response) => Promise<unknown>),
+  storedSigningKey: null as null | { secretName: string; encryptedValue: string },
   authenticate: vi.fn(),
   findByClientId: vi.fn(),
   revokeSession: vi.fn(),
@@ -41,6 +42,16 @@ vi.mock('@bike4mind/database', () => ({
   userRepository: {},
   authSessionRepository: {},
   realtimeConnectionRepository: {},
+  // A store that keeps the first key written, so the hints below are signed with the key the route verifies.
+  systemSecretRepository: {
+    findBySecretName: async () => h.storedSigningKey,
+    upsertSecret: async (secretName: string, data: { encryptedValue: string }) =>
+      (h.storedSigningKey ??= { secretName, encryptedValue: data.encryptedValue }),
+  },
+}));
+vi.mock('@bike4mind/server-utils/security/tokenEncryption', () => ({
+  encryptToken: (value: string) => value,
+  decryptStoredSecret: (value: string) => value,
 }));
 vi.mock('@bike4mind/services', () => ({
   userService: { updateLogoutTime: h.updateLogoutTime, revokeUserSessions: h.revokeUserSessions },
@@ -146,7 +157,7 @@ describe('POST /api/oauth/end-session - rejected requests leave the session alon
     const { status, json } = await call({
       client_id: CLIENT_ID,
       post_logout_redirect_uri: uri,
-      id_token_hint: hintFor('user-1'),
+      id_token_hint: await hintFor('user-1'),
     });
     expect(status).toBe(400);
     expect(json.error).toBe('invalid_request');
@@ -157,7 +168,7 @@ describe('POST /api/oauth/end-session - rejected requests leave the session alon
     ['a malformed hint', 'not-a-jwt'],
     ["another client's hint", 'other-client'],
   ])('rejects %s', async (_n, hint) => {
-    const id_token_hint = hint === 'other-client' ? hintFor('user-1', 'b4m_other_rp_00000000') : hint;
+    const id_token_hint = hint === 'other-client' ? await hintFor('user-1', 'b4m_other_rp_00000000') : hint;
     const { status, json } = await call({ client_id: CLIENT_ID, post_logout_redirect_uri: SIGNED_OUT, id_token_hint });
     expect(status).toBe(400);
     expect(json).toEqual({ error: 'invalid_request', error_description: 'id_token_hint is invalid' });
@@ -178,7 +189,7 @@ describe('POST /api/oauth/end-session - confirmation', () => {
   });
 
   it('asks for confirmation when a valid hint names another user', async () => {
-    const { json } = await call({ client_id: CLIENT_ID, id_token_hint: hintFor('user-2') });
+    const { json } = await call({ client_id: CLIENT_ID, id_token_hint: await hintFor('user-2') });
     expect(json).toEqual({ status: 'confirmation_required', client_name: 'Example RP', redirect_to: null });
     expectSessionUntouched();
   });
@@ -196,7 +207,7 @@ describe('POST /api/oauth/end-session - sign-out', () => {
       client_id: CLIENT_ID,
       post_logout_redirect_uri: SIGNED_OUT,
       state: 'a b&c',
-      id_token_hint: hintFor('user-1'),
+      id_token_hint: await hintFor('user-1'),
     });
     expect(status).toBe(200);
     expect(json).toEqual({ status: 'signed_out', redirect_to: `${SIGNED_OUT}?state=a+b%26c` });
@@ -205,14 +216,14 @@ describe('POST /api/oauth/end-session - sign-out', () => {
   });
 
   it('takes the client from the hint when client_id is absent', async () => {
-    const { json } = await call({ post_logout_redirect_uri: SIGNED_OUT, id_token_hint: hintFor('user-1') });
+    const { json } = await call({ post_logout_redirect_uri: SIGNED_OUT, id_token_hint: await hintFor('user-1') });
     expect(json).toEqual({ status: 'signed_out', redirect_to: SIGNED_OUT });
     expect(h.findByClientId).toHaveBeenCalledWith(CLIENT_ID);
     expectSignedOutThisBrowserOnly();
   });
 
   it("rejects a hint-only request for an unknown client's token", async () => {
-    const { json } = await call({ id_token_hint: hintFor('user-1', 'b4m_unknown') });
+    const { json } = await call({ id_token_hint: await hintFor('user-1', 'b4m_unknown') });
     expect(json).toEqual({ error: 'invalid_client', error_description: 'Unknown client' });
     expectSessionUntouched();
   });
@@ -220,7 +231,7 @@ describe('POST /api/oauth/end-session - sign-out', () => {
   it('accepts an expired hint', async () => {
     vi.useFakeTimers();
     vi.setSystemTime(Date.now() - 7 * 24 * 60 * 60 * 1000);
-    const stale = hintFor('user-1');
+    const stale = await hintFor('user-1');
     vi.useRealTimers();
     const { json } = await call({ client_id: CLIENT_ID, id_token_hint: stale });
     expect(json).toEqual({ status: 'signed_out', redirect_to: null });

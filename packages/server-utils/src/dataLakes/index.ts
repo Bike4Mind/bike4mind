@@ -36,8 +36,7 @@ import {
 } from '@bike4mind/database';
 import type { EntitlementRequest } from '../entitlements/index';
 import type { Logger } from '@bike4mind/observability';
-import { getFilesStorage } from '../utils/storage/index';
-import { fileContentUrl } from '../files/browserFileSigner';
+import { fileContentUrl, signFabFileGet, type FabFileSignOptions } from '../files/browserFileSigner';
 import { toAccessContext, toMemberAccessContext, toCompleteMemberAccessContext } from './toAccessContext';
 import { grantingLakes, normalizedLakePrefix } from './grantingLakes';
 import { firstQueryValue } from './firstQueryValue';
@@ -269,13 +268,9 @@ export async function queryDataLakeArticles(
       projects: projectRepository,
     },
     storage: {
-      generateSignedUrl: async (path: string, expireInSeconds: number, options?: { signingDate?: Date }) => {
+      generateSignedUrl: async (path: string, expireInSeconds: number, options?: FabFileSignOptions) => {
         try {
-          return await getFilesStorage().getSignedUrl(path, 'get', {
-            expiresIn: expireInSeconds,
-            signingDate: options?.signingDate,
-            audience: 'browser',
-          });
+          return await signFabFileGet(path, expireInSeconds, options);
         } catch {
           return null;
         }

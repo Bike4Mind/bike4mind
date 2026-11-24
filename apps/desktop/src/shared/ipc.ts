@@ -7,6 +7,7 @@ import type { LoopResult, LoopState } from './loop';
 import type { RunSpend } from './runSpend';
 import type { PromptCacheTtl } from '@bike4mind/common';
 import type { AttentionNotice, AttentionOpenEvent, NotifyScope } from './attention';
+import type { AppMenuAction, RendererErrorReport } from './appShell';
 import type { AccountBilling, AccountCredits, AccountProfile, SubscribePlanResult } from './account';
 import type { FeedbackSubmitResult } from './feedback';
 import type { AccountPage, AuthState, EnvironmentSelection, SetEnvironmentResult } from './auth';
@@ -63,6 +64,7 @@ import type {
   ChatSessionStatusEvent,
   ChatSessionExportResult,
   ChatSessionSummary,
+  RaiseRunBudgetResult,
   ChatStreamEvent,
   ChatVideoJob,
   ChatVideoLinkResult,
@@ -84,11 +86,13 @@ import type {
 } from './chat';
 import type { GenerationSettings } from './generation';
 import type { ModelLoadOffer, ModelSettings, UnsupportedModelSetting } from './modelSettings';
-import type { DevLogRecord, DevLogSnapshot } from './devLog';
+import type { DevLogErrorReport, DevLogRecord, DevLogSnapshot } from './devLog';
 import type { ShareDirectoryResult } from './directoryRequest';
 import type { PrActionResult, PrBarState, PrOption, PrSummaryEvent } from './pullRequest';
 import type { LocalContextFit, LocalContextSetting } from './localContextSetting';
+import type { SpawnLocation } from './spawnLocation';
 import type { SidebarSectionsState } from './sidebarSections';
+import type { ComposerDrafts } from './composerDrafts';
 import type { WorkspaceChanges } from './workspaceChanges';
 import type { SkillsScope, SkillsState } from './skills';
 import type { PermissionMutationResult, PermissionRuleLists, PermissionScope, PermissionsState } from './permissions';
@@ -156,6 +160,7 @@ import type {
 } from './model3d';
 import type { SimulatorFrame, SimulatorPaneInput, SimulatorViewDevice, SimulatorViewState } from './simulator';
 import type { LocalHistoryResult, LocalHistoryState } from './history';
+import type { OrchestrateMiniPayload } from './orchestrateMini';
 import type { WatchDecision, WatchPreferences, WatchPreferencesPatch, WatchSnapshot } from './watch';
 
 /**
@@ -209,6 +214,10 @@ export const IPC_CHANNELS = {
   chatGetLocalContext: 'chat:get-local-context',
   chatSetLocalContext: 'chat:set-local-context',
   chatGetLocalContextFit: 'chat:get-local-context-fit',
+  /** Where a suggested session starts (SpawnLocation); main pushes `chatSpawnLocation` when it changes. */
+  chatGetSpawnLocation: 'chat:get-spawn-location',
+  chatSetSpawnLocation: 'chat:set-spawn-location',
+  chatSpawnLocation: 'chat:spawn-location',
   chatListCreationTools: 'chat:list-creation-tools',
   chatSetSessionModel: 'chat:set-session-model',
   chatSettleLocalModel: 'chat:settle-local-model',
@@ -219,6 +228,9 @@ export const IPC_CHANNELS = {
   chatHistoryChanged: 'chat:history-changed',
   chatSetSessionReasoningEffort: 'chat:set-session-reasoning-effort',
   chatSetSessionPromptCacheTtl: 'chat:set-session-prompt-cache-ttl',
+  /** The Settings cap on automatic turn extensions; main validates it, see @shared/turnExtensionSetting. */
+  chatGetTurnExtensions: 'chat:get-turn-extensions',
+  chatSetTurnExtensions: 'chat:set-turn-extensions',
   chatSetSessionGeneration: 'chat:set-session-generation',
   chatGetModelSettings: 'chat:get-model-settings',
   chatGetUnsupportedModelSettings: 'chat:get-unsupported-model-settings',
@@ -226,6 +238,7 @@ export const IPC_CHANNELS = {
   chatGetModelLoadOffer: 'chat:get-model-load-offer',
   chatSetSessionPinned: 'chat:set-session-pinned',
   chatSetSessionOrchestrate: 'chat:set-session-orchestrate',
+  chatRaiseRunBudget: 'chat:raise-run-budget',
   chatGetRolePolicy: 'chat:get-role-policy',
   chatSetRolePolicy: 'chat:set-role-policy',
   chatTaskAction: 'chat:task-action',
@@ -540,8 +553,9 @@ export const IPC_CHANNELS = {
   /** main -> renderer push; what the pane's standing indicator draws. */
   browserCookiesChanged: 'browser:cookies-changed',
   /**
-   * The developer log. Every one of these belongs to the dev window alone, and none of them is
-   * reachable from a tool or from a reply: the window is opened by a chord the user presses.
+   * The developer log. All but devLogReportError belong to the dev window alone, and none of
+   * them is reachable from a tool or from a reply: the window is opened by a chord the user
+   * presses. devLogReportError is the one any window may call, and its input is untrusted.
    *
    * Source-agnostic by design - see @shared/devLog. Adding a source to the log adds nothing
    * here.
@@ -552,6 +566,8 @@ export const IPC_CHANNELS = {
   devLogCopy: 'devlog:copy',
   /** main -> renderer push; a batch of newly captured records, coalesced in the sink. */
   devLogRecords: 'devlog:records',
+  /** Renderer -> main, fire-and-forget (no reply). A caught renderer failure; main validates and rate-limits it. */
+  devLogReportError: 'devlog:report-error',
   /** Renderer -> main only. Main decides what may be opened; see isExternallyOpenable. */
   shellOpenExternal: 'shell:open-external',
   /**
@@ -560,6 +576,7 @@ export const IPC_CHANNELS = {
    * (auto-merge in particular) are switched on here and nowhere else.
    */
   prWatch: 'pr:watch',
+  prGetState: 'pr:get-state',
   prBind: 'pr:bind',
   prDismiss: 'pr:dismiss',
   prRefresh: 'pr:refresh',
@@ -579,6 +596,9 @@ export const IPC_CHANNELS = {
   sidebarRenameSection: 'sidebar:rename-section',
   sidebarDeleteSection: 'sidebar:delete-section',
   sidebarMoveSession: 'sidebar:move-session',
+  /** Unsent composer text per conversation; see @shared/composerDrafts. */
+  composerDraftsList: 'drafts:list',
+  composerDraftsSave: 'drafts:save',
   /**
    * The user's terminals; see @shared/terminal. Input and resize are one-way sends rather than
    * invokes: a keystroke has nothing to wait for, and a round trip each would be felt.
@@ -604,6 +624,12 @@ export const IPC_CHANNELS = {
   attentionOpen: 'attention:open',
   /** A notice clicked while no window was open, waiting for the window it reopened; see takePendingOpen. */
   attentionTakePendingOpen: 'attention:take-pending-open',
+  /** main -> renderer push: an app-menu item the renderer carries out (main/appMenu.ts). */
+  appMenuAction: 'appmenu:action',
+  /** A menu action chosen while no window was open, waiting for the window it reopened. */
+  appMenuTakePending: 'appmenu:take-pending',
+  /** Renderer -> main: a render error the top-level error boundary caught, for main's log. */
+  rendererReportError: 'renderer:report-error',
   /** Which sessions alert (NotifyScope), for Settings; main pushes `attentionNotifyScope` when it changes. */
   attentionGetNotifyScope: 'attention:get-notify-scope',
   attentionSetNotifyScope: 'attention:set-notify-scope',
@@ -620,6 +646,18 @@ export const IPC_CHANNELS = {
   watchRespond: 'watch:respond',
   watchFocusAgent: 'watch:focus-agent',
   watchCloseMini: 'watch:close-mini',
+  /** An app window's stage -> main: the OrchestrateMiniPayload the Orchestrate mini window shows, or null. */
+  orchestrateMiniPublish: 'orchestrate:mini-publish',
+  orchestrateMiniToggle: 'orchestrate:mini-toggle',
+  orchestrateMiniGetOpen: 'orchestrate:mini-get-open',
+  /** main -> app windows push: the Orchestrate mini window opened or closed. */
+  orchestrateMiniOpen: 'orchestrate:mini-open',
+  /** The Orchestrate mini window's own surface (preload/orchestrateMini.ts); refused from any other window. */
+  orchestrateMiniGetSnapshot: 'orchestrate:mini-get-snapshot',
+  /** main -> Orchestrate mini window push of the latest payload, or null. */
+  orchestrateMiniSnapshot: 'orchestrate:mini-snapshot',
+  orchestrateMiniFocus: 'orchestrate:mini-focus',
+  orchestrateMiniClose: 'orchestrate:mini-close',
   /** Rescan userData/mods and return every skin, valid or broken (main/mods). */
   skinsList: 'skins:list',
   /** main -> renderer push after the mods folder changed on disk. */
@@ -785,9 +823,28 @@ export interface MiniTavernApi {
   close(): Promise<void>;
 }
 
+/**
+ * Everything the Orchestrate mini window can reach, exposed as `window.b4mOrchestrateMini` by
+ * preload/orchestrateMini.ts: the stage's snapshot and two actions, neither of which answers anything.
+ * Pushed values are `unknown` on purpose: the page parses them (parseOrchestrateMiniPayload) on receipt.
+ */
+export interface OrchestrateMiniApi {
+  getSnapshot(): Promise<unknown>;
+  onSnapshot(listener: (payload: unknown) => void): () => void;
+  /** Raise the main window on the decision this agent (or the root) waits on. */
+  focus(agentId: string): Promise<void>;
+  close(): Promise<void>;
+}
+
 export interface DesktopApi {
   studio: StudioApi;
   getAppInfo(): Promise<AppInfo>;
+  /** App-menu items (Cmd+N, Cmd+,) that act on the renderer's views. */
+  appMenu: {
+    onAction(listener: (action: AppMenuAction) => void): () => void;
+    takePending(): Promise<AppMenuAction | null>;
+  };
+  reportRendererError(report: RendererErrorReport): Promise<void>;
   /** Data-only skins for the Orchestrate views; only validated values ever arrive here. */
   skins: {
     list(): Promise<SkinSummary[]>;
@@ -925,6 +982,10 @@ export interface DesktopApi {
     setLocalContext(setting: LocalContextSetting): Promise<LocalContextSetting>;
     /** Which local models each fixed size may not fit, by the memory estimate. */
     getLocalContextFit(): Promise<LocalContextFit>;
+    /** Where a suggested session starts; see @shared/spawnLocation. */
+    getSpawnLocation(): Promise<SpawnLocation>;
+    setSpawnLocation(location: SpawnLocation): Promise<SpawnLocation>;
+    onSpawnLocation(listener: (location: SpawnLocation) => void): () => void;
     /** The generation tools a Chat turn on `model` would be offered now; empty when signed out, local or unsupported. */
     listCreationTools(model: string): Promise<CreationTool[]>;
     /** Pin a conversation to a model. Null when the session is gone. */
@@ -940,6 +1001,10 @@ export interface DesktopApi {
     setSessionReasoningEffort(sessionId: string, effort: ReasoningEffortSetting): Promise<ChatSessionSummary | null>;
     /** How long this conversation's prompt cache lives. Null when the session is gone. */
     setSessionPromptCacheTtl(sessionId: string, ttl: PromptCacheTtl): Promise<ChatSessionSummary | null>;
+    /** How many times a productive turn is carried on past its budget; 0 always stops. */
+    getTurnExtensions(): Promise<number>;
+    /** Answers with what was saved: anything out of range lands as the default. */
+    setTurnExtensions(extensions: number): Promise<number>;
     /** Replace this conversation's sampling and output overrides; `{}` clears them. Null when the session is gone. */
     setSessionGeneration(sessionId: string, generation: GenerationSettings): Promise<ChatSessionSummary | null>;
     /** A device-side model's defaults from the Models screen; `{}` when none are set, null for an id that is not one. */
@@ -955,7 +1020,14 @@ export interface DesktopApi {
     getModelLoadOffer(modelId: string, draftTokens?: number): Promise<ModelLoadOffer | null>;
     /** Pin a conversation to the top of the sidebar. Null when the session is gone. */
     setSessionPinned(sessionId: string, pinned: boolean): Promise<ChatSessionSummary | null>;
-    setSessionOrchestrate(sessionId: string, orchestrate: boolean): Promise<ChatSessionSummary | null>;
+    /** `budgetCredits` caps the run Orchestrate starts; only read when it turns on. */
+    setSessionOrchestrate(
+      sessionId: string,
+      orchestrate: boolean,
+      budgetCredits?: number
+    ): Promise<ChatSessionSummary | null>;
+    /** Set or raise the credit budget of the session's orchestration run; a raise resumes a paused run. */
+    raiseRunBudget(sessionId: string, budgetCredits: number): Promise<RaiseRunBudgetResult>;
     getRolePolicy(): Promise<RolePolicy>;
     setRolePolicy(policy: RolePolicy): Promise<RolePolicy>;
     taskAction(sessionId: string, action: TaskAction): Promise<ChatSessionSummary>;
@@ -1407,6 +1479,12 @@ export interface DesktopApi {
     /** Null takes the session out of its section. */
     moveSession(sessionId: string, sectionId: string | null): Promise<SidebarSectionsState>;
   };
+  /** Unsent composer text per conversation; see @shared/composerDrafts. */
+  composerDrafts: {
+    list(): Promise<ComposerDrafts>;
+    /** Blank text clears the conversation's draft. Unknown conversations are ignored. */
+    save(sessionId: string, text: string): Promise<void>;
+  };
   tools: {
     getAccess(): Promise<ToolAccessState>;
     /** Opens the OS folder picker. Resolves unchanged if the user cancels. */
@@ -1456,6 +1534,8 @@ export interface DesktopApi {
      * when it has no PR; a read starts in main when the one in hand is missing or stale.
      */
     watch(sessionId: string | null): Promise<PrBarState | null>;
+    /** Read a selected agent's bar without replacing the conversation's watch. */
+    getState(sessionId: string): Promise<PrBarState | null>;
     /** Bind a pasted PR URL to the conversation. */
     bind(sessionId: string, url: string): Promise<PrActionResult>;
     dismiss(sessionId: string): Promise<PrActionResult>;
@@ -1535,6 +1615,15 @@ export interface DesktopApi {
     setPreferences(patch: WatchPreferencesPatch): Promise<WatchPreferences>;
     onPreferences(listener: (preferences: WatchPreferences) => void): () => void;
   };
+  /** The Orchestrate mini window (main/orchestrateMini): the stage feeds it and toggles it. */
+  orchestrateMini: {
+    /** The stage's current payload, or null when no orchestration is on stage. Main validates it. */
+    publish(payload: OrchestrateMiniPayload | null): Promise<void>;
+    /** Resolves with whether the window is open afterwards. */
+    toggle(): Promise<boolean>;
+    isOpen(): Promise<boolean>;
+    onOpenChanged(listener: (open: boolean) => void): () => void;
+  };
   /**
    * The developer log window's own surface. Used by the `#/dev-logs` route and nothing else.
    */
@@ -1547,5 +1636,7 @@ export interface DesktopApi {
     copy(text: string): Promise<void>;
     /** Subscribe to batches of newly captured records; returns the unsubscribe. */
     onRecords(listener: (records: DevLogRecord[]) => void): () => void;
+    /** Report a renderer failure to the log. Fire-and-forget, so it cannot reject into a handler. */
+    reportError(report: DevLogErrorReport): void;
   };
 }

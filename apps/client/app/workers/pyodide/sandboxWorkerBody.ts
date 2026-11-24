@@ -49,7 +49,9 @@ export function pyodideSandboxWorkerBody(): void {
   const loadedPackages = new Set<string>();
   let cancelled = false;
 
-  const post = (response: PyodideWorkerResponse): void => self.postMessage(response);
+  // Bound once at start, so guest code that replaces `self.postMessage` through `js` never sees a call's nonce.
+  const postToParent = self.postMessage.bind(self);
+  const post = (response: PyodideWorkerResponse): void => postToParent(response);
 
   async function initializePyodide(): Promise<void> {
     if (pyodide) {
@@ -293,11 +295,17 @@ _result
    * Load the code as module `b4m_function` (so a `__main__` block does not run), read FUNCTION and, given
    * params, call `run(**params)`. Code and params enter through globals, never interpolation; only strings return.
    */
-  async function callFunction(code: string, packages: string[], paramsJson: string | null): Promise<void> {
+  async function callFunction(
+    code: string,
+    packages: string[],
+    paramsJson: string | null,
+    nonce: string
+  ): Promise<void> {
     const startTime = performance.now();
     const fail = (error: string): void =>
       post({
         type: 'call-result',
+        nonce,
         result: { success: false, output: '', error, executionTime: performance.now() - startTime },
       });
     if (!pyodide) {
@@ -351,13 +359,22 @@ def _output_type_problems(field, value, path, problems):
             problems.append({'path': path, 'message': 'must be a number'})
         elif kind == 'integer' and not isinstance(value, int):
             problems.append({'path': path, 'message': 'must be a whole number'})
-    elif kind == 'array' and isinstance(value, list):
+    elif kind == 'array' and isinstance(value, (list, tuple)):
         for index, item in enumerate(value):
             _output_type_problems(field.get('items'), item, path + '.' + str(index) if path else str(index), problems)
     elif kind == 'object' and isinstance(value, dict) and isinstance(field.get('properties'), dict):
         for name, item in value.items():
             if isinstance(name, str) and name in field['properties']:
                 _output_type_problems(field['properties'][name], item, path + '.' + name if path else name, problems)
+
+# The class name as traceback prints it, taken from the exception's type so a message cannot change it.
+def _error_class(e):
+    try:
+        kind = type(e)
+        name = kind.__qualname__ if kind.__module__ in ('builtins', '__main__') else kind.__module__ + '.' + kind.__qualname__
+        return str(name)[:100]
+    except Exception:
+        return 'Exception'
 
 def _b4m_call_function(code, params_json):
     stdout = StringIO()
@@ -370,6 +387,7 @@ def _b4m_call_function(code, params_json):
     value_json = None
     output_problems = []
     error = None
+    error_class = None
     try:
         namespace = {'__name__': 'b4m_function'}
         exec(compile(code, 'function.py', 'exec'), namespace)
@@ -402,8 +420,9 @@ def _b4m_call_function(code, params_json):
             _output_type_problems(contract.get('outputs'), value, '', output_problems)
     except _FunctionCallError as e:
         error = str(e)
-    except Exception:
+    except BaseException as e:
         error = traceback.format_exc()
+        error_class = _error_class(e)
     finally:
         sys.stdout = original_stdout
         sys.stderr = original_stderr
@@ -414,6 +433,7 @@ def _b4m_call_function(code, params_json):
         'stdout': stdout.getvalue()[:_MAX_OUTPUT_CHARS],
         'stderr': stderr.getvalue()[:_MAX_OUTPUT_CHARS],
         'error': None if error is None else error[:_MAX_OUTPUT_CHARS],
+        'error_class': error_class,
     }
 
 _b4m_call_function(_fn_code, _fn_params_json)
@@ -425,6 +445,7 @@ _b4m_call_function(_fn_code, _fn_params_json)
       const error = text(resultObj.error);
       post({
         type: 'call-result',
+        nonce,
         result: {
           success: !error,
           contractJson: text(resultObj.contract_json),
@@ -463,7 +484,7 @@ _b4m_call_function(_fn_code, _fn_params_json)
         break;
 
       case 'call':
-        await callFunction(msg.code, msg.packages, msg.paramsJson);
+        await callFunction(msg.code, msg.packages, msg.paramsJson, msg.nonce);
         break;
 
       case 'cancel':

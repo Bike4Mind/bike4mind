@@ -904,7 +904,7 @@ function largeLakeFiles(): Array<{ fileName: string; content: string }> {
  * Wait until every fixture file is chunked and embedded. Asking earlier gets the unindexed files
  * withheld (retrievalUnavailable.ts), which shows the coverage notice for a reason this test is not
  * about. Reads the server's health grading rather than comparing the counters here, which would be
- * another copy of the reachability rule (packages/scripts/src/checkLakeReachabilitySites.test.ts).
+ * another copy of the reachability rule (packages/scripts/src/checkLakeReachabilitySites.repo.test.ts).
  */
 async function waitUntilFixtureEmbedded(request: APIRequestContext, token: string, lakeId: string): Promise<void> {
   await expect

@@ -12,13 +12,14 @@ import {
   Checkbox,
   FormControl,
   FormLabel,
-  Input,
 } from '@mui/joy';
 import AddIcon from '@mui/icons-material/Add';
 import EditIcon from '@mui/icons-material/Edit';
 import StopIcon from '@mui/icons-material/Stop';
 import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import FilterListIcon from '@mui/icons-material/FilterList';
+import { OptionalDateInput } from '@client/app/components/common/OptionalDateInput';
+import { todayUtc } from '@client/app/utils/dateUtils';
 import { useEmailJobs, useCancelEmailJob, useCloneEmailJob } from '@client/app/hooks/data/emailMarketing';
 import { EmailJobStatus, EmailJobOverallStatus, IEmailJobDocument } from '@bike4mind/common';
 import { EmptyState, ErrorState, LoadingState } from '../shared';
@@ -127,20 +128,32 @@ export default function EmailJobsPanel() {
             />
             <FormControl size="sm" sx={{ minWidth: 150 }}>
               <FormLabel>From Date</FormLabel>
-              <Input
-                type="date"
+              <OptionalDateInput
+                size="sm"
                 value={dateRange.start}
-                onChange={e => setDateRange({ ...dateRange, start: e.target.value })}
-                data-testid="date-range-start-input"
+                onChange={start => setDateRange({ ...dateRange, start })}
+                emptyLabel="From any date"
+                setLabel="Set start date"
+                clearLabel="Remove start date"
+                initialDate={() => (dateRange.end && dateRange.end < todayUtc() ? dateRange.end : todayUtc())}
+                max={dateRange.end || undefined}
+                aria-label="From date"
+                testId="date-range-start-input"
               />
             </FormControl>
             <FormControl size="sm" sx={{ minWidth: 150 }}>
               <FormLabel>To Date</FormLabel>
-              <Input
-                type="date"
+              <OptionalDateInput
+                size="sm"
                 value={dateRange.end}
-                onChange={e => setDateRange({ ...dateRange, end: e.target.value })}
-                data-testid="date-range-end-input"
+                onChange={end => setDateRange({ ...dateRange, end })}
+                emptyLabel="To any date"
+                setLabel="Set end date"
+                clearLabel="Remove end date"
+                initialDate={() => (dateRange.start && dateRange.start > todayUtc() ? dateRange.start : todayUtc())}
+                min={dateRange.start || undefined}
+                aria-label="To date"
+                testId="date-range-end-input"
               />
             </FormControl>
             {hasFilters && (

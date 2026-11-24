@@ -106,7 +106,7 @@ describe('TileWall', () => {
     // Static, side-effect and dynamic imports alike.
     const imports = [...source.matchAll(/\b(?:from|import)\s*\(?\s*['"]([^'"]+)['"]/g)].map(match => match[1]);
     expect(imports).toContain('@shared/viewSnapshot');
-    const allowed = /^(react|@mui\/.+|@shared\/viewSnapshot|@shared\/agentState|\.\/statePalette)$/;
+    const allowed = /^(react|@mui\/.+|@shared\/viewSnapshot|@shared\/agentState|\.\/(statePalette|AgentPrIndicator))$/;
     expect(imports.filter(specifier => !allowed.test(specifier))).toEqual([]);
   });
 });

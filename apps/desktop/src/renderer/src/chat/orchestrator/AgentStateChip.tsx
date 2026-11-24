@@ -7,12 +7,15 @@ export function AgentStateChip({
   preparing = false,
   muted = false,
   deciding = false,
+  backgroundJobs,
 }: {
   state: AgentState;
   preparing?: boolean;
   muted?: boolean;
   /** Waiting on a decision only the user can make. */
   deciding?: boolean;
+  /** Running background jobs a 'waiting' agent waits on, spelled out beside the label. */
+  backgroundJobs?: number;
 }) {
   if (deciding) {
     return (
@@ -43,7 +46,9 @@ export function AgentStateChip({
       sx={stateSkinSx(state, variant)}
       data-testid={`orchestrator-state-chip-${state}`}
     >
-      {AGENT_STATE_LABEL[state]}
+      {state === 'waiting' && backgroundJobs
+        ? `${AGENT_STATE_LABEL[state]} - ${backgroundJobs} background ${backgroundJobs === 1 ? 'job' : 'jobs'}`
+        : AGENT_STATE_LABEL[state]}
     </Chip>
   );
 }

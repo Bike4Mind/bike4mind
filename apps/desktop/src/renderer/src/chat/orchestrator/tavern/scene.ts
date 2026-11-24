@@ -94,18 +94,23 @@ export function hiddenByCounter(point: SlotPoint, spriteHeight: number): number 
 
 const ZONE: Record<AgentState, TavernZone> = {
   working: 'workbench',
+  // Still on the job: its background command will wake it.
+  waiting: 'workbench',
   'needs-you': 'bar',
   done: 'hearth',
   failed: 'benches',
+  paused: 'benches',
   stopped: 'benches',
   idle: 'benches',
 };
 
 const POSE: Record<AgentState, Pose> = {
   working: 'work',
+  waiting: 'idle',
   'needs-you': 'call',
   done: 'rest',
   failed: 'ko',
+  paused: 'idle',
   stopped: 'idle',
   idle: 'idle',
 };

@@ -22,6 +22,7 @@ import { useNavigate } from '@tanstack/react-router';
 import {
   isTurnBudgetStop,
   lastBoundaryIndex,
+  RUN_BUDGET_STOP,
   SERVER_CREDENTIALS_STOP,
   SESSION_EXPIRED_STOP,
   type ChatMessage,
@@ -45,9 +46,15 @@ import { AttachmentRow } from './Attachments';
 import { ChevronIcon } from './icons';
 import { contentColumnSx, scrollingColumnHostSx } from './layout';
 import { ReplyMarkdown } from './markdown/ReplyMarkdown';
+import { FindBar } from './FindBar';
+import { FIND_CURRENT_HIGHLIGHT, FIND_HIGHLIGHT } from './findHighlight';
+import { ThreadFindContext, useRevealFindTarget } from './ThreadFindContext';
+import { messageScope, roundScope } from './threadFind';
+import { useThreadFind } from './useThreadFind';
 import { SelectionActions } from './SelectionActions';
 import { automaticSummary, displayText, relaySummaryParts } from './relayRows';
 import { MentionedText, SessionLink } from './SessionLink';
+import { ChildReportCard } from './ChildReportCard';
 import { callsIn, roundsOf } from './replyRounds';
 import { skillChipColor, skillSourceLabel } from './skillMenu';
 import { useShowDollarCosts } from './costDisplay';
@@ -58,6 +65,7 @@ import { railGroupId, ReplyStatsRail, turnGridSx, useRailDrawn } from './ReplySt
 import { clampWindow, extendWindow, initialWindow, WINDOW_STEP, type ThreadWindow } from './threadWindow';
 import { ToolCallList, type MoveCallToBackground, type RespondToApproval } from './ToolCallList';
 import { OrphanVideoJobs } from './VideoJobCard';
+import { RunBudgetRaiseRow } from './orchestrator/RunBudgetRaiseRow';
 
 /** What each budget the agent loop enforces is called in the thread. See isTurnBudgetStop. */
 const BUDGET_STOP_LABELS: Record<string, string> = {
@@ -73,7 +81,19 @@ const BUDGET_STOP_LABELS: Record<string, string> = {
  * happened and here is what to do about it" - the chip alone read as a dead end, which is
  * exactly what it no longer is.
  */
-function StopReasonRow({ reason, onContinue }: { reason?: string; onContinue?: () => void }) {
+function StopReasonRow({
+  reason,
+  onContinue,
+  sessionId,
+}: {
+  reason?: string;
+  onContinue?: () => void;
+  sessionId?: string | null;
+}) {
+  // Continue alone would be refused again: only a raise resumes the run. Offered on the last turn only.
+  if (reason === RUN_BUDGET_STOP) {
+    return onContinue && sessionId ? <RunBudgetRaiseRow sessionId={sessionId} /> : null;
+  }
   if (reason === 'max_tokens') {
     return (
       <Chip size="sm" color="warning" variant="soft" sx={{ mt: 1 }} data-testid="chat-truncated-chip">
@@ -293,6 +313,7 @@ const UserTurn = memo(function UserTurn({
               level="body-sm"
               sx={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}
               data-testid="chat-message-user-text"
+              data-find-scope={messageScope(message.id)}
             >
               <MentionedText text={message.content} />
             </Typography>
@@ -408,6 +429,7 @@ const AssistantTurn = memo(function AssistantTurn({
   onContinue,
   onRegenerate,
   regenerateWarns = false,
+  sessionId,
   status,
   live = false,
   skipRounds = 0,
@@ -418,6 +440,8 @@ const AssistantTurn = memo(function AssistantTurn({
   onRegenerate?: () => void;
   /** The reply's tools changed things, so Regenerate asks first. */
   regenerateWarns?: boolean;
+  /** The open conversation, for the controls a stopped turn offers; absent with none open. */
+  sessionId?: string | null;
   onRespond: RespondToApproval;
   /** Absent with no conversation open; the running-command control is then not drawn. */
   onMove?: MoveCallToBackground;
@@ -483,7 +507,11 @@ const AssistantTurn = memo(function AssistantTurn({
             {/* Per round rather than over the whole reply, which is also what keeps a code fence
                 from leaking: a block opened in one round cannot swallow the next round's prose,
                 because the next round is a parse of its own. */}
-            {presented.text.length > 0 && <ReplyMarkdown text={presented.text} />}
+            {presented.text.length > 0 && (
+              <Box data-find-scope={roundScope(message.id, index)}>
+                <ReplyMarkdown text={presented.text} />
+              </Box>
+            )}
             {presented.unfinishedArtifact !== null && (
               <Typography level="body-sm" color="warning" sx={{ mt: 1 }} data-testid="chat-unfinished-artifact">
                 {presented.unfinishedArtifact
@@ -507,7 +535,7 @@ const AssistantTurn = memo(function AssistantTurn({
         </Alert>
       )}
 
-      <StopReasonRow reason={message.stopReason} onContinue={onContinue} />
+      <StopReasonRow reason={message.stopReason} onContinue={onContinue} sessionId={sessionId} />
 
       {/* Last, under the reply it describes, which is where the eye already is while a turn
           runs. It lived in the composer before and read as a property of the input box rather
@@ -538,6 +566,7 @@ const AssistantTurn = memo(function AssistantTurn({
  */
 const SystemTurn = memo(function SystemTurn({ message }: { message: ChatMessage }) {
   if (message.sideChatOf) return <SideChatOpening message={message} from={message.sideChatOf} />;
+  if (message.childReport) return <ChildReportCard message={message} report={message.childReport} />;
   return (
     <Sheet
       variant="soft"
@@ -548,7 +577,11 @@ const SystemTurn = memo(function SystemTurn({ message }: { message: ChatMessage 
       <Typography level="body-xs" textColor="text.tertiary" sx={{ fontWeight: 'lg', mb: 0.5 }}>
         From a session you started
       </Typography>
-      <Typography level="body-sm" sx={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+      <Typography
+        level="body-sm"
+        sx={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}
+        data-find-scope={messageScope(message.id)}
+      >
         <LinkifiedText text={displayText(message)} />
       </Typography>
     </Sheet>
@@ -574,7 +607,9 @@ function SideChatOpening({ message, from }: { message: ChatMessage; from: { sess
           {from.title}
         </SessionLink>
       </Typography>
-      <ReplyMarkdown text={displayText(message)} />
+      <Box data-find-scope={messageScope(message.id)}>
+        <ReplyMarkdown text={displayText(message)} />
+      </Box>
     </Sheet>
   );
 }
@@ -627,6 +662,10 @@ function CollapsedTurn({
   kind: 'relay' | 'automatic';
 }) {
   const [open, setOpen] = useState(false);
+  useRevealFindTarget(
+    target => target.messageId === message.id,
+    () => setOpen(true)
+  );
 
   return (
     <Box sx={{ borderLeft: '2px solid', borderColor: 'divider', pl: 1.25 }}>
@@ -665,6 +704,7 @@ function CollapsedTurn({
           sx={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word', pt: 0.5, pb: 0.5 }}
           textColor="text.secondary"
           data-testid={`chat-message-${kind}-body`}
+          data-find-scope={messageScope(message.id)}
         >
           <LinkifiedText text={kind === 'automatic' ? message.content : displayText(message)} />
         </Typography>
@@ -713,7 +753,7 @@ const BoundaryRow = memo(function BoundaryRow({ message }: { message: ChatMessag
           <Typography level="body-xs" textColor="text.tertiary" sx={{ fontWeight: 'lg', mb: 0.5 }}>
             Summary of the conversation so far
           </Typography>
-          <Box data-testid="chat-boundary-summary">
+          <Box data-testid="chat-boundary-summary" data-find-scope={messageScope(message.id)}>
             <ReplyMarkdown text={message.content} />
           </Box>
         </Sheet>
@@ -732,6 +772,11 @@ const BoundaryRow = memo(function BoundaryRow({ message }: { message: ChatMessag
  */
 function EarlierMessages({ count, children }: { count: number; children: ReactNode }) {
   const [open, setOpen] = useState(false);
+  // `count` is the boundary's index, so the messages folded here are exactly those before it.
+  useRevealFindTarget(
+    target => target.messageIndex < count,
+    () => setOpen(true)
+  );
 
   return (
     <Box
@@ -768,6 +813,15 @@ function EarlierMessages({ count, children }: { count: number; children: ReactNo
 }
 
 const PIN_THRESHOLD_PX = 48;
+
+/** Find matches in amber, the current one in the primary colour (see findHighlight). */
+const findHighlightSx = {
+  [`& *::highlight(${FIND_HIGHLIGHT})`]: { backgroundColor: 'var(--joy-palette-warning-softActiveBg)' },
+  [`& *::highlight(${FIND_CURRENT_HIGHLIGHT})`]: {
+    backgroundColor: 'var(--joy-palette-primary-solidBg)',
+    color: 'var(--joy-palette-primary-solidColor)',
+  },
+};
 
 /**
  * The prompts the last message is waiting on, as one comparable value; empty when there are none.
@@ -862,6 +916,17 @@ function WindowedTurns({
   const latest = useRef(messages);
   latest.current = messages;
 
+  // A match above the window grows it to that message whole, rather than a step at a time.
+  useRevealFindTarget(
+    target => target.messageIndex >= from && target.messageIndex < to,
+    target =>
+      setHeld(current => {
+        const drawn = clampWindow(current, from, to);
+        const outside = target.messageIndex < drawn.start || (target.messageIndex === drawn.start && drawn.skip > 0);
+        return outside ? { start: target.messageIndex, skip: 0 } : current;
+      })
+  );
+
   // Re-subscribed after every step: a fresh observer reports the sentinel's state at once, so a
   // step that did not fill the margin is followed by the next without waiting for a scroll.
   useEffect(() => {
@@ -936,6 +1001,7 @@ export function MessageThread({
   liveTurn = null,
   onEditMessage,
   onRegenerate,
+  findable = false,
 }: {
   messages: ChatMessage[];
   /** Needed to read attachment bytes back; they are stored per conversation. */
@@ -980,6 +1046,8 @@ export function MessageThread({
   onEditMessage?: (messageId: string, text: string) => Promise<boolean>;
   /** Drop the last reply and run its prompt again; absent, there is no Regenerate. */
   onRegenerate?: () => void;
+  /** Mod+F opens a find bar over this thread. Only one thread on screen should take it. */
+  findable?: boolean;
 }) {
   const bottom = useRef<HTMLDivElement>(null);
   const host = useRef<HTMLDivElement>(null);
@@ -1041,7 +1109,7 @@ export function MessageThread({
           {...(onMove ? { onMove } : {})}
           // Only the last turn, and only while nothing is running: resuming writes back
           // into its own message, so a Continue on an older one would edit history.
-          {...(index === messages.length - 1 && !streaming ? { onContinue } : {})}
+          {...(index === messages.length - 1 && !streaming ? { onContinue, sessionId } : {})}
           {...(regenerable?.id === message.id && onRegenerate ? { onRegenerate, regenerateWarns } : {})}
           {...(index === messages.length - 1 && streaming ? { status, live: true } : {})}
           {...(skipRounds > 0 ? { skipRounds } : {})}
@@ -1087,6 +1155,15 @@ export function MessageThread({
     return () => observer.disconnect();
   }, [empty]);
 
+  const find = useThreadFind({
+    messages,
+    host,
+    enabled: findable && !empty,
+    onReveal: () => {
+      pinned.current = false;
+    },
+  });
+
   if (empty) {
     return (
       <Box
@@ -1107,38 +1184,49 @@ export function MessageThread({
   }
 
   return (
-    // Scrolling on the outer box, the column on the inner one: reversing the two would put the
-    // scrollbar in the middle of the window rather than at the edge of the pane.
-    <Box ref={host} onScroll={onScroll} sx={{ flex: 1, ...scrollingColumnHostSx }} data-testid="chat-thread">
-      <Box ref={column} sx={{ ...contentColumnSx, py: 3, ...turnGridSx }}>
-        <WindowedTurns
-          messages={messages}
-          from={Math.max(boundary, 0)}
-          to={messages.length}
-          host={host}
-          turn={turn}
-          above={
-            boundary > 0 && (
-              <EarlierMessages count={boundary}>
-                <WindowedTurns messages={messages} from={0} to={boundary} host={host} turn={turn} />
-              </EarlierMessages>
-            )
-          }
-        />
-        {/* The turn line normally rides the reply, but the last message is not always that reply:
+    // The find bar floats over the thread from this wrapper, so it stays put while the thread scrolls.
+    <Box sx={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', position: 'relative' }}>
+      <ThreadFindContext.Provider value={find.target}>
+        {/* Scrolling on the outer box, the column on the inner one: reversing the two would put the
+        scrollbar in the middle of the window rather than at the edge of the pane. */}
+        <Box
+          ref={host}
+          onScroll={onScroll}
+          sx={{ flex: 1, minHeight: 0, ...scrollingColumnHostSx, ...findHighlightSx }}
+          data-testid="chat-thread"
+        >
+          <Box ref={column} sx={{ ...contentColumnSx, py: 3, ...turnGridSx }}>
+            <WindowedTurns
+              messages={messages}
+              from={Math.max(boundary, 0)}
+              to={messages.length}
+              host={host}
+              turn={turn}
+              above={
+                boundary > 0 && (
+                  <EarlierMessages count={boundary}>
+                    <WindowedTurns messages={messages} from={0} to={boundary} host={host} turn={turn} />
+                  </EarlierMessages>
+                )
+              }
+            />
+            {/* The turn line normally rides the reply, but the last message is not always that reply:
             a queued prompt or a relayed message can land after it while the turn still runs. */}
-        {streaming && status && last && !(last.role === 'assistant' && !last.relay && !last.system) && (
-          <Box>{status}</Box>
-        )}
-        <OrphanVideoJobs messages={messages} />
-        {footer}
-        {/* Stays the LAST child: the auto-scroll targets it, so anything below it would be
+            {streaming && status && last && !(last.role === 'assistant' && !last.relay && !last.system) && (
+              <Box>{status}</Box>
+            )}
+            <OrphanVideoJobs messages={messages} />
+            {footer}
+            {/* Stays the LAST child: the auto-scroll targets it, so anything below it would be
             scrolled past rather than brought into view. */}
-        <div ref={bottom} />
-      </Box>
-      {onReplyToSelection && onSideChatFromSelection && (
-        <SelectionActions container={host} onReply={onReplyToSelection} onSideChat={onSideChatFromSelection} />
-      )}
+            <div ref={bottom} />
+          </Box>
+          {onReplyToSelection && onSideChatFromSelection && (
+            <SelectionActions container={host} onReply={onReplyToSelection} onSideChat={onSideChatFromSelection} />
+          )}
+        </Box>
+      </ThreadFindContext.Provider>
+      {find.open && <FindBar find={find} />}
     </Box>
   );
 }

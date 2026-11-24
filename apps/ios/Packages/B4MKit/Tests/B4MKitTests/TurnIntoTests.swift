@@ -12,8 +12,8 @@ private let track = MediaItem(id: "a1", kind: .audio, fileName: "a1.mp3", mimeTy
 final class TurnIntoPlannerTests: XCTestCase {
   func testActionsFollowTheSourceMedium() {
     XCTAssertEqual(TurnInto.actions(for: image("i1")), [.animate, .arriveAt, .morph])
-    XCTAssertEqual(TurnInto.actions(for: clip), [.grabFrame])
-    XCTAssertEqual(TurnInto.actions(for: track), [])
+    XCTAssertEqual(TurnInto.actions(for: clip), [.grabFrame, .addMusic])
+    XCTAssertEqual(TurnInto.actions(for: track), [.putOnVideo])
   }
 
   func testAnimateMakesTheImageTheFirstFrameAndCopiesItsPrompt() throws {

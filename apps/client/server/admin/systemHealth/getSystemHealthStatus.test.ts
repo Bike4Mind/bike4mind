@@ -17,7 +17,13 @@ vi.mock('@server/security/tier1SecretValidators', () => ({
 
 import { getSystemHealthStatus } from './getSystemHealthStatus';
 
-const ENV_KEYS = ['MAIL_STATUS_TRANSPORT', 'MAIL_TRANSPORT', 'B4M_SELF_HOST'] as const;
+const ENV_KEYS = [
+  'MAIL_STATUS_TRANSPORT',
+  'MAIL_TRANSPORT',
+  'B4M_SELF_HOST',
+  'B4M_ALLOW_PLAINTEXT_SECRETS',
+  'SECRET_ENCRYPTION_KEY',
+] as const;
 
 describe('getSystemHealthStatus email', () => {
   const saved: Record<string, string | undefined> = {};
@@ -35,6 +41,16 @@ describe('getSystemHealthStatus email', () => {
       if (saved[key] === undefined) delete process.env[key];
       else process.env[key] = saved[key];
     }
+  });
+
+  it('flags the plaintext opt-out only when it is set and no valid key exists', async () => {
+    expect((await getSystemHealthStatus()).plaintextSecretsOptOut).toBe(false);
+
+    process.env.B4M_ALLOW_PLAINTEXT_SECRETS = 'true';
+    expect((await getSystemHealthStatus()).plaintextSecretsOptOut).toBe(true);
+
+    process.env.SECRET_ENCRYPTION_KEY = 'a'.repeat(64);
+    expect((await getSystemHealthStatus()).plaintextSecretsOptOut).toBe(false);
   });
 
   it('reports an SES stage as configured with only MAIL_FROM when the SMTP secrets are placeholders', async () => {

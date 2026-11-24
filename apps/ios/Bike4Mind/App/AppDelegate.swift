@@ -74,9 +74,11 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         {
         case .handled: break
         case .openBrief: services.events.didTapNotification(payload)
+        case .listen(let briefID): services.navigator.startVoiceConversation(.newConversation, briefID: briefID)
         case .notHandled:
           await services.approvalNotifications.handle(actionIdentifier: actionIdentifier, payload: payload)
         }
+        services.refreshWidgetPendingDecisions()
       }
       completionHandler()
     }

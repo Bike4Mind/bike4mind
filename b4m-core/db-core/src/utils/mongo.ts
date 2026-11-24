@@ -255,7 +255,18 @@ export const getDB = () => {
   return mongoose;
 };
 
-const afterCommitBySession = new WeakMap<mongoose.mongo.ClientSession, Map<string, () => Promise<unknown>>>();
+interface TransactionState {
+  afterCommit: Map<string, () => Promise<unknown>>;
+  rollback?: { error: unknown };
+}
+
+const transactionBySession = new WeakMap<mongoose.mongo.ClientSession, TransactionState>();
+
+/** Prevents a managed transaction from committing when its caller catches a partial write's error. */
+export function markTransactionForRollback(session: mongoose.mongo.ClientSession, error: unknown): void {
+  const state = transactionBySession.get(session);
+  if (state) state.rollback ??= { error };
+}
 
 /**
  * Queues `work` to run once the withTransaction owning `session` commits; withTransaction awaits it
@@ -267,7 +278,7 @@ export function runAfterCommit(
   key: string,
   work: () => Promise<unknown>
 ): boolean {
-  const queue = afterCommitBySession.get(session);
+  const queue = transactionBySession.get(session)?.afterCommit;
   if (!queue) return false;
   queue.set(key, work);
   return true;
@@ -317,10 +328,16 @@ export const withTransaction = async <T>(
         logger?.debug('Starting transaction...', { attempt: attempt + 1 });
         // Reset per callback run: the driver re-runs it in the same session on a transient commit error.
         afterCommit = new Map();
-        afterCommitBySession.set(session, afterCommit);
-        const result = await fn(session);
-        logger?.debug('Transaction completed');
-        return result;
+        const state: TransactionState = { afterCommit };
+        transactionBySession.set(session, state);
+        try {
+          const result = await fn(session);
+          if (state.rollback) throw state.rollback.error;
+          logger?.debug('Transaction completed');
+          return result;
+        } finally {
+          transactionBySession.delete(session);
+        }
       }, transactionOptions);
       for (const work of afterCommit.values()) {
         try {

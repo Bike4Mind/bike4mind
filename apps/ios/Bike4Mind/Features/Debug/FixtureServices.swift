@@ -24,6 +24,7 @@
     static let account: any AccountAPI = FixtureAccountAPI()
     static let pendingActionAPI: any PendingActionAPI = FixturePendingActionAPI()
     static let stepUp: any StepUpAPI = FixtureStepUpAPI()
+    static let briefSchedule: any BriefScheduleAPI = FixtureBriefScheduleAPI()
     static let briefAPI: any BriefAPI = FixtureBriefAPI()
     static let instructionAPI: any InstructionAPI = FixtureInstructionAPI()
     /// The first fixture session's turn that starts out working and settles a few seconds after it is opened.
@@ -109,7 +110,7 @@
           // The first open (by the link's id) finds it composing; the polls by its own id then fail.
           if id == Self.stuck.id { throw APIError.offline }
           return Self.stuck
-        default: return Self.brief
+        default: return FixtureAnswers.applied(to: Self.brief)
         }
       }
 
@@ -117,6 +118,7 @@
         briefID: String, decisionID: String, text: String, choiceIndex: Int?
       ) async throws -> BriefReplyResult {
         try await Task.sleep(for: .seconds(1))
+        FixtureAnswers.recordReply(decisionID: decisionID)
         return BriefReplyResult(executionID: "fixture-run", sessionID: "fixture-3")
       }
     }
@@ -156,12 +158,57 @@
         case "expired": throw PendingActionFailure.expired
         case "resolved": throw PendingActionFailure.alreadyResolved
         case "offline": throw PendingActionFailure.api(.offline)
-        default: return PendingActionResult(decision: decision)
+        default:
+          FixtureAnswers.record(decision, questID: target.questID)
+          return PendingActionResult(decision: decision)
         }
       }
     }
 
-    /// Every generation runs for a few seconds, then succeeds. No outputs: the gallery fixtures stay as they are.
+    /// What the fixture approval and reply calls answered, so the next brief fetch reports it the way the server's
+    /// live decision states do.
+    private enum FixtureAnswers {
+      private static let lock = NSLock()
+      nonisolated(unsafe) private static var approvals: [String: PendingActionDecision] = [:]
+      nonisolated(unsafe) private static var replied: Set<String> = []
+
+      static func record(_ decision: PendingActionDecision, questID: String) {
+        lock.withLock { approvals[questID] = decision }
+      }
+
+      static func recordReply(decisionID: String) {
+        lock.withLock { _ = replied.insert(decisionID) }
+      }
+
+      static func applied(to brief: Brief) -> Brief {
+        let answered: [String: PendingActionDecision] = lock.withLock { approvals }
+        let repliedIDs: Set<String> = lock.withLock { replied }
+        guard !answered.isEmpty || !repliedIDs.isEmpty else { return brief }
+        let decisions = brief.decisions.map { decision -> BriefDecision in
+          if let approval = decision.approval, approval.state == .pending, let answer = answered[approval.questID] {
+            return BriefDecision(
+              id: decision.id, text: decision.text,
+              approval: BriefApprovalRef(
+                questID: approval.questID, sessionID: approval.sessionID, pendingActionTs: approval.pendingActionTs,
+                state: answer == .approve ? .approved : .denied))
+          }
+          if let question = decision.question, question.state == .open, repliedIDs.contains(decision.id) {
+            return BriefDecision(
+              id: decision.id, text: decision.text,
+              question: BriefQuestionRef(
+                questID: question.questID, sessionID: question.sessionID, options: question.options, state: .answered))
+          }
+          return decision
+        }
+        return Brief(
+          id: brief.id, status: brief.status, createdAt: brief.createdAt, composedAt: brief.composedAt,
+          periodStart: brief.periodStart, periodEnd: brief.periodEnd, headline: brief.headline,
+          happened: brief.happened, handled: brief.handled, decisions: decisions)
+      }
+    }
+
+    /// Every generation runs for a few seconds, then succeeds. No outputs: the gallery fixtures stay as they are,
+    /// except a Scene, which lands on `FixtureMediaAPI.sceneID` so its detail and "Made from" chips can be opened.
     private struct FixtureStudioAPI: StudioAPI {
       static let runTime: TimeInterval = 4
 
@@ -213,6 +260,8 @@
                   lyricsMaxChars: 10_000, duration: .adjustable(min: 30, max: 180, defaultSeconds: 120, exact: false),
                   pricing: MusicPricing(unit: .perSong, credits: 160))))
           ]
+        case .scene:
+          []
         }
       }
 
@@ -227,12 +276,17 @@
           kind: .image, id: "fixture-\(UUID().uuidString)", prompt: request.summaryPrompt, startedAt: Date())
       }
 
+      func composeScene(_ request: SceneRequest) async throws -> GenerationHandle {
+        GenerationHandle(kind: .scene, id: "fixture-\(UUID().uuidString)", prompt: request.label, startedAt: Date())
+      }
+
       func status(of handle: GenerationHandle) async throws -> GenerationStatus {
         let elapsed = Date().timeIntervalSince(handle.startedAt)
         guard elapsed >= Self.runTime else {
           return GenerationStatus(phase: .running(progress: elapsed / Self.runTime))
         }
-        return GenerationStatus(phase: .succeeded)
+        return GenerationStatus(
+          phase: .succeeded, resultFileID: handle.kind == .scene ? FixtureMediaAPI.sceneID : nil)
       }
 
       func cancel(_ handle: GenerationHandle) async throws {}
@@ -274,6 +328,18 @@
       }
       func sendEmailCode() async throws -> String { "fixture-pending-token" }
       func verify(_ proof: StepUpProof) async throws -> Date { Date().addingTimeInterval(300) }
+    }
+
+    /// Keeps the last saved schedule for the run, so Settings shows what was just picked.
+    private actor FixtureBriefScheduleAPI: BriefScheduleAPI {
+      private var stored: BriefSchedule?
+
+      func schedule() async throws -> BriefSchedule? { stored }
+
+      func save(_ schedule: BriefSchedule) async throws -> BriefSchedule {
+        stored = schedule
+        return schedule
+      }
     }
 
     private struct NoopPushTokenAPI: PushTokenAPI {
@@ -427,6 +493,8 @@
     /// players work offline.
     private struct FixtureMediaAPI: MediaAPI {
       private static let now = Date()
+      /// A video item that plays the part of a composed Scene: its trail is the picture, soundtrack and cover.
+      static let sceneID = "fixture-media-8"
 
       private static let all: [MediaItem] = (0..<24).map { index in
         let kind: MediaKind = index % 5 == 3 ? .video : (index % 5 == 4 ? .audio : .image)
@@ -479,6 +547,21 @@
           return FileLineage(
             fileID: id, ancestors: [node(image, generator: "image")], children: [node(video, generator: "video")],
             edges: [edge])
+        case Self.sceneID:
+          let scene = Self.all[8]
+          let song = Self.all[4]
+          return FileLineage(
+            fileID: id,
+            ancestors: [
+              node(scene, generator: "scene"), node(video, generator: "video"), node(song, generator: "music"),
+              node(image, generator: "image"),
+            ],
+            children: [],
+            edges: [
+              LineageEdge(parentID: video.id, childID: id, role: .sceneVideo),
+              LineageEdge(parentID: song.id, childID: id, role: .sceneAudio),
+              LineageEdge(parentID: image.id, childID: id, role: .sceneCover),
+            ])
         default:
           return FileLineage(fileID: id, ancestors: [], children: [], edges: [])
         }

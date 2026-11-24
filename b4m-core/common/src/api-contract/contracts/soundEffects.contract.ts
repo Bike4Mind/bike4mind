@@ -97,14 +97,17 @@ export const generateSoundEffectContract = defineEndpoint({
       schema: MeteredBillingOrganizationForbiddenErrorSchema,
     },
     404: {
-      description: 'A nonexistent `organization_id`, for an admin caller; for anyone else it is `403`.',
+      description:
+        'A nonexistent `organization_id`, for an admin caller; for anyone else it is `403`. A `run` that does ' +
+        'not exist or that another user or billing owner minted is `404` (`errorCode: "run_not_found"`).',
       schema: ApiErrorSchema,
     },
     422: {
       description:
         'Request body failed validation (including a `format` whose codec the provider cannot produce), or ' +
         'the caller cannot afford the effect - the latter is tagged ' +
-        '`errorCode: "insufficient_credits"` (the balance is short, or the org member credit cap is exhausted).',
+        '`errorCode: "insufficient_credits"` (the balance is short, or the org member credit cap is exhausted), ' +
+        'or `errorCode: "run_budget_exhausted"` when the `run` budget has no room for it.',
       schema: InsufficientCreditsErrorSchema,
     },
     429: {
@@ -120,7 +123,12 @@ export const generateSoundEffectContract = defineEndpoint({
         'but could not be read back, the body carries `jobId`, also sent as `X-B4M-Generation-Job-Id`.',
       schema: soundEffectsTimeoutErrorSchema,
     },
-    503: { description: 'No provider API key is configured for this deployment.', schema: ApiErrorSchema },
+    503: {
+      description:
+        'The provider is unavailable: no API key is configured for this deployment, or the provider account is out ' +
+        'of quota. Reserved credits are refunded.',
+      schema: ApiErrorSchema,
+    },
     504: unretrievableAudioResponse({ noun: 'sound effect', schema: soundEffectsTimeoutErrorSchema }),
   },
   // Served by baseApi, so apiKeyRateLimit sets the windowed X-RateLimit-* headers.

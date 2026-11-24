@@ -31,6 +31,12 @@ export const TERMINAL_SUBSCRIPTION_STATUSES: ReadonlySet<Stripe.Subscription.Sta
   'incomplete_expired',
 ]);
 
+/**
+ * Statuses under which a subscription grants its plan's storage allowance. Trialing counts: Stripe
+ * has not charged yet, but the plan's access is already live.
+ */
+export const PLAN_STORAGE_GRANTING_STATUSES: ReadonlySet<Stripe.Subscription.Status> = new Set(['active', 'trialing']);
+
 export const isCancellableSubscriptionStatus = (status: Stripe.Subscription.Status): boolean =>
   !TERMINAL_SUBSCRIPTION_STATUSES.has(status);
 

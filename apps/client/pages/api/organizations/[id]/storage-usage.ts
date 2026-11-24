@@ -3,6 +3,7 @@ import { organizationService } from '@bike4mind/services';
 import { baseApi } from '@server/middlewares/baseApi';
 import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { verifyOrgAdminRead } from '@bike4mind/server-utils/utils/orgAccess';
+import { recordOrganizationRead } from '@server/utils/orgReadAudit';
 
 // One `$group` over the org's rows; the cap only matters for an org with a very large file count,
 // where a slow answer is worse than a failed one the UI can retry.
@@ -21,6 +22,7 @@ const handler = baseApi({ auth: 'jwtOnly' })
   .get(async (req, res) => {
     const organizationId = typeof req.query.id === 'string' ? req.query.id : '';
     const { org } = await verifyOrgAdminRead(req.user!, organizationId);
+    await recordOrganizationRead(req, [org], { view: 'storage_usage' });
 
     const usage = await organizationService.getOrganizationStorageUsage(
       org,

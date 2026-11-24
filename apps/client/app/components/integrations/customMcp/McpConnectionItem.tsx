@@ -12,10 +12,17 @@ import {
   useUpdateMcpConnection,
 } from '@client/app/hooks/data/mcpConnections';
 import { useConfirmation } from '@client/app/hooks/useConfirmation';
+import McpConnectionDetailsFields, { type McpConnectionDetailsDraft } from './McpConnectionDetailsFields';
 import McpToolReview from './McpToolReview';
-import { connectionChip, needsSignIn, offeredToolCount, pendingReviewCount } from './customMcpModel';
+import {
+  connectionChip,
+  connectionDetailsPatch,
+  needsSignIn,
+  offeredToolCount,
+  pendingReviewCount,
+} from './customMcpModel';
 
-type Panel = 'none' | 'review' | 'api-key' | 'client';
+type Panel = 'none' | 'review' | 'api-key' | 'client' | 'details';
 
 const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
 
@@ -48,6 +55,8 @@ const McpConnectionItem = ({
   };
   const [clientId, setClientId] = useState('');
   const [clientSecret, setClientSecret] = useState('');
+  const [details, setDetails] = useState<McpConnectionDetailsDraft>({ displayName: '', description: '' });
+  const [detailsError, setDetailsError] = useState<string | null>(null);
 
   const testId = `custom-mcp-connection-${connection.id}`;
   const chip = connectionChip(connection);
@@ -98,6 +107,31 @@ const McpConnectionItem = ({
         onError: error => toast.error(mcpConnectionErrorMessage(error, 'Could not replace the API key.')),
       }
     );
+
+  const openDetails = () => {
+    setDetails({ displayName: connection.displayName, description: connection.description ?? '' });
+    setDetailsError(null);
+    setPanel(panel === 'details' ? 'none' : 'details');
+  };
+
+  const saveDetails = () => {
+    const changes = connectionDetailsPatch(connection, details);
+    if (Object.keys(changes).length === 0) {
+      setPanel('none');
+      return;
+    }
+    setDetailsError(null);
+    update.mutate(
+      { id: connection.id, ...changes },
+      {
+        onSuccess: () => {
+          setPanel('none');
+          toast.success('Details saved.');
+        },
+        onError: error => setDetailsError(mcpConnectionErrorMessage(error, 'Could not save the details. Try again.')),
+      }
+    );
+  };
 
   const setEnabled = (enabled: boolean) =>
     update.mutate(
@@ -220,6 +254,18 @@ const McpConnectionItem = ({
             Replace API key
           </Button>
         )}
+        {!blocked && (
+          <Button
+            size="sm"
+            variant="outlined"
+            color="neutral"
+            disabled={busy}
+            onClick={openDetails}
+            data-testid={`${testId}-edit-btn`}
+          >
+            Edit details
+          </Button>
+        )}
         <Button
           size="sm"
           variant="plain"
@@ -260,6 +306,51 @@ const McpConnectionItem = ({
           >
             Save key
           </Button>
+        </Stack>
+      )}
+
+      {panel === 'details' && (
+        <Stack
+          gap="10px"
+          sx={{ mt: '12px' }}
+          component="form"
+          data-testid={`${testId}-details`}
+          onSubmit={event => {
+            event.preventDefault();
+            if (details.displayName.trim() && !update.isPending) saveDetails();
+          }}
+        >
+          <McpConnectionDetailsFields
+            draft={details}
+            onChange={setDetails}
+            testIdPrefix={`${testId}-details`}
+            autoFocus
+          />
+          {detailsError && (
+            <Typography level="body-sm" color="danger" role="alert" data-testid={`${testId}-details-error`}>
+              {detailsError}
+            </Typography>
+          )}
+          <Stack direction="row" gap="8px">
+            <Button
+              size="sm"
+              type="submit"
+              loading={update.isPending}
+              disabled={!details.displayName.trim()}
+              data-testid={`${testId}-details-save-btn`}
+            >
+              Save details
+            </Button>
+            <Button
+              size="sm"
+              variant="plain"
+              color="neutral"
+              onClick={() => setPanel('none')}
+              data-testid={`${testId}-details-cancel-btn`}
+            >
+              Cancel
+            </Button>
+          </Stack>
         </Stack>
       )}
 

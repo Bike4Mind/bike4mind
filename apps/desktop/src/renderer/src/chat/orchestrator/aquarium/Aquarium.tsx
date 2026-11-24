@@ -4,6 +4,7 @@ import { keyframes } from '@mui/system';
 import { AGENT_STATE_LABEL, describeAgentStates } from '@shared/agentState';
 import type { ViewAction, ViewSnapshot } from '@shared/viewSnapshot';
 import type { ReactNode } from 'react';
+import { AgentPrIndicator } from '../AgentPrIndicator';
 import { AQUARIUM_BACKDROP, fishLook, fishSprite } from './aquariumArt';
 import { MIDWATER_LANE, lampAction, placeFish, type FishPlacement } from './aquariumScene';
 
@@ -98,8 +99,13 @@ function Fish({ placement, onAction }: { placement: FishPlacement; onAction(acti
       }}
     >
       <Box
-        component="button"
-        type="button"
+        role="button"
+        tabIndex={0}
+        onKeyDown={event => {
+          if (event.target !== event.currentTarget || (event.key !== 'Enter' && event.key !== ' ')) return;
+          event.preventDefault();
+          onAction({ kind: 'open-agent', agentId: agent.id });
+        }}
         onClick={() => onAction({ kind: 'open-agent', agentId: agent.id })}
         aria-label={label}
         title={detail ? `${label}\n${detail}` : label}
@@ -108,6 +114,7 @@ function Fish({ placement, onAction }: { placement: FishPlacement; onAction(acti
         data-pose={pose}
         data-zone={zone}
         sx={{
+          position: 'relative',
           display: 'block',
           width: '100%',
           height: '100%',
@@ -146,6 +153,24 @@ function Fish({ placement, onAction }: { placement: FishPlacement; onAction(acti
             }}
           />
         </Box>
+        {agent.pr && (
+          <Box
+            sx={{
+              position: 'absolute',
+              bottom: '85%',
+              left: '50%',
+              transform: 'translateX(-50%)',
+            }}
+          >
+            <AgentPrIndicator
+              agentId={agent.id}
+              pr={agent.pr}
+              onOpen={() => onAction({ kind: 'open-pr', agentId: agent.id })}
+              compact
+              scene
+            />
+          </Box>
+        )}
       </Box>
       {agent.state === 'done' && <Bubbles key={`${agent.id}-done`} />}
       {atGlass && (

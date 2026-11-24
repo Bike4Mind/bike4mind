@@ -12,6 +12,7 @@ import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { adminApi } from '@server/middlewares/adminApi';
 import { parseAdminActionReason, recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 import { respond } from '@server/utils/respond';
+import { releaseHoldsAfterVerdict } from '@server/security/interventionRelease';
 import { withAiSuggestionId } from '@server/admin/ai/audit';
 import { recordDetectionAssessmentDecision } from '@server/admin/ai/assessmentSuggestion';
 
@@ -97,6 +98,7 @@ const handler = adminApi({
       } catch (error) {
         req.logger.error(`Audit entry failed for shadow detection verdict ${result.item.id}`, error);
       }
+      await releaseHoldsAfterVerdict(req, result.item.id, verdict, reason);
       respond(res, shadowDetectionItemSchema, result.item);
     })
   );

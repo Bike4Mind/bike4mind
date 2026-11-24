@@ -124,14 +124,18 @@ describe('addSessions grant cap', () => {
       doc.users.find(u => u.userId === userId && u.projectId === 'project-1')?.permissions;
   };
 
-  it('lets a read-only adder pass on only read on the session and its knowledge files', async () => {
+  it('lets an adder holding read+share pass on only read on the session and its knowledge files', async () => {
     const session = {
       id: 'session-1',
       userId: 'someone-else',
-      users: [{ userId: ADDER, permissions: [Permission.read] }],
+      users: [{ userId: ADDER, permissions: [Permission.read, Permission.share] }],
       knowledgeIds: ['file-1'],
     };
-    const file = { id: 'file-1', userId: 'someone-else', users: [{ userId: ADDER, permissions: [Permission.read] }] };
+    const file = {
+      id: 'file-1',
+      userId: 'someone-else',
+      users: [{ userId: ADDER, permissions: [Permission.read, Permission.share] }],
+    };
 
     const grantsFor = await run(session, file);
 

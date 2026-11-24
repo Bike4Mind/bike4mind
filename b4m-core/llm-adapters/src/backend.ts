@@ -247,6 +247,12 @@ export interface ICompletionOptions {
   stop_sequences?: string[];
   abortSignal?: AbortSignal;
   /**
+   * Use single-attempt SDK requests with abort-aware retries owned by the adapter.
+   * Requires abortSignal and stream:false text, without tools, structured output, or evaluation.
+   * Omit for the backend's default retry behavior.
+   */
+  retryMode?: 'abort-aware';
+  /**
    * Auto-classified query complexity used to determine reasoning effort
    * when reasoningEffort is not explicitly set
    */
@@ -276,6 +282,18 @@ export interface ICompletionOptions {
    */
   explicitReasoning?: boolean;
   _internal?: {
+    evaluation?: {
+      admit(model: ModelInfo, wireModel: string, outputLimit: number): Promise<void>;
+      reconcile(usage: {
+        inputTokens: number;
+        outputTokens: number;
+        cacheReadTokens: number;
+        reasoningTokens?: number;
+        cacheWrite5mTokens?: number;
+        cacheWrite1hTokens?: number;
+      }): Promise<void>;
+      unknown(): Promise<void>;
+    };
     toolCallCount?: number; // Internal counter for tracking recursive tool calls (do not set manually)
     /** Set by anthropicBackend when a turn starts from another provider's tool history; keeps thinking off for its remaining rounds. */
     thinkingSuppressed?: boolean;

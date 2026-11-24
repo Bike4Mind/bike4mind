@@ -43,6 +43,7 @@ describe('resolveFieldLimits', () => {
       apiKeyId: false,
       oauthClientId: false,
       pendingActionResolution: false,
+      lakeSaveCount: false,
     });
   });
 
@@ -113,6 +114,7 @@ describe('resolveFieldLimits', () => {
       throttle: false,
       riskSignals: false,
       signupLanding: false,
+      interventionHolds: false,
     });
   });
 
@@ -125,6 +127,7 @@ describe('resolveFieldLimits', () => {
       'throttle',
       'riskSignals',
       'signupLanding',
+      'interventionHolds',
     ] as const;
     const limits = resolveFieldLimits('users', opts());
     for (const field of abuseEvidence) {
@@ -187,6 +190,7 @@ describe('resolveFieldLimits', () => {
       apiKeyId: false,
       oauthClientId: false,
       pendingActionResolution: false,
+      lakeSaveCount: false,
     });
   });
 

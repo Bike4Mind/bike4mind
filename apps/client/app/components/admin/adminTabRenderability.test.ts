@@ -11,17 +11,12 @@ describe('canRenderAdminTab', () => {
     expect(canRenderAdminTab(AdminTab.Migrate, { user: admin, enableUserMigration: true })).toBe(true);
   });
 
-  it('keeps a LiveOps deep link until the visibility query answers', () => {
-    expect(canRenderAdminTab(AdminTab.LiveOpsTriage, { user: admin })).toBe(true);
-    expect(canRenderAdminTab(AdminTab.LiveOpsTriage, { user: admin, liveOpsTriage: true })).toBe(true);
-    expect(canRenderAdminTab(AdminTab.LiveOpsTriage, { user: admin, liveOpsTriage: false })).toBe(false);
-  });
-
   it('rejects a retired tab id', () => {
     for (const retired of [
       4,
       11,
       17,
+      35,
       AdminTab.RegistrationInvites,
       AdminTab.PartnerSignupRules,
       AdminTab.HeldSignupGrants,

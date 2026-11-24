@@ -1,11 +1,14 @@
 import { Logger } from '@bike4mind/observability';
-import { EmailEvents, type EmailDeliveryRef } from '../eventBus';
+import { EmailEvents, type EmailDeliveryRef, type EmailSendDetail } from '../eventBus';
+import { putMailBody } from './mailBodyStore';
 import type { MailSendResult } from './transport';
 import type { SendEmailOptions } from './index';
 
-// EventBridge rejects an entry over 256 KB. The serialized properties understate the full entry, so
-// mail over this is certain to be rejected and anything under it is still checked by PutEvents.
-export const MAX_QUEUED_MAIL_BYTES = 256 * 1024;
+// EventBridge rejects an entry over 256 KB, and the serialized properties understate the full entry,
+// so mail over this leaves the body in the mail body store (./mailBodyStore.ts) and sends a reference.
+export const MAX_INLINE_MAIL_BYTES = 200 * 1024;
+// Well under the SES v2 40 MB message limit and what common SMTP relays accept.
+export const MAX_OFFLOADED_MAIL_BYTES = 10 * 1024 * 1024;
 
 export interface QueuedMail {
   subject: string;
@@ -24,6 +27,17 @@ export type QueuedMailOptions = SendEmailOptions & {
  */
 export type QueuedMailResult = MailSendResult | { queued: true } | false;
 
+async function withinEventLimit(properties: EmailSendDetail, mail: QueuedMail): Promise<EmailSendDetail> {
+  if (Buffer.byteLength(JSON.stringify(properties)) <= MAX_INLINE_MAIL_BYTES) return properties;
+  const bodySize = Buffer.byteLength(mail.html) + Buffer.byteLength(mail.text ?? '');
+  if (bodySize > MAX_OFFLOADED_MAIL_BYTES) {
+    throw new Error(`mail body is ${bodySize} bytes, over the ${MAX_OFFLOADED_MAIL_BYTES}-byte message limit`);
+  }
+  const key = await putMailBody(mail.text === undefined ? { html: mail.html } : { html: mail.html, text: mail.text });
+  const { body: _body, text: _text, ...rest } = properties;
+  return { ...rest, bodyRef: { key } };
+}
+
 /**
  * The mailer every process other than the email-send worker sends through. It has the shape of
  * MailService.sendEmail, so it drops into the `mailer` port the service-layer notifiers take: it
@@ -32,7 +46,7 @@ export type QueuedMailResult = MailSendResult | { queued: true } | false;
  * On a hosted stage the mail is published as an email.send event and the worker
  * (apps/workers/src/events/sendEmail.ts) is the one process that holds the transport. Self-host
  * has no event bus, so the mail goes to the SMTP mailer in this process and the result is the
- * delivery result. packages/scripts/src/checkMailSendSites.test.ts keeps direct sends from
+ * delivery result. packages/scripts/src/checkMailSendSites.repo.test.ts keeps direct sends from
  * coming back.
  */
 export const queuedMailer = {
@@ -56,11 +70,7 @@ export const queuedMailer = {
       ...(ref && { ref }),
     };
     try {
-      const size = Buffer.byteLength(JSON.stringify(properties));
-      if (size > MAX_QUEUED_MAIL_BYTES) {
-        throw new Error(`mail is ${size} bytes, over the ${MAX_QUEUED_MAIL_BYTES}-byte event limit`);
-      }
-      const result = await EmailEvents.Send.publish(properties);
+      const result = await EmailEvents.Send.publish(await withinEventLimit(properties, mail));
       // PutEvents reports a rejected entry in its response instead of throwing.
       const rejected = result?.Entries?.find(entry => entry.ErrorCode);
       if (rejected) throw new Error(`${rejected.ErrorCode}: ${rejected.ErrorMessage ?? 'entry rejected'}`);

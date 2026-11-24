@@ -58,6 +58,8 @@ export interface IShadowDetectionDocument extends Document {
   verdict: ShadowDetectionVerdict | null;
   verdicts: ShadowDetectionVerdictEntry[];
   revision: number;
+  /** Internal claim-creation fence; not a detection revision or an API field. */
+  holdClaimVersion?: number;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -131,6 +133,7 @@ export const ShadowDetectionSchema: Schema<IShadowDetectionDocument> = new Schem
     verdict: { type: String, enum: [...SHADOW_DETECTION_VERDICTS, null], default: null },
     verdicts: { type: [VerdictEntrySchema], default: [] },
     revision: { type: Number, default: 0 },
+    holdClaimVersion: { type: Number, default: 0 },
   },
   { timestamps: true, versionKey: false, collection: 'ShadowDetection' }
 );

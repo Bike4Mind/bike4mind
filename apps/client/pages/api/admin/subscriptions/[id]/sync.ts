@@ -28,6 +28,7 @@ import { toAdminSubscriptionRows, type SubscriptionDoc } from '@server/admin/sub
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { adminApi } from '@server/middlewares/adminApi';
 import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
+import { releasePlanStorageLimit } from '@bike4mind/server-utils/subscriptions/releasePlanStorageLimit';
 import { applyStripeSubscriptionState } from '@bike4mind/server-utils/subscriptions/applyStripeSubscriptionState';
 import { stripeSyncChanges } from '@server/subscriptions/stripeSyncChanges';
 import {
@@ -156,7 +157,7 @@ const handler = adminApi({
       const now = new Date();
 
       // The write and its strict audit commit together, so an audit failure rolls the sync back.
-      const changes = await withTransaction(async () => {
+      const { changes, endedUserId } = await withTransaction(async () => {
         let before: ISubscription | null;
         let diff: AdminSubscriptionSyncChange[];
         if (stripeSub) {
@@ -191,8 +192,17 @@ const handler = adminApi({
           details: { subscriptionId, subscriptionRecordId: id, stripeMissing: stripeSub === null },
         });
         await billingMismatchRepository.resolveForSubscription(id, 'sync', now);
-        return diff;
+        const status = stripeSub?.status ?? (isFinished(before) ? before.status : 'canceled');
+        return {
+          changes: diff,
+          endedUserId:
+            before.ownerType === 'User' && TERMINAL_SUBSCRIPTION_STATUSES.has(status) ? before.ownerId : null,
+        };
       });
+
+      // Only committed terminal state can remove an allowance. The canonical stored owner wins
+      // over provider metadata, and no entitlement cleanup runs for previews or rolled-back audits.
+      if (endedUserId) await releasePlanStorageLimit(endedUserId, subscriptionId, req.logger);
 
       try {
         if (owner.notifyUserId) {

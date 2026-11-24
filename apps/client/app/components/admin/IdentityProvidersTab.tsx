@@ -448,6 +448,10 @@ const IdentityProvidersTab: React.FC = () => {
                     }
                     placeholder="https://idp.company.com"
                   />
+                  <FormHelperText>
+                    The IdP&apos;s entity ID, exactly as its metadata lists it. Sign-ins whose Issuer does not match are
+                    refused.
+                  </FormHelperText>
                 </FormControl>
 
                 <FormControl>

@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { AuthenticatedApiClient, SessionChangedError } from '@bike4mind/client-auth';
 import { AxiosError, type AxiosAdapter } from 'axios';
 import { isCredentialAccepted401 } from '../../../auth/unauthorizedBody';
-import { MUSIC_VALIDATION_ERROR_CODES, VIDEO_VALIDATION_ERROR_CODES } from '@bike4mind/common';
+import { ImageModels, MUSIC_VALIDATION_ERROR_CODES, VIDEO_VALIDATION_ERROR_CODES } from '@bike4mind/common';
 import { createStudioDiagnostics } from '../StudioDiagnostics';
 import { MediaApiClient } from '../../media/MediaApiClient';
 import { MediaStore } from '../../media/MediaStore';
@@ -20,7 +20,10 @@ import {
 } from './StudioGenerationService';
 
 const account = { environmentUrl: 'https://example.com', accountId: 'one' };
-const image: StudioGenerationRequest = { kind: 'image', body: { prompt: 'a bicycle', model: 'gpt-image-2' } };
+const image: StudioGenerationRequest = {
+  kind: 'image',
+  body: { mode: 'generate', prompt: 'a bicycle', model: ImageModels.GPT_IMAGE_2 },
+};
 const music: StudioGenerationRequest = { kind: 'music', body: { prompt: 'calm music', model: 'lyria-3.5' } };
 
 describe('Studio generation', () => {
@@ -35,8 +38,6 @@ describe('Studio generation', () => {
     createStudioImages: vi.fn(),
     listStudioImages: vi.fn(),
     getFile: vi.fn(),
-    generateImage: vi.fn(),
-    getQuest: vi.fn(),
     fetchGenerated: vi.fn(),
     createMusicGeneration: vi.fn(),
     getMusicGeneration: vi.fn(),
@@ -67,16 +68,19 @@ describe('Studio generation', () => {
           ? {
               scope: sessionScopeKey(scope),
               client: client as unknown as MediaApiClient,
-              cdnUrl: 'https://cdn.example',
             }
           : null,
     };
     service = new StudioGenerationService(deps);
-    client.generateImage.mockResolvedValue({ questId: 'quest' });
-    client.getQuest.mockResolvedValue({
-      id: 'quest',
-      status: 'done',
-      files: [{ name: 'image.png', url: '/image.png', isImage: true }],
+    client.createStudioImages.mockResolvedValue({ groupId: 'group', jobs: [{ id: 'remote-image' }] });
+    client.listStudioImages.mockResolvedValue({
+      data: [{ id: 'remote-image', state: 'succeeded', output: { fileId: 'file' }, error: null }],
+      next_cursor: null,
+    });
+    client.getFile.mockResolvedValue({
+      moderation_status: 'clean',
+      download_url: '/image.png',
+      mime_type: 'image/png',
     });
     client.fetchGenerated.mockResolvedValue({ bytes: Buffer.from('image'), contentType: 'image/png' });
     client.createMusicGeneration.mockResolvedValue({ id: 'song' });
@@ -112,7 +116,7 @@ describe('Studio generation', () => {
       const request = { ...image, selection } as unknown as StudioGenerationRequest;
       await expect(service.submit(session.id, request)).rejects.toThrow();
       expect(authorize).not.toHaveBeenCalled();
-      expect(client.generateImage).not.toHaveBeenCalled();
+      expect(client.createStudioImages).not.toHaveBeenCalled();
       expect((await workspaces.get(session.id))?.jobs).toEqual([]);
     }
   );
@@ -122,8 +126,26 @@ describe('Studio generation', () => {
     expect(authorize).not.toHaveBeenCalled();
     authorize.mockResolvedValue(false);
     await expect(service.submit(session.id, image)).rejects.toThrow('not approved');
-    expect(client.generateImage).not.toHaveBeenCalled();
+    expect(client.createStudioImages).not.toHaveBeenCalled();
     expect((await workspaces.get(session.id))?.jobs).toEqual([]);
+  });
+  it('rejects an image request without a mode before approval', async () => {
+    const session = await sessions.create();
+    const legacy = { kind: 'image', body: { prompt: 'a bicycle', model: 'gpt-image-2' } };
+    await expect(service.submit(session.id, legacy as unknown as StudioGenerationRequest)).rejects.toThrow();
+    expect(authorize).not.toHaveBeenCalled();
+    expect(client.createStudioImages).not.toHaveBeenCalled();
+  });
+  it('settles a saved quest-based image job as unknown without polling or resubmitting', async () => {
+    const session = await sessions.create();
+    const submitted = await service.submit(session.id, image);
+    const { imageBatch: _batch, providerGroupId: _group, providerJobIds: _ids, ...rest } = submitted;
+    await workspaces.upsertJob(session.id, { ...rest, providerJobId: 'quest' });
+    const [recovered] = await new StudioGenerationService(deps).recover(session.id);
+    expect(recovered).toMatchObject({ id: submitted.id, state: 'unknown', providerJobId: 'quest' });
+    expect(recovered.error).toContain('cannot be recovered');
+    expect(client.listStudioImages).not.toHaveBeenCalled();
+    expect(client.createStudioImages).toHaveBeenCalledTimes(1);
   });
   it('submits one image batch, durably recovers child IDs, and keeps partial successes beside failures', async () => {
     const session = await sessions.create();
@@ -139,7 +161,7 @@ describe('Studio generation', () => {
     const job = await service.submit(session.id, {
       kind: 'image',
       count: 2,
-      body: { model: 'gpt-image-2', mode: 'generate', prompt: 'Two images', size: '1024x1024' },
+      body: { model: ImageModels.GPT_IMAGE_2, mode: 'generate', prompt: 'Two images', size: '1024x1024' },
     });
     expect(client.createStudioImages).toHaveBeenCalledWith(
       expect.objectContaining({ model: 'gpt-image-2', size: '1024x1024' }),
@@ -156,7 +178,6 @@ describe('Studio generation', () => {
     expect((await workspaces.getAsset(session.id, `${job.id}_0`))?.creation?.settings.count).toBe(2);
     await service.recover(session.id);
     expect(client.createStudioImages).toHaveBeenCalledTimes(1);
-    expect(client.generateImage).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -201,10 +222,10 @@ describe('Studio generation', () => {
       });
     });
     api.getAxiosInstance().defaults.adapter = transport;
-    deps.connection = () => ({ scope: sessionScopeKey(account), client: new MediaApiClient(api), cdnUrl: '' });
+    deps.connection = () => ({ scope: sessionScopeKey(account), client: new MediaApiClient(api) });
     const job = await service.submit(session.id, {
       kind: 'image',
-      body: { mode: 'generate', model: 'gpt-image-2', prompt: 'A garden' },
+      body: { mode: 'generate', model: ImageModels.GPT_IMAGE_2, prompt: 'A garden' },
     });
     expect(job.state).toBe(expected);
     expect(job.error).toContain('Original server explanation');
@@ -252,7 +273,7 @@ describe('Studio generation', () => {
       });
     });
     api.getAxiosInstance().defaults.adapter = transport;
-    deps.connection = () => ({ scope: sessionScopeKey(account), client: new MediaApiClient(api), cdnUrl: '' });
+    deps.connection = () => ({ scope: sessionScopeKey(account), client: new MediaApiClient(api) });
     const request = requests.find(request => request.kind === kind)!;
     const job = await service.submit(session.id, request);
     expect(job.state).toBe(expected);
@@ -306,10 +327,10 @@ describe('Studio generation', () => {
     deps.diagnostic = createStudioDiagnostics(logger);
     await service.submit(session.id, image);
     await service.submit(session.id, image);
-    client.getQuest.mockRejectedValueOnce(new Error('TOKEN private prompt https://signed.test/private-query'));
+    client.listStudioImages.mockRejectedValueOnce(new Error('TOKEN private prompt https://signed.test/private-query'));
     const recovered = await service.recover(session.id);
     expect(recovered.map(job => job.state).sort()).toEqual(['completed', 'queued']);
-    expect(client.generateImage).toHaveBeenCalledTimes(2);
+    expect(client.createStudioImages).toHaveBeenCalledTimes(2);
     const logged = JSON.stringify(logger.warn.mock.calls);
     expect(logged).toContain('job-recovery');
     for (const secret of ['TOKEN', 'private prompt', 'signed.test', session.id]) expect(logged).not.toContain(secret);
@@ -378,7 +399,7 @@ describe('Studio generation', () => {
     await service.removeAsset(child.id, asset.id);
     await service.importChatAsset(child.id, asset);
     expect(await workspaces.getAsset(child.id, asset.id)).toBeNull();
-    expect(client.generateImage).not.toHaveBeenCalled();
+    expect(client.createStudioImages).not.toHaveBeenCalled();
   });
 
   const requests: StudioGenerationRequest[] = [
@@ -396,7 +417,7 @@ describe('Studio generation', () => {
     expect(asset?.creation).toEqual(
       expect.objectContaining({ prompt: 'a bicycle', settings: expect.objectContaining({ model: 'gpt-image-2' }) })
     );
-    expect(client.generateImage).toHaveBeenCalledTimes(1);
+    expect(client.createStudioImages).toHaveBeenCalledTimes(1);
   });
   it.each(['none', 'current-session'] as const)(
     'persists %s context selection across job, output and disk reload',
@@ -407,8 +428,8 @@ describe('Studio generation', () => {
       await service.reconcile(session.id, job.id);
       const reloaded = new StudioWorkspaceStore(join(root, 'studio'), sessions);
       expect((await reloaded.getAsset(session.id, `${job.id}_0`))?.creation?.selection).toEqual({ mode });
-      expect(client.generateImage.mock.calls[0]?.[0]).not.toHaveProperty('selection');
-      expect(client.generateImage).toHaveBeenCalledTimes(1);
+      expect(client.createStudioImages.mock.calls[0]?.[0]).not.toHaveProperty('selection');
+      expect(client.createStudioImages).toHaveBeenCalledTimes(1);
     }
   );
   it('imports a completed chat video into workspace storage without another provider call', async () => {
@@ -437,18 +458,22 @@ describe('Studio generation', () => {
     await service.recover(session.id);
     const expired = await workspaces.getJob(session.id, job.id);
     expect(expired).toEqual(
-      expect.objectContaining({ state: 'unknown', recoveryExpired: true, providerJobId: 'quest' })
+      expect.objectContaining({ state: 'unknown', recoveryExpired: true, providerJobId: 'remote-image' })
     );
-    expect(client.getQuest).not.toHaveBeenCalled();
+    expect(client.listStudioImages).not.toHaveBeenCalled();
     await service.reconcile(session.id, job.id);
-    expect(client.getQuest).toHaveBeenCalledTimes(1);
-    expect(client.generateImage).toHaveBeenCalledTimes(1);
+    expect(client.listStudioImages).toHaveBeenCalledTimes(1);
+    expect(client.createStudioImages).toHaveBeenCalledTimes(1);
   });
   it.each(requests)('adapts $kind with durable output and no repeated spend during recovery', async request => {
     const session = await sessions.create();
     const submitted = await service.submit(session.id, request);
     if (request.kind === 'image') {
-      expect(client.generateImage).toHaveBeenCalledWith({ ...request.body, prompt_resolution: 'literal' });
+      expect(client.createStudioImages).toHaveBeenCalledWith(
+        expect.objectContaining(request.body),
+        1,
+        submitted.idempotencyKey
+      );
     }
     const restarted = new StudioGenerationService(deps);
     const [job] = await restarted.recover(session.id);
@@ -463,7 +488,7 @@ describe('Studio generation', () => {
     await restarted.recover(session.id);
     expect((await workspaces.get(session.id))?.assets).toHaveLength(1);
     expect(
-      client.generateImage.mock.calls.length +
+      client.createStudioImages.mock.calls.length +
         client.createMusicGeneration.mock.calls.length +
         client.createVideoGeneration.mock.calls.length +
         client.synthesizeSpeech.mock.calls.length +
@@ -473,15 +498,15 @@ describe('Studio generation', () => {
 
   it('persists submitting before the network call and quarantines ambiguous submissions', async () => {
     const session = await sessions.create();
-    client.generateImage.mockImplementation(async () => {
+    client.createStudioImages.mockImplementation(async () => {
       expect((await workspaces.get(session.id))?.jobs[0].state).toBe('submitting');
       throw new Error('transport timeout');
     });
     const job = await service.submit(session.id, image);
     expect(job.state).toBe('unknown');
     await new StudioGenerationService(deps).recover(session.id);
-    expect(client.generateImage).toHaveBeenCalledTimes(1);
-    expect(client.getQuest).not.toHaveBeenCalled();
+    expect(client.createStudioImages).toHaveBeenCalledTimes(1);
+    expect(client.listStudioImages).not.toHaveBeenCalled();
   });
 
   it('retains provider IDs on interrupted downloads and serializes concurrent reconciliation', async () => {
@@ -525,7 +550,7 @@ describe('Studio generation', () => {
     await expect(service.locateAsset('../escape', '../asset')).rejects.toThrow();
     scope = { ...account, accountId: 'two' };
     await expect(service.reconcile(first.id, job.id)).rejects.toThrow();
-    expect(client.getQuest).not.toHaveBeenCalled();
+    expect(client.listStudioImages).not.toHaveBeenCalled();
     scope = null;
     await expect(service.recover(first.id)).rejects.toThrow('Sign in');
   });
@@ -537,7 +562,7 @@ describe('Studio generation', () => {
       return true;
     });
     await expect(service.submit(session.id, image)).rejects.toThrow('account changed');
-    expect(client.generateImage).not.toHaveBeenCalled();
+    expect(client.createStudioImages).not.toHaveBeenCalled();
   });
 
   it('rejects out-of-workspace asset URLs', async () => {

@@ -16,6 +16,7 @@ import {
   incompleteResult,
   isLatencyObservation,
   mergeResults,
+  serializeResults,
   gatedMedianSec,
   gatedMedianFirstTokenSec,
   latencyBreach,
@@ -122,7 +123,7 @@ export function createAiLatencySuite({
       results,
     };
 
-    fs.writeFileSync(resultsPath, JSON.stringify(output, null, 2));
+    fs.writeFileSync(resultsPath, serializeResults(output));
   }
 
   function prompt(index: number) {

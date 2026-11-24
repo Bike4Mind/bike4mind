@@ -8,7 +8,6 @@ import EmailVerificationTab from '@client/app/components/admin/EmailVerification
 import AdminSystemHealthTab from '@client/app/components/admin/AdminSystemHealthTab';
 import { useUser } from '@client/app/contexts/UserContext';
 import { Box, TabPanel, Tabs } from '@mui/joy';
-import { useLiveOpsTriageEnv } from '@client/app/hooks/data/admin';
 import { lazy, useCallback } from 'react';
 import { useShallow } from 'zustand/react/shallow';
 import SessionContainer from '@client/app/components/Session/SessionContainer';
@@ -54,9 +53,6 @@ export { AdminTab } from './adminSidebarConfig';
 const AdminDashboardTab = dynamic(() => import('./AdminDashboardTab'), { ssr: false });
 const AiOperationsTab = dynamic(() => import('./AiOperationsTab'), { ssr: false });
 
-const AdminLiveOpsTriageMultiConfigTab = dynamic(() => import('./AdminLiveOpsTriageMultiConfigTab'), {
-  ssr: false,
-});
 const WebhookAuditLogsTab = dynamic(() => import('./WebhookAuditLogs'), { ssr: false });
 const AuditLogTab = dynamic(() => import('./AuditLog'), { ssr: false });
 const AccessReviewTab = dynamic(() => import('./AccessReview'), { ssr: false });
@@ -75,6 +71,7 @@ const WaitlistTab = dynamic(() => import('./WaitlistTab'), { ssr: false });
 const SignupDomainHoldsTab = dynamic(() => import('./SignupDomainHoldsTab'), { ssr: false });
 const SignupRiskReviewTab = dynamic(() => import('./SignupRiskReviewTab'), { ssr: false });
 const ModerationIncidentsTab = dynamic(() => import('./ModerationIncidentsTab'), { ssr: false });
+const TextModerationReviewTab = dynamic(() => import('./TextModerationReviewTab'), { ssr: false });
 const ShadowDetectionsTab = dynamic(() => import('./ShadowDetectionsTab'), { ssr: false });
 const StripeDisputesTab = dynamic(() => import('./StripeDisputesTab'), { ssr: false });
 const OAuthClientsTab = dynamic(() => import('./OAuthClientsTab'), { ssr: false });
@@ -95,6 +92,7 @@ const RateLimitsTab = dynamic(() => import('./RateLimits'), { ssr: false });
 const DlqReplayTab = dynamic(() => import('./DlqReplayTab'), { ssr: false });
 const ApiKeyScopePreflightTab = dynamic(() => import('./ApiKeyScopePreflightTab'), { ssr: false });
 const LegacyApiKeysTab = dynamic(() => import('./LegacyApiKeysTab'), { ssr: false });
+const SpendMonitorTab = dynamic(() => import('./SpendMonitorTab'), { ssr: false });
 const TutorialsTab = dynamic(() => import('./TutorialsTab'), { ssr: false });
 const IntegrationHealthTab = dynamic(() => import('./IntegrationHealth'), { ssr: false });
 const IntegrationDemandTab = dynamic(() => import('./IntegrationDemandTab'), { ssr: false });
@@ -118,10 +116,6 @@ const AdminPage = ({ enableUserMigration }: AdminPageProps) => {
   const [storedActiveTab, setActiveTab] = useAdminModal(useShallow(state => [state.activeTab, state.setActiveTab]));
   const { currentUser } = useUser();
 
-  // LiveOps Triage tab visibility - show everywhere except fork production environments
-  const { data: liveopsEnvData, isError: isLiveOpsEnvError } = useLiveOpsTriageEnv(!!currentUser?.isAdmin);
-  const showLiveOpsTriageTab = liveopsEnvData?.showTab ?? false;
-
   // Selecting a tab this screen cannot draw would leave the content pane blank, so the URL sync
   // treats it as unknown and corrects the store instead.
   const isAdminTabRenderable = useCallback(
@@ -129,9 +123,8 @@ const AdminPage = ({ enableUserMigration }: AdminPageProps) => {
       canRenderAdminTab(tab, {
         user: currentUser,
         enableUserMigration,
-        liveOpsTriage: isLiveOpsEnvError ? false : liveopsEnvData?.showTab,
       }),
-    [currentUser, enableUserMigration, liveopsEnvData, isLiveOpsEnvError]
+    [currentUser, enableUserMigration]
   );
 
   useAdminTabUrlSync(storedActiveTab, setActiveTab, isAdminTabRenderable);
@@ -230,6 +223,9 @@ const AdminPage = ({ enableUserMigration }: AdminPageProps) => {
           <TabPanel value={AdminTab.ModerationIncidents}>
             {activeTab === AdminTab.ModerationIncidents && <ModerationIncidentsTab />}
           </TabPanel>
+          <TabPanel value={AdminTab.TextModerationReview}>
+            {activeTab === AdminTab.TextModerationReview && <TextModerationReviewTab />}
+          </TabPanel>
           <TabPanel value={AdminTab.ShadowDetections}>
             {activeTab === AdminTab.ShadowDetections && <ShadowDetectionsTab />}
           </TabPanel>
@@ -249,11 +245,6 @@ const AdminPage = ({ enableUserMigration }: AdminPageProps) => {
           <TabPanel value={AdminTab.SystemSecrets}>
             {activeTab === AdminTab.SystemSecrets && <SystemSecretsTab />}
           </TabPanel>
-          {showLiveOpsTriageTab && (
-            <TabPanel value={AdminTab.LiveOpsTriage}>
-              {activeTab === AdminTab.LiveOpsTriage && <AdminLiveOpsTriageMultiConfigTab />}
-            </TabPanel>
-          )}
           <TabPanel value={AdminTab.ModelLogs}>{activeTab === AdminTab.ModelLogs && <ModelLogsTab />}</TabPanel>
           <TabPanel value={AdminTab.ModelMetrics}>
             {activeTab === AdminTab.ModelMetrics && <ModelMetricsTab />}
@@ -329,6 +320,9 @@ const AdminPage = ({ enableUserMigration }: AdminPageProps) => {
           <TabPanel value={AdminTab.DlqReplay}>{activeTab === AdminTab.DlqReplay && <DlqReplayTab />}</TabPanel>
           <TabPanel value={AdminTab.ApiKeyScopePreflight}>
             {activeTab === AdminTab.ApiKeyScopePreflight && <ApiKeyScopePreflightTab />}
+          </TabPanel>
+          <TabPanel value={AdminTab.SpendMonitor}>
+            {activeTab === AdminTab.SpendMonitor && <SpendMonitorTab />}
           </TabPanel>
           <TabPanel value={AdminTab.LegacyApiKeys}>
             {activeTab === AdminTab.LegacyApiKeys && <LegacyApiKeysTab />}

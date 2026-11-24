@@ -128,6 +128,7 @@ export async function routeHelpCommentToFeedback({
   const feedback = new FeedbackModel({
     _id: feedbackId,
     userId,
+    userIdVerified: true,
     status: FeedbackStatus.New,
     // `username` is required by the schema, so a submitter carrying neither display field would
     // fail validation on an otherwise valid report. `userId` is the last resort for exactly that

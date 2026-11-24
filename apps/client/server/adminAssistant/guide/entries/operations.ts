@@ -63,30 +63,6 @@ export const OPERATIONS_GUIDE: readonly AdminGuideEntry[] = [
     keywords: ['environment variables', 'env vars', 'secret override', 'gui override', 'sst secret', 'api keys config'],
   },
   {
-    id: 'liveops-triage',
-    title: 'LiveOps Triage',
-    summary:
-      'Manages triage configurations that read error alerts from a Slack channel, use an AI model to prioritize them and file GitHub or Jira issues. Each configuration can be dry-run, run on demand and reviewed in run history.',
-    views: ['admin.liveops_triage'],
-    settings: [],
-    howTo: [
-      'Open LiveOps Triage. The left list shows each configuration with its tracker, interval and an On or Off chip. Click Add for a new one, or select one to edit it.',
-      'Fill in the name, issue tracker Type (GitHub or Jira), Slack workspace, source and output channel, run interval, model and Max Errors Per Run, then click Create or Save.',
-      'Click Dry Run to see what would be filed without creating issues. Click Run Now to create real issues (the tooltip warns it is not a test). Both open the Lookback Period modal, where you pick the period.',
-      'Use the Active Runs section to follow current and recent runs. The System Health card in a configuration shows whether its dependencies are ready.',
-    ],
-    keywords: [
-      'error alerts',
-      'incident triage',
-      'create github issues',
-      'jira issues',
-      'dry run',
-      'run now',
-      'run history',
-      'prompt template',
-    ],
-  },
-  {
     id: 'sre-agent',
     title: 'SRE agent',
     summary:

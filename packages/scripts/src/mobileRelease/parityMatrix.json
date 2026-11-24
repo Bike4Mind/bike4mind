@@ -69,7 +69,8 @@
       "title": "Studio media gallery",
       "web": "green",
       "ios": "green",
-      "android": "red"
+      "android": "yellow",
+      "notes": "Android: green once the gallery items in apps/android/DEVICE_TESTING.md pass on a device."
     },
     {
       "id": "deep-links",
@@ -84,7 +85,7 @@
       "title": "Share sheet, camera and voice capture",
       "web": "na",
       "ios": "green",
-      "android": "red"
+      "android": "yellow"
     },
     {
       "id": "home-screen-widgets",
@@ -106,7 +107,8 @@
       "title": "Live agent progress outside the app (Live Activities)",
       "web": "na",
       "ios": "green",
-      "android": "red"
+      "android": "yellow",
+      "notes": "Android: green once the agent-run items in apps/android/DEVICE_TESTING.md pass on a device, including an Android 16 Live Update."
     }
   ]
 }

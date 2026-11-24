@@ -1,5 +1,14 @@
-import type { IUserDocument } from '@bike4mind/common';
 import {
+  CreditHolderType,
+  getQuestErrorCode,
+  type CompletionRunAttribution,
+  type IUserDocument,
+} from '@bike4mind/common';
+import {
+  DelegatedItemModel,
+  delegatedItemRepository,
+  CompletionRunModel,
+  completionRunRepository,
   CreditTransaction,
   Organization,
   PendingCreditHoldModel,
@@ -47,10 +56,12 @@ beforeAll(async () => {
   await mongoose.connect(server.getUri(), { autoIndex: false });
   await settleAutoIndexBuilds(mongoose);
   await Promise.all([
+    DelegatedItemModel.createCollection(),
     User.createCollection(),
     Organization.createCollection(),
     PendingCreditHoldModel.createCollection(),
     CreditTransaction.createCollection(),
+    CompletionRunModel.createCollection(),
   ]);
 });
 
@@ -58,10 +69,12 @@ afterEach(async () => {
   vi.restoreAllMocks();
   acknowledgement.loseNextCommit = false;
   await Promise.all([
+    DelegatedItemModel.collection.deleteMany({}),
     User.collection.deleteMany({}),
     Organization.collection.deleteMany({}),
     PendingCreditHoldModel.collection.deleteMany({}),
     CreditTransaction.collection.deleteMany({}),
+    CompletionRunModel.collection.deleteMany({}),
   ]);
 });
 
@@ -70,9 +83,9 @@ afterAll(async () => {
   await server?.stop();
 });
 
-async function caller() {
+async function caller(currentCredits = 100) {
   const id = new Types.ObjectId();
-  await User.collection.insertOne({ _id: id, currentCredits: 100 });
+  await User.collection.insertOne({ _id: id, currentCredits });
   const user = { id: id.toHexString(), organizationId: null } as IUserDocument;
   return {
     req: { user, logger },
@@ -230,5 +243,92 @@ describe('request credit hold transactions against a replica set', () => {
     expect(await balance()).toBe(100 - charged);
     expect(await CreditTransaction.countDocuments()).toBe(charged === 0 ? 0 : 1);
     expect(await PendingCreditHoldModel.countDocuments({ settledAt: { $exists: false } })).toBe(0);
+  });
+
+  it('rolls the run claim back when the balance hold is refused', async () => {
+    const { req, balance } = await caller(10);
+    const created = await completionRunRepository.create({
+      userId: req.user.id,
+      ownerType: CreditHolderType.User,
+      ownerId: req.user.id,
+      budgetCredits: 50,
+    });
+    const run: CompletionRunAttribution = { runId: created.runId, role: 'worker', purpose: 'tool' };
+
+    const refusal = await reserveRequestCredits({
+      req,
+      requiredCredits: 40,
+      enforceCredits: true,
+      featureLabel: 'test',
+      run,
+    }).catch((error: unknown) => error);
+
+    expect(getQuestErrorCode(refusal)).toBe('insufficient_credits');
+    expect(await balance()).toBe(10);
+    expect((await completionRunRepository.findById(created.runId))?.committedCredits).toBe(0);
+    expect(await PendingCreditHoldModel.countDocuments()).toBe(0);
+  });
+});
+
+describe('delegation admission preserves the paid reservation transaction', () => {
+  async function owned() {
+    const { req, balance } = await caller();
+    const item = await delegatedItemRepository.create({
+      userId: req.user.id,
+      intent: 'Summarize',
+      url: null,
+      text: 'words',
+      fileIds: [],
+    });
+    const id = item._id.toHexString();
+    const now = new Date();
+    await delegatedItemRepository.claim(id, now, 180_000, 'A');
+    return { id, req, balance, now };
+  }
+  it('refuses stale admission before any real hold or debit and preserves free-path ownership checks', async () => {
+    const { id, req, balance, now } = await owned();
+    await delegatedItemRepository.claim(id, new Date(now.getTime() + 180_000), 180_000, 'B');
+    const admit = async (session?: mongoose.mongo.ClientSession) => {
+      if (!(await delegatedItemRepository.fenceClaim(id, 'A', new Date(now.getTime() + 180_001), session)))
+        throw new Error('lost owner');
+    };
+    for (const enforceCredits of [true, false]) {
+      await expect(
+        reserveRequestCredits({ req, enforceCredits, requiredCredits: 10, featureLabel: 'test', admit })
+      ).rejects.toThrow('lost owner');
+    }
+    expect(await balance()).toBe(100);
+    expect(await PendingCreditHoldModel.countDocuments()).toBe(0);
+  });
+  it('rolls admission and balance back if recording fails, then permits refund after ownership is lost', async () => {
+    const { id, req, balance, now } = await owned();
+    const admit = async (session?: mongoose.mongo.ClientSession) => {
+      expect(session?.inTransaction()).toBe(true);
+      if (!(await delegatedItemRepository.fenceClaim(id, 'A', now, session))) throw new Error('lost owner');
+    };
+    const record = pendingCreditHoldRepository.record.bind(pendingCreditHoldRepository);
+    vi.spyOn(pendingCreditHoldRepository, 'record').mockImplementationOnce(async (...args) => {
+      await record(...args);
+      throw new Error('pending write interrupted');
+    });
+    await expect(
+      reserveRequestCredits({ req, enforceCredits: true, requiredCredits: 10, featureLabel: 'test', admit })
+    ).rejects.toThrow('pending write interrupted');
+    expect((await delegatedItemRepository.findById(id))?.claimWriteVersion).toBe(0);
+    expect(await balance()).toBe(100);
+    expect(await PendingCreditHoldModel.countDocuments()).toBe(0);
+    const reservation = await reserveRequestCredits({
+      req,
+      enforceCredits: true,
+      requiredCredits: 10,
+      featureLabel: 'test',
+      admit,
+    });
+    expect(await balance()).toBe(90);
+    expect((await delegatedItemRepository.findById(id))?.claimWriteVersion).toBe(1);
+    await delegatedItemRepository.claim(id, new Date(now.getTime() + 180_000), 180_000, 'B');
+    await reservation.refund();
+    await reservation.refund();
+    expect(await balance()).toBe(100);
   });
 });

@@ -141,7 +141,7 @@ export const secrets = {
   // Identifies main/source deployments (bike4mind staging + production)
   // Set to 'true' on main staging (dev stage) and main production to enable source-only features
   // Fork deployments should NOT have this set (defaults to 'false')
-  // Used by: LiveOps Triage tab visibility (hides from forks)
+  // Used by: the admin deployment descriptor (fork detection)
   IS_SOURCE_DEPLOYMENT: new sst.Secret('IS_SOURCE_DEPLOYMENT', 'false'),
   // Shared secret for authenticating rate limit ingest requests from MCP Lambda
   RATE_LIMIT_INGEST_TOKEN: new sst.Secret('RATE_LIMIT_INGEST_TOKEN', 'not-configured'),

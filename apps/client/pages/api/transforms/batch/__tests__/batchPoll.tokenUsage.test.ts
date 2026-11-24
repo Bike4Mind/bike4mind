@@ -30,7 +30,13 @@ vi.mock('@server/middlewares/baseApi', () => {
   return { baseApi: () => chain };
 });
 
-vi.mock('@bike4mind/server-utils/utils/config', () => ({ Config: { ANTHROPIC_API_KEY: 'sk-test' } }));
+vi.mock('@server/billing/batchAnthropicKeys', () => ({
+  batchAnthropicKeys: async () => ['sk-test'],
+  firstKeyHolding: async (keys: string[], read: (key: string) => Promise<unknown>) => ({
+    key: keys[0],
+    value: await read(keys[0]),
+  }),
+}));
 vi.mock('@bike4mind/utils', () => ({
   NotFoundError: class extends Error {},
   usdToCreditsStochastic: () => 0,

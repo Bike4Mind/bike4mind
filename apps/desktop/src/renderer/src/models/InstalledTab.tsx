@@ -38,7 +38,7 @@ export interface ModelsInUse {
   conversations: readonly ModelInUse[];
 }
 
-function inUseWarning(model: LocalModelEntry, serverId: string, inUse: ModelsInUse | undefined): string | null {
+export function inUseWarning(model: LocalModelEntry, serverId: string, inUse: ModelsInUse | undefined): string | null {
   const lines: string[] = [];
   const same = (entry: ModelInUse | null) => entry?.serverId === serverId && entry.name === model.name;
   if (same(inUse?.active ?? null))

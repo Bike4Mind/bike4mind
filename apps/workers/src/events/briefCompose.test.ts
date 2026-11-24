@@ -19,6 +19,7 @@ const activeActivity = {
   approvals: [{ questId: 'q1', sessionId: 's1', pendingActionTs: 5, tool: 'send_reply', summary: '{}' }],
   questions: [],
   emails: [],
+  delegations: [],
 };
 
 function makeDeps(overrides: Partial<BriefComposeDeps> = {}) {
@@ -29,6 +30,7 @@ function makeDeps(overrides: Partial<BriefComposeDeps> = {}) {
       findById: vi.fn().mockResolvedValue(brief()),
       markReady: vi.fn().mockResolvedValue(true),
       markFailed: vi.fn().mockResolvedValue(true),
+      discardComposing: vi.fn().mockResolvedValue(true),
       removeEmailSourcedItems: vi.fn().mockResolvedValue(0),
     },
     loadActivity: vi.fn().mockResolvedValue(activeActivity),
@@ -40,17 +42,20 @@ function makeDeps(overrides: Partial<BriefComposeDeps> = {}) {
       markBriefed: vi.fn().mockResolvedValue(0),
       storedEmailIds: vi.fn((_userId: string, ids: string[]) => Promise.resolve(ids)),
     },
+    delegations: { markBriefed: vi.fn().mockResolvedValue(0) },
     logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
     ...overrides,
   } as unknown as BriefComposeDeps & {
     briefs: {
       markReady: ReturnType<typeof vi.fn>;
       markFailed: ReturnType<typeof vi.fn>;
+      discardComposing: ReturnType<typeof vi.fn>;
       removeEmailSourcedItems: ReturnType<typeof vi.fn>;
     };
     push: ReturnType<typeof vi.fn>;
     complete: ReturnType<typeof vi.fn>;
     emails: { markBriefed: ReturnType<typeof vi.fn>; storedEmailIds: ReturnType<typeof vi.fn> };
+    delegations: { markBriefed: ReturnType<typeof vi.fn> };
     logger: { error: ReturnType<typeof vi.fn> };
   };
   return deps;
@@ -188,6 +193,25 @@ describe('composeBrief', () => {
     expect(deps.briefs.markReady.mock.calls[0][1].headline).toBe('Nothing new since your last brief.');
   });
 
+  it('discards an empty scheduled brief without a model call or a push', async () => {
+    const deps = makeDeps({ loadActivity: vi.fn().mockResolvedValue({ ...activeActivity, runs: [], approvals: [] }) });
+    await composeBrief(deps, { briefId: 'b1', userId: 'u1', scheduled: true });
+
+    expect(deps.briefs.discardComposing).toHaveBeenCalledWith('b1');
+    expect(deps.briefs.markReady).not.toHaveBeenCalled();
+    expect(deps.complete).not.toHaveBeenCalled();
+    expect(deps.push).not.toHaveBeenCalled();
+  });
+
+  it('still composes a scheduled brief that has activity', async () => {
+    const deps = makeDeps();
+    await composeBrief(deps, { briefId: 'b1', userId: 'u1', scheduled: true });
+
+    expect(deps.briefs.discardComposing).not.toHaveBeenCalled();
+    expect(deps.complete).toHaveBeenCalledOnce();
+    expect(deps.push).toHaveBeenCalledOnce();
+  });
+
   it('fails the brief, and sends no push, when the balance gate refuses', async () => {
     const deps = makeDeps({ canCompose: vi.fn().mockResolvedValue('insufficient_credits') });
     await composeBrief(deps, { briefId: 'b1', userId: 'u1' });
@@ -195,6 +219,19 @@ describe('composeBrief', () => {
     expect(deps.briefs.markFailed).toHaveBeenCalledWith('b1', 'insufficient_credits');
     expect(deps.push).not.toHaveBeenCalled();
   });
+
+  it.each(['insufficient_credits', 'ai_access_held'] as const)(
+    'discards a scheduled brief, leaving no failed row, when the gate answers %s',
+    async gate => {
+      const deps = makeDeps({ canCompose: vi.fn().mockResolvedValue(gate) });
+      await composeBrief(deps, { briefId: 'b1', userId: 'u1', scheduled: true });
+
+      expect(deps.briefs.discardComposing).toHaveBeenCalledWith('b1');
+      expect(deps.briefs.markFailed).not.toHaveBeenCalled();
+      expect(deps.complete).not.toHaveBeenCalled();
+      expect(deps.push).not.toHaveBeenCalled();
+    }
+  );
 
   it('fails the brief on a malformed model reply', async () => {
     const deps = makeDeps({ complete: vi.fn().mockResolvedValue('not json') });
@@ -214,5 +251,61 @@ describe('composeBrief', () => {
     settled.briefs.findById = vi.fn().mockResolvedValue(brief({ status: 'ready' }));
     await composeBrief(settled, { briefId: 'b1', userId: 'u1' });
     expect(settled.briefs.markReady).not.toHaveBeenCalled();
+  });
+
+  const delegationActivity = {
+    ...activeActivity,
+    runs: [],
+    approvals: [],
+    delegations: [
+      { delegationId: 'g1', intent: 'Summarize', status: 'handled', result: 'Summary.' },
+      { delegationId: 'g2', intent: 'Read later', status: 'pending', result: null },
+    ],
+  };
+
+  it('marks the settled delegated items briefed and leaves pending ones for a later brief', async () => {
+    const deps = makeDeps({ loadActivity: vi.fn().mockResolvedValue(delegationActivity) });
+    await composeBrief(deps, { briefId: 'b1', userId: 'u1' });
+
+    const stored = deps.briefs.markReady.mock.calls[0][1];
+    expect(stored.handled[0]).toMatchObject({ text: 'Summary.', source: { kind: 'delegation', delegationId: 'g1' } });
+    expect(stored.happened[0]).toMatchObject({ source: { kind: 'delegation', delegationId: 'g2' } });
+    expect(deps.delegations.markBriefed).toHaveBeenCalledWith('u1', ['g1'], new Date('2026-11-17T01:00:00Z'));
+  });
+
+  it('leaves delegated items unbriefed when the brief fails', async () => {
+    const deps = makeDeps({
+      loadActivity: vi.fn().mockResolvedValue(delegationActivity),
+      complete: vi.fn().mockResolvedValue('not json'),
+    });
+    await composeBrief(deps, { briefId: 'b1', userId: 'u1' });
+    expect(deps.briefs.markFailed).toHaveBeenCalledWith('b1', 'composition_failed');
+    expect(deps.delegations.markBriefed).not.toHaveBeenCalled();
+  });
+
+  it('still pushes a stored brief when marking its delegated items fails', async () => {
+    const deps = makeDeps({ loadActivity: vi.fn().mockResolvedValue(delegationActivity) });
+    deps.delegations.markBriefed.mockRejectedValue(new Error('db down'));
+    await composeBrief(deps, { briefId: 'b1', userId: 'u1' });
+    expect(deps.push).toHaveBeenCalled();
+    expect(deps.logger.error).toHaveBeenCalledWith('[Brief] could not mark the briefed delegations', expect.anything());
+  });
+
+  it('fails the brief when its user is gone', async () => {
+    const deps = makeDeps({ users: { findById: vi.fn().mockResolvedValue(null) } });
+    await composeBrief(deps, { briefId: 'b1', userId: 'u1' });
+    expect(deps.briefs.markFailed).toHaveBeenCalledWith('b1', 'user_missing');
+    expect(deps.complete).not.toHaveBeenCalled();
+  });
+
+  it('still pushes when checking for deleted emails fails', async () => {
+    const deps = makeDeps({ loadActivity: vi.fn().mockResolvedValue(fyiActivity) });
+    deps.emails.storedEmailIds.mockRejectedValue(new Error('db down'));
+    await composeBrief(deps, { briefId: 'b1', userId: 'u1' });
+    expect(deps.push).toHaveBeenCalled();
+    expect(deps.logger.error).toHaveBeenCalledWith(
+      '[Brief] could not drop brief items of deleted emails',
+      expect.anything()
+    );
   });
 });

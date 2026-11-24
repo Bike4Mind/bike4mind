@@ -9,8 +9,10 @@ import {
   SubscriptionCreditTransaction,
   UsageFundingSource,
 } from '@bike4mind/common';
+import { markTransactionForRollback, runAfterCommit, withTransaction } from '@bike4mind/db-core';
 import { BadRequestError, secureParameters } from '@bike4mind/utils';
 import { z } from 'zod';
+import { callerTransactionSession } from '../userService/callerTransaction';
 import { stampCreditLot } from './stampCreditLot';
 import type { CreditLedgerWrite } from './ledgerWrite';
 
@@ -40,9 +42,8 @@ export interface AddCreditsAdapters {
   lotRef?: string;
   /**
    * What a replayed `transactionId` does. 'return' (default) re-reads the holder with a net-zero
-   * increment. 'throw' raises DuplicateCreditTransactionError before touching the session - what
-   * an in-transaction caller needs, because the duplicate write has already aborted it and any
-   * further operation there raises a transient NoSuchTransaction the driver would retry.
+   * increment. 'throw' raises DuplicateCreditTransactionError. If the insert itself collides
+   * inside a caller's transaction, either mode throws because that session can no longer commit.
    */
   duplicateTransactionId?: 'return' | 'throw';
   /**
@@ -74,22 +75,10 @@ export const AddCreditsSchema = z.discriminatedUnion('type', [
 
 export type AddCreditsParameters = z.infer<typeof AddCreditsSchema>;
 
-/**
- * Add credits to a User or Organization and create a corresponding transaction record.
- * Returns the holder and the id of the CreditTransaction row it wrote (undefined on an idempotent retry).
- */
-export async function addCreditsWithLedgerRow(
-  parameters: AddCreditsParameters,
-  { db, creditHolderMethods, duplicateTransactionId = 'return', lotRef, lotFundingSource }: AddCreditsAdapters
-): Promise<CreditLedgerWrite> {
-  const params = secureParameters(parameters, AddCreditsSchema);
+async function writeCreditGrant(params: AddCreditsParameters, { db, creditHolderMethods }: AddCreditsAdapters) {
   const { ownerId, ownerType, credits, type, description, metadata } = params;
 
-  // Write the CreditTransaction record FIRST. Its unique keys (transactionId,
-  // stripePaymentIntentId) are the idempotency gate - they must commit before
-  // the balance is mutated so a duplicate call can never double-credit. A
-  // swallowed duplicate (transactionId E11000) returns null; any other E11000
-  // (e.g. stripePaymentIntentId) rethrows here, before any increment.
+  // The ledger's unique keys gate the balance increment.
   let tx;
   if (type === 'purchase') {
     tx = await db.creditTransactions.createTransaction('purchase', {
@@ -138,22 +127,8 @@ export async function addCreditsWithLedgerRow(
     });
   }
 
-  // Duplicate transactionId (idempotent retry / concurrent handler): the record
-  // already exists and the balance was already credited by the first call. Do
-  // NOT credit again - a net-zero increment returns the current holder without
-  // changing the balance (ICreditHolderMethods exposes no read-only fetch).
-  if (tx === null) {
-    if (duplicateTransactionId === 'throw') {
-      throw new DuplicateCreditTransactionError();
-    }
-    const currentEntity = await creditHolderMethods.incrementCredits(ownerId, 0);
-    if (!currentEntity) {
-      throw new BadRequestError('Failed to load credit holder for idempotent add');
-    }
-    return { creditHolder: currentEntity, creditTransactionId: undefined };
-  }
+  if (tx === null) throw new DuplicateCreditTransactionError();
 
-  // Transaction record committed - now safe to credit the balance exactly once.
   const updatedEntity = await creditHolderMethods.incrementCredits(ownerId, credits, {
     updateLastCreditsPurchasedAt: type === 'purchase',
   });
@@ -161,21 +136,74 @@ export async function addCreditsWithLedgerRow(
     throw new BadRequestError('Failed to update credits');
   }
 
-  if (db.creditLots) {
-    await stampCreditLot(
-      {
-        ownerId,
-        ownerType,
-        amount: Math.abs(credits),
-        grantType: type,
-        stripeRef: ('stripePaymentIntentId' in params ? params.stripePaymentIntentId : undefined) ?? lotRef,
-        fundingSource: lotFundingSource,
-      },
-      { db: { creditLots: db.creditLots } }
-    );
+  return { creditHolder: updatedEntity, creditTransactionId: tx.id };
+}
+
+async function loadIdempotentGrant(
+  ownerId: string,
+  creditHolderMethods: ICreditHolderMethods
+): Promise<CreditLedgerWrite> {
+  const creditHolder = await creditHolderMethods.incrementCredits(ownerId, 0);
+  if (!creditHolder) throw new BadRequestError('Failed to load credit holder for idempotent add');
+  return { creditHolder, creditTransactionId: undefined };
+}
+
+/**
+ * Add credits to a User, Organization or Agent and write the matching CreditTransaction row in one
+ * transaction: the caller's when one is open, else its own. Returns the holder and the id of the row
+ * it wrote (undefined on an idempotent replay).
+ */
+export async function addCreditsWithLedgerRow(
+  parameters: AddCreditsParameters,
+  adapters: AddCreditsAdapters
+): Promise<CreditLedgerWrite> {
+  const params = secureParameters(parameters, AddCreditsSchema);
+  const { ownerId, ownerType, credits, type } = params;
+  const { db, creditHolderMethods, duplicateTransactionId = 'return', lotRef, lotFundingSource } = adapters;
+  const session = callerTransactionSession();
+
+  // A duplicate-key insert would abort the caller's transaction even on an ordinary replay.
+  if (
+    session &&
+    type === 'generic_add' &&
+    params.transactionId !== undefined &&
+    (await db.creditTransactions.findOne({ transactionId: params.transactionId }))
+  ) {
+    if (duplicateTransactionId === 'throw') throw new DuplicateCreditTransactionError();
+    return loadIdempotentGrant(ownerId, creditHolderMethods);
   }
 
-  return { creditHolder: updatedEntity, creditTransactionId: tx.id };
+  let grant: CreditLedgerWrite;
+  try {
+    const write = () => writeCreditGrant(params, adapters);
+    grant = session ? await write() : await withTransaction(write);
+  } catch (error) {
+    if (session) {
+      markTransactionForRollback(session, error);
+    } else if (duplicateTransactionId === 'return' && error instanceof DuplicateCreditTransactionError) {
+      return loadIdempotentGrant(ownerId, creditHolderMethods);
+    }
+    throw error;
+  }
+
+  const { creditLots } = db;
+  if (creditLots) {
+    const stamp = () =>
+      stampCreditLot(
+        {
+          ownerId,
+          ownerType,
+          amount: Math.abs(credits),
+          grantType: type,
+          stripeRef: ('stripePaymentIntentId' in params ? params.stripePaymentIntentId : undefined) ?? lotRef,
+          fundingSource: lotFundingSource,
+        },
+        { db: { creditLots } }
+      );
+    if (!session || !runAfterCommit(session, `creditLot|${grant.creditTransactionId}`, stamp)) await stamp();
+  }
+
+  return grant;
 }
 
 /** addCredits for callers that need the ledger row id; see addCreditsWithLedgerRow. */

@@ -35,6 +35,11 @@ export const ADMIN_REASON_PRESETS = {
   internalAccount: ['Team member', 'Contractor or partner', 'Marked in error'],
   apiKeyRevokeAll: ['Compromised or leaked keys', 'Abuse / automated signups', 'Customer request'],
   apiKeyRotate: ['Compromised or leaked key', 'Customer request', 'Routine rotation'],
+  apiKeyModerationException: [
+    'Approved security research',
+    'Violence-related content is core to the product',
+    'Exception no longer needed',
+  ],
   apiKeyAdminScope: ['Partner integration', 'Internal service', 'Requested by the account owner'],
   embedKeyRevoke: ['Compromised or leaked key', 'Site no longer embeds the agent', 'Customer request'],
   publishedPageTakedown: [
@@ -101,6 +106,7 @@ export const ADMIN_REASON_PRESETS = {
   seatChange: ['Customer request', 'Team size changed', 'Seats out of sync with billing', 'Billing correction'],
   paidConversion: ['Trial converting to paid', 'Customer request', 'Sales-approved conversion'],
   orgMembership: ['Customer request', 'Joined the team', 'Left the team', 'Account cleanup'],
+  homeOrgClear: ['Customer request', 'Billed to the wrong org', 'Service account setup', 'Account cleanup'],
   orgRoleChange: ['Customer request', 'Owner request', 'Team lead changed'],
   ipBlock: ['Card testing or payment fraud', 'Abuse / automated signups', 'Credential stuffing', 'Under investigation'],
   ipUnblock: ['Blocked in error', 'Legitimate users affected', 'Threat has ended'],
@@ -110,6 +116,8 @@ export const ADMIN_REASON_PRESETS = {
     'Organization billing contact resolved it',
     'Duplicate of another dispute',
   ],
+  spendFreeze: ['Abnormal spend spike', 'Suspected abuse', 'Requested by account owner'],
+  spendFreezeLift: ['Reviewed: spend is legitimate', 'Account owner contacted', 'Resolved with account owner'],
   stripeDisputeUndoContain: ['Customer verified as legitimate', 'Contained in error'],
   signupRiskReopen: ['Evidence needs a manual look', 'Linked to known abuse', 'Payment disputed or refunded'],
   shadowDetectionVerdict: [
@@ -134,6 +142,15 @@ export const ADMIN_REASON_PRESETS = {
   heldSignupGrantRevoke: ['Abuse / automated signups', 'Credit farming', 'Granted in error'],
   tutorialDraftDelete: ['Superseded by a newer draft', 'Captured in error', 'No longer needed'],
   knowledgeFileRemoval: ['File no longer needed', 'Outdated instructions', 'Missing file reference'],
+  slackWorkspaceDeactivate: ['Workspace no longer used', 'Customer request', 'Bot misbehaving', 'Security concern'],
+  slackExportCancel: ['Started by mistake', 'Wrong channel or date range', 'Taking too long'],
+  githubDisconnect: [
+    'Switching to a new connection',
+    'Credentials compromised or leaked',
+    'Connection no longer needed',
+  ],
+  githubKeyRotate: ['Routine rotation', 'Key compromised or leaked', 'Key about to expire'],
+  githubRepoAccess: ['Pausing GitHub automation', 'Repository access under review', 'Security incident'],
   modelAccess: [
     'Ready for users',
     'Limit to a test group',

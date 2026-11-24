@@ -8,6 +8,9 @@
  * Reconciles the previous month (closed) and the current month (accruing).
  * Providers whose admin key is not configured are skipped.
  *
+ * The provider side is narrowed to the stage's provider spend scope (providerSpendScope.ts), the same
+ * scope the hourly providerUsagePoll applies; the organization-wide total is logged beside it.
+ *
  * The hosted handler publishes two metrics alarmed in infra/providerSpend.ts:
  * SpendReconciliationDrift (closed-month rows above SPEND_RECONCILIATION_DRIFT_ALERT_PCT) and
  * SpendReconciliationNothingReconciled (a run where every provider-month was skipped or failed).
@@ -26,6 +29,7 @@ import { spendReconciliationService } from '@bike4mind/services';
 import { Config } from '@bike4mind/server-utils/utils/config';
 import { Resource } from 'sst';
 import { type AdminKeyProvider, resolveProviderAdminKey } from './providerAdminKey';
+import { describeProviderSpendScope, readProviderSpendScope } from './providerSpendScope';
 
 const PROVIDER_FETCH_BUDGET_MS = spendReconciliationService.DEFAULT_SPEND_DEADLINE_MS;
 const METRICS_HEADROOM_MS = 30_000;
@@ -37,22 +41,43 @@ const contextToLogs = (context: Context) => ({
   stage: Resource.App.stage,
 });
 
+type ScopedSpendFetch = (
+  key: string,
+  month: string,
+  options: spendReconciliationService.ProviderSpendFetchOptions
+) => Promise<spendReconciliationService.ProviderSpendResult | null>;
+
 interface ProviderConfig {
   provider: AdminKeyProvider;
   source: ISpendReconciliationInput['source'];
-  fetch: typeof spendReconciliationService.fetchAnthropicSpend;
+  /** Reads the stage's spend scope and binds it to the fetcher; throws when the scope is unreadable or invalid. */
+  bindScope: () => Promise<{ scope: object | undefined; fetchSpend: ScopedSpendFetch }>;
 }
 
 const PROVIDERS: ProviderConfig[] = [
   {
     provider: 'anthropic',
     source: 'anthropic_admin_api',
-    fetch: spendReconciliationService.fetchAnthropicSpend,
+    bindScope: async () => {
+      const scope = await readProviderSpendScope('anthropic');
+      return {
+        scope,
+        fetchSpend: (key, month, options) =>
+          spendReconciliationService.fetchAnthropicSpend(key, month, undefined, options, scope),
+      };
+    },
   },
   {
     provider: 'openai',
     source: 'openai_usage_api',
-    fetch: spendReconciliationService.fetchOpenAISpend,
+    bindScope: async () => {
+      const scope = await readProviderSpendScope('openai');
+      return {
+        scope,
+        fetchSpend: (key, month, options) =>
+          spendReconciliationService.fetchOpenAISpend(key, month, undefined, options, scope),
+      };
+    },
   },
 ];
 
@@ -90,7 +115,12 @@ export async function runSpendReconciliation({
   let failed = 0;
   let drifted = 0;
 
-  const configured: { providerConfig: ProviderConfig; key: string }[] = [];
+  const configured: {
+    providerConfig: ProviderConfig;
+    key: string;
+    scope: object | undefined;
+    fetchSpend: ScopedSpendFetch;
+  }[] = [];
   for (const providerConfig of PROVIDERS) {
     let key: string | undefined;
     try {
@@ -105,7 +135,12 @@ export async function runSpendReconciliation({
       skipped++;
       continue;
     }
-    configured.push({ providerConfig, key });
+    try {
+      configured.push({ providerConfig, key, ...(await providerConfig.bindScope()) });
+    } catch (err) {
+      failed++;
+      logger.error(`[SpendReconciliation] ${providerConfig.provider} spend scope read failed`, err);
+    }
   }
 
   if (configured.length === 0) {
@@ -123,7 +158,7 @@ export async function runSpendReconciliation({
   // getReconcileMonths() only ever uses the current and previous month.
   const internalCogs = await usageEventRepository.monthlyCogsByProvider(2);
 
-  for (const [providerIndex, { providerConfig, key }] of configured.entries()) {
+  for (const [providerIndex, { providerConfig, key, scope, fetchSpend }] of configured.entries()) {
     const providerStartedAtMs = Date.now();
     const remainingProviderCount = configured.length - providerIndex;
     // Share the remaining time fairly, retaining unused time for later providers. Both
@@ -135,7 +170,7 @@ export async function runSpendReconciliation({
     for (const month of months) {
       try {
         if (Date.now() >= providerDeadlineMs) throw new Error('Provider request deadline exceeded');
-        const result = await providerConfig.fetch(key, month, undefined, {
+        const result = await fetchSpend(key, month, {
           deadlineMs: providerDeadlineMs,
           onDiagnostic: diagnostic => logger.warn('[SpendReconciliation] Provider request', diagnostic),
         });
@@ -165,8 +200,15 @@ export async function runSpendReconciliation({
         logger.log(
           `[SpendReconciliation] ${providerConfig.provider} ${month}: ` +
             `provider=$${result.providerUsd.toFixed(2)} internal=$${internalUsd.toFixed(2)} ` +
-            `delta=${deltaUsd >= 0 ? '+' : ''}$${deltaUsd.toFixed(2)} (${deltaPct.toFixed(1)}%)`
+            `delta=${deltaUsd >= 0 ? '+' : ''}$${deltaUsd.toFixed(2)} (${deltaPct.toFixed(1)}%) ` +
+            `org=$${result.orgUsd.toFixed(2)} scope=${describeProviderSpendScope(scope)}`
         );
+        if (result.unappliedScope?.length) {
+          logger.warn(
+            `[SpendReconciliation] ${providerConfig.provider} ${month}: the billing report cannot filter by ` +
+              `${result.unappliedScope.join(', ')}, so provider spend covers more than the configured scope`
+          );
+        }
         if (month === closedMonth && deltaPct > SPEND_RECONCILIATION_DRIFT_ALERT_PCT) {
           drifted++;
           logger.warn(

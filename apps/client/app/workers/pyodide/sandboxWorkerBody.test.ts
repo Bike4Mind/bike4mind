@@ -2,9 +2,15 @@ import { describe, it, expect, vi, afterEach } from 'vitest';
 import { readFileSync } from 'fs';
 import path from 'path';
 import { pyodideSandboxWorkerBody } from './sandboxWorkerBody';
-import type { PyodideWorkerMessage, PyodideWorkerResponse } from './types';
+import { SANDBOX_RUNNING_MESSAGE, type PyodideWorkerMessage, type PyodideWorkerResponse } from './types';
 import { DEFAULT_PYODIDE_BASE_URL } from '@client/app/utils/pyodideDistribution';
-import { FUNCTION_CONTRACT_GLOBAL, FUNCTION_CONTRACT_LIMITS, FUNCTION_ENTRY_POINT } from '@bike4mind/common';
+import {
+  FUNCTION_CALL_GLUE_PY,
+  FUNCTION_CONTRACT_GLOBAL,
+  FUNCTION_CONTRACT_LIMITS,
+  FUNCTION_ENTRY_POINT,
+  PYODIDE_VERSION,
+} from '@bike4mind/common';
 
 /**
  * The worker body is shipped by serializing it, so its correctness depends on properties the
@@ -45,6 +51,11 @@ describe('pyodideSandboxWorkerBody serialization', () => {
     expect(source).toContain(DEFAULT_PYODIDE_BASE_URL);
   });
 
+  it('runs the call glue and the Pyodide release the server runtime shares', () => {
+    expect(source).toContain(FUNCTION_CALL_GLUE_PY);
+    expect(DEFAULT_PYODIDE_BASE_URL).toContain(`/v${PYODIDE_VERSION}/`);
+  });
+
   it('loads function code as a module other than __main__ and refuses NaN in JSON', () => {
     // A script-style demo block must not run during a call, and NaN is not JSON.
     expect(source).toContain("namespace = {'__name__': 'b4m_function'}");
@@ -77,6 +88,12 @@ describe('pyodideSandboxWorkerBody serialization', () => {
     expect(source).toContain("_FunctionCallError('The function contract is larger than 32 KB.')");
   });
 
+  it('starts the parent time limit with the status it posts once guest code runs', () => {
+    const posts = source.match(/message: ["']([^"']*)["']/g) ?? [];
+    expect(posts.filter(post => post.slice(10, -1) === SANDBOX_RUNNING_MESSAGE)).toHaveLength(2);
+  });
+
+  // The same glue runs under real Pyodide in apps/workers/src/callableFunctions/callGlue.e2e.test.ts.
   it('checks output number types in Python, where 3.0 and True are still distinct from 3 and 1', () => {
     expect(source).toContain(
       "if isinstance(value, bool) or not isinstance(value, (int, float)):\n            problems.append({'path': path, 'message': 'must be a number'})"
@@ -240,7 +257,7 @@ describe('pyodideSandboxWorkerBody package loading', () => {
     } as never);
     const code = 'FUNCTION = {"name": "f"}\ndef run():\n    return {}';
 
-    await send({ type: 'call', code, packages: [], paramsJson: null, timeoutMs: 1000 });
+    await send({ type: 'call', code, packages: [], paramsJson: null, timeoutMs: 1000, nonce: 'n1' });
 
     expect(pyodide.globals.set).toHaveBeenCalledWith('_fn_code', code);
     expect(pyodide.globals.set).toHaveBeenCalledWith('_fn_params_json', null);
@@ -251,6 +268,7 @@ describe('pyodideSandboxWorkerBody package loading', () => {
     expect(pyodide.globals.delete).toHaveBeenCalledWith('_fn_params_json');
     expect(posted.at(-1)).toEqual({
       type: 'call-result',
+      nonce: 'n1',
       result: {
         success: true,
         contractJson: '{"name": "f"}',
@@ -275,7 +293,7 @@ describe('pyodideSandboxWorkerBody package loading', () => {
       }),
     } as never);
 
-    await send({ type: 'call', code: 'x = 1', packages: [], paramsJson: '{"span": 4}', timeoutMs: 1000 });
+    await send({ type: 'call', code: 'x = 1', packages: [], paramsJson: '{"span": 4}', timeoutMs: 1000, nonce: 'n2' });
 
     expect(pyodide.globals.set).toHaveBeenCalledWith('_fn_params_json', '{"span": 4}');
     expect(posted.at(-1)).toMatchObject({
@@ -299,7 +317,7 @@ describe('pyodideSandboxWorkerBody package loading', () => {
       }),
     } as never);
 
-    await send({ type: 'call', code: 'x = 1', packages: [], paramsJson: '{}', timeoutMs: 1000 });
+    await send({ type: 'call', code: 'x = 1', packages: [], paramsJson: '{}', timeoutMs: 1000, nonce: 'n3' });
 
     expect(posted.at(-1)).toMatchObject({
       type: 'call-result',
@@ -314,7 +332,7 @@ describe('pyodideSandboxWorkerBody package loading', () => {
       toJs: () => ({ contract_json: { name: 'f' }, value_json: 5, stdout: ['x'], stderr: '', error: undefined }),
     } as never);
 
-    await send({ type: 'call', code: 'x = 1', packages: [], paramsJson: '{}', timeoutMs: 1000 });
+    await send({ type: 'call', code: 'x = 1', packages: [], paramsJson: '{}', timeoutMs: 1000, nonce: 'n3' });
 
     expect(posted.at(-1)).toMatchObject({
       type: 'call-result',
@@ -327,11 +345,34 @@ describe('pyodideSandboxWorkerBody package loading', () => {
     await send({ type: 'initialize' });
     pyodide.runPythonAsync.mockRejectedValueOnce(new Error('PythonError: boom'));
 
-    await send({ type: 'call', code: 'x = 1', packages: [], paramsJson: null, timeoutMs: 1000 });
+    await send({ type: 'call', code: 'x = 1', packages: [], paramsJson: null, timeoutMs: 1000, nonce: 'n4' });
 
     expect(posted.at(-1)).toMatchObject({
       type: 'call-result',
+      nonce: 'n4',
       result: { success: false, error: 'PythonError: boom' },
     });
+  });
+
+  it('echoes the nonce of the call it answers, on a refusal before Python runs too', async () => {
+    const { posted, send } = startWorker();
+    await send({ type: 'call', code: 'x = 1', packages: [], paramsJson: null, timeoutMs: 1000, nonce: 'early' });
+    expect(posted.at(-1)).toMatchObject({
+      type: 'call-result',
+      nonce: 'early',
+      result: { success: false, error: 'Pyodide not initialized' },
+    });
+  });
+
+  it('posts through the postMessage it bound at start, so replacing self.postMessage sees no nonce', async () => {
+    const { posted, send } = startWorker();
+    await send({ type: 'initialize' });
+    const replaced = vi.fn();
+    (self as unknown as { postMessage: (message: unknown) => void }).postMessage = replaced;
+
+    await send({ type: 'call', code: 'x = 1', packages: [], paramsJson: '{}', timeoutMs: 1000, nonce: 'secret' });
+
+    expect(replaced).not.toHaveBeenCalled();
+    expect(posted.at(-1)).toMatchObject({ type: 'call-result', nonce: 'secret' });
   });
 });

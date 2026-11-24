@@ -10,6 +10,7 @@ import {
   EMBED_ORIGINS_MAX,
   PublishTagsSchema,
   normalizePublishTags,
+  ApiKeyScope,
 } from '@bike4mind/common';
 import {
   loadLiveOwner,
@@ -109,7 +110,10 @@ function toPublicArtifact(artifact: Record<string, unknown>): Record<string, unk
   return out;
 }
 
-const handler = baseApi()
+const handler = baseApi({
+  requiredScopes: [ApiKeyScope.ARTIFACTS_PUBLISH, ApiKeyScope.ADMIN],
+  grandfatherLegacyKeys: true,
+})
   .get(async (req, res) => {
     const publicId = String(req.query.id);
     // Exclude the share-token capability: this GET is reachable by ANY viewer of a public

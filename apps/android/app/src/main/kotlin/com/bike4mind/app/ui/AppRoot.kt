@@ -37,6 +37,8 @@ fun AppRoot(
     var openChat by rememberSaveable(graph) { mutableStateOf<String?>(null) }
     // A brief id from a push or a link, or LATEST_BRIEF from the chats list.
     var openBrief by rememberSaveable(graph) { mutableStateOf<String?>(null) }
+    // The Studio gallery, opened from the chats list.
+    var openStudio by rememberSaveable(graph) { mutableStateOf(false) }
     // SETTINGS or DELETE_ACCOUNT while Settings is up.
     var openSettings by rememberSaveable(graph) { mutableStateOf<String?>(null) }
     val route by pendingRoute.collectAsStateWithLifecycle()
@@ -44,6 +46,12 @@ fun AppRoot(
     LaunchedEffect(graph) {
         graph.session.restore()
         restored = true
+    }
+
+    // A session that ends (a refresh refused, a sign-out elsewhere) drops what belonged to the account. Checked only
+    // once restore has settled, so a signed-in cold start keeps the gallery's stale-first cache.
+    LaunchedEffect(graph, restored, signedIn) {
+        if (restored && !signedIn) graph.onSessionEnded()
     }
 
     // Push registration follows the session; [onSignedIn] is where the host asks for the notification permission.
@@ -58,6 +66,7 @@ fun AppRoot(
             // A new session starts clean; a call that still finds the account pending raises it again.
             graph.deletionSignal.reset()
             openSettings = null
+            openStudio = false
         }
     }
 
@@ -68,16 +77,19 @@ fun AppRoot(
         when (pending) {
             Route.Sessions -> {
                 openSettings = null
+                openStudio = false
                 openBrief = null
                 openChat = null
             }
             is Route.Session -> {
                 openSettings = null
+                openStudio = false
                 openBrief = null
                 openChat = pending.sessionId
             }
             is Route.Brief -> {
                 openSettings = null
+                openStudio = false
                 openChat = null
                 openBrief = pending.briefId
             }
@@ -118,6 +130,10 @@ fun AppRoot(
                 },
             )
         }
+        openStudio -> ScreenScope(key = Screen.Studio(graph)) {
+            BackHandler { openStudio = false }
+            MediaGalleryScreen(graph = graph, onBack = { openStudio = false })
+        }
         openChat != null -> ScreenScope(key = Screen.Chat(graph, openChat)) {
             BackHandler { openChat = null }
             ChatScreen(
@@ -132,6 +148,7 @@ fun AppRoot(
                 onOpen = { openChat = it },
                 onNewChat = { openChat = NEW_CHAT },
                 onOpenBrief = { openBrief = LATEST_BRIEF },
+                onOpenStudio = { openStudio = true },
                 onOpenSettings = { openSettings = SETTINGS },
             )
         }
@@ -145,6 +162,7 @@ private sealed interface Screen {
     data class Brief(val graph: AppGraph, val brief: String?) : Screen
     data class Sessions(val graph: AppGraph) : Screen
     data class Settings(val graph: AppGraph) : Screen
+    data class Studio(val graph: AppGraph) : Screen
     data class DeleteAccount(val graph: AppGraph) : Screen
     data class Restore(val graph: AppGraph) : Screen
 }

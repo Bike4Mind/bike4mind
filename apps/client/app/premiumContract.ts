@@ -161,6 +161,13 @@ export interface PremiumNavDescriptor {
    * Only the sidebar row shows it, not the "More" flyout.
    */
   useSidebarTag?: () => string | null;
+  /**
+   * Names the target a sign-in `redirectTo` into this item carries in its query (for example the site a
+   * product was asked to read), or null for none. Gets the redirect's query params. The sign-in and register
+   * hints then say "Sign in and <label> reads <name>". It runs for a signed-out visitor on untrusted input, so
+   * it must validate the value and return a short plain-text name (rendered as text, never a link), or null.
+   */
+  redirectTargetName?: (params: URLSearchParams) => string | null;
 }
 
 /**

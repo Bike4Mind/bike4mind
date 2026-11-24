@@ -12,10 +12,10 @@ export const listImageModelsContract = defineEndpoint({
   description:
     'Returns the image models that are offered to the caller, served by this deployment and backed by a usable ' +
     'provider key, best first, with their capabilities per mode and an indicative credit price. The capabilities ' +
-    'and prices are those of image jobs, which refuse an unsupported size, aspect ratio, quality or input image ' +
-    'rather than adjust it. `POST /api/v1/image-generations` and `POST /api/v1/image-edits` do not run as image ' +
-    'jobs yet and may adapt a request to the model, for example by rendering a transparent background on a model ' +
-    'that supports it.',
+    'and prices are those of image jobs (`POST /api/v1/image-jobs`), which refuse an unsupported size, aspect ' +
+    'ratio, quality or input image rather than adjust it. The deprecated `POST /api/v1/image-generations` and ' +
+    '`POST /api/v1/image-edits` do not run as image jobs and may adapt a request to the model, for example by ' +
+    'rendering a transparent background on a model that supports it.',
   tags: ['Images'],
   auth: 'apiKeyOrJwt',
   scopes: [ApiKeyScope.AI_GENERATE],
