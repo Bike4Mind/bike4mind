@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { AUTO_CONTAINMENT_MODES } from './settings';
+import { AUTO_CONTAINMENT_MODES, type AutoContainmentConfig, type AutoContainmentMode } from './settings';
 
 /**
  * Automated containment decisions: what the executor decided for one shadow detection from its abuse
@@ -9,6 +9,31 @@ import { AUTO_CONTAINMENT_MODES } from './settings';
  * enforced. Produced by apps/workers/src/security/autoContainment; stored in the
  * AutoContainmentDecision collection (packages/database).
  */
+
+/** Contain is the top tier; the rest are graduated holds that never suspend, revoke keys or remove balance. */
+export const INTERVENTION_TIERS = ['contain', 'limit', 'verify', 'holdGrant', 'review'] as const;
+export type InterventionTier = (typeof INTERVENTION_TIERS)[number];
+export type GraduatedInterventionTier = Exclude<InterventionTier, 'contain'>;
+
+/** Bumped whenever the wouldAction-to-tier table or a skip rule changes, so graded decisions stay comparable. */
+export const INTERVENTION_POLICY_VERSION = 1;
+
+export const INTERVENTION_SCOPES = ['ai_spend', 'signup_grant', 'account'] as const;
+export type InterventionScope = (typeof INTERVENTION_SCOPES)[number];
+
+export const INTERVENTION_RELEASE_CONDITIONS = [
+  'admin_release',
+  'expiry',
+  'verification',
+  'legitimate_verdict',
+] as const;
+export type InterventionReleaseCondition = (typeof INTERVENTION_RELEASE_CONDITIONS)[number];
+
+/** The global mode is the kill switch: off turns every tier off whatever the tier says. */
+export const effectiveTierMode = (config: AutoContainmentConfig, tier: InterventionTier): AutoContainmentMode => {
+  if (config.mode === 'off') return 'off';
+  return tier === 'contain' ? config.mode : config.tiers[tier].mode;
+};
 
 export const AUTO_CONTAINMENT_OUTCOMES = [
   /**
@@ -26,6 +51,14 @@ export const AUTO_CONTAINMENT_OUTCOMES = [
   'failed',
   /** Enforce mode: an admin ruled on the detection after the decision and before the Contain ran. */
   'withdrawn',
+  /** Shadow mode, graduated tier: would have applied the hold. */
+  'would_intervene',
+  /** Enforce mode, graduated tier: the hold was applied. */
+  'intervened',
+  /** A graduated hold was released before it expired. */
+  'released',
+  /** A graduated hold lapsed at expiresAt. */
+  'expired',
 ] as const;
 export type AutoContainmentOutcome = (typeof AUTO_CONTAINMENT_OUTCOMES)[number];
 
@@ -46,5 +79,37 @@ export const autoContainmentDecisionItemSchema = z.object({
   /** Short diagnostic for a failed outcome; never vendor text. */
   error: z.string().nullable(),
   decidedAt: z.date(),
+  /** Rows written before graduated tiers have no tier; they were all Contain decisions. */
+  tier: z.enum(INTERVENTION_TIERS).prefault('contain'),
+  /** null on rows written before the policy was versioned. */
+  policyVersion: z.number().int().nullable().prefault(null),
+  scope: z.enum(INTERVENTION_SCOPES).prefault('account'),
+  /** When a graduated hold lapses on its own; null for Contain, which never expires. */
+  expiresAt: z.date().nullable().prefault(null),
+  releaseCondition: z.enum(INTERVENTION_RELEASE_CONDITIONS).nullable().prefault(null),
+  releasedAt: z.date().nullable().prefault(null),
+  releasedBy: z.string().nullable().prefault(null),
+  releaseReason: z.string().nullable().prefault(null),
 });
 export type AutoContainmentDecisionItem = z.infer<typeof autoContainmentDecisionItemSchema>;
+
+/**
+ * One graduated hold on a user, keyed by the decision that applied it so release and expiry touch
+ * only that hold, never a manual moderation, review state or another decision's hold.
+ */
+export const interventionHoldSchema = z.object({
+  decisionId: z.string(),
+  detectionId: z.string(),
+  tier: z.enum(INTERVENTION_TIERS).exclude(['contain']),
+  policyVersion: z.number().int(),
+  reason: z.string(),
+  appliedAt: z.date(),
+  expiresAt: z.date(),
+  releasedAt: z.date().nullable(),
+  releasedBy: z.string().nullable(),
+});
+export type InterventionHold = z.infer<typeof interventionHoldSchema>;
+
+/** Active = not released and not yet expired. Expiry is enforced here, not by a sweep. */
+export const isActiveInterventionHold = (hold: InterventionHold, now: Date): boolean =>
+  hold.releasedAt === null && hold.expiresAt.getTime() > now.getTime();

@@ -263,6 +263,8 @@ export const infraHolders = {
         reason: 'Fraud containment record kept to prevent repeat abuse (GDPR Art. 17(3)(e) / Art. 6(1)(f))',
         retention: expiresAfterTtl('decidedAt', 365),
       },
+      // The admin who released a graduated hold.
+      { path: 'releasedBy', matchBy: 'userId', action: 'anonymize' },
     ],
   },
   BusinessMetricState: {

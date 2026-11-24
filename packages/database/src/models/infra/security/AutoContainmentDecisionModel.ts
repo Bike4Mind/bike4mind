@@ -1,8 +1,14 @@
 import mongoose, { Document, Model, model, Schema, Types } from 'mongoose';
 import {
   AUTO_CONTAINMENT_OUTCOMES,
+  INTERVENTION_RELEASE_CONDITIONS,
+  INTERVENTION_SCOPES,
+  INTERVENTION_TIERS,
   type AutoContainmentDecisionItem,
   type AutoContainmentOutcome,
+  type InterventionReleaseCondition,
+  type InterventionScope,
+  type InterventionTier,
 } from '@bike4mind/common';
 
 /**
@@ -22,6 +28,14 @@ export interface IAutoContainmentDecisionDocument extends Document {
   batchId: string | null;
   error: string | null;
   decidedAt: Date;
+  tier?: InterventionTier;
+  policyVersion?: number | null;
+  scope?: InterventionScope;
+  expiresAt?: Date | null;
+  releaseCondition?: InterventionReleaseCondition | null;
+  releasedAt?: Date | null;
+  releasedBy?: string | null;
+  releaseReason?: string | null;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -44,6 +58,14 @@ export const AutoContainmentDecisionSchema: Schema<IAutoContainmentDecisionDocum
       batchId: { type: String, default: null },
       error: { type: String, default: null },
       decidedAt: { type: Date, required: true },
+      tier: { type: String, enum: INTERVENTION_TIERS, default: 'contain' },
+      policyVersion: { type: Number, default: null },
+      scope: { type: String, enum: INTERVENTION_SCOPES, default: 'account' },
+      expiresAt: { type: Date, default: null },
+      releaseCondition: { type: String, enum: [...INTERVENTION_RELEASE_CONDITIONS, null], default: null },
+      releasedAt: { type: Date, default: null },
+      releasedBy: { type: String, default: null },
+      releaseReason: { type: String, default: null },
     },
     { timestamps: true, versionKey: false, collection: 'AutoContainmentDecision' }
   );
@@ -56,7 +78,12 @@ export const AutoContainmentDecisionModel: Model<IAutoContainmentDecisionDocumen
   (mongoose.models.AutoContainmentDecision as unknown as Model<IAutoContainmentDecisionDocument>) ??
   model<IAutoContainmentDecisionDocument>('AutoContainmentDecision', AutoContainmentDecisionSchema);
 
-export type RecordAutoContainmentDecisionInput = Omit<AutoContainmentDecisionItem, 'id'>;
+type DecisionTierField =
+  'tier' | 'policyVersion' | 'scope' | 'expiresAt' | 'releaseCondition' | 'releasedAt' | 'releasedBy' | 'releaseReason';
+
+/** The tier fields are optional so the Contain path records exactly what it did before tiers existed. */
+export type RecordAutoContainmentDecisionInput = Omit<AutoContainmentDecisionItem, 'id' | DecisionTierField> &
+  Partial<Pick<AutoContainmentDecisionItem, DecisionTierField>>;
 
 type LeanDecision = Omit<IAutoContainmentDecisionDocument, keyof Document> & { _id: Types.ObjectId };
 
@@ -73,6 +100,14 @@ const toItem = (doc: LeanDecision): AutoContainmentDecisionItem => ({
   batchId: doc.batchId,
   error: doc.error,
   decidedAt: doc.decidedAt,
+  tier: doc.tier ?? 'contain',
+  policyVersion: doc.policyVersion ?? null,
+  scope: doc.scope ?? 'account',
+  expiresAt: doc.expiresAt ?? null,
+  releaseCondition: doc.releaseCondition ?? null,
+  releasedAt: doc.releasedAt ?? null,
+  releasedBy: doc.releasedBy ?? null,
+  releaseReason: doc.releaseReason ?? null,
 });
 
 const isDuplicateKey = (error: unknown) =>
@@ -122,6 +157,43 @@ export class AutoContainmentDecisionRepository {
   /** Records how a claimed decision ended. */
   async finish(id: string, patch: Pick<AutoContainmentDecisionItem, 'outcome' | 'batchId' | 'error'>): Promise<void> {
     await AutoContainmentDecisionModel.updateOne({ _id: new Types.ObjectId(id) }, { $set: patch });
+  }
+
+  /**
+   * Marks an applied graduated hold released. Only an `intervened` decision not yet released moves,
+   * so a repeat or a release racing expiry is a no-op; null when nothing changed.
+   */
+  async release(
+    id: string,
+    { by, reason, condition, now }: { by: string; reason: string; condition: InterventionReleaseCondition; now: Date }
+  ): Promise<AutoContainmentDecisionItem | null> {
+    if (!Types.ObjectId.isValid(id)) return null;
+    const doc = await AutoContainmentDecisionModel.findOneAndUpdate(
+      { _id: new Types.ObjectId(id), outcome: 'intervened', releasedAt: null },
+      {
+        $set: {
+          outcome: 'released',
+          releasedAt: now,
+          releasedBy: by,
+          releaseReason: reason,
+          releaseCondition: condition,
+        },
+      },
+      { new: true, runValidators: true }
+    ).lean<LeanDecision>();
+    return doc ? toItem(doc) : null;
+  }
+
+  /** Stamps applied, unreleased graduated decisions as expired; returns how many moved. */
+  async markExpired(ids: string[], now: Date): Promise<number> {
+    const objectIds = ids.filter(id => Types.ObjectId.isValid(id)).map(id => new Types.ObjectId(id));
+    if (objectIds.length === 0) return 0;
+    const result = await AutoContainmentDecisionModel.updateMany(
+      { _id: { $in: objectIds }, outcome: 'intervened', releasedAt: null, expiresAt: { $ne: null, $lte: now } },
+      { $set: { outcome: 'expired', releasedAt: now, releaseCondition: 'expiry' } },
+      { runValidators: true }
+    );
+    return result.modifiedCount;
   }
 
   /** Every decision on the detection, any revision, oldest first. */

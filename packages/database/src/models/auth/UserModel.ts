@@ -30,6 +30,7 @@ import {
   ModerationReviewUser,
   ISignupRiskAutoApproval,
   ISignupRiskScore,
+  type InterventionHold,
   RISK_EVIDENCE_TRIGGERS,
   type RiskEvidenceCoverage,
   type RiskEvidenceSummary,
@@ -297,6 +298,21 @@ const KeywordRoutingRuleSchema = new Schema(
 
 /** Newest-first cap on the retained per-user moderation-hit log. */
 export const MODERATION_HITS_RETAINED = 50;
+
+const InterventionHoldSchema = new Schema(
+  {
+    decisionId: { type: String, required: true },
+    detectionId: { type: String, required: true },
+    tier: { type: String, enum: ['limit', 'verify', 'holdGrant', 'review'], required: true },
+    policyVersion: { type: Number, required: true },
+    reason: { type: String, required: true },
+    appliedAt: { type: Date, required: true },
+    expiresAt: { type: Date, required: true },
+    releasedAt: { type: Date, default: null },
+    releasedBy: { type: String, default: null },
+  },
+  { _id: false }
+);
 
 const ModerationHitSchema = new Schema(
   {
@@ -1419,6 +1435,41 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
     );
   }
 
+  /**
+   * Adds a graduated hold unless one from the same decision is already there, so a retried decision
+   * never applies twice. True when this call added it.
+   */
+  async addInterventionHold(userId: string, hold: InterventionHold): Promise<boolean> {
+    if (!mongoose.Types.ObjectId.isValid(userId)) return false;
+    const result = await this.model.updateOne(
+      { _id: new mongoose.Types.ObjectId(userId), 'interventionHolds.decisionId': { $ne: hold.decisionId } },
+      { $push: { interventionHolds: hold } },
+      { runValidators: true }
+    );
+    return result.modifiedCount === 1;
+  }
+
+  /**
+   * Releases only the hold that decision applied. Never touches moderation, riskScore.reviewState,
+   * signupGrantHeldReason or any other decision's hold. True when an unreleased hold was released.
+   */
+  async releaseInterventionHold(
+    userId: string,
+    decisionId: string,
+    { by, now }: { by: string; now: Date }
+  ): Promise<boolean> {
+    if (!mongoose.Types.ObjectId.isValid(userId)) return false;
+    const result = await this.model.updateOne(
+      {
+        _id: new mongoose.Types.ObjectId(userId),
+        interventionHolds: { $elemMatch: { decisionId, releasedAt: null } },
+      },
+      { $set: { 'interventionHolds.$[hold].releasedAt': now, 'interventionHolds.$[hold].releasedBy': by } },
+      { arrayFilters: [{ 'hold.decisionId': decisionId, 'hold.releasedAt': null }], runValidators: true }
+    );
+    return result.modifiedCount === 1;
+  }
+
   async setRiskScore(userId: string, riskScore: ISignupRiskScore): Promise<void> {
     const preservedStates = ['pending', 'approved', 'banned'];
     await this.model.updateOne({ _id: userId }, [
@@ -1989,6 +2040,7 @@ export const UserSchema = new Schema<IUserDocument, IUserModel>(
     signupGrantHeldReason: { type: String, enum: ['budget_exhausted', 'risk_review', null], default: null },
     // When the tranche was last held for an exhausted budget; the activity drip ignores older holds.
     signupGrantHeldAt: { type: Date },
+    interventionHolds: { type: [InterventionHoldSchema], default: undefined },
     signupGrant: {
       type: new Schema(
         {
@@ -2547,6 +2599,11 @@ UserSchema.index({ 'signupMeta.capturedAt': 1 }, { name: 'user_signupMeta_captur
 UserSchema.index(
   { 'signupMeta.ip': 1 },
   { name: 'user_signupMeta_ip', partialFilterExpression: { 'signupMeta.ip': { $type: 'string' } } }
+);
+// Expiry stamping of graduated holds (apps/workers/src/cron/abuseAssessmentSweep.ts); only unreleased holds.
+UserSchema.index(
+  { 'interventionHolds.expiresAt': 1 },
+  { name: 'user_interventionHolds_expiresAt', partialFilterExpression: { 'interventionHolds.releasedAt': null } }
 );
 UserSchema.index({ 'slackSettings.slackUserId': 1 });
 UserSchema.index({ 'slackSettings.githubNotifications.githubUsername': 1 });

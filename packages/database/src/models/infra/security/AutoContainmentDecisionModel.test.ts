@@ -74,4 +74,75 @@ describe('AutoContainmentDecisionRepository', () => {
       batchId: 'batch-1',
     });
   });
+
+  it('reads a row written before tiers existed as a Contain decision', async () => {
+    const { insertedId } = await AutoContainmentDecisionModel.collection.insertOne({
+      detectionId: 'legacy',
+      revision: 0,
+      assessmentId: 'assessment-1',
+      mode: 'shadow',
+      outcome: 'would_contain',
+      userIds: ['user-1'],
+      confidence: 0.95,
+      reason: 'evidence',
+      batchId: null,
+      error: null,
+      decidedAt: NOW,
+    });
+    const [legacy] = await repository.listForDetection('legacy');
+    expect(legacy).toMatchObject({
+      id: insertedId.toString(),
+      tier: 'contain',
+      policyVersion: null,
+      scope: 'account',
+      expiresAt: null,
+      releasedAt: null,
+    });
+  });
+
+  it('records a graduated decision with its tier fields', async () => {
+    const expiresAt = new Date(NOW.getTime() + 72 * 60 * MINUTE_MS);
+    const decision = await repository.recordOnce(
+      input({ tier: 'review', policyVersion: 1, scope: 'ai_spend', expiresAt, outcome: 'would_intervene' })
+    );
+    expect(decision).toMatchObject({ tier: 'review', policyVersion: 1, scope: 'ai_spend', expiresAt });
+  });
+
+  it('releases an applied hold once, and never a shadow or Contain decision', async () => {
+    const expiresAt = new Date(NOW.getTime() + 60 * MINUTE_MS);
+    const applied = await repository.recordOnce(input({ tier: 'limit', expiresAt, outcome: 'intervened' }));
+    const shadow = await repository.recordOnce(
+      input({ revision: 1, tier: 'limit', expiresAt, outcome: 'would_intervene' })
+    );
+    const contained = await repository.recordOnce(input({ revision: 2, outcome: 'contained' }));
+    const release = { by: 'admin-1', reason: 'cleared', condition: 'admin_release' as const, now: NOW };
+
+    expect(await repository.release(applied!.id, release)).toMatchObject({
+      outcome: 'released',
+      releasedAt: NOW,
+      releasedBy: 'admin-1',
+      releaseReason: 'cleared',
+      releaseCondition: 'admin_release',
+    });
+    expect(await repository.release(applied!.id, release)).toBeNull();
+    expect(await repository.release(shadow!.id, release)).toBeNull();
+    expect(await repository.release(contained!.id, release)).toBeNull();
+    expect(await repository.release('not-an-id', release)).toBeNull();
+  });
+
+  it('marks only lapsed, unreleased applied holds expired', async () => {
+    const lapsed = await repository.recordOnce(
+      input({ tier: 'verify', expiresAt: new Date(NOW.getTime() - MINUTE_MS), outcome: 'intervened' })
+    );
+    const live = await repository.recordOnce(
+      input({ revision: 1, tier: 'verify', expiresAt: new Date(NOW.getTime() + MINUTE_MS), outcome: 'intervened' })
+    );
+    const contained = await repository.recordOnce(input({ revision: 2, outcome: 'contained' }));
+
+    expect(await repository.markExpired([lapsed!.id, live!.id, contained!.id, 'bad'], NOW)).toBe(1);
+    expect(await repository.markExpired([lapsed!.id], NOW)).toBe(0);
+    const byRevision = await repository.listForDetection('detection-1');
+    expect(byRevision.map(d => d.outcome)).toEqual(['expired', 'intervened', 'contained']);
+    expect(byRevision[0]).toMatchObject({ releasedAt: NOW, releaseCondition: 'expiry' });
+  });
 });
