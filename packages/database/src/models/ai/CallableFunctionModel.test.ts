@@ -57,7 +57,6 @@ const fn = (overrides: Partial<CallableFunctionCreateInput> = {}): CallableFunct
   userId: 'user-1',
   slug: 'beam_midspan_deflection',
   description: RAW_CONTRACT.description,
-  state: 'draft',
   enabled: true,
   pin: {
     artifactId: 'artifact-1',

@@ -36,7 +36,7 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 
 ## Summary
 
-1283 routes: 132 contracted, 11 aliases of another route, 356 with no static caller in `apps/client/app`.
+1286 routes: 132 contracted, 11 aliases of another route, 356 with no static caller in `apps/client/app`.
 
 | Area | Routes | Contracted | jwt+key | jwt | optional | handler | No static caller |
 | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -59,7 +59,7 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | blog-integration | 1 | 0 | 1 | 0 | 0 | 0 | 0 |
 | briefcase | 3 | 0 | 3 | 0 | 0 | 0 | 0 |
 | business-links | 5 | 0 | 5 | 0 | 0 | 0 | 0 |
-| callable-functions | 5 | 0 | 0 | 5 | 0 | 0 | 0 |
+| callable-functions | 8 | 0 | 0 | 8 | 0 | 0 | 0 |
 | cc-bridge | 6 | 0 | 5 | 0 | 0 | 1 | 4 |
 | chat | 1 | 1 | 1 | 0 | 0 | 0 | 0 |
 | chat-completion-status | 1 | 0 | 1 | 0 | 0 | 0 | 0 |
@@ -763,7 +763,10 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | `/api/callable-functions` | GET, POST | jwt | - | - | no | - | 1: `hooks/data/callableFunctions.ts` |
 | `/api/callable-functions/[id]` | GET, PATCH, DELETE | jwt | - | - | no | - | 1: `hooks/data/callableFunctions.ts` |
+| `/api/callable-functions/[id]/calls` | GET | jwt | - | - | no | - | 1: `hooks/data/callableFunctions.ts` |
+| `/api/callable-functions/[id]/examples` | PUT | jwt | - | - | no | - | 1: `hooks/data/callableFunctions.ts` |
 | `/api/callable-functions/[id]/pin` | POST | jwt | - | - | no | - | 1: `hooks/data/callableFunctions.ts` |
+| `/api/callable-functions/[id]/promote` | POST | jwt | - | - | no | - | 1: `hooks/data/callableFunctions.ts` |
 | `/api/callable-functions/[id]/test-run` | POST | jwt | - | - | no | - | 1: `hooks/data/callableFunctions.ts` |
 | `/api/callable-functions/status` | GET | jwt | - | - | no | - | 1: `hooks/data/callableFunctions.ts` |
 
