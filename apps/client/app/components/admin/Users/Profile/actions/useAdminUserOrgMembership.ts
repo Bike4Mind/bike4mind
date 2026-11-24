@@ -8,7 +8,8 @@ import { adminUpdateErrorMessage } from './useAdminUserUpdate';
 export type OrgMemberRoleChoice = AssignableOrgRole;
 
 /**
- * Audited org membership writes for one user (pages/api/admin/organizations/[id]/members). Failures
+ * Audited org membership writes for one user (pages/api/admin/organizations/[id]/members, and
+ * pages/api/admin/users/[userId]/home-organization for the home-org pointer). Failures
  * toast here and rethrow an Error with the same message, so an ActionDialog stays open and an undo
  * reports the friendly text instead of the raw request error.
  */
@@ -45,5 +46,10 @@ export const useAdminUserOrgMembership = (userId: string) => {
       ),
     setRole: (organizationId: string, role: OrgMemberRoleChoice, reason: string) =>
       run(() => api.patch(memberPath(organizationId), { role, reason }), 'The organization role was not changed.'),
+    clearHomeOrg: (reason: string) =>
+      run(
+        () => api.delete(`/api/admin/users/${encodeURIComponent(userId)}/home-organization`, { data: { reason } }),
+        'The home org was not cleared.'
+      ),
   };
 };
