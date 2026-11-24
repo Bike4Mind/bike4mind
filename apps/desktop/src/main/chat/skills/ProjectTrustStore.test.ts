@@ -1,4 +1,4 @@
-import { mkdtemp } from 'node:fs/promises';
+import { mkdir, mkdtemp, realpath, symlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -41,5 +41,34 @@ describe('ProjectTrustStore', () => {
     });
     await trust.trust(MAIN);
     expect(await trust.isTrusted(WORKTREE)).toBe(false);
+  });
+
+  it('records trust given inside a worktree against its main checkout', async () => {
+    const sibling = '/work/repo/.b4m/worktrees/other';
+    const trust = await store(async directory => (directory === MAIN ? null : MAIN));
+    expect(await trust.trust(WORKTREE)).toEqual([MAIN]);
+    expect(await trust.isTrusted(sibling)).toBe(true);
+    expect(await trust.isTrusted(MAIN)).toBe(true);
+  });
+
+  it('revokes the main checkout when trust is removed inside a worktree', async () => {
+    const trust = await store(async directory => (directory === MAIN ? null : MAIN));
+    await trust.trust(MAIN);
+    expect(await trust.revoke(WORKTREE)).toEqual([]);
+    expect(await trust.isTrusted(WORKTREE)).toBe(false);
+  });
+
+  it('inherits from a project that was trusted through a symlink', async () => {
+    const root = await realpath(await mkdtemp(join(tmpdir(), 'b4m-trust-link-')));
+    const real = join(root, 'repo');
+    const link = join(root, 'link');
+    await mkdir(real);
+    await symlink(real, link);
+    const worktree = join(real, '.b4m', 'worktrees', 'task');
+    const trust = await store(async directory => (directory === worktree ? real : null));
+    await trust.trust(link);
+    expect(await trust.isTrusted(worktree)).toBe(true);
+    expect(await trust.trust(worktree)).toEqual([link]);
+    expect(await trust.revoke(worktree)).toEqual([]);
   });
 });

@@ -1,4 +1,4 @@
-import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, realpath, rename, writeFile } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 
 /**
@@ -14,8 +14,9 @@ import { dirname, resolve } from 'node:path';
  * Matching is EXACT, not prefix. Trusting ~/work/myrepo must not trust ~/work/somebody-elses,
  * and a worktree the user made is its own path. The one exception is `inheritsFrom`: a worktree
  * this app created for a session answers with its main checkout's trust, because every session
- * gets a fresh one and asking again each time taught nothing but to click through. Revoking the
- * main checkout therefore revokes them all.
+ * gets a fresh one and asking again each time taught nothing but to click through. Trusting or
+ * revoking from inside such a worktree is recorded against the main checkout, so it holds for all
+ * of them.
  *
  * Written the way AccessStore writes grants - 0600, write-then-rename - because a truncated
  * file here reads as "nothing trusted", which is the direction a corrupt read should fail in.
@@ -46,20 +47,39 @@ export class ProjectTrustStore {
     const absolute = resolve(directory);
     const trusted = await this.list();
     if (trusted.includes(absolute)) return true;
-    const owner = await this.inheritsFrom?.(absolute).catch(() => null);
-    return owner ? trusted.includes(resolve(owner)) : false;
+    const owner = await this.ownerOf(absolute);
+    return owner ? (await this.entriesFor(owner, trusted)).length > 0 : false;
   }
 
+  /** Recorded against the main checkout when there is one, so the answer reaches its other worktrees. */
   async trust(directory: string): Promise<string[]> {
     const absolute = resolve(directory);
     const current = await this.list();
-    if (current.includes(absolute)) return current;
-    return this.write([...current, absolute]);
+    const target = (await this.ownerOf(absolute)) ?? absolute;
+    if (current.includes(target) || (await this.entriesFor(target, current)).length > 0) return current;
+    return this.write([...current, target]);
   }
 
   async revoke(directory: string): Promise<string[]> {
     const absolute = resolve(directory);
-    return this.write((await this.list()).filter(entry => entry !== absolute));
+    const current = await this.list();
+    const owner = await this.ownerOf(absolute);
+    const inherited = owner ? await this.entriesFor(owner, current) : [];
+    return this.write(current.filter(entry => entry !== absolute && !inherited.includes(entry)));
+  }
+
+  private async ownerOf(absolute: string): Promise<string | null> {
+    const owner = await this.inheritsFrom?.(absolute).catch(() => null);
+    return owner ? resolve(owner) : null;
+  }
+
+  /**
+   * The stored entries that name `owner`. An owner arrives as a real path while an entry keeps
+   * whatever symlink the user opened the project through, so entries are resolved to compare.
+   */
+  private async entriesFor(owner: string, trusted: readonly string[]): Promise<string[]> {
+    const real = await Promise.all(trusted.map(entry => realpath(entry).catch(() => entry)));
+    return trusted.filter((entry, index) => entry === owner || real[index] === owner);
   }
 
   private async write(trusted: string[]): Promise<string[]> {
