@@ -53,7 +53,7 @@ describe('AdminDialog', () => {
         .map(rule => rule.cssText)
         .join('\n');
       return Array.from(el.classList).some(cls =>
-        new RegExp(`@media \\(pointer: coarse\\)\\s*\\{\\s*\\.${cls}\\s*\\{[^}]*top: 5%`).test(css)
+        new RegExp(`@media \\(pointer: coarse\\)\\s*\\{\\s*\\.${cls}\\s*\\{[^}]*top: 5%[^}]*max-height: 90vh`).test(css)
       );
     };
     const { unmount } = render(

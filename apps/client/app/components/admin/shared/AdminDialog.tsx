@@ -49,7 +49,9 @@ export function AdminDialog({
           overflowY: 'auto',
           // The dialog scrolls as a whole; a nested scroll box in DialogContent clips focus rings.
           [`& .${dialogContentClasses.root}`]: { overflow: 'visible' },
-          ...(anchorTop && { '@media (pointer: coarse)': { top: '5%', transform: 'translateX(-50%)' } }),
+          ...(anchorTop && {
+            '@media (pointer: coarse)': { top: '5%', transform: 'translateX(-50%)', maxHeight: '90vh' },
+          }),
         }}
       >
         <ModalClose disabled={closeDisabled} data-testid={`${testId}-close-btn`} />
