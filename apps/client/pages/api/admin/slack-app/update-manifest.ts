@@ -4,7 +4,10 @@ import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 import { z } from 'zod';
 import { slackDevWorkspaceRepository } from '@bike4mind/database/infra';
 import { mergeManifest, extractBaseUrl } from '@bike4mind/slack';
-import { isSlackUserValidationError } from '@bike4mind/server-utils/integrations/slack/slackExportErrors';
+import {
+  isSlackConfigTokenAuthError,
+  STORED_CONFIG_TOKEN_REJECTED_MESSAGE,
+} from '@server/integrations/slack/slackConfigTokenErrors';
 import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 
 /**
@@ -62,9 +65,12 @@ const handler = adminApi({
   if (!exportData.ok) {
     const slackError = exportData.error as string;
 
-    if (isSlackUserValidationError(slackError || '')) {
-      req.logger.warn('Slack manifest export auth error (user validation)', { error: slackError, workspaceId });
-      throw new BadRequestError('Configuration token is invalid or expired. Please reconnect before updating.');
+    if (isSlackConfigTokenAuthError(slackError)) {
+      req.logger.warn('Slack rejected the stored config token (apps.manifest.export)', {
+        error: slackError,
+        workspaceId,
+      });
+      throw new BadRequestError(STORED_CONFIG_TOKEN_REJECTED_MESSAGE);
     }
 
     req.logger.error('Failed to export manifest from Slack', { error: slackError, workspaceId });
@@ -116,9 +122,12 @@ const handler = adminApi({
   if (!updateData.ok) {
     const slackError = updateData.error as string;
 
-    if (isSlackUserValidationError(slackError || '')) {
-      req.logger.warn('Slack manifest update auth error (user validation)', { error: slackError, workspaceId });
-      throw new BadRequestError('Configuration token is invalid or expired. Please reconnect before updating.');
+    if (isSlackConfigTokenAuthError(slackError)) {
+      req.logger.warn('Slack rejected the stored config token (apps.manifest.update)', {
+        error: slackError,
+        workspaceId,
+      });
+      throw new BadRequestError(STORED_CONFIG_TOKEN_REJECTED_MESSAGE);
     }
 
     req.logger.error('Failed to update manifest on Slack', {
