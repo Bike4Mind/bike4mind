@@ -255,10 +255,8 @@ export class AnthropicBackend implements ICompletionBackend {
   private logger: Logger;
   public currentModel: string = '';
   private lastAssistantContent: ContentBlock[] = []; // Store the complete assistant message content for tool use
-  // Text the model streamed ahead of its first tool call (text after it stays out, so replay
-  // never reorders it), for the non-replay path of pushToolMessages to put back on the first
-  // tool_use message of the round. Streaming rounds only: the non-streaming path never
-  // forwards that text, so replaying it would hide it from the user.
+  // Text emitted ahead of the first tool call, for pushToolMessages to replay on the first
+  // tool_use message. Text after that call stays out so replay never reorders it.
   private pendingPreToolText: string | undefined;
   private isThinkingEnabled: boolean = false; // Track if thinking is enabled for current request
   // Opaque, non-PII end-user identifier forwarded as `metadata.user_id` so
@@ -2899,7 +2897,14 @@ export class AnthropicBackend implements ICompletionBackend {
 
         if ('content' in response && Array.isArray(response.content)) {
           this.lastAssistantContent = response.content as ContentBlock[];
-          this.pendingPreToolText = undefined;
+          const firstToolUseIndex = this.lastAssistantContent.findIndex(content => content.type === 'tool_use');
+          this.pendingPreToolText =
+            options.executeTools === false
+              ? undefined
+              : this.lastAssistantContent
+                  .slice(0, firstToolUseIndex === -1 ? undefined : firstToolUseIndex)
+                  .flatMap(content => (content.type === 'text' ? [content.text] : []))
+                  .join('');
           let responseFormatToolEmitted = false;
 
           for (let i = 0; i < response.content.length; i++) {

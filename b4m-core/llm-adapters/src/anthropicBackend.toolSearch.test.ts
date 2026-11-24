@@ -134,10 +134,17 @@ const finalTurn = [
 
 function collect() {
   const infos: CompletionInfo[] = [];
-  const cb = async (_text: (string | null | undefined)[], info?: CompletionInfo) => {
+  const text: string[] = [];
+  const cb = async (chunks: (string | null | undefined)[], info?: CompletionInfo) => {
+    text.push(...chunks.filter((chunk): chunk is string => typeof chunk === 'string'));
     if (info) infos.push(info);
   };
-  return { infos, cb, providerBlocks: () => infos.filter(i => i.providerBlock).map(i => i.providerBlock) };
+  return {
+    infos,
+    cb,
+    text: () => text.join(''),
+    providerBlocks: () => infos.filter(i => i.providerBlock).map(i => i.providerBlock),
+  };
 }
 
 // CLAUDE_5_OPUS at `low` runs with thinking on; CLAUDE_5_SONNET at `none` switches it off.
@@ -561,7 +568,6 @@ describe.each(THINKING_MODES)(
 describe('AnthropicBackend plain tool loop replay (thinking off, no server blocks)', () => {
   const toolUse = { type: 'tool_use', id: 'toolu_1', name: 'get_weather', input: { city: 'Oslo' } };
   const toolResult = { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'toolu_1', content: 'ok' }] };
-  const expectedReplay = [{ role: 'assistant', content: [toolUse] }, toolResult];
 
   it('replays the streamed intro text with the tool_use turn when streaming', async () => {
     const turn = [
@@ -594,10 +600,24 @@ describe('AnthropicBackend plain tool loop replay (thinking off, no server block
     ]);
   });
 
-  it('replays a bare tool_use turn when not streaming', async () => {
+  it.each([
+    { label: 'one text block', content: [{ type: 'text', text: 'Let me check.' }, toolUse], replay: 'Let me check.' },
+    {
+      label: 'split text blocks',
+      content: [{ type: 'text', text: 'Let me ' }, { type: 'text', text: 'check.' }, toolUse],
+      replay: 'Let me check.',
+    },
+    { label: 'no text', content: [toolUse], replay: undefined },
+    { label: 'blank text', content: [{ type: 'text', text: ' \n ' }, toolUse], replay: undefined },
+    {
+      label: 'text after the tool',
+      content: [{ type: 'text', text: 'Let me check.' }, toolUse, { type: 'text', text: 'Later note.' }],
+      replay: 'Let me check.',
+    },
+  ])('replays emitted pre-tool text when not streaming: $label', async ({ content, replay }) => {
     const { backend, captured } = buildBackend([
       {
-        content: [{ type: 'text', text: 'Let me check.' }, toolUse],
+        content,
         stop_reason: 'tool_use',
         usage: { input_tokens: 1, output_tokens: 1 },
       },
@@ -608,14 +628,19 @@ describe('AnthropicBackend plain tool loop replay (thinking off, no server block
       },
     ]);
 
+    const emitted = collect();
     await backend.complete(
       ChatModels.CLAUDE_5_SONNET,
       [{ role: 'user', content: 'weather in Oslo?' }],
       { stream: false, executeTools: true, reasoningEffort: 'none', tools: [tool('get_weather')] },
-      collect().cb
+      emitted.cb
     );
 
-    expect((captured[1].messages as unknown[]).slice(-2)).toEqual(expectedReplay);
+    if (replay) expect(emitted.text()).toContain(replay);
+    expect((captured[1].messages as unknown[]).slice(-2)).toEqual([
+      { role: 'assistant', content: replay ? [{ type: 'text', text: replay }, toolUse] : [toolUse] },
+      toolResult,
+    ]);
   });
 });
 
