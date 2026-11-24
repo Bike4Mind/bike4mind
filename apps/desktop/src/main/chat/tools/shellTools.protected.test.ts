@@ -566,10 +566,19 @@ describe('shell commands that reach a protected location', () => {
       'for f in ../*; do cp x "$f"; done',
       'for f in src/*; do f=.claude; cp evil.json "$f"/settings.local.json; done',
       'for f in src/*; do cd ..; cp -r payload/. "$f"; done',
-      'for f in src; do rm -rf $f; done',
+      "for f in 'src*'; do rm -rf $f; done",
       'for f in "$X"; do cat "$f"; done',
     ])('asks in auto mode before %s', async command => {
       expect((await judge(command, 'P')).auto).toBe(false);
+    });
+
+    // Only the scan's verdicts: a saved rule matches a written-out command, never a loop header, so `allowed` differs.
+    it('judges an unquoted plain loop value as the command written out', async () => {
+      for (const scenario of scenarios) {
+        const { auto, full } = await judge('for f in src; do rm -rf $f; done', scenario);
+        const written = await judge('rm -rf src', scenario);
+        expect({ auto, full }, scenario).toEqual({ auto: written.auto, full: written.full });
+      }
     });
 
     it('reads the top level as unknown once git is pointed elsewhere', async () => {

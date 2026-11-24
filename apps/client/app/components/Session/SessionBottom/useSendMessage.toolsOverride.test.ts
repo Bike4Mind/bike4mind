@@ -164,10 +164,10 @@ describe('useSendMessage - per-send systemContext reaches both routes', () => {
     expect(refusal).toMatch(/options\?\.onRefused\?\.\(\);\s*return;\s*$/);
     // Ahead of the host hand-off and every dispatch.
     expect(refusalStart).toBeLessThan(source.indexOf('useSessionRouter.getState().hostCreateSession'));
-    expect(refusalStart).toBeLessThan(source.indexOf('handleCommand(commandHandlers, {'));
+    expect(refusalStart).toBeLessThan(source.indexOf('dispatchSend(commandHandlers, imageSendMode, {'));
   });
 
-  it.each(['handleCommand(commandHandlers, {', 'handleLLMCommand({', 'agentExecution.start({'])(
+  it.each(['dispatchSend(commandHandlers, imageSendMode, {', 'handleLLMCommand({', 'agentExecution.start({'])(
     'spreads it into %s',
     opener => {
       const slice = callSlice(opener);

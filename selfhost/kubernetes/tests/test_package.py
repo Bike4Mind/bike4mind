@@ -472,5 +472,32 @@ class PackageTests(unittest.TestCase):
             return next(obj['metadata']['name'] for obj in objects if obj['kind'] == 'Job')
         self.assertEqual(job_name(self.render()), job_name(self.render({'renderWorker': {'enabled': True, 'image': self.RENDER_IMAGE}})))
 
+    def test_validate_secrets_runs_shared_validator_strict(self):
+        objects = self.render()
+        worker = next(o for o in objects if o['kind'] == 'Deployment' and o['metadata']['name'] == 'test-worker')
+        init = next(c for c in worker['spec']['template']['spec']['initContainers'] if c['name'] == 'validate-secrets')
+        command = init['command']
+        self.assertEqual(command[:2], ['node', '-e'])
+        self.assertEqual(len(command), 3)
+        source = command[2]
+        self.assertIn('SECRET_ENCRYPTION_KEY_PREVIOUS', source)
+        self.assertIn('not-configured', source)
+        if not shutil.which('node'):
+            self.skipTest('node is required')
+        env = {'PATH': os.environ['PATH'], 'MINIO_ROOT_USER': 'minio-user', 'MINIO_ROOT_PASSWORD': 'p' * 20}
+        for name in ['JWT_SECRET', 'SESSION_SECRET', 'INTERNAL_WS_SECRET', 'INTERNAL_S3_WEBHOOK_SECRET', 'CHAT_COMPLETION_INTERNAL_SECRET']:
+            env[name] = 'x' * 40
+        def run(extra):
+            return subprocess.run(['node', '-e', source], env={**env, **extra}, text=True, capture_output=True)
+        valid = {'SECRET_ENCRYPTION_KEY': 'a' * 64}
+        self.assertEqual(run(valid).returncode, 0)
+        bad_previous = run({**valid, 'SECRET_ENCRYPTION_KEY_PREVIOUS': 'b' * 63})
+        self.assertNotEqual(bad_previous.returncode, 0)
+        self.assertIn('SECRET_ENCRYPTION_KEY_PREVIOUS', bad_previous.stderr)
+        # The plaintext opt-out is Compose-only: the chart stays strict.
+        strict = run({'B4M_ALLOW_PLAINTEXT_SECRETS': 'true', 'SECRET_ENCRYPTION_KEY': 'change-me'})
+        self.assertNotEqual(strict.returncode, 0)
+        self.assertNotIn('B4M_ALLOW_PLAINTEXT_SECRETS', strict.stderr)
+
 if __name__ == '__main__':
     unittest.main()

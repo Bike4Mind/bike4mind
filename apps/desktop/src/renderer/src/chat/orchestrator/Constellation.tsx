@@ -145,7 +145,7 @@ function Node({
       data-color={color}
       onClick={onOpen}
       onKeyDown={event => activate(event, onOpen)}
-      style={{ cursor: 'pointer', opacity: state === 'stopped' || state === 'idle' ? 0.6 : 1 }}
+      style={{ cursor: 'pointer', opacity: state === 'paused' || state === 'stopped' || state === 'idle' ? 0.6 : 1 }}
     >
       {asking && (
         <Box

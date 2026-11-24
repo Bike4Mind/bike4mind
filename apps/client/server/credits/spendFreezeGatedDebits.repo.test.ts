@@ -77,6 +77,9 @@ const SITES: Record<string, Array<[call: string, why: string]>> = {
   'apps/workers/src/dataLakes/runLakeResearch.ts': [
     ['recordOperationalUsage(', 'gated-by assertSpendNotFrozen earlier in the run'],
   ],
+  'apps/workers/src/emailIngestion/emailAnalyzer.ts': [
+    ['recordOperationalUsage(', 'record-only (bypassCreditBilling)'],
+  ],
   'apps/workers/src/events/recordSessionOperationalUsage.ts': [
     [
       'recordOperationalUsage(',

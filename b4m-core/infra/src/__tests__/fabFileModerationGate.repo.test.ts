@@ -135,6 +135,8 @@ const referencesGate = (source: string): boolean => /isImageServeable\s*\(/.test
  * be provably safe, not merely inconvenient to fix.
  */
 const ALLOWLIST: Record<string, string> = {
+  'apps/client/server/files/copyGeneratedImage.ts':
+    'copies a generated-bucket image into a NEW FabFile: the download reads the generated-images bucket, and the presign is the save service wiring for that first write; nothing is returned to a client here - the copy-generated-image route gates the URL it serves on isImageServeable, and the chat image route scans the copy before use',
   'packages/server-utils/src/tutorials/sheet.ts':
     'writes a server-authored text/csv tutorial sheet, never an image or user upload',
   // --- The moderation scanner itself: downloads bytes to RUN Rekognition and PRODUCE

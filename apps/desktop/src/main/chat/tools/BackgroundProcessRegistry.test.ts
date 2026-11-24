@@ -213,6 +213,26 @@ describe('BackgroundProcessRegistry', () => {
 
       expect(exits).toEqual([]);
     }, 20_000);
+
+    it('counts only running wake-on-exit jobs for the session, labelled by the newest', async () => {
+      expect(registry.wakingJobs('session-a')).toBeUndefined();
+
+      const quiet = await start('sleep 30');
+      expect(registry.wakingJobs('session-a')).toBeUndefined();
+
+      const first = await startWaking('sleep 30 # first');
+      const second = await startWaking('sleep 30 # second');
+      await startWaking('sleep 30 # other', 'session-b');
+      expect(registry.wakingJobs('session-a')).toEqual({ running: 2, label: 'sleep 30 # second' });
+
+      await registry.kill(second.id, 'session-a');
+      expect(registry.wakingJobs('session-a')).toEqual({ running: 1, label: 'sleep 30 # first' });
+
+      await registry.kill(first.id, 'session-a');
+      await registry.kill(quiet.id, 'session-a');
+      expect(registry.wakingJobs('session-a')).toBeUndefined();
+      expect(registry.wakingJobs('session-b')?.running).toBe(1);
+    }, 20_000);
   });
 
   /** The reason signals go to -pgid: a bare pid leaves the command's children running. */

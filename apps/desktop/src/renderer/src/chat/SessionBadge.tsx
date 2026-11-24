@@ -25,7 +25,7 @@ export function badgeMarker(status: ChatSessionStatus, outcome: ChildOutcome | u
   const state = deriveAgentState(status, outcome);
   if (state === 'working' || state === 'needs-you' || state === 'failed') return state;
   if (hasPr) return 'pr';
-  return state === 'stopped' && outcome !== 'aborted' ? 'stopped' : 'idle';
+  return (state === 'stopped' || state === 'paused') && outcome !== 'aborted' ? 'stopped' : 'idle';
 }
 
 /**

@@ -5,6 +5,7 @@ import {
   CreditHolderType,
   EditImageRequestBodySchema,
   ImageModels,
+  BadRequestError,
   IMAGES_PER_EDIT_REQUEST,
   insufficientCreditsError,
   ModelBackend,
@@ -306,7 +307,7 @@ describe('ImageEditService.process model dispatch', () => {
     expect(editSpy).not.toHaveBeenCalled();
   });
 
-  it('refuses a paid-only edit before enqueueing and gates the remapped model', async () => {
+  it('refuses a paid-only edit before enqueueing and gates the selected model', async () => {
     const refusal = new Error('paid plan required');
     const assertAdmission = vi.fn(async () => {
       throw refusal;
@@ -321,13 +322,12 @@ describe('ImageEditService.process model dispatch', () => {
           questId: 'quest1',
           prompt: 'edit',
           model: ImageModels.GPT_IMAGE_2,
-          background: 'transparent',
           image: 'https://example.invalid/image.png',
           fabFileIds: ['mask1'],
         },
       })
     ).rejects.toBe(refusal);
-    expect(assertAdmission).toHaveBeenCalledWith('user1', ImageModels.GPT_IMAGE_1_5, undefined, undefined);
+    expect(assertAdmission).toHaveBeenCalledWith('user1', ImageModels.GPT_IMAGE_2, undefined, undefined);
     expect(enqueue).not.toHaveBeenCalled();
   });
 
@@ -480,13 +480,30 @@ describe('ImageEditService.process model dispatch', () => {
     });
   });
 
-  it('steps a gpt-image-2 selection down to gpt-image-1.5 when background is transparent', async () => {
-    await run(ImageModels.GPT_IMAGE_2, { background: 'transparent', output_format: 'png' });
+  it('refuses a transparent background on a model that cannot render one with a 400 instead of stepping down', async () => {
+    const enqueue = vi.fn();
+    const { service } = makeService({}, enqueue);
+    await expect(
+      service.invoke({
+        userId: 'user1',
+        body: {
+          sessionId: 'session1',
+          questId: 'quest1',
+          prompt: 'edit',
+          model: ImageModels.GPT_IMAGE_2,
+          background: 'transparent',
+          image: 'https://example.invalid/image.png',
+          fabFileIds: ['mask1'],
+        },
+      })
+    ).rejects.toBeInstanceOf(BadRequestError);
+    expect(enqueue).not.toHaveBeenCalled();
+  });
 
-    expect(editSpy.mock.calls[0][2]).toMatchObject({
-      model: ImageModels.GPT_IMAGE_1_5,
-      background: 'transparent',
-    });
+  it('leaves a request without a transparent background untouched on gpt-image-2', async () => {
+    await run(ImageModels.GPT_IMAGE_2, { output_format: 'png' });
+
+    expect(editSpy.mock.calls[0][2]).toMatchObject({ model: ImageModels.GPT_IMAGE_2 });
   });
 
   it('rejects a model that cannot edit instead of silently substituting one', async () => {
@@ -745,7 +762,10 @@ describe('ImageEditService.process model dispatch', () => {
           })
         );
 
-        await service.process({ body: { ...editBody, userId: 'user1', run: completionRun } as never, logger: silentLogger });
+        await service.process({
+          body: { ...editBody, userId: 'user1', run: completionRun } as never,
+          logger: silentLogger,
+        });
 
         expect(vi.mocked(service['db'].quests.update)).toHaveBeenCalledWith(
           expect.objectContaining({ status: 'done', errorCode: 'run_budget_exhausted' })
