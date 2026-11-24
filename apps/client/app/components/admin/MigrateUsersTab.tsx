@@ -22,6 +22,8 @@ import { toast } from 'sonner';
 import { buildMigratedUsersCsv } from '@client/app/utils/migratedUsersCsv';
 import ContextHelpButton from '@client/app/components/help/ContextHelpButton';
 import SingleOrganizationSelector from '../common/SingleOrganizationSelector';
+import { AdminPageHeader } from './shared';
+import { ADMIN_DETAIL_MAX_WIDTH, ADMIN_REGION_GAP } from './shared/adminStyles';
 
 const MigrateUsersTab: React.FC = () => {
   const organizations = useGetAllOrganizations({ filters: { personal: false } });
@@ -118,12 +120,13 @@ const MigrateUsersTab: React.FC = () => {
   const secondOption = false;
 
   return (
-    <Sheet sx={{ overflow: 'hidden', width: '100%' }}>
+    <Stack gap={ADMIN_REGION_GAP} sx={{ maxWidth: ADMIN_DETAIL_MAX_WIDTH }}>
+      <AdminPageHeader
+        title="Migrate users"
+        description="Add people to an organization in bulk from a pasted name and email list, and optionally send them a welcome email."
+        actions={<ContextHelpButton helpId="admin/user-migration" tooltipText="User migration help" />}
+      />
       <Stack spacing={2}>
-        <Stack direction="row" alignItems="center" spacing={1}>
-          <Typography level="h1">Migrate Users</Typography>
-          <ContextHelpButton helpId="admin/user-migration" tooltipText="User Migration Help" />
-        </Stack>
         <FormControl>
           <Checkbox
             label="Send Welcome Email to Users"
@@ -275,7 +278,7 @@ const MigrateUsersTab: React.FC = () => {
           </Stack>
         </Sheet>
       </Modal>
-    </Sheet>
+    </Stack>
   );
 };
 
