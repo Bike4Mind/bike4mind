@@ -9,6 +9,7 @@ const h = vi.hoisted(() => ({
   signFileUrl: vi.fn(),
   audience: vi.fn(),
   credits: vi.fn(),
+  freeRun: vi.fn(),
   baseApiOptions: [] as unknown[],
 }));
 
@@ -50,11 +51,16 @@ vi.mock('@server/skillMarket/templatePage', async () => {
   );
   return { ...actual, findServableTemplate: h.find, recordTemplateView: h.record };
 });
+vi.mock('@server/skillMarket/templateFreeRun', () => ({ freeRunPageState: h.freeRun }));
 vi.mock('@server/utils/starterCredits', () => ({ getOpenSignupStarterCredits: h.credits }));
 vi.mock('@client/config/general', () => ({ getBrandName: () => 'Acme' }));
 
 import handler from '../serve';
-import { TEMPLATE_LOADER_SCRIPT_HASH } from '@server/skillMarket/templatePage';
+import {
+  MERMAID_SCRIPT_SRC,
+  TEMPLATE_FREE_RUN_SCRIPT_HASH,
+  TEMPLATE_LOADER_SCRIPT_HASH,
+} from '@server/skillMarket/templatePage';
 
 const template = (over: Record<string, unknown> = {}) => ({
   _id: 'tpl-1',
@@ -105,6 +111,7 @@ beforeEach(() => {
   h.signFileUrl.mockResolvedValue('https://files.example.com/img-1.jpg?sig=1');
   h.audience.mockResolvedValue({ orgIds: [], spaceIds: [] });
   h.credits.mockResolvedValue(2500);
+  h.freeRun.mockResolvedValue(null);
 });
 
 describe('GET /t/[slug]', () => {
@@ -278,5 +285,43 @@ describe('GET /t/[slug]', () => {
     expect(html).toContain('&lt;script&gt;alert(1)&lt;/script&gt;');
     expect(html).toContain('&quot;&gt;&lt;img src=x onerror=alert(1)&gt;');
     expect(html).toContain('/a&quot;b&lt;c');
+  });
+
+  describe('free run', () => {
+    const csp = (res: { getHeader: (name: string) => unknown }) => String(res.getHeader('Content-Security-Policy'));
+
+    it('passes the visitor cookie to the free-run state', async () => {
+      const { run } = call({ slug: 'article-bullets' }, { accept: 'text/html', host: 'localhost:3000', cookie: 'a=1' });
+      await run();
+      expect(h.freeRun).toHaveBeenCalledWith(expect.objectContaining({ _id: 'tpl-1' }), expect.anything(), 'a=1');
+    });
+
+    it('allows the box script, Turnstile and the pinned mermaid build only on a page with the box', async () => {
+      h.freeRun.mockResolvedValue({ state: 'open', siteKey: 'site', inputMaxChars: 8000 });
+      const { res, run } = call({ slug: 'article-bullets' });
+      await run();
+      expect(body(res)).toContain('data-testid="template-page-free-run"');
+      expect(csp(res)).toContain(
+        `script-src ${TEMPLATE_FREE_RUN_SCRIPT_HASH} https://challenges.cloudflare.com ${MERMAID_SCRIPT_SRC}`
+      );
+      expect(csp(res)).toContain('frame-src https://challenges.cloudflare.com');
+      expect(csp(res)).toContain("connect-src 'self'");
+    });
+
+    it('keeps the script-free CSP for the sign-up prompt', async () => {
+      h.freeRun.mockResolvedValue({ state: 'used' });
+      const { res, run } = call({ slug: 'article-bullets' });
+      await run();
+      expect(body(res)).toContain('data-testid="template-page-free-run-signup"');
+      expect(csp(res)).not.toContain('script-src');
+    });
+
+    it('still serves the page, without the box, when the free-run state cannot be read', async () => {
+      h.freeRun.mockRejectedValue(new Error('db down'));
+      const { res, run } = call({ slug: 'article-bullets' });
+      await run();
+      expect(res.statusCode).toBe(200);
+      expect(body(res)).not.toContain('template-page-free-run');
+    });
   });
 });

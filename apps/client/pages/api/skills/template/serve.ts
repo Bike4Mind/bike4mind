@@ -8,8 +8,12 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { optionalJwtAuth } from '@server/middlewares/optionalJwtAuth';
 import { renderNotFoundPage } from '@server/services/publish/renderNotFoundPage';
 import { isPublicTemplatePage, templateImageDeps, templatePageImageFile } from '@server/skillMarket/templateImage';
+import { freeRunPageState } from '@server/skillMarket/templateFreeRun';
 import {
+  MERMAID_SCRIPT_SRC,
+  TEMPLATE_FREE_RUN_SCRIPT_HASH,
   TEMPLATE_LOADER_SCRIPT_HASH,
+  TURNSTILE_ORIGIN,
   findServableTemplate,
   recordTemplateView,
   renderTemplateLoaderShell,
@@ -37,6 +41,13 @@ const BASE_CSP = [
   "frame-ancestors 'self'",
 ];
 const PAGE_CSP = BASE_CSP.join('; ');
+// A page with the free-run box also runs its script, the Turnstile widget and, for a diagram, mermaid.
+const FREE_RUN_PAGE_CSP = [
+  ...BASE_CSP,
+  `script-src ${TEMPLATE_FREE_RUN_SCRIPT_HASH} ${TURNSTILE_ORIGIN} ${MERMAID_SCRIPT_SRC}`,
+  `frame-src ${TURNSTILE_ORIGIN}`,
+  "connect-src 'self'",
+].join('; ');
 const LOADER_CSP = [...BASE_CSP, `script-src ${TEMPLATE_LOADER_SCRIPT_HASH}`, "connect-src 'self'"].join('; ');
 
 function runShim(
@@ -98,9 +109,13 @@ const handler = baseApi({ auth: false, allowedMethods: ['GET'] })
     }
 
     const origin = resolveDocOrigin(req.headers.host, req.headers['x-forwarded-proto']);
-    const [imageSrc, starterCredits] = await Promise.all([
+    const [imageSrc, starterCredits, freeRun] = await Promise.all([
       imageSrcFor(template, listing, isPublic),
       isPublic ? getOpenSignupStarterCredits() : Promise.resolve(0),
+      freeRunPageState(template, listing, req.headers.cookie).catch(error => {
+        req.logger?.warn('template page: free-run state unreadable', error);
+        return null;
+      }),
     ]);
     const brandName = getBrandName();
     const html = renderTemplatePage({
@@ -118,6 +133,7 @@ const handler = baseApi({ auth: false, allowedMethods: ['GET'] })
             siteName: process.env.APP_NAME || brandName,
           }
         : null,
+      freeRun,
     });
 
     await recordTemplateView(template).catch(error =>
@@ -130,7 +146,7 @@ const handler = baseApi({ auth: false, allowedMethods: ['GET'] })
       res.setHeader('Content-Security-Policy', "default-src 'none'; sandbox");
       return res.status(200).send(html);
     }
-    return sendHtml(res, 200, html, PAGE_CSP);
+    return sendHtml(res, 200, html, freeRun?.state === 'open' ? FREE_RUN_PAGE_CSP : PAGE_CSP);
   });
 
 /**

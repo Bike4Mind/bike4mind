@@ -678,6 +678,14 @@ export const SettingKeySchema = z.enum([
   'SkillMarketMaxListingsPerUser',
   'SkillMarketPublicMinAccountAgeDays',
   'SkillMarketReportAutoHideThreshold',
+  'SkillTemplateFreeRunEnabled',
+  'SkillTemplateFreeRunModel',
+  'SkillTemplateFreeRunPerTemplateDailyCap',
+  'SkillTemplateFreeRunGlobalDailyCap',
+  'SkillTemplateFreeRunInputMaxChars',
+  'SkillTemplateFreeRunOutputMaxTokens',
+  'SkillTemplateFreeRunFileMaxMb',
+  'SkillTemplateFreeRunFileMaxPages',
 
   // Slack Webhook URL settings
   'SlackDefaultWebhookUrl',
@@ -1315,6 +1323,9 @@ function makeStringSetting(
       : z.string(),
   };
 }
+
+/** SkillTemplateFreeRunModel value that defers to the operations model. */
+export const SKILL_TEMPLATE_FREE_RUN_OPERATIONS_MODEL = 'operations';
 
 /** Modes of the spend monitor's automatic pause; read by apps/workers/src/cron/spendMonitor/autoPause.ts. */
 export const SPEND_AUTO_PAUSE_MODES = ['off', 'shadow', 'enforce'] as const;
@@ -4150,6 +4161,76 @@ export const settingsMap = {
     int: true,
     description:
       'Open reports from this many distinct users hide a listing from the market until an admin restores or delists it.',
+    category: 'AI Moderation',
+  }),
+  SkillTemplateFreeRunEnabled: makeBooleanSetting({
+    key: 'SkillTemplateFreeRunEnabled',
+    name: 'Skill Template Free Runs Enabled',
+    defaultValue: false,
+    description:
+      'Lets a signed-out visitor run a skill once from its public template page (/t/<slug>), billed to the platform. Off hides the run box on every page and refuses every run. Runs also need the Turnstile secret and site key configured, whatever the sign-in Turnstile toggle says.',
+    category: 'AI Moderation',
+  }),
+  SkillTemplateFreeRunModel: makeStringSetting({
+    key: 'SkillTemplateFreeRunModel',
+    name: 'Skill Template Free Run Model',
+    defaultValue: SKILL_TEMPLATE_FREE_RUN_OPERATIONS_MODEL,
+    description: `Model a template page free run asks. "${SKILL_TEMPLATE_FREE_RUN_OPERATIONS_MODEL}" uses the operations model.`,
+    options: [SKILL_TEMPLATE_FREE_RUN_OPERATIONS_MODEL, ...CHAT_MODELS],
+    category: 'AI Moderation',
+  }),
+  SkillTemplateFreeRunPerTemplateDailyCap: makeNumberSetting({
+    key: 'SkillTemplateFreeRunPerTemplateDailyCap',
+    name: 'Skill Template Free Run Daily Cap (per template)',
+    defaultValue: 50,
+    min: 0,
+    int: true,
+    description: 'Free runs one template page allows per UTC day. Past it the page offers sign-up instead.',
+    category: 'AI Moderation',
+  }),
+  SkillTemplateFreeRunGlobalDailyCap: makeNumberSetting({
+    key: 'SkillTemplateFreeRunGlobalDailyCap',
+    name: 'Skill Template Free Run Daily Cap (all templates)',
+    defaultValue: 500,
+    min: 0,
+    int: true,
+    description: 'Free runs allowed across every template page per UTC day.',
+    category: 'AI Moderation',
+  }),
+  SkillTemplateFreeRunInputMaxChars: makeNumberSetting({
+    key: 'SkillTemplateFreeRunInputMaxChars',
+    name: 'Skill Template Free Run Input Cap (characters)',
+    defaultValue: 8000,
+    min: 1,
+    int: true,
+    description: 'Longest text a visitor may paste into a free run; longer input is refused.',
+    category: 'AI Moderation',
+  }),
+  SkillTemplateFreeRunOutputMaxTokens: makeNumberSetting({
+    key: 'SkillTemplateFreeRunOutputMaxTokens',
+    name: 'Skill Template Free Run Output Cap (tokens)',
+    defaultValue: 1500,
+    min: 1,
+    int: true,
+    description: 'Most tokens a free run may generate; the answer stops there.',
+    category: 'AI Moderation',
+  }),
+  SkillTemplateFreeRunFileMaxMb: makeNumberSetting({
+    key: 'SkillTemplateFreeRunFileMaxMb',
+    name: 'Skill Template Free Run File Size Cap (MB)',
+    defaultValue: 5,
+    min: 0.1,
+    description:
+      'Largest file (PDF, image or plain text) a visitor may attach to a free run; larger files are refused. A hosted request body tops out near 6 MB, so files over 4 MB are refused whatever this says.',
+    category: 'AI Moderation',
+  }),
+  SkillTemplateFreeRunFileMaxPages: makeNumberSetting({
+    key: 'SkillTemplateFreeRunFileMaxPages',
+    name: 'Skill Template Free Run File Page Cap',
+    defaultValue: 10,
+    min: 1,
+    int: true,
+    description: 'Most pages a PDF attached to a free run may have; longer PDFs are refused.',
     category: 'AI Moderation',
   }),
   FormatPromptTemplate: makeStringSetting({
