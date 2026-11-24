@@ -495,7 +495,9 @@ class PackageTests(unittest.TestCase):
         self.assertNotEqual(bad_previous.returncode, 0)
         self.assertIn('SECRET_ENCRYPTION_KEY_PREVIOUS', bad_previous.stderr)
         # The plaintext opt-out is Compose-only: the chart stays strict.
-        self.assertNotEqual(run({'B4M_ALLOW_PLAINTEXT_SECRETS': 'true'}).returncode, 0)
+        strict = run({'B4M_ALLOW_PLAINTEXT_SECRETS': 'true', 'SECRET_ENCRYPTION_KEY': 'change-me'})
+        self.assertNotEqual(strict.returncode, 0)
+        self.assertNotIn('B4M_ALLOW_PLAINTEXT_SECRETS', strict.stderr)
 
 if __name__ == '__main__':
     unittest.main()

@@ -29,11 +29,25 @@ class ValidateSecretsTests(unittest.TestCase):
             if key:
                 self.assertNotIn(key, result.stderr)
 
-    def test_opt_out_without_key_passes_loudly(self):
-        result = self.run_script({'B4M_ALLOW_PLAINTEXT_SECRETS': 'true'}, flag=True)
+    def test_opt_out_with_placeholder_key_passes_loudly(self):
+        result = self.run_script({'B4M_ALLOW_PLAINTEXT_SECRETS': 'true', 'SECRET_ENCRYPTION_KEY': 'change-me-openssl-rand-hex-32'}, flag=True)
         self.assertEqual(result.returncode, 0)
         self.assertIn('WARNING', result.stderr)
         self.assertIn('PLAINTEXT', result.stderr)
+
+    def test_opt_out_with_empty_or_unset_key_fails(self):
+        for env in ({'B4M_ALLOW_PLAINTEXT_SECRETS': 'true'}, {'B4M_ALLOW_PLAINTEXT_SECRETS': 'true', 'SECRET_ENCRYPTION_KEY': ''}):
+            result = self.run_script(env, flag=True)
+            self.assertEqual(result.returncode, 1, env)
+            self.assertIn('SECRET_ENCRYPTION_KEY is empty', result.stderr)
+            self.assertIn('change-me-openssl-rand-hex-32', result.stderr)
+
+    def test_opt_out_hint_only_when_flag_passed(self):
+        with_flag = self.run_script({'SECRET_ENCRYPTION_KEY': 'x'}, flag=True)
+        self.assertIn('B4M_ALLOW_PLAINTEXT_SECRETS', with_flag.stderr)
+        strict = self.run_script({'SECRET_ENCRYPTION_KEY': 'x'})
+        self.assertEqual(strict.returncode, 1)
+        self.assertNotIn('B4M_ALLOW_PLAINTEXT_SECRETS', strict.stderr)
 
     def test_opt_out_needs_the_flag(self):
         self.assertEqual(self.run_script({'B4M_ALLOW_PLAINTEXT_SECRETS': 'true'}).returncode, 1)
@@ -51,7 +65,7 @@ class ValidateSecretsTests(unittest.TestCase):
 
     def test_malformed_previous_key_fails_even_with_opt_out(self):
         for previous in ('b' * 63, 'z' * 64, 'change-me'):
-            for env in ({'SECRET_ENCRYPTION_KEY': KEY}, {'B4M_ALLOW_PLAINTEXT_SECRETS': 'true'}):
+            for env in ({'SECRET_ENCRYPTION_KEY': KEY}, {'B4M_ALLOW_PLAINTEXT_SECRETS': 'true', 'SECRET_ENCRYPTION_KEY': 'unset-placeholder'}):
                 for flag in (False, True):
                     result = self.run_script({**env, 'SECRET_ENCRYPTION_KEY_PREVIOUS': previous}, flag=flag)
                     self.assertEqual(result.returncode, 1, (previous, env, flag))
