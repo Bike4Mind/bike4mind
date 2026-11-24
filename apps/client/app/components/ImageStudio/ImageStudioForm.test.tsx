@@ -119,7 +119,7 @@ describe('ImageStudioForm', () => {
     const { onSubmit } = renderForm();
     typePrompt('  a red fox in snow  ');
     fireEvent.click(screen.getByTestId('image-form-count-3-btn'));
-    expect(submitButton()).toHaveTextContent('Generate 3 images');
+    expect(submitButton()).toHaveTextContent('Make 3 images');
     fireEvent.click(submitButton());
     expect(onSubmit).toHaveBeenCalledWith({
       count: 3,
@@ -508,7 +508,7 @@ describe('ImageStudioForm', () => {
           handoff: true,
         })
       );
-      expect(screen.getByTestId('image-form-mode-edit-btn')).toHaveAttribute('aria-pressed', 'true');
+      expect(screen.getByTestId('image-form-mode-edit-btn')).toHaveAttribute('aria-checked', 'true');
       expect(screen.getByTestId('image-form-edit-source-name')).toHaveTextContent('from-chat.png');
       expect(screen.queryByText(/did not record its model/)).toBeNull();
     });

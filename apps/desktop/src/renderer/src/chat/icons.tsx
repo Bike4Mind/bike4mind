@@ -251,6 +251,17 @@ export function WarningIcon() {
   );
 }
 
+/** Time running out: credits that expire unless spent first. */
+export function HourglassIcon({ size }: { size?: number } = {}) {
+  return (
+    <Glyph size={size}>
+      <path d="M4 1.75h8M4 14.25h8" />
+      <path d="M5 1.75v2.1c0 1.1.6 2 1.6 2.6L8 7.4l1.4-.95c1-.6 1.6-1.5 1.6-2.6v-2.1" />
+      <path d="M5 14.25v-2.1c0-1.1.6-2 1.6-2.6L8 8.6l1.4.95c1 .6 1.6 1.5 1.6 2.6v2.1" />
+    </Glyph>
+  );
+}
+
 export function CheckIcon() {
   return (
     <Glyph>

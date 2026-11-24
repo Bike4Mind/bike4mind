@@ -1,6 +1,7 @@
 import { chmod, mkdir, mkdtemp, realpath, rm, writeFile } from 'node:fs/promises';
-import { homedir, tmpdir } from 'node:os';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { sandboxedHome } from '../../../../vitest.tempRoot';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import {
   expectShellRun,
@@ -179,7 +180,7 @@ describe('sessionScriptRun', () => {
   });
 
   it('matches a written file in the home folder given as ~', async () => {
-    const script = join(homedir(), 'b4m-session-scripts-nonexistent.sh');
+    const script = join(sandboxedHome(), 'b4m-session-scripts-nonexistent.sh');
     await recordSessionWrite(context, script);
     expect(await runs('bash ~/b4m-session-scripts-nonexistent.sh')).toHaveLength(1);
     expect(await runs('cd ~ && bash b4m-session-scripts-nonexistent.sh')).toEqual([

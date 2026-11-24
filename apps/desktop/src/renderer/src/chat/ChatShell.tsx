@@ -62,7 +62,6 @@ import { StudioPane } from './studio/StudioPane';
 import type { StudioController } from './studio/controller';
 import { useStudioController } from './studio/useStudioController';
 import { studioPaneLayout } from './studio/layout';
-import { ProjectSubtitleLine } from './ProjectSubtitleLine';
 import { railFitsBesideThread, replyStatsToggleTitle, setReplyStatsRail, useReplyStatsPrefs } from './replyStatsPrefs';
 import { MessageThread } from './MessageThread';
 import {
@@ -233,7 +232,8 @@ type ChatScreen = 'conversation' | 'artifacts' | 'mission-control' | 'customize'
  * component knows the turn state, and the account strip knows where a glyph goes in its own
  * row. Handing the finished dot down keeps both where they belong - see TurnDot.
  */
-export type AccountStrip = (status: ReactNode) => ReactNode;
+/** `spentAt` ticks when a turn settles, for anything in the strip that reads the balance. */
+export type AccountStrip = (status: ReactNode, spentAt: number) => ReactNode;
 
 /** How long the first-run tavern intro plays before it is marked seen (ms). */
 const ORCHESTRATOR_INTRO_MS = 1500;
@@ -1715,7 +1715,10 @@ export function ChatShell({
             : undefined
         }
         footer={account?.(
-          <TurnDot state={turnState({ streaming: turnOpen, disabled: !activeId || creatingCode, notReady: unbound })} />
+          <TurnDot
+            state={turnState({ streaming: turnOpen, disabled: !activeId || creatingCode, notReady: unbound })}
+          />,
+          conversation.settledTurns
         )}
       />
 
@@ -1779,15 +1782,12 @@ export function ChatShell({
                         Orchestrator
                       </Typography>
                     ) : (
-                      <>
-                        <SessionHeader
-                          title={activeSummary?.title ?? conversation.session.title}
-                          onRename={title =>
-                            void (activeSummary ? rename(activeSummary, title) : conversation.rename(title))
-                          }
-                        />
-                        {conversation.session.project && <ProjectSubtitleLine project={conversation.session.project} />}
-                      </>
+                      <SessionHeader
+                        title={activeSummary?.title ?? conversation.session.title}
+                        onRename={title =>
+                          void (activeSummary ? rename(activeSummary, title) : conversation.rename(title))
+                        }
+                      />
                     )
                   ) : opening ? null : (
                     <Typography level="title-sm" textColor="text.tertiary">

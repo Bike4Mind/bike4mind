@@ -10,6 +10,8 @@ import {
   ORCHESTRATOR_VIEW_INFO,
   ViewSwitcher,
   RESET_LAYOUT,
+  fitMenuToViewport,
+  menuMaxHeight,
   isFocusToggle,
   isViewReset,
   stepView,
@@ -86,16 +88,12 @@ describe('ViewSwitcher', () => {
     expect(Object.keys(ORCHESTRATOR_VIEW_COMPONENTS).sort()).toEqual([...ORCHESTRATOR_VIEWS].sort());
   });
 
-  it('shows the current view on the button', async () => {
+  it('shows the current view on the button, and lists every view under its group with the current one checked', async () => {
     await themed.render(<ViewSwitcher layout={singlePaneLayout('board')} onLayoutChange={onLayoutChange} />);
     const button = el('orchestrator-view-menu-btn');
     expect(button.dataset.view).toBe('board');
     expect(button.textContent).toContain('Board');
-  });
-
-  it('lists every view under its group and checks the current one', async () => {
-    await themed.render(<ViewSwitcher layout={singlePaneLayout('board')} onLayoutChange={onLayoutChange} />);
-    act(() => el('orchestrator-view-menu-btn').click());
+    act(() => button.click());
     const menu = el('orchestrator-view-menu');
     expect(menu.textContent).toContain('Scenes');
     expect(menu.textContent).toContain('Layouts');
@@ -207,6 +205,7 @@ describe('ViewSwitcher', () => {
       window.dispatchEvent(new KeyboardEvent('keydown', shortcut('Escape')));
     });
     expect(onLayoutChange).toHaveBeenLastCalledWith(RESET_LAYOUT);
+    expect(RESET_LAYOUT, 'reset is Board alone, whatever the split').toEqual(singlePaneLayout('board'));
     expect(onToggle).toHaveBeenLastCalledWith(false);
 
     onLayoutChange.mockReset();
@@ -263,11 +262,7 @@ describe('ViewSwitcher', () => {
     expect(onLayoutChange).toHaveBeenCalledWith(singlePaneLayout('tavern'));
   });
 
-  it('selects Office as an ambient scene', async () => {
-    await themed.render(<ViewSwitcher layout={singlePaneLayout('table')} onLayoutChange={onLayoutChange} />);
-    act(() => el('orchestrator-view-menu-btn').click());
-    act(() => el('orchestrator-view-option-office').click());
-    expect(onLayoutChange).toHaveBeenCalledWith(singlePaneLayout('office'));
+  it('treats Office as an ambient scene', async () => {
     expect(ORCHESTRATOR_VIEW_INFO.office.group).toBe('scene');
 
     await themed.render(
@@ -329,14 +324,7 @@ describe('ViewSwitcher', () => {
       expect(onLayoutChange).toHaveBeenCalledWith(split);
     });
 
-    it('stacks the panes it has', async () => {
-      await themed.render(<ViewSwitcher layout={split} onLayoutChange={onLayoutChange} />);
-      act(() => el('orchestrator-view-menu-btn').click());
-      act(() => el('orchestrator-layout-option-stacked').click());
-      expect(onLayoutChange).toHaveBeenCalledWith({ ...split, split: 'column' });
-    });
-
-    it('names a split by its preset and gives each pane its own view menu', async () => {
+    it('names a split by its preset, gives each pane its own view menu, and stacks the panes it has', async () => {
       await themed.render(<ViewSwitcher layout={split} onLayoutChange={onLayoutChange} />);
       expect(el('orchestrator-view-menu-btn').textContent).toContain('Side by side');
       expect(el('orchestrator-view-menu-btn').dataset.layout).toBe('side-by-side');
@@ -345,25 +333,20 @@ describe('ViewSwitcher', () => {
 
       act(() => el('orchestrator-view-menu-btn').click());
       expect(query('orchestrator-view-option-tavern')).toBeNull();
+      act(() => el('orchestrator-layout-option-stacked').click());
+      expect(onLayoutChange).toHaveBeenCalledWith({ ...split, split: 'column' });
     });
 
-    it("changes only the picked pane's view", async () => {
+    it("changes only the picked pane's view from a bounded pane menu", async () => {
       await themed.render(<ViewSwitcher layout={split} onLayoutChange={onLayoutChange} />);
       act(() => el('orchestrator-pane-view-menu-btn-1').click());
+      await act(async () => {});
+      expect(el('orchestrator-pane-view-menu-1').style.maxHeight).toMatch(/^\d+px$/);
       act(() => el('orchestrator-pane-1-view-option-constellation').click());
       expect(onLayoutChange).toHaveBeenCalledWith({
         ...split,
         panes: [split.panes[0], { view: 'constellation', size: 0.5 }],
       });
-    });
-
-    it('resets a split to Board alone', async () => {
-      await themed.render(<ViewSwitcher layout={split} onLayoutChange={onLayoutChange} />);
-      act(() => {
-        window.dispatchEvent(new KeyboardEvent('keydown', shortcut('Escape')));
-      });
-      expect(onLayoutChange).toHaveBeenCalledWith(RESET_LAYOUT);
-      expect(RESET_LAYOUT).toEqual(singlePaneLayout('board'));
     });
 
     it('steps the view of the pane holding focus', async () => {
@@ -386,5 +369,43 @@ describe('ViewSwitcher', () => {
         pane.remove();
       }
     });
+  });
+});
+
+describe('menu height', () => {
+  it('fits the space beside the button, keeping a margin and a floor', () => {
+    expect(menuMaxHeight(760)).toBe(752);
+    expect(menuMaxHeight(760.4)).toBe(752);
+    expect(menuMaxHeight(10)).toBe(120);
+  });
+
+  type ModifierArgs = Parameters<NonNullable<typeof fitMenuToViewport.fn>>[0];
+  const runModifier = (placement: string) => {
+    const state = {
+      placement,
+      elements: { reference: { getBoundingClientRect: () => ({ top: 300, bottom: 330 }) } },
+      styles: { popper: { position: 'absolute' } },
+    };
+    fitMenuToViewport.fn?.({ state } as unknown as ModifierArgs);
+    return state.styles.popper;
+  };
+
+  it('caps the popper to the window below its anchor', () => {
+    expect(runModifier('bottom-start')).toEqual({
+      position: 'absolute',
+      maxHeight: `${menuMaxHeight(window.innerHeight - 330)}px`,
+    });
+  });
+
+  it('caps the popper to the window above its anchor when flipped', () => {
+    expect(runModifier('top-start')).toEqual({ position: 'absolute', maxHeight: `${menuMaxHeight(300)}px` });
+  });
+
+  it('opens the view menu as a bounded, scrollable list', async () => {
+    await themed.render(<ViewSwitcher layout={singlePaneLayout('tavern')} onLayoutChange={onLayoutChange} />);
+    act(() => el('orchestrator-view-menu-btn').click());
+    expect(getComputedStyle(el('orchestrator-view-menu')).overflowY).toBe('auto');
+    await act(async () => {});
+    expect(el('orchestrator-view-menu').style.maxHeight).toMatch(/^\d+px$/);
   });
 });

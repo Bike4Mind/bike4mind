@@ -1,4 +1,5 @@
 import { designTokens, emitJoyThemeFragment, type JoyThemeFragment } from '@bike4mind/design-tokens';
+import { shouldSkipGeneratingVar } from '@mui/joy/styles';
 import { adminPalette } from './admin';
 import { APP_NAME } from '@client/config/general';
 import {
@@ -253,6 +254,10 @@ export const components = {
   },
 };
 
+// `branding` (asset paths, flags) and this palette slot (a theme path, see commonTheme.dark) are
+// not CSS values: emitted as custom properties they make the whole theme stylesheet unparseable.
+const NON_CSS_PALETTE_KEY = 'palette.common.switchSelector.background';
+
 /**
  * Creates the base theme configuration with color schemes
  * This function can be memoized for performance optimization
@@ -263,4 +268,6 @@ export const getThemeConfig = () => ({
   ...shape,
   branding,
   components,
+  shouldSkipGeneratingVar: (keys: string[]) =>
+    keys[0] === 'branding' || keys.join('.') === NON_CSS_PALETTE_KEY || shouldSkipGeneratingVar(keys),
 });

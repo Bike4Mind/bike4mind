@@ -39,6 +39,8 @@ export const isAdminSubscriptionDetailPath = (pathname: string) => pathname.star
 /** Model detail and discovery run pages belong to the Models tab. */
 export const isAdminModelsDetailPath = (pathname: string) => pathname.startsWith('/admin/models/');
 
+const isAdminQaPath = (pathname: string) => pathname === '/admin/qa' || pathname.startsWith('/admin/qa/');
+
 /** The tab a detail page belongs to, or undefined off a detail page. */
 const detailPageTabFor = (pathname: string): AdminTab | undefined =>
   isAdminUserProfilePath(pathname)
@@ -92,9 +94,9 @@ export const AdminLayout = ({
   const [drawerOpen, setDrawerOpen] = useState(false);
 
   const detailPageTab = detailPageTabFor(pathname);
-  // A contributed page is no tab, so none is highlighted while one is open.
+  // A contributed page and the QA pages are no tab, so none is highlighted while one is open.
   const onContributedPage = isAdminExtPath(pathname);
-  const activeTab = onContributedPage ? null : (detailPageTab ?? storedActiveTab);
+  const activeTab = onContributedPage || isAdminQaPath(pathname) ? null : (detailPageTab ?? storedActiveTab);
   const sections = useMemo(() => withContributedPages(SIDEBAR_SECTIONS, adminPages), [adminPages]);
   const canOpenPage = useCallback(() => canOpenContributedAdminPage(currentUser), [currentUser]);
 

@@ -102,6 +102,9 @@ export async function runRelated({ plan, script, shard = '', root = repoRoot, cr
   if (!['test', 'test:integration'].includes(script)) throw new Error('invalid client test lane');
   if (shard && !/^--shard=[1-3]\/3$/.test(shard)) throw new Error('invalid shard');
   if (script === 'test:integration' && shard) throw new Error('integration lane is not sharded');
+  // The vitest CLI defaults NODE_ENV to 'test'; createVitest() does not, and Vite then sets it to
+  // 'development', which the in-process run and the full-suite fallback below would both inherit.
+  process.env.NODE_ENV ??= 'test';
   if (script === 'test:integration') process.env.CLIENT_TEST_LANE = 'integration';
   else delete process.env.CLIENT_TEST_LANE;
   const cwd = join(root, 'apps/client');

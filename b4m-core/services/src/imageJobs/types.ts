@@ -1,6 +1,7 @@
 import {
   IMAGE_JOB_COUNT_MAX,
   type ApiKeyBillingOwnerType,
+  type CompletionRunAttribution,
   type GeneratedAssetLineageEntry,
   type GeneratedAssetMetadata,
   type GenerationJobDelivery,
@@ -17,6 +18,7 @@ import type { Logger } from '@bike4mind/observability';
 import type { ImageProviderRegistry } from '@bike4mind/utils/imageProviders';
 import type { CreditHoldAdapters } from '../creditService/creditHold';
 import type { GenerationJobEngine } from '../generationJobs/engine';
+import type { RunBudgetAdapters } from '../generationJobs/types';
 import type { OutputModerationVerdict } from '../generationJobs/storeOutput';
 import type { SaveGeneratedAssetResult } from '../generatedAssets';
 
@@ -81,6 +83,8 @@ export type ImageJobDeps = {
    * tools bump through recordGeneratedImages. Unset where nothing reads the badge.
    */
   countNotebookImage?(questId: string): Promise<void>;
+  /** Claims and releases a job's share of a completion run's budget; required to create a job with a `run`. */
+  runBudget?: RunBudgetAdapters;
   now(): Date;
   logger: Logger;
 };
@@ -119,6 +123,8 @@ export type CreateImageJobsInput = {
   idempotencyKey?: string;
   /** Server-chosen only (see createCutoutJob); never read from a client body. */
   purpose?: ImageJobPurpose;
+  /** The completion run the batch is made for: each job's hold is claimed against its budget (resolvePaidCallRun). */
+  run?: CompletionRunAttribution;
 };
 
 export type CreateImageJobsErrorCode =

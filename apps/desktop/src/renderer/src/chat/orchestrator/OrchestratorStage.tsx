@@ -14,6 +14,7 @@ import { FinaleBanner } from './FinaleBanner';
 import { FocusPanel } from './FocusPanel';
 import { useRunSpend } from './runSpend';
 import { NeedsYouCard } from './NeedsYouCard';
+import { NeedsYouStrip } from './NeedsYouStrip';
 import { toMiniPayload, useOrchestrateMiniWindow, usePublishOrchestrateMini } from './orchestrateMini';
 import { numberAgents, redactForPresenter, restorePresentedAction, type PresentedStage } from './presenter';
 import type { OrchestratorViewId } from './orchestratorPrefs';
@@ -110,6 +111,8 @@ export interface OrchestratorStageProps {
   onParentToggle?(): void;
   /** The orchestrating session; scopes the remembered finale. Without it the finale never plays. */
   rootId?: string;
+  /** The orchestrating session's title, at the head of the path each Needs-you card shows. */
+  rootTitle?: string;
   /** The parent's closing summary, once its transcript ends on one; the finale waits for it. */
   report?: ParentReport;
   /** The finale's "Read the report": show that summary. */
@@ -169,6 +172,7 @@ export function OrchestratorStage({
   onParentFocus,
   onParentToggle,
   rootId,
+  rootTitle,
   report,
   onReadReport,
   focusAgent = null,
@@ -544,6 +548,10 @@ export function OrchestratorStage({
           <Box sx={{ flex: 1 }} />
           {dockControl}
         </Box>
+      )}
+      {!settled && !presenting && (
+        // Off in Presenter mode: its cards would show the real requests the redacted stage hides.
+        <NeedsYouStrip agents={rosterAgents} personas={personas} rootTitle={rootTitle} onOpenDetails={setSelectedId} />
       )}
       <Box
         data-testid="orchestrator-scene-viewport"

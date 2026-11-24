@@ -121,14 +121,17 @@ export const createMusicGenerationContract = defineEndpoint({
       schema: MeteredBillingOrganizationForbiddenErrorSchema,
     },
     404: {
-      description: 'A nonexistent `organization_id`, for an admin caller; for anyone else it is `403`.',
+      description:
+        'A nonexistent `organization_id`, for an admin caller (for anyone else it is `403`), or a `run` that ' +
+        'does not exist or that another user or billing owner minted (`errorCode: run_not_found`).',
       schema: ApiErrorSchema,
     },
     422: {
       description:
         'The request cannot run: a malformed body, a capability violation (`errorCode` names it, e.g. ' +
         '`unsupported_duration` or `lyrics_too_long`), an unknown or unavailable model (`model_unavailable`), a ' +
-        'model your administrator disabled (`model_disabled`), too few credits (`insufficient_credits`), or an ' +
+        'model your administrator disabled (`model_disabled`), too few credits (`insufficient_credits`), a `run` ' +
+        'budget with too little left for the whole job (`run_budget_exhausted`), or an ' +
         'Idempotency-Key problem ' +
         '(`invalid_idempotency_key`, `idempotency_key_reused`).',
       schema: MusicGenerationErrorResponseSchema,

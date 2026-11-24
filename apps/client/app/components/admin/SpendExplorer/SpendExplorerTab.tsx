@@ -11,6 +11,7 @@ import {
 import { AdminPageHeader, ChartSection, ErrorState, SegmentedControl, StatStrip, StatTile } from '../shared';
 import { ADMIN_REGION_GAP } from '../shared/adminStyles';
 import { AccountSpendPanel } from './AccountSpendPanel';
+import { FeatureCostSection, type FeatureCostSelection } from './FeatureCostSection';
 import { SpendBucketTable } from './SpendBucketTable';
 import { SpendChart } from './SpendChart';
 import { SpendDrillDown } from './SpendDrillDown';
@@ -141,6 +142,21 @@ export default function SpendExplorerTab() {
     (start: string) => {
       setAccount(null);
       setSearch({ [KEYS.at]: start });
+    },
+    [setSearch]
+  );
+
+  const featureSelection = useMemo(
+    (): FeatureCostSelection => ({ audience: view.audience, feature: view.feature, user: view.user }),
+    [view.audience, view.feature, view.user]
+  );
+  const onFeatureSelection = useCallback(
+    (patch: Partial<FeatureCostSelection>) => {
+      const next: SpendExplorerSearchPatch = {};
+      if ('audience' in patch) next[KEYS.audience] = patch.audience === 'all' ? undefined : patch.audience;
+      if ('feature' in patch) next[KEYS.feature] = patch.feature ?? undefined;
+      if ('user' in patch) next[KEYS.user] = patch.user ?? undefined;
+      setSearch(next);
     },
     [setSearch]
   );
@@ -306,6 +322,13 @@ export default function SpendExplorerTab() {
           onClear={() => setSearch({ [KEYS.at]: undefined })}
         />
       )}
+
+      <FeatureCostSection
+        range={view.range}
+        rangeLabel={rangeLabel}
+        selection={featureSelection}
+        onChange={onFeatureSelection}
+      />
     </Stack>
   );
 }

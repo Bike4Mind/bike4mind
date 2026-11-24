@@ -26,8 +26,8 @@ export const adminSurface = {
  * (16 on phones), 24 px above the page header and 64 px below the last region. The shell applies it
  * to each tab panel, and detail routes spread it on their root, so a page never pads itself.
  *
- * The bottom padding is what keeps the fixed AI chat pill (FloatingChatPill: 20 px from the
- * bottom-right corner, 40 px tall) off the last row and the table pager. Must stay at least
+ * The bottom padding is what keeps the fixed AI chat pill (FloatingChatPill: by default 20 px from
+ * the bottom-right corner, 40 px tall; it is draggable) off the last row and the table pager. Must stay at least
  * 7 (56 px) on every breakpoint; adminStyles.test.ts pins it.
  */
 export const adminPageFrame = {

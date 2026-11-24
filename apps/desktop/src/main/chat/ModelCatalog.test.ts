@@ -11,6 +11,11 @@ vi.mock('@bike4mind/common', async importOriginal => ({
   estimateFit: (await import('./fitStub.testHelper')).stubEstimateFit,
 }));
 
+// Conditions here hold a few promise turns in; vi.waitFor's default 50ms poll would wait each one out.
+// Under fake timers each poll also advances the clock by its interval, so those keep the default.
+const waitFor = <T>(check: () => T | Promise<T>, options: { timeout?: number; interval?: number } = {}) =>
+  vi.waitFor(check, { ...(vi.isFakeTimers() ? {} : { interval: 1 }), ...options });
+
 function wireModel(overrides: Record<string, unknown> = {}) {
   return {
     id: 'claude-sonnet-4-5-20250929',
@@ -391,7 +396,7 @@ describe('ModelCatalog', () => {
       local as never
     );
     const listed = catalog.list();
-    await vi.waitFor(() => expect(catalog.lastLocal()).not.toBeNull(), { timeout: 5_000 });
+    await waitFor(() => expect(catalog.lastLocal()).not.toBeNull(), { timeout: 5_000 });
     catalog.forgetLocal();
     finishHosted({ models: [wireModel()] });
     expect((await listed).models.map(model => model.id)).toEqual(['claude-sonnet-4-5-20250929', 'local:ollama:qwen']);
@@ -436,7 +441,7 @@ describe('ModelCatalog', () => {
       local as never
     );
     const listed = catalog.list();
-    await vi.waitFor(() => expect(get).toHaveBeenCalledOnce(), { timeout: 5_000 });
+    await waitFor(() => expect(get).toHaveBeenCalledOnce(), { timeout: 5_000 });
     finishLocal([{ id: 'local:ollama:qwen', name: 'qwen' }]);
     expect((await listed).models.map(model => model.id)).toEqual(['claude-sonnet-4-5-20250929', 'local:ollama:qwen']);
   });
@@ -598,7 +603,7 @@ describe('ModelCatalog', () => {
       .mockResolvedValueOnce({ data: [{ id: 'second', reasoning_efforts: ['xhigh'] }], next_cursor: null });
 
     await catalog.list();
-    await vi.waitFor(() => expect(effortsPage).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(effortsPage).toHaveBeenCalledTimes(2));
     const levels = (await catalog.list()).models.map(model => model.controls?.effort?.levels);
     expect(levels).toEqual([['none', 'high'], ['xhigh']]);
     expect(effortsPage.mock.calls[1]?.[0]).toMatchObject({
@@ -615,7 +620,7 @@ describe('ModelCatalog', () => {
     );
     effortsPage.mockResolvedValue({ data: [], next_cursor: 'more' });
     await catalog.list();
-    await vi.waitFor(() => expect(warn).toHaveBeenCalledWith(expect.stringContaining('stopped at 5 pages')));
+    await waitFor(() => expect(warn).toHaveBeenCalledWith(expect.stringContaining('stopped at 5 pages')));
     expect(effortsPage).toHaveBeenCalledTimes(5);
   });
 
@@ -639,7 +644,7 @@ describe('ModelCatalog', () => {
     expect(changed).not.toHaveBeenCalled();
 
     land({ data: [{ id: ChatModels.GPT5, reasoning_efforts: ['low', 'medium', 'high'] }], next_cursor: null });
-    await vi.waitFor(() => expect(changed).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(changed).toHaveBeenCalledTimes(1));
     expect(catalog.cached()?.[0]?.controls?.effort?.levels).toEqual(['low', 'medium', 'high']);
 
     // A later refresh lists with what is known at once, and says nothing when the read brings no change.
@@ -648,7 +653,7 @@ describe('ModelCatalog', () => {
       next_cursor: null,
     });
     expect((await catalog.list(true)).models[0]?.controls?.effort?.levels).toEqual(['low', 'medium', 'high']);
-    await vi.waitFor(() => expect(effortsPage).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(effortsPage).toHaveBeenCalledTimes(2));
     await Promise.resolve();
     expect(changed).toHaveBeenCalledTimes(1);
   });
@@ -669,12 +674,12 @@ describe('ModelCatalog', () => {
     const second = { id: 'other', reasoning_efforts: ['medium'] };
     effortsPage.mockResolvedValueOnce({ data: [first, second], next_cursor: null });
     await catalog.list();
-    await vi.waitFor(() => expect(catalog.cached()?.[0]?.controls?.effort?.levels).toEqual(['low', 'high']));
+    await waitFor(() => expect(catalog.cached()?.[0]?.controls?.effort?.levels).toEqual(['low', 'high']));
     const before = changed.mock.calls.length;
 
     effortsPage.mockResolvedValueOnce({ data: [second, first], next_cursor: null });
     await catalog.list(true);
-    await vi.waitFor(() => expect(effortsPage).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(effortsPage).toHaveBeenCalledTimes(2));
     await Promise.resolve();
     expect(changed).toHaveBeenCalledTimes(before);
   });
@@ -688,7 +693,7 @@ describe('ModelCatalog', () => {
     expect(effortsPage).toHaveBeenCalledTimes(1);
 
     land({ data: [], next_cursor: null });
-    await vi.waitFor(async () => {
+    await waitFor(async () => {
       await catalog.list(true);
       expect(effortsPage).toHaveBeenCalledTimes(2);
     });

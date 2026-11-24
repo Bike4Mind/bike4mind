@@ -9,6 +9,7 @@ import {
   validateStudioComposition,
   type ImageModels,
   type StudioCompositionUpdateInput,
+  type StudioFileMediaKind,
 } from '@bike4mind/common';
 import type { ToolContext } from '../../base/types';
 import type { ImageToolConfig } from '../imageGeneration/imageJobTool';
@@ -23,6 +24,7 @@ import {
 } from './index';
 import { createProductionAudio } from './audio';
 import { DIRECTOR_TRACK_IDS, directorClips } from './layout';
+import { STORYBOARD_MAX_SHOTS } from './storyboard';
 import { ProductionToolError, describeProductionError } from './shared';
 
 vi.mock('./audio', () => ({ createProductionAudio: vi.fn() }));
@@ -30,10 +32,15 @@ vi.mock('./audio', () => ({ createProductionAudio: vi.fn() }));
 const COMPOSITION_ID = '5'.repeat(24);
 const PRODUCT_FILE_ID = 'ab'.repeat(12);
 
-const referenceModel = (Object.keys(IMAGE_MODEL_CATALOG) as ImageModels[]).find(
-  id => (IMAGE_MODEL_CATALOG[id].modes.generate?.inputs.reference?.max ?? 0) > 0
-);
-if (!referenceModel) throw new Error('the image catalog has no model that takes reference images');
+const referenceCap = (id: ImageModels) => IMAGE_MODEL_CATALOG[id].modes.generate?.inputs.reference?.max ?? 0;
+const imageModelWith = (fits: (cap: number) => boolean): ImageModels => {
+  const model = (Object.keys(IMAGE_MODEL_CATALOG) as ImageModels[]).find(id => fits(referenceCap(id)));
+  if (!model) throw new Error('the image catalog has no model with the reference cap this test needs');
+  return model;
+};
+const referenceModel = imageModelWith(cap => cap > 0);
+const singleReferenceModel = imageModelWith(cap => cap === 1);
+const multiReferenceModel = imageModelWith(cap => cap > 1);
 
 type Harness = {
   config: ProductionToolConfig;
@@ -42,28 +49,41 @@ type Harness = {
   composition(): ProductionComposition;
   counts: { image: number; video: number; music: number; speech: number; sfx: number };
   imageRequests: { request: unknown; count: number }[];
+  /** The state each new image job lands in; a job that is not succeeded saves no file. */
+  imageState: { next: (request: unknown) => 'succeeded' | 'running' | 'failed' };
+  /** Finishes every running image job with a new file, as the job runner would after a call stopped waiting. */
+  finishRunningImages(): void;
+  /** A new file the user can read, of the given kind. */
+  addFile(kind: StudioFileMediaKind): string;
 };
 
 /** An in-memory production: the real validator guards every write, as the real composition service does. */
+// File ids stay unique across tests: product look bookkeeping in productLook.ts is module-level, keyed by file id.
+let nextFile = 1;
+
 function createHarness(): Harness {
-  let nextFile = 1;
   const newFileId = () => (nextFile++).toString(16).padStart(24, '0');
   const knownFileIds = new Set<string>([PRODUCT_FILE_ID]);
-  const makeFile = () => {
+  const kinds = new Map<string, StudioFileMediaKind>([[PRODUCT_FILE_ID, 'image']]);
+  const makeFile = (kind: StudioFileMediaKind = 'image') => {
     const id = newFileId();
     knownFileIds.add(id);
+    kinds.set(id, kind);
     return id;
   };
   const jobs = new Map<string, ProductionJobView>();
   const counts = { image: 0, video: 0, music: 0, speech: 0, sfx: 0 };
   const imageRequests: Harness['imageRequests'] = [];
   let nextJob = 1;
-  const startJob = (kind: 'image' | 'video' | 'music', durationSeconds?: number) => {
+  const imageState: Harness['imageState'] = { next: () => 'succeeded' };
+  const startJob = (kind: 'image' | 'video' | 'music', durationSeconds?: number, request?: unknown) => {
     const id = `job-${kind}-${nextJob++}`;
+    const state = kind === 'image' ? imageState.next(request) : 'succeeded';
     jobs.set(id, {
       id,
-      state: 'succeeded',
-      fileId: makeFile(),
+      state,
+      ...(state === 'succeeded' && { fileId: makeFile(kind === 'music' ? 'audio' : kind) }),
+      ...(state === 'failed' && { error: { code: 'provider_error', message: 'the model refused' } }),
       ...(durationSeconds !== undefined && { durationSeconds }),
     });
     counts[kind] += 1;
@@ -80,13 +100,29 @@ function createHarness(): Harness {
     timeline: defaultStudioTimeline('blank'),
   };
 
+  // Replays a key it has seen, as the real image job service does.
+  const imageJobsByKey = new Map<string, string[]>();
   const image: ImageToolConfig = {
     selection: undefined,
     createJobs: async input => {
+      const key = input.idempotencyKey;
+      const replayed = key ? imageJobsByKey.get(key) : undefined;
+      if (replayed) {
+        const replayJobs = replayed.map(id => ({ id, state: (jobs.get(id) as ProductionJobView).state }));
+        return { ok: true, groupId: 'group', jobs: replayJobs, created: false } as never;
+      }
       imageRequests.push({ request: input.request, count: input.count });
-      const ids = Array.from({ length: input.count }, () => startJob('image'));
+      const ids = Array.from({ length: input.count }, () => startJob('image', undefined, input.request));
+      if (key) imageJobsByKey.set(key, ids);
       return { ok: true, groupId: 'group', jobs: ids.map(id => ({ id })), created: true } as never;
     },
+  };
+  const finishRunningImages = () => {
+    for (const job of jobs.values()) {
+      if (job.id.startsWith('job-image-') && job.state === 'running') {
+        jobs.set(job.id, { ...job, state: 'succeeded', fileId: makeFile('image') });
+      }
+    }
   };
   const video: VideoToolConfig = {
     usableModels: ['test-video'],
@@ -106,11 +142,11 @@ function createHarness(): Harness {
   const adapter: ProductionAudioAdapter = {
     speech: async () => {
       counts.speech += 1;
-      return { ok: true, fileId: makeFile(), durationMs: 1500 };
+      return { ok: true, fileId: makeFile('audio'), durationMs: 1500 };
     },
     soundEffect: async () => {
       counts.sfx += 1;
-      return { ok: true, fileId: makeFile(), durationMs: 800 };
+      return { ok: true, fileId: makeFile('audio'), durationMs: 800 };
     },
   };
   vi.mocked(createProductionAudio).mockReturnValue(adapter);
@@ -151,6 +187,8 @@ function createHarness(): Harness {
       },
     },
     findJobs: async ids => ids.flatMap(id => (jobs.has(id) ? [jobs.get(id) as ProductionJobView] : [])),
+    referenceImages: async ids =>
+      new Map(ids.flatMap(id => (kinds.get(id) === 'image' ? [[id, 'ready'] as const] : []))),
     waitTimeoutMs: 100,
     pollIntervalMs: 1,
   };
@@ -165,7 +203,17 @@ function createHarness(): Harness {
     statusUpdate,
   } as unknown as ToolContext;
 
-  return { config, context, statusUpdate, composition: () => stored, counts, imageRequests };
+  return {
+    config,
+    context,
+    statusUpdate,
+    composition: () => stored,
+    counts,
+    imageRequests,
+    addFile: makeFile,
+    imageState,
+    finishRunningImages,
+  };
 }
 
 type Tool = typeof productionStoryboardTool;
@@ -318,6 +366,222 @@ describe('production director tools', () => {
     );
     expect(cards.filter(card => card.kind === 'image')).toHaveLength(3);
     expect(cards.filter(card => card.kind === 'video')).toHaveLength(3);
+  });
+
+  describe('shot references', () => {
+    const inputsOf = (request: unknown) => (request as { inputs?: { fileId: string }[] }).inputs?.map(i => i.fileId);
+    const setUp = async (model: ImageModels) => {
+      harness.config.imageModels = [model];
+      await run(productionStoryboardTool, harness, { ...STORYBOARD, productFileId: undefined });
+      const photo = harness.addFile('image');
+      const kitVideo = harness.addFile('video');
+      const kitImage = harness.addFile('image');
+      const current = harness.composition();
+      await harness.config.compositions.update(COMPOSITION_ID, {
+        brief: { ...current.brief, productFileId: photo },
+        brandKit: { ...current.brandKit, productFileIds: [kitVideo, kitImage, photo] },
+      });
+      return { photo, kitVideo, kitImage };
+    };
+
+    it('puts the brief photo first, then the kit images, and never a kit video', async () => {
+      const { photo, kitImage } = await setUp(multiReferenceModel);
+      await run(productionGenerateShotTool, harness, { compositionId: COMPOSITION_ID, animate: false });
+
+      expect(harness.imageRequests).toHaveLength(3);
+      for (const { request } of harness.imageRequests) expect(inputsOf(request)).toEqual([photo, kitImage]);
+    });
+
+    it('drops the video before slicing to a one-reference model, so the brief photo takes the slot', async () => {
+      const { photo } = await setUp(singleReferenceModel);
+      await run(productionGenerateShotTool, harness, { compositionId: COMPOSITION_ID, animate: false });
+
+      for (const { request } of harness.imageRequests) expect(inputsOf(request)).toEqual([photo]);
+    });
+
+    it('uses a kit image when a video sits at the front of the kit and there is no brief photo', async () => {
+      harness.config.imageModels = [singleReferenceModel];
+      await run(productionStoryboardTool, harness, { ...STORYBOARD, productFileId: undefined });
+      const kitVideo = harness.addFile('video');
+      const kitImage = harness.addFile('image');
+      await harness.config.compositions.update(COMPOSITION_ID, {
+        brandKit: { ...harness.composition().brandKit, productFileIds: [kitVideo, kitImage] },
+      });
+      await run(productionGenerateShotTool, harness, { compositionId: COMPOSITION_ID, animate: false });
+
+      for (const { request } of harness.imageRequests) expect(inputsOf(request)).toEqual([kitImage]);
+    });
+
+    it("keeps the user's look first when the storyboard adds a product photo, so a one-reference take uses it", async () => {
+      harness.config.imageModels = [singleReferenceModel];
+      await run(productionStoryboardTool, harness, { ...STORYBOARD, productFileId: undefined });
+      const look = harness.addFile('image');
+      await harness.config.compositions.update(COMPOSITION_ID, {
+        brandKit: { ...harness.composition().brandKit, productFileIds: [look] },
+      });
+      await run(productionStoryboardTool, harness, STORYBOARD);
+      expect(harness.composition().brandKit.productFileIds).toEqual([look, PRODUCT_FILE_ID]);
+
+      await run(productionGenerateShotTool, harness, { compositionId: COMPOSITION_ID, animate: false });
+      for (const { request } of harness.imageRequests) expect(inputsOf(request)).toEqual([look]);
+    });
+  });
+
+  describe('product look', () => {
+    const inputsOf = (request: unknown) => (request as { inputs?: { fileId: string }[] }).inputs?.map(i => i.fileId);
+    const isLook = (request: unknown) => (request as { prompt: string }).prompt.startsWith('Product packshot');
+    const noProduct = { ...STORYBOARD, productFileId: undefined };
+
+    it('makes one look from the brief, saves it first in the brand kit, and references it on every take', async () => {
+      await run(productionStoryboardTool, harness, noProduct);
+      const first = JSON.parse(
+        await run(productionGenerateShotTool, harness, {
+          compositionId: COMPOSITION_ID,
+          shotIds: ['shot-1'],
+          animate: false,
+        })
+      );
+      expect(first.productLook).toBe('made');
+      const [look] = harness.composition().brandKit.productFileIds;
+      expect(look).toBeDefined();
+
+      const second = JSON.parse(
+        await run(productionGenerateShotTool, harness, { compositionId: COMPOSITION_ID, animate: false })
+      );
+      expect(second.productLook).toBeUndefined();
+      const requests = harness.imageRequests.map(({ request }) => request);
+      expect(requests.filter(isLook)).toHaveLength(1);
+      expect(inputsOf(requests.find(isLook))).toBeUndefined();
+      const takes = requests.filter(request => !isLook(request));
+      expect(takes).toHaveLength(3);
+      for (const take of takes) expect(inputsOf(take)).toEqual([look]);
+      expect(harness.composition().brandKit.productFileIds).toEqual([look]);
+    });
+
+    it('does not bring back a look the user removed when a re-call replays its finished job', async () => {
+      await run(productionStoryboardTool, harness, noProduct);
+      await run(productionGenerateShotTool, harness, {
+        compositionId: COMPOSITION_ID,
+        shotIds: ['shot-1'],
+        animate: false,
+      });
+      const [look] = harness.composition().brandKit.productFileIds;
+      await harness.config.compositions.update(COMPOSITION_ID, {
+        brandKit: { ...harness.composition().brandKit, productFileIds: [] },
+      });
+      const second = JSON.parse(
+        await run(productionGenerateShotTool, harness, {
+          compositionId: COMPOSITION_ID,
+          shotIds: ['shot-2'],
+          animate: false,
+        })
+      );
+      expect(second.productLook).toMatch(/^skipped: /);
+      expect(harness.composition().brandKit.productFileIds).not.toContain(look);
+      expect(harness.imageRequests.filter(({ request }) => isLook(request))).toHaveLength(1);
+    });
+
+    it('saves a look that finished after the call stopped waiting, and references it on the re-call', async () => {
+      harness.imageState.next = request => (isLook(request) ? 'running' : 'succeeded');
+      await run(productionStoryboardTool, harness, noProduct);
+      const first = JSON.parse(
+        await run(productionGenerateShotTool, harness, { compositionId: COMPOSITION_ID, animate: false })
+      );
+      expect(first.productLook).toBe('pending');
+      harness.finishRunningImages();
+
+      const second = JSON.parse(
+        await run(productionGenerateShotTool, harness, { compositionId: COMPOSITION_ID, animate: false })
+      );
+      expect(second.productLook).toBe('made');
+      const [look] = harness.composition().brandKit.productFileIds;
+      expect(look).toBeDefined();
+      const requests = harness.imageRequests.map(({ request }) => request);
+      expect(requests.filter(isLook)).toHaveLength(1);
+      const takes = requests.filter(request => !isLook(request));
+      expect(takes).toHaveLength(3);
+      for (const take of takes) expect(inputsOf(take)).toEqual([look]);
+    });
+
+    it('starts no takes while the look is still running, and reports every shot pending on it', async () => {
+      harness.imageState.next = request => (isLook(request) ? 'running' : 'succeeded');
+      await run(productionStoryboardTool, harness, noProduct);
+      const result = JSON.parse(await run(productionGenerateShotTool, harness, { compositionId: COMPOSITION_ID }));
+
+      expect(result.productLook).toBe('pending');
+      expect(harness.counts.image).toBe(1);
+      expect(harness.counts.video).toBe(0);
+      for (const shot of result.shots) expect(shot.pending).toEqual([expect.stringContaining('product look')]);
+      expect(result.next).toContain('call production_generate_shot again');
+      expect(harness.composition().brandKit.productFileIds).toEqual([]);
+    });
+
+    it('starts the takes without a reference when the look fails', async () => {
+      harness.imageState.next = request => (isLook(request) ? 'failed' : 'succeeded');
+      await run(productionStoryboardTool, harness, noProduct);
+      const result = JSON.parse(
+        await run(productionGenerateShotTool, harness, { compositionId: COMPOSITION_ID, animate: false })
+      );
+
+      expect(result.productLook).toMatch(/^failed: /);
+      const takes = harness.imageRequests.filter(({ request }) => !isLook(request));
+      expect(takes).toHaveLength(3);
+      for (const { request } of takes) expect(inputsOf(request)).toBeUndefined();
+      expect(harness.composition().shots.every(shot => shot.chosenFileId)).toBe(true);
+    });
+
+    it('neither saves nor references a look the image job would refuse', async () => {
+      harness.config.referenceImages = async () => new Map();
+      await run(productionStoryboardTool, harness, noProduct);
+      const result = JSON.parse(
+        await run(productionGenerateShotTool, harness, { compositionId: COMPOSITION_ID, animate: false })
+      );
+
+      expect(result.productLook).toMatch(/^failed: /);
+      expect(harness.composition().brandKit.productFileIds).toEqual([]);
+      const takes = harness.imageRequests.filter(({ request }) => !isLook(request));
+      expect(takes).toHaveLength(3);
+      for (const { request } of takes) expect(inputsOf(request)).toBeUndefined();
+      for (const shot of result.shots) expect(shot.pending ?? []).toEqual([]);
+    });
+
+    it('reports a saved look that was refused later as failed, not as removed from the brand kit', async () => {
+      await run(productionStoryboardTool, harness, noProduct);
+      await run(productionGenerateShotTool, harness, {
+        compositionId: COMPOSITION_ID,
+        shotIds: ['shot-1'],
+        animate: false,
+      });
+      expect(harness.composition().brandKit.productFileIds).toHaveLength(1);
+      harness.config.referenceImages = async () => new Map();
+      const second = JSON.parse(
+        await run(productionGenerateShotTool, harness, {
+          compositionId: COMPOSITION_ID,
+          shotIds: ['shot-2'],
+          animate: false,
+        })
+      );
+      expect(second.productLook).toMatch(/^failed: /);
+    });
+
+    it('skips the look when the brief has no summary', async () => {
+      await run(productionStoryboardTool, harness, noProduct);
+      await harness.config.compositions.update(COMPOSITION_ID, { brief: {} });
+      const result = JSON.parse(
+        await run(productionGenerateShotTool, harness, { compositionId: COMPOSITION_ID, animate: false })
+      );
+
+      expect(result.productLook).toMatch(/^skipped: /);
+      expect(harness.imageRequests.filter(({ request }) => isLook(request))).toHaveLength(0);
+      expect(harness.counts.image).toBe(3);
+    });
+
+    it('makes no look when the production has a product image', async () => {
+      await run(productionStoryboardTool, harness, STORYBOARD);
+      const result = JSON.parse(await run(productionGenerateShotTool, harness, { compositionId: COMPOSITION_ID }));
+      expect(result.productLook).toBeUndefined();
+      expect(harness.imageRequests.filter(({ request }) => isLook(request))).toHaveLength(0);
+    });
   });
 
   it('starts nothing new when generate_shot is called again with the same arguments', async () => {
@@ -880,6 +1144,37 @@ describe('production director tools', () => {
       const result = await run(productionAssembleTool, harness, { compositionId: COMPOSITION_ID });
       expect(result).toBe('Error: the production was not saved (Invalid composition: timeline.tracks.0: bad clip).');
     });
+  });
+
+  it('storyboards a 2 minute short film in the most shots one call takes, with no product photo', async () => {
+    Object.assign(harness.composition(), { template: 'short_film', timeline: defaultStudioTimeline('short_film') });
+    const beats = ['opening', 'setup', 'inciting incident', 'rising action', 'turn', 'climax', 'resolution'];
+    const shots = Array.from({ length: STORYBOARD_MAX_SHOTS }, (_, index) => ({
+      title: `Scene ${index + 1}`,
+      intent: beats[Math.min(index, beats.length - 1)],
+      prompt: `The lighthouse keeper at dusk, scene ${index + 1}`,
+      durationSeconds: 10,
+      voiceLine: `Line ${index + 1} of the story.`,
+    }));
+    const result = JSON.parse(await run(productionStoryboardTool, harness, { compositionId: COMPOSITION_ID, shots }));
+    expect(result.totalSeconds).toBe(120);
+    expect(harness.composition().shots).toHaveLength(STORYBOARD_MAX_SHOTS);
+    expect(harness.composition().brandKit.productFileIds).toEqual([]);
+
+    await expect(
+      run(productionStoryboardTool, harness, {
+        compositionId: COMPOSITION_ID,
+        shots: [...shots, { ...shots[0], prompt: 'One scene too many for a call' }],
+      })
+    ).rejects.toThrow();
+  });
+
+  it('refuses a new shot without a prompt', async () => {
+    const result = await run(productionStoryboardTool, harness, {
+      compositionId: COMPOSITION_ID,
+      shots: [{ title: 'Opening', durationSeconds: 5 }],
+    });
+    expect(result).toMatch(/^Error: a new shot needs a title, a prompt and durationSeconds/);
   });
 
   it('is unavailable without a production tool config', async () => {
