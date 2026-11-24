@@ -93,7 +93,7 @@ const EditTagModal = () => {
   }, [tags, description, gated, resetFields, updateTags]);
 
   const handleModalClose = (reason?: AdminDialogCloseReason) => {
-    if (reason !== 'backdropClick') {
+    if (reason !== 'backdropClick' && !updateTags.isPending) {
       resetFields();
     }
   };
@@ -104,6 +104,7 @@ const EditTagModal = () => {
       onClose={handleModalClose}
       title="Report settings"
       width={600}
+      closeDisabled={updateTags.isPending}
       data-testid="edit-tag-modal"
     >
       <Textarea

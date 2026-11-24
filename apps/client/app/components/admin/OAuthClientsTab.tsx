@@ -987,7 +987,8 @@ export default function OAuthClientsTab() {
 
       <AdminDialog
         open={createOpen}
-        onClose={() => setCreateOpen(false)}
+        onClose={() => !createMutation.isPending && setCreateOpen(false)}
+        closeDisabled={createMutation.isPending}
         title="Register OAuth client"
         width={560}
         data-testid="oauth-client-create-modal"
@@ -1099,7 +1100,8 @@ export default function OAuthClientsTab() {
 
       <AdminDialog
         open={!!editTarget}
-        onClose={() => setEditTarget(null)}
+        onClose={() => !editMutation.isPending && setEditTarget(null)}
+        closeDisabled={editMutation.isPending}
         title="Edit OAuth client"
         width={560}
         data-testid="oauth-client-edit-modal"
@@ -1240,7 +1242,8 @@ export default function OAuthClientsTab() {
 
       <AdminDialog
         open={!!narrowing}
-        onClose={() => setNarrowing(null)}
+        onClose={() => !editMutation.isPending && setNarrowing(null)}
+        closeDisabled={editMutation.isPending}
         role="alertdialog"
         title={narrowing?.removed.length ? 'Remove scopes' : 'Turn off federation'}
         data-testid="oauth-client-edit-narrow-modal"

@@ -51,4 +51,15 @@ describe('EditTagModal', () => {
     expect(patch).toHaveBeenCalledWith('/api/app-files/update-tags', expect.objectContaining({ id: 'f1' }));
     expect(useEditAppFileTagModal.getState().targetFile).toBeNull();
   });
+
+  it('keeps the dialog open on Escape while a save is in flight', async () => {
+    patch.mockReturnValue(new Promise(() => {}));
+    renderModal();
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('edit-tag-save-btn'));
+    });
+    expect((screen.getByTestId('edit-tag-modal-close-btn') as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.keyDown(screen.getByTestId('edit-tag-modal'), { key: 'Escape' });
+    expect(useEditAppFileTagModal.getState().targetFile).toBe(file);
+  });
 });

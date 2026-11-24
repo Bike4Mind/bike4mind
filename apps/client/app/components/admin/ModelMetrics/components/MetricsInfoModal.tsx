@@ -21,7 +21,7 @@ export const MetricsInfoModal: React.FC<MetricsInfoModalProps> = ({ open, onClos
         {/* Core Timing Section */}
         <Box>
           <Typography level="title-md" sx={{ mb: 1, color: 'primary.500' }}>
-            ⏱️ Core Timing Metrics
+            {'\u23f1\ufe0f'} Core Timing Metrics
           </Typography>
           <Stack spacing={2}>
             <Box>
@@ -83,7 +83,7 @@ export const MetricsInfoModal: React.FC<MetricsInfoModalProps> = ({ open, onClos
         {hasStreamingData && (
           <Box>
             <Typography level="title-md" sx={{ mb: 1, color: 'primary.500' }}>
-              🔄 Streaming Performance
+              {'\u{1f504}'} Streaming Performance
             </Typography>
             <Stack spacing={2}>
               <Box>
@@ -119,7 +119,7 @@ export const MetricsInfoModal: React.FC<MetricsInfoModalProps> = ({ open, onClos
         {/* Feature Execution Section */}
         <Box>
           <Typography level="title-md" sx={{ mb: 1, color: 'primary.500' }}>
-            🔧 Feature Execution Times
+            {'\u{1f527}'} Feature Execution Times
           </Typography>
           <Stack spacing={2}>
             <Box>
@@ -176,7 +176,7 @@ export const MetricsInfoModal: React.FC<MetricsInfoModalProps> = ({ open, onClos
         {/* Database Operations Section */}
         <Box>
           <Typography level="title-md" sx={{ mb: 1, color: 'primary.500' }}>
-            💾 Database Operations
+            {'\u{1f4be}'} Database Operations
           </Typography>
           <Stack spacing={2}>
             <Box>
@@ -209,22 +209,22 @@ export const MetricsInfoModal: React.FC<MetricsInfoModalProps> = ({ open, onClos
         {/* Performance Tips */}
         <Box sx={{ p: 2, bgcolor: 'background.level2', borderRadius: 'sm' }}>
           <Typography level="title-sm" sx={{ mb: 1 }}>
-            💡 Performance Insights
+            {'\u{1f4a1}'} Performance Insights
           </Typography>
           <Stack spacing={1}>
             <Typography level="body-sm">
-              • <strong>TTFVT under 3s:</strong> Excellent user experience
+              {'\u2022'} <strong>TTFVT under 3s:</strong> Excellent user experience
             </Typography>
             {hasStreamingData && (
               <Typography level="body-sm">
-                • <strong>High chars/sec:</strong> Responsive streaming, good for real-time feel
+                {'\u2022'} <strong>High chars/sec:</strong> Responsive streaming, good for real-time feel
               </Typography>
             )}
             <Typography level="body-sm">
-              • <strong>History Loading &gt; 2s:</strong> Consider conversation pruning
+              {'\u2022'} <strong>History Loading &gt; 2s:</strong> Consider conversation pruning
             </Typography>
             <Typography level="body-sm">
-              • <strong>Context Retrieval &gt; 3s:</strong> May indicate data source bottlenecks
+              {'\u2022'} <strong>Context Retrieval &gt; 3s:</strong> May indicate data source bottlenecks
             </Typography>
           </Stack>
         </Box>
