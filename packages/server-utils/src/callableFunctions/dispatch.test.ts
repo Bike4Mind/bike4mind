@@ -15,11 +15,17 @@ const h = vi.hoisted(() => ({
   artifact: null as Record<string, unknown> | null,
   rows: [] as Record<string, unknown>[],
   reads: [] as string[],
+  /** How long each read takes under fake timers. */
+  readMs: 0,
 }));
+const readTakesTime = vi.hoisted(() => () => {
+  if (h.readMs > 0) vi.setSystemTime(Date.now() + h.readMs);
+});
 
 vi.mock('./access', () => ({
   resolveCallableFunctionsEnabled: vi.fn(async () => {
     h.reads.push('setting');
+    readTakesTime();
     return h.enabled;
   }),
 }));
@@ -27,12 +33,14 @@ vi.mock('@bike4mind/database', () => ({
   callableFunctionRepository: {
     findById: vi.fn(async () => {
       h.reads.push('record');
+      readTakesTime();
       return h.fn;
     }),
   },
   artifactRepository: {
     findOne: vi.fn(async () => {
       h.reads.push('head');
+      readTakesTime();
       return h.artifact;
     }),
   },
@@ -45,6 +53,7 @@ vi.mock('@bike4mind/database', () => ({
 }));
 
 import { artifactRepository, callableFunctionCallRepository, callableFunctionRepository } from '@bike4mind/database';
+import { Logger } from '@bike4mind/observability';
 import { resolveCallableFunctionsEnabled } from './access';
 import {
   CALLABLE_FUNCTION_SURFACE_CAPS,
@@ -135,6 +144,7 @@ beforeEach(() => {
   h.artifact = { id: 'artifact-1', version: 3, deletedAt: null };
   h.rows = [];
   h.reads = [];
+  h.readMs = 0;
 });
 
 afterEach(() => {
@@ -290,14 +300,51 @@ describe('dispatchFunctionCall outcomes', () => {
     expect(result.outputs).toBeUndefined();
   });
 
-  it('records an error when the runner throws', async () => {
+  it('records an error when the runner throws, and logs its cause without the call', async () => {
+    const logged = vi.spyOn(Logger, 'error').mockImplementation(() => undefined);
     const result = await dispatchFunctionCall(call(), {
       runner: vi.fn(async () => {
-        throw new Error('Callable function runtime invocation failed');
+        throw new Error('Callable function runtime invocation failed', { cause: 'AccessDeniedException' });
       }),
     });
     expect(result).toMatchObject({ outcome: 'error', reason: 'runtime_unavailable' });
     expect(onlyRow()).toMatchObject({ outcome: 'error', reason: 'runtime_unavailable' });
+    expect(logged).toHaveBeenCalledTimes(1);
+    expect(logged).toHaveBeenCalledWith('[CALLABLE_FUNCTION_RUNNER_FAILED]', {
+      name: 'Error',
+      message: 'Callable function runtime invocation failed',
+      cause: 'AccessDeniedException',
+    });
+    const line = JSON.stringify(logged.mock.calls);
+    for (const leaked of [SOURCE, String(ARGS.load), String(ARGS.span)]) expect(line).not.toContain(leaked);
+    logged.mockRestore();
+  });
+
+  it('counts its own reads against the deadline, so the run waits only what is left after them', async () => {
+    vi.useFakeTimers();
+    h.readMs = 1_000;
+    const runner = vi.fn((_payload: CallableFunctionRunPayload) => new Promise<never>(() => {}));
+    let settled = false;
+    const pending = dispatchFunctionCall(call(), { runner, deadline: Date.now() + 20_000, minWaitMs: 5_000 }).finally(
+      () => {
+        settled = true;
+      }
+    );
+    await vi.advanceTimersByTimeAsync(17_000 - 1);
+    expect(settled).toBe(false);
+    expect(runner.mock.calls[0][0]).toMatchObject({ limits: { timeoutMs: 17_000 } });
+    await vi.advanceTimersByTimeAsync(1);
+    await expect(pending).resolves.toMatchObject({ outcome: 'timeout', reason: 'wait_exceeded' });
+  });
+
+  it('refuses without running when its reads leave less than the minimum wait, and writes the row', async () => {
+    vi.useFakeTimers();
+    h.readMs = 1_000;
+    const runner = vi.fn();
+    const result = await dispatchFunctionCall(call(), { runner, deadline: Date.now() + 7_000, minWaitMs: 5_000 });
+    expect(result).toMatchObject({ outcome: 'refused', reason: 'budget_exhausted' });
+    expect(runner).not.toHaveBeenCalled();
+    expect(onlyRow()).toMatchObject({ outcome: 'refused', reason: 'budget_exhausted' });
   });
 
   it("stops waiting at the surface's cap when the runner never answers, and writes the row", async () => {

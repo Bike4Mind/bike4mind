@@ -615,7 +615,6 @@ def attempt(arg):
     );
   });
 
-  // A sweep, not the live set: a run keeps its pid in the set when its group outlived the reap.
   it('names the packages loaded before guest code ran, so a guest that edits the list changes nothing', async () => {
     const child = spawn(process.execPath, [CHILD, PYODIDE_DIR, '--unsafe-no-isolation'], {
       env: process.env,
@@ -649,6 +648,7 @@ def attempt(arg):
     expect(reply.packages).toEqual([]);
   }, 120_000);
 
+  // A sweep, not the live set: a run keeps its pid in the set when its group outlived the reap.
   it('leaves no child once the hostile attempts end', () => {
     expect(sweepCallableFunctionChildren()).toBe(0);
   });

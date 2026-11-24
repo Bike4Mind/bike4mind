@@ -44,7 +44,7 @@ vi.mock('./dispatch', async importOriginal => ({
   }),
   dispatchFunctionCall: vi.fn(async (...args: unknown[]) => {
     h.calls.push(args);
-    const { waitMs } = args[1] as { waitMs: number };
+    const waitMs = (args[1] as { deadline: number }).deadline - Date.now();
     vi.setSystemTime(Date.now() + (h.caseMs < 0 ? waitMs : h.caseMs));
     return h.results.shift() ?? { outcome: 'timeout', reason: 'wait_exceeded', durationMs: waitMs, callId: 'call-x' };
   }),
@@ -139,6 +139,7 @@ describe('runCallableFunctionTests', () => {
       dispatched({ outputs: { deflection: 4 }, callId: 'call-1', durationMs: 31 }),
       dispatched({ outputs: { deflection: 21 }, callId: 'call-2', durationMs: 29 }),
     ];
+    const deadline = Date.now() + 45_000;
     const run = await runCallableFunctionTests(OWNER, FUNCTION_ID, { runner });
     expect(h.reads).toEqual([
       [
@@ -146,9 +147,10 @@ describe('runCallableFunctionTests', () => {
         { runner, waitMs: CALLABLE_FUNCTION_CONTRACT_READ_WAIT_MS },
       ],
     ]);
+    const options = { runner, contract: CONTRACT, deadline, minWaitMs: CALLABLE_FUNCTION_TEST_CASE_MIN_MS };
     expect(h.calls).toEqual([
-      [caseArgs(2), { runner, contract: CONTRACT, waitMs: 45_000 }],
-      [caseArgs(10), { runner, contract: CONTRACT, waitMs: 45_000 }],
+      [caseArgs(2), options],
+      [caseArgs(10), options],
     ]);
     expect(run).toMatchObject({ functionId: FUNCTION_ID, passed: 1, failed: 1, notRun: 0, contractCallId: 'read-1' });
     expect(run.results).toEqual([
@@ -276,12 +278,13 @@ describe('runCallableFunctionTests', () => {
 });
 
 describe('the test run budget', () => {
-  it('gives each case what is left and returns the cases it cannot reach as not run, with no call', async () => {
+  it('gives each case the run deadline and returns the cases it cannot reach as not run, with no call', async () => {
     h.readMs = 3_000;
     h.caseMs = 38_000;
+    const deadline = Date.now() + 45_000;
     const run = await runCallableFunctionTests(OWNER, FUNCTION_ID, { runner });
     expect(h.calls).toHaveLength(1);
-    expect(h.calls[0][1]).toMatchObject({ waitMs: 42_000 });
+    expect(h.calls[0][1]).toMatchObject({ deadline, minWaitMs: CALLABLE_FUNCTION_TEST_CASE_MIN_MS });
     expect(run).toMatchObject({ passed: 0, failed: 1, notRun: 1 });
     expect(run.results[1]).toEqual({
       name: 'long span',
@@ -292,18 +295,37 @@ describe('the test run budget', () => {
     });
   });
 
+  it("returns a case as not run, with its row, when the dispatcher's reads left it too little time", async () => {
+    h.results = [
+      dispatched({ outcome: 'refused', reason: 'budget_exhausted', callId: 'call-1' }),
+      dispatched({ outputs: { deflection: 20 }, callId: 'call-2' }),
+    ];
+    const run = await runCallableFunctionTests(OWNER, FUNCTION_ID, { runner });
+    expect(run).toMatchObject({ passed: 1, failed: 0, notRun: 1 });
+    expect(run.results[0]).toEqual({
+      name: 'short span',
+      passed: false,
+      outcome: 'not_run',
+      reason: 'budget_exhausted',
+      mismatch: null,
+      callId: 'call-1',
+    });
+  });
+
   it('gives the read no more than what is left of a lowered budget', async () => {
     h.readMs = 2_000;
     h.caseMs = 2_000;
+    const deadline = Date.now() + 8_000;
     const run = await runCallableFunctionTests(OWNER, FUNCTION_ID, { runner, budgetMs: 8_000 });
     expect(h.reads[0][1]).toEqual({ runner, waitMs: 8_000 });
-    expect(h.calls[0][1]).toMatchObject({ waitMs: 6_000 });
+    expect(h.calls[0][1]).toMatchObject({ deadline });
     expect(run.results.map(result => result.outcome)).toEqual(['timeout', 'not_run']);
   });
 
   it('never raises the budget past its ceiling', async () => {
+    const deadline = Date.now() + CALLABLE_FUNCTION_TEST_RUN_BUDGET_MS;
     await runCallableFunctionTests(OWNER, FUNCTION_ID, { runner, budgetMs: 600_000 });
-    expect(h.calls[0][1]).toMatchObject({ waitMs: CALLABLE_FUNCTION_TEST_RUN_BUDGET_MS });
+    expect(h.calls[0][1]).toMatchObject({ deadline });
     expect(callableFunctionTestRunBudget({ CALLABLE_FUNCTION_TEST_RUN_BUDGET_MS: '8000' })).toBe(8_000);
     expect(callableFunctionTestRunBudget({ CALLABLE_FUNCTION_TEST_RUN_BUDGET_MS: '600000' })).toBe(45_000);
     expect(callableFunctionTestRunBudget({ CALLABLE_FUNCTION_TEST_RUN_BUDGET_MS: 'soon' })).toBe(45_000);

@@ -28,8 +28,8 @@ export interface CallableFunctionCallRuntime {
 }
 
 /**
- * One row per call, contract read, or refusal in `callablefunctioncalls`, kept 90 days. It records hashes and sizes only, never the
- * inputs or outputs.
+ * One row per call, contract read, or refusal in `callablefunctioncalls`, kept 90 days. It records hashes and sizes
+ * only, never the inputs or outputs.
  */
 export interface ICallableFunctionCall {
   op: CallableFunctionCallOp;

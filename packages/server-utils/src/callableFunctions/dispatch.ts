@@ -13,6 +13,7 @@ import {
   type ICallableFunctionDocument,
 } from '@bike4mind/common';
 import { artifactRepository, callableFunctionCallRepository, callableFunctionRepository } from '@bike4mind/database';
+import { Logger } from '@bike4mind/observability';
 import { resolveCallableFunctionsEnabled } from './access';
 import {
   CALLABLE_FUNCTION_DEFAULT_TIMEOUT_MS,
@@ -40,6 +41,7 @@ export type CallableFunctionDispatchReason =
   | 'source_deleted'
   | 'input_too_large'
   | 'wait_exceeded'
+  | 'budget_exhausted'
   | 'dispatch_failed';
 
 export type CallableFunctionCallReason = CallableFunctionReason | CallableFunctionDispatchReason;
@@ -91,6 +93,10 @@ export interface CallableFunctionDispatchOptions {
   timeoutMs?: number;
   /** What is left of the caller's own budget; the wait never passes the surface's cap either way. */
   waitMs?: number;
+  /** When the caller's budget ends (epoch ms), so the dispatcher's own reads count against it; wins over `waitMs`. */
+  deadline?: number;
+  /** Refuses with `budget_exhausted`, without running, when less than this is left once the checks are done. */
+  minWaitMs?: number;
 }
 
 /** Room for output hashes beside `data` later; nothing here assumes every output is inline. */
@@ -163,6 +169,15 @@ const waitFor = (surface: CallableFunctionCallSurface, waitMs?: number) =>
 /** A time limit the runtime accepts: whole, at least 1 ms, and never longer than the wait. */
 const limitWithin = (timeoutMs: number, waitMs: number) => Math.max(1, Math.floor(Math.min(timeoutMs, waitMs)));
 
+/** Only the error's own fields, so a log line never carries the payload's inputs, outputs, or source. */
+function describeRunnerError(error: unknown): { name: string; message: string; cause?: string } {
+  if (!(error instanceof Error)) return { name: 'unknown', message: String(error) };
+  const { cause } = error;
+  const fields = { name: error.name, message: error.message };
+  if (cause === undefined) return fields;
+  return { ...fields, cause: cause instanceof Error ? `${cause.name}: ${cause.message}` : String(cause) };
+}
+
 /** Runs one payload; a runner that throws or does not answer within the wait reads as an outcome, never a hang. */
 async function runWithin(
   runner: CallableFunctionRunner,
@@ -179,11 +194,10 @@ async function runWithin(
   });
   try {
     return await Promise.race([
-      runner(payload).catch((): RunResult => ({
-        outcome: 'error',
-        reason: 'runtime_unavailable',
-        durationMs: Date.now() - started,
-      })),
+      runner(payload).catch((error: unknown): RunResult => {
+        Logger.error('[CALLABLE_FUNCTION_RUNNER_FAILED]', describeRunnerError(error));
+        return { outcome: 'error', reason: 'runtime_unavailable', durationMs: Date.now() - started };
+      }),
       deadline,
     ]);
   } finally {
@@ -369,7 +383,10 @@ export async function dispatchFunctionCall(
     if (!runner) return finish({ outcome: 'refused', reason: 'runtime_unavailable' });
     const params = args as Record<string, unknown>;
     const inputHash = row.inputHash ?? functionInputHash(params);
-    const waitMs = waitFor(surface, options.waitMs);
+    const waitMs = waitFor(surface, options.deadline === undefined ? options.waitMs : options.deadline - Date.now());
+    if (options.minWaitMs !== undefined && waitMs < options.minWaitMs) {
+      return finish({ outcome: 'refused', reason: 'budget_exhausted' });
+    }
     const timeoutMs = limitWithin(options.timeoutMs ?? CALLABLE_FUNCTION_DEFAULT_TIMEOUT_MS, waitMs);
     const outputBytesCap = Math.min(caps.outputBytes, CALLABLE_FUNCTION_LIMITS.outputBytes);
     const run = await runWithin(

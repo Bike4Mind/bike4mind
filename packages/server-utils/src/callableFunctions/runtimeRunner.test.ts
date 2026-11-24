@@ -106,6 +106,22 @@ describe('callableFunctionRuntimeConfigured', () => {
     expect(configured({ CALLABLE_FUNCTION_CHILD_PATH: '/srv/child.ts' })).toBe(false);
     expect(configured({})).toBe(false);
   });
+
+  const name = { CALLABLE_FUNCTION_RUNTIME_FUNCTION_NAME: 'runtime-fn' };
+  const child = { CALLABLE_FUNCTION_CHILD_PATH: '/srv/child.ts' };
+  const pyodide = { CALLABLE_FUNCTION_PYODIDE_DIR: '/srv/pyodide' };
+  const emptyName = { CALLABLE_FUNCTION_RUNTIME_FUNCTION_NAME: '' };
+  it.each([
+    ['the function name', name],
+    ['both child paths', { ...child, ...pyodide }],
+    ['the child path only', child],
+    ['the Pyodide directory only', pyodide],
+    ['an empty function name and both child paths', { ...emptyName, ...child, ...pyodide }],
+    ['nothing', {}],
+  ])('agrees with selectCallableFunctionRunner given %s', (_label, env) => {
+    const processEnv = env as NodeJS.ProcessEnv;
+    expect(callableFunctionRuntimeConfigured(processEnv)).toBe(selectCallableFunctionRunner(processEnv) !== null);
+  });
 });
 
 describe('the runtime report in a reply', () => {

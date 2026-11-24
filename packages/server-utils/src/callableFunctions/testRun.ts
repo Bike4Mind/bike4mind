@@ -60,10 +60,12 @@ export type CallableFunctionTestCaseResult =
   | {
       name: string;
       passed: false;
-      /** The budget ran out before this case; nothing ran and no row was written. */
+      /** The budget ran out before this case; nothing ran. */
       outcome: 'not_run';
       reason: 'budget_exhausted';
       mismatch: null;
+      /** The dispatcher's refusal row, when its own reads left the case too little time. */
+      callId?: string;
     };
 
 export interface CallableFunctionTestRun {
@@ -161,16 +163,27 @@ export async function runCallableFunctionTests(
   const tests = wanted ? declared.filter(test => wanted.has(test.name)) : declared;
 
   const results: CallableFunctionTestCaseResult[] = [];
+  const skipped = (name: string, callId?: string): CallableFunctionTestCaseResult => ({
+    name,
+    passed: false,
+    outcome: 'not_run',
+    reason: 'budget_exhausted',
+    mismatch: null,
+    ...(callId ? { callId } : {}),
+  });
   for (const test of tests) {
-    const waitMs = left();
-    if (waitMs < CALLABLE_FUNCTION_TEST_CASE_MIN_MS) {
-      results.push({ name: test.name, passed: false, outcome: 'not_run', reason: 'budget_exhausted', mismatch: null });
+    if (left() < CALLABLE_FUNCTION_TEST_CASE_MIN_MS) {
+      results.push(skipped(test.name));
       continue;
     }
     const call = await dispatchFunctionCall(
       { caller: actor, functionId: fn.id, args: test.input, surface: 'test' },
-      { runner, contract: read.contract, waitMs }
+      { runner, contract: read.contract, deadline, minWaitMs: CALLABLE_FUNCTION_TEST_CASE_MIN_MS }
     );
+    if (call.outcome === 'refused' && call.reason === 'budget_exhausted') {
+      results.push(skipped(test.name, call.callId));
+      continue;
+    }
     const mismatch = call.outcome === 'ok' ? compareFunctionOutput(test.expected, call.outputs, test.tolerance) : null;
     results.push({
       name: test.name,
