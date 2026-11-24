@@ -1483,10 +1483,12 @@ export class ChatService {
    * The catalog lookup is awaited rather than skipped: it is one cached round trip on a
    * deliberate click, and starting a thread on a model the server does not have means the
    * user's first message is the thing that discovers it.
+   *
+   * 'studio' starts the Studio place's own conversation; a Code session has createCodeSession.
    */
-  async createSession(): Promise<ChatSessionSummary> {
+  async createSession(mode: 'chat' | 'studio' = 'chat'): Promise<ChatSessionSummary> {
     const catalog = await this.listModels();
-    return this.deps.store.create(await this.startModel(catalog.models));
+    return this.deps.store.create(await this.startModel(catalog.models), mode === 'studio' ? { mode } : {});
   }
 
   /** The model a new conversation would start on, for a session the Claude importer writes. */
@@ -1867,6 +1869,8 @@ export class ChatService {
     // Folders the user clicked "Add folder" for in THIS conversation. A projectless Code session
     // takes these too: unlike the global grants, nobody shared them for some other conversation.
     const own = session.grantedDirectories ?? [];
+    // A Studio session runs nothing locally: no grant, global or its own, ever reaches its tools.
+    if (session.mode === 'studio') return { roots: [], listedRoots: [] };
     const project = await this.repairBareWorkingDirectory(session);
     if (!project) {
       const global = session.mode === 'code' ? [] : await this.deps.access.list();
@@ -2307,11 +2311,7 @@ export class ChatService {
    * as history, and a refusal that still names the old shortfall reads as final (seen on Haiku and
    * Sonnet), so the result says the budget is now higher and the call should be made again.
    */
-  private async reofferBudgetRefusedTools(
-    sessionId: string,
-    reply: ChatMessage,
-    budgetCredits: number
-  ): Promise<void> {
+  private async reofferBudgetRefusedTools(sessionId: string, reply: ChatMessage, budgetCredits: number): Promise<void> {
     const refused = (call: ChatToolCall) => call.status === 'error' && call.error?.endsWith(RUN_BUDGET_REFUSAL_NOTE);
     if (!reply.toolCalls?.some(refused)) return;
     const note =
@@ -4704,6 +4704,7 @@ export class ChatService {
         (localTurn && !modelOption) || !roomForTools
           ? []
           : toolsForRequest({
+              studio: session.mode === 'studio',
               modelId: session.model,
               roots: granted,
               media: !!media,
@@ -4835,27 +4836,30 @@ export class ChatService {
         // Replayed images exist only on this turn's wire, so next turn the cached prefix changes at this user message and the rest is re-written to the cache once (accepted).
         prependToPrompt(wire, await this.previousReplyImages(session, images));
       }
+      // A Studio session is offered the generation tools alone (see toolsForRequest), so the prompt
+      // describes only those: naming a family it cannot call teaches the model to keep trying it.
+      const offersMore = toolsSupported && session.mode !== 'studio';
       const systemMessage = () =>
         buildSystemMessage(
-          toolsSupported ? listedRoots : [],
+          offersMore ? listedRoots : [],
           toolsSupported && !!media,
-          toolsSupported && !!host,
-          toolsSupported && !!explore,
-          toolsSupported && this.deps.mcp ? mcpServers : null,
+          offersMore && !!host,
+          offersMore && !!explore,
+          offersMore && this.deps.mcp ? mcpServers : null,
           session.project,
           this.deps.dependencies?.promptLines(session.id, { spawned: !!session.origin }) ?? [],
           projectContext,
-          toolsSupported && !!browser,
+          offersMore && !!browser,
           patchEdits,
-          toolsSupported && !!memory,
-          toolsSupported ? skillsSection : '',
-          toolsSupported && ask,
+          offersMore && !!memory,
+          offersMore ? skillsSection : '',
+          offersMore && ask,
           session.model,
-          toolsSupported && !!web,
-          toolsSupported && !!screen,
-          toolsSupported && !!simulator,
+          offersMore && !!web,
+          offersMore && !!screen,
+          offersMore && !!simulator,
           orchestrating,
-          toolsSupported
+          offersMore
         );
       wire.unshift(
         deferred ? buildDeferredSystemMessage(session.project, projectContext, skillsSection) : systemMessage()
@@ -5264,7 +5268,10 @@ export class ChatService {
                 title: session.title,
                 directories: directoryTurn,
                 budgetStop,
-                ...(deferred ? { offered: new Set(toolsFor(roots).map(tool => tool.toolSchema.name)) } : {}),
+                // A Studio session checks too: a call to a tool it was never offered must not run.
+                ...(deferred || session.mode === 'studio'
+                  ? { offered: new Set(toolsFor(roots).map(tool => tool.toolSchema.name)) }
+                  : {}),
                 permissions: {
                   project: session.project?.directory ?? null,
                   workingDirectory: session.project ? (workingDirectory ?? session.project.workingDirectory) : null,
@@ -6258,10 +6265,7 @@ export class ChatService {
           this.deps.logger.debug(`CHAT: tool ${request.name} failed: ${message}`);
           if (err instanceof RunBudgetExhaustedError && scope.budgetStop) scope.budgetStop.error ??= err;
           // The model reads this after a raise resumes the turn; without it, it takes the refusal as final.
-          const stored =
-            err instanceof RunBudgetExhaustedError
-              ? `${message} ${RUN_BUDGET_REFUSAL_NOTE}`
-              : message;
+          const stored = err instanceof RunBudgetExhaustedError ? `${message} ${RUN_BUDGET_REFUSAL_NOTE}` : message;
           settled = decorate({
             ...call,
             // A refusal is its own state: the UI says "denied", not "something broke".

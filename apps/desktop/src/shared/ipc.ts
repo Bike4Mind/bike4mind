@@ -783,6 +783,8 @@ export interface CreateSessionRequest {
    * id and before replying, so the row never shows in the default groups first.
    */
   sectionId?: string;
+  /** Omitted means Chat. Code sessions start through their own request; see CreateCodeSessionRequest. */
+  mode?: 'chat' | 'studio';
 }
 
 /**

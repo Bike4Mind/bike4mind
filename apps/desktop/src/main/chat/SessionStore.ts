@@ -57,8 +57,7 @@ export function isValidSessionId(id: string): boolean {
 }
 
 export type AgentRenameOutcome =
-  | { ok: true; summary: ChatSessionSummary }
-  | { ok: false; reason: 'user-title' | 'missing' };
+  { ok: true; summary: ChatSessionSummary } | { ok: false; reason: 'user-title' | 'missing' };
 
 /**
  * Whether an agent may replace this session's title. Unlocked and agent-set titles are fair game.
@@ -1728,7 +1727,7 @@ export class SessionStore implements SessionWritesStore {
       // project did not survive normalizeProject reads back as an UNBOUND Code session rather
       // than being downgraded: it keeps the chips that can re-point it, and it is safe only
       // because such a session is granted no roots at all - see ChatService.resolveToolScope.
-      mode: parsed.mode === 'code' ? 'code' : 'chat',
+      mode: parsed.mode === 'code' || parsed.mode === 'studio' ? parsed.mode : 'chat',
       approvalMode: normalizeApprovalMode(
         parsed.approvalMode,
         (parsed as StoredSession).approvalModeLaunch,

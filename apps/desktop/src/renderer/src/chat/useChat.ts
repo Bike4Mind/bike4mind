@@ -48,6 +48,8 @@ export interface SessionsController {
   loading: boolean;
   reload: () => Promise<void>;
   create: (placement?: SessionPlacement) => Promise<string>;
+  /** Start the Studio place's own conversation, which no sidebar lists. */
+  createStudio: () => Promise<string>;
   /** Start a Code session. Resolves null when main refused; `codeError` then says why. */
   createCode: (request: CreateCodeSessionRequest, placement?: SessionPlacement) => Promise<string | null>;
   /** Set while a Code session is being created - resolving a worktree can take a moment. */
@@ -178,6 +180,12 @@ export function useSessions(): SessionsController {
     [list]
   );
 
+  const createStudio = useCallback(async () => {
+    const created = await window.b4m.chat.createSession({ mode: 'studio' });
+    list(created, undefined);
+    return created.session.id;
+  }, [list]);
+
   const createCode = useCallback(
     async (request: CreateCodeSessionRequest, placement?: SessionPlacement) => {
       setCreatingCode(true);
@@ -272,6 +280,7 @@ export function useSessions(): SessionsController {
     loading,
     reload,
     create,
+    createStudio,
     createCode,
     creatingCode,
     codeError,
