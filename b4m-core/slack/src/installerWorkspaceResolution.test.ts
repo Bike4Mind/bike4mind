@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { Logger } from '@bike4mind/observability';
 import type { Installation } from '@slack/oauth';
+import { SlackClient } from './SlackClient';
 import { configureSlackPackage } from './di/registry';
 import {
   createInstallProvider,
@@ -164,6 +165,7 @@ describe('storeInstallation', () => {
     const { run } = await store({ workspaceId: 'ws-b' }, installationFor('B_APP'));
     await run();
     expect(mockGetUserInfo).toHaveBeenCalledWith('U_BOT');
+    expect(SlackClient).toHaveBeenCalledWith(expect.any(String), expect.anything(), { timeoutMs: 3000 });
     expect(update).toHaveBeenCalledWith(expect.objectContaining({ id: 'ws-b', slackBotName: 'New Name' }));
   });
 

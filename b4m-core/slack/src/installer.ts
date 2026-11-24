@@ -104,7 +104,9 @@ export interface InstallCallbackOptions {
 async function fetchBotDisplayName(botToken?: string, botUserId?: string): Promise<string | undefined> {
   if (!botToken || !botUserId) return undefined;
   try {
-    const client = new SlackClient(botToken, new Logger({ metadata: { component: 'SlackInstall' } }));
+    const client = new SlackClient(botToken, new Logger({ metadata: { component: 'SlackInstall' } }), {
+      timeoutMs: 3000,
+    });
     const user = await client.getUserInfo(botUserId);
     const name = (user?.display_name || user?.real_name || '').trim();
     if (!name) {
