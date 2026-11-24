@@ -108,11 +108,16 @@ test('Slack status and results carry pass/fail emoji', () => {
   assert.equal(fail.slack_status, ':x: Failed');
   assert.equal(
     fail.slack_results,
-    ':white_check_mark: 1 passed (0 flaky)  :x: 1 failed  :fast_forward: 0 skipped  :no_entry_sign: 0 not started (2 test cases; 0 setup failures)'
+    ':white_check_mark: 1 passed (0 flaky)  :x: 1 failed  :fast_forward: 0 skipped  :no_entry_sign: 0 not started\\nTotal Cases: 2  Setup Failures: 0'
+  );
+  assert.doesNotMatch(fail.slack_results, /\n/);
+  assert.equal(
+    JSON.parse(`"${fail.slack_results}"`).split('\n')[1],
+    'Total Cases: 2  Setup Failures: 0'
   );
   const setup = summarize(report(passed()), { execution: 'failure' });
   setup.setup_failed = 2;
-  assert.match(slackFields(setup).slack_results, /\(1 test cases; 2 setup failures\)$/);
+  assert.match(slackFields(setup).slack_results, /Total Cases: 1 {2}Setup Failures: 2$/);
   assert.equal(slackFields(summarize(report(passed(), pwTest('skipped', [], 'passed')), { execution: 'success' })).slack_status, ':warning: Incomplete');
   assert.equal(slackFields(summarize(undefined, { execution: 'failure' })).slack_status, ':x: Setup/deployment failed');
 });

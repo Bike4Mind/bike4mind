@@ -84,14 +84,18 @@ const STATUS_EMOJI = {
   incomplete: ':warning:',
 };
 
-/** Slack mrkdwn for the Status and Results fields (shortcodes render outside code blocks). */
+/**
+ * Slack mrkdwn for the Status and Results fields (shortcodes render outside code blocks).
+ * The line break is a literal backslash-n: GITHUB_OUTPUT values are single-line, and e2e-run.yml
+ * splices these into a JSON payload, where it decodes to a newline.
+ */
 export function slackFields(result) {
   return {
     slack_status: `${STATUS_EMOJI[result.outcome] ?? ':x:'} ${result.label}`,
     slack_results:
       `:white_check_mark: ${result.passed} passed (${result.flaky} flaky)  :x: ${result.failed} failed  ` +
-      `:fast_forward: ${result.skipped} skipped  :no_entry_sign: ${result.not_started} not started ` +
-      `(${result.total} test cases; ${result.setup_failed} setup failures)`,
+      `:fast_forward: ${result.skipped} skipped  :no_entry_sign: ${result.not_started} not started\\n` +
+      `Total Cases: ${result.total}  Setup Failures: ${result.setup_failed}`,
   };
 }
 
