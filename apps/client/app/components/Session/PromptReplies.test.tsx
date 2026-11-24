@@ -261,6 +261,25 @@ describe('PendingActionButtons (MCP confirmation card)', () => {
     expect(screen.getByTestId('mcp-custom-action-args')).toHaveTextContent('Ship it');
   });
 
+  it('shows a confirmed function output on the card, and none for a reply without one', async () => {
+    const output = JSON.stringify({ output: { deflection: 0.000406901 }, stamp: { trust_label: 'unverified' } });
+    postMock.mockResolvedValue({
+      data: { success: true, message: 'Functions: beam_midspan_deflection completed', output },
+    });
+    renderCard({
+      tool: 'beam_midspan_deflection',
+      params: { load: 2000 },
+      ts: Date.now(),
+      customConnector: { connectionId: 'fn', slug: 'fn', displayName: 'Functions', urlHost: 'functions' },
+    });
+
+    fireEvent.click(screen.getByTestId('mcp-confirm-btn'));
+
+    const shown = await screen.findByTestId('mcp-confirm-output');
+    expect(shown.textContent).toBe(JSON.stringify(JSON.parse(output), null, 2));
+    expect(screen.getByTestId('mcp-confirm-result')).toHaveTextContent('Functions: beam_midspan_deflection completed');
+  });
+
   it('does not render a GitHub project chip for a custom action that reuses a project tool name', () => {
     renderCard({
       tool: 'update_project_item_fields',

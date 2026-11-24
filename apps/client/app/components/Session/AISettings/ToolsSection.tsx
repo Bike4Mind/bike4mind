@@ -48,6 +48,7 @@ import {
   IMcpServerResponse,
   type ICallableFunctionPublic,
   type McpConnectionListEntry,
+  MAX_CALLABLE_FUNCTIONS_PER_TURN,
 } from '@bike4mind/common';
 import SquareSlideToggle from '@client/app/components/SquareSlideToggle';
 import { useLLM } from '@client/app/contexts/LLMContext';
@@ -271,10 +272,17 @@ const AGENT_ONLY_MCP_NOTE = 'Agent mode only - mention an @agent to use it in ch
 // The function host's offer is switched like a user's own connector, by its reserved slug `fn`.
 const FUNCTIONS_CONNECTION = { id: 'fn', slug: 'fn', ownerType: 'user' } as const;
 
-const functionsRowDescription = (functions: ICallableFunctionPublic[]) =>
-  functions.length === 0
-    ? 'No live tools yet. Promote a saved tool to offer it in chat.'
-    : functions.map(fn => `${fn.slug} (${fn.trustLabel ?? 'unverified'})`).join(', ');
+// Chat offers the oldest MAX_CALLABLE_FUNCTIONS_PER_TURN live tools, the same order the list arrives in.
+const functionsRowDescription = (functions: ICallableFunctionPublic[]) => {
+  if (functions.length === 0) return 'No live tools yet. Promote a saved tool to offer it in chat.';
+  const offered = functions
+    .slice(0, MAX_CALLABLE_FUNCTIONS_PER_TURN)
+    .map(fn => `${fn.slug} (${fn.trustLabel ?? 'unverified'})`)
+    .join(', ');
+  const rest = functions.length - MAX_CALLABLE_FUNCTIONS_PER_TURN;
+  return rest > 0 ? `${offered}, and ${rest} more not offered` : offered;
+};
+const FUNCTIONS_ROW_DETAIL = `Up to ${MAX_CALLABLE_FUNCTIONS_PER_TURN} of your live tools, run on the server with a stamp`;
 
 // Tools rendered under the "Fun & Novelty" section. They count toward that section's
 // own pinned tally, not the Individual tools one. Must stay in sync with the tools
@@ -1052,7 +1060,7 @@ const ToolsSection = ({
                     name="Functions"
                     description={functionsRowDescription(liveFunctions)}
                     descriptionTitle={functionsRowDescription(liveFunctions)}
-                    detail="Your live tools, run on the server with a stamp"
+                    detail={FUNCTIONS_ROW_DETAIL}
                   />
                 </Box>
                 <SquareSlideToggle

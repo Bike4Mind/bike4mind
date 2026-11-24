@@ -122,6 +122,22 @@ describe('ToolsSection - Functions row', () => {
     expect(toggle(container)!.getAttribute('aria-checked')).toBe('true');
   });
 
+  it('names the first 20 live tools and counts the rest, with the cap in its detail', () => {
+    mocks.functions.on = true;
+    mocks.functions.list = Array.from({ length: 23 }, (_, i) => ({
+      slug: `tool_${i}`,
+      status: 'live',
+      trustLabel: 'verified',
+    }));
+    const { container } = render(<ToolsSection />, { wrapper: Wrapper });
+
+    const first20 = Array.from({ length: 20 }, (_, i) => `tool_${i} (verified)`).join(', ');
+    expect(within(row(container)!).getByText(`${first20}, and 3 more not offered`)).toBeTruthy();
+    expect(
+      within(row(container)!).getByText('Up to 20 of your live tools, run on the server with a stamp')
+    ).toBeTruthy();
+  });
+
   it('says how to get a tool there when none is live', () => {
     mocks.functions.on = true;
     const { container } = render(<ToolsSection />, { wrapper: Wrapper });

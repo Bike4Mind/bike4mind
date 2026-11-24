@@ -38,6 +38,7 @@ import {
   type FunctionTestCase,
   type ICallableFunctionPublic,
   type McpToolApprovalMode,
+  MAX_CALLABLE_FUNCTIONS_PER_TURN,
 } from '@bike4mind/common';
 import { toast } from 'sonner';
 import {
@@ -795,6 +796,8 @@ const failureToast = (title: string) => (error: unknown) => {
 
 const DELETE_TITLE = 'Delete this tool?';
 
+const FUNCTION_OFFER_CAP_LINE = `Chat and agent runs offer up to ${MAX_CALLABLE_FUNCTIONS_PER_TURN} of your live tools, oldest first.`;
+
 // A function cannot write anywhere, so `default` already runs it without a card; `always_allow` would read the same.
 type FunctionApproval = Extract<McpToolApprovalMode, 'default' | 'always_ask'>;
 const FUNCTION_APPROVALS: readonly FunctionApproval[] = ['default', 'always_ask'];
@@ -1022,6 +1025,11 @@ function FunctionSaveSection({ save, contract }: { save: PythonFunctionSave; con
           )}
           <ToolControls key={saved.id} tool={saved} testIdPrefix="python-function" onDelete={setDeleting} />
         </Stack>
+        {saved.status !== 'source_deleted' && (
+          <Typography level="body-xs" textColor="text.tertiary" data-testid="python-function-offer-cap">
+            {FUNCTION_OFFER_CAP_LINE}
+          </Typography>
+        )}
         {saved.status !== 'source_deleted' && (
           <Box sx={{ pt: 1 }}>
             <PromoteFunctionSection

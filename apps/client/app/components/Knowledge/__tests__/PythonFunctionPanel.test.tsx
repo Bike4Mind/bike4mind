@@ -737,11 +737,15 @@ describe('PythonFunctionPanel save controls', () => {
     fns.saved = { data: savedView({ state: 'live', status: 'live' }), isLoading: false };
     await renderReady(TARGET);
     expect(statusText()).toBe('Live tool, pinned to version 3.');
+    expect(screen.getByTestId('python-function-offer-cap').textContent).toBe(
+      'Chat and agent runs offer up to 20 of your live tools, oldest first.'
+    );
     cleanup();
 
     fns.saved = { data: savedView({ status: 'source_deleted' }), isLoading: false };
     await renderReady(TARGET);
     expect(screen.queryByTestId('promote-section-stub')).toBeNull();
+    expect(screen.queryByTestId('python-function-offer-cap')).toBeNull();
   });
 
   it('a newer version is available: says so and Update repins to the version shown with the contract read', async () => {
