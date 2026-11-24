@@ -33,6 +33,7 @@ import type {
 import { Stream } from 'openai/streaming';
 import { Logger } from '@bike4mind/observability';
 import { executeToolsBatch, shouldEndTurnAfterTools, toolFailureLogLevel } from './executeToolsBatch';
+import { attachPreToolText } from './replayPreToolText';
 import { logToolRound, summarizeToolOutcomes } from './toolRoundTiming';
 import { recordToolResult, type RecordableToolUse } from './recordToolResult';
 import {
@@ -1950,6 +1951,7 @@ export class OpenAIBackend implements ICompletionBackend {
         // chaining: the model needs tools available to retry or continue the chain.
         const anyMcpTool = resolvedTools.some(t => t.isMcpTool);
 
+        const roundMessagesStart = messages.length;
         for (const outcome of outcomes) {
           if (!outcome.ok) {
             if (outcome.error instanceof PermissionDeniedError) throw outcome.error;
@@ -2020,6 +2022,8 @@ export class OpenAIBackend implements ICompletionBackend {
             sanitizedResult
           );
         }
+
+        attachPreToolText(messages, roundMessagesStart, streamedRoundText);
 
         const requestedToolNames = func.flatMap(tool => (tool.name ? [tool.name] : []));
         logToolRound(this.logger, {
@@ -2554,6 +2558,7 @@ export class OpenAIBackend implements ICompletionBackend {
     const inheritedArtifactGuard = options._internal?.artifactGuard;
     let artifactGuard = inheritedArtifactGuard;
 
+    const roundMessagesStart = messages.length;
     for (let i = 0; i < batchOutcomes.length; i++) {
       const outcome = batchOutcomes[i];
       const r = resolved[i];
@@ -2586,6 +2591,8 @@ export class OpenAIBackend implements ICompletionBackend {
         this.pushToolMessages(messages, { id: r.callId, name: r.name, parameters: r.args }, errorMsg);
       }
     }
+
+    attachPreToolText(messages, roundMessagesStart, streamedRoundText);
 
     const anyMcpTool = resolved.some(r => r.isMcpTool);
 
