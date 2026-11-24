@@ -6,8 +6,8 @@ import android.util.Log
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.net.toUri
 import com.bike4mind.app.capture.MediaAudioRecorder
-import com.bike4mind.app.push.FcmClient
 import com.bike4mind.app.media.MediaImageLoader
+import com.bike4mind.app.push.FcmClient
 import com.bike4mind.app.push.SharedPreferencesPushTokenMemory
 import com.bike4mind.app.storage.KeystoreTokenStore
 import com.bike4mind.client.apis.AIApi
@@ -101,7 +101,7 @@ class AppGraph(context: Context, val environment: ServerEnvironment) {
     /** Page 1 of the Studio gallery per filter, kept on disk so the gallery opens stale-first. */
     private val mediaFirstPages = MediaFirstPageStore(
         media,
-        FileMediaListCache(java.io.File(context.cacheDir, "media"), environment) { message, failure -> Log.w("B4MMedia", message, failure) },
+        FileMediaListCache(File(context.cacheDir, "media"), environment) { message, failure -> Log.w("B4MMedia", message, failure) },
     )
     private val account = AccountWire(environment, http) { session.accessToken()?.let(AccountProfile::userId) }
     private val stepUp = StepUpWire(environment, http)
@@ -117,7 +117,7 @@ class AppGraph(context: Context, val environment: ServerEnvironment) {
     private val storageHttp = HttpClient(engine)
 
     /** Gallery tiles and full images, fetched from presigned storage URLs through [storageHttp]. */
-    val mediaImages = MediaImageLoader(storageHttp, java.io.File(context.cacheDir, "media-thumbnails"), environment)
+    val mediaImages = MediaImageLoader(storageHttp, File(context.cacheDir, "media-thumbnails"), environment)
     private val captureWire = CaptureWire(environment, http, storageHttp)
     private val transcription = TranscriptionWire(environment, http, storageHttp)
 
