@@ -369,7 +369,13 @@ export function ChatShell({
   const noLocal = localMode ? noLocalModels(catalog) : null;
   const modelServers = useModelServers();
   const savedServers = useMemo(() => modelServers?.filter(server => !server.local), [modelServers]);
-  const { statuses, preparing, unreadReplies, loaded: statusesLoaded } = useSessionStatusFeed();
+  const {
+    statuses,
+    preparing,
+    unreadReplies,
+    background: backgroundJobs,
+    loaded: statusesLoaded,
+  } = useSessionStatusFeed();
   const prSummaries = usePrSummaries();
   const [collapsed, setCollapsed] = useState(false);
   const [screen, setScreen] = useState<ChatScreen>('conversation');
@@ -802,7 +808,10 @@ export function ChatShell({
     !!pullRequest?.binding || !!pullRequest?.dismissed || (!!activeId && prSummaries.has(activeId));
   const spawned = useMemo(() => spawnedSessions(sessions, statuses, activeId), [sessions, statuses, activeId]);
   // States only: the activity stream is subscribed inside OrchestratorSurface, while orchestrating.
-  const spawnedStates = useMemo(() => agentStates(sessions, statuses, activeId), [sessions, statuses, activeId]);
+  const spawnedStates = useMemo(
+    () => agentStates(sessions, statuses, activeId, backgroundJobs),
+    [sessions, statuses, activeId, backgroundJobs]
+  );
   const orchestrationSession =
     sessionDraft.session && sessionDraft.session.id === conversation.session?.id ? conversation.session : activeSummary;
   // The view is remembered per sidebar group, so a Claude Code worktree shares its repository's choice. Only
@@ -1922,6 +1931,7 @@ export function ChatShell({
                     sessions={sessions}
                     statuses={statuses}
                     preparing={preparing}
+                    background={backgroundJobs}
                     prSummaries={prSummaries}
                     layout={orchestratorLayout}
                     onLayoutChange={changeOrchestratorLayout}
