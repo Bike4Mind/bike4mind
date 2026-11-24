@@ -60,3 +60,31 @@ export interface ICallableFunctionCall {
 }
 
 export interface ICallableFunctionCallDocument extends ICallableFunctionCall, IMongoDocument {}
+
+/** What a call ran on. Room for output hashes beside `data` later; nothing here assumes every output is inline. */
+export interface CallableFunctionStamp {
+  function_id: string;
+  slug: string;
+  pin_version: number;
+  /** Null until the pin is promoted. */
+  pin_seq: number | null;
+  code_hash: string;
+  input_hash: string;
+  runtime: { kind: string; version: string; lock_hash: string | null };
+  packages: { name: string; version: string }[];
+  data: never[];
+  uses: never[];
+  /** Null unless the function is live. */
+  trust_label: 'verified' | 'unverified' | null;
+  surface: CallableFunctionCallSurface;
+  duration_ms: number;
+  called_at: string;
+}
+
+/** The owner's own calls of one function over a window: counts by outcome and the latest few, never inputs. */
+export interface CallableFunctionCallSummary {
+  since: Date;
+  total: number;
+  outcomes: Partial<Record<CallableFunctionCallOutcome, number>>;
+  recent: { id: string; startedAt: Date; outcome: CallableFunctionCallOutcome; surface: CallableFunctionCallSurface }[];
+}

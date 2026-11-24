@@ -1,3 +1,4 @@
+import { getAbortAwareRetrySignal, reportUsageOnAbort, retryAbortAware } from './abortAwareRetry';
 import {
   Content,
   GenerateContentConfig,
@@ -43,7 +44,7 @@ import { getCachingAdapter, logCacheStats } from './caching/adapters';
 import { injectJsonSchemaInstruction, isBestEffortJsonSchema } from './responseFormatHelpers';
 import { geminiThinkingOutputCap } from './thinkingParams';
 import { withAbortListener } from './withAbortListener';
-import { retryTransportErrors } from './transportRetry';
+import { isHeadersTimeoutError, isTransportError, retryTransportErrors } from './transportRetry';
 import { DispatchModel } from './dispatchModel';
 import { normalizeGeminiFinishReason } from './stopReason';
 import { appendIdentityReminder, buildIdentityReminder, shouldOmitIdentityReminder } from './identityReminder';
@@ -626,6 +627,7 @@ export class GeminiBackend implements ICompletionBackend {
     callback: (text: (string | null | undefined)[], completionInfo: CompletionInfo) => Promise<void>,
     toolsUsed: Array<RecordableToolUse> = []
   ): Promise<void> {
+    const retrySignal = getAbortAwareRetrySignal(options);
     this.currentModel = modelName;
     // A catalog-only id (one model discovery promoted) is absent from the literal list,
     // so fall back to the record getLlmByModel handed over.
@@ -1137,19 +1139,52 @@ export class GeminiBackend implements ICompletionBackend {
         // withAbortListener guarantees the listener is removed even if the
         // request throws - removing it only on the success path leaked one
         // listener per failed call on a reused signal.
-        const result = await withAbortListener(options.abortSignal, abortListener, () =>
-          retryTransportErrors(() => this._api.models.generateContent(request), {
-            logger: this.logger,
-            label: 'GeminiBackend',
-            abortSignal: options.abortSignal,
-          })
-        );
-        const r = result;
+        // The SDK drops error response headers, so only retry transport failures without an HTTP response.
+        const r = retrySignal
+          ? await retryAbortAware(
+              () => {
+                // The SDK retains a listener, so give each attempt a short-lived signal.
+                const attempt = new AbortController();
+                return withAbortListener(
+                  retrySignal,
+                  () => attempt.abort(retrySignal.reason),
+                  () => {
+                    retrySignal.throwIfAborted();
+                    return this._api.models.generateContent({
+                      ...request,
+                      config: { ...request.config, abortSignal: attempt.signal },
+                    });
+                  }
+                );
+              },
+              retrySignal,
+              { isRetryable: error => isTransportError(error) && !isHeadersTimeoutError(error) }
+            )
+          : await withAbortListener(options.abortSignal, abortListener, () =>
+              retryTransportErrors(() => this._api.models.generateContent(request), {
+                logger: this.logger,
+                label: 'GeminiBackend',
+                abortSignal: options.abortSignal,
+              })
+            );
 
-        // Check if aborted during request
-        if (options.abortSignal?.aborted) {
-          throw new Error('Request aborted');
+        if (retrySignal?.aborted) {
+          const usage = r.usageMetadata;
+          const hasUsage = [
+            usage?.promptTokenCount,
+            usage?.candidatesTokenCount,
+            usage?.thoughtsTokenCount,
+            usage?.cachedContentTokenCount,
+          ].some(count => typeof count === 'number');
+          if (hasUsage) setTurnUsage(usage);
+          const stopReason = normalizeGeminiFinishReason(r.candidates?.[0]?.finishReason);
+          await reportUsageOnAbort(
+            retrySignal,
+            callback,
+            hasUsage ? { ...usageSoFar(), ...(stopReason ? { stopReason } : {}) } : undefined
+          );
         }
+        if (options.abortSignal?.aborted) throw new Error('Request aborted');
 
         // Extract cache stats if caching is enabled (Gemini caching is automatic)
         const cacheStrategy = options.cacheStrategy;
@@ -1171,13 +1206,13 @@ export class GeminiBackend implements ICompletionBackend {
               textParts.push(part.text);
               if (!part.thought) streamedRoundText += part.text;
             }
-            if (part.functionCall) {
+            if (!retrySignal && part.functionCall) {
               this.registerToolCall(part.functionCall, part, toolCalls, toolsUsed);
             }
-            if (part.function_call) {
+            if (!retrySignal && part.function_call) {
               this.registerToolCall(part.function_call, part, toolCalls, toolsUsed);
             }
-            if (part.name && part.args && !part.text) {
+            if (!retrySignal && part.name && part.args && !part.text) {
               this.registerToolCall({ name: part.name, args: part.args }, part, toolCalls, toolsUsed);
             }
           });
@@ -1195,7 +1230,9 @@ export class GeminiBackend implements ICompletionBackend {
           ...(bestEffortFormat ? { responseFormatMode: 'best-effort' as const } : {}),
           ...(finishReason ? { stopReason: finishReason } : {}),
         });
+        retrySignal?.throwIfAborted();
       } catch (error) {
+        retrySignal?.throwIfAborted();
         // Check if error is due to abort signal
         if (options.abortSignal?.aborted || (error as Error).message.includes('aborted')) {
           throw new Error('Request aborted');

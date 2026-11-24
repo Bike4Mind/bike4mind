@@ -16,8 +16,10 @@ export interface StateColor {
 export const STATE_PALETTE: Readonly<Record<AgentState, StateColor>> = {
   'needs-you': { joy: 'warning', lamp: NEEDS_YOU_AMBER },
   working: { joy: 'primary', lamp: '#ff9d3c' },
+  waiting: { joy: 'primary', lamp: '#6fa8dc' },
   done: { joy: 'success', lamp: '#7ed07a' },
   failed: { joy: 'danger', lamp: '#e5534b' },
+  paused: { joy: 'neutral', lamp: '#c9b27a' },
   stopped: { joy: 'neutral', lamp: '#a89a88' },
   idle: { joy: 'neutral', lamp: '#a89a88' },
 };

@@ -66,6 +66,7 @@ import {
   ArtifactIcon,
   CheckIcon,
   ChevronIcon,
+  MissionControlIcon,
   MoreIcon,
   PanelLeftIcon,
   PlusIcon,
@@ -80,6 +81,7 @@ import { thinScrollbarSx } from './layout';
 import { SessionBadge } from './SessionBadge';
 import { WORKING_COLOR_VAR } from './sessionStatus';
 import { PREPARING_WORKTREE } from './chipState';
+import { SESSION_DRAG_TYPE } from './sessionDrag';
 import {
   clampSidebarWidth,
   readSidebarWidth,
@@ -1090,9 +1092,6 @@ function CappedSessionRows({
   );
 }
 
-/** A type of our own, so a drag of text, a link or files (see useFileDrop) is never taken for a row. */
-const SESSION_DRAG_TYPE = 'application/x-b4m-session';
-
 /** Where a dragged row would land: a section by id, or the default groups, out of any section. */
 type DropTarget = { kind: 'section'; sectionId: string } | { kind: 'default' };
 
@@ -1118,6 +1117,7 @@ export function SessionList({
   onSelect,
   onCreate,
   onOpenArtifacts,
+  onOpenMissionControl,
   onCreateInProject,
   onCreateInSection,
   onDelete,
@@ -1148,6 +1148,8 @@ export function SessionList({
   onSelect: (sessionId: string) => void;
   onCreate: () => void;
   onOpenArtifacts: () => void;
+  /** Every orchestration at a glance (missionControl/MissionControl.tsx). */
+  onOpenMissionControl?: () => void;
   onCreateInProject: (directory: string) => void;
   /** New session that starts inside the user section with this id. */
   onCreateInSection: (sectionId: string) => void;
@@ -1640,6 +1642,14 @@ export function SessionList({
         {/* Not scoped to the open session: the list is the server's, so it spans machines and
             outlives the local session files. */}
         <NavItem icon={<ArtifactIcon />} label="Artifacts" onClick={onOpenArtifacts} testId="chat-artifacts-btn" />
+        {onOpenMissionControl && (
+          <NavItem
+            icon={<MissionControlIcon />}
+            label="Mission Control"
+            onClick={onOpenMissionControl}
+            testId="sidebar-mission-control-btn"
+          />
+        )}
         <Box sx={{ px: 0.5, pt: 0.5 }}>
           <Input
             size="sm"

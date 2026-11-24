@@ -206,6 +206,8 @@ import type { ComposerDraftStore } from './ComposerDraftStore';
 import type { SidebarSectionStore } from './SidebarSectionStore';
 import { childOutcomeDisplay, classifyChildOutcome } from './childOutcome';
 import { childReplyBlock, childReportDetails, cutReply, lastAssistantMessage } from './childReport';
+import { canExtendTurn, TurnClock } from './turnClock';
+import { DEFAULT_TURN_EXTENSIONS, parseTurnExtensions } from '@shared/turnExtensionSetting';
 import { sideChatOpening } from './sideChat';
 import { summarizeSession } from '@shared/agentOutcome';
 import { createPhaseTracker, RESPONDING, THINKING, WAITING } from './modelPhase';
@@ -746,6 +748,11 @@ export interface ChatServiceDeps {
    * to do at full size.
    */
   turnLimits?: Partial<TurnLimits>;
+  /**
+   * The Settings cap on automatic extensions of a productive turn that reached its budget; see
+   * @shared/turnExtensionSetting. Absent in tests, where a budget stop ends the turn as before.
+   */
+  turnExtensions?: () => Promise<number>;
   /** Diagnosis only: logs each round's phases. See createRoundProbe. */
   turnTiming?: boolean;
   /** Null whenever no session is usable, which is how a signed-out send is refused. */
@@ -4469,6 +4476,18 @@ export class ChatService {
     }
   }
 
+  /** Read at each budget stop, so a Settings change applies to a turn already running. */
+  private async turnExtensionCap(): Promise<number> {
+    const read = this.deps.turnExtensions;
+    if (!read) return 0;
+    try {
+      return parseTurnExtensions(await read());
+    } catch (error) {
+      this.deps.logger.warn(`CHAT: could not read the turn extension setting: ${String(error)}`);
+      return DEFAULT_TURN_EXTENSIONS;
+    }
+  }
+
   /** Only reached with `turnTiming` on; see createRoundProbe. */
   private logRoundPhases(sessionId: string, model: string, round: number, phases: RoundPhases): void {
     const line = `CHAT_TIMING ${JSON.stringify({ model, round, ...phases })}`;
@@ -4500,7 +4519,12 @@ export class ChatService {
     let replyId = firstReplyId;
     const limits = { ...TURN_LIMITS, ...this.deps.turnLimits };
     const turnStartedAt = Date.now();
-    const deadline = turnStartedAt + limits.wallClockMs;
+    // Waits on the user and on background processes stop this clock; see TurnClock.
+    const clock = new TurnClock();
+    // Both moved on by each automatic extension; see the budget check after the tools run.
+    let deadline = turnStartedAt + limits.wallClockMs;
+    let roundCeiling = limits.rounds;
+    let extensions = 0;
     // Where the interrupted run had got to, so a consumer can report the resumed run's totals as
     // only what they add; see ChatStreamEvent's `start`.
     this.emit({
@@ -5002,7 +5026,7 @@ export class ChatService {
       // Wire positions of the screenshot messages this turn added, oldest first; see pruneScreenshots.
       const screenshotTurns: number[] = [];
 
-      for (let roundIndex = 0; roundIndex < limits.rounds; roundIndex++) {
+      for (let roundIndex = 0; roundIndex < roundCeiling; roundIndex++) {
         if (controller.signal.aborted) break;
         if (liveState && roundIndex > 0) {
           const next = toolState();
@@ -5304,6 +5328,7 @@ export class ChatService {
                 ask,
                 attended,
                 isLoopTurn,
+                clock,
                 title: session.title,
                 directories: directoryTurn,
                 budgetStop,
@@ -5417,13 +5442,26 @@ export class ChatService {
         if (budgetStop.error) throw budgetStop.error;
         // Checked after a round rather than before one, so a turn is never cut between asking
         // for a tool and reporting what it returned.
-        if (Date.now() >= deadline) {
-          stopReason = 'turn_time_limit';
-          break;
-        }
-        if (roundIndex === limits.rounds - 1) {
-          stopReason = 'tool_turn_limit';
-          break;
+        const outOfTime = Date.now() - clock.idleMs() >= deadline;
+        const outOfRounds = roundIndex === roundCeiling - 1;
+        if (outOfTime || outOfRounds) {
+          // A turn still making progress is carried on rather than handed back for a human to type
+          // "continue"; a stalled one is not (the stall check above already ended a looping one).
+          const allowed = controller.signal.aborted ? 0 : await this.turnExtensionCap();
+          if (!canExtendTurn({ extensions, allowed, stalled })) {
+            stopReason = outOfTime ? 'turn_time_limit' : 'tool_turn_limit';
+            break;
+          }
+          extensions += 1;
+          deadline = Date.now() - clock.idleMs() + limits.wallClockMs;
+          roundCeiling = roundIndex + 1 + limits.rounds;
+          this.deps.logger.debug(`CHAT: turn budget extended automatically (${extensions} of ${allowed})`);
+          // Carried the same way as the plan nudge, so later turns replay it where this one sent it.
+          const extendNote = `[The turn budget was extended automatically (${extensions} of ${allowed}) because you are making progress. Carry on; finish the task or say where you got to.]`;
+          if (lastResult && typeof resultBase === 'string' && typeof lastResult.content === 'string') {
+            lastResult.content = `${lastResult.content}\n\n${extendNote}`;
+            round.sent.resultNote = lastResult.content.slice(resultBase.length);
+          }
         }
 
         // Only where another request is certain to follow, so nothing taken here waits on a turn
@@ -6024,6 +6062,8 @@ export class ChatService {
       attended: boolean;
       /** Captured when the reply starts; stopping its schedule does not change its origin. */
       isLoopTurn: boolean;
+      /** The turn's budget clock, stopped while a call waits on the user or a background process. */
+      clock?: TurnClock;
       /** The conversation's title, so a cross-session approval names it rather than its id. */
       title: string;
       /** Absent outside a reply's own loop, where request_directory then has no turn to track. */
@@ -6200,6 +6240,7 @@ export class ChatService {
           callId: call.id,
           background: this.deps.background,
           foreground: this.deps.foreground,
+          ...(scope.clock ? { pauseTurnClock: scope.clock.pause } : {}),
           ...(media ? { media } : {}),
           ...(host ? { host } : {}),
           ...(explore ? { explore } : {}),
@@ -6239,6 +6280,8 @@ export class ChatService {
 
         // Asked BEFORE 'running' is announced, so the UI never shows a command as under way
         // while it is still waiting on the user, and nothing has run if they say no.
+        // A card waits on the user, which is not the agent working; see TurnClock.
+        const resumeClock = scope.clock?.pause();
         const gated = await this.awaitApproval(
           tool,
           call,
@@ -6249,7 +6292,7 @@ export class ChatService {
           looping,
           scope.directories,
           scope.permissions
-        );
+        ).finally(() => resumeClock?.());
         // Logged from the input the call settled with: an MCP config call's is masked by then.
         if (gated.approval) {
           // The mode the gate decided under, or - on a path no mode can answer - the one in force now.
@@ -10283,7 +10326,7 @@ function describeChildOutcome(child: ChatSession): string {
     case 'failed':
       return `${header}\nIt failed: ${last?.error ?? 'no reason was given'}`;
     case 'turn-budget':
-      return `${header} It ran out of its turn budget rather than finishing, so its work may be incomplete.\n${read}`;
+      return `The session you started, "${child.title}" (${child.id}), paused at its turn budget before finishing, so its work is incomplete. Its last step is in its transcript; send it a message if it should carry on.\n${read}`;
     case 'context-limit':
       return `${header} It filled the model context and stopped, so its work may be incomplete.\n${read}`;
     case 'max-tokens':

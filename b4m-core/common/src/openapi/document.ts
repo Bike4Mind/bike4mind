@@ -137,6 +137,8 @@ export function infoDescription(scopes: readonly string[] = PUBLIC_DOC_API_KEY_S
       '`executionId` of the agent run your reply started. Poll `GET /api/v1/agent-executions/{id}` with it.',
     '- **Research runs** (`POST /api/v1/data-lakes/{id}/research/runs`) return `202`. Poll ' +
       '`GET /api/v1/data-lakes/{id}/research/runs/{run_id}` until `status` is `completed` or `failed`.',
+    '- **Delegations** (`POST /api/v1/delegations`) return `202`. Poll ' +
+      '`GET /api/v1/delegations/{id}` until `status` is `handled`, `needs_decision` or `failed`.',
     '- **File uploads** (`POST /api/v1/files`) return a presigned `upload_url`; after the `PUT`, poll ' +
       '`GET /api/v1/files/{id}` until `moderation_status` is `clean` before passing the id elsewhere.',
     '- **Audio** endpoints are synchronous and return the result directly. A text-to-speech ' +

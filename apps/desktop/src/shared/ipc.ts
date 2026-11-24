@@ -232,6 +232,9 @@ export const IPC_CHANNELS = {
   chatHistoryChanged: 'chat:history-changed',
   chatSetSessionReasoningEffort: 'chat:set-session-reasoning-effort',
   chatSetSessionPromptCacheTtl: 'chat:set-session-prompt-cache-ttl',
+  /** The Settings cap on automatic turn extensions; main validates it, see @shared/turnExtensionSetting. */
+  chatGetTurnExtensions: 'chat:get-turn-extensions',
+  chatSetTurnExtensions: 'chat:set-turn-extensions',
   chatSetSessionGeneration: 'chat:set-session-generation',
   chatGetModelSettings: 'chat:get-model-settings',
   chatGetUnsupportedModelSettings: 'chat:get-unsupported-model-settings',
@@ -1013,6 +1016,10 @@ export interface DesktopApi {
     setSessionReasoningEffort(sessionId: string, effort: ReasoningEffortSetting): Promise<ChatSessionSummary | null>;
     /** How long this conversation's prompt cache lives. Null when the session is gone. */
     setSessionPromptCacheTtl(sessionId: string, ttl: PromptCacheTtl): Promise<ChatSessionSummary | null>;
+    /** How many times a productive turn is carried on past its budget; 0 always stops. */
+    getTurnExtensions(): Promise<number>;
+    /** Answers with what was saved: anything out of range lands as the default. */
+    setTurnExtensions(extensions: number): Promise<number>;
     /** Replace this conversation's sampling and output overrides; `{}` clears them. Null when the session is gone. */
     setSessionGeneration(sessionId: string, generation: GenerationSettings): Promise<ChatSessionSummary | null>;
     /** A device-side model's defaults from the Models screen; `{}` when none are set, null for an id that is not one. */

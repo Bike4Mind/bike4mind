@@ -210,6 +210,18 @@ export function ArtifactIcon() {
   );
 }
 
+/** Mission Control: every orchestration at a glance, as a dashboard of uneven tiles (lucide layout-dashboard). */
+export function MissionControlIcon() {
+  return (
+    <Glyph>
+      <rect x="2.25" y="2.25" width="5" height="6" rx="1" />
+      <rect x="8.75" y="2.25" width="5" height="3.5" rx="1" />
+      <rect x="8.75" y="7.25" width="5" height="6.5" rx="1" />
+      <rect x="2.25" y="10" width="5" height="3.75" rx="1" />
+    </Glyph>
+  );
+}
+
 /** The three approval modes, in the order the popover offers them, and the selected marker. */
 export function HandIcon() {
   return (

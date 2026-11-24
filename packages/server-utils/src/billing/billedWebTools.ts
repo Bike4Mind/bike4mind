@@ -167,7 +167,12 @@ export async function billedWebSearch(
  */
 export async function billedWebFetch(
   call: BilledCall,
-  params: { url: string; offset?: number; maxTimeoutMs?: number }
+  params: {
+    url: string;
+    offset?: number;
+    maxTimeoutMs?: number;
+    admit?: Parameters<typeof reserveRequestCredits>[0]['admit'];
+  }
 ): Promise<WebFetchResult> {
   const prices = await readPrices();
   const hosted = isHostedFirecrawl(await apiKeyService.getFirecrawlConfig(dbAdapters));
@@ -178,6 +183,7 @@ export async function billedWebFetch(
     requiredCredits: hosted ? credits : 0,
     enforceCredits: prices.enforceCredits,
     featureLabel: 'web fetch',
+    admit: params.admit,
   });
   const requestId = `web-fetch-${randomUUID()}`;
 

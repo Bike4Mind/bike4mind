@@ -252,6 +252,8 @@ const api: DesktopApi = {
       ipcRenderer.invoke(IPC_CHANNELS.chatSetSessionReasoningEffort, sessionId, effort),
     setSessionPromptCacheTtl: (sessionId: string, ttl: PromptCacheTtl) =>
       ipcRenderer.invoke(IPC_CHANNELS.chatSetSessionPromptCacheTtl, sessionId, ttl),
+    getTurnExtensions: () => ipcRenderer.invoke(IPC_CHANNELS.chatGetTurnExtensions),
+    setTurnExtensions: (extensions: number) => ipcRenderer.invoke(IPC_CHANNELS.chatSetTurnExtensions, extensions),
     setSessionGeneration: (sessionId: string, generation: GenerationSettings) =>
       ipcRenderer.invoke(IPC_CHANNELS.chatSetSessionGeneration, sessionId, generation),
     getModelSettings: (modelId: string) => ipcRenderer.invoke(IPC_CHANNELS.chatGetModelSettings, modelId),

@@ -51,8 +51,15 @@ export const contentHolders = {
   AssistantBrief: {
     kind: 'holder',
     references: [{ path: 'userId', matchBy: 'userId', action: 'deleteDocument' }],
-    // The source ingested email's id, not an address.
-    unrelatedPaths: ['happened.source.emailId', 'handled.source.emailId', 'decisions.source.emailId'],
+    // Source record ids (an ingested email, a delegated item), not addresses.
+    unrelatedPaths: [
+      'happened.source.emailId',
+      'handled.source.emailId',
+      'decisions.source.emailId',
+      'happened.source.delegationId',
+      'handled.source.delegationId',
+      'decisions.source.delegationId',
+    ],
   },
   AssistantInstruction: {
     kind: 'holder',
@@ -84,6 +91,14 @@ export const contentHolders = {
     references: [{ path: 'userId', matchBy: 'userId', action: 'deleteDocument' }],
   },
   DailyReport: { kind: 'noUserData', note: 'Platform-wide generated activity summary for a date, not per person.' },
+  // What the person forwarded to the assistant. A shared link or text goes with the document.
+  DelegatedItem: {
+    kind: 'holder',
+    references: [{ path: 'userId', matchBy: 'userId', action: 'deleteDocument' }],
+    secretPaths: ['claimToken'],
+    // The person's own uploaded files, which their FabFile entries cover.
+    unrelatedPaths: ['fileIds'],
+  },
   DungeonInstance: {
     kind: 'holder',
     references: [{ path: 'ownerId', matchBy: 'userId', action: 'deleteDocument' }],

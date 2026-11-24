@@ -347,7 +347,9 @@ describe('orchestrate mode in the chat shell', () => {
     await enterOrchestrate();
     const stage = el('orchestrator-stage');
     const scene = el('orchestrator-tavern');
-    await act(async () => el('orchestrator-pr-indicator').click());
+    await act(async () =>
+      el('orchestrator-pr-indicator').dispatchEvent(new MouseEvent('click', { bubbles: true, shiftKey: true }))
+    );
     const dialog = el('orchestrator-pr-dialog');
     watch.mockClear();
     await act(async () => el('pr-bar-open-btn').click());

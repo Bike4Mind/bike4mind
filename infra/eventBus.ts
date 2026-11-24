@@ -331,8 +331,39 @@ const briefComposeSubscription = eventBus.subscribe(
   }
 );
 
+// Runs the operations model over a delegated item (POST /api/v1/delegations); see apps/workers/src/events/delegationProcess.ts.
+// The handler throws only while shared files are still being extracted, so the async retries double as the wait.
+const delegationProcessSubscription = eventBus.subscribe(
+  'delegation-process',
+  {
+    handler: 'apps/workers/src/events/delegationProcess.handler',
+    runtime: 'nodejs24.x',
+    link: [...allSecrets, fabFileBucket, generatedImagesBucket, appFilesBucket, eventBus],
+    vpc: lambdaVpc,
+    timeout: '3 minutes',
+    environment: {
+      ...DEFAULT_LAMBDA_ENVIRONMENT,
+    },
+    permissions: [
+      {
+        actions: ['bedrock:*'],
+        resources: ['*'],
+      },
+      sessionEnrichmentDeadLetter.sendPermission,
+    ],
+    transform: sessionEnrichmentDeadLetter.functionTarget,
+  },
+  {
+    pattern: {
+      detailType: ['delegation.process'],
+    },
+    transform: sessionEnrichmentDeadLetter.ruleTarget,
+  }
+);
+
 sessionEnrichmentDeadLetter.allowRules([
   briefComposeSubscription,
+  delegationProcessSubscription,
   sessionAutoNamingSubscription,
   sessionSummarizationSubscription,
   sessionContextSummarizationSubscription,
@@ -595,6 +626,7 @@ export {
   sreFixDispatchSubscription,
   riskEvidenceCompletionSubscription,
   briefComposeSubscription,
+  delegationProcessSubscription,
   sessionAutoNamingSubscription,
   sessionSummarizationSubscription,
   sessionContextSummarizationSubscription,

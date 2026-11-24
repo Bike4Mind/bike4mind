@@ -89,10 +89,11 @@ public protocol CaptureAPI: FileUploading {
 /// - `POST  /api/v1/data-lakes/{id}/files/{file_id}` addDataLakeFile
 /// - `POST  /api/chat`                               sendChatMessage with `fileIds` (chat.contract.ts)
 /// - `GET   /api/v1/sessions/{id}/quests`            listSessionQuests (oldest first)
+/// - `POST  /api/v1/delegations`                     createDelegation (`DelegationSubmitting`)
 ///
 /// Keep in sync with those contracts. They move into `B4MClient` (and behind `B4MAPI`) when the generator's
 /// operation filter takes them.
-public struct CaptureClient: CaptureAPI {
+public struct CaptureClient: CaptureAPI, DelegationSubmitting {
   private let requester: AuthorizedRequester
 
   public init(baseURL: URL, tokens: any AccessTokenProviding, transport: any HTTPTransport = URLSessionTransport()) {
@@ -119,6 +120,13 @@ public struct CaptureClient: CaptureAPI {
 
   private struct NotesBody: Encodable {
     let notes: String
+  }
+
+  private struct DelegationBody: Encodable {
+    let intent: String
+    let url: String?
+    let text: String?
+    let fileIds: [String]?
   }
 
   private struct LakeListReply: Decodable {
@@ -233,6 +241,15 @@ public struct CaptureClient: CaptureAPI {
       cursor = next
     }
     return .inconclusive
+  }
+
+  public func delegate(_ request: DelegationRequest) async throws {
+    let body = try Self.encode(
+      DelegationBody(
+        intent: request.intent, url: request.url?.absoluteString, text: request.text,
+        fileIds: request.fileIDs.isEmpty ? nil : request.fileIDs))
+    let response = try await requester.send(method: "POST", path: "api/v1/delegations", jsonBody: body)
+    try Self.require(202, response)
   }
 
   // MARK: - Helpers
