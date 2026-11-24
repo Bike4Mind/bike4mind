@@ -6,6 +6,8 @@ import {
 } from '@bike4mind/infra';
 import { contributedInfraResources } from '../../premium-generated/infraResources.generated';
 import { ensureContributedSecretsLoaded, isContributedSecret } from '../../utils/contributedSecrets';
+import { statusTransportKind, unusedMailSecrets } from '../../utils/mailer/configStatus';
+import type { MailTransportKind } from '../../utils/mailer/transport';
 import { Logger } from '@bike4mind/observability';
 
 export interface SecretRotationEntry {
@@ -310,10 +312,17 @@ function ensureContributedRotationsLoaded(): void {
   registerContributedSecretRotations(contributedInfraResources.rotations);
 }
 
-/** Core rotation entries plus every registered contributed one. Core entries win a name clash. */
-export function getSecretRotationConfig(): { [key: string]: SecretRotationEntry } {
+/**
+ * Core rotation entries plus every registered contributed one. Core entries win a name clash.
+ * Mail settings the transport never reads are left out, so an SES stage drops the SMTP ones.
+ */
+export function getSecretRotationConfig(transport: MailTransportKind = statusTransportKind()): {
+  [key: string]: SecretRotationEntry;
+} {
   ensureContributedRotationsLoaded();
-  return { ...Object.fromEntries(contributedRotations), ...SECRET_ROTATION_CONFIG };
+  const config = { ...Object.fromEntries(contributedRotations), ...SECRET_ROTATION_CONFIG };
+  for (const name of unusedMailSecrets(transport)) delete config[name];
+  return config;
 }
 
 /**

@@ -38,7 +38,7 @@ vi.mock('@bike4mind/database', () => ({
 }));
 vi.mock('@server/managers/systemSecretsManager', () => ({
   clearSecretCache: h.clearSecretCache,
-  RESOLVABLE_SECRETS: { OPENAI_API_KEY: { category: 'llm', description: 'OpenAI key' } },
+  getResolvableSecrets: () => ({ OPENAI_API_KEY: { category: 'llm', description: 'OpenAI key' } }),
   TIER1_SECRETS: new Set(['MONGODB_URI']),
   resolveSecret: vi.fn(),
 }));

@@ -18,7 +18,7 @@ import { encryptSecret, isValidEncryptionKey } from '@bike4mind/server-utils/sec
 import { Config } from '@bike4mind/server-utils/utils/config';
 import {
   clearSecretCache,
-  RESOLVABLE_SECRETS,
+  getResolvableSecrets,
   resolveSecret,
   TIER1_SECRETS,
   type ResolvableSecretName,
@@ -45,7 +45,7 @@ const handler = adminApi({
 
       // Build response with resolution status for each configurable secret
       const secretsStatus = await Promise.all(
-        Object.entries(RESOLVABLE_SECRETS).map(async ([secretName, config]) => {
+        Object.entries(getResolvableSecrets()).map(async ([secretName, config]) => {
           const dbSecret = dbSecrets.find(s => s.secretName === secretName);
           const resolution = await resolveSecret(secretName, true);
 
@@ -102,7 +102,7 @@ const handler = adminApi({
       }
 
       // Check if this is a known secret
-      const secretConfig = RESOLVABLE_SECRETS[secretName as ResolvableSecretName];
+      const secretConfig = getResolvableSecrets()[secretName as ResolvableSecretName];
       if (!secretConfig) {
         throw new BadRequestError(`Unknown secret: ${secretName}. Only predefined secrets can be configured.`);
       }
