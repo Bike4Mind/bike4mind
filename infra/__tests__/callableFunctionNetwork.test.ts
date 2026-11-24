@@ -327,6 +327,7 @@ describe('isGetObjectOnlyPolicy', () => {
     ['the bucket itself', policy({ ...statement, Resource: BUCKET_ARN })],
     ['every object in the bucket', policy({ ...statement, Resource: `${BUCKET_ARN}/*` })],
     ['another key segment', policy({ ...statement, Resource: `${BUCKET_ARN}/outputs/*` })],
+    ['the data prefix without its slash', policy({ ...statement, Resource: `${BUCKET_ARN}/data*` })],
     ['two buckets', policy({ ...statement, Resource: [`${BUCKET_ARN}/data/*`, `${BUCKET_ARN}-other/data/*`] })],
     ['a NotAction', policy({ Effect: 'Allow', Principal: '*', NotAction: 's3:PutObject', Resource: '*' })],
     ['a Deny', policy({ ...statement, Effect: 'Deny' })],
@@ -445,16 +446,33 @@ describe('callableFunctionDataBucketPolicy', () => {
 
   const readsOn = (action: string) => (action.startsWith('s3:ListBucket') ? BUCKET_ARN : OBJECT);
 
-  it('refuses every read from outside the endpoint, by any principal but the dispatcher', () => {
-    for (const action of ['s3:GetObject', 's3:GetObjectVersion', 's3:GetObjectAttributes', 's3:ListBucket']) {
-      const resource = readsOn(action);
-      expect(denied(withEndpoint, { action, resource, principalArn: OTHER })).toBe(true);
-      expect(denied(withEndpoint, { action, resource, principalArn: OTHER, sourceVpce: 'vpce-0other' })).toBe(true);
-      expect(denied(withEndpoint, { action, resource })).toBe(true);
-      expect(denied(withoutEndpoint, { action, resource, principalArn: OTHER, sourceVpce: 'vpce-0data' })).toBe(true);
+  it('refuses every read by any principal but the dispatcher, wherever it comes from', () => {
+    for (const policy of [withEndpoint, withoutEndpoint]) {
+      for (const action of ['s3:GetObject', 's3:GetObjectVersion', 's3:GetObjectAttributes', 's3:ListBucket']) {
+        const resource = readsOn(action);
+        for (const sourceVpce of [undefined, 'vpce-0other', 'vpce-0data']) {
+          expect(denied(policy, { action, resource, principalArn: OTHER, sourceVpce })).toBe(true);
+          expect(denied(policy, { action, resource, sourceVpce })).toBe(true);
+        }
+      }
     }
-    const throughEndpoint = { action: 's3:GetObject', resource: OBJECT, principalArn: OTHER, sourceVpce: 'vpce-0data' };
-    expect(denied(withEndpoint, throughEndpoint)).toBe(false);
+  });
+
+  it("refuses the runtime's role a read through the endpoint and allows only the dispatcher's links there", () => {
+    const read = { action: 's3:GetObject', resource: `${BUCKET_ARN}/data/x` };
+    expect(denied(withEndpoint, { ...read, principalArn: 'runtime-role-arn', sourceVpce: 'vpce-0data' })).toBe(true);
+    const link = { ...read, principalArn: DISPATCHER, authType: 'REST-QUERY-STRING' };
+    expect(denied(withEndpoint, { ...link, sourceVpce: 'vpce-0data' })).toBe(false);
+    expect(denied(withEndpoint, link)).toBe(true);
+  });
+
+  it('refuses reads, writes, and deletes by other principals outside the data/ segment too', () => {
+    const resource = `${BUCKET_ARN}/outputs/t1/x`;
+    for (const action of ['s3:GetObject', 's3:PutObject', 's3:DeleteObject']) {
+      for (const sourceVpce of [undefined, 'vpce-0data']) {
+        expect(denied(withEndpoint, { action, resource, principalArn: OTHER, sourceVpce })).toBe(true);
+      }
+    }
   });
 
   it('refuses a read by a signed link from outside the endpoint for every principal, the dispatcher included', () => {

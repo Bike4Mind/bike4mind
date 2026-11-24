@@ -308,9 +308,8 @@ export const FUNCTION_DATA_READ_ACTIONS = ['s3:GetObject*', 's3:ListBucket*'];
 export const FUNCTION_DATA_WRITE_ACTIONS = ['s3:PutObject*', 's3:DeleteObject*', 's3:Replicate*'];
 
 /**
- * The function-data bucket's policy: HTTPS only; reads only through `endpointId` (every read, without one), and
- * reads by a signed link likewise for every principal; object writes and deletes by nobody. The dispatcher's role
- * is exempt from the read and write statements, so it keeps header-signed reads, writes, and deletes.
+ * The function-data bucket's policy: HTTPS only; reads, object writes, and deletes by the dispatcher's role only,
+ * from anywhere when signed in the header; its signed links only through `endpointId`, and none without one.
  */
 export function callableFunctionDataBucketPolicy({
   bucketArn,
@@ -336,12 +335,12 @@ export function callableFunctionDataBucketPolicy({
         Condition: { Bool: { 'aws:SecureTransport': 'false' } },
       },
       {
-        Sid: 'ReadsThroughDataEndpoint',
+        Sid: 'ReadsByDispatcher',
         Effect: 'Deny',
         Principal: '*',
         Action: FUNCTION_DATA_READ_ACTIONS,
         Resource: [bucketArn, `${bucketArn}/*`],
-        Condition: { ...notDispatcher, ...notThroughEndpoint },
+        Condition: notDispatcher,
       },
       {
         Sid: 'SignedLinksThroughDataEndpoint',
