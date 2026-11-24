@@ -1007,7 +1007,7 @@ describe('shellApproval with a command substitution that is only printed', () =>
     expect(runsCheckedInAuto(await approval(command))).toBe(false);
   });
 
-  it('still asks about a delete inside the substitution', async () => {
+  it('still gives the delete reason for a delete inside the substitution', async () => {
     expect((await approval('echo $(rm -rf sub)')).reasons).toContain(
       'Deletes files recursively or forcefully, which cannot be undone.'
     );
