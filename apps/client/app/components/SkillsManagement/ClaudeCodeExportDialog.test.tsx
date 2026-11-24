@@ -25,8 +25,15 @@ const publicConfig = vi.hoisted(() => ({
   refetch: vi.fn(),
 }));
 vi.mock('@client/app/hooks/data/settings', () => ({ usePublicConfig: () => publicConfig }));
+const useSkillBundles = vi.hoisted(() =>
+  vi.fn((_owner: unknown) => ({
+    data: { bundles: [], listings: [], canEdit: false },
+    isPending: false,
+    isError: false,
+  }))
+);
 vi.mock('@client/app/hooks/data/skillMarket', () => ({
-  useSkillBundles: () => ({ data: { bundles: [], listings: [], canEdit: false }, isPending: false, isError: false }),
+  useSkillBundles,
   useSaveSkillBundle: () => ({ mutate: vi.fn(), isPending: false }),
   useDeleteSkillBundle: () => ({ mutate: vi.fn(), isPending: false }),
 }));
@@ -185,6 +192,8 @@ describe('ClaudeCodeExportDialog', () => {
       `/plugin install foo-a1b2c3@b4m-space-${SPACE_ID}`
     );
     expect(screen.getByText(/Platform's approved Skill Market skills/)).toBeInTheDocument();
+    expect(useSkillBundles).toHaveBeenCalledWith({ spaceId: SPACE_ID });
+    expect(useSkillBundles).not.toHaveBeenCalledWith({ orgId: SPACE_ID });
   });
 
   it('builds the team marketplace settings and mints a skills:read key into them', async () => {
@@ -205,6 +214,7 @@ describe('ClaudeCodeExportDialog', () => {
     expect(screen.getByTestId('skill-claude-code-marketplace-install')).toHaveTextContent(
       '/plugin install foo-a1b2c3@b4m-org-65f0aabbccddeeff00112233'
     );
+    expect(useSkillBundles).toHaveBeenCalledWith({ orgId: ORG_ID });
 
     fireEvent.click(screen.getByTestId('skill-claude-code-create-key'));
     expect(createKey.mutate).toHaveBeenCalledWith(expect.objectContaining({ scopes: ['skills:read'] }));
