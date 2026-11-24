@@ -1,4 +1,4 @@
-/** Admin QA status (`/status`): ops summary, tiles, trend charts, flaky tests and run history. Reads: pages/api/admin/qa. */
+/** Admin QA status (`/admin/qa`): ops summary, tiles, trend charts, flaky tests and run history. Reads: pages/api/admin/qa. */
 import { FC } from 'react';
 import { Alert, Box, Stack, Typography } from '@mui/joy';
 import { useNavigate } from '@tanstack/react-router';
@@ -39,12 +39,12 @@ const QaStatusPage: FC = () => {
   const summary = useQaSummary(effective);
 
   const onChange = (patch: Partial<QaStatusSearch>) =>
-    navigate({ from: '/status', to: '/status', search: prev => ({ ...prev, ...patch }) });
-  const openRun = (id: string) => navigate({ to: '/status/runs/$id', params: { id } });
-  const openTest = (testKey: string) => navigate({ to: '/status/tests/$testKey', params: { testKey } });
+    navigate({ from: '/admin/qa', to: '/admin/qa', search: prev => ({ ...prev, ...patch }) });
+  const openRun = (id: string) => navigate({ to: '/admin/qa/runs/$id', params: { id } });
+  const openTest = (testKey: string) => navigate({ to: '/admin/qa/tests/$testKey', params: { testKey } });
 
   return (
-    <Box sx={{ p: 3 }}>
+    <Box>
       <Stack spacing={3}>
         <StatusHeader>
           <Typography level="h3">QA status</Typography>

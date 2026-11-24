@@ -1,4 +1,4 @@
-/** Admin QA test history (`/status/tests/$testKey`): last 50 results and the flake rate. */
+/** Admin QA test history (`/admin/qa/tests/$testKey`): last 50 results and the flake rate. */
 import { FC } from 'react';
 import { Alert, Box, CircularProgress, Link, Stack } from '@mui/joy';
 import { Link as RouterLink, useNavigate } from '@tanstack/react-router';
@@ -15,16 +15,18 @@ const QaTestPage: FC = () => {
   const navigate = useNavigate();
   const { data, isLoading, isError } = useQaTestHistory(testKey);
   return (
-    <Box sx={{ p: 3 }}>
+    <Box>
       <Stack spacing={2}>
         <StatusHeader>
-          <Link component={RouterLink} to="/status" level="body-sm">
+          <Link component={RouterLink} to="/admin/qa" level="body-sm">
             Back to status
           </Link>
         </StatusHeader>
         {isLoading && <CircularProgress />}
         {isError && <Alert color="danger">No results for this test.</Alert>}
-        {data && <TestHistory history={data} onOpenRun={id => navigate({ to: '/status/runs/$id', params: { id } })} />}
+        {data && (
+          <TestHistory history={data} onOpenRun={id => navigate({ to: '/admin/qa/runs/$id', params: { id } })} />
+        )}
       </Stack>
     </Box>
   );
