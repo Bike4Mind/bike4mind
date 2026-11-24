@@ -74,6 +74,8 @@ import ForumIcon from '@mui/icons-material/Forum';
 
 // Components
 import ContextHelpButton from '@client/app/components/help/ContextHelpButton';
+import { AdminPageHeader } from './shared';
+import { ADMIN_REGION_GAP } from './shared/adminStyles';
 
 // Template variable docs
 import { TEMPLATE_VARIABLE_DOCS } from '@bike4mind/server-utils/services/liveopsTriagePrompt';
@@ -220,6 +222,15 @@ const getDefaultConfig = (): Partial<LiveopsTriageConfig> => ({
 });
 
 const POLL_INTERVAL_MS = 3000;
+
+const PAGE_ROOT_SX = { display: 'flex', flexDirection: 'column', height: '100%', gap: ADMIN_REGION_GAP } as const;
+
+const LiveOpsTriagePageHeader = () => (
+  <AdminPageHeader
+    title="LiveOps triage"
+    description="Route Slack alerts into GitHub or Jira issues, one config per channel."
+  />
+);
 
 // Default prompt template (simplified version for display)
 const DEFAULT_PROMPT_TEMPLATE = `You are an expert DevOps engineer analyzing production errors. Review the alerts and triage them.
@@ -589,22 +600,29 @@ export const AdminLiveOpsTriageMultiConfigTab: React.FC = () => {
 
   if (configsLoading) {
     return (
-      <Box sx={{ display: 'flex', justifyContent: 'center' }}>
-        <CircularProgress />
+      <Box sx={PAGE_ROOT_SX}>
+        <LiveOpsTriagePageHeader />
+        <Box sx={{ display: 'flex', justifyContent: 'center' }}>
+          <CircularProgress />
+        </Box>
       </Box>
     );
   }
 
   if (configsError) {
     return (
-      <Alert color="danger" variant="outlined">
-        Failed to load configurations. Please try again.
-      </Alert>
+      <Box sx={PAGE_ROOT_SX}>
+        <LiveOpsTriagePageHeader />
+        <Alert color="danger" variant="outlined">
+          Failed to load configurations. Please try again.
+        </Alert>
+      </Box>
     );
   }
 
   return (
-    <Box sx={{ display: 'flex', flexDirection: 'column', height: '100%', gap: 2 }}>
+    <Box sx={PAGE_ROOT_SX}>
+      <LiveOpsTriagePageHeader />
       {/* Active Runs Panel */}
       <Card variant="outlined" sx={{ p: 2 }}>
         <Box
