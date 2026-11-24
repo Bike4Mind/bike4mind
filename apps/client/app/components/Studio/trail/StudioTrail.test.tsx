@@ -72,6 +72,23 @@ describe('StudioTrail', () => {
     expect(screen.queryByTestId('studio-trail-roles-take')).not.toBeInTheDocument();
   });
 
+  it('draws the ancestry as an ordered strip with the current take marked', () => {
+    render(<StudioTrail fileId="take" onRestore={vi.fn()} />, { wrapper: TestWrapper });
+
+    expect(screen.getByTestId('studio-trail-ancestors').tagName).toBe('OL');
+    expect(screen.getByTestId('studio-trail-children').tagName).toBe('UL');
+    expect(screen.getByTestId('studio-trail-step-take')).toHaveAttribute('data-current', 'true');
+    expect(screen.getByTestId('studio-trail-step-take')).toHaveTextContent('This take');
+    expect(screen.getByTestId('studio-trail-step-source')).toHaveAttribute('data-current', 'false');
+    expect(screen.getByTestId('studio-trail-children-label')).toHaveTextContent('Made from this');
+  });
+
+  it('makes a restorable step a button and leaves the others static', () => {
+    render(<StudioTrail fileId="take" onRestore={vi.fn()} />, { wrapper: TestWrapper });
+    expect(screen.getByTestId('studio-trail-step-source').tagName).toBe('BUTTON');
+    expect(screen.getByTestId('studio-trail-step-upload').tagName).toBe('DIV');
+  });
+
   it('shows an unreadable ancestor as a placeholder', () => {
     render(<StudioTrail fileId="take" />, { wrapper: TestWrapper });
     expect(screen.getByTestId('studio-trail-redacted-hidden')).toHaveTextContent('Not available');
