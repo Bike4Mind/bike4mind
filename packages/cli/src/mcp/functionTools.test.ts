@@ -475,18 +475,37 @@ describe('function tools', () => {
       );
     });
 
-    it('503 says no runtime is available', async () => {
+    it('503 with no runtime gives the server text and says to retry soon', async () => {
       expect(await refusal(apiError(503, { error: 'No function runtime is available.' }))).toBe(
-        `No function runtime is available on the Bike4Mind server at ${BASE_URL}. Try again later, or ask an admin to set one up.`
+        'No function runtime is available. Try again in a minute; if it keeps happening, ask an admin.'
       );
     });
 
-    it('504 says the call was stopped and what to try', async () => {
-      expect(
-        await refusal(apiError(504, { error: 'The call ran past its time limit.', errorCode: 'REQUEST_TIMEOUT' }))
-      ).toBe(
-        'The call ran past its time limit and was stopped. Try smaller inputs, or run the function in the Bike4Mind app.'
+    it('503 when the runtime did not answer gives the server text and says to retry soon', async () => {
+      expect(await refusal(apiError(503, { error: 'The function runtime did not answer. Try again later.' }))).toBe(
+        'The function runtime did not answer. Try again later. Try again in a minute; if it keeps happening, ask an admin.'
       );
+    });
+
+    it('504 request_timeout gives the server text, says the call was stopped, and what to try', async () => {
+      expect(
+        await refusal(apiError(504, { error: 'The call ran past its time limit.', errorCode: 'request_timeout' }))
+      ).toBe(
+        'The call ran past its time limit. It was stopped. Try smaller inputs, or run the function in the Bike4Mind app.'
+      );
+    });
+
+    it('an error result carries the stamp the server sent in _meta', async () => {
+      const body = { error: 'The call ran past its time limit.', errorCode: 'request_timeout', stamp };
+      const invokeFunction = vi.fn().mockRejectedValue(apiError(504, body));
+      const result = await collect(mockClient({ invokeFunction })).call('call_function', { function: ID, input: {} });
+      expect(result.isError).toBe(true);
+      expect(result._meta).toEqual({ stamp });
+      const unstamped = vi.fn().mockRejectedValue(apiError(503, { error: 'No function runtime is available.' }));
+      expect(
+        (await collect(mockClient({ invokeFunction: unstamped })).call('call_function', { function: ID, input: {} }))
+          ._meta
+      ).toBeUndefined();
     });
 
     it('a redirect says the server redirected, that these tools do not follow, and to check B4M_API_URL', async () => {

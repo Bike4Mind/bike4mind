@@ -115,9 +115,12 @@ export function functionErrorMessage(error: unknown, baseURL: string, ref?: stri
       return `${message ?? 'The function failed.'}${outcome} The inputs fit; check the function's code in Bike4Mind or call it with other inputs.`;
     }
     case 503:
-      return `No function runtime is available on the Bike4Mind server at ${baseURL}. Try again later, or ask an admin to set one up.`;
+      return `${message ?? `The function runtime on the Bike4Mind server at ${baseURL} did not answer.`} Try again in a minute; if it keeps happening, ask an admin.`;
     case 504:
-      return 'The call ran past its time limit and was stopped. Try smaller inputs, or run the function in the Bike4Mind app.';
+      if (body.errorCode === 'request_timeout') {
+        return `${message ?? 'The call ran past its time limit.'} It was stopped. Try smaller inputs, or run the function in the Bike4Mind app.`;
+      }
+      break;
   }
   return mapApiError(error, baseURL, SCOPE);
 }
@@ -229,7 +232,12 @@ export function registerFunctionTools(server: McpServer, client: B4mApiClient): 
       return { content: [{ type: 'text', text }], structuredContent: value };
     } catch (error) {
       const text = functionErrorMessage(error, client.baseURL, ref);
-      return { content: [{ type: 'text', text }], isError: true };
+      const { stamp } = errorBody(error);
+      return {
+        content: [{ type: 'text', text }],
+        isError: true,
+        ...(stamp && typeof stamp === 'object' ? { _meta: { stamp } } : {}),
+      };
     }
   };
 
