@@ -8,7 +8,7 @@ import { desktopTheme } from '../theme';
 import { ChatShell } from './ChatShell';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-vi.mock('./CustomizePanel', () => ({ CustomizeNavItem: () => null, CustomizeScreen: () => null }));
+vi.mock('./CustomizePanel', () => ({ CustomizeScreen: () => null, useCustomizeAttention: () => undefined }));
 window.matchMedia ??= ((media: string) => ({
   matches: false,
   media,

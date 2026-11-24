@@ -79,7 +79,6 @@ function render({
         <SessionList
           sessions={sessions}
           mode={mode}
-          onModeChange={() => {}}
           loading={false}
           activeId={activeId}
           statuses={statuses}
@@ -235,7 +234,7 @@ describe('SessionList project cap', () => {
     const onSelect = vi.fn();
     render({ sessions: projectSessions(25), onSelect });
     act(() => {
-      window.dispatchEvent(new KeyboardEvent('keydown', { code: 'Digit9', key: '9', metaKey: true }));
+      window.dispatchEvent(new KeyboardEvent('keydown', { code: 'Digit9', key: '9', altKey: true }));
     });
     expect(onSelect).toHaveBeenCalledWith('s8');
   });

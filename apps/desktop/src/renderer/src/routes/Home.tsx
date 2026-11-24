@@ -8,7 +8,7 @@ import Typography from '@mui/joy/Typography';
 import { useNavigate } from '@tanstack/react-router';
 import { ReauthNotice } from '../auth/ReauthNotice';
 import { SignInCard } from '../auth/SignInCard';
-import { SignedInPanel } from '../auth/SignedInPanel';
+import { LocalRailAccount, SignedInRailAccount } from '../auth/RailAccount';
 import { useAuthState } from '../auth/useAuthState';
 import { ChatShell } from '../chat/ChatShell';
 import { AppUpdateNotice } from '../chat/UpdateNotice';
@@ -41,7 +41,7 @@ export function Home() {
     chatScope.current = `${state.environment.url}:${state.user?.id ?? 'device-local'}`;
   }
 
-  // Signed in, the window belongs to the conversation; identity moves to the sidebar footer. A
+  // Signed in, the window belongs to the conversation; identity moves to the rail's avatar. A
   // session that expired under the user keeps it too, mounted in the same place so nothing in it
   // (the composer's draft above all) is torn down while they sign in again.
   if (state?.status === 'signed-in' || state?.reauthRequired || localChat) {
@@ -53,22 +53,11 @@ export function Home() {
           updateNotice={<AppUpdateNotice controller={update} contained />}
           onOpenModelServers={() => void navigate({ to: '/settings', search: { section: 'servers' } })}
           onOpenImportSettings={focus => void navigate({ to: '/settings', search: { section: 'import', focus } })}
-          account={status =>
+          account={context =>
             state?.status === 'signed-in' || state?.reauthRequired ? (
-              <SignedInPanel state={state} status={status} update={update} />
+              <SignedInRailAccount state={state} update={update} context={context} />
             ) : (
-              <Stack spacing={1} sx={{ p: 1.5 }}>
-                <Button
-                  variant="plain"
-                  onClick={() => void navigate({ to: '/settings' })}
-                  data-testid="local-chat-settings-btn"
-                >
-                  Settings
-                </Button>
-                <Button onClick={() => setLocalChat(false)} data-testid="local-chat-signin-btn">
-                  Sign in
-                </Button>
-              </Stack>
+              <LocalRailAccount context={context} onSignIn={() => setLocalChat(false)} />
             )
           }
         />

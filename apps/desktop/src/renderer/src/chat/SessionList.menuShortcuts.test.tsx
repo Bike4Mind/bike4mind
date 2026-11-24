@@ -60,7 +60,6 @@ async function mount(sessions: ChatSessionSummary[], handlers: Partial<Handlers>
         <SessionList
           sessions={sessions}
           mode="chat"
-          onModeChange={() => {}}
           loading={false}
           activeId={null}
           statuses={new Map()}

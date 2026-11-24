@@ -86,7 +86,6 @@ export function renderSidebar(
       <SessionList
         sessions={[SESSION]}
         mode="code"
-        onModeChange={() => {}}
         loading={false}
         activeId={null}
         statuses={new Map(status === 'done' ? [] : [[SESSION.id, status]])}

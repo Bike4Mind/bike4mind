@@ -21,7 +21,7 @@ import { SESSION_PANEL_SPACE } from './sessionPanelState';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
-vi.mock('./CustomizePanel', () => ({ CustomizeNavItem: () => null, CustomizeScreen: () => null }));
+vi.mock('./CustomizePanel', () => ({ CustomizeScreen: () => null, useCustomizeAttention: () => undefined }));
 // The chips' own behaviour is SessionChips.test.tsx's; here it only matters where they are drawn.
 vi.mock('./SessionChips', () => ({
   SessionChips: ({

@@ -12,7 +12,7 @@ import { ChatShell } from './ChatShell';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
-vi.mock('./CustomizePanel', () => ({ CustomizeNavItem: () => null, CustomizeScreen: () => null }));
+vi.mock('./CustomizePanel', () => ({ CustomizeScreen: () => null, useCustomizeAttention: () => undefined }));
 vi.mock('./Composer', () => ({
   Composer: ({ onSend, footer }: { onSend: (text: string) => void; footer: (node: null) => React.ReactNode }) => (
     <>
@@ -181,7 +181,14 @@ async function openModels() {
   await act(async () => {
     root?.render(
       <CssVarsProvider theme={desktopTheme}>
-        <ChatShell />
+        {/* The avatar menu's Models row lives in the account slot Home supplies; a stand-in reaches the same screen. */}
+        <ChatShell
+          account={context => (
+            <button type="button" onClick={context.onOpenModels} data-testid="chat-models-btn">
+              Models
+            </button>
+          )}
+        />
       </CssVarsProvider>
     );
   });

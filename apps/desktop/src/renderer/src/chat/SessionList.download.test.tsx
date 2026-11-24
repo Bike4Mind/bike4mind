@@ -56,7 +56,6 @@ async function mount(
         <SessionList
           sessions={sessions}
           mode="chat"
-          onModeChange={() => {}}
           loading={false}
           activeId={null}
           statuses={new Map()}

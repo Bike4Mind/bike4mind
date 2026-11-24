@@ -10,7 +10,7 @@ import { ChatShell } from './ChatShell';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
-vi.mock('./CustomizePanel', () => ({ CustomizeNavItem: () => null, CustomizeScreen: () => null }));
+vi.mock('./CustomizePanel', () => ({ CustomizeScreen: () => null, useCustomizeAttention: () => undefined }));
 // The panel's own behaviour is TerminalPanel.test.tsx's; here it only has to say whose it is.
 vi.mock('./TerminalPanel', () => ({
   TerminalPanel: ({ sessionId }: { sessionId: string }) => <div data-testid="terminal-panel">{sessionId}</div>,

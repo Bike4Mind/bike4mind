@@ -11,7 +11,7 @@ import { ChatShell } from './ChatShell';
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 // Screens and panels this test never opens, each with its own IPC to stub otherwise.
-vi.mock('./CustomizePanel', () => ({ CustomizeNavItem: () => null, CustomizeScreen: () => null }));
+vi.mock('./CustomizePanel', () => ({ CustomizeScreen: () => null, useCustomizeAttention: () => undefined }));
 
 window.matchMedia ??= ((query: string) => ({
   matches: false,

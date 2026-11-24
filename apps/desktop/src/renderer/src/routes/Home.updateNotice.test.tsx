@@ -12,7 +12,7 @@ import { writeSessionPanelOpen } from '../chat/sessionPanelState';
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 vi.mock('@tanstack/react-router', () => ({ useNavigate: () => vi.fn() }));
-vi.mock('../chat/CustomizePanel', () => ({ CustomizeNavItem: () => null, CustomizeScreen: () => null }));
+vi.mock('../chat/CustomizePanel', () => ({ CustomizeScreen: () => null, useCustomizeAttention: () => undefined }));
 vi.mock('../chat/Composer', () => ({ Composer: () => null }));
 
 window.matchMedia ??= ((query: string) => ({
@@ -87,6 +87,8 @@ beforeEach(() => {
     }),
     sidebar: quietBridge({ getSections: async () => ({ sections: [], assignments: {} }) }),
     update: quietBridge({ getState: async () => ready, install }),
+    // The avatar menu's runtime footer asks once it opens.
+    getAppInfo: () => new Promise(() => {}),
   };
   (window as unknown as { b4m: unknown }).b4m = new Proxy(namespaces, {
     get(target, name: string | symbol) {
@@ -202,6 +204,7 @@ describe('the update card in the signed-in window', () => {
     }));
     await mount();
     await act(async () => byTestId('chat-session-item')?.click());
+    await act(async () => byTestId('place-rail-account-btn')?.click());
     await act(async () => byTestId('account-attention-chip')?.querySelector('button')?.click());
     expect(install).toHaveBeenCalledWith(false);
     expect(byTestId('update-busy-alert')?.textContent).toContain('1 session is still working.');
@@ -228,7 +231,8 @@ describe('the update card in the signed-in window', () => {
     expect(byTestId('sidebar')?.contains(notices()[0])).toBe(false);
 
     await act(async () => byTestId('sidebar-toggle-btn')?.click());
-    expect(byTestId('sidebar-rail')).not.toBeNull();
+    expect(byTestId('sidebar')).toBeNull();
+    expect(byTestId('place-rail')).not.toBeNull();
     expect(notices()).toHaveLength(1);
     expectCornerAnchored(notices()[0]);
   });
@@ -236,6 +240,7 @@ describe('the update card in the signed-in window', () => {
   it('confirms in the card a restart the account label asked for while work is running', async () => {
     await mount();
 
+    await act(async () => byTestId('place-rail-account-btn')?.click());
     await act(async () => byTestId('account-attention-chip')?.querySelector('button')?.click());
     expect(install).toHaveBeenCalledWith(false);
     expect(notices()[0].querySelector('[data-testid="update-busy-alert"]')?.textContent).toContain(

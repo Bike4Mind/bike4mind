@@ -23,7 +23,7 @@ import { reloadReplyStatsPrefs } from './replyStatsPrefs';
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 // Screens and panels this test never opens, each with its own IPC to stub otherwise.
-vi.mock('./CustomizePanel', () => ({ CustomizeNavItem: () => null, CustomizeScreen: () => null }));
+vi.mock('./CustomizePanel', () => ({ CustomizeScreen: () => null, useCustomizeAttention: () => undefined }));
 vi.mock('./BrowserPane', () => ({
   BrowserPane: ({ sessionId }: { sessionId: string | null }) => (
     <div data-testid="test-browser-pane" data-session-id={sessionId} />
@@ -265,7 +265,7 @@ async function openParent(title: string = PARENT.title, mode: 'chat' | 'code' = 
       </CssVarsProvider>
     );
   });
-  if (mode === 'code') await act(async () => el('mode-switch-code-btn').click());
+  if (mode === 'code') await act(async () => el('place-rail-code-btn').click());
   await clickSessionRow(title);
 }
 
@@ -445,7 +445,8 @@ describe('orchestrate mode in the chat shell', () => {
         new KeyboardEvent('keydown', {
           key: String(index + 1),
           code: `Digit${index + 1}`,
-          metaKey: true,
+          // The session chord off macOS; jsdom does not report a Mac.
+          altKey: true,
           bubbles: true,
         })
       )

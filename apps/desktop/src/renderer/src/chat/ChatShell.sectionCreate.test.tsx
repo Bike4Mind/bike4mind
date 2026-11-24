@@ -10,7 +10,7 @@ import { ChatShell } from './ChatShell';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
-vi.mock('./CustomizePanel', () => ({ CustomizeNavItem: () => null, CustomizeScreen: () => null }));
+vi.mock('./CustomizePanel', () => ({ CustomizeScreen: () => null, useCustomizeAttention: () => undefined }));
 vi.mock('./Composer', () => ({
   Composer: ({ onSend }: { onSend: (text: string) => void }) => (
     <button data-testid="test-send" onClick={() => onSend('First prompt')}>
