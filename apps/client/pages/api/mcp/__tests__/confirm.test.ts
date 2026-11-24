@@ -29,6 +29,15 @@ vi.mock('@bike4mind/server-utils/mcpConnections/customMcpToolHost', () => ({
   customMcpToolHost: { callTool: vi.fn() },
   isCustomToolStillOffered: vi.fn(),
 }));
+vi.mock('@bike4mind/server-utils/callableFunctions/access', () => ({ assertCallableFunctionsEnabled: vi.fn() }));
+vi.mock('@bike4mind/server-utils/callableFunctions/functionToolHost', () => {
+  const host = { listConnections: vi.fn(), callTool: vi.fn() };
+  return {
+    FUNCTION_CONNECTION_ID: 'fn',
+    createFunctionToolHost: vi.fn(() => host),
+    isFunctionToolStillOffered: vi.fn(),
+  };
+});
 vi.mock('@bike4mind/server-utils/utils/invokeMcpHandler', () => ({ invokeMcpHandler: vi.fn() }));
 vi.mock('@bike4mind/server-utils/utils/downloadAttachmentUrl', () => ({ downloadAttachmentUrl: vi.fn() }));
 vi.mock('@bike4mind/server-utils/utils/pendingActionExecutor', () => ({ claimPendingAction: vi.fn() }));
@@ -60,6 +69,11 @@ import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { customMcpToolHost, isCustomToolStillOffered } from '@bike4mind/server-utils/mcpConnections/customMcpToolHost';
 import { assertCustomMcpEnabled } from '@bike4mind/server-utils/mcpConnections/customMcpAccess';
 import { RemoteMcpProtocolError } from '@bike4mind/mcp/remote';
+import { assertCallableFunctionsEnabled } from '@bike4mind/server-utils/callableFunctions/access';
+import {
+  createFunctionToolHost,
+  isFunctionToolStillOffered,
+} from '@bike4mind/server-utils/callableFunctions/functionToolHost';
 import handler from '../confirm';
 
 const SESSION_ID = 'aaaaaaaaaaaaaaaaaaaaaaaa';
@@ -620,5 +634,70 @@ describe('POST /api/mcp/confirm - custom connector actions', () => {
     expect(isCustomToolStillOffered).toHaveBeenCalledWith('user-1', 'c1', 'create');
     expect(claimPendingAction).not.toHaveBeenCalled();
     expect(customMcpToolHost.callTool).not.toHaveBeenCalled();
+  });
+});
+
+describe('POST /api/mcp/confirm - function actions', () => {
+  let ts: number;
+  const functionHost = createFunctionToolHost('chat');
+  const functionAction = () => ({
+    tool: 'beam_midspan_deflection',
+    params: { load: 1, span: 2 },
+    ts,
+    customConnector: { connectionId: 'fn', slug: 'fn', displayName: 'Functions', urlHost: 'functions' },
+  });
+  const confirm = () => post({ questId: QUEST_ID, sessionId: SESSION_ID, confirmed: true, pendingActionTs: ts });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    ts = Date.now();
+    vi.mocked(Session.findById).mockResolvedValue({ userId: 'user-1' } as never);
+    vi.mocked(Quest.findById).mockResolvedValue({ sessionId: SESSION_ID, pendingAction: functionAction() } as never);
+    vi.mocked(claimPendingAction).mockResolvedValue(true);
+    vi.mocked(functionHost.callTool).mockResolvedValue({ result: { content: [] } });
+    vi.mocked(isFunctionToolStillOffered).mockResolvedValue(true);
+    // Custom connectors off: a function card must not depend on them.
+    vi.mocked(assertCustomMcpEnabled).mockRejectedValue(new ForbiddenError('Custom MCP connectors are disabled'));
+  });
+
+  it('runs through the function host under the functions setting, with custom connectors off', async () => {
+    const res = await confirm();
+
+    expect(res._getJSONData()).toEqual({ success: true, message: 'Functions: beam_midspan_deflection completed' });
+    expect(assertCallableFunctionsEnabled).toHaveBeenCalledWith({ id: 'user-1' });
+    expect(assertCustomMcpEnabled).not.toHaveBeenCalled();
+    expect(isFunctionToolStillOffered).toHaveBeenCalledWith('user-1', 'beam_midspan_deflection');
+    expect(isCustomToolStillOffered).not.toHaveBeenCalled();
+    expect(claimPendingAction).toHaveBeenCalledWith(QUEST_ID, ts, 'approved');
+    expect(functionHost.callTool).toHaveBeenCalledWith(
+      expect.objectContaining({
+        connectionId: 'fn',
+        userId: 'user-1',
+        toolName: 'beam_midspan_deflection',
+        args: { load: 1, span: 2 },
+        approved: true,
+      })
+    );
+    expect(customMcpToolHost.callTool).not.toHaveBeenCalled();
+  });
+
+  it('refuses before the claim when callable functions are off', async () => {
+    vi.mocked(assertCallableFunctionsEnabled).mockRejectedValueOnce(
+      new ForbiddenError('Callable functions are disabled')
+    );
+
+    await expect(confirm()).rejects.toBeInstanceOf(ForbiddenError);
+    expect(claimPendingAction).not.toHaveBeenCalled();
+    expect(functionHost.callTool).not.toHaveBeenCalled();
+  });
+
+  it('leaves the action in place when the function is no longer offered', async () => {
+    vi.mocked(isFunctionToolStillOffered).mockResolvedValue(false);
+
+    const res = await confirm();
+
+    expect(res._getStatusCode()).toBe(409);
+    expect(claimPendingAction).not.toHaveBeenCalled();
+    expect(functionHost.callTool).not.toHaveBeenCalled();
   });
 });

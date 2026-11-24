@@ -8,6 +8,12 @@ import { claimPendingAction } from '@bike4mind/server-utils/utils/pendingActionE
 import { loadFabFileAttachment, resolvePendingActionTarget } from '@bike4mind/server-utils/utils/pendingActionTarget';
 import { assertCustomMcpEnabled } from '@bike4mind/server-utils/mcpConnections/customMcpAccess';
 import { customMcpToolHost, isCustomToolStillOffered } from '@bike4mind/server-utils/mcpConnections/customMcpToolHost';
+import { assertCallableFunctionsEnabled } from '@bike4mind/server-utils/callableFunctions/access';
+import {
+  FUNCTION_CONNECTION_ID,
+  createFunctionToolHost,
+  isFunctionToolStillOffered,
+} from '@bike4mind/server-utils/callableFunctions/functionToolHost';
 import { describeCustomCallFailure } from '@bike4mind/server-utils/mcpConnections/describeRemoteMcpError';
 import { downloadAttachmentUrl } from '@bike4mind/server-utils/utils/downloadAttachmentUrl';
 import { getSelectedRepositoriesForMcp } from '@bike4mind/server-utils/integrations/github/github-repo-helper';
@@ -117,11 +123,17 @@ export async function resolveMcpPendingAction({
   // and passes `approved: true` because this click is the approval.
   if (pendingAction.customConnector) {
     const { connectionId, displayName } = pendingAction.customConnector;
+    // A function card answers to the callable functions setting and host, never to custom MCP's.
+    const isFunction = connectionId === FUNCTION_CONNECTION_ID;
+    const host = isFunction ? createFunctionToolHost('chat') : customMcpToolHost;
     // Before the claim, so a disabled feature leaves the action in place.
-    await assertCustomMcpEnabled(user);
+    await (isFunction ? assertCallableFunctionsEnabled(user) : assertCustomMcpEnabled(user));
     // Also before the claim: a connection or tool that is no longer usable would fail after the
     // action was consumed, and the user could not retry.
-    if (!(await isCustomToolStillOffered(user.id, connectionId, pendingAction.tool))) {
+    const stillOffered = isFunction
+      ? await isFunctionToolStillOffered(user.id, pendingAction.tool)
+      : await isCustomToolStillOffered(user.id, connectionId, pendingAction.tool);
+    if (!stillOffered) {
       logger.warn('[MCP Pending Action] Custom connector tool is no longer available', { questId });
       return { status: 409, body: { error: `${displayName} no longer offers this action.` } };
     }
@@ -130,7 +142,7 @@ export async function resolveMcpPendingAction({
       return { status: 409, body: { error: 'This action has already been processed.' }, reason: 'already_resolved' };
     }
     try {
-      const { result } = await customMcpToolHost.callTool({
+      const { result } = await host.callTool({
         connectionId,
         userId: user.id,
         toolName: pendingAction.tool,

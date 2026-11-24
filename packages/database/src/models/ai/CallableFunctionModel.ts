@@ -11,6 +11,7 @@ import {
   CallableFunctionProtectedFieldError,
   CallableFunctionSlugConflictError,
   FUNCTION_CONTRACT_LIMITS,
+  MCP_TOOL_APPROVAL_MODES,
   type CallableFunctionCaseResults,
   type CallableFunctionCreateInput,
   type CallableFunctionExample,
@@ -19,7 +20,9 @@ import {
   type CallableFunctionPromote,
   type CallableFunctionRepin,
   type ICallableFunctionDocument,
+  type ICallableFunctionOfferable,
   type ICallableFunctionRepository,
+  type McpToolApprovalMode,
   type ICallableFunctionSummary,
   type IMongoDocument,
   type RepositoryPatch,
@@ -92,6 +95,7 @@ const CallableFunctionSchema = new Schema<ICallableFunctionDocument>(
     description: { type: String, required: true, maxlength: FUNCTION_CONTRACT_LIMITS.maxDescriptionLength },
     state: { type: String, enum: CALLABLE_FUNCTION_STATES, default: 'draft' },
     enabled: { type: Boolean, required: true, default: true },
+    approval: { type: String, enum: MCP_TOOL_APPROVAL_MODES, default: 'default' },
     pin: { type: CallableFunctionPinSchema, required: true },
     // Property names are identifiers (FUNCTION_PROPERTY_NAME_PATTERN), so no key escaping is needed.
     contract: { type: Schema.Types.Mixed, required: true },
@@ -141,6 +145,7 @@ export const CallableFunction: ICallableFunctionModel =
 type FunctionDoc = ICallableFunctionDocument & IMongoDocument;
 
 const SUMMARY_PROJECTION = { contract: 0, 'pin.source': 0, lastServerRun: 0, promoted: 0, caseResults: 0 };
+const OFFERABLE_PROJECTION = { 'pin.source': 0, lastServerRun: 0, promoted: 0, caseResults: 0 };
 
 const newPin = (pin: CallableFunctionNewPin): CallableFunctionNewPin => ({
   artifactId: pin.artifactId,
@@ -280,6 +285,27 @@ class CallableFunctionRepository extends BaseRepository<FunctionDoc> implements 
       { new: true, runValidators: true }
     );
     return result?.toJSON() ?? null;
+  }
+
+  async setApproval(
+    id: string,
+    owner: CallableFunctionOwner,
+    approval: McpToolApprovalMode
+  ): Promise<ICallableFunctionDocument | null> {
+    if (!mongoose.isObjectIdOrHexString(id)) return null;
+    const result = await this.model.findOneAndUpdate(
+      { _id: id, ...ownerFilter(owner) },
+      { $set: { approval } },
+      { new: true, runValidators: true }
+    );
+    return result?.toJSON() ?? null;
+  }
+
+  async listLiveForOwner(owner: CallableFunctionOwner): Promise<ICallableFunctionOfferable[]> {
+    const docs = await this.model
+      .find({ ...ownerFilter(owner), state: 'live', enabled: true }, OFFERABLE_PROJECTION)
+      .sort({ createdAt: 1 });
+    return docs.map(doc => doc.toObject() as ICallableFunctionOfferable);
   }
 
   async repin(

@@ -21,13 +21,16 @@ const MAX_TOOL_ID_LENGTH = 64;
 const MAX_RESULT_CHARS = 30_000;
 export const MAX_CUSTOM_TOOLS_PER_TURN = 40;
 
+/** A tool as offered; `outputSchema` describes `structuredContent` when the host returns it. */
+export type CustomMcpOfferedTool = IMcpConnectionTool & { outputSchema?: Record<string, unknown> };
+
 /** One connection as the host reports it: enabled, connected and allowed by policy. */
 export interface CustomMcpConnectionOffer extends CustomConnectorPendingRef {
   /** False when an org policy allows read-only tools only. */
   allowWriteTools: boolean;
   /** True when an org policy wants a human approval before every call, reads included. */
   requireApprovalForAll: boolean;
-  tools: IMcpConnectionTool[];
+  tools: CustomMcpOfferedTool[];
 }
 
 export interface CustomMcpToolCallInput {
@@ -46,11 +49,26 @@ export interface CustomMcpListOptions {
    * for each user until they switch it on, so one not named here is not listed.
    */
   platformConnectionIds?: readonly string[];
+  /** No one can answer an approval card in this turn (an API-key call), so hosts may leave out always-ask tools. */
+  headless?: boolean;
+}
+
+export interface CustomMcpToolCallResult {
+  content?: unknown[];
+  isError?: boolean;
+  /** A typed result; when present the model gets `{ output, stamp }` as JSON instead of the text blocks. */
+  structuredContent?: Record<string, unknown>;
+  /** Provenance for `structuredContent`, sent as `stamp`. */
+  meta?: Record<string, unknown>;
+  /** A short trust label carried on the untrusted wrapper. */
+  label?: string;
 }
 
 export interface CustomMcpToolHost {
   listConnections(userId: string, options?: CustomMcpListOptions): Promise<CustomMcpConnectionOffer[]>;
-  callTool(input: CustomMcpToolCallInput): Promise<{ result: { content?: unknown[]; isError?: boolean } }>;
+  callTool(input: CustomMcpToolCallInput): Promise<{ result: CustomMcpToolCallResult }>;
+  /** Set by a host that serves fixed connection ids, so a composed host can route its calls. */
+  ownsConnection?(connectionId: string): boolean;
 }
 
 export interface CustomMcpApprovalRequest extends CustomConnectorPendingRef {
@@ -109,26 +127,36 @@ export async function loadCustomMcpConnections(
   return kept;
 }
 
-function flattenContent(content: unknown[] | undefined): string {
-  const text = (content ?? [])
-    .map(block => {
-      const entry = block as { type?: string; text?: unknown };
-      return entry?.type === 'text' && typeof entry.text === 'string'
-        ? entry.text
-        : `[non-text content omitted: ${entry?.type ?? 'unknown'}]`;
-    })
-    .join('\n');
-  return text.length > MAX_RESULT_CHARS
+const capResult = (text: string) =>
+  text.length > MAX_RESULT_CHARS
     ? `${text.slice(0, MAX_RESULT_CHARS)}\n[truncated: result exceeded ${MAX_RESULT_CHARS} characters]`
     : text;
+
+function flattenContent(content: unknown[] | undefined): string {
+  return capResult(
+    (content ?? [])
+      .map(block => {
+        const entry = block as { type?: string; text?: unknown };
+        return entry?.type === 'text' && typeof entry.text === 'string'
+          ? entry.text
+          : `[non-text content omitted: ${entry?.type ?? 'unknown'}]`;
+      })
+      .join('\n')
+  );
+}
+
+function resultBody(result: CustomMcpToolCallResult): string {
+  if (!result.structuredContent) return flattenContent(result.content);
+  return capResult(JSON.stringify({ output: result.structuredContent, stamp: result.meta ?? null }));
 }
 
 const attr = (value: string) => value.replace(/["<>\r\n]/g, '');
 
-function wrapUntrusted(connection: CustomConnectorPendingRef, body: string): string {
+function wrapUntrusted(connection: CustomConnectorPendingRef, body: string, label?: string): string {
   // Both tags: a spoofed opening tag could claim another connector's provenance mid-body.
   const safe = body.replace(/<\s*(\/?)\s*untrusted_tool_result/gi, '<\\$1untrusted_tool_result');
-  return `<untrusted_tool_result connector="${attr(connection.slug)}" host="${attr(connection.urlHost)}">\n${safe}\n</untrusted_tool_result>`;
+  const labelAttr = label ? ` label="${attr(label)}"` : '';
+  return `<untrusted_tool_result connector="${attr(connection.slug)}" host="${attr(connection.urlHost)}"${labelAttr}>\n${safe}\n</untrusted_tool_result>`;
 }
 
 /** Tool definitions for one connection's offered tools (see `loadCustomMcpConnections`). */
@@ -165,7 +193,7 @@ export function generateCustomMcpTools(
             approved: needsApproval,
             platformConnectionIds,
           });
-          return wrapUntrusted(ref, flattenContent(result.content));
+          return wrapUntrusted(ref, resultBody(result), result.label);
         },
         toolSchema: {
           name,

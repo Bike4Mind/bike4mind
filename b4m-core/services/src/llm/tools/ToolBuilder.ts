@@ -904,6 +904,7 @@ export class ToolBuilder {
         const platformConnectionIds = enabledPlatformMcpConnections ?? [];
         const connections = await loadCustomMcpConnections(this.deps.customMcp, userId, logger, undefined, {
           platformConnectionIds,
+          headless: Boolean(this.deps.apiKeyId),
         });
         for (const connection of connections) {
           // The slug opt-out list is for the user's own connectors; a platform one is switched on by id.

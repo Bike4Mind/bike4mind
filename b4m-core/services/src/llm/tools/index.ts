@@ -225,7 +225,9 @@ export {
   type CustomMcpToolHost,
   type CustomMcpListOptions,
   type CustomMcpConnectionOffer,
+  type CustomMcpOfferedTool,
   type CustomMcpToolCallInput,
+  type CustomMcpToolCallResult,
   type CustomMcpApprovalRequest,
 } from './customMcpTools';
 

@@ -43,7 +43,7 @@ describe('McpConnectionSlugSchema', () => {
 
   it('reserves every built-in server name and the first-party names', () => {
     for (const name of Object.values(McpServerName)) expect(RESERVED_MCP_CONNECTION_SLUGS.has(name)).toBe(true);
-    for (const name of ['mcp', 'b4m', 'bike4mind', 'slack', 'system']) {
+    for (const name of ['mcp', 'b4m', 'bike4mind', 'slack', 'system', 'fn']) {
       expect(isValidMcpConnectionSlug(name)).toBe(false);
     }
     expect(McpConnectionSlugSchema.safeParse('github').error?.issues[0]?.message).toBe('This slug is reserved');

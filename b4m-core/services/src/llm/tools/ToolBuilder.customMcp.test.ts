@@ -25,8 +25,13 @@ const connection = {
   ],
 };
 
-const builderWith = (customMcp: CustomMcpToolHost | undefined, builtIns: unknown[] = []) =>
+const builderWith = (
+  customMcp: CustomMcpToolHost | undefined,
+  builtIns: unknown[] = [],
+  extra: Partial<ToolBuilderConfig> = {}
+) =>
   new ToolBuilder({
+    ...extra,
     user: { id: 'u1', _id: 'u1' },
     db: { mcpServers: { find: vi.fn(async () => builtIns) } },
     logger,
@@ -152,7 +157,7 @@ describe('ToolBuilder buildMcpTools - custom connectors', () => {
 
       expect(Object.keys(mcpToolsByServer)).toEqual(['acme']);
       expect([...customMcpToolNames].filter(name => name.startsWith('shared__'))).toEqual([]);
-      expect(host.listConnections).toHaveBeenCalledWith('u1', { platformConnectionIds: [] });
+      expect(host.listConnections).toHaveBeenCalledWith('u1', { platformConnectionIds: [], headless: false });
       expect(host.callTool).not.toHaveBeenCalled();
     });
 
@@ -217,6 +222,51 @@ describe('ToolBuilder buildMcpTools - custom connectors', () => {
       expect(prompt?.context?.content).toContain(CUSTOM_MCP_DATA_NOTICE);
     }
   );
+
+  describe('the function offer', () => {
+    const functions = {
+      ...connection,
+      connectionId: 'fn',
+      slug: 'fn',
+      displayName: 'Functions',
+      urlHost: 'functions',
+      tools: [connection.tools[0]],
+    };
+    const hostOf = () => ({
+      listConnections: vi.fn(async (_userId: string, _options?: CustomMcpListOptions) => [functions, connection]),
+      callTool: vi.fn(),
+    });
+
+    it('lists headless for an API-key turn and with a person present otherwise', async () => {
+      const host = hostOf();
+      await run(builderWith(host as never, [], { apiKeyId: 'key-1' }));
+      await run(builderWith(host as never));
+      expect(host.listConnections.mock.calls.map(([, options]) => options?.headless)).toEqual([true, false]);
+    });
+
+    it('offers no function on a turn without a confirm card, as on Slack', async () => {
+      const host = hostOf();
+      const { mcpToolsByServer, customMcpToolNames } = await builderWith(host as never).buildMcpTools({
+        enableMCPServer: true,
+        requestedMcpServers: undefined,
+        defaultAdminSettings: {},
+        userMessage: '',
+        logger,
+        processStartTime: Date.now(),
+        quest: { id: 'q1', sessionId: 's1' } as never,
+      } as never);
+      expect(mcpToolsByServer).toEqual({});
+      expect(customMcpToolNames.size).toBe(0);
+      expect(host.listConnections).not.toHaveBeenCalled();
+    });
+
+    it('is switched off in the Tools menu by its slug, keeping the connectors', async () => {
+      const { mcpToolsByServer } = await run(builderWith(hostOf() as never), undefined, {
+        disabledMcpConnections: ['fn'],
+      });
+      expect(Object.keys(mcpToolsByServer)).toEqual(['acme']);
+    });
+  });
 
   it('offers nothing custom without a host', async () => {
     const { mcpToolsByServer } = await run(builderWith(undefined));
