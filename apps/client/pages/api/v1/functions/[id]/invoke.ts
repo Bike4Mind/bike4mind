@@ -12,6 +12,7 @@ import { sendToQueue } from '@bike4mind/server-utils/utils/sqs';
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
 import {
   FUNCTION_INVOKE_BUDGET_MS,
+  FUNCTION_QUEUE_FAILED_MESSAGE,
   FUNCTION_INVOKE_MAX_BODY_BYTES,
   assertFunctionsEnabled,
   functionsRateLimit,
@@ -36,6 +37,10 @@ const handler = nextRouteForContract(invokeFunctionContract, {
   };
 
   if (req.validated.mode === 'async') {
+    // Self-host has no queue consumer for these jobs; refuse before the dispatcher writes a row.
+    if (process.env.B4M_SELF_HOST === 'true') {
+      return res.status(503).json({ error: FUNCTION_QUEUE_FAILED_MESSAGE });
+    }
     const queued = await queueFunctionCall(request, {
       send: job => sendToQueue(getSourceQueueUrl('callableFunctionCallQueue'), { ...job }),
     });

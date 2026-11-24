@@ -167,6 +167,7 @@ const { default: pollRoute } = await import('@pages/api/v1/functions/calls/[call
 const {
   FUNCTION_INVOKE_BUDGET_MS,
   FUNCTION_INVOKE_MAX_BODY_BYTES,
+  FUNCTION_QUEUE_FAILED_MESSAGE,
   FUNCTION_SYNC_STOP_MESSAGE,
   TIMEOUT_MESSAGE,
   invokeAnswer,
@@ -712,6 +713,19 @@ describe('async invoke and poll', () => {
     expect(res.status).toBe(status);
     expect(h.sent).toHaveLength(0);
     expect(h.results.size).toBe(0);
+  });
+
+  it('answers 503 on self-host before any row, result, or job is written', async () => {
+    vi.stubEnv('B4M_SELF_HOST', 'true');
+    try {
+      const res = await asyncInvoke();
+      expect(res).toEqual({ status: 503, body: { error: FUNCTION_QUEUE_FAILED_MESSAGE } });
+    } finally {
+      vi.unstubAllEnvs();
+    }
+    expect(h.calls).toHaveLength(0);
+    expect(h.results.size).toBe(0);
+    expect(h.sent).toHaveLength(0);
   });
 
   it('answers 503 and keeps nothing queued when the job cannot be sent', async () => {
