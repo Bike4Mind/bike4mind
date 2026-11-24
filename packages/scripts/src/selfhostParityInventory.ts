@@ -162,12 +162,7 @@ export const NOT_COVERED: readonly { shape: string; reason: string }[] = [
     shape: 'aws.s3.BucketServerSideEncryptionConfiguration',
     reason: 'Storage encryption policy, not a compute trigger.',
   },
-  {
-    shape: 'aws.s3.Bucket',
-    reason:
-      'Function-data storage the runtime Lambda reads through its S3 endpoint; self-host runs functions in ' +
-      'process and has no endpoint.',
-  },
+  { shape: 'aws.s3.Bucket', reason: 'Storage only, no compute trigger.' },
   { shape: 'aws.s3.BucketPublicAccessBlock', reason: 'Storage access setting for the aws.s3.Bucket, no compute.' },
   { shape: 'aws.s3.BucketPolicy', reason: 'IAM grant for the aws.s3.Bucket, no compute.' },
   { shape: 'sst.aws.Vpc', reason: 'Network plumbing.' },

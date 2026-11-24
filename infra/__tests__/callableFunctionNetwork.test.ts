@@ -9,8 +9,10 @@ import {
   DEDICATED_SUBNET_CIDRS,
   distinctZones,
   FUNCTION_DATA_DISPATCHER_ACTIONS,
+  FUNCTION_DATA_KEY_PREFIX,
   isGetObjectOnlyPolicy,
   LAMBDA_NETWORK_INTERFACE_ACTIONS,
+  namedSubnetIdsOf,
   otherPrefixListFilters,
   probeMatched,
   routeProbeFilters,
@@ -31,6 +33,7 @@ const probes = (found: Partial<RouteProbes> = {}): RouteProbes => ({
   propagated: false,
   endpoint: false,
   created: false,
+  networkInterface: false,
   otherPrefixList: false,
   ...found,
 });
@@ -123,6 +126,12 @@ describe('tableRoutes', () => {
     ]);
   });
 
+  it('refuses a network interface route the data source omits', () => {
+    expect(faultsOf([], { local: true, networkInterface: true })).toEqual([
+      'subnet subnet-0a: route table rtb-0a has a route to a network interface',
+    ]);
+  });
+
   it('keeps a listed route next to the probed routes', () => {
     expect(faultsOf([{ natGatewayId: 'nat-0a' }], { local: true })).toEqual([
       'subnet subnet-0a: route table rtb-0a has a route to a NAT gateway',
@@ -145,6 +154,7 @@ describe('route probe lookups', () => {
     ['propagated', { name: 'route.origin', values: ['EnableVgwRoutePropagation'] }],
     ['endpoint', { name: 'route.gateway-id', values: ['vpce-*'] }],
     ['created', { name: 'route.origin', values: ['CreateRoute'] }],
+    ['networkInterface', { name: 'route.network-interface-id', values: ['eni-*'] }],
   ])('filters the %s probe to the one table and its kind of route', (probe, filter) => {
     expect(routeProbeFilters('rtb-0a', probe)).toEqual([{ name: 'route-table-id', values: ['rtb-0a'] }, filter]);
   });
@@ -192,6 +202,28 @@ describe('the function-data endpoint route', () => {
     const routes = tableRoutes([], probes({ local: true, endpoint: true }), 'rtb-0a', ENDPOINT);
     expect(routes).toEqual([LOCAL, DATA_ROUTE]);
     expect(faultsWith(routes)).toEqual([]);
+  });
+
+  it("does not count the endpoint's own route as a route added to the table when it reads back as CreateRoute", () => {
+    const routes = tableRoutes([], probes({ local: true, endpoint: true, created: true }), 'rtb-0a', ENDPOINT);
+    expect(routes).toEqual([LOCAL, DATA_ROUTE]);
+    expect(faultsWith(routes)).toEqual([]);
+  });
+
+  it('still counts a route added to a table the named endpoint does not list, or with no endpoint route', () => {
+    const elsewhere = tableRoutes([], probes({ local: true, endpoint: true, created: true }), 'rtb-0b', ENDPOINT);
+    expect(elsewhere).toContainEqual({ origin: 'CreateRoute' });
+    const noEndpointRoute = tableRoutes([], probes({ local: true, created: true }), 'rtb-0a', ENDPOINT);
+    expect(faultsWith(noEndpointRoute)).toEqual([
+      'subnet subnet-0a: route table rtb-0a has a route to a route added to the table',
+    ]);
+  });
+
+  it('still refuses a network interface route next to the accepted endpoint route', () => {
+    const found = { local: true, endpoint: true, created: true, networkInterface: true };
+    expect(faultsWith(tableRoutes([], probes(found), 'rtb-0a', ENDPOINT))).toEqual([
+      'subnet subnet-0a: route table rtb-0a has a route to a network interface',
+    ]);
   });
 
   it('refuses the same route when no endpoint is named', () => {
@@ -243,7 +275,7 @@ describe('the function-data endpoint route', () => {
     [
       'a wider endpoint policy',
       { policy: JSON.stringify({ Statement: [{ Effect: 'Allow', Principal: '*', Action: 's3:*', Resource: '*' }] }) },
-      'endpoint vpce-0data has a policy that allows more than s3:GetObject on one bucket',
+      "endpoint vpce-0data has a policy that allows more than s3:GetObject on one bucket's data objects",
     ],
   ])('refuses %s and its route', (_case, endpoint, fault) => {
     expect(faultsWith([LOCAL, DATA_ROUTE], endpoint)).toEqual([
@@ -266,7 +298,7 @@ describe('the function-data endpoint route', () => {
 });
 
 describe('isGetObjectOnlyPolicy', () => {
-  const statement = { Effect: 'Allow', Principal: '*', Action: 's3:GetObject', Resource: `${BUCKET_ARN}/*` };
+  const statement = { Effect: 'Allow', Principal: '*', Action: 's3:GetObject', Resource: `${BUCKET_ARN}/data/*` };
   const policy = (...statements: object[]) => JSON.stringify({ Version: '2012-10-17', Statement: statements });
 
   it("passes the data endpoint's own policy, and its one-element-list form", () => {
@@ -293,9 +325,13 @@ describe('isGetObjectOnlyPolicy', () => {
     ['a second action', policy({ ...statement, Action: ['s3:GetObject', 's3:PutObject'] })],
     ['every bucket', policy({ ...statement, Resource: `arn:${PARTITION}:s3:::*/*` })],
     ['the bucket itself', policy({ ...statement, Resource: BUCKET_ARN })],
-    ['two buckets', policy({ ...statement, Resource: [`${BUCKET_ARN}/*`, `${BUCKET_ARN}-other/*`] })],
+    ['every object in the bucket', policy({ ...statement, Resource: `${BUCKET_ARN}/*` })],
+    ['another key segment', policy({ ...statement, Resource: `${BUCKET_ARN}/outputs/*` })],
+    ['two buckets', policy({ ...statement, Resource: [`${BUCKET_ARN}/data/*`, `${BUCKET_ARN}-other/data/*`] })],
     ['a NotAction', policy({ Effect: 'Allow', Principal: '*', NotAction: 's3:PutObject', Resource: '*' })],
     ['a Deny', policy({ ...statement, Effect: 'Deny' })],
+    ['a Condition', policy({ ...statement, Condition: { StringEquals: { 'aws:SourceVpc': 'vpc-0a' } } })],
+    ['a NotResource beside the Resource', policy({ ...statement, NotResource: `${BUCKET_ARN}/data/x` })],
   ])('refuses %s', (_case, text) => {
     expect(isGetObjectOnlyPolicy(text, PARTITION)).toBe(false);
   });
@@ -336,7 +372,7 @@ describe('callableFunctionRolePolicy', () => {
 });
 
 describe('callableFunctionDataEndpointPolicy', () => {
-  it("allows GetObject on the bucket's objects and nothing else", () => {
+  it("allows GetObject on the bucket's data/ objects and nothing else", () => {
     expect(callableFunctionDataEndpointPolicy(BUCKET_ARN)).toEqual({
       Version: '2012-10-17',
       Statement: [
@@ -345,10 +381,11 @@ describe('callableFunctionDataEndpointPolicy', () => {
           Effect: 'Allow',
           Principal: '*',
           Action: 's3:GetObject',
-          Resource: `${BUCKET_ARN}/*`,
+          Resource: `${BUCKET_ARN}/data/*`,
         },
       ],
     });
+    expect(FUNCTION_DATA_KEY_PREFIX).toBe('data/');
   });
 });
 
@@ -356,15 +393,23 @@ describe('callableFunctionDataBucketPolicy', () => {
   const DISPATCHER = 'dispatcher-role-arn';
   const OTHER = 'other-role-arn';
 
+  const OBJECT = `${BUCKET_ARN}/data/t1/${'a'.repeat(64)}`;
+
   interface Request {
     action: string;
+    /** The object or bucket ARN the request names. */
+    resource: string;
     principalArn?: string;
     sourceVpce?: string;
     secure?: boolean;
+    /** `REST-QUERY-STRING` for a signed link; a request signed in its header otherwise. */
+    authType?: string;
   }
 
-  const matchesAction = (patterns: string | string[], action: string) =>
-    [patterns].flat().some(pattern => new RegExp(`^${pattern.replace(/\*/g, '.*')}$`).test(action));
+  const wildcard = (patterns: string | string[], value: string) =>
+    [patterns]
+      .flat()
+      .some(pattern => new RegExp(`^${pattern.replace(/[.]/g, '\\.').replace(/\*/g, '.*')}$`).test(value));
 
   // Each condition key compares one value; a missing key fails the equality and passes the negated test.
   const conditionHolds = (condition: Record<string, Record<string, string>> | undefined, request: Request) =>
@@ -374,8 +419,9 @@ describe('callableFunctionDataBucketPolicy', () => {
           'aws:PrincipalArn': request.principalArn,
           'aws:SourceVpce': request.sourceVpce,
           'aws:SecureTransport': String(request.secure ?? true),
+          's3:authType': request.authType ?? 'REST-HEADER',
         }[key];
-        if (test === 'Bool') return actual === value;
+        if (test === 'Bool' || test === 'StringEquals') return actual === value;
         if (test === 'ArnNotEquals' || test === 'StringNotEquals') return actual !== value;
         throw new Error(`untested condition ${test}`);
       })
@@ -385,7 +431,8 @@ describe('callableFunctionDataBucketPolicy', () => {
     policy.Statement.some(
       statement =>
         statement.Effect === 'Deny' &&
-        matchesAction(statement.Action, request.action) &&
+        wildcard(statement.Action, request.action) &&
+        wildcard(statement.Resource, request.resource) &&
         conditionHolds(statement.Condition as Record<string, Record<string, string>>, request)
     );
 
@@ -396,36 +443,79 @@ describe('callableFunctionDataBucketPolicy', () => {
   });
   const withoutEndpoint = callableFunctionDataBucketPolicy({ bucketArn: BUCKET_ARN, dispatcherRoleArn: DISPATCHER });
 
+  const readsOn = (action: string) => (action.startsWith('s3:ListBucket') ? BUCKET_ARN : OBJECT);
+
   it('refuses every read from outside the endpoint, by any principal but the dispatcher', () => {
     for (const action of ['s3:GetObject', 's3:GetObjectVersion', 's3:GetObjectAttributes', 's3:ListBucket']) {
-      expect(denied(withEndpoint, { action, principalArn: OTHER })).toBe(true);
-      expect(denied(withEndpoint, { action, principalArn: OTHER, sourceVpce: 'vpce-0other' })).toBe(true);
-      expect(denied(withEndpoint, { action })).toBe(true);
-      expect(denied(withoutEndpoint, { action, principalArn: OTHER, sourceVpce: 'vpce-0data' })).toBe(true);
+      const resource = readsOn(action);
+      expect(denied(withEndpoint, { action, resource, principalArn: OTHER })).toBe(true);
+      expect(denied(withEndpoint, { action, resource, principalArn: OTHER, sourceVpce: 'vpce-0other' })).toBe(true);
+      expect(denied(withEndpoint, { action, resource })).toBe(true);
+      expect(denied(withoutEndpoint, { action, resource, principalArn: OTHER, sourceVpce: 'vpce-0data' })).toBe(true);
     }
-    expect(denied(withEndpoint, { action: 's3:GetObject', principalArn: OTHER, sourceVpce: 'vpce-0data' })).toBe(false);
+    const throughEndpoint = { action: 's3:GetObject', resource: OBJECT, principalArn: OTHER, sourceVpce: 'vpce-0data' };
+    expect(denied(withEndpoint, throughEndpoint)).toBe(false);
   });
 
-  it('lets the dispatcher write, read, and delete from outside the endpoint, and nobody else write or delete', () => {
-    expect(FUNCTION_DATA_DISPATCHER_ACTIONS).toEqual(['s3:PutObject', 's3:GetObject', 's3:DeleteObject']);
+  it('refuses a read by a signed link from outside the endpoint for every principal, the dispatcher included', () => {
+    const link = { action: 's3:GetObject', resource: OBJECT, authType: 'REST-QUERY-STRING' };
+    for (const principalArn of [DISPATCHER, OTHER, undefined]) {
+      expect(denied(withEndpoint, { ...link, principalArn })).toBe(true);
+      expect(denied(withEndpoint, { ...link, principalArn, sourceVpce: 'vpce-0other' })).toBe(true);
+      expect(denied(withoutEndpoint, { ...link, principalArn, sourceVpce: 'vpce-0data' })).toBe(true);
+    }
+    expect(denied(withEndpoint, { ...link, action: 's3:GetObjectVersion', principalArn: DISPATCHER })).toBe(true);
+    expect(denied(withEndpoint, { ...link, principalArn: DISPATCHER, sourceVpce: 'vpce-0data' })).toBe(false);
+  });
+
+  it('keeps header-signed reads, writes, and deletes by the dispatcher from outside the endpoint', () => {
     for (const policy of [withEndpoint, withoutEndpoint]) {
       for (const action of FUNCTION_DATA_DISPATCHER_ACTIONS) {
-        expect(denied(policy, { action, principalArn: DISPATCHER })).toBe(false);
+        expect(denied(policy, { action, resource: OBJECT, principalArn: DISPATCHER, authType: 'REST-HEADER' })).toBe(
+          false
+        );
       }
-      for (const action of ['s3:PutObject', 's3:DeleteObject', 's3:DeleteObjectVersion', 's3:PutObjectAcl']) {
-        expect(denied(policy, { action, principalArn: OTHER, sourceVpce: 'vpce-0data' })).toBe(true);
+    }
+  });
+
+  it('lets nobody but the dispatcher write, delete, or replicate objects, wherever the request comes from', () => {
+    expect(FUNCTION_DATA_DISPATCHER_ACTIONS).toEqual(['s3:PutObject', 's3:GetObject', 's3:DeleteObject']);
+    const writes = ['s3:PutObject', 's3:DeleteObject', 's3:DeleteObjectVersion', 's3:PutObjectAcl'];
+    for (const policy of [withEndpoint, withoutEndpoint]) {
+      for (const action of [...writes, 's3:ReplicateObject', 's3:ReplicateDelete']) {
+        expect(denied(policy, { action, resource: OBJECT, principalArn: OTHER, sourceVpce: 'vpce-0data' })).toBe(true);
+        expect(denied(policy, { action, resource: OBJECT, principalArn: OTHER })).toBe(true);
       }
     }
   });
 
   it('refuses every request without TLS, the dispatcher included', () => {
-    expect(denied(withEndpoint, { action: 's3:GetObject', principalArn: DISPATCHER, secure: false })).toBe(true);
-    expect(denied(withEndpoint, { action: 's3:PutBucketPolicy', principalArn: OTHER, secure: false })).toBe(true);
+    const insecure = { principalArn: DISPATCHER, secure: false };
+    expect(denied(withEndpoint, { action: 's3:GetObject', resource: OBJECT, ...insecure })).toBe(true);
+    expect(denied(withEndpoint, { action: 's3:PutBucketPolicy', resource: BUCKET_ARN, ...insecure })).toBe(true);
   });
 
   it('allows nothing and leaves the bucket settings to the deployer', () => {
     expect(withEndpoint.Statement.every(statement => statement.Effect === 'Deny')).toBe(true);
-    expect(denied(withEndpoint, { action: 's3:GetBucketPolicy', principalArn: OTHER })).toBe(false);
-    expect(denied(withEndpoint, { action: 's3:PutBucketPolicy', principalArn: OTHER })).toBe(false);
+    expect(denied(withEndpoint, { action: 's3:GetBucketPolicy', resource: BUCKET_ARN, principalArn: OTHER })).toBe(
+      false
+    );
+    expect(denied(withEndpoint, { action: 's3:PutBucketPolicy', resource: BUCKET_ARN, principalArn: OTHER })).toBe(
+      false
+    );
+  });
+
+  it('matches requests by resource, so a statement scoped to another resource does not apply', () => {
+    const elsewhere = `arn:${PARTITION}:s3:::other-bucket/data/t1/${'a'.repeat(64)}`;
+    expect(denied(withEndpoint, { action: 's3:PutObject', resource: elsewhere, principalArn: OTHER })).toBe(false);
+    expect(denied(withEndpoint, { action: 's3:GetObject', resource: elsewhere, principalArn: OTHER })).toBe(false);
+  });
+});
+
+describe('namedSubnetIdsOf', () => {
+  it('reads a comma-separated list, trimming blanks', () => {
+    expect(namedSubnetIdsOf(' subnet-0a , ,subnet-0b ')).toEqual(['subnet-0a', 'subnet-0b']);
+    expect(namedSubnetIdsOf('')).toEqual([]);
+    expect(namedSubnetIdsOf(undefined)).toEqual([]);
   });
 });

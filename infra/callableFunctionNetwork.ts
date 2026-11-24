@@ -51,6 +51,14 @@ const TARGET_FIELDS: Array<[Exclude<keyof RouteTarget, 'origin'>, string]> = [
   ['destinationPrefixListId', 'a prefix list'],
 ];
 
+/** The subnet ids in a CALLABLE_FUNCTION_SUBNET_IDS value. */
+export function namedSubnetIdsOf(value: string | undefined): string[] {
+  return (value ?? '')
+    .split(',')
+    .map(id => id.trim())
+    .filter(Boolean);
+}
+
 /** One subnet per CIDR, each in its own zone, all on the one empty route table. */
 export const DEDICATED_SUBNET_CIDRS = ['10.0.0.0/20', '10.0.16.0/20'];
 
@@ -80,6 +88,7 @@ export interface RouteProbes {
   propagated: boolean;
   endpoint: boolean;
   created: boolean;
+  networkInterface: boolean;
   /** A route to any prefix list but the data endpoint's; see otherPrefixListFilters. */
   otherPrefixList: boolean;
 }
@@ -95,6 +104,10 @@ const ROUTE_PROBES: Record<FixedProbe, { filter: { name: string; values: string[
   },
   endpoint: { filter: { name: 'route.gateway-id', values: ['vpce-*'] }, route: { gatewayId: 'vpce-*' } },
   created: { filter: { name: 'route.origin', values: ['CreateRoute'] }, route: { origin: 'CreateRoute' } },
+  networkInterface: {
+    filter: { name: 'route.network-interface-id', values: ['eni-*'] },
+    route: { networkInterfaceId: 'eni-*' },
+  },
 };
 
 /** The `getRouteTables` filters that match `routeTableId` only when its table holds a route of the probed kind. */
@@ -135,15 +148,23 @@ export function tableRoutes(
     routeTableId && dataEndpoint?.routeTableIds.includes(routeTableId)
       ? { gatewayId: dataEndpoint.id, destinationPrefixListId: dataEndpoint.prefixListId }
       : undefined;
-  const found = (Object.keys(ROUTE_PROBES) as FixedProbe[]).filter(probe => probes[probe]);
+  // The endpoint route itself may read back with origin CreateRoute. Every other route the data source omits has a
+  // probe of its own, so `created` adds nothing once the data route is accounted for.
+  const skipCreated = !!dataRoute && probes.endpoint;
+  const found = (Object.keys(ROUTE_PROBES) as FixedProbe[]).filter(
+    probe => probes[probe] && !(probe === 'created' && skipCreated)
+  );
   const probed = found.map(probe => (probe === 'endpoint' && dataRoute ? dataRoute : ROUTE_PROBES[probe].route));
   return [...listed, ...probed, ...(probes.otherPrefixList ? [OTHER_PREFIX_LIST_ROUTE] : [])];
 }
 
-const BUCKET_OBJECTS = /^[a-z0-9][a-z0-9.-]*\/\*$/;
+/** Every function-data key starts with it; must match callableFunctionDataKey (packages/server-utils). */
+export const FUNCTION_DATA_KEY_PREFIX = 'data/';
+
+const BUCKET_DATA_OBJECTS = /^[a-z0-9][a-z0-9.-]*\/data\/\*$/;
 const asList = (value: unknown): unknown[] => (Array.isArray(value) ? value : [value]);
 
-/** True only for one Allow statement of `s3:GetObject` on one bucket's objects, for any principal. */
+/** True only for one Allow statement of `s3:GetObject` on one bucket's `data/` objects, for any principal. */
 export function isGetObjectOnlyPolicy(policy: string | undefined, partition: string): boolean {
   let document: unknown;
   try {
@@ -166,7 +187,7 @@ export function isGetObjectOnlyPolicy(policy: string | undefined, partition: str
     typeof resources[0] === 'string' &&
     partition !== '' &&
     resources[0].startsWith(`arn:${partition}:s3:::`) &&
-    BUCKET_OBJECTS.test(resources[0].slice(`arn:${partition}:s3:::`.length))
+    BUCKET_DATA_OBJECTS.test(resources[0].slice(`arn:${partition}:s3:::`.length))
   );
 }
 
@@ -182,7 +203,7 @@ function dataEndpointFaults(
   if (endpoint.state?.toLowerCase() !== 'available') faults.push(`endpoint ${id} is not available`);
   if (vpcId && endpoint.vpcId !== vpcId) faults.push(`endpoint ${id} is not in VPC ${vpcId}`);
   if (!isGetObjectOnlyPolicy(endpoint.policy, partition)) {
-    faults.push(`endpoint ${id} has a policy that allows more than s3:GetObject on one bucket`);
+    faults.push(`endpoint ${id} has a policy that allows more than s3:GetObject on one bucket's data objects`);
   }
   return faults;
 }
@@ -264,25 +285,32 @@ export function callableFunctionRolePolicy(logGroupArn: string) {
   };
 }
 
-/** The data endpoint's policy: GetObject on the function-data bucket's objects, for any principal. */
+/** The data endpoint's policy: GetObject on the function-data bucket's `data/` objects, for any principal. */
 export function callableFunctionDataEndpointPolicy(bucketArn: string) {
   return {
     Version: '2012-10-17',
     Statement: [
-      { Sid: 'FunctionDataReads', Effect: 'Allow', Principal: '*', Action: 's3:GetObject', Resource: `${bucketArn}/*` },
+      {
+        Sid: 'FunctionDataReads',
+        Effect: 'Allow',
+        Principal: '*',
+        Action: 's3:GetObject',
+        Resource: `${bucketArn}/${FUNCTION_DATA_KEY_PREFIX}*`,
+      },
     ],
   };
 }
 
-/** What the web API function's role may do to the function-data bucket's objects. */
+/** What the web API function's role may do to the function-data bucket's `data/` objects. */
 export const FUNCTION_DATA_DISPATCHER_ACTIONS = ['s3:PutObject', 's3:GetObject', 's3:DeleteObject'];
 
 export const FUNCTION_DATA_READ_ACTIONS = ['s3:GetObject*', 's3:ListBucket*'];
-export const FUNCTION_DATA_WRITE_ACTIONS = ['s3:PutObject*', 's3:DeleteObject*'];
+export const FUNCTION_DATA_WRITE_ACTIONS = ['s3:PutObject*', 's3:DeleteObject*', 's3:Replicate*'];
 
 /**
- * The function-data bucket's policy: HTTPS only; reads only through `endpointId` (every read, without one);
- * object writes and deletes by nobody. The dispatcher's role is exempt from the last two.
+ * The function-data bucket's policy: HTTPS only; reads only through `endpointId` (every read, without one), and
+ * reads by a signed link likewise for every principal; object writes and deletes by nobody. The dispatcher's role
+ * is exempt from the read and write statements, so it keeps header-signed reads, writes, and deletes.
  */
 export function callableFunctionDataBucketPolicy({
   bucketArn,
@@ -294,6 +322,8 @@ export function callableFunctionDataBucketPolicy({
   endpointId?: string;
 }) {
   const notDispatcher = { ArnNotEquals: { 'aws:PrincipalArn': dispatcherRoleArn } };
+  const notThroughEndpoint = endpointId ? { StringNotEquals: { 'aws:SourceVpce': endpointId } } : {};
+  const signedLink = { StringEquals: { 's3:authType': 'REST-QUERY-STRING' } };
   return {
     Version: '2012-10-17',
     Statement: [
@@ -311,7 +341,15 @@ export function callableFunctionDataBucketPolicy({
         Principal: '*',
         Action: FUNCTION_DATA_READ_ACTIONS,
         Resource: [bucketArn, `${bucketArn}/*`],
-        Condition: endpointId ? { ...notDispatcher, StringNotEquals: { 'aws:SourceVpce': endpointId } } : notDispatcher,
+        Condition: { ...notDispatcher, ...notThroughEndpoint },
+      },
+      {
+        Sid: 'SignedLinksThroughDataEndpoint',
+        Effect: 'Deny',
+        Principal: '*',
+        Action: 's3:GetObject*',
+        Resource: `${bucketArn}/*`,
+        Condition: { ...signedLink, ...notThroughEndpoint },
       },
       {
         Sid: 'WritesByDispatcher',

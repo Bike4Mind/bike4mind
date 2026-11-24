@@ -11,6 +11,7 @@ import {
   callableFunctionRolePolicy,
   DEDICATED_SUBNET_CIDRS,
   distinctZones,
+  namedSubnetIdsOf,
   otherPrefixListFilters,
   probeMatched,
   routeProbeFilters,
@@ -24,16 +25,14 @@ import { PRODUCTION_STAGES, STAGE_LOG_RETENTION_DAYS } from './constants';
 import { dlqAlarmTopic } from './dlqAlarms';
 
 // Runs user-written Python (apps/workers/src/callableFunctions/handler.ts) with no link, secrets, or environment, on a
-// network with no route out or name resolution. A raw aws.lambda.Function: sst.aws.Function takes no prebuilt image.
+// network with no name resolution and no route out but the function-data endpoint. A raw aws.lambda.Function:
+// sst.aws.Function takes no prebuilt image.
 const runtimeImage = process.env.CALLABLE_FUNCTION_RUNTIME_IMAGE;
 if (process.env.CI === 'true' && !runtimeImage) {
   console.warn('CALLABLE_FUNCTION_RUNTIME_IMAGE is not set; skipping the callable function runtime.');
 }
 
-const namedSubnetIds = (process.env.CALLABLE_FUNCTION_SUBNET_IDS ?? '')
-  .split(',')
-  .map(id => id.trim())
-  .filter(Boolean);
+const namedSubnetIds = namedSubnetIdsOf(process.env.CALLABLE_FUNCTION_SUBNET_IDS);
 
 const longLivedStage = PRODUCTION_STAGES.includes($app.stage);
 
@@ -49,14 +48,8 @@ if (skippedWithoutNetwork) {
 const enabled = !$dev && !!runtimeImage && !skippedWithoutNetwork;
 
 // The S3 gateway endpoint of the stage that owns the named subnets: its route is the one the route check accepts.
+// The endpoint cannot be read from a table: the route table data source omits a gateway endpoint's route.
 const namedDataEndpointId = process.env.CALLABLE_FUNCTION_DATA_ENDPOINT_ID?.trim() || undefined;
-if (enabled && namedSubnetIds.length > 0) {
-  console.warn(
-    namedDataEndpointId
-      ? 'Function data: the endpoint in CALLABLE_FUNCTION_DATA_ENDPOINT_ID reads only its own stage bucket, so the callable function runtime on this stage cannot read this stage bucket.'
-      : 'CALLABLE_FUNCTION_DATA_ENDPOINT_ID is not set: the named subnets must hold no endpoint route, and only the web API function reads the function-data bucket on this stage.'
-  );
-}
 
 const NETWORK_NAME = `${$app.name}-${$app.stage}-callable-function`;
 
@@ -64,9 +57,9 @@ const S3_SERVICE_NAME = $interpolate`com.amazonaws.${aws.getRegionOutput().regio
 
 /**
  * A VPC with no gateway, IPv6, or DNS; two subnets in two zones share one table holding the local route and the
- * function-data endpoint's route, whose policy allows GetObject on that bucket's objects only.
+ * function-data endpoint's route, whose policy allows GetObject on that bucket's `data/` objects only.
  */
-function dedicatedNetwork() {
+function dedicatedNetwork(dataBucket: aws.s3.Bucket) {
   const vpc = new aws.ec2.Vpc('CallableFunctionRuntimeVpc', {
     cidrBlock: '10.0.0.0/16',
     enableDnsSupport: false,
@@ -105,10 +98,10 @@ function dedicatedNetwork() {
     serviceName: S3_SERVICE_NAME,
     vpcEndpointType: 'Gateway',
     routeTableIds: [routeTable.id],
-    policy: callableFunctionDataBucket.arn.apply(arn => JSON.stringify(callableFunctionDataEndpointPolicy(arn))),
+    policy: dataBucket.arn.apply(arn => JSON.stringify(callableFunctionDataEndpointPolicy(arn))),
     tags: { Name: NETWORK_NAME },
   });
-  return { vpcId: vpc.id, subnetIds: $output(subnets.map(subnet => subnet.id)), dataEndpointId: dataEndpoint.id };
+  return { vpcId: vpc.id, subnetIds: $output(subnets.map(subnet => subnet.id)), dataEndpoint };
 }
 
 /** The endpoint in CALLABLE_FUNCTION_DATA_ENDPOINT_ID, as subnetNetworkFaults reads it. */
@@ -148,6 +141,7 @@ function routesOf(
     propagated: probe('propagated'),
     endpoint: probe('endpoint'),
     created: probe('created'),
+    networkInterface: probe('networkInterface'),
     otherPrefixList,
     data: dataEndpoint,
   }).apply(({ routes, data, ...probes }) => tableRoutes(routes, probes, routeTableId, data));
@@ -181,18 +175,26 @@ function namedNetwork(subnetIds: string[]) {
   return {
     vpcId: checked.apply(read => read[0].vpcId!),
     subnetIds: checked.apply(read => read.map(subnet => subnet.subnetId)),
-    dataEndpointId: checked.apply(() => namedDataEndpointId ?? ''),
+    dataEndpoint: undefined,
   };
 }
 
 function createCallableFunctionRuntime() {
-  const network = namedSubnetIds.length > 0 ? namedNetwork(namedSubnetIds) : dedicatedNetwork();
+  // infra/callableFunctionData.ts creates the bucket exactly when no subnets are named.
+  const network = callableFunctionDataBucket
+    ? dedicatedNetwork(callableFunctionDataBucket)
+    : namedNetwork(namedSubnetIds);
+  const { dataEndpoint } = network;
 
   const securityGroup = new aws.ec2.SecurityGroup('CallableFunctionRuntimeSecurityGroup', {
     vpcId: network.vpcId,
-    description: 'Callable function runtime: no ingress, no egress',
+    description: dataEndpoint
+      ? 'Callable function runtime: no ingress, egress to the function-data endpoint only'
+      : 'Callable function runtime: no ingress, no egress',
     ingress: [],
-    egress: [],
+    egress: dataEndpoint
+      ? [{ protocol: 'tcp', fromPort: 443, toPort: 443, prefixListIds: [dataEndpoint.prefixListId] }]
+      : [],
   });
 
   const role = new aws.iam.Role('CallableFunctionRuntimeRole', {
@@ -232,7 +234,7 @@ function createCallableFunctionRuntime() {
   );
 
   if (dlqAlarmTopic) createAlarms(fn, dlqAlarmTopic);
-  return { fn, subnetIds: network.subnetIds, dataEndpointId: network.dataEndpointId };
+  return { fn, subnetIds: network.subnetIds, dataEndpointId: dataEndpoint?.id };
 }
 
 /** Errors, duration, and throttles, in the shape infra/alarms.ts uses for its Lambda alarms. */
@@ -291,5 +293,5 @@ export const callableFunctionRuntime = runtime?.fn;
 /** For the stack output: another stage in the same account runs the function in these subnets. */
 export const callableFunctionSubnetIds = runtime?.subnetIds.apply(ids => ids.join(','));
 
-/** For the stack output: such a stage sets it as CALLABLE_FUNCTION_DATA_ENDPOINT_ID. Empty without an endpoint. */
+/** For the stack output: such a stage sets it as CALLABLE_FUNCTION_DATA_ENDPOINT_ID. Only a dedicated network has one. */
 export const callableFunctionDataEndpointId = runtime?.dataEndpointId;
