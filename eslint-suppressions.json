@@ -1954,16 +1954,6 @@
       "count": 1
     }
   },
-  "apps/client/pages/api/artifacts/[id]/index.ts": {
-    "@typescript-eslint/no-explicit-any": {
-      "count": 12
-    }
-  },
-  "apps/client/pages/api/artifacts/[id]/versions.ts": {
-    "@typescript-eslint/no-explicit-any": {
-      "count": 10
-    }
-  },
   "apps/client/pages/api/artifacts/[id]/versions/[version].ts": {
     "@typescript-eslint/no-explicit-any": {
       "count": 5
