@@ -1,3 +1,4 @@
+import { getAbortAwareRetrySignal, reportUsageOnAbort, retryAbortAware } from './abortAwareRetry';
 import {
   ARTIFACT_REMOVED_PLACEHOLDER,
   ChatModels,
@@ -146,6 +147,7 @@ export class DeepSeekBackend implements ICompletionBackend {
     callback: (text: (string | null | undefined)[], completionInfo: CompletionInfo) => Promise<void>,
     toolsUsed: Array<RecordableToolUse> = []
   ): Promise<void> {
+    const retrySignal = getAbortAwareRetrySignal(options);
     this.currentModel = model;
 
     const toolCallCount = options._internal?.toolCallCount ?? 0;
@@ -253,11 +255,28 @@ export class DeepSeekBackend implements ICompletionBackend {
     // the adapter exists to read the cache counters back out.
     const cacheStrategy = options.cacheStrategy;
 
-    const response = await this._api.chat.completions.create(parameters, { signal: options.abortSignal });
+    const create = () =>
+      this._api.chat.completions.create(parameters, {
+        signal: options.abortSignal,
+        ...(retrySignal ? { maxRetries: 0 } : {}),
+      });
+    const response = retrySignal ? await retryAbortAware(create, retrySignal) : await create();
     let inputTokens = 0;
     let outputTokens = 0;
 
     if (!(response instanceof Stream)) {
+      if (retrySignal?.aborted) {
+        const usage = response.usage;
+        const turnUsage = usage
+          ? appendCacheInclusiveTurn(
+              undefined,
+              usage.prompt_tokens,
+              cachedTokensFromUsage(usage as unknown as Record<string, unknown>),
+              usage.completion_tokens
+            )
+          : undefined;
+        await reportUsageOnAbort(retrySignal, callback, turnUsage ? { ...turnUsage[0], turnUsage } : undefined);
+      }
       const streamedText: string[] = [];
       // The empty guard keys on prose produced, not on streamedText: the monologue
       // is wrapped into streamedText too, so a guard keyed there cannot tell a
@@ -281,7 +300,7 @@ export class DeepSeekBackend implements ICompletionBackend {
         // reason by default, so that is the normal agentic turn, not an edge case.
         const reasoningContent = (c.message as { reasoning_content?: string }).reasoning_content;
 
-        if (c.message.tool_calls && c.message.tool_calls.length > 0) {
+        if (!retrySignal && c.message.tool_calls && c.message.tool_calls.length > 0) {
           for (const toolCall of c.message.tool_calls) {
             if (toolCall.type !== 'function') continue;
             if (toolCall.function.arguments) {
@@ -526,6 +545,7 @@ export class DeepSeekBackend implements ICompletionBackend {
         ...(bestEffortFormat ? { responseFormatMode: 'best-effort' as const } : {}),
         ...(finishReason ? { stopReason: finishReason } : {}),
       });
+      retrySignal?.throwIfAborted();
       return;
     }
 
