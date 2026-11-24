@@ -38,10 +38,15 @@ data class ChatState(
     val sendsAsAgentRun: Boolean = false,
     /** Answers given from this screen, by the action they answered. */
     val approvals: Map<PendingActionTarget, ApprovalCardState> = emptyMap(),
+    /** Messages that never reached the server, oldest first, each kept for [ChatController.retry]. */
+    val failedSends: List<FailedSend> = emptyList(),
 ) {
     fun approval(questId: String, action: PendingAction): ApprovalCardState =
         approvals[PendingActionTarget(questId, action.requestedAtMs)] ?: ApprovalCardState.Open
 }
+
+/** A message the server never received: shown under the transcript with a retry. Twin of the iOS failed live turn. */
+data class FailedSend(val id: String, val message: String, val fileIds: List<String>)
 
 sealed interface ChatError {
     data class Refused(val errorCode: String?, val message: String?) : ChatError
@@ -94,6 +99,8 @@ class ChatController(
     val state: StateFlow<ChatState> = mutableState.asStateFlow()
 
     private val lastHeard = mutableMapOf<String, Long>()
+    private val onRetryAccepted = mutableMapOf<String, () -> Unit>()
+    private var failedSendCount = 0
     private var socket: Job? = null
 
     fun start() {
@@ -124,9 +131,22 @@ class ChatController(
             return startAgentRun(agentRuns, runSessionId, text)
         }
         mutableState.update { it.copy(sending = true, error = null) }
+        submit(FailedSend("failed-${++failedSendCount}", text, fileIds), onAccepted)
+    }
+
+    /** Sends a failed message again; the same [onAccepted] the first send was given runs once the server takes it. */
+    fun retry(failedSendId: String) {
+        val state = mutableState.value
+        val failed = state.failedSends.firstOrNull { it.id == failedSendId } ?: return
+        if (state.sending) return
+        mutableState.update { current -> current.copy(sending = true, error = null, failedSends = current.failedSends - failed) }
+        submit(failed, onRetryAccepted.remove(failedSendId) ?: {})
+    }
+
+    private fun submit(attempt: FailedSend, onAccepted: () -> Unit) {
         scope.launch {
             try {
-                when (val receipt = backend.send(text, mutableState.value.sessionId, fileIds)) {
+                when (val receipt = backend.send(attempt.message, mutableState.value.sessionId, attempt.fileIds)) {
                     is ChatReceipt.Refused -> mutableState.update {
                         it.copy(sending = false, error = ChatError.Refused(receipt.errorCode, receipt.message))
                     }
@@ -140,7 +160,7 @@ class ChatController(
                                 turns = state.turns + Quest(
                                     id = receipt.questId,
                                     sessionId = receipt.sessionId,
-                                    prompt = text,
+                                    prompt = attempt.message,
                                     reply = null,
                                     status = QuestStatus.PENDING,
                                     type = null,
@@ -154,7 +174,9 @@ class ChatController(
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (error: Exception) {
-                mutableState.update { it.copy(sending = false, error = ChatError.Failed(error.message ?: "Send failed")) }
+                // The composer has already let go of the text, so the message is kept here rather than dropped.
+                onRetryAccepted[attempt.id] = onAccepted
+                mutableState.update { it.copy(sending = false, failedSends = it.failedSends + attempt) }
             }
         }
     }

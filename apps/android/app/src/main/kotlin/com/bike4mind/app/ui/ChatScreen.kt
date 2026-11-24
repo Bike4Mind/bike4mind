@@ -41,6 +41,7 @@ import com.bike4mind.app.R
 import com.bike4mind.kit.approvals.PendingActionDecision
 import com.bike4mind.kit.capture.readyFileIds
 import com.bike4mind.kit.chat.ChatError
+import com.bike4mind.kit.chat.FailedSend
 import com.bike4mind.kit.chat.ChatState
 import com.bike4mind.kit.sessions.PendingAction
 import com.bike4mind.kit.sessions.Quest
@@ -71,8 +72,9 @@ fun ChatScreen(graph: AppGraph, sessionId: String?, onBack: () -> Unit) {
     val fileIds = attachments.readyFileIds()
     val attachedMessage = stringResource(R.string.capture_attached_message, attachments.joinToString(", ") { it.name })
 
-    LaunchedEffect(state.turns.size) {
-        if (state.turns.isNotEmpty()) list.animateScrollToItem(state.turns.lastIndex)
+    val rows = state.turns.size + state.failedSends.size
+    LaunchedEffect(rows) {
+        if (rows > 0) list.animateScrollToItem(rows - 1)
     }
 
     DictationDialog(
@@ -99,6 +101,9 @@ fun ChatScreen(graph: AppGraph, sessionId: String?, onBack: () -> Unit) {
             ) {
                 items(state.turns, key = { it.id }) { turn ->
                     Turn(turn, state) { action, decision -> model.controller.respond(turn.id, action, decision) }
+                }
+                items(state.failedSends, key = { it.id }) { failed ->
+                    FailedSendRow(failed, retryEnabled = !state.sending) { model.controller.retry(failed.id) }
                 }
             }
             state.statusMessage?.let {
@@ -168,6 +173,19 @@ fun ChatScreen(graph: AppGraph, sessionId: String?, onBack: () -> Unit) {
                 }) {
                     Text(stringResource(R.string.chat_send))
                 }
+            }
+        }
+    }
+}
+
+@Composable
+private fun FailedSendRow(failed: FailedSend, retryEnabled: Boolean, onRetry: () -> Unit) {
+    Column(modifier = Modifier.fillMaxWidth().padding(horizontal = Spacing.m).testTag("chat-failed-send")) {
+        Card(modifier = Modifier.testTag("message-user")) { Text(failed.message, modifier = Modifier.padding(Spacing.m)) }
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(stringResource(R.string.chat_send_failed), color = MaterialTheme.colorScheme.error, modifier = Modifier.weight(1f))
+            TextButton(onClick = onRetry, enabled = retryEnabled, modifier = Modifier.testTag("chat-failed-send-retry-btn")) {
+                Text(stringResource(R.string.action_try_again))
             }
         }
     }
