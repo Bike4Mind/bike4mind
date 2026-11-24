@@ -1,11 +1,5 @@
-import {
-  BILLING_ORGANIZATION_MISMATCH_ERROR_CODE,
-  DAILY_FREE_LIMIT_REACHED_ERROR_CODE,
-  isSpendFrozenError,
-  type ApiCompletionOutcome,
-} from '@bike4mind/common';
-import { MISMATCH_MESSAGE, apiKeyBillingOrgId } from '@server/billing/apiKeyBillingOrg';
-import { resolveActiveOrg } from '@bike4mind/server-utils/utils/resolveActiveOrg';
+import { DAILY_FREE_LIMIT_REACHED_ERROR_CODE, isSpendFrozenError, type ApiCompletionOutcome } from '@bike4mind/common';
+import { resolveCompletionBillingOrgId } from '@server/billing/resolveCompletionBillingOrgId';
 import { createCompletionCreditHolds } from '@server/billing/completionCreditHolds';
 import { assertEvaluationAuthorized, evaluationTransport } from '@server/completionRuns/evaluation';
 import { assertSpendNotFrozen } from '@bike4mind/services/creditService';
@@ -16,7 +10,6 @@ import express, { type Request, type Response, type Express, type NextFunction }
 import {
   CompletionRequestSchema,
   BadRequestError,
-  ForbiddenError,
   HTTPError,
   LEGACY_REQUEST_ID_HEADER,
   REQUEST_ID_HEADER,
@@ -142,37 +135,6 @@ async function verifyRunOwnership(
   if (Boolean(stored.evaluation) !== evaluation)
     throw new BadRequestError('Evaluation run requires evaluation attribution on every request.');
   return { ...run, runId: stored.runId };
-}
-
-/**
- * The organization whose credit pool pays for this call (undefined = personal credits).
- *
- * An organization-billed API key always bills its own org; a body `organization_id` naming any other
- * payer (null included) is a 403. A signed-in caller defaults to personal credits (no home-org
- * fallback, unlike the media routes) and may name an org, validated through resolveActiveOrg
- * (403 not a member, 404 unknown). Runs before any credit hold or model call.
- */
-async function resolveCompletionBillingOrgId({
-  apiKeyInfo,
-  requestedOrgId,
-  userId,
-}: {
-  apiKeyInfo: ApiKeyInfo | undefined;
-  requestedOrgId: string | null | undefined;
-  userId: string;
-}): Promise<string | undefined> {
-  const keyOrgId = apiKeyBillingOrgId(apiKeyInfo);
-  if (keyOrgId) {
-    if (requestedOrgId !== undefined && requestedOrgId !== keyOrgId) {
-      throw new ForbiddenError(MISMATCH_MESSAGE, { errorCode: BILLING_ORGANIZATION_MISMATCH_ERROR_CODE });
-    }
-    return keyOrgId;
-  }
-  if (!requestedOrgId) return apiKeyInfo?.organizationId;
-
-  const caller = await userRepository.findById(userId);
-  if (!caller) throw new UnauthorizedError('Authentication failed. Provide a valid API key or JWT token.');
-  return resolveActiveOrg({ user: caller }, requestedOrgId);
 }
 
 function requestIdFrom(headers: Record<string, string | undefined>): string {

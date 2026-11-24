@@ -450,6 +450,14 @@ export const CompletionsUnprocessableErrorSchema = ApiErrorSchema.extend({
   errorCode: z.enum(QUEST_ERROR_CODES).optional(),
 });
 
+/**
+ * 403 on the completion-run routes' `organization_id`: an organization-billed API key naming another
+ * payer, or an organization the caller cannot use (apps/client/server/billing/resolveCompletionBillingOrgId.ts).
+ */
+export const CompletionRunForbiddenErrorSchema = ApiErrorSchema.extend({
+  errorCode: z.literal(BILLING_ORGANIZATION_MISMATCH_ERROR_CODE).optional(),
+});
+
 /** 409 when a run budget change would not raise it. */
 export const RunBudgetNotRaisedErrorSchema = ApiErrorSchema.extend({
   errorCode: z.literal(RUN_BUDGET_NOT_RAISED_ERROR_CODE),

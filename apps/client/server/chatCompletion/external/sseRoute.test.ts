@@ -1584,6 +1584,33 @@ describe('POST /api/ai/v1/completions - run attribution', () => {
     expect(mockExecuteCompletion).not.toHaveBeenCalled();
   });
 
+  it('honours a run minted for an organization when the completion names that organization', async () => {
+    mockResolveContractAuth.mockResolvedValueOnce({ method: 'jwt', userId: 'user-1' });
+    vi.mocked(userRepository.findById).mockResolvedValueOnce({ id: 'user-1', isAdmin: false } as never);
+    mockResolveActiveOrg.mockResolvedValueOnce('org-2');
+    mockFindCompletionRun.mockResolvedValueOnce(storedRun({ ownerType: 'Organization', ownerId: 'org-2' }));
+
+    const res = await post({ ...COMPLETION, run: RUN, organization_id: 'org-2' });
+    await res.text();
+
+    expect(res.status).toBe(200);
+    expect(mockExecuteCompletion).toHaveBeenCalledWith(
+      expect.objectContaining({ run: RUN, billingOrganizationId: 'org-2' })
+    );
+  });
+
+  it('refuses a personal run on a completion that names an organization, since the payers differ', async () => {
+    mockResolveContractAuth.mockResolvedValueOnce({ method: 'jwt', userId: 'user-1' });
+    vi.mocked(userRepository.findById).mockResolvedValueOnce({ id: 'user-1', isAdmin: false } as never);
+    mockResolveActiveOrg.mockResolvedValueOnce('org-2');
+    mockFindCompletionRun.mockResolvedValueOnce(storedRun());
+
+    const body = await expectJsonError(await post({ ...COMPLETION, run: RUN, organization_id: 'org-2' }), 404);
+
+    expect(body.errorCode).toBe('run_not_found');
+    expect(mockExecuteCompletion).not.toHaveBeenCalled();
+  });
+
   it('accepts an uppercased id for an owned run and forwards the normalized id', async () => {
     mockFindCompletionRun.mockResolvedValueOnce(storedRun());
 

@@ -310,6 +310,17 @@ export {
 } from '../constants/completionRuns';
 
 /** A run id issued by `POST /api/v1/completion-runs`. Knowing one grants nothing; the server checks its owner. */
+/**
+ * The payer a completion or completion-run request names. Every route that takes it resolves it the same
+ * way (apps/client/server/billing/resolveCompletionBillingOrgId.ts), so a run and its completions agree.
+ */
+const BillingOrganizationIdSchema = z.string().trim().min(1);
+const BILLING_ORGANIZATION_RULES =
+  'An organization-billed API key always bills its own organization, and naming any other (null included) gets a 403 (`errorCode: "billing_organization_mismatch"`). A caller who cannot use the named organization gets a 403.';
+const RUN_ORGANIZATION_LOOKUP =
+  "The `organization_id` the run was minted with, so a run bound to an organization is found. Omitted: the run of a signed-in caller's personal credits, or of an organization-billed API key's organization. " +
+  BILLING_ORGANIZATION_RULES;
+
 export const CompletionRunIdSchema = z.uuid().describe('A run id issued by `POST /api/v1/completion-runs`.');
 
 const CompletionRunLabelSchema = z.string().min(1).max(128);
@@ -380,6 +391,12 @@ export const CreateCompletionRunRequestSchema = z.object({
   budgetCredits: CompletionRunBudgetCreditsSchema.optional().describe(
     'Caps what its completions may claim, in credits; an estimate miss can take the run slightly over. Omit it and the run draws only on the account balance, as before. A budget can be raised later but never added to a run minted without one.'
   ),
+  organization_id: BillingOrganizationIdSchema.nullable()
+    .optional()
+    .describe(
+      "Organization whose credit pool the run's completions pay from, or null for personal credits. Omitted: personal credits for a signed-in user. A completion matches the run only when it bills the same account, so send this same `organization_id` on those completions and on the run's budget, usage and evaluation requests. " +
+        BILLING_ORGANIZATION_RULES
+    ),
 });
 
 export const CompletionRunSchema = z.object({
@@ -394,6 +411,7 @@ export const RaiseCompletionRunBudgetRequestSchema = z.object({
   budgetCredits: CompletionRunBudgetCreditsSchema.describe(
     "The run's new budget, in credits. Must be above the current one: a budget is only ever raised."
   ),
+  organization_id: BillingOrganizationIdSchema.nullable().optional().describe(RUN_ORGANIZATION_LOOKUP),
 });
 
 export type RaiseCompletionRunBudgetRequest = z.infer<typeof RaiseCompletionRunBudgetRequestSchema>;
@@ -420,6 +438,11 @@ export type CompletionRun = z.infer<typeof CompletionRunSchema>;
 export const COMPLETION_RUN_USAGE_MAX_ATTEMPTS = 500;
 
 export const CompletionRunIdParamSchema = z.object({ runId: CompletionRunIdSchema });
+
+/** Query of the completion-run reads (usage, evaluation): which payer's run to look up. */
+export const CompletionRunOwnerQuerySchema = z.object({
+  organization_id: BillingOrganizationIdSchema.optional().describe(RUN_ORGANIZATION_LOOKUP),
+});
 
 const TokenCountSchema = z.number().int().nonnegative();
 
@@ -494,14 +517,11 @@ export const CompletionRequestSchema = z.object({
   sessionId: CompletionSessionIdSchema.optional(),
   run: CompletionRunAttributionSchema.optional(),
   end_user_id: EndUserIdSchema.optional(),
-  organization_id: z
-    .string()
-    .trim()
-    .min(1)
-    .nullable()
+  organization_id: BillingOrganizationIdSchema.nullable()
     .optional()
     .describe(
-      'Organization whose credit pool pays for this call, or null for personal credits. Omitted: personal credits for a signed-in user; an organization-billed API key always bills its own organization. A signed-in caller who is not a member of the named organization gets a 403, and an unknown organization a 404.'
+      'Organization whose credit pool pays for this call, or null for personal credits. Omitted: personal credits for a signed-in user. With `run`, send the `organization_id` the run was minted with. ' +
+        BILLING_ORGANIZATION_RULES
     ),
   options: z
     .object({
