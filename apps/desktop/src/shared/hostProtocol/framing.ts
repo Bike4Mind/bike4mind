@@ -1,7 +1,7 @@
 import { HOST_ERROR_CODES, parseHostMessage, type HostError, type HostMessage } from './envelope';
 
-/** Counted in UTF-16 code units (string length), not bytes: the decoder works on decoded strings. */
-export const MAX_HOST_FRAME_BYTES = 16 * 1024 * 1024;
+/** In UTF-16 code units (string length): the decoder works on decoded strings, not bytes. */
+export const MAX_HOST_FRAME_LENGTH = 16 * 1024 * 1024;
 
 export type HostFrame = { ok: true; message: HostMessage } | { ok: false; error: HostError };
 
@@ -13,7 +13,7 @@ const oversizeFrame = (): HostFrame => ({
   ok: false,
   error: {
     code: HOST_ERROR_CODES.invalidRequest,
-    message: `Frame exceeds ${MAX_HOST_FRAME_BYTES} characters`,
+    message: `Frame exceeds ${MAX_HOST_FRAME_LENGTH} characters`,
   },
 });
 
@@ -42,7 +42,7 @@ export function createHostFrameDecoder(): { push(chunk: string): HostFrame[] } {
         if (newline === -1) {
           if (discarding) return frames;
           buffer += rest;
-          if (buffer.length > MAX_HOST_FRAME_BYTES) {
+          if (buffer.length > MAX_HOST_FRAME_LENGTH) {
             frames.push(oversizeFrame());
             buffer = '';
             discarding = true;
@@ -57,7 +57,7 @@ export function createHostFrameDecoder(): { push(chunk: string): HostFrame[] } {
         }
         const line = buffer + segment;
         buffer = '';
-        if (line.length > MAX_HOST_FRAME_BYTES) {
+        if (line.length > MAX_HOST_FRAME_LENGTH) {
           frames.push(oversizeFrame());
           continue;
         }

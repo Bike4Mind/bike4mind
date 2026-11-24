@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { HOST_ERROR_CODES, hostNotification, hostRequest } from './envelope';
-import { MAX_HOST_FRAME_BYTES, createHostFrameDecoder, encodeHostFrame } from './framing';
+import { MAX_HOST_FRAME_LENGTH, createHostFrameDecoder, encodeHostFrame } from './framing';
 
 const request = hostRequest(1, 'host/info');
 const notification = hostNotification('host/stateChanged', { account: null });
@@ -69,10 +69,10 @@ describe('host frame codec', () => {
 
   it('drops an oversize line with one error and recovers on the next line', () => {
     const decoder = createHostFrameDecoder();
-    const huge = 'x'.repeat(MAX_HOST_FRAME_BYTES + 1);
+    const huge = 'x'.repeat(MAX_HOST_FRAME_LENGTH + 1);
     const frames = [
-      ...decoder.push(huge.slice(0, MAX_HOST_FRAME_BYTES)),
-      ...decoder.push(huge.slice(MAX_HOST_FRAME_BYTES)),
+      ...decoder.push(huge.slice(0, MAX_HOST_FRAME_LENGTH)),
+      ...decoder.push(huge.slice(MAX_HOST_FRAME_LENGTH)),
       ...decoder.push('still the same line'),
       ...decoder.push(`\n${encodeHostFrame(request)}`),
     ];
@@ -83,7 +83,7 @@ describe('host frame codec', () => {
 
   it('reports an oversize line that arrives whole, with its newline', () => {
     const frames = createHostFrameDecoder().push(
-      `${'x'.repeat(MAX_HOST_FRAME_BYTES + 1)}\n${encodeHostFrame(request)}`
+      `${'x'.repeat(MAX_HOST_FRAME_LENGTH + 1)}\n${encodeHostFrame(request)}`
     );
     expect(frames).toHaveLength(2);
     expect(frames[0]).toMatchObject({ ok: false, error: { code: HOST_ERROR_CODES.invalidRequest } });
