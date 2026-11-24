@@ -16,6 +16,7 @@ vi.mock('./template', () => ({
 import {
   TEMPLATE_LOADER_SCRIPT_HASH,
   findServableTemplate,
+  recordTemplateTry,
   recordTemplateView,
   renderTemplateLoaderShell,
   renderTemplatePage,
@@ -61,6 +62,14 @@ describe('recordTemplateView', () => {
     h.updateOne.mockResolvedValue({});
     await recordTemplateView({ _id: 't1' } as never);
     expect(h.updateOne).toHaveBeenCalledWith({ _id: 't1' }, { $inc: { viewCount: 1 } }, { runValidators: true });
+  });
+});
+
+describe('recordTemplateTry', () => {
+  it('increments the try count', async () => {
+    h.updateOne.mockResolvedValue({});
+    await recordTemplateTry({ _id: 't1' } as never);
+    expect(h.updateOne).toHaveBeenCalledWith({ _id: 't1' }, { $inc: { tryCount: 1 } }, { runValidators: true });
   });
 });
 

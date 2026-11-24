@@ -136,3 +136,12 @@ export const useRemoveSkillTemplateImage = (listingId: string) =>
     const url = `/api/skills/market/${listingId}/template/image`;
     return (await api.delete<TemplateResponse>(url)).data;
   });
+
+export type SkillTemplateTryResult = { skillName: string; examplePrompt: string; imported: boolean };
+
+/** Reuse or import a template page's skill for the signed-in visitor (pages/api/skills/template/try/[slug].ts). */
+export const useTrySkillTemplate = () =>
+  useMutation({
+    mutationFn: async (slug: string) =>
+      (await api.post<SkillTemplateTryResult>(`/api/skills/template/try/${encodeURIComponent(slug)}`)).data,
+  });

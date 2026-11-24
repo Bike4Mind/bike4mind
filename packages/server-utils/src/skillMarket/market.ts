@@ -6,6 +6,7 @@ import {
   spaceRepository,
   SkillListing,
   SkillListingVersion,
+  unpublishListingTemplate,
 } from '@bike4mind/database';
 import type { RequestHandler } from 'express';
 import { rateLimit } from '../middlewares/rateLimit';
@@ -307,7 +308,8 @@ export async function findListing(id: string): Promise<ISkillListing | null> {
 
 /**
  * Take a listing off the market. Importers keep their copies and see "no longer available"; a held
- * version is superseded so it can't be approved later. False when it was already withdrawn or delisted.
+ * version is superseded so it can't be approved later, and its template page is unpublished with its
+ * free run off. False when it was already withdrawn or delisted.
  */
 export async function withdrawListing(listingId: string): Promise<boolean> {
   const before = await SkillListing.findOneAndUpdate(
@@ -322,6 +324,7 @@ export async function withdrawListing(listingId: string): Promise<boolean> {
     { listingId: String(listingId), reviewStatus: 'pending', _id: { $ne: before.currentApprovedVersionId } },
     { $set: { reviewStatus: 'superseded' } }
   );
+  await unpublishListingTemplate(String(listingId));
   return true;
 }
 

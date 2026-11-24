@@ -3,6 +3,7 @@ import {
   SKILL_TEMPLATE_SLUG_MAX,
   SkillTemplateImageGenerateSchema,
   skillTemplateFreeRunEligibility,
+  skillTemplateFreeRunInputKey,
   skillTemplatePagePath,
   skillTemplatePreviewImagePath,
   skillTemplateSlugProblem,
@@ -45,6 +46,10 @@ describe('skillTemplateFreeRunEligibility', () => {
 describe('template paths', () => {
   it('builds the page path', () => {
     expect(skillTemplatePagePath('article-bullets')).toBe('/t/article-bullets');
+  });
+
+  it('keys the free-run text per slug', () => {
+    expect(skillTemplateFreeRunInputKey('article-bullets')).toBe('b4m.skillTemplate.freeRunInput.article-bullets');
   });
 
   it('builds the image path with the file id as a cache buster', () => {

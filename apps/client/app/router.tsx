@@ -79,6 +79,7 @@ const SkillMarketPage = lazy(() => import('./routes/skills/market'));
 const SkillListingPage = lazy(() => import('./routes/skills/market/$listingId'));
 const SkillTemplateEditorPage = lazy(() => import('./routes/skills/market/$listingId/template'));
 const UnlistedSkillListingPage = lazy(() => import('./routes/skills/market/u/$token'));
+const SkillTemplateTryPage = lazy(() => import('./routes/skills/market/try/$slug'));
 const MySkillListingsPage = lazy(() => import('./routes/skills/market/mine'));
 const SkillReviewQueuePage = lazy(() => import('./routes/skills/market/review'));
 const AgentExecutionHistoryPage = lazy(() => import('./routes/agent-executions'));
@@ -749,6 +750,8 @@ const skillMarketRoute = marketRoute('/skills/market', SkillMarketPage);
 const mySkillListingsRoute = marketRoute('/skills/market/mine', MySkillListingsPage);
 const skillReviewQueueRoute = marketRoute('/skills/market/review', SkillReviewQueuePage);
 const unlistedSkillListingRoute = marketRoute('/skills/market/u/$token', UnlistedSkillListingPage);
+// The Try button on a public template page (templateTryPath in server/skillMarket/templatePage.ts).
+const skillTemplateTryRoute = marketRoute('/skills/market/try/$slug', SkillTemplateTryPage);
 const skillListingRoute = marketRoute('/skills/market/$listingId', SkillListingPage);
 const skillTemplateEditorRoute = marketRoute('/skills/market/$listingId/template', SkillTemplateEditorPage);
 
@@ -1515,6 +1518,7 @@ const routeTree = rootRoute.addChildren([
     unlistedSkillListingRoute,
     skillListingRoute,
     skillTemplateEditorRoute,
+    skillTemplateTryRoute,
     agentExecutionHistoryRoute,
     agentMissionRoute,
     deepAgentsRoute,
