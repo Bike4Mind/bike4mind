@@ -4,7 +4,7 @@
  * The key's `functions:invoke` scope is the approval: the owner's own key always runs their live function.
  */
 import type { Request } from 'express';
-import { ApiKeyScope, ForbiddenError, projectFunctionSchema } from '@bike4mind/common';
+import { ApiKeyScope, ForbiddenError, NotFoundError, projectFunctionSchema } from '@bike4mind/common';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js';
 import {
@@ -25,6 +25,7 @@ import {
   invokeAnswer,
   listLiveFunctions,
   loadLiveFunction,
+  loadLiveFunctionBySlug,
   withinBudget,
 } from '@server/callableFunctions/publicFunctions';
 
@@ -38,20 +39,30 @@ interface Caller {
   apiKeyId: string;
 }
 
+/** A function that left `live` after the list was read drops out of the answer instead of failing it. */
 async function listTools(caller: Caller): Promise<Tool[]> {
   const user = { id: caller.userId };
   const live = await listLiveFunctions(user);
-  const details = await Promise.all(live.map(fn => loadLiveFunction(user, fn.id)));
-  return details.map(fn => {
-    const { description, inputSchema, outputSchema } = projectFunctionSchema(fn.contract, 'mcp');
-    return {
-      name: fn.slug,
-      description,
-      inputSchema: { ...inputSchema },
-      outputSchema: { ...outputSchema },
-      annotations: { readOnlyHint: true },
-    };
-  });
+  const loaded = await Promise.all(
+    live.map(fn =>
+      loadLiveFunction(user, fn.id).catch(error => {
+        if (error instanceof NotFoundError) return null;
+        throw error;
+      })
+    )
+  );
+  return loaded
+    .flatMap(fn => (fn ? [fn] : []))
+    .map(fn => {
+      const { description, inputSchema, outputSchema } = projectFunctionSchema(fn.contract, 'mcp');
+      return {
+        name: fn.slug,
+        description,
+        inputSchema: { ...inputSchema },
+        outputSchema: { ...outputSchema },
+        annotations: { readOnlyHint: true },
+      };
+    });
 }
 
 const toolError = (text: string, stamp?: unknown): CallToolResult => ({
@@ -62,8 +73,13 @@ const toolError = (text: string, stamp?: unknown): CallToolResult => ({
 
 // Refusals and failures come back as an isError result, as the SDK's McpServer answers its own tool errors.
 async function callTool(caller: Caller, name: string, args: unknown): Promise<CallToolResult> {
-  const fn = (await listLiveFunctions({ id: caller.userId })).find(live => live.slug === name);
-  if (!fn) return toolError(FUNCTION_NOT_FOUND_MESSAGE);
+  let fn: { id: string };
+  try {
+    fn = await loadLiveFunctionBySlug({ id: caller.userId }, name);
+  } catch (error) {
+    if (error instanceof NotFoundError) return toolError(FUNCTION_NOT_FOUND_MESSAGE);
+    throw error;
+  }
 
   const call = await withinBudget(
     dispatchFunctionCall(
@@ -85,12 +101,33 @@ async function callTool(caller: Caller, name: string, args: unknown): Promise<Ca
   };
 }
 
-function buildServer(caller: Caller): Server {
+const INTERNAL_ERROR_MESSAGE = 'Internal error';
+
+type LogError = (message: string, context: { name: string; message: string }) => void;
+
+function logFailure(logError: LogError, method: string, error: unknown) {
+  const cause = error instanceof Error ? error : new Error(String(error));
+  logError(`[mcp/functions] ${method} failed`, { name: cause.name, message: cause.message });
+}
+
+function buildServer(caller: Caller, logError: LogError): Server {
   const server = new Server(SERVER_INFO, { capabilities: { tools: {} } });
-  server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: await listTools(caller) }));
-  server.setRequestHandler(CallToolRequestSchema, async request =>
-    callTool(caller, request.params.name, request.params.arguments)
-  );
+  server.setRequestHandler(ListToolsRequestSchema, async () => {
+    try {
+      return { tools: await listTools(caller) };
+    } catch (error) {
+      logFailure(logError, 'tools/list', error);
+      throw new Error(INTERNAL_ERROR_MESSAGE);
+    }
+  });
+  server.setRequestHandler(CallToolRequestSchema, async request => {
+    try {
+      return await callTool(caller, request.params.name, request.params.arguments);
+    } catch (error) {
+      logFailure(logError, 'tools/call', error);
+      return toolError(INTERNAL_ERROR_MESSAGE);
+    }
+  });
   return server;
 }
 
@@ -116,7 +153,16 @@ const handler = baseApi({
       throw new ForbiddenError('Callable functions over MCP are turned off for this account.');
     }
 
-    const server = buildServer({ userId: req.user.id, apiKeyId });
+    // The 2025-06-18 protocol dropped batching; one message per request keeps the limiter's count honest.
+    if (Array.isArray(req.body)) {
+      return res
+        .status(400)
+        .json({ jsonrpc: '2.0', id: null, error: { code: -32600, message: 'Send one message per request.' } });
+    }
+
+    const server = buildServer({ userId: req.user.id, apiKeyId }, (message, context) =>
+      req.logger.error(message, context)
+    );
     const transport = new WebStandardStreamableHTTPServerTransport({
       sessionIdGenerator: undefined,
       enableJsonResponse: true,

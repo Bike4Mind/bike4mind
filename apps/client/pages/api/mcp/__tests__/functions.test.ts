@@ -26,6 +26,8 @@ const h = vi.hoisted(() => ({
   artifacts: [] as { id: string; userId: string; version: number; deletedAt: Date | null }[],
   calls: [] as Record<string, unknown>[],
   runner: vi.fn(),
+  listForOwner: vi.fn(),
+  findBySlug: vi.fn(),
 }));
 
 vi.mock('@server/middlewares/baseApi', async () => {
@@ -96,7 +98,8 @@ vi.mock('@bike4mind/database', () => ({
     findById: async (id: string) => h.functions.find(fn => fn.id === id) ?? null,
     findByIdForOwner: async (id: string, owner: Owner) =>
       h.functions.find(fn => fn.id === id && owned(owner)(fn)) ?? null,
-    listForOwner: async (owner: Owner) => h.functions.filter(owned(owner)),
+    findBySlugForOwner: (slug: string, owner: Owner) => h.findBySlug(slug, owner),
+    listForOwner: (owner: Owner) => h.listForOwner(owner),
   },
   artifactRepository: {
     find: async (filter: { id: { $in: string[] }; userId: string }) =>
@@ -238,7 +241,10 @@ async function connect(caller: Caller = {}) {
 }
 
 /** One JSON-RPC message posted on its own, with no initialize before it. */
-async function post(message: Record<string, unknown>, extraHeaders: Record<string, string> = {}) {
+async function post(
+  message: Record<string, unknown> | Record<string, unknown>[],
+  extraHeaders: Record<string, string> = {}
+) {
   const res = await inMemoryFetch()('http://localhost/api/mcp/functions', {
     method: 'POST',
     headers: { 'content-type': 'application/json', accept: 'application/json, text/event-stream', ...extraHeaders },
@@ -274,6 +280,17 @@ beforeEach(() => {
     deletedAt: null,
   }));
   h.runner.mockImplementation(async (_payload: CallableFunctionRunPayload) => okRun());
+  // Copies, ordered by creation as the model's query is, so a later change to a stored function is not seen by a read already made.
+  h.listForOwner.mockImplementation(async (owner: Owner) =>
+    h.functions
+      .filter(owned(owner))
+      .map(fn => ({ ...fn }))
+      .sort((a, b) => (a.createdAt as Date).getTime() - (b.createdAt as Date).getTime())
+  );
+  h.findBySlug.mockImplementation(async (slug: string, owner: Owner) => {
+    const found = h.functions.find(fn => fn.slug === slug && owned(owner)(fn));
+    return found ? { ...found } : null;
+  });
 });
 
 describe('route wiring', () => {
@@ -306,9 +323,60 @@ describe('tools/list', () => {
     ]);
     await client.close();
   });
+
+  it('lists up to the 100-function cap, in the order the functions were created', async () => {
+    const count = 100;
+    h.functions = Array.from({ length: count }, (_, i) =>
+      fnDoc(`6b${String(i).padStart(22, '0')}`, {
+        slug: `fn_${String(i).padStart(3, '0')}`,
+        createdAt: new Date(T0.getTime() + (count - i) * 1000),
+      })
+    );
+    h.artifacts = h.functions.map(fn => ({
+      id: (fn.pin as { artifactId: string }).artifactId,
+      userId: 'u1',
+      version: 5,
+      deletedAt: null,
+    }));
+    const client = await connect();
+    const names = (await client.listTools()).tools.map(t => t.name);
+    expect(names).toHaveLength(count);
+    expect(names).toEqual(Array.from({ length: count }, (_, i) => `fn_${String(count - 1 - i).padStart(3, '0')}`));
+    await client.close();
+  });
+
+  it('leaves out a function that stopped being live after the list was read, and lists the rest', async () => {
+    h.functions.push(
+      fnDoc('6b0000000000000000000004', { slug: 'beam_second' }),
+      fnDoc('6b0000000000000000000005', { slug: 'beam_removed' })
+    );
+    h.artifacts = h.functions.map(fn => ({
+      id: (fn.pin as { artifactId: string }).artifactId,
+      userId: fn.userId as string,
+      version: 5,
+      deletedAt: null,
+    }));
+    h.listForOwner.mockImplementationOnce(async (owner: Owner) => {
+      const read = h.functions.filter(owned(owner)).map(fn => ({ ...fn }));
+      h.functions.find(fn => fn.slug === 'beam_midspan_deflection')!.state = 'draft';
+      h.functions = h.functions.filter(fn => fn.slug !== 'beam_removed');
+      return read;
+    });
+    const client = await connect();
+    expect((await client.listTools()).tools.map(t => t.name)).toEqual(['beam_second']);
+    await client.close();
+  });
 });
 
 describe('tools/call', () => {
+  it('finds the function by its name in one owner lookup, without listing them all', async () => {
+    const client = await connect();
+    await client.callTool({ name: 'beam_midspan_deflection', arguments: { load: 2, span: 4 } });
+    expect(h.findBySlug).toHaveBeenCalledWith('beam_midspan_deflection', { ownerType: 'user', ownerKey: 'u1' });
+    expect(h.listForOwner).not.toHaveBeenCalled();
+    await client.close();
+  });
+
   it('returns the output as structuredContent, a text block with output and stamp, and the stamp in _meta', async () => {
     const client = await connect();
     await client.listTools();
@@ -361,6 +429,126 @@ describe('tools/call', () => {
     expect(result.content[0].text).toBe('The function returned outputs that do not fit its output schema.');
     expect(result._meta?.stamp).toMatchObject({ surface: 'mcp' });
     await client.close();
+  });
+
+  describe('with a function that returns text', () => {
+    const TEXT_CONTRACT: FunctionContract = {
+      ...CONTRACT,
+      name: 'echo_text',
+      inputs: { type: 'object', properties: {}, additionalProperties: false },
+      outputs: {
+        type: 'object',
+        properties: { lines: { type: 'array', items: { type: 'string' } } },
+        required: ['lines'],
+        additionalProperties: false,
+      },
+    };
+    // A string field holds at most 2000 characters, so a large output is a list of lines of 1000 bytes each.
+    const textOutput = (lines: number) => okRun({ lines: Array.from({ length: lines }, () => 'x'.repeat(1000)) });
+
+    beforeEach(() => {
+      h.functions.push(fnDoc('6b0000000000000000000009', { slug: 'echo_text', contract: TEXT_CONTRACT }));
+      h.artifacts.push({ id: 'artifact-6b0000000000000000000009', userId: 'u1', version: 5, deletedAt: null });
+    });
+
+    it('answers an output over 2 MiB with the too-large text, the stamp, and no output', async () => {
+      h.runner.mockImplementation(async () => textOutput(2100));
+      const client = await connect();
+      const result = callResult(await client.callTool({ name: 'echo_text', arguments: {} }));
+      expect(result).toEqual({
+        isError: true,
+        content: [{ type: 'text', text: 'The function returned more than a call can carry.' }],
+        _meta: { stamp: expect.objectContaining({ slug: 'echo_text', surface: 'mcp' }) },
+      });
+      expect(h.calls).toEqual([expect.objectContaining({ surface: 'mcp', outcome: 'output_too_large' })]);
+      await client.close();
+    });
+
+    it('carries an output just under 2 MiB twice and stays under the 6 MB response limit', async () => {
+      h.runner.mockImplementation(async () => textOutput(2080));
+      const client = await connect();
+      const result = callResult(await client.callTool({ name: 'echo_text', arguments: {} }));
+      expect(result.isError).toBeUndefined();
+      expect((result.structuredContent as { lines: string[] }).lines).toHaveLength(2080);
+      expect(Buffer.byteLength(JSON.stringify(result))).toBeLessThan(6 * 1000 * 1000);
+      await client.close();
+    });
+  });
+
+  it('answers a call that outlasts the 45 second budget with the time-limit text', async () => {
+    vi.useFakeTimers();
+    try {
+      h.runner.mockImplementation(() => new Promise(() => {}));
+      const answer = post({
+        jsonrpc: '2.0',
+        id: 3,
+        method: 'tools/call',
+        params: { name: 'beam_midspan_deflection', arguments: { load: 2, span: 4 } },
+      });
+      await vi.advanceTimersByTimeAsync(45_000);
+      expect((await answer).json).toEqual({
+        jsonrpc: '2.0',
+        id: 3,
+        result: { isError: true, content: [{ type: 'text', text: 'The call ran past its time limit.' }] },
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe('one message per request', () => {
+  it('answers a batch with 400 and a fixed error, before anything runs or is logged', async () => {
+    const call = (id: number) => ({
+      jsonrpc: '2.0',
+      id,
+      method: 'tools/call',
+      params: { name: 'beam_midspan_deflection', arguments: { load: 2, span: 4 } },
+    });
+    const answer = await post([call(1), call(2)]);
+    expect(answer.status).toBe(400);
+    expect(answer.json).toEqual({
+      jsonrpc: '2.0',
+      id: null,
+      error: { code: -32600, message: 'Send one message per request.' },
+    });
+    expect(h.runner).not.toHaveBeenCalled();
+    expect(h.calls).toHaveLength(0);
+  });
+});
+
+describe('a store failure', () => {
+  const STORE_FAILURE = 'connection 3 to db-internal-7.example.net:27017 closed';
+
+  it.each([
+    [
+      'tools/list',
+      { jsonrpc: '2.0', id: 1, method: 'tools/list' },
+      { jsonrpc: '2.0', id: 1, error: { code: -32603, message: 'Internal error' } },
+      () => h.listForOwner.mockRejectedValue(new Error(STORE_FAILURE)),
+    ],
+    [
+      'tools/call',
+      { jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'beam_midspan_deflection', arguments: {} } },
+      {
+        jsonrpc: '2.0',
+        id: 2,
+        result: { isError: true, content: [{ type: 'text', text: 'Internal error' }] },
+      },
+      () => h.findBySlug.mockRejectedValue(new Error(STORE_FAILURE)),
+    ],
+  ])('on %s is logged with its cause and answered with a fixed message', async (method, message, expected, fail) => {
+    fail();
+    const answer = await post(message);
+    expect(answer.status).toBe(200);
+    expect(answer.json).toEqual(expected);
+    expect(JSON.stringify(answer.json)).not.toContain('example.net');
+    expect(logger.error).toHaveBeenCalledTimes(1);
+    expect(logger.error).toHaveBeenCalledWith(`[mcp/functions] ${method} failed`, {
+      name: 'Error',
+      message: STORE_FAILURE,
+    });
+    expect(h.runner).not.toHaveBeenCalled();
   });
 });
 
