@@ -77,9 +77,9 @@ describe('SkillListingTemplate', () => {
     expect((await find()).inputs).toEqual([{ label: 'Article text', required: false }]);
   });
 
-  it('stores a preview image reference with its source', async () => {
+  it('stores a preview image reference with its source, unapproved by default', async () => {
     await create({ previewImage: { fabFileId: 'file-1', source: 'upload' } });
-    expect((await find()).previewImage).toEqual({ fabFileId: 'file-1', source: 'upload' });
+    expect((await find()).previewImage).toEqual({ fabFileId: 'file-1', source: 'upload', approved: false });
     await expect(
       create({ listingId: 'listing-2', slug: 'other', previewImage: { fabFileId: 'f', source: 'stock' } })
     ).rejects.toThrow(/source/);

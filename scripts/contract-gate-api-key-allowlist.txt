@@ -690,6 +690,7 @@ apps/client/pages/api/settings/update.ts
 apps/client/pages/api/skills/[id]/index.ts
 apps/client/pages/api/skills/[id]/share.ts
 apps/client/pages/api/skills/index.ts
+apps/client/pages/api/skills/template/image/[slug].ts  # deliberately unauthenticated (auth: false): link-preview fetchers load a template preview image signed out; serves only the approved image of a published template on a live public or unlisted listing, rate limited, read-only
 apps/client/pages/api/sky-greeting/index.ts
 apps/client/pages/api/slack/commands.ts
 apps/client/pages/api/slack/events.ts

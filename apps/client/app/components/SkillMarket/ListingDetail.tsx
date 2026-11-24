@@ -516,6 +516,18 @@ const ListingDetail: FC<{ listingId?: string; token?: string }> = ({ listingId, 
                 Use in Claude Code
               </Button>
             ) : null}
+            {live && viewer.isAuthor ? (
+              <Button
+                variant="outlined"
+                color="neutral"
+                onClick={() =>
+                  navigate({ to: '/skills/market/$listingId/template', params: { listingId: listing.id } })
+                }
+                data-testid="market-view-template-btn"
+              >
+                View as template
+              </Button>
+            ) : null}
             {shareUrl && listing.visibility === 'unlisted' ? (
               <Button
                 variant="outlined"

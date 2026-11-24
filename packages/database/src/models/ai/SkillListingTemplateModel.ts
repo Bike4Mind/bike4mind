@@ -46,6 +46,7 @@ const SkillListingTemplateSchema = new Schema<ISkillListingTemplateDocument>(
         {
           fabFileId: { type: String, required: true },
           source: { type: String, required: true, enum: ['upload', 'generated'] },
+          approved: { type: Boolean, default: false },
         },
         { _id: false }
       ),

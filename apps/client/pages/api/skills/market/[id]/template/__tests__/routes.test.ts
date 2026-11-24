@@ -9,7 +9,7 @@ const h = vi.hoisted(() => ({
   rateLimitResolved: [] as Array<(req: unknown) => Promise<number>>,
   enforceSubmit: vi.fn(),
   getLlm: vi.fn(),
-  getOwnTemplate: vi.fn(),
+  getOwnTemplateView: vi.fn(),
   saveOwnTemplate: vi.fn(),
   deleteOwnTemplate: vi.fn(),
   publishOwnTemplate: vi.fn(),
@@ -44,8 +44,8 @@ vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({
 vi.mock('@bike4mind/server-utils/utils/userRateTier', () => ({ resolveUserRateLimitPerMin: h.rateTier }));
 vi.mock('@bike4mind/server-utils/skillMarket/market', () => ({ enforceSubmitRateLimits: h.enforceSubmit }));
 vi.mock('@server/skillMarket/classifySkill', () => ({ getOperationsClassifierLlm: h.getLlm }));
+vi.mock('@server/skillMarket/templateImage', () => ({ getOwnTemplateView: h.getOwnTemplateView }));
 vi.mock('@server/skillMarket/template', () => ({
-  getOwnTemplate: h.getOwnTemplate,
   saveOwnTemplate: h.saveOwnTemplate,
   deleteOwnTemplate: h.deleteOwnTemplate,
   publishOwnTemplate: h.publishOwnTemplate,
@@ -95,7 +95,7 @@ describe('template routes', () => {
   });
 
   it.each([
-    ['GET', templateHandler, h.getOwnTemplate],
+    ['GET', templateHandler, h.getOwnTemplateView],
     ['PUT', templateHandler, h.saveOwnTemplate],
     ['DELETE', templateHandler, h.deleteOwnTemplate],
     ['POST', publishHandler, h.publishOwnTemplate],
@@ -105,6 +105,14 @@ describe('template routes', () => {
     fn.mockRejectedValueOnce(new ForbiddenError('not yours'));
     await expect(call(handler, method, {}).run()).rejects.toBeInstanceOf(ForbiddenError);
     expect(fn.mock.calls[0].slice(0, 2)).toEqual([USER, 'listing-1']);
+  });
+
+  it('GET answers with the editor view', async () => {
+    const view = { template: null, suggestedSlug: 'summarize', eligibility: { eligible: true } };
+    h.getOwnTemplateView.mockResolvedValue(view);
+    const { run, res } = call(templateHandler, 'GET');
+    await run();
+    expect(res._getJSONData()).toEqual(view);
   });
 
   it('PUT rejects fields the author may not write', async () => {
