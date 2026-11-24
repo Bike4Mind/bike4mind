@@ -19,6 +19,7 @@ import { numberAgents, redactForPresenter, restorePresentedAction, type Presente
 import type { OrchestratorViewId } from './orchestratorPrefs';
 import type { OrchestratorLayout, OrchestratorPane } from './orchestratorLayout';
 import { StageLayout } from './StageLayout';
+import { StageDropZones } from './StageDropZones';
 import { pinLabel, resolvePaneSession } from './panePins';
 import { PinnedPane, type PaneSessionSource } from './PinnedPane';
 import { assignPersonas, type AgentPersona } from '@shared/agentPersona';
@@ -407,6 +408,8 @@ export function OrchestratorStage({
     );
   };
 
+  const isListedSession = (id: string) => paneSessions?.sessions.some(session => session.id === id) === true;
+
   const snapshot = useMemo(
     () => (focused && rootId !== undefined ? toViewSnapshot(rootId, agents, parent, approvals) : undefined),
     [focused, rootId, agents, parent, approvals]
@@ -490,7 +493,7 @@ export function OrchestratorStage({
           </Typography>
         </Box>
       ) : (
-        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.25, px: 1.5, py: 1 }}>
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.25, px: 1.5, py: 1, minWidth: 0 }}>
           <ViewSwitcher
             layout={layout}
             onLayoutChange={onLayoutChange}
@@ -565,6 +568,15 @@ export function OrchestratorStage({
             />
           ) : snapshot ? (
             <FocusPanel snapshot={snapshot} onAction={onViewAction} />
+          ) : renderView && paneSessions ? (
+            <StageDropZones
+              layout={layout}
+              onLayoutChange={onLayoutChange}
+              activeId={rootId}
+              isListed={isListedSession}
+            >
+              <StageLayout layout={layout} onLayoutChange={onLayoutChange} renderPane={renderPane} />
+            </StageDropZones>
           ) : renderView ? (
             <StageLayout layout={layout} onLayoutChange={onLayoutChange} renderPane={renderPane} />
           ) : (

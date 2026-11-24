@@ -268,7 +268,7 @@ export function ViewSwitcher({
   }, []);
 
   return (
-    <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75, flexShrink: 0 }}>
+    <Box sx={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 0.75, minWidth: 0 }}>
       <Dropdown>
         <MenuButton
           size="sm"
