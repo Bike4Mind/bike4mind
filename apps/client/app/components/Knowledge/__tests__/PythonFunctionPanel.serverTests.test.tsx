@@ -270,6 +270,37 @@ describe('PythonFunctionPanel server tests', () => {
     expect(screen.queryByTestId('python-function-tests-server-not-run')).toBeNull();
   });
 
+  it('keeps the earlier results and shows the reason when running the remaining tests fails', async () => {
+    await renderPanel();
+    answerWith({
+      functionId: 'fn-1',
+      passed: 1,
+      failed: 0,
+      notRun: 1,
+      results: [
+        caseResult({ name: 'short span', durationMs: 41 }),
+        { name: 'long span', passed: false, outcome: 'not_run', reason: 'budget_exhausted', mismatch: null },
+      ],
+    });
+    fireEvent.click(serverButton());
+    await waitFor(() => expect(cells('python-function-test-server-status')).toEqual(['Passed', 'Not run']));
+
+    h.runTests.mockImplementationOnce((_request: unknown, handlers: { onError: (error: unknown) => void }) =>
+      handlers.onError(
+        Object.assign(new Error('Request failed with status code 503'), {
+          isAxiosError: true,
+          response: { status: 503, data: { error: 'The server runtime did not answer. Try again.' } },
+        })
+      )
+    );
+    fireEvent.click(screen.getByTestId('python-function-tests-server-run-remaining-btn'));
+    expect((await screen.findByTestId('python-function-tests-server-error')).textContent).toBe(
+      'The server runtime did not answer. Try again.'
+    );
+    expect(cells('python-function-test-server-status')).toEqual(['Passed', 'Not run']);
+    expect(cells('python-function-test-server-status-ms')).toEqual([' (41 ms)']);
+  });
+
   it('shows the runtime-starting answer as the server gave it', async () => {
     await renderPanel();
     h.runTests.mockImplementationOnce((_request: unknown, handlers: { onError: (error: unknown) => void }) =>
