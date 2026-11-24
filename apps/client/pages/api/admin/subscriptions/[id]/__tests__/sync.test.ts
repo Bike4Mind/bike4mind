@@ -28,6 +28,7 @@ const mocks = vi.hoisted(() => ({
   toRows: vi.fn(),
   setSeats: vi.fn(),
   retrieve: vi.fn(),
+  release: vi.fn(),
   audit: vi.fn(),
   send: vi.fn(),
   state: { inTransaction: false, auditInTransaction: undefined as boolean | undefined },
@@ -92,6 +93,12 @@ vi.mock('@bike4mind/server-utils/utils/adminAudit', async importOriginal => {
     },
   };
 });
+vi.mock('@bike4mind/server-utils/subscriptions/releasePlanStorageLimit', () => ({
+  releasePlanStorageLimit: (...args: unknown[]) => {
+    expect(mocks.state.inTransaction).toBe(false);
+    return mocks.release(...args);
+  },
+}));
 vi.mock('@bike4mind/server-utils/websocket/utils', () => ({ sendToClient: mocks.send }));
 vi.mock('sst', () => ({ Resource: { websocket: { managementEndpoint: 'ws-endpoint' } } }));
 
@@ -192,6 +199,7 @@ describe('GET /api/admin/subscriptions/[id]/sync', () => {
     expect(mocks.retrieve).toHaveBeenCalledWith('sub_1');
     expect(mocks.updateReturningBefore).not.toHaveBeenCalled();
     expect(mocks.audit).not.toHaveBeenCalled();
+    expect(mocks.release).not.toHaveBeenCalled();
   });
 
   it('previews no changes for a row that already matches Stripe', async () => {
@@ -249,6 +257,41 @@ describe('GET /api/admin/subscriptions/[id]/sync', () => {
 });
 
 describe('POST /api/admin/subscriptions/[id]/sync', () => {
+  it.each(['canceled', 'incomplete_expired'] as const)('releases a committed %s user allowance', async status => {
+    mocks.retrieve.mockResolvedValue({ ...stripeSub(), status });
+    const { run } = call('POST');
+    await run();
+    expect(mocks.release).toHaveBeenCalledExactlyOnceWith('u1', 'sub_1', expect.any(Object));
+  });
+
+  it('does not release when the strict audit aborts the sync', async () => {
+    mocks.retrieve.mockResolvedValue({ ...stripeSub(), status: 'canceled' });
+    mocks.audit.mockRejectedValueOnce(new Error('Audit unavailable'));
+    const { run } = call('POST');
+    await expect(run()).rejects.toThrow('Audit unavailable');
+    expect(mocks.release).not.toHaveBeenCalled();
+  });
+
+  it.each(['active', 'trialing', 'past_due', 'unpaid', 'paused', 'incomplete'])(
+    'retains a %s allowance',
+    async status => {
+      mocks.retrieve.mockResolvedValue({ ...stripeSub(), status });
+      const { run } = call('POST');
+      await run();
+      expect(mocks.release).not.toHaveBeenCalled();
+    }
+  );
+
+  it('does not release an organization allowance', async () => {
+    mocks.rowFindById.mockResolvedValue(row({ ownerType: 'Organization', ownerId: 'org_1' }));
+    mocks.updateReturningBefore.mockResolvedValue(row({ ownerType: 'Organization', ownerId: 'org_1' }));
+    mocks.orgFindById.mockResolvedValue({ id: 'org_1', name: 'Acme', userId: 'boss-1' });
+    mocks.retrieve.mockResolvedValue({ ...stripeSub(), status: 'canceled' });
+    const { run } = call('POST');
+    await run();
+    expect(mocks.release).not.toHaveBeenCalled();
+  });
+
   it('writes Stripe values and audits the before and after of every changed field, seats included', async () => {
     mocks.rowFindById.mockResolvedValue(row({ ownerType: 'Organization', ownerId: 'org_1' }));
     mocks.updateReturningBefore.mockResolvedValue(row({ ownerType: 'Organization', ownerId: 'org_1' }));
@@ -337,6 +380,7 @@ describe('POST /api/admin/subscriptions/[id]/sync', () => {
       'synced subscription from Stripe (gone from Stripe, marked canceled)'
     );
     expect(mocks.audit.mock.calls[0][1].details).toMatchObject({ stripeMissing: true });
+    expect(mocks.release).toHaveBeenCalledExactlyOnceWith('u1', 'sub_1', expect.any(Object));
     expect(mocks.send).toHaveBeenCalledWith('u1', 'ws-endpoint', {
       action: 'invalidate_query',
       queryKey: ['entitlements'],
@@ -386,6 +430,7 @@ describe('POST /api/admin/subscriptions/[id]/sync', () => {
       await expect(run()).rejects.toMatchObject({ statusCode: 409 });
       expect(mocks.updateReturningBefore).toHaveBeenCalledWith('sub_1', { status }, UPDATED_AT);
       expect(mocks.audit).not.toHaveBeenCalled();
+      expect(mocks.release).not.toHaveBeenCalled();
       expect(mocks.resolveForSubscription).not.toHaveBeenCalled();
       expect(mocks.send).not.toHaveBeenCalled();
     }
@@ -402,6 +447,7 @@ describe('POST /api/admin/subscriptions/[id]/sync', () => {
     expect(mocks.updateReturningBefore).toHaveBeenCalledWith('sub_1', expect.anything(), UPDATED_AT);
     expect(mocks.orgUpdate).not.toHaveBeenCalled();
     expect(mocks.audit).not.toHaveBeenCalled();
+    expect(mocks.release).not.toHaveBeenCalled();
     expect(mocks.resolveForSubscription).not.toHaveBeenCalled();
   });
 

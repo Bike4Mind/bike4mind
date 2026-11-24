@@ -40,7 +40,12 @@ vi.mock('@bike4mind/slack', () => {
   class StubResource {
     getMcpEnvVariables = vi.fn().mockResolvedValue([]);
   }
-  return { GitHubResource: StubResource, JiraResource: StubResource, ConfluenceResource: StubResource };
+  return {
+    GitHubResource: StubResource,
+    JiraResource: StubResource,
+    ConfluenceResource: StubResource,
+    TOKEN_EXPIRATION_MS: 15 * 60 * 1000,
+  };
 });
 
 import { fabFileRepository, Quest, Session } from '@bike4mind/database';

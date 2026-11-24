@@ -64,21 +64,37 @@ public struct WidgetSnapshot: Codable, Equatable, Sendable {
     }
   }
 
+  /// The server's count (`PendingDecisionCount`), split so the widget can drop approvals once they must have lapsed.
+  public struct PendingDecisions: Codable, Equatable, Sendable {
+    public let approvals: Int
+    public let briefDecisions: Int
+    public let observedAt: Date
+
+    public init(approvals: Int, briefDecisions: Int, observedAt: Date) {
+      self.approvals = approvals
+      self.briefDecisions = briefDecisions
+      self.observedAt = observedAt
+    }
+  }
+
   public var schemaVersion: Int
   public var runningAgents: RunningAgents?
   public var credits: Credits?
   public var latestGeneration: LatestGeneration?
+  public var pendingDecisions: PendingDecisions?
 
   public init(
     schemaVersion: Int = WidgetSnapshot.currentSchemaVersion,
     runningAgents: RunningAgents? = nil,
     credits: Credits? = nil,
-    latestGeneration: LatestGeneration? = nil
+    latestGeneration: LatestGeneration? = nil,
+    pendingDecisions: PendingDecisions? = nil
   ) {
     self.schemaVersion = schemaVersion
     self.runningAgents = runningAgents
     self.credits = credits
     self.latestGeneration = latestGeneration
+    self.pendingDecisions = pendingDecisions
   }
 
   public static let empty = WidgetSnapshot()
@@ -89,6 +105,7 @@ public enum WidgetKind {
   public static let runningAgents = "com.bike4mind.widget.running-agents"
   public static let credits = "com.bike4mind.widget.credits"
   public static let latestGeneration = "com.bike4mind.widget.latest-generation"
+  public static let pendingDecisions = "com.bike4mind.widget.pending-decisions"
 
-  public static let all = [runningAgents, credits, latestGeneration]
+  public static let all = [runningAgents, credits, latestGeneration, pendingDecisions]
 }

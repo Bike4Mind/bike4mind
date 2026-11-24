@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { parseFunctionContract } from '../schemas/functionContract';
+import { compareFunctionOutput, parseFunctionContract } from '../schemas/functionContract';
 import { CALLABLE_FUNCTIONS_PROMPT_NOTE, withCallableFunctions } from './callableFunctionsPromptNote';
 
 describe('withCallableFunctions', () => {
@@ -35,6 +35,17 @@ describe('the example in CALLABLE_FUNCTIONS_PROMPT_NOTE', () => {
 
   it('is accepted by parseFunctionContract', () => {
     expect(parseFunctionContract(contract)).toMatchObject({ ok: true });
+  });
+
+  it('declares one test that the formula in run passes', () => {
+    const parsed = parseFunctionContract(contract);
+    if (!parsed.ok) throw new Error('the example contract was refused');
+    expect(parsed.contract.tests).toHaveLength(1);
+    const [test] = parsed.contract.tests ?? [];
+    expect(code).toContain('return {"deflection": 5 * load * span**4 / (384 * elastic_modulus * second_moment)}');
+    const { load, span, elastic_modulus, second_moment } = test.input as Record<string, number>;
+    const deflection = (5 * load * span ** 4) / (384 * elastic_modulus * second_moment);
+    expect(compareFunctionOutput(test.expected, { deflection }, test.tolerance)).toBeNull();
   });
 
   it('defines run with exactly the input names as its parameters', () => {

@@ -26,8 +26,15 @@ beforeEach(() => {
 describe('loadLiveOwner', () => {
   it('returns the name of a live owner', async () => {
     findByIdMock.mockReturnValue({ name: 'Ada', isBanned: false, moderation: { status: 'active' } });
-    expect(await loadLiveOwner('u1')).toEqual({ name: 'Ada' });
+    expect(await loadLiveOwner('u1')).toEqual({ name: 'Ada', referralCode: null, canRefer: false });
     expect(findByIdMock).toHaveBeenCalledWith('u1');
+  });
+
+  it("carries the owner's share-link code and whether they may be given one", async () => {
+    findByIdMock.mockReturnValue({ name: 'Ada', referralCode: 'abcd2345', emailVerified: true });
+    expect(await loadLiveOwner('u1')).toEqual({ name: 'Ada', referralCode: 'abcd2345', canRefer: true });
+    findByIdMock.mockReturnValue({ name: 'Gh', emailVerified: false, authProviders: [{ strategy: 'github' }] });
+    expect(await loadLiveOwner('u1')).toMatchObject({ referralCode: null, canRefer: true });
   });
 
   it('returns null when the owner no longer exists', async () => {
@@ -44,7 +51,7 @@ describe('loadLiveOwner', () => {
 
   it('keeps serving for an owner with only a pending dispute or pending suspension', async () => {
     findByIdMock.mockReturnValue({ name: 'D', disputePending: true, moderation: { status: 'suspend_pending' } });
-    expect(await loadLiveOwner('u1')).toEqual({ name: 'D' });
+    expect(await loadLiveOwner('u1')).toMatchObject({ name: 'D' });
   });
 
   it('fails closed by propagating a lookup error', async () => {

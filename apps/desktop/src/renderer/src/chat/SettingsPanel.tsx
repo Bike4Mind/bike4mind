@@ -46,9 +46,12 @@ import {
   SubSessionsIcon,
 } from './icons';
 import { nestedSessionsSummary, useNestedSessions } from './nestedSessions';
+import { prAttentionSortSummary, usePrAttentionSort } from './prAttentionSort';
 import { useMenuBarSetting } from './menuBarSetting';
 import type { NotifyScope } from '@shared/attention';
 import { notifyScopeSummary, useNotifyScope } from './notifyScopeSetting';
+import { spawnLocationSummary, useSpawnLocation } from './spawnLocationSetting';
+import { SPAWN_LOCATIONS, SPAWN_LOCATION_TEXT, type SpawnLocation } from '@shared/spawnLocation';
 import { useOrchestratorSound } from './orchestrator/chime';
 import { SoundMixControl } from './orchestrator/SoundMixControl';
 import { columnStackSx, contentColumnSx, thinScrollbarSx } from './layout';
@@ -216,6 +219,27 @@ function nestedSessionsEntry(enabled: boolean, toggle: () => void): ConfigEntry 
   };
 }
 
+function prAttentionSortEntry(enabled: boolean, setEnabled: (enabled: boolean) => void): ConfigEntry {
+  return {
+    id: 'pr-attention-sort',
+    icon: <PullRequestIcon />,
+    label: 'Sort by pull request attention',
+    summary: prAttentionSortSummary(enabled),
+    description:
+      'Within each sidebar group, list sessions whose pull request has conflicts, failing CI or requested changes first.',
+    control: (
+      <Switch
+        size="sm"
+        checked={enabled}
+        onChange={event => setEnabled(event.target.checked)}
+        slotProps={{
+          input: { 'aria-label': 'Sort by pull request attention', 'data-testid': 'settings-pr-attention-sort-switch' },
+        }}
+      />
+    ),
+  };
+}
+
 function orchestratorSoundEntry(enabled: boolean, toggle: () => void): ConfigEntry {
   return {
     id: 'orchestrator-sound',
@@ -279,6 +303,41 @@ function notifyScopeEntry(scope: NotifyScope, setScope: (scope: NotifyScope) => 
         {(['agents', 'all'] as const).map(option => (
           <Button key={option} value={option} data-testid={`settings-notify-scope-${option}-btn`}>
             {NOTIFY_SCOPE_LABEL[option]}
+          </Button>
+        ))}
+      </ToggleButtonGroup>
+    ),
+  };
+}
+
+function spawnLocationEntry(location: SpawnLocation, setLocation: (location: SpawnLocation) => void): ConfigEntry {
+  return {
+    id: 'spawn-location',
+    icon: null,
+    label: 'New agent sessions',
+    summary: spawnLocationSummary(location),
+    description:
+      'Where a session another session hands work to starts. With Approve for me or Full access it starts at once; in Ask mode a card confirms it with one click.',
+    control: (
+      <ToggleButtonGroup
+        size="sm"
+        value={location}
+        onChange={(_event, next) => {
+          if (next) setLocation(next as SpawnLocation);
+        }}
+        aria-label="New agent sessions"
+        data-testid="settings-spawn-location-group"
+        sx={{
+          bgcolor: 'background.level1',
+          borderRadius: 'md',
+          p: 0.5,
+          gap: 0.5,
+          '& .MuiButton-root': { border: 0, borderRadius: 'sm' },
+        }}
+      >
+        {SPAWN_LOCATIONS.map(option => (
+          <Button key={option} value={option} data-testid={`settings-spawn-location-${option}-btn`}>
+            {SPAWN_LOCATION_TEXT[option].label}
           </Button>
         ))}
       </ToggleButtonGroup>
@@ -635,10 +694,13 @@ function useSettingsEntries(
   const [claudeImport, setClaudeImport, importError, retryImport] = useClaudeImport();
   const [worktreeDefault, toggleWorktreeDefault] = useWorktreeByDefault();
   const [nestedSessions, toggleNestedSessions] = useNestedSessions();
+  const sortByAttention = usePrAttentionSort(state => state.sortByAttention);
+  const setSortByAttention = usePrAttentionSort(state => state.setSortByAttention);
   const [orchestratorSound, toggleOrchestratorSound] = useOrchestratorSound();
   const [autoFixAttempts, setAutoFixAttempts, autoFixAttemptsError] = useAutoFixAttempts();
   const [menuBar, toggleMenuBar] = useMenuBarSetting();
   const [notifyScope, setNotifyScope] = useNotifyScope();
+  const [spawnLocation, setSpawnLocation] = useSpawnLocation();
   const [localContext, setLocalContext, localContextError, localContextFit] = useLocalContextSetting();
   const [modelServers, setModelServers, modelServersError] = useModelServers();
   const curatedList = useCuratedListSettings();
@@ -648,8 +710,10 @@ function useSettingsEntries(
       appearanceEntry(mode, setMode, theme.palette.mode),
       suggestionsEntry(suggestions, toggleSuggestions, suggestionModel),
       worktreeEntry(worktreeDefault, toggleWorktreeDefault),
+      spawnLocationEntry(spawnLocation, setSpawnLocation),
       autoFixAttemptsEntry(autoFixAttempts, next => void setAutoFixAttempts(next), autoFixAttemptsError),
       nestedSessionsEntry(nestedSessions, toggleNestedSessions),
+      prAttentionSortEntry(sortByAttention, setSortByAttention),
       orchestratorSoundEntry(orchestratorSound, toggleOrchestratorSound),
       orchestratorSoundMixEntry(),
       notifyScopeEntry(notifyScope, setNotifyScope),
@@ -723,12 +787,13 @@ const GENERAL_GROUPS = [
       'notify-scope',
       'menu-bar',
       'nested-sessions',
+      'pr-attention-sort',
     ],
   },
   {
     id: 'conversations',
     label: 'Conversations & code',
-    entries: ['prompt-suggestions', 'worktree-default', 'autofix-attempts', 'orchestration-policy'],
+    entries: ['prompt-suggestions', 'worktree-default', 'spawn-location', 'autofix-attempts', 'orchestration-policy'],
   },
   { id: 'models', label: 'Models', entries: ['local-context', 'reply-stats', 'curated-list'] },
   { id: 'data', label: 'Data & privacy', entries: ['local-history', 'local-data-export'] },

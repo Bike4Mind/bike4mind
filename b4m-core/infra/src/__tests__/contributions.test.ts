@@ -157,13 +157,47 @@ describe('partitionContributedQueues', () => {
     ['a DLQ retention above 14 days', { dlqMessageRetentionSeconds: 1209601 }],
     ['a name whose env form is a reserved variable', { name: 'awsRegion' }],
     ['a DLQ name whose env form has a reserved prefix', { dlqName: 'nodeOptionsDLQ' }],
+    ['a DLQ visibility timeout sst.aws.Queue rejects', { dlqVisibilityTimeout: '6m' }],
+    ['a DLQ visibility timeout above 12 hours', { dlqVisibilityTimeout: '13 hours' }],
+    ['a non-string DLQ visibility timeout', { dlqVisibilityTimeout: 360 as unknown as string }],
+    ['an empty description', { description: '' }],
+    ['a description over 200 characters', { description: 'x'.repeat(201) }],
+    ['a description spanning two lines', { description: 'Sends mail.\nRetries.' }],
+    ['a description with a control character', { description: 'Sends\u0007mail' }],
+    ['a description with edge whitespace', { description: ' Sends mail' }],
+    ['a non-string description', { description: 1 as unknown as string }],
+    ['a replay note over 400 characters', { replayNote: 'x'.repeat(401) }],
+    ['a replay note with a line separator', { replayNote: 'Upserts\u2028by id' }],
+    ['an owner over 64 characters', { owner: 'x'.repeat(65) }],
+    ['an owner with a tab', { owner: 'Example\tops' }],
+    ['an unknown replay value', { replay: 'maybe' as ContributedQueueSpec['replay'] }],
+    ['an inherited replay key', { replay: 'toString' as ContributedQueueSpec['replay'] }],
   ])('rejects %s', (_what, over) => {
     expect(dropped(queue(over)).rejected).toHaveLength(1);
   });
 
   it('registers a pair at the SQS limits', () => {
-    const limits = queue({ visibilityTimeout: '12 hours', retry: 1000, dlqMessageRetentionSeconds: 1209600 });
+    const limits = queue({
+      visibilityTimeout: '12 hours',
+      dlqVisibilityTimeout: '43200 seconds',
+      retry: 1000,
+      dlqMessageRetentionSeconds: 1209600,
+    });
     expect(partitionContributedQueues([limits], core).registered).toEqual([limits]);
+  });
+
+  it('registers a pair carrying operator help at the length limits', () => {
+    const help = queue({
+      description: 'd'.repeat(200),
+      replay: 'side-effects',
+      replayNote: 'n'.repeat(400),
+      owner: 'o'.repeat(64),
+    });
+    expect(partitionContributedQueues([help], core).registered).toEqual([help]);
+  });
+
+  it.each(['safe', 'side-effects', 'unsafe'] as const)('accepts the replay value %s', replay => {
+    expect(partitionContributedQueues([queue({ replay })], core).registered).toHaveLength(1);
   });
 
   it('keeps the first of two pairs sharing a name, DLQ name or label', () => {
@@ -200,6 +234,26 @@ describe('contributedQueuePairOptions', () => {
     const pair = buildQueuePair(contributedQueuePairOptions({ ...spec, encryption: 'none' }));
     expect(pair.dlqArgs.transform?.queue ?? {}).not.toHaveProperty('kmsMasterKeyId');
     expect(pair.queueArgs('arn').transform?.queue ?? {}).not.toHaveProperty('kmsMasterKeyId');
+  });
+
+  it('sets the DLQ visibility timeout only when the spec declares one', () => {
+    expect(buildQueuePair(contributedQueuePairOptions(spec)).dlqArgs).not.toHaveProperty('visibilityTimeout');
+    const pair = buildQueuePair(contributedQueuePairOptions({ ...spec, dlqVisibilityTimeout: '15 minutes' }));
+    expect(pair.dlqArgs.visibilityTimeout).toBe('15 minutes');
+    expect(pair.queueArgs('arn').visibilityTimeout).toBe('6 minutes');
+  });
+
+  it('leaves the queue args alone when the spec carries operator help', () => {
+    const help = {
+      description: 'Does a job.',
+      replay: 'safe',
+      replayNote: 'Upserts by id.',
+      owner: 'Example',
+    } as const;
+    const plain = buildQueuePair(contributedQueuePairOptions(spec));
+    const described = buildQueuePair(contributedQueuePairOptions({ ...spec, ...help }));
+    expect(described.dlqArgs).toEqual(plain.dlqArgs);
+    expect(described.queueArgs('arn')).toEqual(plain.queueArgs('arn'));
   });
 });
 

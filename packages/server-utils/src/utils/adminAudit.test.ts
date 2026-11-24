@@ -155,6 +155,19 @@ describe('recordAdminActionFromRequest', () => {
     }
   );
 
+  it('mirrors a member role change into the team audit trail as member.role_changed', async () => {
+    await recordAdminActionFromRequest(buildRequest(), {
+      action: 'org.member.role_changed',
+      actorScope: 'organization',
+      organizationId: 'org',
+      target: { kind: 'organization', id: 'org', displayName: 'Team' },
+      summary: 'changed organization role to manager',
+    });
+    expect(h.organizationAudit).toHaveBeenCalledWith(
+      expect.objectContaining({ organizationId: 'org', action: 'member.role_changed' })
+    );
+  });
+
   it('falls back to an unknown admin when the impersonator cannot be found', async () => {
     h.findById.mockResolvedValue(null);
     const req = buildRequest({

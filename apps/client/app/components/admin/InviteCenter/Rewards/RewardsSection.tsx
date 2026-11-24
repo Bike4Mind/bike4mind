@@ -14,7 +14,7 @@ const BLOCKS: readonly SettingBlock[] = [
     id: 'referral',
     title: 'Referral rewards for inviters',
     description:
-      'What an inviter earns when an invited friend becomes active or subscribes, plus the hold, starting-invite, share-link limit and alert settings. Payment rewards are held for the hold period, then released; a reward amount of 0 turns that reward off.',
+      'What an inviter earns when an invited friend becomes active or subscribes and at each milestone of active friends, plus the hold, starting-invite, share-link limit and alert settings. Payment rewards are held for the hold period, then released; a reward amount of 0 turns that reward off.',
     keys: REWARD_KEYS.referral,
   },
   {

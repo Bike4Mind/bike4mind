@@ -1,10 +1,28 @@
 import { describe, expect, it } from 'vitest';
 import type { ChatMessage, ChatSession } from './chat';
-import { classifyMessagesOutcome, plainText, snippetOf, summarizeSession } from './agentOutcome';
+import { classifyMessagesOutcome, isUnfinishedOutcome, plainText, snippetOf, summarizeSession } from './agentOutcome';
 
 function assistant(overrides: Partial<ChatMessage> = {}): ChatMessage {
   return { id: 'a', role: 'assistant', content: 'done', createdAt: '2026-01-01T00:00:00.000Z', ...overrides };
 }
+
+describe('isUnfinishedOutcome', () => {
+  it.each([
+    ['finished', false],
+    ['no-reply', false],
+    ['max-tokens', false],
+    ['failed', true],
+    ['aborted', true],
+    ['turn-budget', true],
+    ['context-limit', true],
+  ] as const)('%s -> %s', (outcome, expected) => {
+    expect(isUnfinishedOutcome(outcome)).toBe(expected);
+  });
+
+  it('is false without an outcome', () => {
+    expect(isUnfinishedOutcome(undefined)).toBe(false);
+  });
+});
 
 describe('classifyMessagesOutcome', () => {
   it('is no-reply without an assistant message', () => {
@@ -80,5 +98,50 @@ describe('plainText', () => {
     expect(plainText('- one\n> two\n1. three')).toBe('one\ntwo\nthree');
     expect(plainText('See [the PR](https://example.com/pr/1).')).toBe('See the PR.');
     expect(plainText('```ts\nconst a = 2 * 3 * 4;\n```')).toBe('const a = 2 * 3 * 4;\n');
+  });
+});
+
+describe('summarizeSession plan', () => {
+  const session = (messages: ChatMessage[]) =>
+    ({ id: 's', title: 't', createdAt: '', updatedAt: '', model: 'm', messages }) as unknown as ChatSession;
+  const plan = (id: string, statuses: string[], status: 'done' | 'error' = 'done'): ChatMessage =>
+    assistant({
+      id,
+      toolCalls: [
+        {
+          id: `c-${id}`,
+          name: 'todo_write',
+          input: { todos: statuses.map((s, i) => ({ content: `Step ${i + 1}`, status: s })) },
+          status,
+        },
+      ],
+    });
+
+  it('summarises the latest plan as done, total, current and next', () => {
+    expect(summarizeSession(session([plan('a1', ['completed', 'in_progress', 'pending'])])).plan).toEqual({
+      done: 1,
+      total: 3,
+      current: 'Step 2',
+      next: 'Step 3',
+    });
+  });
+
+  it('has no plan key without a plan, with an empty plan, or when the plan call failed', () => {
+    expect(summarizeSession(session([assistant()]))).not.toHaveProperty('plan');
+    expect(summarizeSession(session([plan('a1', [])]))).not.toHaveProperty('plan');
+    expect(summarizeSession(session([plan('a1', ['pending'], 'error')]))).not.toHaveProperty('plan');
+  });
+
+  it('reads an imported Claude Code task stream', () => {
+    const task = (id: string, name: string, input: Record<string, unknown>): ChatMessage =>
+      assistant({ id, toolCalls: [{ id: `c-${id}`, name, input, status: 'done' }] });
+    const summary = summarizeSession(
+      session([
+        task('t1', 'TaskCreate', { subject: 'One', description: 'd' }),
+        task('t2', 'TaskCreate', { subject: 'Two', description: 'd' }),
+        task('t3', 'TaskUpdate', { taskId: '1', status: 'completed' }),
+      ])
+    );
+    expect(summary.plan).toMatchObject({ done: 1, total: 2 });
   });
 });

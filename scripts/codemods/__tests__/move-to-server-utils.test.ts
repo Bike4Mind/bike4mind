@@ -231,6 +231,7 @@ describe('move-to-server-utils', () => {
       toMove('apps/client/services/teamPlanSettings.ts'),
       toMove('apps/client/app/utils/chartSchemas.ts'),
       toMove('apps/client/app/constants/apiKeyScopes.ts'),
+      toMove('apps/client/app/components/admin/adminActionCounts.ts'),
       toMove('apps/client/server/utils/errors.ts'),
     ];
     const rewriteOutside = (source: string, file: string) => rewriteSource(source, file, OUTSIDE);
@@ -243,6 +244,7 @@ describe('move-to-server-utils', () => {
         'packages/server-utils/src/services/teamPlanSettings',
         'packages/server-utils/src/app/utils/chartSchemas',
         'packages/server-utils/src/app/constants/apiKeyScopes',
+        'packages/server-utils/src/app/components/admin/adminActionCounts',
         'packages/server-utils/src/utils/errors',
       ]);
     });
@@ -310,7 +312,7 @@ describe('move-to-server-utils', () => {
     });
 
     it.each([
-      'apps/client/app/components/x.ts',
+      'apps/client/app/componentsx/y.ts',
       'apps/client/app/x.ts',
       'apps/client/pages/api/x.ts',
       'apps/client/utils/x.ts',
@@ -327,6 +329,10 @@ describe('move-to-server-utils', () => {
       expect(() => toMove(`apps/client/server/${tail}`)).toThrow(/Only \.ts files can be moved/);
     }
   );
+
+  it('rejects moving a .tsx component from app/components', () => {
+    expect(() => toMove('apps/client/app/components/admin/Panel.tsx')).toThrow(/Only \.ts files can be moved/);
+  });
 
   describe('run()', () => {
     let root: string;

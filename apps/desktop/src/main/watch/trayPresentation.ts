@@ -1,7 +1,7 @@
 import { describeAgentStates, type AgentState } from '@shared/agentState';
 import { rootNeedsYou, type WatchOverall, type WatchSnapshot } from '@shared/watch';
 
-export type TrayAction = 'open-tavern' | 'toggle-mini' | 'hide-tray';
+export type TrayAction = 'open-tavern' | 'toggle-mini' | 'toggle-orchestrate-mini' | 'hide-tray';
 
 export type TrayMenuItem =
   | { kind: 'header'; label: string }
@@ -53,8 +53,16 @@ function headline(snapshot: WatchSnapshot): string {
   return describeAgentStates(states, parentsNeedingYou);
 }
 
-/** What the menu-bar item shows for a snapshot: pure, so the mapping is tested without Electron. */
-export function trayPresentation(snapshot: WatchSnapshot, miniOpen: boolean): TrayPresentation {
+/**
+ * What the menu-bar item shows for a snapshot: pure, so the mapping is tested without Electron.
+ * `orchestrateMiniOpen` is the Orchestrate mini window's state (main/orchestrateMini); its toggle is
+ * listed only when that window is wired up.
+ */
+export function trayPresentation(
+  snapshot: WatchSnapshot,
+  miniOpen: boolean,
+  orchestrateMiniOpen?: boolean
+): TrayPresentation {
   const summary = headline(snapshot);
   const items: TrayMenuItem[] = [{ kind: 'header', label: summary }];
 
@@ -95,9 +103,16 @@ export function trayPresentation(snapshot: WatchSnapshot, miniOpen: boolean): Tr
   items.push(
     { kind: 'separator' },
     { kind: 'action', action: 'open-tavern', label: 'Open Tavern' },
-    { kind: 'action', action: 'toggle-mini', label: miniOpen ? 'Hide mini Tavern' : 'Show mini Tavern' },
-    { kind: 'action', action: 'hide-tray', label: 'Hide menu-bar item' }
+    { kind: 'action', action: 'toggle-mini', label: miniOpen ? 'Hide mini Tavern' : 'Show mini Tavern' }
   );
+  if (orchestrateMiniOpen !== undefined) {
+    items.push({
+      kind: 'action',
+      action: 'toggle-orchestrate-mini',
+      label: orchestrateMiniOpen ? 'Hide Orchestrate mini window' : 'Show Orchestrate mini window',
+    });
+  }
+  items.push({ kind: 'action', action: 'hide-tray', label: 'Hide menu-bar item' });
 
   const title = needsYouTitle(snapshot.needsYouCount);
   return { icon: snapshot.overall, title, tooltip: `Bike4Mind - ${title || summary}`, items };

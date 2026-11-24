@@ -46,7 +46,7 @@ import { appReservedHosts } from '@server/utils/pythonArtifactDataOrigins';
 import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 import { recordAdminSettingChange } from '@bike4mind/server-utils/utils/adminSettingsAudit';
 import { AdminAiConfigSchema } from '@bike4mind/common';
-import { validateAdminAiConfigPromotion } from '@server/admin/ai/readiness';
+import { validateAdminAiConfigPromotion } from '@bike4mind/server-utils/admin/ai/readiness';
 
 // One-time guard so a self-host install running without a configured key logs the
 // plaintext-at-rest degradation once, rather than silently or on every write.

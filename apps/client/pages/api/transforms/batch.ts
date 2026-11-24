@@ -2,7 +2,6 @@ import { resolveRequestBillingOrgId } from '@bike4mind/server-utils/billing/reso
 import { admitRequestCompletion } from '@bike4mind/server-utils/utils/untrustedCompletionQuota';
 import { baseApi } from '@server/middlewares/baseApi';
 import { refuseExchangeKey } from '@server/auth/refuseExchangeKey';
-import { Config } from '@bike4mind/server-utils/utils/config';
 import { transformBatchRepository } from '@bike4mind/database';
 import { AnthropicBatchService, getAvailableModels, type BatchTransformRequest } from '@bike4mind/llm-adapters';
 import { ApiKeyScope, BadRequestError, ModelBackend, type IMessage, type ModelInfo } from '@bike4mind/common';
@@ -14,6 +13,7 @@ import {
   resolveShadowSubstitute,
 } from '@bike4mind/server-utils/billing/meterPlatformCompletion';
 import { ANTHROPIC_BATCH_RATE, batchHoldModel } from '@server/billing/anthropicBatchPricing';
+import { batchAnthropicKeys } from '@server/billing/batchAnthropicKeys';
 import { resolveRequestUsageSource } from '@bike4mind/server-utils/utils/resolveRequestUsageSource';
 import Anthropic from '@anthropic-ai/sdk';
 import type { MessageParam } from '@anthropic-ai/sdk/resources/messages';
@@ -85,8 +85,8 @@ const handler = baseApi({
   // The provider queues this work; its lifetime is independent of the HTTP request.
   await admitRequestCompletion(req, { holdSlot: false });
 
-  const apiKey = Config.ANTHROPIC_API_KEY;
-  if (!apiKey || apiKey === 'not-configured') {
+  const [apiKey] = await batchAnthropicKeys();
+  if (!apiKey) {
     return res.status(503).json({ error: 'Anthropic API key not configured', request_id: req.requestId });
   }
 

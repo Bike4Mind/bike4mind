@@ -55,7 +55,7 @@ vi.mock('@bike4mind/database', () => ({
   adminAiSuggestionRepository: { transition: h.transition },
   withTransaction: async (fn: () => Promise<unknown>) => fn(),
 }));
-vi.mock('@server/admin/dlq/triage', () => ({ visibleDlqSuggestion: h.suggestion }));
+vi.mock('@bike4mind/server-utils/admin/dlq/triage', () => ({ visibleDlqSuggestion: h.suggestion }));
 vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({ recordAdminActionFromRequest: h.audit }));
 
 import { Logger } from '@bike4mind/observability';

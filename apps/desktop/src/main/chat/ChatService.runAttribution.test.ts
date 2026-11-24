@@ -115,7 +115,7 @@ describe('orchestration run attribution', () => {
 
     await service.send(parent.id, 'Plan the work');
     await waitStream(0);
-    expect(mint).toHaveBeenCalledWith(expect.any(String), expect.anything(), parent.id);
+    expect(mint).toHaveBeenCalledWith(expect.any(String), expect.anything(), parent.id, undefined);
     expect(await storedRunId(parent.id)).toBe(RUN_A);
     expect(call(0)[1].run).toEqual({ runId: RUN_A, role: 'root', purpose: 'turn' });
     expect(call(0)[2].headers?.['X-Request-ID']).toBeTruthy();

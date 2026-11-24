@@ -140,9 +140,12 @@ const orgMembershipSentence = (entry: AuditEntry): string | null => {
       return `Removed from ${org}`;
     case 'org.member.content_reassigned':
       return `Transferred content in ${org}`;
+    // Two writers: the admin console targets the user; the team's own role route targets the organization
+    // (the member is in details.memberUserId). Both carry the new role in changes.
     case 'org.member.role_changed': {
       const after = entry.changes?.find(change => change.field === 'role')?.after;
       if (after === 'manager') return `Made a manager of ${org}`;
+      if (after === 'billingManager') return `Made a billing manager of ${org}`;
       if (after === 'member') return `Made a member of ${org}`;
       return `Changed role in ${org}`;
     }

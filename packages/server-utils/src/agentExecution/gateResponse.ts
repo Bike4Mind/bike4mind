@@ -3,6 +3,7 @@ import type { AgentCheckpoint } from '@bike4mind/agents';
 import type { Logger } from '@bike4mind/observability';
 import { endAgentRunLiveActivity } from '../utils/liveActivityPush';
 import { persistRunAsQuest } from '../utils/persistRunAsQuest';
+import { startEventBriefForCompletedRun } from '../briefs/eventBriefTrigger';
 import { reopenLowConfidenceAnswer } from '../utils/reopenLowConfidenceAnswer';
 import { extractFinalAnswer } from '../utils/extractFinalAnswer';
 import { resolveAndPublishMementoCompletion } from '../utils/publishMementoCompletion';
@@ -113,6 +114,7 @@ export async function handleGateResponse(
     // natural completion path fires. Resolve gates through the shared authority
     // and hand them over; the helper guards on the gates and `parentExecutionId`.
     await resolveAndPublishMementoCompletion(execution, { db: { adminSettings: adminSettingsRepository } }, logger);
+    await startEventBriefForCompletedRun(cmd.executionId, execution, logger);
     logger.info('[Gate] Stopped execution with partial answer', { executionId: cmd.executionId });
     return;
   }
@@ -150,10 +152,10 @@ export async function handleGateResponse(
 
   // Note: checkpointDepth is not carried here - same limitation as the permission_response path in
   // apps/client/server/websocket/agentExecute.ts. Gate resumes are user-driven and cannot cause a
-  // runaway loop on their own, and are likewise bounded by the persisted `lambdaInvocationCount`
-  // guard (MAX_LAMBDA_HANDOFFS).
+  // runaway loop on their own, so like a permission resume this click does not spend the executor's
+  // MAX_LAMBDA_HANDOFFS budget (`resumedBy: 'user'`); a timeout self-dispatch after it still does.
   try {
-    await dispatchAgentExecution({ executionId: cmd.executionId, connectionId }, executorTarget);
+    await dispatchAgentExecution({ executionId: cmd.executionId, connectionId, resumedBy: 'user' }, executorTarget);
   } catch (error) {
     // A lost ACK may still have queued work. Only an explicit rejection permits rollback.
     if (error instanceof AgentExecutorRejectedError) {
@@ -220,5 +222,6 @@ async function acceptHeldCompletion(
       error: error instanceof Error ? error.message : String(error),
     });
   }
+  await startEventBriefForCompletedRun(execution.id, execution, logger);
   logger.info('[Gate] Accepted low-confidence completion', { executionId: execution.id });
 }

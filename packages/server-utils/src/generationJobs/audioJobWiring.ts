@@ -20,6 +20,7 @@ import {
 } from '@bike4mind/database';
 import { Logger } from '@bike4mind/observability';
 import { runElevenLabsWithCapacity, voiceService } from '@bike4mind/services';
+import { usageKeySourceFields } from './providerKeySource';
 import {
   createSoundEffectJob,
   createSpeechJob,
@@ -130,6 +131,7 @@ const recordSpeechUsage: SpeechJobDeps['recordUsage'] = async ({
       costUsd,
       creditsCharged,
       status: 'ok',
+      ...(await usageKeySourceFields(provider, job.requestedBy)),
       latencyMs: latencyMs(job.createdAt),
     });
   } catch (error) {
@@ -164,6 +166,7 @@ const recordSoundEffectUsage: SoundEffectJobDeps['recordUsage'] = async ({
       creditsCharged,
       status,
       ...(job.payload.usageSource && { source: job.payload.usageSource }),
+      ...(await usageKeySourceFields(job.payload.providerId, job.requestedBy)),
       latencyMs: latencyMs(job.createdAt),
     });
   } catch (error) {

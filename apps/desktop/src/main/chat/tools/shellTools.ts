@@ -494,6 +494,9 @@ export async function shellApproval(
   // another, or from a 60-second run to leaving the same command running all afternoon. NUL
   // separates the fields because it is the one byte neither of them can contain.
   const key = `${tool}\x00${cwd}\x00${command}`;
+  // Left out of the key on purpose: the same command reworded is still the same command.
+  const described = typeof input.description === 'string' ? input.description.trim() : '';
+  const summary = described ? { summary: described } : {};
 
   let startDirectory: string;
   const directories: string[] = [];
@@ -507,7 +510,9 @@ export async function shellApproval(
   }
 
   const scan = await scanShell(command, startDirectory, context.roots).catch(() => null);
-  if (!scan) return unreadApproval(tool, command, detail, key, ungranted, [startDirectory, ...context.roots]);
+  if (!scan) {
+    return { ...unreadApproval(tool, command, detail, key, ungranted, [startDirectory, ...context.roots]), ...summary };
+  }
 
   // Recorded before the check, so a script written and run by this same command counts.
   for (const written of scan.writes) await recordSessionWrite(context, written);
@@ -643,6 +648,7 @@ export async function shellApproval(
   if (script && context.sessionId) expectShellRun(runKey, context.sessionId, script.hooks);
   return {
     detail: [detail, ...reasons].join('\n\n'),
+    ...summary,
     ...(reasons.length > 0 ? { reasons } : {}),
     key: runKey,
     ...(asks ? { askInAuto: true as const } : {}),
@@ -728,6 +734,12 @@ function unreadApproval(
     },
   };
 }
+
+/** The `description` input's schema text, shared with bash_background. */
+export const SHELL_DESCRIPTION_HINT =
+  'A few plain words on what this command does, in the active voice, for example "Lists the ' +
+  'changed files". Shown to the user above the command when they are asked to approve it, so ' +
+  'say what it does and do not repeat the command.';
 
 /** Exported so tests can shrink the grace period. */
 export const bashExecuteRunOptions: RunOptions = {};
@@ -826,6 +838,7 @@ export const bashExecute: ToolDefinition = {
           type: 'number',
           description: `Timeout in milliseconds. Default ${DEFAULT_TIMEOUT_MS}, maximum ${MAX_TIMEOUT_MS}.`,
         },
+        description: { type: 'string', description: SHELL_DESCRIPTION_HINT },
       },
       required: ['command'],
       additionalProperties: false,

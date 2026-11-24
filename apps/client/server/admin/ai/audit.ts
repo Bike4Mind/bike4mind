@@ -9,7 +9,7 @@ import { adminAiSuggestionRepository, type AdminAiSuggestionDecision } from '@bi
 import { systemAuditActor } from '@bike4mind/server-utils/utils/adminAudit';
 import { BadRequestError } from '@bike4mind/utils';
 import { Logger } from '@bike4mind/observability';
-import { getAdminAiClassReadiness } from './readiness';
+import { getAdminAiClassReadiness } from '@bike4mind/server-utils/admin/ai/readiness';
 
 /**
  * Audit glue for admin AI suggestions. An admin accepting a suggestion goes through the existing

@@ -3,6 +3,7 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { CssVarsProvider } from '@mui/joy/styles';
 import type { ChatSpawnSuggestion, SpawnSuggestionResult } from '@shared/chat';
+import type { SpawnLocation } from '@shared/spawnLocation';
 import { afterEach, describe, expect, it, vi, type Mock } from 'vitest';
 import { desktopTheme } from '../theme';
 import { Composer } from './Composer';
@@ -68,6 +69,7 @@ interface Handlers {
   onStart: Mock<StartFn>;
   onDismiss: Mock<(suggestionId: string) => Promise<SpawnSuggestionResult>>;
   onSend: Mock<(text: string) => void>;
+  onOpenSession: Mock<(sessionId: string) => void>;
 }
 
 function handlers(): Handlers {
@@ -75,16 +77,28 @@ function handlers(): Handlers {
     onStart: vi.fn<StartFn>(async () => ok(BASE)),
     onDismiss: vi.fn(async (_suggestionId: string) => ok(BASE)),
     onSend: vi.fn<(text: string) => void>(),
+    onOpenSession: vi.fn<(sessionId: string) => void>(),
   };
 }
 
-function render(suggestions: ChatSpawnSuggestion[], on: Handlers, streaming = false): void {
+function render(
+  suggestions: ChatSpawnSuggestion[],
+  on: Handlers,
+  streaming = false,
+  location: SpawnLocation = 'worktree'
+): void {
   host ??= document.body.appendChild(document.createElement('div'));
   root ??= createRoot(host);
   act(() => {
     root?.render(
       <CssVarsProvider theme={desktopTheme}>
-        <SpawnSuggestionTray suggestions={suggestions} onStart={on.onStart} onDismiss={on.onDismiss} />
+        <SpawnSuggestionTray
+          suggestions={suggestions}
+          onStart={on.onStart}
+          onDismiss={on.onDismiss}
+          onOpenSession={on.onOpenSession}
+          location={location}
+        />
         <Composer
           sessionId="s1"
           disabled={false}
@@ -248,27 +262,84 @@ describe('SpawnSuggestionTray', () => {
     expect(on.onStart).not.toHaveBeenCalled();
   });
 
-  it('remembers the last choice for the next card', async () => {
-    render([BASE], handlers());
-    await choose('here');
-    expect(window.localStorage.getItem(SPAWN_CHOICE_STORAGE_KEY)).toBe('here');
-
-    act(() => root?.unmount());
-    root = null;
-    render([{ ...BASE, id: 's9' }], handlers());
-    expect(primary().textContent).toBe('Run here');
+  it('takes its first choice from the Settings location', () => {
+    render([BASE], handlers(), false, 'local');
+    expect(primary().textContent).toBe('Start in this folder');
+    expect(hasBranchField()).toBe(false);
   });
 
-  it('ignores a remembered worktree choice outside a git repository, and an unknown value', () => {
-    window.localStorage.setItem(SPAWN_CHOICE_STORAGE_KEY, 'worktree');
-    render([{ ...BASE, repository: false }], handlers());
-    expect(primary().textContent).toBe('Start in this folder');
+  it('falls back to the default rule for ask, and for a worktree outside a git repository', () => {
+    render([BASE], handlers(), false, 'ask');
+    expect(primary().textContent).toBe('Start in new worktree');
 
     act(() => root?.unmount());
     root = null;
-    window.localStorage.setItem(SPAWN_CHOICE_STORAGE_KEY, 'elsewhere');
+    render([{ ...BASE, repository: false }], handlers(), false, 'worktree');
+    expect(primary().textContent).toBe('Start in this folder');
+  });
+
+  it('forgets a choice an old card remembered, so it cannot override Settings', async () => {
+    window.localStorage.setItem(SPAWN_CHOICE_STORAGE_KEY, 'local');
     render([BASE], handlers());
     expect(primary().textContent).toBe('Start in new worktree');
+    expect(window.localStorage.getItem(SPAWN_CHOICE_STORAGE_KEY)).toBeNull();
+
+    await choose('here');
+    expect(window.localStorage.getItem(SPAWN_CHOICE_STORAGE_KEY)).toBeNull();
+  });
+
+  describe('a session the Settings location started with no card', () => {
+    const autoStarted = (createdAt: string): ChatSpawnSuggestion => ({
+      ...BASE,
+      createdAt,
+      status: 'started',
+      started: {
+        placement: 'worktree',
+        sessionId: 'child-1',
+        title: 'Tidy imports',
+        branch: 'agent/tidy-imports-2',
+        edited: false,
+        auto: true,
+      },
+    });
+
+    it('is announced with its branch, and Open goes to the new session', async () => {
+      const on = handlers();
+      render([autoStarted(new Date().toISOString())], on);
+      expect(byTestId('spawn-suggestion-auto-notice').textContent).toContain('agent/tidy-imports-2');
+      expect(host?.querySelector('[data-testid="spawn-suggestion-card"]')).toBeNull();
+
+      await click('spawn-suggestion-auto-notice-open-btn');
+      expect(on.onOpenSession).toHaveBeenCalledWith('child-1');
+      expect(host?.querySelector('[data-testid="spawn-suggestion-auto-notice"]')).toBeNull();
+    });
+
+    it('hides on request', async () => {
+      render([autoStarted(new Date().toISOString())], handlers());
+      await click('spawn-suggestion-auto-notice-hide-btn');
+      expect(host?.querySelector('[data-testid="spawn-suggestion-auto-notice"]')).toBeNull();
+    });
+
+    it('is not replayed when an old conversation is reopened', () => {
+      render([autoStarted('2026-10-14T00:00:00.000Z')], handlers());
+      expect(host?.querySelector('[data-testid="spawn-suggestion-auto-notice"]')).toBeNull();
+    });
+
+    it('is not shown for a start the user made from the card', () => {
+      const fromCard = autoStarted(new Date().toISOString());
+      if (fromCard.started?.placement === 'worktree') delete fromCard.started.auto;
+      render([fromCard], handlers());
+      expect(host?.querySelector('[data-testid="spawn-suggestion-auto-notice"]')).toBeNull();
+    });
+  });
+
+  it('says why an automatic start did not happen, and still starts with one click', async () => {
+    const on = handlers();
+    render([{ ...BASE, autoStartError: 'The branch agent/tidy-imports already exists.' }], on);
+    expect(byTestId('spawn-suggestion-auto-error').textContent).toContain('already exists');
+
+    await click('spawn-suggestion-start-btn');
+    expect(on.onStart).toHaveBeenCalledWith(expect.objectContaining({ placement: 'worktree' }));
   });
 
   it('runs here with the edited prompt and no branch, even with the branch cleared', async () => {

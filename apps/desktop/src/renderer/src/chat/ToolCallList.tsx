@@ -244,6 +244,16 @@ function ApprovalParts({ parts }: { parts: NonNullable<ChatToolCall['approvalPar
   );
 }
 
+const MAX_DESCRIPTION_CHARS = 140;
+
+const SHELL_TOOLS = new Set(['bash_execute', 'bash_background']);
+
+/** The model's description as one capped line, or '' when there is nothing to show. */
+function approvalDescriptionLine(description: string | undefined): string {
+  const flat = (description ?? '').replace(/\s+/g, ' ').trim();
+  return flat.length <= MAX_DESCRIPTION_CHARS ? flat : `${flat.slice(0, MAX_DESCRIPTION_CHARS - 3).trimEnd()}...`;
+}
+
 /**
  * The consent prompt for a tool that has not run yet.
  *
@@ -268,6 +278,7 @@ function ApprovalPrompt({
   const irreversible = call.approvalIrreversible === true;
   const noAlways = irreversible || call.approvalOnceOnly === true;
   const choice = call.approvalChoice;
+  const description = approvalDescriptionLine(call.approvalDescription);
   const argument = summarizeInput(call);
   const approvalText = call.approvalDetail ?? argument;
 
@@ -292,6 +303,17 @@ function ApprovalPrompt({
                 ? 'Start this in the background?'
                 : 'Run this command?'))}
       </Typography>
+
+      {!diff && description && (
+        <Typography
+          level="body-xs"
+          textColor="text.secondary"
+          sx={{ mt: 0.5, overflowWrap: 'anywhere' }}
+          data-testid="chat-tool-approval-summary"
+        >
+          {`Agent's summary: ${description}`}
+        </Typography>
+      )}
 
       {diff ? (
         <Stack spacing={0.75} sx={{ mt: 0.75 }}>
@@ -425,6 +447,10 @@ function ToolCallDetail({ call }: { call: ChatToolCall }) {
   // string twice in three lines - and a write has no other argument worth a line of its own.
   const diffs = call.diffs ?? (call.diff ? [call.diff] : []);
   const argument = diffs.length > 0 ? '' : summarizeInput(call);
+  // Read from the input, so a call that never stopped at the gate (an imported session's) shows it too.
+  const description = SHELL_TOOLS.has(call.name)
+    ? approvalDescriptionLine(typeof call.input.description === 'string' ? call.input.description : undefined)
+    : '';
   // The list stands in for the raw text it was parsed from; the model still got that text.
   const listsHits = useWebSearchHits(call).length > 0;
   const output = call.error ?? call.preview ?? call.progress;
@@ -457,6 +483,11 @@ function ToolCallDetail({ call }: { call: ChatToolCall }) {
 
   return (
     <Box data-testid="chat-tool-detail">
+      {description && (
+        <Typography level="body-xs" textColor="text.tertiary" data-testid="chat-tool-detail-summary">
+          {`Agent's summary: ${description}`}
+        </Typography>
+      )}
       {argument && (
         <Stack direction="row" spacing={0.5} alignItems="flex-start" sx={revealBlockCopyButtonSx}>
           <Typography

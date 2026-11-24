@@ -1,6 +1,11 @@
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { ApiKeyStatus, type AdminApiKeyAccess, type IUserApiKeyDocument } from '@bike4mind/common';
+import {
+  ApiKeyStatus,
+  MODERATION_EXCEPTION_CATEGORIES,
+  type AdminApiKeyAccess,
+  type IUserApiKeyDocument,
+} from '@bike4mind/common';
 import { useUser } from '@client/app/contexts/UserContext';
 import { ProfileTestWrapper, buildProfile } from '../../profileTestUtils';
 import { ApiKeysTab } from './ApiKeysTab';
@@ -11,6 +16,7 @@ const mocks = vi.hoisted(() => ({
   revoke: vi.fn(),
   restore: vi.fn(),
   rotate: vi.fn(),
+  setModeration: vi.fn(),
   revokeAll: vi.fn(),
   toastError: vi.fn(),
   toastSuccess: vi.fn(),
@@ -32,6 +38,7 @@ vi.mock('@client/app/hooks/data/adminUserCredits', () => {
     useAdminRevokeApiKey: mutation(mocks.revoke),
     useAdminRestoreApiKey: mutation(mocks.restore),
     useAdminRotateApiKey: mutation(mocks.rotate),
+    useAdminSetApiKeyModerationException: mutation(mocks.setModeration),
     useAdminRevokeAllApiKeys: mutation(mocks.revokeAll),
   };
 });
@@ -287,6 +294,182 @@ describe('ApiKeysTab', () => {
     await waitFor(() => expect(mocks.toastError).toHaveBeenCalledWith('API key is not active'));
     expect(screen.getByRole('dialog', { name: 'Rotate ci-runner' })).toBeInTheDocument();
     expect(screen.queryByTestId('user-keys-new-secret')).not.toBeInTheDocument();
+  });
+
+  it('shows which keys carry a moderation exception', () => {
+    respond({
+      data: {
+        apiKeys: KEYS,
+        liveUsage: {},
+        requests: {},
+        access: PAID,
+        moderationExceptions: {
+          'key-2': { categories: ['violence'], reason: 'Security research', setAt: '2026-11-01T00:00:00.000Z' },
+        },
+      },
+    });
+    renderTab();
+
+    expect(within(row('key-1')).getByTestId('user-keys-moderation-chip')).toHaveTextContent('Standard');
+    expect(within(row('key-2')).getByTestId('user-keys-moderation-chip')).toHaveTextContent('Exception');
+  });
+
+  const category = (name: string) => screen.getByTestId(`user-keys-moderation-category-${name}`);
+
+  it('offers exactly the accepted categories and requires at least one before saving', () => {
+    renderTab();
+
+    fireEvent.click(within(row('key-1')).getByTestId('user-keys-moderation-btn'));
+    expect(screen.getByRole('dialog', { name: 'Moderation exception' })).toBeInTheDocument();
+    for (const name of MODERATION_EXCEPTION_CATEGORIES) expect(category(name)).not.toBeChecked();
+    expect(screen.getByTestId('user-keys-moderation-categories').querySelectorAll('input')).toHaveLength(
+      MODERATION_EXCEPTION_CATEGORIES.length
+    );
+
+    fireEvent.click(screen.getByTestId('user-keys-moderation-dialog-reason-input-preset-0'));
+    expect(screen.getByTestId('user-keys-moderation-dialog-confirm-btn')).toBeDisabled();
+    expect(screen.queryByTestId('user-keys-moderation-dialog-secondary-btn')).not.toBeInTheDocument();
+  });
+
+  it('saves the chosen categories with an audited reason', async () => {
+    mocks.setModeration.mockResolvedValue(undefined);
+    renderTab();
+
+    fireEvent.click(within(row('key-1')).getByTestId('user-keys-moderation-btn'));
+    fireEvent.click(category('violence'));
+    fireEvent.click(category('VIOLENCE'));
+    fireEvent.click(screen.getByTestId('user-keys-moderation-dialog-reason-input-preset-0'));
+    fireEvent.click(screen.getByTestId('user-keys-moderation-dialog-confirm-btn'));
+
+    await waitFor(() =>
+      expect(mocks.setModeration).toHaveBeenCalledWith({
+        keyId: 'key-1',
+        reason: 'Approved security research',
+        categories: ['violence', 'VIOLENCE'],
+      })
+    );
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Moderation exception' })).not.toBeInTheDocument());
+  });
+
+  describe('with an existing exception', () => {
+    beforeEach(() => {
+      mocks.setModeration.mockResolvedValue(undefined);
+      respond({
+        data: {
+          apiKeys: KEYS,
+          liveUsage: {},
+          requests: {},
+          access: PAID,
+          moderationExceptions: {
+            'key-1': {
+              categories: ['violence/graphic'],
+              reason: 'Security research',
+              setAt: '2026-11-01T00:00:00.000Z',
+            },
+          },
+        },
+      });
+    });
+
+    it('preselects the current categories and saves a changed set', async () => {
+      renderTab();
+
+      fireEvent.click(within(row('key-1')).getByTestId('user-keys-moderation-btn'));
+      expect(category('violence/graphic')).toBeChecked();
+      expect(category('violence')).not.toBeChecked();
+
+      fireEvent.click(category('violence'));
+      fireEvent.click(screen.getByTestId('user-keys-moderation-dialog-reason-input-preset-1'));
+      fireEvent.click(screen.getByTestId('user-keys-moderation-dialog-confirm-btn'));
+
+      await waitFor(() =>
+        expect(mocks.setModeration).toHaveBeenCalledWith({
+          keyId: 'key-1',
+          reason: 'Violence-related content is core to the product',
+          categories: ['violence', 'violence/graphic'],
+        })
+      );
+    });
+
+    it('clears the exception with a separate action that sends no categories', async () => {
+      renderTab();
+
+      fireEvent.click(within(row('key-1')).getByTestId('user-keys-moderation-btn'));
+      fireEvent.click(screen.getByTestId('user-keys-moderation-dialog-reason-input-preset-2'));
+      fireEvent.click(screen.getByTestId('user-keys-moderation-dialog-secondary-btn'));
+
+      await waitFor(() =>
+        expect(mocks.setModeration).toHaveBeenCalledWith({
+          keyId: 'key-1',
+          reason: 'Exception no longer needed',
+          categories: [],
+        })
+      );
+    });
+  });
+
+  describe('with an existing exception and every category unchecked', () => {
+    beforeEach(() => {
+      mocks.setModeration.mockResolvedValue(undefined);
+      respond({
+        data: {
+          apiKeys: KEYS,
+          liveUsage: {},
+          requests: {},
+          access: PAID,
+          moderationExceptions: {
+            'key-1': {
+              categories: ['violence/graphic'],
+              reason: 'Security research',
+              setAt: '2026-11-01T00:00:00.000Z',
+            },
+          },
+        },
+      });
+    });
+
+    it('blocks saving but still allows removing the exception', async () => {
+      renderTab();
+
+      fireEvent.click(within(row('key-1')).getByTestId('user-keys-moderation-btn'));
+      fireEvent.click(category('violence/graphic'));
+      fireEvent.click(screen.getByTestId('user-keys-moderation-dialog-reason-input-preset-2'));
+
+      expect(screen.getByTestId('user-keys-moderation-dialog-confirm-btn')).toBeDisabled();
+      expect(screen.getByTestId('user-keys-moderation-dialog-hint')).toHaveTextContent('Choose at least one category.');
+      const remove = screen.getByTestId('user-keys-moderation-dialog-secondary-btn');
+      expect(remove).toBeEnabled();
+
+      fireEvent.click(remove);
+      await waitFor(() =>
+        expect(mocks.setModeration).toHaveBeenCalledWith({
+          keyId: 'key-1',
+          reason: 'Exception no longer needed',
+          categories: [],
+        })
+      );
+    });
+  });
+
+  it('keeps the moderation dialog open and reports a server refusal', async () => {
+    mocks.setModeration.mockRejectedValue({ response: { data: { error: 'API key not found' } } });
+    renderTab();
+
+    fireEvent.click(within(row('key-1')).getByTestId('user-keys-moderation-btn'));
+    fireEvent.click(category('violence'));
+    fireEvent.click(screen.getByTestId('user-keys-moderation-dialog-reason-input-preset-0'));
+    fireEvent.click(screen.getByTestId('user-keys-moderation-dialog-confirm-btn'));
+
+    await waitFor(() => expect(mocks.toastError).toHaveBeenCalledWith('API key not found'));
+    expect(screen.getByRole('dialog', { name: 'Moderation exception' })).toBeInTheDocument();
+  });
+
+  it('disables the moderation action without users:moderate, naming the permission', () => {
+    useUser.setState({ currentUser: { id: 'd1', isAdmin: false, adminPermissions: ['keys:revoke'] } as never });
+    renderTab();
+    const button = within(row('key-1')).getByTestId('user-keys-moderation-btn');
+    expect(button).toBeDisabled();
+    expect((button.parentElement as HTMLElement).getAttribute('aria-label')).toBe('Missing permission: users:moderate');
   });
 
   it('revokes every active key with a counted, reasoned confirm', async () => {

@@ -109,6 +109,7 @@ import { createSlackJobDeliveryDeps } from './slackJobDeliveryDeps';
 import { getFilesStorage, getGeneratedImageStorage } from '../utils/storage/index';
 import { imageModerationIncidents } from '../moderation/imageModerationIncidents';
 import { createFfmpegRunner } from './ffmpegRunner';
+import { usageKeySourceFields } from './providerKeySource';
 
 // Must outlive the worker timeout (5 min, infra/queues.ts generationJobQueue) so two workers never overlap on
 // one job, and stay under the queue visibility timeout (6 min).
@@ -514,6 +515,7 @@ const recordMusicUsage: MusicJobDeps['recordUsage'] = async ({
       costUsd,
       creditsCharged,
       status,
+      ...(await usageKeySourceFields(job.payload.providerId, job.requestedBy)),
       latencyMs: Date.now() - (job.createdAt?.getTime() ?? Date.now()),
     });
   } catch (error) {

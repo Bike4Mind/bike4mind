@@ -78,6 +78,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         case .notHandled:
           await services.approvalNotifications.handle(actionIdentifier: actionIdentifier, payload: payload)
         }
+        services.refreshWidgetPendingDecisions()
       }
       completionHandler()
     }

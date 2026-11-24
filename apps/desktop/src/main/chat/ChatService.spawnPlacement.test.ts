@@ -11,6 +11,7 @@ import {
   type ChatStreamEvent,
   type ChatQueueEvent,
 } from '@shared/chat';
+import type { SpawnLocation } from '@shared/spawnLocation';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ChatService, MAX_CONCURRENT_SPAWNED, SHARED_CHECKOUT_PREAMBLE } from './ChatService';
 import { SessionStore } from './SessionStore';
@@ -67,6 +68,8 @@ describe('ChatService spawn placement', () => {
   let dependencies: DependencyInstaller;
   let attachments: AttachmentStore;
   let queueEvents: ChatQueueEvent[];
+  // 'ask' keeps the card, as every test here assumes unless it sets an automatic location.
+  let location: SpawnLocation;
 
   /** A repository in the user's layout: a bare dir plus one folder per branch beside it. */
   async function repository(): Promise<void> {
@@ -92,6 +95,7 @@ describe('ChatService spawn placement', () => {
     vi.mocked(prefetchBase).mockClear();
     gate.hold = Promise.resolve();
     gate.fail = null;
+    location = 'ask';
     await repository();
     store = new SessionStore(await mkdtemp(join(tmpdir(), 'b4m-place-sessions-')), 'test-model');
     // Bound per test: a previous service replying late must not push into this test's events.
@@ -120,6 +124,7 @@ describe('ChatService spawn placement', () => {
       attachments,
       dependencies,
       approvals: new ApprovalGate(),
+      spawnLocation: { read: async () => location },
       access: { list: async () => [] } as unknown as AccessStore,
       logger: { debug: vi.fn(), warn: vi.fn() },
       getApiClient: () =>
@@ -1024,5 +1029,57 @@ describe('ChatService spawn placement', () => {
     expect((await store.get(parent.id))?.spawnSuggestions?.[0]?.status).toBe('dismissed');
     expect(await child()).toBeUndefined();
     expect(await listWorktrees(main)).toHaveLength(1);
+  });
+
+  describe('with New worktree in Settings', () => {
+    /** A parent in Approve for me (the default) whose model asks for one spawn. */
+    async function autoSpawn() {
+      location = 'worktree';
+      const parent = await parentSession();
+      await service.send(parent.id, 'go');
+      await vi.waitUntil(() => streams.length > 0, { timeout: 5000, interval: 5 });
+      requestSpawn(streams[0], 'call-1', 'do the thing', 'The thing');
+      await awaitSettled(1);
+      return { parent, call: settled()[0] };
+    }
+
+    it('starts the child in a worktree of its own with no card, and names it in the result', async () => {
+      const { parent, call } = await autoSpawn();
+
+      expect(call?.status).toBe('done');
+      expect(call?.preview).toContain('Started session');
+      expect(call?.preview).toContain('agent/the-thing');
+      const path = await worktreeOf('agent/the-thing');
+      expect((await stat(join(path, 'README.md'))).isFile()).toBe(true);
+      expect((await store.get(parent.id))?.project?.workingDirectory).toBe(main);
+      expect((await store.get(parent.id))?.spawnSuggestions?.[0]?.started).toMatchObject({
+        placement: 'worktree',
+        branch: 'agent/the-thing',
+        auto: true,
+      });
+    });
+
+    it('takes the next free branch name when a leftover branch holds the suggested one', async () => {
+      await git(main, ['branch', 'agent/the-thing']);
+      const { call } = await autoSpawn();
+
+      expect(call?.preview).toContain('agent/the-thing-2');
+      await worktreeOf('agent/the-thing-2');
+    });
+
+    it('puts the card back when the worktree cannot be made, and never uses this folder', async () => {
+      gate.fail = new Error('disk full');
+      const { parent } = await autoSpawn();
+
+      const stored = await vi.waitUntil(
+        async () => {
+          const entry = (await store.get(parent.id))?.spawnSuggestions?.[0];
+          return entry?.status === 'pending' ? entry : undefined;
+        },
+        { timeout: 10000, interval: 10 }
+      );
+      expect(stored.status).toBe('pending');
+      expect((await child())?.project?.workingDirectory).not.toBe(main);
+    });
   });
 });

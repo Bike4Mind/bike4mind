@@ -39,7 +39,10 @@ describe('OrchestratePill', () => {
     expect(pill.getAttribute('aria-label')).toBe('Orchestrate');
     expect(pill.getAttribute('aria-pressed')).toBe('false');
     act(() => pill.click());
-    expect(onChange).toHaveBeenCalledWith(true);
+    // Turning on asks for the run's budget first; Start with the field blank means none.
+    expect(onChange).not.toHaveBeenCalled();
+    await act(async () => el('orchestrate-budget-start-btn').click());
+    expect(onChange).toHaveBeenCalledWith(true, undefined);
 
     await themed.render(<OrchestratePill on onChange={onChange} />);
     expect(el('composer-orchestrate-toggle').getAttribute('aria-pressed')).toBe('true');
@@ -152,5 +155,41 @@ describe('OrchestratePill', () => {
     expect(tooltip?.textContent).toBe('Orchestrate: split work across agents');
     expect(query('orchestration-policy-summary')).toBeNull();
     expect(query('composer-orchestrate-unavailable')).toBeNull();
+  });
+
+  it('starts with the budget typed into the dialog, and refuses one that is not whole credits', async () => {
+    await themed.render(<OrchestratePill on={false} onChange={onChange} />);
+    act(() => el('composer-orchestrate-toggle').click());
+    const input = el('orchestrate-budget-input') as HTMLInputElement;
+    const type = (value: string) =>
+      act(() => {
+        Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set?.call(input, value);
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+      });
+
+    type('12.5');
+    expect((el('orchestrate-budget-start-btn') as HTMLButtonElement).disabled).toBe(true);
+    type('2,500');
+    await act(async () => el('orchestrate-budget-start-btn').click());
+
+    expect(onChange).toHaveBeenCalledWith(true, 2500);
+  });
+
+  it('shows the budget in the tooltip while on', async () => {
+    await themed.render(
+      <OrchestratePill
+        on
+        policy={{
+          ...policyWith({ implementation: 'inherit', exploration: 'inherit', review: 'inherit' }),
+          budgetCredits: 5000,
+          budgetPaused: true,
+        }}
+        planner="planner"
+        models={models}
+        onChange={onChange}
+      />
+    );
+    const tooltip = await hoverTooltip();
+    expect(tooltip?.textContent).toContain('Budget: 5,000 credits (paused)');
   });
 });

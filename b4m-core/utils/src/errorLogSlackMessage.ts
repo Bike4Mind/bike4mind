@@ -63,7 +63,7 @@ const CONTEXT_RAW_MAX = 1000;
  * control. Every string the card renders is passed through `redactIpAddresses`, and IP-keyed metadata
  * (`ip`, `clientIp`, `sourceIP`, `ip_address`, ...) is left off the context line rather than shown as
  * `[IP]`. Keep in sync with the Slack error-channel entry in
- * `apps/client/server/dataSubject/externalStores.ts`.
+ * `packages/server-utils/src/dataSubject/externalStores.ts`.
  */
 const IP_ADDRESS_KEY = /^(?:ip|IP)(?:Address|_address)?$|[a-z](?:Ip|IP)(?:Address)?$|_(?:ip|IP)(?:_address)?$/;
 const isIpAddressKey = (key: string) => IP_ADDRESS_KEY.test(key);

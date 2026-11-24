@@ -59,6 +59,8 @@ export function buildExploreContext(options: {
   onUsage(usage: ChatUsage): void;
   /** The turn's run attribution, read per request so a run the server refused mid-turn is not resent. */
   run?: () => CompletionRunAttribution | undefined;
+  /** True when the run has a credit budget: a refused run is then never resent without it. */
+  runBudgeted?: boolean;
   /** Called when the server refuses `run`, before the request is resent without it. */
   onRunRejected?: () => Promise<void>;
 }): ExploreContext {
@@ -73,7 +75,8 @@ export function buildExploreContext(options: {
       withRunFallback(
         options.run?.(),
         run => streamCompletion(options.axios, options.endpoint, run ? { ...request, run } : request, onEvent, signal),
-        async () => options.onRunRejected?.()
+        async () => options.onRunRejected?.(),
+        { budgeted: options.runBudgeted }
       ),
     addUsage: options.onUsage,
   };

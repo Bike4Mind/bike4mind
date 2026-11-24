@@ -1,7 +1,7 @@
 {
   "name": "@bike4mind/services-core",
   "description": "This packages contains all the core business logic",
-  "version": "29.0.0",
+  "version": "30.0.0",
   "publishConfig": {
     "access": "restricted"
   },
@@ -348,6 +348,16 @@
       "require": {
         "types": "./dist/llm/shadowTier.d.cts",
         "default": "./dist/llm/shadowTier.cjs"
+      }
+    },
+    "./llm/llmUsageSettledLog": {
+      "import": {
+        "types": "./dist/llm/llmUsageSettledLog.d.mts",
+        "default": "./dist/llm/llmUsageSettledLog.mjs"
+      },
+      "require": {
+        "types": "./dist/llm/llmUsageSettledLog.d.cts",
+        "default": "./dist/llm/llmUsageSettledLog.cjs"
       }
     },
     "./llm/orgToolPolicy": {

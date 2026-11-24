@@ -203,6 +203,8 @@ describe('updateSession - project propagation opt-out', () => {
 
   const DEFAULT_FILE = {
     id: NEW_FILE,
+    // Owned by the caller: attaching to a project needs share or ownership (projectService/attachGate.ts).
+    userId: 'user-1',
     filePath: 'p/new.pdf',
     mimeType: 'application/pdf',
     moderationStatus: 'clean',
@@ -252,6 +254,18 @@ describe('updateSession - project propagation opt-out', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+  });
+
+  it('adds a file the caller can only read to the session but not to its projects', async () => {
+    const readOnly = { ...DEFAULT_FILE, userId: 'someone-else', users: [{ userId: 'user-1', permissions: ['read'] }] };
+    const { project, adapters } = makeAdapters([readOnly]);
+
+    await updateSession(user, { id: 'session-1', knowledgeIds: [NEW_FILE] }, adapters);
+
+    expect(adapters.db.sessions.updateWithUpdateAccess.mock.calls[0][1].knowledgeIds).toEqual([NEW_FILE]);
+    expect(project.fileIds).toEqual(['already-there']);
+    expect(adapters.db.projects.update).not.toHaveBeenCalled();
+    expect(updateShareableFiles).not.toHaveBeenCalled();
   });
 
   it('appends the file to containing projects by default, preserving the pre-flag behaviour', async () => {
@@ -757,7 +771,11 @@ describe('updateSession - added knowledge ids are access-checked', () => {
           projects: { findAllBySessionId: vi.fn().mockResolvedValue([project]), update: vi.fn() },
           fabFiles: {
             findAccessibleInIds,
-            shareable: { findAllAccessibleByIds: vi.fn(async (_u: unknown, ids: string[]) => ids.map(id => ({ id }))) },
+            shareable: {
+              findAllAccessibleByIds: vi.fn(async (_u: unknown, ids: string[]) =>
+                ids.map(id => ({ id, userId: 'user-1' }))
+              ),
+            },
           },
           caches: {},
           // eslint-disable-next-line @typescript-eslint/no-explicit-any -- minimal adapter shape for this unit test

@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query';
 import { api } from '@client/app/contexts/ApiContext';
-import type { AdminActionCounts } from '@client/app/components/admin/adminActionCounts';
+import type { AdminActionCounts } from '@bike4mind/server-utils/app/components/admin/adminActionCounts';
 
 /** Invalidate this after acting on a counted queue so its sidebar badge drops without waiting for the poll. */
 export const adminActionCountsQueryKey = ['admin', 'action-counts'] as const;

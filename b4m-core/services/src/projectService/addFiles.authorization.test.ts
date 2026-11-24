@@ -120,8 +120,12 @@ describe('addFiles grant cap', () => {
     return grantsFor;
   };
 
-  it('lets a read-only adder pass on only read, to the owner and to every member', async () => {
-    const file = { id: 'file-1', userId: 'someone-else', users: [{ userId: ADDER, permissions: [Permission.read] }] };
+  it('lets an adder holding read+share pass on only read, to the owner and to every member', async () => {
+    const file = {
+      id: 'file-1',
+      userId: 'someone-else',
+      users: [{ userId: ADDER, permissions: [Permission.read, Permission.share] }],
+    };
 
     const grantsFor = await run(ADDER, file);
 
@@ -140,12 +144,12 @@ describe('addFiles grant cap', () => {
     expect(grantsFor(OWNER)).toEqual([Permission.read, Permission.update]);
   });
 
-  it('counts an update grant the adder holds through a group', async () => {
+  it('counts update and share grants the adder holds through a group', async () => {
     const file = {
       id: 'file-1',
       userId: 'someone-else',
       users: [],
-      groups: [{ groupId: 'group-1', permissions: [Permission.read, Permission.update] }],
+      groups: [{ groupId: 'group-1', permissions: [Permission.read, Permission.update, Permission.share] }],
     };
 
     const grantsFor = await run(ADDER, file, ['group-1']);
