@@ -3,6 +3,8 @@
 package com.bike4mind.kit.media
 
 import com.bike4mind.kit.networking.ApiException
+import com.bike4mind.kit.networking.ClientUpgradeNotice
+import com.bike4mind.kit.networking.UpgradeRequiredException
 import java.io.IOException
 import java.time.Instant
 import kotlin.test.Test
@@ -219,6 +221,19 @@ class MediaGalleryControllerTest {
     }
 
     @Test
+    fun aRefusedBuildEndsTheLoadWithoutAnError() = runTest {
+        val api = FakeMediaApi().apply { failure = UpgradeRequiredException(ClientUpgradeNotice("9.9.9")) }
+        val gallery = gallery(api)
+
+        gallery.load()
+        runCurrent()
+
+        assertFalse(gallery.state.value.loading)
+        assertFalse(gallery.state.value.refreshing)
+        assertNull(gallery.state.value.error)
+    }
+
+    @Test
     fun selectingTheSameFilterDoesNothing() = runTest {
         val api = FakeMediaApi().apply { pages[null] = listOf(page("a")) }
         val gallery = gallery(api)
@@ -319,6 +334,18 @@ class MediaDetailControllerTest {
         runCurrent()
         assertNull(detail.state.value.error)
         assertEquals("https://u/fresh", detail.state.value.playableUrl)
+    }
+
+    @Test
+    fun aRefusedBuildEndsTheRefetchWithoutAnError() = runTest {
+        val api = FakeMediaApi().apply { failure = UpgradeRequiredException(ClientUpgradeNotice(null)) }
+        val detail = detail(mediaItem("a"), api)
+
+        detail.prepare()
+        runCurrent()
+
+        assertFalse(detail.state.value.refreshing)
+        assertNull(detail.state.value.error)
     }
 
     @Test
