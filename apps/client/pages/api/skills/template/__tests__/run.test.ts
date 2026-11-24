@@ -425,6 +425,19 @@ describe('POST /api/skills/template/run/[slug]', () => {
       expect(h.accepts).toHaveBeenCalledTimes(1);
     });
 
+    it('refuses a file for a text-only model before checking its size or pages', async () => {
+      h.accepts.mockResolvedValue(false);
+      h.settings.mockResolvedValue({ ...SETTINGS, fileMaxMb: 0.001, fileMaxPages: 1 });
+      const res = await call({ turnstileToken: 'tok', file: pdf(3) });
+      expect(json(res).code).toBe('file_not_supported');
+      expectNoRun();
+    });
+
+    it('checks no model support for a text-only run', async () => {
+      expect((await call()).statusCode).toBe(200);
+      expect(h.accepts).not.toHaveBeenCalled();
+    });
+
     it('refuses an unsupported file type with no model call', async () => {
       const res = await call({
         turnstileToken: 'tok',

@@ -100,11 +100,12 @@ export async function freeRunPageState(
  * picker means one thing. False when the model cannot be resolved: the run is then text only.
  */
 export async function freeRunAcceptsFiles(model: string, logger?: Logger): Promise<boolean> {
+  const log = logger ?? Logger.globalInstance;
   try {
-    const { modelInfo } = await resolveFreeRunBackend(model, logger ?? Logger.globalInstance);
+    const { modelInfo } = await resolveFreeRunBackend(model, log);
     return modelInfo.supportsVision === true;
   } catch (error) {
-    logger?.warn('skill-free-run: model unresolved, files off', error);
+    log.warn('skill-free-run: model unresolved, files off', error);
     return false;
   }
 }

@@ -116,6 +116,11 @@ const handler = baseApi({ auth: false, allowedMethods: ['POST'], maxBodySize: FR
       });
     }
 
+    // Before reading the file, so a text-only model never parses a PDF it would refuse anyway.
+    const sentFile = req.body?.file != null || req.body?.files !== undefined;
+    if (sentFile && !(await freeRunAcceptsFiles(settings.model, req.logger))) {
+      return refuse(req, res, FILE_NOT_SUPPORTED);
+    }
     const read = await readFreeRunFile(req.body, {
       maxBytes: freeRunFileMaxBytes(settings.fileMaxMb),
       maxPages: settings.fileMaxPages,
@@ -129,7 +134,6 @@ const handler = baseApi({ auth: false, allowedMethods: ['POST'], maxBodySize: FR
         error: 'Paste some text or attach a file to run.',
       });
     }
-    if (file && !(await freeRunAcceptsFiles(settings.model, req.logger))) return refuse(req, res, FILE_NOT_SUPPORTED);
 
     const reservation = await reserveFreeRunCaps({
       templateId: String(template._id),
