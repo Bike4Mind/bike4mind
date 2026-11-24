@@ -31,14 +31,20 @@ describe('nextRefillAt', () => {
   const plan = { name: 'Pro', interval: 'monthly' as const, currentPeriodEndsAt: '2026-12-01T00:00:00Z' };
 
   it('reads a monthly period end in the future', () => {
-    expect(nextRefillAt(plan, NOW)).toBe(Date.parse('2026-12-01T00:00:00Z'));
+    expect(nextRefillAt(plan, 50_000, NOW)).toBe(Date.parse('2026-12-01T00:00:00Z'));
   });
 
   it('does not promise a refill for no plan, a yearly plan, a passed or a garbled date', () => {
-    expect(nextRefillAt(null, NOW)).toBeNull();
-    expect(nextRefillAt({ ...plan, interval: 'yearly' }, NOW)).toBeNull();
-    expect(nextRefillAt({ ...plan, currentPeriodEndsAt: '2026-11-01T00:00:00Z' }, NOW)).toBeNull();
-    expect(nextRefillAt({ ...plan, currentPeriodEndsAt: 'soon' }, NOW)).toBeNull();
+    expect(nextRefillAt(null, 50_000, NOW)).toBeNull();
+    expect(nextRefillAt({ ...plan, interval: 'yearly' }, 50_000, NOW)).toBeNull();
+    expect(nextRefillAt({ ...plan, currentPeriodEndsAt: '2026-11-01T00:00:00Z' }, 50_000, NOW)).toBeNull();
+    expect(nextRefillAt({ ...plan, currentPeriodEndsAt: 'soon' }, 50_000, NOW)).toBeNull();
+  });
+
+  it('does not read an org seat renewal as a personal refill', () => {
+    // An org seat brings a plan but no personal allowance: its renewal fills the org's pool.
+    expect(nextRefillAt(plan, null, NOW)).toBeNull();
+    expect(nextRefillAt(plan, 0, NOW)).toBeNull();
   });
 });
 
@@ -65,11 +71,11 @@ describe('creditOutlook', () => {
     });
   });
 
-  it('is idle and full with no recent spend', () => {
+  it('is idle with an empty ring when there is no recent spend, so a small balance never looks plentiful', () => {
     expect(creditOutlook({ balance: 50, burnPerDay: 0, refillAt: null, now: NOW })).toMatchObject({
       kind: 'idle',
       tone: 'ok',
-      ringFill: 1,
+      ringFill: 0,
     });
   });
 
@@ -119,8 +125,9 @@ describe('formatRunway', () => {
     [1, '1 day'],
     [13.9, '13 days'],
     [21, '3 weeks'],
-    [150, '5 months'],
-    [400, 'over a year'],
+    [30, '4 weeks'],
+    [31, 'over a month'],
+    [150, 'over a month'],
   ])('%s days reads "%s"', (days, text) => {
     expect(formatRunway(days)).toBe(text);
   });

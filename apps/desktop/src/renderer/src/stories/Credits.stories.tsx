@@ -34,7 +34,12 @@ function glance(
     profile,
     burnPerDay,
     readAt: NOW,
-    outlook: creditOutlook({ balance, burnPerDay, refillAt: nextRefillAt(plan, NOW), now: NOW }),
+    outlook: creditOutlook({
+      balance,
+      burnPerDay,
+      refillAt: nextRefillAt(plan, profile.credits.monthlyAllowance, NOW),
+      now: NOW,
+    }),
   };
 }
 
@@ -44,6 +49,7 @@ const CASES: { title: string; glance: CreditsGlance }[] = [
   { title: 'Short of the refill', glance: glance(1400, 310, 7) },
   { title: 'Almost out', glance: glance(180, 300, 7) },
   { title: 'Free plan', glance: glance(820, 45, null, 'free') },
+  { title: 'No recent spend', glance: glance(820, 0, 7) },
 ];
 
 /** The strip's avatar and the open menu's top rows, as the account strip draws them. */

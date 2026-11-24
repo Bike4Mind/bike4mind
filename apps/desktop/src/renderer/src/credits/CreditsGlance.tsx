@@ -1,9 +1,10 @@
 import Box from '@mui/joy/Box';
 import Link from '@mui/joy/Link';
 import Stack from '@mui/joy/Stack';
+import Tooltip from '@mui/joy/Tooltip';
 import Typography from '@mui/joy/Typography';
 import type { AccountTier } from '@shared/account';
-import { formatRunway, refillMarker, type CreditOutlook, type CreditTone } from './creditOutlook';
+import { FULL_RUNWAY_DAYS, formatRunway, refillMarker, type CreditOutlook, type CreditTone } from './creditOutlook';
 import type { CreditsGlance } from './useCreditsGlance';
 
 const TONE_COLOR: Record<CreditTone, 'success' | 'warning' | 'danger'> = {
@@ -12,8 +13,8 @@ const TONE_COLOR: Record<CreditTone, 'success' | 'warning' | 'danger'> = {
   critical: 'danger',
 };
 
-/** Past this much runway the verdict names a duration; inside it, a date reads better. */
-const DATE_HORIZON_DAYS = 45;
+/** Named in every projection, so the estimate never reads as a promise. */
+const PACE = "at last week's pace";
 
 const REDUCED_MOTION = '@media (prefers-reduced-motion: reduce)';
 
@@ -94,30 +95,51 @@ export function creditsSubline(outlook: CreditOutlook, tier: AccountTier | null)
   if (outlook.kind === 'unknown') return '';
   const plan = tier === 'free' ? 'Free plan' : null;
   const refillAt = outlookRefillAt(outlook);
-  const refill = refillAt === null ? null : `Refill ${formatDay(refillAt)}`;
+  const refill = refillAt === null ? null : `Renews ${formatDay(refillAt)}`;
   if (outlook.kind === 'empty') return refill ?? plan ?? 'No refill scheduled';
-  if (outlook.kind === 'idle') return [refill ?? plan, 'no spend in 7 days'].filter(Boolean).join(' \u00b7 ');
+  if (outlook.kind === 'idle') return refill ?? plan ?? 'No refill scheduled';
   return [refill ?? plan, `${formatCredits(outlook.burnPerDay)}/day`].filter(Boolean).join(' \u00b7 ');
 }
 
-/** One plain sentence on whether the balance lasts. Null when there is nothing to project. */
+/**
+ * One plain sentence on whether the balance lasts. Null when the balance is unknown.
+ *
+ * Every projection names its basis and stops at the ring's horizon: past it, granted credits may
+ * expire before they are spent, which this projection cannot see (see `formatRunway`).
+ */
 export function creditsVerdict(outlook: CreditOutlook): string | null {
   switch (outlook.kind) {
     case 'unknown':
-    case 'idle':
       return null;
+    case 'idle':
+      return 'No spend in the last 7 days, so nothing to project.';
     case 'empty':
       return 'Out of credits.';
     case 'covered':
-      return outlook.runwayDays > DATE_HORIZON_DAYS
-        ? `About ${formatRunway(outlook.runwayDays)} at this pace. You're fine.`
-        : `Lasts until ${formatDay(outlook.runsOutAt)}, refill ${formatDay(outlook.refillAt)}. You're fine.`;
+      return outlook.runwayDays > FULL_RUNWAY_DAYS
+        ? `More than a month left ${PACE}.`
+        : `Lasts to about ${formatDay(outlook.runsOutAt)} ${PACE}, past the renewal on ${formatDay(outlook.refillAt)}.`;
     case 'short':
-      return `Runs out ${formatDay(outlook.runsOutAt)}, ${outlook.daysShort} day${outlook.daysShort === 1 ? '' : 's'} before the refill on ${formatDay(outlook.refillAt)}.`;
+      return `Runs out about ${formatDay(outlook.runsOutAt)} ${PACE}, ${outlook.daysShort} day${outlook.daysShort === 1 ? '' : 's'} before the renewal on ${formatDay(outlook.refillAt)}.`;
     case 'no-refill':
-      return outlook.runwayDays > DATE_HORIZON_DAYS
-        ? `About ${formatRunway(outlook.runwayDays)} at this pace.`
-        : `At this pace, lasts until ${formatDay(outlook.runsOutAt)}.`;
+      return outlook.runwayDays > FULL_RUNWAY_DAYS
+        ? `More than a month left ${PACE}.`
+        : `Lasts to about ${formatDay(outlook.runsOutAt)} ${PACE}.`;
+  }
+}
+
+/** What the ring shows, in words: its tooltip and its accessible name. */
+export function creditsRingLabel(outlook: CreditOutlook): string {
+  const refill = outlookRefillAt(outlook) === null ? '' : ' The dot marks the renewal.';
+  switch (outlook.kind) {
+    case 'unknown':
+      return 'Balance unavailable.';
+    case 'idle':
+      return `No spend in the last 7 days, so nothing to project.${refill}`;
+    case 'empty':
+      return `No credits left.${refill}`;
+    default:
+      return `About ${formatRunway(outlook.runwayDays)} left ${PACE}. A full ring is ${FULL_RUNWAY_DAYS} days or more.${refill}`;
   }
 }
 
@@ -139,15 +161,19 @@ export function CreditsMenuHeader({ glance, onTopUp }: { glance: CreditsGlance; 
   }
 
   const balance = profile?.credits.balance ?? 0;
-  const color = TONE_COLOR[outlook.tone];
+  const color = outlook.kind === 'idle' ? 'neutral' : TONE_COLOR[outlook.tone];
   const verdict = creditsVerdict(outlook);
   const marker = refillMarker(outlookRefillAt(outlook), glance.readAt ?? Date.now());
 
   return (
     <Stack spacing={1} sx={{ px: 1, pt: 0.5, pb: 1 }} data-testid="credits-glance">
       <Stack direction="row" spacing={1.25} alignItems="center">
-        <CreditRing fill={outlook.ringFill} marker={marker} tone={outlook.tone} />
-        <Stack sx={{ minWidth: 0 }}>
+        <Tooltip title={creditsRingLabel(outlook)} size="sm" placement="bottom-start" variant="soft">
+          <Box role="img" aria-label={creditsRingLabel(outlook)} sx={{ display: 'inline-flex', flexShrink: 0 }}>
+            <CreditRing fill={outlook.ringFill} marker={marker} tone={outlook.tone} />
+          </Box>
+        </Tooltip>
+        <Stack sx={{ minWidth: 0, flex: 1 }}>
           <Typography
             level="body-sm"
             fontWeight="lg"

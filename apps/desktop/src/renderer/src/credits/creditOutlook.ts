@@ -24,7 +24,8 @@ type Projected = { tone: CreditTone; ringFill: number; burnPerDay: number; runwa
 export type CreditOutlook =
   | { kind: 'unknown' }
   | { kind: 'empty'; tone: 'critical'; ringFill: 0; refillAt: number | null }
-  | { kind: 'idle'; tone: 'ok'; ringFill: 1; refillAt: number | null }
+  /** No spend to project from: the ring stays an empty track rather than claiming plenty. */
+  | { kind: 'idle'; tone: 'ok'; ringFill: 0; refillAt: number | null }
   | (Projected & { kind: 'covered'; refillAt: number })
   | (Projected & { kind: 'short'; refillAt: number; daysShort: number })
   | (Projected & { kind: 'no-refill' });
@@ -49,15 +50,16 @@ export function dailyBurn(bars: readonly UsageBar[], now: number): number {
 }
 
 /**
- * When the next credits arrive, or null when that is not known.
+ * When the next personal credits arrive, or null when that is not known.
  *
- * Only a monthly plan's period end is read as a refill: how a yearly plan's credits are granted
- * across its year is not stated by the API, and a refill date a year out would be a guess. A
- * period end already passed means the renewal has not landed yet (a failed payment, say), so it
- * is not promised either.
+ * Needs a stated monthly allowance as well as a monthly plan: the plan can be an org seat, whose
+ * renewal tops up the org's pool, not this balance, and `/me` counts only personal grants in the
+ * allowance. A yearly plan is not read as a refill: how its credits arrive across the year is not
+ * stated by the API. A period end already passed means the renewal has not landed yet (a failed
+ * payment, say), so it is not promised either.
  */
-export function nextRefillAt(plan: AccountPlan | null, now: number): number | null {
-  if (!plan || plan.interval !== 'monthly') return null;
+export function nextRefillAt(plan: AccountPlan | null, monthlyAllowance: number | null, now: number): number | null {
+  if (!plan || plan.interval !== 'monthly' || !monthlyAllowance || monthlyAllowance <= 0) return null;
   const at = Date.parse(plan.currentPeriodEndsAt);
   return Number.isFinite(at) && at > now ? at : null;
 }
@@ -81,7 +83,7 @@ export function creditOutlook({
 }): CreditOutlook {
   if (balance === null) return { kind: 'unknown' };
   if (balance <= 0) return { kind: 'empty', tone: 'critical', ringFill: 0, refillAt };
-  if (burnPerDay <= 0) return { kind: 'idle', tone: 'ok', ringFill: 1, refillAt };
+  if (burnPerDay <= 0) return { kind: 'idle', tone: 'ok', ringFill: 0, refillAt };
 
   const runwayDays = balance / burnPerDay;
   const runsOutAt = now + runwayDays * DAY_MS;
@@ -100,13 +102,17 @@ export function creditOutlook({
   return { ...base, kind: 'short', tone: critical ? 'critical' : 'low', refillAt, daysShort };
 }
 
-/** "3 days", "5 weeks", "4 months". Coarse on purpose: a burn rate is an estimate. */
+/**
+ * "3 days", "2 weeks", "over a month". Coarse on purpose: a burn rate is an estimate.
+ *
+ * Capped at the ring's horizon: a longer claim would ignore that granted credits expire (90 days
+ * for a subscription grant, see `stampCreditLot.ts`), which this projection cannot see yet.
+ */
 export function formatRunway(days: number): string {
   if (days < 1) return 'under a day';
   if (days < 14) return plural(Math.floor(days), 'day');
-  if (days < 60) return plural(Math.round(days / 7), 'week');
-  if (days < 365) return plural(Math.round(days / 30), 'month');
-  return 'over a year';
+  if (days <= FULL_RUNWAY_DAYS) return plural(Math.round(days / 7), 'week');
+  return 'over a month';
 }
 
 function plural(count: number, unit: string): string {

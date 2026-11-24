@@ -303,7 +303,7 @@ describe('the credits glance', () => {
     const glance = byTestId('credits-glance');
     expect(byTestId('account-menu')?.firstElementChild).toBe(glance);
     expect(byTestId('credits-balance')?.textContent).toBe(`${(300_000).toLocaleString()} credits`);
-    expect(byTestId('credits-verdict')?.textContent).toMatch(/at this pace\. You're fine\.$/);
+    expect(byTestId('credits-verdict')?.textContent).toBe("More than a month left at last week's pace.");
     expect(byTestId('credits-top-up-btn')).toBeNull();
   });
 
