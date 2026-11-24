@@ -13,6 +13,7 @@ const h = vi.hoisted(() => ({
   deleteSub: vi.fn(),
   findOneAndDelete: vi.fn(),
   revokeAtlassian: vi.fn(),
+  logger: { warn: vi.fn(), error: vi.fn(), info: vi.fn() },
 }));
 
 vi.mock('@server/middlewares/baseApi', () => ({
@@ -61,7 +62,7 @@ describe('DELETE /api/mcp-servers/atlassian/disconnect', () => {
   });
 
   it('cascades the shared webhook config only for its creator and removes only the caller own subscription otherwise', async () => {
-    await h.handlers.delete({ user: { id: 'user-2' } }, makeRes());
+    await h.handlers.delete({ logger: h.logger, user: { id: 'user-2' } }, makeRes());
     expect(h.deleteConfig).not.toHaveBeenCalled();
     expect(h.deleteSubs).not.toHaveBeenCalled();
     expect(h.deleteSub).toHaveBeenCalledTimes(1);
@@ -69,12 +70,12 @@ describe('DELETE /api/mcp-servers/atlassian/disconnect', () => {
     expect(h.update).toHaveBeenCalledWith({ id: 'user-2', atlassianConnect: null });
 
     h.deleteSub.mockClear();
-    await h.handlers.delete({ user: { id: 'admin-1', isAdmin: true } }, makeRes());
+    await h.handlers.delete({ logger: h.logger, user: { id: 'admin-1', isAdmin: true } }, makeRes());
     expect(h.deleteConfig).not.toHaveBeenCalled();
     expect(h.deleteSub).toHaveBeenCalledWith('sub-admin-1');
 
     h.deleteSub.mockClear();
-    await h.handlers.delete({ user: { id: 'user-1' } }, makeRes());
+    await h.handlers.delete({ logger: h.logger, user: { id: 'user-1' } }, makeRes());
     expect(h.deleteSubs).toHaveBeenCalledWith('jcfg-1');
     expect(h.deleteConfig).toHaveBeenCalledWith('jcfg-1');
     expect(h.deleteSub).not.toHaveBeenCalled();
@@ -85,7 +86,7 @@ describe('DELETE /api/mcp-servers/atlassian/disconnect', () => {
     h.findById.mockResolvedValue({
       atlassianConnect: { accessToken: 'enc-access', refreshToken: 'enc-refresh', resources: [] },
     });
-    await h.handlers.delete({ user: { id: 'user-2' } }, makeRes());
+    await h.handlers.delete({ logger: h.logger, user: { id: 'user-2' } }, makeRes());
     expect(h.revokeAtlassian).toHaveBeenNthCalledWith(1, 'enc-refresh', 'user user-2');
     expect(h.revokeAtlassian).toHaveBeenNthCalledWith(2, 'enc-access', 'user user-2');
   });
@@ -93,7 +94,7 @@ describe('DELETE /api/mcp-servers/atlassian/disconnect', () => {
   it('still disconnects the user when they have no own subscription', async () => {
     h.findOwnSub.mockResolvedValue(null);
     const res = makeRes();
-    await h.handlers.delete({ user: { id: 'user-2' } }, res);
+    await h.handlers.delete({ logger: h.logger, user: { id: 'user-2' } }, res);
     expect(h.deleteSub).not.toHaveBeenCalled();
     expect(h.update).toHaveBeenCalledWith({ id: 'user-2', atlassianConnect: null });
     expect(res.status).toHaveBeenCalledWith(200);
@@ -102,7 +103,7 @@ describe('DELETE /api/mcp-servers/atlassian/disconnect', () => {
   it('still disconnects the user and returns 200 when subscription cleanup rejects', async () => {
     h.findOwnSub.mockRejectedValue(new Error('db down'));
     const res = makeRes();
-    await h.handlers.delete({ user: { id: 'user-2' } }, res);
+    await h.handlers.delete({ logger: h.logger, user: { id: 'user-2' } }, res);
     expect(h.update).toHaveBeenCalledWith({ id: 'user-2', atlassianConnect: null });
     expect(res.status).toHaveBeenCalledWith(200);
   });
@@ -112,7 +113,7 @@ describe('DELETE /api/mcp-servers/atlassian/disconnect', () => {
     h.findByAtlassianCloudId.mockImplementation(async (cloudId: string) =>
       cloudId === 'cloud-1' ? { id: 'jcfg-1', createdBy: 'user-1' } : { id: 'jcfg-2', createdBy: 'user-9' }
     );
-    await h.handlers.delete({ user: { id: 'user-1' } }, makeRes());
+    await h.handlers.delete({ logger: h.logger, user: { id: 'user-1' } }, makeRes());
     expect(h.deleteConfig).toHaveBeenCalledTimes(1);
     expect(h.deleteConfig).toHaveBeenCalledWith('jcfg-1');
     expect(h.deleteSub).toHaveBeenCalledTimes(1);

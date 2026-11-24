@@ -13,11 +13,14 @@ const { JWT_SECRET, mockFindById, mockReadStateNonceHash, mockClearStateNonce, m
     mockAuditFailure: vi.fn(),
   }));
 
+const mockLogger = vi.hoisted(() => ({ warn: vi.fn(), error: vi.fn(), info: vi.fn() }));
+
 vi.mock('@server/middlewares/baseApi', () => ({
   baseApi: () => {
     const h: Record<string, (req: unknown, res: unknown) => unknown> = {};
     const chain = Object.assign(
-      (req: unknown, res: unknown) => h[(req as { method?: string }).method ?? 'GET']?.(req, res),
+      (req: unknown, res: unknown) =>
+        h[(req as { method?: string }).method ?? 'GET']?.(Object.assign(req as object, { logger: mockLogger }), res),
       {
         use: () => chain,
         get: (fn: (req: unknown, res: unknown) => unknown) => ((h.GET = fn), chain),
@@ -103,35 +106,31 @@ describe('GET /api/mcp-servers/atlassian/callback - duplicate delivery', () => {
 
 describe('GET /api/mcp-servers/atlassian/callback - malformed state', () => {
   it('rejects a non-JSON state at warn level so caller junk does not raise an alert', async () => {
-    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
-    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const errorSpy = mockLogger.error;
+    const warnSpy = mockLogger.warn;
     const { req, res } = createMocks({ method: 'GET', query: { code: 'auth-code', state: 'y' } });
 
     await (handler as unknown as (rq: unknown, rs: unknown) => Promise<void>)(req, res);
 
     expect(res._getRedirectUrl()).toBe('/profile?tab=integrations&atlassian=error');
     expect(mockAuditFailure).toHaveBeenCalledWith('invalid_state');
-    expect(warnSpy).toHaveBeenCalledWith('❌ Failed to parse state parameter:', expect.any(SyntaxError));
+    expect(warnSpy).toHaveBeenCalledWith('Atlassian callback state parameter could not be parsed', {
+      error: expect.any(SyntaxError),
+    });
     expect(errorSpy).not.toHaveBeenCalled();
-
-    errorSpy.mockRestore();
-    warnSpy.mockRestore();
   });
 
   it('rejects a state that is absent entirely at warn level', async () => {
-    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
-    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const errorSpy = mockLogger.error;
+    const warnSpy = mockLogger.warn;
     const { req, res } = createMocks({ method: 'GET', query: { code: 'auth-code' } });
 
     await (handler as unknown as (rq: unknown, rs: unknown) => Promise<void>)(req, res);
 
     expect(res._getRedirectUrl()).toBe('/profile?tab=integrations&atlassian=error');
     expect(mockAuditFailure).toHaveBeenCalledWith('missing_state');
-    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('Missing state parameter'));
+    expect(warnSpy).toHaveBeenCalledWith('Atlassian callback missing state parameter');
     expect(errorSpy).not.toHaveBeenCalled();
-
-    errorSpy.mockRestore();
-    warnSpy.mockRestore();
   });
 });
 
@@ -143,34 +142,55 @@ describe('GET /api/mcp-servers/atlassian/callback - authorization not completed'
   };
 
   it('logs a declined consent at warn with only the RFC 6749 code', async () => {
-    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
-    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const errorSpy = mockLogger.error;
+    const warnSpy = mockLogger.warn;
 
     const res = await call({ error: 'access_denied', state: 'opaque-state' });
 
     expect(res._getRedirectUrl()).toBe('/profile?tab=integrations&atlassian=error');
     expect(mockAuditFailure).toHaveBeenCalledWith('oauth_error');
-    expect(warnSpy).toHaveBeenCalledWith('[Atlassian Callback] Authorization not completed', {
+    expect(warnSpy).toHaveBeenCalledWith('Atlassian authorization not completed', {
       error: 'access_denied',
     });
     expect(errorSpy).not.toHaveBeenCalled();
-
-    errorSpy.mockRestore();
-    warnSpy.mockRestore();
   });
 
   it('logs a callback with no code at all at warn', async () => {
-    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
-    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const errorSpy = mockLogger.error;
+    const warnSpy = mockLogger.warn;
 
     const res = await call({});
 
     expect(res._getRedirectUrl()).toBe('/profile?tab=integrations&atlassian=error');
     expect(mockAuditFailure).toHaveBeenCalledWith('missing_code');
-    expect(warnSpy).toHaveBeenCalledWith('[Atlassian Callback] Missing authorization code');
+    expect(warnSpy).toHaveBeenCalledWith('Atlassian callback missing authorization code');
     expect(errorSpy).not.toHaveBeenCalled();
+  });
+});
 
-    errorSpy.mockRestore();
-    warnSpy.mockRestore();
+describe('GET /api/mcp-servers/atlassian/callback - token exchange failure', () => {
+  it('logs only the status, never the code, response body or redirect_uri', async () => {
+    mockReadStateNonceHash.mockReturnValue(NONCE_HASH);
+    mockFindById.mockResolvedValue({ atlassianConnect: { status: 'pending' } });
+    const fetchSpy = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValue(new Response('provider-body-secret', { status: 400 }));
+
+    const res = await run();
+    fetchSpy.mockRestore();
+
+    expect(res._getRedirectUrl()).toBe('/profile?tab=integrations&atlassian=error');
+    expect(mockLogger.error).toHaveBeenCalledWith('Atlassian token exchange failed', {
+      userId: USER_ID,
+      status: 400,
+    });
+    const logged = JSON.stringify([
+      mockLogger.error.mock.calls,
+      mockLogger.warn.mock.calls,
+      mockLogger.info.mock.calls,
+    ]);
+    expect(logged).not.toContain('auth-code');
+    expect(logged).not.toContain('provider-body-secret');
+    expect(logged).not.toContain('"r"');
   });
 });
