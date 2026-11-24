@@ -6,7 +6,7 @@ import type { ChatSessionStatus, ChatSessionSummary, SessionSetupStep } from '@s
 import type { PrSummary } from '@shared/pullRequest';
 import { assignPersonas } from '@shared/agentPersona';
 import type { ViewAction } from '@shared/viewSnapshot';
-import type { OrchestratorViewProps } from './OrchestratorStage';
+import { usePresenterNumbers, type OrchestratorViewProps } from './OrchestratorStage';
 import type { OrchestratorViewId } from './orchestratorViews';
 import { redactForPresenter, restorePresentedAction } from './presenter';
 import { useOrchestratorRoster } from './useOrchestrator';
@@ -28,8 +28,8 @@ interface PinnedPaneProps {
   renderView(view: OrchestratorViewId, props: OrchestratorViewProps): ReactNode;
   /** Opens a session in the shell: a pinned pane never drives the active stage's selection. */
   onOpenSession(id: string): void;
-  /** Presenter mode's agent numbers (the stage's), or undefined when not presenting. */
-  presenterNumbers?: ReadonlyMap<string, number>;
+  /** Presenter mode: the pane numbers its own agents and redacts them as the stage does. */
+  presenting: boolean;
   settled: boolean;
 }
 
@@ -44,18 +44,19 @@ export function PinnedPane({
   source,
   renderView,
   onOpenSession,
-  presenterNumbers,
+  presenting,
   settled,
 }: PinnedPaneProps) {
   const roster = useOrchestratorRoster(rootId, source.sessions, source.statuses, source.prSummaries, source.preparing);
-  const presenting = presenterNumbers !== undefined;
+  const presenterNumbers = usePresenterNumbers(presenting, roster.agents);
   const shown = useMemo(
-    () => (presenterNumbers ? redactForPresenter({ ...roster, approvals: [] }, presenterNumbers) : roster),
-    [roster, presenterNumbers]
+    () => (presenting ? redactForPresenter({ ...roster, approvals: [] }, presenterNumbers) : roster),
+    [roster, presenting, presenterNumbers]
   );
   const personaKey = shown.agents.map(agent => `${agent.id}@${agent.createdAt}@${agent.title}`).join('\n');
   const personas = useMemo(() => assignPersonas(shown.agents), [personaKey]);
 
+  // onOpenPr is omitted on purpose: the PR drawer belongs to the active stage.
   const viewProps: OrchestratorViewProps = {
     agents: shown.agents,
     rootId,

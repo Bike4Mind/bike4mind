@@ -148,7 +148,7 @@ const NO_PARENT: ParentView = {};
 const NO_NUMBERS: ReadonlyMap<string, number> = new Map();
 
 /** Presenter mode's agent numbers: given in roster order as agents first show, kept until the mode is turned off. */
-function usePresenterNumbers(on: boolean, agents: readonly AgentView[]): ReadonlyMap<string, number> {
+export function usePresenterNumbers(on: boolean, agents: readonly AgentView[]): ReadonlyMap<string, number> {
   const numbers = useRef(NO_NUMBERS);
   // Written during render on purpose: numberAgents is deterministic and idempotent, so a double render is
   // harmless, and moving it to an effect would flash the real titles for a frame.
@@ -401,7 +401,7 @@ export function OrchestratorStage({
         source={paneSessions}
         renderView={renderView}
         onOpenSession={actions.open}
-        presenterNumbers={presenting ? presenterNumbers : undefined}
+        presenting={presenting}
         settled={settled}
       />
     );

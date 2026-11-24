@@ -306,8 +306,48 @@ describe('panes pinned to another session', () => {
   it('redacts the pinned pane in Presenter mode too', async () => {
     await renderPinned(pinnedSplit('other'), true);
     const titles = snapshotsByView.get('transit')?.agents.map(agent => agent.title);
-    expect(titles).toEqual([presenterAgentTitle(3)]);
+    expect(titles).toEqual([presenterAgentTitle(1)]);
     expect(el('orchestrator-pinned-pane-label').textContent).toBe('Session 1');
     expect(document.body.textContent).not.toMatch(/Secret other agent|Other run/);
+  });
+
+  it('subscribes to activity only while a pane is pinned, and re-subscribes when the pin moves', async () => {
+    const disposers: ReturnType<typeof vi.fn>[] = [];
+    const onStreamEvent = vi.fn(() => {
+      const dispose = vi.fn();
+      disposers.push(dispose);
+      return dispose;
+    });
+    (window as unknown as { b4m: { chat: { onStreamEvent: unknown } } }).b4m.chat.onStreamEvent = onStreamEvent;
+    const live = () => disposers.filter(dispose => dispose.mock.calls.length === 0).length;
+
+    await renderPinned(pinnedSplit('follow-active'));
+    expect(query('orchestrator-pinned-pane')).toBeNull();
+    const baseline = onStreamEvent.mock.calls.length;
+    const baselineLive = live();
+
+    await renderPinned(pinnedSplit('other'));
+    expect(onStreamEvent).toHaveBeenCalledTimes(baseline + 1);
+    expect(live()).toBe(baselineLive + 1);
+
+    const sessions = [...SESSIONS, sessionFixture('third', undefined, { orchestrate: true, title: 'Third run' })];
+    await themed.render(
+      <OrchestratorStage
+        agents={AGENTS}
+        rootId="root"
+        layout={pinnedSplit('third')}
+        onLayoutChange={onLayoutChange}
+        actions={actions}
+        introPlaying={false}
+        renderView={renderProbeView}
+        paneSessions={{ ...paneSessions, sessions }}
+      />
+    );
+    expect(onStreamEvent).toHaveBeenCalledTimes(baseline + 2);
+    expect(live()).toBe(baselineLive + 1);
+
+    await renderPinned({ ...SIDE_BY_SIDE });
+    expect(onStreamEvent).toHaveBeenCalledTimes(baseline + 2);
+    expect(live()).toBe(baselineLive);
   });
 });
