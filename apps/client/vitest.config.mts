@@ -8,7 +8,6 @@ import path from 'path';
 // for every vitest package (safe: vitest 4 accepts vite ^6 || ^7 || ^8). This
 // vite devDep and the plugin-react v6 bump are coupled — keep both or revert both.
 import react from '@vitejs/plugin-react';
-import tsconfigPaths from 'vite-tsconfig-paths';
 import { barrelImportsPlugin } from './vitest.barrelImports';
 
 const INTEGRATION_LANE = process.env.CLIENT_TEST_LANE === 'integration';
@@ -109,8 +108,9 @@ const projectTest = {
 // app bundle, but vitest would load all ~70 Joy components (~0.5s) for every test that renders one,
 // so the plugin does the same rewrite here. See vitest.barrelImports.ts.
 const projectVite = () => ({
-  plugins: [react(), tsconfigPaths(), barrelImportsPlugin(['@mui/joy'])],
+  plugins: [react(), barrelImportsPlugin(['@mui/joy'])],
   resolve: {
+    tsconfigPaths: true,
     alias: {
       '@server': path.resolve(__dirname, 'server'),
       '@client': path.resolve(__dirname, '.'),

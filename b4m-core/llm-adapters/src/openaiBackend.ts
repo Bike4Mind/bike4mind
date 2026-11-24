@@ -15,6 +15,8 @@ import {
   type ToolStarted,
 } from '@bike4mind/common';
 import { stripToolDependentMessages } from './toolPairingUtils';
+import { assertEvaluationTextWire, assertEvaluationWireBound } from './evaluationTextWire';
+import { reconcileAfterDispatch } from './evaluationReconcile';
 import { appendCacheInclusiveTurn, cachedTokensFromUsage, splitCacheInclusiveInput } from './cacheInclusiveUsage';
 import { addReasoningTokens, reasoningTokensField, reasoningTokensFromUsage } from './reasoningTokens';
 import OpenAI from 'openai';
@@ -1284,14 +1286,25 @@ export class OpenAIBackend implements ICompletionBackend {
 
     const roundStart = Date.now();
     let firstChunkAt: number | null = null;
+    const evaluation = options._internal?.evaluation;
+    if (evaluation) {
+      const info = this._dispatch.for(model);
+      if (!info) throw new BadRequestError('Evaluation model metadata missing.');
+      parameters.stream = false;
+      delete parameters.stream_options;
+      assertEvaluationTextWire(parameters);
+      assertEvaluationWireBound(parameters, info.contextWindow);
+      await evaluation.admit(info, parameters.model, parameters.max_completion_tokens ?? parameters.max_tokens ?? 0);
+    }
     // Wrap with retry for transient network errors (TLS abort, fetch terminated)
     const response = await withRetry(
       () =>
         this._api.chat.completions.create(parameters as ChatCompletionCreateParams, {
           signal: options.abortSignal,
+          ...(evaluation ? { maxRetries: 0 } : {}),
         }),
       {
-        maxRetries: 3,
+        maxRetries: evaluation ? 0 : 3,
         initialDelayMs: 500,
         maxDelayMs: 10000,
         jitterFactor: 0.25,
@@ -1308,6 +1321,27 @@ export class OpenAIBackend implements ICompletionBackend {
     let reasoningTokens: number | undefined;
 
     if (!(response instanceof Stream)) {
+      if (evaluation) {
+        const answered = response;
+        await reconcileAfterDispatch(
+          evaluation,
+          () => {
+            const usage = answered.usage;
+            if (!usage || answered.model !== model) throw new Error('Evaluation provider identity or usage missing');
+            const cachedTokens = usage.prompt_tokens_details?.cached_tokens;
+            const reasoningTokens = usage.completion_tokens_details?.reasoning_tokens;
+            if (cachedTokens === undefined || reasoningTokens === undefined)
+              throw new Error('Evaluation cache or reasoning usage missing');
+            return {
+              inputTokens: usage.prompt_tokens,
+              outputTokens: usage.completion_tokens,
+              cacheReadTokens: cachedTokens,
+              reasoningTokens,
+            };
+          },
+          this.logger
+        );
+      }
       const streamedText: string[] = [];
       const turnCacheReadTokens = cachedTokensFromUsage(
         response.usage as unknown as Record<string, unknown> | undefined
@@ -2299,16 +2333,28 @@ export class OpenAIBackend implements ICompletionBackend {
     // iteration below and is not retried (mirrors the chat streaming path).
     const roundStart = Date.now();
     let firstChunkAt: number | null = null;
-    const stream = await withRetry(() => this._api.responses.create(params, { signal: options.abortSignal }), {
-      maxRetries: 3,
-      initialDelayMs: 500,
-      maxDelayMs: 10000,
-      jitterFactor: 0.25,
-      isRetryable: err => isRetryableError(err) && !isUserInitiatedAbort(err, options.abortSignal),
-      logger: this.logger,
-      abortSignal: options.abortSignal,
-      onRetry: ({ error, delayMs }) => options._internal?.turnTelemetry?.onRetry({ error, delayMs, model }),
-    }).then(r => r.result);
+    const evaluation = options._internal?.evaluation;
+    if (evaluation) {
+      const info = this._dispatch.for(model);
+      if (!info) throw new BadRequestError('Evaluation model metadata missing.');
+      assertEvaluationTextWire(params);
+      assertEvaluationWireBound(params, info.contextWindow);
+      await evaluation.admit(info, params.model ?? '', params.max_output_tokens ?? 0);
+    }
+    const stream = await withRetry(
+      () =>
+        this._api.responses.create(params, { signal: options.abortSignal, ...(evaluation ? { maxRetries: 0 } : {}) }),
+      {
+        maxRetries: evaluation ? 0 : 3,
+        initialDelayMs: 500,
+        maxDelayMs: 10000,
+        jitterFactor: 0.25,
+        isRetryable: err => isRetryableError(err) && !isUserInitiatedAbort(err, options.abortSignal),
+        logger: this.logger,
+        abortSignal: options.abortSignal,
+        onRetry: ({ error, delayMs }) => options._internal?.turnTelemetry?.onRetry({ error, delayMs, model }),
+      }
+    ).then(r => r.result);
 
     // Stream text deltas live; capture the terminal Response for usage + tool handling.
     // Usage is only known at the terminal event, so per-delta emits carry the running
@@ -2370,6 +2416,27 @@ export class OpenAIBackend implements ICompletionBackend {
       throw new ResponsesStreamTruncatedError(model);
     }
 
+    if (evaluation) {
+      const answered = finalResponse;
+      await reconcileAfterDispatch(
+        evaluation,
+        () => {
+          const usage = answered.usage;
+          if (!usage || answered.model !== model) throw new Error('Evaluation provider identity or usage missing');
+          const cachedTokens = usage.input_tokens_details?.cached_tokens;
+          const reasoningTokens = usage.output_tokens_details?.reasoning_tokens;
+          if (cachedTokens === undefined || reasoningTokens === undefined)
+            throw new Error('Evaluation cache or reasoning usage missing');
+          return {
+            inputTokens: usage.input_tokens,
+            outputTokens: usage.output_tokens,
+            cacheReadTokens: cachedTokens,
+            reasoningTokens,
+          };
+        },
+        this.logger
+      );
+    }
     inputTokens = finalResponse.usage?.input_tokens ?? 0;
     outputTokens = finalResponse.usage?.output_tokens ?? 0;
     const reasoningTokens = reasoningTokensFromUsage(finalResponse.usage);

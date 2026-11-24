@@ -277,6 +277,10 @@ export const operations = {
     method: 'GET',
     path: '/api/v1/client-config',
   },
+  getCompletionRunEvaluation: {
+    method: 'GET',
+    path: '/api/v1/completion-runs/{runId}/evaluation',
+  },
   getCompletionRunUsage: {
     method: 'GET',
     path: '/api/v1/completion-runs/{runId}/usage',

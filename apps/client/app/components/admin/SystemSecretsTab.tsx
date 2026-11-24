@@ -52,6 +52,8 @@ interface SecretStatus {
   source: 'database' | 'sst' | null;
   maskedValue: string;
   isOverridable: boolean;
+  /** Not read on this stage. Listed only because an override is stored, so it can be removed. */
+  isUnused?: boolean;
   dbRecord: {
     id: string;
     source: string;
@@ -210,12 +212,14 @@ function SecretRowMenu({
       testId={`system-secrets-row-actions-${secret.secretName}`}
       ariaLabel={`Actions for ${secret.secretName}`}
     >
-      <MenuItem onClick={() => onEdit(secret)} data-testid={`system-secrets-row-edit-${secret.secretName}`}>
-        Edit value
-      </MenuItem>
+      {!secret.isUnused && (
+        <MenuItem onClick={() => onEdit(secret)} data-testid={`system-secrets-row-edit-${secret.secretName}`}>
+          Edit value
+        </MenuItem>
+      )}
       {secret.dbRecord && (
         <>
-          <ListDivider />
+          {!secret.isUnused && <ListDivider />}
           <MenuItem onClick={() => onDelete(secret)} data-testid={`system-secrets-row-delete-${secret.secretName}`}>
             Delete override
           </MenuItem>
@@ -256,6 +260,13 @@ const secretColumns: readonly DataColumn<SecretStatus>[] = [
     render: secret => (
       <Stack direction="row" alignItems="center" gap={1} sx={{ minWidth: 0 }}>
         <TruncatedText text={secret.secretName} mono testId={`system-secrets-name-${secret.secretName}`} />
+        {secret.isUnused && (
+          <Tooltip title="This stage does not read this setting. The stored override can be deleted.">
+            <Box component="span" sx={{ flexShrink: 0 }}>
+              <StatusChip tone="neutral" label="Not used" data-testid={`system-secrets-unused-${secret.secretName}`} />
+            </Box>
+          </Tooltip>
+        )}
         {secret.warnings && secret.warnings.length > 0 && (
           <Tooltip title={secret.warnings.join(' ')}>
             <Box component="span" sx={{ flexShrink: 0 }}>

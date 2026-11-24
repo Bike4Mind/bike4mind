@@ -11,7 +11,8 @@ import type { StudioRenderPricing } from '../../studioComposition/render';
 import type { StudioTimeline, StudioTimelineOutput } from '../../studioComposition/timeline';
 import { IBaseRepository } from './BaseTypes';
 import { IMongoDocument } from './common';
-import { CreditHolderType, type CreditHoldRecord } from './CreditHolderTypes';
+import { CreditHolderType, type CreditHoldRecord, type RunBudgetClaim } from './CreditHolderTypes';
+import type { CompletionRunAttribution } from '../../schemas/cliCompletions';
 
 /**
  * `compose` renders a Scene (a video with a music track muxed in) from files the caller already has; `render` encodes a
@@ -341,6 +342,13 @@ type GenerationJobFields = {
   deadlineAt: Date;
   idempotencyKey?: string;
   creditHold: CreditHoldRecord | null;
+  /** The completion run the job was made for; its settlement ledger row carries it as `metadata.run`. */
+  run?: CompletionRunAttribution;
+  /**
+   * The share of `run`'s budget claimed with `creditHold`, released when the hold ends: down to the charge on
+   * settlement, to 0 on a release. Absent for an unbudgeted run, or when no hold was taken.
+   */
+  runClaim?: RunBudgetClaim;
   settledCredits?: number;
   error?: GenerationJobError;
   rawProviderError?: unknown;

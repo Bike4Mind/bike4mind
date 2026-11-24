@@ -5,7 +5,17 @@ import { CreditHolderType } from './CreditHolderTypes';
 import { NamedApiKeyUsage, ISourceUsage, ILedgerUsageTotal } from './CreditTransactionTypes';
 import { ApiKeyCompletionSource, COMPLETION_SOURCES, CompletionSource, IPlatformEndpointUsage } from '../analytics';
 import { COMPLETION_RUN_PURPOSES, COMPLETION_RUN_ROLES } from '../../constants/completionRuns';
-import type { SpendBreakdown, SpendBreakdownParams, SpendTimelineParams, SpendTimelineRow } from './SpendExplorerTypes';
+import type {
+  SpendActorScanParams,
+  SpendBreakdown,
+  SpendBreakdownParams,
+  SpendFeatureAggregate,
+  SpendFeaturesParams,
+  SpendFeatureUsersPage,
+  SpendFeatureUsersParams,
+  SpendTimelineParams,
+  SpendTimelineRow,
+} from './SpendExplorerTypes';
 
 /**
  * Which product surface generated the provider call.
@@ -910,6 +920,15 @@ export interface IUsageEventRepository extends IBaseRepository<IUsageEventDocume
 
   /** Admin Spend explorer: total, provider and segment cuts, and the top accounts over [from, to). */
   spendBreakdown(params: SpendBreakdownParams): Promise<SpendBreakdown>;
+
+  /** Admin Spend explorer feature view: per-feature totals, distinct users and daily cost. */
+  spendFeatures(params: SpendFeaturesParams): Promise<SpendFeatureAggregate[]>;
+
+  /** Admin Spend explorer feature view: one page of a feature's acting users by cost. */
+  spendFeatureUsers(params: SpendFeatureUsersParams): Promise<SpendFeatureUsersPage>;
+
+  /** Distinct acting users over the feature view's scan window, for audience classification. */
+  spendActorIds(params: SpendActorScanParams): Promise<string[]>;
 
   /** Settlement-basis rollup over the trailing N days (default 30): provider-vs-local token delta and written-off credits. */
   settlementBreakdown(days?: number): Promise<ISettlementBreakdown[]>;

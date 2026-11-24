@@ -42,15 +42,24 @@ type StudioSectionLabelProps = {
   children: ReactNode;
   /** Render as a `<label>` tied to a control. */
   htmlFor?: string;
+  /** For a group that names itself with `aria-labelledby`. */
+  id?: string;
   testId?: string;
 };
 
 /** The uppercase micro-label that heads a Studio section ("DESCRIBE THE IMAGE", "SHAPE"). */
-export const StudioSectionLabel = ({ children, htmlFor, testId = 'studio-section-label' }: StudioSectionLabelProps) =>
+export const StudioSectionLabel = ({
+  children,
+  htmlFor,
+  id,
+  testId = 'studio-section-label',
+}: StudioSectionLabelProps) =>
   htmlFor ? (
-    <ControlLabelRoot htmlFor={htmlFor} data-testid={testId}>
+    <ControlLabelRoot htmlFor={htmlFor} id={id} data-testid={testId}>
       {children}
     </ControlLabelRoot>
   ) : (
-    <LabelRoot data-testid={testId}>{children}</LabelRoot>
+    <LabelRoot id={id} data-testid={testId}>
+      {children}
+    </LabelRoot>
   );

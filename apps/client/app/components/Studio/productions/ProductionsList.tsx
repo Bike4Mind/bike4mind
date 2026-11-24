@@ -20,6 +20,7 @@ import {
 } from '@client/app/hooks/data/studioCompositions';
 import { StudioPanel, StudioSectionLabel } from '../design/StudioPanel';
 import { studioColor, studioRadius } from '../design/studioTokens';
+import ShortFilmBriefFields, { initialShortFilmBrief, shortFilmCreateFields } from './ShortFilmBriefFields';
 
 const formatLength = (durationMs: number) =>
   durationMs >= 60_000 ? `${durationMs / 60_000} min` : `${durationMs / 1000}s`;
@@ -120,15 +121,18 @@ const ProductionsList = () => {
 const CreateProductionForm = () => {
   const [title, setTitle] = useState('');
   const [template, setTemplate] = useState<StudioCompositionTemplate>('ad_campaign');
+  const [shortFilm, setShortFilm] = useState(initialShortFilmBrief);
   const create = useCreateStudioComposition();
   const navigate = useNavigate();
 
+  const isShortFilm = template === 'short_film';
+  const canCreate = Boolean(title.trim()) && (!isShortFilm || shortFilm.aspects.length > 0);
+
   const onSubmit = (event: FormEvent) => {
     event.preventDefault();
-    const trimmed = title.trim();
-    if (!trimmed) return;
+    if (!canCreate) return;
     create.mutate(
-      { title: trimmed, template },
+      { title: title.trim(), template, ...(isShortFilm && shortFilmCreateFields(shortFilm)) },
       {
         onSuccess: composition =>
           void navigate({ to: '/studio/productions/$compositionId', params: { compositionId: composition.id } }),
@@ -160,6 +164,7 @@ const CreateProductionForm = () => {
               );
             })}
           </TemplateGrid>
+          {isShortFilm && <ShortFilmBriefFields value={shortFilm} onChange={setShortFilm} />}
           <Stack direction={{ xs: 'column', md: 'row' }} spacing={1.5} alignItems={{ md: 'flex-end' }}>
             <Stack spacing={0.5} sx={{ flex: 1 }}>
               <StudioSectionLabel htmlFor="productions-create-title">Name</StudioSectionLabel>
@@ -181,7 +186,7 @@ const CreateProductionForm = () => {
               size="sm"
               type="submit"
               loading={create.isPending}
-              disabled={!title.trim()}
+              disabled={!canCreate}
               data-testid="productions-create-btn"
             >
               Create {STUDIO_COMPOSITION_TEMPLATE_DEFINITIONS[template].label.toLowerCase()}
@@ -238,7 +243,12 @@ const ProductionRow = ({ composition }: { composition: StudioCompositionSummaryR
           <Button size="sm" type="submit" loading={update.isPending} data-testid={`${testId}-rename-save-btn`}>
             Save
           </Button>
-          <Button size="sm" variant="plain" onClick={() => setIsRenaming(false)}>
+          <Button
+            size="sm"
+            variant="plain"
+            onClick={() => setIsRenaming(false)}
+            data-testid={`${testId}-rename-cancel-btn`}
+          >
             Cancel
           </Button>
         </form>

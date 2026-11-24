@@ -23,6 +23,8 @@ import {
 import { NavItem } from '../chat/SessionList';
 import type { AppUpdateController } from '../chat/useAppUpdate';
 import { RuntimeInfo } from '../components/RuntimeInfo';
+import { CreditsAvatarDot, CreditsMenuHeader } from '../credits/CreditsGlance';
+import { useCreditsGlance } from '../credits/useCreditsGlance';
 import { SendFeedbackDialog } from './SendFeedbackDialog';
 
 /** What a click on the update chip does, or undefined in a state with no next step to take. */
@@ -63,12 +65,16 @@ export function SignedInPanel({
   state,
   status,
   update,
+  spentAt = 0,
 }: {
   state: AuthState;
   status?: ReactNode;
   update: AppUpdateController;
+  /** Ticks when a turn settles; the credits glance re-reads on it. */
+  spentAt?: number;
 }) {
   const [open, setOpen] = useState(false);
+  const credits = useCreditsGlance(spentAt, open);
   const [feedbackOpen, setFeedbackOpen] = useState(false);
   const navigate = useNavigate();
   const settingsAttention = updateAttention(update.state);
@@ -111,9 +117,12 @@ export function SignedInPanel({
             Joy falls back to the children when it is missing or fails to load, so the initials
             below are both the placeholder and the permanent answer for an account with no
             picture - there is no second state to track here. */}
-        <Avatar size="sm" variant="soft" color="primary" src={user?.photoUrl} alt="">
-          {initials(displayName)}
-        </Avatar>
+        <Box sx={{ position: 'relative', display: 'inline-flex' }}>
+          <Avatar size="sm" variant="soft" color="primary" src={user?.photoUrl} alt="">
+            {initials(displayName)}
+          </Avatar>
+          <CreditsAvatarDot outlook={credits.outlook} />
+        </Box>
         <Stack sx={{ flex: 1, minWidth: 0 }}>
           <Typography level="body-sm" noWrap data-testid="auth-status-chip">
             {displayName}
@@ -157,6 +166,7 @@ export function SignedInPanel({
         <AccountMenu
           state={state}
           attention={settingsAttention}
+          credits={<CreditsMenuHeader glance={credits} onTopUp={() => void navigate({ to: '/billing' })} />}
           onOpenSettings={() => void navigate({ to: '/settings' })}
           onBilling={() => void navigate({ to: '/billing' })}
           onProfile={() => void navigate({ to: '/profile' })}
@@ -185,9 +195,12 @@ export function AccountMenu({
   onBilling,
   onProfile,
   onSendFeedback,
+  credits,
 }: {
   state: AuthState;
   attention?: string;
+  /** Balance and runway, first in the menu so it is one click from anywhere. */
+  credits?: ReactNode;
   onOpenSettings?: () => void;
   onBilling?: () => void;
   onProfile: () => void;
@@ -198,6 +211,7 @@ export function AccountMenu({
 
   return (
     <Stack spacing={0.25} data-testid="account-menu">
+      {credits}
       {/* The strip above shows whatever the account calls itself, which for most users is a
           nickname. The address is what they would recognise on an invoice. */}
       {user?.email && user.email !== displayName && (

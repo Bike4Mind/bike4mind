@@ -10,6 +10,7 @@ import { searchWebContract, fetchWebPageContract, getCurrentWeatherContract } fr
 import { createCompletionContract } from './completions.contract';
 import {
   createCompletionRunContract,
+  getCompletionRunEvaluationContract,
   getCompletionRunUsageContract,
   raiseCompletionRunBudgetContract,
 } from './completionRuns.contract';
@@ -210,6 +211,7 @@ export const CONTRACTS: readonly EndpointContract[] = [
   getCurrentWeatherContract,
   createCompletionContract,
   createCompletionRunContract,
+  getCompletionRunEvaluationContract,
   getCompletionRunUsageContract,
   raiseCompletionRunBudgetContract,
   synthesizeSpeechContract,

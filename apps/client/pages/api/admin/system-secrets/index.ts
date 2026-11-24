@@ -18,6 +18,7 @@ import { encryptSecret, isValidEncryptionKey } from '@bike4mind/server-utils/sec
 import { Config } from '@bike4mind/server-utils/utils/config';
 import {
   clearSecretCache,
+  getResolvableSecrets,
   RESOLVABLE_SECRETS,
   resolveSecret,
   TIER1_SECRETS,
@@ -43,9 +44,15 @@ const handler = adminApi({
     try {
       const dbSecrets = await systemSecretRepository.findAll();
 
+      // A stored override for a setting this stage does not read stays listed, so it can be removed.
+      const resolvable = getResolvableSecrets();
+      const listed = Object.entries(RESOLVABLE_SECRETS).filter(
+        ([secretName]) => secretName in resolvable || dbSecrets.some(s => s.secretName === secretName)
+      );
+
       // Build response with resolution status for each configurable secret
       const secretsStatus = await Promise.all(
-        Object.entries(RESOLVABLE_SECRETS).map(async ([secretName, config]) => {
+        listed.map(async ([secretName, config]) => {
           const dbSecret = dbSecrets.find(s => s.secretName === secretName);
           const resolution = await resolveSecret(secretName, true);
 
@@ -57,6 +64,7 @@ const handler = adminApi({
             source: resolution.source,
             maskedValue: maskSecretValue(resolution.value),
             isOverridable: !TIER1_SECRETS.has(secretName),
+            isUnused: !(secretName in resolvable),
             dbRecord: dbSecret
               ? {
                   id: dbSecret.id,
@@ -102,7 +110,7 @@ const handler = adminApi({
       }
 
       // Check if this is a known secret
-      const secretConfig = RESOLVABLE_SECRETS[secretName as ResolvableSecretName];
+      const secretConfig = getResolvableSecrets()[secretName as ResolvableSecretName];
       if (!secretConfig) {
         throw new BadRequestError(`Unknown secret: ${secretName}. Only predefined secrets can be configured.`);
       }
