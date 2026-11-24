@@ -28,6 +28,8 @@ export const aiHolders = {
       { path: 'callerUserId', matchBy: 'userId', action: 'deleteDocument' },
       { path: 'ownerUserId', matchBy: 'userId', action: 'deleteDocument' },
     ],
+    // A digest of the function's source, not a credential; listed because the name matches the secret pattern.
+    secretPaths: ['codeHash'],
   },
   CodeAgentEvent: {
     kind: 'holder',
