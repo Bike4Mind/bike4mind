@@ -142,7 +142,10 @@ export class BackgroundProcessRegistry {
   private readonly processes = new Map<string, Tracked>();
   private shuttingDown = false;
 
-  constructor(private readonly events: BackgroundProcessEvents) {}
+  constructor(
+    private readonly events: BackgroundProcessEvents,
+    private readonly stdioDrainMs = STDIO_DRAIN_MS
+  ) {}
 
   async start(request: StartRequest): Promise<BackgroundProcessInfo> {
     if (this.shuttingDown) throw new Error('The app is shutting down; no new commands can be started.');
@@ -281,7 +284,7 @@ export class BackgroundProcessRegistry {
       // ticking for the rest of the app's life, which is what made Stop look broken.
       child.on('exit', (code, signal) => {
         if (tracked.info.endedAt) return;
-        const drain = setTimeout(() => settle(ended(), code, signal), STDIO_DRAIN_MS);
+        const drain = setTimeout(() => settle(ended(), code, signal), this.stdioDrainMs);
         drain.unref?.();
       });
     });

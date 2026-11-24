@@ -1,5 +1,7 @@
-import { readdir, rm, stat, utimes } from 'node:fs/promises';
-import { join } from 'node:path';
+import { existsSync, realpathSync } from 'node:fs';
+import { mkdtemp, readdir, rm, stat, utimes } from 'node:fs/promises';
+import { homedir, userInfo } from 'node:os';
+import { join, sep } from 'node:path';
 
 export const RUN_ROOT_PREFIX = 'b4m-desktop-run-';
 export const RUN_ROOT_ENV = 'B4M_DESKTOP_TEST_RUN_ROOT';
@@ -40,6 +42,48 @@ export function redirectTmpdir(dir: string): void {
 export function redirectHomedir(dir: string): void {
   process.env.HOME = dir;
   process.env.USERPROFILE = dir;
+}
+
+function physicalPath(path: string): string {
+  try {
+    return realpathSync(path);
+  } catch {
+    return path;
+  }
+}
+
+/**
+ * The home folder a test may write fixtures into: the per-file one vitest.setup.ts creates under the run
+ * root. Throws when os.homedir() is anything else, the account's real home above all. HOME set through
+ * process.env does not reach os.homedir() in a worker thread, which is how a run can end up there.
+ */
+export function sandboxedHome(): string {
+  const home = homedir();
+  const runRoot = process.env[RUN_ROOT_ENV];
+  // Physical on both sides: a test may hand HOME a resolved path, and macOS's temp folder is a symlink.
+  const inside = !!runRoot && physicalPath(home).startsWith(physicalPath(runRoot) + sep);
+  if (!inside || home === userInfo().homedir) {
+    throw new Error(`Refusing to use ${home} as a test home: it is not inside this run's temp root.`);
+  }
+  return home;
+}
+
+// Must stay in sync with the fixed temp folders shellHome() lists in src/main/chat/tools/shellScan.ts.
+const SHARED_TEMP_FOLDERS = ['/tmp', '/private/tmp', '/var/tmp', '/private/var/tmp'];
+
+/**
+ * A fresh folder for fixtures a shell scan must not read as a shared temp folder. It sits beside the
+ * per-file temp roots, never in the account's home. Where the run root is itself under a fixed temp
+ * folder (Linux's /tmp), it falls back to /dev/shm.
+ */
+export async function mkdtempOutsideTemp(prefix: string): Promise<string> {
+  const runRoot = process.env[RUN_ROOT_ENV];
+  if (!runRoot) throw new Error(`${RUN_ROOT_ENV} is not set: this helper only runs under the desktop vitest config.`);
+  const physical = realpathSync(runRoot);
+  const shared = SHARED_TEMP_FOLDERS.some(folder => physical.startsWith(folder + sep));
+  if (!shared) return mkdtemp(join(runRoot, prefix));
+  if (existsSync('/dev/shm')) return mkdtemp(join('/dev/shm', `${RUN_ROOT_PREFIX}${prefix}`));
+  throw new Error(`No folder outside ${SHARED_TEMP_FOLDERS.join(', ')} to hold test fixtures: set TMPDIR to one.`);
 }
 
 function isAlive(pid: number): boolean {

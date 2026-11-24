@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
-import { describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
 interface FakeChild extends EventEmitter {
   stdin: PassThrough;
@@ -11,6 +11,7 @@ interface FakeChild extends EventEmitter {
 }
 
 const spawned: { file: string; args: string[]; child: FakeChild }[] = [];
+const fake = vi.hoisted(() => ({ echoStdin: false }));
 
 vi.mock('node:child_process', async importOriginal => ({
   ...(await importOriginal<typeof import('node:child_process')>()),
@@ -21,6 +22,7 @@ vi.mock('node:child_process', async importOriginal => ({
       kill: () => true,
       unref: () => undefined,
     });
+    if (fake.echoStdin) child.stdin.on('data', (chunk: Buffer) => child.stdout.write(chunk.toString('utf8')));
     spawned.push({ file, args, child });
     return child;
   },
@@ -73,5 +75,23 @@ describe('wsl.exe spawns', () => {
     expect(session.file).toMatch(WSL_EXE);
     session.child.stdout.write('/data/me\0');
     expect(await answer).toBe('/data/me');
+  });
+});
+
+describe('the realpath session of a distro', () => {
+  beforeAll(() => {
+    fake.echoStdin = true;
+  });
+  afterAll(() => {
+    fake.echoStdin = false;
+  });
+
+  it('is shared by every spelling of the distro name', async () => {
+    expect(await wslRealpath('Arch', '/home/me/a')).toBe('/home/me/a');
+    expect(await wslRealpath('ARCH', '/home/me/b')).toBe('/home/me/b');
+    expect(await wslRealpath('arch', '/home/me/c')).toBe('/home/me/c');
+
+    const sessions = spawned.filter(({ args }) => args[0] === '-d' && args[1]?.toLowerCase() === 'arch');
+    expect(sessions.map(({ args }) => args.slice(0, 2))).toEqual([['-d', 'Arch']]);
   });
 });
