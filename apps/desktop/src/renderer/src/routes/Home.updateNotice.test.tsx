@@ -81,6 +81,9 @@ beforeEach(() => {
   install = vi.fn(async (force: boolean) => (force ? { ok: true } : { ok: false, reason: 'busy', busy: BUSY }));
   const namespaces: Record<string, unknown> = {
     auth: quietBridge({ getState: async () => signedIn }),
+    account: quietBridge({
+      getProfile: async () => ({ credits: { balance: null, monthlyAllowance: null }, plan: null, tier: null }),
+    }),
     chat: quietBridge({
       defaultsForNewSession: async () => ({ model: 'test-model', approvalMode: 'auto', reasoningEffort: 'default' }),
       listModels: async () => ({ models: [] }),
