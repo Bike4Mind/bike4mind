@@ -15,6 +15,10 @@ import { registerAccountDeletionRequestGuard } from '@client/app/utils/accountDe
 // from anywhere else would silently opt out of it.
 export { api, isPublicPath };
 
+// The cookie exchange refreshCoordinator.ts posts to; must stay in sync with it. A local copy, not an
+// import, so the many tests that mock refreshCoordinator keep a working interceptor.
+const REFRESH_TOKEN_PATH = '/api/auth/refreshToken';
+
 // Guard so a burst of concurrent unrecoverable 401s triggers exactly one
 // redirect instead of racing multiple window.location.replace calls.
 // Exported so login flows can reset it (as they reset the refresh coordinator).
@@ -127,11 +131,18 @@ api.interceptors.response.use(
     // 401 handling below run (it already no-ops the redirect for mfaPending).
     const isMfaPending401 =
       isAxiosError(error) && error.response?.status === 401 && error.response?.data?.mfaPending === true;
-    // Suppress logging for the expected mid-MFA rejection and for a 403 step_up_required, which
-    // the step-up interceptor below turns into a verification prompt; log everything else.
+    // A 400/401 from the cookie exchange is the answer "no session", not a fault: every cold load
+    // of a signed-out visitor asks once by design (sessionBootstrap.ts), and the callers act on it.
+    const isNoSessionAnswer =
+      isAxiosError(error) &&
+      error.config?.url === REFRESH_TOKEN_PATH &&
+      (error.response?.status === 400 || error.response?.status === 401);
+    // Suppress logging for the expected mid-MFA rejection, the "no session" answer above, and a
+    // 403 step_up_required, which the step-up interceptor below turns into a verification prompt;
+    // log everything else.
     // TODO: have graceful toasters for customers vs developers
     // For now just a console.log
-    if (!isMfaPending401 && !isStepUpRequired(error)) {
+    if (!isMfaPending401 && !isNoSessionAnswer && !isStepUpRequired(error)) {
       if (isAxiosError(error)) {
         if (error.code === 'ERR_NETWORK' || error.message === 'Network Error') {
           console.error('Network Error: Backend may not be running. Check that SST is started.');
