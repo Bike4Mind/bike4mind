@@ -21,6 +21,7 @@ import { ChatCompletionChunk, ChatCompletionCreateParams } from 'openai/resource
 import { Stream } from 'openai/streaming';
 import { Logger } from '@bike4mind/observability';
 import { executeToolsBatch, shouldEndTurnAfterTools, toolFailureLogLevel } from './executeToolsBatch';
+import { attachPreToolText } from './replayPreToolText';
 import { recordToolResult, type RecordableToolUse } from './recordToolResult';
 import {
   declaredArtifactType,
@@ -889,6 +890,7 @@ export class XAIBackend implements ICompletionBackend {
         let artifactGuard = inheritedArtifactGuard;
 
         // Inject results in original order
+        const roundMessagesStart = messages.length;
         for (const outcome of outcomes) {
           if (outcome.ok) {
             // For tools that return artifacts (like recharts), stream the result directly -
@@ -932,6 +934,8 @@ export class XAIBackend implements ICompletionBackend {
             );
           }
         }
+
+        attachPreToolText(messages, roundMessagesStart, streamedRoundText);
 
         const requestedToolNames = func.flatMap(tool => (tool.name ? [tool.name] : []));
         if (shouldEndTurnAfterTools(requestedToolNames, options.tools, streamedRoundText)) {

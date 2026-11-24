@@ -11,7 +11,7 @@ import { AgentPrIndicator } from './AgentPrIndicator';
 /** Shown as a card: the user has to act on it, or should know it went wrong. */
 const ATTENTION: ReadonlySet<AgentState> = new Set(['needs-you', 'failed']);
 /** The rest, collapsed to one line of counts, in this order. Working agents also get a row each, for Stop. */
-const QUIET_ORDER: readonly AgentState[] = ['done', 'stopped', 'idle'];
+const QUIET_ORDER: readonly AgentState[] = ['waiting', 'done', 'paused', 'stopped', 'idle'];
 
 interface AttentionItem {
   key: string;

@@ -20,6 +20,7 @@ import { ChatCompletionChunk, ChatCompletionCreateParams } from 'openai/resource
 import { Stream } from 'openai/streaming';
 import { Logger } from '@bike4mind/observability';
 import { executeToolsBatch, shouldEndTurnAfterTools, toolFailureLogLevel } from './executeToolsBatch';
+import { replayableText } from './replayPreToolText';
 import { recordToolResult, type RecordableToolUse } from './recordToolResult';
 import {
   declaredArtifactType,
@@ -265,19 +266,16 @@ export class DeepSeekBackend implements ICompletionBackend {
 
     if (!(response instanceof Stream)) {
       if (retrySignal?.aborted) {
-        await reportUsageOnAbort(
-          retrySignal,
-          callback,
-          response.usage
-            ? {
-                ...splitCacheInclusiveInput(
-                  response.usage.prompt_tokens,
-                  cachedTokensFromUsage(response.usage as unknown as Record<string, unknown>)
-                ),
-                outputTokens: response.usage.completion_tokens,
-              }
-            : undefined
-        );
+        const usage = response.usage;
+        const turnUsage = usage
+          ? appendCacheInclusiveTurn(
+              undefined,
+              usage.prompt_tokens,
+              cachedTokensFromUsage(usage as unknown as Record<string, unknown>),
+              usage.completion_tokens
+            )
+          : undefined;
+        await reportUsageOnAbort(retrySignal, callback, turnUsage ? { ...turnUsage[0], turnUsage } : undefined);
       }
       const streamedText: string[] = [];
       // The empty guard keys on prose produced, not on streamedText: the monologue
@@ -810,7 +808,7 @@ export class DeepSeekBackend implements ICompletionBackend {
             });
           }
         }
-        this.pushToolRound(messages, roundResults, streamedReasoning || undefined);
+        this.pushToolRound(messages, roundResults, streamedReasoning || undefined, streamedRoundText);
 
         const requestedToolNames = func.flatMap(tool => (tool.name ? [tool.name] : []));
         if (shouldEndTurnAfterTools(requestedToolNames, options.tools, streamedRoundText)) {
@@ -911,11 +909,16 @@ export class DeepSeekBackend implements ICompletionBackend {
    * per call leaves every message after the first without `reasoning_content`,
    * which DeepSeek's thinking mode rejects with a 400.
    */
-  private pushToolRound(messages: IMessage[], round: ToolRoundResult[], reasoningContent: string | undefined) {
+  private pushToolRound(
+    messages: IMessage[],
+    round: ToolRoundResult[],
+    reasoningContent: string | undefined,
+    assistantText?: string
+  ) {
     if (round.length === 0) return;
 
     messages.push({
-      content: null,
+      content: replayableText(assistantText) ?? null,
       role: 'assistant',
       ...(reasoningContent ? { reasoning_content: reasoningContent } : {}),
       tool_calls: round.map(({ tool }) => ({

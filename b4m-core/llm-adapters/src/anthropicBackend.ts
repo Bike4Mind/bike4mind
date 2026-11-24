@@ -33,6 +33,7 @@ import { federatedAnthropicCredentials } from './anthropicFederation';
 import { closeThinkMarker } from './thinkMarkers';
 import { selectedWifTokenSource } from './wifTokenSource';
 import { executeToolsBatch, shouldEndTurnAfterTools, toolFailureLogLevel } from './executeToolsBatch';
+import { replayableText } from './replayPreToolText';
 import { recordToolResult, type RecordableToolUse } from './recordToolResult';
 import {
   CompletionInfo,
@@ -255,6 +256,9 @@ export class AnthropicBackend implements ICompletionBackend {
   private logger: Logger;
   public currentModel: string = '';
   private lastAssistantContent: ContentBlock[] = []; // Store the complete assistant message content for tool use
+  // Text emitted ahead of the first tool call, for pushToolMessages to replay on the first
+  // tool_use message. Text after that call stays out so replay never reorders it.
+  private pendingPreToolText: string | undefined;
   private isThinkingEnabled: boolean = false; // Track if thinking is enabled for current request
   // Opaque, non-PII end-user identifier forwarded as `metadata.user_id` so
   // Anthropic can attribute abuse to an individual user and scope enforcement
@@ -2305,6 +2309,13 @@ export class AnthropicBackend implements ICompletionBackend {
                   c => c != null && !(c.type === 'text' && !c.text)
                 ) as unknown as ContentBlock[];
               }
+              const firstToolUseIndex = collectedContent.findIndex(c => c?.type === 'tool_use');
+              this.pendingPreToolText =
+                options.executeTools === false
+                  ? undefined
+                  : (firstToolUseIndex === -1 ? collectedContent : collectedContent.slice(0, firstToolUseIndex))
+                      .flatMap(c => (c?.type === 'text' && typeof c.text === 'string' ? [c.text] : []))
+                      .join('');
 
               // Extract cache stats if caching was enabled and usage info is available
               let cacheStats;
@@ -2872,7 +2883,13 @@ export class AnthropicBackend implements ICompletionBackend {
                       maxRetries: 0,
                       ...(requestExtraHeaders ? { headers: requestExtraHeaders } : {}),
                     }),
-                  retrySignal
+                  retrySignal,
+                  {
+                    onRetry: ({ error, delayMs }) => {
+                      this.logger.warn('Retrying Anthropic completion', { model, delayMs });
+                      options._internal?.turnTelemetry?.onRetry({ error, delayMs, model });
+                    },
+                  }
                 )
               : await withRetry(
                   () =>
@@ -2933,6 +2950,14 @@ export class AnthropicBackend implements ICompletionBackend {
 
         if ('content' in response && Array.isArray(response.content)) {
           this.lastAssistantContent = response.content as ContentBlock[];
+          const firstToolUseIndex = this.lastAssistantContent.findIndex(content => content.type === 'tool_use');
+          this.pendingPreToolText =
+            options.executeTools === false
+              ? undefined
+              : this.lastAssistantContent
+                  .slice(0, firstToolUseIndex === -1 ? undefined : firstToolUseIndex)
+                  .flatMap(content => (content.type === 'text' ? [content.text] : []))
+                  .join('');
           let responseFormatToolEmitted = false;
 
           for (let i = 0; i < response.content.length; i++) {
@@ -3583,9 +3608,13 @@ export class AnthropicBackend implements ICompletionBackend {
         });
         parsedInput = {};
       }
+      // Only the first tool_use of a round carries the text: later ones are parallel siblings.
+      const preToolText = replayableText(this.pendingPreToolText);
+      this.pendingPreToolText = undefined;
       messages.push({
         role: 'assistant',
         content: [
+          ...(preToolText ? [{ type: 'text' as const, text: preToolText }] : []),
           {
             type: 'tool_use',
             id: tool.id,

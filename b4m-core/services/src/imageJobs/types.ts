@@ -85,6 +85,11 @@ export type ImageJobDeps = {
   countNotebookImage?(questId: string): Promise<void>;
   /** Claims and releases a job's share of a completion run's budget; required to create a job with a `run`. */
   runBudget?: RunBudgetAdapters;
+  /**
+   * Deletes the requester's own files among `fileIds` (never unshares one they do not own), with the owner's storage
+   * refunded. Unset where no request sets ImageJobPayload.discardInputFileIds.
+   */
+  discardInputFiles?(userId: string, fileIds: readonly string[]): Promise<void>;
   now(): Date;
   logger: Logger;
 };
@@ -125,6 +130,8 @@ export type CreateImageJobsInput = {
   purpose?: ImageJobPurpose;
   /** The completion run the batch is made for: each job's hold is claimed against its budget (resolvePaidCallRun). */
   run?: CompletionRunAttribution;
+  /** Server-chosen only: inputs this request made for the batch, deleted when it ends (ImageJobPayload). */
+  discardInputFileIds?: string[];
 };
 
 export type CreateImageJobsErrorCode =

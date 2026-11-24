@@ -167,6 +167,15 @@ describe('account purge reconciliation', () => {
     expect(matched('CallableFunction', { ownerType: 'user', ownerKey: 'other', userId: 'other' })).toEqual([]);
   });
 
+  it("deletes the function call rows a person made or whose function was called, and no one else's", () => {
+    expect(matched('CallableFunctionCall', { callerUserId: userId, ownerUserId: userId })).toEqual([
+      'deleteDocument',
+      'deleteDocument',
+    ]);
+    expect(matched('CallableFunctionCall', { callerUserId: userId, ownerUserId: 'other' })).toEqual(['deleteDocument']);
+    expect(matched('CallableFunctionCall', { callerUserId: 'other', ownerUserId: 'other' })).toEqual([]);
+  });
+
   it('deletes only a personal project and anonymizes the owner of an organization one', () => {
     const holder = DATA_HOLDER_REGISTRY.Project;
     if (holder.kind !== 'holder') throw new Error('Project must be a holder');

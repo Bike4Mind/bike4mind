@@ -51,7 +51,7 @@ export function registerStudio(deps: {
       if (disposed) return null;
       const scope = sessions.scopeKey();
       const api = auth.getSessionBoundApiClient();
-      return scope && api ? { scope, client: new MediaApiClient(api), cdnUrl: '' } : null;
+      return scope && api ? { scope, client: new MediaApiClient(api) } : null;
     },
     authorize: async () => false,
   });

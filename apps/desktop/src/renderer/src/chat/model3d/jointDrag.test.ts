@@ -11,6 +11,9 @@ import {
   type DragViewport,
   type JointDragFrame,
 } from './jointDrag';
+import { JointGuide } from './jointGuide';
+import type { ModelJoint } from '@shared/model3d';
+import { jointReadout, swingAngles } from './ModelJoints';
 
 const WIDTH = 800;
 const HEIGHT = 600;
@@ -220,5 +223,97 @@ describe('snapping', () => {
     expect(nudgeStep('turn', [0, 110], true)).toBe(15);
     expect(nudgeStep('slide', [0, 40], false)).toBeCloseTo(0.4, 10);
     expect(nudgeStep('slide', [0, 40], true)).toBe(5);
+  });
+});
+
+describe('jointGuide', () => {
+  const lid: JointDragFrame = {
+    motion: 'turn',
+    pivot: new THREE.Vector3(0, 0, 0),
+    axis: new THREE.Vector3(1, 0, 0),
+    range: [0, 110],
+    scale: 1,
+  };
+
+  /** Ticks the guide every 16 ms from `start` until it settles; how many frames that took. */
+  function runUntilSettled(guide: JointGuide, start: number): number {
+    let frames = 0;
+    while (guide.tick(start + frames * 16)) {
+      frames += 1;
+      if (frames > 200) throw new Error('The guide never settled.');
+    }
+    return frames;
+  }
+
+  describe('JointGuide', () => {
+    it('draws a slide as one straight line after it showed an arc', () => {
+      const guide = new JointGuide(() => false);
+      guide.show(lid, 0, new THREE.Vector3(0, 0, 30), 50);
+      const drawer: JointDragFrame = { ...lid, motion: 'slide', axis: new THREE.Vector3(0, -1, 0), range: [0, 40] };
+      guide.show(drawer, 0, new THREE.Vector3(0, -20, 10), 50);
+      const track = guide.object.children.find(child => child.type === 'Line') as THREE.Line;
+      expect(track.geometry.getAttribute('position').count).toBe(2);
+    });
+
+    it('fades in when shown and settles, then fades out when hidden', () => {
+      const guide = new JointGuide(() => false);
+      guide.show(lid, 0, new THREE.Vector3(0, 0, 30), 40);
+      expect(runUntilSettled(guide, 1000)).toBeGreaterThan(2);
+      expect(guide.object.visible).toBe(true);
+      guide.hide();
+      expect(runUntilSettled(guide, 5000)).toBeGreaterThan(2);
+      expect(guide.object.visible).toBe(false);
+    });
+
+    it('shows and hides at once under reduced motion', () => {
+      const guide = new JointGuide(() => true);
+      guide.show(lid, 0, new THREE.Vector3(0, 0, 30), 40);
+      expect(guide.tick(0)).toBe(false);
+      expect(guide.object.visible).toBe(true);
+    });
+
+    it('keeps animating while a limit flash warms it, then settles', () => {
+      const guide = new JointGuide(() => false);
+      guide.show(lid, 0, new THREE.Vector3(0, 0, 30), 40);
+      runUntilSettled(guide, 0);
+      guide.flash(10_000);
+      expect(guide.tick(10_000)).toBe(true);
+      expect(guide.tick(10_400)).toBe(false);
+    });
+
+    it('puts the dot on the arc at the joint value, about the pivot', () => {
+      const guide = new JointGuide(() => true);
+      guide.show(lid, 0, new THREE.Vector3(0, 0, 30), 40);
+      guide.setValue(90);
+      const dot = guide.object.children.find(child => child instanceof THREE.Mesh)!;
+      // A quarter turn about +X carries +Z to -Y, at the part's distance from the hinge.
+      expect(dot.position.x).toBeCloseTo(0, 6);
+      expect(dot.position.y).toBeCloseTo(-30, 6);
+      expect(dot.position.z).toBeCloseTo(0, 6);
+    });
+  });
+});
+
+describe('ModelJoints', () => {
+  const lid: ModelJoint = { name: 'lid', motion: 'turn', axis: [1, 0, 0], range: [0, 110] };
+  const door: ModelJoint = { name: 'door', motion: 'turn', axis: [0, 0, 1], range: [10, -80] };
+
+  describe('swingAngles', () => {
+    it('starts closed, is fully open half way through and closes again', () => {
+      const joints = [lid, door];
+      expect(swingAngles(joints, 0)).toEqual({ lid: 0, door: 10 });
+      expect(swingAngles(joints, 0.5).lid).toBeCloseTo(110);
+      expect(swingAngles(joints, 0.5).door).toBeCloseTo(-80);
+      expect(swingAngles(joints, 0.25).lid).toBeCloseTo(55);
+      expect(swingAngles(joints, 1).lid).toBeCloseTo(0);
+    });
+  });
+
+  describe('jointReadout', () => {
+    it('shows whole degrees for a turn and a distance for a slide', () => {
+      expect(jointReadout(lid, 54.6, 'mm')).toBe('55\u00b0');
+      expect(jointReadout({ ...lid, motion: 'slide', range: [0, 40] }, 12.4, 'mm')).toBe('12 mm');
+      expect(jointReadout({ ...lid, motion: 'slide', range: [0, 0.04] }, 0.0124, 'm')).toBe('0.012 m');
+    });
   });
 });

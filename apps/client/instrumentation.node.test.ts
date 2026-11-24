@@ -1,12 +1,15 @@
 // @vitest-environment node
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-const { registerProcessErrorHandlers, getAvailableModels, logExpiringModels } = vi.hoisted(() => ({
-  registerProcessErrorHandlers: vi.fn(),
-  getAvailableModels: vi.fn(),
-  logExpiringModels: vi.fn(),
-}));
+const { registerProcessErrorHandlers, getAvailableModels, logExpiringModels, warnIfPlaintextSecretsOptOut } =
+  vi.hoisted(() => ({
+    warnIfPlaintextSecretsOptOut: vi.fn(),
+    registerProcessErrorHandlers: vi.fn(),
+    getAvailableModels: vi.fn(),
+    logExpiringModels: vi.fn(),
+  }));
 vi.mock('@bike4mind/utils', () => ({ registerProcessErrorHandlers }));
+vi.mock('@bike4mind/server-utils/security/plaintextSecretsOptOut', () => ({ warnIfPlaintextSecretsOptOut }));
 vi.mock('@bike4mind/llm-adapters', () => ({ getAvailableModels, logExpiringModels }));
 
 import { register } from './instrumentation.node';
@@ -24,6 +27,14 @@ describe('instrumentation.node register', () => {
 
     expect(registerProcessErrorHandlers).toHaveBeenCalledWith(undefined, 'NextServer');
     await vi.waitFor(() => expect(logExpiringModels).toHaveBeenCalledWith(models));
+  });
+
+  it('logs the plaintext secrets opt-out warning at boot', () => {
+    getAvailableModels.mockResolvedValue([]);
+
+    register();
+
+    expect(warnIfPlaintextSecretsOptOut).toHaveBeenCalledOnce();
   });
 
   it('swallows a getAvailableModels rejection', async () => {

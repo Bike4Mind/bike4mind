@@ -49,8 +49,10 @@ import { DispatchModel } from './dispatchModel';
 import { normalizeGeminiFinishReason } from './stopReason';
 import { appendIdentityReminder, buildIdentityReminder, shouldOmitIdentityReminder } from './identityReminder';
 
-// Matches gemini-3-pro-preview, gemini-3.1-pro-preview, gemini-3.5-flash, but not a future gemini-30 family.
-const isGemini3 = (modelId: string) => /^gemini-3(\D|$)/.test(modelId);
+// Gemini 3 and 4 require a thought_signature on replayed function calls and take thinkingLevel.
+// A new major opts in here deliberately once its request shape is confirmed.
+// Matches gemini-3-pro-preview, gemini-3.5-flash, gemini-4-neon, but not a future gemini-30/40 family.
+const isGemini3Or4 = (modelId: string) => /^gemini-[34](\D|$)/.test(modelId);
 
 type ToolCall = {
   id: string;
@@ -176,6 +178,29 @@ export class GeminiBackend implements ICompletionBackend {
         trainingCutoff: '2025-05-01',
         description:
           "Google's Gemini 2.5 Flash image generation and editing model (Nano Banana). Supports text-to-image, image editing with natural language, multi-image composition, and character consistency.",
+      },
+      // Gemini 4
+      {
+        id: ChatModels.GEMINI_4_NEON,
+        type: 'text',
+        name: 'Gemini 4 Neon',
+        backend: ModelBackend.Gemini,
+        contextWindow: 1048576, // 1M context window, shared by input, thinking and output
+        supportsImageVariation: false,
+        max_tokens: 65536, // Max synchronous output tokens
+        can_stream: true,
+        can_think: true,
+        pricing: {
+          // Flat rate at every context length; implicit caching only (no cachedContents).
+          // @see https://ai.google.dev/gemini-api/docs/pricing
+          1048576: { input: 3 / 1000000, output: 15 / 1000000, cache_read: 0.15 / 1000000 }, // $3/1M input, $15/1M output
+        },
+        supportsVision: true,
+        supportsTools: true,
+        logoFile: 'Google_logo.png',
+        rank: 3,
+        description:
+          "Google's Gemini 4 Neon, a thinking model for agentic and coding work with text, image, audio, video and PDF input.",
       },
       // Gemini 3.5
       {
@@ -1528,7 +1553,7 @@ export class GeminiBackend implements ICompletionBackend {
           // former so the guard cannot silently swallow a block this same completion chain just
           // generated.
           const isReplayed = !toolUseBlocks.some(t => liveToolUseIds.has(t.id));
-          if (isReplayed && isGemini3(this.currentModel) && !toolUseBlocks[0]?.thought_signature) {
+          if (isReplayed && isGemini3Or4(this.currentModel) && !toolUseBlocks[0]?.thought_signature) {
             this.logger.warn(
               '[Gemini] Dropping replayed tool_use block(s) with no thought_signature on the first call:',
               { names: toolUseBlocks.map(t => t.name), messageRole: message.role }
@@ -1722,7 +1747,7 @@ export class GeminiBackend implements ICompletionBackend {
     // Bound thinking only when the caller's cap binds; otherwise keep Google's default.
     // Only 3.x and 4.x take thinkingLevel; the -latest aliases track Google's newest 3.x Flash / Flash-Lite.
     // Other ids get the cap alone.
-    return isGemini3(model.id) || /^gemini-(4(\D|$)|flash(-lite)?-latest$)/.test(model.id)
+    return isGemini3Or4(model.id) || /^gemini-flash(-lite)?-latest$/.test(model.id)
       ? { maxOutputTokens, thinkingConfig: { thinkingLevel: ThinkingLevel.LOW } }
       : { maxOutputTokens };
   }

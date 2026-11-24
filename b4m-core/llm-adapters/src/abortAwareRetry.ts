@@ -103,9 +103,11 @@ export async function retryAbortAware<T>(
   {
     maxAttempts = DEFAULT_MAX_ATTEMPTS,
     isRetryable = defaultIsRetryable,
+    onRetry,
   }: {
     maxAttempts?: number;
     isRetryable?: (error: unknown) => boolean;
+    onRetry?: (event: { error: Error; delayMs: number }) => void;
   } = {}
 ): Promise<T> {
   if (!Number.isSafeInteger(maxAttempts) || maxAttempts < 1) throw new RangeError('Invalid retry attempt limit');
@@ -118,7 +120,14 @@ export async function retryAbortAware<T>(
       const hint = getErrorHeader(error, 'x-should-retry');
       if (hint === 'false' || (hint !== 'true' && !isRetryable(error))) throw error;
 
-      const deadline = Date.now() + (retryAfterMs(error) ?? 500 * 2 ** (attempt - 1));
+      const localDelayMs = 500 * 2 ** (attempt - 1);
+      const delayMs = retryAfterMs(error) ?? Math.round(localDelayMs * (0.75 + 0.5 * Math.random()));
+      const deadline = Date.now() + delayMs;
+      try {
+        onRetry?.({ error: error instanceof Error ? error : new Error(String(error)), delayMs });
+      } catch {
+        // A telemetry observer must not interrupt provider retries.
+      }
       let remaining: number;
       while ((remaining = deadline - Date.now()) > 0) {
         await sleep(Math.min(Math.ceil(remaining), MAX_TIMER_DELAY_MS), signal);

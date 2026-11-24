@@ -19,6 +19,7 @@ const h = vi.hoisted(() => ({
   record: vi.fn(),
   userWrite: vi.fn(),
   aiDecision: vi.fn(),
+  releaseAfterVerdict: vi.fn(),
 }));
 vi.mock('@server/middlewares/asyncHandler', () => ({ asyncHandler: (fn: unknown) => fn }));
 // The permission gate itself is adminApi's (covered by its own tests); these assert each route declares it.
@@ -57,6 +58,7 @@ vi.mock('@bike4mind/server-utils/utils/adminAudit', async importOriginal => ({
   recordAdminActionFromRequest: h.record,
 }));
 vi.mock('@server/admin/ai/assessmentSuggestion', () => ({ recordDetectionAssessmentDecision: h.aiDecision }));
+vi.mock('@server/security/interventionRelease', () => ({ releaseHoldsAfterVerdict: h.releaseAfterVerdict }));
 vi.mock('@server/admin/ai/audit', () => ({
   withAiSuggestionId: (details: Record<string, unknown>, aiSuggestionId: string) => ({ ...details, aiSuggestionId }),
 }));
@@ -116,6 +118,7 @@ beforeEach(async () => {
   h.listContext.mockReset().mockResolvedValue({ accounts: [], burstPeers: [], reviewers: [] });
   h.record.mockReset().mockResolvedValue(null);
   h.userWrite.mockReset();
+  h.releaseAfterVerdict.mockReset().mockResolvedValue(undefined);
   if (!h.handlers.list) await loadRoutes();
 });
 
@@ -219,6 +222,15 @@ describe('POST /api/admin/shadow-detections/verdict', () => {
       })
     );
     expect(h.userWrite).not.toHaveBeenCalled();
+  });
+
+  it('hands the committed verdict to the automated-hold release hook', async () => {
+    h.addVerdict.mockResolvedValue({ status: 'updated', item: item({ verdict: 'legitimate_human', revision: 1 }) });
+    const { req, res } = request('POST', { body: verdictBody({ verdict: 'legitimate_human' }) });
+
+    await h.handlers.verdict.post(req, res);
+
+    expect(h.releaseAfterVerdict).toHaveBeenCalledWith(req, DETECTION_ID, 'legitimate_human', REASON);
   });
 
   it('records a grade taken from the assessment against its suggestion and links it in the audit entry', async () => {
@@ -340,6 +352,21 @@ describe('POST /api/admin/shadow-detections/bulk-verdict', () => {
       requiredScopes: [ApiKeyScope.ADMIN],
       adminPermissions: { POST: 'users:moderate' },
     });
+  });
+
+  it('hands each graded record, and only those, to the automated-hold release hook', async () => {
+    h.addVerdicts.mockResolvedValue({
+      graded: [item({ verdict: 'legitimate_automation', revision: 1 })],
+      conflicts: [item({ id: OTHER_ID, revision: 3 })],
+      missing: [],
+      failed: [],
+    });
+    const { req, res } = request('POST', { body: bulkBody({ verdict: 'legitimate_automation' }) });
+
+    await h.handlers.bulk.post(req, res);
+
+    expect(h.releaseAfterVerdict).toHaveBeenCalledTimes(1);
+    expect(h.releaseAfterVerdict).toHaveBeenCalledWith(req, DETECTION_ID, 'legitimate_automation', REASON);
   });
 
   it('grades every item as the signed-in admin, audits each graded record, and reports conflicts and missing ids', async () => {

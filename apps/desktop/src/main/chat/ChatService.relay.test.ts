@@ -19,6 +19,10 @@ import { SessionActivity } from './SessionActivity';
 import { SessionStore } from './SessionStore';
 import type { AccessStore } from './tools/AccessStore';
 
+vi.mock('../git/hostGitArgs', async importOriginal =>
+  (await import('./plainFolderGit.testHelper')).skipGitOutsideRepositories(await importOriginal())
+);
+
 function frame(payload: unknown): string {
   return `data: ${typeof payload === 'string' ? payload : JSON.stringify(payload)}\n\n`;
 }
@@ -140,6 +144,28 @@ describe('ChatService session_send', () => {
   const awaitStream = (index: number, timeout = 5000) =>
     vi.waitUntil(() => streams.length > index, { timeout, interval: 5 });
 
+  const idle = (ids: readonly string[]) => ids.every(id => !service.isSessionBusy(id) && queue.list(id).length === 0);
+
+  /**
+   * True once request `index` opens; false once the sessions have sat idle, with nothing queued
+   * and no request opening, for a whole quiet window. Waiting on that state rather than a fixed
+   * second keeps "nothing more happens" a check on the service, not on the clock.
+   */
+  async function nextRequest(index: number, ids: readonly string[]): Promise<boolean> {
+    const QUIET_MS = 150;
+    for (;;) {
+      await vi.waitUntil(() => streams.length > index || idle(ids), { timeout: 5000, interval: 5 });
+      if (streams.length > index) return true;
+      const quietSince = Date.now();
+      await vi.waitUntil(() => streams.length > index || !idle(ids) || Date.now() - quietSince >= QUIET_MS, {
+        timeout: 5000,
+        interval: 5,
+      });
+      if (streams.length > index) return true;
+      if (idle(ids)) return false;
+    }
+  }
+
   it('stops two sessions messaging each other back and forth, without either of them agreeing to', async () => {
     const alpha = await codeSession('Alpha');
     const beta = await codeSession('Beta');
@@ -152,12 +178,10 @@ describe('ChatService session_send', () => {
     // a continuation round just finishes - until nothing new opens. If the bound did not hold,
     // this would keep finding work and fail on the round limit rather than hanging.
     let opened = 0;
+    // The loop ends only once nextRequest saw a whole quiet window with nothing opening, so the
+    // exchange really is over rather than merely slow.
     for (; opened < 40; opened++) {
-      try {
-        await awaitStream(opened, 1500);
-      } catch {
-        break;
-      }
+      if (!(await nextRequest(opened, [alpha.id, beta.id]))) break;
       if (!isFreshTurn(opened)) {
         endTurn(streams[opened]);
         continue;
@@ -177,10 +201,6 @@ describe('ChatService session_send', () => {
     expect(delivered).toHaveLength(5);
     expect(refused).toHaveLength(1);
     expect(refused[0]?.error).toMatch(/hops from the user/);
-
-    // The exchange really is over rather than merely slow: nothing further opened.
-    const settled = streams.length;
-    await expect(awaitStream(settled, 1000)).rejects.toThrow();
   });
 
   it('stops two busy sessions relaying to each other mid-turn', async () => {
@@ -194,11 +214,7 @@ describe('ChatService session_send', () => {
     let opened = 0;
     let midTurn = 0;
     for (; opened < 60; opened++) {
-      try {
-        await awaitStream(opened, 1500);
-      } catch {
-        break;
-      }
+      if (!(await nextRequest(opened, [alpha.id, beta.id]))) break;
       const messages = messagesOf(opened);
       const last = JSON.stringify(messages.at(-1)?.content ?? '');
       if (!last.includes('kick off') && !last.includes('[Message from another conversation')) {
@@ -218,9 +234,6 @@ describe('ChatService session_send', () => {
     const refused = calls.filter(call => call?.status === 'error');
     expect(refused).toHaveLength(2);
     for (const call of refused) expect(call?.error).toMatch(/hops from the user/);
-
-    const settled = streams.length;
-    await expect(awaitStream(settled, 1000)).rejects.toThrow();
   });
 
   it('ends a chain of notify_when_done messages at the hop bound, landing the last notice without a turn', async () => {
@@ -230,11 +243,7 @@ describe('ChatService session_send', () => {
 
     let opened = 0;
     for (; opened < 60; opened++) {
-      try {
-        await awaitStream(opened, 1500);
-      } catch {
-        break;
-      }
+      if (!(await nextRequest(opened, [alpha.id, beta.id]))) break;
       const last = JSON.stringify(messagesOf(opened).at(-1)?.content ?? '');
       if (!isFreshTurn(opened) || last.includes('finished the turn your message started')) {
         endTurn(streams[opened]);
@@ -260,9 +269,6 @@ describe('ChatService session_send', () => {
       streams[opened].write(frame('[DONE]'));
     }
     expect(opened).toBeLessThan(60);
-
-    const settledStreams = streams.length;
-    await expect(awaitStream(settledStreams, 1000)).rejects.toThrow();
 
     const stored = [...((await store.get(alpha.id))?.messages ?? []), ...((await store.get(beta.id))?.messages ?? [])];
     const notices = stored.filter(message => /finished the turn your message started/.test(message.content));
@@ -331,7 +337,7 @@ describe('ChatService session_send', () => {
         }
         requestSend(streams.at(-1)!, other.id, 'must not send', 'send-capped');
 
-        await vi.waitUntil(() => settledCalls('session_send').length === 1);
+        await vi.waitUntil(() => settledCalls('session_send').length === 1, { interval: 5 });
         expect(settledCalls('session_send')[0]).toMatchObject({
           status: 'error',
           error: expect.stringMatching(/5 hops from the user/),
@@ -836,7 +842,7 @@ describe('ChatService session_send', () => {
 
       await service.resolveHeldRelay(target.id, heldId, true);
 
-      await expect(awaitStream(requests, 1000)).rejects.toThrow();
+      expect(await nextRequest(requests, [target.id])).toBe(false);
       expect(service.heldRelaysFor(target.id)).toHaveLength(0);
       expect(queue.list(target.id)).toHaveLength(0);
       expect((await store.get(target.id))?.messages).toHaveLength(0);

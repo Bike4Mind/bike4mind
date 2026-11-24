@@ -260,7 +260,7 @@
   "packages/database/src/models/infra/ops/TeamMetricsCacheModel.ts": { "b4m/require-update-validators": { "count": 3 } },
   "packages/database/src/models/infra/security/AbuseAssessmentModel.ts": { "b4m/require-update-validators": { "count": 1 } },
   "packages/database/src/models/infra/security/AbuseEvalSetModel.ts": { "b4m/require-update-validators": { "count": 3 } },
-  "packages/database/src/models/infra/security/AutoContainmentDecisionModel.ts": { "b4m/require-update-validators": { "count": 2 } },
+  "packages/database/src/models/infra/security/AutoContainmentDecisionModel.ts": { "b4m/require-update-validators": { "count": 1 } },
   "packages/database/src/models/infra/security/CampaignWatchModel.ts": { "b4m/require-update-validators": { "count": 2 } },
   "packages/database/src/models/infra/security/SecretRotationModel.ts": { "b4m/require-update-validators": { "count": 1 } },
   "packages/database/src/models/infra/security/SecurityFindingModel.ts": { "b4m/require-update-validators": { "count": 5 } },
@@ -1009,11 +1009,6 @@
   "apps/client/app/components/commands/CreateAgentCommand.ts": {
     "@typescript-eslint/no-explicit-any": {
       "count": 1
-    }
-  },
-  "apps/client/app/components/commands/ImageGenerationCommand.ts": {
-    "@typescript-eslint/no-explicit-any": {
-      "count": 2
     }
   },
   "apps/client/app/components/commands/LLMCommand.tsx": {
@@ -4072,7 +4067,7 @@
   },
   "b4m-core/services/src/llm/ImageGeneration.test.ts": {
     "@typescript-eslint/no-explicit-any": {
-      "count": 52
+      "count": 51
     }
   },
   "b4m-core/services/src/llm/QuestMasterHistoryBudget.test.ts": {

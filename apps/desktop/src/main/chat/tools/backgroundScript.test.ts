@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { PARENT_WATCH_FD, parentWatchStdioIndex, wrapWithParentWatchdog } from './backgroundScript';
 
 describe('wrapWithParentWatchdog', () => {
@@ -24,8 +24,7 @@ describe('wrapWithParentWatchdog', () => {
           child.on('exit', (_code, signal) => resolve(signal))
         );
 
-        await new Promise(resolve => setTimeout(resolve, 300));
-        expect(output).toBe('no-stdin\n');
+        await vi.waitFor(() => expect(output).toBe('no-stdin\n'), { timeout: 5_000, interval: 10 });
 
         child.stdin.end();
         expect(await ended).toBe('SIGTERM');

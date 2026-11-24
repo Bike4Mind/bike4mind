@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterAll } from 'vitest';
 import path from 'node:path';
+import { createHash } from 'node:crypto';
 import { execFile, spawn, type ChildProcess } from 'node:child_process';
 import { readFile } from 'node:fs/promises';
 import { promisify } from 'node:util';
@@ -606,6 +607,35 @@ describe('error paths of the child reply', () => {
     expect(await run(call(reply({ contractJson: negativeZero, outputsJson: '{"deflection": 1}' })))).toMatchObject({
       outcome: 'ok',
     });
+  });
+
+  it('reports the lock hash and the loaded packages with lock versions, sorted, dropping unknown and malformed names', async () => {
+    const lockedDir = path.join(FIXTURES, 'lockedPyodide');
+    const lock = await readFile(path.join(lockedDir, 'pyodide-lock.json'));
+    const result = await runCallableFunctionInChild(
+      call(reply({ outputsJson: '{"deflection": 1}', packages: ['pandas', 'not-in-lock', 'numpy', '../x', 7] })),
+      { childPath: CHILD, pyodideDir: lockedDir }
+    );
+    expect(result.runtime).toEqual({
+      lockHash: createHash('sha256').update(lock).digest('hex'),
+      packages: [
+        { name: 'numpy', version: '1.26.4' },
+        { name: 'pandas', version: '1.5.3' },
+      ],
+    });
+    // No lock file: the run still returns, without a report.
+    expect((await run(call(reply({ outputsJson: '{"deflection": 1}', packages: ['numpy'] })))).runtime).toBeUndefined();
+  });
+
+  it('names the lock hash on a timeout, where the child never replied', async () => {
+    const lockedDir = path.join(FIXTURES, 'lockedPyodide');
+    const lock = await readFile(path.join(lockedDir, 'pyodide-lock.json'));
+    const result = await runCallableFunctionInChild(timed({ mode: 'hang' }, 300), {
+      childPath: CHILD,
+      pyodideDir: lockedDir,
+    });
+    expect(result.outcome).toBe('timeout');
+    expect(result.runtime).toEqual({ lockHash: createHash('sha256').update(lock).digest('hex'), packages: [] });
   });
 
   it('maps a child start failure of request to payload_invalid and of load to runtime_unavailable', async () => {

@@ -472,8 +472,8 @@ describe('PythonFunctionPanel tests', () => {
     expect(callFunction).toHaveBeenNthCalledWith(2, CODE, STEEL_INPUT, []);
     expect(callFunction).toHaveBeenNthCalledWith(3, CODE, { ...STEEL_INPUT, span: 2 }, []);
     expect(screen.getAllByTestId('python-function-test-row').map(row => row.textContent)).toEqual([
-      '4 m steel beamPassed',
-      '2 m steel beamPassed',
+      '4 m steel beamPassed (2 ms)',
+      '2 m steel beamPassed (2 ms)',
     ]);
     expect(screen.queryByTestId('python-function-test-failure')).toBeNull();
   });

@@ -38,6 +38,7 @@ import {
 } from './backend';
 import { appendCacheInclusiveTurn, splitCacheInclusiveInput } from './cacheInclusiveUsage';
 import { executeToolsBatch, shouldEndTurnAfterTools, toolFailureLogLevel } from './executeToolsBatch';
+import { replayableText } from './replayPreToolText';
 import {
   appendIdentityReminderToMessages,
   buildIdentityReminder,
@@ -525,7 +526,7 @@ export class OpenAICompatibleBackend implements ICompletionBackend {
         round.push({ tool: { id: target.id, name: target.name, parameters: target.parameters }, result: observation });
       }
     }
-    this.pushToolRound(messages, round, reasoning || undefined);
+    this.pushToolRound(messages, round, reasoning || undefined, roundText);
 
     if (
       shouldEndTurnAfterTools(
@@ -605,10 +606,15 @@ export class OpenAICompatibleBackend implements ICompletionBackend {
     this.pushToolRound(messages, [{ tool, result }], reasoning);
   }
 
-  private pushToolRound(messages: IMessage[], round: ToolRoundResult[], reasoning: string | undefined) {
+  private pushToolRound(
+    messages: IMessage[],
+    round: ToolRoundResult[],
+    reasoning: string | undefined,
+    assistantText?: string
+  ) {
     if (round.length === 0) return;
     messages.push({
-      content: null,
+      content: replayableText(assistantText) ?? null,
       role: 'assistant',
       ...(reasoning ? { reasoning_content: reasoning } : {}),
       tool_calls: round.map(({ tool }) => ({

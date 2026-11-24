@@ -1,6 +1,6 @@
 import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
@@ -104,8 +104,9 @@ describe('RetrievalRateTab page frame', () => {
 
     const filters = screen.getByTestId('retrieval-rate-filter-bar');
     expect(root.children[1]).toBe(filters);
-    expect(within(filters).getByLabelText('Start date')).toHaveAttribute('type', 'date');
-    expect(within(filters).getByLabelText('End date')).toHaveAttribute('type', 'date');
+    expect(within(filters).getByTestId('retrieval-rate-start-input-empty')).toHaveTextContent('Any date');
+    expect(within(filters).getByTestId('retrieval-rate-end-input-empty')).toHaveTextContent('Any date');
+    expect(within(filters).queryByLabelText('Start date')).toBeNull();
     expect(within(filters).getByLabelText('Answerable cutoff')).toHaveAttribute('type', 'number');
     expect(container.querySelector('.MuiCard-root')).toBeNull();
   });
@@ -165,9 +166,9 @@ describe('RetrievalRateTab page frame', () => {
     expect(screen.queryByTestId('retrieval-rate-clear-dates-btn')).toBeNull();
     expect(screen.queryByTestId('admin-stat-strip')).toBeNull();
 
-    const startInput = screen.getByLabelText('Start date');
     const cutoffInput = screen.getByLabelText('Answerable cutoff');
-    fireEvent.change(startInput, { target: { value: '2026-08-01' } });
+    fireEvent.click(screen.getByTestId('retrieval-rate-start-input-set-btn'));
+    fireEvent.change(screen.getByLabelText('Start date'), { target: { value: '2026-08-01' } });
     fireEvent.change(cutoffInput, { target: { value: '0.6' } });
     await waitFor(() =>
       expect(mockGet).toHaveBeenLastCalledWith('/api/admin/retrieval-rate?startDate=2026-08-01&answerableMinScore=0.6')
@@ -178,7 +179,8 @@ describe('RetrievalRateTab page frame', () => {
     fireEvent.click(await screen.findByTestId('retrieval-rate-clear-dates-btn'));
     expect(mockGet).toHaveBeenLastCalledWith('/api/admin/retrieval-rate?answerableMinScore=0.6');
     await waitFor(() => expect(screen.queryByTestId('retrieval-rate-clear-dates-btn')).toBeNull());
-    expect(startInput).toHaveValue('');
+    act(() => screen.getByLabelText('Start date').blur());
+    expect(screen.getByTestId('retrieval-rate-start-input-empty')).toBeInTheDocument();
     expect(cutoffInput).toHaveValue(0.6);
   });
 
@@ -187,8 +189,7 @@ describe('RetrievalRateTab page frame', () => {
     await screen.findByText('25.0%');
     expect(mockGet).toHaveBeenCalledTimes(1);
     expect(screen.queryByTestId('retrieval-rate-apply-btn')).toBeNull();
-    expect(within(screen.getByTestId('retrieval-rate-filter-bar')).queryByRole('button')).toBeNull();
-
+    fireEvent.click(screen.getByTestId('retrieval-rate-end-input-set-btn'));
     fireEvent.change(screen.getByLabelText('End date'), { target: { value: '2026-08-28' } });
     await waitFor(() => expect(mockGet).toHaveBeenLastCalledWith('/api/admin/retrieval-rate?endDate=2026-08-28'));
 

@@ -38,7 +38,7 @@ describe('artifactService - update (permission/visibility escalation guard)', ()
         artifactContents: {
           createOrUpdate: vi.fn().mockResolvedValue({ _id: 'content-new' }),
           delete: vi.fn(),
-          findByArtifactId: vi.fn().mockResolvedValue([]),
+          findLatestContent: vi.fn().mockResolvedValue(null),
         },
         artifactVersions: {
           findByArtifactId: vi.fn().mockResolvedValue([]),
@@ -116,6 +116,7 @@ describe('artifactService - update (write-time re-check)', () => {
         artifactContents: {
           createOrUpdate: vi.fn().mockResolvedValue({ _id: 'content-new' }),
           delete: vi.fn(),
+          findLatestContent: vi.fn().mockResolvedValue(null),
         },
         artifactVersions: {
           findByArtifactId: vi.fn().mockResolvedValue([]),
@@ -170,6 +171,24 @@ describe('artifactService - update (write-time re-check)', () => {
         contentHash: expect.any(String),
         contentSize: expect.any(Number),
       })
+    );
+  });
+
+  it('copies the latest content into a version created without content', async () => {
+    adapters.db.artifactContents.findLatestContent.mockResolvedValueOnce({
+      version: 3,
+      content: 'v3 body',
+      contentHash: 'h3',
+      contentSize: 7,
+      mimeType: 'text/plain',
+      encoding: 'utf-8',
+    });
+
+    await update(writerId, { id: 'artifact-1', createNewVersion: true, changeDescription: 'marker only' }, adapters);
+
+    expect(adapters.db.artifactContents.findLatestContent).toHaveBeenCalledWith('artifact-1');
+    expect(adapters.db.artifactContents.createOrUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({ content: 'v3 body', contentHash: 'h3' })
     );
   });
 

@@ -24,7 +24,7 @@ export function studioSubmissionFailure(error: unknown, request: StudioGeneratio
   const { status, code } = failure;
   let refused = failure.requestNotStarted === true;
   if (code && status) {
-    if (request.kind === 'image' && 'mode' in request.body) refused ||= imageRefusals[status]?.has(code) ?? false;
+    if (request.kind === 'image') refused ||= imageRefusals[status]?.has(code) ?? false;
     if (request.kind === 'video')
       refused ||= (status === 422 && videoRefusals.has(code)) || (status === 404 && code === 'input_image_not_found');
     if (request.kind === 'music') refused ||= status === 422 && musicRefusals.has(code);

@@ -417,7 +417,7 @@ describe('durable evaluation admission', () => {
           ...(!workers ? { finalModelId: opus.id } : {}),
         })
       );
-      await runLiveEvaluation(auth, root, true, config);
+      await runLiveEvaluation(auth, root, true, config, { workerQuietMs: 50 });
       const report = JSON.parse(await readFile(join(root, 'report.json'), 'utf8'));
       expect(report.status).toBe('complete');
       expect(report.accepted, JSON.stringify({ outcomes: report.outcomes, attempts: report.attempts })).toBe(

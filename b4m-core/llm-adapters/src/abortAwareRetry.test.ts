@@ -1,7 +1,10 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { getAbortAwareRetrySignal, retryAbortAware } from './abortAwareRetry';
 
-afterEach(() => vi.useRealTimers());
+afterEach(() => {
+  vi.useRealTimers();
+  vi.restoreAllMocks();
+});
 
 describe('abort-aware retry', () => {
   it('requires a signal and a supported call shape when opted in', () => {
@@ -42,12 +45,51 @@ describe('abort-aware retry', () => {
       .fn()
       .mockRejectedValueOnce({ status: 429, headers: { [name]: hint } })
       .mockResolvedValueOnce('second attempt');
-    const pending = retryAbortAware(dispatch, new AbortController().signal);
+    const random = vi.spyOn(Math, 'random').mockReturnValue(0);
+    const onRetry = vi.fn();
+    const pending = retryAbortAware(dispatch, new AbortController().signal, { onRetry });
     await vi.advanceTimersByTimeAsync(delay - 1);
     expect(dispatch).toHaveBeenCalledOnce();
     await vi.advanceTimersByTimeAsync(1);
     await expect(pending).resolves.toBe('second attempt');
     expect(dispatch).toHaveBeenCalledTimes(2);
+    expect(onRetry).toHaveBeenCalledExactlyOnceWith({ error: expect.any(Error), delayMs: delay });
+    expect(random).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    [0, 375],
+    [0.5, 500],
+    [0.999, 625],
+  ])('jitters the local backoff with a random sample of %s', async (sample, delayMs) => {
+    vi.useFakeTimers();
+    vi.spyOn(Math, 'random').mockReturnValue(sample);
+    const error = Object.assign(new Error('unavailable'), { status: 503 });
+    const dispatch = vi.fn().mockRejectedValueOnce(error).mockResolvedValueOnce('retried');
+    const onRetry = vi.fn();
+    const result = retryAbortAware(dispatch, new AbortController().signal, { onRetry });
+
+    await vi.advanceTimersByTimeAsync(delayMs - 1);
+    expect(dispatch).toHaveBeenCalledOnce();
+    expect(onRetry).toHaveBeenCalledExactlyOnceWith({ error, delayMs });
+    await vi.advanceTimersByTimeAsync(1);
+    await expect(result).resolves.toBe('retried');
+  });
+
+  it('isolates a failed retry observer from dispatch and does not notify on terminal failure', async () => {
+    vi.useFakeTimers();
+    const error = Object.assign(new Error('unavailable'), { status: 503 });
+    const dispatch = vi.fn().mockRejectedValue(error);
+    const onRetry = vi.fn(() => {
+      throw new Error('observer failed');
+    });
+    const result = retryAbortAware(dispatch, new AbortController().signal, { maxAttempts: 2, onRetry }).catch(
+      err => err
+    );
+    await vi.runAllTimersAsync();
+    expect(await result).toBe(error);
+    expect(dispatch).toHaveBeenCalledTimes(2);
+    expect(onRetry).toHaveBeenCalledOnce();
   });
 
   it('wakes before a long Retry-After expires and never sends a second request', async () => {

@@ -11,6 +11,11 @@ import { runsCheckedInAuto, runsCheckedInFull } from './shellApproval.testHelper
 import { shellApproval } from './shellTools';
 import type { ToolContext } from './types';
 
+vi.mock('node:child_process', async importOriginal => {
+  const actual = await importOriginal<typeof import('node:child_process')>();
+  const { memoizedExecFile } = await import('./execFileMemo.testHelper');
+  return { ...actual, execFile: memoizedExecFile(actual.execFile) };
+});
 vi.mock('./userPath', async importOriginal => ({
   ...(await importOriginal<typeof import('./userPath')>()),
   resolveLoginShellVariables: async () => ({}),
@@ -314,8 +319,11 @@ describe('shell approval of common agent git commands', () => {
         uncoverablePaths: roots,
         ...(sessionId ? { sessionId } : {}),
       }) as ToolContext;
-    const prompt = await shellApproval('bash_execute', { command, cwd }, context());
-    const withSession = await shellApproval('bash_execute', { command, cwd }, context(`s${++sessions}`));
+    // Independent decisions, run side by side since each mostly waits on git.
+    const [prompt, withSession] = await Promise.all([
+      shellApproval('bash_execute', { command, cwd }, context()),
+      shellApproval('bash_execute', { command, cwd }, context(`s${++sessions}`)),
+    ]);
     const subject = await resolveSubject(
       permissionSubject({ name: 'bash_execute', input: { command } }, prompt, context())
     ).catch(() => null);
@@ -330,7 +338,7 @@ describe('shell approval of common agent git commands', () => {
       .join('');
   };
 
-  it.each(ROWS)('decides %s (in proj/%s) as %s', async (command, folder, expected) => {
+  it.concurrent.each(ROWS)('decides %s (in proj/%s) as %s', async (command, folder, expected) => {
     expect(await cells(command, folder)).toBe(expected);
   });
 
@@ -352,7 +360,7 @@ describe('shell approval of common agent git commands', () => {
     }
   );
 
-  it.each([
+  it.concurrent.each([
     'git frobnicate',
     'git status --frobnicate',
     'git log --oneline && git frobnicate -x',
