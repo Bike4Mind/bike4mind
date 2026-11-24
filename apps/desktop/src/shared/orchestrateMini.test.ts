@@ -30,7 +30,10 @@ describe('parseOrchestrateMiniPayload', () => {
     ['no payload at all', undefined],
     ['a string', 'payload'],
     ['an unknown top-level key', { ...valid, prompt: 'leaked' }],
-    ['an unknown snapshot contract', { ...valid, snapshot: { ...valid.snapshot, contract: 2 } }],
+    [
+      'an unknown snapshot contract',
+      { ...valid, snapshot: { ...valid.snapshot, contract: VIEW_SNAPSHOT_CONTRACT + 1 } },
+    ],
     [
       'an agent field outside the contract',
       { ...valid, snapshot: { ...valid.snapshot, agents: [{ ...valid.snapshot.agents[0], seedPrompt: 'x' }] } },
