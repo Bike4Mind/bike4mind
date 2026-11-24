@@ -4183,16 +4183,6 @@
       "count": 1
     }
   },
-  "b4m-core/services/src/notebookCurationService/llmMarkdownGenerator.ts": {
-    "@typescript-eslint/no-explicit-any": {
-      "count": 12
-    }
-  },
-  "b4m-core/services/src/notebookCurationService/markdownGenerator.ts": {
-    "@typescript-eslint/no-explicit-any": {
-      "count": 10
-    }
-  },
   "b4m-core/services/src/organizationService/addMember.test.ts": {
     "@typescript-eslint/no-explicit-any": {
       "count": 1
