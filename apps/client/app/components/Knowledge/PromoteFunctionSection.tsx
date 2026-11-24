@@ -406,7 +406,9 @@ export default function PromoteFunctionSection({
                   setRefusal({
                     key,
                     message: callableFunctionErrorMessage(error, 'The tool could not be promoted.'),
-                    left: callableFunctionCasesLeft(error).map(entry => entry.name),
+                    left: callableFunctionCasesLeft(error).map(entry =>
+                      entry.kind === 'example' ? `${entry.name} (worked example)` : entry.name
+                    ),
                   }),
               })
             }

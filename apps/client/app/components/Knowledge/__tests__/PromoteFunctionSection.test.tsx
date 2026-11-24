@@ -245,7 +245,10 @@ describe('PromoteFunctionSection', () => {
           code: 'cases_left',
           passed: 2,
           total: 3,
-          left: [{ kind: 'example', name: 'second case' }],
+          left: [
+            { kind: 'test', name: 'long span' },
+            { kind: 'example', name: 'second case' },
+          ],
         })
       )
     );
@@ -256,7 +259,7 @@ describe('PromoteFunctionSection', () => {
     expect(left.textContent).toContain('Not promoted yet');
     expect(left.textContent).toContain('2 of 3 cases have passed on the server for this version.');
     expect(left.textContent).toContain('Promote again to run the other 1.');
-    expect(left.textContent).toContain('Still to run: second case');
+    expect(left.textContent).toContain('Still to run: long span, second case (worked example)');
   });
 
   it("lists the server's problems with an example", () => {

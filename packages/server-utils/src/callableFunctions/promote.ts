@@ -128,7 +128,7 @@ export async function promoteCallableFunction(
     }
   }
 
-  const failures = ran.filter(({ result }) => result.outcome !== 'not_run' && !result.passed);
+  const failures = ran.filter(({ result }) => result.outcome !== 'not_run' && !result.passed && !result.budgetCut);
   if (failures.length > 0) {
     const { kind, result } = failures[0]!;
     const others = failures.length > 1 ? ` ${failures.length - 1} more case(s) failed too.` : '';
@@ -138,8 +138,15 @@ export async function promoteCallableFunction(
     );
   }
 
-  // A deploy between cases: the cases did not all run on the runtime the pin would name.
-  const otherRuntime = ran.find(({ result }) => result.outcome !== 'not_run' && !ranOnTargetRuntime(target, result));
+  // A deploy between cases: the cases did not all run on the runtime the pin would name. A killed case's stamp has
+  // no lock hash, so a case the budget cut short says nothing about the runtime.
+  const otherRuntime = ran.find(
+    ({ result }) =>
+      result.outcome !== 'not_run' &&
+      !result.budgetCut &&
+      result.stamp !== undefined &&
+      !ranOnTargetRuntime(target, result)
+  );
   if (otherRuntime) {
     throw new ConflictError('The server runtime changed while the cases ran. Promote again.', {
       code: 'runtime_changed',
@@ -147,7 +154,9 @@ export async function promoteCallableFunction(
     });
   }
 
-  const left = all.filter(entry => !reusable.has(entry.caseHash) && resultFor.get(entry)?.passed !== true);
+  const passedHere = (result: CallableFunctionTestCaseResult | undefined) =>
+    result !== undefined && result.passed && ranOnTargetRuntime(target, result);
+  const left = all.filter(entry => !reusable.has(entry.caseHash) && !passedHere(resultFor.get(entry)));
   if (freshResults.length !== fresh.length || runCases.length !== all.length || left.length > 0) {
     const passed = all.length - left.length;
     throw new ConflictError(

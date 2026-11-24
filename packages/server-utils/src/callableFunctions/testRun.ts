@@ -28,6 +28,7 @@ import {
   type CallableFunctionServerRuntime,
   type CallableFunctionStamp,
 } from './dispatch';
+import { CALLABLE_FUNCTION_DEFAULT_TIMEOUT_MS } from './runtimeParent';
 import { selectCallableFunctionRunner, type CallableFunctionRunner } from './runtimeRunner';
 
 /**
@@ -64,6 +65,8 @@ export type CallableFunctionTestCaseResult =
       /** The call-log row this case wrote. */
       callId: string;
       stamp?: CallableFunctionStamp;
+      /** Timed out under a limit the budget lowered, so the case did not get its own time to finish. */
+      budgetCut?: true;
     }
   | {
       name: string;
@@ -232,7 +235,7 @@ export async function recordServerCaseResults(
   );
   let changed = false;
   for (const { kind, caseHash, result } of ran) {
-    if (result.outcome === 'not_run' || !ranOnTargetRuntime(target, result)) continue;
+    if (result.outcome === 'not_run' || result.budgetCut || !ranOnTargetRuntime(target, result)) continue;
     byHash.set(caseHash, {
       caseHash,
       name: result.name,
@@ -296,6 +299,8 @@ export async function runServerCases(
     }
     const mismatch =
       call.outcome === 'ok' ? compareFunctionOutput(testCase.expected, call.outputs, testCase.tolerance) : null;
+    // The runner started `durationMs` ago; less than the default limit left then means the budget set the limit.
+    const leftAtStart = target.deadline - (Date.now() - call.durationMs);
     results.push({
       name: testCase.name,
       passed: call.outcome === 'ok' && mismatch === null,
@@ -307,6 +312,7 @@ export async function runServerCases(
       durationMs: call.durationMs,
       callId: call.callId,
       ...(call.stamp ? { stamp: call.stamp } : {}),
+      ...(call.outcome === 'timeout' && leftAtStart < CALLABLE_FUNCTION_DEFAULT_TIMEOUT_MS ? { budgetCut: true } : {}),
     });
   }
   return results;

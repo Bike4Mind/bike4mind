@@ -73,7 +73,11 @@ vi.mock('./testRun', async importOriginal => {
 });
 
 import { promoteCallableFunction } from './promote';
-import { callableFunctionCaseHash } from './testRun';
+import {
+  CALLABLE_FUNCTION_TEST_CASE_MIN_MS,
+  CALLABLE_FUNCTION_TEST_RUN_BUDGET_MS,
+  callableFunctionCaseHash,
+} from './testRun';
 
 const OWNER = { id: 'owner-1' };
 const FUNCTION_ID = '6650f0a1b2c3d4e5f6a7b8c9';
@@ -353,6 +357,46 @@ describe('promotion within the budget', () => {
         { name: 'handbook case', kind: 'example', passed: true, callId: 'call-2' },
       ],
     });
+  });
+
+  it('counts a case the budget cut short as left, not failed, and records nothing for it', async () => {
+    h.fn = { ...h.fn, examples: [EXAMPLE] };
+    h.caseMs = 35_000;
+    h.results = [
+      dispatched({ outputs: { deflection: 4 }, callId: 'call-1' }),
+      dispatched({
+        outcome: 'timeout',
+        callId: 'call-2',
+        stamp: { ...STAMP, runtime: { ...STAMP.runtime, lock_hash: null } } as CallableFunctionStamp,
+      }),
+    ];
+    await expect(promoteCallableFunction(OWNER, FUNCTION_ID, { runner })).rejects.toMatchObject({
+      additionalInfo: { code: 'cases_left', passed: 1, total: 2, left: [{ kind: 'example', name: 'handbook case' }] },
+    });
+    expect(h.calls).toHaveLength(2);
+    expect(h.promoteArgs).toEqual([]);
+    expect((h.recorded[0]![2] as { cases: { name: string }[] }).cases.map(entry => entry.name)).toEqual(['short span']);
+  });
+
+  it('gives each case the run deadline and counts a budget_exhausted refusal as left, not failed', async () => {
+    h.fn = { ...h.fn, examples: [EXAMPLE] };
+    const deadline = Date.now() + CALLABLE_FUNCTION_TEST_RUN_BUDGET_MS;
+    const refused: DispatchFunctionCallResult = {
+      outcome: 'refused',
+      reason: 'budget_exhausted',
+      durationMs: 0,
+      callId: 'call-2',
+    };
+    h.results = [dispatched({ outputs: { deflection: 4 }, callId: 'call-1' }), refused];
+    await expect(promoteCallableFunction(OWNER, FUNCTION_ID, { runner })).rejects.toMatchObject({
+      additionalInfo: { code: 'cases_left', passed: 1, total: 2, left: [{ kind: 'example', name: 'handbook case' }] },
+    });
+    expect(h.calls.map(call => call[1])).toEqual([
+      expect.objectContaining({ deadline, minWaitMs: CALLABLE_FUNCTION_TEST_CASE_MIN_MS }),
+      expect.objectContaining({ deadline, minWaitMs: CALLABLE_FUNCTION_TEST_CASE_MIN_MS }),
+    ]);
+    expect(h.promoteArgs).toEqual([]);
+    expect((h.recorded[0]![2] as { cases: { name: string }[] }).cases.map(entry => entry.name)).toEqual(['short span']);
   });
 
   it('refuses with cases_left when the run returns fewer results than cases, and never writes', async () => {
