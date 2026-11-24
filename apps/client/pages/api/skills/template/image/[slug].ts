@@ -1,4 +1,9 @@
-import { NotFoundError, SKILL_TEMPLATE_SLUG_MAX, SKILL_TEMPLATE_SLUG_PATTERN } from '@bike4mind/common';
+import {
+  NotFoundError,
+  SKILL_TEMPLATE_SLUG_MAX,
+  SKILL_TEMPLATE_SLUG_PATTERN,
+  isImageServeable,
+} from '@bike4mind/common';
 import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { getFilesStorage } from '@bike4mind/server-utils/utils/storage/index';
 import { storageReadOverrides } from '@bike4mind/utils/contentDisposition';
@@ -23,7 +28,7 @@ const handler = baseApi({ auth: false, allowedMethods: ['GET'] })
     }
 
     const image = await findPublicTemplateImage(slug);
-    if (!image) throw new NotFoundError('Image not found');
+    if (!image || !isImageServeable(image)) throw new NotFoundError('Image not found');
 
     const signed = await getFilesStorage().getSignedUrl(image.filePath, 'get', {
       expiresIn: SIGNED_URL_TTL_SECONDS,

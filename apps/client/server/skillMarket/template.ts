@@ -108,8 +108,8 @@ export async function suggestTemplateSlug(listingName: string): Promise<string> 
 }
 
 /**
- * The author's template, which must be a draft: preview image changes are only allowed there, so a
- * published page never shows an image the scan has not seen.
+ * The author's template, which must be a draft: preview image changes are only allowed there. The
+ * scan covers the copy only; image moderation (isImageServeable, the approval gate) guards the image.
  */
 export async function requireDraftTemplate(
   user: MarketActor,
@@ -260,7 +260,11 @@ export async function publishOwnTemplate(
   }
 
   const claimedAt = new Date();
-  const claimed = await claimSkillTemplateScan(id, claimedAt, ['draft']);
+  // Pins the image checked above so a concurrent image change makes the claim fail.
+  const imageGuard = doc.previewImage
+    ? { 'previewImage.fabFileId': doc.previewImage.fabFileId, 'previewImage.approved': true }
+    : { previewImage: { $exists: false } };
+  const claimed = await claimSkillTemplateScan(id, claimedAt, ['draft'], {}, imageGuard);
   if (!claimed) throw new ConflictError('The template changed while publishing. Reload and try again.');
   return runTemplateScan(listing, plainTemplate(claimed), claimedAt, deps);
 }

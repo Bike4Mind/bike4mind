@@ -170,8 +170,11 @@ describe('upload', () => {
     await makeTemplate(listingId);
     rows.files.set('up-1', file());
 
-    deps.readFile.mockRejectedValueOnce(new Error('NoSuchKey'));
+    deps.readFile.mockRejectedValueOnce(Object.assign(new Error('gone'), { name: 'NoSuchKey' }));
     expect((await failure(setOwnTemplateImageFromUpload(AUTHOR, listingId, 'up-1', deps))).status).toBe(409);
+
+    deps.readFile.mockRejectedValueOnce(new Error('AccessDenied'));
+    await expect(setOwnTemplateImageFromUpload(AUTHOR, listingId, 'up-1', deps)).rejects.toThrow('AccessDenied');
 
     deps.normalize.mockRejectedValueOnce(new ImageDecodeError('bad'));
     expect(await failure(setOwnTemplateImageFromUpload(AUTHOR, listingId, 'up-1', deps))).toEqual({
@@ -276,7 +279,7 @@ describe('approve, remove and publish', () => {
 
   it('refuses to approve a missing image or a deleted file', async () => {
     const listingId = await makeListing();
-    await makeTemplate(listingId);
+    await makeTemplate(listingId, { slug: 'no-image' });
     expect((await failure(approveOwnTemplateImage(AUTHOR, listingId))).message).toBe('Add a preview image first');
 
     const withFile = await withImage();

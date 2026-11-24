@@ -108,7 +108,25 @@ const TemplateEditor: FC<{ listingId: string }> = ({ listingId }) => {
   const freeRun = useSetSkillTemplateFreeRun(listingId);
   const [form, setForm] = useState<TemplateForm | null>(null);
   const [regenerateOpen, setRegenerateOpen] = useState(false);
-  const draftRequested = useRef(false);
+  const draftRequested = useRef<string | null>(null);
+  const currentListingId = useRef(listingId);
+  const alive = useRef(true);
+  // Bumped on every edit of the working copy, so a server response can tell whether it is still current.
+  const revision = useRef(0);
+
+  useEffect(() => {
+    alive.current = true;
+    return () => {
+      alive.current = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    currentListingId.current = listingId;
+    draftRequested.current = null;
+    revision.current += 1;
+    setForm(null);
+  }, [listingId]);
 
   // Seed the form once: from the saved template, or from a draft that is only stored on Save.
   useEffect(() => {
@@ -117,16 +135,20 @@ const TemplateEditor: FC<{ listingId: string }> = ({ listingId }) => {
       setForm(formFromTemplate(view.template));
       return;
     }
-    if (!view.listing.live || draftRequested.current) return;
-    draftRequested.current = true;
+    if (!view.listing.live || draftRequested.current === listingId) return;
+    draftRequested.current = listingId;
     const slug = view.suggestedSlug ?? '';
+    const isCurrent = () => alive.current && currentListingId.current === listingId;
     requestDraft()
-      .then(({ draft, generatedFromVersionId }) => setForm(formFromDraft(slug, draft, generatedFromVersionId)))
+      .then(({ draft, generatedFromVersionId }) => {
+        if (isCurrent()) setForm(formFromDraft(slug, draft, generatedFromVersionId));
+      })
       .catch(e => {
+        if (!isCurrent()) return;
         toast.error(getErrorMessage(e));
         setForm(formFromDraft(slug, EMPTY_DRAFT, view.currentApprovedVersionId));
       });
-  }, [view, form, requestDraft]);
+  }, [view, form, requestDraft, listingId]);
 
   const back = (
     <Button
@@ -167,19 +189,25 @@ const TemplateEditor: FC<{ listingId: string }> = ({ listingId }) => {
   const blocker = publishBlocker(view, template, dirty);
   const status = template ? STATUS_CHIP[template.status] : null;
 
-  const update = (patch: Partial<TemplateForm>) => setForm(current => (current ? { ...current, ...patch } : current));
-  const updateInput = (index: number, patch: Partial<TemplateForm['inputs'][number]>) =>
+  const update = (patch: Partial<TemplateForm>) => {
+    revision.current += 1;
+    setForm(current => (current ? { ...current, ...patch } : current));
+  };
+  const updateInput = (index: number, patch: Partial<TemplateForm['inputs'][number]>) => {
+    revision.current += 1;
     setForm(current =>
       current
         ? { ...current, inputs: current.inputs.map((input, i) => (i === index ? { ...input, ...patch } : input)) }
         : current
     );
+  };
 
   const doSave = async () => {
     if (!form) return;
+    const submittedRevision = revision.current;
     try {
       const saved = await save.mutateAsync(formToUpdate(form, slugFrozen));
-      setForm(formFromTemplate(saved));
+      if (alive.current && revision.current === submittedRevision) setForm(formFromTemplate(saved));
       // Saving new copy on a published page re-runs the scan; a miss takes the page down to a draft.
       if (template?.status === 'published' && saved.status !== 'published') {
         toast.error('The new copy did not pass the scan, so the page is a draft again');
@@ -203,8 +231,14 @@ const TemplateEditor: FC<{ listingId: string }> = ({ listingId }) => {
 
   const regenerate = async () => {
     setRegenerateOpen(false);
+    const startedRevision = revision.current;
     try {
       const { draft, generatedFromVersionId } = await requestDraft();
+      if (!alive.current || currentListingId.current !== listingId) return;
+      if (revision.current !== startedRevision) {
+        toast.error('You edited the copy while it was drafting, so the new draft was discarded');
+        return;
+      }
       setForm(current => formFromDraft(current?.slug ?? template?.slug ?? '', draft, generatedFromVersionId));
       toast.success('New copy drafted. Save to keep it.');
     } catch (e) {
