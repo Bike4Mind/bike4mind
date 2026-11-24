@@ -684,6 +684,8 @@ export const SettingKeySchema = z.enum([
   'SkillTemplateFreeRunGlobalDailyCap',
   'SkillTemplateFreeRunInputMaxChars',
   'SkillTemplateFreeRunOutputMaxTokens',
+  'SkillTemplateFreeRunFileMaxMb',
+  'SkillTemplateFreeRunFileMaxPages',
 
   // Slack Webhook URL settings
   'SlackDefaultWebhookUrl',
@@ -4211,6 +4213,24 @@ export const settingsMap = {
     min: 1,
     int: true,
     description: 'Most tokens a free run may generate; the answer stops there.',
+    category: 'AI Moderation',
+  }),
+  SkillTemplateFreeRunFileMaxMb: makeNumberSetting({
+    key: 'SkillTemplateFreeRunFileMaxMb',
+    name: 'Skill Template Free Run File Size Cap (MB)',
+    defaultValue: 5,
+    min: 0.1,
+    description:
+      'Largest file (PDF, image or plain text) a visitor may attach to a free run; larger files are refused. A hosted request body tops out near 6 MB, so files over 4 MB are refused whatever this says.',
+    category: 'AI Moderation',
+  }),
+  SkillTemplateFreeRunFileMaxPages: makeNumberSetting({
+    key: 'SkillTemplateFreeRunFileMaxPages',
+    name: 'Skill Template Free Run File Page Cap',
+    defaultValue: 10,
+    min: 1,
+    int: true,
+    description: 'Most pages a PDF attached to a free run may have; longer PDFs are refused.',
     category: 'AI Moderation',
   }),
   FormatPromptTemplate: makeStringSetting({

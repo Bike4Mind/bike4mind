@@ -13,6 +13,7 @@ import { approvedSnapshotOf } from '@server/skillMarket/template';
 import {
   buildFreeRunMessages,
   completeFreeRun,
+  freeRunAcceptsFiles,
   FreeRunTimeoutError,
   freeRunCookieHeader,
   hasUsedFreeRun,
@@ -21,6 +22,12 @@ import {
   renderFreeRunResult,
   reserveFreeRunCaps,
 } from '@server/skillMarket/templateFreeRun';
+import {
+  FILE_NOT_SUPPORTED,
+  FREE_RUN_BODY_MAX_BYTES,
+  freeRunFileMaxBytes,
+  readFreeRunFile,
+} from '@server/skillMarket/templateFreeRunFile';
 import { isPublicTemplatePage } from '@server/skillMarket/templateImage';
 import { findServableTemplate } from '@server/skillMarket/templatePage';
 import { getTurnstileFreeRunPolicy } from '@server/utils/auth/turnstile';
@@ -34,6 +41,9 @@ import { ipSubject } from '@server/utils/otcLimits';
  *
  * Every refusal the page acts on carries a `code`: `free_run_used` and `free_run_capped` swap the run
  * box for the sign-up prompt.
+ *
+ * The body may carry one attached file as `file: { name, type, data }` (base64). It is checked against
+ * the size and page caps and the model's file support before any cap is reserved, and is never stored.
  */
 
 type Refusal = { status: number; code: string; error: string };
@@ -72,7 +82,7 @@ const requireFreeRunTurnstile: RequestHandler = async (req, res, next) => {
   return next();
 };
 
-const handler = baseApi({ auth: false, allowedMethods: ['POST'] })
+const handler = baseApi({ auth: false, allowedMethods: ['POST'], maxBodySize: FREE_RUN_BODY_MAX_BYTES })
   .use(checkBlockedIP())
   .use(requireFreeRunTurnstile)
   .use(rateLimit({ bucket: 'skill-template-free-run', subject: ipSubject, limit: 10, windowMs: 60_000 }))
@@ -98,12 +108,30 @@ const handler = baseApi({ auth: false, allowedMethods: ['POST'] })
     if (hasUsedFreeRun(req.headers.cookie)) return refuse(req, res, USED);
 
     const text = typeof req.body?.text === 'string' ? req.body.text.trim() : '';
-    if (!text) return refuse(req, res, { status: 400, code: 'input_required', error: 'Paste some text to run.' });
     if (text.length > settings.inputMaxChars) {
       return refuse(req, res, {
         status: 400,
         code: 'input_too_long',
         error: `Keep it under ${settings.inputMaxChars.toLocaleString('en-US')} characters.`,
+      });
+    }
+
+    // Before reading the file, so a text-only model never parses a PDF it would refuse anyway.
+    const sentFile = req.body?.file != null || req.body?.files !== undefined;
+    if (sentFile && !(await freeRunAcceptsFiles(settings.model, req.logger))) {
+      return refuse(req, res, FILE_NOT_SUPPORTED);
+    }
+    const read = await readFreeRunFile(req.body, {
+      maxBytes: freeRunFileMaxBytes(settings.fileMaxMb),
+      maxPages: settings.fileMaxPages,
+    });
+    if (!read.ok) return refuse(req, res, read.refusal);
+    const file = read.file;
+    if (!text && !file) {
+      return refuse(req, res, {
+        status: 400,
+        code: 'input_required',
+        error: 'Paste some text or attach a file to run.',
       });
     }
 
@@ -119,11 +147,12 @@ const handler = baseApi({ auth: false, allowedMethods: ['POST'] })
 
     let answer: string;
     try {
-      const { system, user } = buildFreeRunMessages(snapshot, text);
+      const { system, user } = buildFreeRunMessages(snapshot, text, undefined, file);
       answer = await completeFreeRun({
         model: settings.model,
         system,
         user,
+        ...(file?.kind === 'image' ? { image: file.dataUrl } : {}),
         maxTokens: settings.outputMaxTokens,
         logger: req.logger,
       });
@@ -156,5 +185,7 @@ export default handler;
 export const config = {
   api: {
     externalResolver: true,
+    // Just above FREE_RUN_BODY_MAX_BYTES, which baseApi's maxBodySize enforces exactly.
+    bodyParser: { sizeLimit: '6mb' },
   },
 };

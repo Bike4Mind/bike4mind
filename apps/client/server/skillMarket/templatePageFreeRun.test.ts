@@ -28,8 +28,8 @@ const mermaid = { initialize: vi.fn(), render: vi.fn() };
 const loaded: string[] = [];
 let solve: (token: string) => void = () => undefined;
 
-function mountPage() {
-  const html = renderTemplatePage(view);
+function mountPage(pageView: TemplatePageView = view) {
+  const html = renderTemplatePage(pageView);
   const script = /<script>([\s\S]*?)<\/script>/.exec(html)![1];
   document.body.innerHTML = /<body>([\s\S]*)<\/body>/.exec(html)![1].replace(/<script>[\s\S]*?<\/script>/, '');
   // Stand-in for the external scripts: report them loaded at once.
@@ -76,6 +76,11 @@ afterEach(() => {
 });
 
 describe('template page free-run box', () => {
+  it('shows no file picker when the model takes no files', () => {
+    expect(byTestId('template-page-free-run-file-row')).toBeNull();
+    expect(byTestId('template-page-free-run-file')).toBeNull();
+  });
+
   it('renders the Turnstile widget with the run action and site key', () => {
     expect(loaded[0]).toContain('challenges.cloudflare.com/turnstile/v0/api.js');
     expect(turnstile.render).toHaveBeenCalledWith(
@@ -138,5 +143,87 @@ describe('template page free-run box', () => {
     expect(byTestId<HTMLButtonElement>('template-page-free-run-btn').disabled).toBe(false);
     expect(byTestId('template-page-free-run-status').textContent).toBe('The run could not finish.');
     expect(turnstile.reset).toHaveBeenCalledWith('widget-1');
+  });
+});
+
+describe('template page free-run file picker', () => {
+  const pick = (...files: File[]) => {
+    const input = byTestId<HTMLInputElement>('template-page-free-run-file');
+    Object.defineProperty(input, 'files', { value: files, configurable: true });
+    input.dispatchEvent(new Event('change'));
+    return input;
+  };
+
+  beforeEach(async () => {
+    loaded.length = 0;
+    mountPage({
+      ...view,
+      freeRun: { state: 'open', siteKey: 'site-key', inputMaxChars: 8000, file: { maxBytes: 1024 } },
+    });
+    await flush();
+  });
+
+  it('offers one PDF, image or text file with the size cap', () => {
+    const input = byTestId<HTMLInputElement>('template-page-free-run-file');
+    expect(input.type).toBe('file');
+    expect(input.multiple).toBe(false);
+    expect(input.accept).toContain('application/pdf');
+    expect(input.accept).toContain('image/png');
+    expect(input.accept).toContain('text/plain');
+    expect(byTestId('template-page-free-run-file-row').textContent).toContain('up to 1 KB');
+  });
+
+  it('sends the file with the run, with or without pasted text', async () => {
+    solve('tok');
+    respond(200, { html: '<p>done</p>', hasDiagram: false });
+    pick(new File(['hello file'], 'notes.txt', { type: 'text/plain' }));
+    await submit('');
+    await flush();
+    await flush();
+    expect(fetch).toHaveBeenCalledTimes(1);
+    const body = JSON.parse(String(vi.mocked(fetch).mock.calls[0][1]?.body));
+    expect(body).toEqual({
+      text: '',
+      turnstileToken: 'tok',
+      file: { name: 'notes.txt', type: 'text/plain', data: Buffer.from('hello file').toString('base64') },
+    });
+    expect(byTestId('template-page-free-run-result').hidden).toBe(false);
+  });
+
+  it('asks for text or a file when both are empty', async () => {
+    solve('tok');
+    await submit('');
+    expect(fetch).not.toHaveBeenCalled();
+    expect(byTestId('template-page-free-run-status').textContent).toBe('Paste some text or attach a file first.');
+  });
+
+  it('refuses a file over the cap without sending it', async () => {
+    solve('tok');
+    const input = pick(new File(['x'.repeat(2048)], 'big.txt', { type: 'text/plain' }));
+    expect(byTestId('template-page-free-run-status').textContent).toBe('Attach a file under 1 KB.');
+    expect(input.value).toBe('');
+    Object.defineProperty(input, 'files', { value: [], configurable: true });
+    await submit('');
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it('refuses a second file without sending either', async () => {
+    solve('tok');
+    pick(new File(['a'], 'a.txt', { type: 'text/plain' }), new File(['b'], 'b.txt', { type: 'text/plain' }));
+    expect(byTestId('template-page-free-run-status').textContent).toBe('Attach one file only.');
+    await submit('');
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it('shows the refusal the run route gives for a file', async () => {
+    solve('tok');
+    respond(400, { code: 'file_too_many_pages', error: 'Attach a PDF of 10 pages or fewer.' });
+    pick(new File(['%PDF-'], 'long.pdf', { type: 'application/pdf' }));
+    await submit('');
+    await flush();
+    await flush();
+    expect(byTestId('template-page-free-run-status').textContent).toBe('Attach a PDF of 10 pages or fewer.');
+    expect(byTestId('template-page-free-run-form').hidden).toBe(false);
+    expect(byTestId<HTMLButtonElement>('template-page-free-run-btn').disabled).toBe(false);
   });
 });
