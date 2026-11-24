@@ -55,7 +55,7 @@ const MIN_SUMMARY_BUDGET_MS = 120_000;
 const USAGE_LOOKUP_TIMEOUT_MS = 10_000;
 const USAGE_WRITE_TIMEOUT_MS = 20_000;
 
-type CheckRunBudget = (minimumRemainingMs?: number) => void;
+export type CheckRunBudget = (minimumRemainingMs?: number) => void;
 type SummaryUsage = CompletionUsage & Pick<CompletionInfo, 'cacheWrite1hInputTokens' | 'stopReason'>;
 type SummaryOwner = Pick<OrgFeedbackSummaryMessage, 'organizationId' | 'userId'>;
 
@@ -138,6 +138,7 @@ async function recordSummaryUsage({
   modelInfo,
   latencyMs,
   failed,
+  timedOut,
   logger,
 }: {
   requestId: string;
@@ -146,6 +147,7 @@ async function recordSummaryUsage({
   modelInfo: ModelInfo;
   latencyMs: number;
   failed: boolean;
+  timedOut: boolean;
   logger: Logger;
 }): Promise<void> {
   const turns = usage.turnUsage?.some(
@@ -222,6 +224,7 @@ async function recordSummaryUsage({
       cacheWriteTokens: cacheCreationInputTokens,
       costUsd,
       priceStamp: buildUsagePriceStamp(modelInfo, { turns, tierBasisTokens: promptTokens, cacheWrite1hTokens }),
+      operation: 'org_feedback_summary',
       finishReason: usage.stopReason,
       latencyMs,
     },
@@ -229,9 +232,23 @@ async function recordSummaryUsage({
       db: {
         adminSettings: adminSettingsRepository,
         usageEvents: {
+          // A completion that outlived the abort is a timed-out attempt: keep the provider's
+          // counts as COGS and leave the local-estimate token columns that feed quotas at zero.
           record: async event => {
             try {
-              return await store.usageEvents.record(event);
+              return await store.usageEvents.record(
+                timedOut
+                  ? {
+                      ...event,
+                      status: 'timeout',
+                      settledBasis: 'provider',
+                      inputTokens: 0,
+                      outputTokens: 0,
+                      providerInputTokens: event.inputTokens,
+                      ...(event.outputTokens ? { providerOutputTokens: event.outputTokens } : {}),
+                    }
+                  : event
+              );
             } catch {
               throw new Error('Organization feedback summary usage insert failed');
             }
@@ -329,6 +346,7 @@ Write 200-400 words covering:
       modelInfo,
       latencyMs: Math.round(performance.now() - startedAt),
       failed,
+      timedOut: controller.signal.aborted,
       logger,
     }).catch(() => logger.warn('Could not record organization feedback summary usage', { model: modelInfo.id }));
   }
