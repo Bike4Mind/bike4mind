@@ -85,12 +85,13 @@ export function refillMarker(refillAt: number | null, now: number): number | nul
 /**
  * Days until the balance reaches zero, spending `burnPerDay` and losing what expires unspent.
  *
- * Mirrors the daily sweep (apps/workers/src/cron/creditLotSweep.ts): spending draws the
- * soonest-expiring grant first, and a grant's unspent remainder leaves the balance when it
- * expires. Walked grant by grant rather than day by day - between two expiries the balance
- * only falls at the burn rate, so each grant is either spent before its expiry or cut off at
- * it, which is the day-by-day projection without the rounding. Credits no grant covers never
- * expire and are spent last. A schedule summing past the balance is trimmed to it.
+ * Mirrors the daily sweep (apps/workers/src/cron/creditLotSweep.ts): a grant's unspent
+ * remainder leaves the balance when it expires, and spending draws the credits no grant covers
+ * first (a grant only counts as spent once the balance falls below the grants' total), then the
+ * soonest-expiring grant. Walked grant by grant rather than day by day - between two expiries
+ * the balance only falls at the burn rate, so each grant is either spent before its expiry or
+ * cut off at it, which is the day-by-day projection without the rounding. A schedule summing
+ * past the balance is trimmed to it.
  */
 export function projectRunwayDays({
   balance,
@@ -106,11 +107,11 @@ export function projectRunwayDays({
   if (balance <= 0) return 0;
   if (burnPerDay <= 0) return Number.POSITIVE_INFINITY;
 
-  let left = balance;
-  let day = 0;
+  let left = Math.min(balance, expiring.reduce((sum, grant) => sum + Math.max(0, grant.amount), 0));
+  let day = (balance - left) / burnPerDay;
   for (const grant of [...expiring].sort((a, b) => a.expiresAt - b.expiresAt)) {
     const amount = Math.min(grant.amount, left);
-    if (amount <= 0) break;
+    if (amount <= 0) continue;
     const expiresInDays = Math.max(0, (grant.expiresAt - now) / DAY_MS);
     // Spent in full before it expires, or cut off at its expiry with the rest lost.
     day = Math.max(day, Math.min(day + amount / burnPerDay, expiresInDays));

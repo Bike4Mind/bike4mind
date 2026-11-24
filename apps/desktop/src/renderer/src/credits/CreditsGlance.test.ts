@@ -34,7 +34,7 @@ describe('creditsVerdict', () => {
   it('says short when a big grant expiring soon cuts the runway before the renewal', () => {
     const expiring = [{ amount: 1800, expiresAt: NOW + 3 * DAY_MS }];
     expect(creditsVerdict(outlook(2000, 100, 7, expiring))).toMatch(
-      /^Runs out about .+ at last week's pace, 2 days before the renewal on .+\.$/
+      /^Runs out about .+ at last week's pace, 4 days before the renewal on .+\.$/
     );
   });
 

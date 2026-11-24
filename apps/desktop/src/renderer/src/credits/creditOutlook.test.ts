@@ -145,9 +145,15 @@ describe('projectRunwayDays', () => {
   });
 
   it('loses only the part of a grant left unspent at its expiry', () => {
-    // 1000 expiring on day 4: 400 is spent by then, 600 is lost, then 500 of untracked credit lasts 5 more days.
+    // 500 no grant covers is spent first (days 0-5); the 1000 grant expiring on day 4 is untouched, so all of it is lost on day 4.
     const runway = projectRunwayDays({ balance: 1500, burnPerDay: 100, expiring: [expires(4, 1000)], now: NOW });
-    expect(runway).toBe(9);
+    expect(runway).toBe(5);
+  });
+
+  it('spends credits no grant covers before a grant that is still counted', () => {
+    // 200 uncovered lasts 2 days, then the 1000 grant is spent for 8 of the 10 days it has.
+    const runway = projectRunwayDays({ balance: 1200, burnPerDay: 100, expiring: [expires(10, 1000)], now: NOW });
+    expect(runway).toBe(10);
   });
 
   it('changes nothing when a grant is spent before it expires', () => {
@@ -188,7 +194,7 @@ describe('creditOutlook with an expiry schedule', () => {
       kind: 'covered',
       runwayDays: 20,
     });
-    // ...but 1800 of it expires on day 3, so after 300 spent and 1500 lost it is gone by day 5.
+    // ...but 1800 of it expires on day 3: the other 200 is spent first, then 100 of the grant, and the rest is lost.
     const outlook = creditOutlook({
       balance: 2000,
       burnPerDay: 100,
@@ -196,7 +202,7 @@ describe('creditOutlook with an expiry schedule', () => {
       expiring: [{ amount: 1800, expiresAt: NOW + 3 * DAY_MS }],
       now: NOW,
     });
-    expect(outlook).toMatchObject({ kind: 'short', tone: 'low', runwayDays: 5, daysShort: 2, expiryKnown: true });
+    expect(outlook).toMatchObject({ kind: 'short', tone: 'low', runwayDays: 3, daysShort: 4, expiryKnown: true });
   });
 
   it('marks a projection made without a schedule, so its claim stays capped', () => {

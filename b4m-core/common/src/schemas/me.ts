@@ -44,9 +44,9 @@ export const MeSubscriptionSchema = z.object({
 export type MeSubscription = z.infer<typeof MeSubscriptionSchema>;
 
 /**
- * Part of the personal balance that will expire unless spent first. Spending draws the
- * soonest-expiring grant first, so `amount` is what remains of that grant after everything
- * spent so far. Credits not covered by any entry do not expire.
+ * Part of the personal balance that will expire unless spent first. `amount` is what remains
+ * of that grant once the balance has fallen below the grants' total: credits no entry covers
+ * are spent first and do not expire.
  */
 export const MeCreditExpirySchema = z.object({
   amount: z.number().positive(),
