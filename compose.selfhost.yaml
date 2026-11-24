@@ -160,6 +160,16 @@ services:
     ports:
       - '127.0.0.1:${MAIL_UI_HOST_PORT:-8025}:8025'
 
+  # One-shot startup check for SECRET_ENCRYPTION_KEY(_PREVIOUS). Every service that reads the
+  # key waits for it, so a missing or malformed key stops the stack before anything starts.
+  # B4M_ALLOW_PLAINTEXT_SECRETS=true (evaluation only) lets a missing key through with a warning.
+  validate-secrets:
+    image: ${B4M_IMAGE:-ghcr.io/bike4mind/bike4mind-selfhost:latest}
+    env_file:
+      - .env.selfhost
+    command: ['node', 'selfhost/validate-secrets.cjs', '--allow-plaintext-opt-out']
+    restart: 'no'
+
   app:
     # Default: pull the CI-published multi-arch image (linux/amd64 + linux/arm64).
     # Override with B4M_IMAGE, or run `docker compose -f compose.selfhost.yaml build`
@@ -175,6 +185,8 @@ services:
       # split still reaches the management port.
       WEBSOCKET_MANAGEMENT_ENDPOINT: http://ws:3002
     depends_on:
+      validate-secrets:
+        condition: service_completed_successfully
       mongo:
         condition: service_healthy
       minio:
@@ -228,6 +240,8 @@ services:
       # split still reaches the management port.
       WEBSOCKET_MANAGEMENT_ENDPOINT: http://ws:3002
     depends_on:
+      validate-secrets:
+        condition: service_completed_successfully
       mongo:
         condition: service_healthy
       sqs:
@@ -265,6 +279,8 @@ services:
       - .env.selfhost
     # The image CMD runs the worker with the sst alias shim, so there is no command override here.
     depends_on:
+      validate-secrets:
+        condition: service_completed_successfully
       mongo:
         condition: service_healthy
       minio:
@@ -296,6 +312,8 @@ services:
       # split still reaches the management port.
       WEBSOCKET_MANAGEMENT_ENDPOINT: http://ws:3002
     depends_on:
+      validate-secrets:
+        condition: service_completed_successfully
       mongo:
         condition: service_healthy
       minio:
@@ -360,6 +378,8 @@ services:
         'src/selfhost/main.ts',
       ]
     depends_on:
+      validate-secrets:
+        condition: service_completed_successfully
       mongo:
         condition: service_healthy
       minio:
@@ -399,6 +419,8 @@ services:
     ports:
       - '${WS_HOST_PORT:-3001}:3001'
     depends_on:
+      validate-secrets:
+        condition: service_completed_successfully
       app:
         condition: service_started
     healthcheck:
@@ -435,6 +457,8 @@ services:
       # chain resolves from env immediately instead of waiting on an IMDS timeout.
       AWS_EC2_METADATA_DISABLED: 'true'
     depends_on:
+      validate-secrets:
+        condition: service_completed_successfully
       mongo:
         condition: service_healthy
       ws:
