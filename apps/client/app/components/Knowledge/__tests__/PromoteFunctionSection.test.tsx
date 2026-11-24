@@ -214,7 +214,7 @@ describe('PromoteFunctionSection', () => {
   it('edits and removes a saved example', () => {
     renderSection(tool({ examples: [EXAMPLE] }));
     expect(screen.getByTestId('python-function-example-citation-text').textContent).toBe(EXAMPLE.citation);
-    fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+    fireEvent.click(screen.getByTestId('python-function-example-edit-btn'));
     type('python-function-example-expected', '{"deflection": 6.5}');
     fireEvent.click(screen.getByTestId('python-function-example-save-btn'));
     expect(h.setExamples.mutate).toHaveBeenLastCalledWith(
@@ -223,6 +223,40 @@ describe('PromoteFunctionSection', () => {
     );
     fireEvent.click(screen.getByTestId('python-function-example-remove-btn'));
     expect(h.setExamples.mutate).toHaveBeenLastCalledWith({ id: 'fn-1', examples: [] }, expect.anything());
+  });
+
+  it('keeps an absolute tolerance the form does not show when an example is edited', () => {
+    const both = { ...EXAMPLE, tolerance: { abs: 0.001, rel: 1e-9 } };
+    renderSection(tool({ examples: [both] }));
+    fireEvent.click(screen.getByTestId('python-function-example-edit-btn'));
+    type('python-function-example-rel', '');
+    fireEvent.click(screen.getByTestId('python-function-example-save-btn'));
+    expect(h.setExamples.mutate).toHaveBeenLastCalledWith(
+      { id: 'fn-1', examples: [{ ...both, tolerance: { abs: 0.001 } }] },
+      expect.anything()
+    );
+  });
+
+  it('says how many cases have passed and which are left when the budget ran out, asking to promote again', () => {
+    h.promote.mutate.mockImplementation((_id: string, handlers: { onError: (error: unknown) => void }) =>
+      handlers.onError(
+        axiosError(409, {
+          error: '2 of 3 cases have passed on the server for this version. Promote again to run the other 1.',
+          code: 'cases_left',
+          passed: 2,
+          total: 3,
+          left: [{ kind: 'example', name: 'second case' }],
+        })
+      )
+    );
+    renderSection(tool());
+    fireEvent.click(screen.getByTestId('python-function-promote-btn'));
+    expect(screen.queryByTestId('python-function-promote-refusal')).toBeNull();
+    const left = screen.getByTestId('python-function-promote-cases-left');
+    expect(left.textContent).toContain('Not promoted yet');
+    expect(left.textContent).toContain('2 of 3 cases have passed on the server for this version.');
+    expect(left.textContent).toContain('Promote again to run the other 1.');
+    expect(left.textContent).toContain('Still to run: second case');
   });
 
   it("lists the server's problems with an example", () => {

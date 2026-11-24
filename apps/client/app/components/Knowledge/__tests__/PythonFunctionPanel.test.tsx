@@ -998,6 +998,21 @@ describe('PythonFunctionPanel save controls', () => {
       );
     });
 
+    it('for a promoted tool, names the promotion and updates anyway to a draft only when confirmed', async () => {
+      const promotedRefusal = refusal();
+      Object.assign(promotedRefusal.response.data, { promotedSeq: 2 });
+      await refuseUpdate(promotedRefusal);
+
+      const dialog = await screen.findByTestId('breaking-change-dialog');
+      expect(within(dialog).getByTestId('breaking-change-dialog-promoted').textContent).toBe(
+        'Version 4 changes the contract of beam_midspan_deflection since promotion 2 in ways that could break its callers. Updating anyway returns the tool to a draft, and promotion will refuse this version.'
+      );
+      expect(fns.repin.mutate).toHaveBeenCalledTimes(1);
+      fireEvent.click(within(dialog).getByTestId('breaking-change-dialog-accept-btn'));
+      expect(fns.repin.mutate).toHaveBeenCalledTimes(2);
+      expect(fns.repin.mutate.mock.calls[1]![0]).toMatchObject({ expectedVersion: 4, acceptBreaking: true });
+    });
+
     it('any other refusal stays a toast', async () => {
       await refuseUpdate(axiosError(409, 'The artifact changed since you opened it. Reload it and try again.'));
 

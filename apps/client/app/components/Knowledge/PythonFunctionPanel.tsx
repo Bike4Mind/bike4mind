@@ -41,6 +41,7 @@ import {
 import { toast } from 'sonner';
 import {
   callableFunctionBreakingChanges,
+  callableFunctionBreakingSincePromotion,
   callableFunctionContractUnreadable,
   callableFunctionErrorMessage,
   useArtifactCallableFunction,
@@ -864,6 +865,7 @@ interface Refusal {
   version: number;
   changes: FunctionContractChange[];
   unreadable: boolean;
+  promotedSeq: number | null;
 }
 
 /**
@@ -965,7 +967,12 @@ function FunctionSaveSection({ save, contract }: { save: PythonFunctionSave; con
                       const changes = callableFunctionBreakingChanges(error);
                       const unreadable = callableFunctionContractUnreadable(error);
                       if (changes.length > 0 || unreadable) {
-                        setRefused({ version: target.version, changes, unreadable });
+                        setRefused({
+                          version: target.version,
+                          changes,
+                          unreadable,
+                          promotedSeq: callableFunctionBreakingSincePromotion(error),
+                        });
                       } else failureToast('Could not update the tool.')(error);
                     },
                   }
@@ -1073,6 +1080,20 @@ function FunctionSaveSection({ save, contract }: { save: PythonFunctionSave; con
           version={refused.version}
           changes={refused.changes}
           unreadable={refused.unreadable}
+          promotedSeq={refused.promotedSeq}
+          accepting={repin.isPending}
+          onAccept={() =>
+            repin.mutate(
+              { id: saved.id, expectedVersion: refused.version, contract, acceptBreaking: true },
+              {
+                onSuccess: () => {
+                  setRefused(null);
+                  setFocusWhen('repinned');
+                },
+                onError: failureToast('Could not update the tool.'),
+              }
+            )
+          }
         />
       )}
     </>

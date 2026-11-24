@@ -26,6 +26,10 @@ interface BreakingChangeDialogProps {
   changes: FunctionContractChange[];
   /** The saved contract no longer parses, so the two could not be compared and `changes` is empty. */
   unreadable?: boolean;
+  /** Set when the changes break the promoted contract: the update can then be confirmed, returning it to draft. */
+  promotedSeq?: number | null;
+  onAccept?: () => void;
+  accepting?: boolean;
 }
 
 const ChangeLine = ({ change }: { change: FunctionContractChange }) => {
@@ -39,7 +43,7 @@ const ChangeLine = ({ change }: { change: FunctionContractChange }) => {
 
 /**
  * Explains a refused Update: what in the new contract could break the tool's callers, and how to keep the tool and
- * save the new version beside it. There is no override.
+ * save the new version beside it. Only a promoted tool's update can be confirmed anyway.
  */
 const BreakingChangeDialog: React.FC<BreakingChangeDialogProps> = ({
   onClose,
@@ -48,6 +52,9 @@ const BreakingChangeDialog: React.FC<BreakingChangeDialogProps> = ({
   version,
   changes,
   unreadable = false,
+  promotedSeq = null,
+  onAccept,
+  accepting = false,
 }) => (
   <Modal open onClose={onClose}>
     <ModalDialog size="lg" data-testid="breaking-change-dialog" sx={{ width: '90%', maxWidth: 600 }}>
@@ -61,10 +68,18 @@ const BreakingChangeDialog: React.FC<BreakingChangeDialogProps> = ({
             </Typography>
           ) : (
             <>
-              <Typography level="body-sm">
-                Version {version} changes the contract of <code>{slug}</code> in ways that could break its callers, so
-                the tool stays pinned to version {pinnedVersion}.
-              </Typography>
+              {promotedSeq !== null ? (
+                <Typography level="body-sm" data-testid="breaking-change-dialog-promoted">
+                  Version {version} changes the contract of <code>{slug}</code> since promotion {promotedSeq} in ways
+                  that could break its callers. Updating anyway returns the tool to a draft, and promotion will refuse
+                  this version.
+                </Typography>
+              ) : (
+                <Typography level="body-sm">
+                  Version {version} changes the contract of <code>{slug}</code> in ways that could break its callers, so
+                  the tool stays pinned to version {pinnedVersion}.
+                </Typography>
+              )}
               <Box component="ul" sx={{ my: 0, pl: 3 }} data-testid="breaking-change-dialog-changes">
                 {changes.map(change => (
                   <ChangeLine
@@ -86,6 +101,17 @@ const BreakingChangeDialog: React.FC<BreakingChangeDialogProps> = ({
         <Button variant="solid" color="primary" onClick={onClose} data-testid="breaking-change-dialog-close-btn">
           Close
         </Button>
+        {promotedSeq !== null && !unreadable && onAccept && (
+          <Button
+            variant="plain"
+            color="danger"
+            loading={accepting}
+            onClick={onAccept}
+            data-testid="breaking-change-dialog-accept-btn"
+          >
+            Update anyway
+          </Button>
+        )}
       </DialogActions>
     </ModalDialog>
   </Modal>

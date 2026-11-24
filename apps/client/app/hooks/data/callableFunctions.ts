@@ -47,6 +47,17 @@ export {
   mcpConnectionErrorCode as callableFunctionErrorCode,
 } from './mcpConnections';
 
+/** The cases a 409 `cases_left` names as not yet passed on this version; empty for any other error. */
+export function callableFunctionCasesLeft(error: unknown): { kind: 'test' | 'example'; name: string }[] {
+  if (!isAxiosError(error)) return [];
+  const data = error.response?.data as { code?: unknown; left?: unknown } | undefined;
+  if (data?.code !== 'cases_left' || !Array.isArray(data.left)) return [];
+  return data.left.filter(
+    (entry): entry is { kind: 'test' | 'example'; name: string } =>
+      (entry?.kind === 'test' || entry?.kind === 'example') && typeof entry?.name === 'string'
+  );
+}
+
 /** The problems a 400 `invalid_contract` lists; empty for any other error. */
 export function callableFunctionErrorProblems(error: unknown): FunctionContractProblem[] {
   if (!isAxiosError(error)) return [];
@@ -82,6 +93,13 @@ export function callableFunctionBreakingChanges(error: unknown): FunctionContrac
       typeof change?.kind === 'string' &&
       CHANGE_SIDES.includes(change?.side)
   );
+}
+
+/** The promotion a 409 `breaking_change` measured against; null when the tool was never promoted. */
+export function callableFunctionBreakingSincePromotion(error: unknown): number | null {
+  if (!isAxiosError(error)) return null;
+  const data = error.response?.data as { code?: unknown; promotedSeq?: unknown } | undefined;
+  return data?.code === 'breaking_change' && typeof data.promotedSeq === 'number' ? data.promotedSeq : null;
 }
 
 /** Whether a 409 `contract_unreadable` refused an update: the stored contract no longer parses. */
@@ -141,11 +159,17 @@ export const useCreateCallableFunction = () => {
 export const useRepinCallableFunction = () => {
   const invalidate = useInvalidateCallableFunctions();
   return useMutation({
-    mutationFn: async ({ id, expectedVersion, contract }: CallableFunctionPinInput & { id: string }) =>
+    mutationFn: async ({
+      id,
+      expectedVersion,
+      contract,
+      acceptBreaking,
+    }: CallableFunctionPinInput & { id: string; acceptBreaking?: true }) =>
       (
         await api.post<ICallableFunctionPublic>(`${COLLECTION}/${encodeURIComponent(id)}/pin`, {
           expectedVersion,
           contract,
+          ...(acceptBreaking ? { acceptBreaking } : {}),
         })
       ).data,
     onSettled: invalidate,

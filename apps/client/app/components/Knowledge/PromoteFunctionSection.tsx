@@ -8,6 +8,7 @@ import type {
   ICallableFunctionPublic,
 } from '@bike4mind/common';
 import {
+  callableFunctionCasesLeft,
   callableFunctionErrorMessage,
   callableFunctionErrorProblems,
   useCallableFunctionCalls,
@@ -39,6 +40,8 @@ interface Draft {
   input: string;
   expected: string;
   rel: string;
+  /** The form edits only `rel`; an absolute tolerance from an earlier save goes back unchanged. */
+  abs?: number;
   citation: string;
 }
 
@@ -55,6 +58,7 @@ const toDraft = (example: CallableFunctionExample): Draft => ({
   input: json(example.input),
   expected: json(example.expected),
   rel: example.tolerance?.rel !== undefined ? String(example.tolerance.rel) : '',
+  ...(example.tolerance?.abs !== undefined ? { abs: example.tolerance.abs } : {}),
   citation: example.citation,
 });
 
@@ -80,11 +84,15 @@ function fromDraft(draft: Draft): CallableFunctionExample | string {
     return 'Relative tolerance must be a number of 0 or more.';
   }
   if (!draft.citation.trim()) return 'Cite a source a reader can check the expected output against.';
+  const tolerance = {
+    ...(draft.abs !== undefined ? { abs: draft.abs } : {}),
+    ...(rel !== undefined ? { rel } : {}),
+  };
   return {
     name: draft.name.trim(),
     input,
     expected,
-    ...(rel !== undefined ? { tolerance: { rel } } : {}),
+    ...(Object.keys(tolerance).length > 0 ? { tolerance } : {}),
     citation: draft.citation.trim(),
   };
 }
@@ -235,6 +243,7 @@ function ExamplesBlock({ tool, contract }: { tool: ICallableFunctionPublic; cont
                       variant="plain"
                       disabled={setExamples.isPending}
                       onClick={() => setEditing(index)}
+                      data-testid="python-function-example-edit-btn"
                     >
                       Edit
                     </Button>
@@ -356,9 +365,9 @@ export default function PromoteFunctionSection({
   blocked: string | null;
 }) {
   const promote = usePromoteCallableFunction();
-  const [refusal, setRefusal] = useState<{ key: string; message: string } | null>(null);
+  const [refusal, setRefusal] = useState<{ key: string; message: string; left: string[] } | null>(null);
   const key = `${tool.id}:${tool.pin.version}`;
-  const shownRefusal = refusal && refusal.key === key ? refusal.message : null;
+  const shownRefusal = refusal && refusal.key === key ? refusal : null;
   const live = tool.state === 'live' && tool.trustLabel !== null;
 
   return (
@@ -394,7 +403,11 @@ export default function PromoteFunctionSection({
               promote.mutate(tool.id, {
                 onSuccess: () => setRefusal(null),
                 onError: error =>
-                  setRefusal({ key, message: callableFunctionErrorMessage(error, 'The tool could not be promoted.') }),
+                  setRefusal({
+                    key,
+                    message: callableFunctionErrorMessage(error, 'The tool could not be promoted.'),
+                    left: callableFunctionCasesLeft(error).map(entry => entry.name),
+                  }),
               })
             }
           >
@@ -406,13 +419,22 @@ export default function PromoteFunctionSection({
             {blocked}
           </Typography>
         )}
-        {shownRefusal && (
+        {shownRefusal && shownRefusal.left.length > 0 && (
+          <Alert color="warning" variant="soft" data-testid="python-function-promote-cases-left">
+            <Stack spacing={0.5}>
+              <Typography level="title-sm">Not promoted yet</Typography>
+              <Typography level="body-sm">{shownRefusal.message}</Typography>
+              <Typography level="body-xs">Still to run: {shownRefusal.left.join(', ')}</Typography>
+            </Stack>
+          </Alert>
+        )}
+        {shownRefusal && shownRefusal.left.length === 0 && (
           <Alert color="danger" variant="soft" sx={dangerAlertSx} data-testid="python-function-promote-refusal">
             <Stack spacing={0.5}>
               <Typography level="title-sm" color="danger">
                 Not promoted
               </Typography>
-              <Typography level="body-sm">{shownRefusal}</Typography>
+              <Typography level="body-sm">{shownRefusal.message}</Typography>
             </Stack>
           </Alert>
         )}
