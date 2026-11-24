@@ -34,7 +34,7 @@ export function coalesceLiveEvents(events: readonly LiveReplyEvent[]): LiveReply
   for (const event of events) {
     const last = merged[merged.length - 1];
     if (event.type === 'delta' && last?.type === 'delta' && last.messageId === event.messageId) {
-      merged[merged.length - 1] = { ...last, text: last.text + event.text };
+      merged[merged.length - 1] = { ...last, text: last.text + event.text, seq: event.seq ?? last.seq };
     } else {
       merged.push(event);
     }
