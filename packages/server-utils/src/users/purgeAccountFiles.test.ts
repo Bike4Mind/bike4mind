@@ -270,26 +270,27 @@ describe('purgeAccountFiles', () => {
     await purgeAccountFiles('u1', options);
     expect(h.fileDelete).not.toHaveBeenCalled();
     expect(h.generatedDelete).not.toHaveBeenCalled();
-    expect(h.cdnAdd).not.toHaveBeenCalled();
     expect(h.hardDelete).toHaveBeenCalledWith('f1', 50, assertLease);
   });
 
-  it('queues the CDN paths of erased generated copies and app files, flushed once after deletion', async () => {
+  it('queues the CDN paths of erased app files only, flushed once after deletion', async () => {
     h.find.mockResolvedValueOnce([{ ...file, sourceMetadata: { generatedCopyKey: 'gen-1.png' } }]);
     h.appFind.mockResolvedValueOnce([{ _id: 'app', path: 'profile-photos/u1/avatar.png' }]);
     await purgeAccountFiles('u1', options);
     expect(h.generatedDelete).toHaveBeenCalledWith('gen-1.png');
-    expect(h.cdnAdd.mock.calls).toEqual([['/generated/gen-1.png'], ['/profile-photos/u1/avatar.png']]);
+    expect(h.cdnAdd.mock.calls).toEqual([['/profile-photos/u1/avatar.png']]);
     expect(h.cdnFlush).toHaveBeenCalledTimes(1);
     expect(h.appStorageDelete.mock.invocationCallOrder[0]).toBeLessThan(h.cdnFlush.mock.invocationCallOrder[0]);
   });
 
   it('still flushes the CDN paths already erased when a later step throws', async () => {
-    h.find.mockResolvedValueOnce([{ ...file, sourceMetadata: { generatedCopyKey: 'gen-1.png' } }]);
-    h.appFind.mockResolvedValueOnce([{ _id: 'app', path: 'photos/avatar' }]);
-    h.appStorageDelete.mockRejectedValue(new Error('app storage down'));
+    h.appFind.mockResolvedValueOnce([
+      { _id: 'app-1', path: 'profile-photos/u1/avatar.png' },
+      { _id: 'app-2', path: 'profile-photos/u1/second.png' },
+    ]);
+    h.appStorageDelete.mockResolvedValueOnce(undefined).mockRejectedValueOnce(new Error('app storage down'));
     await expect(purgeAccountFiles('u1', options)).rejects.toThrow('app storage down');
-    expect(h.cdnAdd).toHaveBeenCalledWith('/generated/gen-1.png');
+    expect(h.cdnAdd).toHaveBeenCalledWith('/profile-photos/u1/avatar.png');
     expect(h.cdnFlush).toHaveBeenCalledTimes(1);
   });
 
