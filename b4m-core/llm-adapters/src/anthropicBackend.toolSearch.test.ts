@@ -407,6 +407,7 @@ describe('AnthropicBackend tool search replay', () => {
     expect(getWeather.toolFn).toHaveBeenCalledTimes(2);
     // The search round's server blocks must not leak into the plain round's replay.
     expect((captured[2].messages as Array<{ content: unknown }>).at(-2)?.content).toEqual([
+      { type: 'text', text: 'Let me check.' },
       { type: 'tool_use', id: 'toolu_B', name: 'get_weather', input: { city: 'Oslo' } },
     ]);
   });
@@ -559,12 +560,10 @@ describe.each(THINKING_MODES)(
 
 describe('AnthropicBackend plain tool loop replay (thinking off, no server blocks)', () => {
   const toolUse = { type: 'tool_use', id: 'toolu_1', name: 'get_weather', input: { city: 'Oslo' } };
-  const expectedReplay = [
-    { role: 'assistant', content: [toolUse] },
-    { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'toolu_1', content: 'ok' }] },
-  ];
+  const toolResult = { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'toolu_1', content: 'ok' }] };
+  const expectedReplay = [{ role: 'assistant', content: [toolUse] }, toolResult];
 
-  it('replays a bare tool_use turn when streaming', async () => {
+  it('replays the streamed intro text with the tool_use turn when streaming', async () => {
     const turn = [
       messageStart,
       { type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } },
@@ -589,7 +588,10 @@ describe('AnthropicBackend plain tool loop replay (thinking off, no server block
       collect().cb
     );
 
-    expect((captured[1].messages as unknown[]).slice(-2)).toEqual(expectedReplay);
+    expect((captured[1].messages as unknown[]).slice(-2)).toEqual([
+      { role: 'assistant', content: [{ type: 'text', text: 'Let me check.' }, toolUse] },
+      toolResult,
+    ]);
   });
 
   it('replays a bare tool_use turn when not streaming', async () => {
