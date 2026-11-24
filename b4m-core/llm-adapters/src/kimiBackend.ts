@@ -327,19 +327,16 @@ export class KimiBackend implements ICompletionBackend {
 
     if (!(response instanceof Stream)) {
       if (retrySignal?.aborted) {
-        await reportUsageOnAbort(
-          retrySignal,
-          callback,
-          response.usage
-            ? {
-                ...splitCacheInclusiveInput(
-                  response.usage.prompt_tokens,
-                  cachedTokensFromUsage(response.usage as unknown as Record<string, unknown>)
-                ),
-                outputTokens: response.usage.completion_tokens,
-              }
-            : undefined
-        );
+        const usage = response.usage;
+        const turnUsage = usage
+          ? appendCacheInclusiveTurn(
+              undefined,
+              usage.prompt_tokens,
+              cachedTokensFromUsage(usage as unknown as Record<string, unknown>),
+              usage.completion_tokens
+            )
+          : undefined;
+        await reportUsageOnAbort(retrySignal, callback, turnUsage ? { ...turnUsage[0], turnUsage } : undefined);
       }
       const streamedText: string[] = [];
       // The empty guard keys on prose produced, not on streamedText: the monologue

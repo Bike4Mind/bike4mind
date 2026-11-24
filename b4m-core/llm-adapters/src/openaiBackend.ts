@@ -1351,7 +1351,13 @@ export class OpenAIBackend implements ICompletionBackend {
               signal: retrySignal,
               maxRetries: 0,
             }),
-          retrySignal
+          retrySignal,
+          {
+            onRetry: ({ error, delayMs }) => {
+              this.logger.warn('Retrying OpenAI completion', { model, delayMs });
+              options._internal?.turnTelemetry?.onRetry({ error, delayMs, model });
+            },
+          }
         )
       : await withRetry(
           () =>
@@ -1384,19 +1390,16 @@ export class OpenAIBackend implements ICompletionBackend {
 
     if (!(response instanceof Stream)) {
       if (retrySignal?.aborted) {
-        await reportUsageOnAbort(
-          retrySignal,
-          callback,
-          response.usage
-            ? {
-                ...splitCacheInclusiveInput(
-                  response.usage.prompt_tokens,
-                  cachedTokensFromUsage(response.usage as unknown as Record<string, unknown>)
-                ),
-                outputTokens: response.usage.completion_tokens,
-              }
-            : undefined
-        );
+        const usage = response.usage;
+        const turnUsage = usage
+          ? appendCacheInclusiveTurn(
+              undefined,
+              usage.prompt_tokens,
+              cachedTokensFromUsage(usage as unknown as Record<string, unknown>),
+              usage.completion_tokens
+            )
+          : undefined;
+        await reportUsageOnAbort(retrySignal, callback, turnUsage ? { ...turnUsage[0], turnUsage } : undefined);
       }
       if (evaluation) {
         const answered = response;

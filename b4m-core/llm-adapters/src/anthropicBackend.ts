@@ -2872,7 +2872,13 @@ export class AnthropicBackend implements ICompletionBackend {
                       maxRetries: 0,
                       ...(requestExtraHeaders ? { headers: requestExtraHeaders } : {}),
                     }),
-                  retrySignal
+                  retrySignal,
+                  {
+                    onRetry: ({ error, delayMs }) => {
+                      this.logger.warn('Retrying Anthropic completion', { model, delayMs });
+                      options._internal?.turnTelemetry?.onRetry({ error, delayMs, model });
+                    },
+                  }
                 )
               : await withRetry(
                   () =>

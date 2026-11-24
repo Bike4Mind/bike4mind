@@ -275,6 +275,7 @@ export class OllamaBackend implements ICompletionBackend {
 
   /** Per-model /api/show results, so the tool-call recursion shows once, not per round. */
   private readonly _modelDetails = new Map<string, Promise<OllamaModelDetails>>();
+  private readonly _successfulModelDetails = new Map<string, OllamaModelDetails>();
 
   private getModelDetailsCached(model: string): Promise<OllamaModelDetails> {
     let details = this._modelDetails.get(model);
@@ -310,7 +311,7 @@ export class OllamaBackend implements ICompletionBackend {
       // Newer Ollama reports the `think` values a template honors; the client library does not type it yet.
       const thinking = (info as { thinking?: { values?: unknown } }).thinking;
 
-      return {
+      const details = {
         capabilities,
         contextWindow,
         facts: {
@@ -322,6 +323,9 @@ export class OllamaBackend implements ICompletionBackend {
           ...(trainedContext !== undefined && { trainedContext }),
         },
       };
+      signal?.throwIfAborted();
+      this._successfulModelDetails.set(model, details);
+      return details;
     } catch (error) {
       signal?.throwIfAborted();
       this._logger.debug(`[OllamaBackend] Could not fetch details for ${model}:`, error);
@@ -390,7 +394,8 @@ export class OllamaBackend implements ICompletionBackend {
   ): Promise<Pick<ChatRequest, 'options' | 'keep_alive' | 'think'>> {
     const retrySignal = getAbortAwareRetrySignal(options);
     const details = retrySignal
-      ? await this.getModelDetails(model, this.createClient(retrySignal), retrySignal)
+      ? (this._successfulModelDetails.get(model) ??
+        (await this.getModelDetails(model, this.createClient(retrySignal), retrySignal)))
       : await this.getModelDetailsCached(model);
     retrySignal?.throwIfAborted();
     const settings = await this.requestSettings(model, details);

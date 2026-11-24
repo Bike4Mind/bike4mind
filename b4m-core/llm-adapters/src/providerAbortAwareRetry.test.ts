@@ -115,11 +115,22 @@ describe('completion SDKs with injected fake fetch', () => {
       );
     vi.stubGlobal('fetch', fetch);
     const callback = vi.fn();
-    const result = make().complete(model, messages, opts(new AbortController().signal), callback);
+    const onRetry = vi.fn();
+    const options = {
+      ...opts(new AbortController().signal),
+      _internal: { turnTelemetry: { onRetry, onSemaphoreWait: vi.fn() } },
+    };
+    const result = make().complete(model, messages, options, callback);
     const checked = expect(result).resolves.toBeUndefined();
-    await vi.advanceTimersByTimeAsync(499);
+    await vi.advanceTimersByTimeAsync(374);
     expect(fetch).toHaveBeenCalledOnce();
-    await vi.advanceTimersByTimeAsync(1);
+    if (name === 'OpenAI' || name === 'Anthropic') {
+      expect(onRetry).toHaveBeenCalledExactlyOnceWith({ error: expect.any(Error), delayMs: expect.any(Number), model });
+      const [{ delayMs }] = onRetry.mock.calls[0] as [{ delayMs: number }];
+      expect(delayMs).toBeGreaterThanOrEqual(375);
+      expect(delayMs).toBeLessThanOrEqual(625);
+    }
+    await vi.advanceTimersByTimeAsync(251);
     await checked;
     expect(fetch).toHaveBeenCalledTimes(2);
     expect(callback).toHaveBeenCalledExactlyOnceWith(
@@ -127,6 +138,32 @@ describe('completion SDKs with injected fake fetch', () => {
       expect.objectContaining({ inputTokens: 8, outputTokens: 2 })
     );
   });
+
+  it.each(sdkBackends.filter(({ name }) => ['OpenAI', 'DeepSeek', 'Kimi'].includes(name)))(
+    '$name reports the actual non-streaming provider turn if the reply arrives after abort',
+    async ({ make, model }) => {
+      const controller = new AbortController();
+      const deadline = new Error('deadline');
+      const fetch = vi.fn(async () => {
+        controller.abort(deadline);
+        return json({
+          id: 'response-1',
+          object: 'chat.completion',
+          created: 0,
+          model,
+          choices: [{ index: 0, message: { role: 'assistant', content: 'late answer' }, finish_reason: 'stop' }],
+          usage: { prompt_tokens: 803, completion_tokens: 11, prompt_tokens_details: { cached_tokens: 23 } },
+        });
+      });
+      vi.stubGlobal('fetch', fetch);
+      const callback = vi.fn();
+      await expect(make().complete(model, messages, opts(controller.signal), callback)).rejects.toBe(deadline);
+
+      const measured = { inputTokens: 780, cacheReadInputTokens: 23, outputTokens: 11 };
+      expect(fetch).toHaveBeenCalledOnce();
+      expect(callback).toHaveBeenCalledExactlyOnceWith([], { ...measured, turnUsage: [measured] });
+    }
+  );
 
   it.each(sdkBackends)('$name retains the legacy SDK retry configuration', ({ make, defaultRetries }) => {
     expect((make() as unknown as { _api: { maxRetries: number } })._api.maxRetries).toBe(defaultRetries);
@@ -441,6 +478,72 @@ describe('opt-in dispatch boundaries', () => {
     );
     expect(fetch).not.toHaveBeenCalled();
     expect(requestSettings).not.toHaveBeenCalled();
+  });
+
+  it('Ollama reuses resolved details from a listing for an abort-aware completion', async () => {
+    const fetch = vi.fn(async (input: RequestInfo | URL, _init?: RequestInit) => {
+      if (String(input).endsWith('/api/tags')) return json({ models: [{ name: 'local-test' }] });
+      if (String(input).endsWith('/api/show')) return json({ capabilities: ['completion'] });
+      return json({ message: { content: 'answer' }, prompt_eval_count: 2, eval_count: 1 });
+    });
+    const backend = new OllamaBackend('http://mock.invalid', logger(), { fetch });
+    await backend.getModelInfo();
+
+    const controller = new AbortController();
+    await backend.complete('local-test', messages, opts(controller.signal), vi.fn());
+    expect(fetch.mock.calls.map(([url]) => new URL(String(url)).pathname)).toEqual([
+      '/api/tags',
+      '/api/show',
+      '/api/chat',
+    ]);
+    expect(fetch.mock.calls.at(-1)?.[1]?.signal).toBe(controller.signal);
+  });
+
+  it('Ollama retries failed details on the first opted-in call and reuses the successful result', async () => {
+    const show = vi
+      .fn()
+      .mockResolvedValueOnce(json({ error: 'lookup failed' }, 500))
+      .mockResolvedValueOnce(json({ capabilities: ['completion'] }));
+    const fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input).endsWith('/api/tags')) return json({ models: [{ name: 'local-test' }] });
+      if (String(input).endsWith('/api/show')) return show(init?.signal);
+      return json({ message: { content: 'answer' }, prompt_eval_count: 2, eval_count: 1 });
+    });
+    const backend = new OllamaBackend('http://mock.invalid', logger(), { fetch });
+    await backend.getModelInfo();
+    expect(backend.toolSupportUnchecked('local-test')).toBe(true);
+
+    const controller = new AbortController();
+    await backend.complete('local-test', messages, opts(controller.signal), vi.fn());
+    await backend.complete('local-test', messages, opts(new AbortController().signal), vi.fn());
+    expect(show.mock.calls).toEqual([[undefined], [controller.signal]]);
+  });
+
+  it('Ollama uses an independent abortable lookup while a legacy lookup is pending', async () => {
+    const legacyLookup = Promise.withResolvers<Response>();
+    const legacyStarted = Promise.withResolvers<void>();
+    const show = vi.fn(async (signal?: AbortSignal | null) => {
+      if (signal) return json({ capabilities: ['completion'] });
+      legacyStarted.resolve();
+      return legacyLookup.promise;
+    });
+    const fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input).endsWith('/api/tags')) return json({ models: [{ name: 'local-test' }] });
+      if (String(input).endsWith('/api/show')) return show(init?.signal);
+      return json({ message: { content: 'answer' }, prompt_eval_count: 2, eval_count: 1 });
+    });
+    const backend = new OllamaBackend('http://mock.invalid', logger(), { fetch });
+    const listing = backend.getModelInfo();
+    await legacyStarted.promise;
+    const signal = new AbortController().signal;
+    const completing = backend.complete('local-test', messages, opts(signal), vi.fn());
+    try {
+      await vi.waitFor(() => expect(show.mock.calls).toEqual([[undefined], [signal]]));
+      await completing;
+    } finally {
+      legacyLookup.resolve(json({ capabilities: ['completion'] }));
+      await listing;
+    }
   });
 
   it('Ollama uses the same signal for model admission and completion and suppresses a late reply', async () => {
