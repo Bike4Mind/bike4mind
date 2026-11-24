@@ -38,6 +38,9 @@ process.env.NEXT_PUBLIC_INTERNAL_ORG_DISPLAY_NAMES ??= 'milliononmars.com:Millio
 
 // Mock window.matchMedia for MUI Joy UI components (only in browser/jsdom environments)
 if (typeof window !== 'undefined') {
+  // jsdom's own scrollTo only reports "Not implemented", straight to stderr and past `silent`.
+  window.scrollTo = () => {};
+
   Object.defineProperty(window, 'matchMedia', {
     writable: true,
     value: vi.fn().mockImplementation(query => ({
