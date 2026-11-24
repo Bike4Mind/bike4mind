@@ -1365,6 +1365,27 @@
               "null"
             ]
           },
+          "step_progress": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "properties": {
+              "completed": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "total": {
+                "type": "integer",
+                "exclusiveMinimum": 0
+              }
+            },
+            "required": [
+              "completed",
+              "total"
+            ],
+            "description": "Progress through a known number of steps, for a determinate progress display. `completed` and `total` count the same steps, which are not ReAct iterations, so do not pair `total` with `total_iterations`. The whole object is null when the executor cannot predict a total for this run, which is the common case: show indeterminate progress then. A run that has finished its last step can still be `running` while it writes its answer, so treat `status` as the source of truth for whether it is done."
+          },
           "created_at": {
             "type": "string"
           },
@@ -1380,6 +1401,7 @@
           "error",
           "steps",
           "total_iterations",
+          "step_progress",
           "created_at",
           "updated_at"
         ]

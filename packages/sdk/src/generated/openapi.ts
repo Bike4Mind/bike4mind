@@ -3308,6 +3308,11 @@ export interface components {
         tool_name?: string;
       }[];
       total_iterations: number | null;
+      /** @description Progress through a known number of steps, for a determinate progress display. `completed` and `total` count the same steps, which are not ReAct iterations, so do not pair `total` with `total_iterations`. The whole object is null when the executor cannot predict a total for this run, which is the common case: show indeterminate progress then. A run that has finished its last step can still be `running` while it writes its answer, so treat `status` as the source of truth for whether it is done. */
+      step_progress: {
+        completed: number;
+        total: number;
+      } | null;
       created_at: string;
       updated_at: string;
     };
