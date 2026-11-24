@@ -3,7 +3,8 @@ import type { ChatSessionSummary } from '@shared/chat';
 
 /**
  * The Studio session Create saves into: the remembered one while it is still open, else the most
- * recent. Null when there is none, which is the cue to start one. `sessions` is newest first, the
+ * recent. An archived session is never picked, even by an explicit select: Create starts a fresh
+ * one instead. Null when there is none, which is the cue to start one. `sessions` is newest first, the
  * order main lists them in.
  */
 export function pickStudioSession(sessions: readonly ChatSessionSummary[], remembered: string | null): string | null {
@@ -20,7 +21,7 @@ export const STUDIO_START_FAILED =
  *
  * One attempt per visit: a failed start (no account signed in, say) is reported and not retried
  * until the user leaves Studio and comes back, so a broken backend never turns into a loop of
- * create calls.
+ * create calls. A start still in flight when the user returns is awaited, never doubled.
  */
 export function useStudioSession(input: {
   /** The Studio place is showing. */
@@ -39,12 +40,16 @@ export function useStudioSession(input: {
   const { active, loading, sessions, remembered, create } = input;
   const [chosen, setChosen] = useState<string | null>(remembered);
   const [error, setError] = useState<string | null>(null);
+  const [retry, setRetry] = useState(0);
   const attempted = useRef(false);
+  const pending = useRef(false);
+  const visit = useRef(0);
   const picked = pickStudioSession(sessions, chosen);
 
   useEffect(() => {
     if (!active) {
       attempted.current = false;
+      visit.current += 1;
       setError(null);
       return;
     }
@@ -53,14 +58,24 @@ export function useStudioSession(input: {
       if (picked !== chosen) setChosen(picked);
       return;
     }
-    if (attempted.current) return;
+    if (attempted.current || pending.current) return;
     attempted.current = true;
+    pending.current = true;
+    const startedIn = visit.current;
     // main's own message arrives wrapped in Electron's IPC prefix, so the user gets a plain one.
-    create().then(
-      id => setChosen(id),
-      () => setError(STUDIO_START_FAILED)
-    );
-  }, [active, loading, picked, chosen, create]);
+    create()
+      .then(
+        id => setChosen(id),
+        () => {
+          // A failure from a visit the user has since left says nothing about this one: try again.
+          if (visit.current === startedIn) setError(STUDIO_START_FAILED);
+        }
+      )
+      .finally(() => {
+        pending.current = false;
+        setRetry(count => count + 1);
+      });
+  }, [active, loading, picked, chosen, create, retry]);
 
-  return { sessionId: picked, error, select: setChosen };
+  return { sessionId: picked, error: picked ? null : error, select: setChosen };
 }
