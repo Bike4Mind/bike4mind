@@ -1,4 +1,4 @@
-import React, { FormEvent, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import React, { FormEvent, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import {
   Box,
   Button,
@@ -131,8 +131,7 @@ export const CreateInviteModal: React.FC<CreateInviteModalProps> = ({ onSubmit, 
     onSubmit(payload);
   };
 
-  const handleClose = () => {
-    setOpenCreate(false);
+  const resetForm = () => {
     clearErrors();
     setUnlimitedUse(false);
     setGrantPackageId(null);
@@ -143,6 +142,14 @@ export const CreateInviteModal: React.FC<CreateInviteModalProps> = ({ onSubmit, 
     setTagInput('');
     setShowTagDropdown(false);
   };
+
+  // The parent closes the dialog through the store after a successful create, so reset on any close.
+  useEffect(() => {
+    if (!openCreate) resetForm();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [openCreate]);
+
+  const handleClose = () => setOpenCreate(false);
 
   return (
     <AdminDialog
