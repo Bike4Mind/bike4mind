@@ -69,12 +69,15 @@ import {
   listProjectsContract,
   listAgentsContract,
   listDataLakesContract,
+  listFunctionsContract,
 } from '@bike4mind/common';
 import {
   EXPLICIT_ONLY_API_KEY_SCOPES,
+  findApiKeyScopeOption,
   type ApiKeyScopeOption,
 } from '@bike4mind/server-utils/app/constants/apiKeyScopes';
 import { useGenericApiKeyScopes } from '@client/app/hooks/useGenericApiKeyScopes';
+import { useCallableFunctionsEnabled } from '@client/app/hooks/data/callableFunctions';
 import { isRevoked, revocationTooltip } from '@client/app/utils/apiKeyRevocation';
 import { ExternalLinks } from '@client/app/utils/externalLinks';
 import ConfirmationModal from '@client/app/components/common/ConfirmationModal';
@@ -200,6 +203,12 @@ const PRESETS: { id: PresetId; label: string; description: string }[] = [
 const sameScopeSet = (a: ApiKeyScopeValue[], b: ApiKeyScopeValue[]) =>
   a.length === b.length && a.every(x => b.includes(x));
 
+// Confined, so it is an access level of its own: a functions key carries no other scope.
+const FUNCTIONS_SCOPE_OPTION = findApiKeyScopeOption(ApiKeyScope.FUNCTIONS_INVOKE);
+
+const isFunctionsOnly = (scopes: ApiKeyScopeValue[]) =>
+  scopes.length === 1 && scopes[0] === ApiKeyScope.FUNCTIONS_INVOKE;
+
 interface NewKeyModalProps {
   open: boolean;
   onClose: () => void;
@@ -228,6 +237,7 @@ function NewKeyModal({ open, onClose, onSuccess }: NewKeyModalProps) {
     const previousModel = seededModel;
     setSeededModel(scopeModel);
     setFormData(fd => {
+      if (isFunctionsOnly(fd.scopes)) return fd;
       const presetId = PRESETS.find(p => sameScopeSet(fd.scopes, previousModel.presetScopes[p.id]))?.id;
       const scopes = presetId
         ? [...scopeModel.presetScopes[presetId]]
@@ -268,10 +278,13 @@ function NewKeyModal({ open, onClose, onSuccess }: NewKeyModalProps) {
     createMutation.mutate(submitData);
   };
 
+  const functionsOffered = useCallableFunctionsEnabled() && FUNCTIONS_SCOPE_OPTION !== undefined;
+  const functionsOnly = isFunctionsOnly(formData.scopes);
   const activePreset = PRESETS.find(p => sameScopeSet(formData.scopes, scopeModel.presetScopes[p.id]))?.id;
-  const isCustom = !activePreset;
+  const isCustom = !activePreset && !functionsOnly;
 
   const applyPreset = (id: PresetId) => setFormData(fd => ({ ...fd, scopes: [...scopeModel.presetScopes[id]] }));
+  const applyFunctions = () => setFormData(fd => ({ ...fd, scopes: [ApiKeyScope.FUNCTIONS_INVOKE] }));
 
   const toggleScope = (value: ApiKeyScopeValue) =>
     setFormData(fd => ({
@@ -284,7 +297,8 @@ function NewKeyModal({ open, onClose, onSuccess }: NewKeyModalProps) {
   const blockedByGate =
     eligibility?.canCreate === false && (!formData.organizationId || refusedOrgIds.includes(formData.organizationId));
   const someOrgAdmitted = (billingOrgs ?? []).some(org => !refusedOrgIds.includes(org.id));
-  const canSubmit = !!formData.name.trim() && formData.scopes.length > 0 && !blockedByGate;
+  const canSubmit =
+    !!formData.name.trim() && formData.scopes.length > 0 && !blockedByGate && (!functionsOnly || functionsOffered);
 
   return (
     <Modal open={open} onClose={onClose} className="project-api-keys-modal">
@@ -374,6 +388,21 @@ function NewKeyModal({ open, onClose, onSuccess }: NewKeyModalProps) {
                   </Tooltip>
                 );
               })}
+              {functionsOffered && (
+                <Tooltip title={FUNCTIONS_SCOPE_OPTION?.description} variant="soft" size="sm">
+                  <Chip
+                    variant={functionsOnly ? 'solid' : 'outlined'}
+                    color={functionsOnly ? 'primary' : 'neutral'}
+                    startDecorator={functionsOnly ? <CheckIcon sx={{ fontSize: 14 }} /> : undefined}
+                    onClick={applyFunctions}
+                    slotProps={{ action: { 'aria-pressed': functionsOnly } }}
+                    data-testid="api-key-preset-functions"
+                    sx={{ '--Chip-radius': '8px', py: 0.5, px: 1.25 }}
+                  >
+                    {FUNCTIONS_SCOPE_OPTION?.label}
+                  </Chip>
+                </Tooltip>
+              )}
               {isCustom && (
                 <Chip variant="solid" color="warning" sx={{ '--Chip-radius': '8px' }}>
                   Custom
@@ -382,60 +411,73 @@ function NewKeyModal({ open, onClose, onSuccess }: NewKeyModalProps) {
             </Box>
           </FormControl>
 
-          <Box className="project-api-keys-scopes-control">
-            <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 1 }}>
-              <Typography level="title-sm">Permissions</Typography>
-              <Typography level="body-xs" sx={{ color: 'text.tertiary' }}>
-                {formData.scopes.length} of {scopeModel.scopeValues.length} enabled
+          {functionsOnly ? (
+            <Sheet
+              variant="outlined"
+              sx={{ borderRadius: 'md', px: 1.5, py: 1.25 }}
+              data-testid="api-key-functions-summary"
+            >
+              <Typography level="title-sm">Functions</Typography>
+              <Typography level="body-sm" sx={{ color: 'text.secondary', mt: 0.5 }}>
+                Lists, reads and calls your live functions, and nothing else. A Functions key holds no other permission.
               </Typography>
-            </Box>
-            <Sheet variant="outlined" sx={{ borderRadius: 'md', overflow: 'hidden' }}>
-              {scopeModel.groups.map((group, i) => (
-                <Box
-                  key={group.resource}
-                  sx={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'space-between',
-                    gap: 1,
-                    px: 1.5,
-                    py: 1.25,
-                    borderTop: i === 0 ? 'none' : '1px solid',
-                    borderColor: 'divider',
-                  }}
-                  className="project-api-keys-scope-item"
-                >
-                  <Typography level="title-sm">{group.resourceLabel}</Typography>
-                  <Box sx={{ display: 'flex', gap: 0.75, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
-                    {group.scopes.map(scope => {
-                      const selected = formData.scopes.includes(scope.value);
-                      return (
-                        <Tooltip key={scope.value} title={scope.description} variant="soft" size="sm">
-                          <Chip
-                            variant={selected ? 'solid' : 'outlined'}
-                            color={selected ? (scope.isMutating ? 'warning' : 'success') : 'neutral'}
-                            startDecorator={selected ? <CheckIcon sx={{ fontSize: 14 }} /> : undefined}
-                            onClick={() => toggleScope(scope.value)}
-                            slotProps={{
-                              action: {
-                                'aria-pressed': selected,
-                                'aria-label': `${group.resourceLabel}: ${scope.actionLabel}`,
-                              },
-                            }}
-                            data-testid={`api-key-scope-${scope.value}`}
-                            className="project-api-keys-scope-checkbox"
-                            sx={{ '--Chip-radius': '8px' }}
-                          >
-                            {scope.actionLabel}
-                          </Chip>
-                        </Tooltip>
-                      );
-                    })}
-                  </Box>
-                </Box>
-              ))}
             </Sheet>
-          </Box>
+          ) : (
+            <Box className="project-api-keys-scopes-control">
+              <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 1 }}>
+                <Typography level="title-sm">Permissions</Typography>
+                <Typography level="body-xs" sx={{ color: 'text.tertiary' }}>
+                  {formData.scopes.length} of {scopeModel.scopeValues.length} enabled
+                </Typography>
+              </Box>
+              <Sheet variant="outlined" sx={{ borderRadius: 'md', overflow: 'hidden' }}>
+                {scopeModel.groups.map((group, i) => (
+                  <Box
+                    key={group.resource}
+                    sx={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'space-between',
+                      gap: 1,
+                      px: 1.5,
+                      py: 1.25,
+                      borderTop: i === 0 ? 'none' : '1px solid',
+                      borderColor: 'divider',
+                    }}
+                    className="project-api-keys-scope-item"
+                  >
+                    <Typography level="title-sm">{group.resourceLabel}</Typography>
+                    <Box sx={{ display: 'flex', gap: 0.75, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+                      {group.scopes.map(scope => {
+                        const selected = formData.scopes.includes(scope.value);
+                        return (
+                          <Tooltip key={scope.value} title={scope.description} variant="soft" size="sm">
+                            <Chip
+                              variant={selected ? 'solid' : 'outlined'}
+                              color={selected ? (scope.isMutating ? 'warning' : 'success') : 'neutral'}
+                              startDecorator={selected ? <CheckIcon sx={{ fontSize: 14 }} /> : undefined}
+                              onClick={() => toggleScope(scope.value)}
+                              slotProps={{
+                                action: {
+                                  'aria-pressed': selected,
+                                  'aria-label': `${group.resourceLabel}: ${scope.actionLabel}`,
+                                },
+                              }}
+                              data-testid={`api-key-scope-${scope.value}`}
+                              className="project-api-keys-scope-checkbox"
+                              sx={{ '--Chip-radius': '8px' }}
+                            >
+                              {scope.actionLabel}
+                            </Chip>
+                          </Tooltip>
+                        );
+                      })}
+                    </Box>
+                  </Box>
+                ))}
+              </Sheet>
+            </Box>
+          )}
 
           <AccordionGroup sx={{ '--Accordion-gap': '0px' }} className="project-api-keys-advanced">
             <Accordion>
@@ -581,6 +623,7 @@ const KEY_TEST_CONTRACTS = [
   listProjectsContract,
   listAgentsContract,
   listDataLakesContract,
+  listFunctionsContract,
 ];
 
 /** The GET path a key with `scopes` can call to prove it works, or undefined when none of them fits. */

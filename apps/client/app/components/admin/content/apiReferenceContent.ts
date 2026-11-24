@@ -165,6 +165,8 @@ use to build a typed client). They are deliberately not repeated here, so the tw
   \`/api/v1/skills/market/versions/{vid}/review\`
 - Release notes: \`/api/v1/whats-new\`, \`/api/v1/whats-new/media/*\` (public, no key needed)
 - Slack (post to channels an org owner enabled): \`/api/v1/slack/messages\`
+- Functions (your live functions; \`functions:invoke\`): \`/api/v1/functions\`, \`/api/v1/functions/{id}\`,
+  \`/api/v1/functions/{id}/invoke\`
 
 Image, video, music and chat work is asynchronous; the Async jobs section of the
 [generated API docs](/api/v1/docs) says what to poll for each kind of job and when it is terminal.
