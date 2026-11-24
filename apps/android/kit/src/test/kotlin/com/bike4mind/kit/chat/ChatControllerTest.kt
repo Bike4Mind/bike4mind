@@ -8,6 +8,7 @@ import com.bike4mind.kit.approvals.PendingActionFailure
 import com.bike4mind.kit.approvals.PendingActionOutcome
 import com.bike4mind.kit.approvals.PendingActionResult
 import com.bike4mind.kit.approvals.PendingActionTarget
+import com.bike4mind.kit.networking.ApiException
 import com.bike4mind.kit.realtime.RealtimeFrames.StreamedCompletion
 import com.bike4mind.kit.sessions.PendingAction
 import com.bike4mind.kit.sessions.Quest
@@ -186,6 +187,51 @@ class ChatControllerTest {
 
         assertEquals(listOf("First", "Second"), backend.sent.map { it.first })
         assertEquals(listOf(failed), chat.state.value.failedSends)
+    }
+
+    @Test
+    fun aRetryOfAnUnknownIdDoesNothing() = runTest {
+        val backend = FakeBackend()
+        val chat = controller(backend, sessionId = "s1")
+
+        chat.retry("failed-99")
+        runCurrent()
+
+        assertTrue(backend.sent.isEmpty())
+        assertFalse(chat.state.value.sending)
+    }
+
+    @Test
+    fun onAcceptedRunsOnceAfterRepeatedFailures() = runTest {
+        val backend = FakeBackend().apply { sendFailure = java.io.IOException("offline") }
+        val chat = controller(backend, sessionId = "s1")
+        var accepted = 0
+
+        chat.send("Hi") { accepted++ }
+        runCurrent()
+        chat.retry(chat.state.value.failedSends.single().id)
+        runCurrent()
+        backend.sendFailure = null
+        chat.retry(chat.state.value.failedSends.single().id)
+        runCurrent()
+
+        assertEquals(1, accepted)
+        assertTrue(chat.state.value.failedSends.isEmpty())
+    }
+
+    @Test
+    fun aServerErrorKeepsItsReasonAndAnOfflineSendHasNone() = runTest {
+        val backend = FakeBackend().apply { sendFailure = ApiException(403) }
+        val chat = controller(backend, sessionId = "s1")
+
+        chat.send("Hi")
+        runCurrent()
+        assertEquals("The server answered HTTP 403", chat.state.value.failedSends.single().reason)
+
+        backend.sendFailure = java.io.IOException("offline")
+        chat.send("Again")
+        runCurrent()
+        assertNull(chat.state.value.failedSends.last().reason)
     }
 
     private class FakeRuns(var receipt: AgentRunReceipt = AgentRunReceipt("e1", "q-run", "s1")) : AgentRunStarter {

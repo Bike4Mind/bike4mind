@@ -41,8 +41,8 @@ import com.bike4mind.app.R
 import com.bike4mind.kit.approvals.PendingActionDecision
 import com.bike4mind.kit.capture.readyFileIds
 import com.bike4mind.kit.chat.ChatError
-import com.bike4mind.kit.chat.FailedSend
 import com.bike4mind.kit.chat.ChatState
+import com.bike4mind.kit.chat.FailedSend
 import com.bike4mind.kit.sessions.PendingAction
 import com.bike4mind.kit.sessions.Quest
 
@@ -168,7 +168,8 @@ fun ChatScreen(graph: AppGraph, sessionId: String?, onBack: () -> Unit) {
                 Button(modifier = Modifier.testTag("chat-composer-send"), enabled = canSend, onClick = {
                     // A turn needs words; files sent on their own go out named.
                     val message = draft.ifBlank { attachedMessage }
-                    model.controller.send(message, fileIds.orEmpty()) { model.attachments.clear() }
+                    val sentFileIds = fileIds.orEmpty()
+                    model.controller.send(message, sentFileIds) { model.attachments.clear(sentFileIds) }
                     draft = ""
                 }) {
                     Text(stringResource(R.string.chat_send))
@@ -181,9 +182,9 @@ fun ChatScreen(graph: AppGraph, sessionId: String?, onBack: () -> Unit) {
 @Composable
 private fun FailedSendRow(failed: FailedSend, retryEnabled: Boolean, onRetry: () -> Unit) {
     Column(modifier = Modifier.fillMaxWidth().padding(horizontal = Spacing.m).testTag("chat-failed-send")) {
-        Card(modifier = Modifier.testTag("message-user")) { Text(failed.message, modifier = Modifier.padding(Spacing.m)) }
+        Card(modifier = Modifier.testTag("message-failed")) { Text(failed.message, modifier = Modifier.padding(Spacing.m)) }
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Text(stringResource(R.string.chat_send_failed), color = MaterialTheme.colorScheme.error, modifier = Modifier.weight(1f))
+            Text(failed.reason?.let { stringResource(R.string.chat_send_failed_reason, it) } ?: stringResource(R.string.chat_send_failed), color = MaterialTheme.colorScheme.error, modifier = Modifier.weight(1f))
             TextButton(onClick = onRetry, enabled = retryEnabled, modifier = Modifier.testTag("chat-failed-send-retry-btn")) {
                 Text(stringResource(R.string.action_try_again))
             }
