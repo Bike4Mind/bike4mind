@@ -276,7 +276,7 @@ describe('approve, remove and publish', () => {
 
   it('refuses to approve a missing image or a deleted file', async () => {
     const listingId = await makeListing();
-    await makeTemplate(listingId);
+    await makeTemplate(listingId, { slug: 'no-image' });
     expect((await failure(approveOwnTemplateImage(AUTHOR, listingId))).message).toBe('Add a preview image first');
 
     const withFile = await withImage();
