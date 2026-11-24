@@ -22,7 +22,12 @@ vi.mock('@bike4mind/slack', () => {
   class StubResource {
     getMcpEnvVariables = vi.fn().mockResolvedValue([]);
   }
-  return { GitHubResource: StubResource, JiraResource: StubResource, ConfluenceResource: StubResource };
+  return {
+    GitHubResource: StubResource,
+    JiraResource: StubResource,
+    ConfluenceResource: StubResource,
+    TOKEN_EXPIRATION_MS: 15 * 60 * 1000,
+  };
 });
 
 import { Quest, Session } from '@bike4mind/database';
@@ -74,7 +79,7 @@ describe('decidePendingAction', () => {
     expect(result.status).toBe(200);
     expect(result.body).toMatchObject({ success: true, url: 'https://example.test/x' });
     expect(claimPendingAction).toHaveBeenCalledTimes(1);
-    expect(claimPendingAction).toHaveBeenCalledWith(QUEST_ID, pendingActionTs);
+    expect(claimPendingAction).toHaveBeenCalledWith(QUEST_ID, pendingActionTs, 'approved');
     expect(invokeMcpHandler).toHaveBeenCalledTimes(1);
   });
 
@@ -82,7 +87,7 @@ describe('decidePendingAction', () => {
     const result = await decide({ confirmed: false });
 
     expect(result).toEqual({ status: 200, body: { success: true, message: 'Action cancelled' } });
-    expect(claimPendingAction).toHaveBeenCalledWith(QUEST_ID, pendingActionTs);
+    expect(claimPendingAction).toHaveBeenCalledWith(QUEST_ID, pendingActionTs, 'denied');
     expect(invokeMcpHandler).not.toHaveBeenCalled();
   });
 
@@ -123,7 +128,7 @@ describe('decidePendingAction', () => {
 
     expect(result.status).toBe(409);
     expect(result.body).toMatchObject({ errorCode: 'action_expired' });
-    expect(claimPendingAction).toHaveBeenCalledWith(QUEST_ID, lapsedTs);
+    expect(claimPendingAction).toHaveBeenCalledWith(QUEST_ID, lapsedTs, 'lapsed');
     expect(invokeMcpHandler).not.toHaveBeenCalled();
   });
 
@@ -168,7 +173,7 @@ describe('decidePendingAction', () => {
 
     expect(result.status).toBe(409);
     expect(result.body).toMatchObject({ errorCode: 'action_expired' });
-    expect(claimPendingAction).toHaveBeenCalledWith(QUEST_ID, lapsedTs);
+    expect(claimPendingAction).toHaveBeenCalledWith(QUEST_ID, lapsedTs, 'lapsed');
     expect(invokeMcpHandler).not.toHaveBeenCalled();
   });
 

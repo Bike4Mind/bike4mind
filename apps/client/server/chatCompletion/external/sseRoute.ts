@@ -1,5 +1,6 @@
 import { DAILY_FREE_LIMIT_REACHED_ERROR_CODE, isSpendFrozenError, type ApiCompletionOutcome } from '@bike4mind/common';
 import { createCompletionCreditHolds } from '@server/billing/completionCreditHolds';
+import { assertEvaluationAuthorized, evaluationTransport } from '@server/completionRuns/evaluation';
 import { assertSpendNotFrozen } from '@bike4mind/services/creditService';
 import { spendFreezeSubjectForRequest } from '@bike4mind/server-utils/billing/spendFreezeSubject';
 import { checkFreeTierDailySpendCap } from '@bike4mind/server-utils/billing/freeTierDailyCapGate';
@@ -127,9 +128,12 @@ function isUpstreamCallerError(error: unknown): error is Error {
 /** The attribution, with the stored run id, once findCallerCompletionRun confirms this caller minted it. */
 async function verifyRunOwnership(
   run: CompletionRunAttribution,
-  caller: CompletionRunCaller
+  caller: CompletionRunCaller,
+  evaluation = false
 ): Promise<CompletionRunAttribution> {
   const stored = await findCallerCompletionRun(run.runId, caller);
+  if (Boolean(stored.evaluation) !== evaluation)
+    throw new BadRequestError('Evaluation run requires evaluation attribution on every request.');
   return { ...run, runId: stored.runId };
 }
 
@@ -282,6 +286,7 @@ export function registerExternalRoutes(app: Express, track: (p: Promise<void>) =
     let apiKeyInfo: ApiKeyInfo | undefined;
     let apiKeyInfoForCompletion: { keyId: string; keyName: string } | undefined;
     let quota: CompletionQuotaGrant = NO_COMPLETION_QUOTA;
+    let evaluation: ReturnType<typeof evaluationTransport> | undefined;
 
     try {
       // The service connects at boot in the background; a request can land first.
@@ -376,8 +381,15 @@ export function registerExternalRoutes(app: Express, track: (p: Promise<void>) =
       }
 
       const run = body.run
-        ? await verifyRunOwnership(body.run, { userId, billingOrganizationId: apiKeyInfo?.organizationId })
+        ? await verifyRunOwnership(
+            body.run,
+            { userId, billingOrganizationId: apiKeyInfo?.organizationId },
+            Boolean(body.evaluation)
+          )
         : undefined;
+      if (body.evaluation && !run) throw new BadRequestError('Evaluation requires a verified completion run.');
+      if (body.evaluation) assertEvaluationAuthorized(userId);
+      if (body.evaluation && run) evaluation = evaluationTransport(run.runId, body.evaluation.requestId, onReady);
 
       // Stream the completion, tracking usage for analytics.
       let finalInputTokens = 0;
@@ -410,6 +422,7 @@ export function registerExternalRoutes(app: Express, track: (p: Promise<void>) =
 
       timing?.phase('completionStarted');
       await executeCompletion({
+        ...(evaluation ? { evaluation } : {}),
         getEntitlements: getUserEntitlements,
         getThinkingVisibility: resolveThinkingVisibility,
         creditHolds: createCompletionCreditHolds(logger, apiKeyInfo?.keyId),
@@ -464,6 +477,7 @@ export function registerExternalRoutes(app: Express, track: (p: Promise<void>) =
       });
 
       completionOutcome = 'completed';
+      if (evaluation && settled.outcome?.committed) await evaluation.platform(settled.outcome);
 
       // After the last content event and before [DONE]. Embed streams never send it: it carries usdCost.
       if (settled.outcome?.committed) {
@@ -497,6 +511,11 @@ export function registerExternalRoutes(app: Express, track: (p: Promise<void>) =
         logger,
       });
     } catch (error) {
+      await evaluation
+        ?.rejected(body?.model ?? '')
+        .catch(receiptError =>
+          logger.error('Evaluation receipt persistence failed', { error: serializeError(receiptError) })
+        );
       const jsonError = toJsonError(error, requestId);
       completionOutcome =
         jsonError.body.errorCode === DAILY_FREE_LIMIT_REACHED_ERROR_CODE

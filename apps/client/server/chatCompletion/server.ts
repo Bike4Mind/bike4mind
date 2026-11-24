@@ -4,7 +4,10 @@ import { connectDB, mongoose } from '@bike4mind/database';
 import { registerProcessErrorHandlers } from '@bike4mind/utils';
 import { hasModelCatalogProvider } from '@bike4mind/llm-adapters';
 import { installConsoleRedaction, Logger } from '@bike4mind/observability';
+import { requireConfiguredSecret } from '@bike4mind/common';
+import { Resource } from 'sst';
 import { Config } from '@bike4mind/server-utils/utils/config';
+import { warnIfPlaintextSecretsOptOut } from '@bike4mind/server-utils/security/plaintextSecretsOptOut';
 import { registerOrgAlertObserver } from '@bike4mind/server-utils/organizations/registerOrgAlertObserver';
 import { registerInternalRoutes } from './internal/route';
 import { registerExternalRoutes } from './external/sseRoute';
@@ -78,7 +81,7 @@ interface DrainLogger {
  * Wait for the tracked in-flight work to settle, bounded by `drainTimeoutMs`. Exported
  * so a test can drive the cut-off branch without booting the service. Returns whether the
  * work drained or the window won; on the cut-off branch it emits an error naming the count
- * so LiveOps triage sees the quests a deploy/scale-in is about to SIGKILL (the WARN/INFO
+ * so LiveOps sees the quests a deploy/scale-in is about to SIGKILL (the WARN/INFO
  * line this replaces was invisible to the ERROR-level log subscription).
  */
 export async function drainInFlight({
@@ -157,8 +160,15 @@ export function checkModelCatalogWired(logger: Pick<Logger, 'error'>): boolean {
   return false;
 }
 
+/** Throws, naming the secret, when one this service verifies with is still a placeholder. */
+export function assertBootSecretsConfigured(): void {
+  requireConfiguredSecret('CHAT_COMPLETION_INTERNAL_SECRET', Resource.CHAT_COMPLETION_INTERNAL_SECRET.value);
+  requireConfiguredSecret('JWT_SECRET', Config.JWT_SECRET);
+}
+
 async function main() {
   installConsoleRedaction();
+  assertBootSecretsConfigured();
   // Crash-safety for a long-running process: one request's mid-stream EPIPE / orphaned undici
   // rejection must NOT take Node's default uncaughtException path and kill the whole container
   // along with every other in-flight request. Registers global handlers that log + swallow the
@@ -166,6 +176,7 @@ async function main() {
   registerProcessErrorHandlers(bootLogger, 'ChatCompletion');
 
   registerSecretsAtRest(bootLogger, Config.SECRET_ENCRYPTION_KEY, Config.SECRET_ENCRYPTION_KEY_PREVIOUS);
+  warnIfPlaintextSecretsOptOut(bootLogger);
 
   const app = createApp();
 

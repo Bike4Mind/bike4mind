@@ -132,6 +132,17 @@ export function missingQueueHelp(entry: Partial<Record<keyof DlqQueueHelp, unkno
  */
 const DLQ_REGISTRY = [
   {
+    label: 'cloud-security-scan',
+    displayName: 'Cloud Security Scan',
+    application: 'Security',
+    sourceQueue: null,
+    replay: 'unsafe',
+    description: 'Retains failed cloud security scan invocations for inspection.',
+    replayNote: 'No SQS replay destination; inspect the failure and request a new scan from the security dashboard.',
+    owner: 'Security',
+    describe: noEntity,
+  },
+  {
     label: 'fab-file-vectorize',
     displayName: 'FabFile Vectorize',
     application: 'FabFileProcessing',
@@ -343,18 +354,6 @@ const DLQ_REGISTRY = [
       'The worker skips a job that is no longer running and treats an already succeeded render as done, so a replay only re-encodes a job that never finished.',
     owner: 'Generation jobs',
     describe: entityAt('Job', 'jobId'),
-  },
-  {
-    label: 'liveops-triage',
-    displayName: 'LiveOps Triage',
-    application: 'LiveOpsTriage',
-    sourceQueue: 'liveOpsTriageQueue',
-    description: 'Triages recent Slack alerts into issue tracker tickets for a LiveOps config.',
-    replay: 'unsafe',
-    replayNote:
-      'A run within 5 minutes of the last one is skipped and duplicate issues are deduplicated, but a later replay runs a fresh triage and posts the Slack summary again.',
-    owner: 'Platform ops',
-    describe: entityAt('Triage config', 'configId'),
   },
   {
     label: 'sre-fix',
@@ -774,6 +773,17 @@ const DLQ_REGISTRY = [
     describe: entityAt('Quest', 'detail.requestId'),
   },
   {
+    label: 'moderation-alerts',
+    displayName: 'Moderation Escalation Alerts',
+    application: 'ModerationAlerts',
+    sourceQueue: null,
+    replay: 'unsafe',
+    description: 'Retains moderation escalation alerts that could not be posted to the abuse alarm channel.',
+    replayNote: 'No SQS replay destination; check the user in the text moderation review list instead.',
+    owner: 'Trust and safety',
+    describe: entityAt('User', 'detail.userId'),
+  },
+  {
     label: 'session-enrichment',
     displayName: 'Session Enrichment',
     application: 'SessionEnrichment',
@@ -923,7 +933,7 @@ const resolvers: DlqResolvers = {
 // infra/queues.ts partitions the same specs against the same reservedQueueNames, so the
 // registry lists exactly the pairs that deploy. Registers nothing when codegen could not read
 // the core names, or read names this file's DLQ_REGISTRY contradicts (a stale generated file).
-function contributedDescriptors(): DlqDescriptor[] {
+function contributedDescriptors(): (DlqDescriptor & Partial<DlqQueueHelp>)[] {
   const specs = generatedInfraResources.contributedInfraResources.queues;
   if (specs.length === 0) return [];
   const reserved = reservedQueueNames(generatedInfraResources);
@@ -947,11 +957,16 @@ function contributedDescriptors(): DlqDescriptor[] {
   }
   const result = partitionContributedQueues(specs, reserved);
   for (const line of describeDroppedContributions('contributed queue', result)) Logger.warn(`[dlqRegistry] ${line}`);
-  return result.registered.map(({ label, displayName, application, name }) => ({
+  return result.registered.map(({ label, displayName, application, name, description, replay, replayNote, owner }) => ({
     label,
     displayName,
     application,
     sourceQueue: name,
+    // Only declared help keys, so an entry without help stays exactly as it was.
+    ...(description === undefined ? {} : { description }),
+    ...(replay === undefined ? {} : { replay }),
+    ...(replayNote === undefined ? {} : { replayNote }),
+    ...(owner === undefined ? {} : { owner }),
   }));
 }
 

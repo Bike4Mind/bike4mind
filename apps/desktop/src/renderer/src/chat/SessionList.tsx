@@ -6,6 +6,7 @@ import {
   useRef,
   useState,
   type DragEvent,
+  type KeyboardEvent as ReactKeyboardEvent,
   type ReactNode,
   type SyntheticEvent,
 } from 'react';
@@ -38,9 +39,11 @@ import {
   type ChatSessionStatus,
   type ChatSessionSummary,
 } from '@shared/chat';
+import { useHasComposerDraft } from './composerDrafts';
 import { useLocalHistory } from './localHistory';
 import { refLabel } from '@shared/githubRefs';
 import { findSessionsByRef } from './sessionRefSearch';
+import { prAttentionRank } from '@shared/prAttention';
 import type { PrSummary } from '@shared/pullRequest';
 import { pendingDecisionOf } from '@shared/orchestration';
 import { sectionOf, type SidebarSection, type SidebarSectionsState } from '@shared/sidebarSections';
@@ -55,6 +58,7 @@ import {
 } from './grouping';
 import { ImportedBadge } from './ImportedBadge';
 import { useImportedInline } from './importedInline';
+import { usePrAttentionSort } from './prAttentionSort';
 import { keepMenuOpen } from './keepMenuOpen';
 import { MessageSessionDialog } from './MessageSessionDialog';
 import {
@@ -62,6 +66,7 @@ import {
   ArtifactIcon,
   CheckIcon,
   ChevronIcon,
+  MissionControlIcon,
   ModelsIcon,
   MoreIcon,
   PanelLeftIcon,
@@ -75,7 +80,9 @@ import { ResizeHandle } from './ResizeHandle';
 import { SectionNameDialog, type SectionNameRequest } from './SectionNameDialog';
 import { thinScrollbarSx } from './layout';
 import { SessionBadge } from './SessionBadge';
+import { WORKING_COLOR_VAR } from './sessionStatus';
 import { PREPARING_WORKTREE } from './chipState';
+import { SESSION_DRAG_TYPE } from './sessionDrag';
 import {
   clampSidebarWidth,
   readSidebarWidth,
@@ -211,11 +218,7 @@ function railSx(depth: number, first: boolean, last: boolean, guides: string, he
   // The elbow into a branch holding working or waiting sessions lights up in the fold pill's colours,
   // so a deep tree shows where the activity is, even folded, and every ancestor on the path glows.
   const elbowColor =
-    heat === 'needs-action'
-      ? 'var(--joy-palette-warning-400)'
-      : heat === 'processing'
-        ? 'var(--joy-palette-primary-400)'
-        : RAIL_COLOR;
+    heat === 'needs-action' ? 'var(--joy-palette-warning-400)' : heat === 'processing' ? WORKING_COLOR_VAR : RAIL_COLOR;
   return {
     marginInlineStart: `${indent}px`,
     // Above the button, so a selected or hovered row's fill does not paint over its own elbow.
@@ -362,6 +365,28 @@ interface RowProps extends NestProps {
   refChip?: string;
 }
 
+/** The right-aligned letter that runs a row menu item while the menu is open; see onRowMenuKeyDown. */
+function MenuShortcut({ letter }: { letter: string }) {
+  return (
+    <Typography aria-hidden level="body-xs" textColor="text.tertiary" sx={{ ml: 3, fontFamily: 'monospace' }}>
+      {letter}
+    </Typography>
+  );
+}
+
+/**
+ * A bare letter runs the item whose data-shortcut it is, by clicking it so the item's own handler
+ * decides what happens (closing, switching view). Marked handled so Joy's type-to-focus stays out.
+ */
+function onRowMenuKeyDown(event: ReactKeyboardEvent<HTMLElement> & { defaultMuiPrevented?: boolean }) {
+  if (event.metaKey || event.ctrlKey || event.altKey || !/^[a-z]$/i.test(event.key)) return;
+  const item = event.currentTarget.querySelector<HTMLElement>(`[data-shortcut="${event.key.toUpperCase()}"]`);
+  if (!item || item.getAttribute('aria-disabled') === 'true') return;
+  event.preventDefault();
+  event.defaultMuiPrevented = true;
+  item.click();
+}
+
 /** Shown in place of the main menu items, not as a flyout: Joy has no nested menu. */
 function MoveToItems({
   session,
@@ -383,7 +408,7 @@ function MoveToItems({
         <ListItemDecorator>
           <ArrowLeftIcon />
         </ListItemDecorator>
-        Move to
+        Move to section
       </MenuItem>
       <ListDivider />
       {userSections.map(section => (
@@ -450,6 +475,10 @@ const isolate = (event: SyntheticEvent) => event.stopPropagation();
  *
  * Keydown stops here, which is also what keeps SessionList's window-level Cmd shortcuts away
  * while typing: React's handler runs at the root, before the event reaches window.
+ *
+ * Focus and blur stop here too: the input sits inside the row's ListItemButton, which would take
+ * the input's focus as its own keyboard focus and keep its focus ring once the input unmounts,
+ * since an unmounted node sends no blur.
  */
 function RenameInput({ title, onDone }: { title: string; onDone: (next: string | null) => void }) {
   const [draft, setDraft] = useState(title);
@@ -477,7 +506,11 @@ function RenameInput({ title, onDone }: { title: string; onDone: (next: string |
       size="sm"
       value={draft}
       onChange={event => setDraft(event.target.value)}
-      onBlur={save}
+      onFocus={isolate}
+      onBlur={event => {
+        event.stopPropagation();
+        save();
+      }}
       onKeyDown={event => {
         event.stopPropagation();
         if (event.key === 'Enter') save();
@@ -536,10 +569,11 @@ const SessionRow = memo(function SessionRow({
       : status === 'processing' || subActivity === 'processing'
         ? 'processing'
         : undefined;
-  const needsAction = status === 'needs-action';
   // Main pushes the project once the worktree exists, which is what ends this.
   const preparing = status === 'processing' && awaitsWorktree(session.project);
   const { ref: titleRef, clipped } = useTitleClipped(session.title, editing);
+  // The open conversation's draft is in the composer in front of the user; only others are marked.
+  const showDraft = useHasComposerDraft(session.id) && !selected && !editing;
 
   const onRenameDone = (next: string | null) => {
     setEditing(false);
@@ -598,7 +632,7 @@ const SessionRow = memo(function SessionRow({
               >
                 <MoreIcon />
               </MenuButton>
-              <Menu size="sm" placement="bottom-end">
+              <Menu size="sm" placement="bottom-end" onKeyDown={onRowMenuKeyDown} sx={{ minWidth: 200 }}>
                 {menuView === 'move' ? (
                   <MoveToItems
                     session={session}
@@ -612,8 +646,14 @@ const SessionRow = memo(function SessionRow({
                   />
                 ) : (
                   <>
-                    <MenuItem onClick={() => actions.togglePin(session)} data-testid="chat-pin-session-btn">
-                      {session.pinned ? 'Unpin' : 'Pin'}
+                    <MenuItem
+                      onClick={() => actions.togglePin(session)}
+                      data-testid="chat-pin-session-btn"
+                      data-shortcut="P"
+                      aria-keyshortcuts="P"
+                    >
+                      <Box sx={{ flex: 1 }}>{session.pinned ? 'Unpin' : 'Pin'}</Box>
+                      <MenuShortcut letter="P" />
                     </MenuItem>
                     <MenuItem
                       onClick={() => {
@@ -623,40 +663,65 @@ const SessionRow = memo(function SessionRow({
                         setEditing(true);
                       }}
                       data-testid="chat-rename-session-btn"
+                      data-shortcut="R"
+                      aria-keyshortcuts="R"
                     >
-                      Rename
+                      <Box sx={{ flex: 1 }}>Rename</Box>
+                      <MenuShortcut letter="R" />
                     </MenuItem>
                     <MenuItem
                       disabled={!!session.archived}
                       onClick={() => actions.message(session)}
                       data-testid="session-row-message-action"
+                      data-shortcut="M"
+                      aria-keyshortcuts="M"
                     >
-                      Message session...
+                      <Box sx={{ flex: 1 }}>Message session...</Box>
+                      <MenuShortcut letter="M" />
+                    </MenuItem>
+                    <MenuItem
+                      onClick={() => actions.download(session)}
+                      data-testid="chat-download-session-btn"
+                      data-shortcut="L"
+                      aria-keyshortcuts="L"
+                    >
+                      <Box sx={{ flex: 1 }}>Download</Box>
+                      <MenuShortcut letter="L" />
                     </MenuItem>
                     {!session.pinned && !session.archived && (
-                      <MenuItem
-                        onClick={event => {
-                          keepMenuOpen(event);
-                          setMenuView('move');
-                        }}
-                        data-testid="chat-move-session-btn"
-                      >
-                        <Box sx={{ flex: 1 }}>Move to</Box>
-                        <ChevronIcon open={false} />
-                      </MenuItem>
+                      <>
+                        <ListDivider />
+                        <MenuItem
+                          onClick={event => {
+                            keepMenuOpen(event);
+                            setMenuView('move');
+                          }}
+                          data-testid="chat-move-session-btn"
+                        >
+                          <Box sx={{ flex: 1 }}>Move to section</Box>
+                          <ChevronIcon open={false} />
+                        </MenuItem>
+                      </>
                     )}
-                    <MenuItem onClick={() => actions.download(session)} data-testid="chat-download-session-btn">
-                      Download
-                    </MenuItem>
-                    <MenuItem onClick={() => actions.toggleArchived(session)} data-testid="chat-archive-session-btn">
-                      {session.archived ? 'Unarchive' : 'Archive'}
+                    <ListDivider />
+                    <MenuItem
+                      onClick={() => actions.toggleArchived(session)}
+                      data-testid="chat-archive-session-btn"
+                      data-shortcut="A"
+                      aria-keyshortcuts="A"
+                    >
+                      <Box sx={{ flex: 1 }}>{session.archived ? 'Unarchive' : 'Archive'}</Box>
+                      <MenuShortcut letter="A" />
                     </MenuItem>
                     <MenuItem
                       color="danger"
                       onClick={() => actions.remove(session.id)}
                       data-testid="chat-delete-session-btn"
+                      data-shortcut="D"
+                      aria-keyshortcuts="D"
                     >
-                      Delete
+                      <Box sx={{ flex: 1 }}>Delete</Box>
+                      <MenuShortcut letter="D" />
                     </MenuItem>
                   </>
                 )}
@@ -668,6 +733,7 @@ const SessionRow = memo(function SessionRow({
     >
       <ListItemButton
         selected={selected}
+        aria-current={selected ? 'true' : undefined}
         onClick={editing ? undefined : () => actions.select(session.id)}
         aria-expanded={subCount > 0 ? !subFolded : undefined}
         onKeyDown={event => {
@@ -695,14 +761,18 @@ const SessionRow = memo(function SessionRow({
           // Paired with the opacity the button fades in on, so the title's edge travels with
           // the button instead of snapping the moment the pointer lands.
           transition: 'padding-inline-end 120ms',
-          ...(needsAction && { boxShadow: 'inset 2px 0 0 var(--joy-palette-warning-400)' }),
         }}
         data-testid="chat-session-item"
         data-session-status={status}
         data-session-pr-state={pr?.state}
       >
         <Stack direction="row" spacing={1.25} sx={{ alignItems: 'center', minWidth: 0, width: '100%' }}>
-          <SessionBadge status={status} pr={pr} deciding={pendingDecisionOf(session.workerTask) !== undefined} />
+          <SessionBadge
+            status={status}
+            pr={pr}
+            outcome={session.lastOutcome}
+            deciding={pendingDecisionOf(session.workerTask) !== undefined}
+          />
           {editing ? (
             <RenameInput title={session.title} onDone={onRenameDone} />
           ) : (
@@ -728,6 +798,18 @@ const SessionRow = memo(function SessionRow({
               data-testid="chat-session-title-text"
             >
               {session.title}
+            </Typography>
+          )}
+          {showDraft && (
+            <Typography
+              level="body-xs"
+              noWrap
+              textColor="text.tertiary"
+              sx={{ flexShrink: 0, fontSize: '0.6875rem', fontStyle: 'italic' }}
+              title="Unsent text in the composer"
+              data-testid="chat-session-draft-marker"
+            >
+              Draft
             </Typography>
           )}
           {!editing && hintTitle && (
@@ -1011,9 +1093,6 @@ function CappedSessionRows({
   );
 }
 
-/** A type of our own, so a drag of text, a link or files (see useFileDrop) is never taken for a row. */
-const SESSION_DRAG_TYPE = 'application/x-b4m-session';
-
 /** Where a dragged row would land: a section by id, or the default groups, out of any section. */
 type DropTarget = { kind: 'section'; sectionId: string } | { kind: 'default' };
 
@@ -1042,6 +1121,7 @@ export function SessionList({
   onSelect,
   onCreate,
   onOpenArtifacts,
+  onOpenMissionControl,
   onCreateInProject,
   onCreateInSection,
   onDelete,
@@ -1076,6 +1156,8 @@ export function SessionList({
   onSelect: (sessionId: string) => void;
   onCreate: () => void;
   onOpenArtifacts: () => void;
+  /** Every orchestration at a glance (missionControl/MissionControl.tsx). */
+  onOpenMissionControl?: () => void;
   onCreateInProject: (directory: string) => void;
   /** New session that starts inside the user section with this id. */
   onCreateInSection: (sectionId: string) => void;
@@ -1135,6 +1217,9 @@ export function SessionList({
   const [importedOpen, setImportedOpen] = useState(false);
   const [importedInline] = useImportedInline();
   const [nested] = useNestedSessions();
+  const sortByAttention = usePrAttentionSort(state => state.sortByAttention);
+  // Only a dependency while the sort is on, so PR updates do not regroup the default sidebar.
+  const rankedPrs = sortByAttention ? prSummaries : null;
   const foldedIds = useFoldedParents();
 
   // `section` is set when the right-click landed in a user section, which then offers a new session in
@@ -1152,10 +1237,13 @@ export function SessionList({
   const searching = query.trim() !== '';
   const sections = useMemo(() => {
     // A search lists matches flat: a tree would hide a match inside a parent that did not match.
-    const grouped = groupSessions(matching, mode, userSections, importedInline, nested && !searching);
+    const attentionRank = rankedPrs
+      ? (session: ChatSessionSummary) => prAttentionRank(rankedPrs.get(session.id))
+      : undefined;
+    const grouped = groupSessions(matching, mode, userSections, importedInline, nested && !searching, attentionRank);
     // An empty section under a search is only noise; with no query it stays so it can be found.
     return searching ? { ...grouped, custom: grouped.custom.filter(group => group.sessions.length > 0) } : grouped;
-  }, [matching, mode, userSections, searching, importedInline, nested]);
+  }, [matching, mode, userSections, searching, importedInline, nested, rankedPrs]);
 
   // Strings, not the hint objects, reach the memoised rows, so an unrelated session update leaves them be.
   // No hints with nesting off: the setting brings back the plain flat list.
@@ -1292,7 +1380,18 @@ export function SessionList({
    */
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      if (!(event.metaKey || event.ctrlKey) || event.altKey || event.shiftKey) return;
+      if (!(event.metaKey || event.ctrlKey) || event.altKey) return;
+
+      // Mod+Shift+F as well as Mod+K: it is where find-across-everything sits in an editor, and
+      // Mod+F alone finds in the open conversation. The orchestrator's focus toggle takes the
+      // chord first while that view is up (see ViewSwitcher), and marks it handled.
+      if (event.shiftKey) {
+        if (event.code !== 'KeyF' || event.defaultPrevented) return;
+        event.preventDefault();
+        if (target.current.collapsed) target.current.onToggleCollapsed();
+        setFocusRequest(request => request + 1);
+        return;
+      }
 
       if (event.key === 'b' || event.key === 'B') {
         event.preventDefault();
@@ -1588,6 +1687,14 @@ export function SessionList({
         {/* Not scoped to the open session: the list is the server's, so it spans machines and
             outlives the local session files. */}
         <NavItem icon={<ArtifactIcon />} label="Artifacts" onClick={onOpenArtifacts} testId="chat-artifacts-btn" />
+        {onOpenMissionControl && (
+          <NavItem
+            icon={<MissionControlIcon />}
+            label="Mission Control"
+            onClick={onOpenMissionControl}
+            testId="sidebar-mission-control-btn"
+          />
+        )}
         {customize}
         {onOpenModels && (
           <NavItem icon={<ModelsIcon />} label="Models" onClick={onOpenModels} testId="chat-models-btn" />

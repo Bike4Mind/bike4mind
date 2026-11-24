@@ -7,8 +7,8 @@ struct MediaGalleryView: View {
 
   var body: some View {
     GalleryContent(
-      api: services.media, onLatestImage: services.latestGeneration, studio: services.studio,
-      tracker: services.studioTracker)
+      api: services.media, firstPages: services.mediaFirstPages, onLatestImage: services.latestGeneration,
+      studio: services.studio, tracker: services.studioTracker, models: services.studioModels)
   }
 }
 
@@ -19,6 +19,7 @@ private struct GalleryContent: View {
   /// path, so a `NavigationLink(value: MediaItem)` has nowhere to go and silently does nothing.
   @State private var openItem: MediaItem?
   @State private var turnInto: TurnIntoRequest?
+  @State private var openFailed = false
   @State private var exporter: MediaExportPresenter
   @Environment(AppServices.self) private var services
   private let tracker: GenerationTracker
@@ -26,12 +27,14 @@ private struct GalleryContent: View {
   private let columns = [GridItem(.adaptive(minimum: 110), spacing: 2)]
 
   init(
-    api: any MediaAPI, onLatestImage: @escaping @Sendable (MediaItem) async -> Void, studio: any StudioAPI,
-    tracker: GenerationTracker
+    api: any MediaAPI, firstPages: MediaFirstPageStore,
+    onLatestImage: @escaping @Sendable (MediaItem) async -> Void, studio: any StudioAPI,
+    tracker: GenerationTracker, models: StudioModelCatalog
   ) {
-    _model = State(initialValue: MediaGalleryViewModel(api: api, onLatestImage: onLatestImage))
+    _model = State(
+      initialValue: MediaGalleryViewModel(api: api, firstPages: firstPages, onLatestImage: onLatestImage))
     _exporter = State(initialValue: MediaExportPresenter(media: api))
-    _create = State(initialValue: StudioCreateViewModel(api: studio, tracker: tracker))
+    _create = State(initialValue: StudioCreateViewModel(api: studio, tracker: tracker, catalog: models))
     self.tracker = tracker
   }
 
@@ -39,7 +42,8 @@ private struct GalleryContent: View {
     content
       .safeAreaInset(edge: .bottom, spacing: 0) {
         VStack(spacing: 0) {
-          GenerationTilesView(tracker: tracker, settings: create, exporter: exporter)
+          GenerationTilesView(
+            tracker: tracker, settings: create, exporter: exporter, onOpen: { id in Task { await open(fileID: id) } })
           StudioCreateBar(model: create, photoContext: editContext)
         }
       }
@@ -55,18 +59,34 @@ private struct GalleryContent: View {
       }
       .turnIntoFlow(request: $turnInto, context: editContext)
       .mediaExport(exporter)
+      .alert("Couldn't open this file", isPresented: $openFailed) {
+        Button("OK", role: .cancel) {}
+      } message: {
+        Text("It may still be saving. Pull to refresh the gallery and open it from there.")
+      }
       .task { await model.load() }
       .refreshable { await model.refresh() }
   }
 
+  /// A finished generation opens like a gallery cell; the detail fetch also signs a fresh URL.
+  private func open(fileID: String) async {
+    do {
+      openItem = try await services.media.media(id: fileID)
+    } catch {
+      openFailed = true
+    }
+  }
+
   private var editContext: StudioEditContext {
     StudioEditContext(
-      api: services.studio, media: services.media, tracker: tracker, frames: services.frameUploader,
+      api: services.studio, media: services.media, firstPages: services.mediaFirstPages, tracker: tracker,
+      frames: services.frameUploader,
       currentInputs: { create.videoInputs },
       apply: { seed in
         openItem = nil
         Task { await create.apply(seed) }
-      })
+      },
+      reveal: { openItem = nil })
   }
 
   private var filter: some View {
@@ -170,12 +190,8 @@ private struct MediaCell: View {
   private var tile: some View {
     switch item.kind {
     case .image:
-      AsyncImage(url: item.url) { phase in
-        switch phase {
-        case .success(let image): image.resizable().scaledToFill()
-        case .failure: placeholder("photo")
-        default: Tokens.Palette.groupedBackground
-        }
+      CachedThumbnail(url: item.url) { failed in
+        if failed { placeholder("photo") } else { Tokens.Palette.groupedBackground }
       }
     case .video: placeholder("play.rectangle.fill")
     case .audio: placeholder("waveform")

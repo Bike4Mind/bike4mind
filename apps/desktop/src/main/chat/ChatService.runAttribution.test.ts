@@ -13,6 +13,10 @@ import type { CompletionRunMinter } from './completionRuns';
 import type { ModelCatalog } from './ModelCatalog';
 import type { AccessStore } from './tools/AccessStore';
 
+vi.mock('../git/hostGitArgs', async importOriginal =>
+  (await import('./plainFolderGit.testHelper')).skipGitOutsideRepositories(await importOriginal())
+);
+
 const contract: TaskContract = {
   version: 1,
   outcome: 'Fix the focused behavior',
@@ -115,7 +119,7 @@ describe('orchestration run attribution', () => {
 
     await service.send(parent.id, 'Plan the work');
     await waitStream(0);
-    expect(mint).toHaveBeenCalledWith(expect.any(String), expect.anything(), parent.id);
+    expect(mint).toHaveBeenCalledWith(expect.any(String), expect.anything(), parent.id, undefined);
     expect(await storedRunId(parent.id)).toBe(RUN_A);
     expect(call(0)[1].run).toEqual({ runId: RUN_A, role: 'root', purpose: 'turn' });
     expect(call(0)[2].headers?.['X-Request-ID']).toBeTruthy();
@@ -157,6 +161,7 @@ describe('orchestration run attribution', () => {
     streams[0].write(frame('[DONE]'));
 
     await vi.waitUntil(() => post.mock.calls.some((_entry, index) => call(index)[1].run?.role === 'worker'), {
+      interval: 5,
       timeout: 5000,
     });
     const child = (await store.list()).find(session => session.origin?.parentSessionId === parent.id);
@@ -331,7 +336,10 @@ describe('orchestration run attribution', () => {
       })
     );
     streams[0].write(frame('[DONE]'));
-    await vi.waitUntil(() => create.mock.calls.some(([, init]) => init?.orchestrationPolicy), { timeout: 5000 });
+    await vi.waitUntil(() => create.mock.calls.some(([, init]) => init?.orchestrationPolicy), {
+      interval: 5,
+      timeout: 5000,
+    });
     const spawned = create.mock.calls.find(([, init]) => init?.orchestrationPolicy)?.[1];
     expect(spawned?.orchestrationPolicy?.serverRunId).toBe(RUN_A);
   });

@@ -50,7 +50,7 @@ describe('secondary send paths forward the composer preferences', () => {
   });
 
   it('the SessionMiddle edit/retry resend spreads turnPreferences', () => {
-    const sites = callSites(read('../Session/SessionMiddle.tsx'), 'handleCommand(commandHandlers, {');
+    const sites = callSites(read('../Session/SessionMiddle.tsx'), 'dispatchSend(commandHandlers, imageSendMode, {');
     expect(sites).toHaveLength(1);
     expect(sites[0]).toMatch(spreadsTurnPreferences);
   });

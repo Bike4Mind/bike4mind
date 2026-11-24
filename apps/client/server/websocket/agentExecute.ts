@@ -148,6 +148,9 @@ const StartCommandSchema = BaseMessageSchema.extend({
   // continuations keep it. Capped like every other caller-supplied prompt body (the client
   // refuses an over-cap launch before sending). Must stay in sync with `StartExecutionSchema`.
   systemContext: z.string().max(PROMPT_TEXT_MAX).optional(),
+  // The Studio production a Direct launch directs. startAgentExecution marks the session with it only after its own
+  // access and ownership checks (an id that fails them is ignored); see `productionCompositionId` there.
+  productionCompositionId: z.string().max(64).optional(),
 });
 
 const AbortCommandSchema = BaseMessageSchema.extend({
@@ -322,6 +325,7 @@ async function handleStart(
         audioConfig: cmd.audioConfig,
         routingSource: cmd.routingSource,
         systemContext: cmd.systemContext,
+        productionCompositionId: cmd.productionCompositionId,
       },
       logger
     );
@@ -488,9 +492,9 @@ async function rememberToolDecision(
  * previous executor handoff, not in the AgentExecution document, so this handler cannot
  * read it. The resumed executor starts at depth 0. This is safe on two counts: permission
  * pauses are user-driven, not loop-driven, so they cannot self-dispatch a runaway on
- * their own; and the resume runs as status `continuing`, which the executor still
- * bounds via the persisted `lambdaInvocationCount` guard (MAX_LAMBDA_HANDOFFS) - a
- * counter the message payload cannot reset.
+ * their own. `resumedBy: 'user'` keeps the click itself off the executor's
+ * `lambdaInvocationCount` budget (MAX_LAMBDA_HANDOFFS); any timeout self-dispatch after
+ * it still counts, and the payload can only skip an increment, never reset the counter.
  */
 async function dispatchPermissionResume(
   executionId: string,
@@ -498,7 +502,7 @@ async function dispatchPermissionResume(
   target: ExecutorTarget
 ): Promise<void> {
   await agentExecutionRepository.updateStatus(executionId, 'continuing');
-  await dispatchAgentExecution({ executionId, connectionId }, target);
+  await dispatchAgentExecution({ executionId, connectionId, resumedBy: 'user' }, target);
 }
 
 export async function handlePermissionResponse(

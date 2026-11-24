@@ -6,12 +6,13 @@ import type { MusicGenerationRequest, MusicProviderId } from '../../music';
 import type { StoredSceneCompositionRequest } from '../../scene';
 import type { SoundGenerationVendor } from '../../soundGeneration';
 import type { ProviderJobHandle, VideoGenerationRequest, VideoProviderId } from '../../video';
-import type { VoiceGenerationVendor, VoiceOutputFormat } from '../../voiceGeneration';
+import type { SpeechWordTiming, VoiceGenerationVendor, VoiceOutputFormat } from '../../voiceGeneration';
 import type { StudioRenderPricing } from '../../studioComposition/render';
 import type { StudioTimeline, StudioTimelineOutput } from '../../studioComposition/timeline';
 import { IBaseRepository } from './BaseTypes';
 import { IMongoDocument } from './common';
-import { CreditHolderType, type CreditHoldRecord } from './CreditHolderTypes';
+import { CreditHolderType, type CreditHoldRecord, type RunBudgetClaim } from './CreditHolderTypes';
+import type { CompletionRunAttribution } from '../../schemas/cliCompletions';
 
 /**
  * `compose` renders a Scene (a video with a music track muxed in) from files the caller already has; `render` encodes a
@@ -171,6 +172,11 @@ export type ImageJobPayload = {
   request: StoredImageRequest;
   /** Absent for a plain render. Server-set: a client cannot ask for it on the image-jobs route. */
   purpose?: ImageJobPurpose;
+  /**
+   * Server-set, never read back by a client: inputs the request made only for this batch (the in-chat edit's mask and
+   * source copy), deleted once every job in the batch is terminal (imageJobHandler onTerminal).
+   */
+  discardInputFileIds?: string[];
   providerId: ImageProviderId;
   providerHandle?: GenerationProviderJobHandle<ImageProviderId>;
   providerOutput?: ProviderOutput;
@@ -228,6 +234,8 @@ export type SpeechJobPayload = {
   /** The vendor that produced the clip and the model it is billed on; set on success. */
   producedBy?: { provider: VoiceGenerationVendor; model: string };
   output?: AudioJobOutput;
+  /** Per-word timing of `request.text` in the clip, when the producing vendor reported alignment. */
+  wordTimings?: SpeechWordTiming[];
 };
 
 /** The validated sound-effect request as persisted, with the default provider applied. */
@@ -339,6 +347,13 @@ type GenerationJobFields = {
   deadlineAt: Date;
   idempotencyKey?: string;
   creditHold: CreditHoldRecord | null;
+  /** The completion run the job was made for; its settlement ledger row carries it as `metadata.run`. */
+  run?: CompletionRunAttribution;
+  /**
+   * The share of `run`'s budget claimed with `creditHold`, released when the hold ends: down to the charge on
+   * settlement, to 0 on a release. Absent for an unbudgeted run, or when no hold was taken.
+   */
+  runClaim?: RunBudgetClaim;
   settledCredits?: number;
   error?: GenerationJobError;
   rawProviderError?: unknown;

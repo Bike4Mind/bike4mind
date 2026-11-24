@@ -75,7 +75,7 @@ export function formatDateISO(date: Date | string | null | undefined): string {
 }
 
 /**
- * Get date string for input[type="date"] value
+ * Get date string for a date input's value
  * @param date Date to format (Date, string, null, or undefined)
  * @returns Formatted date string or empty string if no date provided
  */
@@ -96,6 +96,10 @@ export function formatDisplayDate(date: Date | string | null | undefined): strin
   const d = typeof date === 'string' ? dayjs(date, 'YYYY-MM-DD') : dayjs(date);
   return d.format('MMMM D, YYYY');
 }
+
+export const todayUtc = (): string => new Date().toISOString().slice(0, 10);
+
+export const yesterdayUtc = (): string => new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
 
 /** Pattern for display dates from formatDisplayDate (e.g., "February 7, 2026") */
 export const DISPLAY_DATE_REGEX =

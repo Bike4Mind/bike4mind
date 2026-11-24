@@ -298,7 +298,7 @@ export function BrowserMenu({
             )}
           </DialogContent>
           <Stack direction="row" spacing={1} justifyContent="flex-end" sx={{ pt: 1 }}>
-            <Button size="sm" variant="plain" color="neutral" onClick={() => setStep('closed')}>
+            <Button size="sm" variant="outlined" color="neutral" onClick={() => setStep('closed')}>
               {step === 'done' ? 'Close' : 'Cancel'}
             </Button>
             {step !== 'done' && (
@@ -460,7 +460,7 @@ function ManageSitesDialog({
           </Stack>
         </DialogContent>
         <Stack direction="row" spacing={1} justifyContent="flex-end" sx={{ pt: 1 }}>
-          <Button size="sm" variant="plain" color="neutral" onClick={onClose}>
+          <Button size="sm" variant="outlined" color="neutral" onClick={onClose}>
             Close
           </Button>
           <Button

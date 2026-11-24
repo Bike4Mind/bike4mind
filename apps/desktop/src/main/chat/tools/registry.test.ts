@@ -217,6 +217,80 @@ describe('toolsForRequest', () => {
       expect(isOfferedEditTool('file_read', true)).toBe(true);
     });
   });
+
+  // The provider caches tools as one prefix: a worker whose list is a prefix of its parent's reuses
+  // the parent's warm cache, and sibling workers starting together share one write.
+  it("declares a worker's tools as a prefix of its parent's, up to the per-session ones", () => {
+    const shared = {
+      roots: ['/tmp'],
+      media: true,
+      video: [publicVideoModel('gemini-omni-1.1-flash')],
+      host: true,
+      explore: true,
+      browser: true,
+      screen: true,
+      memory: true,
+      skills: true,
+      web: true,
+      mcp: [mcpSchema],
+      mcpServers: true,
+      pullRequest: true,
+      spawnModelHint: null,
+    };
+    const parent = toolsForRequest({ ...shared, ask: true, suggestions: false, delegates: true });
+    const worker = toolsForRequest({ ...shared, ask: false, structuredTask: true, managedDelegation: true });
+    const perSession = new Set([
+      'task_assess',
+      'session_spawn',
+      'quest_complete',
+      'task_report',
+      'ask_user',
+      'request_directory',
+      'loop',
+      'set_session_pull_request',
+      'mcp_add_server',
+    ]);
+    const firstPerSession = worker.findIndex(tool => perSession.has(tool.toolSchema.name));
+
+    expect(firstPerSession).toBeGreaterThan(0);
+    expect(JSON.stringify(worker.slice(0, firstPerSession))).toBe(JSON.stringify(parent.slice(0, firstPerSession)));
+    expect(worker.slice(firstPerSession).every(tool => perSession.has(tool.toolSchema.name))).toBe(true);
+    expect(
+      parent
+        .slice(firstPerSession)
+        .every(tool => perSession.has(tool.toolSchema.name) || tool.toolSchema.name.startsWith('mcp_'))
+    ).toBe(true);
+  });
+
+  it('offers isolation on session_spawn only to a session whose spawn reads it', () => {
+    const base = { roots: ['/tmp'], media: false, host: true, explore: false, spawnModelHint: null };
+    const spawnProperties = (tools: ReturnType<typeof toolsForRequest>) =>
+      tools.find(tool => tool.toolSchema.name === 'session_spawn')?.toolSchema.parameters.properties ?? {};
+
+    expect(spawnProperties(toolsForRequest({ ...base, ask: true, delegates: true }))).toHaveProperty('isolation');
+    const managed = spawnProperties(toolsForRequest({ ...base, ask: false, managedDelegation: true }));
+    expect(managed).toHaveProperty('contract');
+    expect(managed).not.toHaveProperty('isolation');
+  });
+
+  it("lets a task_assess revision leave a contract's defaulted fields out", () => {
+    const tools = toolsForRequest({
+      roots: ['/tmp'],
+      media: false,
+      host: true,
+      explore: false,
+      ask: true,
+      delegates: true,
+    });
+    const assess = tools.find(tool => tool.toolSchema.name === 'task_assess');
+    const action = assess?.toolSchema.parameters.properties.action as { oneOf?: unknown[]; anyOf?: unknown[] };
+    const variants = (action.oneOf ?? action.anyOf ?? []) as {
+      properties: { kind: { const: string }; contract?: { required?: string[] } };
+    }[];
+    const revise = variants.find(variant => variant.properties.kind.const === 'revise');
+
+    expect(revise?.properties.contract?.required?.sort()).toEqual(['acceptanceCriteria', 'outcome', 'role']);
+  });
 });
 
 describe('offeredMediaToolNames', () => {

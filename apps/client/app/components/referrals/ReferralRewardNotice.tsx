@@ -32,18 +32,28 @@ const formatDate = (iso: string) =>
 export const rewardNoticeMessage = (rewards: InviterRecentReward[]): string => {
   const total = rewards.reduce((sum, reward) => sum + reward.credits, 0);
   const soonest = rewards.map(reward => reward.expiresAt).sort()[0];
-  const subject = rewards.length === 1 ? 'a friend you invited' : `${rewards.length} friends you invited`;
-  return `You earned ${total.toLocaleString('en-US')} credits for ${subject}. They are ready to use and expire on ${formatDate(soonest)}.`;
+  const [only] = rewards;
+  const reason =
+    rewards.length === 1 && only.milestoneFriends
+      ? only.milestoneFriends === 1
+        ? 'your first active friend'
+        : `reaching ${only.milestoneFriends.toLocaleString('en-US')} active friends you invited`
+      : rewards.some(reward => reward.milestoneFriends)
+        ? 'your referrals'
+        : rewards.length === 1
+          ? 'a friend you invited'
+          : `${rewards.length} friends you invited`;
+  return `You earned ${total.toLocaleString('en-US')} credits for ${reason}. They are ready to use and expire on ${formatDate(soonest)}.`;
 };
 
 /**
  * Announces referral rewards that have become usable. Nothing is rendered. Only accounts that have sent an
- * invite ask the server, and the summary comes back disabled while the reward amounts are 0.
+ * invite or have a share link ask the server, and the summary comes back disabled while the reward amounts are 0.
  */
 export function ReferralRewardNotice() {
   const currentUser = useUser(s => s.currentUser);
   const userId = currentUser?.id;
-  const hasInvited = (currentUser?.regInvites?.length ?? 0) > 0;
+  const hasInvited = (currentUser?.regInvites?.length ?? 0) > 0 || !!currentUser?.referralCode;
   const { data: summary } = useGetReferralSummary({ enabled: !!userId && hasInvited });
   // Backs up storage for this page load, so blocked storage cannot repeat a toast on every refetch.
   const announced = useRef(new Set<string>());

@@ -53,6 +53,10 @@ export interface IPublishedArtifactDocument extends Omit<PublishedArtifactData, 
   thumbnail?: PublishedArtifactThumbnail | null;
   /** Current index payload relative to storageKeyPrefix; missing on legacy canonical writes. */
   indexObjectPath?: string | null;
+  /** Set only by the v1 publish endpoint, to the artifact id it published; absent on every other page. Backs the
+   *  one-live-page-per-artifact unique index, which the web flow (several slugs per artifact) must stay outside of. */
+  v1ArtifactId?: string | null;
+  verifiedExternalViewCount?: number;
   softDelete(deletedBy?: string): Promise<IPublishedArtifactDocument>;
   restore(): Promise<IPublishedArtifactDocument>;
 }
@@ -218,6 +222,7 @@ const PublishedArtifactSchema = new Schema(
 
     storageKeyPrefix: { type: String, default: '' },
     indexObjectPath: { type: String, default: null },
+    v1ArtifactId: { type: String },
     size: { type: SizeSubSchema, required: true, default: () => ({ totalBytes: 0, fileCount: 0 }) },
     sha256Index: { type: String },
     manifest: { type: [ArtifactFileSubSchema], default: [] },
@@ -239,9 +244,10 @@ const PublishedArtifactSchema = new Schema(
     /** See PublishedArtifactThumbnail. Absent until the first render lands. */
     thumbnail: { type: ThumbnailSubSchema, default: undefined },
     viewCount: { type: Number, default: 0, min: 0 },
-    /** Views by anyone OTHER than the signed-in owner (anonymous counts as
-     *  external). Feeds the Published gear and social proof; best-effort. */
+    /** Authenticated non-owner views for analytics. */
     externalViewCount: { type: Number, default: 0, min: 0 },
+    /** Verified non-owner views recorded after page admission; used for gear rewards. */
+    verifiedExternalViewCount: { type: Number, default: 0, min: 0 },
 
     /** Concurrency lock for AI revise - set while a revision is in flight,
      *  cleared when it finishes (or expires). Prevents two concurrent revisions
@@ -313,6 +319,12 @@ PublishedArtifactSchema.index({ 'source.fabFileId': 1 }); // fabfile lookups
 // update-existing-vs-new choice. Scoped by owner so the lookup matches the
 // caller's own publication of that artifact.
 PublishedArtifactSchema.index({ 'source.artifactId': 1, ownerId: 1, deletedAt: 1 });
+// One live page per artifact and owner for pages the v1 publish API creates. Keyed on the marker, not on
+// `source.artifactId`, because the web flow legitimately publishes one artifact under several slugs.
+PublishedArtifactSchema.index(
+  { ownerId: 1, v1ArtifactId: 1 },
+  { unique: true, partialFilterExpression: { v1ArtifactId: { $type: 'string' }, deletedAt: null } }
+);
 PublishedArtifactSchema.index({ publishedAt: -1 }); // recency
 PublishedArtifactSchema.index({ moderationStatus: 1, reportCount: -1 }); // admin moderation queue
 PublishedArtifactSchema.index({ tier: 1, scopeId: 1, deletedAt: 1 }); // org-scope quota aggregation

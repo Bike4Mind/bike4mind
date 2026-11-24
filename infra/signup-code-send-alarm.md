@@ -59,6 +59,14 @@ the same account do not combine their counts. Each alarm compares its `Sum` with
 the configured threshold using `GreaterThanOrEqualToThreshold`; missing data is
 not breaching.
 
+A Contributor Insights rule, `<app>-<stage>-signup-code-send-sources`, keys the
+same `otc-code-dispatched` lines on the log's `clientIp`. Its `UniqueContributors`
+statistic (`INSIGHT_RULE_METRIC('<rule>', 'UniqueContributors')`, or
+`GetInsightRuleReport`) is the number of distinct source addresses behind the
+codes sent, so one address sending many codes reads differently from many
+addresses sending one each. It has no alarm. The key is the raw address, so IPv6
+addresses in one /64 count separately.
+
 `otc-code-suppressed` is logged when a sign-in code is issued but not mailed
 because the address was refused (blocked domain or no mail host) and has no
 account. It carries `reason` and the address's `domain`, never the full address.

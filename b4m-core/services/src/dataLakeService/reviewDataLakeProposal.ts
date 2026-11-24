@@ -350,7 +350,18 @@ async function runAdmission(
   // Best-effort, same as recordAdmission above: the approval has already landed, so an audit-write
   // failure here must never turn into a reported failure for work that in fact succeeded.
   const { action, change } = plan.audit(proposal, trustedDomain);
-  await recordLakeConfigChange({ actor: plan.actor, lake, grants, action, changes: [change] }, { db, logger });
+  await recordLakeConfigChange(
+    {
+      actor: plan.actor,
+      lake,
+      grants,
+      action,
+      changes: [change],
+      target: { kind: 'proposal', id: proposalId },
+      admittedFabFileId: fabFile.id,
+    },
+    { db, logger }
+  );
 
   return { admitted: true, proposal: { ...claimed, admittedFabFileId: fabFile.id }, fabFile };
 }
@@ -517,6 +528,7 @@ export async function declineDataLakeProposal(
       lake,
       grants,
       action: 'decline-proposal',
+      target: { kind: 'proposal', id: proposalId },
       changes: [proposalReviewChange(declined, 'declined')],
     },
     { db, logger }
@@ -569,6 +581,7 @@ export async function restoreDataLakeProposal(
       lake,
       grants,
       action: 'restore-proposal',
+      target: { kind: 'proposal', id: proposalId },
       changes: [proposalReviewChange(result.proposal, 'restored')],
     },
     { db, logger }

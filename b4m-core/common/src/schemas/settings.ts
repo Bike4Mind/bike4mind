@@ -42,6 +42,7 @@ import {
 } from '../constants/knowledgeBaseSearch';
 import { BULK_CHANGE_SHARE_PCT_DEFAULT } from '../constants/lakeConvergence';
 import { THINKING_VISIBILITY_LEVELS } from '../utils/streamVisibility';
+import { parseReferralMilestones } from '../utils/referralMilestones';
 import {
   ADMIN_AUDIT_DEFAULT_CRITICAL_GRANT_CREDITS,
   ADMIN_AUDIT_DEFAULT_DAILY_GRANT_CREDITS,
@@ -62,6 +63,7 @@ import {
   VoyageAIEmbeddingModel,
 } from './embedding';
 import { SreAgentConfigSchema } from '../types/entities/SreTypes';
+import { DEFAULT_FEATURE_SPIKE_MULTIPLE } from '../types/entities/SpendExplorerTypes';
 import {
   hasNestedSecretValue,
   isValidNestedSecretGroups,
@@ -337,6 +339,8 @@ export const SettingKeySchema = z.enum([
   'EnableMementosDefault',
   'EnableArtifacts',
   'EnableArtifactsDefault',
+  'pythonArtifactDataOrigins',
+  'EnableCallableFunctions',
   'EnableAgents',
   'EnableAgentsDefault',
   'EnableAgentMode',
@@ -392,8 +396,10 @@ export const SettingKeySchema = z.enum([
   'ReferralFirstAnswerCredits',
   'ReferralFirstPaymentCredits',
   'ReferralSecondPaymentCredits',
+  'ReferralMilestones',
   'ReferralHoldDays',
   'ReferralInvitesPerUser',
+  'ReferralLinkSignupsPerMonth',
   'ReferralAlertRewardsPerDay',
   'BedrockNewsPuzzleCredits5',
   'BedrockNewsPuzzleCredits6',
@@ -559,6 +565,7 @@ export const SettingKeySchema = z.enum([
   'spendMonitorSlackEnabled',
   'spendMonitorPlatformSpikeRatio',
   'spendMonitorPlatformCriticalRatio',
+  'spendExplorerFeatureSpikeMultiple',
   'spendMonitorPlatformSpikeFloorCredits',
   'spendMonitorPlatformCostFloorUsd',
   'spendMonitorAccountSpikeRatio',
@@ -575,6 +582,10 @@ export const SettingKeySchema = z.enum([
   'spendMonitorMarginMinRatio',
   'spendMonitorMarginWindowHours',
   'spendMonitorMarginCostFloorUsd',
+  'spendMonitorAutoPauseMode',
+  'spendMonitorAutoPauseStandardMinCredits',
+  'spendMonitorAutoPausePaidMinCredits',
+  'spendMonitorAutoPauseTrustedMinCredits',
   'youngAccountSpendPageUsdPerHour',
   'youngAccountSpendWarnUsdPerHour',
   'freeTierDailySystemCostCapUsd',
@@ -715,6 +726,9 @@ export const SettingKeySchema = z.enum([
   'elevenLabsServerApiKey',
   'elevenLabsMusicConcurrencyLimit',
   'elevenLabsSoundConcurrencyLimit',
+  'elevenLabsPlanCycleStartDay',
+  'elevenLabsPlanMonthlyCredits',
+  'elevenLabsPlanAgentMinutes',
   'voiceSessionAiVoice',
   'voiceSessionTranscriptionModel',
   'voiceSessionVadType',
@@ -931,6 +945,12 @@ export const OrchestrationDefaultsSchema = z.object({
     'excel_generation',
     // Only offered when the run gets a video config, which enforces agentVideoClipsPerRun.
     'video_generation',
+    // Only offered when the run gets a production config: the Productions flag and its audience rule must open to
+    // the run's user (never an API-key run). Each writes only a composition the user owns; every take is a capped job.
+    'production_storyboard',
+    'production_generate_shot',
+    'production_add_audio',
+    'production_assemble',
     // Inline visualization artifacts: these emit an <artifact> block in the
     // tool result and write nothing - no storage, no user-data mutation - so
     // they are strictly safer than the storage-backed tools above. Without
@@ -1308,6 +1328,10 @@ function makeStringSetting(
       : z.string(),
   };
 }
+
+/** Modes of the spend monitor's automatic pause; read by apps/workers/src/cron/spendMonitor/autoPause.ts. */
+export const SPEND_AUTO_PAUSE_MODES = ['off', 'shadow', 'enforce'] as const;
+export type SpendAutoPauseMode = (typeof SPEND_AUTO_PAUSE_MODES)[number];
 
 /**
  * The default per-user write limit's modes and its default cap. Shared with the middleware that reads
@@ -1730,6 +1754,30 @@ export type AbuseAssessmentConfig = z.infer<typeof AbuseAssessmentConfigSchema>;
 export const AUTO_CONTAINMENT_MODES = ['off', 'shadow', 'enforce'] as const;
 export type AutoContainmentMode = (typeof AUTO_CONTAINMENT_MODES)[number];
 
+const interventionTierShape = {
+  mode: z.enum(AUTO_CONTAINMENT_MODES).prefault('off').meta({
+    title: 'Mode',
+    description: 'off: no decisions for this tier. shadow: record what would be done. enforce: apply the hold.',
+  }),
+  minConfidence: z.number().min(0.5).max(1).prefault(0.9).meta({
+    title: 'Minimum confidence',
+    description: "The judgment's confidence (0.5-1) at or above which this tier acts.",
+  }),
+  maxPerHour: z.number().int().min(0).max(100).prefault(5).meta({
+    title: 'Decisions per hour',
+    description: 'Decisions for this tier per fixed one-hour window, counted per mode.',
+  }),
+  expiryHours: z.number().int().min(1).max(720).prefault(72).meta({
+    title: 'Expiry (hours)',
+    description: 'A hold lapses on its own after this many hours unless released sooner.',
+  }),
+  rolloutPercent: z.number().int().min(0).max(100).prefault(0).meta({
+    title: 'Rollout percent',
+    description: 'Share of accounts (stable per account) this tier applies to. 0 applies it to nobody.',
+  }),
+};
+const interventionTierConfig = (title: string) => z.object(interventionTierShape).prefault({}).meta({ title });
+
 /**
  * Automated containment from abuse assessments (apps/workers/src/security/autoContainment). Acts
  * only on an `abuse` judgment at or above minConfidence, through the admin bulk Contain path.
@@ -1772,8 +1820,35 @@ export const AutoContainmentConfigSchema = z.object({
     title: 'Device-link common networks',
     description: 'A device seen on signups from this many distinct networks in 30 days is mainstream, never evidence.',
   }),
+  tiers: z
+    .object({
+      limit: z
+        .object({
+          ...interventionTierShape,
+          creditsPerHour: z.number().int().min(0).max(1_000_000).prefault(1000).meta({
+            title: 'Credits per hour',
+            description: 'AI spend admitted per fixed one-hour window while a limit hold is active.',
+          }),
+        })
+        .prefault({})
+        .meta({ title: 'Limit spend' }),
+      verify: interventionTierConfig('Require verification').meta({
+        title: 'Require verification',
+        description:
+          'Not used yet: no card or phone verification flow can clear a verify hold, so verify decisions run under Request review and its settings.',
+      }),
+      holdGrant: interventionTierConfig('Hold signup grant'),
+      review: interventionTierConfig('Request review'),
+    })
+    .prefault({})
+    .meta({
+      title: 'Intervention tiers',
+      description:
+        'Graduated interventions below Contain. Each tier is off by default; mode off above turns every tier off.',
+    }),
 });
 export type AutoContainmentConfig = z.infer<typeof AutoContainmentConfigSchema>;
+export type InterventionTierConfig = AutoContainmentConfig['tiers']['verify'];
 
 export const ADMIN_AI_MODES = ['off', 'shadow', 'recommend', 'act'] as const;
 export type AdminAiMode = (typeof ADMIN_AI_MODES)[number];
@@ -2208,7 +2283,7 @@ export const CONTEXT_TELEMETRY_VALIDATION_LIMITS = {
   criticalThreshold: { min: 0, max: 100, default: 50 },
   dedupWindowMinutes: { min: 1, max: 60, default: 5 },
 
-  // Issue Deduplication & Regression (aligned with LiveOps)
+  // Issue Deduplication & Regression
   regressionLookbackDays: { min: 7, max: 180, default: 30 },
   regressionGracePeriodHours: { min: 1, max: 168, default: 48 }, // 1 hour to 1 week, default 48 hours
   duplicateAlertCooldownHours: { min: 1, max: 168, default: 24 }, // Hours before re-alerting for same fingerprint
@@ -2230,20 +2305,19 @@ export const CONTEXT_TELEMETRY_VALIDATION_LIMITS = {
 } as const;
 
 // Context Telemetry Alert Configuration Schema
-// Aligned with LiveOps Triage pattern for Slack/GitHub/LLM integrations
 const CT = CONTEXT_TELEMETRY_VALIDATION_LIMITS; // Shorthand for readability
 
 export const ContextTelemetryAlertsSchema = z.object({
   /** Whether telemetry alerts are enabled */
   enabled: z.boolean().default(false),
 
-  // Slack Integration (OAuth-based like LiveOps Triage)
+  // Slack Integration (OAuth-based)
   /** MongoDB ObjectId of the Slack workspace to use */
   slackWorkspaceId: z.string().optional(),
   /** Slack channel ID for posting anomaly alerts */
   slackChannelId: z.string().optional(),
 
-  // GitHub Integration (uses GitHubService like LiveOps Triage)
+  // GitHub Integration (uses GitHubService)
   /** GitHub repository owner (user or organization) */
   githubOwner: z.string().optional(),
   /** GitHub repository name */
@@ -2285,7 +2359,7 @@ export const ContextTelemetryAlertsSchema = z.object({
     .max(CT.dedupWindowMinutes.max)
     .default(CT.dedupWindowMinutes.default),
 
-  // Issue Deduplication & Regression (aligned with LiveOps)
+  // Issue Deduplication & Regression
   /** Days to look back for closed issues when checking for regressions (default: 30) */
   regressionLookbackDays: z
     .number()
@@ -2638,6 +2712,9 @@ export const API_SERVICE_GROUPS = {
       { key: 'elevenLabsServerApiKey', order: 7 },
       { key: 'elevenLabsMusicConcurrencyLimit', order: 8 },
       { key: 'elevenLabsSoundConcurrencyLimit', order: 9 },
+      { key: 'elevenLabsPlanCycleStartDay', order: 10 },
+      { key: 'elevenLabsPlanMonthlyCredits', order: 11 },
+      { key: 'elevenLabsPlanAgentMinutes', order: 12 },
     ],
   },
   XAI: {
@@ -2785,6 +2862,8 @@ export const API_SERVICE_GROUPS = {
       { key: 'EnableAgentModeDefault', order: 16 },
       { key: 'EnableArtifacts', order: 20 },
       { key: 'EnableArtifactsDefault', order: 21 },
+      { key: 'pythonArtifactDataOrigins', order: 22 },
+      { key: 'EnableCallableFunctions', order: 23 },
       { key: 'EnableBriefcase', order: 25 },
       { key: 'EnableBriefcaseDefault', order: 26 },
       { key: 'EnableImageTemplates', order: 27 },
@@ -2890,6 +2969,7 @@ export const API_SERVICE_GROUPS = {
       { key: 'spendMonitorSlackEnabled', order: 19.42 },
       { key: 'spendMonitorPlatformSpikeRatio', order: 19.43 },
       { key: 'spendMonitorPlatformCriticalRatio', order: 19.44 },
+      { key: 'spendExplorerFeatureSpikeMultiple', order: 19.445 },
       { key: 'spendMonitorPlatformSpikeFloorCredits', order: 19.45 },
       { key: 'spendMonitorPlatformCostFloorUsd', order: 19.46 },
       { key: 'spendMonitorAccountSpikeRatio', order: 19.47 },
@@ -2906,6 +2986,10 @@ export const API_SERVICE_GROUPS = {
       { key: 'spendMonitorMarginMinRatio', order: 19.4942 },
       { key: 'spendMonitorMarginWindowHours', order: 19.4943 },
       { key: 'spendMonitorMarginCostFloorUsd', order: 19.4944 },
+      { key: 'spendMonitorAutoPauseMode', order: 19.4945 },
+      { key: 'spendMonitorAutoPauseStandardMinCredits', order: 19.4946 },
+      { key: 'spendMonitorAutoPausePaidMinCredits', order: 19.4947 },
+      { key: 'spendMonitorAutoPauseTrustedMinCredits', order: 19.4948 },
       { key: 'youngAccountSpendPageUsdPerHour', order: 19.495 },
       { key: 'youngAccountSpendWarnUsdPerHour', order: 19.496 },
       { key: 'freeTierDailySystemCostCapUsd', order: 19.5 },
@@ -3768,6 +3852,35 @@ export const settingsMap = {
     order: 21,
     dependsOn: 'EnableArtifacts',
   }),
+  pythonArtifactDataOrigins: makeObjectSetting<string[]>({
+    key: 'pythonArtifactDataOrigins',
+    name: 'Python Artifact Data Origins',
+    defaultValue: [],
+    description:
+      'Public HTTPS origins that Python artifact code may fetch data from, one per line, such as https://data.example.com (at most 10). Origin only: no path, wildcard, IP address, local hostname or host on this app. Requests come from an isolated frame and carry none of the cookies or tokens of this app, but the code can send anything inside the artifact to a listed origin, so list only public data hosts you trust. The model is told the list. Empty (default): Python artifacts can reach only the Python package CDN. A change applies to pages loaded up to ten minutes after it is saved; a page that has already run Python keeps the earlier list until it is reloaded.',
+    category: 'Experimental',
+    group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
+    order: 22,
+    dependsOn: 'EnableArtifacts',
+    // The Python viewer shows the list to every user.
+    userReadable: true,
+    // Plain strings so the update route can name each bad entry; every reader applies
+    // resolvePythonArtifactDataOrigins, which drops the whole list if any entry is invalid.
+    schema: z.array(z.string()),
+  }),
+  EnableCallableFunctions: makeBooleanSetting({
+    key: 'EnableCallableFunctions',
+    name: 'Enable Callable Functions',
+    defaultValue: false,
+    description:
+      'Lets a person call the run function of a Python artifact with typed inputs. Off (default): Python artifacts behave as before. Can be overridden per organization.',
+    category: 'Experimental',
+    group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
+    order: 23,
+    dependsOn: 'EnableArtifacts',
+    // Read through resolveCallableFunctionsEnabled in packages/server-utils, never as the raw platform value.
+    scope: { settableAt: [SettingScopeLevel.Organization] },
+  }),
   EnableAgents: makeBooleanSetting({
     key: 'EnableAgents',
     name: 'Enable Agents',
@@ -4379,7 +4492,7 @@ export const settingsMap = {
     max: 1000000,
     int: true,
     description:
-      "Max content-moderation scans a Free-tier user's uploaded images may use per 24 hours. A still image is one scan; an animated image is one scan per sampled frame (at most 10). Images over the limit stay pending (not shown) until the window resets and they are scanned. Admin-restricted users get this limit too. Set to 0 to hold every uploaded image for these users.",
+      "Max content-moderation scans a Free-tier user's uploaded images may use per 24 hours. A still image is one scan; an animated image is one scan per distinct frame (at most 60). Images over the limit stay pending (not shown) until the window resets and they are scanned. Admin-restricted users get this limit too. Set to 0 to hold every uploaded image for these users.",
     category: 'SecOps',
     group: API_SERVICE_GROUPS.RATE_LIMITING.id,
     order: 10,
@@ -4611,6 +4724,20 @@ export const settingsMap = {
       "Credits the inviter earns on the invited friend's second full-price Professional payment, usable after the hold. 0 turns this reward off. Payments made while both payment rewards are 0 are not counted.",
     category: 'Referrals',
   }),
+  ReferralMilestones: {
+    ...makeStringSetting({
+      key: 'ReferralMilestones',
+      name: 'Referral Reward: Milestones',
+      defaultValue: '',
+      description:
+        'Credits an inviter earns once a number of the friends they referred are active (a verified email and a first answer), as friends:credits pairs separated by commas, e.g. 5:500, 10:1500. Each milestone pays once. An inviter already past a milestone is paid it when their next friend becomes active. Empty turns milestones off.',
+      category: 'Referrals',
+    }),
+    schema: z.string().refine(value => parseReferralMilestones(value) !== null, {
+      message:
+        'Use friends:credits pairs separated by commas, e.g. 5:500, 10:1500. At most 10, each friend count once, 1 to 10,000 friends and 1 to 100,000,000 credits.',
+    }),
+  },
   ReferralHoldDays: makeNumberSetting({
     key: 'ReferralHoldDays',
     name: 'Referral Reward Hold (days)',
@@ -4631,6 +4758,17 @@ export const settingsMap = {
     max: 1000,
     description:
       'Invites a user starts with when they register by email code. Existing users keep theirs; OAuth sign-ups start with 0 and admin-created accounts with 3.',
+    category: 'Referrals',
+  }),
+  ReferralLinkSignupsPerMonth: makeNumberSetting({
+    key: 'ReferralLinkSignupsPerMonth',
+    name: 'Referral Link Signups Per Month',
+    defaultValue: 10,
+    int: true,
+    min: 0,
+    max: 1000,
+    description:
+      "Most signups a user's share link can be credited with in any 30 days. Signups past it still create the account but credit nobody, so they earn no referral reward. 0 stops share links from crediting anyone.",
     category: 'Referrals',
   }),
   ReferralAlertRewardsPerDay: makeNumberSetting({
@@ -6028,6 +6166,17 @@ export const settingsMap = {
     group: API_SERVICE_GROUPS.CREDITS.id,
     category: 'SecOps',
   }),
+  spendExplorerFeatureSpikeMultiple: makeNumberSetting({
+    key: 'spendExplorerFeatureSpikeMultiple',
+    name: 'Spend Explorer: Feature Spike Multiple',
+    defaultValue: DEFAULT_FEATURE_SPIKE_MULTIPLE,
+    int: false,
+    min: 1,
+    description:
+      'Ratio. The Spend explorer flags a feature, or a user of a feature, as a spike when its cost on the last complete UTC day of the range is above this multiple of its average daily cost over the 7 days before. Display only; nothing alerts on it. Changes show within 5 minutes (the explorer caches its results). Minimum 1.',
+    group: API_SERVICE_GROUPS.CREDITS.id,
+    category: 'SecOps',
+  }),
   spendMonitorPlatformSpikeFloorCredits: makeNumberSetting({
     key: 'spendMonitorPlatformSpikeFloorCredits',
     name: 'Spend Monitor: Platform Spike Floor',
@@ -6196,6 +6345,49 @@ export const settingsMap = {
     min: 1,
     description:
       'USD of provider cost a model needs in the margin window before the margin check can flag it, so low-volume models do not alert. Minimum 1.',
+    group: API_SERVICE_GROUPS.CREDITS.id,
+    category: 'SecOps',
+  }),
+  spendMonitorAutoPauseMode: makeStringSetting({
+    key: 'spendMonitorAutoPauseMode',
+    name: 'Spend Monitor: Automatic Pause Mode',
+    defaultValue: 'shadow',
+    options: [...SPEND_AUTO_PAUSE_MODES],
+    description:
+      '"shadow" (default): an open spend incident that reaches its tier\'s automatic pause threshold is marked "Would pause" on the Spend monitor page, and nothing is paused. "enforce": the paying user, organization or API key gets a spending freeze, which an admin lifts from the Spend monitor page. "off": incidents are never evaluated for pausing.',
+    group: API_SERVICE_GROUPS.CREDITS.id,
+    category: 'SecOps',
+  }),
+  spendMonitorAutoPauseStandardMinCredits: makeNumberSetting({
+    key: 'spendMonitorAutoPauseStandardMinCredits',
+    name: 'Spend Monitor: Automatic Pause Threshold (Standard)',
+    defaultValue: 10_000,
+    int: true,
+    min: 0,
+    description:
+      'Credits per 15-minute window. An open incident on a standard account or API key whose current window spend reaches this value is paused (or marked in shadow mode). 0 turns automatic pausing off for standard accounts.',
+    group: API_SERVICE_GROUPS.CREDITS.id,
+    category: 'SecOps',
+  }),
+  spendMonitorAutoPausePaidMinCredits: makeNumberSetting({
+    key: 'spendMonitorAutoPausePaidMinCredits',
+    name: 'Spend Monitor: Automatic Pause Threshold (Paid)',
+    defaultValue: 0,
+    int: true,
+    min: 0,
+    description:
+      'Credits per 15-minute window. Same as the standard threshold, for accounts held to the paid-account limits. 0 (default) turns automatic pausing off for paid accounts.',
+    group: API_SERVICE_GROUPS.CREDITS.id,
+    category: 'SecOps',
+  }),
+  spendMonitorAutoPauseTrustedMinCredits: makeNumberSetting({
+    key: 'spendMonitorAutoPauseTrustedMinCredits',
+    name: 'Spend Monitor: Automatic Pause Threshold (Trusted)',
+    defaultValue: 0,
+    int: true,
+    min: 0,
+    description:
+      'Credits per 15-minute window. Same as the standard threshold, for trusted accounts. 0 (default) turns automatic pausing off for trusted accounts.',
     group: API_SERVICE_GROUPS.CREDITS.id,
     category: 'SecOps',
   }),
@@ -8062,6 +8254,45 @@ export const settingsMap = {
     category: 'AI',
     group: API_SERVICE_GROUPS.VOICE_SESSION.id,
     order: 13,
+  }),
+  // Plan allowance and billing cycle for the ElevenLabs usage admin view (api/admin/elevenlabs-usage).
+  // 0 means "not configured": the view shows usage without a percentage of plan.
+  elevenLabsPlanCycleStartDay: makeNumberSetting({
+    key: 'elevenLabsPlanCycleStartDay',
+    name: 'ElevenLabs Billing Cycle Start Day',
+    defaultValue: 1,
+    min: 1,
+    max: 31,
+    int: true,
+    description:
+      'Day of the month (UTC) the ElevenLabs subscription renews and its credit quota resets. In shorter months a later day falls on the last day of the month. Used by the ElevenLabs usage view under Credits.',
+    category: 'AI',
+    group: API_SERVICE_GROUPS.VOICE_SESSION.id,
+    order: 14,
+  }),
+  elevenLabsPlanMonthlyCredits: makeNumberSetting({
+    key: 'elevenLabsPlanMonthlyCredits',
+    name: 'ElevenLabs Plan Monthly Credits',
+    defaultValue: 0,
+    min: 0,
+    int: true,
+    description:
+      'Credits the ElevenLabs plan includes per billing cycle (text to speech, sound effects and music draw from this pool). 0 leaves the allowance unset. Used by the ElevenLabs usage view under Credits.',
+    category: 'AI',
+    group: API_SERVICE_GROUPS.VOICE_SESSION.id,
+    order: 15,
+  }),
+  elevenLabsPlanAgentMinutes: makeNumberSetting({
+    key: 'elevenLabsPlanAgentMinutes',
+    name: 'ElevenLabs Plan Agent Minutes',
+    defaultValue: 0,
+    min: 0,
+    int: true,
+    description:
+      'Conversational agent call minutes the ElevenLabs plan includes per billing cycle (agents are billed by minute, not from the credit pool). 0 leaves the allowance unset. Used by the ElevenLabs usage view under Credits.',
+    category: 'AI',
+    group: API_SERVICE_GROUPS.VOICE_SESSION.id,
+    order: 16,
   }),
   voiceSessionAiVoice: makeStringSetting({
     key: 'voiceSessionAiVoice',

@@ -127,6 +127,7 @@ vi.mock('@bike4mind/server-utils/premium-generated/premiumWorkspaceSessionSettin
 }));
 
 import handler from '../index';
+import versionedHandler from '../../../v1/sessions/[id]/index';
 import { ApiKeyScope, ConcurrencyConflictError, NotFoundError, SessionEvents } from '@bike4mind/common';
 
 const VALID_KEY = 'sk-test-valid-key';
@@ -192,7 +193,15 @@ describe('/api/sessions/[id] (integration - dispatcher + contract wiring)', () =
     keyWithScopes([ApiKeyScope.WRITE_NOTEBOOKS]);
   });
 
-  describe('GET', () => {
+  describe.each([
+    ['legacy', handler],
+    ['v1', versionedHandler],
+  ])('GET %s', (_version, getHandler) => {
+    const sessionId = '507f1f77bcf86cd799439011';
+    const runGet: typeof handler = (req, res) => {
+      req.query.id = sessionId;
+      return getHandler(req, res);
+    };
     it('reads the session by the id in the path and redacts systemPromptText', async () => {
       mockGetSession.mockResolvedValue({
         id: 'sess-1',
@@ -201,9 +210,9 @@ describe('/api/sessions/[id] (integration - dispatcher + contract wiring)', () =
         systemPromptText: 'top secret prompt',
       });
       const { req, res } = fire({ method: 'GET' });
-      await handler(req, res);
+      await runGet(req, res);
       expect(res._getStatusCode()).toBe(200);
-      expect(mockGetSession).toHaveBeenCalledWith('user-1', { id: 'sess-1' }, expect.anything());
+      expect(mockGetSession).toHaveBeenCalledWith('user-1', { id: sessionId }, expect.anything());
       expect(res._getJSONData()).not.toHaveProperty('systemPromptText');
     });
 
@@ -218,7 +227,7 @@ describe('/api/sessions/[id] (integration - dispatcher + contract wiring)', () =
         maxToolCalls: 4,
       });
       const { req, res } = fire({ method: 'GET' });
-      await handler(req, res);
+      await runGet(req, res);
       expect(res._getStatusCode()).toBe(200);
       const body = res._getJSONData();
       expect(body.enabledTools).toEqual(['tool_w']);
@@ -241,7 +250,7 @@ describe('/api/sessions/[id] (integration - dispatcher + contract wiring)', () =
           maxToolCalls: 4,
         });
         const { req, res } = fire({ method: 'GET' });
-        await handler(req, res);
+        await runGet(req, res);
         expect(res._getStatusCode()).toBe(200);
         const body = res._getJSONData();
         expect(body).not.toHaveProperty('enabledTools');
@@ -256,7 +265,7 @@ describe('/api/sessions/[id] (integration - dispatcher + contract wiring)', () =
         keyWithScopes([scope]);
         mockGetSession.mockResolvedValue({ id: 'sess-1', name: 'Untitled', userId: 'user-1' });
         const { req, res } = fire({ method: 'GET' });
-        await handler(req, res);
+        await runGet(req, res);
         expect(res._getStatusCode()).toBe(200);
       }
     );
@@ -264,22 +273,33 @@ describe('/api/sessions/[id] (integration - dispatcher + contract wiring)', () =
     it('404s a session not visible to the caller', async () => {
       mockGetSession.mockRejectedValue(new NotFoundError('Session not found'));
       const { req, res } = fire({ method: 'GET' });
-      await handler(req, res);
+      await runGet(req, res);
       expect(res._getStatusCode()).toBe(404);
+      expect(res._getJSONData()).toMatchObject({ error: 'Session not found' });
     });
 
     it('403s a key with neither notebooks scope before the handler runs', async () => {
       keyWithScopes([ApiKeyScope.AI_CHAT]);
       const { req, res } = fire({ method: 'GET' });
-      await handler(req, res);
+      await runGet(req, res);
       expect(res._getStatusCode()).toBe(403);
+      expect(res._getJSONData()).toHaveProperty('error', expect.any(String));
       expect(mockGetSession).not.toHaveBeenCalled();
     });
 
     it('401s an unauthenticated GET before the handler runs', async () => {
       const { req, res } = fire({ method: 'GET', apiKey: null });
-      await handler(req, res);
+      await runGet(req, res);
       expect(res._getStatusCode()).toBe(401);
+      expect(res._getJSONData()).toHaveProperty('error', expect.any(String));
+      expect(mockGetSession).not.toHaveBeenCalled();
+    });
+
+    it('returns a standard 404 for malformed v1 ids without reading a session', async () => {
+      const { req, res } = fire({ method: 'GET' });
+      await versionedHandler(req, res);
+      expect(res._getStatusCode()).toBe(404);
+      expect(res._getJSONData()).toMatchObject({ error: 'Session not found' });
       expect(mockGetSession).not.toHaveBeenCalled();
     });
   });

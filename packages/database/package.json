@@ -1,6 +1,6 @@
 {
   "name": "@bike4mind/database",
-  "version": "0.4.29",
+  "version": "0.4.30",
   "private": true,
   "type": "module",
   "main": "dist/index.mjs",
@@ -52,6 +52,7 @@
     "typecheck:native": "tsgo --noEmit --types node",
     "typecheck:fast": "tsgo --noEmit --types node || tsc --noEmit",
     "test": "vitest run",
+    "test:repo": "REPO_TEST_LANE=repo vitest run",
     "test:coverage": "vitest run --coverage",
     "test:ui": "vitest --ui",
     "generate:model-price-seed": "tsx src/seeds/regenerateModelPriceSeed.ts",

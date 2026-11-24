@@ -13,7 +13,6 @@
  *   pages/api/<stub>.ts (per-package)                  - Next.js API stubs
  *   server/premium-generated/<stub>.ts (per-package)   - SST Lambda handler stubs
  *   server/premium-generated/premiumPartnerSignupHooks.generated.ts - post-signup partner-rule hooks
- *   server/premium-generated/premiumDataSubjectRegistry.generated.ts - overlay data-subject classifications
  *   app/premium-generated/premiumLocalStorageKeys.generated.ts - owned LS key prefixes
  *   app/premium-generated/premiumWorkspaceCopyEntitlements.generated.ts - workspace copy grants
  *   app/premium-generated/premiumWorkspaceGrantDisplays.generated.ts - how a grant shows its workspace
@@ -28,13 +27,16 @@
  *
  *   premiumLlmTools.generated.ts - LLM tool contributions
  *   premiumSystemPrompts.generated.ts - system prompt contributions
+ *   premiumNavigableViews.generated.ts - navigation view registry contributions
  *   premiumAgentExtensions.generated.ts - agent surface profiles + tool-map guards
  *   premiumAdminSettings.generated.ts - contributed admin setting definitions
  *   premiumTutorialOwners.generated.ts - tutorial owner contributions
+ *   premiumSlackInteractiveActions.generated.ts - Slack interactive action handlers
  *   premiumWorkspaceSessionSettings.generated.ts - session fields owned per workspace
  *   premiumWorkspaceDeniedTools.generated.ts - tools denied per workspace
  *   premiumEntitlementGrants.generated.ts - entitlement registry rows
  *   premiumApiKeyScopes.generated.ts - contributed API-key scopes
+ *   premiumDataSubjectRegistry.generated.ts - overlay data-subject classifications
  *
  * Two distinct "empty" forms when no premium packages are present:
  *   SPA/nav   -> emit the file with an empty exported array
@@ -1455,6 +1457,43 @@ function generateSystemPrompts(packages) {
   );
 }
 
+// Premium packages can contribute admin pages to the navigate_view registry
+// (b4mContributions.navigableViewsExport -> a module exporting `navigableViews: NavigableView[]`).
+// server-utils' navigation/registerContributedViews.ts imports this file for its side effect, so it
+// must exist in BOTH forms; the registry validates every entry when it registers.
+function generateNavigableViews(packages) {
+  const outPath = join(SERVER_UTILS_GENERATED_DIR, 'premiumNavigableViews.generated.ts');
+  const typeImport = `import type { NavigableView } from '@bike4mind/common';`;
+
+  const contributors = packages.filter(p => p.contributions.navigableViewsExport);
+
+  if (contributors.length === 0) {
+    writeFile(
+      outPath,
+      `${GENERATED_BANNER}\n${typeImport}\n\nexport const premiumNavigableViews: NavigableView[] = [];\n`
+    );
+    return;
+  }
+
+  contributors.forEach(p =>
+    assertModuleSpecifier(p.contributions.navigableViewsExport, p.name, 'navigableViewsExport')
+  );
+
+  const imports = contributors
+    .map((p, i) => {
+      const spec = relativeOverlayImport(p, p.contributions.navigableViewsExport, 'navigableViewsExport', outPath);
+      return `import { navigableViews as views${i} } from '${spec}';`;
+    })
+    .join('\n');
+
+  const items = contributors.map((_, i) => `  ...views${i}`).join(',\n');
+
+  writeFile(
+    outPath,
+    `${GENERATED_BANNER}\n${typeImport}\n${imports}\n\nexport const premiumNavigableViews: NavigableView[] = [\n${items}\n];\n`
+  );
+}
+
 // Premium packages can run their own grant after a partner signup rule matches
 // (b4mContributions.partnerSignupHooksExport -> a module exporting `partnerSignupHooks:
 // PartnerSignupHook[]`). server/entitlements/signupDomainGrant.ts statically imports this
@@ -1492,11 +1531,11 @@ function generatePartnerSignupHooks(packages) {
 // Premium packages can classify their own models for data-subject erasure and export
 // (b4mContributions.dataSubjectRegistryExport -> a module whose import registers the package's
 // mongoose models and which exports `dataSubjectRegistry: ContributedDataHolderRegistry`).
-// server/dataSubject/registry/index.ts statically imports this file, so it must exist in BOTH forms.
+// packages/server-utils/src/dataSubject/registry/index.ts statically imports this file, so it must exist in BOTH forms.
 // One entry per package, not a spread, so the registry merge sees a model two packages both claim.
 function generateDataSubjectRegistry(packages) {
-  const outPath = join(CLIENT_ROOT, 'server/premium-generated/premiumDataSubjectRegistry.generated.ts');
-  const typeImport = `import type { ContributedDataHolderRegistry } from '@server/dataSubject/types';`;
+  const outPath = join(SERVER_UTILS_GENERATED_DIR, 'premiumDataSubjectRegistry.generated.ts');
+  const typeImport = `import type { ContributedDataHolderRegistry } from '../dataSubject/types';`;
   const declaration = 'export const premiumDataSubjectRegistries: readonly ContributedDataHolderRegistry[]';
 
   const contributors = packages.filter(p => p.contributions.dataSubjectRegistryExport);
@@ -1639,6 +1678,50 @@ function generateTutorialOwners(packages) {
   writeFile(
     outPath,
     `${GENERATED_BANNER}\nimport { assertTutorialOwners, type TutorialOwner } from '@bike4mind/common';\n${imports}\n\nexport const premiumTutorialOwners: TutorialOwner[] = assertTutorialOwners([\n${items}\n]);\n`
+  );
+}
+
+// --- Generate Slack interactive action contributions ---
+//
+// A premium package can handle Slack interactive action ids (b4mContributions.slackInteractiveActionsExport ->
+// a module exporting `slackInteractiveActions: SlackInteractiveActionHandler[]`). Only the Slack interactive API
+// route imports the generated file, so it must exist in BOTH forms; it is server-only and never reachable from
+// apps/client/app. The registry validates each entry at load, so the file carries no checks of its own.
+function generateSlackInteractiveActions(packages) {
+  const outPath = join(SERVER_UTILS_GENERATED_DIR, 'premiumSlackInteractiveActions.generated.ts');
+  const typeImport = `import type { SlackInteractiveActionHandler } from '../integrations/slack/interactiveActionRegistry';`;
+
+  const contributors = packages.filter(p => p.contributions.slackInteractiveActionsExport);
+
+  if (contributors.length === 0) {
+    writeFile(
+      outPath,
+      `${GENERATED_BANNER}\n${typeImport}\n\nexport const premiumSlackInteractiveActions: readonly SlackInteractiveActionHandler[] = [];\n`
+    );
+    return;
+  }
+
+  contributors.forEach(p =>
+    assertModuleSpecifier(p.contributions.slackInteractiveActionsExport, p.name, 'slackInteractiveActionsExport')
+  );
+
+  const imports = contributors
+    .map((p, i) => {
+      const spec = relativeOverlayImport(
+        p,
+        p.contributions.slackInteractiveActionsExport,
+        'slackInteractiveActionsExport',
+        outPath
+      );
+      return `import { slackInteractiveActions as actions${i} } from '${spec}';`;
+    })
+    .join('\n');
+
+  const items = contributors.map((_, i) => `  ...actions${i}`).join(',\n');
+
+  writeFile(
+    outPath,
+    `${GENERATED_BANNER}\n${typeImport}\n${imports}\n\nexport const premiumSlackInteractiveActions: readonly SlackInteractiveActionHandler[] = [\n${items}\n];\n`
   );
 }
 
@@ -1955,6 +2038,9 @@ const INFRA_RESOURCE_TARGETS = [
   join(INFRA_GENERATED_DIR, 'infraResources.generated.ts'),
   join(REPO_ROOT, 'packages/server-utils/src/premium-generated/infraResources.generated.ts'),
 ];
+// Mirror QUEUE_HELP_MAX and QUEUE_REPLAY_VALUES in b4m-core/infra/src/contributions.ts; keep in sync.
+const QUEUE_HELP_MAX = { description: 200, replayNote: 400, owner: 64 };
+const QUEUE_REPLAY_VALUES = ['safe', 'side-effects', 'unsafe'];
 
 function readInfraResources(pkg) {
   const raw = pkg.contributions.infraResources;
@@ -1994,6 +2080,13 @@ function readInfraResources(pkg) {
   };
   const isString = v => typeof v === 'string';
   const isIntBetween = (min, max) => v => Number.isInteger(v) && v >= min && v <= max;
+  const help = (q, field) =>
+    optional(
+      q,
+      field,
+      v => isString(v) && v.length <= QUEUE_HELP_MAX[field] && GRANT_LABEL_RE.test(v) && !/\p{Cc}/u.test(v),
+      `one trimmed line of 1-${QUEUE_HELP_MAX[field]} characters with no control characters`
+    );
   const queues = list('queues').map(q => {
     for (const field of ['name', 'visibilityTimeout', 'label', 'displayName', 'application']) {
       if (typeof q[field] !== 'string') fail(`queue ${field} must be a string`);
@@ -2003,6 +2096,7 @@ function readInfraResources(pkg) {
       name: q.name,
       dlqName: optional(q, 'dlqName', isString, 'a string'),
       visibilityTimeout: q.visibilityTimeout,
+      dlqVisibilityTimeout: optional(q, 'dlqVisibilityTimeout', isString, 'a string'),
       retry: optional(q, 'retry', isIntBetween(1, 1000), 'an integer from 1 to 1000'),
       encryption: optional(q, 'encryption', v => ['kms', 'sse-sqs', 'none'].includes(v), "'kms', 'sse-sqs' or 'none'"),
       dlqEncryption: optional(q, 'dlqEncryption', v => ['kms', 'none'].includes(v), "'kms' or 'none'"),
@@ -2016,6 +2110,10 @@ function readInfraResources(pkg) {
       label: q.label,
       displayName: q.displayName,
       application: q.application,
+      description: help(q, 'description'),
+      replay: optional(q, 'replay', v => QUEUE_REPLAY_VALUES.includes(v), "'safe', 'side-effects' or 'unsafe'"),
+      replayNote: help(q, 'replayNote'),
+      owner: help(q, 'owner'),
     };
   });
   return { secrets, rotations, queues };
@@ -2209,10 +2307,12 @@ generatePartnerSignupHooks(linkedPackages);
 // once pnpm has installed the overlay, which linking it into apps/client implies.
 generateLlmTools(linkedPackages);
 generateSystemPrompts(linkedPackages);
+generateNavigableViews(linkedPackages);
 generateAgentExtensions(linkedPackages);
 generateAdminSettings(linkedPackages);
 generateDataSubjectRegistry(linkedPackages);
 generateTutorialOwners(linkedPackages);
+generateSlackInteractiveActions(linkedPackages);
 generateWorkspaceSessionSettings(linkedPackages);
 // Relative-import glue read only at build or deploy time: needs no node_modules link, so it gets
 // the full list. Any NEW generator goes in whichever group matches how it imports the overlay.

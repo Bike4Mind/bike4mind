@@ -96,7 +96,8 @@ export function convertMessageToOpenAIFormat(
     return [
       {
         role: 'assistant' as const,
-        content: null,
+        // Text the model wrote ahead of its calls (see replayPreToolText) rides along.
+        content: typeof msg.content === 'string' && msg.content.trim() ? msg.content : null,
         tool_calls: msg.tool_calls,
         ...(options.preserveReasoningContent && typeof reasoningContent === 'string'
           ? { reasoning_content: reasoningContent }

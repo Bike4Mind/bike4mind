@@ -54,7 +54,6 @@ interface MemberRosterProps {
   /** Per-target gate (`canRevokeOrgMember`), which also depends on who is being removed. */
   canRevokeMember: (userId: string) => boolean;
   canManageCreditBudgets: boolean;
-  canManageManagers: boolean;
   /** Owner, manager or site admin (`canAdministerOrganization`); plain members get a names-only roster. */
   showEmails: boolean;
 }
@@ -69,7 +68,6 @@ const MemberRoster: FC<MemberRosterProps> = ({
   canRevokeMembers,
   canRevokeMember,
   canManageCreditBudgets,
-  canManageManagers,
   showEmails,
 }) => {
   const { t } = useTranslation();
@@ -232,7 +230,6 @@ const MemberRoster: FC<MemberRosterProps> = ({
         user={member}
         canRevokeMembers={canRevokeMember(member.id)}
         canManageCreditBudgets={canManageCreditBudgets}
-        canManageManagers={canManageManagers}
         selectable={canRevokeMembers}
         showEmails={showEmails}
         selected={selectedIds.has(member.id)}

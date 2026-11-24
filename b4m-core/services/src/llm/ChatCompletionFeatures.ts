@@ -8,6 +8,7 @@ import {
 } from '@bike4mind/utils/embeddingProviders';
 import type { NewAccountSpendCapAdapters } from '../creditService/newAccountSpendCap';
 import type { ISpendFreezeRepository, IUserApiKeyRepository, UserLimitEventKind } from '@bike4mind/common';
+import type { ModerationEscalationAlert } from '../userService/moderationPolicy';
 
 export type LimitEventRecord = {
   userId: string;
@@ -463,6 +464,12 @@ export interface IChatCompletionServiceOptions {
    */
   coreTutorialTurns?: CoreTutorialTurnHook;
   autoNameSession: (sessionId: string, logger: Logger) => Promise<string | null>;
+  /**
+   * Delivers a moderation escalation alert to liveops (the app tier publishes it to the event bus).
+   * Called fire-and-forget: a rejection is logged as a warning and never reaches the chat request.
+   * Optional: a host without it still records hits and escalates, it just alerts no one.
+   */
+  notifyModerationEscalation?: (alert: ModerationEscalationAlert) => Promise<void>;
   invokeCreateMemento: (
     questId: string,
     sessionId: string,
@@ -617,11 +624,16 @@ export interface IChatCompletionServiceOptions {
     requestId?: string; // Quest ID for correlation
   }) => Promise<void>;
   /**
-   * Secret key for deriving daily telemetry salts via HMAC.
-   * Reuses SECRET_ENCRYPTION_KEY - no dedicated secret needed.
+   * Secret key for deriving daily telemetry salts via HMAC. The host supplies it; the apps take it
+   * from `signingKey('telemetry-salt')` in server-utils/src/security/signingKeys.ts.
    * When undefined, falls back to a deterministic placeholder (dev-only).
    */
   telemetryHmacSecret?: string;
+  /**
+   * Key that signs web_search image URLs (`signingKey('search-image-url')` in the apps). When
+   * undefined, `telemetryHmacSecret` signs them, which is what hosts without a separate key rely on.
+   */
+  imageUrlSigningSecret?: string;
   /**
    * Whether the Global Privacy Control (GPC) signal was detected in the request.
    * When true, telemetry capture is skipped for this request regardless of user preference.

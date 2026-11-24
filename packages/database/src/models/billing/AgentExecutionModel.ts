@@ -1165,6 +1165,16 @@ class AgentExecutionRepository extends BaseRepository<IAgentExecution> {
     return result?.toObject() ?? null;
   }
 
+  /** The model of the user's most recent run in a session, to continue that conversation on. */
+  async findLatestModelBySessionId(sessionId: string, userId: string): Promise<string | null> {
+    const latest = await this.model
+      .findOne({ sessionId, userId })
+      .sort({ createdAt: -1 })
+      .select('model')
+      .lean<{ model?: string }>();
+    return latest?.model ?? null;
+  }
+
   async findChildExecutions(parentExecutionId: string): Promise<IAgentExecution[]> {
     const results = await this.model.find({ parentExecutionId }).sort({ createdAt: 1 });
     return results.map(doc => doc.toObject());
@@ -2099,6 +2109,32 @@ class AgentExecutionRepository extends BaseRepository<IAgentExecution> {
     const nextCursor = hasMore && lastDoc ? encodeCursor(lastDoc.createdAt, lastDoc._id) : null;
 
     return { items, nextCursor };
+  }
+
+  /**
+   * `createdAt` of the earliest run, in the same set `findByUserIdPaginated` lists, that was created in
+   * `[createdFrom, completedSince)` but finished at or after `completedSince`: a run that straddles a brief
+   * window's start. Null when there is none.
+   */
+  async findEarliestStraddlingRunCreatedAt(
+    userId: string,
+    completedSince: Date,
+    createdFrom: Date
+  ): Promise<Date | null> {
+    const doc = await this.model
+      .findOne(
+        {
+          userId,
+          $or: [{ parentExecutionId: { $exists: false } }, { isBackgroundExecution: true }],
+          createdAt: { $gte: createdFrom, $lt: completedSince },
+          completedAt: { $gte: completedSince },
+        },
+        { createdAt: 1 }
+      )
+      .sort({ createdAt: 1 })
+      .lean<{ createdAt: Date }>()
+      .exec();
+    return doc?.createdAt ?? null;
   }
 
   // --- DAG decomposition (coordinate_task) ---

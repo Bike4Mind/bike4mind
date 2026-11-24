@@ -1,6 +1,6 @@
 {
   "name": "@bike4mind/resource",
-  "version": "3.4.0",
+  "version": "3.5.0",
   "publishConfig": {
     "access": "restricted"
   },
@@ -29,7 +29,8 @@
     "incremental": "tsdown",
     "typecheck": "tsc --noEmit",
     "dev": "tsdown --watch",
-    "test": "vitest run"
+    "test": "vitest run",
+    "test:repo": "REPO_TEST_LANE=repo vitest run"
   },
   "devDependencies": {
     "tsdown": "^0.22.3",

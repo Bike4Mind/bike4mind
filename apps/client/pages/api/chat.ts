@@ -17,6 +17,7 @@ import { PipelineTimer } from '@bike4mind/llm-adapters';
 import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { adminRoleWithheldFor, requesterScopedUsers } from '@bike4mind/server-utils/auth/apiKeyAdminScope';
 import { resolveUserRateLimitPerMin } from '@bike4mind/server-utils/utils/userRateTier';
+import { resolveCallableFunctionsEnabled } from '@bike4mind/server-utils/callableFunctions/access';
 import { buildAudioToolJobs } from '@bike4mind/server-utils/generationJobs/audioJobWiring';
 import { resolveCallerDefaultModel } from '@server/utils/callerModelList';
 import {
@@ -59,6 +60,7 @@ import { resolveSessionOrigin } from '@server/managers/sessionOrigin';
 import type { Request, Response } from 'express';
 import { dispatchQuest } from '@server/utils/dispatchQuest';
 import { premiumLlmTools } from '@bike4mind/server-utils/premium-generated/premiumLlmTools.generated';
+import '@bike4mind/server-utils/navigation/registerContributedViews';
 import { recommendTools, mergeTools } from '@client/app/utils/toolRecommender';
 import { resolveActiveOrg } from '@bike4mind/server-utils/utils/resolveActiveOrg';
 import { apiKeyBillingOrgId, resolveRequestBillingOrgId } from '@server/billing/apiKeyBillingOrg';
@@ -375,6 +377,7 @@ async function handleChat(
               imageConfig: undefined,
             },
             logger: req.logger,
+            callableFunctionsResolver: () => resolveCallableFunctionsEnabled(req.user),
             // Pass quest from invoke to skip redundant DB read
             prefetchedQuest: quest,
             // Pass session from invoke to skip redundant DB read

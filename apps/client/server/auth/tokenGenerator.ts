@@ -10,8 +10,13 @@ import { Config } from '@bike4mind/server-utils/utils/config';
 export const ACCESS_TOKEN_TTL_SECONDS = 30 * 60;
 
 export const authTokenGenerator = new AuthTokenGeneratorService({
-  accessTokenSecret: Config.JWT_SECRET,
-  refreshTokenSecret: Config.JWT_SECRET,
+  // Getters so the Config check runs on every sign/verify rather than once at import.
+  get accessTokenSecret() {
+    return Config.JWT_SECRET;
+  },
+  get refreshTokenSecret() {
+    return Config.JWT_SECRET;
+  },
   // The access token is now held in JS memory only and re-obtained by silent refresh, so it can
   // be short-lived: an hour-scale TTL bounds what an XSS-exfiltrated token is worth, and it is
   // also the WebSocket's only credential (query-param auth), so it must not be so short that

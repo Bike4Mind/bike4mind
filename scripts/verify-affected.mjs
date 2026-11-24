@@ -2,18 +2,19 @@
 
 // The local "verify before pushing" loop: typecheck (tsgo with tsc fallback, the same
 // `typecheck:fast` CI gates on), test and lint only what this branch changed against
-// $TURBO_SCM_BASE (default origin/main). CI still runs everything; this only decides what a
-// local run can skip.
+// $TURBO_SCM_BASE (default origin/main). CI's test-shards job makes the same selection for a PR
+// (scripts/ci-affected-tests.mjs, through selectAffected below).
 //
 //   node scripts/verify-affected.mjs [--tasks typecheck:fast,test] [--no-lint] [--dry] [turbo args...]
 //
-// Package selection is turbo's own `...[<merge-base>]` filter (changed packages plus their
-// dependents) widened by the cross-package inputs in turbo.json: @bike4mind/workers typechecks
-// apps/client source, server-utils tests read apps/client/pages, and so on. Neither --affected
-// nor a [ref] filter follows those edges, so a client-only change would skip workers. Unknown
-// arguments go to turbo (e.g. --concurrency=4).
+// Package selection is the packages owning a changed file plus their dependents, widened by the
+// cross-package inputs in turbo.json: @bike4mind/workers typechecks apps/client source,
+// server-utils tests read apps/client/pages, and so on. Neither --affected nor a [ref] filter
+// follows those edges, so a client-only change would skip workers. Unknown arguments go to turbo
+// (e.g. --concurrency=4).
 
 import { execFileSync, spawnSync } from 'node:child_process';
+import { homedir } from 'node:os';
 import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join, matchesGlob, posix, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -72,6 +73,43 @@ export function needsFullRun(changedFiles, turbo) {
   return changedFiles.some(file => FULL_RUN_FILES.includes(file) || globals.some(glob => matchesGlob(file, glob)));
 }
 
+// The workspace package owning a repo-relative path: the deepest package directory containing it.
+export function packageOfFile(file, packageDirs) {
+  let owner = null;
+  let ownerDepth = -1;
+  for (const [name, dir] of Object.entries(packageDirs)) {
+    if (file.startsWith(`${dir}/`) && dir.length > ownerDepth) {
+      owner = name;
+      ownerDepth = dir.length;
+    }
+  }
+  return owner;
+}
+
+// `changed` run with their dependents, `extra` (reached only through a foreign input) without.
+export function selectAffected({ changedFiles, turbo, packageDirs, tasks }) {
+  if (needsFullRun(changedFiles, turbo)) return { full: true };
+  const owners = changedFiles.map(file => packageOfFile(file, packageDirs));
+  const changed = new Set(owners.filter(Boolean));
+  const reached = packagesReachedByForeignInputs({ turbo, packageDirs, tasks, changedFiles });
+  return {
+    full: false,
+    changed: [...changed].sort(),
+    extra: [...reached].filter(name => !changed.has(name)).sort(),
+    // A file outside every package belongs to the root package, as in turbo's [ref] filter, so a
+    // root task such as //#typecheck:fast still runs.
+    root: owners.includes(null),
+  };
+}
+
+export function turboFilters({ changed, extra, root = false }) {
+  return [
+    ...changed.map(name => `--filter=...${name}`),
+    ...extra.map(name => `--filter=${name}`),
+    ...(root ? ['--filter=//'] : []),
+  ];
+}
+
 export function planLint(changedFiles, fileExists) {
   if (changedFiles.some(file => FULL_LINT_GLOBS.some(glob => matchesGlob(file, glob)))) return { mode: 'full' };
   const files = changedFiles.filter(file => LINTABLE.test(file) && fileExists(file));
@@ -105,27 +143,40 @@ function changedFilesSince(mergeBase) {
   return [...new Set([...tracked, ...untracked])];
 }
 
-function readPackageDirs() {
+// Name -> directory of the workspace packages `turbo ls` resolves for these filters (all when none).
+export function readPackageDirs(filters = []) {
   let out;
   try {
-    out = execFileSync('pnpm', ['exec', 'turbo', 'ls', '--output=json'], {
+    out = execFileSync('pnpm', ['exec', 'turbo', 'ls', ...filters, '--output=json'], {
       cwd: repoRoot,
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'pipe'],
     });
   } catch (error) {
     const reason = String(error.stderr ?? '').trim() || error.message;
-    console.error(`verify: \`turbo ls\` failed (is \`pnpm install\` done?)\n${reason}`);
-    process.exit(1);
+    throw new Error(`\`turbo ls\` failed (is \`pnpm install\` done?)\n${reason}`);
   }
   const { packages } = JSON.parse(out.slice(out.indexOf('{')));
   return Object.fromEntries(packages.items.map(({ name, path }) => [name, path]));
 }
 
+// Worktrees on one machine share a content-addressed turbo cache; a per-worktree one rebuilds every
+// upstream package in each fresh worktree. An explicit TURBO_CACHE_DIR wins.
+function turboEnv() {
+  return { ...process.env, TURBO_CACHE_DIR: process.env.TURBO_CACHE_DIR || join(homedir(), '.cache', 'turbo-b4m') };
+}
+
+// Turbo's default is 10 concurrent multi-threaded tasks, which oversubscribes the host when several
+// sessions push at once. TURBO_CONCURRENCY is this script's own override, not a turbo variable.
+function concurrencyArgs(turboArgs) {
+  if (turboArgs.some(arg => arg === '--concurrency' || arg.startsWith('--concurrency='))) return [];
+  return [`--concurrency=${process.env.TURBO_CONCURRENCY || '25%'}`];
+}
+
 function run(command, args, dry) {
   console.log(`\n$ ${[command, ...args].join(' ')}`);
   if (dry) return;
-  const { status, error } = spawnSync(command, args, { cwd: repoRoot, stdio: 'inherit' });
+  const { status, error } = spawnSync(command, args, { cwd: repoRoot, stdio: 'inherit', env: turboEnv() });
   if (error) throw error;
   if (status !== 0) process.exit(status ?? 1);
 }
@@ -148,17 +199,24 @@ function main() {
   if (options.tasks.length) {
     const filters = [];
     if (!fullRun) {
-      const extra = packagesReachedByForeignInputs({
-        turbo,
-        packageDirs: readPackageDirs(),
-        tasks: options.tasks,
-        changedFiles,
-      });
-      // No `...` on the extra packages: only their own task reads the changed file, not their dependents.
-      filters.push(`--filter=...[${mergeBase}]`, ...[...extra].map(name => `--filter=${name}`));
-      if (extra.size) console.log(`verify: also running ${[...extra].join(', ')} (cross-package inputs in turbo.json)`);
+      let packageDirs;
+      try {
+        packageDirs = readPackageDirs();
+      } catch (error) {
+        console.error(`verify: ${error.message}`);
+        process.exit(1);
+      }
+      const selection = selectAffected({ changedFiles, turbo, packageDirs, tasks: options.tasks });
+      filters.push(...turboFilters(selection));
+      if (selection.extra.length) {
+        console.log(`verify: also running ${selection.extra.join(', ')} (cross-package inputs in turbo.json)`);
+      }
     }
-    run('pnpm', ['exec', 'turbo', 'run', ...options.tasks, ...filters, ...options.turboArgs], options.dry);
+    if (fullRun || filters.length) {
+      run('pnpm', ['exec', 'turbo', 'run', ...options.tasks, ...filters, ...concurrencyArgs(options.turboArgs), ...options.turboArgs], options.dry);
+    } else {
+      console.log('\nverify: no workspace package changed; skipping turbo.');
+    }
     if (options.tasks.some(task => task.startsWith('typecheck'))) {
       run('pnpm', ['run', 'typecheck:infra:local'], options.dry);
     }

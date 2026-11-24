@@ -21,7 +21,6 @@ const mockDlqUrls = vi.hoisted(() => ({
   'quest-export': 'https://sqs.us-east-2.amazonaws.com/123456789/questExportQueueDLQ',
   'account-data-export': 'https://sqs.us-east-2.amazonaws.com/123456789/accountDataExportQueueDLQ',
   'account-erasure': 'https://sqs.us-east-2.amazonaws.com/123456789/accountErasureQueueDLQ',
-  'liveops-triage': 'https://sqs.us-east-2.amazonaws.com/123456789/liveOpsTriageQueueDLQ',
   'email-ingestion': 'https://sqs.us-east-2.amazonaws.com/123456789/emailIngestionQueueDLQ',
   'email-analysis': 'https://sqs.us-east-2.amazonaws.com/123456789/emailAnalysisQueueDLQ',
   'email-batch': 'https://sqs.us-east-2.amazonaws.com/123456789/emailBatchQueueDLQ',
@@ -51,6 +50,7 @@ const mockDlqUrls = vi.hoisted(() => ({
     [
       'young-account-spend-alert',
       'api-probe-detector',
+      'cloud-security-scan',
       'image-moderation-review-sweep',
       'spend-monitor',
       'signup-grant-held-release',
@@ -61,6 +61,7 @@ const mockDlqUrls = vi.hoisted(() => ({
       'organization-retention',
       'fab-file-moderation',
       'telemetry-alert-rule',
+      'moderation-alerts',
       'session-enrichment',
       'billing-events',
       'email-events',
@@ -93,7 +94,6 @@ const mockSourceQueueUrls = vi.hoisted(() => ({
   questExportQueue: 'https://sqs.us-east-2.amazonaws.com/123456789/questExportQueue',
   accountDataExportQueue: 'https://sqs.us-east-2.amazonaws.com/123456789/accountDataExportQueue',
   accountErasureQueue: 'https://sqs.us-east-2.amazonaws.com/123456789/accountErasureQueue',
-  liveOpsTriageQueue: 'https://sqs.us-east-2.amazonaws.com/123456789/liveOpsTriageQueue',
   emailIngestionQueue: 'https://sqs.us-east-2.amazonaws.com/123456789/emailIngestionQueue',
   emailAnalysisQueue: 'https://sqs.us-east-2.amazonaws.com/123456789/emailAnalysisQueue',
   emailBatchQueue: 'https://sqs.us-east-2.amazonaws.com/123456789/emailBatchQueue',
@@ -188,7 +188,6 @@ describe('dlqRegistry', () => {
 
     it('classifies replay safety from what the consumer does', () => {
       expect(getDlqByLabel('fab-file-chunk')?.replay).toBe('safe');
-      expect(getDlqByLabel('liveops-triage')?.replay).toBe('unsafe');
       expect(getDlqByLabel('secops-triage')?.replay).toBe('unsafe');
       expect(getDlqByLabel('fab-file-vectorize')?.replay).toBe('side-effects');
       expect(getDlqByLabel('webhook-delivery')?.replay).toBe('unsafe');

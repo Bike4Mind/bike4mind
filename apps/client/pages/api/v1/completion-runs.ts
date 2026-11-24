@@ -5,28 +5,27 @@
  * (server/chatCompletion/external/sseRoute.ts verifies both before honouring `run`); both resolve
  * the owner through completionRunOwnerOf.
  */
-import { createCompletionRunContract, type CompletionRun } from '@bike4mind/common';
+import { createCompletionRunContract } from '@bike4mind/common';
+import { assertEvaluationAuthorized, initialEvaluation } from '@server/completionRuns/evaluation';
 import { completionRunRepository } from '@bike4mind/database';
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
 import { perUserRateLimit } from '@server/middlewares/perUserRateLimit';
-import { completionRunOwnerOf } from '@server/completionRuns/callerCompletionRun';
+import { completionRunOwnerOf, toCompletionRunBody } from '@server/completionRuns/callerCompletionRun';
 
 export default nextRouteForContract(createCompletionRunContract, {
   rateLimit: perUserRateLimit('POST /api/v1/completion-runs'),
 }).post(async (req, res) => {
+  if (req.validated.evaluation) assertEvaluationAuthorized(req.user.id);
   const run = await completionRunRepository.create({
     userId: req.user.id,
     ...completionRunOwnerOf({ userId: req.user.id, billingOrganizationId: req.apiKeyInfo?.organizationId }),
     apiKeyId: req.apiKeyInfo?.keyId,
     rootSessionId: req.validated.rootSessionId,
+    budgetCredits: req.validated.budgetCredits,
+    ...(req.validated.evaluation && { evaluation: initialEvaluation(req.validated.evaluation) }),
   });
 
-  const body: CompletionRun = {
-    runId: run.runId,
-    ...(run.rootSessionId !== undefined && { rootSessionId: run.rootSessionId }),
-    createdAt: run.createdAt.toISOString(),
-  };
-  return res.status(201).json(body);
+  return res.status(201).json(toCompletionRunBody(run));
 });
 
 export const config = {

@@ -9,6 +9,7 @@ import {
 import { BadRequestError, secureParameters } from '@bike4mind/utils';
 import { z } from 'zod';
 import { distinctIdCount } from '../utils/objectIds';
+import { AttachableItem, assertCanAttachToProject } from './attachGate';
 
 const createProjectSchema = z.object({
   name: z.string().min(1),
@@ -46,6 +47,8 @@ export const createProject = async (
   if (fileIds && fileIds.length > 0) {
     const files = await db.fabFiles.shareable.findAllAccessibleByIds(withoutOrgApiKeyReach(actor), fileIds);
     if (files.length !== distinctIdCount(fileIds)) throw new BadRequestError('Some files are not accessible');
+    // The project starts with no members, but every future member will read what it holds.
+    assertCanAttachToProject(files as unknown as AttachableItem[], actor, [], 'files');
     resolvedFileIds = files.map(file => file.id);
   }
 
@@ -53,6 +56,7 @@ export const createProject = async (
   if (sessionIds && sessionIds.length > 0) {
     const sessions = await db.sessions.shareable.findAllAccessibleByIds(withoutOrgApiKeyReach(actor), sessionIds);
     if (sessions.length !== distinctIdCount(sessionIds)) throw new BadRequestError('Some sessions are not accessible');
+    assertCanAttachToProject(sessions as unknown as AttachableItem[], actor, [], 'notebooks');
     resolvedSessionIds = sessions.map(session => session.id);
   }
 

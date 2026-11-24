@@ -25,6 +25,10 @@ vi.mock('@client/app/components/help/ContextHelpButton', () => ({
 vi.mock('sonner', () => ({
   toast: { success: mocks.toastSuccess, error: mocks.toastError, info: mocks.toastInfo },
 }));
+// Covered by its own test; stubbed so this file's request and state assertions see only the tools table.
+vi.mock('./PlatformMcpConnectorsSection', () => ({
+  default: () => <section data-testid="platform-mcp-section" />,
+}));
 
 import ToolDefinitionsTab from './ToolDefinitionsTab';
 
@@ -117,6 +121,15 @@ describe('ToolDefinitionsTab', () => {
     expect(screen.getAllByRole('heading', { level: 1 })).toHaveLength(1);
     expect(within(header).getByTestId('context-help')).toHaveAttribute('data-help-id', 'admin/tool-definitions');
     expect(within(header).getByTestId('tools-refresh-btn')).toHaveTextContent('Refresh');
+  });
+
+  it('carries the platform connectors section below the tools table', async () => {
+    renderTab();
+
+    const section = await screen.findByTestId('platform-mcp-section');
+    expect(
+      screen.getByTestId('tools-table').compareDocumentPosition(section) & Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy();
   });
 
   it('refetches the list from the header Refresh button', async () => {

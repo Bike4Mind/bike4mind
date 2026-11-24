@@ -4,7 +4,8 @@
     {
       "name": "chat-completion",
       "dockerfile": "apps/client/Dockerfile.chatcompletion",
-      "env": "CHAT_COMPLETION_IMAGE"
+      "env": "CHAT_COMPLETION_IMAGE",
+      "retentionDays": 21
     },
     {
       "name": "searxng",
@@ -15,7 +16,13 @@
     {
       "name": "render-worker",
       "dockerfile": "apps/workers/Dockerfile.renderworker",
-      "env": "RENDER_WORKER_IMAGE"
+      "env": "RENDER_WORKER_IMAGE",
+      "retentionDays": 21
+    },
+    {
+      "name": "callable-function-runtime",
+      "dockerfile": "apps/workers/Dockerfile.callablefunction",
+      "env": "CALLABLE_FUNCTION_RUNTIME_IMAGE"
     }
   ],
   "externalImages": [
@@ -45,6 +52,7 @@
     "BLOG_HOST",
     "BUSINESS_METRIC_ALERTS_ENABLED",
     "BUSINESS_METRIC_THRESHOLDS",
+    "CALLABLE_FUNCTION_SUBNET_IDS",
     "CANONICAL_ORIGIN",
     "CHAT_COMPLETION_PUBLIC_URL",
     "CI",
@@ -58,6 +66,7 @@
     "ENABLE_WARMING",
     "FAB_FILES_BUCKET_NAME",
     "GA_COOKIE_DOMAIN",
+    "GA_MARKETING_MEASUREMENT_ID",
     "GA_MEASUREMENT_ID",
     "GENERATED_IMAGES_BUCKET_NAME",
     "IMPERSONATION_TTL_MINUTES",
@@ -90,6 +99,7 @@
     "OPENAI_WIF_AUDIENCE",
     "OAUTH_SIGNUP_REFUSED_ALARM_PER_5MIN",
     "OPS_ALERT_EMAIL",
+    "ORIGIN_VERIFY_SECRET_GENERATION",
     "OTC_SES_BOUNCE_ALARM_PERCENT",
     "OTC_SES_COMPLAINT_ALARM_PERCENT",
     "PLATFORM_EMAIL_DOMAIN",

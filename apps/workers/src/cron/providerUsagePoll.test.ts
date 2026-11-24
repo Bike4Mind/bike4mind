@@ -14,6 +14,7 @@ const mocks = vi.hoisted(() => ({
   fetchAnthropicHourlyUsage: vi.fn(),
   fetchOpenAIHourlyUsage: vi.fn(),
   priceProviderUsage: vi.fn(),
+  readProviderSpendScope: vi.fn(async (_provider: string): Promise<object | undefined> => undefined),
   info: vi.fn(),
   warn: vi.fn(),
   error: vi.fn(),
@@ -65,6 +66,10 @@ vi.mock('@bike4mind/observability', () => ({
   },
 }));
 vi.mock('@bike4mind/server-utils/utils/config', () => ({ Config: mocks.config }));
+vi.mock('./providerSpendScope', async importOriginal => ({
+  ...(await importOriginal<typeof import('./providerSpendScope')>()),
+  readProviderSpendScope: mocks.readProviderSpendScope,
+}));
 vi.mock('sst', () => ({ Resource: { App: { name: 'test-app', stage: 'production' } } }));
 
 const { handler, previousHourWindow } = await import('./providerUsagePoll');
@@ -81,6 +86,7 @@ const usageRow = (model: string) => ({
   outputTokens: 20,
   cacheReadTokens: 0,
   cacheWriteTokens: 0,
+  inScope: true,
 });
 
 type PutInput = { Namespace: string; MetricData: Array<Record<string, unknown>> };
@@ -89,6 +95,18 @@ const published = (): PutInput => {
   if (!command) throw new Error('no metrics were published');
   return command.input;
 };
+
+const FRESH_AGE_HOURS = (5 * 3600 + 7 * 60 + 23.456) / 3600;
+const SNAPSHOT_METRICS = ['ModelPriceSnapshotAgeHours', 'ModelPriceSnapshotMissing'];
+const isSnapshotMetric = (d: Record<string, unknown>) => SNAPSHOT_METRICS.includes(d.MetricName as string);
+const providerData = () => published().MetricData.filter(d => !isSnapshotMetric(d));
+const snapshotData = () => published().MetricData.filter(isSnapshotMetric);
+const snapshotDatum = (MetricName: string, Value: number, Unit: string) => ({
+  MetricName,
+  Value,
+  Unit,
+  Timestamp: NOW,
+});
 
 const snapshotBody = (overrides: Record<string, unknown> = {}) => ({
   Body: {
@@ -111,6 +129,7 @@ beforeEach(() => {
   mocks.config.OPENAI_ADMIN_API_KEY = 'openai-admin-key';
   mocks.fetchAnthropicHourlyUsage.mockResolvedValue([usageRow('claude-opus-5-5-20260901'), usageRow('claude-x')]);
   mocks.fetchOpenAIHourlyUsage.mockResolvedValue([usageRow('gpt-5.5')]);
+  mocks.readProviderSpendScope.mockImplementation(async () => undefined);
   mocks.priceProviderUsage.mockImplementation(async (provider: string) =>
     provider === 'anthropic'
       ? { usd: 42.5, outputTokens: 40, unpricedOutputTokens: 20, unpricedModels: ['claude-x'] }
@@ -140,12 +159,14 @@ describe('providerUsagePoll handler', () => {
     expect(mocks.fetchAnthropicHourlyUsage).toHaveBeenCalledExactlyOnceWith(
       'anthropic-admin-key',
       '2026-10-31T13:00:00.000Z',
-      '2026-10-31T14:00:00.000Z'
+      '2026-10-31T14:00:00.000Z',
+      undefined
     );
     expect(mocks.fetchOpenAIHourlyUsage).toHaveBeenCalledExactlyOnceWith(
       'openai-admin-key',
       START.getTime() / 1000,
-      END.getTime() / 1000
+      END.getTime() / 1000,
+      undefined
     );
     expect(mocks.priceProviderUsage).toHaveBeenCalledWith(
       'anthropic',
@@ -177,11 +198,15 @@ describe('providerUsagePoll handler', () => {
       Namespace: 'test-app/production/LLMSpend',
       MetricData: [
         datum('anthropic', 'ProviderReportedUsd', 42.5, 'None'),
+        datum('anthropic', 'ProviderReportedOrgUsd', 42.5, 'None'),
         datum('anthropic', 'ProviderReportedOutputTokens', 40, 'Count'),
         datum('anthropic', 'UnpricedOutputTokens', 20, 'Count'),
         datum('openai', 'ProviderReportedUsd', 3.25, 'None'),
+        datum('openai', 'ProviderReportedOrgUsd', 3.25, 'None'),
         datum('openai', 'ProviderReportedOutputTokens', 20, 'Count'),
         datum('openai', 'UnpricedOutputTokens', 0, 'Count'),
+        snapshotDatum('ModelPriceSnapshotAgeHours', FRESH_AGE_HOURS, 'None'),
+        snapshotDatum('ModelPriceSnapshotMissing', 0, 'Count'),
       ],
     });
   });
@@ -190,11 +215,55 @@ describe('providerUsagePoll handler', () => {
     await handler({}, context);
     expect(mocks.info).toHaveBeenCalledTimes(3);
     expect(mocks.info.mock.calls[1][0]).toBe(
-      '[ProviderUsagePoll] anthropic 2026-10-31T13:00:00.000Z..2026-10-31T14:00:00.000Z: usd=$42.50 outputTokens=40 models=2'
+      '[ProviderUsagePoll] anthropic 2026-10-31T13:00:00.000Z..2026-10-31T14:00:00.000Z: usd=$42.50 orgUsd=$42.50 scope=org outputTokens=40 models=2'
     );
     expect(mocks.warn).toHaveBeenCalledExactlyOnceWith(
       '[ProviderUsagePoll] anthropic: no price for claude-x (20 output tokens)'
     );
+  });
+
+  it('publishes the scoped spend as ProviderReportedUsd and the whole organization as ProviderReportedOrgUsd', async () => {
+    const scope = { workspaceIds: ['wrkspc_prod'] };
+    mocks.readProviderSpendScope.mockImplementation(async provider => (provider === 'anthropic' ? scope : undefined));
+    const inside = usageRow('claude-opus-5-5-20260901');
+    const outside = { ...usageRow('claude-opus-5-5-20260901'), inScope: false };
+    mocks.fetchAnthropicHourlyUsage.mockResolvedValue([inside, outside]);
+    mocks.priceProviderUsage.mockImplementation(async (provider: string, rows: unknown[]) =>
+      provider === 'anthropic'
+        ? { usd: rows.length * 10, outputTokens: rows.length * 20, unpricedOutputTokens: 0, unpricedModels: [] }
+        : { usd: 3.25, outputTokens: 20, unpricedOutputTokens: 0, unpricedModels: [] }
+    );
+
+    await handler({}, context);
+
+    expect(mocks.fetchAnthropicHourlyUsage).toHaveBeenCalledWith(
+      'anthropic-admin-key',
+      expect.any(String),
+      expect.any(String),
+      scope
+    );
+    expect(mocks.priceProviderUsage).toHaveBeenCalledWith('anthropic', [inside], undefined, expect.anything());
+    expect(mocks.priceProviderUsage).toHaveBeenCalledWith('anthropic', [inside, outside], undefined, expect.anything());
+    const anthropicValue = (name: string) =>
+      providerData().find(
+        d => d.MetricName === name && (d.Dimensions as Array<{ Value: string }>)[0].Value === 'anthropic'
+      )?.Value;
+    expect(anthropicValue('ProviderReportedUsd')).toBe(10);
+    expect(anthropicValue('ProviderReportedOutputTokens')).toBe(20);
+    expect(anthropicValue('ProviderReportedOrgUsd')).toBe(20);
+    expect(mocks.info).toHaveBeenCalledWith(expect.stringContaining('usd=$10.00 orgUsd=$20.00 scope=workspaceIds:1'));
+  });
+
+  it('fails a provider whose scope cannot be read instead of reporting the whole organization', async () => {
+    mocks.readProviderSpendScope.mockImplementation(async provider => {
+      if (provider === 'openai') throw new Error('openai spend scope is not valid JSON');
+      return undefined;
+    });
+
+    await expect(handler({}, context)).rejects.toThrow('usage report failed for openai');
+
+    expect(mocks.fetchOpenAIHourlyUsage).not.toHaveBeenCalled();
+    expect(providerData().some(d => (d.Dimensions as Array<{ Value: string }>)[0].Value === 'openai')).toBe(false);
   });
 
   const skippedDatum = (provider: string) => ({
@@ -213,7 +282,7 @@ describe('providerUsagePoll handler', () => {
     expect(mocks.fetchOpenAIHourlyUsage).not.toHaveBeenCalled();
     expect(mocks.warn).toHaveBeenCalledWith('[ProviderUsagePoll] openai: admin key not configured, skipping');
     expect(mocks.send).toHaveBeenCalledTimes(1);
-    const metrics = published().MetricData;
+    const metrics = providerData();
     expect(metrics.filter(d => d.MetricName === 'ProviderUsagePollSkipped')).toEqual([skippedDatum('openai')]);
     const spendProviders = metrics
       .filter(d => d.MetricName !== 'ProviderUsagePollSkipped')
@@ -221,14 +290,19 @@ describe('providerUsagePoll handler', () => {
     expect(new Set(spendProviders)).toEqual(new Set(['anthropic']));
   });
 
-  it('publishes only a skipped datum per provider, in one call, when no provider is configured', async () => {
+  it('publishes only skipped data and the snapshot metrics, in one call, when no provider is configured', async () => {
     mocks.config.ANTHROPIC_ADMIN_API_KEY = undefined;
     mocks.config.OPENAI_ADMIN_API_KEY = 'not-configured';
     expect(await handler({}, context)).toEqual({ published: 0, skipped: 2 });
     expect(mocks.send).toHaveBeenCalledTimes(1);
     expect(published()).toEqual({
       Namespace: 'test-app/production/LLMSpend',
-      MetricData: [skippedDatum('anthropic'), skippedDatum('openai')],
+      MetricData: [
+        skippedDatum('anthropic'),
+        skippedDatum('openai'),
+        snapshotDatum('ModelPriceSnapshotAgeHours', FRESH_AGE_HOURS, 'None'),
+        snapshotDatum('ModelPriceSnapshotMissing', 0, 'Count'),
+      ],
     });
   });
 
@@ -247,8 +321,8 @@ describe('providerUsagePoll handler', () => {
 
     await expect(handler({}, context)).rejects.toThrow('usage report failed for anthropic');
     expect(mocks.error).toHaveBeenCalledTimes(1);
-    const metrics = published().MetricData;
-    expect(metrics).toHaveLength(3);
+    const metrics = providerData();
+    expect(metrics).toHaveLength(4);
     expect(metrics.every(d => (d.Dimensions as Array<{ Value: string }>)[0].Value === 'openai')).toBe(true);
   });
 
@@ -292,7 +366,7 @@ describe('providerUsagePoll handler', () => {
       expect(mocks.send).toHaveBeenCalledTimes(1);
       expect(published().Namespace).toBe('test-app/production/LLMSpend');
       expect(ageData()).toEqual([ageDatum('anthropic', 50), ageDatum('openai', 80.5)]);
-      expect(published().MetricData).toHaveLength(8);
+      expect(providerData()).toHaveLength(10);
     });
 
     it('publishes an age of zero for a version dated after the run started', async () => {
@@ -346,12 +420,14 @@ describe('providerUsagePoll handler', () => {
       expect(mocks.fetchAnthropicHourlyUsage).toHaveBeenCalledWith(
         'stored-anthropic-key',
         expect.any(String),
-        expect.any(String)
+        expect.any(String),
+        undefined
       );
       expect(mocks.fetchOpenAIHourlyUsage).toHaveBeenCalledWith(
         'stored-openai-key',
         expect.any(Number),
-        expect.any(Number)
+        expect.any(Number),
+        undefined
       );
     });
 
@@ -375,8 +451,8 @@ describe('providerUsagePoll handler', () => {
       expect(mocks.fetchAnthropicHourlyUsage).not.toHaveBeenCalled();
       expect(mocks.error).toHaveBeenCalledTimes(1);
       expect(mocks.warn).not.toHaveBeenCalledWith('[ProviderUsagePoll] anthropic: admin key not configured, skipping');
-      const metrics = published().MetricData;
-      expect(metrics).toHaveLength(3);
+      const metrics = providerData();
+      expect(metrics).toHaveLength(4);
       expect(metrics.every(d => (d.Dimensions as Array<{ Value: string }>)[0].Value === 'openai')).toBe(true);
     });
   });
@@ -414,6 +490,73 @@ describe('providerUsagePoll model price snapshot', () => {
     await handler({}, context);
     expect(mocks.warn).toHaveBeenCalledWith(expect.stringContaining('stale or implausible'));
     expect(snapshotArg()).toBeDefined();
+  });
+
+  describe('snapshot age metrics', () => {
+    const age = () => snapshotData().filter(d => d.MetricName === 'ModelPriceSnapshotAgeHours');
+    const missing = () => snapshotData().filter(d => d.MetricName === 'ModelPriceSnapshotMissing');
+
+    it('publishes the age in hours and Missing=0 for a fresh snapshot, without dimensions', async () => {
+      await handler({}, context);
+      expect(published().Namespace).toBe('test-app/production/LLMSpend');
+      expect(age()).toEqual([snapshotDatum('ModelPriceSnapshotAgeHours', FRESH_AGE_HOURS, 'None')]);
+      expect(missing()).toEqual([snapshotDatum('ModelPriceSnapshotMissing', 0, 'Count')]);
+      for (const d of snapshotData()) expect(d).not.toHaveProperty('Dimensions');
+    });
+
+    it('publishes the age of a stale snapshot, still logging the staleness warning', async () => {
+      mocks.s3Send.mockResolvedValue(
+        snapshotBody({ generatedAt: new Date(NOW.getTime() - 60 * 3_600_000).toISOString() })
+      );
+      await handler({}, context);
+      expect(age()).toEqual([snapshotDatum('ModelPriceSnapshotAgeHours', 60, 'None')]);
+      expect(missing()[0].Value).toBe(0);
+      expect(mocks.warn).toHaveBeenCalledWith(expect.stringContaining('stale or implausible'));
+    });
+
+    it('clamps small forward clock skew to an age of zero', async () => {
+      mocks.s3Send.mockResolvedValue(
+        snapshotBody({ generatedAt: new Date(NOW.getTime() + 30 * 60_000).toISOString() })
+      );
+      await handler({}, context);
+      expect(age()[0].Value).toBe(0);
+      expect(missing()[0].Value).toBe(0);
+    });
+
+    it.each([
+      [
+        'the object is missing',
+        () => mocks.s3Send.mockRejectedValue(Object.assign(new Error('x'), { name: 'NoSuchKey' })),
+      ],
+      ['the bucket is not configured', () => vi.stubEnv('MODEL_PRICE_SNAPSHOT_BUCKET', '')],
+      [
+        'the snapshot fails parsing',
+        () => mocks.s3Send.mockResolvedValue({ Body: { transformToString: async () => 'nope' } }),
+      ],
+    ])('publishes Missing=1 and no age when %s', async (_label, arrange) => {
+      arrange();
+      await handler({}, context);
+      expect(age()).toEqual([]);
+      expect(missing()).toEqual([snapshotDatum('ModelPriceSnapshotMissing', 1, 'Count')]);
+      for (const d of snapshotData()) expect(d).not.toHaveProperty('Dimensions');
+    });
+
+    it.each([
+      ['unparseable', 'not a date'],
+      ['more than an hour in the future', '2026-11-03T00:00:00.000Z'],
+    ])('publishes Missing=1 and no age when generatedAt is %s', async (_label, generatedAt) => {
+      mocks.s3Send.mockResolvedValue(snapshotBody({ generatedAt }));
+      await handler({}, context);
+      expect(age()).toEqual([]);
+      expect(missing()).toEqual([snapshotDatum('ModelPriceSnapshotMissing', 1, 'Count')]);
+    });
+
+    it('publishes the snapshot metrics even when a provider fails the run', async () => {
+      mocks.fetchAnthropicHourlyUsage.mockRejectedValue(new Error('Anthropic API 401: bad key'));
+      mocks.fetchOpenAIHourlyUsage.mockRejectedValue(new Error('OpenAI API 401: bad key'));
+      await expect(handler({}, context)).rejects.toThrow('usage report failed');
+      expect(snapshotData()).toHaveLength(2);
+    });
   });
 
   it('prices from the static tables with one warning when the bucket is not configured', async () => {

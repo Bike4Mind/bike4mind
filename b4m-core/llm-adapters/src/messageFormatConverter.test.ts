@@ -246,3 +246,24 @@ describe('convertOpenAIToolHistoryToCanonical', () => {
     expect(results).toEqual({ role: 'user', content: [{ type: 'tool_result', tool_use_id: 't1', content: 'r' }] });
   });
 });
+
+describe('convertMessagesToOpenAIFormat - text ahead of tool_calls', () => {
+  const toolTurn = (content: unknown) =>
+    ({
+      role: 'assistant',
+      content,
+      tool_calls: [{ id: 't1', type: 'function', function: { name: 'search', arguments: '{}' } }],
+    }) as unknown as IMessage;
+
+  it('keeps the text the model wrote before its calls', () => {
+    const result = convertMessagesToOpenAIFormat([toolTurn('Plan: search first.')]);
+
+    expect(result[0]).toMatchObject({ role: 'assistant', content: 'Plan: search first.' });
+  });
+
+  it.each([null, '', '  \n'])('sends null content for %j', content => {
+    const result = convertMessagesToOpenAIFormat([toolTurn(content)]);
+
+    expect(result[0]).toMatchObject({ role: 'assistant', content: null });
+  });
+});

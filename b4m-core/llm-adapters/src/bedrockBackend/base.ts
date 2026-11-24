@@ -9,6 +9,7 @@ import {
   ARTIFACT_REMOVED_PLACEHOLDER,
   bedrockClientConfig,
   estimateStreamedOutputTokens,
+  isRetryableError,
   TOOL_SEARCH_BLOCK_TYPES,
   type ModelInfo,
   type TurnUsage,
@@ -31,6 +32,7 @@ import { getCachingAdapter } from '../caching/adapters';
 import { describePayloadShape } from './payloadShape';
 import { handleToolResultStreaming, createRecursiveArtifactGuard, declaredArtifactType } from '../toolStreamingHelper';
 import { injectJsonSchemaInstruction, isBestEffortJsonSchema } from '../responseFormatHelpers';
+import { getAbortAwareRetrySignal, reportUsageOnAbort, retryAbortAware } from '../abortAwareRetry';
 import {
   BedrockRuntimeClient,
   InvokeModelCommand,
@@ -182,6 +184,29 @@ function isAbortError(err: unknown): boolean {
   return err.message.includes('aborted');
 }
 
+function isRetryableBedrockError(error: unknown): boolean {
+  if (!(error instanceof Error) || isAbortError(error)) return false;
+  const { $metadata, $retryable } = error as Error & {
+    $metadata?: { httpStatusCode?: number };
+    $retryable?: { throttling?: boolean };
+  };
+  const status = $metadata?.httpStatusCode;
+  return (
+    Boolean($retryable) ||
+    status === 408 ||
+    status === 429 ||
+    (typeof status === 'number' && status >= 500 && status < 600) ||
+    [
+      'ThrottlingException',
+      'ModelNotReadyException',
+      'ServiceUnavailableException',
+      'InternalServerException',
+      'TimeoutError',
+    ].includes(error.name) ||
+    isRetryableError(error)
+  );
+}
+
 export abstract class BaseBedrockBackend implements ICompletionBackend {
   private _options: BedrockOptions;
   protected _bedrockRuntime: BedrockRuntimeClient;
@@ -223,19 +248,21 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
    */
   protected async invokeModel(
     input: { modelId: string; contentType: string; accept: string; body: string },
-    abortSignal?: AbortSignal
+    abortSignal?: AbortSignal,
+    client = this._bedrockRuntime
   ): Promise<{ body?: Uint8Array }> {
     const command = new InvokeModelCommand(input);
-    return this._bedrockRuntime.send(command, { abortSignal });
+    return client.send(command, { abortSignal });
   }
 
   /** @see invokeModel */
   protected async invokeModelStream(
     input: { modelId: string; contentType: string; accept: string; body: string },
-    abortSignal?: AbortSignal
+    abortSignal?: AbortSignal,
+    client = this._bedrockRuntime
   ): Promise<{ body?: AsyncIterable<{ chunk?: { bytes?: Uint8Array } }> }> {
     const command = new InvokeModelWithResponseStreamCommand(input);
-    return this._bedrockRuntime.send(command, { abortSignal });
+    return client.send(command, { abortSignal });
   }
 
   /**
@@ -289,6 +316,16 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
     });
   }
 
+  protected createAbortAwareClient(model: string): BedrockRuntimeClient {
+    return new BedrockRuntimeClient({
+      region: this.getRegionForModel(model),
+      ...bedrockClientConfig(),
+      maxAttempts: 1,
+      retryMode: 'standard',
+      requestHandler: BEDROCK_REQUEST_HANDLER,
+    });
+  }
+
   async complete(
     model: string,
     messages: IMessage[],
@@ -296,9 +333,10 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
     callback: (text: (string | null | undefined)[], completionInfo?: CompletionInfo) => Promise<void>,
     toolsUsed: Array<RecordableToolUse> = []
   ): Promise<void> {
+    const retrySignal = getAbortAwareRetrySignal(options);
     this.currentModel = model;
     // Update client region if needed for this specific model
-    this.updateClientForModel(model);
+    if (!retrySignal) this.updateClientForModel(model);
 
     // Tool chaining safeguard: Track and limit recursive tool calls
     const toolCallCount = options._internal?.toolCallCount ?? 0;
@@ -532,6 +570,7 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
       }
     }
 
+    const requestClient = retrySignal ? this.createAbortAwareClient(model) : this._bedrockRuntime;
     try {
       Logger.globalInstance.log(
         `[BaseBedrockBackend] Invoking model: ${model} with stream=${options.stream} in region: ${this._options.region}`
@@ -542,7 +581,7 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
         const roundStart = Date.now();
         let firstChunkAt: number | null = null;
         try {
-          response = await this.invokeModelStream(input, options.abortSignal);
+          response = await this.invokeModelStream(input, options.abortSignal, requestClient);
         } catch (err: unknown) {
           this.handleBedrockError(err);
         }
@@ -934,7 +973,11 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
       } else {
         let response;
         try {
-          response = await this.invokeModel(input, options.abortSignal);
+          response = retrySignal
+            ? await retryAbortAware(() => this.invokeModel(input, retrySignal, requestClient), retrySignal, {
+                isRetryable: isRetryableBedrockError,
+              })
+            : await this.invokeModel(input, options.abortSignal, requestClient);
         } catch (err: unknown) {
           this.handleBedrockError(err);
         }
@@ -950,13 +993,18 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
           streamedText[choice.index] = (streamedText[choice.index] ?? '') + (choice.chunkText || '');
         });
 
-        inputTokens = chunk?.choices[0].usage?.input_tokens || 0;
-        outputTokens = chunk?.choices[0].usage?.output_tokens || 0;
-        cacheReadTokens = chunk?.choices[0].usage?.cache_read_input_tokens || 0;
-        cacheWriteTokens = chunk?.choices[0].usage?.cache_creation_input_tokens || 0;
+        inputTokens = chunk?.choices[0]?.usage?.input_tokens || 0;
+        outputTokens = chunk?.choices[0]?.usage?.output_tokens || 0;
+        cacheReadTokens = chunk?.choices[0]?.usage?.cache_read_input_tokens || 0;
+        cacheWriteTokens = chunk?.choices[0]?.usage?.cache_creation_input_tokens || 0;
+        if (retrySignal) {
+          const hasUsage = inputTokens + outputTokens + cacheReadTokens + cacheWriteTokens > 0;
+          await reportUsageOnAbort(retrySignal, callback, hasUsage ? buildCompletionInfo() : undefined);
+        }
 
         // Provider blocks go out at their place in the text, so a caller echoing them keeps the response order.
         const emitResponseText = async (text: string[]) => {
+          retrySignal?.throwIfAborted();
           if (providerBlocks.length === 0) {
             await callback(text, buildCompletionInfo());
             return;
@@ -964,10 +1012,13 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
           const whole = text.join('');
           let from = 0;
           for (const { providerBlock, textOffset } of providerBlocks) {
+            retrySignal?.throwIfAborted();
             if (textOffset > from) await callback([whole.slice(from, textOffset)], buildCompletionInfo());
             from = Math.max(from, textOffset);
+            retrySignal?.throwIfAborted();
             await callback([], { ...buildCompletionInfo(), providerBlock });
           }
+          retrySignal?.throwIfAborted();
           await callback([whole.slice(from)], buildCompletionInfo());
         };
 
@@ -1117,11 +1168,12 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
         }
 
         await emitResponseText(streamedText);
+        retrySignal?.throwIfAborted();
       }
     } catch (error) {
       // Log detailed error information
       if (error instanceof Error) {
-        if (error.message.includes('aborted')) {
+        if (error.message.includes('aborted') || (retrySignal && (retrySignal.aborted || isAbortError(error)))) {
           Logger.globalInstance.log('[BaseBedrockBackend] Request aborted, skipping error logging');
           throw error;
         }
@@ -1156,6 +1208,8 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
       }
 
       throw error;
+    } finally {
+      if (retrySignal) requestClient.destroy();
     }
   }
 

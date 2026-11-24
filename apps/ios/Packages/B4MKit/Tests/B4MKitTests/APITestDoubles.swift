@@ -25,6 +25,20 @@ actor FakeTokens: AccessTokenProviding {
 
 /// In-memory `B4MAPI` that serves scripted pages and records the cursors it was asked for.
 actor FakeAPI: B4MAPI {
+  private(set) var sessionLookups: [String] = []
+  var sessionsByID: [String: SessionSummary] = [:]
+
+  func setSessions(_ sessions: [SessionSummary]) {
+    sessionsByID = Dictionary(uniqueKeysWithValues: sessions.map { ($0.id, $0) })
+  }
+
+  func session(id: String) async throws -> SessionSummary {
+    sessionLookups.append(id)
+    if let failure { throw failure }
+    guard let session = sessionsByID[id] else { throw APIError.notFound }
+    return session
+  }
+
   var sessionPages: [String?: Page<SessionSummary>] = [:]
   var questPages: [String?: Page<QuestTurn>] = [:]
   var balance = CreditBalance(credits: 0)
@@ -46,7 +60,23 @@ actor FakeAPI: B4MAPI {
   func listSessionQuests(sessionID: String, cursor: String?, limit: Int) async throws -> Page<QuestTurn> {
     questCursors.append(cursor)
     if let failure { throw failure }
-    return questPages[cursor] ?? Page(items: [], nextCursor: nil)
+    let page = questPages[cursor] ?? Page(items: [], nextCursor: nil)
+    if holdingNextQuestHistory {
+      holdingNextQuestHistory = false
+      await withCheckedContinuation { heldQuestHistory.append($0) }
+    }
+    return page
+  }
+
+  private var holdingNextQuestHistory = false
+  private var heldQuestHistory: [CheckedContinuation<Void, Never>] = []
+
+  /// Captures the next response before suspending, like an older history request already in flight.
+  func holdNextQuestHistory() { holdingNextQuestHistory = true }
+
+  func releaseQuestHistory() {
+    for request in heldQuestHistory { request.resume() }
+    heldQuestHistory.removeAll()
   }
 
   func creditBalance() async throws -> CreditBalance {

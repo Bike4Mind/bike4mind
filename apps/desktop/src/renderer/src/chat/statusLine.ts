@@ -43,6 +43,21 @@ export interface TurnProgress {
    * Absent until the first event, which is what `startedAt` stands in for.
    */
   lastEventAt?: number;
+  /** The reply being written, for the stats rail beside it; it is not always the last message. */
+  messageId?: string;
+  /** A resumed reply: what its message already stores is from the runs before this one. */
+  continued?: boolean;
+  /**
+   * Epoch ms the first request went out, after the turn's setup; see withPhase. Null on a reply
+   * this window opened mid-stream, whose first request it never saw.
+   */
+  requestAt?: number | null;
+  /** Epoch ms the model's first output of any kind arrived, for the stats rail; see withPhase. */
+  firstTokenAt?: number;
+  /** Thinking time of the phases that have ended, in ms; see withPhase. */
+  thinkingMs?: number;
+  /** Epoch ms the phase in flight started thinking, while it still is. */
+  thinkingSince?: number;
 }
 
 /**
@@ -146,8 +161,11 @@ export function formatElapsed(ms: number): string {
 /** Compact counts: "820", "1.1k", "12k", "1.2M". One decimal only where it still carries meaning. */
 export function formatTokens(count: number): string {
   if (count < 1000) return String(count);
-  if (count < 10_000) return `${(count / 1000).toFixed(1)}k`;
-  if (count < 1_000_000) return `${Math.round(count / 1000)}k`;
+  // Rounded before the unit is picked, so 9999 reads "10k" and 999999 "1.0M".
+  const tenths = Math.round(count / 100);
+  if (tenths < 100) return `${(tenths / 10).toFixed(1)}k`;
+  const thousands = Math.round(count / 1000);
+  if (thousands < 1000) return `${thousands}k`;
   return `${(count / 1_000_000).toFixed(1)}M`;
 }
 
@@ -226,7 +244,7 @@ export function describeActivity(
   phase: ModelPhase | null = null
 ): TurnActivity {
   if (calls.some(call => call.status === 'awaiting-approval'))
-    return { kind: 'approval', label: 'Waiting for your answer...' };
+    return { kind: 'approval', label: 'Waiting for your answer' };
 
   const running = calls.filter(call => call.status === 'running');
   if (running.length === 1) return { kind: 'tool', label: runningLabel(running[0]) };
@@ -321,17 +339,51 @@ export function activityDetail(activity: TurnActivity): ActivityDetail | null {
   return null;
 }
 
-/** The whole line, dot-separated, as one string - which is also how a test can read it. */
+/**
+ * The status line's clock: the turn's own time, with every wait on the user left out.
+ *
+ * A card waits for a click with no deadline (see ApprovalGate), so a clock that kept running
+ * through it would count the user's thinking as the agent's work and read as a countdown.
+ * Held in the renderer, not main: it is a display of this window's turn, and a window that
+ * opens onto a turn already waiting starts its hold from then.
+ */
+export interface TurnClock {
+  startedAt: number;
+  /** Waits on the user that have ended, in ms. */
+  pausedMs: number;
+  /** Epoch ms the wait in progress began, or null while the turn is not waiting. */
+  pausedSince: number | null;
+}
+
+export function startClock(startedAt: number): TurnClock {
+  return { startedAt, pausedMs: 0, pausedSince: null };
+}
+
+/** The clock held or released to match whether the turn waits on the user; the same object when unchanged. */
+export function holdClock(clock: TurnClock, waiting: boolean, now: number): TurnClock {
+  if (waiting === (clock.pausedSince !== null)) return clock;
+  if (waiting) return { ...clock, pausedSince: now };
+  return { ...clock, pausedMs: clock.pausedMs + Math.max(0, now - (clock.pausedSince ?? now)), pausedSince: null };
+}
+
+export function clockElapsedMs(clock: TurnClock, now: number): number {
+  return Math.max(0, (clock.pausedSince ?? now) - clock.startedAt - clock.pausedMs);
+}
+
+/**
+ * The whole line, dot-separated, as one string - which is also how a test can read it. A null
+ * `elapsedMs` leaves the clock out: a turn waiting on the user shows no time at all.
+ */
 export function statusFields(
   turn: TurnProgress,
-  now: number,
+  elapsedMs: number | null,
   activity: string,
   showDollars = false,
   rate: string | null = null
 ): string[] {
   const cost = formatCost(turn.usage, showDollars);
   return [
-    formatElapsed(now - turn.startedAt),
+    ...(elapsedMs === null ? [] : [formatElapsed(elapsedMs)]),
     ...(turn.tokens === null ? [] : [`${formatTokens(turn.tokens)} tokens`]),
     ...(cost ? [cost] : []),
     ...(rate ? [rate] : []),

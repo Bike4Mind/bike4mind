@@ -1441,6 +1441,16 @@ describe('DataLakeSettingsModal - Research tab', () => {
     expect(screen.getByTestId('datalake-settings-tab-research')).toBeInTheDocument();
   });
 
+  it('keeps the tab list on one scrollable line so five tabs fit a phone', () => {
+    render(
+      <Wrapper>
+        <DataLakeSettingsModal lake={manageableLake} onClose={vi.fn()} />
+      </Wrapper>
+    );
+
+    expect(screen.getByTestId('datalake-settings-tablist')).toHaveStyle({ overflowX: 'auto', flexWrap: 'nowrap' });
+  });
+
   it('never offers it to a caller who cannot manage the lake, and never reads on their behalf', () => {
     render(
       <Wrapper>
@@ -1530,7 +1540,7 @@ describe('DataLakeSettingsModal - Research tab', () => {
     );
 
     await userEvent.click(screen.getByTestId('datalake-settings-tab-research'));
-    await userEvent.click(await screen.findByTestId('datalake-research-run-btn'));
+    await userEvent.click(await screen.findByTestId('datalake-research-run-btn-config-1'));
 
     expect(startResearchRunMutate).toHaveBeenCalledWith('config-1');
   });
@@ -2107,5 +2117,71 @@ describe('DataLakeSettingsModal - owner-only sharing changes', () => {
     expect(screen.getByTestId('datalake-settings-save-btn')).toBeEnabled();
     await user.click(screen.getByTestId('datalake-settings-save-btn'));
     expect(updateMutate).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('DataLakeSettingsModal - initialTab', () => {
+  const lake = { ...openLake, id: 'lake-init-1', canManage: true };
+  const reader = { ...openLake, id: 'lake-init-2', canManage: false, embeddingSpendMicroUsd: 0 };
+  const selected = (tab: string) =>
+    expect(screen.getByTestId(`datalake-settings-tab-${tab}`)).toHaveAttribute('aria-selected', 'true');
+
+  it('opens on the requested tab', () => {
+    render(
+      <Wrapper>
+        <DataLakeSettingsModal lake={lake} initialTab="proposals" onClose={vi.fn()} />
+      </Wrapper>
+    );
+    selected('proposals');
+  });
+
+  it('shows the research panel when opened on Research', async () => {
+    render(
+      <Wrapper>
+        <DataLakeSettingsModal lake={lake} initialTab="research" onClose={vi.fn()} />
+      </Wrapper>
+    );
+    selected('research');
+    expect(await screen.findByTestId('datalake-research-panel')).toBeVisible();
+  });
+
+  it('opens on Settings when no tab is requested', () => {
+    render(
+      <Wrapper>
+        <DataLakeSettingsModal lake={lake} onClose={vi.fn()} />
+      </Wrapper>
+    );
+    selected('settings');
+  });
+
+  it('falls back to Settings when the requested tab is not visible to the user', () => {
+    render(
+      <Wrapper>
+        <DataLakeSettingsModal lake={reader} initialTab="research" onClose={vi.fn()} />
+      </Wrapper>
+    );
+    expect(screen.queryByTestId('datalake-settings-tab-research')).toBeNull();
+    selected('settings');
+  });
+
+  it('applies the requested tab on each open, not just the first', () => {
+    const { rerender } = render(
+      <Wrapper>
+        <DataLakeSettingsModal lake={lake} initialTab="research" onClose={vi.fn()} />
+      </Wrapper>
+    );
+    selected('research');
+
+    rerender(
+      <Wrapper>
+        <DataLakeSettingsModal lake={null} onClose={vi.fn()} />
+      </Wrapper>
+    );
+    rerender(
+      <Wrapper>
+        <DataLakeSettingsModal lake={lake} initialTab="proposals" onClose={vi.fn()} />
+      </Wrapper>
+    );
+    selected('proposals');
   });
 });

@@ -7,6 +7,7 @@ import Compressor from 'compressorjs';
 import { useUpdateOrganization } from '@client/app/hooks/data/organizations';
 import OrganizationGroupTypesCard from './OrganizationGroupTypesCard';
 import OrganizationSegmentCard from './OrganizationSegmentCard';
+import OrganizationApiKeysCard from './OrganizationApiKeysCard';
 import OrganizationGroupMembersCard from './OrganizationGroupMembersCard';
 import OrganizationStorageLimitField, { parseStorageLimitInput } from './OrganizationStorageLimitField';
 import { OrganizationBillingSection } from './Billing/OrganizationBillingSection';
@@ -241,6 +242,7 @@ const OrganizationProfileUpdated: React.FC<OrganizationProfileProps> = ({ org, o
               <Fact label="Created">{org.createdAt ? new Date(org.createdAt).toLocaleDateString() : undefined}</Fact>
             </SectionCard>
             <OrganizationSegmentCard org={org} />
+            <OrganizationApiKeysCard orgId={org.id} />
             <OrganizationGroupTypesCard org={org} />
             <OrganizationGroupMembersCard org={org} />
             {children}

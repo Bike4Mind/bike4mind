@@ -8,6 +8,8 @@ import {
 } from '@bike4mind/database';
 import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import { REFERRAL_REWARD_REASON } from '@bike4mind/server-utils/referrals/firstAnswerReward';
+import { activeReferredFriendsFilter, readReferralMilestones } from '@bike4mind/server-utils/referrals/activeFriends';
+import type { ReferralMilestone } from '@bike4mind/common';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -29,17 +31,24 @@ export interface InviterRecentReward {
   credits: number;
   grantedAt: string;
   expiresAt: string;
+  /** Set on a milestone reward: the active-friend count it was paid for. */
+  milestoneFriends?: number;
 }
 
 interface RecentRewardRow {
   _id: { toString(): string };
   credits: number;
   createdAt: Date;
-  metadata?: { invoiceId?: string };
+  metadata?: { invoiceId?: string; milestoneFriends?: number };
+}
+
+export interface InviterMilestone extends ReferralMilestone {
+  /** The inviter has at least `friends` active friends; the reward may still be queued for the trickle pool. */
+  reached: boolean;
 }
 
 export interface InviterSummary {
-  /** False while all three reward amounts are 0: the screen and the notices stay hidden. */
+  /** False while all three reward amounts are 0 and no milestone is set: the screen and the notices stay hidden. */
   enabled: boolean;
   invited: number;
   active: number;
@@ -48,6 +57,8 @@ export interface InviterSummary {
   recentRewards: InviterRecentReward[];
   /** Credits the inviter earns per milestone; 0 means that reward is off. */
   rewards: { firstAnswer: number; firstPayment: number; secondPayment: number };
+  /** Sorted by friend count; empty while milestones are off. */
+  milestones: InviterMilestone[];
 }
 
 const EMPTY_SUMMARY: InviterSummary = {
@@ -58,23 +69,24 @@ const EMPTY_SUMMARY: InviterSummary = {
   creditsEarned: 0,
   recentRewards: [],
   rewards: { firstAnswer: 0, firstPayment: 0, secondPayment: 0 },
+  milestones: [],
 };
 
 /**
  * What an inviter sees about the friends they invited. Credits earned come from the ledger (rewards granted
  * minus rewards taken back), so a held subscription reward, which has no ledger row until released, is not
  * counted; `subscribed` counts friends whose reward is held or released. Returns the empty, disabled
- * summary while all three reward amounts are 0.
+ * summary while all three reward amounts are 0 and no milestone is set.
  */
 export async function getInviterSummary(inviterId: string, now = new Date()): Promise<InviterSummary> {
   const settings = await getSettingsMap(
     { adminSettings: adminSettingsRepository },
-    { names: [...REWARD_AMOUNT_SETTINGS], skipCache: true }
+    { names: [...REWARD_AMOUNT_SETTINGS, 'ReferralMilestones'], skipCache: true }
   );
-  const enabled = REWARD_AMOUNT_SETTINGS.some(name => getSettingsValue(name, settings, 0) > 0);
+  const milestones = readReferralMilestones(getSettingsValue('ReferralMilestones', settings, ''));
+  const enabled = REWARD_AMOUNT_SETTINGS.some(name => getSettingsValue(name, settings, 0) > 0) || milestones.length > 0;
   if (!enabled) return EMPTY_SUMMARY;
 
-  // Same friend filter the first-answer reward applies, so "active" matches what pays out.
   const friends = { referredByUserId: inviterId, isSynthetic: { $ne: true }, deletedAt: null };
   // Repeating the balance-event type list lets these reads use the partial credit_tx_owner_balance_events
   // index instead of walking the inviter's usage rows.
@@ -88,7 +100,8 @@ export async function getInviterSummary(inviterId: string, now = new Date()): Pr
 
   const [invited, active, subscribed, totals, recent, recentTakebacks] = await Promise.all([
     User.countDocuments(friends),
-    User.countDocuments({ ...friends, emailVerified: true, firstValueAt: { $ne: null } }),
+    // The filter the first-answer reward and the milestones pay on, so "active" matches what pays out.
+    User.countDocuments(activeReferredFriendsFilter(inviterId)),
     referralSubscriptionRewardRepository.countSubscribedFriends(inviterId),
     CreditTransaction.aggregate<{ _id: string; total: number }>([
       { $match: { ...ownLedger, reason: { $in: [REFERRAL_REWARD_REASON, 'referral_reward_takeback'] } } },
@@ -101,7 +114,7 @@ export async function getInviterSummary(inviterId: string, now = new Date()): Pr
     })
       .sort({ createdAt: -1 })
       .limit(MAX_RECENT_REWARDS)
-      .select('credits createdAt metadata.invoiceId')
+      .select('credits createdAt metadata.invoiceId metadata.milestoneFriends')
       .lean<RecentRewardRow[]>(),
     CreditTransaction.find({
       ...ownLedger,
@@ -140,11 +153,13 @@ export async function getInviterSummary(inviterId: string, now = new Date()): Pr
       credits,
       grantedAt: row.createdAt.toISOString(),
       expiresAt: new Date(row.createdAt.getTime() + REWARD_LOT_DAYS * DAY_MS).toISOString(),
+      ...(row.metadata?.milestoneFriends ? { milestoneFriends: row.metadata.milestoneFriends } : {}),
     })),
     rewards: {
       firstAnswer: getSettingsValue('ReferralFirstAnswerCredits', settings, 0),
       firstPayment: getSettingsValue('ReferralFirstPaymentCredits', settings, 0),
       secondPayment: getSettingsValue('ReferralSecondPaymentCredits', settings, 0),
     },
+    milestones: milestones.map(milestone => ({ ...milestone, reached: active >= milestone.friends })),
   };
 }

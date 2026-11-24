@@ -12,6 +12,8 @@ import {
   MIN_PRICE_PER_CREDIT_USD,
   partitionDomainList,
   partitionEmailList,
+  partitionPythonDataOrigins,
+  PYTHON_ARTIFACT_DATA_ORIGINS_MAX,
   FULL_ADMIN_SETTING_KEYS,
   isFullAdmin,
   isRegisteredSettingKey,
@@ -40,10 +42,11 @@ import {
 import { encryptSecret, isEncrypted, isValidEncryptionKey } from '@bike4mind/server-utils/security/secretEncryption';
 import { materializePublicSettingsArtifactSafe } from '@server/utils/publicSettingsArtifact';
 import { refuseFloorAboveMeasured } from '@server/utils/refuseFloorAboveMeasured';
+import { appReservedHosts } from '@server/utils/pythonArtifactDataOrigins';
 import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 import { recordAdminSettingChange } from '@bike4mind/server-utils/utils/adminSettingsAudit';
 import { AdminAiConfigSchema } from '@bike4mind/common';
-import { validateAdminAiConfigPromotion } from '@server/admin/ai/readiness';
+import { validateAdminAiConfigPromotion } from '@bike4mind/server-utils/admin/ai/readiness';
 
 // One-time guard so a self-host install running without a configured key logs the
 // plaintext-at-rest degradation once, rather than silently or on every write.
@@ -132,6 +135,19 @@ const handler = adminApi({ adminPermissions: { PUT: 'settings:manage' } }).put(
         throw new BadRequestError(
           `Not an owned domain (public suffix): ${suffixes.map(d => JSON.stringify(d)).join(', ')}`
         );
+      }
+      value = valid;
+    }
+
+    if (key === 'pythonArtifactDataOrigins') {
+      const { valid, invalid } = partitionPythonDataOrigins(value, appReservedHosts());
+      if (invalid.length > 0) {
+        throw new BadRequestError(
+          `Not an allowed data origin: ${invalid.map(({ entry, problem }) => `${JSON.stringify(entry)} (${problem})`).join(', ')}`
+        );
+      }
+      if (valid.length > PYTHON_ARTIFACT_DATA_ORIGINS_MAX) {
+        throw new BadRequestError(`At most ${PYTHON_ARTIFACT_DATA_ORIGINS_MAX} data origins can be listed.`);
       }
       value = valid;
     }

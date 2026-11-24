@@ -197,6 +197,13 @@ describe('formatUtc and RelativeTime', () => {
     expect(relativeTime(new Date(now - 5 * 60_000), now)).toBe('5 minutes ago');
   });
 
+  it('reads a scheduled time as a future time when asked to', () => {
+    const now = Date.parse('2026-10-29T12:00:00Z');
+    expect(relativeTime(new Date(now + 3 * 86_400_000), now, true)).toBe('in 3 days');
+    expect(relativeTime(new Date(now + 2 * 3_600_000), now, true)).toBe('in 2 hours');
+    expect(relativeTime(new Date(now - 5 * 60_000), now, true)).toBe('5 minutes ago');
+  });
+
   describe('when the time changes between ticks', () => {
     afterEach(() => vi.useRealTimers());
 

@@ -1,4 +1,4 @@
-import { CreditHolderType } from '@bike4mind/common';
+import { CreditHolderType, RUN_BUDGET_EXHAUSTED_ERROR_CODE, UnprocessableEntityError } from '@bike4mind/common';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { observeCreditHold, recordSettlementAfterSweep } from './creditHoldTelemetry';
 
@@ -47,6 +47,19 @@ describe('credit hold telemetry', () => {
     expect(JSON.parse(vi.mocked(console.info).mock.calls[0][0])).toMatchObject({
       outcome: 'error',
       Outcome: 'error',
+    });
+  });
+
+  it('records a run budget refusal as refused rather than an error', async () => {
+    const error = new UnprocessableEntityError('budget used up', { errorCode: RUN_BUDGET_EXHAUSTED_ERROR_CODE });
+    await expect(
+      observeCreditHold(context, async () => {
+        throw error;
+      })
+    ).rejects.toBe(error);
+    expect(JSON.parse(vi.mocked(console.info).mock.calls[0][0])).toMatchObject({
+      outcome: 'refused',
+      Outcome: 'refused',
     });
   });
 

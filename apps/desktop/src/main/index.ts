@@ -1,12 +1,13 @@
 // First, before any module that could read userData or touch safeStorage; see appIdentity.ts.
 import './bootstrapIdentity';
 import { join } from 'node:path';
-import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron';
+import { app, BrowserWindow, dialog, ipcMain, screen, shell } from 'electron';
 import { IPC_CHANNELS, type AppInfo } from '@shared/ipc';
 import { describeBusy, isBusy, type UpdateBusyReport } from '@shared/update';
 import appIcon from '../../build/icon.png?asset';
 import macAppIcon from '../../build/icon-mac.png?asset';
 import { registerAccount } from './account';
+import { registerAppMenu } from './appMenu';
 import { currentVersion, currentVersionBasis } from './appVersion';
 import { onAuthStateChanged, registerAuth } from './auth';
 import { registerChat } from './chat';
@@ -21,15 +22,21 @@ import { registerModelScheme } from './chat/model3d/engineProtocol';
 import { registerMediaScheme } from './chat/media/protocol';
 import { isExternallyOpenable } from '@shared/externalLinks';
 import { persistConsoleWarnings } from './logFile';
+import { initialMainWindowPlacement, MainWindowStateStore, trackMainWindowState } from './mainWindowState';
 import { registerSkinScheme } from './mods/skinProtocol';
 import { registerSkins } from './mods';
+import { registerRendererErrorLog } from './rendererErrors';
+import { claimSingleInstance } from './singleInstance';
 import { registerUpdates } from './update';
 import { registerTerminals } from './terminal';
-import { registerUsage } from './usage';
+import { registerLocalUsage, registerUsage } from './usage';
 import { registerAttention } from './attention';
 import { appWindows } from './windows';
+import { registerOrchestrateMini } from './orchestrateMini';
 import { registerWatch } from './watch';
 import { registerWindowTheme } from './windowTheme';
+import { registerSessionHandoff } from './handoff';
+import { runLiveEvaluation } from './chat/liveEvaluation';
 
 // electron-vite sets this in dev only; a packaged build loads the renderer off disk.
 const rendererDevUrl = process.env.ELECTRON_RENDERER_URL;
@@ -40,6 +47,8 @@ registerMediaScheme();
 registerArtifactScheme();
 registerModelScheme();
 registerSkinScheme();
+
+const mainWindowState = new MainWindowStateStore(join(app.getPath('userData'), 'main-window.json'));
 
 function buildAppInfo(): AppInfo {
   const versionBasis = currentVersionBasis();
@@ -56,13 +65,16 @@ function buildAppInfo(): AppInfo {
 /** Set once chat is registered; closes the agent's hidden browsers. */
 let closeAgentBrowsers = (): void => undefined;
 let canCloseLastWindow = (): boolean => true;
-/** Set once the watch is registered; closes the mini Tavern. */
-let closeMiniTavern = (): void => undefined;
+/** Set once the watch is registered; closes the mini Tavern and the Orchestrate mini window (floatingWindow.ts). */
+let closeFloatingWindows = (): void => undefined;
 
 function createWindow(): void {
+  const placement = initialMainWindowPlacement(
+    mainWindowState.current(),
+    screen.getAllDisplays().map(display => display.workArea)
+  );
   const window = new BrowserWindow({
-    width: 1280,
-    height: 860,
+    ...placement.bounds,
     show: false,
     title: 'Bike4Mind',
     icon: appIcon,
@@ -75,7 +87,9 @@ function createWindow(): void {
   });
 
   // Showing only once the renderer has painted avoids a flash of empty chrome.
-  window.once('ready-to-show', () => window.show());
+  // maximize() shows the window too, so it stands in for show() rather than following it.
+  window.once('ready-to-show', () => (placement.maximized ? window.maximize() : window.show()));
+  trackMainWindowState(window, mainWindowState);
   window.on('close', event => {
     if (process.platform === 'darwin' || canCloseLastWindow()) return;
     if (appWindows().some(other => other !== window)) return;
@@ -90,9 +104,9 @@ function createWindow(): void {
     if (appWindows().length > 0) return;
     closeAgentBrowsers();
     closeDevLogWindow();
-    // macOS keeps running with no window, and the mini Tavern is how a watcher keeps an eye on it.
-    // Elsewhere the last window closing quits, which needs the mini window gone too.
-    if (process.platform !== 'darwin') closeMiniTavern();
+    // macOS keeps running with no window, and the floating windows are how a watcher keeps an eye on it.
+    // Elsewhere the last window closing quits, which needs them gone too.
+    if (process.platform !== 'darwin') closeFloatingWindows();
   });
 
   attachDevLogShortcut(window.webContents);
@@ -122,7 +136,19 @@ function createWindow(): void {
   }
 }
 
+/** Bring the main window forward, opening one if none is (macOS keeps running with none). */
+function showMainWindow(): void {
+  const window = appWindows()[0];
+  if (!window) return createWindow();
+  if (window.isMinimized()) window.restore();
+  window.show();
+  window.focus();
+  // A second launch arrives while another app is frontmost; focus() alone only raises the window.
+  if (process.platform === 'darwin') app.focus({ steal: true });
+}
+
 ipcMain.handle(IPC_CHANNELS.getAppInfo, buildAppInfo);
+registerRendererErrorLog();
 registerWindowTheme();
 
 registerDevLog();
@@ -139,7 +165,20 @@ function sessionScopeKeyOf(state: Parameters<typeof sessionScopeFor>[0]): string
 }
 
 void app.whenReady().then(async () => {
-  // First in this handler, so a failure below is on disk too (a packaged build has no terminal);
+  let quitState: 'idle' | 'confirming' | 'cleaning-up' | 'ready' = 'idle';
+  // First, before anything that touches the profile. After ready rather than at import: taken
+  // before ready while a previous instance is still quitting, the lock can leave macOS never
+  // finishing this launch, so the app sits in the dock with no window. Here it waits for the old
+  // instance to let go and carries on. A launch during a quit is not brought forward: the window
+  // it would raise is closing.
+  const onSecondLaunch = () => {
+    if (quitState === 'idle') showMainWindow();
+  };
+  if (!claimSingleInstance(app, onSecondLaunch)) {
+    app.exit(0);
+    return;
+  }
+  // Right after the lock, so a failure below is on disk too (a packaged build has no terminal);
   // warnings before app ready are not persisted.
   persistConsoleWarnings(console, app.getPath('logs'));
   // Started now so the first command or PR poll does not wait on a slow login shell.
@@ -152,7 +191,11 @@ void app.whenReady().then(async () => {
   // After ready, not before: safeStorage is only usable once the app is ready, and the vault
   // asks it whether encryption is available on its first access.
   const auth = registerAuth();
-  const attention = registerAttention({ openWindow: createWindow });
+  registerSessionHandoff(auth);
+  const attention = registerAttention({
+    openWindow: createWindow,
+    notifyScopePath: join(app.getPath('userData'), 'attention-preferences.json'),
+  });
   registerAccount(auth);
   registerUsage(auth);
   const fleet = registerFleet();
@@ -164,6 +207,7 @@ void app.whenReady().then(async () => {
     simulatorView,
     modelViews,
     pullRequests,
+    composerDrafts,
     claudeImport,
     spareWorktrees,
     modelServers,
@@ -173,6 +217,7 @@ void app.whenReady().then(async () => {
     modelSettings,
     capabilityLedger,
     respondToApproval,
+    store: sessions,
   } = registerChat(auth, {
     sessionClosed: sessionId => terminals.killSession(sessionId),
     releaseSessionTerminals: sessionId => terminals.acquireSessionCleanup(sessionId),
@@ -198,6 +243,12 @@ void app.whenReady().then(async () => {
     listSessions: () => chat.listSessions(),
     sessionMessages: async sessionId => (await chat.getSession(sessionId))?.messages ?? [],
   });
+  // The Orchestrate mini window: fed by the stage, toggled from its view menu and the menu-bar item.
+  const orchestrateMini = registerOrchestrateMini({
+    openSession: open => attention.openSession(open),
+    isQuitting: () => quitState === 'cleaning-up' || quitState === 'ready',
+    ...(rendererDevUrl ? { rendererDevUrl } : {}),
+  });
   // The menu-bar item and the mini Tavern: the same status feed and approval gate as above.
   const watch = registerWatch({
     sources: {
@@ -207,20 +258,18 @@ void app.whenReady().then(async () => {
       resolveApproval: respondToApproval,
     },
     openSession: open => attention.openSession(open),
-    showApp: () => {
-      const window = appWindows()[0];
-      if (!window) return createWindow();
-      if (window.isMinimized()) window.restore();
-      window.show();
-      window.focus();
-    },
+    showApp: showMainWindow,
     appIcon,
-    // quitState is declared below; this only runs on later window and quit events.
     isQuitting: () => quitState === 'cleaning-up' || quitState === 'ready',
     ...(rendererDevUrl ? { rendererDevUrl } : {}),
+    orchestrateMini,
   });
-  closeMiniTavern = () => watch.closeMini();
+  closeFloatingWindows = () => {
+    watch.closeMini();
+    orchestrateMini.close();
+  };
   void watch.start();
+  void orchestrateMini.start();
   const chatScopeKeyOf = (state: Parameters<typeof sessionScopeForChat>[0]) => {
     const scope = sessionScopeForChat(state);
     return scope ? sessionScopeKey(scope) : null;
@@ -234,6 +283,7 @@ void app.whenReady().then(async () => {
     needsYou.scopeChanged();
     watch.scopeChanged();
   });
+  registerLocalUsage(auth, sessions, modelServers);
   fleet.setDirectoryResolver(async sessionId => {
     const session = await chat.getSession(sessionId);
     return session?.project?.workingDirectory ?? session?.grantedDirectories?.[0] ?? null;
@@ -245,7 +295,6 @@ void app.whenReady().then(async () => {
     return session?.project?.workingDirectory ?? session?.grantedDirectories?.[0] ?? null;
   });
 
-  let quitState: 'idle' | 'confirming' | 'cleaning-up' | 'ready' = 'idle';
   let signalQuit = false;
   canCloseLastWindow = () => quitState === 'ready';
 
@@ -342,6 +391,7 @@ void app.whenReady().then(async () => {
   });
 
   app.once('will-quit', () => {
+    composerDrafts.flushSync();
     auth.dispose();
     fleet.dispose();
     models.dispose();
@@ -372,6 +422,8 @@ void app.whenReady().then(async () => {
     });
   }
 
+  registerAppMenu({ showApp: showMainWindow, version: currentVersion() });
+  await mainWindowState.load();
   createWindow();
   claudeImport.start();
   app.on('browser-window-focus', () => claudeImport.onWindowFocus());
@@ -387,7 +439,26 @@ void app.whenReady().then(async () => {
   // Restoring runs alongside the window opening rather than gating it: the renderer starts in
   // the `initializing` state and is pushed the outcome, so a slow or unreachable backend
   // delays the auth card, not the whole app.
-  void auth.initialize();
+  void auth.initialize().then(
+    () =>
+      runLiveEvaluation(
+        auth,
+        join(app.getPath('userData'), 'controlled-evaluation'),
+        process.argv.includes('--controlled-cost-evaluation-live'),
+        process.argv
+          .find(argument => argument.startsWith('--controlled-cost-evaluation-config='))
+          ?.split('=')
+          .slice(1)
+          .join('='),
+        {
+          finalPhase: process.argv.includes('--controlled-cost-evaluation-final'),
+          recoverRunId: process.argv
+            .find(argument => argument.startsWith('--controlled-cost-evaluation-recover-run='))
+            ?.split('=')[1],
+        }
+      ).catch((error: unknown) => console.warn('EVALUATION: stopped; inspect the local evaluation report.', error)),
+    (error: unknown) => console.error('Auth restore failed at startup', error)
+  );
 
   app.on('activate', () => {
     if (appWindows().length === 0) createWindow();

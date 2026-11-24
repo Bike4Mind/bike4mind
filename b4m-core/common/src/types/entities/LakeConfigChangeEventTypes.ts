@@ -1,6 +1,7 @@
 import { IBaseRepository } from './BaseTypes';
 import { IMongoDocument } from './common';
 import type { IDataLake } from './DataLakeTypes';
+import type { ResearchRunLevers } from './DataLakeResearchTypes';
 import { LAKE_ACCESS_PRINCIPAL_KINDS, type LakeAccessPrincipalKind } from './LakeAccessEventTypes';
 
 // -- Lake Config Change Event ---------------------------------------------------------------
@@ -417,6 +418,30 @@ export interface ILakeConfigFingerprintChange {
  */
 export type ILakeConfigFieldChange = ILakeConfigLiteralChange | ILakeConfigFingerprintChange;
 
+/** What a config event is about, for the rows whose subject is an entity rather than a lake field. */
+export const LAKE_CONFIG_EVENT_TARGET_KINDS = ['researchConfig', 'proposal', 'file'] as const;
+export type LakeConfigEventTargetKind = (typeof LAKE_CONFIG_EVENT_TARGET_KINDS)[number];
+
+export interface ILakeConfigEventTarget {
+  kind: LakeConfigEventTargetKind;
+  id: string;
+}
+
+/** A research-config lever or one of the schedule settings that sit beside the levers. */
+export type LakeConfigLeverName =
+  keyof ResearchRunLevers | 'name' | 'cadence' | 'reviewBacklogLimit' | 'schedulePaused';
+
+/**
+ * One lever's move as a value, the machine-readable twin of the prose line in `changes`. A feed
+ * address is stored in its redacted form here: the full value lives only in the short-lived config
+ * snapshot, because this row is kept for years and a private feed's query string can carry a token.
+ */
+export interface ILakeConfigLeverChange {
+  lever: LakeConfigLeverName;
+  before: unknown;
+  after: unknown;
+}
+
 export interface ILakeConfigChangeEvent {
   principalKind: LakeConfigChangePrincipalKind;
   principalId: string;
@@ -459,6 +484,12 @@ export interface ILakeConfigChangeEvent {
    * which for the config surface is the same thing and for auto-activate is not quite.
    */
   changes: ILakeConfigFieldChange[];
+  /** The entity this row is about. Absent on rows written before it existed and on lake-level rows. */
+  target?: ILakeConfigEventTarget;
+  /** Structured lever moves for a research-config write. Absent on old rows and on other actions. */
+  leverChanges?: ILakeConfigLeverChange[];
+  /** The file an approve or auto-approve admitted, so the admission can be traced to its proposal. */
+  admittedFabFileId?: string;
   /** Computed at write time from the floor-clamped retention; TTL-indexed. */
   expiresAt: Date;
 }
@@ -475,6 +506,9 @@ export interface RecordLakeConfigChangeInput {
   manageRung: LakeManageRung;
   action: LakeConfigChangeAction;
   changes: ILakeConfigFieldChange[];
+  target?: ILakeConfigEventTarget;
+  leverChanges?: ILakeConfigLeverChange[];
+  admittedFabFileId?: string;
   /** The platform-configured retention (days), if the caller resolved it; unconditionally clamped
    * to the floor inside `record()` regardless of what is passed here. */
   retentionDays?: number;

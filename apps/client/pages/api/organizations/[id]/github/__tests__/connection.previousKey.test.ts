@@ -27,7 +27,7 @@ vi.mock('@server/middlewares/baseApi', () => {
 });
 vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({ rateLimit: () => ({}) }));
 vi.mock('@bike4mind/server-utils/utils/orgAccess', () => ({
-  verifyOrgOwner: vi.fn(async () => ({ id: 'org-1', name: 'Acme' })),
+  verifyOrgPermission: vi.fn(async () => ({ id: 'org-1', name: 'Acme' })),
 }));
 vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({ recordAdminActionFromRequest: vi.fn(async () => null) }));
 vi.mock('@bike4mind/database', () => ({ orgGitHubConnectionRepository: h.connectionRepo }));

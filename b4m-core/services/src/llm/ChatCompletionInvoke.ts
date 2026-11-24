@@ -176,6 +176,7 @@ export class ChatCompletionInvoke {
       audioConfig,
       mcpServers,
       disabledMcpConnections,
+      enabledPlatformMcpConnections,
       extraContextMessages,
       correctsQuestId,
       allowedAgents,
@@ -451,6 +452,9 @@ export class ChatCompletionInvoke {
               throw new NotFoundError('Quest not found');
             }
             // Retry path: clear prior replies and images.
+            // An edited prompt is a new request, so it gets a fresh data lake save budget. A plain retry
+            // keeps the count: the files its earlier attempt saved still exist.
+            const promptEdited = q.prompt !== message;
             q.type = 'message';
             q.reply = null;
             q.replies = [];
@@ -487,8 +491,9 @@ export class ChatCompletionInvoke {
                 promptMeta: q.promptMeta,
                 agentIds: q.agentIds,
               },
-              { unset: ['errorCode', 'turnTiming'] }
+              { unset: promptEdited ? ['errorCode', 'turnTiming', 'lakeSaveCount'] : ['errorCode', 'turnTiming'] }
             );
+            if (promptEdited) q.lakeSaveCount = undefined;
             return q;
           })
         : this.db.quests.create({
@@ -626,6 +631,7 @@ export class ChatCompletionInvoke {
         tools,
         mcpServers,
         disabledMcpConnections,
+        enabledPlatformMcpConnections,
         projectId,
         organizationId,
         questMaster,

@@ -7,6 +7,7 @@ import {
 } from '@shared/viewSnapshot';
 import { agentNowText } from './activity';
 import type { AgentView, ParentView } from './roster';
+import { isOneClickDecision } from './tavern/bubbleAnswer';
 
 function rootState(parent: ParentView): ViewSnapshot['root']['state'] {
   if (parent.status === 'needs-action') return 'needs-you';
@@ -33,11 +34,28 @@ function toViewAgent(agent: AgentView): ViewAgent {
           question: question.question,
           options: question.options.map(option => option.label),
           ...(question.multiSelect && { multiSelect: true }),
+          oneClick:
+            agent.oneClickDecision ??
+            isOneClickDecision(
+              question.options.map(option => option.label),
+              question.multiSelect
+            ),
         },
       }),
-    ...(agent.pr && { pr: { number: agent.pr.number, state: agent.pr.state } }),
+    ...(agent.pr && {
+      pr: {
+        number: agent.pr.number,
+        state: agent.pr.state,
+        ...(agent.pr.repo && { repo: agent.pr.repo }),
+        ...(agent.pr.attention && { attention: agent.pr.attention }),
+        ...(agent.pr.behind && { behind: true }),
+        ...(agent.pr.autoMerge && { autoMerge: true }),
+        ...(agent.pr.stale && { stale: true }),
+      },
+    }),
     ...(agent.usdCost !== undefined && { usdCost: agent.usdCost }),
     ...(agent.credits !== undefined && { credits: agent.credits }),
+    ...(agent.plan && { plan: agent.plan }),
   };
 }
 
@@ -64,6 +82,7 @@ export function toViewSnapshot(
 /** What the host does for an accepted action that is not answered over IPC. */
 export interface ViewActionHost {
   openAgent(agentId: string): void;
+  openPr?(agentId: string): void;
   openRoot(): void;
   /** The stage's own Stop (AgentActions.stop); absent where the host has none, and the action rejects. */
   stop?(agentId: string): void | Promise<void>;
@@ -78,6 +97,8 @@ export async function runViewAction(action: ViewAction, host: ViewActionHost): P
   switch (action.kind) {
     case 'open-agent':
       return host.openAgent(action.agentId);
+    case 'open-pr':
+      return host.openPr?.(action.agentId);
     case 'open-root':
       return host.openRoot();
     case 'answer':

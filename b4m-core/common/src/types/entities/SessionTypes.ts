@@ -14,6 +14,22 @@ import type { GenerationJobRef } from './GenerationJobTypes';
 import type { IQuestCallback } from '../../schemas/generationCallback';
 import type { SuggestedChoices } from '../../utils/replyChoices';
 
+/**
+ * How long a pending action stays answerable (ms). Shared by the web and public-API resolver, the brief
+ * composer and the brief serializer so the three agree on when an approval has lapsed.
+ */
+export const PENDING_ACTION_TTL_MS = 15 * 60 * 1000;
+
+export const PENDING_ACTION_OUTCOMES = ['approved', 'denied', 'lapsed'] as const;
+export type PendingActionResolutionOutcome = (typeof PENDING_ACTION_OUTCOMES)[number];
+
+/** The last pending action taken off a quest, kept so a brief can report what became of it. */
+export interface IPendingActionResolution {
+  ts: number;
+  outcome: PendingActionResolutionOutcome;
+  at: Date;
+}
+
 /** Pending action for Slack/Web button-based confirmation flow */
 export interface IPendingAction {
   tool: string;
@@ -105,13 +121,15 @@ export type SessionProps = {
  * thrown quest error is classified for billing reasons, never for the
  * provider-configuration reasons the HTTP surface reports. The `satisfies` is what keeps it a narrowing rather
  * than a second vocabulary - a code added here that is not in `API_ERROR_CODES`
- * fails the build.
+ * fails the build. `run_budget_exhausted` lands on an image generation quest whose `run` budget
+ * could not cover the render's credit hold (ImageGeneration.process).
  */
 export const QUEST_ERROR_CODES = [
   'insufficient_credits',
   'spend_cap_exceeded',
   'spend_frozen',
   'free_quest_limit_reached',
+  'run_budget_exhausted',
 ] as const satisfies readonly ApiErrorCode[];
 export type QuestErrorCode = (typeof QUEST_ERROR_CODES)[number];
 
@@ -299,6 +317,9 @@ export interface IChatHistoryItem {
   /** Agent-mode sound effects this run has claimed; the per-run cap's counter (QuestRepository.claimAgentGenerationSlot). */
   agentSoundEffectsClaimed?: number;
 
+  /** save_content_to_data_lake saves this turn has claimed; the per-turn cap's counter (QuestRepository.claimLakeSaveSlot). */
+  lakeSaveCount?: number;
+
   /** TODO unclear purpose: Possibly out-of-band data such as link to website? */
   oob?: string;
   promptMeta?: PromptMeta;
@@ -479,6 +500,9 @@ export interface IChatHistoryItem {
    *   - other: MCP tool confirmation (params contain tool arguments)
    */
   pendingAction?: IPendingAction;
+
+  /** Written by the claim that takes `pendingAction` off the quest (pendingActionExecutor.claimPendingAction). */
+  pendingActionResolution?: IPendingActionResolution;
 
   /**
    * Slack notification info for async message editing
@@ -785,6 +809,13 @@ export interface ISession {
    * names. Mirrors how `systemPromptText` scopes a session without a project.
    */
   enabledTools?: string[];
+  /**
+   * The Studio production this notebook directs, set by the agent start of a Direct launch after the server
+   * checks the caller owns the composition and has Productions open. While set, every turn runs in agent mode
+   * with the director tools and system context (client: useSendMessage; executor: agentExecutor.directedSession).
+   * Not copied by clone/fork/snip.
+   */
+  productionCompositionId?: string;
   /**
    * Tools that must NOT be offered to the model for this session, even if the
    * request or global auto-adds include them. Applied as a denylist after all

@@ -1,5 +1,6 @@
 import { registerOrgAlertObserver } from '@bike4mind/server-utils/organizations/registerOrgAlertObserver';
 import '@bike4mind/server-utils/lib/settings/registerContributedSettings';
+import '@bike4mind/server-utils/navigation/registerContributedViews';
 import { initializeSlackPackage } from '@bike4mind/server-utils/integrations/slack/slackPackageInit';
 initializeSlackPackage();
 
@@ -84,6 +85,7 @@ import { cancelPendingActionOnQuest } from '@bike4mind/server-utils/utils/pendin
 import { buildPendingActionButtons } from '@bike4mind/server-utils/integrations/slack/pendingActionButtons';
 import {
   getSharedTokenizer,
+  publishModerationEscalation,
   publishTelemetryAlertCallback,
 } from '@bike4mind/server-utils/utils/chatCompletionDefaults';
 import { recallMementosV2 } from '@bike4mind/server-utils/memory/recallMementosV2';
@@ -98,6 +100,7 @@ import {
 } from '@workers/videoGenerations/slackVideoToolConfig';
 import { getCreateVideoJobDeps, getVideoJobDeps } from '@bike4mind/server-utils/generationJobs/wiring';
 import { buildAudioToolJobs } from '@bike4mind/server-utils/generationJobs/audioJobWiring';
+import { resolveCallableFunctionsEnabled } from '@bike4mind/server-utils/callableFunctions/access';
 
 // Slack quests settle org credits; this entry does not load queueHandlers/utils.
 registerOrgAlertObserver();
@@ -201,6 +204,7 @@ export const getStaticOptions = () => {
     releaseQuestStart,
     getThinkingVisibility: resolveThinkingVisibility,
     autoNameSession: autoNameSessionAdapter,
+    notifyModerationEscalation: publishModerationEscalation,
     invokeCreateMemento: async (
       questId: string,
       sessionId: string,
@@ -492,6 +496,7 @@ export const handler = withEventContext(async (event, logger) => {
       logger,
       externalTools,
       videoToolConfigResolver: getSlackVideoToolConfigResolver(params.questId, user.id),
+      callableFunctionsResolver: () => resolveCallableFunctionsEnabled(user),
     });
   } catch (processError) {
     // A credit or AI-access refusal fails identically on every retry, so it is an expected outcome, not a fault.

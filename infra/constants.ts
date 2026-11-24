@@ -1,3 +1,4 @@
+// Must stay in sync with the preview test in isPersonalMailStage (infra/personalMailDefaults.ts).
 export const isPreviewStage = process.env.IS_PREVIEW === 'true' || /^pr\d+$/.test($app.stage);
 const isStagingStage = $app.stage === 'dev';
 
@@ -16,6 +17,8 @@ export { PRODUCTION_STAGES };
 
 /** Stage default for log groups set in `infra/`; must match `resolveDefaultLogging` in b4m-core/infra. */
 export const STAGE_LOG_RETENTION = $app.stage === 'production' ? '1 month' : '1 week';
+/** STAGE_LOG_RETENTION in days, for a log group declared as a raw aws.cloudwatch.LogGroup. */
+export const STAGE_LOG_RETENTION_DAYS = STAGE_LOG_RETENTION === '1 month' ? 30 : 7;
 
 /**
  * Subscriber options for a single-record queue handler (one that reads only

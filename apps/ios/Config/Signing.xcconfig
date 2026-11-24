@@ -1,0 +1,17 @@
+// Signing defaults for all targets. These reproduce the team/CI build exactly.
+// A developer builds to a personal device by copying Local.xcconfig.example to
+// Local.xcconfig (gitignored) and overriding values; no tracked file is edited.
+
+DEVELOPMENT_TEAM =
+
+B4M_APP_BUNDLE_ID = com.bike4mind.app
+// Extensions must stay prefixed by the app id, so they derive from it.
+B4M_WIDGETS_BUNDLE_ID = $(B4M_APP_BUNDLE_ID).widgets
+B4M_SHARE_BUNDLE_ID = $(B4M_APP_BUNDLE_ID).ShareExtension
+
+B4M_APP_ENTITLEMENTS = Bike4Mind/Resources/Bike4Mind.entitlements
+B4M_WIDGETS_ENTITLEMENTS = WidgetSupport/Widgets.entitlements
+B4M_SHARE_ENTITLEMENTS = ShareExtension/ShareExtension.entitlements
+
+// Optional: a missing Local.xcconfig is not an error. Keep this last so it wins.
+#include? "Local.xcconfig"

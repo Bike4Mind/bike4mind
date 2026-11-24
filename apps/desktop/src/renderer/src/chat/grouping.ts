@@ -71,7 +71,9 @@ export function groupSessions(
   mode: ChatSessionMode,
   userSections: SidebarSectionsState = EMPTY_SIDEBAR_SECTIONS,
   importedInline = false,
-  nested = false
+  nested = false,
+  /** Lower first, ahead of activity within every group; omitted, the order is activity alone. */
+  attentionRank?: (session: ChatSessionSummary) => number
 ): SidebarSections {
   const inMode = sessions.filter(session => session.mode === mode);
   // Archiving outranks pinning: a pinned session that is then archived has been put away, and
@@ -80,7 +82,7 @@ export function groupSessions(
   const visible = inMode.filter(session => !session.archived);
   const children = nested ? nestSpawned(visible, userSections) : NO_CHILDREN;
   const attached = new Set([...children.values()].flat().map(session => session.id));
-  const byGroupActivity = activityOrder(children);
+  const byGroupActivity = withRank(activityOrder(children), attentionRank);
   const pinned = visible.filter(session => session.pinned).sort(byGroupActivity);
   const rest = visible.filter(session => !session.pinned && !attached.has(session.id)).sort(byGroupActivity);
 
@@ -187,6 +189,14 @@ function activityOrder(children: ReadonlyMap<string, readonly ChatSessionSummary
   if (children.size === 0) return () => 0;
   return (a: ChatSessionSummary, b: ChatSessionSummary): number =>
     groupActivity(children, b).localeCompare(groupActivity(children, a));
+}
+
+type SessionOrder = (a: ChatSessionSummary, b: ChatSessionSummary) => number;
+
+/** `order`, untouched when there is no rank, so the default sidebar sorts exactly as before. */
+function withRank(order: SessionOrder, rank?: (session: ChatSessionSummary) => number): SessionOrder {
+  if (!rank) return order;
+  return (a, b) => rank(a) - rank(b) || order(a, b);
 }
 
 /**

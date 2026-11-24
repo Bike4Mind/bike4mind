@@ -5,8 +5,8 @@ import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 import { getDlqByLabel, getDlqUrl } from '@bike4mind/server-utils/utils/dlqRegistry';
 import { acquireDlqMessagesById } from '@bike4mind/server-utils/utils/dlqMessages';
 import { adminAiSuggestionRepository, withTransaction } from '@bike4mind/database';
-import { visibleDlqSuggestion } from '@server/admin/dlq/triage';
-import { triageActionSchema } from '@server/admin/dlq/triagePolicy';
+import { visibleDlqSuggestion } from '@bike4mind/server-utils/admin/dlq/triage';
+import { triageActionSchema } from '@bike4mind/server-utils/admin/dlq/triagePolicy';
 import { discardDlqMessages } from '@server/admin/dlq/discardMessages';
 import { Logger } from '@bike4mind/observability';
 import { z } from 'zod';
@@ -117,6 +117,7 @@ const handler = adminApi({
     sourceQueue: entry.displayName,
     reason,
     adminUserId,
+    aiSuggestionId,
     messages,
     // A message acquired by ID is hidden; release it so it reappears for a retry right away.
     releaseUnretained: Boolean(messageIds),

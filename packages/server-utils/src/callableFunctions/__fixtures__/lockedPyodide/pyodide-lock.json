@@ -1,0 +1,8 @@
+{
+  "info": { "version": "0.25.1" },
+  "packages": {
+    "numpy": { "name": "numpy", "version": "1.26.4" },
+    "pandas": { "name": "pandas", "version": "1.5.3" },
+    "micropip": { "name": "micropip", "version": "0.5.0" }
+  }
+}

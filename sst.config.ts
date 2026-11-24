@@ -113,6 +113,15 @@ export default $config({
       },
     });
 
+    // Must run before ./infra loads: infra/mailTransport.ts reads the mail env at module top.
+    const { applyPersonalMailDefaults } = await import('./infra/personalMailDefaults');
+    await applyPersonalMailDefaults({
+      stage: $app.stage,
+      env: process.env,
+      appName: $app.name,
+      lookup: name => aws.ssm.getParameter({ name }).then(result => result.value),
+    });
+
     const {
       fabFileBucket,
       generatedImagesBucket,
@@ -149,6 +158,8 @@ export default $config({
       wafWebAclArn,
       contributedQueues,
       dlqAlarmTopic,
+      forwardErrorLogs,
+      callableFunctionSubnetIds,
     } = await import('./infra');
 
     // Contribute premium package infra (crons, alarms, Slack fan-out, EventBridge
@@ -210,7 +221,9 @@ export default $config({
     // overlay pattern. Retry-exhaustion failures are still alarmed to Slack via the
     // retained tavern-heartbeat DLQ alarm (infra/dlqAlarms.ts).
     const { contributeInfra: contributeTavernInfra } = await import('./infra/premium-generated/tavern-infra.generated');
-    contributeTavernInfra({
+    // A variable, not an inline literal: an overlay whose params type does not declare eventBus yet
+    // would reject the extra key on a fresh object literal (excess-property check).
+    const tavernInfraContext = {
       lambdaVpc,
       allSecrets,
       defaultLambdaEnvironment: DEFAULT_LAMBDA_ENVIRONMENT,
@@ -222,7 +235,9 @@ export default $config({
       routePrefix,
       appFilesBucket,
       isSharedRouterConsumer,
-    });
+      eventBus,
+    };
+    contributeTavernInfra(tavernInfraContext);
 
     // OptiHashi premium infra: compute alarm topics, MetricAlarms, run-poller cron.
     // Handler path uses generated stub (server/premium-generated/qworkRunPoller.ts) so
@@ -254,11 +269,12 @@ export default $config({
     });
 
     // Same generated-glue pattern as the overlays above: a no-op when the overlay is absent.
-    // Also handed the shared bus, the package-declared queue pairs (infra/queues.ts) and the alarm
-    // topic, so a package can subscribe consumers and attach rules and alarms from its own infra.
-    // alarmTopic is undefined on a stage without monitoring (infra/dlqAlarms.ts).
+    // Also handed the shared resources and core wiring a package's own functions need: the bus, the
+    // package-declared queue pairs (infra/queues.ts), buckets, mail body grants, the alarm topic
+    // (undefined on a stage without monitoring) and ERROR log forwarding (infra/logMonitor.ts).
     const { contributeInfra: contributeSentinelInfra } =
       await import('./infra/premium-generated/sentinel-infra.generated');
+    const { mailBodyEnvironment, mailBodyPutPermission } = await import('./infra/mailBodyOffload');
     const infrastructureContext = {
       lambdaVpc,
       allSecrets,
@@ -266,6 +282,16 @@ export default $config({
       eventBus,
       contributedQueues,
       alarmTopic: dlqAlarmTopic,
+      websocketApi,
+      fabFileBucket,
+      generatedImagesBucket,
+      appFilesBucket,
+      mcpHandler,
+      mailBody: {
+        environment: mailBodyEnvironment(appFilesBucket),
+        permission: mailBodyPutPermission(appFilesBucket),
+      },
+      forwardErrorLogs,
     };
     contributeSentinelInfra(infrastructureContext);
 
@@ -294,6 +320,7 @@ export default $config({
       websocketEndpoint: websocketApi.managementEndpoint,
       subscriberFanout: subscriberFanout.urn,
       scheduleTaskCron: scheduleTaskCron.urn,
+      callableFunctionSubnetIds,
     };
   },
 });

@@ -17,7 +17,7 @@ import { isFeatureEnabled } from '@bike4mind/server-utils/middlewares/featureFla
 /**
  * The org admin side of custom MCP connectors (design #4845 section 8): an org owner or manager
  * reads and sets the org's `customMcpPolicy` override and sees which current members hold
- * connections. Authorization is the caller's (`verifyOrgAccess`); members pick the policy up through
+ * connections. Authorization is the caller's (`managePolicies`); members pick the policy up through
  * `resolveCustomMcpContext`; other instances observe changes after their settings cache expires.
  */
 

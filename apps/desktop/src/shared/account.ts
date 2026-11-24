@@ -21,8 +21,20 @@ export interface AccountCredits {
   balance: number | null;
   /** Backend-stated grant for one monthly plan cycle. Null means no finite allowance was stated. */
   monthlyAllowance: number | null;
+  /**
+   * The part of the balance due to expire, soonest first. Absent when the server stated no
+   * schedule (an older server, or a failed read), which says nothing about whether credits expire.
+   */
+  expiring?: CreditExpiry[];
   /** Set when the read failed. Present with a null balance, never with a real one. */
   error?: string;
+}
+
+/** One grant's unspent remainder and when it expires. */
+export interface CreditExpiry {
+  amount: number;
+  /** Epoch ms. May be past for a grant that has expired but not yet been deducted. */
+  expiresAt: number;
 }
 
 /** The caller's active subscription, as `GET /api/v1/me` states it. */

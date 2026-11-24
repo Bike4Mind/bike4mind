@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import {
+  STUDIO_OUTPUT_ASPECT_RATIOS,
   STUDIO_OUTPUT_DEFAULT_SIZES,
   STUDIO_TIMELINE_VERSION,
   StudioFileIdSchema,
@@ -54,6 +55,8 @@ export const StudioCompositionBriefSchema = z.object({
   summary: z.string().trim().max(limits.briefSummaryMaxLength).optional(),
   audience: z.string().trim().max(limits.briefFieldMaxLength).optional(),
   callToAction: z.string().trim().max(limits.briefFieldMaxLength).optional(),
+  // A short film's mood, e.g. "wistful" or "tense"; the director matches the music and narration to it.
+  tone: z.string().trim().max(limits.briefFieldMaxLength).optional(),
   // The product photo the ad is built around; an image.
   productFileId: StudioFileIdSchema.optional(),
 });
@@ -244,11 +247,16 @@ export const STUDIO_COMPOSITION_TEMPLATE_DEFINITIONS: Record<
   },
   short_film: {
     label: 'Short film',
-    description: 'A 2 minute story in 16:9.',
-    durationMs: 120_000,
+    description: 'A 60s narrated story with a beginning, middle and end.',
+    durationMs: 60_000,
     aspects: ['16:9'],
-    trackKinds: ['video', 'voice', 'sfx', 'music'],
-    starterShots: [],
+    trackKinds: ['video', 'voice', 'sfx', 'music', 'captions'],
+    starterShots: [
+      { title: 'Opening', intent: 'opening' },
+      { title: 'Inciting moment', intent: 'inciting incident' },
+      { title: 'Climax', intent: 'climax' },
+      { title: 'Resolution', intent: 'resolution' },
+    ],
   },
   blank: {
     label: 'Blank',
@@ -260,9 +268,24 @@ export const STUDIO_COMPOSITION_TEMPLATE_DEFINITIONS: Record<
   },
 };
 
-/** An empty timeline sized for the template: its default length, output shapes and empty lanes. */
-export const defaultStudioTimeline = (template: StudioCompositionTemplate): StudioTimeline => {
-  const { durationMs, aspects, trackKinds } = STUDIO_COMPOSITION_TEMPLATE_DEFINITIONS[template];
+/** The lengths and output shapes the Short film brief offers; the chosen ones size its starting timeline. */
+export const STUDIO_SHORT_FILM_LENGTHS_MS = [30_000, 60_000, 90_000, 120_000] as const;
+export const STUDIO_SHORT_FILM_ASPECTS: readonly StudioOutputAspectRatio[] = STUDIO_OUTPUT_ASPECT_RATIOS;
+
+export type StudioTimelineSizing = { durationMs?: number; aspects?: readonly StudioOutputAspectRatio[] };
+
+/**
+ * An empty timeline sized for the template: its default length, output shapes and empty lanes, or the given
+ * length and shapes instead.
+ */
+export const defaultStudioTimeline = (
+  template: StudioCompositionTemplate,
+  sizing: StudioTimelineSizing = {}
+): StudioTimeline => {
+  const definition = STUDIO_COMPOSITION_TEMPLATE_DEFINITIONS[template];
+  const { trackKinds } = definition;
+  const durationMs = sizing.durationMs ?? definition.durationMs;
+  const aspects = sizing.aspects ?? definition.aspects;
   return {
     version: STUDIO_TIMELINE_VERSION,
     durationMs,

@@ -276,7 +276,7 @@ describe('confidence gate, end to end', () => {
     const resumed = await agentExecutionRepository.findById(executionId);
     expect(resumed?.status).toBe('continuing');
     expect(resumed?.pendingGate).toBeUndefined();
-    expect(h.dispatched).toEqual([{ executionId, connectionId: 'conn-1' }]);
+    expect(h.dispatched).toEqual([{ executionId, connectionId: 'conn-1', resumedBy: 'user' }]);
 
     // Invocation 2: the continuation picks up the checkpoint and the model answers. Its final
     // turn uses no tools, so the gate has nothing to score and the run completes.
@@ -406,7 +406,7 @@ describe('confidence gate, end to end', () => {
 
       await Promise.all([respond(executionId, userId, 'continue'), respond(executionId, userId, 'continue')]);
 
-      expect(h.dispatched).toEqual([{ executionId, connectionId: 'conn-1' }]);
+      expect(h.dispatched).toEqual([{ executionId, connectionId: 'conn-1', resumedBy: 'user' }]);
     });
 
     it('Stop still writes the Quest and completes when the completed event cannot be delivered', async () => {

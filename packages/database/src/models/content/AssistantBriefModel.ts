@@ -1,5 +1,5 @@
 import mongoose, { Schema } from 'mongoose';
-import type { BriefDecision, BriefItem, BriefStatus } from '@bike4mind/common';
+import type { BriefItem, BriefSourceRef, BriefStatus, StoredBriefDecision } from '@bike4mind/common';
 
 /**
  * An assistant brief: what happened, what was handled and what needs a decision, composed for one user
@@ -14,7 +14,7 @@ export type IAssistantBrief = {
   headline: string | null;
   happened: BriefItem[];
   handled: BriefItem[];
-  decisions: BriefDecision[];
+  decisions: StoredBriefDecision[];
   composedAt: Date | null;
   failureReason: string | null;
   createdAt: Date;
@@ -23,9 +23,19 @@ export type IAssistantBrief = {
 
 export type AssistantBriefContent = Pick<IAssistantBrief, 'headline' | 'happened' | 'handled' | 'decisions'>;
 
+function requiredFor(kind: BriefSourceRef['kind']) {
+  return function (this: { kind?: string }) {
+    return this.kind === kind;
+  };
+}
+
 // Every field of the wire item must be declared here: strict mode drops undeclared keys on write.
 const sourceSchema = new Schema(
-  { kind: { type: String, enum: ['email'], required: true }, emailId: { type: String, required: true } },
+  {
+    kind: { type: String, enum: ['email', 'delegation'], required: true },
+    emailId: { type: String, required: requiredFor('email') },
+    delegationId: { type: String, required: requiredFor('delegation') },
+  },
   { _id: false }
 );
 const itemSchema = new Schema(
@@ -63,6 +73,18 @@ const decisionSchema = new Schema(
       ),
       required: false,
     },
+    question: {
+      type: new Schema(
+        {
+          questId: { type: String, required: true },
+          sessionId: { type: String, required: true },
+          options: { type: [String], default: [] },
+        },
+        { _id: false }
+      ),
+      required: false,
+    },
+    repliedAt: { type: Date, required: false },
   },
   { _id: false }
 );
@@ -124,6 +146,17 @@ export const assistantBriefRepository = {
     return AssistantBriefModel.findOne({ userId, status: 'ready' }).sort({ createdAt: -1 }).lean();
   },
 
+  /** The latest ready brief's id and each decision's approval ref and reply stamp: what the pending-decisions count reads. */
+  async findLatestReadyDecisionRefs(userId: string): Promise<{
+    _id: mongoose.Types.ObjectId;
+    decisions: Array<Pick<StoredBriefDecision, 'approval' | 'repliedAt'>>;
+  } | null> {
+    return AssistantBriefModel.findOne({ userId, status: 'ready' })
+      .sort({ createdAt: -1 })
+      .select('_id decisions.approval decisions.repliedAt')
+      .lean();
+  },
+
   /** Only a `composing` brief can be settled, so a redelivered event never overwrites a finished one. */
   async markReady(id: string, content: AssistantBriefContent, composedAt: Date): Promise<boolean> {
     const result = await AssistantBriefModel.updateOne(
@@ -141,6 +174,35 @@ export const assistantBriefRepository = {
       { runValidators: true }
     );
     return result.modifiedCount === 1;
+  },
+
+  /** Drops a brief that is still composing; a settled one is left alone. */
+  async discardComposing(id: string): Promise<boolean> {
+    const result = await AssistantBriefModel.deleteOne({ _id: id, status: 'composing' });
+    return result.deletedCount === 1;
+  },
+
+  /**
+   * Marks a question decision replied, once: only the first caller gets `true`, so a double tap or a
+   * replay sends the reply to the agent at most once. Scoped to the owner like `findByIdForUser`.
+   */
+  async claimDecisionReply(id: string, userId: string, decisionId: string, at: Date = new Date()): Promise<boolean> {
+    if (!mongoose.isValidObjectId(id)) return false;
+    const result = await AssistantBriefModel.updateOne(
+      { _id: id, userId, decisions: { $elemMatch: { id: decisionId, question: { $exists: true }, repliedAt: null } } },
+      { $set: { 'decisions.$.repliedAt': at } },
+      { runValidators: true }
+    );
+    return result.modifiedCount === 1;
+  },
+
+  /** Undoes a claim whose reply never reached the agent, so the user can try again. */
+  async releaseDecisionReply(id: string, userId: string, decisionId: string, at: Date): Promise<void> {
+    await AssistantBriefModel.updateOne(
+      { _id: id, userId, decisions: { $elemMatch: { id: decisionId, repliedAt: at } } },
+      { $unset: { 'decisions.$.repliedAt': 1 } },
+      { runValidators: true }
+    );
   },
 
   /** Removes the items sourced from these ingested emails from every brief of the owner, so a deleted email leaves no copy behind. */

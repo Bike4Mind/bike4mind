@@ -142,7 +142,7 @@ action's `case "$EVENT_NAME"` block fails open on **every** run of that trigger,
 the run looks entirely normal - nothing errors, some extra jobs just run. Such a run
 evaluates `deployable=true, docs-changed=true` unconditionally and so gates on a different
 signal than the PR's own CI, which lets it fail a leg the PR legitimately skipped.
-`packages/scripts/src/checkChangesFilterEvents.test.ts` therefore cross-checks `ci.yml`'s
+`packages/scripts/src/checkChangesFilterEvents.repo.test.ts` therefore cross-checks `ci.yml`'s
 trigger list against the arms, and checks that each arm's SHAs are declared in the
 step's `env:` block, bound to that event's own payload, and bound to the end of the range
 their names claim (an arm alone reads unset vars and fails open identically; a base bound

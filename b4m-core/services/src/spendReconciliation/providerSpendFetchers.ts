@@ -5,14 +5,29 @@
  * per-key/per-model breakdown. When a provider's admin key is not configured
  * the fetcher returns null (skip, not error). A non-ok HTTP response throws
  * so the cron can skip the month without persisting a false $0 snapshot.
+ *
+ * With a scope (providerSpendScope.ts), `providerUsd` and `breakdown` cover only the scoped
+ * workspaces/projects/keys and `orgUsd` keeps the organization-wide total observable.
  */
 
+import {
+  anthropicRowInScope,
+  openAIRowInScope,
+  type AnthropicSpendScope,
+  type OpenAISpendScope,
+} from './providerSpendScope';
 import { DEFAULT_SPEND_DEADLINE_MS, fetchSpendJson, type ProviderSpendFetchOptions } from './spendFetchRetry';
 export type { ProviderSpendFetchOptions, ProviderSpendDiagnostic } from './spendFetchRetry';
 
 export interface ProviderSpendResult {
+  /** Spend inside the scope; the whole organization when no scope is given. */
   providerUsd: number;
+  /** Spend across the whole organization, whatever the scope. */
+  orgUsd: number;
+  /** Line items inside the scope. */
   breakdown: Record<string, number>;
+  /** Scope dimensions this endpoint cannot filter by, so `providerUsd` is wider than asked. */
+  unappliedScope?: string[];
 }
 
 // -- Anthropic Admin API ------------------------------------------------
@@ -24,6 +39,8 @@ export interface ProviderSpendResult {
  * Params: starting_at / ending_at (RFC 3339), bucket_width=1d.
  * Response: { data: [{ results: [{ amount: "cents-string", ... }] }], has_more, next_page }
  * Amount is in lowest currency units (cents) as a decimal string.
+ * The report can be grouped by workspace but not by API key, so a scope's `apiKeyIds` cannot be
+ * applied here and is returned in `unappliedScope`.
  *
  * Docs: https://platform.claude.com/docs/en/api/admin-api/usage-cost/get-cost-report
  */
@@ -31,7 +48,8 @@ export async function fetchAnthropicSpend(
   adminApiKey: string,
   month: string,
   fetchFn: typeof fetch = fetch,
-  options: ProviderSpendFetchOptions = {}
+  options: ProviderSpendFetchOptions = {},
+  scope?: AnthropicSpendScope
 ): Promise<ProviderSpendResult | null> {
   if (!adminApiKey || adminApiKey === 'not-configured') return null;
 
@@ -39,6 +57,7 @@ export async function fetchAnthropicSpend(
   const requestOptions = { ...options, deadlineMs: options.deadlineMs ?? Date.now() + DEFAULT_SPEND_DEADLINE_MS };
   const breakdown: Record<string, number> = {};
   let total = 0;
+  let orgTotal = 0;
   let page: string | undefined;
 
   do {
@@ -47,6 +66,7 @@ export async function fetchAnthropicSpend(
     url.searchParams.set('ending_at', endIso);
     url.searchParams.set('bucket_width', '1d');
     url.searchParams.set('group_by[]', 'description');
+    if (scope?.workspaceIds) url.searchParams.append('group_by[]', 'workspace_id');
     url.searchParams.set('limit', '31');
     if (page) url.searchParams.set('page', page);
 
@@ -69,6 +89,8 @@ export async function fetchAnthropicSpend(
         const cents = typeof item.amount === 'string' ? parseFloat(item.amount) : 0;
         if (!Number.isFinite(cents)) continue;
         const usd = cents / 100;
+        orgTotal += usd;
+        if (!anthropicRowInScope({ workspaceIds: scope?.workspaceIds }, item)) continue;
         const label = typeof item.description === 'string' ? item.description : 'other';
         breakdown[label] = (breakdown[label] ?? 0) + usd;
         total += usd;
@@ -78,7 +100,12 @@ export async function fetchAnthropicSpend(
     page = data.has_more ? data.next_page : undefined;
   } while (page);
 
-  return { providerUsd: total, breakdown };
+  return {
+    providerUsd: total,
+    orgUsd: orgTotal,
+    breakdown,
+    ...(scope?.apiKeyIds ? { unappliedScope: ['apiKeyIds'] } : {}),
+  };
 }
 
 interface AnthropicCostItem {
@@ -86,6 +113,7 @@ interface AnthropicCostItem {
   description?: unknown;
   cost_type?: unknown;
   model?: unknown;
+  workspace_id?: unknown;
 }
 
 interface AnthropicCostBucket {
@@ -107,6 +135,7 @@ interface AnthropicCostResponse {
  * Requires an admin API key. Returns daily cost buckets.
  * Amounts are in USD as decimal numbers (not cents).
  * bucket_width only supports "1d"; limit defaults to 7 so we must paginate.
+ * A scope groups the report by project and/or API key and keeps the matching rows.
  *
  * Docs: https://developers.openai.com/cookbook/examples/completions_usage_api
  */
@@ -114,7 +143,8 @@ export async function fetchOpenAISpend(
   adminApiKey: string,
   month: string,
   fetchFn: typeof fetch = fetch,
-  options: ProviderSpendFetchOptions = {}
+  options: ProviderSpendFetchOptions = {},
+  scope?: OpenAISpendScope
 ): Promise<ProviderSpendResult | null> {
   if (!adminApiKey || adminApiKey === 'not-configured') return null;
 
@@ -122,6 +152,7 @@ export async function fetchOpenAISpend(
   const requestOptions = { ...options, deadlineMs: options.deadlineMs ?? Date.now() + DEFAULT_SPEND_DEADLINE_MS };
   const breakdown: Record<string, number> = {};
   let total = 0;
+  let orgTotal = 0;
   let afterTs = startTs;
 
   // OpenAI only supports bucket_width=1d and limit defaults to 7. A month
@@ -139,6 +170,8 @@ export async function fetchOpenAISpend(
     url.searchParams.set('bucket_width', '1d');
     url.searchParams.set('limit', '31');
     url.searchParams.set('group_by[]', 'line_item');
+    if (scope?.projectIds) url.searchParams.append('group_by[]', 'project_id');
+    if (scope?.apiKeyIds) url.searchParams.append('group_by[]', 'api_key_id');
 
     const data = await fetchSpendJson<OpenAICostsResponse>(
       'OpenAI',
@@ -156,6 +189,8 @@ export async function fetchOpenAISpend(
       for (const item of bucket.results ?? []) {
         const lineItem = typeof item.line_item === 'string' ? item.line_item : 'other';
         const cost = typeof item.amount?.value === 'number' ? item.amount.value : 0;
+        orgTotal += cost;
+        if (!openAIRowInScope(scope, item)) continue;
         breakdown[lineItem] = (breakdown[lineItem] ?? 0) + cost;
         total += cost;
       }
@@ -169,11 +204,13 @@ export async function fetchOpenAISpend(
     if (buckets.length < 31) break;
   }
 
-  return { providerUsd: total, breakdown };
+  return { providerUsd: total, orgUsd: orgTotal, breakdown };
 }
 
 interface OpenAICostLineItem {
   line_item?: unknown;
+  project_id?: unknown;
+  api_key_id?: unknown;
   amount?: { value?: number; currency?: string };
 }
 

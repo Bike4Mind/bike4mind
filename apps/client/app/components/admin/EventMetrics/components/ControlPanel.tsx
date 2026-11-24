@@ -1,6 +1,8 @@
 import React from 'react';
-import { Button, Input, Stack, Typography } from '@mui/joy';
+import { Button, Stack, Typography } from '@mui/joy';
 import dayjs from 'dayjs';
+import { OptionalDateInput } from '@client/app/components/common/OptionalDateInput';
+import { getLocalDate } from '@client/app/utils/dateUtils';
 import { EVENT_CATEGORIES } from '@server/admin/categorizeEvent';
 import { FilterChip, SegmentedControl, type SegmentedOption } from '../../shared';
 import { adminFocusScope } from '../../shared/adminStyles';
@@ -126,36 +128,42 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
       />
       {dateRange === 'custom' && (
         <>
-          <Input
+          <OptionalDateInput
             size="sm"
-            type="date"
             value={isoToDay(dateFrom)}
-            onChange={event => setDateFrom(dayToIso(event.target.value, 'start'))}
-            slotProps={{
-              input: {
-                'aria-label': 'From',
-                min: MIN_DAY,
-                max: isoToDay(dateTo) || MAX_DAY,
-                'data-testid': 'event-metrics-date-from',
-              },
+            onChange={day => setDateFrom(dayToIso(day, 'start'))}
+            emptyLabel="From any date"
+            setLabel="Set start date"
+            clearLabel="Remove start date"
+            initialDate={() => {
+              const today = getLocalDate();
+              const to = isoToDay(dateTo);
+              return to && to < today ? to : today;
             }}
+            min={MIN_DAY}
+            max={isoToDay(dateTo) || MAX_DAY}
+            aria-label="From"
+            testId="event-metrics-date-from"
           />
           <Typography level="body-xs" sx={{ color: 'admin.inkMuted' }}>
             to
           </Typography>
-          <Input
+          <OptionalDateInput
             size="sm"
-            type="date"
             value={isoToDay(dateTo)}
-            onChange={event => setDateTo(dayToIso(event.target.value, 'end'))}
-            slotProps={{
-              input: {
-                'aria-label': 'To',
-                min: isoToDay(dateFrom) || MIN_DAY,
-                max: MAX_DAY,
-                'data-testid': 'event-metrics-date-to',
-              },
+            onChange={day => setDateTo(dayToIso(day, 'end'))}
+            emptyLabel="To any date"
+            setLabel="Set end date"
+            clearLabel="Remove end date"
+            initialDate={() => {
+              const today = getLocalDate();
+              const from = isoToDay(dateFrom);
+              return from && from > today ? from : today;
             }}
+            min={isoToDay(dateFrom) || MIN_DAY}
+            max={MAX_DAY}
+            aria-label="To"
+            testId="event-metrics-date-to"
           />
         </>
       )}

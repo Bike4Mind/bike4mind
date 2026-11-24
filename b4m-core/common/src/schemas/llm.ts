@@ -13,6 +13,11 @@ export const b4mLLMTools = z.enum([
   'audio_generation',
   // Non-blocking video job creation; the job engine bills and renders
   'video_generation',
+  // Studio Productions director tools; offered only with a production config (EnableStudioProductions)
+  'production_storyboard',
+  'production_generate_shot',
+  'production_add_audio',
+  'production_assemble',
   'weather_info',
   'web_search',
   'web_fetch',

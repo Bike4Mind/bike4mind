@@ -1,5 +1,5 @@
 import type { ChildOutcome } from './agentOutcome';
-import type { ChatSessionStatus, ChatSessionSummary } from './chat';
+import type { ChatSessionStatus, ChatSessionSummary, SessionBackgroundJobs } from './chat';
 import type { WorkerTask } from './orchestration';
 
 export const MISSING_TASK_RESULT_REASON = 'The attempt stopped without a structured result.';
@@ -16,13 +16,19 @@ export function isUpdateOnlyTask(state: WorkerTask['state']): boolean {
  * renderer's roster and main (main/watch) cannot disagree on what "done" or "needs you" means.
  */
 
-export type AgentState = 'needs-you' | 'working' | 'done' | 'failed' | 'stopped' | 'idle';
+/**
+ * 'waiting': the turn ended but background commands it started are still running, and their exit
+ * wakes it. 'paused': the agent loop ran out of its turn budget mid-task, so it can be continued.
+ */
+export type AgentState = 'needs-you' | 'working' | 'waiting' | 'done' | 'failed' | 'paused' | 'stopped' | 'idle';
 
 export const AGENT_STATE_LABEL: Record<AgentState, string> = {
   'needs-you': 'Needs you',
   working: 'Working',
+  waiting: 'Waiting',
   done: 'Done',
   failed: 'Failed',
+  paused: 'Paused',
   stopped: 'Stopped',
   idle: 'Idle',
 };
@@ -31,7 +37,9 @@ export const AGENT_STATE_LABEL: Record<AgentState, string> = {
 export const AGENT_STATE_PRIORITY: readonly AgentState[] = [
   'needs-you',
   'working',
+  'waiting',
   'failed',
+  'paused',
   'stopped',
   'idle',
   'done',
@@ -49,8 +57,10 @@ export function countAgentStates(states: readonly AgentState[], parentsNeedingYo
     total: states.length,
     'needs-you': parentsNeedingYou,
     working: 0,
+    waiting: 0,
     done: 0,
     failed: 0,
+    paused: 0,
     stopped: 0,
     idle: 0,
   };
@@ -78,35 +88,40 @@ const OUTCOME_STATE: Record<ChildOutcome, AgentState> = {
   finished: 'done',
   'max-tokens': 'done',
   failed: 'failed',
-  'turn-budget': 'stopped',
+  'turn-budget': 'paused',
   'context-limit': 'stopped',
   aborted: 'stopped',
   'no-reply': 'idle',
 };
 
-/**
- * "Needs you" is a live approval or question, or a worker task waiting on the user's decision in its
- * Task panel (blocked, escalated, paused, or finished and not yet accepted). needsYouCount (the dock
- * badge) and the watch model (menu bar) count sessions by this same rule.
- */
+/** Attention comes only from SessionActivity, just like the sidebar badge, including task decisions. */
 export function deriveTaskAgentState(
   session: Pick<ChatSessionSummary, 'workerTask' | 'lastOutcome'>,
-  status: ChatSessionStatus | undefined
+  status: ChatSessionStatus | undefined,
+  background?: SessionBackgroundJobs
 ): AgentState {
-  const runtimeState = deriveAgentState(status, session.lastOutcome);
+  const runtimeState = deriveAgentState(status, session.lastOutcome, background);
   const task = session.workerTask?.state;
   if (runtimeState === 'working' || runtimeState === 'needs-you' || !task) return runtimeState;
-  // Queued or running with no live status (a pre-reply gap, a model switch, a restart) waits on nothing.
-  if (task.status === 'queued' || task.status === 'running') return runtimeState;
-  if (task.status === 'completed' && task.accepted && session.workerTask?.attentionViewed !== false) return 'done';
-  if (isUpdateOnlyTask(task) && session.workerTask?.attentionViewed) return 'done';
-  return task.status === 'canceled' ? 'stopped' : 'needs-you';
+  // A pending decision arrives as 'needs-action' above, so running jobs only ever outrank a settled task.
+  if (runtimeState === 'waiting') return 'waiting';
+  if (task.status === 'completed') return 'done';
+  if (task.status === 'canceled') return 'stopped';
+  return runtimeState;
 }
 
-/** The live status wins; a stored outcome only speaks for a session that is neither running nor waiting. */
-export function deriveAgentState(status: ChatSessionStatus | undefined, outcome: ChildOutcome | undefined): AgentState {
+/**
+ * The live status wins; then running background jobs the agent will be woken by; a stored outcome
+ * only speaks for a session that is neither running, waiting on the user, nor waiting on its jobs.
+ */
+export function deriveAgentState(
+  status: ChatSessionStatus | undefined,
+  outcome: ChildOutcome | undefined,
+  background?: SessionBackgroundJobs
+): AgentState {
   if (status === 'needs-action') return 'needs-you';
   if (status === 'processing') return 'working';
+  if (background && background.running > 0) return 'waiting';
   return outcome ? OUTCOME_STATE[outcome] : 'idle';
 }
 

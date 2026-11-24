@@ -2,7 +2,9 @@ import { CssVarsProvider } from '@mui/joy/styles';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import type { AuthState } from '@shared/auth';
+import { REPLY_STATS } from './replyStats';
 import { isSettingsSection, SETTINGS_SECTIONS, SettingsScreen, type SettingsSection } from './SettingsPanel';
+import { currentThemeMode, nextThemeMode, themeModeSummary } from './themeMode';
 
 /** Rendered to a string, like CustomizePanel's tests and for the same reason: vitest runs on `node`. */
 const markup = (node: React.ReactNode) => renderToStaticMarkup(<CssVarsProvider>{node}</CssVarsProvider>);
@@ -52,9 +54,16 @@ describe('the Settings screen', () => {
     expect(groups).toHaveLength(5);
     expect(html).not.toContain('data-testid="settings-group-other"');
     const expected = [
-      ['appearance', 'orchestrator-sound', 'menu-bar', 'nested-sessions'],
-      ['prompt-suggestions', 'worktree-default', 'autofix-attempts', 'orchestration-policy'],
-      ['local-context', 'token-rate', 'curated-list'],
+      ['appearance', 'orchestrator-sound', 'notify-scope', 'menu-bar', 'nested-sessions'],
+      [
+        'prompt-suggestions',
+        'worktree-default',
+        'spawn-location',
+        'autofix-attempts',
+        'turn-extensions',
+        'orchestration-policy',
+      ],
+      ['local-context', 'reply-stats', 'curated-list'],
       ['local-history', 'local-data-export'],
       ['server', 'updates'],
     ];
@@ -65,6 +74,14 @@ describe('the Settings screen', () => {
         expect(html).toContain(`aria-labelledby="settings-label-${id}"`);
       }
     });
+  });
+
+  it('offers the notify scope next to the chime, agents only by default', () => {
+    expect(html).toContain('data-testid="settings-notify-scope-group"');
+    expect(html).toContain('data-testid="settings-notify-scope-agents-btn"');
+    expect(html).toContain('data-testid="settings-notify-scope-all-btn"');
+    expect(html).toContain('Agents only');
+    expect(html).toContain('All sessions');
   });
 
   it('keeps advanced worker settings behind an expandable disclosure', () => {
@@ -136,8 +153,12 @@ describe('the Settings screen', () => {
     expect(html).toContain('data-testid="settings-orchestrator-sound-switch"');
   });
 
-  it('offers the self-hosted model speed preference', () => {
-    expect(html).toContain('data-testid="settings-token-rate-switch"');
+  it('offers the reply stats rail and a checkbox per stat, in place of the old speed switch', () => {
+    expect(html).toContain('data-testid="settings-reply-stats-rail-switch"');
+    for (const id of REPLY_STATS) expect(html).toContain(`data-testid="settings-reply-stat-${id}-checkbox"`);
+    expect(html).toContain('Share of draft tokens accepted');
+    expect(html).toContain('Draft acceptance is reported by llama-server');
+    expect(html).not.toContain('settings-token-rate-switch');
   });
 
   it('mounts the same server picker and updater, not copies of them', () => {
@@ -168,5 +189,46 @@ describe('the Settings screen', () => {
     expect(early).toContain('data-entry="prompt-suggestions"');
     expect(early).toContain('data-entry="updates"');
     expect(early).not.toContain('data-entry="server"');
+  });
+});
+
+describe('themeMode', () => {
+  describe('cycling the appearance control', () => {
+    it('reaches every state and returns to the start', () => {
+      expect(nextThemeMode('system')).toBe('light');
+      expect(nextThemeMode('light')).toBe('dark');
+      expect(nextThemeMode('dark')).toBe('system');
+    });
+
+    /**
+     * Joy hands back `undefined` until the provider has read localStorage, and a run of that
+     * state must not strand the user: the first click has to land somewhere they can cycle out of.
+     */
+    it('treats an unread mode as following the system', () => {
+      expect(currentThemeMode(undefined)).toBe('system');
+      expect(nextThemeMode(undefined)).toBe('light');
+    });
+
+    it('ignores a stored value it does not recognise', () => {
+      expect(currentThemeMode('sepia')).toBe('system');
+      expect(nextThemeMode('sepia')).toBe('light');
+    });
+  });
+
+  describe('the line under the label', () => {
+    it('names the scheme the OS resolved to, but only while following it', () => {
+      expect(themeModeSummary('system', 'dark')).toBe('System (dark)');
+      expect(themeModeSummary('system', 'light')).toBe('System (light)');
+    });
+
+    it('names a picked scheme on its own', () => {
+      expect(themeModeSummary('light', 'light')).toBe('Light');
+      expect(themeModeSummary('dark', 'dark')).toBe('Dark');
+    });
+
+    // The resolved scheme lags the click by a paint, so a picked mode must not report it.
+    it('does not let a stale resolved scheme contradict a picked one', () => {
+      expect(themeModeSummary('dark', 'light')).toBe('Dark');
+    });
   });
 });

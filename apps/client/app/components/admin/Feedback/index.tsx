@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { Button, Chip, ListDivider, MenuItem, Option, Select, Stack, Tooltip, Typography } from '@mui/joy';
+import { Button, Chip, ChipDelete, ListDivider, MenuItem, Option, Select, Stack, Tooltip, Typography } from '@mui/joy';
 import DownloadIcon from '@mui/icons-material/Download';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import Papa from 'papaparse';
@@ -65,7 +65,7 @@ import {
 } from './feedbackTabSearch';
 import { FeedbackCreatedRangeDialog, formatCreatedRange } from './FeedbackCreatedRangeDialog';
 import { useFeedbackSelection } from './hooks/useFeedbackSelection';
-import FeedbackBulkActions from './FeedbackBulkActions';
+import FeedbackBulkActions, { feedbackRowScrollClearance } from './FeedbackBulkActions';
 import { RowActionsMenu } from '../shared/RowActionsMenu';
 
 type FeedbackRow = IExtendedFeedbackDocument;
@@ -149,6 +149,7 @@ const ReporterName = ({ row }: { row: FeedbackRow }) => {
 
 const ReporterCell = ({ row }: { row: FeedbackRow }) => {
   const organization = row.organization && row.organization !== 'Unknown' ? row.organization : undefined;
+  const reporterId = parseObjectId(row.userId);
   return (
     <Stack gap={0.25} alignItems="flex-start" sx={{ minWidth: 0, maxWidth: '100%' }}>
       <Stack direction="row" alignItems="baseline" gap={0.75} sx={{ minWidth: 0, width: '100%' }}>
@@ -165,7 +166,7 @@ const ReporterCell = ({ row }: { row: FeedbackRow }) => {
             {row.userEmail}
           </Typography>
         )}
-        {row.userId && <UserIdChip userId={row.userId} />}
+        {reporterId && <UserIdChip userId={reporterId} />}
       </Stack>
     </Stack>
   );
@@ -212,7 +213,8 @@ const ContentCell = ({ row }: { row: FeedbackRow }) => (
     )}
     <Typography
       level="body-sm"
-      sx={{ maxWidth: '100%', maxHeight: 80, overflowY: 'auto', whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}
+      data-testid={`feedback-row-content-${row._id}`}
+      sx={{ maxWidth: '100%', maxHeight: 120, overflowY: 'auto', whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}
     >
       {getFeedbackDisplayContent(row, '') || (
         <Typography component="span" sx={{ color: 'admin.inkMuted' }}>
@@ -271,6 +273,7 @@ const FeedbackTab: React.FC = () => {
     setSearchTerm,
     setStatusFilters,
     setSelectedOrganizations,
+    setUserId,
     setSubject,
     setResolution,
     setTypes,
@@ -464,6 +467,7 @@ const FeedbackTab: React.FC = () => {
     },
   ];
   const [rangeDialogOpen, setRangeDialogOpen] = useState(false);
+  const [bulkBarHeight, setBulkBarHeight] = useState(0);
   const setReceivedFilter = (value: string | undefined) => {
     if (value === CUSTOM_RANGE) return setRangeDialogOpen(true);
     setReceived(FEEDBACK_RECEIVED_WINDOWS.find(range => range === value));
@@ -480,7 +484,8 @@ const FeedbackTab: React.FC = () => {
     filters.received !== undefined ||
     customRangeSet ||
     filters.comment !== undefined ||
-    filters.selectedOrganizations.length > 0;
+    filters.selectedOrganizations.length > 0 ||
+    filters.userId !== undefined;
   const clearFilters = () => showOnly({ statusFilters: toStatusFilters(FEEDBACK_STATUS_ORDER) });
 
   // `loading` also covers a refetch with rows on screen (keepPreviousData): those rows stay, under a bar.
@@ -489,7 +494,15 @@ const FeedbackTab: React.FC = () => {
 
   const columns: DataColumn<FeedbackRow>[] = [
     { id: 'createdAt', label: 'Created', sortable: true, width: '7.5rem', render: row => <CreatedCell row={row} /> },
-    { id: 'reporter', label: 'Reporter', width: '15rem', render: row => <ReporterCell row={row} /> },
+    // cqw, not %: Chrome treats a percentage inside clamp() as auto on a fixed-layout table. The query
+    // container is the table region below: 15rem once it is ~68rem wide, the 7.25rem floor at ~48rem and
+    // narrower (the region is narrower than that at a 768 px viewport), so Feedback stays widest on tablets.
+    {
+      id: 'reporter',
+      label: 'Reporter',
+      width: 'clamp(7.25rem, 40cqw - 12rem, 15rem)',
+      render: row => <ReporterCell row={row} />,
+    },
     { id: 'content', label: 'Feedback', wrap: true, render: row => <ContentCell row={row} /> },
     {
       id: 'status',
@@ -656,6 +669,22 @@ const FeedbackTab: React.FC = () => {
             onChange={setSelectedOrganizations}
           />
         )}
+        {filters.userId && (
+          <Chip
+            variant="soft"
+            color="primary"
+            data-testid="feedback-filter-reporter-chip"
+            endDecorator={
+              <ChipDelete
+                aria-label="Show every reporter"
+                data-testid="feedback-filter-reporter-clear"
+                onDelete={() => setUserId(undefined)}
+              />
+            }
+          >
+            Reporter: {currentFeedback.find(row => row.userId === filters.userId)?.username || filters.userId}
+          </Chip>
+        )}
       </Stack>
 
       <Stack
@@ -663,7 +692,15 @@ const FeedbackTab: React.FC = () => {
         tabIndex={-1}
         data-testid="feedback-table-region"
         gap={1}
-        sx={{ minWidth: 0, ...adminFocus }}
+        style={
+          { '--feedback-row-scroll-clearance': `${feedbackRowScrollClearance(bulkBarHeight)}px` } as React.CSSProperties
+        }
+        sx={{
+          minWidth: 0,
+          containerType: 'inline-size',
+          ...adminFocus,
+          '& tbody tr[data-row-id]': { scrollMarginBottom: 'var(--feedback-row-scroll-clearance)' },
+        }}
       >
         <UpdatingBar active={loading && !firstLoad} testId="feedback-updating-bar" />
         <DataTable
@@ -736,6 +773,7 @@ const FeedbackTab: React.FC = () => {
         disabled={loading || !totalSettled}
         onSelectionChange={selection.setSelection}
         onApplied={refreshFeedback}
+        onHeightChange={setBulkBarHeight}
       />
 
       <ActionDialog
@@ -766,6 +804,12 @@ const FeedbackTab: React.FC = () => {
         onNext={detailNavigation.onNext}
         onClose={closeFeedback}
         onStatusChange={handleStatusChange}
+        onShowReporterReports={userId => {
+          // Every status, so no report the drawer counted is hidden; the list also holds this report and any later ones.
+          // The server drops unverified reports from a userId filter, as the count does.
+          showOnly({ userId, statusFilters: toStatusFilters(FEEDBACK_STATUS_ORDER) });
+          closeFeedback();
+        }}
       />
       {feedbackToClose && (
         <FeedbackCloseDialog feedbackId={feedbackToClose.id} onClose={cancelClose} onConfirm={confirmClose} />

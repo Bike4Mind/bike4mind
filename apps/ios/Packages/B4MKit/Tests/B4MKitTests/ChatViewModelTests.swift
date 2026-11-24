@@ -155,10 +155,17 @@ final class ChatViewModelTests: XCTestCase {
   func testAFinalFrameWithTextOnlyInRepliesShowsTheReplyLive() async throws {
     let realtime = FakeRealtime()
     let model = makeModel(realtime: realtime)
+    let listener = Task { await model.listen() }
+    defer {
+      listener.cancel()
+      model.stop()
+    }
+    await eventually { await realtime.listenerCount == 1 }
+    await eventually { await MainActor.run { model.isRealtimeConnected } }
     model.draft = "Name two colors"
     await model.send()
-    let listener = Task { await model.listen() }
-    await eventually { await realtime.listenerCount == 1 }
+    let beforeTerminal = await api.questLookups
+    XCTAssertTrue(beforeTerminal.isEmpty, "this realtime test must not begin with a fallback poll")
 
     func quest(_ fields: JSONObject) -> RealtimeEvent {
       var quest: JSONObject = ["id": "quest-1", "sessionId": "s1", "type": "message", "prompt": "Name two colors"]
@@ -180,8 +187,6 @@ final class ChatViewModelTests: XCTestCase {
     XCTAssertEqual(model.liveTurns.first?.creditsUsed, 2)
     let lookups = await api.questLookups
     XCTAssertEqual(lookups.filter { $0 == "quest-1" }.count, 1, "the settled quest is fetched once")
-    listener.cancel()
-    model.stop()
   }
 
   func testASettledTurnKeepsTheFrameTextWhenTheFetchFails() async throws {

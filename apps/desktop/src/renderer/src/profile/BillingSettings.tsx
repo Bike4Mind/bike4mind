@@ -163,7 +163,7 @@ function SignedInBilling() {
         </Stack>
         <Button
           size="sm"
-          variant="soft"
+          variant="outlined"
           color="neutral"
           loading={loading}
           onClick={() => void refresh()}
@@ -202,7 +202,8 @@ function SignedInBilling() {
             {checkout === 'pending' && (
               <Button
                 size="sm"
-                variant="plain"
+                variant="outlined"
+                color="neutral"
                 disabled={loading}
                 data-testid="billing-checkout-canceled-btn"
                 onClick={() => {

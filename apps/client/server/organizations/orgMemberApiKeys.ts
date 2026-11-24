@@ -7,7 +7,7 @@ import { creatorDisplayName } from './orgApiKeys';
 
 /**
  * Members' own keys billed to an org (org-owned keys are orgApiKeys.ts). Served by
- * pages/api/organizations/[id]/api-keys/members/*, which authorize the caller (verifyOrgAccess) first.
+ * pages/api/organizations/[id]/api-keys/members/*, which authorize the caller (manageKeys) first.
  */
 
 export async function listOrgMemberKeys(organizationId: string): Promise<IUserApiKeyDocument[]> {

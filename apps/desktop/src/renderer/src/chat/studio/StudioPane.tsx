@@ -236,6 +236,7 @@ function CreationForm({
       <Button
         size="sm"
         variant="outlined"
+        color="neutral"
         sx={{ '&.Mui-disabled': { borderColor: 'neutral.outlinedBorder' } }}
         disabled={locked || !draft.prompt.trim()}
         loading={phase !== 'idle'}
@@ -429,7 +430,7 @@ function AssetPreview({
           <Button type="submit" size="sm" disabled={locked || !title.trim()}>
             Save
           </Button>
-          <Button size="sm" variant="plain" disabled={locked} onClick={() => setRenaming(false)}>
+          <Button size="sm" variant="outlined" color="neutral" disabled={locked} onClick={() => setRenaming(false)}>
             Cancel
           </Button>
         </Stack>
@@ -447,7 +448,8 @@ function AssetPreview({
           </Button>
           <Button
             size="sm"
-            variant="plain"
+            variant="outlined"
+            color="neutral"
             disabled={locked}
             onClick={() => setConfirmDelete(false)}
             data-testid="studio-asset-cancel-delete-btn"

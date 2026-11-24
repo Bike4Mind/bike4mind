@@ -10,7 +10,8 @@ import { createSpeechProvider, type SpeechProviderRequest } from './speech';
 import { testSpeechProvider } from './test';
 
 const OPENAI_SPEECH = 'https://api.openai.com/v1/audio/speech';
-const ELEVENLABS_SPEECH = 'https://api.elevenlabs.io/v1/text-to-speech/:voiceId';
+// The speech provider always asks ElevenLabs for word timings, so it calls the with-timestamps variant.
+const ELEVENLABS_SPEECH = 'https://api.elevenlabs.io/v1/text-to-speech/:voiceId/with-timestamps';
 const AUDIO = Buffer.from([0xff, 0xfb, 0x14, 0xc0, 1, 2, 3, 4]);
 // Stops the OpenAI SDK's own retry loop from slowing the error cases down.
 const NO_SDK_RETRY = { 'retry-after-ms': '1', 'x-should-retry': 'false' };
@@ -32,6 +33,15 @@ const request = (text = 'Hello there'): SpeechProviderRequest => ({ text });
 
 const audioResponse = () => new HttpResponse(new Uint8Array(AUDIO), { headers: { 'content-type': 'audio/mpeg' } });
 
+const HELLO_THERE_ALIGNMENT = {
+  characters: [...'Hello there'],
+  character_start_times_seconds: [...'Hello there'].map((_, index) => index / 10),
+  character_end_times_seconds: [...'Hello there'].map((_, index) => (index + 1) / 10),
+};
+
+const timestampedResponse = () =>
+  HttpResponse.json({ audio_base64: AUDIO.toString('base64'), alignment: HELLO_THERE_ALIGNMENT });
+
 const openAiError = (status: number, body: Record<string, unknown>) =>
   HttpResponse.json({ error: body }, { status, headers: NO_SDK_RETRY });
 
@@ -49,7 +59,7 @@ const armOpenAi = (name: SyncConformanceScenario) => {
 const armElevenLabs = (name: SyncConformanceScenario) => {
   server.use(
     http.post(ELEVENLABS_SPEECH, () => {
-      if (name === 'succeeds') return audioResponse();
+      if (name === 'succeeds') return timestampedResponse();
       if (name === 'blocked') {
         return HttpResponse.json({ detail: { status: 'content_policy_violation', message: 'no' } }, { status: 400 });
       }
@@ -75,13 +85,24 @@ describeSyncProviderConformance('test speech provider', {
 });
 
 describe('speech provider', () => {
-  it('returns the audio inline with the format content type', async () => {
+  it('returns the audio inline with the format content type and the word timings', async () => {
     armElevenLabs('succeeds');
     const result = await createSpeechProvider('elevenlabs').generate(request(), {}, context());
     expect(result).toEqual({
       status: 'succeeded',
       output: { kind: 'inline', base64: AUDIO.toString('base64'), contentType: 'audio/mpeg' },
+      wordTimings: [
+        { text: 'Hello', startMs: 0, endMs: 500 },
+        { text: 'there', startMs: 600, endMs: 1100 },
+      ],
     });
+  });
+
+  it('reports no word timings for a vendor that cannot align', async () => {
+    armOpenAi('succeeds');
+    const result = await createSpeechProvider('openai').generate(request(), {}, context());
+    expect(result).toMatchObject({ status: 'succeeded' });
+    expect(result).not.toHaveProperty('wordTimings');
   });
 
   it('lists the vendor default model among its models', () => {

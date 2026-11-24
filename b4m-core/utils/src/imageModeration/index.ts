@@ -9,6 +9,10 @@ import { imageSize } from 'image-size';
 import { Logger } from '@bike4mind/observability';
 import { imagePixelCount, MAX_IMAGE_PIXELS } from '../imageResize';
 import { extractAnimationFrames } from './animatedFrames';
+import { jimpFromRgba } from './jimpBitmap';
+import { decodeWebp, isWebp, WebpDecoderUnavailableError } from './webpDecode';
+
+export { WebpDecoderUnavailableError } from './webpDecode';
 
 /**
  * Rekognition top-level ("L1") categories we block on. Broadening is a policy change.
@@ -27,6 +31,18 @@ import { extractAnimationFrames } from './animatedFrames';
  * mild content the product allows (see safety_tolerance cap).
  */
 export const BLOCKED_CATEGORIES = ['Explicit', 'Explicit Nudity'] as const;
+
+/** Decodes bytes for a re-encode. jimp ships no WebP decoder, so a still WebP goes through webpDecode. */
+async function readImage(bytes: Buffer) {
+  if (isWebp(bytes)) {
+    const { data, width, height } = await decodeWebp(bytes);
+    return jimpFromRgba(data, width, height);
+  }
+  // Dynamic import mirrors ensureImageWithinDimensionLimit in llm/utils.ts: a static jimp
+  // import makes bundlers (CLI's tsdown) treat it as external even where it's never called.
+  const { Jimp } = await import('jimp');
+  return Jimp.read(bytes);
+}
 
 /** Confidence floor (0-100) for a block. Rekognition returns per-label confidence. */
 export const EXPLICIT_NUDITY_CONFIDENCE = 90;
@@ -90,7 +106,7 @@ export interface ModerationLabelHit {
 
 export interface CheckImageOptions {
   /**
-   * Called once with the number of detector calls the scan needs (1 for a still image, the sampled
+   * Called once with the number of detector calls the scan needs (1 for a still image, the distinct
    * frame count for an animation), before the first one. False ends the scan with
    * ModerationBudgetExceededError and no detector call.
    */
@@ -122,8 +138,8 @@ export class ImageModerationBlockedError extends Error {
 /**
  * Thrown by `checkImage` when the image bytes are a format Rekognition's
  * `DetectModerationLabels` cannot process (`InvalidImageFormatException` - it only accepts
- * JPEG/PNG, and WEBP in some regions) AND jimp cannot decode/transcode them into something
- * it can (e.g. HEIC, SVG).
+ * JPEG/PNG) AND neither jimp nor webpDecode can decode/transcode them into something it can
+ * (e.g. HEIC, SVG). A WebP decoder that cannot start is WebpDecoderUnavailableError instead.
  *
  * Deliberately distinct from both `ImageModerationBlockedError` (a confirmed explicit-
  * content match, with `labels`) and a bare `Error` (a transient/retryable failure like
@@ -209,21 +225,22 @@ export class RekognitionImageModerationService implements ImageModerationService
   /**
    * Downscale buffers that exceed Rekognition's inline 5 MB or 10000px limit so the check still runs.
    *
-   * Split into two try/catches deliberately: a `Jimp.read()` failure means jimp
-   * could not even decode the format - the SAME condition `transcodeToJpeg`'s catch below
-   * treats as a confirmed unsupported format - so it's terminal via `UnsupportedImageFormatError`
-   * right here. Without this, an oversized+undecodable buffer (e.g. HEIC from an iPhone, which
-   * is both large and a format jimp can't read) would fall through with the ORIGINAL oversized
-   * bytes; Rekognition would then likely throw `ImageTooLargeException` rather than
-   * `InvalidImageFormatException` (it never gets far enough to inspect the format), which isn't
+   * Split into two try/catches deliberately: a `readImage()` failure means the format could not
+   * even be decoded - the SAME condition `toJpegOrUnsupported` treats as a confirmed unsupported
+   * format - so it's terminal via `UnsupportedImageFormatError` right here (unless the WebP
+   * decoder itself is down, which is rethrown as transient). Without this, an oversized+undecodable
+   * buffer (e.g. HEIC from an iPhone, which is both large and a format jimp can't read) would fall
+   * through with the ORIGINAL oversized bytes; Rekognition would then likely throw
+   * `ImageTooLargeException` rather than `InvalidImageFormatException` (it never gets far enough
+   * to inspect the format), which isn't
    * caught by the reactive transcode branch in `checkImage` - so it would burn the
    * transient-retry budget and get stuck 'pending' until DLQ instead of terminating cleanly.
-   * `Jimp.read()` is a synchronous local decode with no I/O, so unlike the Rekognition call
-   * there is no throttling/5xx-style transient failure mode to preserve here - any read failure
-   * is safely treated as terminal.
+   * The decode is local with no I/O, so unlike the Rekognition call there is no
+   * throttling/5xx-style transient failure mode to preserve here - any read failure other than
+   * WebpDecoderUnavailableError is safely treated as terminal.
    *
    * A failure in the SECOND try (resize/re-encode, after a successful decode) is NOT a format
-   * problem - jimp already proved it can read these bytes - so that one keeps the original
+   * problem - the decode already proved these bytes are readable - so that one keeps the original
    * fall-through-with-original-bytes behavior: the Rekognition call will fail-closed (block)
    * rather than silently skip, which is the safe direction.
    */
@@ -239,13 +256,11 @@ export class RekognitionImageModerationService implements ImageModerationService
         `Image declares ${pixels} pixels, over the ${MAX_IMAGE_PIXELS}-pixel decode limit`
       );
     }
-    // Dynamic import mirrors ensureImageWithinDimensionLimit in llm/utils.ts: a static jimp
-    // import makes bundlers (CLI's tsdown) treat it as external even where it's never called.
-    const { Jimp } = await import('jimp');
-    let image: Awaited<ReturnType<typeof Jimp.read>>;
+    let image: Awaited<ReturnType<typeof readImage>>;
     try {
-      image = await Jimp.read(bytes);
+      image = await readImage(bytes);
     } catch (err) {
+      if (err instanceof WebpDecoderUnavailableError) throw this.decoderDown(err);
       this.logger.warn(
         `[ImageModeration] oversized image (${bytes.length}B) could not be decoded for downscaling, unsupported format: ${(err as Error).message}`
       );
@@ -272,32 +287,38 @@ export class RekognitionImageModerationService implements ImageModerationService
     }
   }
 
+  private decoderDown(err: WebpDecoderUnavailableError): WebpDecoderUnavailableError {
+    this.logger.error(`[ImageModeration] ${err.message}`);
+    return err;
+  }
+
   /**
-   * Re-encode arbitrary jimp-decodable bytes as JPEG. Used reactively when
-   * Rekognition rejects the original format - jimp decodes jpeg/png/webp/gif/bmp/tiff, a
-   * broader set than Rekognition itself accepts (jpeg/png, webp in some regions), so this
-   * recovers formats Rekognition can't parse but jimp can. If jimp ALSO can't decode the
-   * bytes (e.g. HEIC, SVG), it throws and the caller treats that as a confirmed unsupported
-   * format rather than a transient failure.
+   * Re-encode readImage-decodable bytes as JPEG, a format Rekognition accepts: jimp decodes
+   * jpeg/png/gif/bmp/tiff and webpDecode covers still WebP. Bytes neither can decode (e.g. HEIC,
+   * SVG) are a confirmed unsupported format, terminal via UnsupportedImageFormatError; a WebP
+   * decoder that cannot start is rethrown as WebpDecoderUnavailableError, a transient failure.
    */
-  private async transcodeToJpeg(bytes: Buffer): Promise<Buffer> {
+  private async toJpegOrUnsupported(bytes: Buffer, why: string): Promise<Buffer> {
     const pixels = imagePixelCount(bytes);
     if (pixels !== null && pixels > MAX_IMAGE_PIXELS) {
       throw new UnsupportedImageFormatError(
         `Image declares ${pixels} pixels, over the ${MAX_IMAGE_PIXELS}-pixel decode limit`
       );
     }
-    // Dynamic import for the same bundler reason as fitForInlineDetection.
-    const { Jimp } = await import('jimp');
-    const image = await Jimp.read(bytes);
-    return Buffer.from(await image.getBuffer('image/jpeg'));
+    try {
+      const image = await readImage(bytes);
+      return Buffer.from(await image.getBuffer('image/jpeg'));
+    } catch (err) {
+      if (err instanceof WebpDecoderUnavailableError) throw this.decoderDown(err);
+      this.logger.warn(`[ImageModeration] unsupported image format, cannot transcode: ${(err as Error).message}`);
+      throw new UnsupportedImageFormatError(`${why} and it could not be transcoded: ${(err as Error).message}`);
+    }
   }
 
   /**
    * Rekognition reads only the first frame of an animated image, so an animated GIF, APNG or WebP is
-   * moderated on at most MAX_SAMPLED_FRAMES sampled frames (see extractAnimationFrames): any flagged
-   * frame blocks the image, and one that cannot be split or is over the frame cap is unsupported, so
-   * blocked as well.
+   * moderated on each of its distinct frames (see extractAnimationFrames): any flagged frame blocks
+   * the image, and one that cannot be split or is over the frame cap is unsupported, so blocked as well.
    */
   async checkImage(bytes: Buffer, _mimeType: string, options: CheckImageOptions = {}): Promise<void> {
     const deadline = Date.now() + this.deadlineMs;
@@ -329,7 +350,9 @@ export class RekognitionImageModerationService implements ImageModerationService
 
   private async checkStillImage(bytes: Buffer, deadline: number, onDetectorCall?: () => void): Promise<void> {
     let image = await this.fitForInlineDetection(bytes);
-    let triedTranscode = false;
+    // Rekognition always rejects WebP, so it is transcoded up front rather than after a wasted call.
+    let triedTranscode = isWebp(image);
+    if (triedTranscode) image = await this.toJpegOrUnsupported(image, 'WebP is not accepted by Rekognition');
     for (let attempt = 1; ; attempt++) {
       try {
         const res = await this.client.send(
@@ -359,28 +382,15 @@ export class RekognitionImageModerationService implements ImageModerationService
         if (err instanceof ImageModerationBlockedError) throw err; // a block is not a retryable error
 
         if (err instanceof InvalidImageFormatException && !triedTranscode) {
-          // Rekognition only accepts JPEG/PNG (WEBP in some regions) and threw
-          // InvalidImageFormatException for this format. Try a jimp transcode before giving
-          // up - checked reactively (not proactively) so region-dependent formats like WEBP
-          // only pay the transcode cost when Rekognition actually rejects them.
+          // Rekognition only accepts JPEG/PNG. Formats other than WebP are rare enough to transcode
+          // only once it actually rejects them; one that cannot be decoded either is terminal.
           triedTranscode = true;
-          try {
-            image = await this.transcodeToJpeg(image);
-            this.logger.warn(
-              '[ImageModeration] Rekognition rejected the original format; transcoded to JPEG via jimp and retrying'
-            );
-            attempt--; // retry with the transcoded bytes without burning a transient-retry attempt
-            continue;
-          } catch (transcodeErr) {
-            // jimp can't decode it either (e.g. HEIC, SVG) - a confirmed unsupported format,
-            // not a transient failure. Terminal: must not retry forever.
-            this.logger.warn(
-              `[ImageModeration] unsupported image format, cannot transcode: ${(transcodeErr as Error).message}`
-            );
-            throw new UnsupportedImageFormatError(
-              `Rekognition rejected the format (${err.name}) and it could not be transcoded: ${(transcodeErr as Error).message}`
-            );
-          }
+          image = await this.toJpegOrUnsupported(image, `Rekognition rejected the format (${err.name})`);
+          this.logger.warn(
+            '[ImageModeration] Rekognition rejected the original format; transcoded to JPEG and retrying'
+          );
+          attempt--; // retry with the transcoded bytes without burning a transient-retry attempt
+          continue;
         }
 
         if (err instanceof ImageTooLargeException || err instanceof InvalidParameterException) {

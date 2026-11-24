@@ -300,6 +300,7 @@ describe('saveGeneratedAsset', () => {
       id: 'f0',
       fileName: 'video.mp4',
       filePath: 'generated-video/old.mp4',
+      mimeType: 'video/mp4',
       moderationStatus: 'clean',
     });
     vi.mocked(deps.storage.generateSignedUrl).mockResolvedValue('https://fresh.example.invalid/old.mp4');
@@ -314,7 +315,29 @@ describe('saveGeneratedAsset', () => {
       fileName: 'video.mp4',
       fileUrl: 'https://fresh.example.invalid/old.mp4',
     });
-    expect(deps.storage.generateSignedUrl).toHaveBeenCalledWith('generated-video/old.mp4', 3600, 'get');
+    expect(deps.storage.generateSignedUrl).toHaveBeenCalledWith('generated-video/old.mp4', 3600, 'get', {
+      ResponseContentDisposition: undefined,
+      ResponseContentType: 'video/mp4',
+    });
+  });
+
+  it('forwards an attachment disposition on a job dedupe hit for a non-media row', async () => {
+    findOne.mockResolvedValue({
+      id: 'f0',
+      fileName: 'page.svg',
+      filePath: 'generated-image/old.svg',
+      mimeType: 'image/svg+xml',
+      moderationStatus: 'clean',
+    });
+    vi.mocked(deps.storage.generateSignedUrl).mockResolvedValue('https://fresh.example.invalid/old.svg');
+    const generation: GeneratedAssetMetadata = { generator: 'image', provider: 'p', jobId: 'j1', prompt: 'x' };
+
+    await saveGeneratedAsset(params({ contentType: 'image/svg+xml', generation }), deps);
+
+    expect(deps.storage.generateSignedUrl).toHaveBeenCalledWith('generated-image/old.svg', 3600, 'get', {
+      ResponseContentDisposition: 'attachment; filename="page.svg"',
+      ResponseContentType: undefined,
+    });
   });
 
   it('rejects when the job dedup lookup fails, so the store step retries instead of falling back', async () => {

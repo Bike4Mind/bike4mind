@@ -8,7 +8,7 @@
  * ChatCompletionProcess and the whole tool registry into its bundle, since
  * @vercel/nft follows files rather than used bindings.
  * Re-exported from ChatCompletionFeatures.ts, so the public surface is unchanged.
- * See services/src/index.closure.test.ts.
+ * See services/src/index.closure.repo.test.ts.
  */
 import { z } from 'zod';
 import {
@@ -27,6 +27,7 @@ import {
   type AuthOrigin,
   DEEP_RESEARCH_MAX_DEPTH,
   DEEP_RESEARCH_MAX_DURATION_MIN,
+  EnabledPlatformMcpConnectionsSchema,
 } from '@bike4mind/common';
 
 export const QuestStartBodySchema = z
@@ -96,6 +97,7 @@ export const QuestStartBodySchema = z
     mcpServers: z.array(z.string()).optional(),
     /** See ChatCompletionInvokeParamsSchema.disabledMcpConnections - must stay in sync with it. */
     disabledMcpConnections: z.array(z.string()).optional(),
+    enabledPlatformMcpConnections: EnabledPlatformMcpConnectionsSchema,
     projectId: z.string().optional(),
     organizationId: z.string().nullable().optional(),
     questMaster: QuestMasterParamsSchema.optional(),

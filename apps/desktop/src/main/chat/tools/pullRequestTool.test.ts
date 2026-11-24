@@ -55,7 +55,10 @@ describe('set_session_pull_request', () => {
     expect(labels).toEqual(["Set the session's PR to example-org/widgets#611"]);
     expect(out.last()).toMatchObject({ sessionId: SESSION, binding: { number: 611 } });
     expect(pushed).toEqual([
-      { sessionId: SESSION, summary: { number: 611, state: 'open', repo: 'example-org/widgets' } },
+      {
+        sessionId: SESSION,
+        summary: { number: 611, state: 'open', attention: 'awaitingReview', repo: 'example-org/widgets' },
+      },
     ]);
     expect(fake.calls).toEqual(['snapshot']);
     monitor.dispose();
@@ -69,7 +72,7 @@ describe('set_session_pull_request', () => {
     expect(await store.get(SESSION)).toMatchObject({ number: 700, source: 'agent' });
     expect(pushed.at(-1)).toEqual({
       sessionId: SESSION,
-      summary: { number: 700, state: 'open', repo: 'example-org/widgets' },
+      summary: { number: 700, state: 'open', attention: 'awaitingReview', repo: 'example-org/widgets' },
     });
     monitor.dispose();
   });
@@ -115,7 +118,10 @@ describe('set_session_pull_request', () => {
     expect(labels.at(-1)).toBe("Cleared the session's PR");
     // A dismissed bar has no icon either; see PrMonitor.summaryOf.
     expect(pushed).toEqual([
-      { sessionId: SESSION, summary: { number: 611, state: 'open', repo: 'example-org/widgets' } },
+      {
+        sessionId: SESSION,
+        summary: { number: 611, state: 'open', attention: 'awaitingReview', repo: 'example-org/widgets' },
+      },
       { sessionId: SESSION, summary: null },
     ]);
 
@@ -124,7 +130,7 @@ describe('set_session_pull_request', () => {
     expect((await store.get(SESSION))?.dismissed).toBe(false);
     expect(pushed.at(-1)).toEqual({
       sessionId: SESSION,
-      summary: { number: 611, state: 'open', repo: 'example-org/widgets' },
+      summary: { number: 611, state: 'open', attention: 'awaitingReview', repo: 'example-org/widgets' },
     });
     monitor.dispose();
   });
@@ -144,14 +150,14 @@ describe('set_session_pull_request', () => {
   it('refuses without a PR monitor', async () => {
     await expect(
       setSessionPullRequest.run({ pull_request: REF.url }, { roots: [], signal: new AbortController().signal })
-    ).rejects.toThrow('The PR bar can only be changed in a conversation the user is in.');
+    ).rejects.toThrow('The PR bar can only be changed in a turn the user typed.');
   });
 
-  it('is offered only to a Code session with a user present', () => {
+  it('is offered to a Code session whether or not a user is present', () => {
     const names = (options: Partial<Parameters<typeof toolsForRequest>[0]>) =>
       toolsForRequest({ roots: [], media: false, host: false, ...options }).map(entry => entry.toolSchema.name);
     expect(names({ pullRequest: true, ask: true })).toContain('set_session_pull_request');
-    expect(names({ pullRequest: true, ask: false })).not.toContain('set_session_pull_request');
+    expect(names({ pullRequest: true, ask: false })).toContain('set_session_pull_request');
     expect(names({ pullRequest: false, ask: true })).not.toContain('set_session_pull_request');
     expect(findTool('set_session_pull_request')).toBe(setSessionPullRequest);
     expect(setSessionPullRequest.approval).toBeUndefined();

@@ -1,8 +1,7 @@
 /**
  * Shared GitHub Label Definitions
  *
- * Centralized label definitions used by both LiveOps Triage and Context Telemetry systems.
- * This ensures consistency across automated issue creation and allows fixes to be shared.
+ * Centralized label definitions for automated issue creation.
  */
 
 /**
@@ -14,7 +13,7 @@ export interface GitHubLabelDef {
   description: string;
 }
 
-// Priority labels (shared by both systems)
+// Priority labels
 
 export const PRIORITY_LABELS: GitHubLabelDef[] = [
   { name: 'P0', color: 'd73a4a', description: 'Priority P0 - Critical' },
@@ -23,7 +22,7 @@ export const PRIORITY_LABELS: GitHubLabelDef[] = [
   { name: 'P3', color: '0e8a16', description: 'Priority P3 - Low' },
 ];
 
-// Common labels (shared by both systems)
+// Common labels
 
 export const COMMON_LABELS: GitHubLabelDef[] = [
   { name: 'bug', color: 'd73a4a', description: "Something isn't working" },
@@ -32,21 +31,11 @@ export const COMMON_LABELS: GitHubLabelDef[] = [
 
 // System-specific labels
 
-export const LIVEOPS_LABELS: GitHubLabelDef[] = [
-  { name: 'liveops', color: 'f9d0c4', description: 'Automated LiveOps triage' },
-];
-
 export const TELEMETRY_LABELS: GitHubLabelDef[] = [
   { name: 'telemetry', color: 'c5def5', description: 'Automated context telemetry alert' },
 ];
 
 // Combined label sets (for each system's health checks)
-
-/**
- * All labels required for LiveOps triage issue creation.
- * Used by health checks and issue creation.
- */
-export const REQUIRED_LIVEOPS_LABELS: GitHubLabelDef[] = [...COMMON_LABELS, ...PRIORITY_LABELS, ...LIVEOPS_LABELS];
 
 /**
  * All labels required for Context Telemetry issue creation.
@@ -58,13 +47,13 @@ export const REQUIRED_TELEMETRY_LABELS: GitHubLabelDef[] = [...COMMON_LABELS, ..
 
 /**
  * Get a label definition by name.
- * Searches across all label types (common, priority, liveops, telemetry).
+ * Searches across all label types (common, priority, telemetry).
  *
  * @param name - The label name to look up
  * @returns The label definition or undefined if not found
  */
 export function getLabelDef(name: string): GitHubLabelDef | undefined {
-  const allLabels = [...COMMON_LABELS, ...PRIORITY_LABELS, ...LIVEOPS_LABELS, ...TELEMETRY_LABELS];
+  const allLabels = [...COMMON_LABELS, ...PRIORITY_LABELS, ...TELEMETRY_LABELS];
   return allLabels.find(l => l.name === name);
 }
 

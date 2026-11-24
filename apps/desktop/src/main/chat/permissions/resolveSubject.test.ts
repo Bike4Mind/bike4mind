@@ -29,6 +29,17 @@ vi.mock('node:fs/promises', async importOriginal => {
   };
 });
 
+const walkLimit = vi.hoisted(() => ({ names: undefined as number | undefined }));
+vi.mock('../tools/paths', async importOriginal => {
+  const actual = await importOriginal<typeof import('../tools/paths')>();
+  return {
+    ...actual,
+    get MAX_WALK_NAMES() {
+      return walkLimit.names ?? actual.MAX_WALK_NAMES;
+    },
+  };
+});
+
 const PATH_MAX_CASES = [
   ['as this platform allows', Infinity],
   ['under the macOS PATH_MAX', 1024],
@@ -42,6 +53,7 @@ describe('resolveSubject', () => {
   afterEach(async () => {
     pathMax.bytes = Infinity;
     pathMax.overflows = undefined;
+    walkLimit.names = undefined;
     await rm(root, { recursive: true, force: true });
   });
 
@@ -131,6 +143,8 @@ describe('resolveSubject', () => {
   );
 
   it('refuses a path of more names than MAX_WALK_NAMES', async () => {
+    // The walk makes a failed realpath per name, so the real limit takes over a second on CI.
+    walkLimit.names = 64;
     const most = join(root, ...Array.from({ length: MAX_WALK_NAMES }, () => 'a'));
     expect((await resolveSubject({ tool: 'file_read', paths: [most] })).paths).toEqual([most]);
     await expect(resolveSubject({ tool: 'file_read', paths: [join(most, 'a')] })).rejects.toMatchObject({

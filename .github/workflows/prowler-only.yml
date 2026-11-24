@@ -71,7 +71,7 @@ jobs:
           fi
 
       - name: Configure AWS Credentials for Prowler
-        uses: aws-actions/configure-aws-credentials@v4
+        uses: aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a # v4
         with:
           role-to-assume: ${{ steps.env.outputs.role_arn }}
           aws-region: us-east-2
@@ -97,7 +97,7 @@ jobs:
           node-version: '24'
 
       - name: Install pnpm
-        uses: pnpm/action-setup@v5
+        uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v5
         with:
           run_install: false
 

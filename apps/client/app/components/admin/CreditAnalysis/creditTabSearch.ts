@@ -12,6 +12,7 @@ export const CREDIT_ANALYSIS_TABS = [
   'org-usage',
   'api-usage',
   'side-apps',
+  'elevenlabs',
   'ledger',
   'adjustments',
   'economy',

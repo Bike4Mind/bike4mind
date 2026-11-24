@@ -15,9 +15,12 @@ import type {
   CreateCodeSessionRequest,
   ModelPhase,
   ReasoningEffortSetting,
+  SendMessageResult,
+  SessionBackgroundJobs,
   SessionSetupStep,
   UpdateProjectRequest,
 } from '@shared/chat';
+import { carriedNotes, regenerableReply } from '@shared/threadRewind';
 import { summarizeSession } from '@shared/agentOutcome';
 import { normalizeSessionTitle } from '@shared/chat';
 import { isUntouchedImport } from './grouping';
@@ -31,7 +34,8 @@ import { forgetSessionPrefs } from './orchestrator/orchestratorPrefs';
 import { describeReturn } from './queuedMessages';
 import { applyLiveEvent, coalesceLiveEvents, startReply, type LiveReplyEvent } from '@shared/liveReply';
 import { applyReplyDone } from './replyDone';
-import { applyPreparingEvents, applyStatusEvents } from './sessionStatus';
+import { withPhase } from './replyStats';
+import { applyBackgroundEvents, applyPreparingEvents, applyStatusEvents, applyUnreadReplyEvents } from './sessionStatus';
 import { EVENT_STAMP_RESOLUTION_MS, REASONING_TAIL_CHARS, totalTokens, type TurnProgress } from './statusLine';
 import { applyWorkspaceEvent, preparingOnSend, type WorkspaceProgress } from './workspaceProgress';
 import { canHoldWorktree, worktreeByDefault } from './worktreeDefault';
@@ -301,8 +305,11 @@ export function useSessionStatuses(): ReadonlyMap<string, ChatSessionStatus> {
 
 export interface SessionStatusFeed {
   statuses: ReadonlyMap<string, ChatSessionStatus>;
+  unreadReplies: ReadonlySet<string>;
   /** Busy sessions still being prepared, by setup step; a subset of the 'processing' ones in `statuses`. */
   preparing: ReadonlyMap<string, SessionSetupStep>;
+  /** Running wake-on-exit background jobs per session; independent of `statuses` (a 'done' session can have some). */
+  background: ReadonlyMap<string, SessionBackgroundJobs>;
   /** True once the first snapshot has been folded in, so `statuses` is a baseline rather than a gap. */
   loaded: boolean;
 }
@@ -311,7 +318,9 @@ export interface SessionStatusFeed {
 export function useSessionStatusFeed(): SessionStatusFeed {
   const [feed, setFeed] = useState<SessionStatusFeed>(() => ({
     statuses: new Map(),
+    unreadReplies: new Set(),
     preparing: new Map(),
+    background: new Map(),
     loaded: false,
   }));
 
@@ -327,9 +336,17 @@ export function useSessionStatusFeed(): SessionStatusFeed {
       setFeed(current => {
         const statuses = applyStatusEvents(current.statuses, [event]);
         const preparing = applyPreparingEvents(current.preparing, [event]);
+        const unreadReplies = applyUnreadReplyEvents(current.unreadReplies, [event]);
+        const background = applyBackgroundEvents(current.background, [event]);
         // Same object for a no-op push, so React skips re-rendering everything that reads the feed.
-        if (statuses === current.statuses && preparing === current.preparing) return current;
-        return { ...current, statuses, preparing };
+        if (
+          statuses === current.statuses &&
+          preparing === current.preparing &&
+          unreadReplies === current.unreadReplies &&
+          background === current.background
+        )
+          return current;
+        return { ...current, statuses, preparing, unreadReplies, background };
       });
     });
 
@@ -339,7 +356,9 @@ export function useSessionStatusFeed(): SessionStatusFeed {
       setFeed(current => ({
         loaded: true,
         statuses: applyStatusEvents(current.statuses, unspoken),
+        unreadReplies: applyUnreadReplyEvents(current.unreadReplies, unspoken),
         preparing: applyPreparingEvents(current.preparing, unspoken),
+        background: applyBackgroundEvents(current.background, unspoken),
       }));
     });
 
@@ -536,6 +555,13 @@ export interface ConversationController {
   /** Resume the last reply if the agent loop's budget cut it short. */
   continueReply: () => Promise<void>;
   /**
+   * Replace a sent prompt with `text`, dropping every turn after it, and send it. False when main
+   * refused; the thread is put back and the reason is in `sendError`.
+   */
+  editMessage: (messageId: string, text: string) => Promise<boolean>;
+  /** Drop the last reply and run its prompt again. A refusal puts the reply back. */
+  regenerate: () => Promise<void>;
+  /**
    * Run a slash command. Client-side actions only; nothing here reaches the model as a tool.
    * A refusal lands in `sendError`, which is where the user is already looking for one.
    */
@@ -580,7 +606,7 @@ export interface ConversationController {
    */
   setApprovalMode: (mode: ChatApprovalMode) => Promise<void>;
   /** Turn Orchestrate on or off for this conversation; see ChatSessionMeta.orchestrate. */
-  setOrchestrate: (orchestrate: boolean) => Promise<void>;
+  setOrchestrate: (orchestrate: boolean, budgetCredits?: number) => Promise<void>;
   /** Where this Code session is grounded, for the chip row. Inert on a Chat session. */
   project: ProjectBindingController;
   /**
@@ -728,7 +754,9 @@ export function useConversation(
           // to say so, the 'workspace' one went out before this window was looking.
           setPreparing(current => current ?? loaded?.preparingWorkspace ?? null);
           setStreaming(!!live);
-          setTurn(live ? { startedAt: live.startedAt, tokens: null } : null);
+          setTurn(
+            live ? { startedAt: live.startedAt, tokens: null, messageId: live.messageId, requestAt: null } : null
+          );
         })
         .catch(failed);
     };
@@ -891,7 +919,11 @@ export function useConversation(
           });
         }
         // The call has arrived, so the tool's own status takes over; the next round sends a phase anew.
-        if (event.type === 'tool-start') setPhase(null);
+        if (event.type === 'tool-start') {
+          setPhase(null);
+          const at = Date.now();
+          setTurn(current => (current ? withPhase(current, { kind: 'waiting' }, at) : current));
+        }
         queued.push(event);
         frame ??= requestAnimationFrame(flushLive);
         // rAF is paused in a hidden or occluded window; without this the reply stalls until the
@@ -910,6 +942,12 @@ export function useConversation(
         // background conversation spends from the same balance as this one.
         setSettledTurns(count => count + 1);
       }
+      if (event.type === 'context-notice-cleared') {
+        const keep = (list: ContextNotice[] | undefined) => (list ?? []).filter(item => item.kind !== event.kind);
+        if (event.sessionId === activeSessionId.current) setNotices(keep);
+        else backgroundNotices.set(event.sessionId, keep(backgroundNotices.get(event.sessionId)));
+        return;
+      }
       if (event.type === 'context-notice' && event.sessionId !== activeSessionId.current) {
         backgroundNotices.set(
           event.sessionId,
@@ -922,7 +960,8 @@ export function useConversation(
       if (event.type === 'phase') {
         setPhase(event.phase);
         // A sign of life like any other frame: a thinking marker carries no text to stamp it.
-        setTurn(current => (current ? { ...current, lastEventAt: Date.now() } : current));
+        const at = Date.now();
+        setTurn(current => (current ? { ...withPhase(current, event.phase, at), lastEventAt: at } : current));
         return;
       }
 
@@ -933,7 +972,13 @@ export function useConversation(
         setStreaming(true);
         reasoning = '';
         const startedAt = Date.now();
-        setTurn({ startedAt, tokens: null, lastEventAt: startedAt });
+        setTurn({
+          startedAt,
+          tokens: null,
+          lastEventAt: startedAt,
+          messageId: event.messageId,
+          ...(event.baseUsage ? { continued: true } : {}),
+        });
         setMessages(current => startReply(current, event.messageId));
         return;
       }
@@ -1024,6 +1069,7 @@ export function useConversation(
             error: event.message,
             contextSnapshot: event.contextSnapshot,
             ...(event.stopReason ? { stopReason: event.stopReason } : {}),
+            ...(event.stats ? { stats: event.stats } : {}),
           };
         });
       });
@@ -1166,6 +1212,77 @@ export function useConversation(
     const read = openRead.current;
     if (read && read.sessionId === id) read.stale = true;
   }, []);
+
+  /**
+   * Both rewinds draw at once - the dropped turns leave the thread before the round trip, as a
+   * send's prompt appears before it - and put the thread back if main refuses. Main truncates
+   * the stored thread itself (SessionStore.truncateFrom), so a reload shows the same history.
+   */
+  const rewind = useCallback(
+    async (
+      next: (current: ChatMessage[]) => ChatMessage[],
+      call: (id: string) => Promise<SendMessageResult>
+    ): Promise<boolean> => {
+      if (!sessionId) return false;
+      transcriptVersion.current++;
+      outdateOpenRead(sessionId);
+      setSendError(null);
+      setNotice(null);
+      const before = messages;
+      setMessages(next(before));
+      const result = await call(sessionId);
+      if (activeSessionId.current !== sessionId) return result.ok;
+      if (!result.ok) {
+        setMessages(before);
+        setSendError(result.error);
+        return false;
+      }
+      if (!result.queued && result.notice) setNotice(result.notice);
+      const updated = await window.b4m.chat.getSession(sessionId);
+      if (updated) {
+        if (activeSessionId.current === sessionId)
+          setSession(current => (current?.id === sessionId ? updated : current));
+        onSummaryChanged(summarizeSession(updated));
+      }
+      return true;
+    },
+    [sessionId, messages, onSummaryChanged, outdateOpenRead]
+  );
+
+  const editMessage = useCallback(
+    async (messageId: string, text: string): Promise<boolean> => {
+      const prompt = text.trim();
+      if (!prompt) return false;
+      return rewind(
+        current => {
+          const at = current.findIndex(message => message.id === messageId);
+          if (at < 0) return current;
+          const { attachments } = current[at];
+          const notes = carriedNotes(current[at]);
+          return [
+            ...current.slice(0, at),
+            {
+              id: `${OPTIMISTIC_ID_PREFIX}${Date.now()}`,
+              role: 'user',
+              content: prompt,
+              createdAt: new Date().toISOString(),
+              ...(attachments?.length ? { attachments } : {}),
+              ...(notes.length ? { notes } : {}),
+            },
+          ];
+        },
+        id => window.b4m.chat.editMessage({ sessionId: id, messageId, text: prompt })
+      );
+    },
+    [rewind]
+  );
+
+  const regenerate = useCallback(async () => {
+    await rewind(
+      current => (regenerableReply(current) ? current.slice(0, -1) : current),
+      id => window.b4m.chat.regenerateReply(id)
+    );
+  }, [rewind]);
 
   // A summary main just wrote, folded into both the open conversation and the sidebar row. The
   // open conversation only when it is that session: a share can return after the user moved on.
@@ -1444,9 +1561,13 @@ export function useConversation(
   );
 
   const setOrchestrate = useCallback(
-    async (orchestrate: boolean) => {
+    async (orchestrate: boolean, budgetCredits?: number) => {
       if (!sessionId) return;
-      const updated = await window.b4m.chat.setSessionOrchestrate(sessionId, orchestrate).catch((error: unknown) => {
+      const request =
+        budgetCredits === undefined
+          ? window.b4m.chat.setSessionOrchestrate(sessionId, orchestrate)
+          : window.b4m.chat.setSessionOrchestrate(sessionId, orchestrate, budgetCredits);
+      const updated = await request.catch((error: unknown) => {
         if (activeSessionId.current === sessionId) {
           setNotice(`Could not change Orchestrate. ${error instanceof Error ? error.message : String(error)}`);
         }
@@ -1632,6 +1753,8 @@ export function useConversation(
     send,
     stop,
     continueReply,
+    editMessage,
+    regenerate,
     runCommand,
     commandProgress,
     queued,

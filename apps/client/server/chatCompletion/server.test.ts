@@ -135,9 +135,12 @@ vi.mock('@bike4mind/utils', async importOriginal => ({
   ...(await importOriginal<typeof import('@bike4mind/utils')>()),
   registerProcessErrorHandlers: vi.fn(),
 }));
-vi.mock('@bike4mind/server-utils/utils/config', () => ({
-  Config: { MONGODB_URI: 'mongodb://x/%STAGE%', STAGE: 'test' },
+const mockConfig = vi.hoisted(() => ({
+  MONGODB_URI: 'mongodb://x/%STAGE%',
+  STAGE: 'test',
+  JWT_SECRET: 'test-jwt-secret',
 }));
+vi.mock('@bike4mind/server-utils/utils/config', () => ({ Config: mockConfig }));
 
 const ipGate = vi.hoisted(() => ({ blocked: false, options: [] as unknown[] }));
 vi.mock('@server/middlewares/checkBlockedIP', () => ({
@@ -148,8 +151,20 @@ vi.mock('@server/middlewares/checkBlockedIP', () => ({
   },
 }));
 
-import { checkModelCatalogWired, createApp, drainInFlight, DRAIN_TIMEOUT_MS } from './server';
+import {
+  assertBootSecretsConfigured,
+  checkModelCatalogWired,
+  createApp,
+  drainInFlight,
+  DRAIN_TIMEOUT_MS,
+} from './server';
 import { GENERIC_PROCESSING_FAILURE_REPLY } from './internal/route';
+import {
+  QUEST_DISPATCH_MAX_SKEW_MS,
+  QUEST_DISPATCH_SIGNATURE_HEADER,
+  QUEST_DISPATCH_TIMESTAMP_HEADER,
+  signQuestDispatch,
+} from '@server/utils/questDispatchSignature';
 
 const VALID_BODY = { questId: 'q1', sessionId: 's1', userId: 'u1', message: 'hello' };
 const AUTH = `Bearer ${mockResource.CHAT_COMPLETION_INTERNAL_SECRET.value}`;
@@ -160,7 +175,7 @@ let baseUrl: string;
 beforeAll(async () => {
   const app = createApp();
   await new Promise<void>(resolve => {
-    server = app.listen(0, () => {
+    server = app.listen(0, '127.0.0.1', () => {
       const { port } = server.address() as AddressInfo;
       baseUrl = `http://127.0.0.1:${port}`;
       resolve();
@@ -176,12 +191,29 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
-const post = (body: unknown, headers: Record<string, string> = {}) =>
-  fetch(`${baseUrl}/process`, {
+// Signs like dispatchQuest unless `signed` is false; explicit headers override the signed ones.
+const post = (
+  body: unknown,
+  headers: Record<string, string> = {},
+  { signed = true, signedAt }: { signed?: boolean; signedAt?: number } = {}
+) => {
+  const raw = JSON.stringify(body);
+  const fields = body as Partial<Record<'questId' | 'userId' | 'sessionId', string>>;
+  const signature = signQuestDispatch(
+    mockResource.CHAT_COMPLETION_INTERNAL_SECRET.value,
+    { questId: fields.questId ?? '', userId: fields.userId ?? '', sessionId: fields.sessionId ?? '' },
+    raw,
+    signedAt
+  );
+  const signatureHeaders = signed
+    ? { [QUEST_DISPATCH_TIMESTAMP_HEADER]: signature.timestamp, [QUEST_DISPATCH_SIGNATURE_HEADER]: signature.signature }
+    : {};
+  return fetch(`${baseUrl}/process`, {
     method: 'POST',
-    headers: { 'content-type': 'application/json', ...headers },
-    body: JSON.stringify(body),
+    headers: { 'content-type': 'application/json', ...signatureHeaders, ...headers },
+    body: raw,
   });
+};
 
 describe('ChatCompletion /process', () => {
   it('returns 401 when the bearer token is missing', async () => {
@@ -196,9 +228,55 @@ describe('ChatCompletion /process', () => {
     expect(mockProcessQuest).not.toHaveBeenCalled();
   });
 
+  it('returns 401 to every caller while the internal secret is a placeholder, even one presenting it', async () => {
+    const configured = mockResource.CHAT_COMPLETION_INTERNAL_SECRET.value;
+    mockResource.CHAT_COMPLETION_INTERNAL_SECRET.value = 'my-secret-placeholder-value';
+    try {
+      const res = await post(VALID_BODY, { authorization: 'Bearer my-secret-placeholder-value' });
+      expect(res.status).toBe(401);
+      expect(mockProcessQuest).not.toHaveBeenCalled();
+    } finally {
+      mockResource.CHAT_COMPLETION_INTERNAL_SECRET.value = configured;
+    }
+  });
+
   it('returns 400 on a malformed payload (and does not process)', async () => {
     const res = await post({ questId: 'q1' }, { authorization: AUTH });
     expect(res.status).toBe(400);
+    expect(mockProcessQuest).not.toHaveBeenCalled();
+  });
+
+  it('returns 401 when the dispatch signature headers are missing', async () => {
+    const res = await post(VALID_BODY, { authorization: AUTH }, { signed: false });
+    expect(res.status).toBe(401);
+    expect(mockProcessQuest).not.toHaveBeenCalled();
+  });
+
+  it('returns 401 when the body names a different user than the one signed for', async () => {
+    const signed = signQuestDispatch(
+      mockResource.CHAT_COMPLETION_INTERNAL_SECRET.value,
+      { questId: 'q1', userId: 'u1', sessionId: 's1' },
+      JSON.stringify(VALID_BODY)
+    );
+    const res = await post(
+      { ...VALID_BODY, userId: 'u2' },
+      {
+        authorization: AUTH,
+        [QUEST_DISPATCH_TIMESTAMP_HEADER]: signed.timestamp,
+        [QUEST_DISPATCH_SIGNATURE_HEADER]: signed.signature,
+      }
+    );
+    expect(res.status).toBe(401);
+    expect(mockProcessQuest).not.toHaveBeenCalled();
+  });
+
+  it('returns 401 when the dispatch signature is outside the accepted window', async () => {
+    const res = await post(
+      VALID_BODY,
+      { authorization: AUTH },
+      { signedAt: Date.now() - QUEST_DISPATCH_MAX_SKEW_MS - 60_000 }
+    );
+    expect(res.status).toBe(401);
     expect(mockProcessQuest).not.toHaveBeenCalled();
   });
 
@@ -459,6 +537,27 @@ describe('ChatCompletion Dockerfile PID 1', () => {
     expect(cmd).toContain('tsx');
     // An ENTRYPOINT would become PID 1 instead of the CMD, hiding a wrapper.
     expect(dockerfileSource).not.toMatch(/^ENTRYPOINT\b/m);
+  });
+});
+
+describe('assertBootSecretsConfigured', () => {
+  afterEach(() => {
+    mockResource.CHAT_COMPLETION_INTERNAL_SECRET.value = 'test-shared-secret';
+    mockConfig.JWT_SECRET = 'test-jwt-secret';
+  });
+
+  it('passes when both secrets are configured', () => {
+    expect(() => assertBootSecretsConfigured()).not.toThrow();
+  });
+
+  it('refuses to start on a placeholder internal secret, naming only the secret', () => {
+    mockResource.CHAT_COMPLETION_INTERNAL_SECRET.value = 'change-me-openssl-rand-hex-32';
+    expect(() => assertBootSecretsConfigured()).toThrow(/^CHAT_COMPLETION_INTERNAL_SECRET is not configured/);
+  });
+
+  it('refuses to start on an empty JWT secret', () => {
+    mockConfig.JWT_SECRET = '';
+    expect(() => assertBootSecretsConfigured()).toThrow(/^JWT_SECRET is not configured/);
   });
 });
 

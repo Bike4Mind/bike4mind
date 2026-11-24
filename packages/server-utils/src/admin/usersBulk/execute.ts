@@ -399,6 +399,7 @@ export async function executeAdminUsersBulk(
   const result: AdminUsersBulkResult = {
     batchId,
     applied: snapshots.length,
+    committedUserIds: snapshots.map(snapshot => snapshot.userId),
     skipped: attempted - snapshots.length - failed.length,
     failed,
     partial: remaining > 0,

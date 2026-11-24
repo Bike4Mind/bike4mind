@@ -422,6 +422,27 @@ describe('POST /api/ai/llm (integration - ai:chat scope enforcement)', () => {
     });
   });
 
+  describe('platform MCP connectors switched on in the composer', () => {
+    const platformId = 'a'.repeat(24);
+    const body = { enabledPlatformMcpConnections: [platformId] };
+    const invokedBody = () => (mockInvoke.mock.calls[0][0] as { body: Record<string, unknown> }).body;
+
+    it('forwards them for a session (JWT) caller', async () => {
+      const { req, res } = fire({ apiKey: null, body });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(200);
+      expect(invokedBody().enabledPlatformMcpConnections).toEqual([platformId]);
+    });
+
+    it('drops them for an API-key caller', async () => {
+      validateWithScopes([ApiKeyScope.AI_CHAT]);
+      const { req, res } = fire({ body });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(200);
+      expect(invokedBody().enabledPlatformMcpConnections).toBeUndefined();
+    });
+  });
+
   describe('agentIds stamped on a newly created session (GH #2600)', () => {
     const getOrCreateArgs = () => mockGetOrCreateSession.mock.calls[0][0] as { agentIds?: string[] };
     const invokedBody = () => (mockInvoke.mock.calls[0][0] as { body: Record<string, unknown> }).body;

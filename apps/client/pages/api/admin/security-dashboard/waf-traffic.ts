@@ -1,7 +1,11 @@
 import type { Request, Response } from 'express';
 import { adminApi } from '@server/middlewares/adminApi';
 import { resolveStage } from '@bike4mind/server-utils/security/resolveStage';
-import { getWafTrafficOverview, resolveDefaultPeriod, type WafTrafficPeriod } from '@server/security/wafTraffic';
+import {
+  getWafTrafficOverview,
+  resolveDefaultPeriod,
+  type WafTrafficPeriod,
+} from '@bike4mind/server-utils/security/wafTraffic';
 import { parseRangeParam, wafQueryRateLimit, isWafDebugRequest } from '@server/security/wafApiHelpers';
 import { ApiKeyScope } from '@bike4mind/common';
 

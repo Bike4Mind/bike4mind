@@ -1,4 +1,5 @@
 import type {
+  CompletionRunAttribution,
   CompletionSource,
   GeneratedAssetMetadata,
   GenerationJobSource,
@@ -14,6 +15,7 @@ import type { SoundEffectProviderRequest, SpeechProviderRequest } from '@bike4mi
 import type { SyncGenerationProvider } from '@bike4mind/utils/generationProviders';
 import type { CreditHoldAdapters } from '../creditService/creditHold';
 import type { GenerationJobEngine } from '../generationJobs/engine';
+import type { RunBudgetAdapters } from '../generationJobs/types';
 import type { SaveGeneratedAssetResult } from '../generatedAssets';
 
 // Stamped on the job as deadlineAt at create; one provider call takes seconds, so this only bounds retries.
@@ -47,6 +49,8 @@ export type AudioJobDeps = {
     signal: AbortSignal;
   }): Promise<{ s3Key: string }>;
   credits: CreditHoldAdapters;
+  /** Required for a job created with a `run`; see holdJobCredits. */
+  runBudget?: RunBudgetAdapters;
   enqueue(jobId: string, delaySeconds: number): Promise<void>;
   now(): Date;
   logger: Logger;
@@ -149,6 +153,8 @@ export type CreateAudioJobInput = {
   saveToFiles?: boolean;
   sessionId?: string;
   questId?: string;
+  /** The completion run the job is made for: its hold is claimed against the run's budget (resolvePaidCallRun). */
+  run?: CompletionRunAttribution;
 };
 
 export type CreateSoundEffectJobInput = CreateAudioJobInput & {

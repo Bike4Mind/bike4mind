@@ -12,7 +12,7 @@ import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 // Must stay in sync with MANIFEST_SIGNATURE_CONTEXT and manifestSignatureMessage in
-// src/main/update/manifestSignature.ts; signUpdateManifests.test.ts signs here and verifies there.
+// src/main/update/manifestSignature.ts; src/main/update/update.test.ts signs here and verifies there.
 export const MANIFEST_SIGNATURE_CONTEXT = 'b4m-desktop-update-manifest-v1';
 const MANIFEST_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]*\.yml$/;
 const SIGNATURE_BYTES = 64;

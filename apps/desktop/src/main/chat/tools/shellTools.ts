@@ -24,7 +24,13 @@ import {
 } from './sessionScripts';
 import { commandEnv, launchCommand, spawnFailure, spawnsDetached } from './commandLaunch';
 import { commandExit, signalCommandTree } from './commandTree';
-import { protectionFor, secretPaths, type SandboxedCommand } from './sandbox';
+import {
+  guardSpellingsForDecision,
+  protectionFor,
+  secretPaths,
+  type GuardSpellings,
+  type SandboxedCommand,
+} from './sandbox';
 import { folderReaches, namesRuleFile, shellReachesProtected } from '../permissions/rules';
 import { shownPath, wslLocation } from '../../wsl/wslPath';
 import {
@@ -429,7 +435,8 @@ function reachesProtected(
   command: string,
   scan: ShellScan,
   protectedPaths: readonly string[],
-  permissionPaths: readonly string[]
+  permissionPaths: readonly string[],
+  spellings: GuardSpellings
 ): boolean {
   const named = [...(scan.paths ?? []), ...scan.writes].filter(
     path => !scan.readOnly || !CLAUDE_SETTINGS_NAME.test(path)
@@ -438,7 +445,7 @@ function reachesProtected(
   // The scan names a `.claude` folder itself when a write reaches it whole (`cp x .claude`, `find . -delete`).
   const replaced = [...scan.writes, ...scan.writtenTrees, ...(scan.readOnly ? [] : (scan.paths ?? []))];
   return (
-    named.some(path => withinGuarded(guarded, [path]) || protectionFor([path], 'write') !== undefined) ||
+    named.some(path => withinGuarded(guarded, [path]) || protectionFor([path], 'write', spellings) !== undefined) ||
     replaced.some(path => CLAUDE_FOLDER.test(path)) ||
     foldersReach(scan, guarded) ||
     shellReachesProtected({ script: command, ...scan, paths: named }, guarded)
@@ -446,11 +453,12 @@ function reachesProtected(
 }
 
 /** Whether a command may read what no tool reads in any mode: the app's own data or a secret store (sandbox.ts). */
-function readsSecret(scan: ShellScan, protectedPaths: readonly string[]): boolean {
+function readsSecret(scan: ShellScan, protectedPaths: readonly string[], spellings: GuardSpellings): boolean {
   const named = [...(scan.paths ?? []), ...scan.writes];
   return (
-    named.some(path => withinGuarded(protectedPaths, [path]) || protectionFor([path], 'read') !== undefined) ||
-    foldersReach(scan, [...protectedPaths, ...secretPaths()])
+    named.some(
+      path => withinGuarded(protectedPaths, [path]) || protectionFor([path], 'read', spellings) !== undefined
+    ) || foldersReach(scan, [...protectedPaths, ...secretPaths()])
   );
 }
 
@@ -494,6 +502,9 @@ export async function shellApproval(
   // another, or from a 60-second run to leaving the same command running all afternoon. NUL
   // separates the fields because it is the one byte neither of them can contain.
   const key = `${tool}\x00${cwd}\x00${command}`;
+  // Left out of the key on purpose: the same command reworded is still the same command.
+  const described = typeof input.description === 'string' ? input.description.trim() : '';
+  const summary = described ? { summary: described } : {};
 
   let startDirectory: string;
   const directories: string[] = [];
@@ -507,7 +518,9 @@ export async function shellApproval(
   }
 
   const scan = await scanShell(command, startDirectory, context.roots).catch(() => null);
-  if (!scan) return unreadApproval(tool, command, detail, key, ungranted, [startDirectory, ...context.roots]);
+  if (!scan) {
+    return { ...unreadApproval(tool, command, detail, key, ungranted, [startDirectory, ...context.roots]), ...summary };
+  }
 
   // Recorded before the check, so a script written and run by this same command counts.
   for (const written of scan.writes) await recordSessionWrite(context, written);
@@ -519,7 +532,8 @@ export async function shellApproval(
   });
   const gitProgram = gitRunsConfiguredProgram(scan.commands) ?? scan.gitProgram ?? null;
   const protectedPaths = context.protectedPaths ?? [];
-  const touchesProtected = reachesProtected(command, scan, protectedPaths, context.uncoverablePaths ?? []);
+  const spellings = guardSpellingsForDecision();
+  const touchesProtected = reachesProtected(command, scan, protectedPaths, context.uncoverablePaths ?? [], spellings);
   const written = [...(scan.writtenPlaces ?? scan.paths ?? []), ...scan.writes, ...scan.writtenTrees];
   // Reading a protected location stops a mode only for a secret (`secret`); what a command may write there stops it.
   const writesProtected =
@@ -529,9 +543,10 @@ export async function shellApproval(
         command,
         { ...scan, paths: scan.writtenPlaces },
         protectedPaths,
-        context.uncoverablePaths ?? []
+        context.uncoverablePaths ?? [],
+        spellings
       ));
-  const secret = readsSecret(scan, protectedPaths);
+  const secret = readsSecret(scan, protectedPaths, spellings);
   const writesWhileUnresolved = (context.unresolvedProtectedPaths?.length ?? 0) > 0 && !scan.readOnly;
   const unreachable = [...new Set([...ungranted, ...scan.ungranted])];
   const named = unreachable.filter(
@@ -643,6 +658,7 @@ export async function shellApproval(
   if (script && context.sessionId) expectShellRun(runKey, context.sessionId, script.hooks);
   return {
     detail: [detail, ...reasons].join('\n\n'),
+    ...summary,
     ...(reasons.length > 0 ? { reasons } : {}),
     key: runKey,
     ...(asks ? { askInAuto: true as const } : {}),
@@ -728,6 +744,12 @@ function unreadApproval(
     },
   };
 }
+
+/** The `description` input's schema text, shared with bash_background. */
+export const SHELL_DESCRIPTION_HINT =
+  'A few plain words on what this command does, in the active voice, for example "Lists the ' +
+  'changed files". Shown to the user above the command when they are asked to approve it, so ' +
+  'say what it does and do not repeat the command.';
 
 /** Exported so tests can shrink the grace period. */
 export const bashExecuteRunOptions: RunOptions = {};
@@ -826,6 +848,7 @@ export const bashExecute: ToolDefinition = {
           type: 'number',
           description: `Timeout in milliseconds. Default ${DEFAULT_TIMEOUT_MS}, maximum ${MAX_TIMEOUT_MS}.`,
         },
+        description: { type: 'string', description: SHELL_DESCRIPTION_HINT },
       },
       required: ['command'],
       additionalProperties: false,

@@ -1,4 +1,5 @@
 import '@bike4mind/server-utils/lib/settings/registerContributedSettings';
+import '@bike4mind/server-utils/navigation/registerContributedViews';
 import {
   connectDB,
   questRepository,
@@ -54,6 +55,7 @@ import { premiumWorkspaceDeniedTools } from '@bike4mind/server-utils/premium-gen
 import { coreTutorialTurns } from '@bike4mind/server-utils/tutorials/chatTurns';
 import { premiumWorkspaceSessionSettings } from '@bike4mind/server-utils/premium-generated/premiumWorkspaceSessionSettings.generated';
 import { Resource } from 'sst';
+import { signingKey } from '@bike4mind/server-utils/security/signingKeys';
 import { getFilesStorage, getGeneratedImageStorage } from '@bike4mind/server-utils/utils/storage/index';
 import { logEvent } from '@bike4mind/server-utils/utils/analyticsLog';
 import { publishPushNotification, sessionDeepLink } from '@bike4mind/server-utils/utils/pushNotifications';
@@ -77,6 +79,7 @@ import {
 import { LLMEvents, SessionEvents } from '@bike4mind/server-utils/utils/eventBus';
 import {
   getSharedTokenizer,
+  publishModerationEscalation,
   publishTelemetryAlertCallback,
 } from '@bike4mind/server-utils/utils/chatCompletionDefaults';
 import { recallMementosV2 } from '@bike4mind/server-utils/memory/recallMementosV2';
@@ -95,7 +98,8 @@ import {
   getVideoJobDeps,
 } from '@bike4mind/server-utils/generationJobs/wiring';
 import { createImageJobs } from '@bike4mind/services/imageJobs';
-import { resolveImageJobFiles } from '@server/generations/resolveImageJobFiles';
+import { resolveImageJobFiles } from '@bike4mind/server-utils/generations/resolveImageJobFiles';
+import { resolveCallableFunctionsEnabled } from '@bike4mind/server-utils/callableFunctions/access';
 import { getMcpClientAdapter } from '@bike4mind/server-utils/utils/getMcpClientAdapter';
 import { createCompletionMeter } from '@bike4mind/server-utils/billing/meterPlatformCompletion';
 import { customMcpToolHost } from '@bike4mind/server-utils/mcpConnections/customMcpToolHost';
@@ -212,6 +216,7 @@ export const getStaticOptions = () => {
     releaseQuestStart,
     getThinkingVisibility: resolveThinkingVisibility,
     autoNameSession: autoNameSessionAdapter,
+    notifyModerationEscalation: publishModerationEscalation,
     invokeCreateMemento: async (
       questId: string,
       sessionId: string,
@@ -243,7 +248,8 @@ export const getStaticOptions = () => {
     logEvent: logEvent,
     cacheRepository: cacheRepository,
     publishTelemetryAlert: publishTelemetryAlertCallback,
-    telemetryHmacSecret: Resource.SECRET_ENCRYPTION_KEY.value,
+    telemetryHmacSecret: signingKey('telemetry-salt'),
+    imageUrlSigningSecret: signingKey('search-image-url'),
   };
 
   return cachedStaticOptions;
@@ -489,6 +495,7 @@ export async function processQuest(params: z.infer<typeof QuestStartBodySchema>,
       musicToolConfigResolver: getMusicToolConfigResolver(params.apiKeyId, user.id),
       imageJobsResolver: getImageJobsResolver(params.apiKeyId),
       imageJobFilesResolver: resolveImageJobFiles,
+      callableFunctionsResolver: () => resolveCallableFunctionsEnabled(user),
     });
   } catch (error) {
     await liveActivity.end('failed');

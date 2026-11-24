@@ -4,6 +4,7 @@ import { MarginDashboard } from './components/MarginDashboard';
 import { UsageDashboard } from './components/UsageDashboard';
 import { PlatformUsageDashboard } from './components/PlatformUsageDashboard';
 import { SideAppsDashboard } from './components/SideAppsDashboard';
+import { ElevenLabsDashboard } from './components/ElevenLabsDashboard';
 import { CreditHolderType } from '@bike4mind/common';
 import { TransactionLedger } from './components/TransactionLedger';
 import { CreditAdjustmentsAuditLink } from './components/CreditAdjustmentsAuditLink';
@@ -71,6 +72,9 @@ export const CreditAnalyticsTab: React.FC = () => {
           <Tab value="side-apps" data-testid="credit-analysis-side-apps-tab">
             Side apps
           </Tab>
+          <Tab value="elevenlabs" data-testid="credit-analysis-elevenlabs-tab">
+            ElevenLabs
+          </Tab>
           <Tab value="ledger" data-testid="credit-analysis-ledger-tab">
             Ledger
           </Tab>
@@ -100,6 +104,10 @@ export const CreditAnalyticsTab: React.FC = () => {
 
         <TabPanel value="side-apps" sx={{ p: 0 }}>
           <SideAppsDashboard />
+        </TabPanel>
+
+        <TabPanel value="elevenlabs" sx={{ p: 0 }}>
+          <ElevenLabsDashboard />
         </TabPanel>
 
         <TabPanel value="ledger" sx={{ p: 0 }}>

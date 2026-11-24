@@ -2,6 +2,7 @@ import z from 'zod';
 import type { ApiErrorCode } from './apiErrorCodes';
 // The specific file, not the `./schemas` barrel - the barrel drags in an unbuilt
 // dist in the CI openapi job (same note as tts.contract.ts).
+import { CompletionRunAttributionSchema } from './schemas/cliCompletions';
 import { ApiErrorSchema, MeteredBillingOrganizationForbiddenErrorSchema } from './schemas/chat';
 import { EndUserIdSchema } from './schemas/endUserId';
 import {
@@ -29,6 +30,18 @@ export const VOICE_VENDOR_LABELS: Record<VoiceGenerationVendor, string> = {
   openai: 'OpenAI',
   elevenlabs: 'ElevenLabs',
 };
+
+/**
+ * When one spoken word (a whitespace-separated token of the input text) starts and ends, in ms from the start of
+ * the generated clip. Recorded on a speech job when its provider reports alignment (ElevenLabs does).
+ */
+export const SpeechWordTimingSchema = z.object({
+  text: z.string().min(1),
+  startMs: z.number().int().nonnegative(),
+  endMs: z.number().int().nonnegative(),
+});
+
+export type SpeechWordTiming = z.infer<typeof SpeechWordTimingSchema>;
 
 // Output container the caller wants back. All providers accept mp3; the rest are
 // best-effort per provider (OpenAI supports the full set, ElevenLabs maps a
@@ -104,6 +117,10 @@ export const ttsRequestSchema = z.object({
         'rejected with a 403 (`errorCode: billing_organization_mismatch`).'
     ),
   end_user_id: EndUserIdSchema.optional(),
+  run: CompletionRunAttributionSchema.optional().describe(
+    "The completion run this call is made for. Its cost is claimed against that run's budget before the " +
+      'provider is called, and the call is refused with 422 `run_budget_exhausted` when it does not fit.'
+  ),
   ...generatedAudioRequestFields,
 });
 
@@ -146,7 +163,8 @@ export type TtsBase64Response = z.infer<typeof ttsBase64ResponseSchema>;
  * `insufficient_credits` rides the 422 and means the same thing it does on
  * /api/ai/music and every other credit-metered endpoint. The two provider codes
  * are easy to invert: `provider_not_configured` means WE have no usable key,
- * `provider_rejected` means the provider REFUSED the key we sent.
+ * `provider_rejected` means the provider REFUSED the key we sent. A call sent with a `run` adds
+ * `run_not_found` (404) and `run_budget_exhausted` (422, the run's budget has no room for the hold).
  */
 export const TTS_ERROR_CODES = [
   'insufficient_credits',
@@ -156,6 +174,8 @@ export const TTS_ERROR_CODES = [
   'invalid_end_user_id',
   // The 504 of a clip that outlasted the request and could never be retrieved (unretrievableAudioResponse).
   'request_timeout',
+  'run_not_found',
+  'run_budget_exhausted',
 ] as const satisfies readonly ApiErrorCode[];
 
 /**

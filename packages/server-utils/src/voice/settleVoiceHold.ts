@@ -1,8 +1,14 @@
-import { CONVERSATIONAL_VOICE_MODEL_ID, CreditHolderType, type ISpendFreezeRepository } from '@bike4mind/common';
+import {
+  CONVERSATIONAL_VOICE_MODEL_ID,
+  CreditHolderType,
+  ELEVENLABS_AGENT_USD_PER_MINUTE,
+  type ISpendFreezeRepository,
+} from '@bike4mind/common';
 import {
   creditTransactionRepository,
   newAccountSpendCapAdapters,
   sessionRepository,
+  usageEventRepository,
   userRepository,
   warmExchangeAttribution,
   withTransaction,
@@ -92,6 +98,40 @@ export type VoiceHoldSettlementSource = 'end' | 'sweep' | 'bootstrap';
 export type VoiceHoldSettlement =
   { settled: false } | { settled: true; connected: boolean; chargedCredits: number; refundedCredits: number };
 
+type AgentCallUsage = { payerId: string; connectedSeconds: number; apiKeyId?: string };
+
+/**
+ * The analytics row for a settled ElevenLabs agent call, so agent minutes count against the vendor plan like every
+ * other ElevenLabs path (see elevenLabsPlanUsage.ts). Units are the connected seconds, uncapped by the hold: the
+ * vendor bills the call's real length. Agent calls always run on the platform key. Never throws: the credits moved.
+ */
+async function recordAgentCallUsage(hold: VoiceHold, call: AgentCallUsage, chargedCredits: number): Promise<void> {
+  try {
+    await usageEventRepository.record({
+      requestId: voiceHoldSettleTransactionId(hold.id, hold.voiceSessionStartedAt),
+      userId: hold.userId,
+      ownerId: call.payerId,
+      ownerType: CreditHolderType.User,
+      sessionId: hold.id,
+      feature: 'voice',
+      provider: 'elevenlabs',
+      model: CONVERSATIONAL_VOICE_MODEL_ID,
+      inputTokens: 0,
+      outputTokens: 0,
+      cachedInputTokens: 0,
+      cacheWriteTokens: 0,
+      units: call.connectedSeconds,
+      costUsd: (call.connectedSeconds / 60) * ELEVENLABS_AGENT_USD_PER_MINUTE,
+      creditsCharged: chargedCredits,
+      status: 'ok',
+      keySource: 'platform',
+      ...(call.apiKeyId && { apiKeyId: call.apiKeyId }),
+    });
+  } catch (err) {
+    logger.warn('failed to record voice agent usage event', { sessionId: hold.id, err });
+  }
+}
+
 const secondsBetween = (from: Date, to: Date) => Math.max(0, Math.floor((to.getTime() - from.getTime()) / 1000));
 
 /**
@@ -121,9 +161,12 @@ export async function settleVoiceHold(
 ): Promise<VoiceHoldSettlement> {
   const reserved = hold.voiceReservedCredits;
   let settlement: VoiceHoldSettlement;
+  // Set by the claimer of an ElevenLabs hold, for the usage event written after the transaction commits.
+  let agentCall: AgentCallUsage | null = null;
   await warmExchangeAttribution(hold.voiceHoldApiKeyId);
   try {
     settlement = await withTransaction(async (): Promise<VoiceHoldSettlement> => {
+      agentCall = null;
       const claimed = await sessionRepository.claimVoiceHold(hold.id, hold.voiceSessionStartedAt);
       if (!claimed) return { settled: false };
 
@@ -139,9 +182,9 @@ export async function settleVoiceHold(
         connected = chargedCredits > 0;
       } else {
         connected = hold.voiceConnectedAt != null;
-        chargedCredits = hold.voiceConnectedAt
-          ? creditsForElapsed(reserved, secondsBetween(new Date(hold.voiceConnectedAt), endedAt))
-          : 0;
+        const connectedSeconds = hold.voiceConnectedAt ? secondsBetween(new Date(hold.voiceConnectedAt), endedAt) : 0;
+        chargedCredits = connected ? creditsForElapsed(reserved, connectedSeconds) : 0;
+        agentCall = connected ? { payerId, connectedSeconds, apiKeyId: claimed.apiKeyId ?? undefined } : null;
       }
 
       // Responses billed past the hold already left the balance, so a settlement only ever refunds.
@@ -168,6 +211,9 @@ export async function settleVoiceHold(
     throw err;
   }
 
+  if (settlement.settled && agentCall) {
+    await recordAgentCallUsage(hold, agentCall, settlement.chargedCredits);
+  }
   if (settlement.settled) {
     logger.info(VOICE_HOLD_SETTLED_LOG, {
       source,
@@ -245,6 +291,11 @@ export async function reserveVoiceHold(args: {
     if (args.reservedCredits) {
       const after = await userRepository.incrementCredits(args.userId, -args.reservedCredits);
       if ((after?.currentCredits ?? 0) < 0) throw args.unaffordable();
+      // Inside the transaction, so a refusal aborts the debit and the opened hold with it.
+      await creditService.assertInterventionSpendAllowed(
+        { userId: args.userId, credits: args.reservedCredits },
+        { users: userRepository, window: args.newAccountSpendCap?.interventionSpendWindow }
+      );
     }
     return true;
   }, VOICE_SETTLE_TRANSACTION_OPTIONS);

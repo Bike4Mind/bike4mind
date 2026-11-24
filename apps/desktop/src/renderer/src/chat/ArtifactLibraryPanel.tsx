@@ -262,7 +262,7 @@ function ArtifactDetail({
             endDecorator={
               <Button
                 size="sm"
-                variant="soft"
+                variant="outlined"
                 color="danger"
                 onClick={onRetry}
                 data-testid="artifact-library-detail-retry-btn"
@@ -499,7 +499,7 @@ export function ArtifactLibraryPanel({ onClose }: { onClose: () => void }) {
               </Typography>
               <Button
                 size="sm"
-                variant="plain"
+                variant="outlined"
                 color="neutral"
                 onClick={() => void load()}
                 disabled={loading}
@@ -560,7 +560,7 @@ export function ArtifactLibraryPanel({ onClose }: { onClose: () => void }) {
                   {filtering && (
                     <Button
                       size="sm"
-                      variant="plain"
+                      variant="outlined"
                       color="neutral"
                       onClick={clearFilters}
                       data-testid="artifact-library-clear-btn"

@@ -32,6 +32,77 @@ describe('PendingCreditHoldModel', () => {
     expect(recorded).toEqual({ ...hold, id: expect.any(String), featureLabel: 'embeddings', expiresAt: minutes(60) });
   });
 
+  it('round-trips a run budget claim, and hands it back to whoever claims the hold', async () => {
+    const recorded = await pendingCreditHoldRepository.record(hold, 'platform-key completion', minutes(60), {
+      runId: 'run-1',
+      credits: 40,
+    });
+
+    expect(recorded.runClaim).toEqual({ runId: 'run-1', credits: 40 });
+    await expect(pendingCreditHoldRepository.claim(recorded.id)).resolves.toMatchObject({
+      runClaim: { runId: 'run-1', credits: 40 },
+    });
+  });
+
+  it('grows the run claim of an outstanding hold only', async () => {
+    const outstanding = await pendingCreditHoldRepository.record(hold, 'platform-key completion', minutes(60), {
+      runId: 'run-1',
+      credits: 40,
+    });
+    const settled = await pendingCreditHoldRepository.record(hold, 'platform-key completion', minutes(60), {
+      runId: 'run-1',
+      credits: 40,
+    });
+    await pendingCreditHoldRepository.markSettled(settled.id, 10);
+    const released = await pendingCreditHoldRepository.record(hold, 'platform-key completion', minutes(60), {
+      runId: 'run-1',
+      credits: 40,
+    });
+    await pendingCreditHoldRepository.claim(released.id);
+    const unclaimed = await pendingCreditHoldRepository.record(hold, 'platform-key completion', minutes(60));
+
+    expect(await pendingCreditHoldRepository.addRunClaimCredits(outstanding.id, 25)).toBe(true);
+    expect(await pendingCreditHoldRepository.addRunClaimCredits(settled.id, 25)).toBe(false);
+    expect(await pendingCreditHoldRepository.addRunClaimCredits(released.id, 25)).toBe(false);
+    expect(await pendingCreditHoldRepository.addRunClaimCredits(unclaimed.id, 25)).toBe(false);
+    await expect(pendingCreditHoldRepository.claim(outstanding.id)).resolves.toMatchObject({
+      runClaim: { runId: 'run-1', credits: 65 },
+    });
+  });
+
+  it('settles a hold once and hands back its stored run claim, top-ups included', async () => {
+    const { id } = await pendingCreditHoldRepository.record(hold, 'platform-key completion', minutes(60), {
+      runId: 'run-1',
+      credits: 40,
+    });
+    await pendingCreditHoldRepository.addRunClaimCredits(id, 25);
+
+    await expect(pendingCreditHoldRepository.markSettledAndRead(id, 30)).resolves.toMatchObject({
+      runClaim: { runId: 'run-1', credits: 65 },
+      settledCredits: 30,
+    });
+    expect(await pendingCreditHoldRepository.markSettledAndRead(id, 30)).toBeNull();
+    expect(await pendingCreditHoldRepository.findSettlement(id)).toBe(30);
+  });
+
+  it('keeps one outstanding hold per key and frees the key on settlement', async () => {
+    await PendingCreditHoldModel.createIndexes();
+    const keyed = await pendingCreditHoldRepository.record(hold, 'image generation', minutes(60), undefined, 'gen-1');
+    await pendingCreditHoldRepository.record(hold, 'image generation', minutes(60));
+    await pendingCreditHoldRepository.record(hold, 'image generation', minutes(60));
+
+    await expect(pendingCreditHoldRepository.findOutstandingByKey('gen-1')).resolves.toMatchObject({ id: keyed.id });
+    await expect(
+      pendingCreditHoldRepository.record(hold, 'image generation', minutes(60), undefined, 'gen-1')
+    ).rejects.toMatchObject({ code: 11000 });
+
+    await pendingCreditHoldRepository.markSettled(keyed.id, 5);
+    await expect(pendingCreditHoldRepository.findOutstandingByKey('gen-1')).resolves.toBeNull();
+    await expect(
+      pendingCreditHoldRepository.record(hold, 'image generation', minutes(60), undefined, 'gen-1')
+    ).resolves.toMatchObject({ holdKey: 'gen-1' });
+  });
+
   it('lets exactly one caller claim a hold', async () => {
     const { id } = await pendingCreditHoldRepository.record(hold, 'embeddings', minutes(60));
 

@@ -12,7 +12,7 @@ import { SignupChart } from '../Signups/SignupChart';
 import { useSignupTimeseries } from '../Signups/useSignupTimeseries';
 import { AnomalyBanner } from '../Users/AnomalyBanner';
 import { AdminTab } from '../adminSidebarConfig';
-import { adminTabToSlug } from '../adminTabSlugs';
+import { adminTabLinkSearch, adminTabToSlug } from '../adminTabSlugs';
 import { useSecurityDashboardSearch } from './useSecurityDashboardSearch';
 import {
   ErrorState,
@@ -37,7 +37,7 @@ import {
   type IncidentSignals,
   type IncidentState,
   type PaymentWindow,
-} from './incidentTypes';
+} from '@bike4mind/server-utils/app/components/admin/SecurityDashboard/incidentTypes';
 
 const DASH = '\u2014';
 const SIGNALS_DOWN = 'Could not load live signals.';
@@ -550,7 +550,7 @@ function QueuesCard({ state, onRetry }: { state: Source<IncidentState>; onRetry:
                 size="sm"
                 variant="plain"
                 aria-label={`Open ${queue.label}`}
-                onClick={() => void navigate({ to: '/admin', search: { tab: adminTabToSlug(queue.tab) } })}
+                onClick={() => void navigate({ to: '/admin', search: adminTabLinkSearch(queue.tab) })}
                 data-testid={`security-incident-queue-${queue.id}-btn`}
               >
                 Open

@@ -11,12 +11,14 @@ public struct CaptureStack: Sendable {
   public let submitter: any CaptureSubmitting
   public let transcription: any TranscriptionService
   public let destinationStore: any DestinationStore
+  public let delegator: (any DelegationSubmitting)?
 
   public init(
     engine: CaptureEngine?, destinations: any DestinationSource, submitter: any CaptureSubmitting,
     transcription: any TranscriptionService, destinationStore: any DestinationStore,
-    jobs: any CaptureJobTracking
+    jobs: any CaptureJobTracking, delegator: (any DelegationSubmitting)? = nil
   ) {
+    self.delegator = delegator
     self.engine = engine
     self.jobs = jobs
     self.destinations = destinations
@@ -30,30 +32,33 @@ public struct CaptureStack: Sendable {
   public static func live(
     baseURL: URL, tokens: any AccessTokenProviding, ownIdentifier: String,
     directory: URL = SharedContainer.directory(),
-    destinationStore: any DestinationStore = UserDefaultsDestinationStore()
+    destinationStore: any DestinationStore = UserDefaultsDestinationStore(),
+    didSendToSession: (@Sendable (String) async -> Void)? = nil
   ) -> CaptureStack {
     let capture = CaptureClient(baseURL: baseURL, tokens: tokens)
     let engine = CaptureEngine(
       store: FileUploadJobStore(directory: directory), api: capture, ownIdentifier: ownIdentifier,
-      makeUploader: { URLSessionBackgroundUploader(identifier: $0) })
+      makeUploader: { URLSessionBackgroundUploader(identifier: $0) }, didSendToSession: didSendToSession)
     return CaptureStack(
       engine: engine,
       destinations: RemoteDestinationSource(capture: capture, api: APIClient(baseURL: baseURL, tokens: tokens)),
       submitter: engine,
       transcription: TranscriptionClient(baseURL: baseURL, tokens: tokens),
-      destinationStore: destinationStore, jobs: engine)
+      destinationStore: destinationStore, jobs: engine, delegator: capture)
   }
 
   /// Offline stand-ins for `B4M_UI_FIXTURES=1`.
   public static func fixture(destinationStore: any DestinationStore = InMemoryDestinationStore()) -> CaptureStack {
     CaptureStack(
       engine: nil, destinations: CaptureFixtures.destinationSource, submitter: CaptureFixtures.submitter,
-      transcription: CaptureFixtures.transcription, destinationStore: destinationStore, jobs: CaptureFixtures.jobs)
+      transcription: CaptureFixtures.transcription, destinationStore: destinationStore, jobs: CaptureFixtures.jobs,
+      delegator: CaptureFixtures.delegator)
   }
 
   @MainActor
   public func composerModel(items: [ShareItem]) -> ShareComposerModel {
-    ShareComposerModel(items: items, source: destinations, submitter: submitter, store: destinationStore)
+    ShareComposerModel(
+      items: items, source: destinations, submitter: submitter, store: destinationStore, delegator: delegator)
   }
 }
 

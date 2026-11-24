@@ -11,6 +11,7 @@ import type {
   SpawnSuggestionResult,
 } from '@shared/chat';
 import { formatSessionMention } from '@shared/sessionMention';
+import type { SpawnLocation } from '@shared/spawnLocation';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ChatService, describeSuggestionOutcome, RUN_HERE_PREAMBLE } from './ChatService';
 import { MessageQueue } from './MessageQueue';
@@ -18,6 +19,10 @@ import type { ModelCatalog } from './ModelCatalog';
 import { SessionStore } from './SessionStore';
 import type { AccessStore } from './tools/AccessStore';
 import { ApprovalGate } from './tools/ApprovalGate';
+
+vi.mock('../git/hostGitArgs', async importOriginal =>
+  (await import('./plainFolderGit.testHelper')).skipGitOutsideRepositories(await importOriginal())
+);
 
 function frame(payload: unknown): string {
   return `data: ${typeof payload === 'string' ? payload : JSON.stringify(payload)}\n\n`;
@@ -48,8 +53,11 @@ describe('ChatService spawn suggestions', () => {
   let queue: MessageQueue;
   let queueEvents: ChatQueueEvent[];
   let signedIn: boolean;
+  // 'ask' keeps the card for every suggestion, so only the tests that change it see an automatic start.
+  let location: SpawnLocation;
 
   beforeEach(async () => {
+    location = 'ask';
     project = await realpath(await mkdtemp(join(tmpdir(), 'b4m-suggest-')));
     sessionsDir = await mkdtemp(join(tmpdir(), 'b4m-suggest-sessions-'));
     store = new SessionStore(sessionsDir, 'test-model');
@@ -81,6 +89,7 @@ describe('ChatService spawn suggestions', () => {
       } as unknown as ModelCatalog,
       approvals,
       queue,
+      spawnLocation: { read: async () => location },
       logger: { debug: vi.fn(), warn: vi.fn() },
       getApiClient: () =>
         signedIn
@@ -654,6 +663,64 @@ describe('ChatService spawn suggestions', () => {
       callTool(streams[index], 'u1', 'session_suggestion_update', { id: suggestion.id, prompt: 'other' });
       await vi.waitUntil(() => settled('session_suggestion_update').length === 1, { timeout: 5000, interval: 5 });
       expect(settled('session_suggestion_update')[0]?.error).toMatch(/chose to run suggestion .* here/);
+    });
+  });
+
+  describe('with a Settings location', () => {
+    /** The parent calls session_spawn and the call settles, however the start went. */
+    async function spawnFrom(prompt: string) {
+      const parent = await codeSession();
+      await service.send(parent.id, 'delegate');
+      await vi.waitUntil(() => streams.length === 1, { timeout: 5000, interval: 5 });
+      callTool(streams[0], 's1', 'session_spawn', { prompt, title: 'Tidy imports' });
+      await vi.waitUntil(() => settled('session_spawn').length === 1, { timeout: 5000, interval: 5 });
+      return { parent, call: settled('session_spawn')[0] };
+    }
+
+    it('starts the session at once in this folder, with no card, and tells the model in the result', async () => {
+      location = 'local';
+      const { parent, call } = await spawnFrom('remove the unused imports');
+
+      expect(call?.status).toBe('done');
+      expect(call?.preview).toContain('Started session');
+      expect(call?.preview).toContain('shares this working directory');
+      expect(requested).not.toHaveBeenCalled();
+      const started = await awaitSuggestion(parent.id, entry => entry.status === 'started');
+      expect(started.started).toMatchObject({ placement: 'local', auto: true });
+      // Already in the tool result, so no later turn reports it a second time.
+      expect(started.unreported).toBeUndefined();
+      expect((await store.list()).some(session => session.origin?.parentSessionId === parent.id)).toBe(true);
+    });
+
+    it('keeps the card in Ask mode', async () => {
+      location = 'local';
+      const parent = await codeSession();
+      await service.setApprovalMode(parent.id, 'ask');
+      await service.send(parent.id, 'delegate');
+      await vi.waitUntil(() => streams.length === 1, { timeout: 5000, interval: 5 });
+      callTool(streams[0], 's1', 'session_spawn', { prompt: 'remove the unused imports', title: 'Tidy imports' });
+      await vi.waitUntil(() => settled('session_spawn').length === 1, { timeout: 5000, interval: 5 });
+
+      expect(settled('session_spawn')[0]?.preview).toContain('Nothing has started');
+      expect(latestSuggestions(parent.id)[0]?.status).toBe('pending');
+      expect((await store.list()).some(session => session.origin)).toBe(false);
+    });
+
+    it('keeps the card for a worktree outside a git repository, and never runs it in this folder', async () => {
+      location = 'worktree';
+      const { parent, call } = await spawnFrom('remove the unused imports');
+
+      expect(call?.preview).toContain('Nothing has started');
+      const pending = latestSuggestions(parent.id)[0];
+      expect(pending).toMatchObject({ status: 'pending', repository: false });
+      expect(pending?.autoStartError).toBeUndefined();
+      expect((await store.list()).some(session => session.origin)).toBe(false);
+    });
+
+    it('keeps the card when Settings says ask each time', async () => {
+      const { parent, call } = await spawnFrom('remove the unused imports');
+      expect(call?.preview).toContain('Nothing has started');
+      expect(latestSuggestions(parent.id)[0]?.status).toBe('pending');
     });
   });
 

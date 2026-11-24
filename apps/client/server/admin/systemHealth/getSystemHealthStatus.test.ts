@@ -17,7 +17,13 @@ vi.mock('@server/security/tier1SecretValidators', () => ({
 
 import { getSystemHealthStatus } from './getSystemHealthStatus';
 
-const ENV_KEYS = ['MAIL_STATUS_TRANSPORT', 'MAIL_TRANSPORT', 'B4M_SELF_HOST'] as const;
+const ENV_KEYS = [
+  'MAIL_STATUS_TRANSPORT',
+  'MAIL_TRANSPORT',
+  'B4M_SELF_HOST',
+  'B4M_ALLOW_PLAINTEXT_SECRETS',
+  'SECRET_ENCRYPTION_KEY',
+] as const;
 
 describe('getSystemHealthStatus email', () => {
   const saved: Record<string, string | undefined> = {};
@@ -37,6 +43,16 @@ describe('getSystemHealthStatus email', () => {
     }
   });
 
+  it('flags the plaintext opt-out only when it is set and no valid key exists', async () => {
+    expect((await getSystemHealthStatus()).plaintextSecretsOptOut).toBe(false);
+
+    process.env.B4M_ALLOW_PLAINTEXT_SECRETS = 'true';
+    expect((await getSystemHealthStatus()).plaintextSecretsOptOut).toBe(true);
+
+    process.env.SECRET_ENCRYPTION_KEY = 'a'.repeat(64);
+    expect((await getSystemHealthStatus()).plaintextSecretsOptOut).toBe(false);
+  });
+
   it('reports an SES stage as configured with only MAIL_FROM when the SMTP secrets are placeholders', async () => {
     process.env.MAIL_STATUS_TRANSPORT = 'ses';
     Object.assign(configValues, {
@@ -49,10 +65,16 @@ describe('getSystemHealthStatus email', () => {
 
     const { email } = await getSystemHealthStatus();
 
-    expect(email).toEqual({ configured: true, transport: 'ses', missingSecrets: [], secrets: { MAIL_FROM: true } });
+    expect(email).toEqual({
+      configured: true,
+      transport: 'ses',
+      missingSecrets: [],
+      optionalSecrets: [],
+      secrets: { MAIL_FROM: true },
+    });
   });
 
-  it('names the SMTP credentials on a self-host deploy even when the status transport says ses', async () => {
+  it('names the SMTP settings on a self-host deploy even when the status transport says ses', async () => {
     process.env.B4M_SELF_HOST = 'true';
     process.env.MAIL_STATUS_TRANSPORT = 'ses';
     configValues.MAIL_FROM = 'noreply@example.com';
@@ -61,6 +83,14 @@ describe('getSystemHealthStatus email', () => {
 
     expect(email.configured).toBe(false);
     expect(email.transport).toBe('smtp');
-    expect(email.missingSecrets).toEqual(['MAIL_HOST', 'MAIL_PORT', 'MAIL_USERNAME', 'MAIL_PASSWORD']);
+    expect(email.missingSecrets).toEqual(['MAIL_HOST', 'MAIL_PORT']);
+    expect(email.optionalSecrets).toEqual(['MAIL_USERNAME', 'MAIL_PASSWORD']);
+  });
+
+  it('reports selfHost from B4M_SELF_HOST', async () => {
+    expect((await getSystemHealthStatus()).selfHost).toBe(false);
+
+    process.env.B4M_SELF_HOST = 'true';
+    expect((await getSystemHealthStatus()).selfHost).toBe(true);
   });
 });

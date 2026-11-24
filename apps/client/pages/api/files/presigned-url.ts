@@ -9,6 +9,7 @@ import { grantingLakes, resolveAccessibleLakes } from '@bike4mind/server-utils/d
 import { recordLakeRead } from '@server/dataLakes/recordLakeRead';
 import { holdsDataLakeReadScope } from '@bike4mind/server-utils/dataLakes/dataLakeScopes';
 import { getFilesStorage } from '@bike4mind/server-utils/utils/storage/index';
+import { storageReadOverrides } from '@bike4mind/utils/contentDisposition';
 
 const MAX_PRESIGNED_URL_EXPIRY_SECONDS = 3600;
 
@@ -25,6 +26,7 @@ const GetPresignedUrlRequestInput = z.object({
 type FabFileLookupResult = {
   _id: unknown;
   mimeType?: string | null;
+  fileName?: string | null;
   moderationStatus?: string | null;
   tags?: { name: string }[] | null;
   deletedAt?: Date | null;
@@ -119,9 +121,14 @@ const handler = baseApi({ requiredScopes: FILES_READ_SCOPES }).get(
       const lakeFileIds: string[] = [];
       const lakeIds = new Set<string>();
 
+      const lookedUp = new Map<string, FabFileLookupResult>();
       const serveableFileKeys = await filterServeableFilePaths(
         decodedFileKeys,
-        filePath => FabFile.findOne({ filePath }).lean(),
+        async filePath => {
+          const fabFile = await FabFile.findOne({ filePath }).lean();
+          lookedUp.set(filePath, fabFile);
+          return fabFile;
+        },
         async fabFile => {
           const id = String(fabFile._id);
           if (await fabFileRepository.shareable.findAccessibleById(req.user, id)) return true;
@@ -149,9 +156,11 @@ const handler = baseApi({ requiredScopes: FILES_READ_SCOPES }).get(
       const presignedUrls = await Promise.all(
         serveableFileKeys.map(decodedFilePath => {
           if (!decodedFilePath) return null;
+          const fabFile = lookedUp.get(decodedFilePath);
           return getFilesStorage().getSignedUrl(decodedFilePath, 'get', {
             expiresIn,
             ...(audience === 'browser' && { audience: 'browser' as const }),
+            ...storageReadOverrides({ mimeType: fabFile?.mimeType, fileName: fabFile?.fileName, key: decodedFilePath }),
           });
         })
       );

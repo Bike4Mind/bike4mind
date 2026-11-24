@@ -6,21 +6,13 @@ import {
   VERDICT_EVAL_WINDOWS,
   type VerdictEvalCohortRow,
   type VerdictEvalDisagreement,
-  type VerdictEvalLabelSource,
   type VerdictEvalOperationsRow,
   type VerdictEvalScore,
   type VerdictEvalWindowDays,
 } from '@client/app/utils/verdictEval';
 import { VerdictEvalSetsPanel } from './VerdictEvalSetsPanel';
-import { COHORT_LABELS, GRADER_LABELS } from './verdictEvalLabels';
+import { COHORT_LABELS, GRADER_LABELS, LABEL_SOURCE_LABELS } from './verdictEvalLabels';
 import { DataTable, StatStrip, StatTile, formatUtc, type DataColumn } from './shared';
-
-const SOURCE_LABELS: Record<VerdictEvalLabelSource, string> = {
-  adminVerdict: 'Detection verdict',
-  reinstated: 'Reinstated',
-  adminSuspended: 'Suspended by an admin',
-  riskReview: 'Risk review',
-};
 
 const operationsColumns: readonly DataColumn<VerdictEvalOperationsRow>[] = [
   { id: 'detector', label: 'Detector', render: row => row.detector },
@@ -123,7 +115,7 @@ const columns: readonly DataColumn<VerdictEvalDisagreement>[] = [
   { id: 'grader', label: 'Grader', render: row => `${GRADER_LABELS[row.grader]}, ${row.variant}` },
   { id: 'kind', label: 'Kind', render: row => (row.kind === 'falseNegative' ? 'Missed abuse' : 'False positive') },
   { id: 'predicted', label: 'Said', render: row => row.predicted },
-  { id: 'label', label: 'Admins said', render: row => `${row.label} (${SOURCE_LABELS[row.labelSource]})` },
+  { id: 'label', label: 'Admins said', render: row => `${row.label} (${LABEL_SOURCE_LABELS[row.labelSource]})` },
   { id: 'subject', label: 'Detection or account', render: row => row.detectionId ?? row.userId ?? '-' },
 ];
 

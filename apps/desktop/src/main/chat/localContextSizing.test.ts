@@ -7,6 +7,11 @@ import { AUTO_LOCAL_CONTEXT } from '@shared/localContextSetting';
 import type { ModelServerView } from '@shared/modelServers';
 import { HardwareProbe, localContextSizing, localLlamaServer, relistAfterSave } from './localContextSizing';
 
+// Conditions here hold a few promise turns in; vi.waitFor's default 50ms poll would wait each one out.
+// Under fake timers each poll also advances the clock by its interval, so those keep the default.
+const waitFor = <T>(check: () => T | Promise<T>, options: { timeout?: number; interval?: number } = {}) =>
+  vi.waitFor(check, { ...(vi.isFakeTimers() ? {} : { interval: 1 }), ...options });
+
 const qwenInfo = {
   'general.architecture': 'qwen2',
   'qwen2.block_count': 24,
@@ -137,7 +142,7 @@ describe('HardwareProbe', () => {
     const hardware = new HardwareProbe(probe);
     await hardware.profile();
     hardware.relistLlamaServer(true);
-    await vi.waitFor(() => expect(probe).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(probe).toHaveBeenCalledTimes(2));
     expect(probe).toHaveBeenLastCalledWith({ llamaServerMaxAgeMs: 0 });
     expect(hardware.known()).toBe(intel);
     finish(sized);
@@ -145,7 +150,7 @@ describe('HardwareProbe', () => {
     expect(hardware.known()).toBe(sized);
     // With its VRAM known, a save may still point at another binary.
     hardware.relistLlamaServer(true);
-    await vi.waitFor(() => expect(probe).toHaveBeenCalledTimes(3));
+    await waitFor(() => expect(probe).toHaveBeenCalledTimes(3));
     expect(probe).toHaveBeenLastCalledWith({ llamaServerMaxAgeMs: 0 });
     expect(await hardware.profile()).toBe(intel);
   });
@@ -159,7 +164,7 @@ describe('HardwareProbe', () => {
     const hardware = new HardwareProbe(probe);
     await hardware.profile();
     hardware.relistLlamaServer(true);
-    await vi.waitFor(() => expect(probe).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(probe).toHaveBeenCalledTimes(2));
     expect(await hardware.profile()).toBe(intel);
     expect(hardware.known()).toBe(intel);
   });
@@ -219,20 +224,20 @@ describe('HardwareProbe', () => {
     // The configured llama-server was removed, leaving the one on PATH.
     path = '/usr/local/bin/llama-server';
     hardware.relistLlamaServer(false);
-    await vi.waitFor(() => expect(probe).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(probe).toHaveBeenCalledTimes(2));
     expect(probe).toHaveBeenLastCalledWith({ llamaServer: expect.any(Function), llamaServerMaxAgeMs: 0 });
     hardware.relistLlamaServer(false);
     await settled();
     expect(probe).toHaveBeenCalledTimes(2);
     path = null;
     hardware.relistLlamaServer(false);
-    await vi.waitFor(() => expect(probe).toHaveBeenCalledTimes(3));
+    await waitFor(() => expect(probe).toHaveBeenCalledTimes(3));
     hardware.relistLlamaServer(false);
     await settled();
     expect(probe).toHaveBeenCalledTimes(3);
     locate.mockRejectedValueOnce(new Error('store unreadable'));
     hardware.relistLlamaServer(false);
-    await vi.waitFor(() => expect(probe).toHaveBeenCalledTimes(4));
+    await waitFor(() => expect(probe).toHaveBeenCalledTimes(4));
   });
 
   it('compares with the llama-server of the probe whose result it keeps, not of one superseded', async () => {
@@ -252,7 +257,7 @@ describe('HardwareProbe', () => {
     const hardware = new HardwareProbe(probe, undefined, byPath);
     hardware.setLlamaServer(async () => ({ path }));
     const first = hardware.probed();
-    await vi.waitFor(() => expect(probe).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(probe).toHaveBeenCalledTimes(1));
     path = '/opt/new/llama-server';
     hardware.forget();
     expect(await hardware.probed()).toBe(intel);
@@ -298,7 +303,7 @@ describe('HardwareProbe', () => {
       await writeFile(binary, 'build two, a different size');
       await utimes(binary, new Date(1_000_000), new Date(1_000_000));
       expect(await hardware.relistLlamaServer(false)).toBe(true);
-      await vi.waitFor(() => expect(probe).toHaveBeenCalledTimes(3));
+      await waitFor(() => expect(probe).toHaveBeenCalledTimes(3));
     });
 
     it('lists again when the symlink it found now points at another binary', async () => {
@@ -313,7 +318,7 @@ describe('HardwareProbe', () => {
       await rm(link);
       await symlink(join(dir, 'cpu'), link);
       hardware.relistLlamaServer(false);
-      await vi.waitFor(() => expect(probe).toHaveBeenCalledTimes(2));
+      await waitFor(() => expect(probe).toHaveBeenCalledTimes(2));
     });
 
     it('warns and lists again when the binary cannot be read', async () => {
@@ -323,7 +328,7 @@ describe('HardwareProbe', () => {
       await rm(binary);
       const warn = vi.fn();
       hardware.relistLlamaServer(false, warn);
-      await vi.waitFor(() => expect(probe).toHaveBeenCalledTimes(2));
+      await waitFor(() => expect(probe).toHaveBeenCalledTimes(2));
       expect(warn).toHaveBeenCalledOnce();
     });
 
@@ -400,11 +405,11 @@ describe('HardwareProbe', () => {
     gate = new Promise(resolve => (open = resolve));
     locate.mockClear();
     hardware.relistLlamaServer(false);
-    await vi.waitFor(() => expect(locate).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(locate).toHaveBeenCalledTimes(1));
     hardware.relistLlamaServer(true);
-    await vi.waitFor(() => expect(locate).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(locate).toHaveBeenCalledTimes(2));
     open();
-    await vi.waitFor(() => expect(probe).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(probe).toHaveBeenCalledTimes(2));
     await settled();
     expect(probe.mock.calls[1][0].llamaServerMaxAgeMs).toBe(0);
     expect(await hardware.profile()).toBe(intelCard);
@@ -507,7 +512,7 @@ describe('relistAfterSave', () => {
     for (const [id, llamaServerSaved] of expected) {
       relist.mockClear();
       saved(id);
-      await vi.waitFor(() => expect(relist).toHaveBeenCalledOnce());
+      await waitFor(() => expect(relist).toHaveBeenCalledOnce());
       expect(relist).toHaveBeenCalledWith(llamaServerSaved, expect.any(Function));
     }
     expect(warn).not.toHaveBeenCalled();
@@ -518,7 +523,7 @@ describe('relistAfterSave', () => {
     const relist = vi.spyOn(hardware, 'relistLlamaServer').mockResolvedValue(false);
     const warn = vi.fn();
     relistAfterSave(hardware, () => Promise.reject(new Error('store unreadable')), { warn })('llama');
-    await vi.waitFor(() => expect(relist).toHaveBeenCalledWith(true, expect.any(Function)));
+    await waitFor(() => expect(relist).toHaveBeenCalledWith(true, expect.any(Function)));
     expect(warn).toHaveBeenCalledWith(
       "MODEL SERVERS: could not read the saved servers after a save, so listing the llama-server's devices again: Error: store unreadable"
     );

@@ -1,10 +1,14 @@
 import React, { useMemo, useState } from 'react';
-import { Box, Button, IconButton, Stack, Tooltip, Typography } from '@mui/joy';
+import { Box, Button, Checkbox, IconButton, Stack, Tooltip, Typography } from '@mui/joy';
 import AutorenewRoundedIcon from '@mui/icons-material/AutorenewRounded';
+import GppMaybeRoundedIcon from '@mui/icons-material/GppMaybeRounded';
 import BlockRoundedIcon from '@mui/icons-material/BlockRounded';
 import { toast } from 'sonner';
 import {
   ApiKeyStatus,
+  MODERATION_EXCEPTION_CATEGORIES,
+  type AdminApiKeyModerationException,
+  type ModerationExceptionCategory,
   type AdminApiKeyRequestCounts,
   type ApiKeyRateLimitUsage,
   type IUserApiKeyDocument,
@@ -15,6 +19,7 @@ import {
   useAdminRevokeAllApiKeys,
   useAdminRevokeApiKey,
   useAdminRotateApiKey,
+  useAdminSetApiKeyModerationException,
 } from '@client/app/hooks/data/adminUserCredits';
 import AdminGenerateApiKeyModal from '../../../Details/AdminGenerateApiKeyModal';
 import AdminApiKeysModal from '../../../Details/AdminApiKeysModal';
@@ -54,6 +59,8 @@ type KeyRowActions = {
   rotateBlocked: string | null;
   onRevoke: (key: IUserApiKeyDocument) => void;
   onRotate: (key: IUserApiKeyDocument) => void;
+  moderationBlocked: string | null;
+  onModeration: (key: IUserApiKeyDocument) => void;
   pendingKeyId: string | null;
 };
 
@@ -95,6 +102,8 @@ const RowActions: React.FC<{ apiKey: IUserApiKeyDocument } & KeyRowActions> = ({
   apiKey,
   onRevoke,
   onRotate,
+  onModeration,
+  moderationBlocked,
   pendingKeyId,
   revokeBlocked,
   rotateBlocked,
@@ -103,6 +112,22 @@ const RowActions: React.FC<{ apiKey: IUserApiKeyDocument } & KeyRowActions> = ({
   const busy = pendingKeyId === apiKey.id;
   return (
     <Stack direction="row" gap={0.5} justifyContent="flex-end">
+      <Tooltip title={moderationBlocked ?? 'Manage moderation exception'}>
+        <span>
+          <IconButton
+            size="sm"
+            variant="plain"
+            color="neutral"
+            aria-label={`Moderation exception for ${apiKey.name}`}
+            disabled={busy || !!moderationBlocked}
+            onClick={() => onModeration(apiKey)}
+            data-testid="user-keys-moderation-btn"
+            sx={{ color: 'admin.inkMuted' }}
+          >
+            <GppMaybeRoundedIcon sx={{ fontSize: 18 }} />
+          </IconButton>
+        </span>
+      </Tooltip>
       <Tooltip title={rotateBlocked ?? 'Rotate key'}>
         <span>
           <IconButton
@@ -142,6 +167,7 @@ const RowActions: React.FC<{ apiKey: IUserApiKeyDocument } & KeyRowActions> = ({
 const buildColumns = (
   requests: Readonly<Record<string, AdminApiKeyRequestCounts>> | undefined,
   liveUsage: Readonly<Record<string, ApiKeyRateLimitUsage>> | undefined,
+  exceptions: Readonly<Record<string, AdminApiKeyModerationException>> | undefined,
   actions: KeyRowActions
 ): DataColumn<IUserApiKeyDocument>[] => {
   const weeklyMax = maxWeeklyRequests(requests);
@@ -213,6 +239,21 @@ const buildColumns = (
         return <StatusChip tone={status.tone} label={status.label} />;
       },
     },
+    {
+      id: 'moderation',
+      label: 'Moderation',
+      render: key => {
+        const exception = exceptions?.[key.id];
+        if (!exception) return <StatusChip tone="neutral" label="Standard" data-testid="user-keys-moderation-chip" />;
+        return (
+          <Tooltip title={`${exception.categories.join(', ')}. ${exception.reason}`}>
+            <span tabIndex={0}>
+              <StatusChip tone="warn" label="Exception" data-testid="user-keys-moderation-chip" />
+            </span>
+          </Tooltip>
+        );
+      },
+    },
     { id: 'actions', label: '', render: key => <RowActions apiKey={key} {...actions} /> },
   ];
 };
@@ -252,14 +293,18 @@ export const ApiKeysTab: React.FC<{ user: AdminUserProfile }> = ({ user }) => {
   const restore = useAdminRestoreApiKey(user.id);
   const rotate = useAdminRotateApiKey(user.id);
   const revokeAll = useAdminRevokeAllApiKeys(user.id);
+  const setModeration = useAdminSetApiKeyModerationException(user.id);
   const showUndo = useUndoToast();
   const { currentUser } = useUser();
   // Rotating or minting hands back a working secret for the owner, so it also needs the impersonation grant.
   const revokeBlocked = adminActionBlockedReason(currentUser, user, 'keys:revoke');
+  const moderationBlocked = adminActionBlockedReason(currentUser, user, 'users:moderate');
   const secretBlocked = revokeBlocked ?? adminActionBlockedReason(currentUser, user, 'users:impersonate');
 
   const [modal, setModal] = useState<'generate' | 'limits' | null>(null);
   const [rotating, setRotating] = useState<IUserApiKeyDocument | null>(null);
+  const [moderating, setModerating] = useState<IUserApiKeyDocument | null>(null);
+  const [moderationCategories, setModerationCategories] = useState<ModerationExceptionCategory[]>([]);
   const [revokingAll, setRevokingAll] = useState(false);
   const [newSecret, setNewSecret] = useState<NewSecret | null>(null);
   const [pendingKeyId, setPendingKeyId] = useState<string | null>(null);
@@ -302,6 +347,35 @@ export const ApiKeysTab: React.FC<{ user: AdminUserProfile }> = ({ user }) => {
     }
   };
 
+  const moderatingException = moderating ? keys.data?.moderationExceptions?.[moderating.id] : undefined;
+
+  const openModeration = (key: IUserApiKeyDocument) => {
+    const current = keys.data?.moderationExceptions?.[key.id]?.categories ?? [];
+    setModerationCategories(MODERATION_EXCEPTION_CATEGORIES.filter(category => current.includes(category)));
+    setModerating(key);
+  };
+
+  const toggleCategory = (category: ModerationExceptionCategory, checked: boolean) =>
+    setModerationCategories(previous =>
+      MODERATION_EXCEPTION_CATEGORIES.filter(c => (c === category ? checked : previous.includes(c)))
+    );
+
+  const changeModeration = async (reason: string, categories: ModerationExceptionCategory[]) => {
+    if (!moderating) return;
+    try {
+      await setModeration.mutateAsync({ keyId: moderating.id, reason, categories });
+      toast.success(
+        categories.length > 0
+          ? `Moderation exception saved for ${moderating.name}.`
+          : `Moderation exception removed from ${moderating.name}.`
+      );
+      setModerating(null);
+    } catch (error) {
+      toast.error(apiErrorMessage(error, `The moderation exception of ${moderating.name} could not be changed.`));
+      throw error;
+    }
+  };
+
   const revokeAllKeys = async (reason: string) => {
     try {
       const result = await revokeAll.mutateAsync(reason);
@@ -315,9 +389,11 @@ export const ApiKeysTab: React.FC<{ user: AdminUserProfile }> = ({ user }) => {
     }
   };
 
-  const columns = buildColumns(keys.data?.requests, keys.data?.liveUsage, {
+  const columns = buildColumns(keys.data?.requests, keys.data?.liveUsage, keys.data?.moderationExceptions, {
     onRevoke: key => void revokeKey(key),
     onRotate: setRotating,
+    onModeration: openModeration,
+    moderationBlocked,
     pendingKeyId,
     revokeBlocked,
     rotateBlocked: secretBlocked,
@@ -436,6 +512,43 @@ export const ApiKeysTab: React.FC<{ user: AdminUserProfile }> = ({ user }) => {
         pending={rotate.isPending}
         data-testid="user-keys-rotate-dialog"
       />
+
+      <ActionDialog
+        open={moderating !== null}
+        onClose={() => setModerating(null)}
+        title="Moderation exception"
+        description={`Lets prompts sent with ${moderating?.name ?? 'this key'} continue when moderation flags them only for the categories checked here. Every other category still blocks.`}
+        reasonPresets={ADMIN_REASON_PRESETS.apiKeyModerationException}
+        confirmLabel="Save exception"
+        onConfirm={reason => changeModeration(reason, moderationCategories)}
+        secondaryAction={
+          moderatingException
+            ? {
+                label: 'Remove exception',
+                onConfirm: reason => changeModeration(reason, []),
+                ignoreBlockedReason: true,
+              }
+            : undefined
+        }
+        blockedReason={
+          moderationBlocked ?? (moderationCategories.length === 0 ? 'Choose at least one category.' : null)
+        }
+        pending={setModeration.isPending}
+        formKey={moderating?.id}
+        data-testid="user-keys-moderation-dialog"
+      >
+        <Stack gap={1} data-testid="user-keys-moderation-categories">
+          {MODERATION_EXCEPTION_CATEGORIES.map(category => (
+            <Checkbox
+              key={category}
+              label={category}
+              checked={moderationCategories.includes(category)}
+              onChange={event => toggleCategory(category, event.target.checked)}
+              slotProps={{ input: { 'data-testid': `user-keys-moderation-category-${category}` } }}
+            />
+          ))}
+        </Stack>
+      </ActionDialog>
 
       <ActionDialog
         open={revokingAll}

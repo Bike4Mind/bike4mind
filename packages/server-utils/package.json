@@ -1,6 +1,6 @@
 {
   "name": "@bike4mind/server-utils",
-  "version": "0.0.19",
+  "version": "0.0.20",
   "private": true,
   "type": "module",
   "exports": {
@@ -11,6 +11,7 @@
     "typecheck:native": "tsgo --noEmit",
     "typecheck:fast": "tsgo --noEmit",
     "test": "vitest run",
+    "test:repo": "REPO_TEST_LANE=repo vitest run",
     "test:integration": "SERVER_UTILS_TEST_LANE=integration vitest run"
   },
   "dependencies": {
@@ -19,6 +20,7 @@
     "@aws-sdk/client-cloudfront": "^3.1150.0",
     "@aws-sdk/client-cloudtrail": "^3.1150.0",
     "@aws-sdk/client-cloudwatch": "^3.1150.0",
+    "@aws-sdk/client-cloudwatch-logs": "^3.1150.0",
     "@aws-sdk/client-ec2": "^3.1150.0",
     "@aws-sdk/client-eventbridge": "^3.1150.0",
     "@aws-sdk/client-iam": "^3.1150.0",
@@ -27,6 +29,7 @@
     "@aws-sdk/client-secrets-manager": "^3.1150.0",
     "@aws-sdk/client-sesv2": "^3.1150.0",
     "@aws-sdk/client-sqs": "^3.1150.0",
+    "@aws-sdk/client-wafv2": "^3.1150.0",
     "@bike4mind/agents": "workspace:*",
     "@bike4mind/auth": "workspace:*",
     "@bike4mind/common": "workspace:*",

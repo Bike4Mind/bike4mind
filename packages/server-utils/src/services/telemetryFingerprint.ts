@@ -4,7 +4,7 @@
  * Provides deterministic fingerprinting for context telemetry alerts.
  * Used for GitHub issue deduplication and regression detection.
  *
- * Key design decisions (following liveops/Sentry/Rollbar best practices):
+ * Key design decisions (following Sentry/Rollbar best practices):
  * - SHA-1 hash (40 chars) - industry standard for fingerprinting
  * - Include severity level - prevents different severities from deduplicating
  * - Include model/provider - separates issues by AI provider

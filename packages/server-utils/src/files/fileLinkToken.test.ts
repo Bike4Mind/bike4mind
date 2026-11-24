@@ -85,3 +85,18 @@ describe('buildFileLinkUrl', () => {
     expect(() => buildFileLinkUrl(claims.target, 'u1', 0)).toThrow();
   });
 });
+
+describe('file link tokens on a placeholder JWT_SECRET', () => {
+  afterEach(() => {
+    vi.doUnmock('sst');
+    vi.resetModules();
+  });
+
+  it('refuses to sign or verify', async () => {
+    vi.resetModules();
+    vi.doMock('sst', () => ({ Resource: { JWT_SECRET: { value: 'my-secret-placeholder-value' } } }));
+    const fresh = await import('./fileLinkToken');
+    expect(() => fresh.signFileLinkToken(claims)).toThrow(/JWT_SECRET is not configured/);
+    expect(() => fresh.verifyFileLinkToken('a.b', NOW)).toThrow(/JWT_SECRET is not configured/);
+  });
+});

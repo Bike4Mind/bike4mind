@@ -38,7 +38,7 @@ export interface ModelsInUse {
   conversations: readonly ModelInUse[];
 }
 
-function inUseWarning(model: LocalModelEntry, serverId: string, inUse: ModelsInUse | undefined): string | null {
+export function inUseWarning(model: LocalModelEntry, serverId: string, inUse: ModelsInUse | undefined): string | null {
   const lines: string[] = [];
   const same = (entry: ModelInUse | null) => entry?.serverId === serverId && entry.name === model.name;
   if (same(inUse?.active ?? null))
@@ -145,7 +145,7 @@ function InstalledRow({
       {onSettings && (
         <Button
           size="sm"
-          variant="plain"
+          variant="outlined"
           color="neutral"
           onClick={onSettings}
           aria-label={`Settings for ${model.name}`}
@@ -162,7 +162,7 @@ function InstalledRow({
       {onRemove && !removeBlocked && (
         <Button
           size="sm"
-          variant="plain"
+          variant="outlined"
           color="danger"
           startDecorator={<TrashIcon />}
           onClick={onRemove}
@@ -177,7 +177,7 @@ function InstalledRow({
             {/* aria-disabled rather than disabled keeps it focusable, so keyboard and screen reader users get the reason. */}
             <Button
               size="sm"
-              variant="plain"
+              variant="outlined"
               color="danger"
               startDecorator={<TrashIcon />}
               aria-disabled="true"
@@ -406,7 +406,7 @@ export function InstalledTab({
               Remove
             </Button>
             <Button
-              variant="plain"
+              variant="outlined"
               color="neutral"
               disabled={removing}
               onClick={() => setConfirming(null)}

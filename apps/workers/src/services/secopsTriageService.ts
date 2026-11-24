@@ -163,7 +163,7 @@ function getScanSourceMeta(scanSource?: string) {
 // ─── LLM Enrichment ──────────────────────────────────────────────────────────
 
 // Safety limits for LLM responses
-const LLM_MAX_RESPONSE_SIZE = 100_000; // 100KB — matches LiveOps pattern
+const LLM_MAX_RESPONSE_SIZE = 100_000; // 100KB
 const LLM_CALL_TIMEOUT_MS = 30_000; // 30s per call — prevents Lambda timeout with 20 findings
 const LLM_HEALTH_MAX_CHARS = 2_800; // Slack section block text limit is 3000 chars
 

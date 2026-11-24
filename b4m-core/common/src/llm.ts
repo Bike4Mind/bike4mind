@@ -8,6 +8,7 @@ import { PROMPT_TEXT_MAX } from './schemas/briefcasePrompt';
 import { MAX_REFERENCE_IMAGES } from './utils/modelHelpers';
 import { GenerationCallbackUrlSchema } from './schemas/generationCallback';
 import { BillingOrganizationIdSchema } from './schemas/billingOrganization';
+import { CompletionRunAttributionSchema } from './schemas/cliCompletions';
 import { ChatToolModeSchema } from './schemas/promptMeta';
 
 // Re-export LLM tools for external use
@@ -194,6 +195,12 @@ export const GenerateImageRequestBodySchema = GenerateImageIvokeParamsSchema.omi
       'for models that cannot run without an input image. Use `"literal"` when the prompt is already ' +
       'self-contained, for example when an agent or pipeline builds it.'
   ),
+  run: CompletionRunAttributionSchema.optional().describe(
+    "The completion run this call is made for. Its cost is claimed against that run's budget when the " +
+      'render is held, and the call is refused with 422 `run_budget_exhausted` when it does not fit: ' +
+      'synchronously when the run cannot cover even the cheapest form of the render, otherwise on the ' +
+      'polled quest (`type: "error"`, `errorCode: "run_budget_exhausted"`). The run bills its own account.'
+  ),
 });
 export type GenerateImageRequestBody = z.infer<typeof GenerateImageRequestBodySchema>;
 
@@ -274,6 +281,12 @@ export const EditImageRequestBodySchema = OpenAIImageGenerationInput.extend({
    */
   edit_regions: BflEditRegionsSchema.optional(),
   callbackUrl: GenerationCallbackUrlSchema.optional(),
+  run: CompletionRunAttributionSchema.optional().describe(
+    "The completion run this call is made for. Its cost is claimed against that run's budget when the " +
+      'edit is held, and the call is refused with 422 `run_budget_exhausted` when it does not fit: ' +
+      'synchronously when the run cannot cover even the cheapest form of the edit, otherwise on the ' +
+      'polled quest (`type: "error"`, `errorCode: "run_budget_exhausted"`). The run bills its own account.'
+  ),
 });
 
 /**
@@ -310,6 +323,18 @@ export const resolveHistoryFetchLimit = (historyCount: number | null | undefined
 /** Server ingress: swap the client's slider sentinel for the internal marker, exactly once. */
 export const normalizeRequestedHistoryCount = (historyCount: number): number =>
   historyCount === CLIENT_UNLIMITED_HISTORY_VALUE ? UNLIMITED_HISTORY_COUNT : historyCount;
+
+/**
+ * Most platform connector ids one request may carry; a bound on what reaches a Mongo `$in`. Generous
+ * because the composer keeps an id across an admin's disable and re-enable and never prunes it.
+ */
+export const MAX_ENABLED_PLATFORM_MCP_CONNECTIONS = 200;
+
+/** Platform MCP connector ids (ObjectId hex) the composer switched on. */
+export const EnabledPlatformMcpConnectionsSchema = z
+  .array(z.string().regex(/^[a-f\d]{24}$/i))
+  .max(MAX_ENABLED_PLATFORM_MCP_CONNECTIONS)
+  .optional();
 
 export const ChatCompletionInvokeParamsSchema = z.object({
   /** Notebook session ID */
@@ -446,6 +471,12 @@ export const ChatCompletionInvokeParamsSchema = z.object({
    * would switch them all off.
    */
   disabledMcpConnections: z.array(z.string()).optional(),
+  /**
+   * Ids of the platform connectors the user switched on in the composer. Opt-in, unlike
+   * `disabledMcpConnections`: a platform connector is offered to no one who has not switched it on,
+   * so a request without this list gets none.
+   */
+  enabledPlatformMcpConnections: EnabledPlatformMcpConnectionsSchema,
   /** Project ID */
   projectId: z.string().optional(),
   /** Organization ID */

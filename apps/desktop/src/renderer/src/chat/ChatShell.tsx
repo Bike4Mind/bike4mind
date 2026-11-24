@@ -12,6 +12,7 @@ import type { AttentionOpenEvent } from '@shared/attention';
 import type { AuthState } from '@shared/auth';
 import { DEFAULT_PROMPT_CACHE_TTL, type PromptCacheTtl } from '@bike4mind/common';
 import type { ChatArtifact, ChatModelOption, ChatSessionMode, ChatSessionSummary } from '@shared/chat';
+import { promptHistory } from '@shared/threadRewind';
 import type { SkillMarketListingRef } from '@shared/skillMarket';
 import type { SkillsScope } from '@shared/skills';
 import {
@@ -27,8 +28,11 @@ import { closingText, plainText, snippetOf } from '@shared/agentOutcome';
 import { effectiveContextLimit, occupiedTokens } from '@shared/contextLimit';
 import { LOCAL_SERVER_ID } from '@shared/modelServers';
 import type { ModelSettings } from '@shared/modelSettings';
+import { alertableSessions } from '@shared/needsYou';
 import { activeTodos } from '@shared/todos';
 import { ArtifactLibraryPanel } from './ArtifactLibraryPanel';
+import { MissionControl } from './missionControl/MissionControl';
+import { useMissionControlActions } from './missionControl/useMissionControlActions';
 import { BlankChat, BlankChatGreeting } from './BlankChat';
 import { SkillMarketPanel } from './SkillMarketPanel';
 import { BackgroundTaskChip, BackgroundTaskPanel } from './BackgroundTaskPanel';
@@ -49,7 +53,8 @@ import type { ComposerFill } from './composerInput';
 import { ModelsScreen } from '../models/ModelsScreen';
 import { ComposerOllamaNotice } from '../models/OllamaNotRunning';
 import { useModelServers } from '../models/useModelHub';
-import { PanelRightIcon } from './icons';
+import { ConversationIcon, PanelRightIcon, StatsIcon } from './icons';
+import { PresenterPendingNotice } from './PresenterPendingNotice';
 import { OpenPaneButtons, PanesMenu, type PaneControl } from './PanesMenu';
 import { SessionArtifactsButton } from './SessionArtifactsButton';
 import { paneDocument, sessionArtifacts, type SessionArtifact } from './sessionArtifacts';
@@ -57,7 +62,7 @@ import { StudioPane } from './studio/StudioPane';
 import type { StudioController } from './studio/controller';
 import { useStudioController } from './studio/useStudioController';
 import { studioPaneLayout } from './studio/layout';
-import { ProjectSubtitleLine } from './ProjectSubtitleLine';
+import { railFitsBesideThread, replyStatsToggleTitle, setReplyStatsRail, useReplyStatsPrefs } from './replyStatsPrefs';
 import { MessageThread } from './MessageThread';
 import {
   chatShellRootSx,
@@ -97,8 +102,10 @@ import { HeldRelayCard } from './HeldRelayCard';
 import { SessionOpenerContext } from './SessionLink';
 import { clampQuote, quotedMessage } from './quotedReply';
 import { SpawnSuggestionTray } from './SpawnSuggestionTray';
+import { ChildrenStrip } from './ChildrenStrip';
+import { useSpawnLocation } from './spawnLocationSetting';
 import { useHeldRelays } from './useHeldRelays';
-import { TaskDecisionCards, useTaskDecisions } from './TaskDecisionCards';
+import { TaskDecisionCards, decisionsFor, useTaskDecisions } from './TaskDecisionCards';
 import { pendingDecisionOf } from '@shared/orchestration';
 import { useSpawnSuggestions } from './useSpawnSuggestions';
 import { TurnDot, turnState } from './TurnDot';
@@ -142,17 +149,18 @@ import {
   writeAmbientHintSeen,
   writeIntroSeen,
   writeSurface,
-  type OrchestratorViewId,
 } from './orchestrator/orchestratorPrefs';
+import { singlePaneLayout, type OrchestratorLayout } from './orchestrator/orchestratorLayout';
 import { renderOrchestratorView } from './orchestrator/viewRegistry';
 import { ORCHESTRATOR_VIEW_INFO } from './orchestrator/ViewSwitcher';
 import { latestQuestReport } from './orchestrator/finale';
-import { agentStates } from './orchestrator/roster';
+import { agentStates, descendantIds } from './orchestrator/roster';
 import { prefersReducedMotion } from './orchestrator/motion';
 import { ThreadDock, type ThreadDockMode } from './orchestrator/ThreadDock';
 import { useOrchestratorPrefs } from './orchestrator/useOrchestrator';
 import { useNeedsYouAlerts } from './orchestrator/useNeedsYouAlerts';
 import { SidebarSyncHints } from './SyncHints';
+import { useNewChatRequests } from '../appMenu/newChatRequests';
 import type { ClaudeImportKind } from '@shared/claudeImport';
 
 /** How long the orchestrator's "Read the report" keeps the summary highlighted (ms). */
@@ -215,7 +223,7 @@ function SessionHeader({ title, onRename }: { title: string; onRename: (title: s
  * What the main pane is showing. One value rather than a flag per screen, so the screens
  * cannot both be up and nothing has to remember to shut the other one.
  */
-type ChatScreen = 'conversation' | 'artifacts' | 'customize' | 'skill-market' | 'models';
+type ChatScreen = 'conversation' | 'artifacts' | 'mission-control' | 'customize' | 'skill-market' | 'models';
 
 /**
  * The sidebar's account strip, given the dot that says whether a reply is running.
@@ -224,10 +232,13 @@ type ChatScreen = 'conversation' | 'artifacts' | 'customize' | 'skill-market' | 
  * component knows the turn state, and the account strip knows where a glyph goes in its own
  * row. Handing the finished dot down keeps both where they belong - see TurnDot.
  */
-export type AccountStrip = (status: ReactNode) => ReactNode;
+/** `spentAt` ticks when a turn settles, for anything in the strip that reads the balance. */
+export type AccountStrip = (status: ReactNode, spentAt: number) => ReactNode;
 
 /** How long the first-run tavern intro plays before it is marked seen (ms). */
 const ORCHESTRATOR_INTRO_MS = 1500;
+/** The intro always plays in the Tavern alone, whatever layout the session is on. */
+const INTRO_LAYOUT = singlePaneLayout('tavern');
 
 /**
  * 'playing' while the first-run intro runs, then 'shown' until the user picks a view: the intro is
@@ -261,7 +272,7 @@ export function ChatShell({
 }: {
   auth?: AuthState | null;
   account?: AccountStrip;
-  updateNotice?: (panelShown: boolean) => ReactNode;
+  updateNotice?: ReactNode;
   onOpenModelServers?: () => void;
   /** Settings > Import, scrolled to one source; the sidebar's sync hints are shown only with it. */
   onOpenImportSettings?: (focus: ClaudeImportKind) => void;
@@ -333,6 +344,7 @@ export function ChatShell({
   const chatSettingsLocked = !activeId || settling || conversation.session?.id !== activeId;
   const openFailed = !!activeId && conversation.openFailedFor === activeId && conversation.session?.id !== activeId;
   const spawnSuggestions = useSpawnSuggestions(conversation.session);
+  const [spawnLocation] = useSpawnLocation();
   const heldRelays = useHeldRelays(persistedId);
   const taskDecisions = useTaskDecisions();
   const markSessionStart = useSessionStartTiming(sessions);
@@ -359,7 +371,13 @@ export function ChatShell({
   const noLocal = localMode ? noLocalModels(catalog) : null;
   const modelServers = useModelServers();
   const savedServers = useMemo(() => modelServers?.filter(server => !server.local), [modelServers]);
-  const { statuses, preparing, loaded: statusesLoaded } = useSessionStatusFeed();
+  const {
+    statuses,
+    preparing,
+    unreadReplies,
+    background: backgroundJobs,
+    loaded: statusesLoaded,
+  } = useSessionStatusFeed();
   const prSummaries = usePrSummaries();
   const [collapsed, setCollapsed] = useState(false);
   const [screen, setScreen] = useState<ChatScreen>('conversation');
@@ -570,6 +588,16 @@ export function ChatShell({
     [activeId, showBrowserPane]
   );
   const artifactsInSession = useMemo(() => sessionArtifacts(conversation.messages), [conversation.messages]);
+  const reportedChildIds = useMemo(
+    () =>
+      new Set(
+        conversation.messages.flatMap(message => {
+          const id = message.reportedChildId ?? message.childReport?.sessionId;
+          return id ? [id] : [];
+        })
+      ),
+    [conversation.messages]
+  );
   const openSessionArtifact = useCallback(
     ({ key, artifact }: SessionArtifact) =>
       openArtifactInSessionBrowser(
@@ -762,9 +790,13 @@ export function ChatShell({
    */
   const sessionStatus = activeId ? statuses.get(activeId) : undefined;
   const awaitingDecision = pendingDecisionOf(activeSummary?.workerTask) !== undefined;
+  const unreadReply = !!activeId && unreadReplies.has(activeId);
   const turnOpen =
-    conversation.streaming || sessionStatus === 'processing' || (sessionStatus === 'needs-action' && !awaitingDecision);
+    conversation.streaming ||
+    sessionStatus === 'processing' ||
+    (sessionStatus === 'needs-action' && !awaitingDecision && !unreadReply);
   const plan = useMemo(() => activeTodos(conversation.messages, turnOpen), [conversation.messages, turnOpen]);
+  const sentPrompts = useMemo(() => promptHistory(conversation.messages), [conversation.messages]);
 
   const workspaceChanges = useWorkspaceChanges(
     screen === 'conversation' ? persistedId : null,
@@ -778,7 +810,10 @@ export function ChatShell({
     !!pullRequest?.binding || !!pullRequest?.dismissed || (!!activeId && prSummaries.has(activeId));
   const spawned = useMemo(() => spawnedSessions(sessions, statuses, activeId), [sessions, statuses, activeId]);
   // States only: the activity stream is subscribed inside OrchestratorSurface, while orchestrating.
-  const spawnedStates = useMemo(() => agentStates(sessions, statuses, activeId), [sessions, statuses, activeId]);
+  const spawnedStates = useMemo(
+    () => agentStates(sessions, statuses, activeId, backgroundJobs),
+    [sessions, statuses, activeId, backgroundJobs]
+  );
   const orchestrationSession =
     sessionDraft.session && sessionDraft.session.id === conversation.session?.id ? conversation.session : activeSummary;
   // The view is remembered per sidebar group, so a Claude Code worktree shares its repository's choice. Only
@@ -788,7 +823,7 @@ export function ChatShell({
     activeId,
     orchestrationProject && projectGroupDirectory(orchestrationProject)
   );
-  const { setDockOpen, setView: setOrchestratorView, setSurface: setOrchestratorSurface } = orchestratorPrefs;
+  const { setDockOpen, setLayout: setOrchestratorLayout, setSurface: setOrchestratorSurface } = orchestratorPrefs;
   // A Code session can orchestrate before it has any agents; a Chat session only shows its agents.
   // One at the depth cap, or on a model sent no tools, could start none: main ignores its flag
   // there (orchestratesAgents, toolsSupported) and so does this.
@@ -800,6 +835,10 @@ export function ChatShell({
   const hasAgents = spawnedStates.length > 0;
   const agentsSurfaceAvailable = hasAgents || (delegating && orchestrateCapable);
   const orchestrating = orchestratorPrefs.surface === 'orchestrate' && agentsSurfaceAvailable;
+  // Presenter mode redacts the stage (orchestrator/presenter.ts). Around it, the header names the root as
+  // "Orchestrator" without its project line, and the trays above the composer, which quote agents' questions
+  // and messages, are replaced by a neutral count until it is off.
+  const presentingStage = orchestrating && orchestratorPrefs.presenter;
   const { setOrchestrate } = conversation;
   const staleAgentsSurface = !settling && !agentsSurfaceAvailable && orchestratorPrefs.surface === 'orchestrate';
   useEffect(() => {
@@ -833,7 +872,10 @@ export function ChatShell({
     // introEntry too: a switch between two orchestrating sessions keeps the phase 'playing', and the
     // new session's intro still needs its full run.
   }, [introPhase, introEntry]);
-  const orchestratorView = introPhase === 'off' ? orchestratorPrefs.view : 'tavern';
+  const orchestratorLayout = introPhase === 'off' ? orchestratorPrefs.layout : INTRO_LAYOUT;
+  const orchestratorView = orchestratorLayout.panes[0].view;
+  // The ambient settle and the in-scene conversation are a single scene's; a split stage has neither.
+  const orchestratorSplit = orchestratorLayout.panes.length > 1;
   const threadHost = useRef<HTMLDivElement | null>(null);
   const dockToggle = useRef<HTMLButtonElement | null>(null);
   const [conversationRequest, setConversationRequest] = useState(0);
@@ -874,6 +916,7 @@ export function ChatShell({
       orchestrating &&
       activeId !== null &&
       ORCHESTRATOR_VIEW_INFO[orchestratorView].ambient &&
+      !orchestratorSplit &&
       !orchestratorPrefs.focus &&
       introPhase !== 'playing',
     // A reply streaming in is something to watch arrive, not to hide.
@@ -908,6 +951,10 @@ export function ChatShell({
     () => ({ on: orchestratorPrefs.focus, onToggle: orchestratorPrefs.setFocus }),
     [orchestratorPrefs.focus, orchestratorPrefs.setFocus]
   );
+  const stagePresenter = useMemo(
+    () => ({ on: orchestratorPrefs.presenter, onToggle: orchestratorPrefs.setPresenter }),
+    [orchestratorPrefs.presenter, orchestratorPrefs.setPresenter]
+  );
 
   const parentReply = useMemo(() => {
     if (conversation.session?.id !== activeId) return undefined;
@@ -938,6 +985,17 @@ export function ChatShell({
     [sendToConversation, modelSessionId, conversationId, modelOption]
   );
   const dockVisible = orchestratorPrefs.dockOpen && !ambient.settled;
+  useEffect(() => {
+    if (!persistedId || screen !== 'conversation' || (orchestrating && !dockVisible)) return;
+    const acknowledge = () => markSessionViewed(persistedId);
+    acknowledge();
+    window.addEventListener('focus', acknowledge);
+    document.addEventListener('visibilitychange', acknowledge);
+    return () => {
+      window.removeEventListener('focus', acknowledge);
+      document.removeEventListener('visibilitychange', acknowledge);
+    };
+  }, [persistedId, screen, unreadReply, orchestrating, dockVisible]);
   const toggleParentChat = () => {
     const agentDetailsOpen = threadHost.current?.parentElement?.querySelector('[data-agent-details-open="true"]');
     wakeAmbient();
@@ -956,7 +1014,31 @@ export function ChatShell({
     [parentReply, wakeAmbient, readParentReport, dockVisible]
   );
   // The agent a clicked needs-you notice asked for; handed to its parent's stage once that is open.
-  const [noticeFocus, setNoticeFocus] = useState<{ rootId: string; agentId: string } | null>(null);
+  // Distinct from selectedAgentId below, which is the standing selection the stage and sidebar share.
+  const [agentFocus, setAgentFocus] = useState<{ rootId: string; agentId: string } | null>(null);
+  const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
+  const rosterIds = useMemo(() => descendantIds(sessions, activeId), [sessions, activeId]);
+  const viewerVisible = screen === 'conversation' && orchestrating && activeId !== null;
+  const selectionHost = viewerVisible ? activeId : null;
+  const [previousSelectionHost, setPreviousSelectionHost] = useState(selectionHost);
+  if (selectionHost !== previousSelectionHost) {
+    setPreviousSelectionHost(selectionHost);
+    setSelectedAgentId(null);
+  }
+  const selectedRosterId = viewerVisible && selectedAgentId && rosterIds.has(selectedAgentId) ? selectedAgentId : null;
+  const selectSidebarSession = useCallback(
+    (sessionId: string) => {
+      if (viewerVisible && rosterIds.has(sessionId)) {
+        wakeAmbient();
+        setSelectedAgentId(sessionId);
+        markSessionViewed(sessionId);
+      } else {
+        setSelectedAgentId(null);
+        selectSession(sessionId);
+      }
+    },
+    [viewerVisible, rosterIds, wakeAmbient, selectSession]
+  );
   const openNotice = ({ sessionId, rootId }: AttentionOpenEvent) => {
     // A notice outlives its session in the OS notification centre; a deleted one has nothing to open.
     if (!sessions.some(session => session.id === rootId)) return;
@@ -966,11 +1048,20 @@ export function ChatShell({
       else writeSurface(rootId, 'orchestrate');
     }
     selectSession(rootId);
-    if (sessionId === rootId) setDockOpen(true);
-    else setNoticeFocus({ rootId, agentId: sessionId });
+    if (sessionId !== rootId) setAgentFocus({ rootId, agentId: sessionId });
+    // The dock is a global preference, so a plain session's notice must not reopen one the user hid.
+    else if (alertableSessions(sessions, 'agents').has(rootId)) setDockOpen(true);
   };
-  useNeedsYouAlerts(sessions, statuses, statusesLoaded, openNotice);
-  const clearNoticeFocus = useCallback(() => setNoticeFocus(null), []);
+  // Only the conversation screen shows the session asking; Artifacts, Models and the rest hide it.
+  useNeedsYouAlerts(
+    sessions,
+    statuses,
+    statusesLoaded,
+    openNotice,
+    screen === 'conversation' ? activeId : null,
+    unreadReplies
+  );
+  const clearAgentFocus = useCallback(() => setAgentFocus(null), []);
   const pickExampleQuest = useCallback(
     (prompt: string) => {
       // The conversation the quest starts plays out in the dock, so a collapsed one would hide the reply.
@@ -979,13 +1070,21 @@ export function ChatShell({
     },
     [setDockOpen, fillComposer]
   );
-  const changeOrchestratorView = useCallback(
-    (view: OrchestratorViewId) => {
+  const changeOrchestratorLayout = useCallback(
+    (layout: OrchestratorLayout) => {
       setIntroPhase('off');
-      setOrchestratorView(view);
+      setOrchestratorLayout(layout);
     },
-    [setOrchestratorView]
+    [setOrchestratorLayout]
   );
+  const missionControl = useMissionControlActions({
+    activeId,
+    activeHasAgents: hasAgents,
+    layout: orchestratorPrefs.layout,
+    onLayoutChange: changeOrchestratorLayout,
+    setActiveSurface: setOrchestratorSurface,
+    selectSession,
+  });
 
   const agentActions = useMemo<AgentActions>(
     () => ({
@@ -997,6 +1096,10 @@ export function ChatShell({
       },
     }),
     [selectSession, sessions, toggleArchived]
+  );
+  const paneSessions = useMemo(
+    () => ({ sessions, statuses, prSummaries, preparing }),
+    [sessions, statuses, prSummaries, preparing]
   );
   const initialCodeSetup = conversation.session?.mode === 'code' && conversation.messages.length === 0;
 
@@ -1016,6 +1119,12 @@ export function ChatShell({
   const panelDocked = panelLayout !== 'overlay';
   const panelShown = panelAvailable && (panelDocked ? panelPrefs.open : panelPopoverOpen);
   const panelSpace = panelShown && panelLayout === 'push' ? SESSION_PANEL_SPACE : 0;
+  // Unmeasured reads as too narrow, the reverse of the panel: a rail drawn before the width is
+  // known could overhang the sidebar for a frame, where the footer it falls back to cannot.
+  // A pushing panel's reserved space narrows the scroller; the orchestrator's thread dock is narrower still.
+  const statsRailFits =
+    !orchestratorShown && railFitsBesideThread(threadRegionWidth === null ? null : threadRegionWidth - panelSpace);
+  const statsRailOn = useReplyStatsPrefs().rail;
   const bindingErrorHidden =
     !!panelProject && !!conversation.project.error && (!panelShown || panelPrefs.collapsed.has('environment'));
   const { toggleOpen: togglePanelOpen } = panelPrefs;
@@ -1198,6 +1307,8 @@ export function ChatShell({
     if (created) setActiveId(created);
     setComposerFocus(request => request + 1);
   }, [startSession, markSessionStart]);
+  // The app menu's New Chat (Cmd+N), once the last conversation is restored.
+  useNewChatRequests(onCreate, !settling);
 
   const shareFolderTo = conversation.addContextDirectoryTo;
   const addingFolder = useRef(false);
@@ -1400,6 +1511,7 @@ export function ChatShell({
                   // after React drops it.
                   key={`thread-${activeId ?? 'none'}`}
                   messages={conversation.messages}
+                  findable
                   sessionId={activeId}
                   // What stands in for the transcript when there is no session to have one. It is the
                   // only control on screen that starts one from here, so it is a button and not a
@@ -1464,9 +1576,13 @@ export function ChatShell({
                   onRespond={conversation.respondToApproval}
                   onMove={background.moveToBackground}
                   onContinue={() => void conversation.continueReply()}
+                  onEditMessage={conversation.editMessage}
+                  onRegenerate={() => void conversation.regenerate()}
                   onReplyToSelection={onReplyToSelection}
                   onSideChatFromSelection={text => void onSideChatFromSelection(text)}
                   status={conversation.turn && <TurnStatus turn={conversation.turn} activity={activity} />}
+                  statsRail={statsRailFits && statsRailOn}
+                  liveTurn={conversation.turn}
                   // At the foot of the thread rather than above the composer: a background command is
                   // something this conversation started, so it reads as the last thing that happened
                   // in it. It scrolls with the transcript, which is the trade - the panel is reached
@@ -1500,7 +1616,10 @@ export function ChatShell({
 
   const threadDockMode: ThreadDockMode = !orchestratorShown ? 'chat' : dockVisible ? 'docked' : 'hidden';
   const sceneConversation =
-    orchestratorShown && !orchestratorPrefs.focus && ORCHESTRATOR_VIEW_INFO[orchestratorView].group === 'scene';
+    orchestratorShown &&
+    !orchestratorPrefs.focus &&
+    !orchestratorSplit &&
+    ORCHESTRATOR_VIEW_INFO[orchestratorView].group === 'scene';
   const handledConversationClicks = useRef(new WeakSet<Event>());
   useEffect(() => {
     if (!sceneConversation || !dockVisible) return;
@@ -1571,14 +1690,15 @@ export function ChatShell({
         mode={mode}
         onModeChange={setMode}
         loading={loading}
-        activeId={activeId}
+        activeId={selectedRosterId ?? activeId}
         statuses={statuses}
         prSummaries={prSummaries}
         collapsed={collapsed}
         onToggleCollapsed={() => setCollapsed(current => !current)}
-        onSelect={selectSession}
+        onSelect={selectSidebarSession}
         onCreate={() => void onCreate()}
         onOpenArtifacts={() => setScreen('artifacts')}
+        onOpenMissionControl={() => setScreen('mission-control')}
         onCreateInProject={directory => void onCreateInProject(directory)}
         onCreateInSection={sectionId => void onCreateInSection(sectionId)}
         onDelete={setDeleteSessionId}
@@ -1604,13 +1724,25 @@ export function ChatShell({
             : undefined
         }
         footer={account?.(
-          <TurnDot state={turnState({ streaming: turnOpen, disabled: !activeId || creatingCode, notReady: unbound })} />
+          <TurnDot
+            state={turnState({ streaming: turnOpen, disabled: !activeId || creatingCode, notReady: unbound })}
+          />,
+          conversation.settledTurns
         )}
       />
 
-      {screen !== 'conversation' && updateNotice?.(false)}
+      {screen !== 'conversation' && updateNotice}
       {screen === 'artifacts' ? (
         <ArtifactLibraryPanel onClose={() => setScreen('conversation')} />
+      ) : screen === 'mission-control' ? (
+        <MissionControl
+          sessions={sessions}
+          statuses={statuses}
+          presenting={orchestratorPrefs.presenter}
+          onOpen={missionControl.open}
+          onOpenBeside={missionControl.openBeside}
+          onClose={() => setScreen('conversation')}
+        />
       ) : screen === 'models' ? (
         <ModelsScreen
           onClose={() => {
@@ -1654,15 +1786,18 @@ export function ChatShell({
               <Box sx={{ ...contentColumnSx, py: 1.25, display: 'flex', alignItems: 'center', gap: 1 }}>
                 <Box sx={{ flex: 1, minWidth: 0 }}>
                   {conversation.session ? (
-                    <>
+                    presentingStage ? (
+                      <Typography level="title-sm" noWrap data-testid="chat-session-title">
+                        Orchestrator
+                      </Typography>
+                    ) : (
                       <SessionHeader
                         title={activeSummary?.title ?? conversation.session.title}
                         onRename={title =>
                           void (activeSummary ? rename(activeSummary, title) : conversation.rename(title))
                         }
                       />
-                      {conversation.session.project && <ProjectSubtitleLine project={conversation.session.project} />}
-                    </>
+                    )
                   ) : opening ? null : (
                     <Typography level="title-sm" textColor="text.tertiary">
                       No conversation open
@@ -1753,6 +1888,35 @@ export function ChatShell({
                     panes={paneControls}
                     historyOn={!opening && conversation.session?.historyEnabled === true}
                   />
+                  {/* Drawn at every width, so the buttons beside it never shift and focus is never
+                  dropped as the window crosses the breakpoint; narrower, the tooltip says why
+                  nothing shows beside the conversation. */}
+                  <Tooltip
+                    size="sm"
+                    variant="soft"
+                    placement="bottom-end"
+                    title={replyStatsToggleTitle({
+                      persisted: !!persistedId,
+                      orchestratorShown,
+                      railFits: statsRailFits,
+                      railOn: statsRailOn,
+                    })}
+                  >
+                    <Box component="span" sx={{ display: 'inline-flex' }}>
+                      <IconButton
+                        size="sm"
+                        variant={statsRailOn && persistedId ? 'soft' : 'plain'}
+                        color="neutral"
+                        disabled={!persistedId}
+                        aria-pressed={statsRailOn}
+                        aria-label={statsRailOn ? 'Hide reply stats' : 'Show reply stats'}
+                        onClick={() => setReplyStatsRail(!statsRailOn)}
+                        data-testid="chat-toggle-reply-stats-btn"
+                      >
+                        <StatsIcon />
+                      </IconButton>
+                    </Box>
+                  </Tooltip>
                 </Box>
               </Box>
             </Box>
@@ -1791,23 +1955,28 @@ export function ChatShell({
                     sessions={sessions}
                     statuses={statuses}
                     preparing={preparing}
+                    background={backgroundJobs}
                     prSummaries={prSummaries}
-                    view={orchestratorView}
-                    onViewChange={changeOrchestratorView}
+                    layout={orchestratorLayout}
+                    onLayoutChange={changeOrchestratorLayout}
                     actions={agentActions}
+                    onOpenPrLink={(_sessionId, url) => openInBrowserPane(url)}
                     introPlaying={introPhase === 'playing'}
                     renderView={renderOrchestratorView}
                     onParentFocus={focusParentChat}
                     onParentToggle={toggleParentChat}
                     report={parentReport}
                     onReadReport={readParentReport}
-                    focusAgent={noticeFocus?.rootId === activeId ? noticeFocus.agentId : null}
-                    onFocusAgentConsumed={clearNoticeFocus}
+                    selection={{ id: selectedRosterId, onChange: setSelectedAgentId }}
+                    focusAgent={agentFocus?.rootId === activeId ? agentFocus.agentId : null}
+                    onFocusAgentConsumed={clearAgentFocus}
                     onExampleQuest={pickExampleQuest}
                     desk={innkeeperDesk}
                     ambient={stageAmbient}
                     focus={stageFocus}
                     conversationRequest={conversationRequest}
+                    presenter={stagePresenter}
+                    paneSessions={paneSessions}
                     dockControl={
                       <Tooltip
                         size="sm"
@@ -1836,7 +2005,7 @@ export function ChatShell({
                           }}
                           data-testid="orchestrator-dock-toggle-btn"
                         >
-                          <PanelRightIcon />
+                          <ConversationIcon />
                         </IconButton>
                       </Tooltip>
                     }
@@ -1905,7 +2074,7 @@ export function ChatShell({
                 />
               )}
               {/* A modal panel leaves no room for a second card; Home keeps the update controller mounted. */}
-              {(!panelShown || panelDocked) && updateNotice?.(panelShown)}
+              {(!panelShown || panelDocked) && updateNotice}
             </Box>
 
             {ambient.settled && (
@@ -2031,15 +2200,36 @@ export function ChatShell({
                 </Box>
               )}
 
-              <HeldRelayCard held={heldRelays.held} onResolve={heldRelays.resolve} onOpenSession={selectSession} />
+              {presentingStage && (
+                <PresenterPendingNotice
+                  count={heldRelays.held.length + decisionsFor(persistedId, taskDecisions).length}
+                  onTurnOff={() => orchestratorPrefs.setPresenter(false)}
+                />
+              )}
 
-              <TaskDecisionCards sessionId={persistedId} decisions={taskDecisions} onOpenSession={selectSession} />
+              {!presentingStage && (
+                <>
+                  <HeldRelayCard held={heldRelays.held} onResolve={heldRelays.resolve} onOpenSession={selectSession} />
 
-              <SpawnSuggestionTray
-                suggestions={spawnSuggestions.suggestions}
-                onStart={onStartSuggestion}
-                onDismiss={spawnSuggestions.dismiss}
-              />
+                  <TaskDecisionCards sessionId={persistedId} decisions={taskDecisions} onOpenSession={selectSession} />
+
+                  <SpawnSuggestionTray
+                    suggestions={spawnSuggestions.suggestions}
+                    onStart={onStartSuggestion}
+                    onDismiss={spawnSuggestions.dismiss}
+                    onOpenSession={selectSession}
+                    location={spawnLocation}
+                  />
+
+                  <ChildrenStrip
+                    sessions={sessions}
+                    statuses={statuses}
+                    parentId={persistedId}
+                    reportedIds={reportedChildIds}
+                    onOpenSession={selectSession}
+                  />
+                </>
+              )}
 
               {/* After first use, an unbound session or a hidden panel error still needs these controls
             above the composer. Empty Code sessions render them in the transcript instead. */}
@@ -2081,6 +2271,7 @@ export function ChatShell({
 
               <Composer
                 sessionId={activeId}
+                promptHistory={sentPrompts}
                 disabled={!activeId || creatingCode || sessionDraft.busy || openFailed}
                 disabledPlaceholder={disabledPlaceholder}
                 streaming={turnOpen}
@@ -2152,7 +2343,7 @@ export function ChatShell({
                         policy={conversation.session?.orchestrationPolicy}
                         planner={conversation.session?.model}
                         models={catalog.models}
-                        onChange={on => void setOrchestrate(on)}
+                        onChange={(on, budgetCredits) => void setOrchestrate(on, budgetCredits)}
                       />
                     )}
                   </>

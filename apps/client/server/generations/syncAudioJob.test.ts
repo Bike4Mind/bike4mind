@@ -21,6 +21,8 @@ import {
   audioJobInlineOptions,
   awaitInlineAudioJob,
   createAudioJobKeepingAudioOnFullQuota,
+  failureLogLevelOf,
+  isQuotaExhaustedFailure,
   isRateLimitedFailure,
   prefersRespondAsync,
   providerStatusOf,
@@ -232,6 +234,10 @@ describe('rate-limited failures', () => {
     ['a message that only looks rate limited', failedJob({ code: 'provider_error', message: 'openai_rate_limited' })],
     ['an unknown outcome', failedJob({ code: 'orphaned_submit', message: 'timeout' })],
     ['a job that did not fail', failedJob({ code: 'content_blocked', message: 'x', providerStatus: 429 }, 'blocked')],
+    [
+      'an exhausted quota answered as a 429',
+      failedJob({ code: 'provider_error', message: 'openai_speech_quota_exhausted', providerStatus: 429 }),
+    ],
   ])('does not treat %s as rate limited', (_label, job) => {
     expect(isRateLimitedFailure(job)).toBe(false);
   });
@@ -260,5 +266,29 @@ describe('prefersRespondAsync', () => {
   it('reads a repeated header and an absent one', () => {
     expect(prefersRespondAsync({ headers: { prefer: ['return=minimal', 'respond-async'] } })).toBe(true);
     expect(prefersRespondAsync({ headers: {} })).toBe(false);
+  });
+});
+
+describe('quota-exhausted failures', () => {
+  const exhausted = failedJob({
+    code: 'provider_error',
+    message: 'elevenlabs_sound_effect_quota_exhausted',
+    providerStatus: 401,
+  });
+
+  it('recognises the handlers quota reason and logs it at warn', () => {
+    expect(isQuotaExhaustedFailure(exhausted)).toBe(true);
+    expect(failureLogLevelOf(exhausted)).toBe('warn');
+  });
+
+  it.each([
+    [
+      'a credential rejection',
+      failedJob({ code: 'provider_error', message: 'x_credential_rejected', providerStatus: 401 }),
+    ],
+    ['another error code', failedJob({ code: 'orphaned_submit', message: 'x_quota_exhausted' })],
+  ])('does not treat %s as an exhausted quota', (_label, job) => {
+    expect(isQuotaExhaustedFailure(job)).toBe(false);
+    expect(failureLogLevelOf(job)).toBe('error');
   });
 });

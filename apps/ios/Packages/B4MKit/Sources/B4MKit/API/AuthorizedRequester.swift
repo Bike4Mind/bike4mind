@@ -1,7 +1,7 @@
 import Foundation
 
 /// Sends hand-written JSON requests for the few routes the generated client does not cover
-/// (`/api/chat`, `/api/websocket/ticket`, `/api/settings/serverConfig`). Same bearer + single 401 retry
+/// (`/api/chat`, `/api/websocket/ticket`, `/api/settings/serverConfig`, and the voice routes in `VoiceWire`). Same bearer + single 401 retry
 /// policy as `BearerAuthMiddleware`, and failures fold into `APIError` like `APIClient`'s.
 struct AuthorizedRequester: Sendable {
   let baseURL: URL
@@ -11,20 +11,29 @@ struct AuthorizedRequester: Sendable {
   struct Response: Sendable {
     let status: Int
     let body: Data
+    var contentType: String?
   }
 
   /// Returns any HTTP response (callers branch on status); throws `APIError` for transport failures and
-  /// for a 401 that survives one token refresh.
-  func send(method: String, path: String, query: [URLQueryItem] = [], jsonBody: Data? = nil) async throws -> Response {
+  /// for a 401 that survives one token refresh. With `codedUnauthorizedIsAnswer`, a 401 whose JSON body carries
+  /// an `errorCode` is returned as is: the auth layer's 401s carry none, so it is a route's own answer (tts.ts
+  /// reports a provider credential failure that way) and must not refresh tokens or end the session.
+  func send(
+    method: String, path: String, query: [URLQueryItem] = [], jsonBody: Data? = nil,
+    codedUnauthorizedIsAnswer: Bool = false
+  ) async throws -> Response {
+    func isSessionRejection(_ response: Response) -> Bool {
+      response.status == 401 && !(codedUnauthorizedIsAnswer && Self.carriesErrorCode(response.body))
+    }
     do {
       let token = try await tokens.accessToken()
       let first = try await perform(method: method, path: path, query: query, body: jsonBody, token: token)
-      guard first.status == 401 else { return first }
+      guard isSessionRejection(first) else { return first }
 
       await tokens.invalidateAccessToken(token)
       let fresh = try await tokens.accessToken()
       let retry = try await perform(method: method, path: path, query: query, body: jsonBody, token: fresh)
-      if retry.status == 401 {
+      if isSessionRejection(retry) {
         await tokens.sessionRejected()
         throw APIError.signedOut
       }
@@ -44,6 +53,14 @@ struct AuthorizedRequester: Sendable {
     }
   }
 
+  static func carriesErrorCode(_ body: Data) -> Bool {
+    errorCode(in: body) != nil
+  }
+
+  static func errorCode(in body: Data) -> String? {
+    (try? JSONSerialization.jsonObject(with: body) as? [String: Any])?["errorCode"] as? String
+  }
+
   private func perform(
     method: String, path: String, query: [URLQueryItem], body: Data?, token: String
   ) async throws -> Response {
@@ -58,6 +75,7 @@ struct AuthorizedRequester: Sendable {
       request.httpBody = body
     }
     let (data, response) = try await transport.send(request)
-    return Response(status: response.statusCode, body: data)
+    return Response(
+      status: response.statusCode, body: data, contentType: response.value(forHTTPHeaderField: "Content-Type"))
   }
 }

@@ -41,10 +41,20 @@ const refuse = (status: number, code: CreateRenderJobsRefusalCode, message: stri
 const timelineHasContent = (timeline: StudioTimeline): boolean =>
   timeline.tracks.some(track => track.enabled && track.clips.length > 0);
 
-/** What the worker renders: disabled tracks are skipped, so their files neither need to be readable nor playable. */
+/**
+ * What the worker renders: disabled tracks are skipped, so their files neither need to be readable nor playable.
+ * Caption sync links are an editor concern, so they are dropped too: a caption synced to a voice clip on a disabled
+ * track still renders at its own time.
+ */
 const enabledTracksOnly = (timeline: StudioTimeline): StudioTimeline => ({
   ...timeline,
-  tracks: timeline.tracks.filter(track => track.enabled),
+  tracks: timeline.tracks
+    .filter(track => track.enabled)
+    .map(track =>
+      track.kind === 'captions'
+        ? { ...track, clips: track.clips.map(({ syncedVoiceClipId: _link, ...clip }) => clip) }
+        : track
+    ),
 });
 
 /** The first image clip whose type the worker cannot decode, so it is refused at submit rather than after queueing. */

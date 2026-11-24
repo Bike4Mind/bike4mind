@@ -273,6 +273,9 @@ export enum ChatModels {
   JURASSIC2_MID = 'ai21.j2-mid-v1',
 
   // GEMINI
+  // Gemini 4
+  GEMINI_4_NEON = 'gemini-4-neon',
+
   // Gemini 3.5
   GEMINI_3_5_FLASH = 'gemini-3.5-flash',
 

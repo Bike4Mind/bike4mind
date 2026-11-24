@@ -1,14 +1,17 @@
 import React from 'react';
 import { Alert, Box, Chip, CircularProgress, Sheet, Stack, Table, Typography } from '@mui/joy';
 import type { ColorPaletteProp } from '@mui/joy';
-import { LAKE_CONFIG_EVENT_VALUE_FIELDS } from '@bike4mind/common';
+import { LAKE_CONFIG_EVENT_VALUE_FIELDS, LAKE_MEMBERSHIP_CHANGE_AUDIT_RETENTION_DAYS } from '@bike4mind/common';
 import type {
   DataLakeGroundingMode,
   DataLakeOrigin,
   DataLakeStatus,
   LakeConfigChangeAction,
   LakeConfigChangeField,
+  LakeConfigHistoryConfigEntry,
   LakeConfigHistoryEntry,
+  LakeConfigHistoryFileAction,
+  LakeConfigHistoryFileEntry,
   LakeConfigHistoryFieldChange,
   LakeConfigHistoryFingerprintChange,
   LakeConfigHistoryView,
@@ -250,7 +253,56 @@ const fieldLabel = (field: LakeConfigChangeField): string =>
 const actionLabel = (action: LakeConfigChangeAction): string =>
   Object.hasOwn(ACTION_LABEL, action) ? ACTION_LABEL[action] : action;
 
+/** Total over the file arm's actions. */
+const FILE_ACTION_LABEL: Record<LakeConfigHistoryFileAction, string> = {
+  'file-added': 'File added',
+  'file-removed': 'File removed',
+};
+
+function FileRow({ entry }: { entry: LakeConfigHistoryFileEntry }) {
+  const who = entry.principalName ?? entry.principalId;
+  const label = Object.hasOwn(FILE_ACTION_LABEL, entry.action) ? FILE_ACTION_LABEL[entry.action] : entry.action;
+  return (
+    <tr data-testid="datalake-config-history-file-row">
+      <td>
+        <Typography level="body-sm">{fmtDateTime(entry.changedAt)}</Typography>
+        <Typography level="body-xs" textColor="text.tertiary">
+          {label}
+        </Typography>
+      </td>
+      <td>
+        <Typography level="body-sm" noWrap title={who} data-testid="datalake-config-history-who">
+          {who}
+        </Typography>
+        <Typography level="body-xs" textColor="text.tertiary" noWrap>
+          {entry.principalKind}
+        </Typography>
+      </td>
+      <td>
+        <Chip size="sm" variant="soft" color="neutral">
+          {entry.origin === 'connector' ? 'Connector' : 'Person'}
+        </Chip>
+      </td>
+      <td>
+        <Box data-testid="datalake-config-history-change">
+          <Typography level="body-xs" fontWeight="lg">
+            File
+          </Typography>
+          <Typography level="body-xs" textColor="text.tertiary" noWrap title={entry.target.id}>
+            {entry.target.id}
+          </Typography>
+        </Box>
+      </td>
+    </tr>
+  );
+}
+
 function ChangeRow({ entry, userNames }: { entry: LakeConfigHistoryEntry; userNames: Record<string, string> }) {
+  if (entry.kind === 'file') return <FileRow entry={entry} />;
+  return <ConfigRow entry={entry} userNames={userNames} />;
+}
+
+function ConfigRow({ entry, userNames }: { entry: LakeConfigHistoryConfigEntry; userNames: Record<string, string> }) {
   const rung = rungLabel(entry.manageRung);
   const who = entry.principalName ?? entry.principalId;
   const whoKind = `${entry.principalKind}${entry.onBehalfOfUserId ? ` (for ${entry.onBehalfOfName ?? entry.onBehalfOfUserId})` : ''}`;
@@ -357,10 +409,14 @@ export function LakeConfigHistorySection({ view, isLoading, error }: LakeConfigH
               </tbody>
             </Table>
           </Sheet>
+          <Typography level="body-xs" textColor="text.tertiary" data-testid="datalake-config-history-file-footnote">
+            File additions and removals are kept for {LAKE_MEMBERSHIP_CHANGE_AUDIT_RETENTION_DAYS} days. Older file
+            changes are not shown.
+          </Typography>
           {view.truncated && (
             <Typography level="body-xs" textColor="text.tertiary" data-testid="datalake-config-history-truncated">
-              Showing the {view.entries.length} most recent changes
-              {view.windowStartsAt ? `, back to ${fmtDate(view.windowStartsAt)}` : ''}. Older changes are not shown.
+              {view.windowStartsAt ? `Complete back to ${fmtDate(view.windowStartsAt)}. ` : ''}Some earlier changes are
+              not shown.
             </Typography>
           )}
         </Stack>

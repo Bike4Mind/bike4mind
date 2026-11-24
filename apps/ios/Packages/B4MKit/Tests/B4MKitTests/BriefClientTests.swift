@@ -97,4 +97,90 @@ final class BriefClientTests: XCTestCase {
     let count = await transport.requests.count
     XCTAssertEqual(count, 0)
   }
+
+  func testApprovalStateDecodesWithUnknownAndMissingAsResolved() async throws {
+    let json = Self.readyJSON
+      .replacingOccurrences(
+        of: "\"pendingActionTs\":1700000000000}", with: "\"pendingActionTs\":1700000000000,\"state\":\"pending\"}")
+    let (pendingClient, _) = client(200, json)
+    let pendingBrief = try await pendingClient.brief(id: "b1")
+    XCTAssertEqual(pendingBrief.decisions.first?.approval?.state, .pending)
+
+    let (unknownClient, _) = client(
+      200, json.replacingOccurrences(of: "\"state\":\"pending\"", with: "\"state\":\"escalated\""))
+    let unknownBrief = try await unknownClient.brief(id: "b1")
+    XCTAssertEqual(unknownBrief.decisions.first?.approval?.state, .resolved)
+
+    let (missingClient, _) = client(200, Self.readyJSON)
+    let missingBrief = try await missingClient.brief(id: "b1")
+    XCTAssertEqual(missingBrief.decisions.first?.approval?.state, .resolved)
+  }
+
+  func testQuestionDecisionDecodes() async throws {
+    let json = Self.readyJSON.replacingOccurrences(
+      of: "{\"id\":\"d2\",\"text\":\"Decide\"}",
+      with:
+        "{\"id\":\"d2\",\"text\":\"Decide\",\"question\":{\"questId\":\"q2\",\"sessionId\":\"s2\",\"options\":[\"A\",\"B\"],\"state\":\"open\"}}"
+    )
+    let (client, _) = client(200, json)
+    let brief = try await client.brief(id: "b1")
+    XCTAssertEqual(
+      brief.decisions.last?.question,
+      BriefQuestionRef(questID: "q2", sessionID: "s2", options: ["A", "B"], state: .open))
+  }
+
+  func testReplyPostsTextAndChoiceAndDecodesTheRun() async throws {
+    let (client, transport) = client(202, #"{"executionId":"e1","sessionId":"s2"}"#)
+    let result = try await client.reply(briefID: "b1", decisionID: "d2", text: "Go", choiceIndex: 1)
+    XCTAssertEqual(result, BriefReplyResult(executionID: "e1", sessionID: "s2"))
+    let requests = await transport.requests
+    let request = try XCTUnwrap(requests.first)
+    XCTAssertEqual(request.httpMethod, "POST")
+    XCTAssertEqual(request.url?.path(), "/api/v1/briefs/b1/decisions/d2/reply")
+    let body = try XCTUnwrap(request.httpBody)
+    let sent = try JSONSerialization.jsonObject(with: body) as? [String: Any]
+    XCTAssertEqual(sent?["text"] as? String, "Go")
+    XCTAssertEqual(sent?["choiceIndex"] as? Int, 1)
+  }
+
+  func testReplyStatusesMapToTypedFailures() async {
+    let closedBody = #"{"error":"x","errorCode":"question_closed"}"#
+    let busyBody = #"{"error":"Too many agent runs are active."}"#
+    let cases: [(Int, String, BriefReplyFailure)] = [
+      (409, closedBody, .closed),
+      (409, busyBody, .refused("Too many agent runs are active.")),
+      (409, "{}", .refused(BriefClient.fallbackRefusal)),
+      (400, #"{"error":"Billing changed. Reopen the brief."}"#, .refused("Billing changed. Reopen the brief.")),
+      (403, #"{"error":"Tool not allowed."}"#, .refused("Tool not allowed.")),
+      (404, "{}", .notFound),
+      (503, "{}", .api(.server(status: 503))),
+      (502, "{}", .dispatchFailed(BriefClient.fallbackDispatchFailure)),
+    ]
+    for (status, body, expected) in cases {
+      let (client, _) = client(status, body)
+      do {
+        _ = try await client.reply(briefID: "b1", decisionID: "d2", text: "Go", choiceIndex: nil)
+        XCTFail("expected \(expected) for \(status)")
+      } catch {
+        XCTAssertEqual(error as? BriefReplyFailure, expected, "status \(status)")
+      }
+    }
+  }
+  func testDispatchFailurePreservesCheckFirstGuidance() async throws {
+    let messages = [
+      "Execution e1 could not be confirmed. Check it before starting another run.",
+      "The executor rejected this request. Try again in a moment.",
+    ]
+    for message in messages {
+      let body = String(decoding: try JSONSerialization.data(withJSONObject: ["error": message]), as: UTF8.self)
+      let (client, _) = client(502, body)
+      do {
+        _ = try await client.reply(briefID: "b1", decisionID: "d2", text: "Go", choiceIndex: nil)
+        XCTFail("expected dispatch failure")
+      } catch {
+        XCTAssertEqual((error as? BriefReplyFailure)?.message, message)
+      }
+    }
+  }
+
 }

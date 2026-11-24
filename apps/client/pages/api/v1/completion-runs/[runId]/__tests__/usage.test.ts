@@ -130,6 +130,26 @@ describe('GET /api/v1/completion-runs/{runId}/usage', () => {
     });
   });
 
+  it('reports a budgeted run against its budget, separating unsettled claims from settled spend', async () => {
+    completionRunRepository.findById.mockResolvedValue(storedRun({ budgetCredits: 500, committedCredits: 190 }));
+
+    const res = await call();
+
+    const body = CompletionRunUsageSchema.parse(res._getJSONData());
+    expect(body.budget).toEqual({
+      budgetCredits: 500,
+      committedCredits: 190,
+      reservedCredits: 120,
+      remainingCredits: 310,
+    });
+  });
+
+  it('leaves budget off the response for a run minted without one', async () => {
+    const res = await call();
+
+    expect(res._getJSONData()).not.toHaveProperty('budget');
+  });
+
   it('leaves rootSessionId off the response when the run has none', async () => {
     completionRunRepository.findById.mockResolvedValue(storedRun({ rootSessionId: undefined }));
 

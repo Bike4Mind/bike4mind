@@ -187,6 +187,13 @@ class PreflightTests(unittest.TestCase):
                 model['services']['app']['environment'][key] = value
                 self.assertIn('app.secrets', check_config(model))
 
+    def test_previous_encryption_key_accepts_the_documented_unset_forms(self):
+        for value in ('', 'not-configured', 'b' * 64):
+            with self.subTest(value=value):
+                model = configured_stack()
+                model['services']['app']['environment']['SECRET_ENCRYPTION_KEY_PREVIOUS'] = value
+                self.assertNotIn('app.secrets', check_config(model))
+
     def test_memory_key_must_match_every_worker(self):
         model = configured_stack()
         model['services']['chatcompletion']['environment']['MEMORY_KEY_SECRET'] = 'a-different-memory-key'

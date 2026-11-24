@@ -16,6 +16,18 @@ describe('DoomLoopTracker', () => {
     expect(tracker.record('s', 'file_read', { command: 'ls -a' })).toBe(false);
   });
 
+  it('counts a shell command reworded only in its description as the same call', () => {
+    const tracker = new DoomLoopTracker();
+    const call = (description?: string) =>
+      tracker.record('s', 'bash_execute', { command: 'ls', ...(description ? { description } : {}) });
+    expect([call('Lists files'), call(), call('Shows the folder')]).toEqual([false, false, true]);
+
+    const other = new DoomLoopTracker();
+    other.record('s', 'file_read', { path: 'a', description: 'one' });
+    other.record('s', 'file_read', { path: 'a', description: 'two' });
+    expect(other.record('s', 'file_read', { path: 'a', description: 'three' })).toBe(false);
+  });
+
   it('counts each conversation on its own', () => {
     const tracker = new DoomLoopTracker();
     tracker.record('a', 't', {});

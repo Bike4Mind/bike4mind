@@ -21,6 +21,11 @@ describe('executor transport', () => {
     vi.stubEnv('AGENT_EXECUTOR_INTERNAL_SECRET', '');
     expect(() => resolveAgentExecutorTarget()).toThrow(/SECRET/);
   });
+  it('refuses the example-file placeholder as the executor secret', () => {
+    vi.stubEnv('AGENT_EXECUTOR_SERVICE', 'http://agentexecutor:8080');
+    vi.stubEnv('AGENT_EXECUTOR_INTERNAL_SECRET', 'change-me-openssl-rand-hex-32');
+    expect(() => resolveAgentExecutorTarget()).toThrow(/AGENT_EXECUTOR_INTERNAL_SECRET is not configured/);
+  });
   it('preserves the resolved hosted function and async invoke payload', async () => {
     vi.stubEnv('AGENT_EXECUTOR_SERVICE', '');
     resolveName.mockReturnValue('hosted-fn');

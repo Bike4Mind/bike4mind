@@ -58,6 +58,12 @@ describe('LakeMembershipChangeEventModel / lakeMembershipChangeEventRepository.r
       });
     });
 
+    it('round-trips undoesEventId and causedByEventId', async () => {
+      const event = await repo.record(baseInput({ undoesEventId: 'e1', causedByEventId: 'e2' }));
+      const stored = await LakeMembershipChangeEventModel.findById(event.id).lean();
+      expect(stored).toMatchObject({ undoesEventId: 'e1', causedByEventId: 'e2' });
+    });
+
     it('rejects a value outside the vocabulary rather than storing it', async () => {
       await expect(repo.record(baseInput({ action: 'reticulate' as never }))).rejects.toThrow();
       await expect(repo.record(baseInput({ origin: 'robot' as never }))).rejects.toThrow();

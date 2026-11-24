@@ -198,11 +198,19 @@ export function useDeleteUser() {
     },
     onSuccess: data => {
       if (isApprovalPending(data)) return notifyApprovalSubmitted(queryClient);
-      toast.success('User deleted successfully');
+      if (data?.queued === false) {
+        toast.warning('Deletion started, but the erasure could not be queued and will run with the daily sweep');
+      } else {
+        toast.success('Deletion started');
+      }
       queryClient.invalidateQueries({ queryKey: ['users'] });
       queryClient.invalidateQueries({ queryKey: ['organizations'] });
     },
-    onError: error => toast.error('Failed to delete user'),
+    onError: error => {
+      if (isStepUpCancelled(error)) return;
+      const data = isAxiosError(error) ? (error.response?.data as ErrorResponse | undefined) : undefined;
+      toast.error(data?.error ?? 'Failed to delete user');
+    },
   });
 }
 

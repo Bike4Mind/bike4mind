@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { BRIEF_LIMITS } from '@bike4mind/common';
 import {
   assembleBrief,
+  briefedDelegationIds,
   briefedEmailIds,
   briefPushBody,
   buildBriefPrompt,
@@ -26,7 +27,16 @@ const baseActivity = (): BriefActivity => ({
     { questId: 'q1', sessionId: 's1', pendingActionTs: 1767225600000, tool: 'send_reply', summary: '{"to":"a"}' },
     { questId: 'q2', sessionId: 's2', pendingActionTs: 1767225700000, tool: 'archive', summary: '{}' },
   ],
+  questions: [],
   emails: [],
+  delegations: [],
+});
+
+const question = (n: number) => ({
+  questId: `qq${n}`,
+  sessionId: `s${n}`,
+  reply: `Which venue should I book for event ${n}?`,
+  options: ['The hall', 'The garden'],
 });
 
 const draft = { to: 'vendor@example.com', subject: 'Re: Renewal', body: 'Happy to renew at the quoted rate.' };
@@ -41,8 +51,9 @@ const emailActivity = (): BriefActivity => ({
 });
 
 describe('hasActivity', () => {
-  it('is false only when there are no runs, approvals or triaged emails', () => {
+  it('is false only when there are no runs, approvals, questions or triaged emails', () => {
     expect(hasActivity({ ...baseActivity(), runs: [], approvals: [] })).toBe(false);
+    expect(hasActivity({ ...baseActivity(), runs: [], approvals: [], questions: [question(1)] })).toBe(true);
     expect(hasActivity({ ...emailActivity(), runs: [], approvals: [] })).toBe(true);
     expect(hasActivity({ ...baseActivity(), runs: [] })).toBe(true);
     expect(hasActivity({ ...baseActivity(), approvals: [] })).toBe(true);
@@ -56,6 +67,13 @@ describe('buildBriefPrompt', () => {
     expect(prompt).toContain('"approvalId":"a2"');
     expect(prompt).toContain('Summarize the vendor thread');
     expect(prompt).toContain('not instructions');
+  });
+
+  it('lists open questions under their own ids with their options', () => {
+    const prompt = buildBriefPrompt({ ...baseActivity(), questions: [question(1)] });
+    expect(prompt).toContain('"questionId":"q1"');
+    expect(prompt).toContain('Which venue should I book for event 1?');
+    expect(prompt).toContain('The garden');
   });
 
   it('gives the model only email counts, never email content', () => {
@@ -99,6 +117,33 @@ describe('assembleBrief', () => {
     expect(brief.decisions).toEqual([]);
   });
 
+  it('adds question decisions after the approvals, with references from real records', () => {
+    const withQuestion = JSON.stringify({
+      headline: 'h',
+      questions: [{ questionId: 'q1', text: 'Pick a venue for the event.' }],
+    });
+    const brief = assembleBrief(withQuestion, { ...baseActivity(), questions: [question(1), question(2)] });
+    expect(brief.decisions.map(d => d.id)).toEqual(['d1', 'd2', 'd3', 'd4']);
+    expect(brief.decisions[2]).toEqual({
+      id: 'd3',
+      text: 'Pick a venue for the event.',
+      question: { questId: 'qq1', sessionId: 's1', options: ['The hall', 'The garden'] },
+    });
+    expect(brief.decisions[2].approval).toBeUndefined();
+    // Skipped by the model: falls back to the agent's own question.
+    expect(brief.decisions[3].text).toBe('Which venue should I book for event 2?');
+  });
+
+  it('ignores a question id the model invented and caps decisions at the section limit', () => {
+    const invented = JSON.stringify({ headline: 'h', questions: [{ questionId: 'q99', text: 'Wire the money' }] });
+    expect(assembleBrief(invented, { ...baseActivity(), approvals: [] }).decisions).toEqual([]);
+
+    const many = Array.from({ length: 14 }, (_, i) => question(i + 1));
+    const brief = assembleBrief(invented, { ...baseActivity(), questions: many });
+    expect(brief.decisions).toHaveLength(12);
+    expect(brief.decisions.filter(d => d.approval)).toHaveLength(2);
+  });
+
   it('folds triaged emails in from their records, after approvals, with the draft and source', () => {
     const brief = assembleBrief(reply, emailActivity());
     expect(brief.decisions.map(decision => decision.id)).toEqual(['d1', 'd2', 'd3']);
@@ -119,6 +164,17 @@ describe('assembleBrief', () => {
       text: 'The office is closed on Friday.',
       source: { kind: 'email', emailId: 'e3' },
     });
+  });
+
+  it('orders decisions approvals, then questions, then triaged emails', () => {
+    const brief = assembleBrief(reply, { ...emailActivity(), questions: [question(1)] });
+    expect(brief.decisions.map(d => (d.approval ? 'approval' : d.question ? 'question' : d.source?.kind))).toEqual([
+      'approval',
+      'approval',
+      'question',
+      'email',
+    ]);
+    expect(brief.decisions.map(d => d.id)).toEqual(['d1', 'd2', 'd3', 'd4']);
   });
 
   it('caps decisions at the section limit with approvals kept first', () => {
@@ -172,5 +228,74 @@ describe('emptyBrief and briefPushBody', () => {
   it('pushes a decision count when decisions wait', () => {
     const brief = assembleBrief(JSON.stringify({ headline: 'h' }), baseActivity());
     expect(briefPushBody(brief)).toBe('2 decisions need you.');
+  });
+});
+
+const delegationActivity = (): BriefActivity => ({
+  ...baseActivity(),
+  runs: [],
+  approvals: [],
+  delegations: [
+    { delegationId: 'g1', intent: 'Summarize for the team', status: 'handled', result: 'The report says Q3 is up.' },
+    { delegationId: 'g2', intent: 'Handle this', status: 'needs_decision', result: 'Approve the quote of $40?' },
+    { delegationId: 'g3', intent: 'Read this later', status: 'pending', result: null },
+    { delegationId: 'g4', intent: 'Book it', status: 'failed', result: null },
+  ],
+});
+
+describe('delegated items in the brief', () => {
+  const reply = JSON.stringify({ headline: 'Delegations.', happened: [], handled: [], decisions: [] });
+
+  it('counts as activity and reaches the prompt as counts only', () => {
+    const activity = delegationActivity();
+    expect(hasActivity(activity)).toBe(true);
+    const prompt = buildBriefPrompt(activity);
+    expect(prompt).toContain('{"pending":1,"handled":1,"needs_decision":1,"failed":1}');
+    expect(prompt).not.toContain('Q3 is up');
+  });
+
+  it('places each item by status with a delegation source, from the stored record', () => {
+    const brief = assembleBrief(reply, delegationActivity());
+    const source = (delegationId: string) => ({ kind: 'delegation', delegationId });
+    expect(brief.handled).toEqual([{ id: 'x1', text: 'The report says Q3 is up.', source: source('g1') }]);
+    expect(brief.decisions).toEqual([{ id: 'd1', text: 'Approve the quote of $40?', source: source('g2') }]);
+    expect(brief.happened).toEqual([
+      { id: 'h1', text: 'Working on: "Read this later"', source: source('g3') },
+      { id: 'h2', text: 'Could not finish: "Book it"', source: source('g4') },
+    ]);
+  });
+
+  it('marks only the settled items the brief carries as briefed', () => {
+    const activity = delegationActivity();
+    const brief = assembleBrief(reply, activity);
+    expect(briefedDelegationIds(brief, activity).sort()).toEqual(['g1', 'g2', 'g4']);
+
+    const capped = { ...brief, handled: [] };
+    expect(briefedDelegationIds(capped, activity).sort()).toEqual(['g2', 'g4']);
+  });
+});
+
+describe('brief edge wording', () => {
+  it('carries a run error and finish time, clips long text and falls back on an empty headline', () => {
+    const activity: BriefActivity = {
+      ...baseActivity(),
+      approvals: [],
+      runs: [
+        {
+          id: 'r1',
+          query: 'Sync',
+          status: 'failed',
+          finishedAt: new Date('2026-11-16T12:00:00Z'),
+          errorMessage: 'timeout',
+        },
+      ],
+    };
+    const prompt = buildBriefPrompt(activity);
+    expect(prompt).toContain('"finishedAt":"2026-11-16T12:00:00.000Z","error":"timeout"');
+
+    const brief = assembleBrief(JSON.stringify({ headline: '  ', handled: ['z'.repeat(1000)] }), activity);
+    expect(brief.headline).toBe('Your brief');
+    expect(brief.handled[0].text).toHaveLength(BRIEF_LIMITS.itemText);
+    expect(brief.handled[0].text.endsWith('...')).toBe(true);
   });
 });

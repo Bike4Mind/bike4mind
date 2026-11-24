@@ -87,6 +87,7 @@ const EVENT: PushNotificationEvent = {
 };
 
 type Token = {
+  id?: string;
   token: string;
   environment: 'sandbox' | 'production';
   sid?: string;
@@ -139,6 +140,42 @@ const payloadOf = (request: ApnsRequest) => JSON.parse(request.payload);
 
 describe('deliverPush', () => {
   beforeEach(() => vi.clearAllMocks());
+
+  it('sends a handoff only to the selected registration with no transcript or destination metadata', async () => {
+    const { deps, sent } = makeDeps([
+      { id: 'chosen', token: 'tok-chosen', environment: 'production' },
+      { id: 'other', token: 'tok-other', environment: 'production' },
+    ]);
+    await deliverPush(
+      {
+        ...EVENT,
+        category: 'session_handoff',
+        destinationId: 'chosen',
+        destinationSid: 'sid-live',
+        title: 'Continue',
+        body: 'Tap to open',
+      },
+      deps,
+      logger
+    );
+    expect(sent.map(request => request.deviceToken)).toEqual(['tok-chosen']);
+    expect(payloadOf(sent[0])).toEqual({
+      aps: { alert: { title: 'Continue', body: 'Tap to open' }, sound: 'default', 'thread-id': 'session-1' },
+      category: 'session_handoff',
+      deepLink: 'https://app.example.test/notebooks/session-1',
+      questId: 'quest-1',
+      sessionId: 'session-1',
+    });
+    sent.length = 0;
+    await deliverPush({ ...EVENT, category: 'session_handoff' }, deps, logger);
+    expect(sent).toEqual([]);
+    await deliverPush(
+      { ...EVENT, category: 'session_handoff', destinationId: 'chosen', destinationSid: 'previous-session' },
+      deps,
+      logger
+    );
+    expect(sent).toEqual([]);
+  });
 
   it('succeeds without contacting APNs or reading the user when there are no device tokens', async () => {
     const { deps } = makeDeps([]);
@@ -293,6 +330,26 @@ describe('deliverPush', () => {
       expect(payloadOf(call)).not.toHaveProperty('approval');
       expect(payloadOf(call).aps).not.toHaveProperty('category');
     }
+  });
+
+  it('selects the brief category from briefAction, falls back to Listen, and keeps it when redacted', async () => {
+    const { deps, sent } = makeDeps([{ token: 'tok-a', environment: 'production' }], {
+      loadRecipient: vi.fn(async () => ({ preferences: undefined, redactContent: true })),
+    });
+    const brief = { ...EVENT, category: 'brief_ready' as const, briefId: 'brief-1' };
+
+    await deliverPush({ ...brief, briefAction: 'approval' }, deps, logger);
+    await deliverPush({ ...brief, briefAction: 'question' }, deps, logger);
+    await deliverPush(brief, deps, logger);
+    await deliverPush({ ...brief, briefId: undefined, briefAction: 'approval' }, deps, logger);
+    await deliverPush({ ...EVENT, category: 'agent_completed' as const, briefAction: 'approval' }, deps, logger);
+
+    expect(payloadOf(sent[0]).aps.category).toBe('brief_ready_approval');
+    expect(payloadOf(sent[1]).aps.category).toBe('brief_ready_reply');
+    expect(payloadOf(sent[2]).aps.category).toBe('brief_ready_listen');
+    for (const call of sent.slice(3)) expect(payloadOf(call).aps).not.toHaveProperty('category');
+    expect(payloadOf(sent[0])).toMatchObject({ briefId: 'brief-1' });
+    expect(payloadOf(sent[0])).not.toHaveProperty('approval');
   });
 
   it('keeps an absolute deepLink as published', async () => {

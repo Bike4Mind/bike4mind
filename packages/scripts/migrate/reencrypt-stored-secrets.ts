@@ -25,7 +25,8 @@
  * the credential census (audit:credential-census) reports those.
  *
  * Config: SECRET_ENCRYPTION_KEY, SECRET_ENCRYPTION_KEY_PREVIOUS and MONGODB_URI from SST resources
- * (run under `sst shell`); MONGODB_URI falls back to the process env.
+ * (run under `sst shell`). Each falls back to the process env, which is how an install without
+ * SST resources (self-host) supplies them.
  *
  * Usage:
  *   pnpm --filter @bike4mind/scripts migrate:reencrypt-stored-secrets --dry-run
@@ -58,7 +59,7 @@ const MODE_TITLE: Record<SweepMode, string> = {
 };
 
 const validKey = (name: string): string | undefined => {
-  const value = getResource(name);
+  const value = getResource(name) ?? process.env[name];
   return value && isValidEncryptionKey(value) ? value : undefined;
 };
 

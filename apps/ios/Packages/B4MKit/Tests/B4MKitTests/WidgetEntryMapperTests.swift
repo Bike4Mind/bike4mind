@@ -98,6 +98,50 @@ final class WidgetEntryMapperTests: XCTestCase {
       .image(mediaID: "m1", title: "Lighthouse", thumbnailFileName: "m1.img", createdAt: referenceDate))
   }
 
+  // MARK: Pending decisions
+
+  private func pending(approvals: Int, briefDecisions: Int) -> WidgetSnapshot {
+    WidgetSnapshot(
+      pendingDecisions: .init(approvals: approvals, briefDecisions: briefDecisions, observedAt: referenceDate))
+  }
+
+  func testPendingDecisionsPlaceholderUntilTheAppHasCounted() {
+    XCTAssertEqual(mapper(nil).pendingDecisions(), .placeholder)
+    XCTAssertEqual(mapper(.empty).pendingDecisions(), .placeholder)
+  }
+
+  func testPendingDecisionsShowTheServerCountWhileApprovalsCanStillBeOpen() {
+    XCTAssertEqual(mapper(pending(approvals: 2, briefDecisions: 3), at: 60).pendingDecisions(), .count(5))
+    XCTAssertEqual(
+      mapper(pending(approvals: 2, briefDecisions: 3), at: PendingAction.lifetime).pendingDecisions(), .count(5))
+    XCTAssertEqual(mapper(pending(approvals: 0, briefDecisions: 0)).pendingDecisions(), .count(0))
+  }
+
+  func testCountedApprovalsDropOutOnceTheyMustHaveLapsed() {
+    XCTAssertEqual(
+      mapper(pending(approvals: 2, briefDecisions: 3), at: PendingAction.lifetime + 1).pendingDecisions(), .count(3))
+  }
+
+  func testNextRefreshLandsJustAfterCountedApprovalsLapse() {
+    XCTAssertEqual(
+      mapper(pending(approvals: 1, briefDecisions: 0), at: 60).nextRefresh(),
+      referenceDate.addingTimeInterval(PendingAction.lifetime + 1))
+    XCTAssertEqual(
+      mapper(pending(approvals: 0, briefDecisions: 4), at: 60).nextRefresh(),
+      referenceDate.addingTimeInterval(60 + 3_600))
+    XCTAssertEqual(
+      mapper(pending(approvals: 1, briefDecisions: 0), at: 2 * PendingAction.lifetime).nextRefresh(),
+      referenceDate.addingTimeInterval(2 * PendingAction.lifetime + 3_600))
+  }
+
+  func testNextRefreshTakesTheEarliestDeadline() {
+    var snapshot = running(observedAt: referenceDate)
+    snapshot.pendingDecisions = .init(
+      approvals: 1, briefDecisions: 0, observedAt: referenceDate.addingTimeInterval(-600))
+    XCTAssertEqual(
+      mapper(snapshot, at: 60).nextRefresh(), referenceDate.addingTimeInterval(PendingAction.lifetime - 600 + 1))
+  }
+
   func testFixtureSnapshotMapsToEveryActiveDisplay() {
     let fixture = WidgetSnapshot.fixture(now: referenceDate)
     let mapper = WidgetEntryMapper(snapshot: fixture, now: referenceDate, locale: locale)
@@ -105,5 +149,6 @@ final class WidgetEntryMapperTests: XCTestCase {
     XCTAssertEqual(count, 2)
     guard case .balance = mapper.credits() else { return XCTFail("expected balance") }
     guard case .image = mapper.latestGeneration() else { return XCTFail("expected image") }
+    XCTAssertEqual(mapper.pendingDecisions(), .count(3))
   }
 }
