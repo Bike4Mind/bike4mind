@@ -58,29 +58,39 @@ The app refuses to run with the template values: JWT signing and verification fa
 ChatCompletion service exits at startup, and the internal websocket, upload webhook and quest
 dispatch calls are rejected until each secret holds a generated value.
 
-> **Upgrading an existing install: a valid `SECRET_ENCRYPTION_KEY` is now required.** A new `validate-secrets` service checks the key before the app, worker, ChatCompletion and the other services start. A Compose install that never set a key (the template value `change-me-openssl-rand-hex-32`, or an empty value) **will not start after this upgrade** until you either set a valid key or opt out. Update the image and your checkout together: an older pinned `B4M_IMAGE` does not contain the check and `validate-secrets` fails with "Cannot find module".
+> **Upgrading an existing install: a valid `SECRET_ENCRYPTION_KEY` is now required.** A new `validate-secrets` service checks the key before the app, worker, ChatCompletion and the other services start. A Compose install that never set a key (the template value `change-me-openssl-rand-hex-32`) **will not start after this upgrade** until you either set a valid key or opt out. Update the image and your checkout together: an older pinned `B4M_IMAGE` does not contain the check and `validate-secrets` fails with "Cannot find module".
 >
-> - **Evaluation only:** set `B4M_ALLOW_PLAINTEXT_SECRETS=true` in `.env.selfhost`. The stack starts keyless, stored secrets stay in plaintext, every process logs a warning at boot, and admin System Health shows a warning.
+> - **Evaluation only:** set `B4M_ALLOW_PLAINTEXT_SECRETS=true` in `.env.selfhost` and leave the template `SECRET_ENCRYPTION_KEY` value in place (do not blank it: the services exit when the variable is empty). The stack starts keyless, stored secrets stay in plaintext, every process logs a warning at boot, and admin System Health shows a warning.
 > - **Move to a key (recommended):**
 >   1. Generate one: `openssl rand -hex 32`. Back it up somewhere other than this host; losing it makes everything encrypted under it unreadable.
->   2. Set it as `SECRET_ENCRYPTION_KEY` in `.env.selfhost`, take a backup (see [Backup and restore](#backup-and-restore)), and recreate the services: `docker compose -f compose.selfhost.yaml --env-file .env.selfhost up -d`.
->   3. Encrypt the rows already stored in plaintext. With the environment from step 3 of [Rotating the encryption key](#rotating-the-encryption-key) set (`SECRET_ENCRYPTION_KEY`, `MONGODB_URI`), stop writers and run, from the repo checkout, each of:
+>   2. Set it as `SECRET_ENCRYPTION_KEY` in `.env.selfhost`. The backfill below also needs a persistent `MEMORY_KEY_SECRET` (it wraps the per-user memory keys): if `.env.selfhost` has none, generate one with `openssl rand -hex 32`, add it as `MEMORY_KEY_SECRET=...`, and back it up next to the encryption key. Never change it afterwards. Take a backup (see [Backup and restore](#backup-and-restore)), then recreate the services: `docker compose -f compose.selfhost.yaml --env-file .env.selfhost up -d`.
+>   3. Encrypt the rows already stored in plaintext. Stop the writers (skip any that are not running):
 >
 >      ```bash
->      SCRIPTS="pnpm --filter @bike4mind/scripts exec tsx --import ../../apps/client/server/chatCompletion/selfhostSstAlias.mjs"
->      $SCRIPTS migrate/protect-stored-credentials.ts --maintenance-window   # API keys, MCP servers, Slack dev workspaces, users, secret rotations
->      $SCRIPTS migrate/encrypt-tokens-at-rest.ts                            # OAuth provider tokens, webhook secrets, Slack bot tokens
->      $SCRIPTS migrate/encrypt-admin-settings-and-apikeys.ts                # sensitive admin settings, per-user provider API keys
+>      docker compose -f compose.selfhost.yaml --env-file .env.selfhost stop app worker chatcompletion ws agentexecutor render-worker subscriber-fanout
 >      ```
 >
->      Each command skips values that are already encrypted, so it is safe to repeat.
+>      Then, from the repo checkout (Node and `pnpm install`), export the values from `.env.selfhost` and run each command below. Use the same `MONGODB_URI` form as step 3 of [Rotating the encryption key](#rotating-the-encryption-key):
+>
+>      ```bash
+>      export SECRET_ENCRYPTION_KEY="$(grep '^SECRET_ENCRYPTION_KEY=' .env.selfhost | cut -d= -f2-)"
+>      export MEMORY_KEY_SECRET="$(grep '^MEMORY_KEY_SECRET=' .env.selfhost | cut -d= -f2-)"
+>      export MONGODB_URI='mongodb://localhost:27017/bike4mind?replicaSet=rs0&directConnection=true'
+>      pnpm --filter @bike4mind/scripts exec tsx --import ../../apps/client/server/chatCompletion/selfhostSstAlias.mjs migrate/protect-stored-credentials.ts --maintenance-window
+>      pnpm --filter @bike4mind/scripts exec tsx --import ../../apps/client/server/chatCompletion/selfhostSstAlias.mjs migrate/encrypt-tokens-at-rest.ts
+>      pnpm --filter @bike4mind/scripts exec tsx --import ../../apps/client/server/chatCompletion/selfhostSstAlias.mjs migrate/encrypt-admin-settings-and-apikeys.ts
+>      ```
+>
+>      They cover, in order: API keys, MCP server secrets, Slack dev-workspace secrets, TOTP seeds and secret rotations; Atlassian, Google Drive, Slack user and blog tokens, webhook secrets and Slack bot tokens; sensitive admin settings and per-user provider API keys. Each command skips values that are already encrypted, so it is safe to repeat. Restart the stack afterwards with the `up -d` command from step 2.
+>
+>      **Not covered:** sign-in provider tokens (`users.authProviders[]` and `users.oauthCredentials`). They are encrypted the next time each user signs in, and stay in plaintext until then.
 >   4. `migrate:reencrypt-stored-secrets` (below) is **not** a substitute: it only moves existing ciphertext from one key to another and leaves plaintext rows as they are.
 >
 > `SECRET_ENCRYPTION_KEY_PREVIOUS` must be empty, `not-configured`, or 64 hex characters. Anything else also blocks startup, even with the opt-out.
 
 > **Do not rotate `SECRET_ENCRYPTION_KEY` casually.** It encrypts other secrets stored in the database. If you must change it, follow [Rotating the encryption key](#rotating-the-encryption-key): set `SECRET_ENCRYPTION_KEY_PREVIOUS` to the old key so reads fall back to it and old ciphertext (admin settings, per-user API keys, OAuth tokens, social connections) stays readable, then re-encrypt the stored values. Dropping the previous key before that finishes makes anything still encrypted under it unrecoverable.
 
-> **Rotating `JWT_SECRET`?** The rotation grace window (which briefly accepts tokens signed with the outgoing secret) stores that outgoing secret encrypted at rest, so it now depends on `SECRET_ENCRYPTION_KEY` being configured - and on `SECRET_ENCRYPTION_KEY_PREVIOUS` too if you are mid-way through an encryption-key rotation. With no encryption key set the outgoing secret is stored in plaintext (logged once) and the grace window still works; but if the encryption key is set at renew time and then changed without carrying the previous key, grace-window tokens fail to verify until they naturally expire.
+> **Rotating `JWT_SECRET`?** The rotation grace window (which briefly accepts tokens signed with the outgoing secret) stores that outgoing secret encrypted at rest, so it now depends on `SECRET_ENCRYPTION_KEY` being configured - and on `SECRET_ENCRYPTION_KEY_PREVIOUS` too if you are mid-way through an encryption-key rotation. With no encryption key set (only possible with `B4M_ALLOW_PLAINTEXT_SECRETS=true`) the outgoing secret is stored in plaintext (logged once) and the grace window still works; but if the encryption key is set at renew time and then changed without carrying the previous key, grace-window tokens fail to verify until they naturally expire.
 
 > **Formatting:** compose reads `.env.selfhost` values verbatim - don't add comments on the same line as a value.
 
@@ -919,7 +929,7 @@ With built `minio` and `createbuckets` images (see the storage build steps above
 
 ## Troubleshooting
 
-- **`validate-secrets` exited 1 / the app never starts** - run `docker compose -f compose.selfhost.yaml --env-file .env.selfhost logs validate-secrets`. It names the variable that failed: `SECRET_ENCRYPTION_KEY` must be 64 hexadecimal characters (`openssl rand -hex 32`), and `SECRET_ENCRYPTION_KEY_PREVIOUS` must be empty, `not-configured`, or 64 hex characters. For an evaluation install without a key, see "Upgrading an existing install" under step 2. "Cannot find module" means the image predates the check: pull or rebuild it together with your checkout.
+- **`validate-secrets` exited 1 / the app never starts** - run `docker compose -f compose.selfhost.yaml --env-file .env.selfhost logs validate-secrets`. It names the variable that failed: `SECRET_ENCRYPTION_KEY` must be 64 hexadecimal characters (`openssl rand -hex 32`), and `SECRET_ENCRYPTION_KEY_PREVIOUS` must be empty, `not-configured`, or 64 hex characters. For an evaluation install without a key (keep the template value and set the opt-out), see "Upgrading an existing install" under step 2. "Cannot find module" means the image predates the check: pull or rebuild it together with your checkout.
 - **`docker pull` fails with `unauthorized` / `manifest unknown`** - the prebuilt image isn't available to your account (or isn't published yet). Build it from source instead - see "Building from source" in step 3.
 - **`Error ... address already in use` / `failed to bind host port`** - another process on your host already owns one of the published ports (a local `mongod` on 27017 is the common one; also 3000, 9000, 9001, 9324, 9325, 8025). Override just the host side with the matching `*_HOST_PORT` var in `.env.selfhost` (e.g. `MONGO_HOST_PORT=27018`) - the services still reach each other over the compose network on their fixed internal ports, so nothing else needs to change.
 - **MongoDB crashes on first boot with `WT_PANIC` / `Too many open files`** - WiredTiger opens a file per collection and index and needs a high open-files limit; Docker's default (1024) is far below MongoDB's documented minimum. The bundled `mongo` service raises `nofile` to 64000 via `ulimits`. If you've customized the compose file or run mongo outside it, set that limit yourself, then remove only the half-initialized Mongo volume and restart. Do not use `down -v`: it also deletes `sqs-data` and every pending queue message (see "Queue storage and container replacement"). Naming the service (`down -v mongo`) is not a safe shortcut either, because Compose releases before v2.29 still remove every volume in the project. The steps below read the volume name from the `mongo` container, so they follow whatever `-p` or `COMPOSE_PROJECT_NAME` the stack uses; pass the same one here. If the first command prints nothing, there is no `mongo` container to read from: create one with `docker compose -f compose.selfhost.yaml --env-file .env.selfhost up --no-start mongo` and run the steps again.
