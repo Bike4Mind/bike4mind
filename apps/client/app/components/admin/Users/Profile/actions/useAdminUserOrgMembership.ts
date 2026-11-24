@@ -9,12 +9,6 @@ import { adminUpdateErrorMessage } from './useAdminUserUpdate';
 export type OrgMemberRoleChoice = AssignableOrgRole;
 
 /**
- * Audited org membership writes for one user (pages/api/admin/organizations/[id]/members, and
- * pages/api/admin/users/[userId]/home-organization for the home-org pointer). Failures
- * toast here and rethrow an Error with the same message, so an ActionDialog stays open and an undo
- * reports the friendly text instead of the raw request error.
- */
-/**
  * The raw home-org pointer, which the profile's user record serves as null once the user left that org or
  * it was deleted. Keyed under ['admin', 'users', userId] so the membership writes below refresh it.
  */
@@ -27,6 +21,12 @@ export const useAdminHomeOrg = (userId: string | null) =>
     enabled: userId !== null,
   });
 
+/**
+ * Audited org membership writes for one user (pages/api/admin/organizations/[id]/members, and
+ * pages/api/admin/users/[userId]/home-organization for the home-org pointer). Failures
+ * toast here and rethrow an Error with the same message, so an ActionDialog stays open and an undo
+ * reports the friendly text instead of the raw request error.
+ */
 export const useAdminUserOrgMembership = (userId: string) => {
   const cache = useQueryClient();
   const membersPath = (organizationId: string) =>
