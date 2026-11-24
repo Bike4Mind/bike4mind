@@ -3784,8 +3784,22 @@ export class ChatService {
    */
   async continueReply(sessionId: string): Promise<SendMessageResult> {
     const historyScope = this.deps.history?.scopeKey() ?? null;
-    if (this.isBusy(sessionId)) return { ok: false, error: 'This conversation is still replying.' };
+    const refusal = this.rerunRefusal(sessionId);
+    if (refusal) return { ok: false, error: refusal, busy: true };
 
+    // Claimed before the first await, as regenerateReply does: Continue is offered on the
+    // conversation and in the Agent view, and a second click must find this one's claim.
+    this.accepting.add(sessionId);
+    try {
+      return await this.startContinue(sessionId, historyScope);
+    } finally {
+      this.accepting.delete(sessionId);
+      this.flushQueue(sessionId);
+      this.loops.idle(sessionId);
+    }
+  }
+
+  private async startContinue(sessionId: string, historyScope: string | null): Promise<SendMessageResult> {
     const api = this.deps.getApiClient();
     const session = await this.deps.store.get(sessionId);
     if (!session) return { ok: false, error: 'That conversation no longer exists.' };
@@ -3827,6 +3841,19 @@ export class ChatService {
       ...(earlierStats ? { stats: earlierStats } : {}),
     });
     return { ok: true, messageId: replyId };
+  }
+
+  /**
+   * Why Continue or Retry may not start a turn now, or null. Neither is idempotent and both are
+   * offered from several surfaces (the conversation, the peek drawer, the Needs-you strip), so a
+   * turn already running, being accepted or waiting in the queue refuses the second click.
+   */
+  private rerunRefusal(sessionId: string): string | null {
+    if (this.hasTurnInFlight(sessionId) || this.abandoning.has(sessionId))
+      return 'This conversation is still replying.';
+    if ((this.deps.queue?.list(sessionId).length ?? 0) > 0)
+      return 'This conversation already has a turn waiting to run.';
+    return null;
   }
 
   /**
@@ -3899,9 +3926,8 @@ export class ChatService {
   async regenerateReply(sessionId: string): Promise<SendMessageResult> {
     const historyScope = this.deps.history?.scopeKey() ?? null;
     if (!isValidSessionId(sessionId)) return { ok: false, error: 'That conversation no longer exists.' };
-    if (this.hasTurnInFlight(sessionId) || this.abandoning.has(sessionId)) {
-      return { ok: false, error: 'This conversation is still replying.' };
-    }
+    const refusal = this.rerunRefusal(sessionId);
+    if (refusal) return { ok: false, error: refusal, busy: true };
 
     // Claimed with no await since the check above, as acceptTurn does, so a send arriving
     // during the awaits below queues behind this turn instead of racing the truncation.

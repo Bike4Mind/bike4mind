@@ -48,6 +48,7 @@ beforeEach(() => {
   (window as unknown as { b4m: unknown }).b4m = {
     chat: {
       getSession: vi.fn().mockResolvedValue(null),
+      getHeldRelays: vi.fn().mockResolvedValue([]),
       onStreamEvent: vi.fn(() => () => undefined),
       onQueueChanged: vi.fn(() => () => undefined),
       getRunSpend: vi.fn().mockResolvedValue({ status: 'unattributed' }),
@@ -337,10 +338,38 @@ describe('OrchestratorStage', () => {
     expect(reachedWindow).toEqual([true]);
   });
 
+  it('lists what an agent waits on in the Needs-you strip, and opens its details from there', async () => {
+    vi.mocked(window.b4m.chat.getHeldRelays).mockImplementation(async id =>
+      id === 'n'
+        ? [
+            {
+              id: 'h1',
+              sessionId: 'n',
+              text: 'merge it',
+              heldAt: '2026-10-01T00:00:00.000Z',
+              reason: 'other-project',
+              relay: { fromSessionId: 'x', fromTitle: 'Sender', hops: 1 },
+            },
+          ]
+        : []
+    );
+    await renderStage(FIXTURE);
+    await act(async () => undefined);
+    expect(el('orchestrator-needs-you-strip').textContent).toContain('merge it');
+    expect(window.b4m.chat.getHeldRelays).not.toHaveBeenCalledWith('w1');
+    await act(async () => el('decision-card-open-btn').click());
+    expect(el('orchestrator-peek-drawer').textContent).toContain('Agent n');
+  });
+
   it('opens the agent conversation when a table row is clicked', async () => {
-    vi.mocked(window.b4m.chat.getSession).mockResolvedValueOnce({
-      messages: [{ id: 'reply-w2', role: 'assistant', content: 'Working on the second task.' }],
-    } as Awaited<ReturnType<typeof window.b4m.chat.getSession>>);
+    // By id: the Needs-you strip reads the waiting agents' sessions too.
+    vi.mocked(window.b4m.chat.getSession).mockImplementation(async id =>
+      id === 'w2'
+        ? ({
+            messages: [{ id: 'reply-w2', role: 'assistant', content: 'Working on the second task.' }],
+          } as Awaited<ReturnType<typeof window.b4m.chat.getSession>>)
+        : null
+    );
     await renderStage(FIXTURE);
     await act(async () => el('orchestrator-table-row-w2').click());
     expect(el('orchestrator-peek-drawer').textContent).toContain('Agent w2');

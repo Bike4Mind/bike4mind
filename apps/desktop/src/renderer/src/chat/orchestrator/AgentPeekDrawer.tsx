@@ -10,11 +10,13 @@ import Textarea from '@mui/joy/Textarea';
 import Typography from '@mui/joy/Typography';
 import { useTheme } from '@mui/joy/styles';
 import { isStoppableState } from '@shared/agentState';
-import type { ChatApprovalAnswer, ChatMessage, ChatQueuedMessage, ChatToolCall } from '@shared/chat';
+import type { ChatApprovalAnswer, ChatMessage, ChatQueuedMessage, ChatToolCall, SendMessageResult } from '@shared/chat';
 import { useEffect, useId, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
 import { CaretDownIcon } from '../icons';
 import { ToolCallList } from '../ToolCallList';
 import { MessageThread } from '../MessageThread';
+import { HeldRelayRow } from '../HeldRelayCard';
+import { useHeldRelays } from '../useHeldRelays';
 import { TaskDecisionPanel } from './TaskDecisionPanel';
 import { markSessionViewed } from '../markSessionViewed';
 import { activityLabel } from './activity';
@@ -307,6 +309,19 @@ export function AgentPeekDrawer({ agent, onClose, actions, skin, visible = true 
   const { messages, loadError } = useSessionMessages(agent.id, `${refreshKeyOf(agent)}\n${revision}`, visible);
   const refresh = () => setRevision(value => value + 1);
   const canStop = isStoppableState(agent.state);
+  const heldRelays = useHeldRelays(visible ? agent.id : null);
+
+  // Continue and Retry are also on the Needs-you strip; main refuses the second click as `busy`.
+  const rerun = (start: (sessionId: string) => Promise<SendMessageResult>) => {
+    setActionError(null);
+    void start(agent.id).then(
+      result => {
+        if (!result.ok && !result.busy) setActionError(result.error);
+        refresh();
+      },
+      error => setActionError(errorText(error))
+    );
+  };
 
   const drawerRef = useRef<HTMLDivElement>(null);
   // Focus moves in on open and back to the opener on close; a drawer swapped to another agent keeps its place.
@@ -410,6 +425,16 @@ export function AgentPeekDrawer({ agent, onClose, actions, skin, visible = true 
           </Box>
         </Box>
       )}
+      {heldRelays.held.length > 0 && (
+        <Box
+          data-testid="orchestrator-peek-held-relays"
+          sx={{ flex: '0 1 auto !important', minHeight: 0, maxHeight: '35%', overflowY: 'auto' }}
+        >
+          {heldRelays.held.map(entry => (
+            <HeldRelayRow key={entry.id} held={entry} onResolve={heldRelays.resolve} onOpenSession={actions.open} />
+          ))}
+        </Box>
+      )}
       <Box
         data-testid="orchestrator-peek-conversation"
         sx={{
@@ -438,16 +463,8 @@ export function AgentPeekDrawer({ agent, onClose, actions, skin, visible = true 
               .respondToApproval(approvalId, answer)
               .then(refresh, error => setActionError(errorText(error)));
           }}
-          onContinue={() => {
-            setActionError(null);
-            void window.b4m.chat.continueReply(agent.id).then(
-              result => {
-                if (result.ok) refresh();
-                else setActionError(result.error);
-              },
-              error => setActionError(errorText(error))
-            );
-          }}
+          onContinue={() => rerun(window.b4m.chat.continueReply)}
+          onRegenerate={() => rerun(window.b4m.chat.regenerateReply)}
         />
       </Box>
 
