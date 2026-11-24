@@ -1,6 +1,6 @@
 import React from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
@@ -38,7 +38,7 @@ describe('AdminLiveOpsTriageMultiConfigTab page header', () => {
   it('leads with the header while configs load', () => {
     apiGet.mockReturnValue(new Promise(() => {}));
     const { container } = renderTab();
-    expect(screen.getByRole('progressbar')).toBeInTheDocument();
+    expect(screen.getByTestId('admin-loading-state')).toHaveTextContent('Loading configurations');
     expectHeaderFirst(container);
   });
 
@@ -47,8 +47,15 @@ describe('AdminLiveOpsTriageMultiConfigTab page header', () => {
       url === '/api/admin/liveops-triage-configs' ? Promise.reject(new Error('boom')) : new Promise(() => {})
     );
     const { container } = renderTab();
-    expect(await screen.findByText('Failed to load configurations. Please try again.')).toBeInTheDocument();
+    expect(await screen.findByTestId('admin-error-state')).toHaveTextContent(
+      'The triage configurations failed to load.'
+    );
     expectHeaderFirst(container);
+
+    const configCalls = () => apiGet.mock.calls.filter(([url]) => url === '/api/admin/liveops-triage-configs').length;
+    const before = configCalls();
+    fireEvent.click(screen.getByTestId('admin-error-retry-btn'));
+    expect(configCalls()).toBe(before + 1);
   });
 
   it('leads with the header once configs load', async () => {
