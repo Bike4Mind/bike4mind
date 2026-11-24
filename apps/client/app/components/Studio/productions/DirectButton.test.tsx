@@ -40,7 +40,7 @@ vi.mock('@client/app/components/Files/EmbeddedFileBrowser', async () => {
 });
 
 import DirectButton from './DirectButton';
-import { DIRECTOR_TOOLS } from '@bike4mind/common';
+import { DIRECTOR_TOOLS, buildDirectorSystemContext, defaultStudioTimeline } from '@bike4mind/common';
 
 const appTheme = extendTheme({ ...getThemeConfig() });
 const wrap = (children: ReactNode) => <CssVarsProvider theme={appTheme}>{children}</CssVarsProvider>;
@@ -150,6 +150,108 @@ describe('DirectButton', () => {
 
     await waitFor(() => expect(setProgrammaticLaunch).toHaveBeenCalledTimes(1));
     expect(setProgrammaticLaunch.mock.calls[0][0].promptContent).not.toContain('replaces that ad');
+  });
+
+  it('directs a short film with the film context, no product photo and a film redirect', async () => {
+    const timeline = defaultStudioTimeline('short_film', { durationMs: 90_000 });
+    const film = {
+      id: 'comp123',
+      template: 'short_film',
+      brief: { summary: 'A lighthouse keeper', tone: 'wistful' },
+      brandKit: { productFileIds: ['kit456'] },
+      shots: authoredShots,
+      timeline,
+    };
+    render(wrap(<DirectButton composition={film as never} blocked={false} />));
+    fireEvent.click(screen.getByTestId('production-direct-btn'));
+    expect(screen.queryByTestId('production-direct-product-pick-btn')).toBeNull();
+    expect(screen.getByTestId('production-direct-brief-input')).toHaveAttribute(
+      'placeholder',
+      'A lighthouse keeper finds a message in a bottle addressed to her'
+    );
+    fireEvent.change(screen.getByTestId('production-direct-brief-input'), { target: { value: 'A new story' } });
+    fireEvent.click(screen.getByTestId('production-direct-submit-btn'));
+
+    await waitFor(() => expect(setProgrammaticLaunch).toHaveBeenCalledTimes(1));
+    const dispatch = setProgrammaticLaunch.mock.calls[0][0];
+    expect(dispatch.systemContext).toBe(
+      buildDirectorSystemContext('comp123', { template: 'short_film', tone: 'wistful', durationMs: 90_000 })
+    );
+    expect(dispatch.promptContent).not.toContain('Product photo');
+    expect(dispatch.promptContent).toContain('This brief replaces that film');
+  });
+
+  it('keeps the ad context for an ad production that carries its template and timeline', async () => {
+    const ad = {
+      id: 'comp123',
+      template: 'ad_campaign',
+      brief: { summary: 'A running shoe ad' },
+      timeline: defaultStudioTimeline('ad_campaign'),
+    };
+    render(wrap(<DirectButton composition={ad as never} blocked={false} />));
+    fireEvent.click(screen.getByTestId('production-direct-btn'));
+    fireEvent.click(screen.getByTestId('production-direct-submit-btn'));
+
+    await waitFor(() => expect(setProgrammaticLaunch).toHaveBeenCalledTimes(1));
+    expect(setProgrammaticLaunch.mock.calls[0][0].systemContext).toBe(buildDirectorSystemContext('comp123'));
+  });
+
+  it('counts a single earlier shot and treats a production with no saved brief as re-briefed', async () => {
+    render(
+      wrap(
+        <DirectButton
+          composition={
+            {
+              id: 'comp123',
+              brief: {},
+              shots: [
+                { id: 'shot-1', title: 'Hook', voiceLine: 'Start strong.' },
+                { id: 'shot-2', title: 'Bare' },
+              ],
+            } as never
+          }
+          blocked={false}
+        />
+      )
+    );
+    fireEvent.click(screen.getByTestId('production-direct-btn'));
+    fireEvent.change(screen.getByTestId('production-direct-brief-input'), { target: { value: 'A new ad' } });
+    fireEvent.click(screen.getByTestId('production-direct-submit-btn'));
+
+    await waitFor(() => expect(setProgrammaticLaunch).toHaveBeenCalledTimes(1));
+    expect(setProgrammaticLaunch.mock.calls[0][0].promptContent).toContain('It already has 1 shot from an earlier');
+  });
+
+  it('falls back to a time-based nonce without crypto.randomUUID', async () => {
+    vi.stubGlobal('crypto', {});
+    try {
+      openDialog();
+      fireEvent.click(screen.getByTestId('production-direct-submit-btn'));
+      await waitFor(() => expect(setProgrammaticLaunch).toHaveBeenCalledTimes(1));
+      expect(setProgrammaticLaunch.mock.calls[0][0].dispatchNonce).toMatch(/^\d+-[a-z0-9]+$/);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('keeps no product when the picker returns nothing', () => {
+    pickState.file = null;
+    openDialog();
+    fireEvent.click(screen.getByTestId('production-direct-product-pick-btn'));
+    expect(screen.queryByTestId('production-direct-product-name')).toBeNull();
+  });
+
+  it('closes the dialog on cancel', () => {
+    openDialog();
+    fireEvent.click(screen.getByTestId('production-direct-cancel-btn'));
+    return waitFor(() => expect(screen.queryByTestId('production-direct-dialog')).toBeNull());
+  });
+
+  it('shows a generic error when the failure is not an Error', async () => {
+    mockGenerateNewSession.mockRejectedValue('nope');
+    openDialog();
+    fireEvent.click(screen.getByTestId('production-direct-submit-btn'));
+    await waitFor(() => expect(mockToastError).toHaveBeenCalledWith('Could not start directing. Please try again.'));
   });
 
   it('requires a brief', () => {

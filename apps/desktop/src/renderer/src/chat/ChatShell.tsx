@@ -231,7 +231,8 @@ type ChatScreen = 'conversation' | 'artifacts' | 'customize' | 'skill-market' | 
  * component knows the turn state, and the account strip knows where a glyph goes in its own
  * row. Handing the finished dot down keeps both where they belong - see TurnDot.
  */
-export type AccountStrip = (status: ReactNode) => ReactNode;
+/** `spentAt` ticks when a turn settles, for anything in the strip that reads the balance. */
+export type AccountStrip = (status: ReactNode, spentAt: number) => ReactNode;
 
 /** How long the first-run tavern intro plays before it is marked seen (ms). */
 const ORCHESTRATOR_INTRO_MS = 1500;
@@ -1700,7 +1701,10 @@ export function ChatShell({
             : undefined
         }
         footer={account?.(
-          <TurnDot state={turnState({ streaming: turnOpen, disabled: !activeId || creatingCode, notReady: unbound })} />
+          <TurnDot
+            state={turnState({ streaming: turnOpen, disabled: !activeId || creatingCode, notReady: unbound })}
+          />,
+          conversation.settledTurns
         )}
       />
 

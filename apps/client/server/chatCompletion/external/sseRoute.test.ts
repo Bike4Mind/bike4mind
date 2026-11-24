@@ -1416,6 +1416,23 @@ describe('POST /api/ai/v1/completions - run attribution', () => {
     expect(mockExecuteCompletion).toHaveBeenCalledWith(expect.objectContaining({ run: RUN }));
   });
 
+  it('rejects evaluation attribution without a verified run before provider execution', async () => {
+    await expectJsonError(await post({ ...COMPLETION, evaluation: { version: 1, requestId: RUN_ID } }), 400);
+    expect(mockExecuteCompletion).not.toHaveBeenCalled();
+  });
+
+  it('requires evaluation attribution on an evaluation run', async () => {
+    mockFindCompletionRun.mockResolvedValueOnce(storedRun({ evaluation: { version: 1 } }));
+    await expectJsonError(await post({ ...COMPLETION, run: RUN }), 400);
+    expect(mockExecuteCompletion).not.toHaveBeenCalled();
+  });
+
+  it('rejects evaluation attribution on an ordinary run', async () => {
+    mockFindCompletionRun.mockResolvedValueOnce(storedRun());
+    await expectJsonError(await post({ ...COMPLETION, run: RUN, evaluation: { version: 1, requestId: RUN_ID } }), 400);
+    expect(mockExecuteCompletion).not.toHaveBeenCalled();
+  });
+
   it('refuses an unknown run with a 404 before the stream opens or the provider is called', async () => {
     mockFindCompletionRun.mockResolvedValueOnce(null);
 
