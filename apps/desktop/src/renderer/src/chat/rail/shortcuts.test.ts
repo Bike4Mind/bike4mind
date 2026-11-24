@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { matchPlaceShortcut, matchSessionShortcut, matchSidebarToggle, placeShortcutLabel } from './shortcuts';
+import {
+  matchPlaceShortcut,
+  matchSessionShortcut,
+  matchSidebarToggle,
+  placeShortcutLabel,
+  sidebarShortcutLabel,
+} from './shortcuts';
 
 const chord = (code: string, modifiers: Partial<Record<'metaKey' | 'ctrlKey' | 'altKey' | 'shiftKey', boolean>>) => ({
   code,
@@ -30,6 +36,7 @@ describe('on macOS', () => {
 
   it('labels the place chord with the Command glyph', () => {
     expect(placeShortcutLabel(2, mac)).toBe('\u23182');
+    expect(sidebarShortcutLabel(mac)).toBe('\u2318B');
   });
 });
 
@@ -49,6 +56,7 @@ describe('on Windows and Linux', () => {
 
   it('labels the place chord with Ctrl', () => {
     expect(placeShortcutLabel(1, mac)).toBe('Ctrl+1');
+    expect(sidebarShortcutLabel(mac)).toBe('Ctrl+B');
   });
 });
 

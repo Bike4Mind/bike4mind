@@ -1309,6 +1309,23 @@ export function ChatShell({
     [sessions, activeSessionMode]
   );
   usePlaceShortcuts({ onPlace: selectPlace, onToggleSidebar: () => setCollapsed(current => !current) });
+
+  /**
+   * A rail click also drives the sidebar, so a collapsed one is always a click away: any icon
+   * reopens it, and the active place's icon hides it again. The digit shortcuts only switch place.
+   */
+  const selectPlaceFromRail = (next: Place) => {
+    if (collapsed) {
+      setCollapsed(false);
+      selectPlace(next);
+      return;
+    }
+    if (next === place && screen === 'conversation') {
+      setCollapsed(true);
+      return;
+    }
+    selectPlace(next);
+  };
   const customizeAttention = useCustomizeAttention();
 
   /** First-run and explicit New share the renderer-only draft lifecycle. */
@@ -1714,7 +1731,8 @@ export function ChatShell({
 
       <PlaceRail
         place={place}
-        onSelect={selectPlace}
+        sidebarCollapsed={collapsed}
+        onSelect={selectPlaceFromRail}
         account={account?.({
           status: (
             <TurnDot

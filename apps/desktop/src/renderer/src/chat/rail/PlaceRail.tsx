@@ -6,7 +6,7 @@ import Tooltip from '@mui/joy/Tooltip';
 import Typography from '@mui/joy/Typography';
 import { RailChatIcon, RailCodeIcon, RailStudioIcon } from '../icons';
 import { PLACES, type Place } from './places';
-import { placeShortcutLabel } from './shortcuts';
+import { placeShortcutLabel, sidebarShortcutLabel } from './shortcuts';
 
 export const RAIL_WIDTH = 48;
 
@@ -57,14 +57,17 @@ export const railButtonSx = (active: boolean) => ({
 
 /**
  * The far-left column: the places, then the account at the foot. It never hides; collapsing the
- * sidebar leaves it as the only map of the app.
+ * sidebar leaves it as the only map of the app. The shell decides what a click does to the
+ * sidebar; the active icon's tooltip says so, since that click shows or hides it.
  */
 export function PlaceRail({
   place,
+  sidebarCollapsed = false,
   onSelect,
   account,
 }: {
   place: Place;
+  sidebarCollapsed?: boolean;
   onSelect: (place: Place) => void;
   /** The avatar slot at the foot of the rail. */
   account?: ReactNode;
@@ -93,7 +96,16 @@ export function PlaceRail({
         return (
           <Tooltip
             key={value}
-            title={<RailTooltipTitle label={label} shortcut={placeShortcutLabel(digit)} />}
+            title={
+              active ? (
+                <RailTooltipTitle
+                  label={sidebarCollapsed ? 'Show sidebar' : 'Hide sidebar'}
+                  shortcut={sidebarShortcutLabel()}
+                />
+              ) : (
+                <RailTooltipTitle label={label} shortcut={placeShortcutLabel(digit)} />
+              )
+            }
             placement="right"
             size="sm"
             variant="outlined"

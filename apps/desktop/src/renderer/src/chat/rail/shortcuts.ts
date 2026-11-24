@@ -28,6 +28,10 @@ export function placeShortcutLabel(digit: number, mac = isMac): string {
   return mac ? `\u2318${digit}` : `Ctrl+${digit}`;
 }
 
+export function sidebarShortcutLabel(mac = isMac): string {
+  return mac ? '⌘B' : 'Ctrl+B';
+}
+
 export function matchPlaceShortcut(event: Chord, mac = isMac): Place | null {
   if (!only(event, mac ? 'metaKey' : 'ctrlKey')) return null;
   const digit = digitOf(event.code);

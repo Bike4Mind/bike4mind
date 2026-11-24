@@ -229,9 +229,25 @@ describe('places on the rail', () => {
     await press({ key: 'b', code: 'KeyB', ctrlKey: true });
     expect(find('sidebar')).toBeNull();
     expect(find('place-rail')).not.toBeNull();
-    await act(async () => el('place-rail-studio-btn').click());
+    // The digit chord only switches place; the sidebar stays as it was.
+    await press({ key: '3', code: 'Digit3', ctrlKey: true });
     expect(find('studio-sidebar')).toBeNull();
     await press({ key: 'b', code: 'KeyB', metaKey: true });
     expect(find('studio-sidebar')).not.toBeNull();
+  });
+
+  it('reopens a collapsed sidebar from any rail icon, and hides it from the active one', async () => {
+    await mount();
+    await act(async () => el('place-rail-chat-btn').click());
+    expect(find('sidebar')).toBeNull();
+    expect(el('place-rail-chat-btn').getAttribute('aria-current')).toBe('page');
+
+    await act(async () => el('place-rail-chat-btn').click());
+    expect(find('sidebar')).not.toBeNull();
+
+    await press({ key: 'b', code: 'KeyB', ctrlKey: true });
+    await act(async () => el('place-rail-code-btn').click());
+    expect(el('sidebar-place-title').textContent).toBe('Code');
+    expect(el('place-rail-code-btn').getAttribute('aria-current')).toBe('page');
   });
 });
