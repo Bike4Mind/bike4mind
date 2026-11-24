@@ -3,9 +3,11 @@ import { OFFICE_ROOMS, type OfficeRoom } from './officeLayout';
 
 const ROOM_BY_STATE: Record<AgentState, OfficeRoom> = {
   working: 'desks',
+  waiting: 'desks',
   'needs-you': 'conference-room',
   done: 'break-room',
   failed: 'conference-room',
+  paused: 'conference-room',
   stopped: 'conference-room',
   idle: 'conference-room',
 };

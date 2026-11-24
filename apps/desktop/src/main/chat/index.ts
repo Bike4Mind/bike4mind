@@ -118,6 +118,8 @@ import { registerMediaProtocol } from './media/protocol';
 import { ModelCatalog } from './ModelCatalog';
 import { ModelPreference } from './ModelPreference';
 import { SessionActivity } from './SessionActivity';
+import { BackgroundJobsFeed } from './backgroundJobsFeed';
+import { BACKGROUND_EXIT_HOLD_MS } from './backgroundWake';
 import { SessionStore } from './SessionStore';
 import { LocalHistory } from './LocalHistory';
 import { registerHistoryIpc } from './historyIpc';
@@ -676,11 +678,12 @@ export function registerChat(
   // Declared before the two things that feed it, because both take it as a constructor
   // argument: the gate reports who is waiting on the user, the service reports who is
   // replying, and this turns the pair into the one status a sidebar row draws.
-  const activity = new SessionActivity((event: ChatSessionStatusEvent) => {
+  const activity = new SessionActivity((event: ChatSessionStatusEvent, statusChanged: boolean) => {
     send(IPC_CHANNELS.chatSessionStatus, event);
     hooks.observeSessionStatus?.(event);
-    // Only reached once a turn has run, long after pullRequests below exists.
-    if (event.status === 'done' || event.unreadReply) pullRequests.turnSettled(event.sessionId);
+    // Only reached once a turn has run, long after pullRequests below exists. A background job
+    // starting or ending re-sends 'done' without a new turn, so only a real change settles one.
+    if (statusChanged && (event.status === 'done' || event.unreadReply)) pullRequests.turnSettled(event.sessionId);
     // Same: a session changes status only once `service` below exists.
     service.sessionStatusChanged(event);
   });
@@ -697,10 +700,19 @@ export function registerChat(
   // Output and status go out on the same channel as reply tokens: a background process is
   // still something that conversation is doing, and a renderer that reloads re-subscribes to
   // one stream rather than two.
+  // Holds Waiting across the wake's coalesce gap after a job ends on its own; see BackgroundJobsFeed.
+  const backgroundJobs = new BackgroundJobsFeed(
+    (sessionId, jobs) => activity.backgroundChanged(sessionId, jobs),
+    BACKGROUND_EXIT_HOLD_MS
+  );
   const background = new BackgroundProcessRegistry({
     output: (sessionId, processId, stream, text) =>
       broadcast(eventLog.append({ type: 'background-output', sessionId, processId, stream, text })),
-    status: (sessionId, process) => broadcast(eventLog.append({ type: 'background-status', sessionId, process })),
+    status: (sessionId, process) => {
+      broadcast(eventLog.append({ type: 'background-status', sessionId, process }));
+      // Only ever fires from start/finish, after `background` below has been assigned.
+      backgroundJobs.update(sessionId, background.wakingJobs(sessionId), process.status);
+    },
     // Only ever fires once a process has run, long after `service` below exists.
     exited: (sessionId, processId) => service.backgroundExited(sessionId, processId),
   });

@@ -8,7 +8,40 @@ import { assignPersonas } from '@shared/agentPersona';
 import { ANNOUNCE_DEBOUNCE_MS } from './announcements';
 import { BAR_COUNTER, DOOR_POINT, INNKEEPER_POINT, OVERFLOW_POINTS, TAVERN_SLOTS, hiddenByCounter } from './scene';
 import { UNFOCUSED_PAUSE_MS } from './useScenePause';
-import { TavernView } from './TavernView';
+import { TavernView, bubbleText, waitingLabel } from './TavernView';
+
+describe('bubbleText for settled and waiting agents', () => {
+  it('names the one background job, or counts several', () => {
+    expect(waitingLabel({ running: 1, label: 'pnpm test' })).toBe('Waiting: pnpm test');
+    expect(waitingLabel({ running: 3, label: 'pnpm test' })).toBe('Waiting: 3 jobs');
+    expect(bubbleText(agentFixture('a', 'waiting', { background: { running: 1, label: 'pnpm test' } }), 0)).toBe(
+      'Waiting: pnpm test'
+    );
+  });
+
+  it('shows a paused agent its last words, or the budget when it said nothing', () => {
+    expect(bubbleText(agentFixture('a', 'paused', { lastSnippet: 'Ran 3 of 5 suites' }), 0)).toBe(
+      'Paused: Ran 3 of 5 suites'
+    );
+    expect(bubbleText(agentFixture('a', 'paused'), 0)).toBe('Paused: turn budget');
+  });
+
+  it('keeps an idle agent its last snippet', () => {
+    expect(bubbleText(agentFixture('a', 'idle', { lastSnippet: 'state blocked: queued' }), 0)).toBe(
+      'state blocked: queued'
+    );
+    expect(bubbleText(agentFixture('a', 'idle'), 0)).toBeUndefined();
+  });
+
+  it('shows a plain done agent its last words, and keeps an accepted worker task quiet', () => {
+    expect(bubbleText(agentFixture('a', 'done', { lastSnippet: 'Waiting on your sign-off' }), 0)).toBe(
+      'Waiting on your sign-off'
+    );
+    expect(bubbleText(agentFixture('a', 'done'), 0)).toBeUndefined();
+    const workerTask = { state: { status: 'completed', accepted: true } } as unknown as AgentView['workerTask'];
+    expect(bubbleText(agentFixture('a', 'done', { lastSnippet: 'All green', workerTask }), 0)).toBeUndefined();
+  });
+});
 
 type SceneModule = typeof import('./scene');
 // Lets one test squeeze a label below the minimum, which no real seat pair does.
