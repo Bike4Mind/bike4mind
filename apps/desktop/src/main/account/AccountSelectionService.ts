@@ -61,7 +61,10 @@ export interface AccountSelectionDeps {
   /** Resolves once `store` has loaded; reads and picks wait for it so a load never overwrites a pick. */
   ready: Promise<unknown>;
   logger: { warn(message: string): void };
-  /** Every selection a window did not ask for itself: a pick in another window, a fallback, a sign-in or out. */
+  /**
+   * Every change of payer: a pick (sent to every window, the picker's too, so each hook in it stays in
+   * step), a fallback, a sign-in or out.
+   */
   onChanged(selection: AccountSelection): void;
 }
 

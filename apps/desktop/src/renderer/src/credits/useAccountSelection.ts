@@ -17,8 +17,7 @@ function message(error: unknown): string {
 /**
  * Who pays for credit-spending calls, as main remembers it. Read from main's last answer on mount,
  * re-read fresh each time `refresh` turns true (the account menu opening) or an org-paid turn settles
- * (`spentAt` changes), and kept in step with
- * picks made in other windows.
+ * (`spentAt` changes), and kept in step with picks made anywhere in the app.
  */
 export function useAccountSelection(refresh = false, spentAt = 0): AccountSelectionController {
   const [selection, setSelection] = useState<AccountSelection | null>(null);

@@ -944,7 +944,7 @@ export interface DesktopApi {
     getSelection(fresh?: boolean): Promise<AccountSelection>;
     /** Null is Personal. Rejects for an organization the user is not listed in. */
     selectPayer(organizationId: string | null): Promise<AccountSelection>;
-    /** A pick made in another window, or a fallback to Personal; returns the unsubscribe. */
+    /** Any pick (this window's included), a fallback to Personal, or a sign-in or out; returns the unsubscribe. */
     onSelectionChanged(listener: (selection: AccountSelection) => void): () => void;
   };
   usage: {
