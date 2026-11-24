@@ -190,6 +190,21 @@ CreditTransactionSchema.index(
   { name: 'credit_tx_oauth_client', partialFilterExpression: { oauthClientId: { $exists: true } } }
 );
 
+/**
+ * The ledger rows a run's settled spend is read from: its completions, and the paid tool calls a
+ * run-attributed client made on its behalf. Each must be written with `metadata.run`, and each is
+ * claimed against the run budget with its hold, so the committed total and this sum agree.
+ */
+const RUN_SPEND_TRANSACTION_TYPES = [
+  'completion_api_usage',
+  'image_generation_usage',
+  'image_edit_usage',
+  'video_generation_usage',
+  'music_generation_usage',
+  'text_to_speech_usage',
+  'sound_effects_usage',
+] as const;
+
 export type ICreditTransactionModel = Model<ICreditTransactionDocument>;
 
 /**
@@ -745,9 +760,9 @@ export class CreditTransactionRepository
             'metadata.run.runId': runId,
             ownerId: owner.ownerId,
             ownerType: owner.ownerType,
-            // Settled-only by construction: cliCompletions.ts writes this row, negative, after the credit
-            // charge settles. A writer that records it earlier or unsigned breaks this sum and the $abs.
-            type: 'completion_api_usage',
+            // Settled-only by construction: each of these rows is written, negative, after its credit
+            // charge settles. A writer that records one earlier or unsigned breaks this sum and the $abs.
+            type: { $in: [...RUN_SPEND_TRANSACTION_TYPES] },
           },
         },
         {

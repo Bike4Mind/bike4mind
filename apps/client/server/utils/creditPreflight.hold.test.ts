@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { CreditHolderType, UnprocessableEntityError } from '@bike4mind/common';
+import { CreditHolderType, RUN_BUDGET_EXHAUSTED_ERROR_CODE, UnprocessableEntityError } from '@bike4mind/common';
 
 const { mocks } = vi.hoisted(() => ({
   mocks: {
@@ -132,6 +132,46 @@ describe('holdPreflightCredits', () => {
     mocks.reserve.mockRejectedValue(new UnprocessableEntityError('not enough credits'));
 
     await expect(hold()).rejects.toBeInstanceOf(InsufficientCreditsPreflightError);
+  });
+
+  describe('with a completion run', () => {
+    const run = { runId: 'run-1', role: 'root' as const, purpose: 'tool' as const };
+
+    it('forwards the run to the reservation so the whole hold is claimed from it', async () => {
+      await hold({ billingOrganizationId: 'org1', run });
+
+      expect(mocks.reserve).toHaveBeenCalledWith(expect.objectContaining({ run, billingOrganizationId: 'org1' }));
+    });
+
+    it('lets a run budget refusal reach the route as its own 422, not as a credit refusal', async () => {
+      const refusal = new UnprocessableEntityError('run is spent', { errorCode: RUN_BUDGET_EXHAUSTED_ERROR_CODE });
+      mocks.reserve.mockRejectedValue(refusal);
+
+      await expect(hold({ run })).rejects.toBe(refusal);
+    });
+
+    it('records the run on a direct charge, where no reservation settles it', async () => {
+      mocks.getSettingsMap.mockResolvedValue({ enforceCredits: 'false' });
+      mocks.reserve.mockResolvedValue(held({ reservedCredits: 0 }));
+      const preflight = await hold({ run });
+
+      await preflight.settle(25, { type: 'text_to_speech_usage', model: 'tts-1', sessionId: 's1' });
+
+      expect(mocks.deductCreditsWithOrgSupport).toHaveBeenCalledWith(
+        expect.objectContaining({ credits: 25, run }),
+        expect.anything()
+      );
+    });
+
+    it('leaves a direct charge without a run untouched', async () => {
+      mocks.getSettingsMap.mockResolvedValue({ enforceCredits: 'false' });
+      mocks.reserve.mockResolvedValue(held({ reservedCredits: 0 }));
+      const preflight = await hold();
+
+      await preflight.settle(25, { type: 'text_to_speech_usage', model: 'tts-1', sessionId: 's1' });
+
+      expect(mocks.deductCreditsWithOrgSupport.mock.calls[0][0]).not.toHaveProperty('run');
+    });
   });
 
   it('passes a non-billing failure through untouched', async () => {

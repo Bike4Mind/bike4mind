@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import type { ChatReplyStats, ChatUsage } from '@shared/chat';
+import type {
+  ChatReplyStats,
+  ChatUsage,
+  ChatMessage,
+  ChatStreamEvent,
+  ChatToolCall,
+  ChatReplyRound,
+} from '@shared/chat';
 import {
   cacheReadShare,
   describeReplyStats,
@@ -14,7 +21,11 @@ import {
   thinkingShare,
   withPhase,
 } from './replyStats';
-import type { TurnProgress } from './statusLine';
+import { type TurnProgress, contextTokens } from './statusLine';
+import { applyLiveEvent } from '@shared/liveReply';
+import { callsIn, roundsOf } from './replyRounds';
+import { applyReplyDone } from './replyDone';
+import { describeTokenRate, formatTokenRate } from './tokenRate';
 
 const base: ChatReplyStats = { totalMs: 20_000, modelMs: 20_000, toolMs: 0 };
 
@@ -624,5 +635,382 @@ describe('the live turn', () => {
   it('has no thinking time or first token for a turn that has neither', () => {
     expect(liveReplyStats(turn, 12_000).reasoningMs).toBeUndefined();
     expect(liveReplyStats(turn, 12_000).firstTokenMs).toBeUndefined();
+  });
+});
+
+describe('replyRounds', () => {
+  function call(id: string, name = 'bash_execute'): ChatToolCall {
+    return { id, name, input: {}, status: 'done' };
+  }
+
+  function message(fields: Partial<ChatMessage>): ChatMessage {
+    return {
+      id: 'm1',
+      role: 'assistant',
+      content: '',
+      createdAt: new Date().toISOString(),
+      ...fields,
+    } as ChatMessage;
+  }
+
+  describe('roundsOf', () => {
+    it('collapses a message stored before rounds existed into one round', () => {
+      const drawn = roundsOf(message({ content: 'All done.', toolCalls: [call('a'), call('b')] }));
+
+      expect(drawn).toEqual([{ text: 'All done.', toolCallIds: ['a', 'b'] }]);
+    });
+
+    it('folds wordless rounds into the round whose prose introduced them', () => {
+      const drawn = roundsOf(
+        message({
+          content: 'Running the tests.\n\nGreen.',
+          rounds: [
+            { text: 'Running the tests.', toolCallIds: ['a'] },
+            { text: '', toolCallIds: ['b'] },
+            { text: '', toolCallIds: ['c'] },
+            { text: 'Green.', toolCallIds: [] },
+          ],
+          toolCalls: [call('a'), call('b'), call('c')],
+        })
+      );
+
+      expect(drawn).toEqual([
+        { text: 'Running the tests.', toolCallIds: ['a', 'b', 'c'] },
+        { text: 'Green.', toolCallIds: [] },
+      ]);
+    });
+
+    it('keeps a round that carries only reasoning, which now has a row of its own', () => {
+      const drawn = roundsOf(
+        message({
+          content: 'Found it.',
+          rounds: [
+            { text: '', toolCallIds: [], reasoning: 'planning' },
+            { text: 'Found it.', toolCallIds: [] },
+          ],
+        })
+      );
+
+      expect(drawn).toEqual([
+        { text: '', toolCallIds: [], reasoning: 'planning' },
+        { text: 'Found it.', toolCallIds: [] },
+      ]);
+    });
+
+    it('carries the reasoning of a wordless round into the round it is folded into', () => {
+      const drawn = roundsOf(
+        message({
+          rounds: [
+            { text: 'Looking.', toolCallIds: ['a'], reasoning: 'first thought' },
+            { text: '', toolCallIds: ['b'], reasoning: 'second thought' },
+          ],
+          toolCalls: [call('a'), call('b')],
+        })
+      );
+
+      expect(drawn).toEqual([
+        { text: 'Looking.', toolCallIds: ['a', 'b'], reasoning: 'first thought\n\nsecond thought' },
+      ]);
+    });
+
+    it('folds a wordless round with no reasoning without inventing an empty one', () => {
+      const drawn = roundsOf(
+        message({
+          rounds: [
+            { text: 'Looking.', toolCallIds: ['a'] },
+            { text: '', toolCallIds: ['b'] },
+          ],
+          toolCalls: [call('a'), call('b')],
+        })
+      );
+
+      expect(drawn).toEqual([{ text: 'Looking.', toolCallIds: ['a', 'b'] }]);
+    });
+
+    it('keeps the calls of a reasoning-only round that went on to run tools', () => {
+      const drawn = roundsOf(
+        message({
+          rounds: [
+            { text: '', toolCallIds: [], reasoning: 'planning' },
+            { text: '', toolCallIds: ['a'] },
+          ],
+          toolCalls: [call('a')],
+        })
+      );
+
+      expect(drawn.flatMap(round => round.toolCallIds)).toEqual(['a']);
+    });
+
+    it('keeps a leading wordless round rather than dropping its calls', () => {
+      const drawn = roundsOf(
+        message({
+          content: 'Found it.',
+          rounds: [
+            { text: '', toolCallIds: ['a'] },
+            { text: 'Found it.', toolCallIds: [] },
+          ],
+          toolCalls: [call('a')],
+        })
+      );
+
+      expect(drawn).toEqual([
+        { text: '', toolCallIds: ['a'] },
+        { text: 'Found it.', toolCallIds: [] },
+      ]);
+    });
+  });
+
+  describe('callsIn', () => {
+    it('takes only its own calls, in the message order, ignoring ids that are gone', () => {
+      const calls = callsIn({ text: '', toolCallIds: ['c', 'a', 'gone'] }, [call('a'), call('b'), call('c')]);
+
+      expect(calls.map(entry => entry.id)).toEqual(['a', 'c']);
+    });
+  });
+
+  describe('roundsOf while a reply streams', () => {
+    const ev = (event: { type: string; text?: string; call?: ChatToolCall }) =>
+      ({ sessionId: 's1', messageId: 'm1', ...event }) as ChatStreamEvent;
+
+    it('never moves a call out of the round it was first drawn in', () => {
+      const events = [
+        ev({ type: 'delta', text: 'Reading.' }),
+        ev({ type: 'tool-start', call: call('a') }),
+        ev({ type: 'delta', text: '\n' }),
+        ev({ type: 'tool-start', call: call('b') }),
+        ev({ type: 'delta', text: '\n\nNow editing.' }),
+        ev({ type: 'tool-start', call: call('c') }),
+        ev({ type: 'delta', text: 'Done.' }),
+      ];
+      let live = message({});
+      const seen = new Map<string, number>();
+      for (const event of events) {
+        live = applyLiveEvent(live, event);
+        roundsOf(live).forEach((round, index) =>
+          round.toolCallIds.forEach(id => {
+            expect(seen.get(id) ?? index).toBe(index);
+            seen.set(id, index);
+          })
+        );
+      }
+    });
+  });
+});
+
+describe('replyDone', () => {
+  type ReplyDoneEvent = Extract<ChatStreamEvent, { type: 'done' }>;
+
+  const ARTIFACT = '<artifact type="text/html" title="Demo">\n<b>hi</b>\n</artifact>';
+
+  /** A reply as it looks mid-stream: the deltas that arrived, artifact markup and all. */
+  function streaming(rounds: ChatReplyRound[]): ChatMessage {
+    return {
+      id: 'm1',
+      role: 'assistant',
+      createdAt: '2026-01-01T00:00:00.000Z',
+      content: rounds.map(round => round.text).join('\n\n'),
+      rounds,
+    };
+  }
+
+  function done(event: Partial<ReplyDoneEvent>): ReplyDoneEvent {
+    return { type: 'done', sessionId: 's1', messageId: 'm1', content: '', ...event };
+  }
+
+  describe('applyReplyDone', () => {
+    it('takes the stripped rounds off the event, so the thread stops drawing raw markup', () => {
+      // The regression. Main strips per round before it announces the reply, so the event holds
+      // clean prose while the message still holds the deltas that carried the markup.
+      const message = streaming([{ text: `Here you go.\n\n${ARTIFACT}`, toolCallIds: ['c1'] }]);
+      const settled = applyReplyDone(
+        message,
+        done({ content: 'Here you go.', rounds: [{ text: 'Here you go.', toolCallIds: ['c1'] }] })
+      );
+
+      const drawn = roundsOf(settled)
+        .map(round => round.text)
+        .join('\n');
+      expect(drawn).not.toContain('<artifact');
+      expect(drawn).toBe('Here you go.');
+    });
+
+    it('drops the streamed rounds when the event omits them, so content is what draws', () => {
+      // A turn that ran no tools: main sends no `rounds`, and roundsOf rebuilds the single round
+      // from `content`. Defaulting to the message's own rounds here would keep the raw markup.
+      const message = streaming([{ text: `Made it.\n\n${ARTIFACT}`, toolCallIds: [] }]);
+      const settled = applyReplyDone(message, done({ content: 'Made it.' }));
+
+      expect(settled.rounds).toBeUndefined();
+      expect(roundsOf(settled).map(round => round.text)).toEqual(['Made it.']);
+    });
+
+    it('keeps every round of a resumed turn, not just the ones after the interruption', () => {
+      // Continue streams into the SAME message and its done carries seeded + new rounds.
+      const message = streaming([
+        { text: 'First.', toolCallIds: ['c1'] },
+        { text: `Second.\n\n${ARTIFACT}`, toolCallIds: [] },
+      ]);
+      const settled = applyReplyDone(
+        message,
+        done({
+          content: 'First.\n\nSecond.',
+          rounds: [
+            { text: 'First.', toolCallIds: ['c1'] },
+            { text: 'Second.', toolCallIds: [] },
+          ],
+        })
+      );
+
+      expect(roundsOf(settled).map(round => round.text)).toEqual(['First.', 'Second.']);
+    });
+
+    it('carries the reply fields the event brings', () => {
+      const settled = applyReplyDone(
+        streaming([{ text: 'x', toolCallIds: [] }]),
+        done({
+          content: 'x',
+          stopReason: 'tool_turn_limit',
+          contextSnapshot: { model: 'test', inputTokens: 100, overhead: [] },
+          artifacts: [{ id: 'a1', type: 'html', mimeType: 'text/html', title: 'Demo', content: '<b>hi</b>' }],
+        })
+      );
+
+      expect(settled.stopReason).toBe('tool_turn_limit');
+      expect(settled.contextSnapshot?.inputTokens).toBe(100);
+      expect(settled.artifacts).toHaveLength(1);
+    });
+
+    it('keeps what streamed for the fields the event leaves out', () => {
+      const message: ChatMessage = {
+        ...streaming([{ text: 'x', toolCallIds: ['c1'] }]),
+        toolCalls: [{ id: 'c1', name: 'bash_execute', input: { command: 'ls' }, status: 'done' }],
+      };
+      const settled = applyReplyDone(message, done({ content: 'x' }));
+
+      expect(settled.toolCalls).toHaveLength(1);
+      expect(settled.stopReason).toBeUndefined();
+    });
+
+    /**
+     * The settled reply is the window's only copy until the conversation is reloaded, so a usage
+     * dropped here is a usage the composer's context indicator cannot read: it went to "--" the
+     * instant the turn it was measuring ended, and came back only on a reload.
+     */
+    it('carries the usage, which is what the context indicator is read off', () => {
+      const settled = applyReplyDone(
+        streaming([{ text: 'x', toolCallIds: [] }]),
+        done({ content: 'x', usage: { inputTokens: 1357, cacheReadInputTokens: 11_136, outputTokens: 5996 } })
+      );
+
+      expect(settled.usage?.inputTokens).toBe(1357);
+      expect(contextTokens(settled)).toBe(12_493);
+    });
+
+    // A terminal event with no usage on it leaves whatever the stream already folded in, rather
+    // than clearing a figure that was real - see the other `keeps what streamed` case.
+    it('keeps a usage the event does not restate', () => {
+      const message: ChatMessage = { ...streaming([{ text: 'x', toolCallIds: [] }]), usage: { inputTokens: 900 } };
+      expect(applyReplyDone(message, done({ content: 'x' })).usage?.inputTokens).toBe(900);
+    });
+
+    it('takes the prompt cache stamp, which only the settled reply carries', () => {
+      const stamp = { cachedAt: 1_000, ttl: '1h' as const, model: 'claude-opus-5-5' };
+      const message = streaming([{ text: 'x', toolCallIds: [] }]);
+      expect(applyReplyDone(message, done({ content: 'x', promptCache: stamp })).promptCache).toEqual(stamp);
+    });
+
+    it('takes the stats, so the rail shows the settled figures without a reload', () => {
+      const stats = { totalMs: 4000, modelMs: 4000, toolMs: 0, firstTokenMs: 300 };
+      const message = streaming([{ text: 'x', toolCallIds: [] }]);
+      const settled = applyReplyDone(message, done({ content: 'x', stats }));
+
+      expect(settled.stats).toEqual(stats);
+      expect(applyReplyDone(settled, done({ content: 'x' })).stats).toEqual(stats);
+    });
+
+    it('leaves the text a reply with no artifact in it streamed', () => {
+      const message = streaming([{ text: 'Plain answer.', toolCallIds: [] }]);
+      const settled = applyReplyDone(message, done({ content: 'Plain answer.' }));
+
+      expect(roundsOf(settled).map(round => round.text)).toEqual(['Plain answer.']);
+    });
+
+    it('carries the quest_complete mark onto the settled reply, and adds none without it', () => {
+      const message = streaming([{ text: 'Summary.', toolCallIds: [] }]);
+      expect(applyReplyDone(message, done({ content: 'Summary.', questComplete: true })).questComplete).toBe(true);
+      expect(applyReplyDone(message, done({ content: 'Summary.' }))).not.toHaveProperty('questComplete');
+    });
+  });
+});
+
+describe('tokenRate', () => {
+  describe('formatTokenRate', () => {
+    it('shows one decimal under 100 tok/s and whole numbers above', () => {
+      expect(formatTokenRate({ evalTokens: 478, evalMs: 20_000 })).toBe('23.9 tok/s');
+      expect(formatTokenRate({ evalTokens: 1500, evalMs: 10_000 })).toBe('150 tok/s');
+    });
+
+    it('marks an estimate with a tilde', () => {
+      expect(formatTokenRate({ evalTokens: 40, evalMs: 2000, estimated: true })).toBe('~20.0 tok/s');
+    });
+
+    it.each([undefined, null, { evalTokens: 0, evalMs: 100 }, { evalTokens: 10, evalMs: 0 }])(
+      'shows nothing without a measurement: %j',
+      rate => {
+        expect(formatTokenRate(rate)).toBeNull();
+      }
+    );
+  });
+
+  describe('describeTokenRate', () => {
+    it('adds prompt, load and draft lines only where reported', () => {
+      expect(
+        describeTokenRate({
+          evalTokens: 478,
+          evalMs: 20_000,
+          promptTokens: 1200,
+          promptMs: 1500,
+          loadMs: 2300,
+          draftTokens: 245,
+          draftAccepted: 120,
+        })
+      ).toBe(
+        [
+          'Generation: 23.9 tok/s (478 tokens in 20.0s)',
+          'Prompt: 800 tok/s (1.2k tokens in 1.5s)',
+          'Load (total): 2.3s',
+          'Draft acceptance: 49% (120 of 245)',
+        ].join('\n')
+      );
+      expect(describeTokenRate({ evalTokens: 10, evalMs: 400 })).toBe('Generation: 25.0 tok/s (10 tokens in 400ms)');
+    });
+
+    it('says how much of the output was timed when some rounds were not', () => {
+      expect(describeTokenRate({ evalTokens: 40, evalMs: 2000 }, 100)).toBe(
+        'Generation: 20.0 tok/s (timed 40 of 100 output tokens in 2.0s)'
+      );
+      expect(describeTokenRate({ evalTokens: 40, evalMs: 2000 }, 40)).toBe(
+        'Generation: 20.0 tok/s (40 tokens in 2.0s)'
+      );
+    });
+
+    it('leaves out the tokens left untimed by design, and a count that rounds like the output', () => {
+      expect(describeTokenRate({ evalTokens: 199, evalMs: 4000, untimedTokens: 1 }, 200)).toBe(
+        'Generation: 49.8 tok/s (199 tokens in 4.0s)'
+      );
+      expect(describeTokenRate({ evalTokens: 9999, evalMs: 4000 }, 10_000)).toBe(
+        'Generation: 2500 tok/s (10k tokens in 4.0s)'
+      );
+    });
+
+    it('says an estimate was timed by the app', () => {
+      expect(describeTokenRate({ evalTokens: 40, evalMs: 2000, estimated: true })).toBe(
+        'Generation: ~20.0 tok/s (40 tokens in 2.0s)\nEstimated from stream timing; the server reported no timings'
+      );
+    });
+
+    it('is null with nothing measured', () => {
+      expect(describeTokenRate(undefined)).toBeNull();
+    });
   });
 });

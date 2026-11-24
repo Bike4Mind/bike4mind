@@ -31,7 +31,13 @@ function glanceFor(organization: BillingAccount | null): CreditsGlance {
     organization,
     burnPerDay: organization ? null : 100,
     readAt: NOW,
-    outlook: creditOutlook({ balance, burnPerDay: organization ? 0 : 100, refillAt: null, now: NOW }),
+    outlook: creditOutlook({
+      balance,
+      burnPerDay: organization ? 0 : 100,
+      refillAt: null,
+      expiring: undefined,
+      now: NOW,
+    }),
   };
 }
 

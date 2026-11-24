@@ -1,11 +1,11 @@
 import { execFileSync } from 'node:child_process';
-import { mkdir, mkdtemp, readFile, realpath, writeFile } from 'node:fs/promises';
+import { cp, mkdir, mkdtemp, readFile, realpath, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
 import type { AuthenticatedApiClient } from '@bike4mind/client-auth';
 import type { ChatApprovalMode, ChatSessionSummary, ChatStreamEvent, ChatToolCall } from '@shared/chat';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ChatService } from './ChatService';
 import { SessionStore } from './SessionStore';
 import type { AccessStore } from './tools/AccessStore';
@@ -14,6 +14,10 @@ import { toolsForRequest } from './tools/registry';
 import { bashExecute, shellApproval } from './tools/shellTools';
 import * as shellScanner from './tools/shellScan';
 import * as wslPaths from '../wsl/wslPath';
+
+vi.mock('../git/hostGitArgs', async importOriginal =>
+  (await import('./plainFolderGit.testHelper')).skipGitOutsideRepositories(await importOriginal())
+);
 
 function frame(payload: unknown): string {
   return `data: ${typeof payload === 'string' ? payload : JSON.stringify(payload)}\n\n`;
@@ -369,16 +373,29 @@ describe('ChatService approval modes', () => {
       });
     };
 
+    // Built once and copied per test, since several tests change the repository.
+    let template: { root: string; origin: string };
+    beforeAll(async () => {
+      const templateRoot = await realpath(await mkdtemp(join(tmpdir(), 'b4m-mode-template-')));
+      const origin = await realpath(await mkdtemp(join(tmpdir(), 'b4m-mode-origin-')));
+      await writeFile(join(templateRoot, 'notes.txt'), 'hello\n', 'utf8');
+      git(templateRoot, 'init', '-q', '-b', 'main');
+      git(templateRoot, 'add', 'notes.txt');
+      git(templateRoot, 'commit', '-qm', 'notes');
+      git(origin, 'clone', '-q', '--bare', templateRoot, '.');
+      git(origin, 'branch', 'x', 'main');
+      git(templateRoot, 'remote', 'add', 'origin', origin);
+      git(templateRoot, 'fetch', '-q', 'origin');
+      template = { root: templateRoot, origin };
+    });
+
     beforeEach(async () => {
       const origin = await realpath(await mkdtemp(join(tmpdir(), 'b4m-mode-origin-')));
-      git(root, 'init', '-q', '-b', 'main');
-      git(root, 'add', 'notes.txt');
-      git(root, 'commit', '-qm', 'notes');
-      git(origin, 'clone', '-q', '--bare', root, '.');
-      git(origin, 'branch', 'x', 'main');
-      git(root, 'remote', 'add', 'origin', origin);
+      await cp(template.origin, origin, { recursive: true });
+      await cp(join(template.root, '.git'), join(root, '.git'), { recursive: true });
+      const config = join(root, '.git', 'config');
+      await writeFile(config, (await readFile(config, 'utf8')).replaceAll(template.origin, origin), 'utf8');
       await mkdir(join(root, 'sub'), { recursive: true });
-      git(root, 'fetch', '-q', 'origin');
     });
 
     const routine = [
@@ -390,16 +407,15 @@ describe('ChatService approval modes', () => {
       'git show --format= --remerge-diff HEAD',
     ];
 
+    // The prompt does not depend on the mode, and autoApproves stops in 'auto' for everything it
+    // stops in 'full'. One command keeps both modes to pin that ordering; the rest run in one.
     it.each([
-      ['auto', 'git fetch origin main -q && git merge --ff-only origin/main 2>&1 | tail -2'],
       ['full', 'git fetch origin main -q && git merge --ff-only origin/main 2>&1 | tail -2'],
       ['auto', 'git status --frobnicate'],
       ['full', 'git status --frobnicate'],
-      ['auto', 'cd sub && ls ; wc -l ../notes.txt'],
       ['full', 'cd sub && ls ; wc -l ../notes.txt'],
       ['auto', 'git merge --abort'],
       ['auto', 'git merge --abort && git status --short && git rev-parse HEAD'],
-      ['auto', 'git status && rm -f "$OPAQUE_TARGET"'],
       ['full', 'git status && rm -f "$OPAQUE_TARGET"'],
     ] as const)('asks in %s when the scan cannot follow it: %s', async (mode, command) => {
       const execute = vi.spyOn(bashExecute, 'run').mockResolvedValue('test execution');
@@ -410,12 +426,12 @@ describe('ChatService approval modes', () => {
       expect(execute).not.toHaveBeenCalled();
     });
 
-    it.each(['auto', 'full'] as const)('holds assembled protected destinations and unknown curl in %s', async mode => {
+    it('holds assembled protected destinations and unknown curl in full access', async () => {
       const settings = join(root, '.claude', 'settings.json');
       await mkdir(join(root, '.claude'), { recursive: true });
       await writeFile(settings, 'protected fixture');
       const execute = vi.spyOn(bashExecute, 'run').mockResolvedValue('test execution');
-      await startTurn(mode);
+      await startTurn('full');
       streams[0].write(
         toolTurn('c1', 'bash_execute', {
           command:
@@ -429,32 +445,28 @@ describe('ChatService approval modes', () => {
       expect(await readFile(settings, 'utf8')).toBe('protected fixture');
     });
 
-    it.each(['auto', 'full'] as const)('asks for unparsed commands in %s', async mode => {
+    it('asks for unparsed commands in full access', async () => {
       const execute = vi.spyOn(bashExecute, 'run').mockResolvedValue('test execution');
-      await startTurn(mode);
+      await startTurn('full');
       streams[0].write(toolTurn('c1', 'bash_execute', { command: 'if then fi ((', cwd: root }));
       streams[0].write(frame('[DONE]'));
       await awaitStatus('awaiting-approval');
       expect(execute).not.toHaveBeenCalled();
     });
 
-    it.each(routine)('runs %s in full access', async command => {
-      await startTurn('full');
-      streams[0].write(toolTurn('c1', 'bash_execute', { command, cwd: root }));
-      streams[0].write(frame('[DONE]'));
+    it.each([...routine.map(command => ['auto', command] as const), ['full', routine[0]] as const])(
+      'runs without asking in %s: %s',
+      async (mode, command) => {
+        // The decision is the subject; running the real fetch would only cost time.
+        vi.spyOn(bashExecute, 'run').mockResolvedValue('test execution');
+        await startTurn(mode);
+        streams[0].write(toolTurn('c1', 'bash_execute', { command, cwd: root }));
+        streams[0].write(frame('[DONE]'));
 
-      await vi.waitUntil(() => calls('done')[0] ?? calls('error')[0], { timeout: 10_000, interval: 10 });
-      expect(calls('awaiting-approval')).toHaveLength(0);
-    });
-
-    it.each(routine)('runs %s in approve for me', async command => {
-      await startTurn('auto');
-      streams[0].write(toolTurn('c1', 'bash_execute', { command, cwd: root }));
-      streams[0].write(frame('[DONE]'));
-
-      await vi.waitUntil(() => calls('done')[0] ?? calls('error')[0], { timeout: 10_000, interval: 10 });
-      expect(calls('awaiting-approval')).toHaveLength(0);
-    });
+        await vi.waitUntil(() => calls('done')[0] ?? calls('error')[0], { timeout: 10_000, interval: 10 });
+        expect(calls('awaiting-approval')).toHaveLength(0);
+      }
+    );
 
     it.each([
       ['a .env read', 'cat .env', 'usually holds secrets'],

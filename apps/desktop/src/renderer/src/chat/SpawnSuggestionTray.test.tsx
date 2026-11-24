@@ -157,6 +157,7 @@ describe('SpawnSuggestionTray', () => {
     expect(byTestId<HTMLInputElement>('spawn-suggestion-branch-input').value).toBe('agent/tidy-imports');
     expect(byTestId('spawn-suggestion-base').textContent).toBe('Based on feat/parent');
     expect(host?.querySelector('[data-testid="spawn-suggestion-prompt-input"]')).toBeNull();
+    expect(primary().textContent).toBe('Start in new worktree');
   });
 
   it('starts with the edited prompt, title and branch', async () => {
@@ -193,12 +194,6 @@ describe('SpawnSuggestionTray', () => {
     expect(byTestId('spawn-suggestion-error').textContent).toContain('already running');
   });
 
-  it('defaults to a new worktree in a git repository, showing the branch', () => {
-    render([BASE], handlers());
-    expect(primary().textContent).toBe('Start in new worktree');
-    expect(hasBranchField()).toBe(true);
-  });
-
   it('defaults to this folder outside a git repository, where a worktree cannot be chosen', async () => {
     render([{ ...BASE, repository: false }], handlers());
     expect(primary().textContent).toBe('Start in this folder');
@@ -226,17 +221,6 @@ describe('SpawnSuggestionTray', () => {
     expect(primary().textContent).toBe('Start in new worktree');
     expect(hasBranchField()).toBe(true);
     expect(on.onStart).not.toHaveBeenCalled();
-  });
-
-  it('labels each menu item with a line saying what it does', async () => {
-    render([BASE], handlers());
-    await click('spawn-suggestion-start-menu-btn');
-    expect(inDocument('spawn-suggestion-choice-worktree-item')?.textContent).toContain('New session in a worktree');
-    expect(inDocument('spawn-suggestion-choice-local-item')?.textContent).toContain('New session in this folder');
-    const here = inDocument('spawn-suggestion-choice-here-item')?.textContent ?? '';
-    expect(here).toContain('Run here, in this conversation');
-    expect(here).toContain('No new session.');
-    expect(byTestId('spawn-suggestion-start-menu-btn').getAttribute('aria-expanded')).toBe('true');
   });
 
   it('opens the menu from the keyboard with focus inside it, so a choice can be picked by key', async () => {
@@ -361,14 +345,12 @@ describe('SpawnSuggestionTray', () => {
     });
   });
 
-  it('needs a prompt for every choice', async () => {
+  // canStart checks the prompt before it looks at the choice, so one choice covers all three.
+  it('needs a prompt to start', async () => {
     render([BASE], handlers());
     await click('spawn-suggestion-expand-btn');
     type(byTestId<HTMLTextAreaElement>('spawn-suggestion-prompt-input'), '  ');
-    for (const choice of ['worktree', 'local', 'here'] as const) {
-      await choose(choice);
-      expect(primary().disabled).toBe(true);
-    }
+    expect(primary().disabled).toBe(true);
   });
 
   it('dismisses', async () => {

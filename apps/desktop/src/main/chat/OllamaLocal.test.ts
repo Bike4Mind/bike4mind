@@ -146,9 +146,19 @@ describe('OllamaLocal', () => {
       )
     );
     vi.useFakeTimers();
-    const pending = new OllamaLocal().models();
-    await vi.advanceTimersByTimeAsync(1_001);
-    await expect(pending).resolves.toEqual([]);
+    // AbortSignal.timeout runs on a real timer that fake timers do not reach.
+    const deadline = vi.spyOn(AbortSignal, 'timeout').mockImplementation(ms => {
+      const controller = new AbortController();
+      setTimeout(() => controller.abort(new DOMException('timed out', 'TimeoutError')), ms);
+      return controller.signal;
+    });
+    try {
+      const pending = new OllamaLocal().models();
+      await vi.advanceTimersByTimeAsync(1_001);
+      await expect(pending).resolves.toEqual([]);
+    } finally {
+      deadline.mockRestore();
+    }
   });
 
   it.each([true, false])('omits thinking %s when the fresh inspection reports a plain model', async thinking => {

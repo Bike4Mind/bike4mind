@@ -4,7 +4,16 @@ import Stack from '@mui/joy/Stack';
 import Tooltip from '@mui/joy/Tooltip';
 import Typography from '@mui/joy/Typography';
 import type { AccountTier, BillingAccount } from '@shared/account';
-import { FULL_RUNWAY_DAYS, formatRunway, refillMarker, type CreditOutlook, type CreditTone } from './creditOutlook';
+import { HourglassIcon } from '../chat/icons';
+import {
+  FULL_RUNWAY_DAYS,
+  formatRunway,
+  refillMarker,
+  runwayBeyondStatedHorizon,
+  upcomingExpiry,
+  type CreditOutlook,
+  type CreditTone,
+} from './creditOutlook';
 import type { CreditsGlance } from './useCreditsGlance';
 
 const TONE_COLOR: Record<CreditTone, 'success' | 'warning' | 'danger'> = {
@@ -22,8 +31,15 @@ function formatCredits(value: number): string {
   return Math.round(value).toLocaleString();
 }
 
+/** "Dec 2", or "Dec 2, 2027" outside the current year: a runway can now reach past New Year. */
 function formatDay(at: number): string {
-  return new Date(at).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+  const date = new Date(at);
+  const otherYear = date.getFullYear() !== new Date().getFullYear();
+  return date.toLocaleDateString(undefined, {
+    month: 'short',
+    day: 'numeric',
+    ...(otherYear ? { year: 'numeric' } : {}),
+  });
 }
 
 /**
@@ -104,8 +120,8 @@ export function creditsSubline(outlook: CreditOutlook, tier: AccountTier | null)
 /**
  * One plain sentence on whether the balance lasts. Null when the balance is unknown.
  *
- * Every projection names its basis and stops at the ring's horizon: past it, granted credits may
- * expire before they are spent, which this projection cannot see (see `formatRunway`).
+ * Every projection names its basis. A long runway is stated as "more than" past the horizon
+ * `formatRunway` can vouch for: a month without an expiry schedule, a year with one.
  */
 export function creditsVerdict(outlook: CreditOutlook): string | null {
   switch (outlook.kind) {
@@ -116,14 +132,14 @@ export function creditsVerdict(outlook: CreditOutlook): string | null {
     case 'empty':
       return 'Out of credits.';
     case 'covered':
-      return outlook.runwayDays > FULL_RUNWAY_DAYS
-        ? `More than a month left ${PACE}.`
+      return runwayBeyondStatedHorizon(outlook.runwayDays, outlook.expiryKnown)
+        ? `More than ${outlook.expiryKnown ? 'a year' : 'a month'} left ${PACE}.`
         : `Lasts to about ${formatDay(outlook.runsOutAt)} ${PACE}, past the renewal on ${formatDay(outlook.refillAt)}.`;
     case 'short':
       return `Runs out about ${formatDay(outlook.runsOutAt)} ${PACE}, ${outlook.daysShort} day${outlook.daysShort === 1 ? '' : 's'} before the renewal on ${formatDay(outlook.refillAt)}.`;
     case 'no-refill':
-      return outlook.runwayDays > FULL_RUNWAY_DAYS
-        ? `More than a month left ${PACE}.`
+      return runwayBeyondStatedHorizon(outlook.runwayDays, outlook.expiryKnown)
+        ? `More than ${outlook.expiryKnown ? 'a year' : 'a month'} left ${PACE}.`
         : `Lasts to about ${formatDay(outlook.runsOutAt)} ${PACE}.`;
   }
 }
@@ -139,7 +155,7 @@ export function creditsRingLabel(outlook: CreditOutlook): string {
     case 'empty':
       return `No credits left.${refill}`;
     default:
-      return `About ${formatRunway(outlook.runwayDays)} left ${PACE}. A full ring is ${FULL_RUNWAY_DAYS} days or more.${refill}`;
+      return `About ${formatRunway(outlook.runwayDays, outlook.expiryKnown)} left ${PACE}. A full ring is ${FULL_RUNWAY_DAYS} days or more.${refill}`;
   }
 }
 
@@ -195,6 +211,12 @@ function OrganizationCreditsHeader({
   );
 }
 
+/** "1,800 credits expire Nov 27": the next grant to expire within two weeks, as it stands now. */
+export function creditsExpiryNotice(expiry: { amount: number; expiresAt: number }): string {
+  const amount = formatCredits(expiry.amount);
+  return `${amount} credit${amount === '1' ? '' : 's'} expire${amount === '1' ? 's' : ''} ${formatDay(expiry.expiresAt)}`;
+}
+
 /** The credits block at the top of the account menu. */
 export function CreditsMenuHeader({ glance, onTopUp }: { glance: CreditsGlance; onTopUp?: () => void }) {
   const { outlook, profile, organization } = glance;
@@ -216,7 +238,9 @@ export function CreditsMenuHeader({ glance, onTopUp }: { glance: CreditsGlance; 
   const balance = profile?.credits.balance ?? 0;
   const color = outlook.kind === 'idle' ? 'neutral' : TONE_COLOR[outlook.tone];
   const verdict = creditsVerdict(outlook);
-  const marker = refillMarker(outlookRefillAt(outlook), glance.readAt ?? Date.now());
+  const at = glance.readAt ?? Date.now();
+  const marker = refillMarker(outlookRefillAt(outlook), at);
+  const expiry = upcomingExpiry(profile?.credits.expiring, at);
 
   return (
     <Stack spacing={1} sx={{ px: 1, pt: 0.5, pb: 1 }} data-testid="credits-glance" data-payer="personal">
@@ -239,6 +263,18 @@ export function CreditsMenuHeader({ glance, onTopUp }: { glance: CreditsGlance; 
           <Typography level="body-xs" textColor="text.tertiary" noWrap>
             {creditsSubline(outlook, profile?.tier ?? null)}
           </Typography>
+          {expiry && (
+            <Typography
+              level="body-xs"
+              color="warning"
+              noWrap
+              startDecorator={<HourglassIcon size={12} />}
+              sx={{ fontVariantNumeric: 'tabular-nums' }}
+              data-testid="credits-expiry-notice"
+            >
+              {creditsExpiryNotice(expiry)}
+            </Typography>
+          )}
         </Stack>
       </Stack>
       {verdict && (

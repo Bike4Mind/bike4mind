@@ -65,7 +65,7 @@ import {
 } from './feedbackTabSearch';
 import { FeedbackCreatedRangeDialog, formatCreatedRange } from './FeedbackCreatedRangeDialog';
 import { useFeedbackSelection } from './hooks/useFeedbackSelection';
-import FeedbackBulkActions from './FeedbackBulkActions';
+import FeedbackBulkActions, { feedbackRowScrollClearance } from './FeedbackBulkActions';
 import { RowActionsMenu } from '../shared/RowActionsMenu';
 
 type FeedbackRow = IExtendedFeedbackDocument;
@@ -213,7 +213,8 @@ const ContentCell = ({ row }: { row: FeedbackRow }) => (
     )}
     <Typography
       level="body-sm"
-      sx={{ maxWidth: '100%', maxHeight: 80, overflowY: 'auto', whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}
+      data-testid={`feedback-row-content-${row._id}`}
+      sx={{ maxWidth: '100%', maxHeight: 120, overflowY: 'auto', whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}
     >
       {getFeedbackDisplayContent(row, '') || (
         <Typography component="span" sx={{ color: 'admin.inkMuted' }}>
@@ -466,6 +467,7 @@ const FeedbackTab: React.FC = () => {
     },
   ];
   const [rangeDialogOpen, setRangeDialogOpen] = useState(false);
+  const [bulkBarHeight, setBulkBarHeight] = useState(0);
   const setReceivedFilter = (value: string | undefined) => {
     if (value === CUSTOM_RANGE) return setRangeDialogOpen(true);
     setReceived(FEEDBACK_RECEIVED_WINDOWS.find(range => range === value));
@@ -492,7 +494,15 @@ const FeedbackTab: React.FC = () => {
 
   const columns: DataColumn<FeedbackRow>[] = [
     { id: 'createdAt', label: 'Created', sortable: true, width: '7.5rem', render: row => <CreatedCell row={row} /> },
-    { id: 'reporter', label: 'Reporter', width: '15rem', render: row => <ReporterCell row={row} /> },
+    // cqw, not %: Chrome treats a percentage inside clamp() as auto on a fixed-layout table. The query
+    // container is the table region below: 15rem once it is ~68rem wide, the 7.25rem floor at ~48rem and
+    // narrower (the region is narrower than that at a 768 px viewport), so Feedback stays widest on tablets.
+    {
+      id: 'reporter',
+      label: 'Reporter',
+      width: 'clamp(7.25rem, 40cqw - 12rem, 15rem)',
+      render: row => <ReporterCell row={row} />,
+    },
     { id: 'content', label: 'Feedback', wrap: true, render: row => <ContentCell row={row} /> },
     {
       id: 'status',
@@ -682,7 +692,15 @@ const FeedbackTab: React.FC = () => {
         tabIndex={-1}
         data-testid="feedback-table-region"
         gap={1}
-        sx={{ minWidth: 0, ...adminFocus }}
+        style={
+          { '--feedback-row-scroll-clearance': `${feedbackRowScrollClearance(bulkBarHeight)}px` } as React.CSSProperties
+        }
+        sx={{
+          minWidth: 0,
+          containerType: 'inline-size',
+          ...adminFocus,
+          '& tbody tr[data-row-id]': { scrollMarginBottom: 'var(--feedback-row-scroll-clearance)' },
+        }}
       >
         <UpdatingBar active={loading && !firstLoad} testId="feedback-updating-bar" />
         <DataTable
@@ -755,6 +773,7 @@ const FeedbackTab: React.FC = () => {
         disabled={loading || !totalSettled}
         onSelectionChange={selection.setSelection}
         onApplied={refreshFeedback}
+        onHeightChange={setBulkBarHeight}
       />
 
       <ActionDialog

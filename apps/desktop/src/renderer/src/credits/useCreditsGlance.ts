@@ -84,7 +84,13 @@ export function useCreditsGlance(
   return useMemo(() => {
     const at = readAt ?? now();
     if (organization) {
-      const outlook = creditOutlook({ balance: organization.credits, burnPerDay: 0, refillAt: null, now: at });
+      const outlook = creditOutlook({
+        balance: organization.credits,
+        burnPerDay: 0,
+        refillAt: null,
+        expiring: undefined,
+        now: at,
+      });
       return { profile, organization, outlook, burnPerDay: null, readAt };
     }
     const burnPerDay = bars ? dailyBurn(bars, at) : null;
@@ -93,6 +99,7 @@ export function useCreditsGlance(
           balance: profile.credits.balance,
           burnPerDay: burnPerDay ?? 0,
           refillAt: nextRefillAt(profile.plan, profile.credits.monthlyAllowance, at),
+          expiring: profile.credits.expiring,
           now: at,
         })
       : ({ kind: 'unknown' } as const);

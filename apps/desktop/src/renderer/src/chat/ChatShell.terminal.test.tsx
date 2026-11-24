@@ -11,6 +11,21 @@ import { ChatShell } from './ChatShell';
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 vi.mock('./CustomizePanel', () => ({ CustomizeScreen: () => null, useCustomizeAttention: () => undefined }));
+// Never looked at here, and its pickers and menus are a good share of every render.
+vi.mock('./Composer', () => ({ Composer: () => null }));
+// The 3D engine's iframe would make jsdom boot a whole extra window on every mount.
+vi.mock('./model3d/modelEngineFrame', async importOriginal => ({
+  ...(await importOriginal<typeof import('./model3d/modelEngineFrame')>()),
+  ModelEngineFrame: class {
+    warm() {
+      return this;
+    }
+    dispose() {}
+    async build() {
+      return null;
+    }
+  },
+}));
 // The panel's own behaviour is TerminalPanel.test.tsx's; here it only has to say whose it is.
 vi.mock('./TerminalPanel', () => ({
   TerminalPanel: ({ sessionId }: { sessionId: string }) => <div data-testid="terminal-panel">{sessionId}</div>,
@@ -134,21 +149,17 @@ async function renderShell() {
 }
 
 describe('the terminal toggle', () => {
-  it('lives in the Panes menu, with no header button while it is closed', async () => {
+  it('lives in the Panes menu while closed, opens from it, then closes from the button it promotes into the header', async () => {
     await renderShell();
+    expect(panel()).toBeNull();
     expect(find('chat-toggle-terminal-btn')).toBeNull();
     expect(find('chat-toggle-browser-btn')).toBeNull();
     await act(async () => el('chat-panes-menu-btn').click());
     const row = el('chat-panes-menu-terminal-item');
     expect(row.getAttribute('aria-checked')).toBe('false');
     expect(row.textContent).toContain('Ctrl+`');
-  });
 
-  it('opens from the menu, then closes from the button it promotes into the header', async () => {
-    await renderShell();
-    expect(panel()).toBeNull();
-
-    await pickPane('terminal');
+    await act(async () => row.click());
     expect(panel()?.textContent).toBe('first');
     expect(el('chat-toggle-terminal-btn').getAttribute('aria-pressed')).toBe('true');
     expect(el('chat-toggle-terminal-btn').getAttribute('aria-label')).toBe('Hide the terminal');
@@ -168,15 +179,7 @@ describe('the terminal toggle', () => {
     expect(promoted).toEqual(['chat-toggle-terminal-btn', 'chat-toggle-browser-btn']);
   });
 
-  it('promotes the button for a pane opened by the keyboard, not only by the menu', async () => {
-    await renderShell();
-    await act(async () => {
-      window.dispatchEvent(new KeyboardEvent('keydown', { code: 'Backquote', ctrlKey: true, bubbles: true }));
-    });
-    expect(el('chat-toggle-terminal-btn').getAttribute('aria-pressed')).toBe('true');
-  });
-
-  it('toggles with Ctrl+backquote', async () => {
+  it('toggles with Ctrl+backquote, promoting the header button for a pane opened by the keyboard too', async () => {
     await renderShell();
     const press = () =>
       act(async () => {
@@ -184,6 +187,7 @@ describe('the terminal toggle', () => {
       });
     await press();
     expect(panel()).not.toBeNull();
+    expect(el('chat-toggle-terminal-btn').getAttribute('aria-pressed')).toBe('true');
     await press();
     expect(panel()).toBeNull();
   });

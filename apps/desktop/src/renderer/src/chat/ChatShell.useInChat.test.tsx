@@ -13,6 +13,19 @@ import { ChatShell } from './ChatShell';
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 vi.mock('./CustomizePanel', () => ({ CustomizeScreen: () => null, useCustomizeAttention: () => undefined }));
+// The 3D engine's iframe would make jsdom boot a whole extra window on every mount.
+vi.mock('./model3d/modelEngineFrame', async importOriginal => ({
+  ...(await importOriginal<typeof import('./model3d/modelEngineFrame')>()),
+  ModelEngineFrame: class {
+    warm() {
+      return this;
+    }
+    dispose() {}
+    async build() {
+      return null;
+    }
+  },
+}));
 vi.mock('./Composer', () => ({
   Composer: ({ onSend, footer }: { onSend: (text: string) => void; footer: (node: null) => React.ReactNode }) => (
     <>
@@ -219,19 +232,14 @@ describe('Use in chat', () => {
     expect(document.querySelector('[data-testid="models-screen"]')).toBeNull();
   });
 
-  it('routes a saved server model to that server, and offers nothing for a server that is down', async () => {
+  it('routes a saved server model to that server, offers one still listing, and nothing for a server that is down', async () => {
     await openModels();
     expect(offered?.('gpu', 'qwen3.5:0.8b')).toBeNull();
+    // A server still listing its models is pending, not down: the same lookup offers it.
+    expect(offered?.('slow', 'qwen3.5:0.8b')).toBeTypeOf('function');
     await act(async () => offered?.('lab', 'qwen3.5:0.8b')?.());
     await sendDraft();
     expect(setSessionModel).toHaveBeenCalledWith('fresh-1', LAB_ID);
-  });
-
-  it('offers a model on a server that is still listing its models', async () => {
-    await openModels();
-    await act(async () => offered?.('slow', 'qwen3.5:0.8b')?.());
-    await sendDraft();
-    expect(setSessionModel).toHaveBeenCalledWith('fresh-1', SLOW_ID);
   });
 
   it('starts one conversation for a double click', async () => {

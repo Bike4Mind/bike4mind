@@ -13,6 +13,10 @@ import { SessionStore } from './SessionStore';
 import type { AccessStore } from './tools/AccessStore';
 import { ApprovalGate } from './tools/ApprovalGate';
 
+vi.mock('../git/hostGitArgs', async importOriginal =>
+  (await import('./plainFolderGit.testHelper')).skipGitOutsideRepositories(await importOriginal())
+);
+
 /**
  * The whole path, with a real MCP server at the end of it: the model asks for an mcp__ tool,
  * the user is asked to approve it exactly as they would a bash command, and only then does a

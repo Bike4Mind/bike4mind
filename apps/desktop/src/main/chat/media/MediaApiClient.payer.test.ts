@@ -13,7 +13,7 @@ function harness() {
   const post = vi.fn().mockResolvedValue({});
   const axiosPost = vi.fn().mockResolvedValue({ data: new ArrayBuffer(0), headers: {} });
   const api = { post, getAxiosInstance: () => ({ post: axiosPost }) } as unknown as AuthenticatedApiClient;
-  const client = new MediaApiClient(api, () => payer);
+  const client = new MediaApiClient(api, undefined, () => payer);
   const submitted = async (call: Submit, idempotencyKey = freshKey()) => {
     post.mockClear();
     axiosPost.mockClear();

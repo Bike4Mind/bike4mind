@@ -25,10 +25,18 @@ import {
   type SoundEffectsRequest,
   type TTSRequest,
   type TtsBase64Response,
+  type CompletionRunAttribution,
 } from '@bike4mind/common';
 import type { BillingPayer } from '@shared/account';
 import type { ChatToolNotice } from '@shared/chat';
 import { currentBillingPayer } from '../../account/billingPayer';
+import {
+  isRunBudgetExhausted,
+  isRunNotFound,
+  RunBudgetExhaustedError,
+  RunNotFoundError,
+  withRunFallback,
+} from '../completions';
 import { parseMusicModels } from './musicModels';
 
 const studioImageJobSchema = z.object({
@@ -39,6 +47,20 @@ const studioImageJobSchema = z.object({
   error: z.object({ code: z.string(), message: z.string() }).nullable(),
 });
 export type StudioRemoteImageJob = z.infer<typeof studioImageJobSchema>;
+
+/**
+ * The orchestration run a turn's paid calls are charged to. Read at call time: the turn drops a
+ * run the server refused, and a call made after that must not send it again.
+ */
+export interface MediaRun {
+  current: () => CompletionRunAttribution | undefined;
+  /** A budgeted run is never resent unattributed: that would spend outside the cap. */
+  budgeted: boolean;
+  /** Runs when the server no longer knows the run, before any resend. See withRunFallback. */
+  onRejected: () => Promise<void>;
+}
+
+type RunField = { run?: CompletionRunAttribution };
 
 /**
  * A generation failure worth saying something specific about.
@@ -126,14 +148,6 @@ export function isTerminalQuest(quest: QuestPoll): boolean {
 }
 
 /**
- * The b4m generation endpoints this client calls, over the app's authenticated session.
- *
- * Shaped after packages/cli/src/mcp/b4mApiClient.ts: one typed method per route, with the
- * transport quirks (arraybuffer bodies, a JSON error body arriving as bytes) handled here so
- * the tools above it deal in outcomes. Not merged with that class because the CLI's is built on
- * the CLI's own ApiClient and config store; this one takes the desktop app's AuthenticatedApiClient.
- */
-/**
  * The payer each Idempotency-Key was first sent with. The server scopes a key to the billed account,
  * so a retry that re-read a since-switched payer would start a second, differently billed job.
  * Module-wide because callers build a fresh client per submit; bounded, oldest evicted first.
@@ -141,12 +155,42 @@ export function isTerminalQuest(quest: QuestPoll): boolean {
 const PAYER_BY_IDEMPOTENCY_KEY = new Map<string, BillingPayer>();
 const PAYER_BY_IDEMPOTENCY_KEY_LIMIT = 500;
 
+/**
+ * The b4m generation endpoints this client calls, over the app's authenticated session.
+ *
+ * Shaped after packages/cli/src/mcp/b4mApiClient.ts: one typed method per route, with the
+ * transport quirks (arraybuffer bodies, a JSON error body arriving as bytes) handled here so
+ * the tools above it deal in outcomes. Not merged with that class because the CLI's is built on
+ * the CLI's own ApiClient and config store; this one takes the desktop app's AuthenticatedApiClient.
+ */
 export class MediaApiClient {
-  /** `getPayer` is read on every submit, so a payer switch applies to the next call this client makes. */
+  /** `getPayer` is read per submit (see `payer()`), so a switch applies to this client's next call. */
   constructor(
     private readonly api: AuthenticatedApiClient,
+    private readonly run?: MediaRun,
     private readonly getPayer: () => BillingPayer | Promise<BillingPayer> = currentBillingPayer
   ) {}
+
+  /**
+   * Send a paid request with the turn's run, tagged as a tool call so the run's usage tells it
+   * apart from the turn's completions. The server claims the call's whole cost against the run
+   * before charging, and refuses it with 422 run_budget_exhausted when it does not fit.
+   */
+  private withRun<T>(send: (field: RunField) => Promise<T>): Promise<T> {
+    const current = this.run?.current();
+    return withRunFallback(
+      current && { ...current, purpose: 'tool' },
+      async attribution => {
+        try {
+          return await send(attribution ? { run: attribution } : {});
+        } catch (error) {
+          throw toRunRefusal(error) ?? error;
+        }
+      },
+      async () => this.run?.onRejected(),
+      { budgeted: this.run?.budgeted }
+    );
+  }
 
   /** The route takes `organization_id` beside `{ count, request }` and bills that account. */
   async createStudioImages(request: ImageJobRequest, count: number, key: string) {
@@ -176,17 +220,17 @@ export class MediaApiClient {
    */
   async createImageJob(body: CreateImageJobBody, idempotencyKey: string): Promise<PublicImageJob[]> {
     try {
-      const response = await this.api.post<unknown>(
-        '/api/v1/image-jobs',
-        { ...body, ...(await this.payer('/api/v1/image-jobs', idempotencyKey)) },
-        {
-          timeout: TIMEOUT_MS.submit,
-          headers: { 'Idempotency-Key': idempotencyKey },
-        }
+      const payer = await this.payer('/api/v1/image-jobs', idempotencyKey);
+      const response = await this.withRun(run =>
+        this.api.post<unknown>(
+          '/api/v1/image-jobs',
+          { ...body, ...payer, ...run },
+          { timeout: TIMEOUT_MS.submit, headers: { 'Idempotency-Key': idempotencyKey } }
+        )
       );
       return CreateImageJobResponseSchema.parse(response).data;
     } catch (error) {
-      throw toMediaError(error, 'Image generation');
+      throw toPaidCallError(error, 'Image generation');
     }
   }
 
@@ -196,16 +240,19 @@ export class MediaApiClient {
    */
   async generateImage(request: GenerateImageRequest): Promise<{ questId: string; remoteSessionId?: string }> {
     try {
-      const response = await this.api.post<{ quest?: { id?: string }; session?: { id?: string } }>(
-        '/api/ai/generate-image',
-        { ...request, ...(await this.payer()) },
-        { timeout: TIMEOUT_MS.submit }
+      const payer = await this.payer();
+      const response = await this.withRun(run =>
+        this.api.post<{ quest?: { id?: string }; session?: { id?: string } }>(
+          '/api/ai/generate-image',
+          { ...request, ...payer, ...run },
+          { timeout: TIMEOUT_MS.submit }
+        )
       );
       const questId = response?.quest?.id;
       if (!questId) throw new MediaToolError('The server accepted the request but returned no job to follow.');
       return { questId, remoteSessionId: response?.session?.id };
     } catch (error) {
-      throw toMediaError(error, 'Image generation');
+      throw toPaidCallError(error, 'Image generation');
     }
   }
 
@@ -273,17 +320,17 @@ export class MediaApiClient {
    */
   async createVideoGeneration(body: CreateVideoGenerationBody, idempotencyKey: string): Promise<VideoGeneration> {
     try {
-      const response = await this.api.post<unknown>(
-        '/api/v1/video-generations',
-        { ...body, ...(await this.payer('/api/v1/video-generations', idempotencyKey)) },
-        {
-          timeout: TIMEOUT_MS.submit,
-          headers: { 'Idempotency-Key': idempotencyKey },
-        }
+      const payer = await this.payer('/api/v1/video-generations', idempotencyKey);
+      const response = await this.withRun(run =>
+        this.api.post<unknown>(
+          '/api/v1/video-generations',
+          { ...body, ...payer, ...run },
+          { timeout: TIMEOUT_MS.submit, headers: { 'Idempotency-Key': idempotencyKey } }
+        )
       );
       return VideoGenerationSchema.parse(response);
     } catch (error) {
-      throw toMediaError(error, 'Video generation');
+      throw toPaidCallError(error, 'Video generation');
     }
   }
 
@@ -383,14 +430,17 @@ export class MediaApiClient {
    */
   async synthesizeSpeech(request: Omit<TTSRequest, 'encoding'>): Promise<TtsBase64Response> {
     try {
-      const body = await this.api.post<unknown>(
-        '/api/ai/tts',
-        { ...request, encoding: 'base64', ...(await this.payer()) },
-        { timeout: TIMEOUT_MS.audio }
+      const payer = await this.payer();
+      const body = await this.withRun(run =>
+        this.api.post<unknown>(
+          '/api/ai/tts',
+          { ...request, ...payer, ...run, encoding: 'base64' },
+          { timeout: TIMEOUT_MS.audio }
+        )
       );
       return ttsBase64ResponseSchema.parse(body);
     } catch (error) {
-      throw toMediaError(error, 'Speech synthesis');
+      throw toPaidCallError(error, 'Speech synthesis');
     }
   }
 
@@ -421,17 +471,17 @@ export class MediaApiClient {
    */
   async createMusicGeneration(body: CreateMusicGenerationBody, idempotencyKey: string): Promise<MusicGeneration> {
     try {
-      const response = await this.api.post<unknown>(
-        '/api/v1/music-generations',
-        { ...body, ...(await this.payer('/api/v1/music-generations', idempotencyKey)) },
-        {
-          timeout: TIMEOUT_MS.submit,
-          headers: { 'Idempotency-Key': idempotencyKey },
-        }
+      const payer = await this.payer('/api/v1/music-generations', idempotencyKey);
+      const response = await this.withRun(run =>
+        this.api.post<unknown>(
+          '/api/v1/music-generations',
+          { ...body, ...payer, ...run },
+          { timeout: TIMEOUT_MS.submit, headers: { 'Idempotency-Key': idempotencyKey } }
+        )
       );
       return MusicGenerationSchema.parse(response);
     } catch (error) {
-      throw toMediaError(error, 'Music generation');
+      throw toPaidCallError(error, 'Music generation');
     }
   }
 
@@ -485,11 +535,17 @@ export class MediaApiClient {
    * headers. On a failure the JSON error body arrives as bytes too, so it is decoded back into
    * place before the shared mapper reads it.
    */
-  private async postForAudio(path: string, body: unknown, action: string): Promise<GeneratedAudio> {
+  private async postForAudio(path: string, body: object, action: string): Promise<GeneratedAudio> {
     try {
-      const response = await this.api
-        .getAxiosInstance()
-        .post<ArrayBuffer>(path, body, { responseType: 'arraybuffer', timeout: TIMEOUT_MS.audio });
+      const response = await this.withRun(async run => {
+        try {
+          return await this.api
+            .getAxiosInstance()
+            .post<ArrayBuffer>(path, { ...body, ...run }, { responseType: 'arraybuffer', timeout: TIMEOUT_MS.audio });
+        } catch (error) {
+          throw decodeArrayBufferErrorBody(error);
+        }
+      });
       const header = (name: string): string | undefined => {
         const value = response.headers[name];
         return typeof value === 'string' && value ? value : undefined;
@@ -501,7 +557,7 @@ export class MediaApiClient {
         ...(saved ? { fabFileId: header('x-b4m-audio-fab-file-id') } : {}),
       };
     } catch (error) {
-      throw toMediaError(decodeArrayBufferErrorBody(error), action);
+      throw toPaidCallError(decodeArrayBufferErrorBody(error), action);
     }
   }
 }
@@ -566,6 +622,25 @@ interface ApiErrorBody {
   errorCode?: string;
   provider?: string;
   fabFileId?: string;
+}
+
+/**
+ * A refusal of the request's `run`, as the error the turn acts on: a used-up budget pauses the
+ * whole run (ChatService.pauseRunForBudget), and an unknown run is handled by withRunFallback.
+ */
+function toRunRefusal(error: unknown): RunBudgetExhaustedError | RunNotFoundError | undefined {
+  if (!isAxiosError(error)) return undefined;
+  const body = (error.response?.data ?? {}) as ApiErrorBody;
+  const detail = body.error || body.message;
+  if (isRunBudgetExhausted(error, body)) return new RunBudgetExhaustedError(detail);
+  if (isRunNotFound(error, body)) return new RunNotFoundError(detail);
+  return undefined;
+}
+
+/** toMediaError for a paid submit, letting a run refusal through untouched. */
+function toPaidCallError(error: unknown, action: string): Error {
+  if (error instanceof RunBudgetExhaustedError || error instanceof RunNotFoundError) return error;
+  return toMediaError(error, action);
 }
 
 /**

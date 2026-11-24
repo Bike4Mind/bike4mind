@@ -112,6 +112,7 @@ export async function createMusicJob(
       featureLabel: 'music generation',
       apiKeyId: input.apiKeyId,
       apiKeyBillingOwnerType: input.apiKeyBillingOwnerType,
+      ...(input.run && { run: input.run }),
     },
     deps
   );
@@ -139,6 +140,8 @@ export async function createMusicJob(
       deadlineAt: new Date(now.getTime() + MUSIC_JOB_MAX_WALL_CLOCK_MS),
       idempotencyKey: input.idempotencyKey,
       creditHold: held.hold,
+      ...(input.run && { run: input.run }),
+      ...(held.runClaim && { runClaim: held.runClaim }),
       questId: input.questId,
     },
     deps

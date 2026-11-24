@@ -10,8 +10,8 @@ export interface IArtifactVersionDocument extends Document<string> {
   artifactId: string;
   version: number;
   versionTag?: string;
-  contentId: Schema.Types.ObjectId;
-  parentVersionId?: Schema.Types.ObjectId;
+  contentId: string;
+  parentVersionId?: string;
   changes: string[];
   changeDescription?: string;
   createdBy: string;

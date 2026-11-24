@@ -15,7 +15,7 @@ const QUEUES = read('infra/queues.ts');
 describe("What's New queue subscription", () => {
   // The handler throws on the first failed record, so a larger batch would re-post earlier records on redelivery.
   it('delivers one record at a time to the kind-routing handler', () => {
-    const start = QUEUES.indexOf('const whatsNewGenerationQueueSubscription = whatsNewGenerationQueue.subscribe(');
+    const start = QUEUES.indexOf('const whatsNewGenerationQueueSubscription = subscribeUnlessPreview(');
     expect(start).toBeGreaterThanOrEqual(0);
     const sub = QUEUES.slice(start, QUEUES.indexOf('\n);', start));
     expect(sub).toMatch(/handler:\s*'apps\/workers\/src\/queueHandlers\/whatsNewJob\.dispatch'/);

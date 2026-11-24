@@ -168,7 +168,7 @@ acceptance criteria or changing rollout defaults.
 ## Free verification
 
 ```sh
-VITEST_MAX_WORKERS=25% pnpm --filter @bike4mind/desktop exec vitest run src/main/chat/liveEvaluation.test.ts src/main/chat/evaluationBudget.test.ts src/main/chat/completions.test.ts src/main/chat/ChatService.controlledCost.test.ts
+VITEST_MAX_WORKERS=25% pnpm --filter @bike4mind/desktop exec vitest run src/main/chat/liveEvaluation.test.ts src/main/chat/evaluationBudget.test.ts src/main/chat/completions.test.ts src/main/chat/ChatService.usage.test.ts
 node --test apps/desktop/scripts/test_controlled_cost_evaluation.cjs
 pnpm --filter @bike4mind/desktop typecheck
 ```

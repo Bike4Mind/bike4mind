@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { PublicImageJob } from '@bike4mind/common';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { RunBudgetExhaustedError } from '../completions';
 import { generateImage } from './imageGeneration';
 import { MediaToolError, type MediaApiClient } from './MediaApiClient';
 import { MediaStore } from './MediaStore';
@@ -170,6 +171,15 @@ describe('generateImage', () => {
     await expect(generateImage(REQUEST, h.deps)).rejects.toMatchObject({
       notice: { kind: 'insufficient-credits' },
     });
+    expect(h.getImageJob).not.toHaveBeenCalled();
+  });
+
+  // The run's claim is taken with the job's hold, so a refusal arrives on create, never on a poll.
+  it('lets a run budget refusal on create through, so the run pauses', async () => {
+    const h = await harness([DONE]);
+    h.createImageJob.mockRejectedValue(new RunBudgetExhaustedError('Run budget used up.'));
+
+    await expect(generateImage(REQUEST, h.deps)).rejects.toBeInstanceOf(RunBudgetExhaustedError);
     expect(h.getImageJob).not.toHaveBeenCalled();
   });
 
