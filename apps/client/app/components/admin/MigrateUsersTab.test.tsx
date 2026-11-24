@@ -56,6 +56,19 @@ describe('MigrateUsersTab', () => {
     expect(within(actions).getByRole('button', { name: 'Migration Tutorial' })).toBeInTheDocument();
   });
 
+  it('sends the tutorial button to the migration tutorial page', () => {
+    const originalLocation = window.location;
+    const location = { href: '' };
+    Object.defineProperty(window, 'location', { configurable: true, value: location });
+    try {
+      renderTab();
+      fireEvent.click(screen.getByRole('button', { name: 'Migration Tutorial' }));
+      expect(location.href).toBe('/developer/migration');
+    } finally {
+      Object.defineProperty(window, 'location', { configurable: true, value: originalLocation });
+    }
+  });
+
   it('still parses the list and migrates the parsed users from the page body', () => {
     renderTab();
 
