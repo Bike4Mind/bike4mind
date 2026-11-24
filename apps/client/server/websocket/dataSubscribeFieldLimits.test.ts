@@ -114,6 +114,7 @@ describe('resolveFieldLimits', () => {
       throttle: false,
       riskSignals: false,
       signupLanding: false,
+      interventionHolds: false,
     });
   });
 
@@ -126,6 +127,7 @@ describe('resolveFieldLimits', () => {
       'throttle',
       'riskSignals',
       'signupLanding',
+      'interventionHolds',
     ] as const;
     const limits = resolveFieldLimits('users', opts());
     for (const field of abuseEvidence) {

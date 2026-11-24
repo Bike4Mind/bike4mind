@@ -106,6 +106,7 @@ export const ADMIN_REASON_PRESETS = {
   seatChange: ['Customer request', 'Team size changed', 'Seats out of sync with billing', 'Billing correction'],
   paidConversion: ['Trial converting to paid', 'Customer request', 'Sales-approved conversion'],
   orgMembership: ['Customer request', 'Joined the team', 'Left the team', 'Account cleanup'],
+  homeOrgClear: ['Customer request', 'Billed to the wrong org', 'Service account setup', 'Account cleanup'],
   orgRoleChange: ['Customer request', 'Owner request', 'Team lead changed'],
   ipBlock: ['Card testing or payment fraud', 'Abuse / automated signups', 'Credential stuffing', 'Under investigation'],
   ipUnblock: ['Blocked in error', 'Legitimate users affected', 'Threat has ended'],

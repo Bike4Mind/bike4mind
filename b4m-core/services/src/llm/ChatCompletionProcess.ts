@@ -334,6 +334,7 @@ import {
   getMemberCreditPeriodEnd,
   isMemberCreditCapExceeded,
   checkNewAccountSpendCap,
+  assertInterventionSpendAllowed,
 } from '../creditService';
 import { assertSpendNotFrozen } from '../spendFreezeService/assertSpendNotFrozen';
 import { spendFreezeSubjectForHold } from '../spendFreezeService/spendFreezeSubjectForHold';
@@ -5242,6 +5243,15 @@ export class ChatCompletionProcess {
             availableCredits: actualBalance,
           });
           throw new InsufficientCreditsError(errorMessage, 'insufficient_credits');
+        }
+        try {
+          await assertInterventionSpendAllowed(
+            { userId: this.user.id, credits: requiredCredits },
+            { users: this.db.users, window: this.db.newAccountSpendCap.interventionSpendWindow }
+          );
+        } catch (refusal) {
+          await reservationMethods.incrementCredits(reservationOwnerId, requiredCredits);
+          throw refusal;
         }
 
         // Update in-memory balance so mid-stream tool validation sees the reduced balance

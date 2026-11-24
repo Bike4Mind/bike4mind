@@ -80,3 +80,48 @@ describe('POST /api/admin/slack-app/reconnect admin audit', () => {
     await expect(reconnect()).rejects.toThrow('audit down');
   });
 });
+
+describe('POST /api/admin/slack-app/reconnect token rejection', () => {
+  const slackRejects = (error: string) =>
+    vi.mocked(fetch).mockResolvedValue({ json: () => Promise.resolve({ ok: false, error }) } as Response);
+
+  const reconnectExpectingError = async () => {
+    const { req, res } = createMocks({ method: 'POST', body: { workspaceId: 'ws-1', configToken: CONFIG_TOKEN } });
+    const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+    Object.assign(req, { user: { id: 'admin-1', isAdmin: true }, logger });
+    const thrown: unknown = await (handler as unknown as Route)(req, res).then(
+      () => undefined,
+      (error: unknown) => error
+    );
+    return { thrown, logger };
+  };
+
+  it('logs invalid_auth at warn, answers 400 with an actionable message, and stores nothing', async () => {
+    slackRejects('invalid_auth');
+
+    const { thrown, logger } = await reconnectExpectingError();
+
+    expect(thrown).toMatchObject({ statusCode: 400 });
+    expect((thrown as Error).message).toContain('Generate a fresh app configuration token');
+    expect((thrown as Error).message).toContain('invalid_auth');
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('config token'), {
+      error: 'invalid_auth',
+      workspaceId: 'ws-1',
+    });
+    expect(logger.error).not.toHaveBeenCalled();
+    expect(h.storeConfigToken).not.toHaveBeenCalled();
+  });
+
+  it('still logs an unexpected Slack error at error', async () => {
+    slackRejects('app_not_found');
+
+    const { thrown, logger } = await reconnectExpectingError();
+
+    expect(thrown).toMatchObject({ statusCode: 400 });
+    expect(logger.error).toHaveBeenCalledWith('Config token validation failed', {
+      error: 'app_not_found',
+      workspaceId: 'ws-1',
+    });
+    expect(logger.warn).not.toHaveBeenCalled();
+  });
+});

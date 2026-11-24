@@ -422,9 +422,16 @@ describe('parseFunctionContract tests', () => {
 
   it(`allows at most ${FUNCTION_CONTRACT_LIMITS.maxTests} test cases`, () => {
     expect(FUNCTION_CONTRACT_LIMITS.maxTests).toBe(20);
-    expect(problemsOf(withTests(Array.from({ length: 20 }, steel)))).toEqual([]);
-    expect(problemsOf(withTests(Array.from({ length: 21 }, steel)))).toEqual([
+    const named = (length: number) => Array.from({ length }, (_, index) => ({ ...steel(), name: `case ${index}` }));
+    expect(problemsOf(withTests(named(20)))).toEqual([]);
+    expect(problemsOf(withTests(named(21)))).toEqual([
       { path: 'tests', message: 'has 21 test cases; at most 20 are allowed' },
+    ]);
+  });
+
+  it('refuses a test name used twice, naming it', () => {
+    expect(problemsOf(withTests([steel(), { ...steel(), name: 'exact' }, steel()]))).toEqual([
+      { path: 'tests.2.name', message: 'repeats the test name "4 m steel beam"; each test needs its own' },
     ]);
   });
 

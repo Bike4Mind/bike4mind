@@ -36,7 +36,11 @@ function harness(runPayer?: BillingPayer) {
 
 const CASES: [string, string, Submit][] = [
   ['createImageJob', '/api/v1/image-jobs', (c, key) => c.createImageJob({ prompt: 'p', model: 'm' } as never, key)],
-  ['generateImage', '/api/ai/generate-image', c => c.generateImage({ prompt: 'p', model: 'm' })],
+  [
+    'createStudioImages',
+    '/api/studio/image-jobs',
+    (c, key) => c.createStudioImages({ model: 'test-image', mode: 'generate', prompt: 'p' }, 1, key),
+  ],
   [
     'createVideoGeneration',
     '/api/v1/video-generations',
@@ -50,6 +54,9 @@ const CASES: [string, string, Submit][] = [
   ['synthesizeSpeech', '/api/ai/tts', c => c.synthesizeSpeech({ text: 'hi' } as never)],
   ['generateSoundEffect', '/api/ai/sound-effects', c => c.generateSoundEffect({ text: 'boom' } as never)],
 ];
+
+// Studio's image call is made from the Studio pane on a client with no orchestration run.
+const RUN_CASES = CASES.filter(([name]) => name !== 'createStudioImages');
 
 describe('MediaApiClient payer', () => {
   it.each(CASES)('%s states the payer on %s, read at submit time', async (_name, path, call) => {
@@ -93,7 +100,7 @@ describe('MediaApiClient payer', () => {
     }
   );
 
-  it.each(CASES)(
+  it.each(RUN_CASES)(
     "%s bills an organization run's payer on %s after the selection switches",
     async (_name, _path, call) => {
       const { submitted, pay } = harness({ organization_id: 'org-1' });
@@ -105,7 +112,7 @@ describe('MediaApiClient payer', () => {
     }
   );
 
-  it.each(CASES)(
+  it.each(RUN_CASES)(
     '%s states null for a Personal run on %s after an organization is selected',
     async (_name, _path, call) => {
       const { submitted, pay } = harness({ organization_id: null });

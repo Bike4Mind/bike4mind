@@ -88,37 +88,6 @@ export class MediaToolError extends Error {
   }
 }
 
-// The quest-based image path below (GenerateImageRequest, QuestPoll, isTerminalQuest, generateImage,
-// getQuest) serves only StudioGenerationService's legacy branch (a request without `mode`, and jobs it
-// saved with a quest id). Chat image generation uses the /api/v1/image-jobs methods. Remove these when
-// Studio's legacy branch moves onto image jobs, before the quest routes' sunset (2027-02-17).
-
-/** POST /api/ai/generate-image, narrowed to what this client sends. */
-export interface GenerateImageRequest {
-  prompt: string;
-  model: string;
-  size?: string;
-  prompt_resolution?: 'auto' | 'literal';
-  /** Notebook to file the generation under; the server creates one when this is absent. */
-  sessionId?: string;
-  sessionName?: string;
-}
-
-/** The subset of the quest poll this client reads. Extra fields on the wire are ignored. */
-export interface QuestPoll {
-  id: string;
-  status?: string;
-  /** 'error' is the only reliable failure signal: a failed quest still polls 200 with status 'done'. */
-  type?: string;
-  errorCode?: string;
-  sessionId?: string;
-  reply?: string;
-  /** Bare generated-file basenames, e.g. `<uuid>.png`. */
-  images?: string[];
-  /** The same files with short-lived presigned URLs (about an hour); empty only on an older server. */
-  files?: { name: string; url: string; isImage: boolean; isAudio: boolean }[];
-}
-
 export interface FetchedBytes {
   bytes: Buffer;
   contentType: string;
@@ -141,13 +110,6 @@ const TIMEOUT_MS = {
   /** A clip can run to tens of megabytes; this bounds a stalled transfer, not a slow one. */
   video: 300_000,
 };
-
-// Anything else - 'running', 'pending', an absent status on a freshly queued quest - is still in flight.
-const TERMINAL_STATUSES = new Set(['done', 'stopped']);
-
-export function isTerminalQuest(quest: QuestPoll): boolean {
-  return !!quest.status && TERMINAL_STATUSES.has(quest.status);
-}
 
 /**
  * The payer each Idempotency-Key was first sent with. The server scopes a key to the billed account,
@@ -233,36 +195,6 @@ export class MediaApiClient {
       return CreateImageJobResponseSchema.parse(response).data;
     } catch (error) {
       throw toPaidCallError(error, 'Image generation');
-    }
-  }
-
-  /**
-   * Queue a quest-based image generation (Studio's legacy branch only). Returns the quest to poll,
-   * not an image: the route hands the request to a worker and answers immediately.
-   */
-  async generateImage(request: GenerateImageRequest): Promise<{ questId: string; remoteSessionId?: string }> {
-    try {
-      const payer = await this.payer();
-      const response = await this.withRun(run =>
-        this.api.post<{ quest?: { id?: string }; session?: { id?: string } }>(
-          '/api/ai/generate-image',
-          { ...request, ...payer, ...run },
-          { timeout: TIMEOUT_MS.submit }
-        )
-      );
-      const questId = response?.quest?.id;
-      if (!questId) throw new MediaToolError('The server accepted the request but returned no job to follow.');
-      return { questId, remoteSessionId: response?.session?.id };
-    } catch (error) {
-      throw toPaidCallError(error, 'Image generation');
-    }
-  }
-
-  async getQuest(questId: string): Promise<QuestPoll> {
-    try {
-      return await this.api.get<QuestPoll>(`/api/quests/${encodeURIComponent(questId)}`);
-    } catch (error) {
-      throw toMediaError(error, 'Image generation');
     }
   }
 

@@ -1,11 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import { ModelBackend } from '../models';
+import { ORGANIZATION_MEMBER_VISIBLE_FIELDS } from '../serializers/toSafeOrganization';
 import {
   INVALID_ORG_MODEL_POLICY,
   isModelAllowedByOrgPolicy,
   isToolAllowedByOrgPolicy,
   OrgModelPolicySchema,
   readOrgModelPolicy,
+  StoredOrgModelPolicySchema,
   type OrgModelPolicy,
 } from './orgModelPolicy';
 
@@ -34,6 +36,28 @@ describe('OrgModelPolicySchema', () => {
     expect(OrgModelPolicySchema.safeParse({ allowedTools: ['not_a_tool'] }).success).toBe(false);
     expect(OrgModelPolicySchema.safeParse({ allowedModels: ['  '] }).success).toBe(false);
     expect(OrgModelPolicySchema.safeParse({ allowedModels: null, extra: 1 }).success).toBe(false);
+  });
+});
+
+// organization.modelPolicy is sent to every org member (ORGANIZATION_MEMBER_VISIBLE_FIELDS in
+// serializers/toSafeOrganization.ts). That was decided for exactly these three allowlists; a new key
+// ships to members too, so adding one means deciding again whether the field stays member-visible.
+describe('modelPolicy member visibility', () => {
+  const DECIDED_KEYS = ['allowedModels', 'allowedProviders', 'allowedTools'];
+  const redecide =
+    'modelPolicy keys changed. modelPolicy is visible to every org member, so re-decide whether it stays in ' +
+    'ORGANIZATION_MEMBER_VISIBLE_FIELDS (b4m-core/common/src/serializers/toSafeOrganization.ts) or the new key ' +
+    'moves somewhere admin-only, then update DECIDED_KEYS here.';
+
+  it.each([
+    ['OrgModelPolicySchema', OrgModelPolicySchema],
+    ['StoredOrgModelPolicySchema', StoredOrgModelPolicySchema],
+  ])('%s has exactly the keys whose member visibility was decided', (_name, schema) => {
+    expect(Object.keys(schema.shape).sort(), redecide).toEqual(DECIDED_KEYS);
+  });
+
+  it('is member-visible', () => {
+    expect(ORGANIZATION_MEMBER_VISIBLE_FIELDS).toContain('modelPolicy');
   });
 });
 

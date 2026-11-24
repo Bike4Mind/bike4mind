@@ -1,3 +1,4 @@
+import type { InterventionSpendWindow } from './interventionSpendGate';
 import { insufficientCreditsError, type IAdminSettingsRepository, type IUserDocument } from '@bike4mind/common';
 import type { ILogger } from '@bike4mind/observability';
 import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
@@ -37,6 +38,8 @@ export type NewAccountSpendCapAdapters = {
    * Best-effort: a failure is logged and the refusal stands.
    */
   onRefused?(event: NewAccountSpendCapRefusalEvent): Promise<void>;
+  /** Meters a limit intervention hold (interventionSpendGate.ts); without it, such a hold refuses all spend. */
+  interventionSpendWindow?: InterventionSpendWindow;
 };
 
 export type NewAccountSpendCapUser = Pick<IUserDocument, 'id' | 'createdAt' | 'isAdmin' | 'newAccountSpendCapLifted'>;
