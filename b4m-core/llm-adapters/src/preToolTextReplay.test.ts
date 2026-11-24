@@ -309,3 +309,50 @@ describe('OpenAIBackend non-streaming pre-tool text', () => {
     expect(toolTurns[0].content).toBeNull();
   });
 });
+
+describe('AnthropicBackend pre-tool text ordering', () => {
+  it('replays only the text written before the first tool call, never text that followed it', async () => {
+    const { backend, requests, setSequence } = anthropicHarness();
+    const textBlock = (index: number, text: string) => [
+      { type: 'content_block_start', index, content_block: { type: 'text', text: '' } },
+      { type: 'content_block_delta', index, delta: { type: 'text_delta', text } },
+      { type: 'content_block_stop', index },
+    ];
+    setSequence([
+      [
+        { type: 'message_start' },
+        ...textBlock(0, PLAN),
+        {
+          type: 'content_block_start',
+          index: 1,
+          content_block: { type: 'tool_use', id: 'call_1', name: 'lookup', input: {} },
+        },
+        {
+          type: 'content_block_delta',
+          index: 1,
+          delta: { type: 'input_json_delta', partial_json: JSON.stringify({ target: 'x' }) },
+        },
+        { type: 'content_block_stop', index: 1 },
+        ...textBlock(2, 'Trailing note.'),
+        {
+          type: 'message_delta',
+          delta: { stop_reason: 'tool_use' },
+          usage: { input_tokens: 10, output_tokens: 5 },
+        },
+        { type: 'message_stop' },
+      ],
+      anthropicRound('Final answer.', []),
+    ]);
+
+    await backend.complete(
+      'claude-sonnet-4-5-20250929',
+      [{ role: 'user', content: 'question' }],
+      { stream: true, tools: [lookupTool], executeTools: true },
+      async () => {}
+    );
+
+    const toolTurns = requests[1].filter(isToolCallTurn);
+    expect(toolTurns).toHaveLength(1);
+    expect(anthropicText(toolTurns[0])).toBe(PLAN);
+  });
+});
