@@ -68,9 +68,12 @@ export function buildLoginRedirectUrl(
   return `/login?${params.toString()}`;
 }
 
-/** True for the published-artifact viewer paths (`/p/...`, `/a/...`) the SPA router does not own. */
+/**
+ * True for the server-rendered paths the SPA router does not own: the published-artifact viewer
+ * (`/p/...`, `/a/...`) and Skill Market template pages (`/t/...`).
+ */
 export function isServerRenderedPath(path: string): boolean {
-  return /^\/(p|a)\//.test(path);
+  return /^\/(p|a|t)\//.test(path);
 }
 
 /**

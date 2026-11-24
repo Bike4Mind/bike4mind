@@ -66,6 +66,19 @@ describe('prepareShareMeta', () => {
     expect(metaTags).toContain('<meta name="twitter:card" content="summary">');
   });
 
+  it('adds an escaped og:image and a large card only when a caller passes an image', () => {
+    const { metaTags } = prepareShareMeta({
+      title: 'Hello',
+      canonicalUrl: 'https://example.com/t/slug',
+      imageUrl: 'https://example.com/api/skills/template/image/slug?v=1&x="y"',
+    });
+
+    const escaped = 'https://example.com/api/skills/template/image/slug?v=1&amp;x=&quot;y&quot;';
+    expect(metaTags).toContain(`<meta property="og:image" content="${escaped}">`);
+    expect(metaTags).toContain(`<meta name="twitter:image" content="${escaped}">`);
+    expect(metaTags).toContain('<meta name="twitter:card" content="summary_large_image">');
+  });
+
   it('omits the unfurl CTA when no siteName is configured (fork-safe neutral default)', () => {
     const { metaTags } = prepareShareMeta({
       title: 'Hello',

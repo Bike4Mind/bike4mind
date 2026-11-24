@@ -137,7 +137,9 @@ describe('applyRedirect', () => {
       const history = { push: vi.fn(), replace: vi.fn() };
       applyRedirect(history, '/p/r/abc123');
       applyRedirect(history, '/a/token', '/new', true);
+      applyRedirect(history, '/t/article-bullets');
       expect(location.assign).toHaveBeenCalledWith('/p/r/abc123');
+      expect(location.assign).toHaveBeenCalledWith('/t/article-bullets');
       expect(location.replace).toHaveBeenCalledWith('/a/token');
       expect(history.push).not.toHaveBeenCalled();
       expect(history.replace).not.toHaveBeenCalled();
