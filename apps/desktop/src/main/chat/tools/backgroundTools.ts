@@ -17,7 +17,7 @@ import {
  * otherwise come back as a cheerful handle, and the model would only discover the failure a
  * turn later. Short enough that a server which starts fine is not being waited on.
  */
-const SETTLE_MS = 2_000;
+export const SETTLE_MS = 2_000;
 
 const DEFAULT_READ_CHARS = 8_000;
 const MAX_READ_CHARS = 20_000;

@@ -9,6 +9,10 @@ import { git } from './project/git';
 import { appWorktreeRoot } from './project/workspace';
 import type { AccessStore } from './tools/AccessStore';
 
+vi.mock('../git/hostGitArgs', async importOriginal =>
+  (await import('./plainFolderGit.testHelper')).skipGitOutsideRepositories(await importOriginal())
+);
+
 const resolution = vi.hoisted(() => ({
   afterResolve: null as ((path: string) => Promise<void>) | null,
 }));

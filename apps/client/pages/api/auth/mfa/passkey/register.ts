@@ -2,7 +2,8 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { mfaService } from '@bike4mind/services';
 import { userRepository } from '@bike4mind/database';
-import { redactUserSecretsForSelf } from '@bike4mind/common';
+import { passthroughField, redactUserSecretsForSelf, selfUserResponseSchema } from '@bike4mind/common';
+import { respond } from '@server/utils/respond';
 import { logAuthAudit } from '@server/utils/authAudit';
 import { completeMfaEnrollment } from '@server/auth/completeMfaEnrollment';
 import { resolveRoleAdminPermissions } from '@bike4mind/server-utils/auth/adminRoles';
@@ -19,6 +20,14 @@ import * as z from 'zod';
 const bodySchema = z.object({
   response: registrationResponseSchema,
   name: z.string().trim().max(64).optional(),
+});
+
+// toPasskeySummary is already an allowlist; the schema is here for `user`, like the other MFA routes.
+const firstFactorResponseSchema = z.object({
+  passkey: passthroughField,
+  backupCodes: z.array(z.string()).nullable(),
+  accessToken: z.string(),
+  user: selfUserResponseSchema,
 });
 
 /**
@@ -67,7 +76,7 @@ const handler = baseApi({ auth: 'jwtOnly' }).post(
     if (!enrolledUser) {
       return res.status(404).json({ error: 'User not found' });
     }
-    return res.json({
+    return respond(res, firstFactorResponseSchema, {
       passkey: toPasskeySummary(credential),
       backupCodes: result.backupCodes,
       accessToken,

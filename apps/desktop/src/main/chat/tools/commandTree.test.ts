@@ -1,5 +1,6 @@
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
+import { once } from 'node:events';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -136,13 +137,17 @@ describe.runIf(process.platform === 'linux')('WINDOWS_TREE_SCRIPT', () => {
     return { child, ended: new Promise(resolve => child.on('exit', (_code, signal) => resolve(signal))) };
   };
 
+  // 'spawn' fires once exec has succeeded, so the tag is already in /proc/<pid>/environ.
+  const spawned = (...sleepers: { child: ChildProcess }[]) =>
+    Promise.all(sleepers.map(({ child }) => once(child, 'spawn')));
+
   it('signals every process carrying one of the tags and nothing else', async () => {
     const [one, two, other] = [randomUUID(), randomUUID(), randomUUID()];
     const first = sleeper(one);
     const second = sleeper(two);
     const untagged = sleeper();
     const elsewhere = sleeper(other);
-    await new Promise(resolve => setTimeout(resolve, 200));
+    await spawned(first, second, untagged, elsewhere);
 
     const run = spawnSync('bash', ['-c', WINDOWS_TREE_SCRIPT, 'b4m-signal', '', 'TERM', one, two], {
       encoding: 'utf8',
@@ -159,7 +164,7 @@ describe.runIf(process.platform === 'linux')('WINDOWS_TREE_SCRIPT', () => {
   it('kills tagged processes with SIGKILL where there is no taskkill, as in a WSL distro', async () => {
     const tag = randomUUID();
     const tagged = sleeper(tag);
-    await new Promise(resolve => setTimeout(resolve, 200));
+    await spawned(tagged);
     spawnSync('bash', ['-c', WINDOWS_TREE_SCRIPT, 'b4m-signal', '', 'KILL', tag]);
     expect(await tagged.ended).toBe('SIGKILL');
   });
