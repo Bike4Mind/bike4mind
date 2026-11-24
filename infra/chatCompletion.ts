@@ -9,6 +9,7 @@ import {
 import { ecsEnvSecret, ecsResourceSecrets, ecsSecretsVersion } from './ecsSecrets';
 import { eventBus } from './eventBus';
 import { imageProcessor } from './imageProcessor';
+import { withDirectPathSourceIp } from './listenerRuleConditions';
 import { mcpHandler } from './mcp';
 import { remoteMcpHandler } from './remoteMcp';
 import { providerFederation } from './providerFederation';
@@ -259,12 +260,7 @@ if (originVerifyEnabled) {
     args.conditions = $util.secret(
       $util
         .all([args.conditions, natEgressCidrs()])
-        // Each condition block holds one match type, so the source IPs are a block of their own.
-        .apply(([conditions, cidrs]) =>
-          conditions.some(condition => condition.pathPattern)
-            ? [...conditions, { sourceIp: { values: cidrs } }]
-            : conditions
-        )
+        .apply(([conditions, cidrs]) => withDirectPathSourceIp(conditions, cidrs))
     );
   });
 }

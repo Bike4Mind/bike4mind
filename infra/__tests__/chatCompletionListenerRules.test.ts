@@ -3,6 +3,7 @@
  */
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
+import { withDirectPathSourceIp } from '../listenerRuleConditions';
 
 // infra/chatCompletion.ts only loads inside `sst`, so wiring is asserted against its source text.
 const source = readFileSync(new URL('../chatCompletion.ts', import.meta.url), 'utf8');
@@ -17,6 +18,7 @@ describe('ChatCompletion load balancer listener rules', () => {
   });
 
   it('forwards on port 80 only when the stage has no origin domain', () => {
+    expect(source).toContain("const forwardListen = originDomain ? ('443/https' as const) : ('80/http' as const);");
     expect(source).not.toMatch(/listen: '80\/http', forward:/);
   });
 
@@ -34,13 +36,11 @@ describe('ChatCompletion load balancer listener rules', () => {
     expect(source.match(/listen: forwardListen, forward: '8080\/http' as const \}/g)).toHaveLength(1);
   });
 
-  it('keeps the rule conditions secret and limits the direct paths to the NAT egress IPs', () => {
+  it('wraps the rule conditions as secret through the listener-rule transform', () => {
     expect(squashed).toContain(
       "if (originVerifyEnabled) { $transform(aws.lb.ListenerRule, (args, _opts, name) => { if (!name.startsWith('ChatCompletionListener')) return; args.conditions = $util.secret("
     );
-    expect(squashed).toContain(
-      'conditions.some(condition => condition.pathPattern) ? [...conditions, { sourceIp: { values: cidrs } }] : conditions'
-    );
+    expect(squashed).toContain('.apply(([conditions, cidrs]) => withDirectPathSourceIp(conditions, cidrs))');
   });
 
   it('admits each source on the forwarding port only', () => {
@@ -48,5 +48,22 @@ describe('ChatCompletion load balancer listener rules', () => {
     expect(source.match(/fromPort: forwardingPort,\s+toPort: forwardingPort,/g)).toHaveLength(2);
     expect(source).not.toMatch(/fromPort: 80,/);
     expect(source).toContain('const natCidrs = natEgressCidrs();');
+  });
+});
+
+describe('withDirectPathSourceIp', () => {
+  const cidrs = ['203.0.113.1/32', '203.0.113.2/32'];
+
+  it('leaves a header rule unchanged', () => {
+    const conditions = [{ httpHeader: { httpHeaderName: 'x-b4m-origin-verify', values: ['secret'] } }];
+    expect(withDirectPathSourceIp(conditions, cidrs)).toEqual(conditions);
+  });
+
+  it('adds the source IPs as a separate block on a path rule', () => {
+    const conditions = [{ pathPattern: { values: ['/process'] } }];
+    expect(withDirectPathSourceIp(conditions, cidrs)).toEqual([
+      { pathPattern: { values: ['/process'] } },
+      { sourceIp: { values: cidrs } },
+    ]);
   });
 });
