@@ -170,6 +170,27 @@ export function setPaneSession(
   };
 }
 
+/**
+ * Adds a pane showing `sessionId` beside the others: a new last pane while there is room (sizes even out, as
+ * applyPreset does), else the last pane is re-pinned. `split` reshapes a single pane only; a split keeps its
+ * own, since the model has one split for every pane. A session already pinned in a pane changes nothing.
+ */
+export function addPinnedPane(
+  layout: OrchestratorLayout,
+  sessionId: string,
+  view: OrchestratorViewId = FALLBACK_PANE_VIEW,
+  split: LayoutSplit = layout.split
+): OrchestratorLayout {
+  if (layout.panes.some(pane => pane.sessionId === sessionId)) return layout;
+  if (layout.panes.length >= MAX_PANES) return setPaneSession(layout, layout.panes.length - 1, sessionId);
+  const panes: UnsizedPane[] = [...layout.panes.map(pane => paneOf(pane.view, pane.sessionId)), { view, sessionId }];
+  return withSizes(
+    layout.panes.length === 1 ? split : layout.split,
+    panes,
+    panes.map(() => 1)
+  );
+}
+
 /** The layout with every pin dropped: what a scope shared by other sessions remembers (orchestratorPrefs.ts). */
 export function withoutPins(layout: OrchestratorLayout): OrchestratorLayout {
   if (layout.panes.every(pane => pane.sessionId === undefined)) return layout;

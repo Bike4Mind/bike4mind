@@ -31,6 +31,8 @@ import type { ModelSettings } from '@shared/modelSettings';
 import { alertableSessions } from '@shared/needsYou';
 import { activeTodos } from '@shared/todos';
 import { ArtifactLibraryPanel } from './ArtifactLibraryPanel';
+import { MissionControl } from './missionControl/MissionControl';
+import { useMissionControlActions } from './missionControl/useMissionControlActions';
 import { BlankChat, BlankChatGreeting } from './BlankChat';
 import { SkillMarketPanel } from './SkillMarketPanel';
 import { BackgroundTaskChip, BackgroundTaskPanel } from './BackgroundTaskPanel';
@@ -222,7 +224,7 @@ function SessionHeader({ title, onRename }: { title: string; onRename: (title: s
  * What the main pane is showing. One value rather than a flag per screen, so the screens
  * cannot both be up and nothing has to remember to shut the other one.
  */
-type ChatScreen = 'conversation' | 'artifacts' | 'customize' | 'skill-market' | 'models';
+type ChatScreen = 'conversation' | 'artifacts' | 'mission-control' | 'customize' | 'skill-market' | 'models';
 
 /**
  * The sidebar's account strip, given the dot that says whether a reply is running.
@@ -1066,6 +1068,14 @@ export function ChatShell({
     },
     [setOrchestratorLayout]
   );
+  const missionControl = useMissionControlActions({
+    activeId,
+    activeHasAgents: hasAgents,
+    layout: orchestratorPrefs.layout,
+    onLayoutChange: changeOrchestratorLayout,
+    setActiveSurface: setOrchestratorSurface,
+    selectSession,
+  });
 
   const agentActions = useMemo<AgentActions>(
     () => ({
@@ -1679,6 +1689,7 @@ export function ChatShell({
         onSelect={selectSidebarSession}
         onCreate={() => void onCreate()}
         onOpenArtifacts={() => setScreen('artifacts')}
+        onOpenMissionControl={() => setScreen('mission-control')}
         onCreateInProject={directory => void onCreateInProject(directory)}
         onCreateInSection={sectionId => void onCreateInSection(sectionId)}
         onDelete={setDeleteSessionId}
@@ -1711,6 +1722,15 @@ export function ChatShell({
       {screen !== 'conversation' && updateNotice}
       {screen === 'artifacts' ? (
         <ArtifactLibraryPanel onClose={() => setScreen('conversation')} />
+      ) : screen === 'mission-control' ? (
+        <MissionControl
+          sessions={sessions}
+          statuses={statuses}
+          presenting={orchestratorPrefs.presenter}
+          onOpen={missionControl.open}
+          onOpenBeside={missionControl.openBeside}
+          onClose={() => setScreen('conversation')}
+        />
       ) : screen === 'models' ? (
         <ModelsScreen
           onClose={() => {

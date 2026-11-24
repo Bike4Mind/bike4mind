@@ -53,6 +53,17 @@ function optionLabel(session: PinnableSession, relation: PinRelation, ordinal: n
 const newestFirst = (a: PinnableSession, b: PinnableSession) => b.updatedAt.localeCompare(a.updatedAt);
 
 /**
+ * Whether a session is a top-level orchestration: one that orchestrates or already has agents. Shared by the
+ * pane picker's "Other orchestrations" and Mission Control (missionControl/missionControlModel.ts).
+ */
+export function orchestrationTest(
+  sessions: readonly Pick<ChatSessionSummary, 'origin'>[]
+): (session: Pick<ChatSessionSummary, 'id' | 'origin' | 'orchestrate'>) => boolean {
+  const withAgents = new Set(sessions.flatMap(session => session.origin?.parentSessionId ?? []));
+  return session => !session.origin && (session.orchestrate === true || withAgents.has(session.id));
+}
+
+/**
  * What a pane can be pinned to, besides following the active session: its parent, its children, then up to
  * `limit` other top-level orchestrations (a session that orchestrates or already has agents).
  */
@@ -65,9 +76,9 @@ export function pinOptions(
   const parentId = sessions.find(session => session.id === activeId)?.origin?.parentSessionId;
   const parent = live.find(session => session.id === parentId);
   const children = activeId === undefined ? [] : live.filter(s => s.origin?.parentSessionId === activeId);
-  const withAgents = new Set(sessions.flatMap(session => session.origin?.parentSessionId ?? []));
+  const orchestrates = orchestrationTest(sessions);
   const others = live
-    .filter(s => !s.origin && s.id !== parentId && (s.orchestrate === true || withAgents.has(s.id)))
+    .filter(s => s.id !== parentId && orchestrates(s))
     .sort(newestFirst)
     .slice(0, limit);
 
