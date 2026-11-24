@@ -48,6 +48,8 @@ type Harness = {
   composition(): ProductionComposition;
   counts: { image: number; video: number; music: number; speech: number; sfx: number };
   imageRequests: { request: unknown; count: number }[];
+  /** The state each new image job lands in; a job that is not succeeded saves no file. */
+  imageState: { next: (request: unknown) => 'succeeded' | 'running' | 'failed' };
   /** A new file the user can read, of the given kind. */
   addFile(kind: StudioFileMediaKind): string;
 };
@@ -68,12 +70,15 @@ function createHarness(): Harness {
   const counts = { image: 0, video: 0, music: 0, speech: 0, sfx: 0 };
   const imageRequests: Harness['imageRequests'] = [];
   let nextJob = 1;
-  const startJob = (kind: 'image' | 'video' | 'music', durationSeconds?: number) => {
+  const imageState: Harness['imageState'] = { next: () => 'succeeded' };
+  const startJob = (kind: 'image' | 'video' | 'music', durationSeconds?: number, request?: unknown) => {
     const id = `job-${kind}-${nextJob++}`;
+    const state = kind === 'image' ? imageState.next(request) : 'succeeded';
     jobs.set(id, {
       id,
-      state: 'succeeded',
-      fileId: makeFile(kind === 'music' ? 'audio' : kind),
+      state,
+      ...(state === 'succeeded' && { fileId: makeFile(kind === 'music' ? 'audio' : kind) }),
+      ...(state === 'failed' && { error: { code: 'provider_error', message: 'the model refused' } }),
       ...(durationSeconds !== undefined && { durationSeconds }),
     });
     counts[kind] += 1;
@@ -94,7 +99,7 @@ function createHarness(): Harness {
     selection: undefined,
     createJobs: async input => {
       imageRequests.push({ request: input.request, count: input.count });
-      const ids = Array.from({ length: input.count }, () => startJob('image'));
+      const ids = Array.from({ length: input.count }, () => startJob('image', undefined, input.request));
       return { ok: true, groupId: 'group', jobs: ids.map(id => ({ id })), created: true } as never;
     },
   };
@@ -176,7 +181,16 @@ function createHarness(): Harness {
     statusUpdate,
   } as unknown as ToolContext;
 
-  return { config, context, statusUpdate, composition: () => stored, counts, imageRequests, addFile: makeFile };
+  return {
+    config,
+    context,
+    statusUpdate,
+    composition: () => stored,
+    counts,
+    imageRequests,
+    addFile: makeFile,
+    imageState,
+  };
 }
 
 type Tool = typeof productionStoryboardTool;
@@ -373,6 +387,84 @@ describe('production director tools', () => {
       await run(productionGenerateShotTool, harness, { compositionId: COMPOSITION_ID, animate: false });
 
       for (const { request } of harness.imageRequests) expect(inputsOf(request)).toEqual([kitImage]);
+    });
+  });
+
+  describe('product look', () => {
+    const inputsOf = (request: unknown) => (request as { inputs?: { fileId: string }[] }).inputs?.map(i => i.fileId);
+    const isLook = (request: unknown) => (request as { prompt: string }).prompt.startsWith('Product packshot');
+    const noProduct = { ...STORYBOARD, productFileId: undefined };
+
+    it('makes one look from the brief, saves it first in the brand kit, and references it on every take', async () => {
+      await run(productionStoryboardTool, harness, noProduct);
+      const first = JSON.parse(
+        await run(productionGenerateShotTool, harness, {
+          compositionId: COMPOSITION_ID,
+          shotIds: ['shot-1'],
+          animate: false,
+        })
+      );
+      expect(first.productLook).toBe('made');
+      const [look] = harness.composition().brandKit.productFileIds;
+      expect(look).toBeDefined();
+
+      const second = JSON.parse(
+        await run(productionGenerateShotTool, harness, { compositionId: COMPOSITION_ID, animate: false })
+      );
+      expect(second.productLook).toBeUndefined();
+      const requests = harness.imageRequests.map(({ request }) => request);
+      expect(requests.filter(isLook)).toHaveLength(1);
+      expect(inputsOf(requests.find(isLook))).toBeUndefined();
+      const takes = requests.filter(request => !isLook(request));
+      expect(takes).toHaveLength(3);
+      for (const take of takes) expect(inputsOf(take)).toEqual([look]);
+      expect(harness.composition().brandKit.productFileIds).toEqual([look]);
+    });
+
+    it('starts no takes while the look is still running, and reports every shot pending on it', async () => {
+      harness.imageState.next = request => (isLook(request) ? 'running' : 'succeeded');
+      await run(productionStoryboardTool, harness, noProduct);
+      const result = JSON.parse(await run(productionGenerateShotTool, harness, { compositionId: COMPOSITION_ID }));
+
+      expect(result.productLook).toBe('pending');
+      expect(harness.counts.image).toBe(1);
+      expect(harness.counts.video).toBe(0);
+      for (const shot of result.shots) expect(shot.pending).toEqual([expect.stringContaining('product look')]);
+      expect(result.next).toContain('call production_generate_shot again');
+      expect(harness.composition().brandKit.productFileIds).toEqual([]);
+    });
+
+    it('starts the takes without a reference when the look fails', async () => {
+      harness.imageState.next = request => (isLook(request) ? 'failed' : 'succeeded');
+      await run(productionStoryboardTool, harness, noProduct);
+      const result = JSON.parse(
+        await run(productionGenerateShotTool, harness, { compositionId: COMPOSITION_ID, animate: false })
+      );
+
+      expect(result.productLook).toMatch(/^failed: /);
+      const takes = harness.imageRequests.filter(({ request }) => !isLook(request));
+      expect(takes).toHaveLength(3);
+      for (const { request } of takes) expect(inputsOf(request)).toBeUndefined();
+      expect(harness.composition().shots.every(shot => shot.chosenFileId)).toBe(true);
+    });
+
+    it('skips the look when the brief has no summary', async () => {
+      await run(productionStoryboardTool, harness, noProduct);
+      await harness.config.compositions.update(COMPOSITION_ID, { brief: {} });
+      const result = JSON.parse(
+        await run(productionGenerateShotTool, harness, { compositionId: COMPOSITION_ID, animate: false })
+      );
+
+      expect(result.productLook).toMatch(/^skipped: /);
+      expect(harness.imageRequests.filter(({ request }) => isLook(request))).toHaveLength(0);
+      expect(harness.counts.image).toBe(3);
+    });
+
+    it('makes no look when the production has a product image', async () => {
+      await run(productionStoryboardTool, harness, STORYBOARD);
+      const result = JSON.parse(await run(productionGenerateShotTool, harness, { compositionId: COMPOSITION_ID }));
+      expect(result.productLook).toBeUndefined();
+      expect(harness.imageRequests.filter(({ request }) => isLook(request))).toHaveLength(0);
     });
   });
 

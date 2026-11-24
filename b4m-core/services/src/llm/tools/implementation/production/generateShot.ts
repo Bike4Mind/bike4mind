@@ -21,6 +21,7 @@ import {
   waitForJobs,
 } from './jobs';
 import { DEFAULT_SHOT_DURATION_MS } from './layout';
+import { ensureProductLook, type ProductLook } from './productLook';
 import {
   CompositionIdArg,
   ProductionToolError,
@@ -57,7 +58,8 @@ type GenerateShotArgs = z.infer<typeof schema>;
 
 const description =
   'Make the takes and clips for the shots of a Studio production. For each shot without a chosen take it starts ' +
-  'image jobs from the shot prompt with the product photo as a reference, picks the first finished take, then ' +
+  'image jobs from the shot prompt with the product images as references (with none, it first makes one product ' +
+  'look from the brief and saves it to the brand kit), picks the first finished take, then ' +
   'animates it into a video clip. Waits for the jobs; if some are still running when it returns, call it again with ' +
   'the same arguments to keep waiting (nothing is started twice). Then call production_add_audio.';
 
@@ -115,7 +117,10 @@ const failures = (jobIds: readonly string[], jobs: Map<string, ProductionJobView
     .filter(outcome => !outcome.startsWith('still') && outcome !== 'succeeded')
     .join('; ');
 
-/** Starts takes for every shot that needs one, waits, and records the finished takes and the pick. */
+/**
+ * Starts takes for every shot that needs one, waits, and records the finished takes and the pick. With no product
+ * image to reference, it first makes the production's product look (productLook.ts) and references that.
+ */
 async function makeTakes(
   context: Context,
   config: ProductionToolConfig,
@@ -123,20 +128,33 @@ async function makeTakes(
   shots: readonly StudioShot[],
   takes: number,
   reports: Map<string, ShotReport>
-): Promise<StudioShot[]> {
+): Promise<{ shots: StudioShot[]; productLook?: ProductLook['status'] }> {
+  const needing = shots.filter(candidate => !candidate.chosenFileId);
+  for (const shot of needing.filter(candidate => !candidate.prompt)) {
+    reports.set(shot.id, { id: shot.id, problem: 'no prompt; storyboard it first' });
+  }
+  const toShoot = needing.filter(candidate => candidate.prompt);
+  if (toShoot.length === 0) return { shots: [...shots] };
+
   const composition = await config.compositions.get(compositionId);
-  const references = productImageReferenceFileIds(
+  let references = productImageReferenceFileIds(
     composition,
     await config.fileKinds(productReferenceFileIds(composition))
   );
+  let look: ProductLook | undefined;
+  if (references.length === 0) {
+    look = await ensureProductLook(context, config, composition);
+    references = look.references;
+    if (look.pendingJobId) {
+      for (const shot of toShoot)
+        reports.set(shot.id, { id: shot.id, pending: [`product look: ${look.pendingJobId}`] });
+      return { shots: [...shots], productLook: look.status };
+    }
+  }
   const aspectRatio = primaryAspectRatio(composition);
   const started = new Map<string, string[]>();
-  for (const shot of shots.filter(candidate => !candidate.chosenFileId)) {
-    if (!shot.prompt) {
-      reports.set(shot.id, { id: shot.id, problem: 'no prompt; storyboard it first' });
-      continue;
-    }
-    const prompt = buildShotImagePrompt(shot.prompt, composition.brandKit.colors, references.length > 0);
+  for (const shot of toShoot) {
+    const prompt = buildShotImagePrompt(shot.prompt as string, composition.brandKit.colors, references.length > 0);
     const submitted = await submitShotImages(
       context,
       config,
@@ -144,9 +162,10 @@ async function makeTakes(
       takes
     );
     if (submitted.ok) started.set(shot.id, submitted.jobIds);
+    else if (submitted.notReady) reports.set(shot.id, { id: shot.id, pending: [`takes: ${submitted.message}`] });
     else reports.set(shot.id, { id: shot.id, problem: submitted.message });
   }
-  if (started.size === 0) return [...shots];
+  if (started.size === 0) return { shots: [...shots], productLook: look?.status };
 
   const jobs = await waitForJobs(config, [...started.values()].flat(), context.getAbortSignal?.());
   const updated = await updateShots(config, compositionId, current =>
@@ -168,7 +187,10 @@ async function makeTakes(
       ...(failed && { problem: `takes failed: ${failed}` }),
     });
   }
-  return updated.shots.filter(shot => shots.some(selected => selected.id === shot.id));
+  return {
+    shots: updated.shots.filter(shot => shots.some(selected => selected.id === shot.id)),
+    productLook: look?.status,
+  };
 }
 
 /** Animates every chosen take that has no clip yet, waits, and records the clips. */
@@ -251,7 +273,8 @@ export const productionGenerateShotTool: ToolDefinition = {
             });
             shots = updated.shots.filter(shot => selected.some(candidate => candidate.id === shot.id));
           }
-          shots = await makeTakes(context, config, args.compositionId, shots, args.takesPerShot ?? 1, reports);
+          const taken = await makeTakes(context, config, args.compositionId, shots, args.takesPerShot ?? 1, reports);
+          shots = taken.shots;
           // A prompt-less shot is an editor-made still; animate it only when the director names it.
           const toAnimate = shots.filter(shot => shot.prompt || args.shotIds?.includes(shot.id));
           if (args.animate !== false) {
@@ -279,6 +302,7 @@ export const productionGenerateShotTool: ToolDefinition = {
           const stillRunning = summary.some(shot => shot.pending && shot.pending.length > 0);
           return JSON.stringify({
             shots: summary,
+            ...(taken.productLook && { productLook: taken.productLook }),
             ...(videoNote && { note: videoNote }),
             next: stillRunning
               ? 'Some jobs are still running: call production_generate_shot again with the same arguments to wait for them.'

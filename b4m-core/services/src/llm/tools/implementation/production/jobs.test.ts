@@ -278,6 +278,38 @@ describe('submitShotImages', () => {
       expect(createJobs).toHaveBeenCalledTimes(2);
     });
   });
+
+  describe('a reference still in its safety check', () => {
+    const notReady = { ok: false as const, code: 'input_image_not_found', message: 'Input image not found' };
+    const timed = (createJobs: ReturnType<typeof vi.fn>, inputReadyTimeoutMs: number) =>
+      ({ ...configWith(createJobs), inputReadyTimeoutMs, pollIntervalMs: 1 }) as ProductionToolConfig;
+
+    it('retries until the reference clears, then starts the takes', async () => {
+      const createJobs = vi
+        .fn()
+        .mockResolvedValueOnce(notReady)
+        .mockResolvedValueOnce(replayed('fresh', 'queued', true));
+      const result = await submitShotImages(context, timed(createJobs, 1_000), shot('s1'), 1);
+      expect(result).toEqual({ ok: true, jobIds: ['fresh'] });
+      expect(createJobs).toHaveBeenCalledTimes(2);
+    });
+
+    it('reports not ready, not a failure, once the wait runs out', async () => {
+      const createJobs = vi.fn().mockResolvedValue(notReady);
+      const result = await submitShotImages(context, timed(createJobs, 20), shot('s1'), 1);
+      expect(result).toMatchObject({ ok: false, notReady: true });
+      expect(createJobs.mock.calls.length).toBeGreaterThan(1);
+    });
+  });
+
+  it('keys the product look apart from every shot', async () => {
+    const createJobs = vi.fn().mockResolvedValue(replayed('j', 'queued', true));
+    const config = configWith(createJobs);
+    const { shotId: _shotId, ...look } = shot('s1');
+    await submitShotImages(context, config, { ...look, purpose: 'product-look' }, 1);
+    await submitShotImages(context, config, shot('product-look'), 1);
+    expect(keyOf(createJobs, 0)).not.toBe(keyOf(createJobs, 1));
+  });
 });
 
 describe('submitShotClip waiting for a new take', () => {
