@@ -6,7 +6,10 @@ import {
   type DispatchFunctionCallRequest,
   type DispatchFunctionCallResult,
 } from './dispatch';
-import { CALLABLE_FUNCTION_PARENT_MARGIN_MS, CALLABLE_FUNCTION_START_BUDGET_MS } from './runtimeParent';
+import {
+  CALLABLE_FUNCTION_CALL_CONSUMER_TIMEOUT_SECONDS,
+  CALLABLE_FUNCTION_QUEUED_MAX_TIMEOUT_MS,
+} from './runtimeParent';
 import type { CallableFunctionRunner } from './runtimeRunner';
 import { resolveCallableFunctionTimeLimitMs } from './timeLimit';
 
@@ -20,18 +23,8 @@ export interface CallableFunctionCallJob {
   callId: string;
 }
 
-/** The consumer Lambda's own timeout, in seconds (infra/queues.ts). */
-export const CALLABLE_FUNCTION_CALL_CONSUMER_TIMEOUT_SECONDS = 900;
-
-/** Room the consumer keeps for its database reads and writes around the run. */
-const CONSUMER_MARGIN_MS = 30_000;
-
-/** A queued call's longest time limit: what fits in the consumer with the runtime's start budget and margin. */
-export const CALLABLE_FUNCTION_QUEUED_MAX_TIMEOUT_MS =
-  CALLABLE_FUNCTION_CALL_CONSUMER_TIMEOUT_SECONDS * 1000 -
-  CALLABLE_FUNCTION_START_BUDGET_MS -
-  CALLABLE_FUNCTION_PARENT_MARGIN_MS -
-  CONSUMER_MARGIN_MS;
+/** A worker that has held a call `running` this long is gone: the consumer's own timeout is this many seconds. */
+const LOST_WORKER_AFTER_MS = CALLABLE_FUNCTION_CALL_CONSUMER_TIMEOUT_SECONDS * 1000;
 
 /**
  * Makes every check a synchronous call makes, then writes the row as `queued`, keeps the inputs in a result
@@ -62,7 +55,8 @@ export async function queueFunctionCall(
 }
 
 /**
- * Runs one queued call under the caller's time limit, once: a redelivered job finds it claimed and is skipped.
+ * Runs one queued call under the caller's time limit, once: a redelivered job finds it claimed and is skipped,
+ * and ends it as `worker_lost` if its worker has held it `running` past the consumer's timeout.
  * The dispatcher checks everything again, so a function turned off while the call waited is refused.
  */
 export async function runQueuedFunctionCall(
@@ -70,7 +64,13 @@ export async function runQueuedFunctionCall(
   options: { runner?: CallableFunctionRunner | null } = {}
 ): Promise<DispatchFunctionCallResult<CallableFunctionCallOutcome> | null> {
   const claimed = await callableFunctionResultRepository.claim(job.callId);
-  if (!claimed) return null;
+  if (!claimed) {
+    const staleBefore = new Date(Date.now() - LOST_WORKER_AFTER_MS);
+    if (await callableFunctionResultRepository.endLost(job.callId, staleBefore)) {
+      await callableFunctionCallRepository.rewrite(job.callId, { outcome: 'error', reason: 'worker_lost' });
+    }
+    return null;
+  }
   try {
     await callableFunctionCallRepository.rewrite(job.callId, { outcome: 'running' });
     const limitMs = await resolveCallableFunctionTimeLimitMs({ id: claimed.callerUserId });

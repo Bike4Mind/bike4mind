@@ -797,7 +797,7 @@ const callableFunctionCallQueueSubscription = callableFunctionCallQueue.subscrib
   {
     handler: 'apps/workers/src/queueHandlers/callableFunctionCall.dispatch',
     runtime: 'nodejs24.x',
-    // CALLABLE_FUNCTION_CALL_CONSUMER_TIMEOUT_SECONDS in packages/server-utils/src/callableFunctions/asyncCalls.ts.
+    // CALLABLE_FUNCTION_CALL_CONSUMER_TIMEOUT_SECONDS in packages/server-utils/src/callableFunctions/runtimeLimits.ts.
     timeout: '15 minutes',
     memory: '512 MB',
     vpc: lambdaVpc,

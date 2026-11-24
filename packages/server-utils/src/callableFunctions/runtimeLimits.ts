@@ -39,6 +39,22 @@ export const CALLABLE_FUNCTION_START_BUDGET_MS = 60_000;
 /** The parent's own time around a run: the input checks and the wait for the killed child's reap. */
 export const CALLABLE_FUNCTION_PARENT_MARGIN_MS = 15_000;
 
+/** The queued-call consumer Lambda's own timeout, in seconds (infra/queues.ts). */
+export const CALLABLE_FUNCTION_CALL_CONSUMER_TIMEOUT_SECONDS = 900;
+
+/** Room the consumer keeps for its database reads and writes around the run. */
+const CONSUMER_MARGIN_MS = 30_000;
+
+/**
+ * A queued call's longest time limit: what fits in the consumer with the runtime's start budget and margin.
+ * `CallableFunctionTimeLimitSeconds` in b4m-core/common/src/schemas/settings.ts must allow exactly this many seconds.
+ */
+export const CALLABLE_FUNCTION_QUEUED_MAX_TIMEOUT_MS =
+  CALLABLE_FUNCTION_CALL_CONSUMER_TIMEOUT_SECONDS * 1000 -
+  CALLABLE_FUNCTION_START_BUDGET_MS -
+  CALLABLE_FUNCTION_PARENT_MARGIN_MS -
+  CONSUMER_MARGIN_MS;
+
 /** The runtime Lambda's configured timeout, in seconds; Lambda allows at most 900. */
 export const CALLABLE_FUNCTION_LAMBDA_TIMEOUT_SECONDS = Math.ceil(
   (CALLABLE_FUNCTION_LIMITS.timeoutMs + CALLABLE_FUNCTION_START_BUDGET_MS + CALLABLE_FUNCTION_PARENT_MARGIN_MS) / 1000

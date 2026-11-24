@@ -47,7 +47,7 @@ describe('asynchronous callable function call queue', () => {
   it('gives the consumer 15 minutes and hides a job for longer than that', () => {
     const timeout = minutes(subscription, 'timeout');
     expect(timeout).toBe(15);
-    expect(read('packages/server-utils/src/callableFunctions/asyncCalls.ts')).toMatch(
+    expect(read('packages/server-utils/src/callableFunctions/runtimeLimits.ts')).toMatch(
       /CALLABLE_FUNCTION_CALL_CONSUMER_TIMEOUT_SECONDS = 900;/
     );
     expect(minutes(queue, 'visibilityTimeout')).toBeGreaterThan(timeout);

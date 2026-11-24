@@ -1,6 +1,6 @@
 import { adminSettingsRepository, organizationRepository, scopedSettingsRepository } from '@bike4mind/database';
 import { scopedSettingsService } from '@bike4mind/services';
-import { CALLABLE_FUNCTION_DEFAULT_TIMEOUT_MS, CALLABLE_FUNCTION_LIMITS } from './runtimeParent';
+import { CALLABLE_FUNCTION_DEFAULT_TIMEOUT_MS, CALLABLE_FUNCTION_QUEUED_MAX_TIMEOUT_MS } from './runtimeParent';
 
 /**
  * A person's time limit for one call, in ms: `CallableFunctionTimeLimitSeconds` at the lowest of the organizations
@@ -21,5 +21,5 @@ export async function resolveCallableFunctionTimeLimitMs(user: { id: string }): 
         : CALLABLE_FUNCTION_DEFAULT_TIMEOUT_MS;
     })
   );
-  return Math.floor(Math.min(...seconds, CALLABLE_FUNCTION_LIMITS.timeoutMs));
+  return Math.floor(Math.min(...seconds, CALLABLE_FUNCTION_QUEUED_MAX_TIMEOUT_MS));
 }

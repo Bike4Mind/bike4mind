@@ -66,6 +66,19 @@ class CallableFunctionResultRepository extends BaseRepository<ICallableFunctionR
   }
 
   /**
+   * Ends a call still `running` since before `staleBefore` as `error`/`worker_lost`, in one guarded update so a live
+   * worker's result is never overwritten. Returns false when the call is not that old, or is no longer running.
+   */
+  async endLost(callId: string, staleBefore: Date): Promise<boolean> {
+    const ended = await this.model.updateOne(
+      { callId, state: 'running', updatedAt: { $lt: staleBefore } },
+      { $set: { state: 'finished', outcome: 'error', reason: 'worker_lost' }, $unset: { input: 1 } },
+      { runValidators: true }
+    );
+    return ended.modifiedCount === 1;
+  }
+
+  /**
    * Stores how the call ended and drops its inputs. Outputs over the 5 MB cap are not stored; the call reads
    * `output_too_large` instead. Returns the outcome as stored.
    */

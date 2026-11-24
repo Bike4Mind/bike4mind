@@ -29,18 +29,23 @@ import { createMongoServer, MONGO_TEST_TIMEOUT_MS } from '../../../../packages/d
  * run that outlives its limit.
  */
 
-const h = vi.hoisted(() => ({ enabled: true, limitMs: 30_000 }));
+const h = vi.hoisted(() => ({ enabled: true, limitMs: 30_000, limitFails: false }));
 
 vi.mock('@bike4mind/server-utils/queueHandlers/utils', () => ({ dispatchWithLogger: (fn: unknown) => fn }));
 vi.mock('@bike4mind/server-utils/callableFunctions/access', () => ({
   resolveCallableFunctionsEnabled: async () => h.enabled,
 }));
 vi.mock('@bike4mind/server-utils/callableFunctions/timeLimit', () => ({
-  resolveCallableFunctionTimeLimitMs: async () => h.limitMs,
+  resolveCallableFunctionTimeLimitMs: async () => {
+    if (h.limitFails) throw new Error('settings unavailable');
+    return h.limitMs;
+  },
 }));
 
-const { queueFunctionCall, readFunctionCall, runQueuedFunctionCall, CALLABLE_FUNCTION_QUEUED_MAX_TIMEOUT_MS } =
+const { queueFunctionCall, readFunctionCall, runQueuedFunctionCall } =
   await import('@bike4mind/server-utils/callableFunctions/asyncCalls');
+const { CALLABLE_FUNCTION_QUEUED_MAX_TIMEOUT_MS } =
+  await import('@bike4mind/server-utils/callableFunctions/runtimeParent');
 const { createInProcessCallableFunctionRunner } =
   await import('@bike4mind/server-utils/callableFunctions/runtimeRunner');
 const { handleCallableFunctionCallRecords } = await import('./callableFunctionCall');
@@ -67,7 +72,11 @@ const parsed = parseFunctionContract({
     type: 'object',
     additionalProperties: false,
     required: ['load', 'span'],
-    properties: { load: { type: 'number', unit: 'N/m' }, span: { type: 'number', unit: 'm' } },
+    properties: {
+      load: { type: 'number', unit: 'N/m' },
+      span: { type: 'number', unit: 'm' },
+      notes: { type: 'array', items: { type: 'string' } },
+    },
   },
   outputs: {
     type: 'object',
@@ -168,6 +177,7 @@ afterAll(async () => {
 beforeEach(async () => {
   h.enabled = true;
   h.limitMs = 30_000;
+  h.limitFails = false;
   vi.unstubAllEnvs();
   await Promise.all([
     CallableFunctionCall.deleteMany({}),
@@ -206,9 +216,10 @@ describe('refusals before anything is queued', () => {
     ['an input does not fit', () => queue({ load: 'heavy', span: 2 }), 'input_invalid', undefined],
     [
       'the input is over the cap',
-      () => queue({ load: 1, span: 2, extra: 'x'.repeat(5 * 1024 * 1024) }),
+      // A string field is capped at 2000 characters, so the 5 MiB is a list of full-length strings.
+      () => queue({ load: 1, span: 2, notes: Array.from({ length: 2800 }, () => 'x'.repeat(2000)) }),
       'input_invalid',
-      undefined,
+      'input_too_large',
     ],
     ['no runtime is configured', () => queue(ARGS, { runner: null }), 'refused', 'runtime_unavailable'],
   ])('%s', async (_name, run, outcome, reason) => {
@@ -296,6 +307,50 @@ describe('a queued call', () => {
     );
     expect((await rows())[0].outcome).toBe('queued');
     expect(await readFunctionCall(OWNER, call.callId)).toMatchObject({ state: 'queued' });
+  });
+
+  it('marks the row and result error when the run cannot be started', async () => {
+    const { call } = await queue();
+    h.limitFails = true;
+    await expect(runQueuedFunctionCall({ callId: call.callId }, { runner: okRunner() })).rejects.toThrow(
+      'settings unavailable'
+    );
+    expect((await rows()).map(r => [r.outcome, r.reason])).toEqual([['error', 'dispatch_failed']]);
+    expect(await readFunctionCall(OWNER, call.callId)).toMatchObject({
+      state: 'finished',
+      outcome: 'error',
+      reason: 'dispatch_failed',
+    });
+  });
+
+  describe('when the worker is lost after its claim', () => {
+    const claimAndAge = async (ageMs: number) => {
+      const { call } = await queue();
+      await callableFunctionResultRepository.claim(call.callId);
+      await CallableFunctionCall.updateOne({ _id: call.callId }, { $set: { outcome: 'running' } });
+      await CallableFunctionResult.collection.updateOne(
+        { callId: call.callId },
+        { $set: { updatedAt: new Date(Date.now() - ageMs) } }
+      );
+      await handleCallableFunctionCallRecords(event({ callId: call.callId }), logger);
+      return call.callId;
+    };
+
+    it('ends the result and the row as error worker_lost once it has run past 900 s', async () => {
+      const callId = await claimAndAge(901_000);
+      expect(await readFunctionCall(OWNER, callId)).toMatchObject({
+        state: 'finished',
+        outcome: 'error',
+        reason: 'worker_lost',
+      });
+      expect((await rows()).map(r => [r.outcome, r.reason])).toEqual([['error', 'worker_lost']]);
+    });
+
+    it('leaves a call a live worker may still be running as running', async () => {
+      const callId = await claimAndAge(800_000);
+      expect(await readFunctionCall(OWNER, callId)).toMatchObject({ state: 'running' });
+      expect((await rows()).map(r => r.outcome)).toEqual(['running']);
+    });
   });
 
   it('marks the row and result error when the job cannot be sent', async () => {

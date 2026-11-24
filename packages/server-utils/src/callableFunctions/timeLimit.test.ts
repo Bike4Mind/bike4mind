@@ -1,0 +1,40 @@
+// @vitest-environment node
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { settingsMap } from '@bike4mind/common';
+
+const state = vi.hoisted(() => ({ seconds: [] as unknown[] }));
+
+vi.mock('@bike4mind/database', () => ({
+  adminSettingsRepository: {},
+  scopedSettingsRepository: {},
+  organizationRepository: { findMembershipOrgIds: vi.fn(async () => ['org-1', 'org-2']) },
+}));
+vi.mock('@bike4mind/services', () => ({
+  scopedSettingsService: {
+    scopeForCaller: (caller: { userId: string; organizationId?: string }) => ({ owner: { id: caller.organizationId } }),
+    resolveScopedSetting: vi.fn(async () => ({ value: state.seconds.shift(), source: 'organization' })),
+  },
+}));
+
+const { resolveCallableFunctionTimeLimitMs } = await import('./timeLimit');
+const { CALLABLE_FUNCTION_QUEUED_MAX_TIMEOUT_MS } = await import('./runtimeParent');
+
+describe('resolveCallableFunctionTimeLimitMs', () => {
+  beforeEach(() => {
+    state.seconds = [];
+  });
+
+  it('allows the setting exactly as many seconds as a queued call can run', () => {
+    expect(settingsMap.CallableFunctionTimeLimitSeconds.max).toBe(CALLABLE_FUNCTION_QUEUED_MAX_TIMEOUT_MS / 1000);
+  });
+
+  it('takes the lowest of the organizations', async () => {
+    state.seconds = [300, 60];
+    expect(await resolveCallableFunctionTimeLimitMs({ id: 'u1' })).toBe(60_000);
+  });
+
+  it('caps a stored value above what a queued call can run', async () => {
+    state.seconds = [825, 900];
+    expect(await resolveCallableFunctionTimeLimitMs({ id: 'u1' })).toBe(CALLABLE_FUNCTION_QUEUED_MAX_TIMEOUT_MS);
+  });
+});

@@ -3727,10 +3727,10 @@ export const settingsMap = {
     name: 'Callable Function Time Limit (seconds)',
     defaultValue: 30,
     min: 1,
-    max: 825,
+    max: 795,
     int: true,
     description:
-      "How long one call of a saved function may run, in seconds, not counting the runtime's start. Default 30, at most 825. A synchronous API call stops at 45 seconds whatever this is; a call sent with mode async runs to this limit and is polled for its result. Can be overridden per organization; a person in several organizations gets the lowest.",
+      "How long one call of a saved function may run, in seconds, not counting the runtime's start. Default 30, at most 795. A synchronous API call stops at 45 seconds whatever this is; a call sent with mode async runs to this limit and is polled for its result. Can be overridden per organization; a person in several organizations gets the lowest.",
     category: 'Experimental',
     group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
     order: 24.5,

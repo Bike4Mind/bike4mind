@@ -96,7 +96,7 @@ curl https://app.bike4mind.com/api/v1/functions/calls/<call-id> \
 ## Limits
 
 - The input may be up to 5 MB, and so may the output. An output too large to return answers `502` with `outcome` set to `output_too_large`.
-- The function runs for at most 30 seconds unless your organization sets a longer **Callable Function Time Limit** (up to 825 seconds). A call that waits for its result still has 45 seconds to finish; use `"mode": "async"` to run to the full limit.
+- The function runs for at most 30 seconds unless your organization sets a longer **Callable Function Time Limit** (up to 795 seconds). A call that waits for its result still has 45 seconds to finish; use `"mode": "async"` to run to the full limit.
 - Requests are rate limited per user and per route, at your account's per-minute limit. Each response carries the rate-limit headers.
 
 ## Errors

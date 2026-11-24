@@ -316,7 +316,7 @@ const DLQ_REGISTRY = [
     description: 'Runs one asynchronous call of a saved Python function.',
     replay: 'safe',
     replayNote:
-      'A call runs at most once: a replayed job finds it already claimed and does nothing, and the caller keeps polling the same call.',
+      'A job dead-lettered before its claim runs the call on replay. One already claimed is skipped, and ends the call as an error if its worker was lost.',
     owner: 'Chat',
     describe: entityAt('Call', 'callId'),
   },
