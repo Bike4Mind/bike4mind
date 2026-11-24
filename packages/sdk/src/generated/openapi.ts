@@ -46346,7 +46346,7 @@ export interface operations {
           'application/json': components['schemas']['invokeFunctionResponse502'];
         };
       };
-      /** @description No function runtime is available on this deployment. */
+      /** @description No function runtime is available, or the runtime did not answer. Try again later. */
       503: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */

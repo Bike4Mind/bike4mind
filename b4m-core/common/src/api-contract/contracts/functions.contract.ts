@@ -121,7 +121,10 @@ export const invokeFunctionContract = defineEndpoint({
         '(`output_too_large`). `stamp` names what it ran on.',
       schema: InvokeFunctionFailedErrorSchema,
     },
-    503: { description: 'No function runtime is available on this deployment.', schema: ApiErrorSchema },
+    503: {
+      description: 'No function runtime is available, or the runtime did not answer. Try again later.',
+      schema: ApiErrorSchema,
+    },
     504: {
       description: `The call ran past its time limit and was stopped (\`errorCode: "${REQUEST_TIMEOUT_ERROR_CODE}"\`).`,
       schema: InvokeFunctionTimeoutErrorSchema,

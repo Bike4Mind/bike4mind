@@ -108313,7 +108313,7 @@
             }
           },
           "503": {
-            "description": "No function runtime is available on this deployment.",
+            "description": "No function runtime is available, or the runtime did not answer. Try again later.",
             "content": {
               "application/json": {
                 "schema": {

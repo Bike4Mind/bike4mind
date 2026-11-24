@@ -96,8 +96,11 @@ export interface InvokeAnswer {
   body: Record<string, unknown>;
 }
 
+export const FUNCTION_RUNTIME_FAULT_MESSAGE = 'The function runtime did not answer. Try again later.';
+
+const errorMessage = (errorClass?: string) => `The function raised an error${errorClass ? ` (${errorClass})` : ''}.`;
+
 const FAILURE_MESSAGES: Record<string, string> = {
-  error: 'The function raised an error',
   memory: 'The function ran out of memory.',
   output_invalid: 'The function returned outputs that do not fit its output schema.',
   output_too_large: 'The function returned more than a call can carry.',
@@ -130,11 +133,17 @@ export function invokeAnswer(call: DispatchFunctionCallResult): InvokeAnswer {
         return { status: 503, body: { error: 'No function runtime is available.' } };
       }
       return { status: 404, body: { error: FUNCTION_NOT_FOUND_MESSAGE } };
-    default: {
-      const base = FAILURE_MESSAGES[call.outcome] ?? 'The function failed.';
-      const error = call.outcome === 'error' ? `${base}${call.errorClass ? ` (${call.errorClass})` : ''}.` : base;
-      return { status: 502, body: { error, outcome: call.outcome, ...stamp } };
-    }
+    case 'error':
+      // A runner that threw or never replied is a platform fault, not the function's own error.
+      if (call.reason === 'runtime_unavailable' || call.reason === 'no_reply') {
+        return { status: 503, body: { error: FUNCTION_RUNTIME_FAULT_MESSAGE } };
+      }
+      return { status: 502, body: { error: errorMessage(call.errorClass), outcome: call.outcome, ...stamp } };
+    default:
+      return {
+        status: 502,
+        body: { error: FAILURE_MESSAGES[call.outcome] ?? 'The function failed.', outcome: call.outcome, ...stamp },
+      };
   }
 }
 

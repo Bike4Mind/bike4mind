@@ -24,6 +24,9 @@ const h = vi.hoisted(() => ({
   rateLimitOptions: [] as Array<{ bucket?: string }>,
   baseApiOptions: [] as Array<Record<string, unknown> | undefined>,
   limited: { value: false },
+  realLimiter: { value: false },
+  perMin: { value: 60 },
+  buckets: new Map<string, number>(),
   enabled: { value: true },
   functions: [] as Record<string, unknown>[],
   artifacts: [] as { id: string; userId: string; version: number; deletedAt: Date | null }[],
@@ -60,14 +63,22 @@ vi.mock('@server/middlewares/baseApi', () => ({
     return chain;
   },
 }));
-vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({
-  rateLimit: (options: { bucket?: string }) => {
-    h.rateLimitOptions.push(options);
-    return (_req: unknown, _res: unknown, next: (error?: unknown) => void) =>
-      next(h.limited.value ? new TooManyRequestsError('Rate limit exceeded.') : undefined);
-  },
-}));
-vi.mock('@bike4mind/server-utils/utils/userRateTier', () => ({ resolveUserRateLimitPerMin: () => 60 }));
+// The real limiter runs over an in-memory counter when `realLimiter` is on; otherwise `limited` decides.
+vi.mock('@bike4mind/server-utils/middlewares/rateLimit', async importOriginal => {
+  const actual = await importOriginal<typeof import('@bike4mind/server-utils/middlewares/rateLimit')>();
+  type Middleware = ReturnType<typeof actual.rateLimit>;
+  return {
+    rateLimit: (options: Parameters<typeof actual.rateLimit>[0]) => {
+      h.rateLimitOptions.push(options);
+      const real = actual.rateLimit(options);
+      return (...args: Parameters<Middleware>) => {
+        if (h.realLimiter.value) return real(...args);
+        args[2](h.limited.value ? new TooManyRequestsError('Rate limit exceeded.') : undefined);
+      };
+    },
+  };
+});
+vi.mock('@bike4mind/server-utils/utils/userRateTier', () => ({ resolveUserRateLimitPerMin: () => h.perMin.value }));
 vi.mock('@bike4mind/server-utils/callableFunctions/access', () => ({
   resolveCallableFunctionsEnabled: async () => h.enabled.value,
 }));
@@ -82,6 +93,15 @@ const isHexId = (id: string) => /^[0-9a-f]{24}$/.test(id);
 vi.mock('@bike4mind/database', () => ({
   adminSettingsRepository: {},
   artifactContentRepository: {},
+  cacheRepository: {
+    tryIncrementWithinLimitFixedWindow: async (key: string, limit: number, windowMs: number) => {
+      const count = (h.buckets.get(key) ?? 0) + 1;
+      const expiresAt = new Date(Date.now() + windowMs);
+      if (count > limit) return { success: false, expiresAt };
+      h.buckets.set(key, count);
+      return { success: true, expiresAt };
+    },
+  },
   callableFunctionRepository: {
     findById: async (id: string) => h.functions.find(fn => fn.id === id) ?? null,
     findByIdForOwner: async (id: string, owner: Owner) =>
@@ -175,13 +195,14 @@ interface CallOptions {
   query?: Record<string, string>;
   body?: unknown;
   user?: string;
+  keyId?: string;
 }
 
 type AnyHandler = (req: unknown, res: unknown) => Promise<unknown>;
 
-async function call(handler: unknown, { method = 'GET', query = {}, body, user = 'u1' }: CallOptions) {
+async function call(handler: unknown, { method = 'GET', query = {}, body, user = 'u1', keyId = 'k1' }: CallOptions) {
   const { req, res } = createMocks({ method: method as 'GET', query, body: body as object });
-  Object.assign(req, { user: { id: user }, logger, headers: {}, apiKeyInfo: { keyId: 'k1' } });
+  Object.assign(req, { user: { id: user }, logger, headers: {}, apiKeyInfo: { keyId } });
   try {
     await (handler as AnyHandler)(req, res);
   } catch (error) {
@@ -195,12 +216,15 @@ async function call(handler: unknown, { method = 'GET', query = {}, body, user =
   };
 }
 
-const invoke = (id: string, body: unknown, user?: string) =>
-  call(invokeRoute, { method: 'POST', query: { id }, body, user });
+const invoke = (id: string, body: unknown, as: Pick<CallOptions, 'user' | 'keyId'> = {}) =>
+  call(invokeRoute, { method: 'POST', query: { id }, body, ...as });
 
 beforeEach(() => {
   vi.clearAllMocks();
   h.limited.value = false;
+  h.realLimiter.value = false;
+  h.perMin.value = 60;
+  h.buckets.clear();
   h.enabled.value = true;
   h.runnerConfigured.value = true;
   h.calls = [];
@@ -260,9 +284,23 @@ describe('scopes and limits', () => {
   it('answers 429 from the limiter before the function is read or run', async () => {
     h.limited.value = true;
     const res = await invoke(LIVE_ID, { input: { load: 1, span: 2 } });
-    expect(res.status).toBe(429);
+    expect(res).toEqual({ status: 429, body: { error: 'Rate limit exceeded.' } });
     expect(h.runner).not.toHaveBeenCalled();
     expect(h.calls).toHaveLength(0);
+  });
+
+  it('counts one bucket per user, so a second key of the same user cannot pass it', async () => {
+    h.realLimiter.value = true;
+    h.perMin.value = 2;
+    const body = { input: { load: 1, span: 2 } };
+    expect((await invoke(LIVE_ID, body, { keyId: 'k1' })).status).toBe(200);
+    expect((await invoke(LIVE_ID, body, { keyId: 'k2' })).status).toBe(200);
+    expect(await invoke(LIVE_ID, body, { keyId: 'k3' })).toEqual({
+      status: 429,
+      body: { error: 'Rate limit exceeded. Try again in 60 seconds.' },
+    });
+    expect(h.runner).toHaveBeenCalledTimes(2);
+    expect((await invoke(OTHERS_ID, body, { user: 'u2', keyId: 'k4' })).status).toBe(200);
   });
 
   it.each([
@@ -271,7 +309,10 @@ describe('scopes and limits', () => {
     ['invoke', () => invoke(LIVE_ID, { input: { load: 1, span: 2 } })],
   ])('answers 403 when callable functions are off: %s', async (_name, run) => {
     h.enabled.value = false;
-    expect((await run()).status).toBe(403);
+    expect(await run()).toEqual({
+      status: 403,
+      body: { error: 'Callable functions are turned off for this account.' },
+    });
     expect(h.runner).not.toHaveBeenCalled();
   });
 });
@@ -341,11 +382,13 @@ describe('not found', () => {
     expect(h.runner).not.toHaveBeenCalled();
   });
 
-  it('answers a turned-off function and one whose artifact was deleted with the same 404', async () => {
+  it('answers a turned-off function and one whose artifact was deleted with the same 404 on read and invoke', async () => {
     h.functions[0] = fnDoc(LIVE_ID, { enabled: false });
+    expect(await call(getRoute, { query: { id: LIVE_ID } })).toEqual(missing);
     expect(await invoke(LIVE_ID, { input: { load: 1, span: 2 } })).toEqual(missing);
     h.functions[0] = fnDoc(LIVE_ID);
     h.artifacts = h.artifacts.filter(a => a.id !== `artifact-${LIVE_ID}`);
+    expect(await call(getRoute, { query: { id: LIVE_ID } })).toEqual(missing);
     expect(await invoke(LIVE_ID, { input: { load: 1, span: 2 } })).toEqual(missing);
     expect(h.runner).not.toHaveBeenCalled();
   });
@@ -377,46 +420,80 @@ describe('invoke', () => {
 
   it('answers 422 naming the field when an input does not fit, before anything runs', async () => {
     const res = await invoke(LIVE_ID, { input: { load: 2000, span: 'four' } });
-    expect(res.status).toBe(422);
-    expect(res.body.error).toMatch(/^Input span /);
-    expect(res.body.problems).toEqual([expect.objectContaining({ path: 'span' })]);
+    expect(res).toEqual({
+      status: 422,
+      body: { error: 'Input span must be a number.', problems: [{ path: 'span', message: 'must be a number' }] },
+    });
     expect(h.runner).not.toHaveBeenCalled();
   });
 
   it('answers 422 naming a missing required input', async () => {
     const res = await invoke(LIVE_ID, { input: { load: 2000 } });
-    expect(res.status).toBe(422);
-    expect(JSON.stringify(res.body.problems)).toContain('span');
+    expect(res).toEqual({
+      status: 422,
+      body: { error: 'Input span is required.', problems: [{ path: 'span', message: 'is required' }] },
+    });
   });
 
   it('answers 422 for a body without input or with an unknown field', async () => {
-    expect((await invoke(LIVE_ID, {})).status).toBe(422);
-    expect((await invoke(LIVE_ID, { input: { load: 1, span: 1 }, extra: true })).status).toBe(422);
+    // The contract prelude throws here; baseApi's error handler (stubbed) writes the envelope.
+    const thrown = { status: 422, body: { error: expect.any(String) } };
+    expect(await invoke(LIVE_ID, {})).toEqual(thrown);
+    expect(await invoke(LIVE_ID, { input: { load: 1, span: 1 }, extra: true })).toEqual(thrown);
     expect(h.runner).not.toHaveBeenCalled();
   });
 
+  const stamp = expect.objectContaining({ function_id: LIVE_ID, surface: 'rest' });
+
   it.each([
-    ['error', { outcome: 'error', errorClass: 'ZeroDivisionError', durationMs: 3 }, 502],
-    ['memory', { outcome: 'memory', durationMs: 3 }, 502],
-    ['output_invalid', { outcome: 'ok', outputs: { deflection: 'x' }, durationMs: 3 }, 502],
-  ] as const)('answers a run that ends in %s with %i, its outcome, and its stamp', async (outcome, run, status) => {
+    [
+      'error',
+      { outcome: 'error', errorClass: 'ZeroDivisionError', durationMs: 3 },
+      'The function raised an error (ZeroDivisionError).',
+    ],
+    ['memory', { outcome: 'memory', durationMs: 3 }, 'The function ran out of memory.'],
+    [
+      'output_invalid',
+      { outcome: 'ok', outputs: { deflection: 'x' }, durationMs: 3 },
+      'The function returned outputs that do not fit its output schema.',
+    ],
+  ] as const)('answers a run that ends in %s with 502, its outcome, and its stamp', async (outcome, run, error) => {
     h.runner.mockResolvedValue(run);
     const res = await invoke(LIVE_ID, { input: { load: 1, span: 2 } });
-    expect(res.status).toBe(status);
-    expect(res.body.outcome).toBe(outcome);
-    expect(res.body.stamp).toMatchObject({ function_id: LIVE_ID, surface: 'rest' });
+    expect(res).toEqual({ status: 502, body: { error, outcome, stamp } });
   });
 
   it('answers a run past its time limit with 504 request_timeout', async () => {
     h.runner.mockResolvedValue({ outcome: 'timeout', reason: 'timeout', durationMs: 30_000 });
     const res = await invoke(LIVE_ID, { input: { load: 1, span: 2 } });
-    expect(res.status).toBe(504);
-    expect(res.body.errorCode).toBe('request_timeout');
+    expect(res).toEqual({
+      status: 504,
+      body: { error: 'The call ran past its time limit.', errorCode: 'request_timeout', stamp },
+    });
   });
 
   it('answers 503 when no runtime is configured', async () => {
     h.runnerConfigured.value = false;
-    expect((await invoke(LIVE_ID, { input: { load: 1, span: 2 } })).status).toBe(503);
+    expect(await invoke(LIVE_ID, { input: { load: 1, span: 2 } })).toEqual({
+      status: 503,
+      body: { error: 'No function runtime is available.' },
+    });
+  });
+
+  it('answers 503 asking for a retry when the runtime fails, not 502', async () => {
+    h.runner.mockRejectedValue(new Error('runtime went away'));
+    expect(await invoke(LIVE_ID, { input: { load: 1, span: 2 } })).toEqual({
+      status: 503,
+      body: { error: 'The function runtime did not answer. Try again later.' },
+    });
+    expect(h.calls).toEqual([expect.objectContaining({ outcome: 'error', reason: 'runtime_unavailable' })]);
+  });
+
+  it('answers 503 when the runtime never replied', () => {
+    expect(invokeAnswer({ outcome: 'error', reason: 'no_reply', durationMs: 105_000, callId: 'c' })).toEqual({
+      status: 503,
+      body: { error: 'The function runtime did not answer. Try again later.' },
+    });
   });
 
   it('answers 504 request_timeout when the call outlives the route budget, inside the web timeout', async () => {
@@ -426,8 +503,10 @@ describe('invoke', () => {
       const pending = invoke(LIVE_ID, { input: { load: 1, span: 2 } });
       await vi.advanceTimersByTimeAsync(FUNCTION_INVOKE_BUDGET_MS);
       const res = await pending;
-      expect(res.status).toBe(504);
-      expect(res.body.errorCode).toBe('request_timeout');
+      expect(res).toEqual({
+        status: 504,
+        body: { error: 'The call ran past its time limit.', errorCode: 'request_timeout' },
+      });
       expect(FUNCTION_INVOKE_BUDGET_MS).toBeLessThan(60_000);
     } finally {
       vi.useRealTimers();

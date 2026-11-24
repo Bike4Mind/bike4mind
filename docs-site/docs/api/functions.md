@@ -69,7 +69,7 @@ The stamp records which pinned version ran, the hashes of its code and your inpu
 
 ## Limits
 
-- The input may be up to 5 MB, and so may the output.
+- The input may be up to 5 MB. An output too large to return answers `502` with `outcome` set to `output_too_large`.
 - A call has 45 seconds to finish. The function itself runs for at most 30 seconds.
 - Requests are rate limited per user and per route, at your account's per-minute limit. Each response carries the rate-limit headers.
 
@@ -82,6 +82,6 @@ Errors use the shared error envelope described in [Errors](./errors.md).
 - `413`: the input is larger than 5 MB.
 - `422`: an input does not fit `input_schema`. The `error` names the first field, for example `Input span must be a number.`, and `problems` lists every field with its `path` and `message`.
 - `429`: you passed the rate limit.
-- `502`: the function raised an error, ran out of memory, or returned outputs that do not fit `output_schema`. `outcome` names which, and `stamp` is included.
-- `503`: no function runtime is available.
+- `502`: the function raised an error, ran out of memory, returned outputs that do not fit `output_schema`, or returned too much. `outcome` names which, and `stamp` is included.
+- `503`: no function runtime is available, or the runtime did not answer. Try again later.
 - `504`: the call ran past its time limit. `errorCode` is `request_timeout`.
