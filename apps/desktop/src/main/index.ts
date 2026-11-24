@@ -36,6 +36,7 @@ import { registerOrchestrateMini } from './orchestrateMini';
 import { registerWatch } from './watch';
 import { registerWindowTheme } from './windowTheme';
 import { registerSessionHandoff } from './handoff';
+import { runLiveEvaluation } from './chat/liveEvaluation';
 
 // electron-vite sets this in dev only; a packaged build loads the renderer off disk.
 const rendererDevUrl = process.env.ELECTRON_RENDERER_URL;
@@ -438,7 +439,26 @@ void app.whenReady().then(async () => {
   // Restoring runs alongside the window opening rather than gating it: the renderer starts in
   // the `initializing` state and is pushed the outcome, so a slow or unreachable backend
   // delays the auth card, not the whole app.
-  void auth.initialize();
+  void auth.initialize().then(
+    () =>
+      runLiveEvaluation(
+        auth,
+        join(app.getPath('userData'), 'controlled-evaluation'),
+        process.argv.includes('--controlled-cost-evaluation-live'),
+        process.argv
+          .find(argument => argument.startsWith('--controlled-cost-evaluation-config='))
+          ?.split('=')
+          .slice(1)
+          .join('='),
+        {
+          finalPhase: process.argv.includes('--controlled-cost-evaluation-final'),
+          recoverRunId: process.argv
+            .find(argument => argument.startsWith('--controlled-cost-evaluation-recover-run='))
+            ?.split('=')[1],
+        }
+      ).catch((error: unknown) => console.warn('EVALUATION: stopped; inspect the local evaluation report.', error)),
+    (error: unknown) => console.error('Auth restore failed at startup', error)
+  );
 
   app.on('activate', () => {
     if (appWindows().length === 0) createWindow();

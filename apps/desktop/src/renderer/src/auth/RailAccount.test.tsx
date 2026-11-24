@@ -65,8 +65,14 @@ function contextWith(overrides: Partial<RailAccountContext> = {}): RailAccountCo
   return { status: null, onOpenCustomize: vi.fn(), onOpenModels: vi.fn(), ...overrides };
 }
 
-function mount(node: React.ReactNode) {
+const pending = () => new Promise(() => {});
+
+function mount(node: React.ReactNode, bridge: Record<string, unknown> = {}) {
   (window as unknown as { b4m: unknown }).b4m = {
+    // The avatar reads the credits glance on mount; left pending unless a test brings its own.
+    account: { getProfile: pending },
+    usage: { getHistory: pending },
+    ...bridge,
     getAppInfo: () => new Promise(() => {}),
     attention: { openServerSessions: vi.fn(async () => {}) },
     auth: { signOut: vi.fn(async () => {}), retryIdentity: vi.fn(async () => {}) },
@@ -77,6 +83,33 @@ function mount(node: React.ReactNode) {
   act(() => {
     root?.render(<CssVarsProvider>{node}</CssVarsProvider>);
   });
+}
+
+/** A credits bridge: `balance` left, and `creditsSpent` burned yesterday, on a monthly plan. */
+function creditsBridge(balance: number, creditsSpent: number) {
+  const day = new Date();
+  day.setHours(0, 0, 0, 0);
+  return {
+    account: {
+      getProfile: async () => ({
+        credits: { balance, monthlyAllowance: 10_000 },
+        plan: {
+          name: 'Pro',
+          interval: 'monthly',
+          currentPeriodEndsAt: new Date(Date.now() + 10 * 86_400_000).toISOString(),
+        },
+        tier: 'pro',
+      }),
+    },
+    usage: {
+      getHistory: async () => ({
+        ok: true,
+        usage: {
+          bars: [{ startsAt: new Date(day.getTime() - 86_400_000).toISOString(), creditsSpent, requests: 1 }],
+        },
+      }),
+    },
+  };
 }
 
 const byTestId = (id: string) => document.querySelector<HTMLElement>(`[data-testid="${id}"]`);
@@ -264,4 +297,38 @@ describe('the next step the update label takes', () => {
       expect(updateNextStep(controllerIn(status))).toBeUndefined();
     }
   );
+});
+
+describe('the credits glance on the rail avatar', () => {
+  async function mountWith(balance: number, creditsSpent: number) {
+    mount(
+      <SignedInRailAccount state={signedIn} update={controllerIn('idle')} context={contextWith()} />,
+      creditsBridge(balance, creditsSpent)
+    );
+    await act(async () => undefined);
+  }
+
+  it('shows nothing extra on the avatar while credits are fine', async () => {
+    await mountWith(300_000, 1000);
+    expect(byTestId('credits-avatar-dot')).toBeNull();
+    expect(byTestId('credits-glance')).toBeNull();
+  });
+
+  it('opens with the balance and runway at the top of the account menu', async () => {
+    await mountWith(300_000, 1000);
+    await act(async () => byTestId('place-rail-account-btn')?.click());
+    const glance = byTestId('credits-glance');
+    expect(byTestId('account-menu')?.firstElementChild).toBe(glance);
+    expect(byTestId('credits-balance')?.textContent).toBe(`${(300_000).toLocaleString()} credits`);
+    expect(byTestId('credits-verdict')?.textContent).toBe("More than a month left at last week's pace.");
+    expect(byTestId('credits-top-up-btn')).toBeNull();
+  });
+
+  it('puts a dot on the avatar and offers a top-up when credits run out before the refill', async () => {
+    await mountWith(4000, 1000);
+    expect(byTestId('credits-avatar-dot')?.getAttribute('aria-label')).toBe('Credits running low');
+    await act(async () => byTestId('place-rail-account-btn')?.click());
+    expect(byTestId('credits-verdict')?.textContent).toMatch(/^Runs out /);
+    expect(byTestId('credits-top-up-btn')).not.toBeNull();
+  });
 });

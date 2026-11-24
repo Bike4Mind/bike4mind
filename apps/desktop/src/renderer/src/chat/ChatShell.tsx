@@ -1739,6 +1739,7 @@ export function ChatShell({
               state={turnState({ streaming: turnOpen, disabled: !activeId || creatingCode, notReady: unbound })}
             />
           ),
+          spentAt: conversation.settledTurns,
           customizeAttention,
           onOpenCustomize: () => setScreen('customize'),
           onOpenModels: () => setScreen('models'),

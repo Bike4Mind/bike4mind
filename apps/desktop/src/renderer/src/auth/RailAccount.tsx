@@ -30,6 +30,8 @@ import {
 import { railButtonSx, RailTooltipTitle, type RailAccountContext } from '../chat/rail/PlaceRail';
 import type { AppUpdateController } from '../chat/useAppUpdate';
 import { RuntimeInfo } from '../components/RuntimeInfo';
+import { CreditsAvatarDot, CreditsMenuHeader } from '../credits/CreditsGlance';
+import { useCreditsGlance } from '../credits/useCreditsGlance';
 import { SendFeedbackDialog } from './SendFeedbackDialog';
 
 /** What a click on the update chip does, or undefined in a state with no next step to take. */
@@ -58,9 +60,20 @@ type DotTone = 'warning' | 'neutral';
  * The dot is the rail's only colour: warning when something is broken (a failing Customize
  * entry, a sign-in error), neutral when an update is merely waiting.
  */
-function RailAccountButton({ face, dot, children }: { face: ReactNode; dot: DotTone | null; children: ReactNode }) {
+function RailAccountButton({
+  face,
+  dot,
+  onOpenChange,
+  children,
+}: {
+  face: ReactNode;
+  dot: DotTone | null;
+  /** Reports the menu opening and closing, for reads that should refresh when it opens. */
+  onOpenChange?: (open: boolean) => void;
+  children: ReactNode;
+}) {
   return (
-    <Dropdown>
+    <Dropdown onOpenChange={(_event, open) => onOpenChange?.(open)}>
       <Tooltip
         title={<RailTooltipTitle label="Account" />}
         placement="right"
@@ -82,7 +95,7 @@ function RailAccountButton({ face, dot, children }: { face: ReactNode; dot: DotT
               data-tone={dot}
               sx={{
                 position: 'absolute',
-                top: 3,
+                bottom: 3,
                 right: 3,
                 width: 8,
                 height: 8,
@@ -165,6 +178,8 @@ export function SignedInRailAccount({
   context: RailAccountContext;
 }) {
   const [feedbackOpen, setFeedbackOpen] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const credits = useCreditsGlance(context.spentAt ?? 0, menuOpen);
   const navigate = useNavigate();
   const settingsAttention = updateAttention(update.state);
   const user = state.user;
@@ -177,20 +192,26 @@ export function SignedInRailAccount({
     <>
       <RailAccountButton
         dot={dot}
+        onOpenChange={setMenuOpen}
         face={
           // `src` is a b4m-media: URL main wrote to disk; Joy falls back to the initials when it
           // is missing or fails to load, so they are both the placeholder and the final answer.
-          <Avatar
-            variant="soft"
-            color="neutral"
-            src={user?.photoUrl}
-            alt=""
-            sx={{ '--Avatar-size': '26px', fontSize: 11 }}
-          >
-            {initials(displayName)}
-          </Avatar>
+          <Box sx={{ position: 'relative', display: 'inline-flex' }}>
+            <Avatar
+              variant="soft"
+              color="neutral"
+              src={user?.photoUrl}
+              alt=""
+              sx={{ '--Avatar-size': '26px', fontSize: 11 }}
+            >
+              {initials(displayName)}
+            </Avatar>
+            <CreditsAvatarDot outlook={credits.outlook} />
+          </Box>
         }
       >
+        {/* Balance and runway first, so they are one click from anywhere. */}
+        <CreditsMenuHeader glance={credits} onTopUp={() => void navigate({ to: '/billing' })} />
         <Stack spacing={0.75} sx={{ px: 1.5, pt: 1, pb: 1 }} data-testid="account-menu-header">
           <Stack direction="row" spacing={1} alignItems="center">
             <Stack sx={{ flex: 1, minWidth: 0 }}>

@@ -135,6 +135,11 @@ export const createCompletionContract = defineEndpoint({
       schema: RunNotFoundErrorSchema,
     },
     413: { description: 'Request body over 25 MB.', schema: ApiErrorSchema },
+    409: {
+      description:
+        'Evaluation receipt already exists or another evaluation request remains unresolved. Recover the owner-scoped run evaluation receipts before continuing.',
+      schema: ApiErrorSchema,
+    },
     422: {
       description:
         'The body failed schema validation, or the caller cannot afford the request ' +

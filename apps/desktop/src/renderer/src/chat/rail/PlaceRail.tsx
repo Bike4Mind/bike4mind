@@ -17,6 +17,8 @@ export const RAIL_WIDTH = 48;
 export interface RailAccountContext {
   /** The dot that says whether a reply is running; see TurnDot. */
   status: ReactNode;
+  /** Ticks when a turn settles, for anything in the slot that reads the balance. */
+  spentAt?: number;
   /** What the Customize screen would flag, if anything. */
   customizeAttention?: string;
   onOpenCustomize: () => void;
