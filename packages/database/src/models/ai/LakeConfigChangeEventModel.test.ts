@@ -1,3 +1,4 @@
+import mongoose from 'mongoose';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import type { ILakeConfigFieldChange, RecordLakeConfigChangeInput } from '@bike4mind/common';
 import {
@@ -104,6 +105,14 @@ describe('LakeConfigChangeEventModel / lakeConfigChangeEventRepository.record', 
       expect(stored?.leverChanges?.[0]).toMatchObject({ lever: 'minRelevance', before: 0.6, after: 0.5 });
       expect(stored?.leverChanges?.[1]).toMatchObject({ lever: 'feedUrl', before: null });
       expect(stored?.leverChanges?.[2].after).toEqual([{ condition: 'press release', action: 'block' }]);
+    });
+
+    it('round-trips undoesEventId and writes a pre-minted event id as the row id', async () => {
+      const eventId = new mongoose.Types.ObjectId().toHexString();
+      const event = await repo.record(baseInput({ undoesEventId: 'e1', eventId }));
+      expect(event.id).toBe(eventId);
+      const stored = await LakeConfigChangeEventModel.findById(eventId).lean();
+      expect(stored?.undoesEventId).toBe('e1');
     });
 
     it('stores an old-shaped row without the new fields', async () => {

@@ -26,11 +26,16 @@ import {
  * point today is an interactive door except the Drive connector sync, which passes `'connector'`
  * explicitly (see `driveLakeIngest.ts`).
  */
+/** The refusal for a file the lake does not hold; callers that treat "already gone" as done match it. */
+export const FILE_NOT_IN_LAKE_MESSAGE = 'File not found in this data lake';
+
 export interface MembershipEventLinks {
   /** Recorded on the membership event: this write reverses that event. */
   undoesEventId?: string;
   /** Recorded on the membership event: this write is a side effect of that event. */
   causedByEventId?: string;
+  /** A pre-minted id for the membership event, for a caller that must name it before it is written. */
+  eventId?: string;
 }
 
 export interface MembershipOriginOptions extends MembershipEventLinks {
@@ -201,7 +206,7 @@ export const removeFileFromLake = async (
   lake: MembershipLake,
   fabFileId: string,
   { db, logger }: RemoveMembershipAdapters,
-  { origin = 'person', undoesEventId, causedByEventId }: MembershipOriginOptions = {}
+  { origin = 'person', undoesEventId, causedByEventId, eventId }: MembershipOriginOptions = {}
 ): Promise<{ contentTags: { name: string; strength: number }[] }> => {
   if (!(await resolveCanManageLake(lake, actor, { db }))) {
     throw new BadRequestError('You do not have permission to remove files from this data lake');
@@ -227,7 +232,7 @@ export const removeFileFromLake = async (
     // Restamps so a by-id remove retry repairs a post-pull reassign throw (rolled back on transactional
     // routes); costs a findById + findByDatalakeTags per expected NotFound in finalizePrefixArmLeaves.
     if (file) await reassignStorageOwner(file.id, db);
-    throw new NotFoundError('File not found in this data lake');
+    throw new NotFoundError(FILE_NOT_IN_LAKE_MESSAGE);
   }
 
   // One atomic $pull for both signals. Two writes would leave a window - and on a crash, a
@@ -243,7 +248,7 @@ export const removeFileFromLake = async (
   // append two `removed` events for one transition - a permanent claim that the file left twice.
   if (pulled > 0) {
     await recordLakeMembershipChange(
-      { actor, lake, fabFileId: file.id, action: 'removed', origin, undoesEventId, causedByEventId },
+      { actor, lake, fabFileId: file.id, action: 'removed', origin, undoesEventId, causedByEventId, eventId },
       { db, logger }
     );
   }
@@ -272,7 +277,13 @@ export const addFileToLake = async (
   lake: MembershipLake,
   fabFileId: string,
   { db, logger }: AddMembershipAdapters,
-  { origin = 'person', ownerTransferPreCleared = false, undoesEventId, causedByEventId }: AddMembershipOptions = {}
+  {
+    origin = 'person',
+    ownerTransferPreCleared = false,
+    undoesEventId,
+    causedByEventId,
+    eventId,
+  }: AddMembershipOptions = {}
 ): Promise<void> => {
   if (!(await resolveCanManageLake(lake, actor, { db }))) {
     throw new BadRequestError('You do not have permission to add files to this data lake');
@@ -300,7 +311,7 @@ export const addFileToLake = async (
   // separate read of the file, or the insert count alone, both would be.
   if (priorState && !satisfiesMembershipScope(lakeMembershipScope(lake), priorState)) {
     await recordLakeMembershipChange(
-      { actor, lake, fabFileId, action: 'added', origin, undoesEventId, causedByEventId },
+      { actor, lake, fabFileId, action: 'added', origin, undoesEventId, causedByEventId, eventId },
       { db, logger }
     );
   }

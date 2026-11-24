@@ -1,5 +1,5 @@
 import React from 'react';
-import { Alert, Box, Chip, CircularProgress, Sheet, Stack, Table, Typography } from '@mui/joy';
+import { Alert, Box, Button, Chip, CircularProgress, Sheet, Stack, Table, Typography } from '@mui/joy';
 import type { ColorPaletteProp } from '@mui/joy';
 import { LAKE_CONFIG_EVENT_VALUE_FIELDS, LAKE_MEMBERSHIP_CHANGE_AUDIT_RETENTION_DAYS } from '@bike4mind/common';
 import type {
@@ -16,6 +16,7 @@ import type {
   LakeConfigHistoryFingerprintChange,
   LakeConfigHistoryView,
   LakeConfigLiteralValue,
+  LakeConfigUndoResult,
   LakeManageRung,
 } from '@bike4mind/common';
 
@@ -259,7 +260,61 @@ const FILE_ACTION_LABEL: Record<LakeConfigHistoryFileAction, string> = {
   'file-removed': 'File removed',
 };
 
-function FileRow({ entry }: { entry: LakeConfigHistoryFileEntry }) {
+/** What a row needs to offer Undo. Absent when the surface cannot undo (a reader, or an older host). */
+interface UndoControls {
+  busyEventId: string | null;
+  errors: Record<string, string>;
+  notes: Record<string, string[]>;
+  onUndo: (eventId: string) => void;
+}
+
+/** The Undo button, the Undone marker, or the reason a row has neither. */
+function UndoCell({ entry, undo }: { entry: LakeConfigHistoryEntry; undo?: UndoControls }) {
+  const error = undo?.errors[entry.eventId];
+  const notes = undo?.notes[entry.eventId] ?? [];
+  return (
+    <Stack gap={0.5} alignItems="flex-start" data-testid="datalake-config-history-undo-cell">
+      {entry.undone ? (
+        <Chip size="sm" variant="soft" color="neutral" data-testid="datalake-config-history-undone-chip">
+          Undone
+        </Chip>
+      ) : entry.undoable && undo ? (
+        <Button
+          size="sm"
+          variant="outlined"
+          color="neutral"
+          loading={undo.busyEventId === entry.eventId}
+          disabled={undo.busyEventId !== null && undo.busyEventId !== entry.eventId}
+          onClick={() => undo.onUndo(entry.eventId)}
+          data-testid="datalake-config-history-undo-btn"
+        >
+          Undo
+        </Button>
+      ) : entry.undoNote ? (
+        <Typography level="body-xs" textColor="text.tertiary" data-testid="datalake-config-history-undo-note">
+          {entry.undoNote}
+        </Typography>
+      ) : null}
+      {error && (
+        <Typography level="body-xs" color="danger" role="alert" data-testid="datalake-config-history-undo-error">
+          {error}
+        </Typography>
+      )}
+      {notes.map(note => (
+        <Typography
+          key={note}
+          level="body-xs"
+          textColor="text.tertiary"
+          data-testid="datalake-config-history-undo-result-note"
+        >
+          {note}
+        </Typography>
+      ))}
+    </Stack>
+  );
+}
+
+function FileRow({ entry, undo }: { entry: LakeConfigHistoryFileEntry; undo?: UndoControls }) {
   const who = entry.principalName ?? entry.principalId;
   const label = Object.hasOwn(FILE_ACTION_LABEL, entry.action) ? FILE_ACTION_LABEL[entry.action] : entry.action;
   return (
@@ -293,16 +348,35 @@ function FileRow({ entry }: { entry: LakeConfigHistoryFileEntry }) {
           </Typography>
         </Box>
       </td>
+      <td>
+        <UndoCell entry={entry} undo={undo} />
+      </td>
     </tr>
   );
 }
 
-function ChangeRow({ entry, userNames }: { entry: LakeConfigHistoryEntry; userNames: Record<string, string> }) {
-  if (entry.kind === 'file') return <FileRow entry={entry} />;
-  return <ConfigRow entry={entry} userNames={userNames} />;
+function ChangeRow({
+  entry,
+  userNames,
+  undo,
+}: {
+  entry: LakeConfigHistoryEntry;
+  userNames: Record<string, string>;
+  undo?: UndoControls;
+}) {
+  if (entry.kind === 'file') return <FileRow entry={entry} undo={undo} />;
+  return <ConfigRow entry={entry} userNames={userNames} undo={undo} />;
 }
 
-function ConfigRow({ entry, userNames }: { entry: LakeConfigHistoryConfigEntry; userNames: Record<string, string> }) {
+function ConfigRow({
+  entry,
+  userNames,
+  undo,
+}: {
+  entry: LakeConfigHistoryConfigEntry;
+  userNames: Record<string, string>;
+  undo?: UndoControls;
+}) {
   const rung = rungLabel(entry.manageRung);
   const who = entry.principalName ?? entry.principalId;
   const whoKind = `${entry.principalKind}${entry.onBehalfOfUserId ? ` (for ${entry.onBehalfOfName ?? entry.onBehalfOfUserId})` : ''}`;
@@ -349,6 +423,9 @@ function ConfigRow({ entry, userNames }: { entry: LakeConfigHistoryConfigEntry; 
           ))}
         </Stack>
       </td>
+      <td>
+        <UndoCell entry={entry} undo={undo} />
+      </td>
     </tr>
   );
 }
@@ -357,6 +434,11 @@ export interface LakeConfigHistorySectionProps {
   view: LakeConfigHistoryView | undefined;
   isLoading: boolean;
   error: unknown;
+  /**
+   * Reverses one row. A rejection's message is shown inline under the row, so the caller turns a
+   * server refusal into a readable Error. Omit to render History without Undo.
+   */
+  onUndo?: (eventId: string) => Promise<LakeConfigUndoResult>;
 }
 
 /**
@@ -367,7 +449,32 @@ export interface LakeConfigHistorySectionProps {
  * QueryClientProvider in tests, and it can be mounted from any surface that already holds the view
  * (today the settings modal; the owner access panel once #1672 lands).
  */
-export function LakeConfigHistorySection({ view, isLoading, error }: LakeConfigHistorySectionProps) {
+export function LakeConfigHistorySection({ view, isLoading, error, onUndo }: LakeConfigHistorySectionProps) {
+  const [busyEventId, setBusyEventId] = React.useState<string | null>(null);
+  const [errors, setErrors] = React.useState<Record<string, string>>({});
+  const [notes, setNotes] = React.useState<Record<string, string[]>>({});
+
+  const undo: UndoControls | undefined = onUndo
+    ? {
+        busyEventId,
+        errors,
+        notes,
+        onUndo: eventId => {
+          setBusyEventId(eventId);
+          setErrors(({ [eventId]: _cleared, ...rest }) => rest);
+          onUndo(eventId)
+            .then(result => setNotes(prev => ({ ...prev, [eventId]: result.notes })))
+            .catch((err: unknown) =>
+              setErrors(prev => ({
+                ...prev,
+                [eventId]: err instanceof Error && err.message ? err.message : 'Could not undo this change.',
+              }))
+            )
+            .finally(() => setBusyEventId(null));
+        },
+      }
+    : undefined;
+
   return (
     <Box data-testid="datalake-config-history-section">
       <Typography level="title-sm" sx={{ mb: 1 }}>
@@ -400,11 +507,12 @@ export function LakeConfigHistorySection({ view, isLoading, error }: LakeConfigH
                   <th>Who</th>
                   <th>Authorized as</th>
                   <th>What changed</th>
+                  <th aria-label="Undo" />
                 </tr>
               </thead>
               <tbody>
                 {view.entries.map(entry => (
-                  <ChangeRow key={entry.eventId} entry={entry} userNames={view.userNames} />
+                  <ChangeRow key={entry.eventId} entry={entry} userNames={view.userNames} undo={undo} />
                 ))}
               </tbody>
             </Table>

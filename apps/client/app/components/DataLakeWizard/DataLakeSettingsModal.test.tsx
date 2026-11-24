@@ -77,6 +77,7 @@ vi.mock('@client/app/hooks/data/dataLakes', () => ({
   serverRefusalMessage: (e: unknown) => (e instanceof Error ? e.message : undefined),
   useDataLakeSpend: (...args: unknown[]) => useDataLakeSpendMock(...args),
   useLakeConfigHistory: (...args: unknown[]) => useLakeConfigHistoryMock(...args),
+  useUndoLakeConfigChange: () => ({ mutate: vi.fn(), isPending: false, variables: undefined }),
   useDataLakeProposals: (...args: unknown[]) => useDataLakeProposalsMock(...args),
   useReviewDataLakeProposal: () => ({ mutate: reviewProposalMutate, isPending: false, variables: undefined }),
   useGetDataLakes: (...args: unknown[]) => useGetDataLakesMock(...args),

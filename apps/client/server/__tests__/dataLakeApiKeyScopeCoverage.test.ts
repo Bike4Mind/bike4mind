@@ -64,7 +64,7 @@ const READ_ONLY_POST_ROUTES = new Set(['semantic-search.ts', 'rlm-answer.ts', 'c
  * - listed by hand (not inferred from `auth: 'jwtOnly'`) so each exemption is a reviewed claim
  * rather than something a route silently opts into by omission.
  */
-const JWT_ONLY_ROUTES = new Set(['[id]/membership-diff.ts']);
+const JWT_ONLY_ROUTES = new Set(['[id]/membership-diff.ts', '[id]/config-history/[eventId]/undo.ts']);
 
 /**
  * Routes whose gate must be pinned to a SPECIFIC constant, not merely "some DATA_LAKE_ constant".

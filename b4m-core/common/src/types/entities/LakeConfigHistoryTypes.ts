@@ -77,6 +77,16 @@ interface LakeConfigHistoryEntryBase {
   onBehalfOfName?: string;
   /** The entity the row is about. Absent on old rows and on lake-level changes. */
   target?: ILakeConfigEventTarget;
+  /** This row reverses that event. */
+  undoesEventId?: string;
+  /** Whether Undo applies: a supported action with the structured fields it needs, not yet undone. */
+  undoable?: boolean;
+  /** True once the event has been undone, whether or not the row that undid it is in this window. */
+  undone?: boolean;
+  /** The row that undid this one, when it is in the window. */
+  undoneByEventId?: string;
+  /** Why a row has no Undo button, when the reason is something the reader can act on. */
+  undoNote?: string;
 }
 
 /**
@@ -112,8 +122,6 @@ export interface LakeConfigHistoryFileEntry extends LakeConfigHistoryEntryBase {
   action: LakeConfigHistoryFileAction;
   target: ILakeConfigEventTarget;
   origin: LakeMembershipChangeOrigin;
-  /** This row reverses that event. */
-  undoesEventId?: string;
   /** This row is a side effect of that event, so it has no Undo of its own. */
   causedByEventId?: string;
 }
@@ -148,4 +156,12 @@ export interface LakeConfigHistoryView {
    * incomplete.
    */
   userNames: Record<string, string>;
+}
+
+/** What the undo route returns: the History row the undo wrote, plus anything the reader should know. */
+export interface LakeConfigUndoResult {
+  /** The undo's own History row, or null when that best-effort write did not persist. */
+  entry: LakeConfigHistoryEntry | null;
+  /** Consequences of the undo, in words (for example a schedule put on hold). */
+  notes: string[];
 }
