@@ -4,7 +4,7 @@
  * `baseApi` is a stand-in that applies the route's method list and scope gate; the database, the settings, and the
  * runtime are stubbed; the registry, the dispatcher, and the input and output checks run for real.
  */
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
@@ -22,6 +22,7 @@ const h = vi.hoisted(() => ({
   limited: { value: false },
   enabled: { value: true },
   mcpEnabled: { value: true },
+  settingReadMs: { value: 0 },
   functions: [] as Record<string, unknown>[],
   artifacts: [] as { id: string; userId: string; version: number; deletedAt: Date | null }[],
   calls: [] as Record<string, unknown>[],
@@ -82,7 +83,10 @@ vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({
 vi.mock('@bike4mind/server-utils/utils/userRateTier', () => ({ resolveUserRateLimitPerMin: () => 60 }));
 vi.mock('@bike4mind/server-utils/callableFunctions/access', () => ({
   resolveCallableFunctionsEnabled: async () => h.enabled.value,
-  resolveCallableFunctionsMcpEnabled: async () => h.enabled.value && h.mcpEnabled.value,
+  resolveCallableFunctionsMcpEnabled: async () => {
+    if (h.settingReadMs.value) await new Promise(resolve => setTimeout(resolve, h.settingReadMs.value));
+    return h.enabled.value && h.mcpEnabled.value;
+  },
 }));
 vi.mock('@bike4mind/server-utils/callableFunctions/runtimeRunner', () => ({
   selectCallableFunctionRunner: () => h.runner,
@@ -116,6 +120,7 @@ vi.mock('@bike4mind/database', () => ({
 }));
 
 const { default: route, config } = await import('@pages/api/mcp/functions');
+const { FUNCTION_RUNTIME_FAULT_MESSAGE, TIMEOUT_MESSAGE } = await import('@server/callableFunctions/publicFunctions');
 const rateLimitBuckets = h.rateLimitOptions.map(o => o.bucket);
 
 const CONTRACT: FunctionContract = {
@@ -267,6 +272,7 @@ beforeEach(() => {
   h.limited.value = false;
   h.enabled.value = true;
   h.mcpEnabled.value = true;
+  h.settingReadMs.value = 0;
   h.calls = [];
   h.functions = [
     fnDoc('6b0000000000000000000001'),
@@ -424,10 +430,41 @@ describe('tools/call', () => {
     const result = callResult(
       await client.callTool({ name: 'beam_midspan_deflection', arguments: { load: 2, span: 4 } })
     );
-    expect(result.isError).toBe(true);
-    expect(result.structuredContent).toBeUndefined();
-    expect(result.content[0].text).toBe('The function returned outputs that do not fit its output schema.');
-    expect(result._meta?.stamp).toMatchObject({ surface: 'mcp' });
+    expect(result).toEqual({
+      isError: true,
+      content: [{ type: 'text', text: 'The function returned outputs that do not fit its output schema.' }],
+      _meta: { stamp: expect.objectContaining({ slug: 'beam_midspan_deflection', surface: 'mcp' }) },
+    });
+    await client.close();
+  });
+
+  it.each([
+    ['throws', () => h.runner.mockRejectedValue(new Error('spawn failed')), 'runtime_unavailable'],
+    [
+      'never replies',
+      () => h.runner.mockResolvedValue({ outcome: 'error', reason: 'no_reply', durationMs: 9 }),
+      'no_reply',
+    ],
+  ])('answers a runner that %s with the runtime fault text and no stamp', async (_case, fail, reason) => {
+    fail();
+    const client = await connect();
+    const result = await client.callTool({ name: 'beam_midspan_deflection', arguments: { load: 2, span: 4 } });
+    expect(result).toEqual({ isError: true, content: [{ type: 'text', text: FUNCTION_RUNTIME_FAULT_MESSAGE }] });
+    expect(h.calls).toEqual([expect.objectContaining({ surface: 'mcp', outcome: 'error', reason })]);
+    await client.close();
+  });
+
+  it('writes one refused row for a function it turns away before the dispatcher', async () => {
+    const client = await connect();
+    for (const name of ['beam_draft', 'beam_other', 'no_such_function']) {
+      await client.callTool({ name, arguments: { load: 2, span: 4 } });
+    }
+    const refused = { surface: 'mcp', apiKeyId: 'key-u1', callerUserId: 'u1', outcome: 'refused' };
+    expect(h.calls).toEqual([
+      expect.objectContaining({ ...refused, functionId: '6b0000000000000000000002', reason: 'not_live' }),
+      expect.objectContaining({ ...refused, functionId: 'beam_other', reason: 'not_found' }),
+      expect.objectContaining({ ...refused, functionId: 'no_such_function', reason: 'not_found' }),
+    ]);
     await client.close();
   });
 
@@ -494,31 +531,75 @@ describe('tools/call', () => {
     });
   });
 
-  it('answers a call that outlasts the 45 second budget with the time-limit text', async () => {
-    vi.useFakeTimers();
-    try {
-      h.runner.mockImplementation(() => new Promise(() => {}));
-      let settled = false;
+  describe('on fake timers', () => {
+    beforeEach(() => {
+      vi.useFakeTimers();
+    });
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    const startCall = (id: number) => {
+      const state = { settled: false };
       const answer = post({
         jsonrpc: '2.0',
-        id: 3,
+        id,
         method: 'tools/call',
         params: { name: 'beam_midspan_deflection', arguments: { load: 2, span: 4 } },
       }).finally(() => {
-        settled = true;
+        state.settled = true;
       });
+      return { answer, state };
+    };
+
+    it('answers a call that outlasts the 45 second budget with the time-limit text', async () => {
+      h.runner.mockImplementation(() => new Promise(() => {}));
+      const { answer, state } = startCall(3);
       await vi.advanceTimersByTimeAsync(44_999);
-      expect(settled).toBe(false);
+      expect(state.settled).toBe(false);
       await vi.advanceTimersByTimeAsync(1);
-      await vi.waitFor(() => expect(settled).toBe(true));
+      await vi.waitFor(() => expect(state.settled).toBe(true));
       expect((await answer).json).toEqual({
         jsonrpc: '2.0',
         id: 3,
-        result: { isError: true, content: [{ type: 'text', text: 'The call ran past its time limit.' }] },
+        result: {
+          isError: true,
+          content: [{ type: 'text', text: TIMEOUT_MESSAGE }],
+          _meta: { stamp: expect.objectContaining({ surface: 'mcp' }) },
+        },
       });
-    } finally {
-      vi.useRealTimers();
-    }
+      expect(h.calls).toEqual([expect.objectContaining({ surface: 'mcp', outcome: 'timeout' })]);
+    });
+
+    it('counts the setting and lookup reads against the budget taken when the request arrived', async () => {
+      h.settingReadMs.value = 5_000;
+      h.findBySlug.mockImplementation(async (slug: string, owner: Owner) => {
+        await new Promise(resolve => setTimeout(resolve, 5_000));
+        return h.functions.find(fn => fn.slug === slug && owned(owner)(fn)) ?? null;
+      });
+      h.runner.mockImplementation(() => new Promise(() => {}));
+      const { answer, state } = startCall(4);
+      await vi.advanceTimersByTimeAsync(44_999);
+      expect(state.settled).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      await vi.waitFor(() => expect(state.settled).toBe(true));
+      expect((await answer).json).toMatchObject({ result: { content: [{ type: 'text', text: TIMEOUT_MESSAGE }] } });
+    });
+
+    it('answers a call left too little of the budget with the time-limit text, without running', async () => {
+      h.settingReadMs.value = 44_000;
+      const { answer } = startCall(5);
+      await vi.advanceTimersByTimeAsync(44_000);
+      expect((await answer).json).toEqual({
+        jsonrpc: '2.0',
+        id: 5,
+        result: { isError: true, content: [{ type: 'text', text: TIMEOUT_MESSAGE }] },
+      });
+      expect(h.runner).not.toHaveBeenCalled();
+      expect(h.calls).toEqual([
+        expect.objectContaining({ surface: 'mcp', outcome: 'refused', reason: 'budget_exhausted' }),
+      ]);
+    });
   });
 });
 

@@ -13,11 +13,16 @@ import {
   type CallToolResult,
   type Tool,
 } from '@modelcontextprotocol/sdk/types.js';
+import { callableFunctionRepository } from '@bike4mind/database';
 import { resolveCallableFunctionsMcpEnabled } from '@bike4mind/server-utils/callableFunctions/access';
-import { dispatchFunctionCall } from '@bike4mind/server-utils/callableFunctions/dispatch';
+import {
+  CALLABLE_FUNCTION_SURFACE_CAPS,
+  dispatchFunctionCall,
+  recordCallableFunctionRefusal,
+} from '@bike4mind/server-utils/callableFunctions/dispatch';
+import { FUNCTION_MIN_WAIT_MS } from '@bike4mind/server-utils/callableFunctions/functionToolHost';
 import { baseApi } from '@server/middlewares/baseApi';
 import {
-  FUNCTION_INVOKE_BUDGET_MS,
   FUNCTION_INVOKE_MAX_BODY_BYTES,
   FUNCTION_INVOKE_RUN_TIMEOUT_MS,
   FUNCTION_NOT_FOUND_MESSAGE,
@@ -25,13 +30,13 @@ import {
   invokeAnswer,
   listLiveFunctions,
   loadLiveFunction,
-  loadLiveFunctionBySlug,
   OUTPUT_TOO_LARGE_MESSAGE,
-  withinBudget,
 } from '@server/callableFunctions/publicFunctions';
 
 // Under the 6 MB Lambda response limit, which the answer reaches escaped a second time.
 const MAX_ANSWER_BYTES = 5 * 1024 * 1024;
+
+const FUNCTION_MCP_BUDGET_MS = CALLABLE_FUNCTION_SURFACE_CAPS.mcp.waitMs;
 
 const SERVER_INFO = { name: 'bike4mind-functions', version: '1.0.0' };
 
@@ -41,6 +46,8 @@ const FORWARDED_HEADERS = ['accept', 'content-type', 'mcp-protocol-version'];
 interface Caller {
   userId: string;
   apiKeyId: string;
+  /** Epoch ms at which the whole request, its setting and lookup reads included, must be answered. */
+  deadline: number;
 }
 
 /** A function that left `live` after the list was read drops out of the answer instead of failing it. */
@@ -77,23 +84,25 @@ const toolError = (text: string, stamp?: unknown): CallToolResult => ({
 
 // Refusals and failures come back as an isError result, as the SDK's McpServer answers its own tool errors.
 async function callTool(caller: Caller, name: string, args: unknown): Promise<CallToolResult> {
-  let fn: { id: string };
+  const user = { id: caller.userId };
+  const request = { caller: user, surface: 'mcp' as const, apiKeyId: caller.apiKeyId };
+  const found = await callableFunctionRepository.findBySlugForOwner(name, { ownerType: 'user', ownerKey: user.id });
+  if (!found) {
+    await recordCallableFunctionRefusal({ ...request, functionId: name }, 'not_found');
+    return toolError(FUNCTION_NOT_FOUND_MESSAGE);
+  }
   try {
-    fn = await loadLiveFunctionBySlug({ id: caller.userId }, name);
+    await loadLiveFunction(user, found.id);
   } catch (error) {
-    if (error instanceof NotFoundError) return toolError(FUNCTION_NOT_FOUND_MESSAGE);
-    throw error;
+    if (!(error instanceof NotFoundError)) throw error;
+    await recordCallableFunctionRefusal({ ...request, functionId: found.id }, 'not_live', found);
+    return toolError(FUNCTION_NOT_FOUND_MESSAGE);
   }
 
-  const call = await withinBudget(
-    dispatchFunctionCall(
-      { caller: { id: caller.userId }, functionId: fn.id, args: args ?? {}, surface: 'mcp', apiKeyId: caller.apiKeyId },
-      { timeoutMs: FUNCTION_INVOKE_RUN_TIMEOUT_MS }
-    ),
-    FUNCTION_INVOKE_BUDGET_MS
+  const call = await dispatchFunctionCall(
+    { ...request, functionId: found.id, args: args ?? {} },
+    { timeoutMs: FUNCTION_INVOKE_RUN_TIMEOUT_MS, deadline: caller.deadline, minWaitMs: FUNCTION_MIN_WAIT_MS }
   );
-  if (!call) return toolError('The call ran past its time limit.');
-
   const answer = invokeAnswer(call);
   if (answer.status !== 200) return toolError(String(answer.body.error), answer.body.stamp);
   const output = call.outputs ?? {};
@@ -156,6 +165,7 @@ const handler = baseApi({
 })
   .use(functionsRateLimit('/api/mcp/functions'))
   .post(async (req, res) => {
+    const deadline = Date.now() + FUNCTION_MCP_BUDGET_MS;
     const apiKeyId = req.apiKeyInfo?.keyId;
     if (!apiKeyId) throw new ForbiddenError('This endpoint takes an API key holding the functions:invoke scope.');
     if (!(await resolveCallableFunctionsMcpEnabled(req.user))) {
@@ -169,7 +179,7 @@ const handler = baseApi({
         .json({ jsonrpc: '2.0', id: null, error: { code: -32600, message: 'Send one message per request.' } });
     }
 
-    const server = buildServer({ userId: req.user.id, apiKeyId }, (message, context) =>
+    const server = buildServer({ userId: req.user.id, apiKeyId, deadline }, (message, context) =>
       req.logger.error(message, context)
     );
     const transport = new WebStandardStreamableHTTPServerTransport({

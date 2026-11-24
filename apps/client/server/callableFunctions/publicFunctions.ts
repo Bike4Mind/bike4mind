@@ -7,7 +7,6 @@ import {
   type ICallableFunctionDetail,
   type ICallableFunctionPublic,
 } from '@bike4mind/common';
-import { callableFunctionRepository } from '@bike4mind/database';
 import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { resolveUserRateLimitPerMin } from '@bike4mind/server-utils/utils/userRateTier';
 import { resolveCallableFunctionsEnabled } from '@bike4mind/server-utils/callableFunctions/access';
@@ -62,13 +61,6 @@ export async function loadLiveFunction(user: { id: string }, id: string): Promis
   return fn;
 }
 
-/** The owner's live function holding `slug`: one slug read, then the same live check as `loadLiveFunction`. */
-export async function loadLiveFunctionBySlug(user: { id: string }, slug: string): Promise<ICallableFunctionDetail> {
-  const found = await callableFunctionRepository.findBySlugForOwner(slug, { ownerType: 'user', ownerKey: user.id });
-  if (!found) throw notFound();
-  return loadLiveFunction(user, found.id);
-}
-
 export async function listLiveFunctions(user: { id: string }): Promise<ICallableFunctionPublic[]> {
   return (await listCallableFunctions(user)).filter(fn => fn.status === 'live');
 }
@@ -104,9 +96,9 @@ export interface InvokeAnswer {
   body: Record<string, unknown>;
 }
 
-const TIMEOUT_MESSAGE = 'The call ran past its time limit.';
+export const TIMEOUT_MESSAGE = 'The call ran past its time limit.';
 
-const FUNCTION_RUNTIME_FAULT_MESSAGE = 'The function runtime did not answer. Try again later.';
+export const FUNCTION_RUNTIME_FAULT_MESSAGE = 'The function runtime did not answer. Try again later.';
 
 // Refusals about the function or its caller; any other refusal comes from the runtime.
 const FUNCTION_NOT_FOUND_REASONS = new Set(['not_found', 'not_caller', 'disabled', 'source_deleted']);
