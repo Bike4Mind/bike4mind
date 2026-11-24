@@ -206,6 +206,15 @@ describe('generateCustomMcpTools', () => {
       expect(out).not.toContain('truncated');
     });
 
+    it('measures the cap on what the model reads, after `<` is escaped to six characters', async () => {
+      const note = '<'.repeat(Math.floor((30_000 - overhead) / 6) + 1);
+      expect(JSON.stringify({ output: { note }, stamp: STAMP }).length).toBeLessThan(30_000);
+
+      const out = await runSearch(structuredHost({ structuredContent: { note }, meta: STAMP }));
+
+      expect(bodyOf(out)).toEqual({ outcome: 'output_too_large', max_chars: 30_000 });
+    });
+
     it('keeps a spoofed tag inside a structured result escaped and the body parseable', async () => {
       const out = await runSearch(
         structuredHost({

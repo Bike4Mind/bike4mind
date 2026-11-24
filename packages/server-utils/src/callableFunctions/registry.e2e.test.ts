@@ -957,6 +957,23 @@ describe('listOfferedCallableFunctions', () => {
     expect(await slugs({ limit: 2 })).toEqual(['beam_midspan_deflection', 'second_tool']);
     expect(await slugs({ limit: 2, excludeAlwaysAsk: true })).toEqual(['second_tool', 'third_tool']);
   });
+
+  it('counts the limit over functions whose artifact is still in place', async () => {
+    const gone = await save();
+    await promoteDirectly(gone.id);
+    await artifactRepository.softDelete('artifact-1');
+    for (const [artifactId, name] of [
+      ['artifact-2', 'second_tool'],
+      ['artifact-3', 'third_tool'],
+      ['artifact-4', 'fourth_tool'],
+    ]) {
+      await promoteDirectly((await saveNamed(artifactId, name)).id);
+    }
+
+    const offered = await listOfferedCallableFunctions(OWNER, { limit: 2 });
+
+    expect(offered.map(fn => fn.slug)).toEqual(['second_tool', 'third_tool']);
+  });
 });
 
 describe('setCallableFunctionApproval', () => {

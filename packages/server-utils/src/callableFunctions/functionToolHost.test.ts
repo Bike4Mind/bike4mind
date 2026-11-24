@@ -185,8 +185,15 @@ describe('listing', () => {
     ]);
   });
 
-  it('lists with the MCP server off', () => {
-    expect(createFunctionToolHost('chat').listsWithoutMcpServer).toBe(true);
+  it('lists the functions but no connector when the MCP server is off, even with custom connectors on', async () => {
+    h.customMcpOn = true;
+    const host = functionAndConnectorToolHost('chat');
+
+    const off = await host.listConnections(USER, { mcpServerOff: true });
+    const on = await host.listConnections(USER);
+
+    expect(off.map(offer => offer.slug)).toEqual(['fn']);
+    expect(on.map(offer => offer.slug)).toEqual(['fn', 'docs']);
   });
 });
 

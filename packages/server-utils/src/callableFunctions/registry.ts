@@ -286,12 +286,17 @@ export async function listOfferedCallableFunctions(
   actor: CallableFunctionActor,
   options: { limit?: number; excludeAlwaysAsk?: boolean } = {}
 ): Promise<ICallableFunctionOfferable[]> {
-  const functions = await callableFunctionRepository.listLiveForOwner(userOwner(actor), options);
+  const { limit, excludeAlwaysAsk } = options;
+  const functions = await callableFunctionRepository.listLiveForOwner(userOwner(actor), { excludeAlwaysAsk });
   const heads = await readHeads(
     actor,
     functions.map(fn => fn.pin.artifactId)
   );
-  return functions.filter(fn => effectiveCallableFunctionStatus(fn, heads.get(fn.pin.artifactId) ?? null) === 'live');
+  const live = functions.filter(
+    fn => effectiveCallableFunctionStatus(fn, heads.get(fn.pin.artifactId) ?? null) === 'live'
+  );
+  // After the head filter, so a function whose artifact is gone never takes one of the `limit` slots.
+  return limit ? live.slice(0, limit) : live;
 }
 
 /**

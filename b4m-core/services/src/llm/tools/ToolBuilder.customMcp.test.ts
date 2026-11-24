@@ -286,11 +286,22 @@ describe('ToolBuilder buildMcpTools - custom connectors', () => {
       expect(builtInServers).not.toHaveBeenCalled();
     });
 
-    it('offers no connector with Enable MCP Server off from a host that does not list without it', async () => {
-      const host = hostOf();
-      const { mcpToolsByServer } = await run(builderWith(host as never), undefined, { enableMCPServer: false });
-      expect(mcpToolsByServer).toEqual({});
-      expect(host.listConnections).not.toHaveBeenCalled();
+    it('offers the functions but no connector with Enable MCP Server off, and nothing from a host that cannot list without it', async () => {
+      const composed = {
+        listsWithoutMcpServer: true,
+        listConnections: vi.fn(async (_userId: string, options?: CustomMcpListOptions) =>
+          options?.mcpServerOff ? [functions] : [functions, connection]
+        ),
+        callTool: vi.fn(),
+      };
+      const connectorsOnly = hostOf();
+
+      const offered = await run(builderWith(composed as never), undefined, { enableMCPServer: false });
+      const refused = await run(builderWith(connectorsOnly as never), undefined, { enableMCPServer: false });
+
+      expect(Object.keys(offered.mcpToolsByServer)).toEqual(['fn']);
+      expect(refused.mcpToolsByServer).toEqual({});
+      expect(connectorsOnly.listConnections).not.toHaveBeenCalled();
     });
 
     it('leaves switched-off functions out of the cap, so connector tools fill all 40 slots', async () => {
