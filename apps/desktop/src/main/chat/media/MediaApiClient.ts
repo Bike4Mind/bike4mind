@@ -26,7 +26,9 @@ import {
   type TTSRequest,
   type TtsBase64Response,
 } from '@bike4mind/common';
+import type { BillingPayer } from '@shared/account';
 import type { ChatToolNotice } from '@shared/chat';
+import { currentBillingPayer } from '../../account/billingPayer';
 import { parseMusicModels } from './musicModels';
 
 const studioImageJobSchema = z.object({
@@ -131,11 +133,28 @@ export function isTerminalQuest(quest: QuestPoll): boolean {
  * the tools above it deal in outcomes. Not merged with that class because the CLI's is built on
  * the CLI's own ApiClient and config store; this one takes the desktop app's AuthenticatedApiClient.
  */
-export class MediaApiClient {
-  constructor(private readonly api: AuthenticatedApiClient) {}
+/**
+ * The payer each Idempotency-Key was first sent with. The server scopes a key to the billed account,
+ * so a retry that re-read a since-switched payer would start a second, differently billed job.
+ * Module-wide because callers build a fresh client per submit; bounded, oldest evicted first.
+ */
+const PAYER_BY_IDEMPOTENCY_KEY = new Map<string, BillingPayer>();
+const PAYER_BY_IDEMPOTENCY_KEY_LIMIT = 500;
 
+export class MediaApiClient {
+  /** `getPayer` is read on every submit, so a payer switch applies to the next call this client makes. */
+  constructor(
+    private readonly api: AuthenticatedApiClient,
+    private readonly getPayer: () => BillingPayer | Promise<BillingPayer> = currentBillingPayer
+  ) {}
+
+  /** The route takes `organization_id` beside `{ count, request }` and bills that account. */
   async createStudioImages(request: ImageJobRequest, count: number, key: string) {
-    const body = { request: ImageJobRequestSchema.parse(request), count: z.number().int().min(1).max(4).parse(count) };
+    const body = {
+      request: ImageJobRequestSchema.parse(request),
+      count: z.number().int().min(1).max(4).parse(count),
+      ...(await this.payer('/api/studio/image-jobs', key)),
+    };
     return z.object({ groupId: z.string(), jobs: z.array(studioImageJobSchema).min(1).max(4) }).parse(
       await this.api.post<unknown>('/api/studio/image-jobs', body, {
         timeout: TIMEOUT_MS.submit,
@@ -157,10 +176,14 @@ export class MediaApiClient {
    */
   async createImageJob(body: CreateImageJobBody, idempotencyKey: string): Promise<PublicImageJob[]> {
     try {
-      const response = await this.api.post<unknown>('/api/v1/image-jobs', body, {
-        timeout: TIMEOUT_MS.submit,
-        headers: { 'Idempotency-Key': idempotencyKey },
-      });
+      const response = await this.api.post<unknown>(
+        '/api/v1/image-jobs',
+        { ...body, ...(await this.payer('/api/v1/image-jobs', idempotencyKey)) },
+        {
+          timeout: TIMEOUT_MS.submit,
+          headers: { 'Idempotency-Key': idempotencyKey },
+        }
+      );
       return CreateImageJobResponseSchema.parse(response).data;
     } catch (error) {
       throw toMediaError(error, 'Image generation');
@@ -175,7 +198,7 @@ export class MediaApiClient {
     try {
       const response = await this.api.post<{ quest?: { id?: string }; session?: { id?: string } }>(
         '/api/ai/generate-image',
-        request,
+        { ...request, ...(await this.payer()) },
         { timeout: TIMEOUT_MS.submit }
       );
       const questId = response?.quest?.id;
@@ -250,10 +273,14 @@ export class MediaApiClient {
    */
   async createVideoGeneration(body: CreateVideoGenerationBody, idempotencyKey: string): Promise<VideoGeneration> {
     try {
-      const response = await this.api.post<unknown>('/api/v1/video-generations', body, {
-        timeout: TIMEOUT_MS.submit,
-        headers: { 'Idempotency-Key': idempotencyKey },
-      });
+      const response = await this.api.post<unknown>(
+        '/api/v1/video-generations',
+        { ...body, ...(await this.payer('/api/v1/video-generations', idempotencyKey)) },
+        {
+          timeout: TIMEOUT_MS.submit,
+          headers: { 'Idempotency-Key': idempotencyKey },
+        }
+      );
       return VideoGenerationSchema.parse(response);
     } catch (error) {
       throw toMediaError(error, 'Video generation');
@@ -358,7 +385,7 @@ export class MediaApiClient {
     try {
       const body = await this.api.post<unknown>(
         '/api/ai/tts',
-        { ...request, encoding: 'base64' },
+        { ...request, encoding: 'base64', ...(await this.payer()) },
         { timeout: TIMEOUT_MS.audio }
       );
       return ttsBase64ResponseSchema.parse(body);
@@ -367,8 +394,12 @@ export class MediaApiClient {
     }
   }
 
-  generateSoundEffect(request: SoundEffectsRequest): Promise<GeneratedAudio> {
-    return this.postForAudio('/api/ai/sound-effects', request, 'Sound-effect generation');
+  async generateSoundEffect(request: SoundEffectsRequest): Promise<GeneratedAudio> {
+    return this.postForAudio(
+      '/api/ai/sound-effects',
+      { ...request, ...(await this.payer()) },
+      'Sound-effect generation'
+    );
   }
 
   /** Music models this caller can use right now, in the server's order. */
@@ -390,10 +421,14 @@ export class MediaApiClient {
    */
   async createMusicGeneration(body: CreateMusicGenerationBody, idempotencyKey: string): Promise<MusicGeneration> {
     try {
-      const response = await this.api.post<unknown>('/api/v1/music-generations', body, {
-        timeout: TIMEOUT_MS.submit,
-        headers: { 'Idempotency-Key': idempotencyKey },
-      });
+      const response = await this.api.post<unknown>(
+        '/api/v1/music-generations',
+        { ...body, ...(await this.payer('/api/v1/music-generations', idempotencyKey)) },
+        {
+          timeout: TIMEOUT_MS.submit,
+          headers: { 'Idempotency-Key': idempotencyKey },
+        }
+      );
       return MusicGenerationSchema.parse(response);
     } catch (error) {
       throw toMediaError(error, 'Music generation');
@@ -423,6 +458,25 @@ export class MediaApiClient {
     } catch (error) {
       throw toMediaError(error, 'Cancelling the song');
     }
+  }
+
+  /**
+   * Null is stated, never omitted: an omitted payer bills the home organization on most media routes.
+   * With an Idempotency-Key, the payer the key was first sent with is reused for its retries.
+   */
+  private async payer(path?: string, idempotencyKey?: string): Promise<BillingPayer> {
+    const keyed = path && idempotencyKey ? `${path}|${idempotencyKey}` : null;
+    const remembered = keyed ? PAYER_BY_IDEMPOTENCY_KEY.get(keyed) : undefined;
+    if (remembered) return remembered;
+    const payer: BillingPayer = { organization_id: (await this.getPayer()).organization_id };
+    if (keyed) {
+      PAYER_BY_IDEMPOTENCY_KEY.set(keyed, payer);
+      if (PAYER_BY_IDEMPOTENCY_KEY.size > PAYER_BY_IDEMPOTENCY_KEY_LIMIT) {
+        const oldest = PAYER_BY_IDEMPOTENCY_KEY.keys().next().value;
+        if (oldest !== undefined) PAYER_BY_IDEMPOTENCY_KEY.delete(oldest);
+      }
+    }
+    return payer;
   }
 
   /**

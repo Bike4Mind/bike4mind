@@ -2,7 +2,7 @@
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { CssVarsProvider } from '@mui/joy/styles';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { desktopTheme } from '../../theme';
 import type { StudioController, StudioReview } from './controller';
 import { StudioPane } from './StudioPane';
@@ -22,6 +22,13 @@ window.matchMedia ??= ((query: string) => ({
 })) as typeof window.matchMedia;
 let root: Root | null = null;
 let host: HTMLElement | null = null;
+// The payer note under Generate asks main who pays; left pending, it renders nothing.
+beforeEach(() => {
+  (window as unknown as { b4m: unknown }).b4m = {
+    account: { getSelection: () => new Promise(() => {}), onSelectionChanged: () => () => {} },
+  };
+});
+
 afterEach(() => {
   act(() => root?.unmount());
   host?.remove();

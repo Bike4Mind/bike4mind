@@ -32,6 +32,7 @@ function glance(
   const profile: AccountProfile = { credits: { balance, monthlyAllowance: plan ? 10_000 : null }, plan, tier };
   return {
     profile,
+    organization: null,
     burnPerDay,
     readAt: NOW,
     outlook: creditOutlook({
@@ -43,6 +44,15 @@ function glance(
   };
 }
 
+function organizationGlance(credits: number): CreditsGlance {
+  return {
+    ...glance(820, 45, 7),
+    organization: { id: 'org-1', name: 'Acme', personal: false, credits },
+    burnPerDay: null,
+    outlook: creditOutlook({ balance: credits, burnPerDay: 0, refillAt: null, now: NOW }),
+  };
+}
+
 const CASES: { title: string; glance: CreditsGlance }[] = [
   { title: 'Banked balance', glance: glance(312_480, 2100, 7) },
   { title: 'Covered to the refill', glance: glance(6200, 260, 7) },
@@ -50,6 +60,8 @@ const CASES: { title: string; glance: CreditsGlance }[] = [
   { title: 'Almost out', glance: glance(180, 300, 7) },
   { title: 'Free plan', glance: glance(820, 45, null, 'free') },
   { title: 'No recent spend', glance: glance(820, 0, 7) },
+  { title: 'Paid by an organization', glance: organizationGlance(48_200) },
+  { title: 'Organization pool empty', glance: organizationGlance(0) },
 ];
 
 /** The strip's avatar and the open menu's top rows, as the account strip draws them. */

@@ -83,3 +83,41 @@ export interface AccountBilling {
 
 /** Success means checkout opened, not that a payment completed. */
 export type SubscribePlanResult = { ok: true } | { ok: false; error: string };
+
+/**
+ * One account that can pay for a credit-spending call: the user's own (personal) ledger or an
+ * organization pool they belong to. Mirrors the web switcher's `Account`
+ * (apps/client/app/components/Credits/selectedAccountStore.ts).
+ */
+export interface BillingAccount {
+  /** The user id for the personal account, the organization id otherwise. */
+  id: string;
+  name: string;
+  personal: boolean;
+  /** Personal balance or organization pool; null when it could not be read. */
+  credits: number | null;
+  seats?: number;
+}
+
+/**
+ * The payer field a credit-spending request carries. Null is the personal ledger, which media
+ * routes need stated outright: an omitted field bills the home organization there.
+ */
+export interface BillingPayer {
+  organization_id: string | null;
+}
+
+/** Who pays for the signed-in user's calls, and who else could. */
+export interface AccountSelection {
+  /** Personal first, then each organization the user belongs to. Empty when signed out. */
+  accounts: BillingAccount[];
+  /** The account that pays now; null only when signed out. */
+  selected: BillingAccount | null;
+  /**
+   * Set when the remembered organization was missing from a successful read of the user's
+   * organizations, so the payer fell back to Personal. Cleared by the next pick.
+   */
+  droppedOrganizationId: string | null;
+  /** The organization list could not be read; `accounts` then holds what was last known. */
+  error?: string;
+}

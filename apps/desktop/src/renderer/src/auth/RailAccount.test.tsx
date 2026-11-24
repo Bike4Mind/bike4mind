@@ -70,7 +70,7 @@ const pending = () => new Promise(() => {});
 function mount(node: React.ReactNode, bridge: Record<string, unknown> = {}) {
   (window as unknown as { b4m: unknown }).b4m = {
     // The avatar reads the credits glance on mount; left pending unless a test brings its own.
-    account: { getProfile: pending },
+    account: { getProfile: pending, getSelection: pending, onSelectionChanged: () => () => {} },
     usage: { getHistory: pending },
     ...bridge,
     getAppInfo: () => new Promise(() => {}),
@@ -91,6 +91,8 @@ function creditsBridge(balance: number, creditsSpent: number) {
   day.setHours(0, 0, 0, 0);
   return {
     account: {
+      getSelection: pending,
+      onSelectionChanged: () => () => {},
       getProfile: async () => ({
         credits: { balance, monthlyAllowance: 10_000 },
         plan: {

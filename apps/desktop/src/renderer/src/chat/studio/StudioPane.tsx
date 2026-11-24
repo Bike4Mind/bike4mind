@@ -19,6 +19,7 @@ import type { StudioAsset, StudioMediaKind } from '@shared/studio';
 import { studioAssetTitle } from '@shared/studioAssetTitle';
 import { ArrowLeftIcon, CloseIcon, ImageIcon, MusicIcon, SoundIcon, VideoIcon, VoiceIcon } from '../icons';
 import { thinScrollbarSx } from '../layout';
+import { GenerationPayerNote } from '../../credits/GenerationPayerNote';
 import type { StudioController, StudioCreationDraft } from './controller';
 import { STUDIO_PANE_WIDTH } from './layout';
 import { StudioSettings, defaultStudioSettings } from './StudioSettings';
@@ -245,6 +246,7 @@ function CreationForm({
       >
         Generate
       </Button>
+      <GenerationPayerNote data-testid="studio-payer-note" />
       {error && (
         <Alert size="sm" color="danger" data-testid="studio-creation-error">
           {error}
