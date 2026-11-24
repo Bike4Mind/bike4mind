@@ -162,6 +162,14 @@ export const NOT_COVERED: readonly { shape: string; reason: string }[] = [
     shape: 'aws.s3.BucketServerSideEncryptionConfiguration',
     reason: 'Storage encryption policy, not a compute trigger.',
   },
+  {
+    shape: 'aws.s3.Bucket',
+    reason:
+      'Function-data storage the runtime Lambda reads through its S3 endpoint; self-host runs functions in ' +
+      'process and has no endpoint.',
+  },
+  { shape: 'aws.s3.BucketPublicAccessBlock', reason: 'Storage access setting for the aws.s3.Bucket, no compute.' },
+  { shape: 'aws.s3.BucketPolicy', reason: 'IAM grant for the aws.s3.Bucket, no compute.' },
   { shape: 'sst.aws.Vpc', reason: 'Network plumbing.' },
   { shape: 'sst.aws.Cluster', reason: 'Container host for inventoried sst.aws.Service declarations.' },
   { shape: 'aws.ec2.SecurityGroup', reason: 'Network plumbing.' },
@@ -170,7 +178,10 @@ export const NOT_COVERED: readonly { shape: string; reason: string }[] = [
   { shape: 'aws.ec2.RouteTable', reason: 'Network plumbing.' },
   { shape: 'aws.ec2.RouteTableAssociation', reason: 'Network plumbing.' },
   { shape: 'aws.ec2.SecurityGroupRule', reason: 'Network plumbing.' },
-  { shape: 'aws.ec2.VpcEndpoint', reason: 'Network plumbing.' },
+  {
+    shape: 'aws.ec2.VpcEndpoint',
+    reason: 'Network plumbing, the runtime Lambda S3 endpoint included; self-host runs functions in process.',
+  },
   { shape: 'aws.acm.Certificate', reason: 'TLS certificate for a hosted load balancer listener, no compute.' },
   { shape: 'aws.acm.CertificateValidation', reason: 'Waits for the certificate above to be issued, no compute.' },
   { shape: 'aws.servicediscovery.Service', reason: 'Service discovery plumbing.' },

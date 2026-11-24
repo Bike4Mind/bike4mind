@@ -99,7 +99,7 @@ describe('callable function runtime isolation', () => {
     expect(vpc).toMatch(/assignGeneratedIpv6CidrBlock:\s*false,/);
     expect(vpc).not.toMatch(/ipv6CidrBlock|ipv6IpamPoolId|ipv6NetmaskLength/);
     expect(source).not.toMatch(
-      /new aws\.ec2\.(Route|VpcEndpoint|NatGateway|InternetGateway|EgressOnlyInternetGateway|VpcPeeringConnection|VpnGateway|VpnGatewayRoutePropagation|TransitGatewayVpcAttachment|VpcDhcpOptions\w*|VpcIpv6CidrBlockAssociation|MainRouteTableAssociation)\(/
+      /new aws\.ec2\.(Route|NatGateway|InternetGateway|EgressOnlyInternetGateway|VpcPeeringConnection|VpnGateway|VpnGatewayRoutePropagation|TransitGatewayVpcAttachment|VpcDhcpOptions\w*|VpcIpv6CidrBlockAssociation|MainRouteTableAssociation)\(/
     );
     expect(source).not.toMatch(/aws\.ec2transitgateway|aws\.route53/);
 
@@ -128,34 +128,85 @@ describe('callable function runtime isolation', () => {
     );
     expect(association).toMatch(/subnetId:\s*subnet\.id,/);
     expect(association).toMatch(/routeTableId:\s*routeTable\.id,/);
-    expect(body).toMatch(/return \{ vpcId: vpc\.id, subnetIds: \$output\(subnets\.map\(subnet => subnet\.id\)\) \};/);
+    expect(body).toMatch(
+      /return \{ vpcId: vpc\.id, subnetIds: \$output\(subnets\.map\(subnet => subnet\.id\)\), dataEndpointId: dataEndpoint\.id \};/
+    );
+  });
+
+  it('routes the dedicated network to S3 through one gateway endpoint whose policy allows only data reads', () => {
+    expect(source.match(/new aws\.ec2\.VpcEndpoint\(/g)).toHaveLength(1);
+    const endpoint = declaration('aws.ec2.VpcEndpoint', 'CallableFunctionRuntimeDataEndpoint');
+    expect(functionBody('dedicatedNetwork')).toContain(endpoint);
+    expect(endpoint).toMatch(/vpcId:\s*vpc\.id,/);
+    expect(endpoint).toMatch(/serviceName:\s*S3_SERVICE_NAME,/);
+    expect(endpoint).toMatch(/vpcEndpointType:\s*'Gateway',/);
+    expect(endpoint).toMatch(/routeTableIds:\s*\[routeTable\.id\],/);
+    expect(endpoint).toMatch(
+      /policy:\s*callableFunctionDataBucket\.arn\.apply\(arn => JSON\.stringify\(callableFunctionDataEndpointPolicy\(arn\)\)\),/
+    );
+    expect(endpoint).not.toMatch(/privateDnsEnabled|subnetIds|securityGroupIds/);
+    expect(source).toMatch(
+      /const S3_SERVICE_NAME = \$interpolate`com\.amazonaws\.\$\{aws\.getRegionOutput\(\)\.region\}\.s3`;/
+    );
+  });
+
+  it('gives the runtime role no S3 permission and the function no data bucket', () => {
+    expect(source).not.toMatch(/['"`]s3:/);
+    expect(fn).not.toMatch(/callableFunctionData/);
+    const rolePolicy = declaration('aws.iam.RolePolicy', 'CallableFunctionRuntimePolicy');
+    expect(rolePolicy).not.toMatch(/callableFunctionData|bucket/i);
   });
 
   it('fails the deploy unless every named subnet passes subnetNetworkFaults', () => {
     const named = functionBody('namedNetwork');
     expect(named).toMatch(
-      /const checked = \$resolve\(subnets\)\.apply\(read => \{\s*const faults = subnetNetworkFaults\(read\);\s*if \(faults\.length > 0\) throw new Error\(`CALLABLE_FUNCTION_SUBNET_IDS: \$\{faults\.join\('; '\)\}\.`\);\s*return read;\s*\}\);/
+      /const lookups = \$util\.all\(\[\$resolve\(subnets\), dataEndpoint, S3_SERVICE_NAME, aws\.getPartitionOutput\(\)\.partition\]\);\s*const checked = lookups\.apply\(\(\[network, endpoint, s3ServiceName, partition\]\) => \{\s*const faults = subnetNetworkFaults\(network, endpoint && \{ endpoint, s3ServiceName, partition \}\);\s*if \(faults\.length > 0\) throw new Error\(`CALLABLE_FUNCTION_SUBNET_IDS: \$\{faults\.join\('; '\)\}\.`\);\s*return network;\s*\}\);/
     );
     expect(named).toMatch(
-      /return \{\s*vpcId: checked\.apply\(read => read\[0\]\.vpcId!\),\s*subnetIds: checked\.apply\(read => read\.map\(subnet => subnet\.subnetId\)\),\s*\};\s*\}$/
+      /return \{\s*vpcId: checked\.apply\(read => read\[0\]\.vpcId!\),\s*subnetIds: checked\.apply\(read => read\.map\(subnet => subnet\.subnetId\)\),\s*dataEndpointId: checked\.apply\(\(\) => namedDataEndpointId \?\? ''\),\s*\};\s*\}$/
     );
+    expect(named).toMatch(
+      /const dataEndpoint = \$output\(namedDataEndpointId \? dataEndpointOf\(namedDataEndpointId\) : undefined\);/
+    );
+    expect(named).toMatch(/const prefixListIds = aws\.ec2\.getManagedPrefixListsOutput\(\{\}\)\.ids;/);
+    expect(source).toMatch(
+      /const namedDataEndpointId = process\.env\.CALLABLE_FUNCTION_DATA_ENDPOINT_ID\?\.trim\(\) \|\| undefined;/
+    );
+    const endpointRead = functionBody('dataEndpointOf');
+    expect(endpointRead).toMatch(/aws\.ec2\.getVpcEndpointOutput\(\{ id \}\)/);
+    const fields = ['vpcId', 'vpcEndpointType', 'serviceName', 'state', 'prefixListId', 'routeTableIds', 'policy'];
+    for (const field of fields) expect(endpointRead).toMatch(new RegExp(`${field}: endpoint\\.${field},`));
     expect(named.match(/\breturn\b/g)).toHaveLength(3);
     // The table each subnet uses: its explicit association, else the VPC's main table.
     expect(named).toMatch(/name: 'association\.subnet-id', values: \[subnetId\]/);
     expect(named).toMatch(/vpcId, filters: \[\{ name: 'association\.main', values: \['true'\] \}\]/);
     expect(named).toMatch(/ids\[0\] \?\? mainIds\[0\]/);
     expect(named).toMatch(/enableDnsSupport: aws\.ec2\.getVpcOutput\(\{ id: vpcId \}\)\.enableDnsSupport,/);
-    expect(named).toMatch(/routes: routeTableId\.apply\(routesOf\),/);
+    expect(named).toMatch(/routes: routeTableId\.apply\(id => routesOf\(id, dataEndpoint, prefixListIds\)\),/);
 
     const routes = functionBody('routesOf');
     expect(routes).toMatch(/routes: aws\.ec2\.getRouteTableOutput\(\{ routeTableId \}\)\.routes,/);
     for (const kind of ['local', 'lattice', 'propagated', 'endpoint', 'created']) {
       expect(routes).toMatch(new RegExp(`${kind}: probe\\('${kind}'\\),`));
     }
+    expect(routes).toMatch(/aws\.ec2\.getRouteTablesOutput\(\{ filters \}\)\.ids\.apply\(probeMatched\)/);
+    expect(routes).toMatch(/const probe = \(kind: FixedProbe\) => lookup\(routeProbeFilters\(routeTableId, kind\)\);/);
     expect(routes).toMatch(
-      /aws\.ec2\.getRouteTablesOutput\(\{ filters: routeProbeFilters\(routeTableId, kind\) \}\)\.ids\.apply\(probeMatched\)/
+      /const otherPrefixList = \$util\.all\(\[prefixListIds, dataEndpoint\]\)\.apply\(\(\[ids, endpoint\]\) => \{/
     );
-    expect(routes).toMatch(/\.apply\(\(\{ routes, \.\.\.probes \}\) => tableRoutes\(routes, probes\)\)/);
+    expect(routes).toMatch(
+      /const filters = otherPrefixListFilters\(routeTableId, ids, endpoint\?\.prefixListId\);\s*return filters \? lookup\(filters\) : \$output\(false\);/
+    );
+    expect(routes).toMatch(/otherPrefixList,\s*data: dataEndpoint,/);
+    expect(routes).toMatch(
+      /\.apply\(\(\{ routes, data, \.\.\.probes \}\) => tableRoutes\(routes, probes, routeTableId, data\)\)/
+    );
+  });
+
+  it('says on the deploy what the function on named subnets can read', () => {
+    expect(source).toMatch(
+      /if \(enabled && namedSubnetIds\.length > 0\) \{\s*console\.warn\(\s*namedDataEndpointId\s*\? '[^']*cannot read this stage bucket\.'\s*: 'CALLABLE_FUNCTION_DATA_ENDPOINT_ID is not set: [^']*'\s*\);/
+    );
   });
 
   it('creates the dedicated VPC only on the stages the repository treats as long-lived', () => {
@@ -203,9 +254,16 @@ describe('callable function runtime isolation', () => {
     expect(source).toMatch(
       /export const callableFunctionSubnetIds = runtime\?\.subnetIds\.apply\(ids => ids\.join\(','\)\);/
     );
+    expect(source).toMatch(/export const callableFunctionDataEndpointId = runtime\?\.dataEndpointId;/);
+    expect(functionBody('createCallableFunctionRuntime')).toMatch(
+      /return \{ fn, subnetIds: network\.subnetIds, dataEndpointId: network\.dataEndpointId \};/
+    );
     const config = stripComments(read('sst.config.ts'));
-    expect(config).toMatch(/\bcallableFunctionSubnetIds,\s*\} = await import\('\.\/infra'\);/);
-    expect(balanced(config, config.lastIndexOf('return {'), '{', '}')).toMatch(/\bcallableFunctionSubnetIds,/);
+    expect(config).toMatch(
+      /\bcallableFunctionSubnetIds,\s*callableFunctionDataEndpointId,\s*\} = await import\('\.\/infra'\);/
+    );
+    const outputs = balanced(config, config.lastIndexOf('return {'), '{', '}');
+    expect(outputs).toMatch(/\bcallableFunctionSubnetIds,\s*callableFunctionDataEndpointId,/);
     const contract = JSON.parse(read('infra/deploy-contract.json')) as { builtImages: Array<Record<string, string>> };
     expect(contract.builtImages).toContainEqual({
       name: 'callable-function-runtime',
@@ -246,5 +304,61 @@ describe('callable function runtime isolation', () => {
       /if \(dlqAlarmTopic\) createAlarms\(fn, dlqAlarmTopic\);/
     );
     expect(source).toMatch(/alarmActions:\s*\[topic\.arn\]/);
+  });
+});
+
+describe('callable function data bucket', () => {
+  const data = stripComments(read('infra/callableFunctionData.ts'));
+  const policyModule = stripComments(read('infra/callableFunctionDataPolicy.ts'));
+  const web = stripComments(read('infra/web.ts'));
+
+  it('is one private, encrypted bucket per stage, kept on the long-lived stages', () => {
+    expect(data.match(/new aws\.s3\.Bucket\(/g)).toHaveLength(1);
+    expect(data).toMatch(
+      /new aws\.s3\.Bucket\(\s*'CallableFunctionDataBucket',\s*\{ forceDestroy: !retained \},\s*\{ retainOnDelete: retained \}\s*\)/
+    );
+    expect(data).toMatch(/const retained = PRODUCTION_STAGES\.includes\(\$app\.stage\);/);
+    expect(data).toMatch(
+      /new aws\.s3\.BucketPublicAccessBlock\(\s*'CallableFunctionDataPublicAccessBlock',\s*\{ bucket: callableFunctionDataBucket\.bucket, \.\.\.BLOCK_ALL_PUBLIC_ACCESS \}\s*\)/
+    );
+    expect(data).toMatch(/import \{ BLOCK_ALL_PUBLIC_ACCESS \} from '\.\/bucketSecurity';/);
+    const encryption = balanced(data, data.indexOf("'CallableFunctionDataEncryption',"), '{', '}');
+    expect(encryption).toMatch(/bucket: callableFunctionDataBucket\.bucket,/);
+    expect(encryption).toMatch(/sseAlgorithm: 'AES256'/);
+    expect(data).not.toMatch(/\bpolicy\b|website|acl|cors/i);
+  });
+
+  it('takes the policy that refuses reads outside the endpoint and writes by all but the dispatcher', () => {
+    expect(policyModule.match(/new aws\.s3\.BucketPolicy\(/g)).toHaveLength(1);
+    expect(policyModule).toMatch(
+      /if \(web\.nodes\.server\) \{\s*const names = \$util\.all\(\[\s*callableFunctionDataBucket\.arn,\s*web\.nodes\.server\.nodes\.role\.arn,\s*callableFunctionDataEndpointId \?\? '',\s*\]\);\s*new aws\.s3\.BucketPolicy\(\s*'CallableFunctionDataPolicy',/
+    );
+    expect(policyModule).toMatch(/bucket: callableFunctionDataBucket\.bucket,/);
+    expect(policyModule).toMatch(
+      /policy: names\.apply\(\(\[bucketArn, dispatcherRoleArn, endpointId\]\) =>\s*JSON\.stringify\(callableFunctionDataBucketPolicy\(\{ bucketArn, dispatcherRoleArn, endpointId \}\)\)\s*\),/
+    );
+    expect(policyModule).toMatch(/\{ dependsOn: \[callableFunctionDataPublicAccessBlock\] \}/);
+    expect(policyModule).toMatch(/import \{ callableFunctionDataEndpointId \} from '\.\/callableFunctionRuntime';/);
+    const index = stripComments(read('infra/index.ts'));
+    const at = (module: string) => index.indexOf(`export * from './${module}';`);
+    expect(at('callableFunctionData')).toBeGreaterThan(-1);
+    expect(at('callableFunctionData')).toBeLessThan(at('callableFunctionRuntime'));
+    expect(at('callableFunctionDataPolicy')).toBeGreaterThan(at('web'));
+  });
+
+  it("gives the web API function the bucket's name and its object permissions by statement, not by link", () => {
+    expect(web).toMatch(/CALLABLE_FUNCTION_DATA_BUCKET: callableFunctionDataBucket\.bucket,/);
+    expect(web).toMatch(/\{ actions: FUNCTION_DATA_DISPATCHER_ACTIONS, resources: \[callableFunctionDataObjects\] \},/);
+    expect(data).toMatch(
+      /export const callableFunctionDataObjects = \$interpolate`\$\{callableFunctionDataBucket\.arn\}\/\*`;/
+    );
+    expect(balanced(web, web.indexOf('link: ['), '[', ']')).not.toMatch(/callableFunctionData/);
+    expect(web.match(/callableFunctionData\w*/g)?.sort()).toEqual([
+      'callableFunctionData',
+      'callableFunctionDataBucket',
+      'callableFunctionDataBucket',
+      'callableFunctionDataObjects',
+      'callableFunctionDataObjects',
+    ]);
   });
 });

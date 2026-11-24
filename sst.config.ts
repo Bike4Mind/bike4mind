@@ -160,6 +160,7 @@ export default $config({
       dlqAlarmTopic,
       forwardErrorLogs,
       callableFunctionSubnetIds,
+      callableFunctionDataEndpointId,
     } = await import('./infra');
 
     // Contribute premium package infra (crons, alarms, Slack fan-out, EventBridge
@@ -321,6 +322,7 @@ export default $config({
       subscriberFanout: subscriberFanout.urn,
       scheduleTaskCron: scheduleTaskCron.urn,
       callableFunctionSubnetIds,
+      callableFunctionDataEndpointId,
     };
   },
 });

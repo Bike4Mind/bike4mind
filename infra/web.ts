@@ -195,6 +195,8 @@ import { websocketApi } from './websocket';
 import { lambdaVpc } from './vpc';
 import { wafLabelForwarding, wafQueryWebAclArn, wafReadPermissions, wafWebAclArn } from './waf';
 import { mailBodyEnvironment, mailBodyPutPermission } from './mailBodyOffload';
+import { callableFunctionDataBucket, callableFunctionDataObjects } from './callableFunctionData';
+import { FUNCTION_DATA_DISPATCHER_ACTIONS } from './callableFunctionNetwork';
 
 // Every queue this stage creates, by SST's physical-name prefix. SST keeps `${app}-${stage}-`
 // in front of a queue name only while app + stage + logical name + 2 fit in 71 characters (SQS's
@@ -599,9 +601,13 @@ export const web = new sst.aws.Nextjs(
         ],
       },
       ...providerFederation.permissions,
+      // The dispatcher for callable functions: it stores data files and signs the runtime's read links. The bucket
+      // policy refuses these to every other principal (infra/callableFunctionDataPolicy.ts).
+      { actions: FUNCTION_DATA_DISPATCHER_ACTIONS, resources: [callableFunctionDataObjects] },
     ],
     environment: {
       ...mailBodyEnvironment(appFilesBucket),
+      CALLABLE_FUNCTION_DATA_BUCKET: callableFunctionDataBucket.bucket,
       ...DEFAULT_LAMBDA_ENVIRONMENT,
       B4M_DEPLOYED_REVISION: process.env.B4M_DEPLOYED_REVISION || '',
       B4M_BUILD_FINGERPRINT: process.env.B4M_BUILD_FINGERPRINT || '',
