@@ -81,7 +81,7 @@ export function PinnedPane({
         color="primary"
         title={label}
         data-testid="orchestrator-pinned-pane-label"
-        sx={{ position: 'absolute', top: 6, right: 8, zIndex: 5, maxWidth: 'calc(100% - 16px)', pointerEvents: 'none' }}
+        sx={{ alignSelf: 'flex-start', flexShrink: 0, mx: 1, mt: 0.75, mb: 0.5, maxWidth: 'calc(100% - 16px)' }}
       >
         {label}
       </Chip>
