@@ -2,6 +2,9 @@ import { describe, expect, it } from 'vitest';
 import {
   STUDIO_COMPOSITION_TEMPLATE_DEFINITIONS,
   STUDIO_COMPOSITION_TEMPLATES,
+  STUDIO_SHORT_FILM_ASPECTS,
+  STUDIO_SHORT_FILM_LENGTHS_MS,
+  StudioCompositionBriefSchema,
   StudioCompositionContentSchema,
   StudioCompositionCreateInputSchema,
   StudioCompositionUpdateInputSchema,
@@ -32,6 +35,40 @@ describe('defaultStudioTimeline', () => {
     expect(timeline.outputs.map(output => output.aspectRatio)).toEqual(['16:9', '9:16', '1:1']);
     expect(timeline.tracks.map(track => track.kind)).toEqual(['video', 'voice', 'music', 'captions']);
   });
+
+  it('starts a short film at 60s in 16:9 with narration, effects, music and caption lanes', () => {
+    const timeline = defaultStudioTimeline('short_film');
+    expect(timeline.durationMs).toBe(60_000);
+    expect(timeline.outputs.map(output => output.aspectRatio)).toEqual(['16:9']);
+    expect(timeline.tracks.map(track => track.kind)).toEqual(['video', 'voice', 'sfx', 'music', 'captions']);
+  });
+
+  it.each(STUDIO_SHORT_FILM_LENGTHS_MS)('sizes a short film to a chosen %i ms in every chosen shape', durationMs => {
+    const timeline = defaultStudioTimeline('short_film', { durationMs, aspects: STUDIO_SHORT_FILM_ASPECTS });
+    expect(timeline.durationMs).toBe(durationMs);
+    expect(timeline.outputs).toEqual([
+      { id: 'out-16x9', aspectRatio: '16:9', width: 1920, height: 1080 },
+      { id: 'out-9x16', aspectRatio: '9:16', width: 1080, height: 1920 },
+      { id: 'out-1x1', aspectRatio: '1:1', width: 1080, height: 1080 },
+      { id: 'out-4x5', aspectRatio: '4:5', width: 1080, height: 1350 },
+    ]);
+    expect(StudioTimelineSchema.parse(timeline)).toEqual(timeline);
+    expect(validateStudioTimeline(timeline)).toEqual([]);
+  });
+
+  it('keeps the default length when only the shapes are chosen', () => {
+    const timeline = defaultStudioTimeline('short_film', { aspects: ['9:16'] });
+    expect(timeline.durationMs).toBe(60_000);
+    expect(timeline.outputs.map(output => output.aspectRatio)).toEqual(['9:16']);
+  });
+
+  it('offers short film lengths from 30s to 2 minutes, all within the timeline limit', () => {
+    expect(STUDIO_SHORT_FILM_LENGTHS_MS).toEqual([30_000, 60_000, 90_000, 120_000]);
+    expect(STUDIO_SHORT_FILM_LENGTHS_MS).toContain(STUDIO_COMPOSITION_TEMPLATE_DEFINITIONS.short_film.durationMs);
+    expect(
+      STUDIO_COMPOSITION_TEMPLATE_DEFINITIONS.short_film.aspects.every(a => STUDIO_SHORT_FILM_ASPECTS.includes(a))
+    ).toBe(true);
+  });
 });
 
 describe('defaultStudioShots', () => {
@@ -49,6 +86,23 @@ describe('defaultStudioShots', () => {
       'benefit',
       'call to action',
     ]);
+  });
+
+  it('outlines a short film as a beginning, middle and end', () => {
+    expect(defaultStudioShots('short_film').map(({ title, intent }) => [title, intent])).toEqual([
+      ['Opening', 'opening'],
+      ['Inciting moment', 'inciting incident'],
+      ['Climax', 'climax'],
+      ['Resolution', 'resolution'],
+    ]);
+  });
+});
+
+describe('StudioCompositionBriefSchema', () => {
+  it('takes a trimmed tone and refuses one past the field limit', () => {
+    expect(StudioCompositionBriefSchema.parse({ tone: '  wistful  ' })).toEqual({ tone: 'wistful' });
+    expect(StudioCompositionBriefSchema.safeParse({ tone: 'x'.repeat(500) }).success).toBe(true);
+    expect(StudioCompositionBriefSchema.safeParse({ tone: 'x'.repeat(501) }).success).toBe(false);
   });
 });
 
@@ -109,6 +163,15 @@ describe('composition references', () => {
 
   it('collects every referenced file once', () => {
     expect(studioCompositionFileIds(content)).toEqual([FILE_D, FILE_A, FILE_B, FILE_C, FILE_E]);
+  });
+
+  it('collects nothing from a production with no files', () => {
+    const empty = StudioCompositionContentSchema.parse({
+      title: 'Empty',
+      shots: [{ id: 'shot-1', title: 'Opening' }],
+      timeline: defaultStudioTimeline('short_film'),
+    });
+    expect(studioCompositionFileIds(empty)).toEqual([]);
   });
 
   it('reports timeline issues under `timeline`, duplicate shots, stray chosen takes and unknown files', () => {
