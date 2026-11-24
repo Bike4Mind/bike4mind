@@ -91,7 +91,9 @@ const InterventionList: React.FC<{
           {row.reason}
           {row.policyVersion !== null && ` (policy v${row.policyVersion})`}
         </Typography>
-        {row.expiresAt && row.status === 'active' && <RelativeTime prefix="Expires" at={row.expiresAt} />}
+        {row.expiresAt && row.status === 'active' && (
+          <RelativeTime prefix="Expires" at={row.expiresAt} future data-testid={`${testIdPrefix}-expires`} />
+        )}
         {row.status === 'active' && row.tier !== 'contain' && (
           <Button
             size="sm"

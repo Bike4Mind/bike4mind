@@ -47,6 +47,15 @@ describe('InterventionHoldsCard', () => {
     expect(screen.queryByTestId('user-intervention-holds')).toBeNull();
   });
 
+  it('shows an active hold expiry as a future time', async () => {
+    mocks.get.mockResolvedValue({
+      data: { data: [hold({ expiresAt: new Date(Date.now() + 3 * 24 * HOUR_MS + 60_000).toISOString() })] },
+    });
+    render(<InterventionHoldsCard userId="subject" />, { wrapper: ProfileTestWrapper });
+
+    expect(await screen.findByTestId('user-intervention-hold-expires')).toHaveTextContent(/^Expires in 3 days$/);
+  });
+
   it('offers Release only on an active hold and posts that decision with the reason', async () => {
     mocks.get.mockResolvedValue({
       data: { data: [hold(), hold({ decisionId: 'decision-2', tier: 'limit', expiresAt: past() })] },
