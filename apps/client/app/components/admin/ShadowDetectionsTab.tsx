@@ -111,6 +111,8 @@ const IGNORED_REASON_LABELS: Record<AccountCampaignIgnoredReason, string> = {
 const ACTION_DISPLAY: Record<ShadowDetectionAction, { label: string; tone: AdminStatusTone }> = {
   contain: { label: 'Contain', tone: 'neutral' },
   restrict: { label: 'Restrict', tone: 'neutral' },
+  limit: { label: 'Limit spend', tone: 'neutral' },
+  verify: { label: 'Require verification', tone: 'neutral' },
   suspend: { label: 'Suspend', tone: 'warn' },
   blockIp: { label: 'Block IP', tone: 'warn' },
   confirmHold: { label: 'Confirm hold', tone: 'neutral' },
