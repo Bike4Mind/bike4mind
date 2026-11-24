@@ -4,7 +4,6 @@ import android.content.Context
 import android.os.Build
 import android.util.Log
 import androidx.core.app.NotificationManagerCompat
-import androidx.core.net.toUri
 import com.bike4mind.app.capture.MediaAudioRecorder
 import com.bike4mind.app.media.MediaImageLoader
 import com.bike4mind.app.push.AgentRunNotifications
@@ -137,7 +136,7 @@ class AppGraph(context: Context, val environment: ServerEnvironment) {
 
     /** Shares from other apps, run by app/capture/CaptureWorker. One queue per server, like the tokens. */
     val capture = CaptureEngine(
-        CaptureJobStore(File(context.filesDir, "capture/" + environment.baseUrl.toUri().host.orEmpty())),
+        CaptureJobStore(File(context.filesDir, "capture/" + environment.host)),
         captureWire,
         TurnSender { message, sessionId, fileIds -> chatSend.send(message, sessionId, fileIds) },
     )
@@ -166,8 +165,12 @@ class AppGraph(context: Context, val environment: ServerEnvironment) {
 
     fun mediaDetail(item: MediaItem, scope: CoroutineScope) = MediaDetailController(item, media, scope)
 
-    /** The session ended: the next account must never see this one's gallery, from memory or disk. */
-    suspend fun forgetMedia() {
+    /**
+     * The session ended: queued shares belong to the account that made them, and the next account must never see
+     * this one's gallery, from memory or disk.
+     */
+    suspend fun onSessionEnded() {
+        capture.discardAll()
         mediaFirstPages.invalidate()
         mediaImages.clear()
     }

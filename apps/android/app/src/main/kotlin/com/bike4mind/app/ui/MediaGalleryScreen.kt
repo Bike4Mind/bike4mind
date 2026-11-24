@@ -22,7 +22,6 @@ import androidx.compose.foundation.lazy.grid.itemsIndexed
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SegmentedButton
 import androidx.compose.material3.SegmentedButtonDefaults
@@ -44,7 +43,6 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.text.style.TextAlign
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewModelScope
@@ -52,17 +50,38 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.bike4mind.app.AppGraph
 import com.bike4mind.app.R
 import com.bike4mind.app.media.MediaImageLoader
+import com.bike4mind.kit.media.MediaDetailController
 import com.bike4mind.kit.media.MediaError
 import com.bike4mind.kit.media.MediaGalleryState
 import com.bike4mind.kit.media.MediaItem
 import com.bike4mind.kit.media.MediaKind
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
 
-class MediaGalleryViewModel(graph: AppGraph) : ViewModel() {
+class MediaGalleryViewModel(private val graph: AppGraph) : ViewModel() {
     val controller = graph.mediaGallery(viewModelScope).also { it.load() }
 
-    /** The item open full screen; here rather than in the composition so it survives rotation. */
-    val openItem = MutableStateFlow<MediaItem?>(null)
+    /**
+     * The file open full screen. Here rather than in the composition so it survives rotation; each open gets a
+     * fresh controller, cancelled on close, so a reopened file checks its URL again and never reopens on an old error.
+     */
+    val openDetail = MutableStateFlow<MediaDetailController?>(null)
+    private var detailJob: Job? = null
+
+    fun open(item: MediaItem) {
+        close()
+        val job = SupervisorJob(viewModelScope.coroutineContext[Job])
+        detailJob = job
+        openDetail.value = graph.mediaDetail(item, CoroutineScope(viewModelScope.coroutineContext + job)).also { it.prepare() }
+    }
+
+    fun close() {
+        detailJob?.cancel()
+        detailJob = null
+        openDetail.value = null
+    }
 }
 
 /**
@@ -77,13 +96,13 @@ fun MediaGalleryScreen(graph: AppGraph, onBack: () -> Unit) {
     val model = viewModel { MediaGalleryViewModel(graph) }
     val controller = model.controller
     val state by controller.state.collectAsStateWithLifecycle()
-    val openItem by model.openItem.collectAsStateWithLifecycle()
+    val openDetail by model.openDetail.collectAsStateWithLifecycle()
     // Hoisted above the detail branch so closing a file returns to the same scroll position.
     val gridState = rememberLazyGridState()
 
-    openItem?.let { item ->
-        BackHandler { model.openItem.value = null }
-        MediaDetailScreen(graph = graph, item = item, onBack = { model.openItem.value = null })
+    openDetail?.let { detail ->
+        BackHandler(onBack = model::close)
+        MediaDetailScreen(graph = graph, controller = detail, onBack = model::close)
         return
     }
 
@@ -127,7 +146,7 @@ fun MediaGalleryScreen(graph: AppGraph, onBack: () -> Unit) {
                         onRefresh = controller::refresh,
                         modifier = Modifier.fillMaxSize(),
                     ) {
-                        Grid(state, gridState, graph.mediaImages, onOpen = { model.openItem.value = it }, onRetry = controller::refresh, onLoadMore = controller::loadMore, onNear = controller::loadMoreIfNeeded)
+                        Grid(state, gridState, graph.mediaImages, onOpen = model::open, onRetry = controller::refresh, onLoadMore = controller::loadMore, onNear = controller::loadMoreIfNeeded)
                     }
                 }
             }
@@ -182,7 +201,7 @@ private fun Grid(
                 state.loadingMore -> Box(modifier = Modifier.fillMaxWidth().padding(Spacing.m), contentAlignment = Alignment.Center) {
                     CircularProgressIndicator(modifier = Modifier.testTag("media-loading-more"))
                 }
-                state.loadMoreError != null -> InlineError(errorMessage(state.loadMoreError!!), onLoadMore, tag = "media-load-more-error")
+                else -> state.loadMoreError?.let { InlineError(errorMessage(it), onLoadMore, tag = "media-load-more-error") }
             }
         }
     }
@@ -224,36 +243,6 @@ private fun InlineError(message: String, onRetry: () -> Unit, tag: String) {
         Text(message, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
         TextButton(onClick = onRetry) { Text(stringResource(R.string.action_try_again)) }
     }
-}
-
-@Composable
-internal fun Notice(
-    title: String,
-    body: String?,
-    tag: String,
-    action: Pair<String, () -> Unit>? = null,
-    actionTag: String? = null,
-) {
-    Centered(tag = tag) {
-        Column(
-            modifier = Modifier.padding(Spacing.l),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(Spacing.m),
-        ) {
-            Text(title, style = MaterialTheme.typography.titleMedium, textAlign = TextAlign.Center)
-            body?.let {
-                Text(it, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = TextAlign.Center)
-            }
-            action?.let { (label, onClick) ->
-                OutlinedButton(onClick = onClick, modifier = actionTag?.let { Modifier.testTag(it) } ?: Modifier) { Text(label) }
-            }
-        }
-    }
-}
-
-@Composable
-private fun Centered(tag: String, content: @Composable () -> Unit) {
-    Box(modifier = Modifier.fillMaxSize().testTag(tag), contentAlignment = Alignment.Center) { content() }
 }
 
 @Composable

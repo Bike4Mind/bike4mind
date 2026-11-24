@@ -36,21 +36,14 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.viewinterop.AndroidView
-import androidx.lifecycle.ViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import androidx.lifecycle.viewModelScope
-import androidx.lifecycle.viewmodel.compose.viewModel
 import com.bike4mind.app.AppGraph
 import com.bike4mind.app.R
 import com.bike4mind.app.media.MediaImageLoader
+import com.bike4mind.kit.media.MediaDetailController
 import com.bike4mind.kit.media.MediaKind
-import com.bike4mind.kit.media.MediaItem
 import java.io.IOException
 import kotlinx.coroutines.CancellationException
-
-class MediaDetailViewModel(graph: AppGraph, item: MediaItem) : ViewModel() {
-    val controller = graph.mediaDetail(item, viewModelScope).also { it.prepare() }
-}
 
 /**
  * One generated file full screen: a zoomable image, or a video/audio player. Storage URLs are short-lived, so the
@@ -58,9 +51,7 @@ class MediaDetailViewModel(graph: AppGraph, item: MediaItem) : ViewModel() {
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun MediaDetailScreen(graph: AppGraph, item: MediaItem, onBack: () -> Unit) {
-    val model = viewModel(key = "media-detail-${item.id}") { MediaDetailViewModel(graph, item) }
-    val controller = model.controller
+fun MediaDetailScreen(graph: AppGraph, controller: MediaDetailController, onBack: () -> Unit) {
     val state by controller.state.collectAsStateWithLifecycle()
     val shown = state.item
 

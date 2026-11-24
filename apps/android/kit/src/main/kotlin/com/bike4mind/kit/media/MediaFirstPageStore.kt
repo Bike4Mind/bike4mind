@@ -3,7 +3,6 @@ package com.bike4mind.kit.media
 import com.bike4mind.kit.environment.ServerEnvironment
 import java.io.File
 import java.io.IOException
-import java.net.URI
 import java.time.Instant
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicInteger
@@ -37,7 +36,7 @@ class FileMediaListCache(
     private val io: CoroutineDispatcher = Dispatchers.IO,
     private val log: (String, Throwable?) -> Unit = { _, _ -> },
 ) : MediaListCache {
-    private val host = runCatching { URI(environment.baseUrl).host }.getOrNull() ?: "default"
+    private val host = environment.host
 
     override suspend fun load(kind: MediaKind?): MediaPage? = withContext(io) {
         val file = file(kind)

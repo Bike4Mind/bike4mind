@@ -48,10 +48,10 @@ fun AppRoot(
         restored = true
     }
 
-    // Shares belong to the account that made them, so a session that ends (a refresh refused, a sign-out
-    // elsewhere) drops whatever was still queued.
+    // A session that ends (a refresh refused, a sign-out elsewhere) drops what belonged to the account. Checked only
+    // once restore has settled, so a signed-in cold start keeps the gallery's stale-first cache.
     LaunchedEffect(graph, restored, signedIn) {
-        if (restored && !signedIn) graph.capture.discardAll()
+        if (restored && !signedIn) graph.onSessionEnded()
     }
 
     // Push registration follows the session; [onSignedIn] is where the host asks for the notification permission.
@@ -68,11 +68,6 @@ fun AppRoot(
             openSettings = null
             openStudio = false
         }
-    }
-
-    // Checked only once restore has settled, so a signed-in cold start keeps the gallery's stale-first cache.
-    LaunchedEffect(graph, restored, signedIn) {
-        if (restored && !signedIn) graph.forgetMedia()
     }
 
     // A tapped push or an app link waits here through sign-in, then replaces whatever screen was up.
