@@ -639,7 +639,8 @@ export function registerChat(
     loopChanged: (sessionId, state) => send(IPC_CHANNELS.chatLoopChanged, { sessionId, state }),
   };
 
-  const runtime = new HostRuntime({
+  // Annotated: the machine tools' callbacks read the runtime's store, so inference would cycle.
+  const runtime: HostRuntime = new HostRuntime({
     environment,
     events,
     auth,

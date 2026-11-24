@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { AuthState } from '@shared/auth';
-import type { ChatSessionSummary } from '@shared/chat';
+import type { ChatSessionStatusEvent } from '@shared/chat';
 import { HostRuntime, hostProtectedLocations, type HostEnvironment, type HostEventSink } from '.';
 
 // A headless host has no Electron to load: any import of it from src/host, direct or through a
@@ -29,16 +29,16 @@ afterEach(async () => {
 });
 
 function recordingSink() {
-  const summaries: ChatSessionSummary[] = [];
+  const statuses: ChatSessionStatusEvent[] = [];
   const events: HostEventSink = {
     streamEvent: vi.fn(),
-    sessionSummary: summary => summaries.push(summary),
-    sessionStatus: vi.fn(),
+    sessionSummary: vi.fn(),
+    sessionStatus: event => statuses.push(event),
     queueChanged: vi.fn(),
     taskDecisions: vi.fn(),
     loopChanged: vi.fn(),
   };
-  return { events, summaries };
+  return { events, statuses };
 }
 
 async function headlessRuntime(pullRequests?: { forget: (sessionId: string) => Promise<void> }) {
@@ -51,7 +51,7 @@ async function headlessRuntime(pullRequests?: { forget: (sessionId: string) => P
     platform: process.platform,
   };
   const logger = { debug: vi.fn(), warn: vi.fn() };
-  const { events, summaries } = recordingSink();
+  const { events, statuses } = recordingSink();
   const runtime = new HostRuntime({
     environment,
     events,
@@ -69,7 +69,7 @@ async function headlessRuntime(pullRequests?: { forget: (sessionId: string) => P
       : {},
   });
   runtimes.push(runtime);
-  return { runtime, dataDirectory, summaries };
+  return { runtime, dataDirectory, statuses };
 }
 
 describe('HostRuntime without Electron', () => {
@@ -79,16 +79,32 @@ describe('HostRuntime without Electron', () => {
     await expect(runtime.listSessions()).resolves.toEqual([]);
   });
 
-  it('writes a created session under <dataDirectory>/sessions and pushes its summary on rename', async () => {
-    const { runtime, dataDirectory, summaries } = await headlessRuntime();
+  it('writes a created session under <dataDirectory>/sessions', async () => {
+    const { runtime, dataDirectory } = await headlessRuntime();
 
     const created = await runtime.createSession();
     const files = await readdir(join(dataDirectory, 'sessions'), { recursive: true });
-    expect(files.some(file => file.includes(created.id))).toBe(true);
 
-    await runtime.renameSession(created.id, 'Renamed');
-    expect(summaries).toEqual([expect.objectContaining({ id: created.id, title: 'Renamed' })]);
+    expect(files.some(file => file.includes(created.id))).toBe(true);
     await expect(runtime.listSessions()).resolves.toEqual([expect.objectContaining({ id: created.id })]);
+  });
+
+  it('pushes the session status while an approval waits, and settles it through respondToApproval', async () => {
+    const { runtime, statuses } = await headlessRuntime();
+    const session = await runtime.createSession();
+    let approvalId = '';
+
+    const settlement = runtime.approvals.request(session.id, 'tool', new AbortController().signal, id => {
+      approvalId = id;
+    });
+    await vi.waitFor(() => expect(approvalId).not.toBe(''));
+    expect(statuses).toContainEqual(expect.objectContaining({ sessionId: session.id }));
+    const pushedWhileWaiting = statuses.length;
+
+    runtime.respondToApproval(approvalId, { decision: 'once' });
+
+    await expect(settlement).resolves.toMatchObject({ decision: 'once' });
+    expect(statuses.length).toBeGreaterThan(pushedWhileWaiting);
   });
 
   it('asks through the given confirm before archiving a parent, and archives nothing on cancel', async () => {
