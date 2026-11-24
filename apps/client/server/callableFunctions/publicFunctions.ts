@@ -29,8 +29,8 @@ export const functionsRateLimit = (bucket: string) =>
     bucket,
   });
 
-/** The web function answers within 60 s (`server.timeout` in infra/web.ts), so a call must finish well inside it. */
-export const FUNCTION_INVOKE_BUDGET_MS = 45_000;
+/** The whole call, from the request's arrival, ends within the rest surface's wait, inside the web function's 60 s. */
+export const FUNCTION_INVOKE_BUDGET_MS = CALLABLE_FUNCTION_SURFACE_CAPS.rest.waitMs;
 
 /** The guest's own run time; the runtime's start and its margin sit outside it. */
 export const FUNCTION_INVOKE_RUN_TIMEOUT_MS = Math.min(CALLABLE_FUNCTION_DEFAULT_TIMEOUT_MS, FUNCTION_INVOKE_BUDGET_MS);
@@ -96,6 +96,8 @@ export interface InvokeAnswer {
   body: Record<string, unknown>;
 }
 
+const TIMEOUT_MESSAGE = 'The call ran past its time limit.';
+
 const FUNCTION_RUNTIME_FAULT_MESSAGE = 'The function runtime did not answer. Try again later.';
 
 // Refusals about the function or its caller; any other refusal comes from the runtime.
@@ -112,6 +114,9 @@ const FAILURE_MESSAGES: Record<string, string> = {
 /** The HTTP answer for one dispatcher result. Refusals the route did not catch first still map to their status. */
 export function invokeAnswer(call: DispatchFunctionCallResult): InvokeAnswer {
   const stamp = call.stamp ? { stamp: call.stamp } : {};
+  if (call.outcome === 'refused' && call.reason === 'budget_exhausted') {
+    return { status: 504, body: { error: TIMEOUT_MESSAGE, errorCode: REQUEST_TIMEOUT_ERROR_CODE } };
+  }
   switch (call.outcome) {
     case 'ok':
       return { status: 200, body: { output: call.outputs ?? {}, stamp: call.stamp } };
@@ -126,7 +131,7 @@ export function invokeAnswer(call: DispatchFunctionCallResult): InvokeAnswer {
     case 'timeout':
       return {
         status: 504,
-        body: { error: 'The call ran past its time limit.', errorCode: REQUEST_TIMEOUT_ERROR_CODE, ...stamp },
+        body: { error: TIMEOUT_MESSAGE, errorCode: REQUEST_TIMEOUT_ERROR_CODE, ...stamp },
       };
     case 'refused':
       if (call.reason === 'setting_off') {
@@ -150,18 +155,5 @@ export function invokeAnswer(call: DispatchFunctionCallResult): InvokeAnswer {
         status: 502,
         body: { error: FAILURE_MESSAGES[call.outcome] ?? 'The function failed.', outcome: call.outcome, ...stamp },
       };
-  }
-}
-
-/** Resolves to null when `work` has not settled within `ms`. */
-export async function withinBudget<T>(work: Promise<T>, ms: number): Promise<T | null> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const expired = new Promise<null>(resolve => {
-    timer = setTimeout(() => resolve(null), ms);
-  });
-  try {
-    return await Promise.race([work, expired]);
-  } finally {
-    clearTimeout(timer);
   }
 }

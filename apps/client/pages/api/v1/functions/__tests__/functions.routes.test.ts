@@ -551,8 +551,8 @@ describe('invoke', () => {
     });
   });
 
-  it('answers 504 request_timeout when the call outlives the route budget, inside the web timeout', async () => {
-    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+  it('answers 504 request_timeout from the dispatcher at the route budget, inside the web timeout, with one row', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
     try {
       h.runner.mockImplementation(() => new Promise(() => undefined));
       const pending = invoke(LIVE_ID, { input: { load: 1, span: 2 } });
@@ -560,12 +560,22 @@ describe('invoke', () => {
       const res = await pending;
       expect(res).toEqual({
         status: 504,
-        body: { error: 'The call ran past its time limit.', errorCode: 'request_timeout' },
+        body: { error: 'The call ran past its time limit.', errorCode: 'request_timeout', stamp },
       });
+      expect(h.calls).toEqual([
+        expect.objectContaining({ surface: 'rest', outcome: 'timeout', reason: 'wait_exceeded' }),
+      ]);
       expect(FUNCTION_INVOKE_BUDGET_MS).toBeLessThan(60_000);
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it('answers 504 request_timeout when the budget ran out before the run', () => {
+    expect(invokeAnswer({ outcome: 'refused', reason: 'budget_exhausted', durationMs: 0, callId: 'c' })).toEqual({
+      status: 504,
+      body: { error: 'The call ran past its time limit.', errorCode: 'request_timeout' },
+    });
   });
 
   it('answers an input over the surface cap with 413', () => {
