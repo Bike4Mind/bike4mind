@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Alert, Button, Link, Stack, Typography } from '@mui/joy';
+import { Alert, Box, Button, Link, Stack, Typography } from '@mui/joy';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { FeedbackStatus } from '@bike4mind/common';
 import { api } from '@client/app/contexts/ApiContext';
@@ -87,7 +87,16 @@ export default function FeedbackSimilarReports({ feedbackId }: { feedbackId: str
                 <Link
                   href={`/admin?tab=feedback&feedbackId=${item.id}`}
                   data-testid={`feedback-similar-link-${item.id}`}
-                  sx={{ overflowWrap: 'anywhere' }}
+                  title={item.excerpt}
+                  // Joy's Link is inline-flex, which the cell's text-overflow cannot truncate.
+                  sx={{
+                    display: 'block',
+                    minWidth: 0,
+                    maxWidth: '100%',
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    whiteSpace: 'nowrap',
+                  }}
                 >
                   {item.excerpt}
                 </Link>
@@ -96,11 +105,14 @@ export default function FeedbackSimilarReports({ feedbackId }: { feedbackId: str
             {
               id: 'status',
               label: 'Status',
+              width: '7.5rem',
               render: item => (
-                <StatusChip
-                  tone={item.status === FeedbackStatus.Closed ? 'neutral' : 'info'}
-                  label={FEEDBACK_STATUS_LABELS[item.status]}
-                />
+                <Box sx={{ pl: 1 }}>
+                  <StatusChip
+                    tone={item.status === FeedbackStatus.Closed ? 'neutral' : 'info'}
+                    label={FEEDBACK_STATUS_LABELS[item.status]}
+                  />
+                </Box>
               ),
             },
           ]}

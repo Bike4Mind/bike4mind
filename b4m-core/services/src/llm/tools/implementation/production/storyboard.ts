@@ -4,6 +4,7 @@ import {
   STUDIO_COMPOSITION_LIMITS,
   STUDIO_TIMELINE_LIMITS,
   StudioFileIdSchema,
+  withDirectorProduct,
   type StudioShot,
 } from '@bike4mind/common';
 import type { ToolContext, ToolDefinition } from '../../base/types';
@@ -29,8 +30,7 @@ const ShotArg = z.object({
     .optional()
     .describe(
       'A current shot id (e.g. "shot-3") to carry over with its prompt, takes, clip and voice line; omit prompt. ' +
-        'Use it for every shot you are not re-imagining; a new order moves them. Other fields default to the ' +
-        'current ones; voiceLine "" removes it.'
+        'A new order moves it. Other fields default to the current ones; voiceLine "" removes it.'
     ),
   title: z.string().trim().min(1).max(limits.shotTitleMaxLength).optional().describe('A short name, e.g. "Hook".'),
   intent: z
@@ -67,7 +67,8 @@ const schema = z.object({
     .optional()
     .describe("The one-line brief to save on the production, when the user gave one that isn't saved yet."),
   productFileId: StudioFileIdSchema.optional().describe(
-    'The product photo (a Files id) to keep in every shot; saved to the brand kit.'
+    'The product photo (a Files id) for the shots; saved to the brand kit behind a product look already there, which ' +
+      'stays the first reference.'
   ),
   shots: z.array(ShotArg).min(1).max(STORYBOARD_MAX_SHOTS),
   rewriteLines: z
@@ -373,10 +374,7 @@ export const productionStoryboardTool: ToolDefinition = {
             ...(args.brief && { brief: { ...current.brief, summary: args.brief } }),
             ...(product &&
               !products.includes(product) && {
-                brandKit: {
-                  ...current.brandKit,
-                  productFileIds: [product, ...products].slice(0, STUDIO_COMPOSITION_LIMITS.brandProductFilesMax),
-                },
+                brandKit: { ...current.brandKit, productFileIds: withDirectorProduct(products, product) },
               }),
           });
           if (reorders) markReordered(config);

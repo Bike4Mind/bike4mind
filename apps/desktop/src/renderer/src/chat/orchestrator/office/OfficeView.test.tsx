@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { act } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { agentFixture, createThemedMount, el } from '../testUtils';
+import { agentFixture, createThemedMount, el, query } from '../testUtils';
 import { OfficeView } from './OfficeView';
 
 const mount = createThemedMount();
@@ -35,9 +35,10 @@ describe('OfficeView', () => {
         agents={[agentFixture('done', 'done'), agentFixture('idle', 'idle'), agentFixture('waiting', 'needs-you')]}
       />
     );
-    expect(el('office-room-break-room').contains(el('office-agent-done'))).toBe(true);
-    expect(el('office-room-conference-room').contains(el('office-agent-idle'))).toBe(true);
-    expect(el('office-room-manager-door').contains(el('office-agent-waiting'))).toBe(true);
+    expect(el('office-agent-done').dataset.officeRoom).toBe('break-room');
+    expect(el('office-agent-idle').dataset.officeRoom).toBe('conference-room');
+    expect(el('office-agent-waiting').dataset.officeRoom).toBe('conference-room');
+    expect(el('office-room-conference-room').dataset.occupants).toBe('2');
     expect(el('office-agent-done').getAttribute('aria-pressed')).toBe('true');
     const character = el('office-agent-done').getAttribute('aria-label')!.split(':')[0];
     expect(el('office-agent-done').textContent).toBe(`${character.split(' ')[0]} *`);
@@ -49,10 +50,28 @@ describe('OfficeView', () => {
         agents={[agentFixture('done', 'working'), agentFixture('idle', 'idle'), agentFixture('waiting', 'needs-you')]}
       />
     );
-    expect(el('office-room-desks').contains(el('office-agent-done'))).toBe(true);
+    expect(el('office-agent-done').dataset.officeRoom).toBe('desks');
     expect(el('office-agent-done').getAttribute('aria-label')).toBe(`${character}: Agent done, working`);
     expect(el('office-agent-done').textContent).toBe(character.split(' ')[0]);
     expect(el('office-agent-done').getAttribute('aria-pressed')).toBe('true');
+  });
+
+  it('keeps the same agent node when it walks to another room, so the move animates', async () => {
+    const props = { personas: new Map(), selectedId: null, onSelect: vi.fn(), introPlaying: false };
+    await mount.render(<OfficeView {...props} agents={[agentFixture('a', 'working')]} />);
+    const before = el('office-agent-a');
+    await mount.render(<OfficeView {...props} agents={[agentFixture('a', 'needs-you')]} />);
+    expect(el('office-agent-a')).toBe(before);
+    expect(before.dataset.officeRoom).toBe('conference-room');
+  });
+
+  it('marks Manager with an exclamation mark only while the parent needs action', async () => {
+    const props = { agents: [], personas: new Map(), selectedId: null, onSelect: vi.fn(), introPlaying: false };
+    await mount.render(<OfficeView {...props} parent={{ status: 'processing' } as never} />);
+    expect(query('office-parent-alert')).toBeNull();
+    await mount.render(<OfficeView {...props} parent={{ status: 'needs-action' } as never} />);
+    expect(el('office-parent-alert').textContent).toBe('!');
+    expect(el('office-parent').getAttribute('aria-label')).toBe('Manager, parent session, needs you');
   });
 
   it('opens the parent reply in the shared conversation window', async () => {

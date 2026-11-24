@@ -153,6 +153,7 @@ jobs:
     # tests run) and can't stamp e2e/core (silent gate death).
     permissions:
       contents: read
+      pull-requests: read
       id-token: write
       statuses: write
     uses: ./.github/workflows/e2e-run.yml

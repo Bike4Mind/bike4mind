@@ -28,7 +28,8 @@ const isMonitoredStage = MONITORED_STAGES.includes($app.stage) || process.env.EN
 
 let whatsNewDashboard: aws.cloudwatch.Dashboard | undefined;
 
-if (isMonitoredStage) {
+// The subscription is undefined on a preview (infra/previewQueueConsumers.ts).
+if (isMonitoredStage && whatsNewGenerationQueueSubscription) {
   /**
    * Dashboard body with Pulumi Outputs properly handled
    *

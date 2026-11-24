@@ -1,6 +1,6 @@
 import { randomBytes } from 'node:crypto';
 import { mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
-import { isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import type { ChatProject } from '@shared/chat';
 import type {
   AppWorktree,
@@ -133,6 +133,22 @@ async function canonical(path: string): Promise<string | null> {
  */
 export function appWorktreeRoot(container: string): string {
   return join(container, APP_DIRECTORY, 'worktrees');
+}
+
+/**
+ * The main checkout `directory` was created from, when it is one of this app's own worktrees:
+ * a folder directly inside that checkout's `.b4m/worktrees`. Null for anything else, including a
+ * worktree the user made elsewhere. `mainCheckoutOf` is passed in because shellTools imports
+ * this module's neighbours; see its doc for why the git link it verifies cannot be forged.
+ */
+export async function appWorktreeMainCheckout(
+  directory: string,
+  mainCheckoutOf: (directory: string) => Promise<string | null>
+): Promise<string | null> {
+  const main = await mainCheckoutOf(directory).catch(() => null);
+  if (!main) return null;
+  const [path, root] = await Promise.all([canonical(directory), canonical(appWorktreeRoot(main))]);
+  return path && root && dirname(path) === root ? main : null;
 }
 
 /**
