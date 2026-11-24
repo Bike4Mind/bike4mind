@@ -11,6 +11,7 @@ import { useAdminActivitySummary } from './useAdminActivitySummary';
 import { NewSignupsTile } from './Signups/NewSignupsTile';
 import { AiAdvisoryStrip } from './AiAdvisory/AiAdvisoryStrip';
 import { ADMIN_REGION_GAP } from './shared/adminStyles';
+import { AdminPageHeader } from './shared';
 import { CampaignWatchesPanel } from './CampaignWatches/CampaignWatchesPanel';
 import { MorningBriefCard } from './MorningBriefCard';
 
@@ -59,13 +60,11 @@ export default function AdminDashboardTab({ onNavigate }: AdminDashboardTabProps
 
   return (
     // overflowX clip: the Joy Grid negative gutters stick out of this wrapper
-    <Stack spacing={ADMIN_REGION_GAP} sx={{ overflowX: 'clip' }} data-testid="admin-dashboard">
-      <Box>
-        <Typography level="h1">Admin dashboard</Typography>
-        <Typography level="body-md" sx={{ mt: 1 }}>
-          See how Bike4Mind is being used and jump into the tools behind the numbers.
-        </Typography>
-      </Box>
+    <Stack gap={ADMIN_REGION_GAP} sx={{ overflowX: 'clip' }} data-testid="admin-dashboard">
+      <AdminPageHeader
+        title="Admin dashboard"
+        description="See how Bike4Mind is being used and jump into the tools behind the numbers."
+      />
 
       <AiAdvisoryStrip />
       <MorningBriefCard />
