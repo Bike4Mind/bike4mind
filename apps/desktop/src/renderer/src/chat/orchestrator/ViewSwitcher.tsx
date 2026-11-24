@@ -2,7 +2,7 @@ import Box from '@mui/joy/Box';
 import Dropdown from '@mui/joy/Dropdown';
 import ListDivider from '@mui/joy/ListDivider';
 import ListItemDecorator from '@mui/joy/ListItemDecorator';
-import Menu from '@mui/joy/Menu';
+import Menu, { type MenuProps } from '@mui/joy/Menu';
 import MenuButton from '@mui/joy/MenuButton';
 import MenuItem from '@mui/joy/MenuItem';
 import Typography from '@mui/joy/Typography';
@@ -188,6 +188,35 @@ const SHORTCUT_HINT = isMac ? '\u2318\u21E7[ ]' : 'Ctrl+Shift+[ ]';
 const FOCUS_SHORTCUT = isMac ? '\u2318\u21E7F' : 'Ctrl+Shift+F';
 const RESET_SHORTCUT = isMac ? '\u2318\u21E7Esc' : 'Ctrl+Shift+Esc';
 
+/** Window space a menu leaves free, in px; Joy Menu's 4px offset comes out of it, leaving a 4px gap. */
+const MENU_VIEWPORT_MARGIN = 8;
+/** Below this many px the menu stops shrinking, so a button at the very bottom still shows a few items. */
+const MENU_MIN_HEIGHT = 120;
+
+/** The tallest a menu may be and still fit `space` px of window between its anchor and the window edge. */
+export function menuMaxHeight(space: number): number {
+  return Math.max(MENU_MIN_HEIGHT, Math.floor(space - MENU_VIEWPORT_MARGIN));
+}
+
+type MenuModifier = NonNullable<MenuProps['modifiers']>[number];
+
+/**
+ * Caps the menu to the window space on its side of the button (below, or above when Popper flips it)
+ * so a long menu scrolls instead of running off a laptop screen with its last items unreachable.
+ */
+export const fitMenuToViewport: MenuModifier = {
+  name: 'fitMenuToViewport',
+  enabled: true,
+  phase: 'beforeWrite',
+  requires: ['computeStyles'],
+  fn: ({ state }) => {
+    const anchor = state.elements.reference.getBoundingClientRect();
+    const space = state.placement.startsWith('top') ? anchor.top : window.innerHeight - anchor.bottom;
+    state.styles.popper = { ...state.styles.popper, maxHeight: `${menuMaxHeight(space)}px` };
+  },
+};
+const MENU_MODIFIERS = [fitMenuToViewport];
+
 interface Toggle {
   on: boolean;
   onToggle(on: boolean): void;
@@ -279,7 +308,13 @@ export function ViewSwitcher({
         >
           {focus?.on ? `${menuLabel} \u00B7 Focus` : menuLabel}
         </MenuButton>
-        <Menu size="sm" placement="bottom-start" sx={{ minWidth: 260 }} data-testid="orchestrator-view-menu">
+        <Menu
+          size="sm"
+          placement="bottom-start"
+          modifiers={MENU_MODIFIERS}
+          sx={{ minWidth: 260, overflowY: 'auto' }}
+          data-testid="orchestrator-view-menu"
+        >
           <Typography level="body-xs" textColor="text.tertiary" sx={{ px: 1.5, pt: 0.75, pb: 0.25 }}>
             Panes
           </Typography>
@@ -478,7 +513,8 @@ function PaneViewMenu({
       <Menu
         size="sm"
         placement="bottom-start"
-        sx={{ minWidth: 260 }}
+        modifiers={MENU_MODIFIERS}
+        sx={{ minWidth: 260, overflowY: 'auto' }}
         data-testid={`orchestrator-pane-view-menu-${index}`}
       >
         <ViewOptions selected={view} onPick={onPick} testIdPrefix={`orchestrator-pane-${index}-view-option`} />
