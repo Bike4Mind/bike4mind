@@ -32,6 +32,7 @@ vi.mock('@bike4mind/server-utils/utils/mailer', () => {
 vi.mock('@bike4mind/database', () => ({
   adminSettingsRepository: { getSettingsValue: vi.fn(async (name: string) => m.settings[name]) },
   apiKeyRepository: {},
+  usageEventRepository: {},
   ingestedEmailRepository: { findById: m.findEmail, update: m.updateEmail },
   User: { findById: vi.fn().mockResolvedValue({ id: 'user-1' }) },
   IngestedEmailModel: { countDocuments: vi.fn().mockResolvedValue(0) },
@@ -40,6 +41,7 @@ vi.mock('@bike4mind/database', () => ({
 }));
 
 vi.mock('@bike4mind/services', () => ({
+  recordOperationalUsage: vi.fn().mockResolvedValue(undefined),
   apiKeyService: { getEffectiveLLMApiKeys: vi.fn().mockResolvedValue({ anthropic: 'test' }) },
   emailAnalysisService: {
     emailDocumentToAnalysisInput: vi.fn((email: unknown) => email),
@@ -53,7 +55,7 @@ vi.mock('@bike4mind/utils', () => ({
 }));
 
 vi.mock('@bike4mind/llm-adapters', () => ({
-  getAvailableModels: vi.fn().mockResolvedValue([{ id: 'triage-test-model' }]),
+  getAvailableModels: vi.fn().mockResolvedValue([{ id: 'triage-test-model', freeToRun: true }]),
   getLlmByModel: vi.fn(() => ({ complete: m.complete })),
 }));
 
