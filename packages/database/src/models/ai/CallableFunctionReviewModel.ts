@@ -84,6 +84,15 @@ class CallableFunctionReviewRepository extends BaseRepository<ICallableFunctionR
     await this.model.deleteMany({ functionId });
   }
 
+  async deleteForUsers(functionId: string, userIds: string[]): Promise<void> {
+    if (userIds.length === 0) return;
+    await this.model.deleteMany({ functionId, userId: { $in: userIds } });
+  }
+
+  async deleteForFunctionExceptUsers(functionId: string, keepUserIds: string[]): Promise<void> {
+    await this.model.deleteMany({ functionId, userId: { $nin: keepUserIds } });
+  }
+
   async deleteForFunctions(functionIds: string[]): Promise<void> {
     if (functionIds.length === 0) return;
     await this.model.deleteMany({ functionId: { $in: functionIds } });

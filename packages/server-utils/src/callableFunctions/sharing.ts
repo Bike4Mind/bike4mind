@@ -182,6 +182,21 @@ export async function shareCallableFunction(
       code: 'not_live',
     });
   }
+
+  // A person the edit drops, or everyone outside the new grant when its scope changed, starts at pending if added back.
+  const before = current.grants;
+  const scopeChanged =
+    before?.visibility !== grants.visibility ||
+    before?.projectId !== grants.projectId ||
+    before?.organizationId !== grants.organizationId;
+  if (scopeChanged) {
+    await callableFunctionReviewRepository.deleteForFunctionExceptUsers(saved.id, [...userIds, actor.id]);
+  } else {
+    await callableFunctionReviewRepository.deleteForUsers(
+      saved.id,
+      (before?.userIds ?? []).filter(userId => !userIds.includes(userId))
+    );
+  }
   return toCallableFunctionPublic(saved, await readHead(actor, saved.pin.artifactId));
 }
 

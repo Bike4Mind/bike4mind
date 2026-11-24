@@ -357,6 +357,17 @@ describe('revoking', () => {
     await shareCallableFunction(OWNER, id, people);
     expect(await callAs(PERSON, id)).toMatchObject({ outcome: 'refused', reason: 'review_required' });
   });
+
+  it('ends the review of a person a share edit drops, so adding them back starts at pending', async () => {
+    const id = await seedLiveFunction();
+    await shareCallableFunction(OWNER, id, { visibility: 'private', userIds: [PERSON.id] });
+    await reviewSharedCallableFunction(PERSON, id, { reviewHash: await reviewHash(CONTRACT), approval: 'default' });
+    expect(await callAs(PERSON, id)).toMatchObject({ outcome: 'ok' });
+
+    await shareCallableFunction(OWNER, id, { visibility: 'private', userIds: [STRANGER.id] });
+    await shareCallableFunction(OWNER, id, { visibility: 'private', userIds: [PERSON.id] });
+    expect(await callAs(PERSON, id)).toMatchObject({ outcome: 'refused', reason: 'review_required' });
+  });
 });
 
 describe('shareCallableFunction', () => {
@@ -663,7 +674,7 @@ describe('a recipient review', () => {
     expect(await CallableFunctionReview.countDocuments({})).toBe(0);
   });
 
-  it('erases recipients reviews of a function with its owner, and no one elses', async () => {
+  it("erases recipients' reviews of a function with its owner, and no one else's", async () => {
     const id = await seedLiveFunction({ visibility: 'private', userIds: [PERSON.id] });
     await review(PERSON, id);
     const elsewhere = { functionId: oid(), userId: PERSON.id, reviewHash: await reviewHash(CONTRACT) };
