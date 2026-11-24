@@ -952,6 +952,8 @@ describe('shellApproval with an unquoted loop variable inside a word', () => {
     'for f in a.txt; do echo repos/x/$f/logs; done',
     'for j in 1 2; do gh api repos/example-org/widgets/actions/jobs/$j/logs; done',
     'for n in 611 612; do gh pr view $n --repo example-org/widgets --json title; done',
+    // IFS never splits a double-quoted use, so a script naming it still binds that form.
+    'for f in a.txt; do cat "sub/$f"; done; echo IFS',
   ])('runs a read through the loop variable unasked: %s', async command => {
     expect(runsCheckedInAuto(await approval(command))).toBe(true);
   });
