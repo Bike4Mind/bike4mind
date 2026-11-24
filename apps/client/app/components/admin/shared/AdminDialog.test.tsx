@@ -36,6 +36,20 @@ describe('AdminDialog', () => {
     expect(onClose).toHaveBeenCalled();
   });
 
+  it('passes the close reason through so a caller can ignore the backdrop', () => {
+    const onClose = renderDialog();
+    fireEvent.click(screen.getByTestId('test-dialog-close-btn'));
+    fireEvent.keyDown(screen.getByTestId('test-dialog'), { key: 'Escape' });
+    expect(onClose.mock.calls).toEqual([['closeClick'], ['escapeKeyDown']]);
+  });
+
+  it('disables only the close button when closeDisabled is set', () => {
+    const onClose = renderDialog({ closeDisabled: true });
+    expect(screen.getByTestId('test-dialog-close-btn')).toHaveProperty('disabled', true);
+    fireEvent.keyDown(screen.getByTestId('test-dialog'), { key: 'Escape' });
+    expect(onClose).toHaveBeenCalledWith('escapeKeyDown');
+  });
+
   it('renders nothing while closed', () => {
     renderDialog({ open: false });
     expect(screen.queryByTestId('test-dialog')).toBeNull();

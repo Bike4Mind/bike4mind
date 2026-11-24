@@ -2,9 +2,12 @@ import React, { useId } from 'react';
 import { DialogTitle, Modal, ModalClose, ModalDialog, Stack, dialogContentClasses } from '@mui/joy';
 import { adminFocusScope } from './adminStyles';
 
+export type AdminDialogCloseReason = 'backdropClick' | 'escapeKeyDown' | 'closeClick';
+
 export type AdminDialogProps = {
   open?: boolean;
-  onClose: () => void;
+  onClose: (reason?: AdminDialogCloseReason) => void;
+  /** Disables only the close button; Esc and backdrop still call onClose, so guard it there too. */
   closeDisabled?: boolean;
   title: string;
   children: React.ReactNode;
@@ -32,7 +35,7 @@ export function AdminDialog({
 }: AdminDialogProps) {
   const titleId = useId();
   return (
-    <Modal open={open} onClose={onClose}>
+    <Modal open={open} onClose={(_, reason) => onClose(reason)}>
       <ModalDialog
         role={role}
         aria-labelledby={titleId}

@@ -586,7 +586,7 @@ function SecretModal({
       // AdminDialog hands Joy's close reason through. The secret is shown once, so Esc and a backdrop
       // click must not dismiss it. The close button (reason closeClick) and Done close it; Esc and
       // backdrop are pinned in OAuthClientsTab.test.tsx.
-      onClose={(_event?: unknown, reason?: string) => {
+      onClose={reason => {
         if (reason === 'backdropClick' || reason === 'escapeKeyDown') return;
         onClose();
       }}
