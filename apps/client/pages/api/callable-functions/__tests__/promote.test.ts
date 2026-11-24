@@ -253,6 +253,7 @@ describe('no route that takes a body can set what a promotion writes', () => {
     sequence: { pin: { seq: 9 } },
     state: { state: 'live' },
     caseResults: { caseResults: { pinVersion: 1, cases: [] } },
+    grants: { grants: { visibility: 'organization', organizationId: 'org-1', userIds: [] } },
   };
   const ROUTES = [
     ['POST /api/callable-functions', collectionRoute, 'POST', { artifactId: 'a1', expectedVersion: 1, contract: {} }],
