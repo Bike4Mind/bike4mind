@@ -431,7 +431,7 @@ export const CALLABLE_FUNCTION_CREATE_REFUSED_FIELDS = [
 
 export type CallableFunctionCreateInput = Omit<
   ICallableFunctionDocument,
-  'id' | 'createdAt' | 'updatedAt' | 'pin' | (typeof CALLABLE_FUNCTION_CREATE_REFUSED_FIELDS)[number]
+  'id' | 'createdAt' | 'updatedAt' | 'pin' | 'grants' | (typeof CALLABLE_FUNCTION_CREATE_REFUSED_FIELDS)[number]
 > & { pin: CallableFunctionNewPin };
 
 export interface CallableFunctionRepin {

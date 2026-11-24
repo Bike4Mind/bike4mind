@@ -29,7 +29,8 @@ export const aiHolders = {
     kind: 'holder',
     references: [
       { path: 'callerUserId', matchBy: 'userId', action: 'deleteDocument' },
-      { path: 'ownerUserId', matchBy: 'userId', action: 'deleteDocument' },
+      // A recipient's call is the recipient's record; the function's owner is only named on it.
+      { path: 'ownerUserId', matchBy: 'userId', action: 'anonymize' },
     ],
     // A digest of the function's source, not a credential; listed because the name matches the secret pattern.
     secretPaths: ['codeHash'],

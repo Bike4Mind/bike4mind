@@ -206,7 +206,54 @@ describe('the access matrix, through the dispatcher', () => {
     h.orgSettingOn[ORG_ID] = false;
     expect(await callAs(ORG_MEMBER, byOrg)).toMatchObject({ outcome: 'refused', reason: 'not_found' });
     const grants = { visibility: 'organization' as const, organizationId: ORG_ID, userIds: [] };
-    expect(await canCallFunction(ORG_MEMBER, { ownerType: 'user', ownerKey: OWNER.id, grants })).toBeNull();
+    expect(
+      await canCallFunction(ORG_MEMBER, { ownerType: 'user', ownerKey: OWNER.id, state: 'live', grants })
+    ).toBeNull();
+    expect(await listSharedCallableFunctions(ORG_MEMBER)).toEqual([]);
+  });
+
+  it('ends an organization share when the owner leaves the organization, at the next call and the next list', async () => {
+    const byOrg = await seedLiveFunction({ visibility: 'organization', organizationId: ORG_ID, userIds: [PERSON.id] });
+    expect(await callAs(ORG_MEMBER, byOrg)).toMatchObject({ reason: 'pending_review' });
+
+    await Organization.collection.updateOne({ _id: new mongoose.Types.ObjectId(ORG_ID) }, { $set: { userId: oid() } });
+    expect(await callAs(ORG_MEMBER, byOrg)).toMatchObject({ outcome: 'refused', reason: 'not_found' });
+    expect(await listSharedCallableFunctions(ORG_MEMBER)).toEqual([]);
+    expect(await callAs(PERSON, byOrg)).toMatchObject({ reason: 'pending_review' });
+  });
+
+  it('ends a project share when the owner leaves the project, at the next call and the next list', async () => {
+    const byProject = await seedLiveFunction({ visibility: 'project', projectId: PROJECT_ID, userIds: [] });
+    expect(await callAs(PROJECT_MEMBER, byProject)).toMatchObject({ reason: 'pending_review' });
+    expect((await listSharedCallableFunctions(PROJECT_MEMBER)).map(fn => fn.id)).toEqual([byProject]);
+
+    await Project.collection.updateOne({ _id: new mongoose.Types.ObjectId(PROJECT_ID) }, { $set: { userId: oid() } });
+    expect(await callAs(PROJECT_MEMBER, byProject)).toMatchObject({ outcome: 'refused', reason: 'not_found' });
+    expect(await listSharedCallableFunctions(PROJECT_MEMBER)).toEqual([]);
+  });
+
+  it('refuses every recipient while a repin leaves the function a draft, until the next promotion', async () => {
+    const id = await seedLiveFunction({ visibility: 'organization', organizationId: ORG_ID, userIds: [PERSON.id] });
+    const owner = { ownerType: 'user' as const, ownerKey: OWNER.id };
+    const live = await CallableFunction.findById(id).lean();
+    const repinned = await callableFunctionRepository.repin(id, owner, 1, {
+      pin: { ...live!.pin, version: 2, pinnedAt: new Date() },
+      contract: CONTRACT,
+      description: CONTRACT.description,
+    });
+    expect(repinned).toMatchObject({ state: 'draft', grants: { userIds: [PERSON.id] } });
+
+    runner.mockClear();
+    for (const recipient of [PERSON, ORG_MEMBER]) {
+      expect(await callAs(recipient, id)).toMatchObject({ outcome: 'refused', reason: 'not_found' });
+      expect(await canCallFunction(recipient, repinned!)).toBeNull();
+      expect(await listSharedCallableFunctions(recipient)).toEqual([]);
+    }
+    expect(runner).not.toHaveBeenCalled();
+    expect(await canCallFunction(OWNER, repinned!)).toBe('owner');
+
+    await CallableFunction.updateOne({ _id: id }, { $set: { state: 'live' } });
+    expect(await callAs(PERSON, id)).toMatchObject({ reason: 'pending_review' });
   });
 
   it('admits a project member, and refuses them at the next call after they leave', async () => {
@@ -292,11 +339,37 @@ describe('shareCallableFunction', () => {
     expect((await CallableFunction.findById(id).lean())?.grants).toBeUndefined();
   });
 
-  it('refuses a draft, an unknown person, no recipients, and a project or organization the owner is not in', async () => {
+  it('answers alike for an id with no account and one with an account, and names neither by email', async () => {
     const id = await seedLiveFunction();
-    await expect(shareCallableFunction(OWNER, id, { visibility: 'private', userIds: [oid()] })).rejects.toMatchObject(
-      refusal('unknown_person')
-    );
+    const missing = oid();
+    await User.collection.updateOne({ _id: new mongoose.Types.ObjectId(PERSON.id) }, { $unset: { name: 1 } });
+    const withMissing = await shareCallableFunction(OWNER, id, { visibility: 'private', userIds: [missing] });
+    const withPerson = await shareCallableFunction(OWNER, id, { visibility: 'private', userIds: [PERSON.id] });
+    expect(withMissing.grants).toEqual({ visibility: 'private', userIds: [missing] });
+    expect(withPerson.grants).toEqual({ visibility: 'private', userIds: [PERSON.id] });
+
+    await shareCallableFunction(OWNER, id, { visibility: 'private', userIds: [missing, PERSON.id, STRANGER.id] });
+    const view = await getCallableFunctionShare(OWNER, id);
+    expect(view.people).toEqual([
+      { id: missing, name: 'Unnamed person' },
+      { id: PERSON.id, name: 'Unnamed person' },
+      { id: STRANGER.id, name: 'Person 4' },
+    ]);
+    expect(JSON.stringify(view)).not.toContain('@example.com');
+  });
+
+  it('drops a function whose artifact was deleted from the shared list', async () => {
+    const id = await seedLiveFunction({ visibility: 'private', userIds: [PERSON.id] });
+    expect((await listSharedCallableFunctions(PERSON)).map(fn => fn.id)).toEqual([id]);
+    await Artifact.updateOne({ id: ARTIFACT_ID }, { $set: { deletedAt: new Date() } });
+    expect(await listSharedCallableFunctions(PERSON)).toEqual([]);
+  });
+
+  it('refuses a draft, a malformed id, no recipients, and a project or organization the owner is not in', async () => {
+    const id = await seedLiveFunction();
+    await expect(
+      shareCallableFunction(OWNER, id, { visibility: 'private', userIds: ['not-an-id'] })
+    ).rejects.toMatchObject(refusal('invalid_person'));
     await expect(shareCallableFunction(OWNER, id, { visibility: 'private', userIds: [] })).rejects.toMatchObject(
       refusal('no_recipients')
     );

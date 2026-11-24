@@ -3,6 +3,7 @@ import {
   CALLABLE_FUNCTION_GRANT_LIMITS,
   ConflictError,
   NotFoundError,
+  effectiveCallableFunctionStatus,
   toCallableFunctionPublic,
   toCallableFunctionShared,
   type CallableFunctionAccess,
@@ -49,25 +50,40 @@ async function projectIdsForMember(userId: string): Promise<string[]> {
   return projects.map(project => String(project._id));
 }
 
+async function isOrganizationMember(userId: string, organizationId: string): Promise<boolean> {
+  return (await organizationRepository.findMembershipOrgIds(userId)).includes(organizationId);
+}
+
 /**
- * How `caller` reaches `fn`, or null when they do not: the owner; a person named in the grants; a member of the
- * granted project; or a member of the granted organization while that organization has callable functions on.
+ * How `caller` reaches `fn`, or null when they do not: the owner; while the function is live, a person named in
+ * the grants; a member of the granted project; or a member of the granted organization while that organization has
+ * callable functions on. A project or organization grant holds only while the owner is still a member of it.
  */
 export async function canCallFunction(
   caller: { id: string },
-  fn: Pick<ICallableFunction, 'ownerType' | 'ownerKey' | 'grants'>
+  fn: Pick<ICallableFunction, 'ownerType' | 'ownerKey' | 'grants' | 'state'>
 ): Promise<CallableFunctionAccess | null> {
   if (fn.ownerType === 'user' && fn.ownerKey === caller.id) return 'owner';
   const grants = fn.grants;
-  if (!grants) return null;
+  // A repin returns the function to draft and keeps its grants; they apply again at the next promotion.
+  if (!grants || fn.state !== 'live') return null;
   if (grants.userIds.includes(caller.id)) return 'person';
   if (grants.visibility === 'project' && grants.projectId) {
-    return (await isProjectMember(caller.id, grants.projectId)) ? 'project' : null;
+    const { projectId } = grants;
+    const [callerIn, ownerIn] = await Promise.all([
+      isProjectMember(caller.id, projectId),
+      isProjectMember(fn.ownerKey, projectId),
+    ]);
+    return callerIn && ownerIn ? 'project' : null;
   }
   if (grants.visibility === 'organization' && grants.organizationId) {
-    const orgIds = await organizationRepository.findMembershipOrgIds(caller.id);
-    if (!orgIds.includes(grants.organizationId)) return null;
-    return (await resolveOrganizationCallableFunctionsEnabled(caller, grants.organizationId)) ? 'organization' : null;
+    const { organizationId } = grants;
+    const [callerIn, ownerIn] = await Promise.all([
+      isOrganizationMember(caller.id, organizationId),
+      isOrganizationMember(fn.ownerKey, organizationId),
+    ]);
+    if (!callerIn || !ownerIn) return null;
+    return (await resolveOrganizationCallableFunctionsEnabled(caller, organizationId)) ? 'organization' : null;
   }
   return null;
 }
@@ -90,20 +106,11 @@ export interface CallableFunctionShareView {
   people: CallableFunctionSharePerson[];
 }
 
-async function namesOf(userIds: string[]): Promise<Map<string, string>> {
-  if (userIds.length === 0) return new Map();
-  const users = await userRepository.find({ _id: { $in: userIds } }, { name: 1, email: 1 });
-  return new Map(
-    users.map(user => {
-      const { name, email } = user as { name?: string; email?: string };
-      return [String(user._id), name || email || ''];
-    })
-  );
-}
-
+// Names only: an id in the grants must not turn into an email, and a missing account reads like a nameless one.
 async function peopleOf(userIds: string[]): Promise<CallableFunctionSharePerson[]> {
-  const names = await namesOf(userIds);
-  return userIds.map(id => ({ id, name: names.get(id) || 'Unknown person' }));
+  const users = userIds.length > 0 ? await userRepository.find({ _id: { $in: userIds } }, { name: 1 }) : [];
+  const names = new Map(users.map(user => [String(user._id), (user as { name?: string }).name]));
+  return userIds.map(id => ({ id, name: names.get(id) || 'Unnamed person' }));
 }
 
 export async function getCallableFunctionShare(
@@ -140,8 +147,9 @@ export async function shareCallableFunction(
   if (userIds.length > maxUserIds) {
     throw new BadRequestError(`A tool can be shared with at most ${maxUserIds} people.`, { code: 'too_many_people' });
   }
-  if (userIds.some(userId => !OBJECT_ID.test(userId)) || (await namesOf(userIds)).size !== userIds.length) {
-    throw new BadRequestError('One of the people named was not found.', { code: 'unknown_person' });
+  // No account read here, so saving answers the same whether or not an id belongs to anyone.
+  if (userIds.some(userId => !OBJECT_ID.test(userId))) {
+    throw new BadRequestError('One of the people named is not a valid id.', { code: 'invalid_person' });
   }
 
   const grants: ICallableFunctionGrants = { visibility: input.visibility, userIds };
@@ -190,7 +198,10 @@ export async function listSharedCallableFunctions(actor: CallableFunctionActor):
   const shared: ICallableFunctionShared[] = [];
   for (const fn of candidates) {
     const access = await canCallFunction(actor, fn);
-    if (access && access !== 'owner') shared.push(toCallableFunctionShared(fn, access));
+    if (!access || access === 'owner') continue;
+    const head = await readHead({ id: fn.userId }, fn.pin.artifactId);
+    if (effectiveCallableFunctionStatus(fn, head) !== 'live') continue;
+    shared.push(toCallableFunctionShared(fn, access));
   }
   return shared;
 }

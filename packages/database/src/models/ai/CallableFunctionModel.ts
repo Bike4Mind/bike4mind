@@ -465,6 +465,7 @@ class CallableFunctionRepository extends BaseRepository<FunctionDoc> implements 
         SUMMARY_PROJECTION
       )
       .sort({ updatedAt: -1 })
+      // Capped like an owner's own list: shares past the most recent are not listed but stay callable.
       .limit(CALLABLE_FUNCTION_LIMITS.maxPerOwner);
     return docs.map(doc => doc.toObject() as ICallableFunctionSummary);
   }
