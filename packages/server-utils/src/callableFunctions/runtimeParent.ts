@@ -478,7 +478,8 @@ const GLUE_REFUSALS: ReadonlyArray<[string, CallableFunctionReason]> = [
   [FUNCTION_RESULT_TOO_LARGE_PREFIX, 'result_too_large'],
 ];
 
-const ERROR_CLASS = /^[A-Za-z_][A-Za-z0-9_.]{0,99}$/;
+/** The call log's `errorClass` pattern (`CallableFunctionCallModel`); a remote reply is held to it too. */
+export const CALLABLE_FUNCTION_ERROR_CLASS = /^[A-Za-z_][A-Za-z0-9_.]{0,99}$/;
 
 /** Reduces guest error text to a class name and, for the glue's own refusals, a fixed reason. */
 export function classifyGuestError(
@@ -489,7 +490,9 @@ export function classifyGuestError(
     const refusal = GLUE_REFUSALS.find(([prefix]) => error.startsWith(prefix));
     return { errorClass: 'FunctionCallError', reason: refusal?.[1] };
   }
-  return { errorClass: errorClass !== undefined && ERROR_CLASS.test(errorClass) ? errorClass : 'Exception' };
+  return {
+    errorClass: errorClass !== undefined && CALLABLE_FUNCTION_ERROR_CLASS.test(errorClass) ? errorClass : 'Exception',
+  };
 }
 
 const PROBLEM_PATH = /^[A-Za-z0-9_.]{0,200}$/;
@@ -602,14 +605,19 @@ export async function runCallableFunctionInChild(
     limits
   );
   child.startMs = run.startMs;
-  // Never `timeout`: a slow start is the runtime's, not the function's.
-  if (run.kind === 'start_timeout') return finish({ outcome: 'error', reason: 'start_timeout' });
-  if (run.kind === 'timeout') return finish({ outcome: 'timeout' });
-  if (run.kind === 'memory') return finish({ outcome: 'memory' });
-  if (run.kind === 'reply_too_large') return finish({ outcome: 'output_too_large', reason: 'reply_too_large' });
   if (run.kind === 'spawn_failed') return refused('runtime_unavailable');
+  // The lock is the parent's own file, so an outcome with no reply still names it; packages need the reply.
+  const lockOnly = await runtimeReport(options.pyodideDir, []);
+  const noReply = lockOnly ? { runtime: lockOnly } : {};
+  // Never `timeout`: a slow start is the runtime's, not the function's.
+  if (run.kind === 'start_timeout') return finish({ ...noReply, outcome: 'error', reason: 'start_timeout' });
+  if (run.kind === 'timeout') return finish({ ...noReply, outcome: 'timeout' });
+  if (run.kind === 'memory') return finish({ ...noReply, outcome: 'memory' });
+  if (run.kind === 'reply_too_large') {
+    return finish({ ...noReply, outcome: 'output_too_large', reason: 'reply_too_large' });
+  }
   const reply = run.kind === 'reply' ? parseReply(run.reply) : null;
-  if (!reply) return finish({ outcome: 'error', reason: 'no_reply' });
+  if (!reply) return finish({ ...noReply, outcome: 'error', reason: 'no_reply' });
   if (!reply.ok) return refused(CHILD_FAILURES[reply.failure]);
 
   const report = await runtimeReport(options.pyodideDir, reply.packages ?? []);

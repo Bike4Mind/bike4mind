@@ -8,7 +8,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { EventEmitter } from 'events';
 import { createMocks } from 'node-mocks-http';
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { ConflictError, NotFoundError, UnprocessableEntityError } from '@bike4mind/common';
+import { ConflictError, NotFoundError, ServiceUnavailableError, UnprocessableEntityError } from '@bike4mind/common';
 
 const h = vi.hoisted(() => ({
   enabled: true,
@@ -18,7 +18,8 @@ const h = vi.hoisted(() => ({
   runCallableFunctionTests: vi.fn(),
 }));
 
-vi.mock('@bike4mind/server-utils/callableFunctions/testRun', () => ({
+vi.mock('@bike4mind/server-utils/callableFunctions/testRun', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/server-utils/callableFunctions/testRun')>()),
   runCallableFunctionTests: h.runCallableFunctionTests,
 }));
 vi.mock('@bike4mind/server-utils/callableFunctions/access', async () => {
@@ -117,7 +118,20 @@ describe('POST /api/callable-functions/[id]/test-run', () => {
     const res = await fire();
     expect(res._getStatusCode()).toBe(200);
     expect(res._getJSONData()).toEqual(RUN);
-    expect(h.runCallableFunctionTests).toHaveBeenCalledWith(expect.objectContaining({ id: 'jwt-user' }), FUNCTION_ID);
+    expect(h.runCallableFunctionTests).toHaveBeenCalledWith(expect.objectContaining({ id: 'jwt-user' }), FUNCTION_ID, {
+      budgetMs: 45_000,
+    });
+  });
+
+  it('runs only the named tests, and lowers the budget only through its setting', async () => {
+    vi.stubEnv('CALLABLE_FUNCTION_TEST_RUN_BUDGET_MS', '8000');
+    const res = await fire({ body: { tests: ['long span'] } });
+    vi.unstubAllEnvs();
+    expect(res._getStatusCode()).toBe(200);
+    expect(h.runCallableFunctionTests).toHaveBeenCalledWith(expect.anything(), FUNCTION_ID, {
+      tests: ['long span'],
+      budgetMs: 8_000,
+    });
   });
 
   it('uses its own per-user rate limit bucket', () => {
@@ -147,8 +161,12 @@ describe('POST /api/callable-functions/[id]/test-run', () => {
     expect(h.runCallableFunctionTests).not.toHaveBeenCalled();
   });
 
-  it('refuses a body naming the contract or the tests, since the server reads them itself', async () => {
-    const res = await fire({ body: { tests: [{ name: 'forged', input: {}, expected: {} }] } });
+  it.each([
+    ['a test case instead of a name', { tests: [{ name: 'forged', input: {}, expected: {} }] }],
+    ['the contract', { contract: { name: 'forged' } }],
+    ['an empty list of names', { tests: [] }],
+  ])('refuses a body naming %s, since the server reads the tests itself', async (_name, body) => {
+    const res = await fire({ body });
     expect(res._getStatusCode()).toBe(400);
     expect(res._getJSONData()).toMatchObject({ code: 'invalid_body' });
     expect(h.runCallableFunctionTests).not.toHaveBeenCalled();
@@ -173,6 +191,11 @@ describe('POST /api/callable-functions/[id]/test-run', () => {
         outcome: 'timeout',
       }),
       { code: 'contract_unreadable' },
+    ],
+    [
+      503,
+      new ServiceUnavailableError('The runtime is starting. Try again in a minute.', { code: 'runtime_starting' }),
+      { code: 'runtime_starting', error: 'The runtime is starting. Try again in a minute.' },
     ],
   ])('passes a %i from the runner through', async (status, error, body) => {
     h.runCallableFunctionTests.mockRejectedValue(error);

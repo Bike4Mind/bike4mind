@@ -2,7 +2,10 @@ import { UnauthorizedError } from '@bike4mind/utils';
 import { baseApi } from '@server/middlewares/baseApi';
 import { perUserRateLimit } from '@server/middlewares/perUserRateLimit';
 import { assertCallableFunctionsEnabled } from '@bike4mind/server-utils/callableFunctions/access';
-import { runCallableFunctionTests } from '@bike4mind/server-utils/callableFunctions/testRun';
+import {
+  callableFunctionTestRunBudget,
+  runCallableFunctionTests,
+} from '@bike4mind/server-utils/callableFunctions/testRun';
 import {
   callableFunctionTestRunBodySchema,
   parseCallableFunctionBody,
@@ -20,8 +23,13 @@ const handler = baseApi({ auth: 'jwtOnly' }).post(
   async (req, res) => {
     if (!req.user) throw new UnauthorizedError('Sign in to use callable functions.');
     await assertCallableFunctionsEnabled(req.user);
-    parseCallableFunctionBody(callableFunctionTestRunBodySchema, req.body ?? {});
-    res.json(await runCallableFunctionTests(req.user, functionId(req.query)));
+    const body = parseCallableFunctionBody(callableFunctionTestRunBodySchema, req.body ?? {});
+    res.json(
+      await runCallableFunctionTests(req.user, functionId(req.query), {
+        ...(body.tests ? { tests: body.tests } : {}),
+        budgetMs: callableFunctionTestRunBudget(),
+      })
+    );
   }
 );
 

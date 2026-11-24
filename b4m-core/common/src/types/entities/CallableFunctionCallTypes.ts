@@ -4,6 +4,10 @@ import { IMongoDocument } from './common';
 export const CALLABLE_FUNCTION_CALL_SURFACES = ['test', 'rest', 'chat', 'agent', 'mcp'] as const;
 export type CallableFunctionCallSurface = (typeof CALLABLE_FUNCTION_CALL_SURFACES)[number];
 
+/** What the run was for: a call of `run`, or the server's read of `FUNCTION` from the pinned code. */
+export const CALLABLE_FUNCTION_CALL_OPS = ['call', 'read_contract'] as const;
+export type CallableFunctionCallOp = (typeof CALLABLE_FUNCTION_CALL_OPS)[number];
+
 /** How a call ended; the server runtime's results use the same names. */
 export const CALLABLE_FUNCTION_CALL_OUTCOMES = [
   'ok',
@@ -24,10 +28,11 @@ export interface CallableFunctionCallRuntime {
 }
 
 /**
- * One row per call or refusal in `callablefunctioncalls`, kept 90 days. It records hashes and sizes only, never the
+ * One row per call, contract read, or refusal in `callablefunctioncalls`, kept 90 days. It records hashes and sizes only, never the
  * inputs or outputs.
  */
 export interface ICallableFunctionCall {
+  op: CallableFunctionCallOp;
   functionId: string;
   /** Absent when the record was not found. */
   ownerUserId?: string;

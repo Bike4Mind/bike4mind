@@ -2,6 +2,7 @@ import { InvokeCommand, LambdaClient } from '@aws-sdk/client-lambda';
 import { parseFunctionContract, type FunctionContractProblem } from '@bike4mind/common';
 import {
   CALLABLE_FUNCTION_CHILD_PATH_ENV,
+  CALLABLE_FUNCTION_ERROR_CLASS,
   CALLABLE_FUNCTION_OUTCOMES,
   CALLABLE_FUNCTION_PYODIDE_DIR_ENV,
   CALLABLE_FUNCTION_REASONS,
@@ -24,6 +25,13 @@ export function createInProcessCallableFunctionRunner(options: CallableFunctionC
 
 /** Names the runtime Lambda; when unset, the child runs on this host if its two paths are set. */
 export const CALLABLE_FUNCTION_RUNTIME_NAME_ENV = 'CALLABLE_FUNCTION_RUNTIME_FUNCTION_NAME';
+
+/** Whether this stage can run functions on the server, without building a runner. */
+export const callableFunctionRuntimeConfigured = (env: NodeJS.ProcessEnv = process.env): boolean =>
+  Boolean(
+    env[CALLABLE_FUNCTION_RUNTIME_NAME_ENV] ||
+    (env[CALLABLE_FUNCTION_CHILD_PATH_ENV] && env[CALLABLE_FUNCTION_PYODIDE_DIR_ENV])
+  );
 
 /** The Lambda runner when the environment names the function, the in-process runner otherwise; null when neither. */
 export function selectCallableFunctionRunner(env: NodeJS.ProcessEnv = process.env): CallableFunctionRunner | null {
@@ -70,7 +78,10 @@ export function parseCallableFunctionRunResult(raw: unknown): CallableFunctionRu
     if (typeof raw.reason !== 'string' || !REASONS.has(raw.reason)) return null;
     result.reason = raw.reason as CallableFunctionRunResult['reason'];
   }
-  if (typeof raw.errorClass === 'string') result.errorClass = raw.errorClass;
+  if (raw.errorClass !== undefined) {
+    if (typeof raw.errorClass !== 'string' || !CALLABLE_FUNCTION_ERROR_CLASS.test(raw.errorClass)) return null;
+    result.errorClass = raw.errorClass;
+  }
   if (typeof raw.printed === 'string') result.printed = raw.printed;
   if (typeof raw.initMs === 'number') result.initMs = raw.initMs;
   if (typeof raw.startMs === 'number') result.startMs = raw.startMs;

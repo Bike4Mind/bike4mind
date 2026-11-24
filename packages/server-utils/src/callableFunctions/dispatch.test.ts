@@ -44,7 +44,15 @@ vi.mock('@bike4mind/database', () => ({
   },
 }));
 
-import { buildCallableFunctionStamp, dispatchFunctionCall, functionInputHash, readServerContract } from './dispatch';
+import { artifactRepository, callableFunctionCallRepository, callableFunctionRepository } from '@bike4mind/database';
+import { resolveCallableFunctionsEnabled } from './access';
+import {
+  CALLABLE_FUNCTION_SURFACE_CAPS,
+  buildCallableFunctionStamp,
+  dispatchFunctionCall,
+  functionInputHash,
+  readServerContract,
+} from './dispatch';
 
 const OWNER = { id: 'owner-1' };
 const FUNCTION_ID = '6650f0a1b2c3d4e5f6a7b8c9';
@@ -153,11 +161,31 @@ describe('dispatchFunctionCall refusals, in order', () => {
     expect(onlyRow().ownerUserId).toBeUndefined();
   });
 
-  it('refuses anyone but the owner before reading the status', async () => {
+  it('refuses anyone but the owner before reading the status, and names the reason in the row only', async () => {
     const result = await dispatchFunctionCall(call({ caller: { id: 'stranger-1' } }), { runner: runnerOf(ok()) });
-    expect(result).toMatchObject({ outcome: 'refused', reason: 'not_caller' });
+    expect(result).toMatchObject({ outcome: 'refused', reason: 'not_found' });
     expect(h.reads).toEqual(['setting', 'record']);
-    expect(onlyRow()).toMatchObject({ ownerUserId: OWNER.id, callerUserId: 'stranger-1', codeHash: HASH });
+    expect(onlyRow()).toMatchObject({
+      reason: 'not_caller',
+      ownerUserId: OWNER.id,
+      callerUserId: 'stranger-1',
+      codeHash: HASH,
+    });
+  });
+
+  it("answers another owner's function exactly as a missing one", async () => {
+    const stranger = { id: 'stranger-1' };
+    const refusal = async () => {
+      const result = await dispatchFunctionCall(call({ caller: stranger }), { runner: runnerOf(ok()) });
+      const { callId: _callId, durationMs: _durationMs, ...rest } = result;
+      return rest;
+    };
+    const theirs = await refusal();
+    h.fn = null;
+    const missing = await refusal();
+    expect(theirs).toEqual(missing);
+    expect(theirs).toEqual({ outcome: 'refused', reason: 'not_found' });
+    expect(h.rows.map(row => row.reason)).toEqual(['not_caller', 'not_found']);
   });
 
   it('refuses a turned-off function before checking the inputs', async () => {
@@ -166,6 +194,7 @@ describe('dispatchFunctionCall refusals, in order', () => {
     const result = await dispatchFunctionCall(call({ args: { load: 'heavy' } }), { runner });
     expect(result).toMatchObject({ outcome: 'refused', reason: 'disabled' });
     expect(runner).not.toHaveBeenCalled();
+    expect(onlyRow()).toMatchObject({ outcome: 'refused', reason: 'disabled' });
   });
 
   it('refuses a function whose artifact was deleted', async () => {
@@ -175,11 +204,21 @@ describe('dispatchFunctionCall refusals, in order', () => {
     expect(result).toMatchObject({ outcome: 'refused', reason: 'source_deleted' });
     expect(h.reads).toEqual(['setting', 'record', 'head']);
     expect(runner).not.toHaveBeenCalled();
+    expect(onlyRow()).toMatchObject({ outcome: 'refused', reason: 'source_deleted' });
   });
 
-  it('refuses inputs that break the contract, before measuring their size', async () => {
+  it('measures the input size before validating, so an oversize input is never walked', async () => {
     const runner = runnerOf(ok());
     const result = await dispatchFunctionCall(call({ args: { load: 'heavy', samples: OVERSIZE } }), { runner });
+    expect(result).toMatchObject({ outcome: 'input_invalid', reason: 'input_too_large' });
+    expect(result.problems).toBeUndefined();
+    expect(runner).not.toHaveBeenCalled();
+    expect(onlyRow()).toMatchObject({ outcome: 'input_invalid', reason: 'input_too_large' });
+  });
+
+  it('refuses inputs that break the contract', async () => {
+    const runner = runnerOf(ok());
+    const result = await dispatchFunctionCall(call({ args: { load: 'heavy' } }), { runner });
     expect(result.outcome).toBe('input_invalid');
     expect(result.reason).toBeUndefined();
     expect(result.problems?.map(problem => problem.path)).toEqual(['span', 'load']);
@@ -215,6 +254,7 @@ describe('dispatchFunctionCall outcomes', () => {
       limits: { timeoutMs: 30_000, outputBytes: 256 * 1024 },
     });
     expect(onlyRow()).toMatchObject({
+      op: 'call',
       outcome: 'ok',
       surface: 'chat',
       inputHash: functionInputHash(ARGS),
@@ -260,14 +300,79 @@ describe('dispatchFunctionCall outcomes', () => {
     expect(onlyRow()).toMatchObject({ outcome: 'error', reason: 'runtime_unavailable' });
   });
 
-  it('stops waiting at the hard deadline when the runner never answers', async () => {
+  it("stops waiting at the surface's cap when the runner never answers, and writes the row", async () => {
     vi.useFakeTimers();
-    const pending = dispatchFunctionCall(call(), {
-      runner: vi.fn(() => new Promise<never>(() => {})),
-      timeoutMs: 1000,
+    let settled = false;
+    const pending = dispatchFunctionCall(call(), { runner: vi.fn(() => new Promise<never>(() => {})) }).finally(() => {
+      settled = true;
     });
-    await vi.advanceTimersByTimeAsync(1000 + 60_000 + 15_000);
-    await expect(pending).resolves.toMatchObject({ outcome: 'error', reason: 'no_reply' });
+    await vi.advanceTimersByTimeAsync(45_000 - 1);
+    expect(settled).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    await expect(pending).resolves.toMatchObject({ outcome: 'timeout', reason: 'wait_exceeded' });
+    expect(onlyRow()).toMatchObject({ outcome: 'timeout', reason: 'wait_exceeded' });
+  });
+
+  it("waits no longer than the caller's budget, and gives the guest no more time than the wait", async () => {
+    vi.useFakeTimers();
+    const runner = vi.fn((_payload: CallableFunctionRunPayload) => new Promise<never>(() => {}));
+    let settled = false;
+    const pending = dispatchFunctionCall(call(), { runner, waitMs: 7_000 }).finally(() => {
+      settled = true;
+    });
+    await vi.advanceTimersByTimeAsync(7_000 - 1);
+    expect(settled).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    await expect(pending).resolves.toMatchObject({ outcome: 'timeout', reason: 'wait_exceeded' });
+    expect(runner.mock.calls[0][0]).toMatchObject({ limits: { timeoutMs: 7_000 } });
+  });
+
+  it("never waits past the surface's cap whatever the caller asks", async () => {
+    vi.useFakeTimers();
+    const runner = vi.fn((_payload: CallableFunctionRunPayload) => new Promise<never>(() => {}));
+    const pending = dispatchFunctionCall(call(), { runner, waitMs: 600_000, timeoutMs: 600_000 });
+    await vi.advanceTimersByTimeAsync(45_000);
+    await expect(pending).resolves.toMatchObject({ outcome: 'timeout', reason: 'wait_exceeded' });
+    expect(runner.mock.calls[0][0]).toMatchObject({ limits: { timeoutMs: 45_000 } });
+  });
+});
+
+describe('one row on every path', () => {
+  const thrown = new Error('database unavailable');
+
+  it.each([
+    ['the setting check', () => vi.mocked(resolveCallableFunctionsEnabled).mockRejectedValueOnce(thrown)],
+    ['the record read', () => vi.mocked(callableFunctionRepository.findById).mockRejectedValueOnce(thrown)],
+    ['the artifact read', () => vi.mocked(artifactRepository.findOne).mockRejectedValueOnce(thrown)],
+  ])('writes one error row when %s throws, then rethrows', async (_step, fail) => {
+    fail();
+    const runner = runnerOf(ok());
+    await expect(dispatchFunctionCall(call(), { runner })).rejects.toBe(thrown);
+    expect(runner).not.toHaveBeenCalled();
+    expect(onlyRow()).toMatchObject({
+      op: 'call',
+      outcome: 'error',
+      reason: 'dispatch_failed',
+      callerUserId: OWNER.id,
+    });
+  });
+
+  it('tries a failed row write once more and answers with the second', async () => {
+    vi.mocked(callableFunctionCallRepository.record).mockRejectedValueOnce(thrown);
+    const result = await dispatchFunctionCall(call(), { runner: runnerOf(ok()) });
+    expect(result).toMatchObject({ outcome: 'ok', callId: 'call-1' });
+    const writes = vi.mocked(callableFunctionCallRepository.record).mock.calls.slice(-2);
+    expect(writes.map(([row]) => row.outcome)).toEqual(['ok', 'ok']);
+    expect(onlyRow()).toMatchObject({ outcome: 'ok' });
+  });
+
+  it('rethrows when the retried row write fails too, without a third write', async () => {
+    const record = vi.mocked(callableFunctionCallRepository.record);
+    const before = record.mock.calls.length;
+    record.mockRejectedValueOnce(thrown).mockRejectedValueOnce(new Error('still unavailable'));
+    await expect(dispatchFunctionCall(call(), { runner: runnerOf(ok()) })).rejects.toThrow('still unavailable');
+    expect(record.mock.calls.length - before).toBe(2);
+    expect(h.rows).toEqual([]);
   });
 });
 
@@ -336,30 +441,75 @@ describe('the stamp', () => {
 });
 
 describe('readServerContract', () => {
-  it('reads FUNCTION through the runner with the short time limit', async () => {
-    const runner = runnerOf({ outcome: 'ok', contract: CONTRACT, durationMs: 5 });
-    await expect(readServerContract(SOURCE, runner)).resolves.toEqual({ ok: true, contract: CONTRACT });
+  const read = (runner: Parameters<typeof readServerContract>[1]['runner'], waitMs?: number) =>
+    readServerContract({ caller: OWNER, fn: record() as never, surface: 'test' }, { runner, waitMs });
+
+  it('reads FUNCTION through the runner with the short time limit and logs the read as its own op', async () => {
+    const runner = runnerOf({ outcome: 'ok', contract: CONTRACT, durationMs: 5, initMs: 700 });
+    await expect(read(runner)).resolves.toEqual({ ok: true, contract: CONTRACT, callId: 'call-1' });
     expect(runner).toHaveBeenCalledWith({ op: 'read_contract', code: SOURCE, limits: { timeoutMs: 10_000 } });
+    const row = onlyRow();
+    expect(row).toMatchObject({
+      op: 'read_contract',
+      functionId: FUNCTION_ID,
+      ownerUserId: OWNER.id,
+      callerUserId: OWNER.id,
+      surface: 'test',
+      codeHash: HASH,
+      outcome: 'ok',
+      durationMs: 5,
+      initMs: 700,
+    });
+    expect(row).not.toHaveProperty('inputHash');
+    expect(row).not.toHaveProperty('inputBytes');
+    expect(row).not.toHaveProperty('outputBytes');
   });
 
-  it('reports a read that timed out or found no contract', async () => {
-    await expect(readServerContract(SOURCE, runnerOf({ outcome: 'timeout', durationMs: 10_000 }))).resolves.toEqual({
+  it('reports and logs a read that timed out or found no contract', async () => {
+    await expect(read(runnerOf({ outcome: 'timeout', durationMs: 10_000 }))).resolves.toEqual({
       ok: false,
       outcome: 'timeout',
+      callId: 'call-1',
     });
     await expect(
-      readServerContract(SOURCE, runnerOf({ outcome: 'error', reason: 'contract_missing', durationMs: 5 }))
+      read(runnerOf({ outcome: 'error', reason: 'contract_missing', durationMs: 5 }))
     ).resolves.toMatchObject({ ok: false, reason: 'contract_missing' });
-    await expect(readServerContract(SOURCE, null)).resolves.toMatchObject({ ok: false, reason: 'runtime_unavailable' });
+    expect(h.rows.map(row => [row.op, row.outcome, row.reason])).toEqual([
+      ['read_contract', 'timeout', undefined],
+      ['read_contract', 'error', 'contract_missing'],
+    ]);
   });
 
-  it('stops waiting at the hard deadline', async () => {
+  it('stops waiting at its share of the budget, so a cold runtime reads as wait_exceeded', async () => {
     vi.useFakeTimers();
-    const pending = readServerContract(
-      SOURCE,
-      vi.fn(() => new Promise<never>(() => {}))
+    const pending = read(vi.fn(() => new Promise<never>(() => {})));
+    await vi.advanceTimersByTimeAsync(15_000);
+    await expect(pending).resolves.toMatchObject({ ok: false, outcome: 'timeout', reason: 'wait_exceeded' });
+    expect(onlyRow()).toMatchObject({ op: 'read_contract', outcome: 'timeout', reason: 'wait_exceeded' });
+  });
+
+  it('waits no longer than what is left, and gives the read no more time than the wait', async () => {
+    vi.useFakeTimers();
+    const runner = vi.fn((_payload: CallableFunctionRunPayload) => new Promise<never>(() => {}));
+    const pending = read(runner, 4_000);
+    await vi.advanceTimersByTimeAsync(4_000);
+    await expect(pending).resolves.toMatchObject({ ok: false, reason: 'wait_exceeded' });
+    expect(runner.mock.calls[0][0]).toMatchObject({ limits: { timeoutMs: 4_000 } });
+  });
+
+  it('tries a failed row write once more, then rethrows', async () => {
+    vi.mocked(callableFunctionCallRepository.record)
+      .mockRejectedValueOnce(new Error('unavailable'))
+      .mockRejectedValueOnce(new Error('still unavailable'));
+    await expect(read(runnerOf({ outcome: 'ok', contract: CONTRACT, durationMs: 5 }))).rejects.toThrow(
+      'still unavailable'
     );
-    await vi.advanceTimersByTimeAsync(10_000 + 60_000 + 15_000);
-    await expect(pending).resolves.toMatchObject({ ok: false, outcome: 'error', reason: 'no_reply' });
+    expect(h.rows).toEqual([]);
+  });
+});
+
+describe('surface caps', () => {
+  it('never wait past 45 s, inside the web function', () => {
+    for (const caps of Object.values(CALLABLE_FUNCTION_SURFACE_CAPS)) expect(caps.waitMs).toBeLessThanOrEqual(45_000);
   });
 });

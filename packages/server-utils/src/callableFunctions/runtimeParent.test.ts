@@ -627,6 +627,17 @@ describe('error paths of the child reply', () => {
     expect((await run(call(reply({ outputsJson: '{"deflection": 1}', packages: ['numpy'] })))).runtime).toBeUndefined();
   });
 
+  it('names the lock hash on a timeout, where the child never replied', async () => {
+    const lockedDir = path.join(FIXTURES, 'lockedPyodide');
+    const lock = await readFile(path.join(lockedDir, 'pyodide-lock.json'));
+    const result = await runCallableFunctionInChild(timed({ mode: 'hang' }, 300), {
+      childPath: CHILD,
+      pyodideDir: lockedDir,
+    });
+    expect(result.outcome).toBe('timeout');
+    expect(result.runtime).toEqual({ lockHash: createHash('sha256').update(lock).digest('hex'), packages: [] });
+  });
+
   it('maps a child start failure of request to payload_invalid and of load to runtime_unavailable', async () => {
     const failure = (kind: string) => call({ mode: 'reply', skipStart: true, reply: { ok: false, failure: kind } });
     expect(await run(failure('request'))).toMatchObject({ outcome: 'refused', reason: 'payload_invalid' });

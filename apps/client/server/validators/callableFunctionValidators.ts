@@ -1,3 +1,4 @@
+import { FUNCTION_CONTRACT_LIMITS } from '@bike4mind/common';
 import { z } from 'zod';
 
 // Bodies of pages/api/callable-functions/**. `.strict()` everywhere: the hash, the pin, the name, the state, and
@@ -18,8 +19,19 @@ export const callableFunctionPinBodySchema = z.object(pinFields).strict();
 
 export const callableFunctionPatchBodySchema = z.object({ enabled: z.boolean() }).strict();
 
-/** Empty: the tests and the contract come from the server's own read of the pinned code. */
-export const callableFunctionTestRunBodySchema = z.object({}).strict();
+/**
+ * At most the names of the declared tests to run (the ones a budget left not run); the tests themselves and the
+ * contract come from the server's own read of the pinned code.
+ */
+export const callableFunctionTestRunBodySchema = z
+  .object({
+    tests: z
+      .array(z.string().min(1).max(FUNCTION_CONTRACT_LIMITS.maxDescriptionLength))
+      .min(1)
+      .max(FUNCTION_CONTRACT_LIMITS.maxTests)
+      .optional(),
+  })
+  .strict();
 
 // The same 400 `invalid_body` envelope as the connection routes.
 export { parseMcpConnectionBody as parseCallableFunctionBody } from './mcpConnectionValidators';

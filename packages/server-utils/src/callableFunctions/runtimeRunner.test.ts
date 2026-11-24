@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import type { InvokeCommand } from '@aws-sdk/client-lambda';
 import {
+  callableFunctionRuntimeConfigured,
   createInProcessCallableFunctionRunner,
   createLambdaCallableFunctionRunner,
   parseCallableFunctionRunResult,
@@ -85,6 +86,25 @@ describe('parseCallableFunctionRunResult', () => {
       })
     ).toEqual({ outcome: 'output_invalid', durationMs: 1, problems: [{ path: 'a', message: 'is required' }] });
     expect(parseCallableFunctionRunResult({ outcome: 'ok', durationMs: 1, contract: { name: 'x' } })).toBeNull();
+  });
+
+  it('refuses a reply whose error class the call log would refuse', () => {
+    const error = (errorClass: unknown) =>
+      parseCallableFunctionRunResult({ outcome: 'error', durationMs: 1, errorClass });
+    expect(error('ZeroDivisionError')).toEqual({ outcome: 'error', durationMs: 1, errorClass: 'ZeroDivisionError' });
+    expect(error('v_input text with spaces')).toBeNull();
+    expect(error(7)).toBeNull();
+  });
+});
+
+describe('callableFunctionRuntimeConfigured', () => {
+  it('is true with the function name or both child paths, false otherwise', () => {
+    const configured = (env: Record<string, string>) => callableFunctionRuntimeConfigured(env as NodeJS.ProcessEnv);
+    expect(configured({ CALLABLE_FUNCTION_RUNTIME_FUNCTION_NAME: 'runtime-fn' })).toBe(true);
+    const both = { CALLABLE_FUNCTION_CHILD_PATH: '/srv/child.ts', CALLABLE_FUNCTION_PYODIDE_DIR: '/srv/pyodide' };
+    expect(configured(both)).toBe(true);
+    expect(configured({ CALLABLE_FUNCTION_CHILD_PATH: '/srv/child.ts' })).toBe(false);
+    expect(configured({})).toBe(false);
   });
 });
 

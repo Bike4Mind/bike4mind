@@ -8,6 +8,7 @@ import { CallableFunctionCall, callableFunctionCallRepository } from './Callable
 const HASH = 'a'.repeat(64);
 
 const row = (overrides: Partial<ICallableFunctionCall> = {}): ICallableFunctionCall => ({
+  op: 'call',
   functionId: new mongoose.Types.ObjectId().toHexString(),
   ownerUserId: 'owner-1',
   callerUserId: 'owner-1',
@@ -63,6 +64,8 @@ describe('CallableFunctionCall', () => {
       /outcome/
     );
     await expect(callableFunctionCallRepository.record(row({ surface: 'slack' as never }))).rejects.toThrow(/surface/);
+    await expect(callableFunctionCallRepository.record(row({ op: 'invoke' as never }))).rejects.toThrow(/op/);
+    await expect(callableFunctionCallRepository.record(row({ op: undefined as never }))).rejects.toThrow(/op/);
     await expect(
       callableFunctionCallRepository.record(row({ outcome: 'error', reason: 'Traceback (most recent call last)' }))
     ).rejects.toThrow(/reason/);

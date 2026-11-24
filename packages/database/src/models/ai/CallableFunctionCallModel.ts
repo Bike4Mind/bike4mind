@@ -1,4 +1,5 @@
 import {
+  CALLABLE_FUNCTION_CALL_OPS,
   CALLABLE_FUNCTION_CALL_OUTCOMES,
   CALLABLE_FUNCTION_CALL_SURFACES,
   type ICallableFunctionCall,
@@ -24,6 +25,7 @@ const RuntimeSchema = new Schema(
 // Strict, so a field passed in by mistake (an input, an output) is dropped rather than stored.
 const CallableFunctionCallSchema = new Schema<ICallableFunctionCallDocument>(
   {
+    op: { type: String, enum: CALLABLE_FUNCTION_CALL_OPS, required: true },
     functionId: { type: String, required: true, maxlength: 64 },
     ownerUserId: { type: String },
     callerUserId: { type: String, required: true },
