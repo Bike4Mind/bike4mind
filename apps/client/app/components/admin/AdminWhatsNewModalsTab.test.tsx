@@ -12,6 +12,7 @@ const mocks = vi.hoisted(() => ({
   toggle: vi.fn(),
   remove: vi.fn(),
   create: vi.fn(),
+  update: vi.fn(),
   deployment: vi.fn(),
   toggleState: {} as Record<string, unknown>,
   highlights: vi.fn(),
@@ -24,7 +25,7 @@ vi.mock('@client/app/hooks/data/whatsNewModals', () => ({
   useDeleteWhatsNewModal: () => idleMutation(mocks.remove),
   useToggleWhatsNewModal: () => ({ ...idleMutation(mocks.toggle), ...mocks.toggleState }),
   useCreateWhatsNewModal: () => idleMutation(mocks.create),
-  useUpdateWhatsNewModal: () => idleMutation(),
+  useUpdateWhatsNewModal: () => idleMutation(mocks.update),
   useUpdateWhatsNewModalVariants: () => idleMutation(),
   useGetRawModalVariants: () => ({ data: undefined, isLoading: false }),
   useGetHighlightsConfig: mocks.highlights,
@@ -69,6 +70,7 @@ describe('AdminWhatsNewModalsTab', () => {
     mocks.toggle.mockReset();
     mocks.remove.mockReset();
     mocks.create.mockReset();
+    mocks.update.mockReset();
     mocks.toggleState = {};
     // A fork stage hides the weekly highlights section; only the last test shows it.
     mocks.deployment.mockReturnValue({ data: { stage: 'production', isForkProduction: true } });
@@ -165,6 +167,37 @@ describe('AdminWhatsNewModalsTab', () => {
 
     expect(mocks.create).toHaveBeenCalledTimes(1);
     expect(mocks.create.mock.calls[0][0].endDate).toBeUndefined();
+  });
+
+  it('shows the edit form end date as unset for a modal without one', async () => {
+    mocks.modals.mockReturnValue(listResult([modal('a', { description: 'Body' })]));
+    renderTab();
+
+    await userEvent.click(screen.getByTestId('whats-new-row-actions-a'));
+    await userEvent.click(screen.getByTestId('whats-new-row-edit-a'));
+    expect(screen.getByTestId('whats-new-edit-enddate-input-empty')).toHaveTextContent('No end date');
+    expect(screen.queryByTestId('whats-new-edit-enddate-input')).not.toBeInTheDocument();
+
+    await userEvent.click(screen.getByTestId('whats-new-edit-submit-btn'));
+    expect(mocks.update.mock.calls[0][0].updates.endDate).toBeUndefined();
+  });
+
+  it('removes an existing end date from the edit form', async () => {
+    // Midday UTC so the stored instant is the same calendar day in every zone.
+    mocks.modals.mockReturnValue(listResult([modal('a', { description: 'Body', endDate: '2027-03-01T12:00:00Z' })]));
+    renderTab();
+
+    await userEvent.click(screen.getByTestId('whats-new-row-actions-a'));
+    await userEvent.click(screen.getByTestId('whats-new-row-edit-a'));
+    expect(screen.getByTestId('whats-new-edit-enddate-input')).toHaveValue('2027-03-01');
+
+    await userEvent.click(screen.getByTestId('whats-new-edit-enddate-input-clear-btn'));
+    expect(screen.getByTestId('whats-new-edit-enddate-input-empty')).toBeInTheDocument();
+
+    await userEvent.click(screen.getByTestId('whats-new-edit-submit-btn'));
+    expect(mocks.update).toHaveBeenCalledTimes(1);
+    expect(mocks.update.mock.calls[0][0]).toMatchObject({ modalId: 'a' });
+    expect(mocks.update.mock.calls[0][0].updates.endDate).toBeUndefined();
   });
 
   it('shows a retryable error when the modals fail to load', async () => {
