@@ -53,7 +53,7 @@ The endpoint keeps no session. It issues no session id and ignores one sent to i
 }
 ```
 
-The limits are those of the Functions API: 5 MB in and out, 45 seconds per call, and the same per-user rate limit.
+The limits are 5 MB in, 2 MB out, 45 seconds per call, and the same per-user rate limit as the Functions API. The output goes back twice, once as `structuredContent` and once in the text block, so an output over 2 MB returns `The function returned more than a call can carry.` instead.
 
 ## Refusals
 
@@ -61,6 +61,7 @@ A request the endpoint refuses before reading any MCP message gets an HTTP error
 
 - `403` with `required_scopes`: the key does not hold `functions:invoke`.
 - `403`: the request carries no API key, or callable functions over MCP are turned off for your account.
+- `400`: the body is a JSON-RPC batch. Send one message per request.
 - `429`: you passed the rate limit.
 
 A call that cannot run returns a result with `isError: true` and the reason in its text block:
@@ -68,3 +69,4 @@ A call that cannot run returns a result with `isError: true` and the reason in i
 - `Function not found`: the name is not one of your live functions. A draft, a turned-off function, and another person's function answer the same way.
 - `Input span must be a number.`: an input does not fit `inputSchema`; the text names the first field.
 - The function raised an error, ran out of memory, returned outputs that do not fit `outputSchema`, or ran past its time limit. When the function ran, `_meta.stamp` is included.
+- `Internal error`: the endpoint could not read your functions. `tools/list` answers the same text as a JSON-RPC error.
