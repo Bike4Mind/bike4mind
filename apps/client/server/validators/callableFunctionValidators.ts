@@ -1,4 +1,4 @@
-import { FUNCTION_CONTRACT_LIMITS } from '@bike4mind/common';
+import { CALLABLE_FUNCTION_EXAMPLE_LIMITS, FUNCTION_CONTRACT_LIMITS } from '@bike4mind/common';
 import { z } from 'zod';
 
 // Bodies of pages/api/callable-functions/**. `.strict()` everywhere: the hash, the pin, the name, the state, and
@@ -30,6 +30,33 @@ export const callableFunctionTestRunBodySchema = z
       .min(1)
       .max(FUNCTION_CONTRACT_LIMITS.maxTests)
       .optional(),
+  })
+  .strict();
+
+/** Empty: the sequence, runtime, results, label, and state all come from the server's own run. */
+export const callableFunctionPromoteBodySchema = z.object({}).strict();
+
+const valueRecord = z.record(z.string(), z.unknown());
+
+/** Shape only: the registry checks each example against the stored contract as it checks declared tests. */
+export const callableFunctionExamplesBodySchema = z
+  .object({
+    examples: z
+      .array(
+        z
+          .object({
+            name: z.string().trim().min(1).max(FUNCTION_CONTRACT_LIMITS.maxDescriptionLength),
+            input: valueRecord,
+            expected: valueRecord,
+            tolerance: z
+              .object({ abs: z.number().min(0).optional(), rel: z.number().min(0).optional() })
+              .strict()
+              .optional(),
+            citation: z.string().trim().min(1).max(CALLABLE_FUNCTION_EXAMPLE_LIMITS.maxCitationLength),
+          })
+          .strict()
+      )
+      .max(CALLABLE_FUNCTION_EXAMPLE_LIMITS.maxExamples),
   })
   .strict();
 

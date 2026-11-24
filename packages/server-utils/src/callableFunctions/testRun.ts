@@ -8,8 +8,12 @@ import {
   compareFunctionOutput,
   effectiveCallableFunctionStatus,
   type CallableFunctionCallOutcome,
+  type CallableFunctionHead,
+  type FunctionContract,
   type FunctionContractProblem,
   type FunctionOutputMismatch,
+  type FunctionTestCase,
+  type ICallableFunctionDocument,
 } from '@bike4mind/common';
 import { artifactRepository, callableFunctionRepository } from '@bike4mind/database';
 import { assertCallableFunctionsEnabled } from './access';
@@ -78,12 +82,27 @@ export interface CallableFunctionTestRun {
   results: CallableFunctionTestCaseResult[];
 }
 
-export interface CallableFunctionTestRunOptions {
+export interface CallableFunctionServerRunOptions {
   runner?: CallableFunctionRunner | null;
-  /** Names of the declared tests to run, in declared order; every test when absent. */
-  tests?: string[];
   /** Never above `CALLABLE_FUNCTION_TEST_RUN_BUDGET_MS`. */
   budgetMs?: number;
+}
+
+export interface CallableFunctionTestRunOptions extends CallableFunctionServerRunOptions {
+  /** Names of the declared tests to run, in declared order; every test when absent. */
+  tests?: string[];
+}
+
+export interface CallableFunctionServerRunTarget {
+  fn: ICallableFunctionDocument;
+  head: CallableFunctionHead | null;
+  runner: CallableFunctionRunner;
+  /** The contract the server read from the pinned code, equal to the stored one. */
+  contract: FunctionContract;
+  /** The contract read's call-log row. */
+  contractCallId: string;
+  /** Epoch ms after which no case starts; the contract read and every case draw from one budget. */
+  deadline: number;
 }
 
 /** Read outcomes that mean the runtime is not ready yet, so a retry can succeed. */
@@ -91,15 +110,15 @@ const isStarting = (reason: CallableFunctionCallReason | undefined) =>
   reason === 'wait_exceeded' || reason === 'start_timeout';
 
 /**
- * Runs the tests the pinned code declares through the dispatcher, one call each, in order, within one budget. The
- * tests come from the contract the server reads from the pinned code, never from the record's display copy or the
- * browser. Another owner's function answers 404, as a missing one does.
+ * The checks every server run of a saved function makes before any case runs: the setting, the owner's record, its
+ * status, a runtime, and a server read of `FUNCTION` from the pinned code that matches the stored contract. The
+ * budget starts here. Another owner's function answers 404, as a missing one does.
  */
-export async function runCallableFunctionTests(
+export async function prepareServerRun(
   actor: { id: string },
   id: string,
-  options: CallableFunctionTestRunOptions = {}
-): Promise<CallableFunctionTestRun> {
+  options: CallableFunctionServerRunOptions = {}
+): Promise<CallableFunctionServerRunTarget> {
   const budgetMs = Math.min(
     options.budgetMs ?? CALLABLE_FUNCTION_TEST_RUN_BUDGET_MS,
     CALLABLE_FUNCTION_TEST_RUN_BUDGET_MS
@@ -112,10 +131,8 @@ export async function runCallableFunctionTests(
   if (!fn) throw new NotFoundError('Tool not found');
 
   const artifact = await artifactRepository.findOne({ id: fn.pin.artifactId, userId: actor.id });
-  const status = effectiveCallableFunctionStatus(
-    fn,
-    artifact ? { version: artifact.version, deletedAt: artifact.deletedAt } : null
-  );
+  const head = artifact ? { version: artifact.version, deletedAt: artifact.deletedAt } : null;
+  const status = effectiveCallableFunctionStatus(fn, head);
   if (status === 'disabled' || status === 'source_deleted') {
     throw new ConflictError(
       status === 'disabled' ? 'This tool is turned off.' : 'The artifact behind this tool was deleted.',
@@ -150,18 +167,19 @@ export async function runCallableFunctionTests(
       code: 'contract_changed',
     });
   }
-  const declared = read.contract.tests ?? [];
-  if (declared.length === 0) throw new BadRequestError('This function declares no tests.', { code: 'no_tests' });
-  const wanted = options.tests ? new Set(options.tests) : null;
-  const unknown = options.tests?.filter(name => !declared.some(test => test.name === name)) ?? [];
-  if (unknown.length > 0) {
-    throw new BadRequestError('The function declares no test with that name.', {
-      code: 'unknown_test',
-      names: unknown,
-    });
-  }
-  const tests = wanted ? declared.filter(test => wanted.has(test.name)) : declared;
+  return { fn, head, runner, contract: read.contract, contractCallId: read.callId, deadline };
+}
 
+/**
+ * Runs each case through the dispatcher, one call and one call-log row each, in order, while the target's budget
+ * lasts; a case without `CALLABLE_FUNCTION_TEST_CASE_MIN_MS` left, before or after the dispatcher's own reads, comes
+ * back `not_run`.
+ */
+export async function runServerCases(
+  actor: { id: string },
+  target: CallableFunctionServerRunTarget,
+  cases: Pick<FunctionTestCase, 'name' | 'input' | 'expected' | 'tolerance'>[]
+): Promise<CallableFunctionTestCaseResult[]> {
   const results: CallableFunctionTestCaseResult[] = [];
   const skipped = (name: string, callId?: string): CallableFunctionTestCaseResult => ({
     name,
@@ -171,22 +189,28 @@ export async function runCallableFunctionTests(
     mismatch: null,
     ...(callId ? { callId } : {}),
   });
-  for (const test of tests) {
-    if (left() < CALLABLE_FUNCTION_TEST_CASE_MIN_MS) {
-      results.push(skipped(test.name));
+  for (const testCase of cases) {
+    if (target.deadline - Date.now() < CALLABLE_FUNCTION_TEST_CASE_MIN_MS) {
+      results.push(skipped(testCase.name));
       continue;
     }
     const call = await dispatchFunctionCall(
-      { caller: actor, functionId: fn.id, args: test.input, surface: 'test' },
-      { runner, contract: read.contract, deadline, minWaitMs: CALLABLE_FUNCTION_TEST_CASE_MIN_MS }
+      { caller: actor, functionId: target.fn.id, args: testCase.input, surface: 'test' },
+      {
+        runner: target.runner,
+        contract: target.contract,
+        deadline: target.deadline,
+        minWaitMs: CALLABLE_FUNCTION_TEST_CASE_MIN_MS,
+      }
     );
     if (call.outcome === 'refused' && call.reason === 'budget_exhausted') {
-      results.push(skipped(test.name, call.callId));
+      results.push(skipped(testCase.name, call.callId));
       continue;
     }
-    const mismatch = call.outcome === 'ok' ? compareFunctionOutput(test.expected, call.outputs, test.tolerance) : null;
+    const mismatch =
+      call.outcome === 'ok' ? compareFunctionOutput(testCase.expected, call.outputs, testCase.tolerance) : null;
     results.push({
-      name: test.name,
+      name: testCase.name,
       passed: call.outcome === 'ok' && mismatch === null,
       outcome: call.outcome,
       ...(call.reason ? { reason: call.reason } : {}),
@@ -198,14 +222,41 @@ export async function runCallableFunctionTests(
       ...(call.stamp ? { stamp: call.stamp } : {}),
     });
   }
+  return results;
+}
+
+/**
+ * Runs the tests the pinned code declares through the dispatcher, one call each, in order, within one budget. The
+ * tests come from the contract the server reads from the pinned code, never from the record's display copy or the
+ * browser.
+ */
+export async function runCallableFunctionTests(
+  actor: { id: string },
+  id: string,
+  options: CallableFunctionTestRunOptions = {}
+): Promise<CallableFunctionTestRun> {
+  const target = await prepareServerRun(actor, id, options);
+  const declared = target.contract.tests ?? [];
+  if (declared.length === 0) throw new BadRequestError('This function declares no tests.', { code: 'no_tests' });
+  const wanted = options.tests ? new Set(options.tests) : null;
+  const unknown = options.tests?.filter(name => !declared.some(test => test.name === name)) ?? [];
+  if (unknown.length > 0) {
+    throw new BadRequestError('The function declares no test with that name.', {
+      code: 'unknown_test',
+      names: unknown,
+    });
+  }
+  const tests = wanted ? declared.filter(test => wanted.has(test.name)) : declared;
+
+  const results = await runServerCases(actor, target, tests);
   const passed = results.filter(result => result.passed).length;
   const notRun = results.filter(result => result.outcome === 'not_run').length;
   return {
-    functionId: fn.id,
+    functionId: target.fn.id,
     passed,
     failed: results.length - passed - notRun,
     notRun,
-    contractCallId: read.callId,
+    contractCallId: target.contractCallId,
     results,
   };
 }
