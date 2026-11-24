@@ -43,14 +43,16 @@ describe('asynchronous callable function call queue', () => {
     expect(subscription).toMatch(/SINGLE_RECORD_BATCH\s*$/);
   });
 
-  // The handler's longest time limit is derived from this timeout; a longer visibility keeps a running call unseen.
-  it('gives the consumer 15 minutes and hides a job for longer than that', () => {
+  // The handler's longest time limit is derived from this timeout; with retry 2 the one redelivery lands one
+  // visibility timeout after receive, which must be after claim + 900 s for any claim within 5 minutes of receive.
+  it('gives the consumer 15 minutes and hides a job for 20, so the redelivery lands after a live worker is gone', () => {
     const timeout = minutes(subscription, 'timeout');
     expect(timeout).toBe(15);
     expect(read('packages/server-utils/src/callableFunctions/runtimeLimits.ts')).toMatch(
       /CALLABLE_FUNCTION_CALL_CONSUMER_TIMEOUT_SECONDS = 900;/
     );
-    expect(minutes(queue, 'visibilityTimeout')).toBeGreaterThan(timeout);
+    expect(queue).toMatch(/retry:\s*2\b/);
+    expect(minutes(queue, 'visibilityTimeout')).toBe(20);
   });
 
   it('alarms on its dead-letter queue and shows it in the admin queue list', () => {

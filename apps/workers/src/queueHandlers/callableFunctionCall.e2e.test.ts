@@ -17,6 +17,7 @@ import {
   CallableFunction,
   CallableFunctionCall,
   CallableFunctionResult,
+  callableFunctionCallRepository,
   callableFunctionResultRepository,
 } from '@bike4mind/database';
 import type { Logger } from '@bike4mind/observability';
@@ -324,7 +325,7 @@ describe('a queued call', () => {
   });
 
   describe('when the worker is lost after its claim', () => {
-    const claimAndAge = async (ageMs: number) => {
+    const claimAndAge = async (ageMs: number, redeliver = true) => {
       const { call } = await queue();
       await callableFunctionResultRepository.claim(call.callId);
       await CallableFunctionCall.updateOne({ _id: call.callId }, { $set: { outcome: 'running' } });
@@ -332,11 +333,11 @@ describe('a queued call', () => {
         { callId: call.callId },
         { $set: { updatedAt: new Date(Date.now() - ageMs) } }
       );
-      await handleCallableFunctionCallRecords(event({ callId: call.callId }), logger);
+      if (redeliver) await handleCallableFunctionCallRecords(event({ callId: call.callId }), logger);
       return call.callId;
     };
 
-    it('ends the result and the row as error worker_lost once it has run past 900 s', async () => {
+    it('ends the result and the row as error worker_lost once it has run past 900 s, dropping the input', async () => {
       const callId = await claimAndAge(901_000);
       expect(await readFunctionCall(OWNER, callId)).toMatchObject({
         state: 'finished',
@@ -344,12 +345,34 @@ describe('a queued call', () => {
         reason: 'worker_lost',
       });
       expect((await rows()).map(r => [r.outcome, r.reason])).toEqual([['error', 'worker_lost']]);
+      expect((await CallableFunctionResult.findOne({ callId }).lean())?.input).toBeUndefined();
     });
 
-    it('leaves a call a live worker may still be running as running', async () => {
-      const callId = await claimAndAge(800_000);
+    it('leaves a call a live worker may still be running as running just under 900 s', async () => {
+      const callId = await claimAndAge(899_000);
       expect(await readFunctionCall(OWNER, callId)).toMatchObject({ state: 'running' });
       expect((await rows()).map(r => r.outcome)).toEqual(['running']);
+    });
+
+    it('ends the row on the next delivery when the row rewrite threw after the result was ended', async () => {
+      const callId = await claimAndAge(901_000, false);
+      const rewrite = vi.spyOn(callableFunctionCallRepository, 'rewrite').mockRejectedValueOnce(new Error('row down'));
+      await expect(handleCallableFunctionCallRecords(event({ callId }), logger)).rejects.toThrow('row down');
+      rewrite.mockRestore();
+      expect(await readFunctionCall(OWNER, callId)).toMatchObject({ state: 'finished', reason: 'worker_lost' });
+      expect((await rows()).map(r => r.outcome)).toEqual(['running']);
+
+      await handleCallableFunctionCallRecords(event({ callId }), logger);
+
+      expect((await rows()).map(r => [r.outcome, r.reason])).toEqual([['error', 'worker_lost']]);
+      expect(await readFunctionCall(OWNER, callId)).toMatchObject({ state: 'finished', reason: 'worker_lost' });
+    });
+
+    it('leaves the row of a finished call untouched on a redelivery', async () => {
+      const { call } = await queue();
+      await runQueuedFunctionCall({ callId: call.callId }, { runner: okRunner() });
+      await handleCallableFunctionCallRecords(event({ callId: call.callId }), logger);
+      expect((await rows()).map(r => r.outcome)).toEqual(['ok']);
     });
   });
 

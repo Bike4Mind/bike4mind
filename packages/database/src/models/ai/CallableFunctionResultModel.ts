@@ -67,7 +67,8 @@ class CallableFunctionResultRepository extends BaseRepository<ICallableFunctionR
 
   /**
    * Ends a call still `running` since before `staleBefore` as `error`/`worker_lost`, in one guarded update so a live
-   * worker's result is never overwritten. Returns false when the call is not that old, or is no longer running.
+   * worker's result is never overwritten. Returns true when the call reads `worker_lost` afterwards, whether this
+   * call ended it or an earlier one did, and false when it is not that old or ended another way.
    */
   async endLost(callId: string, staleBefore: Date): Promise<boolean> {
     const ended = await this.model.updateOne(
@@ -75,7 +76,8 @@ class CallableFunctionResultRepository extends BaseRepository<ICallableFunctionR
       { $set: { state: 'finished', outcome: 'error', reason: 'worker_lost' }, $unset: { input: 1 } },
       { runValidators: true }
     );
-    return ended.modifiedCount === 1;
+    if (ended.modifiedCount === 1) return true;
+    return (await this.model.exists({ callId, state: 'finished', outcome: 'error', reason: 'worker_lost' })) !== null;
   }
 
   /**

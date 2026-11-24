@@ -55,9 +55,8 @@ export async function queueFunctionCall(
 }
 
 /**
- * Runs one queued call under the caller's time limit, once: a redelivered job finds it claimed and is skipped,
- * and ends it as `worker_lost` if its worker has held it `running` past the consumer's timeout.
- * The dispatcher checks everything again, so a function turned off while the call waited is refused.
+ * Runs one queued call under the caller's time limit, once. A redelivery skips a claimed call, and settles one
+ * whose worker is gone as `worker_lost`. The dispatcher checks everything again before it runs.
  */
 export async function runQueuedFunctionCall(
   job: CallableFunctionCallJob,
@@ -66,6 +65,7 @@ export async function runQueuedFunctionCall(
   const claimed = await callableFunctionResultRepository.claim(job.callId);
   if (!claimed) {
     const staleBefore = new Date(Date.now() - LOST_WORKER_AFTER_MS);
+    // True also when an earlier delivery already ended the result but died before it rewrote the row.
     if (await callableFunctionResultRepository.endLost(job.callId, staleBefore)) {
       await callableFunctionCallRepository.rewrite(job.callId, { outcome: 'error', reason: 'worker_lost' });
     }

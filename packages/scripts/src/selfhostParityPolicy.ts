@@ -730,7 +730,7 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   ),
   gapBecause(
     'queue:infra/queues.ts:callableFunctionCallQueue',
-    '41c498a7ac05c71d243fce6c218e0e7de9252d33d64d605d8d3c485a658e1cdd',
+    '19820bcb7c9767534c18366e2d9310ce50bbb6a8640daddeadba3cf1f5ae1962',
     'Asynchronous function calls are not wired on self-host: the broker declares no such queue, so an async invoke answers 503 and a synchronous call still runs.'
   ),
   gapBecause(

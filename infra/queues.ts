@@ -786,8 +786,9 @@ const slackExportQueueSubscription = subscribeUnlessPreview(
 // only the call id; the handler claims the call once, so a redelivery never runs the guest twice.
 const callableFunctionCallQueueDLQ = new sst.aws.Queue('callableFunctionCallQueueDLQ', {});
 const callableFunctionCallQueue = new sst.aws.Queue('callableFunctionCallQueue', {
-  // Above the consumer's timeout, so a call still running is never handed to a second consumer.
-  visibilityTimeout: '16 minutes',
+  // With retry 2 the one redelivery lands this long after receive; 5 minutes of slack past the consumer's
+  // timeout keeps it after claim + 900 s, so a live call is never handed on and a dead one is always settled.
+  visibilityTimeout: '20 minutes',
   dlq: {
     queue: callableFunctionCallQueueDLQ.arn,
     retry: 2,
