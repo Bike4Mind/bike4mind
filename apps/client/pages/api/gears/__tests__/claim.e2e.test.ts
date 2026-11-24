@@ -170,7 +170,7 @@ describe('social gear eligibility on a real replica set', () => {
         },
       }
     );
-    expect(await claim(owner.id, 'shareproject')).toMatchObject({ status: 409, body: { error: 'not_unlocked' } });
+    expect(await claim(owner.id, 'shareproject')).toMatchObject({ status: 409, body: { error: 'reward_pending' } });
     expect(await balanceOf(owner.id)).toBe(0);
     await User.updateOne({ _id: friend.id }, { $set: { emailVerified: true } });
     expect(await claim(owner.id, 'shareproject')).toEqual({
@@ -240,6 +240,29 @@ describe('social gear eligibility on a real replica set', () => {
     expect(await claim(owner.id, 'published')).toEqual({
       status: 200,
       body: { key: 'published', alreadyClaimed: true },
+    });
+  });
+
+  it('records no Published reward evidence for a same-signup-IP or blocked verified viewer', async () => {
+    const { recordVerifiedView } = await import('@server/services/publish/recordVerifiedView');
+    const owner = await seedUnlockedUser();
+    await User.updateOne({ _id: owner.id }, { $set: { 'signupMeta.ip': '203.0.113.1' } });
+    const sameIp = await member(true);
+    await User.updateOne({ _id: sameIp.id }, { $set: { 'signupMeta.ip': '203.0.113.1' } });
+    const banned = await member(true);
+    await User.updateOne({ _id: banned.id }, { $set: { isBanned: true } });
+    const friend = await member(true);
+    const published = await page(owner.id);
+    const artifact = { publicId: published.publicId, ownerId: owner.id };
+    for (const viewer of [sameIp.id, banned.id]) {
+      await recordVerifiedView(artifact, viewer);
+      expect(await claim(owner.id, 'published')).toMatchObject({ status: 409, body: { error: 'reward_pending' } });
+    }
+    expect((await PublishedArtifact.findById(published._id).lean())?.verifiedExternalViewCount ?? 0).toBe(0);
+    await recordVerifiedView(artifact, friend.id);
+    expect(await claim(owner.id, 'published')).toEqual({
+      status: 200,
+      body: { key: 'published', creditsAwarded: 5000 },
     });
   });
 

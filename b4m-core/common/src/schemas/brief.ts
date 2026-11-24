@@ -179,6 +179,31 @@ export const BriefScheduleResponseSchema = z.object({
     .describe('ISO 8601 instant of the next scheduled brief; null when the schedule is off or unset.'),
 });
 
+export const PendingDecisionCountSchema = z.object({
+  count: z
+    .number()
+    .int()
+    .nonnegative()
+    .describe('Decisions waiting on you: `approvals` plus `briefDecisions`. Nothing is counted twice.'),
+  approvals: z
+    .number()
+    .int()
+    .nonnegative()
+    .describe('Agent approvals still open in your notebooks: raised within the last 15 minutes and not yet answered.'),
+  briefDecisions: z
+    .number()
+    .int()
+    .nonnegative()
+    .describe(
+      'Decisions in your latest ready brief that are not agent approvals. An approval decision in the brief is ' +
+        'counted under `approvals` while it is open, and not at all once it was answered or lapsed.'
+    ),
+  briefId: z
+    .string()
+    .nullable()
+    .describe('The latest ready brief `briefDecisions` comes from; null when there is none.'),
+});
+
 export type Brief = z.infer<typeof BriefSchema>;
 export type BriefItem = z.infer<typeof BriefItemSchema>;
 export type BriefDecision = z.infer<typeof BriefDecisionSchema>;
@@ -196,3 +221,4 @@ export type StoredBriefDecision = Omit<BriefDecision, 'approval' | 'question'> &
 };
 export type BriefSourceRef = z.infer<typeof BriefSourceRefSchema>;
 export type BriefDraftReply = z.infer<typeof BriefDraftReplySchema>;
+export type PendingDecisionCount = z.infer<typeof PendingDecisionCountSchema>;

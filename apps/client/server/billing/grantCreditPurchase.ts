@@ -16,15 +16,6 @@ export type CreditPurchaseGrant = {
 
 export type CreditPurchaseGrantResult = 'granted' | 'already_granted';
 
-/**
- * Grants a paid credit purchase exactly once per payment intent.
- *
- * The ledger row and the balance increment commit in one transaction. addCredits writes them as
- * two separate writes, and the webhook treats an existing row as "already granted", so a failure
- * between them would leave a row with no credits behind it that every Stripe redelivery then
- * acknowledged. Inside the transaction, either both writes land or neither does, and a redelivery
- * after a failure grants for real. Same shape as pages/api/gears/claim.ts.
- */
 export async function grantCreditPurchase(
   grant: CreditPurchaseGrant,
   logger?: Logger

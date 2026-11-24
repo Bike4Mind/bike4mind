@@ -1,7 +1,15 @@
-import { IFabFileRepository, IProjectDocument, IProjectRepository, IUserDocument } from '@bike4mind/common';
+import {
+  IFabFileRepository,
+  IInviteRepository,
+  IProjectDocument,
+  IProjectRepository,
+  IUserDocument,
+  IUserRepository,
+} from '@bike4mind/common';
 import { NotFoundError, secureParameters } from '@bike4mind/utils';
 import { z } from 'zod';
 import { canonicalId } from '../utils/objectIds';
+import { revokeProjectFileGrants } from './revokeProjectFileGrants';
 
 const removeSystemPromptsSchema = z.object({
   projectId: z.string(),
@@ -14,12 +22,14 @@ interface RemoveSystemPromptsAdapters {
   db: {
     fabFiles: IFabFileRepository;
     projects: IProjectRepository;
+    users: Pick<IUserRepository, 'findByIds'>;
+    invites: Pick<IInviteRepository, 'findAllByDocumentId'>;
   };
 }
 
 // Removes the given fileIds from a project's systemPrompts in one pass. Idempotent:
-// ids that aren't present are simply skipped (mirrors removeFiles). System prompts do
-// not un-share the underlying fabFile, so this only touches project.systemPrompts.
+// ids that aren't present are simply skipped (mirrors removeFiles). Revokes the grants the
+// project pushed onto each removed file, like removeFiles, unless it is still in fileIds.
 export const removeSystemPrompts = async (
   user: IUserDocument,
   params: RemoveSystemPromptsParameters,
@@ -45,10 +55,26 @@ export const removeSystemPrompts = async (
   ) as IProjectDocument;
 
   const removeSet = new Set(fileIds.map(canonicalId));
+  const removedIds = project.systemPrompts
+    .map(prompt => prompt.fileId)
+    .filter(fileId => removeSet.has(canonicalId(fileId)));
   project.systemPrompts = project.systemPrompts.filter(prompt => !removeSet.has(canonicalId(prompt.fileId)));
   project.updatedAt = new Date();
 
   await db.projects.update({ id: project.id, systemPrompts: project.systemPrompts, updatedAt: project.updatedAt });
+
+  // A file still in fileIds stays shared with the members (removeFiles makes the mirror check).
+  // Looked up unscoped, as acceptProject does: a revoke only narrows access, and the caller already
+  // holds update on the project. An id with no live row may be soft-deleted, so it is revoked with
+  // includeDeleted; one with no row at all is a no-op there.
+  const attachedFileIds = new Set((project.fileIds ?? []).map(canonicalId));
+  const revoking = removedIds.filter(fileId => !attachedFileIds.has(canonicalId(fileId)));
+  if (revoking.length > 0) {
+    const files = await db.fabFiles.findAllByIds(revoking);
+    const live = new Set(files.map(file => canonicalId(String(file.id))));
+    const softDeletedIds = revoking.filter(fileId => !live.has(canonicalId(fileId)));
+    await revokeProjectFileGrants(project.id, { files, softDeletedIds }, adapters);
+  }
 
   return project;
 };

@@ -11,7 +11,7 @@ import type { RootPolicy, ModelSelection, WorkerTask } from './orchestration';
  */
 
 import type { GithubRef } from './githubRefs';
-import type { GenerationJobState, PromptCacheTtl, ValidationViolation } from '@bike4mind/common';
+import type { GenerationJobState, PlanProgress, PromptCacheTtl, ValidationViolation } from '@bike4mind/common';
 import type { ReasoningEffortSetting } from '@bike4mind/local-models/model-settings';
 import type { ChildOutcome } from './agentOutcome';
 import type { ChatImportOrigin } from './claudeImport';
@@ -188,6 +188,12 @@ export interface ChatToolCall {
   approvalId?: string;
   /** What the user is being asked to allow, ready to display. Set with `approvalId`. */
   approvalDetail?: string;
+  /**
+   * Set with `approvalId` on a shell call the model described: its own words on what the command
+   * does. Unchecked, so a surface shows it only next to `approvalDetail`, never in its place, and
+   * nothing decides on it (see isQuickApproval in watch.ts).
+   */
+  approvalDescription?: string;
   /**
    * Set with `approvalId` on a tool whose effect cannot be undone. The card must not offer
    * "always in this chat" for one of these, and main refuses to honour a standing approval
@@ -744,6 +750,21 @@ export type ChatAutomaticOrigin =
       summary: string;
     };
 
+/** The structured half of a settled child's report, for the thread's card. See ChatMessage.childReport. */
+export interface ChatChildReport {
+  sessionId: string;
+  title: string;
+  outcome: ChildOutcome;
+  /** The child's worktree branch; absent when it shared its parent's folder. */
+  branch?: string;
+  /** Short HEAD of that worktree; absent when git was slow, absent or the child has no worktree. */
+  headSha?: string;
+  /** The child's last reply, cut by childReport.ts cutReply (see replyTruncated). Untrusted text from another session. */
+  reply?: string;
+  /** The reply was cut at the cap; the rest is in the child's own session. */
+  replyTruncated?: boolean;
+}
+
 export interface ChatMessage {
   id: string;
   role: ChatRole;
@@ -840,6 +861,15 @@ export interface ChatMessage {
    * branched from, so the thread can say so and link back. See ChatService.startSideChat.
    */
   sideChatOf?: { sessionId: string; title: string };
+  /**
+   * Set with `system` on the report a settled spawned session leaves in its parent, so the thread
+   * can draw it as a card without parsing `content` (the model's copy). See
+   * ChatService.reportSettledAgent; withheld whole from a hosted parent of a device-local child
+   * (flushChildReports). Absent on reports stored before this field existed, and on waiting notices.
+   */
+  childReport?: ChatChildReport;
+  /** The child this settled report is from. Set even when `childReport` is withheld from a hosted parent. */
+  reportedChildId?: string;
   /**
    * Artifacts parsed out of this reply. Their markup is NOT in `content`, which holds the prose
    * around them; the wire rebuilds it from here (restoreArtifactMarkup) so the model still sees
@@ -1414,6 +1444,12 @@ interface ChatSessionMeta {
    * overwrites a title it did not put there; nothing in the renderer draws it.
    */
   titleLocked?: boolean;
+  /**
+   * Who put a locked title there: 'user' for a hand rename, 'agent' for session_rename. Absent on
+   * a title locked at creation (a spawn naming its child) and on files written before this field
+   * existed; see agentMayRetitle in SessionStore for how each case is read.
+   */
+  titleSource?: 'user' | 'agent';
   model: string;
   createdAt: string;
   updatedAt: string;
@@ -1506,6 +1542,8 @@ export interface ChatSessionSummary extends ChatSessionMeta {
   totalCredits?: number;
   /** Issue and PR refs the transcript mentions, first seen first; absent when none. See githubRefs.ts. */
   githubRefs?: GithubRef[];
+  /** Progress of the thread's latest plan; absent when it has none. See todos.ts. */
+  plan?: PlanProgress;
 }
 
 export interface ChatSession extends ChatSessionMeta {
@@ -1572,7 +1610,7 @@ export type ModelPhase =
   { kind: 'waiting' } | { kind: 'thinking' } | { kind: 'responding' } | { kind: 'writing-tool'; name: string };
 
 /** A newer context notice of the same kind replaces the older one for a conversation. */
-export type ContextNoticeKind = 'context-size' | 'no-tools';
+export type ContextNoticeKind = 'context-size' | 'no-tools' | 'run-budget';
 
 export type ChatStreamEvent =
   | {
@@ -1658,6 +1696,8 @@ export type ChatStreamEvent =
   | { type: 'context-trimmed'; sessionId: string; dropped: number }
   /** Auto changed a local model's context mid-turn in a way that affects its replies (slower, or smaller). */
   | { type: 'context-notice'; sessionId: string; message: string; kind?: ContextNoticeKind }
+  /** Withdraws the notice of `kind` that no longer holds, such as a budget warning after a raise. */
+  | { type: 'context-notice-cleared'; sessionId: string; kind: ContextNoticeKind }
   /**
    * A first turn is cutting the session's worktree before it goes out
    * (ChatService.ensureWorkspace). `branch` arrives once it has been chosen; `running: false`
@@ -2036,6 +2076,8 @@ export interface ChatSpawnSuggestion {
   dismissedBy?: 'user' | 'assistant';
   /** A user outcome the model has not been told yet; cleared when the next turn carries it. */
   unreported?: boolean;
+  /** Why the automatic start Settings asked for did not happen; the card shows it and waits. */
+  autoStartError?: string;
 }
 
 /** 'here' runs the task as the user's own next message in the suggesting conversation. */
@@ -2053,6 +2095,8 @@ interface SpawnSuggestionStartBase {
   title: string;
   /** The user changed the prompt or title before starting. */
   edited: boolean;
+  /** Started by the Settings location with no card; the model heard it in the tool result. */
+  auto?: boolean;
 }
 
 export type ChatSpawnSuggestionStart =
@@ -2223,10 +2267,20 @@ export const SESSION_EXPIRED_STOP = 'session_expired';
 export const SERVER_CREDENTIALS_STOP = 'server_credentials';
 
 /**
+ * The stop reason of a turn the server refused because its orchestration run's credit budget is
+ * used up. Resumable: refused before the provider ran, so the transcript ends on a request
+ * boundary, and raising the budget continues every session the run paused.
+ */
+export const RUN_BUDGET_STOP = 'run_budget_exhausted';
+
+/** What raising a run budget did: how many paused sessions it continued, or why it was refused. */
+export type RaiseRunBudgetResult = { ok: true; resumed: number } | { ok: false; error: string };
+
+/**
  * Whether Continue can carry the turn on in place. A turn cut by an expired session stopped at
  * a request boundary - before any of that request streamed - so its transcript ends where a
  * budget-stopped one does, or on the user's own prompt.
  */
 export function isResumableStop(reason?: string): boolean {
-  return isTurnBudgetStop(reason) || reason === SESSION_EXPIRED_STOP;
+  return isTurnBudgetStop(reason) || reason === SESSION_EXPIRED_STOP || reason === RUN_BUDGET_STOP;
 }

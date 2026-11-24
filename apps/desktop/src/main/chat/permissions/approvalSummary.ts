@@ -125,8 +125,10 @@ function reasonLabel(entry: ApprovalLogEntry): string {
   if (source) reasons.push(`untrusted content (${source[1]})`);
   if (/because of the rule/.test(because)) reasons.push('ask rule');
   if (/repeated \d+ times/.test(because)) reasons.push('repeated call');
-  // Prefix kept in step with FULL_ACCESS_ASK_PREFIX in ChatService.
+  // Prefixes kept in step with FULL_ACCESS_ASK_PREFIX, AUTO_ASK_PREFIX and ASK_MODE_REASON in ChatService.
   if (/Asked in Full access because:/.test(because)) reasons.push('full access stop');
+  if (/Asked in Approve for me because:/.test(because)) reasons.push('tool check');
+  if (/is in Ask mode/.test(because)) reasons.push('ask mode');
   return reasons.length > 0 ? reasons.join(' + ') : 'other';
 }
 

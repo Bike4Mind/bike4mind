@@ -595,7 +595,7 @@ export interface ConversationController {
    */
   setApprovalMode: (mode: ChatApprovalMode) => Promise<void>;
   /** Turn Orchestrate on or off for this conversation; see ChatSessionMeta.orchestrate. */
-  setOrchestrate: (orchestrate: boolean) => Promise<void>;
+  setOrchestrate: (orchestrate: boolean, budgetCredits?: number) => Promise<void>;
   /** Where this Code session is grounded, for the chip row. Inert on a Chat session. */
   project: ProjectBindingController;
   /**
@@ -930,6 +930,12 @@ export function useConversation(
         // Counted before the session filter below, and deliberately: a reply running in a
         // background conversation spends from the same balance as this one.
         setSettledTurns(count => count + 1);
+      }
+      if (event.type === 'context-notice-cleared') {
+        const keep = (list: ContextNotice[] | undefined) => (list ?? []).filter(item => item.kind !== event.kind);
+        if (event.sessionId === activeSessionId.current) setNotices(keep);
+        else backgroundNotices.set(event.sessionId, keep(backgroundNotices.get(event.sessionId)));
+        return;
       }
       if (event.type === 'context-notice' && event.sessionId !== activeSessionId.current) {
         backgroundNotices.set(
@@ -1544,9 +1550,13 @@ export function useConversation(
   );
 
   const setOrchestrate = useCallback(
-    async (orchestrate: boolean) => {
+    async (orchestrate: boolean, budgetCredits?: number) => {
       if (!sessionId) return;
-      const updated = await window.b4m.chat.setSessionOrchestrate(sessionId, orchestrate).catch((error: unknown) => {
+      const request =
+        budgetCredits === undefined
+          ? window.b4m.chat.setSessionOrchestrate(sessionId, orchestrate)
+          : window.b4m.chat.setSessionOrchestrate(sessionId, orchestrate, budgetCredits);
+      const updated = await request.catch((error: unknown) => {
         if (activeSessionId.current === sessionId) {
           setNotice(`Could not change Orchestrate. ${error instanceof Error ? error.message : String(error)}`);
         }

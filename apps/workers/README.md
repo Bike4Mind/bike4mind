@@ -19,7 +19,7 @@ Background work that used to live under `apps/client/server`, moved here one cat
 
 ## Interim bridge into apps/client
 
-Most of the code these handlers call still lives in `apps/client/server`. Until it is extracted into a shared package, `tsconfig.json` and `vitest.config.mts` map `@server/*`, `@client/*` and the other client aliases into `../client`. The dependency is one-way:
+Handlers no longer import `apps/client/server` through the `@server/*` alias; shared server code lives in `packages/server-utils`. `tsconfig.json` and `vitest.config.mts` still map some client aliases into `../client`. The dependency is one-way:
 
 - `apps/workers` may import `apps/client/server` code through those aliases.
 - The self-host `worker` and `agentexecutor` services run under `tsconfig.selfhost.json`, which extends `tsconfig.json` and also includes `../client/**/*.ts`. tsx applies compilerOptions only to included files, so without it the bridged client files would transpile outside strict mode. It is runtime-only; `tsc` never reads it.

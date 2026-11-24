@@ -222,6 +222,19 @@ describe('the model a conversation settles on', () => {
     expect((await service.createSession()).model).toBe(QWEN.id);
   });
 
+  it('keeps the live plan of a turn in flight on the settled summary', async () => {
+    const { service, local } = await fixture({ mode: 'device-local', local: [] });
+    const session = await service.createSession();
+    local.current = [GEMMA];
+    // livePlans is private; a turn in flight is the state under test, and its plan is all the overlay reads.
+    const livePlans = (service as unknown as { livePlans: Map<string, unknown> }).livePlans;
+    livePlans.set(session.id, { done: 1, total: 3, current: 'Step 2' });
+
+    const settled = await service.settleSessionModel(session.id);
+    expect(settled?.session.model).toBe(GEMMA.id);
+    expect(settled?.session.plan).toEqual({ done: 1, total: 3, current: 'Step 2' });
+  });
+
   it('is the first listed model with nothing remembered', async () => {
     const { service, local } = await fixture({ mode: 'device-local', local: [] });
     const session = await service.createSession();

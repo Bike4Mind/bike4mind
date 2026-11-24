@@ -67,6 +67,7 @@ const FULL_AGENT: { [K in keyof Required<AgentView>]: AgentView[K] } = {
   lastSnippet: `${SECRET} snippet`,
   usdCost: 1.25,
   credits: 1234,
+  plan: { done: 1, total: 3, current: `${SECRET} current`, next: `${SECRET} next` },
   pr: { number: 4242, state: 'open', repo: `${SECRET}/repo` },
   branch: `${SECRET}-branch`,
   oneClickDecision: true,
@@ -208,6 +209,7 @@ const SNAPSHOT_AGENT_FIELDS = {
   // Derived from activity and the last reply, both dropped; only a setup step's fixed label could remain.
   now: 'drop',
   decision: 'replace',
+  plan: 'drop',
   pr: 'drop',
   usdCost: 'drop',
   credits: 'drop',

@@ -7,6 +7,7 @@ import {
   buildDisallowList,
   buildSitemapPaths,
   buildSitemapUrl,
+  isCrawlableStage,
   normalizeOrigin,
 } from './crawlPolicy';
 
@@ -228,5 +229,16 @@ describe('buildSitemapUrl', () => {
 
   it('omits the line when the sitemap would be empty', () => {
     expect(buildSitemapUrl('https://example.test', [])).toBeUndefined();
+  });
+});
+
+describe('isCrawlableStage', () => {
+  it('treats production and an unstaged build as crawlable', () => {
+    expect(isCrawlableStage('production')).toBe(true);
+    expect(isCrawlableStage('')).toBe(true);
+  });
+
+  it.each(['dev', 'pr1234', 'shared-dev', 'Production'])('treats stage %j as not crawlable', stage => {
+    expect(isCrawlableStage(stage)).toBe(false);
   });
 });

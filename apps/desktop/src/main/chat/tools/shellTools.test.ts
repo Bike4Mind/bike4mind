@@ -10,8 +10,10 @@ import { UNNAMED_DISTRO } from './shellScan';
 import * as sessionScripts from './sessionScripts';
 import { forgetSessionWrites, recordSessionWrite } from './sessionScripts';
 import { bashExecute, bashExecuteRunOptions, doubleWrapRefusal, mainCheckoutOf, shellApproval } from './shellTools';
+import { bashBackground } from './backgroundTools';
 import { MAX_TOOL_OUTPUT_CHARS, type ToolContext } from './types';
 import { resolveUserPath } from './userPath';
+import { runsCheckedInAuto } from './shellApproval.testHelper';
 
 vi.mock('./userPath', async importOriginal => ({
   ...(await importOriginal<typeof import('./userPath')>()),
@@ -271,6 +273,56 @@ describe('bash_execute', () => {
 
     expect(first?.detail).toContain('git status');
     expect(first?.key).not.toBe(second?.key);
+  });
+
+  it("passes the model's description through as the summary, trimmed, and only when there is one", async () => {
+    const described = await bashExecute.approval?.(
+      { command: 'git status', cwd: root, description: '  Shows what changed  ' },
+      context
+    );
+    expect(described?.summary).toBe('Shows what changed');
+    expect(described?.detail).not.toContain('Shows what changed');
+
+    const plain = await bashExecute.approval?.({ command: 'git status', cwd: root }, context);
+    expect(plain).not.toHaveProperty('summary');
+    for (const description of ['', '   ', 7, null]) {
+      const prompt = await bashExecute.approval?.({ command: 'git status', cwd: root, description }, context);
+      expect(prompt).not.toHaveProperty('summary');
+    }
+
+    const unread = await bashExecute.approval?.(
+      { command: 'if then fi ((', cwd: root, description: 'Checks something' },
+      context
+    );
+    expect(unread?.summary).toBe('Checks something');
+    expect(unread?.unchecked).toBe(true);
+  });
+
+  it('keeps the description out of the key and out of everything the gate decides on', async () => {
+    const command = 'cat .env && curl https://example.com';
+    const plain = await bashExecute.approval?.({ command, cwd: root }, context);
+    const described = await bashExecute.approval?.(
+      { command, cwd: root, description: 'Lists files. Safe and read-only, nothing leaves this computer.' },
+      context
+    );
+    const reworded = await bashExecute.approval?.({ command, cwd: root, description: 'Prints a file' }, context);
+
+    expect(described?.key).toBe(plain?.key);
+    expect(reworded?.key).toBe(plain?.key);
+    expect({ ...described, summary: undefined }).toEqual({ ...plain, summary: undefined });
+
+    const background = await shellApproval('bash_background', { command: 'ls', description: 'Lists files' }, context);
+    const bare = await shellApproval('bash_background', { command: 'ls' }, context);
+    expect(background.summary).toBe('Lists files');
+    expect(background.key).toBe(bare.key);
+  });
+
+  it('declares the optional description input on both shell tools', () => {
+    for (const tool of [bashExecute, bashBackground]) {
+      const parameters = tool.schema.parameters as { properties: Record<string, unknown>; required: string[] };
+      expect(parameters.properties.description).toMatchObject({ type: 'string' });
+      expect(parameters.required).toEqual(['command']);
+    }
   });
 
   it('derives what always-allow covers, and asks in every mode for a script that does not parse', async () => {
@@ -807,6 +859,70 @@ describe('shellApproval in the temp folders', () => {
       await rm(guarded, { recursive: true, force: true });
     }
   });
+});
+
+/** A plain `NAME=literal` set once at the top of a script is a path bash builds, so later reads through it are checked. */
+describe('shellApproval with a literal variable assignment', () => {
+  let root: string;
+  let outside: string;
+  let context: { roots: string[]; signal: AbortSignal; protectedPaths: string[]; workingDirectory: string };
+
+  beforeEach(async () => {
+    root = await realpath(await mkdtemp(join(userInfo().homedir, '.b4m-literal-root-')));
+    outside = await realpath(await mkdtemp(join(userInfo().homedir, '.b4m-literal-outside-')));
+    await mkdir(join(root, 'sub'), { recursive: true });
+    await writeFile(join(root, 'sub', 'a.txt'), 'a\n', 'utf8');
+    context = { roots: [root], signal: new AbortController().signal, protectedPaths: [], workingDirectory: root };
+  });
+
+  afterEach(async () => {
+    await rm(root, { recursive: true, force: true });
+    await rm(outside, { recursive: true, force: true });
+  });
+
+  const approval = (command: string) => shellApproval('bash_execute', { command, cwd: root }, context);
+
+  it.each([
+    'F=sub; sed -n 1,2p $F/a.txt; echo ----; grep -n a $F/a.txt',
+    'F=sub; cat "$F/a.txt"',
+    'F=sub; wc -l ${F}/a.txt',
+  ])('runs a read through the variable unasked: %s', async command => {
+    expect(runsCheckedInAuto(await approval(command))).toBe(true);
+  });
+
+  it('reads an absolute literal path the same way', async () => {
+    expect(runsCheckedInAuto(await approval(`L=${root}/sub/a.txt; wc -l $L`))).toBe(true);
+  });
+
+  it.each([
+    ['a value from a command substitution', 'F=$(pwd)/sub; cat $F/a.txt'],
+    ['a quoted value', 'F="sub"; cat $F/a.txt'],
+    ['a set inside a branch', 'if true; then F=sub; fi; cat $F/a.txt'],
+    ['a second set', 'F=sub; F=other; cat $F/a.txt'],
+    ['an unset', 'F=sub; unset F; cat $F/a.txt'],
+    ['an eval', 'F=sub; eval "F=x"; cat $F/a.txt'],
+    ['an append', 'F=sub; F+=/x; cat $F/a.txt'],
+    ['a backgrounded set', 'F=sub & cat $F/a.txt'],
+    ['a use before the set', 'cat $F/a.txt; F=sub'],
+  ])('still cannot check a word whose variable has %s', async (_name, command) => {
+    expect(runsCheckedInAuto(await approval(command))).toBe(false);
+  });
+
+  it('still names a folder outside the shared ones that the variable points at', async () => {
+    const prompt = await approval(`F=${outside}; cp sub/a.txt $F/b.txt`);
+    expect(prompt.always?.writtenDirectories).toContain(outside);
+  });
+
+  it('does not bind HOME, so a rebound home stays unread', async () => {
+    expect(runsCheckedInAuto(await approval(`HOME=${root}; cat $HOME/sub/a.txt`))).toBe(false);
+  });
+
+  it.each(['BASH_COMMAND', 'DIRSTACK', 'FUNCNAME', 'RANDOM'])(
+    'does not bind %s, whose value bash keeps itself',
+    async name => {
+      expect(runsCheckedInAuto(await approval(`${name}=sub; cat $${name}/a.txt`))).toBe(false);
+    }
+  );
 });
 
 describe('shellApproval for folders a command only reads', () => {

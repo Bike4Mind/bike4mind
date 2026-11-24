@@ -43,6 +43,17 @@ public actor WidgetSnapshotRecorder {
     write(snapshot, reload: changed ? [WidgetKind.credits] : [])
   }
 
+  /// An open approval may lapse or be answered elsewhere without the count changing shape, so a write that still
+  /// holds approvals reloads too: the widget re-plans when they lapse from the new observation time.
+  public func recordPendingDecisions(_ count: PendingDecisionCount) {
+    var snapshot = store.load() ?? .empty
+    let previous = snapshot.pendingDecisions
+    let changed = previous?.approvals != count.approvals || previous?.briefDecisions != count.briefDecisions
+    snapshot.pendingDecisions = .init(
+      approvals: count.approvals, briefDecisions: count.briefDecisions, observedAt: now())
+    write(snapshot, reload: changed || count.approvals > 0 ? [WidgetKind.pendingDecisions] : [])
+  }
+
   /// Folds one session's turns into the running-agents aggregate. Call whenever a chat screen's turns change.
   public func recordTurns(sessionID: String, sessionTitle: String, turns: [QuestTurn]) {
     let active = turns.filter(Self.isActive)

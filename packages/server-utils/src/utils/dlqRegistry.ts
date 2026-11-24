@@ -785,6 +785,17 @@ const DLQ_REGISTRY = [
     describe: entityAt('Quest', 'detail.requestId'),
   },
   {
+    label: 'moderation-alerts',
+    displayName: 'Moderation Escalation Alerts',
+    application: 'ModerationAlerts',
+    sourceQueue: null,
+    replay: 'unsafe',
+    description: 'Retains moderation escalation alerts that could not be posted to the abuse alarm channel.',
+    replayNote: 'No SQS replay destination; check the user in the text moderation review list instead.',
+    owner: 'Trust and safety',
+    describe: entityAt('User', 'detail.userId'),
+  },
+  {
     label: 'session-enrichment',
     displayName: 'Session Enrichment',
     application: 'SessionEnrichment',
@@ -934,7 +945,7 @@ const resolvers: DlqResolvers = {
 // infra/queues.ts partitions the same specs against the same reservedQueueNames, so the
 // registry lists exactly the pairs that deploy. Registers nothing when codegen could not read
 // the core names, or read names this file's DLQ_REGISTRY contradicts (a stale generated file).
-function contributedDescriptors(): DlqDescriptor[] {
+function contributedDescriptors(): (DlqDescriptor & Partial<DlqQueueHelp>)[] {
   const specs = generatedInfraResources.contributedInfraResources.queues;
   if (specs.length === 0) return [];
   const reserved = reservedQueueNames(generatedInfraResources);
@@ -958,11 +969,16 @@ function contributedDescriptors(): DlqDescriptor[] {
   }
   const result = partitionContributedQueues(specs, reserved);
   for (const line of describeDroppedContributions('contributed queue', result)) Logger.warn(`[dlqRegistry] ${line}`);
-  return result.registered.map(({ label, displayName, application, name }) => ({
+  return result.registered.map(({ label, displayName, application, name, description, replay, replayNote, owner }) => ({
     label,
     displayName,
     application,
     sourceQueue: name,
+    // Only declared help keys, so an entry without help stays exactly as it was.
+    ...(description === undefined ? {} : { description }),
+    ...(replay === undefined ? {} : { replay }),
+    ...(replayNote === undefined ? {} : { replayNote }),
+    ...(owner === undefined ? {} : { owner }),
   }));
 }
 

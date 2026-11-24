@@ -214,6 +214,36 @@ it('drops a root policy snapshot when orchestrate expires on restart, keeping a 
   expect((await restarted.get(child.id))?.orchestrationPolicy?.rootRunId).toBe('run-one');
 });
 
+it('keeps a budgeted root policy, with its pause, when orchestrate expires on restart', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'b4m-policy-budget-'));
+  const first = new SessionStore(directory, 'planner', 'launch-one');
+  const budgeted = {
+    rootSessionId: 'root',
+    rootRunId: 'run-one',
+    serverRunId: 'server-run',
+    budgetCredits: 100,
+    budgetPaused: true as const,
+    policy: inheritancePolicy(),
+  };
+  const root = await first.create('planner', { orchestrationPolicy: budgeted });
+  await first.setOrchestrate(root.id, true);
+
+  const reloaded = await new SessionStore(directory, 'planner', 'launch-two').get(root.id);
+  expect(reloaded?.orchestrate).toBeUndefined();
+  expect(reloaded?.orchestrationPolicy).toEqual(budgeted);
+});
+
+it('records a budget field only while the budget is the expected one', async () => {
+  const store = new SessionStore(await mkdtemp(join(tmpdir(), 'b4m-policy-guard-')), 'planner');
+  const root = await store.create('planner', {
+    orchestrationPolicy: { rootSessionId: 'root', rootRunId: 'run', budgetCredits: 200, policy: inheritancePolicy() },
+  });
+  expect(await store.setRunBudget(root.id, 'run', { budgetWarnedAt: 100 }, undefined, 100)).toBeNull();
+  expect((await store.get(root.id))?.orchestrationPolicy?.budgetWarnedAt).toBeUndefined();
+  await store.setRunBudget(root.id, 'run', { budgetWarnedAt: 200 }, undefined, 200);
+  expect((await store.get(root.id))?.orchestrationPolicy?.budgetWarnedAt).toBe(200);
+});
+
 it('warns without stored values for a malformed workerTask and stays silent for a valid session', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'b4m-parse-warn-'));
   const store = new SessionStore(directory, 'worker');

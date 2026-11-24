@@ -1,3 +1,4 @@
+import type { PlanProgress } from '@bike4mind/common';
 import { z } from 'zod';
 import { isStoppableState, type AgentState } from './agentState';
 import { MAX_LABEL_CHARS, MAX_OPTIONS, MAX_OTHER_CHARS } from './questions';
@@ -11,7 +12,7 @@ import { QUICK_SUMMARY_MAX } from './watch';
  * the snapshot. Bump `contract` on any breaking change.
  */
 
-export const VIEW_SNAPSHOT_CONTRACT = 1;
+export const VIEW_SNAPSHOT_CONTRACT = 2;
 
 const AGENT_STATES = [
   'needs-you',
@@ -38,6 +39,17 @@ const viewDecisionSchema = z.strictObject({
   oneClick: z.boolean().optional(),
 });
 
+/** Plan progress as display data: counts and two one-line labels, never the items' notes. */
+const viewPlanSchema = z
+  .strictObject({
+    done: z.number().int().min(0),
+    total: z.number().int().min(0),
+    // Same cap as a plan item's text (planLeafSchema).
+    current: z.string().max(200).optional(),
+    next: z.string().max(200).optional(),
+  })
+  .refine(plan => plan.done <= plan.total, { message: 'done exceeds total' }) satisfies z.ZodType<PlanProgress>;
+
 const viewAgentSchema = z.strictObject({
   id,
   title: z.string(),
@@ -54,6 +66,8 @@ const viewAgentSchema = z.strictObject({
   pr: z.strictObject({ number: z.number().int().positive(), state: z.string() }).optional(),
   usdCost: z.number().nonnegative().optional(),
   credits: z.number().nonnegative().optional(),
+  /** Progress of its latest plan; absent when it has none. */
+  plan: viewPlanSchema.optional(),
 });
 
 /**
@@ -78,6 +92,7 @@ export const viewSnapshotSchema = z.strictObject({
   approvals: z.array(viewApprovalSchema).optional(),
 });
 
+export type ViewPlan = z.infer<typeof viewPlanSchema>;
 export type ViewAgent = z.infer<typeof viewAgentSchema>;
 export type ViewDecision = z.infer<typeof viewDecisionSchema>;
 export type ViewApproval = z.infer<typeof viewApprovalSchema>;

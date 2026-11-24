@@ -14,6 +14,7 @@ import { FinaleBanner } from './FinaleBanner';
 import { FocusPanel } from './FocusPanel';
 import { useRunSpend } from './runSpend';
 import { NeedsYouCard } from './NeedsYouCard';
+import { toMiniPayload, useOrchestrateMiniWindow, usePublishOrchestrateMini } from './orchestrateMini';
 import { numberAgents, redactForPresenter, restorePresentedAction, type PresentedStage } from './presenter';
 import type { OrchestratorViewId } from './orchestratorPrefs';
 import type { OrchestratorLayout } from './orchestratorLayout';
@@ -380,6 +381,18 @@ export function OrchestratorStage({
     () => (focused && rootId !== undefined ? toViewSnapshot(rootId, agents, parent, approvals) : undefined),
     [focused, rootId, agents, parent, approvals]
   );
+  // The mini window draws from the same (possibly redacted) roster as the views, never the real one.
+  const miniWindow = useOrchestrateMiniWindow();
+  const miniOpen = miniWindow?.on === true;
+  const miniPayload = useMemo(
+    () =>
+      miniOpen && rootId !== undefined && agents.length > 0
+        ? toMiniPayload(toViewSnapshot(rootId, agents, parent), skin, presenting)
+        : null,
+    [miniOpen, rootId, agents, parent, skin, presenting]
+  );
+  usePublishOrchestrateMini(miniPayload, miniOpen);
+
   // Through the same gate a view that does not ship with the app will go through.
   const onViewAction = async (action: ViewAction) => {
     const accepted = snapshot && acceptViewAction(snapshot, action);
@@ -454,6 +467,7 @@ export function OrchestratorStage({
             ambient={ambient && { on: ambient.on, onToggle: ambient.onToggle }}
             focus={focus}
             presenter={presenter}
+            miniWindow={miniWindow}
           />
           {presenting && <PresentingBadge />}
           <Typography

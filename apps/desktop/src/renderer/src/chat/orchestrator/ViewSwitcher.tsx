@@ -13,6 +13,7 @@ import {
   CaretDownIcon,
   CheckIcon,
   ConstellationIcon,
+  PlanIcon,
   SwimlanesIcon,
   TableIcon,
   TavernIcon,
@@ -95,6 +96,13 @@ export const ORCHESTRATOR_VIEW_INFO: Record<OrchestratorViewId, ViewInfo> = {
     description: 'Every agent in sortable rows',
     group: 'layout',
     icon: <TableIcon />,
+    ambient: false,
+  },
+  plan: {
+    label: 'Plan',
+    description: 'Done, working on and next for every agent',
+    group: 'layout',
+    icon: <PlanIcon />,
     ambient: false,
   },
   'tile-wall': {
@@ -191,6 +199,7 @@ export function ViewSwitcher({
   ambient,
   focus,
   presenter,
+  miniWindow,
 }: {
   layout: OrchestratorLayout;
   onLayoutChange(layout: OrchestratorLayout): void;
@@ -200,6 +209,8 @@ export function ViewSwitcher({
   focus?: Toggle;
   /** Presenter mode (presenter.ts), on top of whichever view is chosen; Reset leaves it as it is. */
   presenter?: Toggle;
+  /** The always-on-top Orchestrate mini window (orchestrateMini.ts); absent without the desktop bridge. */
+  miniWindow?: Toggle;
 }) {
   const view = layout.panes[0].view;
   const current = ORCHESTRATOR_VIEW_INFO[view];
@@ -346,6 +357,25 @@ export function ViewSwitcher({
                   </Typography>
                 </Box>
                 {presenter.on && <CheckIcon />}
+              </MenuItem>
+            </>
+          )}
+          {miniWindow && (
+            <>
+              <ListDivider />
+              <MenuItem
+                role="menuitemcheckbox"
+                aria-checked={miniWindow.on}
+                onClick={() => miniWindow.onToggle(!miniWindow.on)}
+                data-testid="orchestrator-mini-window-toggle"
+              >
+                <Box sx={{ flex: 1, minWidth: 0 }}>
+                  <Typography level="body-sm">Mini window</Typography>
+                  <Typography level="body-xs" textColor="text.tertiary">
+                    Keep what needs you in a small window on top of other apps
+                  </Typography>
+                </Box>
+                {miniWindow.on && <CheckIcon />}
               </MenuItem>
             </>
           )}

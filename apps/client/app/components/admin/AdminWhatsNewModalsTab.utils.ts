@@ -1,4 +1,5 @@
 import { IModalDocument } from '@bike4mind/common';
+import type { DeploymentInfo } from '@client/app/hooks/data/admin';
 import type { AdminStatusTone } from '@client/app/utils/themes/admin';
 
 /**
@@ -120,7 +121,7 @@ export function getStatusLabel(status: ModalPriorityStatus): string {
  * environments: the source deployment's production, dev, and PR preview stages. Staging,
  * shared-dev and personal stages are excluded, as is a fork's production.
  */
-export function shouldShowWeeklyHighlights(env: { stage: string; isForkProduction: boolean } | undefined): boolean {
-  if (!env || env.isForkProduction) return false;
-  return env.stage === 'production' || env.stage === 'dev' || env.stage.startsWith('pr');
+export function shouldShowWeeklyHighlights(deployment: DeploymentInfo | undefined): boolean {
+  if (!deployment || deployment.isForkProduction) return false;
+  return deployment.stage === 'production' || deployment.stage === 'dev' || deployment.stage.startsWith('pr');
 }

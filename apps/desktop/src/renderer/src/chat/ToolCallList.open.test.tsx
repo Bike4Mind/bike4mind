@@ -66,6 +66,28 @@ describe('a tool row behind its disclosure', () => {
     expect(count('chat-tool-diff')).toBe(1);
   });
 
+  it("shows the agent's summary of a settled command once opened, read from the call's input", () => {
+    const shell = (id: string, input: ChatToolCall['input'], name = 'bash_execute'): ChatToolCall => ({
+      id,
+      name,
+      input,
+      status: 'done',
+      preview: 'ok',
+    });
+    const summaries = (calls: ChatToolCall[]) => {
+      act(() => root.render(<ToolCallList calls={calls} onRespond={() => undefined} />));
+      open(container.querySelector('[data-testid="chat-tool-row"]') as Element);
+      return [...container.querySelectorAll('[data-testid="chat-tool-detail-summary"]')].map(el => el.textContent);
+    };
+
+    expect(summaries([shell('a', { command: 'pnpm build', description: 'Builds the app' })])).toEqual([
+      "Agent's summary: Builds the app",
+    ]);
+    expect(container.querySelector('[data-testid="chat-tool-detail-input"]')?.textContent).toBe('pnpm build');
+    expect(summaries([shell('b', { command: 'pnpm build' })])).toEqual([]);
+    expect(summaries([shell('c', { path: 'a.ts', description: 'Reads a file' }, 'file_read')])).toEqual([]);
+  });
+
   it("shows a settled question's answers from the stored call once opened", () => {
     const asked: ChatToolCall = {
       id: 'q1',

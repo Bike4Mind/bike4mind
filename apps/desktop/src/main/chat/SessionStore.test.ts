@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { ChatReplyStats } from '@shared/chat';
 import { beforeEach, describe, expect, it } from 'vitest';
-import { deriveTitle, SessionStore } from './SessionStore';
+import { agentMayRetitle, deriveTitle, SessionStore } from './SessionStore';
 
 const MODEL = 'test-model';
 
@@ -376,5 +376,43 @@ describe('SessionStore', () => {
       expect(loaded?.messages).toEqual(messages);
       expect(loaded?.messages[1]).not.toHaveProperty('stats');
     });
+  });
+});
+
+describe('agent titles', () => {
+  it('reads who may retitle a session from how its title was locked', () => {
+    const origin = { parentSessionId: 'p', depth: 1, seedPrompt: 's' };
+    expect(agentMayRetitle({})).toBe(true);
+    expect(agentMayRetitle({ titleLocked: true, titleSource: 'agent' })).toBe(true);
+    expect(agentMayRetitle({ titleLocked: true, titleSource: 'user', origin })).toBe(false);
+    // Locked at spawn time by the parent agent.
+    expect(agentMayRetitle({ titleLocked: true, origin })).toBe(true);
+    // Locked before titleSource existed, on a session the user made: only a hand rename did that.
+    expect(agentMayRetitle({ titleLocked: true })).toBe(false);
+  });
+
+  it('locks an agent title, refuses over a user rename, and survives a reload', async () => {
+    const { store, directory } = await freshStore();
+    const created = await store.create();
+
+    const first = await store.renameByAgent(created.id, '  Agent   title ');
+    expect(first).toMatchObject({ ok: true, summary: { title: 'Agent title', titleLocked: true, titleSource: 'agent' } });
+    expect(await new SessionStore(directory, MODEL).get(created.id)).toMatchObject({ titleSource: 'agent' });
+
+    await store.rename(created.id, 'User title');
+    expect(await store.renameByAgent(created.id, 'Again')).toEqual({ ok: false, reason: 'user-title' });
+    expect(await store.get(created.id)).toMatchObject({ title: 'User title', titleSource: 'user' });
+    expect(await store.renameByAgent('00000000-0000-4000-8000-000000000000', 'x')).toEqual({
+      ok: false,
+      reason: 'missing',
+    });
+  });
+
+  it('keeps the generator off an agent-set title', async () => {
+    const { store } = await freshStore();
+    const created = await store.create();
+    await store.renameByAgent(created.id, 'Agent title');
+    expect(await store.applyGeneratedTitle(created.id, 'Generated')).toBeNull();
+    expect((await store.get(created.id))?.title).toBe('Agent title');
   });
 });

@@ -88,6 +88,11 @@
 			path = CaptureUI;
 			sourceTree = "<group>";
 		};
+		B4A800000000000000000302 /* ActivityIntents */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = ActivityIntents;
+			sourceTree = "<group>";
+		};
 /* End PBXFileSystemSynchronizedRootGroup section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -125,6 +130,7 @@
 				B4A700000000000000000301 /* Widgets */,
 				B4A600000000000000000301 /* ShareExtension */,
 				B4A600000000000000000302 /* CaptureUI */,
+				B4A800000000000000000302 /* ActivityIntents */,
 				B4A000000000000000000231 /* Signing.xcconfig */,
 				B4A000000000000000000602 /* Products */,
 			);
@@ -161,6 +167,7 @@
 			fileSystemSynchronizedGroups = (
 				B4A000000000000000000301 /* Bike4Mind */,
 				B4A600000000000000000302 /* CaptureUI */,
+				B4A800000000000000000302 /* ActivityIntents */,
 			);
 			name = Bike4Mind;
 			packageProductDependencies = (
@@ -184,6 +191,7 @@
 			);
 			fileSystemSynchronizedGroups = (
 				B4A700000000000000000301 /* Widgets */,
+				B4A800000000000000000302 /* ActivityIntents */,
 			);
 			name = Widgets;
 			packageProductDependencies = (

@@ -2,6 +2,7 @@ import { Organization, organizationRepository, User, userRepository } from '@bik
 import { BadRequestError } from '@bike4mind/utils';
 import { ForbiddenError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
+import { verifyOrgPermission } from '@bike4mind/server-utils/utils/orgAccess';
 import { SubscriptionOwnerType, SubscriptionSource } from '@bike4mind/server-utils/lib/subscriptions/types';
 import { subscriptionRepository } from '@bike4mind/server-utils/models/Subscription';
 import { resolveSubscriptionSource } from '@bike4mind/server-utils/services/organizationService';
@@ -11,7 +12,6 @@ import { createCustomer, CustomerType, stripe } from '@bike4mind/server-utils/in
 import { isAllowedCallbackOrigin } from '@server/integrations/stripe/callbackUrl';
 import { signupNetworkMetadata } from '@server/integrations/stripe/riskMetadata';
 import { z } from 'zod';
-import { orgMemberHasPermission } from '@bike4mind/common';
 
 const stripePortalSchema = z.object({
   callbackUrl: z.string().url(),
@@ -34,15 +34,7 @@ const handler = baseApi()
     let customerId: string;
 
     if (ownerType === SubscriptionOwnerType.Organization) {
-      // A malformed id has always answered 404 here (the error handler remapped the cast);
-      // the 400 below is this route's answer for a well-formed id that matches nothing.
-      if (!isValidObjectId(ownerId)) throw new NotFoundError('Organization not found');
-      const organization = await organizationRepository.findById(ownerId);
-      if (!organization) throw new BadRequestError('Organization not found');
-
-      // Platform admins are deliberately not admitted: the portal acts on the team's own Stripe customer.
-      if (!orgMemberHasPermission(organization, authUser.id, 'manageBilling'))
-        throw new BadRequestError('User is not authorized to access this organization');
+      const organization = await verifyOrgPermission(authUser, ownerId, 'manageBilling');
 
       // Block free/admin-granted orgs from auto-creating a Stripe customer here.
       // An admin must explicitly run the convert-to-paid flow to enable billing.
@@ -82,11 +74,10 @@ const handler = baseApi()
 
       customerId = organization.stripeCustomerId;
     } else {
-      if (!isValidObjectId(ownerId)) throw new NotFoundError('User not found');
+      // Only the caller's own customer; another user's id answers like a missing one.
+      if (ownerId !== authUser.id || !isValidObjectId(ownerId)) throw new NotFoundError('User not found');
       const user = await userRepository.findById(ownerId);
-      if (!user) throw new BadRequestError('User not found');
-
-      if (user.id !== authUser.id) throw new BadRequestError('User is not authorized to access this user');
+      if (!user) throw new NotFoundError('User not found');
 
       // Mirror the org-path guard: admin-granted user subscriptions must not
       // silently bootstrap a Stripe customer here; conversion to paid is an explicit admin action.

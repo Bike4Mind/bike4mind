@@ -187,6 +187,7 @@ describe('toolKind', () => {
     ['session_spawn', 'agent'],
     ['session_send', 'agent'],
     ['session_archive', 'agent'],
+    ['session_rename', 'agent'],
     ['session_delete', 'agent'],
     ['session_suggestion_update', 'agent'],
     ['session_suggestion_dismiss', 'agent'],

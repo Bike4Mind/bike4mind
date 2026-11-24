@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { applyAppIdentity, DEV_APP_NAME } from './appIdentity';
+import { applyAppIdentity, DEV_APP_NAME, DEV_USER_DATA_ENV } from './appIdentity';
 
 const APP_DATA = '/Users/someone/Library/Application Support';
 
@@ -23,14 +23,34 @@ function fakeHost(isPackaged: boolean) {
 describe('applyAppIdentity', () => {
   it('moves a dev run onto its own name and userData folder', () => {
     const { host, calls } = fakeHost(false);
-    applyAppIdentity(host);
+    applyAppIdentity(host, {});
     expect(calls).toEqual({ name: DEV_APP_NAME, userData: join(APP_DATA, DEV_APP_NAME) });
+  });
+
+  it('puts a dev run on an absolute userData override when one is given', () => {
+    const { host, calls } = fakeHost(false);
+    applyAppIdentity(host, { [DEV_USER_DATA_ENV]: '/tmp/b4m-throwaway' });
+    expect(calls).toEqual({ name: DEV_APP_NAME, userData: '/tmp/b4m-throwaway' });
+  });
+
+  it('ignores a relative or blank override and keeps the shared dev folder', () => {
+    for (const value of ['relative/dir', '   ']) {
+      const { host, calls } = fakeHost(false);
+      applyAppIdentity(host, { [DEV_USER_DATA_ENV]: value });
+      expect(calls.userData).toBe(join(APP_DATA, DEV_APP_NAME));
+    }
+  });
+
+  it('ignores the override in a packaged build', () => {
+    const { host, calls } = fakeHost(true);
+    applyAppIdentity(host, { [DEV_USER_DATA_ENV]: '/tmp/b4m-throwaway' });
+    expect(calls).toEqual({});
   });
 
   // Renaming a packaged build would orphan every existing install's vault and keychain item.
   it('leaves a packaged build on its existing name and folder', () => {
     const { host, calls } = fakeHost(true);
-    applyAppIdentity(host);
+    applyAppIdentity(host, {});
     expect(calls).toEqual({});
   });
 

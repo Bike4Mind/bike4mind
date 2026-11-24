@@ -101,6 +101,8 @@ import { HeldRelayCard } from './HeldRelayCard';
 import { SessionOpenerContext } from './SessionLink';
 import { clampQuote, quotedMessage } from './quotedReply';
 import { SpawnSuggestionTray } from './SpawnSuggestionTray';
+import { ChildrenStrip } from './ChildrenStrip';
+import { useSpawnLocation } from './spawnLocationSetting';
 import { useHeldRelays } from './useHeldRelays';
 import { TaskDecisionCards, decisionsFor, useTaskDecisions } from './TaskDecisionCards';
 import { pendingDecisionOf } from '@shared/orchestration';
@@ -268,7 +270,7 @@ export function ChatShell({
 }: {
   auth?: AuthState | null;
   account?: AccountStrip;
-  updateNotice?: (panelShown: boolean) => ReactNode;
+  updateNotice?: ReactNode;
   onOpenModelServers?: () => void;
   /** Settings > Import, scrolled to one source; the sidebar's sync hints are shown only with it. */
   onOpenImportSettings?: (focus: ClaudeImportKind) => void;
@@ -340,6 +342,7 @@ export function ChatShell({
   const chatSettingsLocked = !activeId || settling || conversation.session?.id !== activeId;
   const openFailed = !!activeId && conversation.openFailedFor === activeId && conversation.session?.id !== activeId;
   const spawnSuggestions = useSpawnSuggestions(conversation.session);
+  const [spawnLocation] = useSpawnLocation();
   const heldRelays = useHeldRelays(persistedId);
   const taskDecisions = useTaskDecisions();
   const markSessionStart = useSessionStartTiming(sessions);
@@ -577,6 +580,16 @@ export function ChatShell({
     [activeId, showBrowserPane]
   );
   const artifactsInSession = useMemo(() => sessionArtifacts(conversation.messages), [conversation.messages]);
+  const reportedChildIds = useMemo(
+    () =>
+      new Set(
+        conversation.messages.flatMap(message => {
+          const id = message.reportedChildId ?? message.childReport?.sessionId;
+          return id ? [id] : [];
+        })
+      ),
+    [conversation.messages]
+  );
   const openSessionArtifact = useCallback(
     ({ key, artifact }: SessionArtifact) =>
       openArtifactInSessionBrowser(
@@ -1691,7 +1704,7 @@ export function ChatShell({
         )}
       />
 
-      {screen !== 'conversation' && updateNotice?.(false)}
+      {screen !== 'conversation' && updateNotice}
       {screen === 'artifacts' ? (
         <ArtifactLibraryPanel onClose={() => setScreen('conversation')} />
       ) : screen === 'models' ? (
@@ -2026,7 +2039,7 @@ export function ChatShell({
                 />
               )}
               {/* A modal panel leaves no room for a second card; Home keeps the update controller mounted. */}
-              {(!panelShown || panelDocked) && updateNotice?.(panelShown)}
+              {(!panelShown || panelDocked) && updateNotice}
             </Box>
 
             {ambient.settled && (
@@ -2169,6 +2182,16 @@ export function ChatShell({
                     suggestions={spawnSuggestions.suggestions}
                     onStart={onStartSuggestion}
                     onDismiss={spawnSuggestions.dismiss}
+                    onOpenSession={selectSession}
+                    location={spawnLocation}
+                  />
+
+                  <ChildrenStrip
+                    sessions={sessions}
+                    statuses={statuses}
+                    parentId={persistedId}
+                    reportedIds={reportedChildIds}
+                    onOpenSession={selectSession}
                   />
                 </>
               )}
@@ -2285,7 +2308,7 @@ export function ChatShell({
                         policy={conversation.session?.orchestrationPolicy}
                         planner={conversation.session?.model}
                         models={catalog.models}
-                        onChange={on => void setOrchestrate(on)}
+                        onChange={(on, budgetCredits) => void setOrchestrate(on, budgetCredits)}
                       />
                     )}
                   </>

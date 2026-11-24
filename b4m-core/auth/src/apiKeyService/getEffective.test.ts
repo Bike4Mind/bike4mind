@@ -1,6 +1,7 @@
 import { vi, describe, it, expect } from 'vitest';
 import {
   getEffectiveApiKey,
+  getEffectiveApiKeyWithSource,
   getEffectiveLLMApiKeys,
   getSearxngUrl,
   getWebSearchProviderSetting,
@@ -555,5 +556,44 @@ describe('getEffectiveApiKey self-host env fallback', () => {
     await withEnv({ B4M_SELF_HOST: 'true' }, async () => {
       expect(await getEffectiveApiKey('user-1', { type: ApiKeyType.elevenlabs }, adapters())).toBeUndefined();
     });
+  });
+});
+
+describe('getEffectiveApiKeyWithSource', () => {
+  const adapters = (userKey: string | null, settings: Record<string, string | null> = {}) =>
+    ({
+      db: {
+        apiKeys: {
+          ...makeApiKeyRepo(),
+          findByUserIdAndType: vi.fn(async () => (userKey ? { type: ApiKeyType.elevenlabs, apiKey: userKey } : null)),
+        },
+        adminSettings: makeAdminSettingsRepoByName(settings),
+      },
+    }) as unknown as Parameters<typeof getEffectiveApiKeyWithSource>[2];
+
+  it("reports the user's own key as 'user', ahead of the platform key", async () => {
+    expect(
+      await getEffectiveApiKeyWithSource(
+        'user-1',
+        { type: ApiKeyType.elevenlabs },
+        adapters('el-user', { elevenLabsServerApiKey: 'el-platform' })
+      )
+    ).toEqual({ key: 'el-user', source: 'user' });
+  });
+
+  it("reports the admin setting key as 'platform'", async () => {
+    expect(
+      await getEffectiveApiKeyWithSource(
+        'user-1',
+        { type: ApiKeyType.elevenlabs },
+        adapters(null, { elevenLabsServerApiKey: 'el-platform' })
+      )
+    ).toEqual({ key: 'el-platform', source: 'platform' });
+  });
+
+  it('returns undefined when no key resolves', async () => {
+    expect(
+      await getEffectiveApiKeyWithSource('user-1', { type: ApiKeyType.elevenlabs }, adapters(null))
+    ).toBeUndefined();
   });
 });

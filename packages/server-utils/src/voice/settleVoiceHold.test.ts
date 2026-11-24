@@ -1,16 +1,25 @@
 import { CreditHolderType } from '@bike4mind/common';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const { findActiveForSubject, claimVoiceHold, openVoiceHold, incrementCredits, createTransaction, logInfo, logError } =
-  vi.hoisted(() => ({
-    findActiveForSubject: vi.fn(),
-    claimVoiceHold: vi.fn(),
-    openVoiceHold: vi.fn(),
-    incrementCredits: vi.fn(),
-    createTransaction: vi.fn(),
-    logInfo: vi.fn(),
-    logError: vi.fn(),
-  }));
+const {
+  findActiveForSubject,
+  claimVoiceHold,
+  openVoiceHold,
+  incrementCredits,
+  createTransaction,
+  recordUsageEvent,
+  logInfo,
+  logError,
+} = vi.hoisted(() => ({
+  findActiveForSubject: vi.fn(),
+  claimVoiceHold: vi.fn(),
+  openVoiceHold: vi.fn(),
+  incrementCredits: vi.fn(),
+  createTransaction: vi.fn(),
+  recordUsageEvent: vi.fn(),
+  logInfo: vi.fn(),
+  logError: vi.fn(),
+}));
 vi.mock('@bike4mind/database', () => ({
   withTransaction: async <T>(fn: () => Promise<T>): Promise<T> => fn(),
   warmExchangeAttribution: async () => undefined,
@@ -18,6 +27,7 @@ vi.mock('@bike4mind/database', () => ({
   // A user without createdAt predates the new-account spend cap, so reserveVoiceHold's cap check passes.
   userRepository: { incrementCredits, findById: async (id: string) => ({ id }) },
   creditTransactionRepository: { createTransaction },
+  usageEventRepository: { record: recordUsageEvent },
   // No samples and no settings rows: the spend cap reads defaults and never refuses here.
   newAccountSpendCapAdapters: {
     adminSettings: { findAll: async () => [], findBySettingNames: async () => [] },
@@ -32,6 +42,7 @@ vi.mock('@bike4mind/observability', () => ({
     error(...args: unknown[]) {
       logError(...args);
     }
+    warn() {}
   },
 }));
 
@@ -55,6 +66,52 @@ describe('settleVoiceHold', () => {
     claimVoiceHold.mockResolvedValue({ billedCredits: null });
     incrementCredits.mockResolvedValue(undefined);
     createTransaction.mockImplementation(async (_type: string, row: object) => ({ id: 'tx', ...row }));
+    recordUsageEvent.mockResolvedValue(null);
+  });
+
+  describe('agent call usage event', () => {
+    it('records an ElevenLabs call as a voice usage event of its uncapped connected seconds on the platform key', async () => {
+      claimVoiceHold.mockResolvedValue({ billedCredits: null, payerId: 'payer', apiKeyId: 'key-1' });
+      const seconds = MAX_SESSION_SECONDS + 120;
+
+      await settleVoiceHold({ ...HOLD, voiceConnectedAt: at(30) }, at(30 + seconds), 'end');
+
+      expect(recordUsageEvent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          requestId: voiceHoldSettleTransactionId('s1', STARTED),
+          userId: 'u1',
+          ownerId: 'payer',
+          ownerType: CreditHolderType.User,
+          sessionId: 's1',
+          feature: 'voice',
+          provider: 'elevenlabs',
+          model: 'elevenlabs',
+          units: seconds,
+          creditsCharged: 600,
+          keySource: 'platform',
+          apiKeyId: 'key-1',
+          status: 'ok',
+        })
+      );
+    });
+
+    it('records nothing for a call that never connected, a realtime hold, or a lost claim', async () => {
+      await settleVoiceHold(HOLD, at(60), 'end');
+      claimVoiceHold.mockResolvedValue({ billedCredits: 100 });
+      await settleVoiceHold({ ...HOLD, voiceConnectedAt: at(0) }, at(60), 'end');
+      claimVoiceHold.mockResolvedValue(null);
+      await settleVoiceHold({ ...HOLD, voiceConnectedAt: at(0) }, at(60), 'end');
+
+      expect(recordUsageEvent).not.toHaveBeenCalled();
+    });
+
+    it('still settles when the usage event write fails', async () => {
+      recordUsageEvent.mockRejectedValue(new Error('db down'));
+
+      const result = await settleVoiceHold({ ...HOLD, voiceConnectedAt: at(0) }, at(60), 'end');
+
+      expect(result).toMatchObject({ settled: true, chargedCredits: 120 });
+    });
   });
 
   it('bills connected time from the connect, not from the hold start, and refunds the rest', async () => {

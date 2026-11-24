@@ -13,7 +13,7 @@ import {
 import { WAFV2Client, GetLoggingConfigurationCommand } from '@aws-sdk/client-wafv2';
 import { getWafBlockedRequests, getWafLogsInsightsOverview } from '../wafLogsInsights';
 import { WAF_MASKED_HEADER_VALUE } from '../wafHeaderRedaction';
-import { wafQueryCache } from '../wafQueryCache';
+import { wafQueryCache } from '@bike4mind/server-utils/security/wafQueryCache';
 import type { WafCustomRange } from '@bike4mind/server-utils/security/wafSharedHelpers';
 
 const cloudFrontMock = mockClient(CloudFrontClient);

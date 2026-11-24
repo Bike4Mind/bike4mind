@@ -96,6 +96,19 @@ describe('trayPresentation', () => {
     expect(label(true)).toMatchObject({ label: 'Hide mini Tavern' });
   });
 
+  it('lists the Orchestrate mini window toggle, before hiding the item, only when that window is wired', () => {
+    const actions = (orchestrateMiniOpen?: boolean) =>
+      trayPresentation(busy, false, orchestrateMiniOpen).items.flatMap(item =>
+        item.kind === 'action' ? [[item.action, item.label]] : []
+      );
+    expect(actions().map(([action]) => action)).not.toContain('toggle-orchestrate-mini');
+    expect(actions(false).slice(-2)).toEqual([
+      ['toggle-orchestrate-mini', 'Show Orchestrate mini window'],
+      ['hide-tray', 'Hide menu-bar item'],
+    ]);
+    expect(actions(true)).toContainEqual(['toggle-orchestrate-mini', 'Hide Orchestrate mini window']);
+  });
+
   it('shows only the summary and the actions when nothing runs', () => {
     const { items, icon } = trayPresentation(EMPTY_WATCH_SNAPSHOT, false);
     expect(icon).toBe('idle');

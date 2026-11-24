@@ -333,6 +333,14 @@ dialog. The code is 8 random characters, minted the first time the user asks for
 their link, and kept on the account as `User.referralCode`. It identifies the
 sharer to the server only and contains no personal information.
 
+The "Built with" pill on embedded published pages and the bar on open-public
+published pages also link through the author's share link, as
+`/r/<code>?via=embed-badge` or `/r/<code>?via=share-bar`, when the author has a
+verified email or an OAuth sign-in. Such an author's code is minted the first time
+one of their pages is served, if they have none yet. These links redirect to the
+same campaign-tagged marketing page the pill and bar linked to before, instead of
+to signup.
+
 Opening a share link whose code belongs to an account stores that code in the app
 cookie `b4m_ref` (`__Host-b4m_ref` outside local development), then redirects to
 signup. The cookie is HttpOnly, `path=/`, `Secure` outside local development, and
@@ -355,7 +363,8 @@ to a third party, and is used only to credit the signup it leads to.
 
 Two product events go to host analytics. `referral_link_visit` is
 sent without a user and carries only `known`, whether the code belongs to an
-account. `referral_link_signup` is sent under the new account's pseudonym and
+account, and `via`, which published-page link was followed (`embed-badge`,
+`share-bar`, or `direct` for any other visit). `referral_link_signup` is sent under the new account's pseudonym and
 carries `outcome` (whether the signup was credited, and if not, which rule
 declined it) and `method` (the signup method). Synthetic accounts send no
 `referral_link_signup`. Neither event carries the code or the sharer's identity.

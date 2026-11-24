@@ -3,7 +3,7 @@ const h = vi.hoisted(() => ({ run: vi.fn(), connect: vi.fn() }));
 vi.mock('@bike4mind/database', () => ({ connectDB: h.connect }));
 vi.mock('@bike4mind/server-utils/utils/config', () => ({ Config: { MONGODB_URI: 'mongodb://example/%STAGE%' } }));
 vi.mock('sst', () => ({ Resource: { App: { stage: 'dev' } } }));
-vi.mock('@server/admin/morningBrief', () => ({ runMorningBrief: h.run, morningBriefDeps: {} }));
+vi.mock('@workers/admin/morningBrief', () => ({ runMorningBrief: h.run, morningBriefDeps: {} }));
 import { handler } from './adminMorningBrief';
 afterEach(() => {
   vi.unstubAllEnvs();

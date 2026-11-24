@@ -2,20 +2,17 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vites
 import { ADMIN_ERASURE_COMPLETED_ACTION } from '@bike4mind/common';
 import { adminAuditLogRepository, mongoose } from '@bike4mind/database';
 import type { MongoMemoryReplSet } from 'mongodb-memory-server';
-// Registered outside the `@bike4mind/database` barrel, so they register only when imported.
-import '@bike4mind/server-utils/models/Subscription';
-import '@bike4mind/server-utils/models/UserSubscription';
 import { erasureIdHash } from '@bike4mind/server-utils/privacy/erasureHash';
 import {
   createMongoReplSet,
   settleAutoIndexBuilds,
   MONGO_TEST_TIMEOUT_MS,
 } from '../../../../packages/database/src/__test__/createMongoServer';
-import { setPath, valuesAt } from './documentPaths';
-import { erasureRegistry } from './erasureRegistry';
-import { DATA_HOLDER_REGISTRY } from './registry';
-import { SubjectErasurePlan } from './subjectErasurePlan';
-import type { UserReference } from './types';
+import { setPath, valuesAt } from '@bike4mind/server-utils/dataSubject/documentPaths';
+import { erasureRegistry } from '@bike4mind/server-utils/dataSubject/erasureRegistry';
+import { DATA_HOLDER_REGISTRY } from '@bike4mind/server-utils/dataSubject/registry/index';
+import { SubjectErasurePlan } from '@bike4mind/server-utils/dataSubject/subjectErasurePlan';
+import type { UserReference } from '@bike4mind/server-utils/dataSubject/types';
 
 type Outcome = 'deleted' | 'anonymized' | 'retained';
 

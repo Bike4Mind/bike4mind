@@ -35,6 +35,11 @@ export const ADMIN_REASON_PRESETS = {
   internalAccount: ['Team member', 'Contractor or partner', 'Marked in error'],
   apiKeyRevokeAll: ['Compromised or leaked keys', 'Abuse / automated signups', 'Customer request'],
   apiKeyRotate: ['Compromised or leaked key', 'Customer request', 'Routine rotation'],
+  apiKeyModerationException: [
+    'Approved security research',
+    'Violence-related content is core to the product',
+    'Exception no longer needed',
+  ],
   apiKeyAdminScope: ['Partner integration', 'Internal service', 'Requested by the account owner'],
   embedKeyRevoke: ['Compromised or leaked key', 'Site no longer embeds the agent', 'Customer request'],
   publishedPageTakedown: [

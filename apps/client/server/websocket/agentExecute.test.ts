@@ -56,6 +56,9 @@ vi.mock('@bike4mind/server-utils/utils/liveActivityPush', () => ({ endAgentRunLi
 vi.mock('@bike4mind/server-utils/utils/persistRunAsQuest', () => ({
   persistRunAsQuest: vi.fn(),
 }));
+vi.mock('@bike4mind/server-utils/briefs/eventBriefTrigger', () => ({
+  startEventBriefForCompletedRun: vi.fn(),
+}));
 vi.mock('@server/utils/startAgentExecution', () => ({
   startAgentExecution: vi.fn(),
 }));
