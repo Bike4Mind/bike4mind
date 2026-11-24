@@ -544,6 +544,25 @@ describe('production director tools', () => {
       for (const shot of result.shots) expect(shot.pending ?? []).toEqual([]);
     });
 
+    it('reports a saved look that was refused later as failed, not as removed from the brand kit', async () => {
+      await run(productionStoryboardTool, harness, noProduct);
+      await run(productionGenerateShotTool, harness, {
+        compositionId: COMPOSITION_ID,
+        shotIds: ['shot-1'],
+        animate: false,
+      });
+      expect(harness.composition().brandKit.productFileIds).toHaveLength(1);
+      harness.config.referenceImages = async () => new Map();
+      const second = JSON.parse(
+        await run(productionGenerateShotTool, harness, {
+          compositionId: COMPOSITION_ID,
+          shotIds: ['shot-2'],
+          animate: false,
+        })
+      );
+      expect(second.productLook).toMatch(/^failed: /);
+    });
+
     it('skips the look when the brief has no summary', async () => {
       await run(productionStoryboardTool, harness, noProduct);
       await harness.config.compositions.update(COMPOSITION_ID, { brief: {} });

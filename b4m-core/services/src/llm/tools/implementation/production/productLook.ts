@@ -60,15 +60,15 @@ export async function ensureProductLook(
   const job = (await waitForJobs(config, [jobId], context.getAbortSignal?.())).get(jobId);
   if (job?.state === 'succeeded' && job.fileId) {
     const fileId = job.fileId;
+    // A look the image job would refuse (e.g. moderation-blocked) is never saved or waited on. Checked before the
+    // saved-look guard, since a look saved during its safety check and blocked later is still in the kit.
+    const state = (await config.referenceImages([fileId])).get(fileId);
+    if (!state) return { references: [], status: 'failed: the product look cannot be used as a reference' };
     // The job is keyed per Quest, so a re-call after the user took a saved look out of the kit replays it; saving it
     // again would bring the removed image back. A look that finished after an earlier call stopped waiting is saved.
     if (savedLooks.has(fileId)) {
       return { references: [], status: 'skipped: the look made earlier in this run is no longer in the brand kit' };
     }
-    // A look the image job would refuse (e.g. moderation-blocked) is neither saved nor referenced, so takes do not
-    // wait on it and a re-call does not keep reporting them pending.
-    const state = (await config.referenceImages([fileId])).get(fileId);
-    if (!state) return { references: [], status: 'failed: the product look cannot be used as a reference' };
     // Read again: the user may have edited the brand kit while the look was being made.
     const fresh = await config.compositions.get(composition.id);
     await config.compositions.update(composition.id, {
