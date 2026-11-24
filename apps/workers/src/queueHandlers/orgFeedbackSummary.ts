@@ -12,8 +12,13 @@
  * timeout or retry policy is changing both.
  */
 
+import { randomUUID } from 'node:crypto';
 import {
   ChatModels,
+  buildUsagePriceStamp,
+  getTextModelCost,
+  getTurnsCost,
+  type ModelInfo,
   ORG_FEEDBACK_SUMMARY_JOB_TYPE,
   ORG_FEEDBACK_SUMMARY_TAG_LIMIT,
   OrgFeedbackSummaryArtifact,
@@ -22,13 +27,22 @@ import {
   OrgFeedbackSummaryJob,
   adminSettingsRepository,
   apiKeyRepository,
+  createBoundedOperationalUsageStore,
   orgFeedbackReport,
 } from '@bike4mind/database';
 import { organizationRepository } from '@bike4mind/database/infra';
 import { S3Storage } from '@bike4mind/fab-pipeline';
-import { buildApiKeyTable, getAvailableModels, getLlmByModel } from '@bike4mind/llm-adapters';
+import {
+  buildApiKeyTable,
+  getAvailableModels,
+  getLlmByModel,
+  isLlmTimeoutError,
+  SafetyRefusalError,
+  type CompletionInfo,
+} from '@bike4mind/llm-adapters';
 import { Logger } from '@bike4mind/observability';
-import { apiKeyService } from '@bike4mind/services';
+import { apiKeyService, recordOperationalUsage } from '@bike4mind/services';
+import { latchUsage, type CompletionUsage } from '@bike4mind/services/billing/completionMeter';
 import { getSettingsByNames } from '@bike4mind/utils';
 import { sendToClient } from '@bike4mind/server-utils/websocket/utils';
 import { Resource } from 'sst';
@@ -36,7 +50,14 @@ import { z } from 'zod';
 
 const DEFAULT_SUMMARY_MODEL = ChatModels.CLAUDE_4_5_HAIKU_BEDROCK;
 const SUMMARY_MAX_TOKENS = 2000;
-const SUMMARY_TIMEOUT_MS = 60000;
+const SUMMARY_TIMEOUT_MS = 60_000;
+const MIN_SUMMARY_BUDGET_MS = 120_000;
+const USAGE_LOOKUP_TIMEOUT_MS = 10_000;
+const USAGE_WRITE_TIMEOUT_MS = 20_000;
+
+type CheckRunBudget = (minimumRemainingMs?: number) => void;
+type SummaryUsage = CompletionUsage & Pick<CompletionInfo, 'cacheWrite1hInputTokens' | 'stopReason'>;
+type SummaryOwner = Pick<OrgFeedbackSummaryMessage, 'organizationId' | 'userId'>;
 
 export const OrgFeedbackSummaryPayload = z.object({
   jobType: z.literal(ORG_FEEDBACK_SUMMARY_JOB_TYPE),
@@ -110,7 +131,126 @@ By day:
 ${bucketList(report.byDay.map(row => ({ key: row.day, count: row.count })))}`;
 }
 
-async function generateSummary(message: OrgFeedbackSummaryMessage, promptBody: string, model: string, logger: Logger) {
+async function recordSummaryUsage({
+  requestId,
+  owner,
+  usage,
+  modelInfo,
+  latencyMs,
+  failed,
+  logger,
+}: {
+  requestId: string;
+  owner?: SummaryOwner;
+  usage: SummaryUsage;
+  modelInfo: ModelInfo;
+  latencyMs: number;
+  failed: boolean;
+  logger: Logger;
+}): Promise<void> {
+  const turns = usage.turnUsage?.some(
+    turn => turn.inputTokens || turn.outputTokens || turn.cacheReadInputTokens || turn.cacheCreationInputTokens
+  )
+    ? usage.turnUsage
+    : undefined;
+  const zeroTokens = { inputTokens: 0, outputTokens: 0, cacheReadInputTokens: 0, cacheCreationInputTokens: 0 };
+  const totals = turns?.reduce<typeof zeroTokens>(
+    (total, turn) => ({
+      inputTokens: total.inputTokens + turn.inputTokens,
+      outputTokens: total.outputTokens + turn.outputTokens,
+      cacheReadInputTokens: total.cacheReadInputTokens + (turn.cacheReadInputTokens ?? 0),
+      cacheCreationInputTokens: total.cacheCreationInputTokens + (turn.cacheCreationInputTokens ?? 0),
+    }),
+    zeroTokens
+  );
+  const { inputTokens = 0, outputTokens = 0, cacheReadInputTokens = 0, cacheCreationInputTokens = 0 } = totals ?? usage;
+  const promptTokens = inputTokens + cacheReadInputTokens + cacheCreationInputTokens;
+  if (promptTokens + outputTokens <= 0) {
+    logger.warn('Organization feedback summary provider did not report token usage', { model: modelInfo.id });
+    return;
+  }
+  if (!owner) {
+    logger.warn('Organization feedback summary usage owner does not match the job');
+    return;
+  }
+
+  const store = createBoundedOperationalUsageStore({
+    lookupTimeoutMS: USAGE_LOOKUP_TIMEOUT_MS,
+    writeTimeoutMS: USAGE_WRITE_TIMEOUT_MS,
+  });
+  const [userResult, organizationResult] = await Promise.allSettled([
+    store.findUserById(owner.userId),
+    store.findOrganizationById(owner.organizationId),
+  ]);
+  if (userResult.status === 'rejected' || organizationResult.status === 'rejected') {
+    logger.warn('Could not look up organization feedback summary usage owner');
+    return;
+  }
+  const user = userResult.value;
+  const organization = organizationResult.value;
+  if (!user || !organization) {
+    logger.warn('Organization feedback summary usage owner is missing');
+    return;
+  }
+  if (failed) logger.warn('Recording reported usage after organization feedback summary provider failure');
+
+  const cacheWrite1hTokens = usage.cacheWrite1hInputTokens;
+  const costUsd = turns
+    ? getTurnsCost(modelInfo, turns)
+    : getTextModelCost(
+        modelInfo,
+        inputTokens,
+        outputTokens,
+        cacheReadInputTokens,
+        cacheCreationInputTokens,
+        promptTokens,
+        cacheWrite1hTokens
+      );
+  await recordOperationalUsage(
+    {
+      requestId,
+      user,
+      organization,
+      feature: 'operations',
+      source: 'system',
+      bypassCreditBilling: true,
+      provider: modelInfo.backend,
+      model: modelInfo.id,
+      inputTokens,
+      outputTokens,
+      cachedInputTokens: cacheReadInputTokens,
+      cacheWriteTokens: cacheCreationInputTokens,
+      costUsd,
+      priceStamp: buildUsagePriceStamp(modelInfo, { turns, tierBasisTokens: promptTokens, cacheWrite1hTokens }),
+      finishReason: usage.stopReason,
+      latencyMs,
+    },
+    {
+      db: {
+        adminSettings: adminSettingsRepository,
+        usageEvents: {
+          record: async event => {
+            try {
+              return await store.usageEvents.record(event);
+            } catch {
+              throw new Error('Organization feedback summary usage insert failed');
+            }
+          },
+        },
+      },
+      logger,
+    }
+  );
+}
+
+async function generateSummary(
+  message: OrgFeedbackSummaryMessage,
+  owner: SummaryOwner | undefined,
+  promptBody: string,
+  model: string,
+  checkBudget: CheckRunBudget,
+  logger: Logger
+) {
   const dbAdapters = {
     db: { apiKeys: apiKeyRepository, adminSettings: adminSettingsRepository },
     getSettingsByNames,
@@ -144,23 +284,54 @@ Write 200-400 words covering:
     { role: 'user' as const, content: promptBody },
   ];
 
+  checkBudget(MIN_SUMMARY_BUDGET_MS);
+  const requestId = randomUUID();
+  const startedAt = performance.now();
+  const controller = new AbortController();
+  const timeoutError = new Error(`Summary generation timeout after ${SUMMARY_TIMEOUT_MS}ms`);
+  const deadline = setTimeout(() => controller.abort(timeoutError), SUMMARY_TIMEOUT_MS);
+  const usage: SummaryUsage = {};
   let responseText = '';
-  await Promise.race([
-    llm.complete(
+  let failed = false;
+  try {
+    await llm.complete(
       model,
       messages,
-      { temperature: 0.3, maxTokens: SUMMARY_MAX_TOKENS, stream: false },
-      async (texts: (string | null | undefined)[]) => {
-        if (texts && texts.length > 0) responseText += texts.filter(Boolean).join('');
+      {
+        temperature: 0.3,
+        maxTokens: SUMMARY_MAX_TOKENS,
+        stream: false,
+        retryMode: 'abort-aware',
+        abortSignal: controller.signal,
+      },
+      async (texts, info) => {
+        latchUsage(usage, info);
+        if (info?.cacheWrite1hInputTokens !== undefined) usage.cacheWrite1hInputTokens = info.cacheWrite1hInputTokens;
+        if (info?.stopReason !== undefined) usage.stopReason = info.stopReason;
+        if (!controller.signal.aborted && texts?.length) responseText += texts.filter(Boolean).join('');
       }
-    ),
-    new Promise((_, reject) =>
-      setTimeout(
-        () => reject(new Error(`Summary generation timeout after ${SUMMARY_TIMEOUT_MS}ms`)),
-        SUMMARY_TIMEOUT_MS
-      )
-    ),
-  ]);
+    );
+    controller.signal.throwIfAborted();
+  } catch (error) {
+    failed = true;
+    if ((isLlmTimeoutError(error) || error instanceof SafetyRefusalError) && error.usage) {
+      const { turnUsage, ...counts } = error.usage;
+      latchUsage(usage, { ...counts, turnUsage: turnUsage?.slice() });
+    }
+    if (error instanceof SafetyRefusalError) usage.stopReason = 'refusal';
+    throw controller.signal.aborted ? timeoutError : error;
+  } finally {
+    clearTimeout(deadline);
+    await recordSummaryUsage({
+      requestId,
+      owner,
+      usage,
+      modelInfo,
+      latencyMs: Math.round(performance.now() - startedAt),
+      failed,
+      logger,
+    }).catch(() => logger.warn('Could not record organization feedback summary usage', { model: modelInfo.id }));
+  }
 
   if (!responseText.trim()) throw new Error('Empty summary response from LLM');
   return responseText.trim();
@@ -169,7 +340,7 @@ Write 200-400 words covering:
 export async function runOrgFeedbackSummary(
   message: OrgFeedbackSummaryMessage,
   logger: Logger,
-  checkBudget: () => void = () => undefined
+  checkBudget: CheckRunBudget = () => undefined
 ): Promise<void> {
   const { summaryJobId, organizationId, userId } = message;
   logger.updateMetadata({ handler: 'orgFeedbackSummary', summaryJobId, organizationId, userId });
@@ -204,7 +375,11 @@ export async function runOrgFeedbackSummary(
     await sendProgress(userId, summaryJobId, organizationId, 'processing', 40);
     checkBudget();
     const model = (await adminSettingsRepository.getSettingsValue('OrgFeedbackSummaryModel')) || DEFAULT_SUMMARY_MODEL;
-    const summary = await generateSummary(message, buildPrompt(report), model, logger);
+    const owner =
+      job.requestedBy === userId && job.organizationId === organizationId
+        ? { userId: job.requestedBy, organizationId: job.organizationId }
+        : undefined;
+    const summary = await generateSummary(message, owner, buildPrompt(report), model, checkBudget, logger);
 
     const artifact: OrgFeedbackSummaryArtifact = {
       summaryJobId,

@@ -334,8 +334,8 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
   // a malformed message into a 422 the wrapper swallows instead of a retry loop into the DLQ.
   const message = secureParameters(JSON.parse(body), QueuePayload);
 
-  const checkBudget = () => {
-    if (context.getRemainingTimeInMillis() < 1000) throw new Error('Quest export run budget exhausted');
+  const checkBudget = (minimumRemainingMs = 1000) => {
+    if (context.getRemainingTimeInMillis() < minimumRemainingMs) throw new Error('Quest export run budget exhausted');
   };
   if (message.jobType === ORG_FEEDBACK_SUMMARY_JOB_TYPE) {
     await runOrgFeedbackSummary(message, logger, checkBudget);

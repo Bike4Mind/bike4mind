@@ -88,6 +88,9 @@ const SITES: Record<string, Array<[call: string, why: string]>> = {
     ['recordOperationalUsage(', 'record-only (settledCredits from its own reservation)'],
     ['reserveRequestCredits(', VIA_RESERVE],
   ],
+  'apps/workers/src/queueHandlers/orgFeedbackSummary.ts': [
+    ['recordOperationalUsage(', 'record-only (bypassCreditBilling)'],
+  ],
   'b4m-core/services/src/billing/recordOperationalUsage.ts': [
     ['decrementCreditsFloored(holderId, params.credits', HELPER],
   ],
