@@ -1,6 +1,14 @@
-import { Chip, Sheet, Stack, Typography } from '@mui/joy';
-import type { ICallableFunctionShared } from '@bike4mind/common';
-import { useCallableFunctionsEnabled, useSharedCallableFunctions } from '@client/app/hooks/data/callableFunctions';
+import { useState } from 'react';
+import { isAxiosError } from 'axios';
+import { Box, Button, Chip, Option, Select, Sheet, Stack, Switch, Typography } from '@mui/joy';
+import type { CallableFunctionApprovalMode, ICallableFunctionShared } from '@bike4mind/common';
+import {
+  useCallableFunctionsEnabled,
+  useReviewSharedCallableFunction,
+  useSharedCallableFunctions,
+  useUpdateSharedCallableFunctionReview,
+} from '@client/app/hooks/data/callableFunctions';
+import { ContractTable } from '@client/app/components/Knowledge/FunctionContractTable';
 
 const VIA: Record<ICallableFunctionShared['sharedVia'], string> = {
   person: 'Shared with you',
@@ -8,7 +16,179 @@ const VIA: Record<ICallableFunctionShared['sharedVia'], string> = {
   organization: 'Shared with your organization',
 };
 
-/** Functions other people shared with this person; each stays pending review and cannot be called yet. */
+const STATUS: Record<ICallableFunctionShared['status'], { label: string; color: 'warning' | 'success' | 'neutral' }> = {
+  pending_review: { label: 'Pending review', color: 'warning' },
+  reviewed: { label: 'Reviewed', color: 'success' },
+  disabled: { label: 'Turned off', color: 'neutral' },
+};
+
+const APPROVAL_LABELS: Record<CallableFunctionApprovalMode, string> = {
+  default: 'Default',
+  always_allow: 'Always allow',
+  always_ask: 'Always ask',
+};
+
+const LABEL_TEXT: Record<'verified' | 'unverified', string> = {
+  verified: 'Verified: a worked example passed on the server when it was promoted.',
+  unverified: 'Unverified: no worked example was checked when it was promoted.',
+};
+
+const errorMessage = (error: unknown, fallback: string): string =>
+  isAxiosError(error) && (error.response?.data as { code?: unknown } | undefined)?.code === 'review_conflict'
+    ? 'The tool changed while you were reviewing it. Review it again.'
+    : fallback;
+
+function SharedFunctionCard({ fn }: { fn: ICallableFunctionShared }) {
+  const pending = fn.status === 'pending_review';
+  const [open, setOpen] = useState(false);
+  const [draftApproval, setDraftApproval] = useState<CallableFunctionApprovalMode>(fn.review?.approval ?? 'default');
+  const [error, setError] = useState<string | null>(null);
+  const review = useReviewSharedCallableFunction();
+  const update = useUpdateSharedCallableFunctionReview();
+  const approval = pending ? draftApproval : (fn.review?.approval ?? 'default');
+  const status = STATUS[fn.status];
+
+  const onReview = () => {
+    setError(null);
+    review.mutate(
+      { id: fn.id, reviewHash: fn.reviewHash, approval },
+      { onError: err => setError(errorMessage(err, 'Could not save the review. Try again.')) }
+    );
+  };
+  const onSettings = (settings: { approval?: CallableFunctionApprovalMode; enabled?: boolean }) => {
+    setError(null);
+    update.mutate({ id: fn.id, ...settings }, { onError: () => setError('Could not save the change. Try again.') });
+  };
+
+  return (
+    <Sheet variant="outlined" sx={{ borderRadius: '8px', p: 1.5 }} data-testid="shared-function-row">
+      <Stack direction="row" gap="8px" alignItems="center" flexWrap="wrap">
+        <Typography level="title-sm" sx={{ fontFamily: 'code' }}>
+          {fn.slug}
+        </Typography>
+        <Chip size="sm" variant="soft" color={status.color} data-testid="shared-function-status">
+          {status.label}
+        </Chip>
+        <Box sx={{ flex: 1 }} />
+        <Button
+          size="sm"
+          variant={pending ? 'solid' : 'plain'}
+          onClick={() => setOpen(value => !value)}
+          data-testid="shared-function-open-btn"
+        >
+          {open ? 'Close' : pending ? 'Review' : 'Details'}
+        </Button>
+      </Stack>
+      <Typography level="body-sm" sx={{ mt: 0.5 }}>
+        {fn.description}
+      </Typography>
+      <Typography level="body-xs" sx={{ color: 'text.secondary', mt: 0.5 }} data-testid="shared-function-summary">
+        {VIA[fn.sharedVia]} by {fn.ownerName}, promotion {fn.pin.seq ?? ''}.{' '}
+        {pending
+          ? fn.review
+            ? 'Its name, description, or schemas changed since your review, so it cannot be called until you review it again.'
+            : 'It cannot be called until you review it.'
+          : fn.status === 'disabled'
+            ? 'You turned it off.'
+            : 'You reviewed it.'}
+      </Typography>
+      {open && (
+        <Stack gap="12px" sx={{ mt: 1.5 }} data-testid="shared-function-review-card">
+          <Stack gap="4px">
+            <Typography level="title-sm">Inputs</Typography>
+            <ContractTable schema={fn.inputs} testId="shared-function-inputs" />
+          </Stack>
+          <Stack gap="4px">
+            <Typography level="title-sm">Outputs</Typography>
+            <ContractTable schema={fn.outputs} testId="shared-function-outputs" />
+          </Stack>
+          <Stack gap="4px">
+            <Typography level="title-sm">Label</Typography>
+            <Typography level="body-sm" data-testid="shared-function-label">
+              {fn.trustLabel ? LABEL_TEXT[fn.trustLabel] : 'None.'}
+            </Typography>
+          </Stack>
+          <Stack gap="4px">
+            <Typography level="title-sm">Owner</Typography>
+            <Typography level="body-sm" data-testid="shared-function-owner">
+              {fn.ownerName}
+            </Typography>
+          </Stack>
+          <Stack gap="4px" data-testid="shared-function-data">
+            <Typography level="title-sm">Data it reads</Typography>
+            {fn.dataPins.length + fn.sources.length === 0 ? (
+              <Typography level="body-sm" sx={{ color: 'text.secondary' }}>
+                None.
+              </Typography>
+            ) : (
+              <Box component="ul" sx={{ m: 0, pl: 2.5 }}>
+                {fn.dataPins.map(name => (
+                  <li key={`data-${name}`} data-testid="shared-function-data-item">
+                    <Typography level="body-sm">Data file: {name}</Typography>
+                  </li>
+                ))}
+                {fn.sources.map(name => (
+                  <li key={`source-${name}`} data-testid="shared-function-data-item">
+                    <Typography level="body-sm">Source: {name}</Typography>
+                  </li>
+                ))}
+              </Box>
+            )}
+          </Stack>
+          <Typography level="body-xs" sx={{ color: 'text.secondary' }}>
+            A review covers the name, description, and schemas, not the code. The owner can change the code and keep
+            your review; a change to any of those asks you to review again.
+          </Typography>
+          <Stack direction="row" gap="12px" alignItems="center" flexWrap="wrap">
+            <Typography level="body-sm">Before a call in chat</Typography>
+            <Select
+              size="sm"
+              value={approval}
+              onChange={(_event, value) => {
+                if (!value) return;
+                if (pending) setDraftApproval(value);
+                else onSettings({ approval: value });
+              }}
+              disabled={update.isPending}
+              slotProps={{ button: { 'data-testid': 'shared-function-approval' } }}
+              sx={{ minWidth: 150 }}
+            >
+              {(Object.keys(APPROVAL_LABELS) as CallableFunctionApprovalMode[]).map(mode => (
+                <Option key={mode} value={mode}>
+                  {APPROVAL_LABELS[mode]}
+                </Option>
+              ))}
+            </Select>
+            <Box sx={{ flex: 1 }} />
+            {pending ? (
+              <Button size="sm" onClick={onReview} loading={review.isPending} data-testid="shared-function-review-btn">
+                Allow calls
+              </Button>
+            ) : (
+              <Switch
+                checked={fn.status === 'reviewed'}
+                disabled={update.isPending}
+                onChange={event => onSettings({ enabled: event.target.checked })}
+                endDecorator={fn.status === 'reviewed' ? 'On' : 'Off'}
+                slotProps={{ input: { 'aria-label': 'Allow calls', 'data-testid': 'shared-function-enabled' } }}
+              />
+            )}
+          </Stack>
+          <Typography level="body-xs" sx={{ color: 'text.tertiary' }}>
+            An Always ask function is not offered in a run with no one to answer.
+          </Typography>
+          {error && (
+            <Typography level="body-sm" color="danger" data-testid="shared-function-error">
+              {error}
+            </Typography>
+          )}
+        </Stack>
+      )}
+    </Sheet>
+  );
+}
+
+/** Functions other people shared with this person: each runs for them only after they review its interface. */
 export default function SharedFunctionsSection() {
   const enabled = useCallableFunctionsEnabled();
   const { data } = useSharedCallableFunctions();
@@ -17,22 +197,7 @@ export default function SharedFunctionsSection() {
     <Stack gap="8px" data-testid="shared-functions-section">
       <Typography level="title-sm">Functions shared with you</Typography>
       {data.map(fn => (
-        <Sheet key={fn.id} variant="outlined" sx={{ borderRadius: '8px', p: 1.5 }} data-testid="shared-function-row">
-          <Stack direction="row" gap="8px" alignItems="center" flexWrap="wrap">
-            <Typography level="title-sm" sx={{ fontFamily: 'code' }}>
-              {fn.slug}
-            </Typography>
-            <Chip size="sm" variant="soft" color="warning" data-testid="shared-function-status">
-              Pending review
-            </Chip>
-          </Stack>
-          <Typography level="body-sm" sx={{ mt: 0.5 }}>
-            {fn.description}
-          </Typography>
-          <Typography level="body-xs" sx={{ color: 'text.secondary', mt: 0.5 }}>
-            {VIA[fn.sharedVia]}, promotion {fn.pin.seq ?? ''}. It cannot be called until you review it.
-          </Typography>
-        </Sheet>
+        <SharedFunctionCard key={fn.id} fn={fn} />
       ))}
     </Stack>
   );

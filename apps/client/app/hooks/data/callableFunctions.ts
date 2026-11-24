@@ -2,6 +2,7 @@ import { api } from '@client/app/contexts/ApiContext';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { isAxiosError } from 'axios';
 import type {
+  CallableFunctionApprovalMode,
   CallableFunctionCallSummary,
   CallableFunctionExample,
   CallableFunctionGrantVisibility,
@@ -312,7 +313,33 @@ export const useStopSharingCallableFunction = () => {
   });
 };
 
-/** Tools other people shared with this person, each pending review. */
+/** Records this person's review of a tool shared with them, naming the interface hash they were shown. */
+export const useReviewSharedCallableFunction = () => {
+  const invalidate = useInvalidateCallableFunctions();
+  return useMutation({
+    mutationFn: async ({ id, ...review }: { id: string; reviewHash: string; approval: CallableFunctionApprovalMode }) =>
+      (await api.put<ICallableFunctionShared>(`${COLLECTION}/${encodeURIComponent(id)}/review`, review)).data,
+    onSettled: invalidate,
+  });
+};
+
+/** Changes this person's approval mode for a reviewed tool, or turns it off or on. */
+export const useUpdateSharedCallableFunctionReview = () => {
+  const invalidate = useInvalidateCallableFunctions();
+  return useMutation({
+    mutationFn: async ({
+      id,
+      ...settings
+    }: {
+      id: string;
+      approval?: CallableFunctionApprovalMode;
+      enabled?: boolean;
+    }) => (await api.patch<ICallableFunctionShared>(`${COLLECTION}/${encodeURIComponent(id)}/review`, settings)).data,
+    onSettled: invalidate,
+  });
+};
+
+/** Tools other people shared with this person, with this person's review of each. */
 export function useSharedCallableFunctions() {
   const hasAccessToken = useAccessToken(s => !!s.accessToken);
   return useQuery({
