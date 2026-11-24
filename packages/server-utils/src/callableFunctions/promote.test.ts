@@ -1,5 +1,5 @@
 // @vitest-environment node
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { parseFunctionContract, type FunctionContract } from '@bike4mind/common';
 import type { CallableFunctionStamp, DispatchFunctionCallResult } from './dispatch';
 
@@ -13,6 +13,9 @@ const h = vi.hoisted(() => ({
   promoteArgs: [] as unknown[][],
   promoted: true,
   owners: [] as unknown[],
+  recorded: [] as unknown[][],
+  caseMs: 0,
+  dropLastResult: false,
 }));
 
 vi.mock('./access', async () => {
@@ -42,18 +45,35 @@ vi.mock('@bike4mind/database', () => ({
         pin: { ...pin, seq: update.seq, runtime: update.runtime },
       };
     }),
+    recordCaseResults: vi.fn(async (...args: unknown[]) => {
+      h.recorded.push(args);
+      return true;
+    }),
   },
   artifactRepository: { findOne: vi.fn(async () => h.artifact) },
 }));
-vi.mock('./dispatch', () => ({
+vi.mock('./dispatch', async importOriginal => ({
+  ...(await importOriginal<typeof import('./dispatch')>()),
   readServerContract: vi.fn(async () => h.read),
   dispatchFunctionCall: vi.fn(async (...args: unknown[]) => {
     h.calls.push(args);
+    vi.setSystemTime(Date.now() + h.caseMs);
     return h.results.shift();
   }),
 }));
+vi.mock('./testRun', async importOriginal => {
+  const actual = await importOriginal<typeof import('./testRun')>();
+  return {
+    ...actual,
+    runServerCases: vi.fn(async (...args: Parameters<typeof actual.runServerCases>) => {
+      const results = await actual.runServerCases(...args);
+      return h.dropLastResult ? results.slice(0, -1) : results;
+    }),
+  };
+});
 
 import { promoteCallableFunction } from './promote';
+import { callableFunctionCaseHash } from './testRun';
 
 const OWNER = { id: 'owner-1' };
 const FUNCTION_ID = '6650f0a1b2c3d4e5f6a7b8c9';
@@ -104,23 +124,56 @@ const dispatched = (overrides: Partial<DispatchFunctionCallResult>): DispatchFun
   ...overrides,
 });
 
+const CONTENT_HASH = 'c'.repeat(64);
+const RUNTIME = { kind: 'pyodide-server', version: '0.25.1', lockHash: LOCK, packages: STAMP.packages };
+const readOf = (contract: unknown) => ({ ok: true, contract, callId: 'read-1', runtime: RUNTIME });
+const SECOND_EXAMPLE = { ...EXAMPLE, name: 'second case', input: { span: 5 }, expected: { deflection: 10 } };
+const TEST_CASE = CONTRACT.tests![0]!;
+const passOf = (testCase: typeof TEST_CASE, overrides: Record<string, unknown> = {}) => ({
+  caseHash: callableFunctionCaseHash(testCase),
+  name: testCase.name,
+  kind: 'test',
+  passed: true,
+  outcome: 'ok',
+  durationMs: 12,
+  callId: 'earlier-call',
+  at: UPDATED_AT,
+  ...overrides,
+});
+const recordOf = (cases: unknown[], overrides: Record<string, unknown> = {}) => ({
+  pinVersion: 2,
+  contentHash: CONTENT_HASH,
+  runtimeVersion: RUNTIME.version,
+  lockHash: LOCK,
+  cases,
+  ...overrides,
+});
+
 beforeEach(() => {
+  vi.useFakeTimers({ toFake: ['Date'] });
   h.enabled = true;
   h.fn = {
     id: FUNCTION_ID,
     enabled: true,
     state: 'draft',
-    pin: { artifactId: 'a1', version: 2, source: 'code' },
+    pin: { artifactId: 'a1', version: 2, contentHash: CONTENT_HASH, source: 'code' },
     contract: CONTRACT,
     updatedAt: UPDATED_AT,
   };
   h.artifact = { id: 'a1', version: 2, deletedAt: null };
-  h.read = { ok: true, contract: CONTRACT };
+  h.read = readOf(CONTRACT);
   h.calls = [];
   h.results = [];
   h.promoteArgs = [];
   h.promoted = true;
   h.owners = [];
+  h.recorded = [];
+  h.caseMs = 0;
+  h.dropLastResult = false;
+});
+
+afterEach(() => {
+  vi.useRealTimers();
 });
 
 describe('promoteCallableFunction', () => {
@@ -177,7 +230,7 @@ describe('promoteCallableFunction', () => {
   });
 
   it('refuses when the contract the server reads differs from the stored one, running nothing', async () => {
-    h.read = { ok: true, contract: contractOf({ stress: { type: 'number', unit: 'Pa' } }) };
+    h.read = readOf(contractOf({ stress: { type: 'number', unit: 'Pa' } }));
     await expect(promoteCallableFunction(OWNER, FUNCTION_ID, { runner })).rejects.toMatchObject({
       statusCode: 409,
       additionalInfo: { code: 'contract_changed' },
@@ -247,7 +300,7 @@ describe('promoteCallableFunction', () => {
   it('refuses a function with no tests and no worked examples', async () => {
     const { tests: _tests, ...untested } = CONTRACT;
     h.fn = { ...h.fn, contract: untested };
-    h.read = { ok: true, contract: untested };
+    h.read = readOf(untested);
     await expect(promoteCallableFunction(OWNER, FUNCTION_ID, { runner })).rejects.toMatchObject({
       statusCode: 400,
       additionalInfo: { code: 'no_cases' },
@@ -261,5 +314,122 @@ describe('promoteCallableFunction', () => {
       statusCode: 409,
       additionalInfo: { code: 'version_changed' },
     });
+  });
+
+  it('refuses a promoted contract it cannot read, running nothing', async () => {
+    h.fn = { ...h.fn, promoted: { seq: 1, contract: { name: 7 }, at: UPDATED_AT } };
+    await expect(promoteCallableFunction(OWNER, FUNCTION_ID, { runner })).rejects.toMatchObject({
+      statusCode: 409,
+      message: expect.stringContaining('The promoted contract cannot be read since promotion 1'),
+      additionalInfo: { code: 'breaking_change' },
+    });
+    expect(h.calls).toEqual([]);
+    expect(h.promoteArgs).toEqual([]);
+  });
+});
+
+describe('promotion within the budget', () => {
+  it('refuses with cases_left when the budget runs out, naming the cases not run, and never writes', async () => {
+    h.fn = { ...h.fn, examples: [EXAMPLE, SECOND_EXAMPLE] };
+    h.caseMs = 30_000;
+    h.results = [
+      dispatched({ outputs: { deflection: 4 }, callId: 'call-1' }),
+      dispatched({ outputs: { deflection: 6 }, callId: 'call-2' }),
+    ];
+    await expect(promoteCallableFunction(OWNER, FUNCTION_ID, { runner })).rejects.toMatchObject({
+      statusCode: 409,
+      message: '2 of 3 cases have passed on the server for this version. Promote again to run the other 1.',
+      additionalInfo: { code: 'cases_left', passed: 2, total: 3, left: [{ kind: 'example', name: 'second case' }] },
+    });
+    expect(h.calls).toHaveLength(2);
+    expect(h.promoteArgs).toEqual([]);
+    expect(h.recorded[0]![2]).toMatchObject({
+      pinVersion: 2,
+      contentHash: CONTENT_HASH,
+      runtimeVersion: '0.25.1',
+      lockHash: LOCK,
+      cases: [
+        { name: 'short span', kind: 'test', passed: true, callId: 'call-1' },
+        { name: 'handbook case', kind: 'example', passed: true, callId: 'call-2' },
+      ],
+    });
+  });
+
+  it('refuses with cases_left when the run returns fewer results than cases, and never writes', async () => {
+    h.fn = { ...h.fn, examples: [EXAMPLE] };
+    h.dropLastResult = true;
+    h.results = [dispatched({ outputs: { deflection: 4 } }), dispatched({ outputs: { deflection: 6 } })];
+    await expect(promoteCallableFunction(OWNER, FUNCTION_ID, { runner })).rejects.toMatchObject({
+      additionalInfo: { code: 'cases_left', passed: 1, total: 2, left: [{ kind: 'example', name: 'handbook case' }] },
+    });
+    expect(h.promoteArgs).toEqual([]);
+  });
+
+  it('reuses passes recorded on this pin, code, and runtime, and runs only the missing cases', async () => {
+    h.fn = { ...h.fn, examples: [EXAMPLE], caseResults: recordOf([passOf(TEST_CASE)]) };
+    h.results = [dispatched({ outputs: { deflection: 6 }, callId: 'call-2' })];
+    await promoteCallableFunction(OWNER, FUNCTION_ID, { runner });
+    expect(h.calls.map(call => (call[0] as { args: unknown }).args)).toEqual([{ span: 3 }]);
+    expect(h.promoteArgs[0]![3]).toMatchObject({
+      trustLabel: 'verified',
+      lastServerRun: {
+        passed: 2,
+        results: [
+          { name: 'short span', kind: 'test', passed: true, callId: 'earlier-call' },
+          { name: 'handbook case', kind: 'example', passed: true, callId: 'call-2' },
+        ],
+      },
+    });
+  });
+
+  it('finishes a suite over two promotions, running each case once', async () => {
+    h.fn = { ...h.fn, examples: [EXAMPLE, SECOND_EXAMPLE] };
+    h.caseMs = 30_000;
+    h.results = [dispatched({ outputs: { deflection: 4 } }), dispatched({ outputs: { deflection: 6 } })];
+    await expect(promoteCallableFunction(OWNER, FUNCTION_ID, { runner })).rejects.toMatchObject({
+      additionalInfo: { code: 'cases_left' },
+    });
+    h.fn = { ...h.fn, caseResults: h.recorded[0]![2] };
+    h.results = [dispatched({ outputs: { deflection: 10 }, callId: 'call-3' })];
+    await promoteCallableFunction(OWNER, FUNCTION_ID, { runner });
+    expect(h.calls).toHaveLength(3);
+    expect(h.promoteArgs[0]![3]).toMatchObject({ lastServerRun: { passed: 3, failed: 0 } });
+  });
+
+  it.each([
+    ['the pin version', { pinVersion: 1 }, {}],
+    ['the code hash', { contentHash: 'd'.repeat(64) }, {}],
+    ['the runtime version', { runtimeVersion: '0.24.0' }, {}],
+    ['the lock hash', { lockHash: 'b'.repeat(64) }, {}],
+    ['the case', {}, { expected: { deflection: 5 } }],
+  ])('runs a recorded pass again when %s changed', async (_what, recordChange, caseChange) => {
+    const recordedCase = { ...TEST_CASE, ...caseChange };
+    h.fn = { ...h.fn, caseResults: recordOf([passOf(recordedCase)], recordChange) };
+    h.results = [dispatched({ outputs: { deflection: 4 } })];
+    await promoteCallableFunction(OWNER, FUNCTION_ID, { runner });
+    expect(h.calls).toHaveLength(1);
+  });
+
+  it('never reuses a recorded failure', async () => {
+    h.fn = { ...h.fn, caseResults: recordOf([passOf(TEST_CASE, { passed: false, outcome: 'error' })]) };
+    h.results = [dispatched({ outputs: { deflection: 5 } })];
+    await expect(promoteCallableFunction(OWNER, FUNCTION_ID, { runner })).rejects.toMatchObject({
+      additionalInfo: { code: 'test_failed' },
+    });
+    expect(h.calls).toHaveLength(1);
+    expect(h.recorded[0]![2]).toMatchObject({ cases: [{ name: 'short span', passed: false }] });
+  });
+
+  it('refuses when a case ran on another runtime than the contract read, and records only what matched', async () => {
+    h.fn = { ...h.fn, examples: [EXAMPLE] };
+    const moved = { ...STAMP, runtime: { ...STAMP.runtime, lock_hash: 'b'.repeat(64) } } as CallableFunctionStamp;
+    h.results = [dispatched({ outputs: { deflection: 4 } }), dispatched({ outputs: { deflection: 6 }, stamp: moved })];
+    await expect(promoteCallableFunction(OWNER, FUNCTION_ID, { runner })).rejects.toMatchObject({
+      statusCode: 409,
+      additionalInfo: { code: 'runtime_changed' },
+    });
+    expect(h.promoteArgs).toEqual([]);
+    expect(h.recorded[0]![2]).toMatchObject({ cases: [{ name: 'short span' }] });
+    expect((h.recorded[0]![2] as { cases: unknown[] }).cases).toHaveLength(1);
   });
 });

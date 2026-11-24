@@ -67,6 +67,29 @@ export interface CallableFunctionServerRun {
   stamp?: CallableFunctionStamp;
 }
 
+/** One case's latest server result on a pin. Only a pass is reused, and only on the same pin, runtime, and case. */
+export interface CallableFunctionCaseResult {
+  /** sha256 hex of the canonical JSON of the case's input, expected outputs, and tolerance. */
+  caseHash: string;
+  name: string;
+  kind: 'test' | 'example';
+  passed: boolean;
+  outcome: CallableFunctionCallOutcome;
+  durationMs: number;
+  /** The call-log row the case wrote. */
+  callId: string;
+  at: Date;
+}
+
+/** Server results for one pin and runtime: a different pin version, code hash, or runtime makes every one stale. */
+export interface CallableFunctionCaseResults {
+  pinVersion: number;
+  contentHash: string;
+  runtimeVersion: string;
+  lockHash: string | null;
+  cases: CallableFunctionCaseResult[];
+}
+
 /** The last promotion, kept across repins so the next promotion can refuse a breaking change against it. */
 export interface CallableFunctionPromotion {
   seq: number;
@@ -125,14 +148,15 @@ export interface ICallableFunction {
   trustLabel?: CallableFunctionTrustLabel;
   lastServerRun?: CallableFunctionServerRun;
   promoted?: CallableFunctionPromotion;
+  caseResults?: CallableFunctionCaseResults;
 }
 
 export interface ICallableFunctionDocument extends ICallableFunction, IMongoDocument {}
 
-/** The list read: no contract, pinned code, server run, or promotion record. */
+/** The list read: no contract, pinned code, server run, promotion record, or case results. */
 export type ICallableFunctionSummary = Omit<
   ICallableFunctionDocument,
-  'contract' | 'pin' | 'lastServerRun' | 'promoted'
+  'contract' | 'pin' | 'lastServerRun' | 'promoted' | 'caseResults'
 > & {
   pin: Omit<ICallableFunctionPin, 'source'>;
 };
@@ -228,7 +252,8 @@ export function callableFunctionTrustLabel(
 /**
  * Top-level fields the generic `update`/`updateGuarded`/`updateMany` refuse. The owner fields never change; the
  * slug, description, pin, and contract move together through `repin`; `pin.seq`, `pin.runtime`, the state, the
- * label, the server run, and the promotion record only through `promote`; the examples only through `setExamples`.
+ * label, the server run, and the promotion record only through `promote`; the examples only through `setExamples`;
+ * the case results only through `recordCaseResults`.
  */
 export const CALLABLE_FUNCTION_PROTECTED_FIELDS = [
   'ownerType',
@@ -243,6 +268,7 @@ export const CALLABLE_FUNCTION_PROTECTED_FIELDS = [
   'lastServerRun',
   'promoted',
   'examples',
+  'caseResults',
 ] as const;
 
 export class CallableFunctionProtectedFieldError extends Error {
@@ -276,12 +302,19 @@ export class CallableFunctionSlugConflictError extends ConflictError {
   }
 }
 
-/** A repin refused because the new contract could break callers of the pinned one; `changes` names each change. */
+/**
+ * A repin refused because the new contract could break callers of the pinned one, or of the promoted one when
+ * `promotedSeq` is set; `changes` names each change.
+ */
 export class CallableFunctionBreakingChangeError extends ConflictError {
-  constructor(readonly changes: FunctionContractChange[]) {
+  constructor(
+    readonly changes: FunctionContractChange[],
+    readonly promotedSeq?: number
+  ) {
     super('This version changes the contract in a way that could break callers of the tool.', {
       code: 'breaking_change',
       changes,
+      ...(promotedSeq !== undefined ? { promotedSeq } : {}),
     });
     this.name = 'CallableFunctionBreakingChangeError';
   }
@@ -295,10 +328,26 @@ export class CallableFunctionContractUnreadableError extends ConflictError {
   }
 }
 
-export type CallableFunctionCreateInput = Omit<ICallableFunctionDocument, 'id' | 'createdAt' | 'updatedAt'>;
+/** A pin as create and repin write it: `seq` and `runtime` come only from promotion. */
+export type CallableFunctionNewPin = Omit<ICallableFunctionPin, 'seq' | 'runtime'>;
+
+/** Fields `create` refuses at run time too, so a create is always a draft with nothing promotion writes. */
+export const CALLABLE_FUNCTION_CREATE_REFUSED_FIELDS = [
+  'state',
+  'trustLabel',
+  'lastServerRun',
+  'promoted',
+  'examples',
+  'caseResults',
+] as const;
+
+export type CallableFunctionCreateInput = Omit<
+  ICallableFunctionDocument,
+  'id' | 'createdAt' | 'updatedAt' | 'pin' | (typeof CALLABLE_FUNCTION_CREATE_REFUSED_FIELDS)[number]
+> & { pin: CallableFunctionNewPin };
 
 export interface CallableFunctionRepin {
-  pin: ICallableFunctionPin;
+  pin: CallableFunctionNewPin;
   contract: FunctionContract;
   description: string;
 }
@@ -333,11 +382,22 @@ export interface ICallableFunctionRepository extends IBaseRepository<ICallableFu
     expectedVersion: number,
     update: CallableFunctionRepin
   ): Promise<ICallableFunctionDocument | null>;
+  /**
+   * Compare-and-set on `updatedAt`, so a promotion cannot land between the read that decided `unverify` and this
+   * write. `unverify` sets the label to `unverified` until the next promotion.
+   */
   setExamples(
     id: string,
     owner: CallableFunctionOwner,
-    examples: CallableFunctionExample[]
+    expected: { updatedAt: Date },
+    examples: CallableFunctionExample[],
+    options?: { unverify?: boolean }
   ): Promise<ICallableFunctionDocument | null>;
+  /**
+   * Replaces the case results only while the record is still on `results.pinVersion` and `results.contentHash`, and
+   * leaves `updatedAt` alone so a promotion in progress still matches; false when the pin moved.
+   */
+  recordCaseResults(id: string, owner: CallableFunctionOwner, results: CallableFunctionCaseResults): Promise<boolean>;
   /**
    * Writes `pin.seq`, `pin.runtime`, the server run, the label, the promotion record, and `state: 'live'`, only if
    * the record is unchanged since `expected.updatedAt` was read; null when it changed or is not the owner's.

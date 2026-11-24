@@ -3,6 +3,7 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { perUserRateLimit } from '@server/middlewares/perUserRateLimit';
 import { assertCallableFunctionsEnabled } from '@bike4mind/server-utils/callableFunctions/access';
 import { promoteCallableFunction } from '@bike4mind/server-utils/callableFunctions/promote';
+import { callableFunctionTestRunBudget } from '@bike4mind/server-utils/callableFunctions/testRun';
 import {
   callableFunctionPromoteBodySchema,
   parseCallableFunctionBody,
@@ -18,7 +19,9 @@ const handler = baseApi({ auth: 'jwtOnly' }).post(
     if (!req.user) throw new UnauthorizedError('Sign in to use callable functions.');
     await assertCallableFunctionsEnabled(req.user);
     parseCallableFunctionBody(callableFunctionPromoteBodySchema, req.body ?? {});
-    res.json(await promoteCallableFunction(req.user, functionId(req.query)));
+    res.json(
+      await promoteCallableFunction(req.user, functionId(req.query), { budgetMs: callableFunctionTestRunBudget() })
+    );
   }
 );
 

@@ -15,7 +15,13 @@ export const callableFunctionCreateBodySchema = z
   .object({ artifactId: z.string().trim().min(1).max(200), ...pinFields })
   .strict();
 
-export const callableFunctionPinBodySchema = z.object(pinFields).strict();
+export const callableFunctionPinBodySchema = z
+  .object({
+    ...pinFields,
+    /** Update a promoted tool even though the new contract breaks its promoted one; it returns to draft. */
+    acceptBreaking: z.literal(true).optional(),
+  })
+  .strict();
 
 export const callableFunctionPatchBodySchema = z.object({ enabled: z.boolean() }).strict();
 

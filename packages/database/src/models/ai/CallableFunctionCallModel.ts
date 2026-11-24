@@ -73,7 +73,8 @@ class CallableFunctionCallRepository extends BaseRepository<ICallableFunctionCal
     since: Date,
     recentLimit: number
   ): Promise<CallableFunctionCallSummary> {
-    const match = { functionId, callerUserId, startedAt: { $gte: since } };
+    // Contract reads are logged too, but they are not calls of the function.
+    const match = { functionId, callerUserId, op: 'call', startedAt: { $gte: since } };
     const [counts, recent] = await Promise.all([
       this.model.aggregate<{ _id: CallableFunctionCallOutcome; count: number }>([
         { $match: match },

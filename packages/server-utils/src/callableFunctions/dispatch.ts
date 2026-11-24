@@ -231,8 +231,21 @@ const runtimeRow = (run: Pick<CallableFunctionRunResult, 'runtime'>): ICallableF
   ...(run.runtime ? { lockHash: run.runtime.lockHash } : {}),
 });
 
+export interface CallableFunctionServerRuntime {
+  kind: string;
+  version: string;
+  lockHash: string | null;
+  packages: { name: string; version: string }[];
+}
+
 export type ServerContractRead =
-  | { ok: true; contract: FunctionContract; callId: string }
+  | {
+      ok: true;
+      contract: FunctionContract;
+      callId: string;
+      /** The runtime that read the contract, which every case of the same run should match. */
+      runtime: CallableFunctionServerRuntime;
+    }
   | {
       ok: false;
       outcome: CallableFunctionCallOutcome;
@@ -284,7 +297,19 @@ export async function readServerContract(
       ...(run.reason ? { reason: run.reason } : {}),
       ...(run.errorClass ? { errorClass: run.errorClass } : {}),
     });
-    if (run.outcome === 'ok' && run.contract) return { ok: true, contract: run.contract, callId: saved.id };
+    if (run.outcome === 'ok' && run.contract) {
+      return {
+        ok: true,
+        contract: run.contract,
+        callId: saved.id,
+        runtime: {
+          kind: RUNTIME_KIND,
+          version: PYODIDE_VERSION,
+          lockHash: run.runtime?.lockHash ?? null,
+          packages: run.runtime?.packages ?? [],
+        },
+      };
+    }
     return {
       ok: false,
       outcome: run.outcome,

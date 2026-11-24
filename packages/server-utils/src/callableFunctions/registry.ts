@@ -7,8 +7,10 @@ import {
   CallableFunctionContractUnreadableError,
   CallableFunctionSlugConflictError,
   ConflictError,
+  FUNCTION_CONTRACT_LIMITS,
   NotFoundError,
   calculateContentHash,
+  canonicalJson,
   calculateContentSize,
   diffFunctionContracts,
   effectiveCallableFunctionStatus,
@@ -39,6 +41,9 @@ import { Logger } from '@bike4mind/observability';
  * person's function or artifact reads as not found. The routes check `assertCallableFunctionsEnabled` first.
  */
 
+// The size refusal of `parseFunctionContract` (b4m-core/common/src/schemas/functionContract.ts).
+const CONTRACT_SIZE_PROBLEM = /^FUNCTION is \d+ bytes/;
+
 export interface CallableFunctionActor {
   id: string;
 }
@@ -48,6 +53,11 @@ export interface CallableFunctionPinInput {
   expectedVersion: number;
   /** The caller's read of `FUNCTION`, checked with `parseFunctionContract`. */
   contract: unknown;
+}
+
+export interface CallableFunctionRepinInput extends CallableFunctionPinInput {
+  /** Confirms an update that breaks the promoted contract; ignored before the first promotion. */
+  acceptBreaking?: boolean;
 }
 
 const userOwner = (actor: CallableFunctionActor): CallableFunctionOwner => ({ ownerType: 'user', ownerKey: actor.id });
@@ -171,7 +181,6 @@ export async function createCallableFunction(
         userId: actor.id,
         slug: contract.name,
         description: contract.description,
-        state: 'draft',
         enabled: true,
         pin,
         contract,
@@ -210,7 +219,7 @@ export async function getCallableFunction(actor: CallableFunctionActor, id: stri
 export async function repinCallableFunction(
   actor: CallableFunctionActor,
   id: string,
-  input: CallableFunctionPinInput
+  input: CallableFunctionRepinInput
 ): Promise<ICallableFunctionPublic> {
   const owner = userOwner(actor);
   const current = await callableFunctionRepository.findByIdForOwner(id, owner);
@@ -227,11 +236,14 @@ export async function repinCallableFunction(
       { code: 'name_changed' }
     );
   }
-  // Once promoted, the repin returns the function to draft and promotion checks against the promoted contract.
-  if (!current.promoted) {
-    const diff = diffFunctionContracts(current.contract, contract);
+  // Once promoted, callers rely on the promoted contract. Breaking it is allowed only when confirmed, since the
+  // tool returns to draft and promotion will refuse this version.
+  if (!current.promoted || !input.acceptBreaking) {
+    const diff = diffFunctionContracts(current.promoted?.contract ?? current.contract, contract);
     if (!diff) throw new CallableFunctionContractUnreadableError();
-    if (diff.breaking.length > 0) throw new CallableFunctionBreakingChangeError(diff.breaking);
+    if (diff.breaking.length > 0) {
+      throw new CallableFunctionBreakingChangeError(diff.breaking, current.promoted?.seq);
+    }
   }
   const repinned = await callableFunctionRepository.repin(id, owner, current.pin.version, {
     pin,
@@ -258,8 +270,8 @@ export async function setCallableFunctionEnabled(
 }
 
 /**
- * Replaces the owner's worked examples, each checked against the stored contract the way declared tests are. The
- * label changes only at the next promotion.
+ * Replaces the owner's worked examples, each checked against the stored contract the way declared tests are. A live
+ * tool whose examples change is `unverified` until the next promotion.
  */
 export async function setCallableFunctionExamples(
   actor: CallableFunctionActor,
@@ -293,6 +305,13 @@ export async function setCallableFunctionExamples(
   const parsed = parseFunctionContract({ ...current.contract, tests: cases });
   if (!parsed.ok) {
     for (const problem of parsed.problems) {
+      if (problem.path === '' && CONTRACT_SIZE_PROBLEM.test(problem.message)) {
+        problems.push({
+          path: 'examples',
+          message: `together with the contract must fit in ${FUNCTION_CONTRACT_LIMITS.maxContractBytes} bytes; shorten or remove an example`,
+        });
+        continue;
+      }
       const path = problem.path.startsWith('tests') ? `examples${problem.path.slice(5)}` : problem.path;
       problems.push({ ...problem, path });
     }
@@ -300,12 +319,17 @@ export async function setCallableFunctionExamples(
   if (problems.length > 0) {
     throw new BadRequestError('The worked examples have problems.', { code: 'invalid_examples', problems });
   }
-  const saved = await callableFunctionRepository.setExamples(
-    id,
-    owner,
-    examples.map(example => ({ ...example, citation: example.citation.trim() }))
-  );
-  if (!saved) throw notFound();
+  const next = examples.map(example => ({ ...example, citation: example.citation.trim() }));
+  // A live tool's label stands for the examples it was promoted with; changed ones have not run on the server.
+  const unverify = current.state === 'live' && canonicalJson(next) !== canonicalJson(current.examples ?? []);
+  const saved = await callableFunctionRepository.setExamples(id, owner, { updatedAt: current.updatedAt }, next, {
+    unverify,
+  });
+  if (!saved) {
+    throw new ConflictError('The tool changed since you opened it. Reload it and try again.', {
+      code: 'version_changed',
+    });
+  }
   return toCallableFunctionPublic(saved, await readHead(actor, saved.pin.artifactId));
 }
 

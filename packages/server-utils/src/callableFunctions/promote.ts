@@ -1,7 +1,6 @@
 import {
   BadRequestError,
   ConflictError,
-  PYODIDE_VERSION,
   callableFunctionTrustLabel,
   describeFunctionContractChange,
   diffFunctionContracts,
@@ -13,8 +12,17 @@ import {
   type ICallableFunctionPublic,
 } from '@bike4mind/common';
 import { callableFunctionRepository } from '@bike4mind/database';
-import type { CallableFunctionRunner } from './runtimeRunner';
-import { prepareServerRun, runServerCases, type CallableFunctionTestCaseResult } from './testRun';
+import {
+  callableFunctionCaseHash,
+  prepareServerRun,
+  ranOnTargetRuntime,
+  recordServerCaseResults,
+  reusableCasePasses,
+  runServerCases,
+  type CallableFunctionServerCase,
+  type CallableFunctionServerRunOptions,
+  type CallableFunctionTestCaseResult,
+} from './testRun';
 
 export interface CallableFunctionPromotion {
   function: ICallableFunctionPublic;
@@ -38,15 +46,23 @@ function failureText(result: CallableFunctionTestCaseResult): string {
   return `ended with ${result.outcome}${result.reason ? ` (${result.reason})` : ''}`;
 }
 
+interface PromotionCase {
+  kind: 'test' | 'example';
+  testCase: CallableFunctionServerCase;
+  caseHash: string;
+}
+
 /**
  * Promotes the owner's function to `live`. The server reads `FUNCTION` from the pinned code and refuses a contract
- * that differs from the stored one or breaks the last promoted one, then runs every declared test and worked example
- * through the dispatcher; only when all pass does it write the sequence, runtime, run, label, and state.
+ * that differs from the stored one or breaks the last promoted one. Every declared test and worked example must then
+ * have passed on the server on this pin, code, and runtime: passes recorded by earlier runs are reused, and the rest
+ * run within one budget. Only when every case has passed does it write the sequence, runtime, run, label, and state;
+ * cases the budget did not reach are refused as `cases_left`, and their passes are kept for the next promotion.
  */
 export async function promoteCallableFunction(
   actor: { id: string },
   id: string,
-  options: { runner?: CallableFunctionRunner | null } = {}
+  options: CallableFunctionServerRunOptions = {}
 ): Promise<CallableFunctionPromotion> {
   const target = await prepareServerRun(actor, id, options);
   const { fn, contract } = target;
@@ -63,54 +79,101 @@ export async function promoteCallableFunction(
     }
   }
 
-  const tests = contract.tests ?? [];
-  const examples = fn.examples ?? [];
-  if (tests.length + examples.length === 0) {
+  const all: PromotionCase[] = [
+    ...(contract.tests ?? []).map(testCase => ({ kind: 'test' as const, testCase })),
+    ...(fn.examples ?? []).map(testCase => ({ kind: 'example' as const, testCase })),
+  ].map(entry => ({ ...entry, caseHash: callableFunctionCaseHash(entry.testCase) }));
+  if (all.length === 0) {
     throw new BadRequestError('Declare a test or add a worked example before promoting.', { code: 'no_cases' });
   }
 
-  const ran = [
-    ...(await runServerCases(actor, target, tests)).map(result => ({ kind: 'test' as const, result })),
-    ...(await runServerCases(actor, target, examples)).map(result => ({ kind: 'example' as const, result })),
-  ];
-  const cases: CallableFunctionServerRunCase[] = ran.flatMap(({ kind, result }) =>
-    result.outcome === 'not_run'
-      ? []
-      : [
-          {
-            name: result.name,
-            kind,
-            passed: result.passed,
-            outcome: result.outcome,
-            ...(result.reason ? { reason: result.reason } : {}),
-            durationMs: result.durationMs,
-            callId: result.callId,
-          },
-        ]
+  const reusable = reusableCasePasses(target);
+  const fresh = all.filter(entry => !reusable.has(entry.caseHash));
+  const freshResults = await runServerCases(
+    actor,
+    target,
+    fresh.map(entry => entry.testCase)
   );
+  const resultFor = new Map<PromotionCase, CallableFunctionTestCaseResult>();
+  fresh.forEach((entry, index) => {
+    const result = freshResults[index];
+    if (result) resultFor.set(entry, result);
+  });
+  const ran = [...resultFor].map(([entry, result]) => ({ ...entry, result }));
+  await recordServerCaseResults(actor, target, ran, new Set(all.map(entry => entry.caseHash)));
 
-  const failures = ran.filter(({ result }) => !result.passed);
+  const runCases: CallableFunctionServerRunCase[] = [];
+  for (const entry of all) {
+    const reused = reusable.get(entry.caseHash);
+    const result = resultFor.get(entry);
+    if (reused) {
+      runCases.push({
+        name: entry.testCase.name,
+        kind: entry.kind,
+        passed: true,
+        outcome: reused.outcome,
+        durationMs: reused.durationMs,
+        callId: reused.callId,
+      });
+    } else if (result && result.outcome !== 'not_run') {
+      runCases.push({
+        name: result.name,
+        kind: entry.kind,
+        passed: result.passed,
+        outcome: result.outcome,
+        ...(result.reason ? { reason: result.reason } : {}),
+        durationMs: result.durationMs,
+        callId: result.callId,
+      });
+    }
+  }
+
+  const failures = ran.filter(({ result }) => result.outcome !== 'not_run' && !result.passed);
   if (failures.length > 0) {
     const { kind, result } = failures[0]!;
     const others = failures.length > 1 ? ` ${failures.length - 1} more case(s) failed too.` : '';
     throw new ConflictError(
       `${kind === 'example' ? 'Worked example' : 'Test'} "${result.name}" failed on the server: ${failureText(result)}.${others}`,
-      { code: kind === 'example' ? 'example_failed' : 'test_failed', results: cases }
+      { code: kind === 'example' ? 'example_failed' : 'test_failed', results: runCases }
+    );
+  }
+
+  // A deploy between cases: the cases did not all run on the runtime the pin would name.
+  const otherRuntime = ran.find(({ result }) => result.outcome !== 'not_run' && !ranOnTargetRuntime(target, result));
+  if (otherRuntime) {
+    throw new ConflictError('The server runtime changed while the cases ran. Promote again.', {
+      code: 'runtime_changed',
+      results: runCases,
+    });
+  }
+
+  const left = all.filter(entry => !reusable.has(entry.caseHash) && resultFor.get(entry)?.passed !== true);
+  if (freshResults.length !== fresh.length || runCases.length !== all.length || left.length > 0) {
+    const passed = all.length - left.length;
+    throw new ConflictError(
+      `${passed} of ${all.length} cases have passed on the server for this version. Promote again to run the other ${left.length}.`,
+      {
+        code: 'cases_left',
+        passed,
+        total: all.length,
+        left: left.map(entry => ({ kind: entry.kind, name: entry.testCase.name })),
+        results: runCases,
+      }
     );
   }
 
   const stamp = ran.flatMap(({ result }) => (result.outcome !== 'not_run' && result.stamp ? [result.stamp] : []))[0];
   const runtime: CallableFunctionRuntimePin = {
-    kind: stamp?.runtime.kind ?? 'pyodide-server',
-    version: stamp?.runtime.version ?? PYODIDE_VERSION,
-    ...(stamp?.runtime.lock_hash ? { lockHash: stamp.runtime.lock_hash } : {}),
-    packages: stamp?.packages ?? [],
+    kind: target.runtime.kind,
+    version: target.runtime.version,
+    ...(target.runtime.lockHash ? { lockHash: target.runtime.lockHash } : {}),
+    packages: stamp?.packages ?? target.runtime.packages,
   };
   const run: CallableFunctionServerRun = {
     at: new Date(),
-    passed: cases.length,
+    passed: runCases.length,
     failed: 0,
-    results: cases,
+    results: runCases,
     ...(stamp ? { stamp } : {}),
   };
   const promoted = await callableFunctionRepository.promote(
@@ -121,7 +184,7 @@ export async function promoteCallableFunction(
       seq: (fn.promoted?.seq ?? 0) + 1,
       runtime,
       lastServerRun: run,
-      trustLabel: callableFunctionTrustLabel(cases),
+      trustLabel: callableFunctionTrustLabel(runCases),
       contract,
     }
   );

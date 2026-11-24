@@ -2,6 +2,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createHash } from 'node:crypto';
 import {
+  PYODIDE_VERSION,
   canonicalJson,
   parseFunctionContract,
   type FunctionContract,
@@ -510,8 +511,20 @@ describe('readServerContract', () => {
     readServerContract({ caller: OWNER, fn: record() as never, surface: 'test' }, { runner, waitMs });
 
   it('reads FUNCTION through the runner with the short time limit and logs the read as its own op', async () => {
-    const runner = runnerOf({ outcome: 'ok', contract: CONTRACT, durationMs: 5, initMs: 700 });
-    await expect(read(runner)).resolves.toEqual({ ok: true, contract: CONTRACT, callId: 'call-1' });
+    const packages = [{ name: 'numpy', version: '1.26.4' }];
+    const runner = runnerOf({
+      outcome: 'ok',
+      contract: CONTRACT,
+      durationMs: 5,
+      initMs: 700,
+      runtime: { lockHash: LOCK, packages },
+    });
+    await expect(read(runner)).resolves.toEqual({
+      ok: true,
+      contract: CONTRACT,
+      callId: 'call-1',
+      runtime: { kind: 'pyodide-server', version: PYODIDE_VERSION, lockHash: LOCK, packages },
+    });
     expect(runner).toHaveBeenCalledWith({ op: 'read_contract', code: SOURCE, limits: { timeoutMs: 10_000 } });
     const row = onlyRow();
     expect(row).toMatchObject({

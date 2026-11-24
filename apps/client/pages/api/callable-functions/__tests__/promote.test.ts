@@ -29,6 +29,7 @@ vi.mock('@bike4mind/server-utils/callableFunctions/promote', () => ({
 }));
 vi.mock('@bike4mind/server-utils/callableFunctions/testRun', () => ({
   runCallableFunctionTests: h.runCallableFunctionTests,
+  callableFunctionTestRunBudget: () => 45_000,
 }));
 vi.mock('@bike4mind/server-utils/callableFunctions/registry', () => ({
   setCallableFunctionExamples: h.setCallableFunctionExamples,
@@ -166,7 +167,9 @@ describe('POST /api/callable-functions/[id]/promote', () => {
     const res = await fire(promoteRoute);
     expect(res._getStatusCode()).toBe(200);
     expect(res._getJSONData()).toEqual(PROMOTION);
-    expect(h.promoteCallableFunction).toHaveBeenCalledWith(expect.objectContaining({ id: 'jwt-user' }), FUNCTION_ID);
+    expect(h.promoteCallableFunction).toHaveBeenCalledWith(expect.objectContaining({ id: 'jwt-user' }), FUNCTION_ID, {
+      budgetMs: 45_000,
+    });
   });
 
   it('answers 401 without a session or a user, and for an API key without looking it up', async () => {
@@ -249,6 +252,7 @@ describe('no route that takes a body can set what a promotion writes', () => {
     results: { lastServerRun: { passed: 9, failed: 0, results: [] } },
     sequence: { pin: { seq: 9 } },
     state: { state: 'live' },
+    caseResults: { caseResults: { pinVersion: 1, cases: [] } },
   };
   const ROUTES = [
     ['POST /api/callable-functions', collectionRoute, 'POST', { artifactId: 'a1', expectedVersion: 1, contract: {} }],

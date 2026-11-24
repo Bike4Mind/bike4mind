@@ -1,4 +1,5 @@
 import {
+  CALLABLE_FUNCTION_CREATE_REFUSED_FIELDS,
   CALLABLE_FUNCTION_EXAMPLE_LIMITS,
   CALLABLE_FUNCTION_LIMITS,
   CALLABLE_FUNCTION_OWNER_TYPES,
@@ -10,8 +11,10 @@ import {
   CallableFunctionProtectedFieldError,
   CallableFunctionSlugConflictError,
   FUNCTION_CONTRACT_LIMITS,
+  type CallableFunctionCaseResults,
   type CallableFunctionCreateInput,
   type CallableFunctionExample,
+  type CallableFunctionNewPin,
   type CallableFunctionOwner,
   type CallableFunctionPromote,
   type CallableFunctionRepin,
@@ -113,6 +116,7 @@ const CallableFunctionSchema = new Schema<ICallableFunctionDocument>(
         { _id: false }
       ),
     },
+    caseResults: { type: Schema.Types.Mixed },
   },
   {
     timestamps: true,
@@ -136,7 +140,27 @@ export const CallableFunction: ICallableFunctionModel =
 
 type FunctionDoc = ICallableFunctionDocument & IMongoDocument;
 
-const SUMMARY_PROJECTION = { contract: 0, 'pin.source': 0, lastServerRun: 0, promoted: 0 };
+const SUMMARY_PROJECTION = { contract: 0, 'pin.source': 0, lastServerRun: 0, promoted: 0, caseResults: 0 };
+
+const newPin = (pin: CallableFunctionNewPin): CallableFunctionNewPin => ({
+  artifactId: pin.artifactId,
+  version: pin.version,
+  contentHash: pin.contentHash,
+  source: pin.source,
+  pinnedAt: pin.pinnedAt,
+});
+
+/** The input types already omit these; this holds for a caller that casts past them. */
+function assertCreatable(data: CallableFunctionCreateInput): void {
+  const fields: Record<string, unknown> = data;
+  for (const field of CALLABLE_FUNCTION_CREATE_REFUSED_FIELDS) {
+    if (fields[field] !== undefined) throw new CallableFunctionProtectedFieldError(field);
+  }
+  const pin: Record<string, unknown> = data.pin;
+  for (const field of ['seq', 'runtime']) {
+    if (pin[field] !== undefined) throw new CallableFunctionProtectedFieldError(`pin.${field}`);
+  }
+}
 
 const PROTECTED_FIELDS: ReadonlySet<string> = new Set(CALLABLE_FUNCTION_PROTECTED_FIELDS);
 
@@ -196,8 +220,9 @@ class CallableFunctionRepository extends BaseRepository<FunctionDoc> implements 
 
   async create(data: CallableFunctionCreateInput) {
     if (data.ownerKey !== data.userId) throw new CallableFunctionOwnerError(OWNER_MISMATCH);
+    assertCreatable(data);
     try {
-      return await super.create(data);
+      return await super.create({ ...data, state: 'draft' });
     } catch (error) {
       throw duplicateKeyError(error, data) ?? error;
     }
@@ -268,8 +293,8 @@ class CallableFunctionRepository extends BaseRepository<FunctionDoc> implements 
     const result = await this.model.findOneAndUpdate(
       { _id: id, ...ownerFilter(owner), 'pin.version': expectedVersion },
       {
-        $set: { pin: update.pin, contract: update.contract, description: update.description, state: 'draft' },
-        $unset: { trustLabel: 1 },
+        $set: { pin: newPin(update.pin), contract: update.contract, description: update.description, state: 'draft' },
+        $unset: { trustLabel: 1, lastServerRun: 1, caseResults: 1 },
       },
       { new: true, runValidators: true }
     );
@@ -279,15 +304,36 @@ class CallableFunctionRepository extends BaseRepository<FunctionDoc> implements 
   async setExamples(
     id: string,
     owner: CallableFunctionOwner,
-    examples: CallableFunctionExample[]
+    expected: { updatedAt: Date },
+    examples: CallableFunctionExample[],
+    options: { unverify?: boolean } = {}
   ): Promise<ICallableFunctionDocument | null> {
     if (!mongoose.isObjectIdOrHexString(id)) return null;
     const result = await this.model.findOneAndUpdate(
-      { _id: id, ...ownerFilter(owner) },
-      { $set: { examples } },
+      { _id: id, ...ownerFilter(owner), updatedAt: expected.updatedAt },
+      { $set: { examples, ...(options.unverify ? { trustLabel: 'unverified' } : {}) } },
       { new: true, runValidators: true }
     );
     return result?.toJSON() ?? null;
+  }
+
+  async recordCaseResults(
+    id: string,
+    owner: CallableFunctionOwner,
+    results: CallableFunctionCaseResults
+  ): Promise<boolean> {
+    if (!mongoose.isObjectIdOrHexString(id)) return false;
+    const result = await this.model.updateOne(
+      {
+        _id: id,
+        ...ownerFilter(owner),
+        'pin.version': results.pinVersion,
+        'pin.contentHash': results.contentHash,
+      },
+      { $set: { caseResults: results } },
+      { timestamps: false, runValidators: true }
+    );
+    return result.matchedCount === 1;
   }
 
   async promote(
