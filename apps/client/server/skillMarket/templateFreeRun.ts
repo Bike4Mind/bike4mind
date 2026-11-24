@@ -211,7 +211,8 @@ export class FreeRunModelUnavailableError extends Error {}
 /** The provider call may still be running and billing, so its caps stay spent. */
 export class FreeRunTimeoutError extends Error {}
 
-const FREE_RUN_TIMEOUT_MS = 60_000;
+// Under the 60 s server Lambda timeout (infra/web.ts), so a slow run ends in a refusal, not a killed function.
+const FREE_RUN_TIMEOUT_MS = 45_000;
 
 /** One non-streaming completion on platform keys. Throws on any failure, including an empty answer. */
 export async function completeFreeRun(args: {
@@ -272,7 +273,8 @@ export async function recordTemplateFreeRun(templateId: unknown): Promise<void> 
 
 // --- Rendering the answer ---
 
-const MERMAID_FENCE = /^\s{0,3}(`{3,}|~{3,})\s*mermaid\b/im;
+// Case-sensitive like the page script's `code.language-mermaid` selector, so a fence it cannot draw loads nothing.
+const MERMAID_FENCE = /^\s{0,3}(`{3,}|~{3,})\s*mermaid\b/m;
 
 /**
  * Model output as safe HTML. marked passes raw HTML through, so sanitize-html is the boundary: no
