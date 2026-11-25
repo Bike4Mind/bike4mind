@@ -283,7 +283,7 @@ import {
   suggestionModelChoices,
   suggestionRequestMessages,
 } from './nextPrompt';
-import type { SessionActivity } from './SessionActivity';
+import { endsUnread, type SessionActivity, type TurnOutcome } from './SessionActivity';
 import { deriveTitle, isValidSessionId, type SessionStore } from './SessionStore';
 import { expandSkill, parseSkillInvocation } from './skills/expand';
 import { resolveInlineSkills } from './skills/inline';
@@ -431,8 +431,6 @@ type TaskDecisionIndexLoad = {
   ready: Promise<void>;
 };
 
-/** How a turn ended. Only 'completed' lets a queued message go out; see settleQueue. */
-type TurnOutcome = 'completed' | 'aborted' | 'failed' | 'expired';
 type AuxiliaryPurpose = Extract<CompletionRunAttribution['purpose'], 'title' | 'compaction' | 'suggestion'>;
 type AuxiliaryRun = { session: ChatSession; run: CompletionRunAttribution; budgeted: boolean; payer: BillingPayer };
 
@@ -4338,7 +4336,7 @@ export class ChatService {
         this.attendedTurns.delete(sessionId);
         // Backstop for a turn that ended without a 'done'/'error' (its own bookkeeping threw).
         if (this.livePlans.delete(sessionId)) void this.pushStoredSummary(sessionId);
-        this.deps.activity?.replyEnded(sessionId, outcome === 'completed' && finalReply.content.trim().length > 0);
+        this.deps.activity?.replyEnded(sessionId, endsUnread(outcome, finalReply.content));
         // All three need the session to be idle, and this is the moment it becomes so: a
         // spawned run gives its concurrency slot back and reports to its parent, and a parent
         // that was mid-turn takes delivery of anything that finished while it was busy.

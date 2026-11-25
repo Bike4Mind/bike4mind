@@ -5,6 +5,7 @@ import {
   projectFunctionSchema,
   type FunctionContractProblem,
   type ICallableFunctionDetail,
+  type ICallableFunctionResult,
   type ICallableFunctionPublic,
 } from '@bike4mind/common';
 import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
@@ -34,6 +35,23 @@ export const FUNCTION_INVOKE_BUDGET_MS = CALLABLE_FUNCTION_SURFACE_CAPS.rest.wai
 
 /** The guest's own run time; the runtime's start and its margin sit outside it. */
 export const FUNCTION_INVOKE_RUN_TIMEOUT_MS = Math.min(CALLABLE_FUNCTION_DEFAULT_TIMEOUT_MS, FUNCTION_INVOKE_BUDGET_MS);
+
+/** Said only when the organization's limit is longer than a synchronous call can wait. */
+export const FUNCTION_SYNC_STOP_MESSAGE =
+  'A synchronous call stops at 45 s. Send "mode": "async" to run to your time limit, then poll the call for its result.';
+
+/** The 504 for a synchronous call: it names async mode only when async mode would have let the call run longer. */
+export function syncTimeoutError(limitMs: number): string {
+  return limitMs > FUNCTION_INVOKE_BUDGET_MS ? FUNCTION_SYNC_STOP_MESSAGE : TIMEOUT_MESSAGE;
+}
+
+export const FUNCTION_CALL_NOT_FOUND_MESSAGE = 'Call not found';
+
+export const FUNCTION_QUEUE_FAILED_MESSAGE = 'The call could not be queued. Try again later.';
+
+export const FUNCTION_ASYNC_UNAVAILABLE_MESSAGE = 'Asynchronous calls are not available on self-hosted installs.';
+
+export const FUNCTION_CALL_STOPPED_MESSAGE = 'The call stopped before it finished. Send it again.';
 
 /** The input cap plus room for the `{ "input": ... }` envelope and a pretty-printed body. */
 export const FUNCTION_INVOKE_MAX_BODY_BYTES = CALLABLE_FUNCTION_SURFACE_CAPS.rest.inputBytes + 64 * 1024;
@@ -135,6 +153,8 @@ export function invokeAnswer(call: DispatchFunctionCallResult): InvokeAnswer {
         status: 504,
         body: { error: TIMEOUT_MESSAGE, errorCode: REQUEST_TIMEOUT_ERROR_CODE, ...stamp },
       };
+    case 'queued':
+      return { status: 202, body: { call_id: call.callId, status: 'queued' } };
     case 'refused':
       if (call.reason === 'setting_off') {
         return { status: 403, body: { error: 'Callable functions are turned off for this account.' } };
@@ -147,6 +167,7 @@ export function invokeAnswer(call: DispatchFunctionCallResult): InvokeAnswer {
       }
       return { status: 503, body: { error: FUNCTION_RUNTIME_FAULT_MESSAGE } };
     case 'error':
+      if (call.reason === 'queue_failed') return { status: 503, body: { error: FUNCTION_QUEUE_FAILED_MESSAGE } };
       // A runner that threw, never replied, or was slow to start is a platform fault, not the function's own error.
       if (call.reason === 'runtime_unavailable' || call.reason === 'no_reply' || call.reason === 'start_timeout') {
         return { status: 503, body: { error: FUNCTION_RUNTIME_FAULT_MESSAGE } };
@@ -158,4 +179,30 @@ export function invokeAnswer(call: DispatchFunctionCallResult): InvokeAnswer {
         body: { error: FAILURE_MESSAGES[call.outcome] ?? 'The function failed.', outcome: call.outcome, ...stamp },
       };
   }
+}
+
+/** A polled call: `queued` and `running` alone, a finished one with its outcome and what the invoke would answer. */
+export function functionCallAnswer(doc: ICallableFunctionResult): Record<string, unknown> {
+  if (doc.state !== 'finished' || !doc.outcome) return { call_id: doc.callId, status: doc.state };
+  const base = { call_id: doc.callId, status: 'finished', outcome: doc.outcome };
+  if (doc.outcome === 'ok') return { ...base, output: doc.outputs ?? {}, ...(doc.stamp ? { stamp: doc.stamp } : {}) };
+  // These two reasons are written only by the queue worker, so they are not dispatcher reasons.
+  if (doc.reason === 'worker_lost' || doc.reason === 'dispatch_failed') {
+    return { ...base, error: FUNCTION_CALL_STOPPED_MESSAGE, ...(doc.stamp ? { stamp: doc.stamp } : {}) };
+  }
+  const answer = invokeAnswer({
+    outcome: doc.outcome,
+    ...(doc.reason ? { reason: doc.reason as DispatchFunctionCallResult['reason'] } : {}),
+    ...(doc.errorClass ? { errorClass: doc.errorClass } : {}),
+    ...(doc.problems ? { problems: doc.problems } : {}),
+    ...(doc.stamp ? { stamp: doc.stamp } : {}),
+    durationMs: doc.stamp?.duration_ms ?? 0,
+    callId: doc.callId,
+  });
+  return {
+    ...base,
+    error: answer.body.error,
+    ...(doc.problems ? { problems: doc.problems } : {}),
+    ...(doc.stamp ? { stamp: doc.stamp } : {}),
+  };
 }

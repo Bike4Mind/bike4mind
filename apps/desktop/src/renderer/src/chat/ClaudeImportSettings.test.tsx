@@ -135,4 +135,26 @@ describe('opened from a sidebar sync hint', () => {
       HTMLElement.prototype.scrollIntoView = original;
     }
   });
+
+  it('highlights the web "Keep in sync" switch for a moment when opened at the web section', async () => {
+    getState.mockResolvedValue(ready);
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      await mount('b4m-web');
+      const toggle = () => host.querySelector<HTMLElement>('[data-testid="claude-import-web-switch"]');
+      expect(toggle()?.dataset.highlighted).toBe('true');
+      await act(async () => vi.advanceTimersByTime(2500));
+      expect(toggle()?.dataset.highlighted).toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('leaves the switch plain when opened at another source', async () => {
+    getState.mockResolvedValue(ready);
+    await mount('claude-code');
+    expect(
+      host.querySelector<HTMLElement>('[data-testid="claude-import-web-switch"]')?.dataset.highlighted
+    ).toBeUndefined();
+  });
 });

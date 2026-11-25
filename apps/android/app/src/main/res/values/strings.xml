@@ -151,6 +151,7 @@
     <string name="settings_notifications_open_system">Open notification settings</string>
     <string name="settings_save_failed">Couldn\'t save that change. Try again.</string>
     <string name="settings_account">Account</string>
+    <string name="settings_credits">Credits</string>
     <string name="settings_server">Server: %1$s</string>
     <string name="settings_sign_out">Sign out</string>
     <string name="settings_delete_account">Delete account</string>

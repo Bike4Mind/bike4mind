@@ -16,7 +16,7 @@ import { sendToClient } from '@bike4mind/server-utils/websocket/utils';
 import { getFilesStorage, getGeneratedImageStorage } from '@bike4mind/server-utils/utils/storage/index';
 import { filterReadableQuests } from '@bike4mind/server-utils/utils/sessionAccess';
 import { userCanAccessGeneratedImage } from '@bike4mind/server-utils/utils/generatedImageAccess';
-import { resolveProxyTarget } from '@bike4mind/server-utils/utils/appFileProxy';
+import { generatedKeyFromProxyPath } from '@bike4mind/server-utils/utils/appFileProxy';
 import { apiKeyService } from '@bike4mind/services';
 import { aiAccessDeniedMessage } from '@bike4mind/services/userService/accountState';
 import {
@@ -120,8 +120,7 @@ function extractImageUrls(content: string, imageArrays: string[][]): string[] {
 
 /**
  * Raw bucket / CloudFront URLs, plus generated images served from the app's own CDN origin
- * (`<cdnUrl>/generated/<key>`, see generatedFiles.ts) - the shape the chat UI renders and users
- * copy into plans. Other CDN prefixes (org-files, admin-logos, ...) stay out of scope.
+ * (legacy `<cdnUrl>/generated/<key>` links stored in content) - the shape users copy into plans. Other CDN prefixes (org-files, admin-logos, ...) stay out of scope.
  */
 function isStorageImageUrl(url: string): boolean {
   if (url.includes('.amazonaws.com') || url.includes('cloudfront.net')) return true;
@@ -152,8 +151,8 @@ function extractS3Key(url: string): string {
 
 /**
  * Determines which storage holds the image and its key there. A raw S3 URL names its bucket in
- * the host; a CDN URL routes by path, where CloudFront strips `/generated/` before the generated
- * bucket (infra/buckets.ts), so the key is the bare name `quest.images` and the access check use.
+ * the host; a legacy `<cdnUrl>/generated/<key>` link maps to the generated bucket by path, so the
+ * key is the bare name `quest.images` and the access check use.
  */
 function resolveImageSource(url: string): {
   storage: S3Storage;
@@ -173,9 +172,9 @@ function resolveImageSource(url: string): {
     }
     return { storage: getFilesStorage(), label: 'files', key };
   }
-  const target = resolveProxyTarget(key);
-  if (target?.bucket === 'generated') {
-    return { storage: getGeneratedImageStorage(), label: 'generatedImages', key: target.key };
+  const generatedKey = generatedKeyFromProxyPath(key);
+  if (generatedKey !== null) {
+    return { storage: getGeneratedImageStorage(), label: 'generatedImages', key: generatedKey };
   }
   return { storage: getFilesStorage(), label: 'files', key };
 }

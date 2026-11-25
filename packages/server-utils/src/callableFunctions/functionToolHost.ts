@@ -18,7 +18,13 @@ import {
 import { customMcpToolHost } from '../mcpConnections/customMcpToolHost';
 import { resolveCallableFunctionsEnabled } from './access';
 import { composeToolHosts } from './composeToolHosts';
-import { dispatchFunctionCall, recordCallableFunctionRefusal, type DispatchFunctionCallResult } from './dispatch';
+import {
+  dispatchFunctionCall,
+  recordCallableFunctionRefusal,
+  type CallableFunctionDispatchOptions,
+  type DispatchFunctionCallRequest,
+  type DispatchFunctionCallResult,
+} from './dispatch';
 import { listOfferedCallableFunctions } from './registry';
 
 export { FUNCTION_CONNECTION_ID };
@@ -34,8 +40,14 @@ export const FUNCTION_ANSWER_RESERVE_MS = 15_000;
 /** With less wait than this left, the dispatcher refuses `budget_exhausted` without running. */
 export const FUNCTION_MIN_WAIT_MS = 2_000;
 
+/** The host only runs a call synchronously; it never queues one. */
+export type FunctionToolDispatch = (
+  request: DispatchFunctionCallRequest,
+  options?: Pick<CallableFunctionDispatchOptions, 'deadline' | 'minWaitMs'>
+) => Promise<DispatchFunctionCallResult>;
+
 export interface FunctionToolHostDeps {
-  dispatch: typeof dispatchFunctionCall;
+  dispatch: FunctionToolDispatch;
   recordRefusal: typeof recordCallableFunctionRefusal;
 }
 

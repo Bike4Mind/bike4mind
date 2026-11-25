@@ -24,6 +24,9 @@ import {
 } from './hopToken';
 import { stableEventId } from '@bike4mind/server-utils/analytics/signupEvents';
 import { readVisitId } from './visitSession';
+import { Logger } from '@bike4mind/observability';
+
+const logger = new Logger({ metadata: { service: 'hops' } });
 
 /**
  * Verified hops: a click that left a source product for this app, proven by the source rather than
@@ -209,7 +212,7 @@ export async function redeemHop(opts: {
       ...(opts.linkVisit && { sessionId: opts.visitId }),
     });
   } catch (err) {
-    console.warn('[b4m-analytics] hop redeem failed', err instanceof Error ? err.message : err);
+    logger.warn('[b4m-analytics] hop redeem failed', { error: err });
     return { redeemed: false, reason: 'error' };
   }
   if (!hop) return { redeemed: false, reason: 'refused' };
@@ -281,7 +284,7 @@ export async function bindSignupHop(
     if (!hop?.redeemedAt) return undefined;
     return { srcProductId: hop.srcProductId, hopId: hop.hopId, redeemedAt: new Date(hop.redeemedAt) };
   } catch (err) {
-    console.warn('[b4m-analytics] signup hop not bound', err instanceof Error ? err.message : err);
+    logger.warn('[b4m-analytics] signup hop not bound', { error: err });
     return undefined;
   }
 }
