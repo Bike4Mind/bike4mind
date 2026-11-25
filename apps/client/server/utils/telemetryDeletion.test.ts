@@ -1,3 +1,4 @@
+import { Logger } from '@bike4mind/observability';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const { mockUpdateMany, mockCountDocuments, mockAuditCreate, mockHashes } = vi.hoisted(() => ({
@@ -35,8 +36,8 @@ beforeEach(() => {
   mockUpdateMany.mockReset().mockResolvedValue({ modifiedCount: 3 });
   mockCountDocuments.mockReset().mockResolvedValue(0);
   mockAuditCreate.mockReset().mockResolvedValue(undefined);
-  vi.spyOn(console, 'error').mockImplementation(() => {});
-  vi.spyOn(console, 'warn').mockImplementation(() => {});
+  vi.spyOn(Logger.prototype, 'error').mockImplementation(() => {});
+  vi.spyOn(Logger.prototype, 'warn').mockImplementation(() => {});
 });
 
 describe('triggerTelemetryDeletion', () => {

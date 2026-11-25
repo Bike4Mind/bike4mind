@@ -49,6 +49,9 @@ import {
   describeRemoteMcpError,
   type InvokeRemoteMcpOptions,
 } from '@bike4mind/server-utils/mcpConnections/invokeRemoteMcp';
+import { Logger } from '@bike4mind/observability';
+
+const logger = new Logger({ metadata: { service: 'connectionService' } });
 
 /**
  * The custom MCP connection operations behind pages/api/mcp-connections/** and
@@ -226,7 +229,10 @@ async function probe(
         await mcpConnectionRepository.setStatus(connection.id, 'error', failure.lastError);
       }
     } catch (statusError) {
-      console.warn(`[connectionService] Could not record the probe failure on ${connection.id}:`, statusError);
+      logger.warn('[connectionService] Could not record the probe failure', {
+        connectionId: connection.id,
+        error: statusError,
+      });
     }
   }
 }
@@ -559,7 +565,7 @@ async function revokeRemoteGrant(actor: ConnectionActor, connection: IMcpConnect
     const { network } = await resolveCustomMcpContext(actor.id);
     await revokeConnectionGrant(connection, network);
   } catch {
-    console.warn(`[connectionService] Could not revoke the grant of connection ${connection.id}`);
+    logger.warn('[connectionService] Could not revoke the grant of the connection', { connectionId: connection.id });
   }
 }
 

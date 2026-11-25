@@ -4,6 +4,9 @@ import { McpServerName } from '@bike4mind/common';
 import { decryptToken, encryptEnvVariables } from '@bike4mind/server-utils/security/tokenEncryption';
 import { buildMcpToolCacheUpdate } from '@bike4mind/services/llm';
 import { NOTION_API_BASE_URL, NOTION_VERSION } from './notionConfig';
+import { Logger } from '@bike4mind/observability';
+
+const logger = new Logger({ metadata: { service: 'notionTokenManager' } });
 
 const TOKEN_VALIDATION_TIMEOUT = 10000;
 
@@ -121,7 +124,7 @@ export class NotionTokenManager {
       const accessToken = this.readStoredToken(notionConnect.accessToken);
       if (!accessToken) {
         // A stored connection whose token is missing or will not decrypt can only be fixed by a new OAuth grant.
-        console.warn('Stored Notion access token is unreadable. Marking for reconnection.');
+        logger.warn('Stored Notion access token is unreadable. Marking for reconnection.', { userId });
         await this.markNeedsReconnect(userId, UNREADABLE_TOKEN_REASON);
         throw new NotionReconnectRequiredError(UNREADABLE_TOKEN_REASON);
       }
@@ -129,7 +132,7 @@ export class NotionTokenManager {
       const status = await this.validateToken(accessToken);
 
       if (status === 'revoked') {
-        console.log('Notion token is confirmed revoked (401/403). Marking for reconnection.');
+        logger.info('Notion token is confirmed revoked (401/403). Marking for reconnection.', { userId });
         await this.markNeedsReconnect(userId, REVOKED_TOKEN_REASON);
         throw new NotionReconnectRequiredError();
       }
@@ -137,9 +140,9 @@ export class NotionTokenManager {
       if (status === 'unknown') {
         // Transient error (timeout, network, 5xx) - use the token optimistically
         // since Notion tokens don't expire, the most likely cause is a temporary issue
-        console.warn('Notion token validation inconclusive (network/timeout). Using token optimistically.');
+        logger.warn('Notion token validation inconclusive (network/timeout). Using token optimistically.', { userId });
       } else {
-        console.log('Using valid Notion token');
+        logger.debug('Using valid Notion token', { userId });
       }
 
       return {
@@ -151,7 +154,7 @@ export class NotionTokenManager {
       if (error instanceof NotionReconnectRequiredError || error instanceof NotionNotConnectedError) {
         throw error;
       }
-      console.error('Error in getValidTokens:', error);
+      logger.error('Error in getValidTokens', { userId, error });
       return null;
     }
   }
@@ -203,7 +206,7 @@ export class NotionTokenManager {
         // Reconnect: drop any prior "confirmed empty" marker so the retry loop below is trusted.
         { unset: ['toolSchemasFetchedAt'] }
       );
-      console.log('Updated existing Notion MCP server');
+      logger.info('Updated existing Notion MCP server', { userId });
     } else {
       notionServer = await mcpServerRepository.create({
         ...{ _id: recordId },
@@ -213,7 +216,7 @@ export class NotionTokenManager {
         enabled: true,
         tools: [],
       });
-      console.log('Created new Notion MCP server');
+      logger.info('Created new Notion MCP server', { userId });
     }
 
     // Fetch and cache tool schemas so ToolBuilder / loadAgentMcpTools can
@@ -240,11 +243,16 @@ export class NotionTokenManager {
         if (notionServer) {
           await mcpServerRepository.update(buildMcpToolCacheUpdate(notionServer.id, tools as Array<{ name: string }>));
         }
-        console.log(`Notion MCP server configured with ${tools.length} tools`);
+        logger.info('Notion MCP server configured', { userId, toolCount: tools.length });
         toolsFetched = true;
         break;
       } catch (toolsError) {
-        console.warn(`Failed to get Notion MCP tools (attempt ${attempt}/${MAX_TOOL_FETCH_ATTEMPTS}):`, toolsError);
+        logger.warn('Failed to get Notion MCP tools', {
+          userId,
+          attempt,
+          maxAttempts: MAX_TOOL_FETCH_ATTEMPTS,
+          error: toolsError,
+        });
         if (attempt < MAX_TOOL_FETCH_ATTEMPTS) {
           await new Promise(resolve => setTimeout(resolve, BASE_BACKOFF_MS * attempt));
         }
@@ -252,10 +260,11 @@ export class NotionTokenManager {
     }
 
     if (!toolsFetched) {
-      console.error(
+      logger.error(
         'Notion MCP tools could not be fetched after retries. ' +
           'The server is saved but toolSchemas are empty - the LLM will not see Notion tools ' +
-          'until the next GET /api/mcp-servers request refreshes them.'
+          'until the next GET /api/mcp-servers request refreshes them.',
+        { userId }
       );
     }
   }

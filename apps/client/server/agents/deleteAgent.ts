@@ -1,6 +1,9 @@
 import { agentRepository, User, userRepository, creditTransactionRepository } from '@bike4mind/database';
 import { CreditHolderType } from '@bike4mind/common';
 import { creditService } from '@bike4mind/services';
+import { Logger } from '@bike4mind/observability';
+
+const logger = new Logger({ metadata: { service: 'deleteAgent' } });
 
 /**
  * Deletes an agent the caller has already been verified to own: returns its credits to `userId`,
@@ -42,11 +45,11 @@ export async function deleteAgent(agent: { id: string }, userId: string): Promis
       );
     } catch (err) {
       // Non-atomic: log for manual reconciliation but still block deletion if reclaim failed
-      console.error('Agent credit reclaim failed - manual reconciliation may be needed', {
+      logger.error('Agent credit reclaim failed - manual reconciliation may be needed', {
         agentId: agent.id,
         userId,
         credits: creditsToReclaim,
-        err,
+        error: err,
       });
       throw err;
     }
@@ -62,7 +65,7 @@ export async function deleteAgent(agent: { id: string }, userId: string): Promis
       { $unset: { 'slackSettings.customAgentId': '' } }
     );
   } catch (error) {
-    console.error('Failed to clean up agent references:', error);
+    logger.error('Failed to clean up agent references', { error });
     // Don't fail the request - agent is already deleted
   }
 }
