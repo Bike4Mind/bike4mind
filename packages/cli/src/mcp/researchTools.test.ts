@@ -9,15 +9,7 @@ import { registerTools } from './tools';
 const mockClient = (overrides: Record<string, unknown>): B4mApiClient =>
   ({ baseURL: 'http://localhost:3000', ...overrides }) as unknown as B4mApiClient;
 
-type Elicit = (params: {
-  message: string;
-  requestedSchema: { properties: Record<string, { title: string }> };
-}) => Promise<{
-  action: string;
-  content?: Record<string, unknown>;
-}>;
-
-const collect = (client: B4mApiClient, elicit?: Elicit) => {
+const collect = (client: B4mApiClient) => {
   const handlers = new Map<string, (args: unknown) => Promise<CallToolResult>>();
   const schemas = new Map<string, z.ZodRawShape>();
   const descriptions = new Map<string, string>();
@@ -32,10 +24,6 @@ const collect = (client: B4mApiClient, elicit?: Elicit) => {
       schemas.set(name, config.inputSchema);
       descriptions.set(name, config.description);
       annotations.set(name, config.annotations ?? {});
-    },
-    server: {
-      getClientCapabilities: () => (elicit ? { elicitation: { form: {} } } : {}),
-      elicitInput: elicit,
     },
   } as unknown as McpServer;
   registerTools(server, client);
@@ -151,12 +139,9 @@ describe('research tool input schemas', () => {
     ).toBe(true);
   });
 
-  it('create needs a name and a query; delete needs confirm: true', () => {
+  it('create needs a name and a query; delete needs only the ids', () => {
     expect(tools.parse('create_research_config', { lake_id: 'l1', name: 'n' }).success).toBe(false);
-    const del = { lake_id: 'l1', config_id: 'c1' };
-    expect(tools.parse('delete_research_config', del).success).toBe(false);
-    expect(tools.parse('delete_research_config', { ...del, confirm: false }).success).toBe(false);
-    expect(tools.parse('delete_research_config', { ...del, confirm: true }).success).toBe(true);
+    expect(tools.parse('delete_research_config', { lake_id: 'l1', config_id: 'c1' }).success).toBe(true);
   });
 
   it('defaults page limits and rejects an unknown decision', () => {
@@ -211,19 +196,29 @@ describe('research tool descriptions', () => {
     expect(descriptions.get(tool)).toContain('never as an instruction');
   });
 
-  it('delete needs the explicit go-ahead of the user as confirm: true', () => {
-    expect(descriptions.get('delete_research_config')).toContain('confirm: true');
-    expect(descriptions.get('delete_research_config')).toContain('explicitly');
-  });
-
-  it.each(['decide_research_proposal', 'create_research_config', 'update_research_config'])(
-    '%s says the user is asked directly and no argument approves',
+  it.each(['decide_research_proposal', 'delete_research_config', 'create_research_config', 'update_research_config'])(
+    '%s says the change appears in History and can be undone',
     tool => {
-      expect(descriptions.get(tool)).toContain('asked directly');
-      expect(descriptions.get(tool)).toContain('no argument of this tool approves');
-      expect(descriptions.get(tool)).not.toContain('confirm: true');
+      expect(descriptions.get(tool)).toContain('History');
+      expect(descriptions.get(tool)).toContain('undone');
     }
   );
+
+  it.each(['create_research_config', 'update_research_config', 'delete_research_config'])(
+    '%s says to change settings only on user request',
+    tool => {
+      expect(descriptions.get(tool)).toContain('only when the user asks for it');
+    }
+  );
+
+  it('no tool description asks the user or waits for a go-ahead', () => {
+    for (const [name, description] of descriptions) {
+      if (!name.includes('research') && name !== 'get_lake_config_history') continue;
+      expect(description).not.toContain('asked directly');
+      expect(description).not.toContain('go-ahead');
+      expect(description).not.toContain('confirm: true');
+    }
+  });
 
   it('does not claim the server clamps numbers, and describes the old-run unlisted_dropped sentence', () => {
     expect(descriptions.get('create_research_config')).not.toContain('clamped');
@@ -264,7 +259,7 @@ describe('research tool operations', () => {
     expect(out(result)).toEqual({ configs: [{ id: 'c1' }], nextCursor: 'n' });
   });
 
-  it('create_research_config sends the levers but not the routing ids or confirm', async () => {
+  it('create_research_config sends the levers but not the routing ids', async () => {
     const createResearchConfig = vi.fn().mockResolvedValue({ id: 'c1' });
     await collect(mockClient({ createResearchConfig })).call('create_research_config', {
       lake_id: 'l1',
@@ -291,12 +286,11 @@ describe('research tool operations', () => {
     expect(updateResearchConfig).toHaveBeenCalledWith('l1', 'c1', { schedule_paused: true });
   });
 
-  it('delete_research_config deletes with confirm: true', async () => {
+  it('delete_research_config deletes with no confirm', async () => {
     const deleteResearchConfig = vi.fn().mockResolvedValue(undefined);
     const result = await collect(mockClient({ deleteResearchConfig })).call('delete_research_config', {
       lake_id: 'l1',
       config_id: 'c1',
-      confirm: true,
     });
     expect(deleteResearchConfig).toHaveBeenCalledWith('l1', 'c1');
     expect(out(result)).toEqual({ deleted: true, lake_id: 'l1', config_id: 'c1' });
@@ -421,13 +415,11 @@ describe('research tool projections', () => {
   });
 });
 
-describe('research tool guarded actions', () => {
+describe('research tool direct changes', () => {
   const decide = (decision: string, ids = ['p1']) => ({ lake_id: 'l1', proposal_ids: ids, decision });
   const pending = (...ids: string[]) =>
     vi.fn().mockResolvedValue({
-      data: ids.map(id =>
-        rawProposal({ id, title: `Title ${id} ${'x'.repeat(150)}`, source_url: `https://${id}.test/a` })
-      ),
+      data: ids.map(id => rawProposal({ id, source_url: `https://${id}.test/a` })),
       nextCursor: null,
     });
   const approved = (id: string) => ({
@@ -436,328 +428,113 @@ describe('research tool guarded actions', () => {
   });
 
   describe('approve', () => {
-    it('shows one form with a field per proposal and approves only the ticked ones', async () => {
+    it('approves every given id directly and reports an id that is not pending', async () => {
       const decideProposal = vi.fn().mockImplementation((_l: string, id: string) => Promise.resolve(approved(id)));
-      const elicit = vi.fn().mockResolvedValue({ action: 'accept', content: { p1: false, p2: true, p3: true } });
-      const tools = collect(mockClient({ listProposals: pending('p1', 'p2', 'p3'), decideProposal }), elicit);
-      const result = await tools.call('decide_research_proposal', decide('approve', ['p1', 'p2', 'p3']));
-      expect(elicit).toHaveBeenCalledTimes(1);
-      const form = elicit.mock.calls[0][0];
-      expect(Object.keys(form.requestedSchema.properties)).toEqual(['p1', 'p2', 'p3']);
-      expect(form.requestedSchema.properties.p1.title).toContain('p1.test');
-      expect(form.requestedSchema.properties.p1.title.length).toBeLessThan(130);
-      expect(decideProposal.mock.calls.map(c => c[1])).toEqual(['p2', 'p3']);
-      expect(out(result).results).toHaveLength(2);
-      expect(out(result).left_pending).toEqual(['p1']);
-    });
-
-    it('strips format and control characters from titles and leads with the host', async () => {
-      const listProposals = vi.fn().mockResolvedValue({
-        data: [
-          rawProposal({ id: 'p1', title: 'Real\u202E\u200B page (nih.gov)\n', source_url: 'https://evil.test/a' }),
-        ],
-        nextCursor: null,
-      });
-      const elicit = vi.fn().mockResolvedValue({ action: 'accept', content: { p1: false } });
-      await collect(mockClient({ listProposals, decideProposal: vi.fn() }), elicit).call(
-        'decide_research_proposal',
-        decide('approve')
-      );
-      expect(elicit.mock.calls[0][0].requestedSchema.properties.p1.title).toBe('evil.test: Real page (nih.gov)');
-    });
-
-    it.each([
-      ['declined', { action: 'decline' }],
-      ['cancelled', { action: 'cancel' }],
-      ['accepted with nothing ticked', { action: 'accept', content: { p1: false } }],
-    ])('approves nothing when the form is %s', async (_name, answer) => {
-      const decideProposal = vi.fn();
-      const tools = collect(
-        mockClient({ listProposals: pending('p1'), decideProposal }),
-        vi.fn().mockResolvedValue(answer)
-      );
-      const result = await tools.call('decide_research_proposal', decide('approve'));
+      const tools = collect(mockClient({ listProposals: pending('p1', 'p2'), decideProposal }));
+      const result = await tools.call('decide_research_proposal', decide('approve', ['p1', 'p2', 'p9']));
       expect(result.isError).toBeUndefined();
-      expect(decideProposal).not.toHaveBeenCalled();
-      expect(out(result).message).toContain('Nothing was approved');
+      expect(decideProposal.mock.calls.map(c => c.slice(1))).toEqual([
+        ['p1', { decision: 'approve' }],
+        ['p2', { decision: 'approve' }],
+      ]);
+      expect(out(result).results.map((r: { proposal_id: string }) => r.proposal_id)).toEqual(['p1', 'p2']);
+      expect(out(result).not_pending).toEqual(['p9']);
+      expect(out(result).failed).toEqual([]);
     });
 
-    it('refuses on a client that cannot elicit, with no API call', async () => {
-      const listProposals = pending('p1');
+    it('reports a failed id with its error and still approves the others', async () => {
+      const decideProposal = vi
+        .fn()
+        .mockImplementation((_l: string, id: string) =>
+          id === 'p1' ? Promise.reject(new Error('boom')) : Promise.resolve(approved(id))
+        );
+      const tools = collect(mockClient({ listProposals: pending('p1', 'p2'), decideProposal }));
+      const result = await tools.call('decide_research_proposal', decide('approve', ['p1', 'p2']));
+      expect(out(result).results).toHaveLength(1);
+      expect(out(result).failed).toEqual([{ proposal_id: 'p1', error: 'boom' }]);
+    });
+
+    it('approves nothing and writes nothing when none of the ids is pending', async () => {
       const decideProposal = vi.fn();
-      const result = await collect(mockClient({ listProposals, decideProposal })).call(
-        'decide_research_proposal',
-        decide('approve')
-      );
-      expect(result.isError).toBe(true);
-      expect(text(result)).toContain('Bike4Mind app');
-      expect(listProposals).not.toHaveBeenCalled();
+      const tools = collect(mockClient({ listProposals: pending(), decideProposal }));
+      const result = await tools.call('decide_research_proposal', decide('approve', ['p9']));
       expect(decideProposal).not.toHaveBeenCalled();
-    });
-
-    it('reports an id that is not pending and asks only about the found ones', async () => {
-      const decideProposal = vi.fn().mockImplementation((_l: string, id: string) => Promise.resolve(approved(id)));
-      const elicit = vi.fn().mockResolvedValue({ action: 'accept', content: { p1: true } });
-      const tools = collect(mockClient({ listProposals: pending('p1'), decideProposal }), elicit);
-      const result = await tools.call('decide_research_proposal', decide('approve', ['p1', 'gone']));
-      expect(Object.keys(elicit.mock.calls[0][0].requestedSchema.properties)).toEqual(['p1']);
-      expect(out(result).not_pending).toEqual(['gone']);
-      expect(decideProposal).toHaveBeenCalledTimes(1);
-    });
-
-    it('does not ask when none of the ids is pending', async () => {
-      const elicit = vi.fn();
-      const tools = collect(mockClient({ listProposals: pending(), decideProposal: vi.fn() }), elicit);
-      const result = await tools.call('decide_research_proposal', decide('approve', ['gone']));
-      expect(elicit).not.toHaveBeenCalled();
-      expect(out(result).not_pending).toEqual(['gone']);
-    });
-
-    it('ignores a confirm the model supplies', async () => {
-      const decideProposal = vi.fn();
-      const result = await collect(mockClient({ listProposals: pending('p1'), decideProposal })).call(
-        'decide_research_proposal',
-        { ...decide('approve'), confirm: true }
-      );
-      expect(result.isError).toBe(true);
-      expect(decideProposal).not.toHaveBeenCalled();
+      expect(out(result).results).toEqual([]);
+      expect(out(result).not_pending).toEqual(['p9']);
     });
   });
 
-  it.each(['decline', 'restore'])('%s takes several ids with no elicitation', async decision => {
+  it.each(['decline', 'restore'])('%s takes several ids', async decision => {
     const decideProposal = vi.fn().mockResolvedValue({ data: rawProposal(), file: null });
-    const elicit = vi.fn();
-    const result = await collect(mockClient({ decideProposal }), elicit).call(
+    const result = await collect(mockClient({ decideProposal })).call(
       'decide_research_proposal',
       decide(decision, ['p1', 'p2', 'p1'])
     );
     expect(result.isError).toBeUndefined();
     expect(decideProposal.mock.calls.map(c => c[1])).toEqual(['p1', 'p2']);
-    expect(elicit).not.toHaveBeenCalled();
   });
 
-  it('refuses delete_research_config without confirm even if the schema is bypassed', async () => {
-    const deleteResearchConfig = vi.fn();
+  it('delete_research_config needs no confirm', async () => {
+    const deleteResearchConfig = vi.fn().mockResolvedValue(undefined);
     const result = await collect(mockClient({ deleteResearchConfig })).call('delete_research_config', {
       lake_id: 'l1',
       config_id: 'c1',
     });
+    expect(result.isError).toBeUndefined();
+    expect(deleteResearchConfig).toHaveBeenCalledWith('l1', 'c1');
+  });
+
+  it.each([
+    { auto_admit_trusted: true },
+    { trusted_domains: ['example.gov'] },
+    { min_relevance: 0.2 },
+    { blocked_domains: [] },
+  ])('update applies %j with no elicitation and no current-config read', async change => {
+    const getResearchConfig = vi.fn();
+    const updateResearchConfig = vi.fn().mockResolvedValue({ id: 'c1' });
+    const result = await collect(mockClient({ getResearchConfig, updateResearchConfig })).call(
+      'update_research_config',
+      { lake_id: 'l1', config_id: 'c1', ...change }
+    );
+    expect(result.isError).toBeUndefined();
+    expect(updateResearchConfig).toHaveBeenCalledWith('l1', 'c1', change);
+    expect(getResearchConfig).not.toHaveBeenCalled();
+  });
+
+  it('create applies a trust-widening config directly', async () => {
+    const createResearchConfig = vi.fn().mockResolvedValue({ id: 'c1' });
+    const result = await collect(mockClient({ createResearchConfig })).call('create_research_config', {
+      lake_id: 'l1',
+      name: 'n',
+      query: 'q',
+      auto_admit_trusted: true,
+      trusted_domains: ['example.gov'],
+    });
+    expect(result.isError).toBeUndefined();
+    expect(createResearchConfig).toHaveBeenCalledTimes(1);
+  });
+
+  it('refuses a domain that normalizes to empty before any API call', async () => {
+    const updateResearchConfig = vi.fn();
+    const result = await collect(mockClient({ updateResearchConfig })).call('update_research_config', {
+      lake_id: 'l1',
+      config_id: 'c1',
+      review_domains: ['https://'],
+    });
     expect(result.isError).toBe(true);
-    expect(deleteResearchConfig).not.toHaveBeenCalled();
+    expect(text(result)).toContain('https://');
+    expect(updateResearchConfig).not.toHaveBeenCalled();
   });
 
-  const current = (over: Record<string, unknown> = {}) => ({
-    id: 'c1',
-    query: 'q',
-    auto_admit_trusted: false,
-    trusted_domains: ['a.gov'],
-    max_auto_admits: 3,
-    blocked_domains: ['spam.test'],
-    item_rules: [{ condition: 'is ad', action: 'block' }],
-    ...over,
-  });
-  const yes: Elicit = vi.fn().mockResolvedValue({ action: 'accept', content: { approve: true } });
-
-  describe('create', () => {
-    it.each([{ auto_admit_trusted: true }, { trusted_domains: ['example.gov'] }])('asks for %j', async extra => {
-      const createResearchConfig = vi.fn().mockResolvedValue({ id: 'c1' });
-      const elicit = vi.fn().mockResolvedValue({ action: 'accept', content: { approve: true } });
-      const result = await collect(mockClient({ createResearchConfig }), elicit).call('create_research_config', {
-        lake_id: 'l1',
-        name: 'n',
-        query: 'q',
-        ...extra,
-      });
-      expect(elicit).toHaveBeenCalledTimes(1);
-      expect(result.isError).toBeUndefined();
-      expect(createResearchConfig).toHaveBeenCalledWith('l1', expect.not.objectContaining({ confirm: true }));
+  it('pauses without reading the current config', async () => {
+    const getResearchConfig = vi.fn();
+    const updateResearchConfig = vi.fn().mockResolvedValue({ id: 'c1' });
+    await collect(mockClient({ getResearchConfig, updateResearchConfig })).call('update_research_config', {
+      lake_id: 'l1',
+      config_id: 'c1',
+      schedule_paused: true,
     });
-
-    it('writes nothing when the user declines', async () => {
-      const createResearchConfig = vi.fn();
-      const elicit = vi.fn().mockResolvedValue({ action: 'decline' });
-      const result = await collect(mockClient({ createResearchConfig }), elicit).call('create_research_config', {
-        lake_id: 'l1',
-        name: 'n',
-        query: 'q',
-        auto_admit_trusted: true,
-      });
-      expect(createResearchConfig).not.toHaveBeenCalled();
-      expect(out(result).applied).toBe(false);
-    });
-
-    it('refuses on a client that cannot elicit, and needs none for safe changes', async () => {
-      const createResearchConfig = vi.fn().mockResolvedValue({ id: 'c1' });
-      const tools = collect(mockClient({ createResearchConfig }));
-      const refused = await tools.call('create_research_config', {
-        lake_id: 'l1',
-        name: 'n',
-        query: 'q',
-        trusted_domains: ['example.gov'],
-        confirm: true,
-      });
-      expect(refused.isError).toBe(true);
-      expect(text(refused)).toContain('Bike4Mind app');
-      expect(createResearchConfig).not.toHaveBeenCalled();
-      for (const safe of [{ min_relevance: 0.5 }, { auto_admit_trusted: false }, { trusted_domains: [] }]) {
-        const ok = await tools.call('create_research_config', { lake_id: 'l1', name: 'n', query: 'q', ...safe });
-        expect(ok.isError).toBeUndefined();
-      }
-      expect(createResearchConfig).toHaveBeenCalledTimes(3);
-    });
-  });
-
-  describe('update', () => {
-    const run = async (cur: Record<string, unknown>, change: Record<string, unknown>, elicit?: Elicit) => {
-      const getResearchConfig = vi.fn().mockResolvedValue(current(cur));
-      const updateResearchConfig = vi.fn().mockResolvedValue({ id: 'c1' });
-      const result = await collect(mockClient({ getResearchConfig, updateResearchConfig }), elicit).call(
-        'update_research_config',
-        { lake_id: 'l1', config_id: 'c1', ...change }
-      );
-      return { result, updateResearchConfig };
-    };
-
-    it.each([
-      ['auto_admit_trusted turns on', {}, { auto_admit_trusted: true }],
-      ['a trusted domain is added', {}, { trusted_domains: ['a.gov', 'b.gov'] }],
-      ['max_auto_admits rises with auto-admit on', { auto_admit_trusted: true }, { max_auto_admits: 5 }],
-      ['a blocked domain is removed with auto-admit on', { auto_admit_trusted: true }, { blocked_domains: [] }],
-      ['an item rule is removed with auto-admit on', { auto_admit_trusted: true }, { item_rules: [] }],
-      ['the query changes with auto-admit on', { auto_admit_trusted: true }, { query: 'other' }],
-      [
-        'min_relevance lowers with auto-admit on',
-        { auto_admit_trusted: true, min_relevance: 0.6 },
-        { min_relevance: 0.4 },
-      ],
-      ['the judge model changes with auto-admit on', { auto_admit_trusted: true, model: null }, { model: 'm1' }],
-      [
-        'a different item rule replaces the stored one',
-        { auto_admit_trusted: true },
-        { item_rules: [{ condition: 'extra', action: 'block' }] },
-      ],
-      [
-        'feed_url changes with auto-admit on',
-        { auto_admit_trusted: true, feed_url: 'https://a.test/f' },
-        { feed_url: 'https://b.test/f' },
-      ],
-      ['source changes with auto-admit on', { auto_admit_trusted: true, source: 'search' }, { source: 'feed' }],
-      [
-        'a review domain is removed with auto-admit on',
-        { auto_admit_trusted: true, review_domains: ['x.a.gov', 'y.test'] },
-        { review_domains: ['y.test'] },
-      ],
-      [
-        'blocked_domains removal is compared after normalization',
-        { auto_admit_trusted: true, blocked_domains: ['spam.test'] },
-        { blocked_domains: ['other.test'] },
-      ],
-    ])('asks when %s', async (_name, cur, change) => {
-      const elicit = vi.fn().mockResolvedValue({ action: 'accept', content: { approve: true } });
-      const { result, updateResearchConfig } = await run(cur, change, elicit);
-      expect(elicit).toHaveBeenCalledTimes(1);
-      expect(result.isError).toBeUndefined();
-      expect(updateResearchConfig).toHaveBeenCalled();
-    });
-
-    it.each([
-      ['an unchanged trusted_domains resend', {}, { trusted_domains: ['A.gov'] }],
-      ['auto-admit already on and resent', { auto_admit_trusted: true }, { auto_admit_trusted: true }],
-      ['max_auto_admits rises while auto-admit is off', {}, { max_auto_admits: 9 }],
-      ['a blocked domain removed while auto-admit is off', {}, { blocked_domains: [] }],
-      ['the query changes while auto-admit is off', {}, { query: 'other' }],
-      ['max_auto_admits lowers with auto-admit on', { auto_admit_trusted: true }, { max_auto_admits: 1 }],
-      ['auto-admit is turned off', { auto_admit_trusted: true }, { auto_admit_trusted: false }],
-      [
-        'min_relevance raises with auto-admit on',
-        { auto_admit_trusted: true, min_relevance: 0.4 },
-        { min_relevance: 0.6 },
-      ],
-      ['min_relevance lowers with auto-admit off', { min_relevance: 0.6 }, { min_relevance: 0.4 }],
-      [
-        'an item rule resent with different case and spacing',
-        { auto_admit_trusted: true },
-        { item_rules: [{ condition: '  IS   AD ', action: 'block' }] },
-      ],
-      [
-        'a review domain is added with auto-admit on',
-        { auto_admit_trusted: true, review_domains: ['x.a.gov'] },
-        { review_domains: ['x.a.gov', 'new.test'] },
-      ],
-      ['a URL form of a stored trusted domain', {}, { trusted_domains: ['https://a.gov'] }],
-      [
-        'a blocked domain kept in URL form',
-        { auto_admit_trusted: true, blocked_domains: ['spam.test'] },
-        { blocked_domains: ['https://www.spam.test/x'] },
-      ],
-    ])('does not ask for %s', async (_name, cur, change) => {
-      const elicit = vi.fn();
-      const { result, updateResearchConfig } = await run(cur, change, elicit);
-      expect(elicit).not.toHaveBeenCalled();
-      expect(result.isError).toBeUndefined();
-      expect(updateResearchConfig).toHaveBeenCalled();
-    });
-
-    it('shows the normalized host for a credentialed trusted domain', async () => {
-      const elicit = vi.fn().mockResolvedValue({ action: 'accept', content: { approve: true } });
-      await run({}, { trusted_domains: ['nih.gov@evil.com'] }, elicit);
-      const message = elicit.mock.calls[0][0].message;
-      expect(message).toContain('evil.com');
-      expect(message).not.toContain('nih.gov');
-    });
-
-    it('lists the trusted sites and cap when auto-admit turns on', async () => {
-      const elicit = vi.fn().mockResolvedValue({ action: 'accept', content: { approve: true } });
-      await run({ min_relevance: 0.7 }, { auto_admit_trusted: true }, elicit);
-      const message = elicit.mock.calls[0][0].message;
-      expect(message).toContain('min_relevance: 0.7');
-      expect(message).toContain('a.gov');
-      expect(message).toContain('cap: 3');
-    });
-
-    it('refuses a domain that normalizes to empty before any API call', async () => {
-      const getResearchConfig = vi.fn();
-      const updateResearchConfig = vi.fn();
-      const result = await collect(mockClient({ getResearchConfig, updateResearchConfig }), yes).call(
-        'update_research_config',
-        { lake_id: 'l1', config_id: 'c1', review_domains: ['https://'] }
-      );
-      expect(result.isError).toBe(true);
-      expect(text(result)).toContain('https://');
-      expect(getResearchConfig).not.toHaveBeenCalled();
-      expect(updateResearchConfig).not.toHaveBeenCalled();
-    });
-
-    it('writes nothing when the form is accepted with approve false', async () => {
-      const { result, updateResearchConfig } = await run(
-        {},
-        { auto_admit_trusted: true },
-        vi.fn().mockResolvedValue({ action: 'accept', content: { approve: false } })
-      );
-      expect(updateResearchConfig).not.toHaveBeenCalled();
-      expect(out(result).applied).toBe(false);
-    });
-
-    it('writes nothing when the user cancels, and refuses without elicitation', async () => {
-      const cancelled = await run({}, { auto_admit_trusted: true }, vi.fn().mockResolvedValue({ action: 'cancel' }));
-      expect(cancelled.updateResearchConfig).not.toHaveBeenCalled();
-      expect(out(cancelled.result).applied).toBe(false);
-      const refused = await run({}, { trusted_domains: ['new.gov'], confirm: true });
-      expect(refused.result.isError).toBe(true);
-      expect(text(refused.result)).toContain('Bike4Mind app');
-      expect(refused.updateResearchConfig).not.toHaveBeenCalled();
-    });
-
-    it('pauses without reading the current config', async () => {
-      const getResearchConfig = vi.fn();
-      const updateResearchConfig = vi.fn().mockResolvedValue({ id: 'c1' });
-      await collect(mockClient({ getResearchConfig, updateResearchConfig }), yes).call('update_research_config', {
-        lake_id: 'l1',
-        config_id: 'c1',
-        schedule_paused: true,
-      });
-      expect(getResearchConfig).not.toHaveBeenCalled();
-    });
+    expect(getResearchConfig).not.toHaveBeenCalled();
   });
 });
 
