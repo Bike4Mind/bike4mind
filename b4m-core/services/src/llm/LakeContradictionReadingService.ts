@@ -3,7 +3,9 @@ import { BadRequestError, InternalServerError } from '@bike4mind/utils';
 import { getAvailableModels, getLlmByModel, type ApiKeyTable } from '@bike4mind/llm-adapters';
 import { Logger } from '@bike4mind/observability';
 import { z } from 'zod';
-import { ChatModels, EXCERPT_MAX, excerpt } from '@bike4mind/common';
+import { ChatModels, EXCERPT_MAX, excerpt, isTerminalCreditRefusal } from '@bike4mind/common';
+import { meterCompletionBackend, type CompletionMeter } from '../billing/completionMeter';
+import { isAiAccessRefusal } from '../userService/accountState';
 import { createSmallLLMService } from './SmallLLMService';
 
 /**
@@ -192,12 +194,15 @@ export class LakeContradictionReadingService {
     model = ChatModels.GPT4_1_MINI,
     documents,
     endUserId,
+    meter,
   }: {
     apiKeyTable: ApiKeyTable;
     model?: ChatModels;
     documents: ContradictionCandidateDocument[];
     /** Lake owner, for provider abuse attribution - matches `LakeMemoryExtractionService`. */
     endUserId?: string;
+    /** Bills every call, retries included, to the lake owner; its credit or AI-access refusal is rethrown. */
+    meter?: CompletionMeter;
   }): Promise<ModelContradiction[] | null> {
     // Nothing to compare. Below 2 the request would still bill for a read that can only ever answer
     // "no contradictions" - cheaper to refuse it here than to ask the model.
@@ -207,9 +212,10 @@ export class LakeContradictionReadingService {
       const modelInfo = (await getAvailableModels(apiKeyTable)).find(m => m.id === model);
       if (!modelInfo) throw new BadRequestError(`Invalid model: "${model}" is not available`);
 
-      const llm = getLlmByModel(apiKeyTable, { modelInfo, logger: this.logger, endUserId });
-      if (!llm) throw new InternalServerError(`Failed to initialize LLM for model: "${model}"`);
+      const backend = getLlmByModel(apiKeyTable, { modelInfo, logger: this.logger, endUserId });
+      if (!backend) throw new InternalServerError(`Failed to initialize LLM for model: "${model}"`);
 
+      const llm = meter ? meterCompletionBackend(backend, meter, modelInfo) : backend;
       const smallLLM = createSmallLLMService({ llm, modelId: model }, this.logger);
       const { data } = await smallLLM.completeJSON(
         buildContradictionPrompt(documents, randomUUID()),
@@ -243,6 +249,8 @@ export class LakeContradictionReadingService {
       });
       return grounded;
     } catch (error) {
+      // Every later batch would be refused too, so this ends the run rather than counting as a bad batch.
+      if (isTerminalCreditRefusal(error) || isAiAccessRefusal(error)) throw error;
       this.logger.warn('Model contradiction pass failed for batch:', error);
       return null;
     }

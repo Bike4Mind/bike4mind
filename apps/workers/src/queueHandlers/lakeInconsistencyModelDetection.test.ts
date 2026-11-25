@@ -9,6 +9,8 @@ const h = vi.hoisted(() => ({
   recordLakeFindings: vi.fn(),
   getEffectiveLLMApiKeys: vi.fn(),
   listGrantsByLake: vi.fn(),
+  findUserById: vi.fn(),
+  createCompletionMeter: vi.fn(),
   loggerInfo: vi.fn(),
   loggerWarn: vi.fn(),
   loggerError: vi.fn(),
@@ -24,6 +26,9 @@ vi.mock('@bike4mind/server-utils/queueHandlers/utils', () => ({
         warn: h.loggerWarn,
         error: h.loggerError,
       }),
+}));
+vi.mock('@bike4mind/server-utils/billing/meterPlatformCompletion', () => ({
+  createCompletionMeter: h.createCompletionMeter,
 }));
 vi.mock('@bike4mind/services', () => ({
   dataLakeService: {
@@ -55,6 +60,7 @@ vi.mock('@bike4mind/database', () => ({
   },
   fabFileChunkRepository: {},
   fabFileRepository: {},
+  userRepository: { findById: h.findUserById },
 }));
 
 import { dispatch } from './lakeInconsistencyModelDetection';
@@ -91,6 +97,8 @@ beforeEach(() => {
   h.recordLakeFindings.mockResolvedValue({ recorded: 0, failed: 0 });
   h.getEffectiveLLMApiKeys.mockResolvedValue({});
   h.listGrantsByLake.mockResolvedValue([]);
+  h.findUserById.mockImplementation(async (id: string) => ({ id }));
+  h.createCompletionMeter.mockReturnValue('owner-meter');
 });
 
 describe('lakeInconsistencyModelDetection queue handler (#3057)', () => {
@@ -111,6 +119,39 @@ describe('lakeInconsistencyModelDetection queue handler (#3057)', () => {
 
     expect(h.getEffectiveLLMApiKeys).toHaveBeenCalledWith('newOwner', expect.anything(), expect.anything());
     expect(h.detectLakeInconsistenciesModel.mock.calls[0][1].endUserId).toBe('newOwner');
+  });
+
+  it("meters every model call against the effective owner's credits", async () => {
+    h.listGrantsByLake.mockResolvedValue([{ principalType: 'user', principalId: 'newOwner', role: 'owner' }]);
+
+    await invoke();
+
+    expect(h.createCompletionMeter).toHaveBeenCalledExactlyOnceWith(
+      { id: 'newOwner' },
+      expect.anything(),
+      'data lake inconsistency detection',
+      { systemModel: true }
+    );
+    expect(h.detectLakeInconsistenciesModel.mock.calls[0][1].meter).toBe('owner-meter');
+  });
+
+  it('drops the run, releasing the lease, when the owner account is gone', async () => {
+    h.findUserById.mockResolvedValue(null);
+
+    await invoke();
+
+    expect(h.detectLakeInconsistenciesModel).not.toHaveBeenCalled();
+    expect(h.releaseModelInconsistencyRun).toHaveBeenCalledOnce();
+  });
+
+  it('consumes the message when the owner cannot pay, instead of retrying into the DLQ', async () => {
+    h.detectLakeInconsistenciesModel.mockRejectedValue(
+      Object.assign(new Error('no credits'), { additionalInfo: { errorCode: 'insufficient_credits' } })
+    );
+
+    await expect(invoke()).resolves.toBeUndefined();
+    expect(h.releaseModelInconsistencyRun).toHaveBeenCalledOnce();
+    expect(h.loggerWarn).toHaveBeenCalledWith(expect.stringContaining('lake owner refused'));
   });
 
   it('bills the creator when the lake carries no owner grant', async () => {

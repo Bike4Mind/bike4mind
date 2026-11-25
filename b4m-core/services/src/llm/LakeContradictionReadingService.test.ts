@@ -1,6 +1,7 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 import type { ApiKeyTable } from '@bike4mind/llm-adapters';
-import { ChatModels, EXCERPT_MAX } from '@bike4mind/common';
+import { ChatModels, EXCERPT_MAX, ForbiddenError, insufficientCreditsError } from '@bike4mind/common';
+import { AI_ACCESS_REVOKED_MESSAGE } from '../userService/accountState';
 
 // Same mocking shape as LakeMemoryExtractionService.test.ts: fake the adapters so evaluate()'s
 // getAvailableModels + getLlmByModel resolve to a backend whose `complete` streams whatever canned
@@ -8,6 +9,7 @@ import { ChatModels, EXCERPT_MAX } from '@bike4mind/common';
 let nextResponse = '';
 let completeCalls = 0;
 let nextError: Error | null = null;
+let nextInfo: { inputTokens: number; outputTokens: number } | undefined;
 
 vi.mock('@bike4mind/llm-adapters', async () => {
   const actual = await vi.importActual<typeof import('@bike4mind/llm-adapters')>('@bike4mind/llm-adapters');
@@ -23,7 +25,7 @@ vi.mock('@bike4mind/llm-adapters', async () => {
       ) => {
         completeCalls++;
         if (nextError) throw nextError;
-        await callback([nextResponse], undefined);
+        await callback([nextResponse], nextInfo);
       },
     }),
   };
@@ -49,6 +51,7 @@ beforeEach(() => {
   completeCalls = 0;
   nextResponse = '';
   nextError = null;
+  nextInfo = undefined;
 });
 
 describe('LakeContradictionReadingService.evaluate', () => {
@@ -193,5 +196,47 @@ describe('LakeContradictionReadingService.evaluate', () => {
 
     expect(result).toHaveLength(1);
     expect(result![0].documents.map(d => d.fabFileId)).toEqual(['a', 'b']);
+  });
+
+  it('rethrows a credit refusal from the meter without calling the provider', async () => {
+    const meter = vi.fn().mockRejectedValue(insufficientCreditsError('no credits'));
+
+    await expect(service.evaluate({ apiKeyTable, documents: [doc('a'), doc('b')], meter })).rejects.toMatchObject({
+      statusCode: 422,
+    });
+    expect(completeCalls).toBe(0);
+  });
+
+  it("rethrows the owner's AI-access refusal from the meter without calling the provider", async () => {
+    const meter = vi.fn().mockRejectedValue(new ForbiddenError(AI_ACCESS_REVOKED_MESSAGE));
+
+    await expect(service.evaluate({ apiKeyTable, documents: [doc('a'), doc('b')], meter })).rejects.toMatchObject({
+      statusCode: 403,
+    });
+    expect(completeCalls).toBe(0);
+  });
+
+  it("settles each funded call through the meter with the provider's reported usage", async () => {
+    nextResponse = JSON.stringify({ contradictions: [] });
+    nextInfo = { inputTokens: 1200, outputTokens: 40 };
+    const settle = vi.fn().mockResolvedValue(1);
+    const meter = vi.fn().mockResolvedValue({ settle, refund: vi.fn() });
+
+    await expect(service.evaluate({ apiKeyTable, documents: [doc('a'), doc('b')], meter })).resolves.toEqual([]);
+
+    expect(meter).toHaveBeenCalledOnce();
+    expect(settle).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ inputTokens: 1200, outputTokens: 40 }));
+  });
+
+  it('meters the retry as its own call when the first response does not parse', async () => {
+    nextResponse = 'not json';
+    const settle = vi.fn().mockResolvedValue(1);
+    const meter = vi.fn().mockResolvedValue({ settle, refund: vi.fn() });
+
+    await expect(service.evaluate({ apiKeyTable, documents: [doc('a'), doc('b')], meter })).resolves.toBeNull();
+
+    expect(completeCalls).toBe(2);
+    expect(meter).toHaveBeenCalledTimes(2);
+    expect(settle).toHaveBeenCalledTimes(2);
   });
 });

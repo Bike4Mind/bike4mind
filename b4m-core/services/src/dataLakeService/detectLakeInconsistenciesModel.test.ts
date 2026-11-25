@@ -72,6 +72,26 @@ describe('detectLakeInconsistenciesModel', () => {
     });
   });
 
+  it("hands the owner's meter to every batch call", async () => {
+    const adapters = makeAdapters([memberRow('a'), memberRow('b')]);
+    const meter = vi.fn();
+
+    await detectLakeInconsistenciesModel(lake, { ...adapters, meter } as never);
+
+    expect(evaluateMock).toHaveBeenCalledOnce();
+    expect(evaluateMock.mock.calls[0][0]).toMatchObject({ meter });
+  });
+
+  it('ends the run on a credit refusal instead of reading the next batch', async () => {
+    const members = Array.from({ length: MODEL_INCONSISTENCY_BATCH_SIZE * 2 }, (_, i) => memberRow(`f${i}`));
+    const adapters = makeAdapters(members);
+    const refusal = Object.assign(new Error('no credits'), { additionalInfo: { errorCode: 'insufficient_credits' } });
+    evaluateMock.mockRejectedValueOnce(refusal);
+
+    await expect(detectLakeInconsistenciesModel(lake, adapters as never)).rejects.toBe(refusal);
+    expect(evaluateMock).toHaveBeenCalledOnce();
+  });
+
   it('reads chunk text with its own, deeper bound than the lexical pass', async () => {
     const adapters = makeAdapters([memberRow('a'), memberRow('b')]);
 
