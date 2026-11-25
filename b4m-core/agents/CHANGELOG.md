@@ -1,5 +1,14 @@
 # @bike4mind/agents
 
+## 1.8.6
+
+### Patch Changes
+
+- Updated dependencies [[`aac27dd`](https://github.com/Bike4Mind/bike4mind/commit/aac27ddd6b392a7464e18a1d986bb818c69788dc), [`47f5337`](https://github.com/Bike4Mind/bike4mind/commit/47f53374181e4612f0c166ca428c85ce44059c8d), [`c9da20b`](https://github.com/Bike4Mind/bike4mind/commit/c9da20bd0903e95df4333dd797c20c7c8e7397ef), [`ad578f3`](https://github.com/Bike4Mind/bike4mind/commit/ad578f3419df2cccd8152884ab108655aeed9b79), [`862fa66`](https://github.com/Bike4Mind/bike4mind/commit/862fa66be1993684c7d6610daef38970456b04fe), [`10bc07d`](https://github.com/Bike4Mind/bike4mind/commit/10bc07dddc658343591617b2dd912b482e65412c)]:
+  - @bike4mind/common@31.0.0
+  - @bike4mind/utils@13.0.0
+  - @bike4mind/llm-adapters@2.8.1
+
 ## 1.8.5
 
 ### Patch Changes

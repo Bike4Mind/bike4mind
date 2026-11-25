@@ -1561,11 +1561,6 @@
       "count": 25
     }
   },
-  "apps/client/pages/api/admin/modal-tool.ts": {
-    "@typescript-eslint/no-explicit-any": {
-      "count": 10
-    }
-  },
   "apps/client/pages/api/admin/modals/variants.ts": {
     "b4m/require-update-validators": { "count": 1 },
     "b4m/no-raw-entity-response": {
