@@ -3250,15 +3250,15 @@ export class ChatService {
     return inspection;
   }
 
-  /**
-   * Preparation stays active until its binding is persisted under the same lease as cleanup.
-   */
   /** Another session cutting a workspace may be about to bind this checkout; see orphanOptions. */
   private preparationHold(deleting: readonly string[]) {
     return () =>
       [...this.preparing.keys()].some(id => !deleting.includes(id)) ? 'A workspace is being prepared' : null;
   }
 
+  /**
+   * Preparation stays active until its binding is persisted under the same lease as cleanup.
+   */
   private orphanOptions(titles?: ReadonlyMap<ChatProject, string>) {
     return {
       ...(titles ? { titles } : {}),

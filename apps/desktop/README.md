@@ -793,7 +793,8 @@ Archiving, imported-session deletion and the agent's `session_delete` tool keep 
 session", after which the nested sessions move to the top level, or "Delete N sessions", which
 deletes them deepest first and the parent last. The dialog checks each nested session's own
 worktree and lists what it discards or keeps; only those it listed as removable go. A checkout a
-nested session shares with the parent counts as removable once they are deleted together. A
+nested session shares with the parent counts as removable once they are deleted together; one shared between two nested sessions, rather
+than with the parent, is kept. A
 delete that fails part way stops there and shows the error; the sessions already deleted stay
 deleted.
 

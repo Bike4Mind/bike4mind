@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import Alert from '@mui/joy/Alert';
 import Button from '@mui/joy/Button';
 import Checkbox from '@mui/joy/Checkbox';
@@ -43,11 +43,13 @@ export function DeleteSessionDialog({
   const [removeWorktree, setRemoveWorktree] = useState(false);
   const [deleting, setDeleting] = useState<'alone' | 'withNested' | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const seeded = useRef(false);
   const nestedIds = nested.map(session => session.id);
   const nestedKey = JSON.stringify(nested.map(session => [session.id, session.title]));
 
   useEffect(() => {
     let cancelled = false;
+    setLoading(true);
     async function inspect() {
       try {
         const titles = new Map(JSON.parse(nestedKey) as [string, string][]);
@@ -66,9 +68,12 @@ export function DeleteSessionDialog({
           inspection ? [{ id, title: titles.get(id) ?? id, inspection }] : []
         );
         setInspections({ alone, withNested, nested: own });
-        setRemoveWorktree(
-          alone?.removable === true || withNested?.removable === true || own.some(entry => entry.inspection.removable)
-        );
+        if (!seeded.current) {
+          seeded.current = true;
+          setRemoveWorktree(
+            alone?.removable === true || withNested?.removable === true || own.some(entry => entry.inspection.removable)
+          );
+        }
       } catch (err) {
         if (!cancelled) setError(err instanceof Error ? err.message : 'Could not check the worktree');
       } finally {

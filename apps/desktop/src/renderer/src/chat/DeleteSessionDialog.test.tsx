@@ -65,14 +65,16 @@ async function mount(
   host = document.createElement('div');
   document.body.append(host);
   root = createRoot(host);
-  await act(async () =>
-    root?.render(
-      <CssVarsProvider theme={desktopTheme}>
-        <DeleteSessionDialog sessionId="session" title="Parent" nested={nested} onDelete={onDelete} onClose={onClose} />
-      </CssVarsProvider>
-    )
-  );
-  return { onDelete, onClose, inspect };
+  const render = (list: { id: string; title: string }[]) =>
+    act(async () =>
+      root?.render(
+        <CssVarsProvider theme={desktopTheme}>
+          <DeleteSessionDialog sessionId="session" title="Parent" nested={list} onDelete={onDelete} onClose={onClose} />
+        </CssVarsProvider>
+      )
+    );
+  await render(nested);
+  return { onDelete, onClose, inspect, rerender: render };
 }
 
 describe('DeleteSessionDialog', () => {
@@ -183,6 +185,18 @@ describe('DeleteSessionDialog', () => {
     await act(async () => checkbox().click());
     await act(async () => element('delete-session-with-nested-btn').click());
     expect(onDelete).toHaveBeenCalledWith('session', false, ['child'], []);
+  });
+  it('keeps an unticked cleanup choice when a live nested session changes and the dialog re-inspects', async () => {
+    const nestedInspections = { child: safe };
+    const nested = [{ id: 'child', title: 'Child' }];
+    const { inspect, rerender } = await mount(safe, undefined, { nested, nestedInspections });
+    expect(checkbox().checked).toBe(true);
+    await act(async () => checkbox().click());
+    expect(checkbox().checked).toBe(false);
+    const before = inspect.mock.calls.length;
+    await rerender([{ id: 'child', title: 'Renamed child' }]);
+    expect(inspect.mock.calls.length).toBeGreaterThan(before);
+    expect(checkbox().checked).toBe(false);
   });
   it('hides the option for a session without an app worktree', async () => {
     await mount(null);

@@ -561,6 +561,22 @@ describe('session deletion integration', () => {
     }
   });
 
+  it('keeps a checkout dirtied while resources are released when discarding is not allowed', async () => {
+    let dirtied = false;
+    const { project, store, session, service } = await serviceFixture(async (_store, project) => {
+      if (dirtied) return;
+      dirtied = true;
+      await writeFile(join(project.workingDirectory, 'late.txt'), 'scratch');
+    });
+    try {
+      await expect(service.deleteSession(session.id, true)).rejects.toThrow('uncommitted');
+      expect(await store.get(session.id)).not.toBeNull();
+      expect((await stat(join(project.workingDirectory, 'late.txt'))).isFile()).toBe(true);
+    } finally {
+      service.dispose();
+    }
+  });
+
   it('refuses to discard without allowDiscard, as host protocol deletes ask', async () => {
     const { project, store, session, service } = await serviceFixture();
     try {

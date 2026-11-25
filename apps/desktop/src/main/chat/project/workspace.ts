@@ -440,7 +440,7 @@ async function removeWorktree(projectDirectory: string, path: string): Promise<v
 
 type InspectedWorktreeRemoval = WorktreeRemoval & { preservedRef?: string };
 
-/** `safeReason` is why the checkout is not safe, before `reason` became the dialog's discard notice. */
+/** Why the checkout is not safe; `reason` may hold the dialog's discard notice instead. */
 type InspectedSessionRemoval = SessionWorktreeRemoval & { preservedRef?: string; safeReason?: string | null };
 
 /** States whose checkout a conversation delete still removes; the branch keeps any commits. */
