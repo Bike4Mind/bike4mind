@@ -89,6 +89,7 @@ describe('POST /api/admin/upload-logo', () => {
 const run = async (method: 'POST' | 'DELETE', body: Record<string, unknown>) => {
   const { req, res } = createMocks({ method, body });
   (req as Record<string, unknown>).user = { id: 'admin-1', isAdmin: true };
+  (req as Record<string, unknown>).logger = { error: vi.fn(), warn: vi.fn(), info: vi.fn() };
   const outcome = await (handler as unknown as (req: unknown, res: unknown) => Promise<void>)(req, res).then(
     () => undefined,
     (error: Error) => error
