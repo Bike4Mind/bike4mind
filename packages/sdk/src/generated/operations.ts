@@ -329,6 +329,10 @@ export const operations = {
     method: 'GET',
     path: '/api/v1/files/by-ids',
   },
+  getFunction: {
+    method: 'GET',
+    path: '/api/v1/functions/{id}',
+  },
   getImageJob: {
     method: 'GET',
     path: '/api/v1/image-jobs/{id}',
@@ -393,6 +397,10 @@ export const operations = {
     method: 'POST',
     path: '/api/v1/skills/market/listings/{id}/import',
   },
+  invokeFunction: {
+    method: 'POST',
+    path: '/api/v1/functions/{id}/invoke',
+  },
   listAgents: {
     method: 'GET',
     path: '/api/v1/agents',
@@ -448,6 +456,10 @@ export const operations = {
   listFiles: {
     method: 'GET',
     path: '/api/v1/files',
+  },
+  listFunctions: {
+    method: 'GET',
+    path: '/api/v1/functions',
   },
   listHandoffDevices: {
     method: 'GET',

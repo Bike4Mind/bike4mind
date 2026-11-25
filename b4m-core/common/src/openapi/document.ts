@@ -55,7 +55,7 @@ export function infoDescription(scopes: readonly string[] = PUBLIC_DOC_API_KEY_S
       'and async jobs.',
     '',
     'Endpoints are grouped by tag: **AI** (chat, completions, embeddings, agent runs, tools, quest polling), ' +
-      '**Images**, **Audio**, **Videos**, **Music**, **Transcriptions**, **Sessions**, **Artifacts**, **Files**, **Projects**, **Agents**, **Data Lakes**, **Data Lake Research**, **Skills** and **Account**.',
+      '**Images**, **Audio**, **Videos**, **Music**, **Transcriptions**, **Sessions**, **Artifacts**, **Files**, **Projects**, **Agents**, **Data Lakes**, **Data Lake Research**, **Skills**, **Functions** and **Account**.',
     '',
     '## Authentication',
     'Send an API key as `Authorization: Bearer b4m_live_<key>` (canonical), `x-api-key: b4m_live_<key>` ' +
@@ -443,6 +443,11 @@ export function buildOpenApiDocument(version: string): Record<string, unknown> {
       name: 'Skills',
       description:
         "Create, update and read your own skills from a SKILL.md, and the Skill Market: your organization's approved listings, served as a Claude Code plugin marketplace.",
+    },
+    {
+      name: 'Functions',
+      description:
+        'Your live functions: Python artifacts saved as functions and promoted after their tests passed on the server. List and read them, and call one to get its output with a stamp of what it ran on.',
     },
     {
       name: 'Slack',

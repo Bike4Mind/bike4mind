@@ -815,6 +815,31 @@ describe('userApiKeyService - createUserApiKey confined-scope mint guard', () =>
     expect(repo.createIfUnderCap).toHaveBeenCalled();
   });
 
+  it.each([ApiKeyScope.READ_NOTEBOOKS, ApiKeyScope.AI_CHAT, ApiKeyScope.SLACK_POST, ApiKeyScope.ME_READ])(
+    'refuses functions:invoke minted with %s',
+    async second => {
+      await expect(
+        createUserApiKey(
+          'user1',
+          { ...chatParams, scopes: [ApiKeyScope.FUNCTIONS_INVOKE, second] },
+          { trust: TRUSTED, db: { userApiKeys: repo } }
+        )
+      ).rejects.toThrow(/confined scope/i);
+      expect(repo.create).not.toHaveBeenCalled();
+      expect(repo.createIfUnderCap).not.toHaveBeenCalled();
+    }
+  );
+
+  it('mints functions:invoke on its own', async () => {
+    const result = await createUserApiKey(
+      'user1',
+      { ...chatParams, scopes: [ApiKeyScope.FUNCTIONS_INVOKE] },
+      { trust: TRUSTED, db: { userApiKeys: repo } }
+    );
+    expect(result.id).toBe('key-1');
+    expect(repo.createIfUnderCap).toHaveBeenCalled();
+  });
+
   it('reports the confined-scope reason before the embed agentId requirement', async () => {
     // embed:chat + an ordinary scope with no agentId: the actionable error is the
     // single-scope rule, not the downstream missing agentId.

@@ -488,4 +488,9 @@ export const DERIVED_API_KEY_SCOPE_ENDPOINTS: Readonly<Partial<Record<ApiKeyScop
     'POST|DELETE /api/v1/artifacts/:id/publish',
     'POST /api/v1/artifacts/:id/republish',
   ],
+  [ApiKeyScope.FUNCTIONS_INVOKE]: [
+    'GET /api/v1/functions',
+    'GET /api/v1/functions/:id',
+    'POST /api/v1/functions/:id/invoke',
+  ],
 };

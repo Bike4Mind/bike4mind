@@ -202,4 +202,5 @@ export {
   listSkillMarketReviewQueueContract,
   reviewSkillMarketVersionContract,
 } from './contracts/skillMarketReview.contract';
+export { listFunctionsContract, getFunctionContract, invokeFunctionContract } from './contracts/functions.contract';
 export { CONTRACTS } from './contracts';
