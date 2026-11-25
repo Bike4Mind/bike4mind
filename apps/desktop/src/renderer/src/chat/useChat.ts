@@ -166,7 +166,8 @@ export function useSessions(keepIds: readonly string[] = []): SessionsController
   const reload = useCallback((): Promise<void> => {
     const ticket = ++latestReload.current;
     const editsBefore = localEdits.current;
-    // Re-reads every page loaded so far in one request, so scrolled-to rows stay put.
+    // Re-reads every page loaded so far in one request, so scrolled-to rows stay put. Past the
+    // request cap the list is cut back to it, so a very deep scroll resets on the next reload.
     const limit = Math.min(Math.max(SESSION_PAGE_SIZE, pagingRef.current.loaded), SESSION_PAGE_MAX_LIMIT);
     const listing = (async (): Promise<void> => {
       const page = await hostClient.request(LOCAL_HOST_ID, 'session/page', {
@@ -199,7 +200,8 @@ export function useSessions(keepIds: readonly string[] = []): SessionsController
     void (async () => {
       try {
         const page = await hostClient.request(LOCAL_HOST_ID, 'session/page', { limit: SESSION_PAGE_SIZE, cursor });
-        if (ticket !== latestReload.current) return;
+        // A reload that landed meanwhile moved the cursor; this page was cut from the old list.
+        if (ticket !== latestReload.current || pagingRef.current.nextCursor !== cursor) return;
         setSessions(current => withRows(current, [...page.sessions, ...page.related]));
         setPaging(current => ({
           loaded: current.loaded + page.sessions.length,

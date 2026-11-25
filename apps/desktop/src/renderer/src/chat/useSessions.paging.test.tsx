@@ -27,16 +27,16 @@ const summary = (index: number): ChatSessionSummary =>
 function pagingHost(count: number) {
   let all = Array.from({ length: count }, (_, index) => summary(index)).sort(compareSessionsForPage);
   const requests: SessionPageRequest[] = [];
-  let held: (() => void) | null = null;
-  let holdNext = false;
+  const held: Array<() => void> = [];
+  let holdNext = 0;
   const host: HostBridgeApi = {
     request: vi.fn(async (_hostId: string, method: string, params?: unknown) => {
       if (method !== 'session/page') return { ok: false as const, error: { code: -32601, message: method } };
       const request = sessionPageRequestSchema.parse(params);
       requests.push(request);
-      if (holdNext) {
-        holdNext = false;
-        await new Promise<void>(resolve => (held = resolve));
+      if (holdNext > 0) {
+        holdNext--;
+        await new Promise<void>(resolve => held.push(resolve));
       }
       return { ok: true as const, result: pageSessions(all, request) };
     }),
@@ -49,10 +49,11 @@ function pagingHost(count: number) {
   });
   return {
     requests,
-    hold: () => (holdNext = true),
-    release: async () => {
-      await act(async () => held?.());
+    hold: () => holdNext++,
+    release: async (index = 0) => {
+      await act(async () => held[index]?.());
     },
+    add: (index: number) => (all = [summary(index), ...all].sort(compareSessionsForPage)),
     remove: (id: string) => (all = all.filter(session => session.id !== id)),
   };
 }
@@ -142,6 +143,24 @@ describe('useSessions paging', () => {
     await host.release();
     expect(current().sessions).toHaveLength(SESSION_PAGE_SIZE);
     expect(current().loadingMore).toBe(false);
+  });
+
+  it('keeps every row when a reload lands first and shifts the list under a page already requested', async () => {
+    const host = pagingHost(250);
+    const { current } = await mount();
+    host.hold();
+    host.hold();
+    act(() => void current().reload());
+    act(() => current().loadMore());
+    host.add(-1);
+    await host.release(0);
+    await host.release(1);
+    // The stale page is dropped; the next one starts from the reload's cursor, so s99 is not lost.
+    expect(current().loadingMore).toBe(false);
+    expect(current().sessions).toHaveLength(SESSION_PAGE_SIZE);
+    await act(async () => current().loadMore());
+    expect(current().sessions).toHaveLength(2 * SESSION_PAGE_SIZE);
+    expect(ids(current())).toContain('s99');
   });
 
   it('fetches a kept session that no loaded page holds, once', async () => {
