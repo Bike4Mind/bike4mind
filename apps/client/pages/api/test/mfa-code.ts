@@ -3,11 +3,8 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { isE2EEnabled } from '@bike4mind/server-utils/utils/config';
 import { userRepository } from '@bike4mind/database';
 import { isValidE2eTestSecret } from '@server/auth/e2eTestSecret';
+import { TOTP_STEP_SECONDS, totpCode } from '@bike4mind/auth/mfaService/totp';
 import { Request } from 'express';
-import speakeasy from 'speakeasy';
-
-// Must match the step the MFA service verifies with (b4m-core/auth/src/mfaService/utils.ts).
-const TOTP_STEP_SECONDS = 30;
 
 /**
  * TEST-ONLY: returns a TOTP code the server will accept for an MFA-enrolled test account, so the
@@ -52,7 +49,7 @@ const handler = baseApi({ auth: false }).get(
       return res.status(409).json({ error: 'The next unused code is not valid yet', retryAfterMs });
     }
 
-    const code = speakeasy.totp({ secret, encoding: 'base32', time: step * TOTP_STEP_SECONDS });
+    const code = totpCode(secret, step);
     return res.status(200).json({ code, step });
   })
 );

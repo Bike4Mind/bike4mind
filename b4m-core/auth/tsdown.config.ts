@@ -6,6 +6,7 @@ export default defineConfig({
     'src/apiKeyService/index.ts',
     'src/mfaService/index.ts',
     'src/mfaService/utils.ts',
+    'src/mfaService/totp.ts',
     'src/crypto.ts',
   ],
   format: ['esm', 'cjs'],

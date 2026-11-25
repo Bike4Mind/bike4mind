@@ -279,7 +279,7 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
     },
     ['bedrock:*']
   ),
-  gap('event:infra/llm.ts:slack-completion-start', 'e026bba94df2b9e5b83a8273ef4946b1ece4b4328d64b3b8b6fabe2b68cc32d4', [
+  gap('event:infra/llm.ts:slack-completion-start', '7cfedef3ce297637f3f09f3a7a26f9a50b8494dab8c1d6444f41ca43aad263df', [
     'bedrock:*',
     'cloudwatch:PutMetricData',
     'events:PutEvents',
@@ -313,7 +313,7 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   ),
   gap(
     'function:infra/agentExecutor.ts:AgentExecutor',
-    '0e1bee91f81db1aa189d0b6baf376a29ff155dce2774908e5483762aa4611b7e',
+    '61cc1dd56ad310c15e1c92b912845dab751a421b1342e43d17c2a4d258c0a421',
     ['bedrock:InvokeModel', 'bedrock:InvokeModelWithResponseStream', 'cloudwatch:PutMetricData', 'events:PutEvents']
   ),
   gap('function:infra/database.ts:DatabaseCleaner', 'e52f8c2f59b621e25176f06917724c82cd678c213de7325e2d9ad064c2971b70'),
@@ -329,7 +329,7 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
     'function:infra/imageProcessor.ts:ImageProcessor',
     'f7bbbefdca6ac5807469cafe56cb856206b6ffdfe08dcb2ba2bd16bb4937ea15'
   ),
-  gap('function:infra/mcp.ts:mcpHandler', '8f95aa9d3422dccc02308adb7da5500afa9582d09351477574a7e4f2331b814f'),
+  gap('function:infra/mcp.ts:mcpHandler', 'b106329f68d1d3225ec735b12aff58943f1bdf1ae1b87d2c21fb8b2ac57d921e'),
   hostedOnly(
     'function:infra/remoteMcp.ts:remoteMcpHandler',
     '69d7d937077e31281f43012e903c58d74513036fd50296b764855fc6c90e1b70',
@@ -435,7 +435,7 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   ),
   gap(
     'queue:infra/queues.ts:agentContinuationQueue',
-    '9e9c5e8d932ec1b77a030a60bb1bc6030ad33a0e83f6c20dfedf1ed625bd10b0',
+    '5ebca7cdcb9170ef166585b6c8a9f78ae695df60a67779d6500b988185737d8f',
     ['bedrock:InvokeModel', 'bedrock:InvokeModelWithResponseStream', 'cloudwatch:PutMetricData', 'events:PutEvents']
   ),
   broker(
@@ -623,7 +623,7 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
     'queue:infra/queues.ts:generatedMediaPurgeQueueDLQ',
     'c2d58c32249e95e85b54c27855e71c6dc8512ff1fc4965a78013fd5eee539abc'
   ),
-  gap('queue:infra/queues.ts:githubWebhookQueue', '4cd81f93593a5731edbec85c15ddee3e74ef0b3bd815f413ec37200e11a4b61f', [
+  gap('queue:infra/queues.ts:githubWebhookQueue', '6fed8fe8e418c474e7615d1a3090ec7344536e15f8864f1c86479c63d18620e9', [
     'import:@aws-sdk/client-cloudwatch',
   ]),
   broker(
@@ -1317,7 +1317,7 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   ),
   gap(
     'service:infra/chatCompletion.ts:ChatCompletion',
-    'de5fffb06a8f9c555fbfdaec726ec6e81c3c8914e8eb2eb556be5162836e47e4',
+    '2e18094a8a37e55b333a9cec439dc308ff32ce2b3fd57c9ef896356ff5900f71',
     ['bedrock:*', 'cloudwatch:PutMetricData', 'events:PutEvents', 'execute-api:ManageConnections']
   ),
   gapBecause(

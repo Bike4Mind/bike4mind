@@ -610,7 +610,7 @@
   },
   "apps/client/app/components/ProfileModal/CreditAnalyticsTabContent.tsx": {
     "@typescript-eslint/no-explicit-any": {
-      "count": 3
+      "count": 2
     }
   },
   "apps/client/app/components/ProfileModal/ImportHistoryJobsList.tsx": {
@@ -908,22 +908,7 @@
       "count": 2
     }
   },
-  "apps/client/app/components/admin/ModelMetrics/components/AnalyticsTab.test.tsx": {
-    "@typescript-eslint/no-explicit-any": {
-      "count": 1
-    }
-  },
-  "apps/client/app/components/admin/ModelMetrics/components/AnalyticsTab.tsx": {
-    "@typescript-eslint/no-explicit-any": {
-      "count": 1
-    }
-  },
   "apps/client/app/components/admin/ModelMetrics/components/RawDataTab.tsx": {
-    "@typescript-eslint/no-explicit-any": {
-      "count": 1
-    }
-  },
-  "apps/client/app/components/admin/ModelMetrics/components/SpendTab.tsx": {
     "@typescript-eslint/no-explicit-any": {
       "count": 1
     }

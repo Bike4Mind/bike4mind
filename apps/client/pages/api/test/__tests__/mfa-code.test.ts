@@ -1,5 +1,4 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import speakeasy from 'speakeasy';
 
 const h = vi.hoisted(() => ({
   isE2EEnabled: vi.fn(() => true),
@@ -35,7 +34,9 @@ const EMAIL = 'qa-user-e2e@test.com';
 const NOW_MS = Date.UTC(2026, 0, 1, 0, 0, 10);
 const NOW_STEP = Math.floor(NOW_MS / 30_000);
 
-const codeFor = (step: number) => speakeasy.totp({ secret: SECRET, encoding: 'base32', time: step * 30 });
+// What an authenticator app shows for SECRET at NOW_STEP and the step after.
+const NOW_CODE = '260025';
+const NEXT_CODE = '307890';
 
 const call = async (email: string | undefined = EMAIL, secret = 'right-secret') => {
   const json = vi.fn();
@@ -99,13 +100,13 @@ describe('GET /api/test/mfa-code', () => {
   it("returns the current step's code when no code has been used", async () => {
     const { status, json } = await call();
     expect(status).toHaveBeenCalledWith(200);
-    expect(json).toHaveBeenCalledWith({ code: codeFor(NOW_STEP), step: NOW_STEP });
+    expect(json).toHaveBeenCalledWith({ code: NOW_CODE, step: NOW_STEP });
   });
 
   it('returns the code after the last accepted step', async () => {
     h.findByIdWithMfaSecrets.mockResolvedValue(enrolled(NOW_STEP));
     const { json } = await call();
-    expect(json).toHaveBeenCalledWith({ code: codeFor(NOW_STEP + 1), step: NOW_STEP + 1 });
+    expect(json).toHaveBeenCalledWith({ code: NEXT_CODE, step: NOW_STEP + 1 });
   });
 
   it('asks the caller to wait when the next unused step is outside the verify window', async () => {

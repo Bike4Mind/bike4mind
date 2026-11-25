@@ -281,7 +281,7 @@ describe('errorHandler - a ZodError becomes a 422', () => {
     const body = json.mock.calls[0][0] as Record<string, unknown>;
     expect(body.name).toBe('UnprocessableEntityError');
     expect(String(body.error)).toContain('days');
-    // fromZodError() flattens to a readable sentence; the raw issue objects carry keys
+    // formatZodError() renders readable lines; the raw issue objects carry keys
     // (`code`, `expected`, `_zod`) that are not in the envelope and must not reach a body.
     expect(JSON.stringify(body)).not.toContain('_zod');
     for (const key of Object.keys(body)) {
@@ -289,9 +289,9 @@ describe('errorHandler - a ZodError becomes a 422', () => {
     }
   });
 
-  // Pins the fromZodError() call itself, not just the status. Asserting only the status and
+  // Pins the formatZodError() call itself, not just the status. Asserting only the status and
   // the field name leaves the transformation unpinned: zod's raw `message` is a JSON dump of
-  // the issue array and happens to contain the field name too, so dropping fromZodError()
+  // the issue array and happens to contain the field name too, so dropping formatZodError()
   // would ship that dump on every 422 across baseApi with nothing failing.
   it('flattens the message rather than dumping the zod issue array', () => {
     const { req, res, json } = makeReqRes();

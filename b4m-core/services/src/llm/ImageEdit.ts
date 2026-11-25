@@ -71,7 +71,6 @@ import { MongoAbility } from '@casl/ability';
 import { fileTypeFromBuffer } from 'file-type';
 import mongoose from 'mongoose';
 import { z } from 'zod';
-import { fromZodError } from 'zod-validation-error';
 import type { ImageCreditHolds } from './imageCreditHolds';
 import type { ImageGenerationRun } from './ImageGeneration';
 import { assertSpendNotFrozen } from '../spendFreezeService/assertSpendNotFrozen';
@@ -80,7 +79,7 @@ import { moderateImageOrThrow } from './imageModerationGate';
 import { resolveModerationOpenaiKey } from './moderationOpenaiKey';
 import { isSettledQuestStatus, startQuestHeartbeat } from './questHeartbeat';
 import { estimateImageCredits } from '../imageCost';
-import { getQuestErrorCode } from '@bike4mind/common';
+import { formatZodError, getQuestErrorCode } from '@bike4mind/common';
 import { recordGeneratedImages } from './recordGeneratedImages';
 import { saveGeneratedImage, type SaveGeneratedAssetFn } from './saveGeneratedImage';
 
@@ -372,7 +371,7 @@ export class ImageEditService {
     } catch (error) {
       let errorMessage = `Something went wrong. Please try again.`;
       if (isZodError(error)) {
-        errorMessage = fromZodError(error).message;
+        errorMessage = formatZodError(error);
       } else if (error instanceof Error) {
         errorMessage = error.message;
       }
