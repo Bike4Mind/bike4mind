@@ -479,7 +479,7 @@ export default defineConfig([
 
   // CommonJS files (legacy configs, scripts, etc.)
   {
-    files: ['**/*.cjs', 'packages/eslint-config/**/*.js'],
+    files: ['**/*.cjs'],
     languageOptions: {
       sourceType: 'commonjs',
       globals: {

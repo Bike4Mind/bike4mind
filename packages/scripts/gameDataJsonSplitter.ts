@@ -1,4 +1,4 @@
-#!/usr/bin/env npx ts-node -r tsconfig-paths/register
+#!/usr/bin/env tsx
 
 import { mkdir, readFile, writeFile } from 'fs/promises';
 import path from 'path';

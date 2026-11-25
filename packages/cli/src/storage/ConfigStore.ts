@@ -3,7 +3,6 @@ import { createHash } from 'node:crypto';
 import path from 'path';
 import { homedir } from 'os';
 import { isDeepStrictEqual } from 'node:util';
-import { v4 as uuidv4 } from 'uuid';
 import { z } from 'zod';
 import { ChatModels } from '@bike4mind/common';
 import { isAuthTokenValid, normalizeEnvKey, swapActiveEnvAuth } from '@bike4mind/client-auth';
@@ -627,7 +626,7 @@ const CONFIG_SCHEMA_VERSION = '0.3.0';
  */
 const DEFAULT_CONFIG: CliConfig = {
   version: CONFIG_SCHEMA_VERSION,
-  userId: uuidv4(),
+  userId: crypto.randomUUID(),
   defaultModel: ChatModels.CLAUDE_5_5_SONNET,
   toolApiKeys: {
     openweather: undefined,
@@ -1626,7 +1625,7 @@ export class ConfigStore {
   private async writeConfigFile(contents: string): Promise<void> {
     // Rename onto the link's target, so a symlinked config stays a symlink.
     const target = await fs.realpath(this.configPath).catch(() => this.configPath);
-    const temp = `${target}.${process.pid}.${uuidv4()}.tmp`;
+    const temp = `${target}.${process.pid}.${crypto.randomUUID()}.tmp`;
     try {
       await fs.writeFile(temp, contents, { encoding: 'utf-8', mode: 0o600 });
       if (!this.configLock) throw new Error(`Refusing to write ${this.configPath} without holding its write lock`);
@@ -2040,7 +2039,7 @@ export class ConfigStore {
    */
   async reset(): Promise<CliConfig> {
     // structuredClone so reset never shares DEFAULT_CONFIG's mutable arrays.
-    this.globalConfig = { ...structuredClone(DEFAULT_CONFIG), userId: uuidv4() };
+    this.globalConfig = { ...structuredClone(DEFAULT_CONFIG), userId: crypto.randomUUID() };
     this.fallbackBase = null;
     this.projectTrusted = false;
     this.rawProjectConfig = null;
