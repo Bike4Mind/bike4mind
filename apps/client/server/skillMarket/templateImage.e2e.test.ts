@@ -354,6 +354,7 @@ describe('editor view', () => {
       suggestedSlug: 'summarize-2',
       previewImageUrl: null,
       previewImageStatus: null,
+      exampleRunsLeftToday: 5,
     });
   });
 

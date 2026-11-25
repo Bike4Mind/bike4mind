@@ -5,6 +5,7 @@ import {
   TURNSTILE_ACTION_SKILL_FREE_RUN,
   skillTemplateFreeRunEligibility,
 } from '@bike4mind/common';
+import { usageEventRepository } from '@bike4mind/database';
 import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { baseApi } from '@server/middlewares/baseApi';
 import { checkBlockedIP } from '@server/middlewares/checkBlockedIP';
@@ -154,6 +155,8 @@ const handler = baseApi({ auth: false, allowedMethods: ['POST'], maxBodySize: FR
         user,
         ...(file?.kind === 'image' ? { image: file.dataUrl } : {}),
         maxTokens: settings.outputMaxTokens,
+        listingId: String(listing.id),
+        ledger: { usageEvents: usageEventRepository },
         logger: req.logger,
       });
     } catch (error) {

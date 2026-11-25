@@ -7,6 +7,7 @@ import {
   detectSkillMentions,
   neutralizeSkillDelimiters,
   renderInvokedSkill,
+  type RenderableSkill,
 } from '@bike4mind/common';
 import { ChatCompletionFeature, ChatCompletionContext } from '../ChatCompletionFeatures';
 
@@ -66,8 +67,19 @@ export class SkillsFeature implements ChatCompletionFeature {
     fabFileIds: string[];
     questId: string;
     questMaster: unknown;
+    exampleRunSkill?: { name: string; body: string };
   }): Promise<{ shouldContinue: boolean }> {
-    const { message, quest } = args;
+    const { message, quest, exampleRunSkill } = args;
+    if (exampleRunSkill) {
+      // No catalog and no name lookup: only the approved version runs, under the author's trust.
+      const mention = detectSkillMentions(message).find(m => m.name === exampleRunSkill.name);
+      if (mention) {
+        quest._skillsToInvoke = [
+          { skill: { ...exampleRunSkill, userId: this.service.user.id }, rawArgs: mention.args },
+        ];
+      }
+      return { shouldContinue: true };
+    }
     if (!this.service.db.skills) {
       this.service.logger.log('🔧 SkillsFeature: skill repository unavailable — no-op');
       return { shouldContinue: true };
@@ -210,6 +222,6 @@ function buildSkillCatalogPrompt(skills: ISkill[], invokerUserId: string): strin
 }
 
 interface ResolvedSkillInvocation {
-  skill: ISkill;
+  skill: RenderableSkill;
   rawArgs: string;
 }

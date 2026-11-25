@@ -333,6 +333,29 @@ The table below remains the literal-update inventory, not proof that all databas
 | SkillListing | `status` | enum | `ai/SkillListingModel.ts#approvePendingListingVersion` | repository-check | `literal` | writes "approved" |
 | SkillListing | `status` | enum | `ai/SkillListingModel.ts#clearPendingListingVersion` | repository-check | `literal` | writes "rejected" |
 | SkillListing | `status` | enum | `ai/SkillListingModel.ts#setPendingListingVersion` | repository-check | `literal` | writes "in_review" |
+| SkillListingTemplate | `example.artifact.html` | maxlength | `ai/SkillListingTemplateModel.ts#startSkillTemplateExampleRun` | schema | `runValidators` | update call passes runValidators |
+| SkillListingTemplate | `example.artifact.title` | maxlength | `ai/SkillListingTemplateModel.ts#startSkillTemplateExampleRun` | schema | `runValidators` | update call passes runValidators |
+| SkillListingTemplate | `example.artifact.type` | maxlength | `ai/SkillListingTemplateModel.ts#startSkillTemplateExampleRun` | schema | `runValidators` | update call passes runValidators |
+| SkillListingTemplate | `example.error` | maxlength | `ai/SkillListingTemplateModel.ts#failSkillTemplateExampleRun` | schema | `runValidators` | update call passes runValidators |
+| SkillListingTemplate | `example.error` | maxlength | `ai/SkillListingTemplateModel.ts#startSkillTemplateExampleRun` | schema | `runValidators` | update call passes runValidators |
+| SkillListingTemplate | `example.media.items.bytes` | min | `ai/SkillListingTemplateModel.ts#startSkillTemplateExampleRun` | schema | `runValidators` | update call passes runValidators |
+| SkillListingTemplate | `example.media.items.durationS` | min | `ai/SkillListingTemplateModel.ts#startSkillTemplateExampleRun` | schema | `runValidators` | update call passes runValidators |
+| SkillListingTemplate | `example.media.items.height` | min | `ai/SkillListingTemplateModel.ts#startSkillTemplateExampleRun` | schema | `runValidators` | update call passes runValidators |
+| SkillListingTemplate | `example.media.items.key` | maxlength | `ai/SkillListingTemplateModel.ts#startSkillTemplateExampleRun` | schema | `runValidators` | update call passes runValidators |
+| SkillListingTemplate | `example.media.items.mime` | maxlength | `ai/SkillListingTemplateModel.ts#startSkillTemplateExampleRun` | schema | `runValidators` | update call passes runValidators |
+| SkillListingTemplate | `example.media.items.moderation` | enum | `ai/SkillListingTemplateModel.ts#startSkillTemplateExampleRun` | schema | `runValidators` | update call passes runValidators |
+| SkillListingTemplate | `example.media.items.width` | min | `ai/SkillListingTemplateModel.ts#startSkillTemplateExampleRun` | schema | `runValidators` | update call passes runValidators |
+| SkillListingTemplate | `example.media.kind` | enum | `ai/SkillListingTemplateModel.ts#startSkillTemplateExampleRun` | schema | `runValidators` | update call passes runValidators |
+| SkillListingTemplate | `example.prompt` | maxlength | `ai/SkillListingTemplateModel.ts#startSkillTemplateExampleRun` | schema | `runValidators` | update call passes runValidators |
+| SkillListingTemplate | `example.replyTrimmedTo` | min,max | `ai/SkillListingTemplateModel.ts#startSkillTemplateExampleRun` | schema | `runValidators` | update call passes runValidators |
+| SkillListingTemplate | `example.reply` | maxlength | `ai/SkillListingTemplateModel.ts#startSkillTemplateExampleRun` | schema | `runValidators` | update call passes runValidators |
+| SkillListingTemplate | `example.sampleFile.mime` | maxlength | `ai/SkillListingTemplateModel.ts#startSkillTemplateExampleRun` | schema | `runValidators` | update call passes runValidators |
+| SkillListingTemplate | `example.sampleFile.name` | maxlength | `ai/SkillListingTemplateModel.ts#startSkillTemplateExampleRun` | schema | `runValidators` | update call passes runValidators |
+| SkillListingTemplate | `example.sampleFile.pages` | min | `ai/SkillListingTemplateModel.ts#startSkillTemplateExampleRun` | schema | `runValidators` | update call passes runValidators |
+| SkillListingTemplate | `example.sampleFile.source` | enum | `ai/SkillListingTemplateModel.ts#startSkillTemplateExampleRun` | schema | `runValidators` | update call passes runValidators |
+| SkillListingTemplate | `example.status` | enum | `ai/SkillListingTemplateModel.ts#failSkillTemplateExampleRun` | schema | `runValidators` | writes "failed" |
+| SkillListingTemplate | `example.status` | enum | `ai/SkillListingTemplateModel.ts#startSkillTemplateExampleRun` | schema | `runValidators` | update call passes runValidators |
+| SkillListingTemplate | `example.steps.label` | maxlength | `ai/SkillListingTemplateModel.ts#startSkillTemplateExampleRun` | schema | `runValidators` | update call passes runValidators |
 | SkillListingTemplate | `scanError` | maxlength | `ai/SkillListingTemplateModel.ts#releaseStaleSkillTemplateScan` | schema | `runValidators` | update call passes runValidators |
 | SkillListingTemplate | `scanError` | maxlength | `ai/SkillListingTemplateModel.ts#settleVoidedScan` | schema | `runValidators` | update call passes runValidators |
 | SkillListingTemplate | `scanFindings.excerpt` | maxlength | `ai/SkillListingTemplateModel.ts#claimSkillTemplateScan` | schema | `runValidators` | update call passes runValidators |

@@ -1,11 +1,19 @@
 import mongoose, { Document, FilterQuery, Model, Schema, model } from 'mongoose';
 import {
+  SKILL_TEMPLATE_EXAMPLE_ARTIFACT_HTML_MAX,
+  SKILL_TEMPLATE_EXAMPLE_ARTIFACT_TITLE_MAX,
+  SKILL_TEMPLATE_EXAMPLE_CAROUSEL_MAX_SLIDES,
+  SKILL_TEMPLATE_EXAMPLE_IMAGE_MODERATION,
   SKILL_TEMPLATE_EXAMPLE_PROMPT_MAX,
+  SKILL_TEMPLATE_EXAMPLE_REPLY_MAX,
+  SKILL_TEMPLATE_EXAMPLE_STEP_LABEL_MAX,
+  SKILL_TEMPLATE_EXAMPLE_STEPS_MAX,
   SKILL_TEMPLATE_HEADLINE_MAX,
   SKILL_TEMPLATE_INPUT_LABEL_MAX,
   SKILL_TEMPLATE_MAX_INPUTS,
   SKILL_TEMPLATE_SLUG_MAX,
   type ISkillListingTemplate,
+  type ISkillTemplateExample,
 } from '@bike4mind/common';
 import { SkillScanFindingSchema } from './SkillListingVersionModel';
 
@@ -18,6 +26,90 @@ import { SkillScanFindingSchema } from './SkillListingVersionModel';
 export interface ISkillListingTemplateDocument extends Omit<ISkillListingTemplate, 'id'>, Document {
   id: string;
 }
+
+const SkillTemplateExampleSchema = new Schema(
+  {
+    status: { type: String, required: true, enum: ['running', 'ready', 'failed'] },
+    enabled: { type: Boolean, default: true },
+    prompt: { type: String, default: '', maxlength: SKILL_TEMPLATE_EXAMPLE_PROMPT_MAX },
+    reply: { type: String, default: '', maxlength: SKILL_TEMPLATE_EXAMPLE_REPLY_MAX },
+    replyTrimmedTo: { type: Number, default: null, min: 1, max: SKILL_TEMPLATE_EXAMPLE_REPLY_MAX },
+    artifact: {
+      type: new Schema(
+        {
+          type: { type: String, required: true, maxlength: 64 },
+          title: { type: String, default: '', maxlength: SKILL_TEMPLATE_EXAMPLE_ARTIFACT_TITLE_MAX },
+          html: { type: String, required: true, maxlength: SKILL_TEMPLATE_EXAMPLE_ARTIFACT_HTML_MAX },
+        },
+        { _id: false }
+      ),
+      default: null,
+    },
+    media: {
+      type: new Schema(
+        {
+          kind: { type: String, required: true, enum: ['video', 'image', 'carousel'] },
+          items: {
+            type: [
+              new Schema(
+                {
+                  key: { type: String, required: true, maxlength: 1024 },
+                  mime: { type: String, required: true, maxlength: 128 },
+                  bytes: { type: Number, required: true, min: 0 },
+                  durationS: { type: Number, min: 0 },
+                  width: { type: Number, min: 0 },
+                  height: { type: Number, min: 0 },
+                  moderation: { type: String, enum: SKILL_TEMPLATE_EXAMPLE_IMAGE_MODERATION },
+                },
+                { _id: false }
+              ),
+            ],
+            default: [],
+            validate: {
+              validator: (items: unknown[]) => items.length <= SKILL_TEMPLATE_EXAMPLE_CAROUSEL_MAX_SLIDES,
+              message: `Example media has at most ${SKILL_TEMPLATE_EXAMPLE_CAROUSEL_MAX_SLIDES} items`,
+            },
+          },
+        },
+        { _id: false }
+      ),
+      default: null,
+    },
+    sampleFile: {
+      type: new Schema(
+        {
+          name: { type: String, required: true, maxlength: 255 },
+          mime: { type: String, required: true, maxlength: 128 },
+          pages: { type: Number, min: 0 },
+          source: { type: String, required: true, enum: ['generated', 'upload'] },
+          fabFileId: { type: String },
+        },
+        { _id: false }
+      ),
+      default: null,
+    },
+    steps: {
+      type: [
+        new Schema(
+          {
+            label: { type: String, required: true, maxlength: SKILL_TEMPLATE_EXAMPLE_STEP_LABEL_MAX },
+            simulated: { type: Boolean, default: false },
+          },
+          { _id: false }
+        ),
+      ],
+      default: [],
+      validate: {
+        validator: (steps: unknown[]) => steps.length <= SKILL_TEMPLATE_EXAMPLE_STEPS_MAX,
+        message: `An example has at most ${SKILL_TEMPLATE_EXAMPLE_STEPS_MAX} steps`,
+      },
+    },
+    generatedFromVersionId: { type: String, default: null },
+    runAt: { type: Date },
+    error: { type: String, maxlength: 500 },
+  },
+  { _id: false }
+);
 
 const SkillListingTemplateSchema = new Schema<ISkillListingTemplateDocument>(
   {
@@ -52,6 +144,9 @@ const SkillListingTemplateSchema = new Schema<ISkillListingTemplateDocument>(
       ),
       default: undefined,
     },
+    takesFile: { type: Boolean, default: false },
+    // Absent on templates made before example runs; the page then keeps the layout without a demo.
+    example: { type: SkillTemplateExampleSchema, default: undefined },
     status: { type: String, required: true, enum: ['draft', 'in_review', 'published'], default: 'draft' },
     freeRunEnabled: { type: Boolean, default: false },
     generatedFromVersionId: { type: String, default: null },
@@ -89,7 +184,10 @@ export type SkillTemplateScanVerdictPatch = Pick<ISkillListingTemplate, 'scanSta
 
 /** Copy fields an author edit may write in the same update that claims the scan. */
 export type SkillTemplateCopyPatch = Partial<
-  Pick<ISkillListingTemplate, 'headline' | 'inputs' | 'examplePrompt' | 'generatedFromVersionId' | 'stale'>
+  Pick<
+    ISkillListingTemplate,
+    'headline' | 'inputs' | 'examplePrompt' | 'takesFile' | 'generatedFromVersionId' | 'stale'
+  >
 >;
 
 /**
@@ -185,6 +283,67 @@ export async function unpublishListingTemplate(listingId: string): Promise<void>
     { runValidators: true }
   );
   await settleVoidedScan(listingId);
+}
+
+/** What a finished example run writes; the author's `enabled` switch is kept. */
+export type SkillTemplateExampleResult = Pick<
+  ISkillTemplateExample,
+  'prompt' | 'reply' | 'artifact' | 'media' | 'sampleFile' | 'steps' | 'generatedFromVersionId'
+>;
+
+/**
+ * Mark an example run as started at `runAt`. Refused (null) while another run is in flight unless
+ * it started before `staleBefore`. A previous example's content stays until the new run finishes.
+ */
+export async function startSkillTemplateExampleRun(listingId: string, runAt: Date, staleBefore: Date) {
+  const first = await SkillListingTemplate.findOneAndUpdate(
+    { listingId, example: { $exists: false } },
+    { $set: { example: { status: 'running', enabled: true, prompt: '', reply: '', steps: [], runAt } } },
+    { new: true, runValidators: true }
+  );
+  if (first) return first;
+  return SkillListingTemplate.findOneAndUpdate(
+    {
+      listingId,
+      example: { $exists: true },
+      $or: [{ 'example.status': { $ne: 'running' } }, { 'example.runAt': { $lt: staleBefore } }],
+    },
+    { $set: { 'example.status': 'running', 'example.runAt': runAt }, $unset: { 'example.error': 1 } },
+    { new: true, runValidators: true }
+  );
+}
+
+/** Mark the run in flight at `runAt` failed; the previous example's content is kept. */
+export async function failSkillTemplateExampleRun(listingId: string, runAt: Date, error: string): Promise<boolean> {
+  const res = await SkillListingTemplate.updateOne(
+    { listingId, 'example.status': 'running', 'example.runAt': runAt },
+    { $set: { 'example.status': 'failed', 'example.error': error.slice(0, 500) } },
+    { runValidators: true }
+  );
+  return res.modifiedCount > 0;
+}
+
+export type SkillTemplateExampleEdit = Partial<
+  Pick<ISkillTemplateExample, 'enabled' | 'replyTrimmedTo' | 'sampleFile'>
+>;
+
+/**
+ * The author's unscanned edits to a stored example (switch, trim, sample file), for a change no page
+ * shows. Switching the demo off always lands; any other edit lands only while the demo is still off
+ * and no scan is in flight, so it cannot slip past the scan a concurrent switch-on claims. Null when
+ * there is no example or that no longer holds.
+ */
+export async function editSkillTemplateExample(listingId: string, edit: SkillTemplateExampleEdit) {
+  const set: Record<string, unknown> = {};
+  if (edit.enabled !== undefined) set['example.enabled'] = edit.enabled;
+  if (edit.replyTrimmedTo !== undefined) set['example.replyTrimmedTo'] = edit.replyTrimmedTo;
+  if (edit.sampleFile !== undefined) set['example.sampleFile'] = edit.sampleFile;
+  const hidden = edit.enabled === false ? {} : { 'example.enabled': false, status: { $ne: 'in_review' } };
+  return SkillListingTemplate.findOneAndUpdate(
+    { listingId, example: { $exists: true }, ...hidden },
+    { $set: set },
+    { new: true, runValidators: true }
+  );
 }
 
 /** Remove a listing's template row so its slug can be reused. Returns how many rows were removed. */

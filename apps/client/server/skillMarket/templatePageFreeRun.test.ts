@@ -227,3 +227,48 @@ describe('template page free-run file picker', () => {
     expect(byTestId<HTMLButtonElement>('template-page-free-run-btn').disabled).toBe(false);
   });
 });
+
+describe('template page free-run box as the example input bar', () => {
+  const example = {
+    prompt: 'Plan it',
+    replyHtml: '<p>Plan</p>',
+    steps: [],
+    artifact: null,
+    media: null,
+    sampleFile: null,
+  };
+
+  beforeEach(async () => {
+    loaded.length = 0;
+    mountPage({
+      ...view,
+      inputs: [{ label: 'Your goal', required: true }],
+      takesFile: true,
+      example,
+      freeRun: { state: 'open', siteKey: 'site-key', inputMaxChars: 8000, file: { maxBytes: 1024 } },
+    });
+    await flush();
+  });
+
+  it('sits inside the chat window with the skill chip, the first input label and the paperclip', () => {
+    const bar = byTestId('template-page-example');
+    expect(bar.contains(byTestId('template-page-free-run-form'))).toBe(true);
+    expect(byTestId<HTMLTextAreaElement>('template-page-free-run-input').placeholder).toBe('Your goal');
+    expect(byTestId('template-page-example-paperclip').getAttribute('for')).toBe('free-run-file');
+  });
+
+  it('runs a file from the paperclip and swaps in the sign-up prompt', async () => {
+    solve('tok');
+    respond(200, { html: '<p>done</p>', hasDiagram: false });
+    const input = byTestId<HTMLInputElement>('template-page-free-run-file');
+    Object.defineProperty(input, 'files', { value: [new File(['hi'], 'a.txt', { type: 'text/plain' })] });
+    await submit('My goal');
+    await flush();
+    await flush();
+    const body = JSON.parse(String(vi.mocked(fetch).mock.calls[0][1]?.body));
+    expect(body.text).toBe('My goal');
+    expect(body.file.name).toBe('a.txt');
+    expect(byTestId('template-page-free-run-result').hidden).toBe(false);
+    expect(byTestId('template-page-free-run-signup').hidden).toBe(false);
+  });
+});

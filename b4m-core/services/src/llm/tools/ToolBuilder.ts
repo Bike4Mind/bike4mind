@@ -495,6 +495,8 @@ export interface BuildToolsArgs {
   agentStore?: ServerAgentStore;
   externalTools?: Record<string, ToolDefinition>;
   toolAvailability?: ToolAvailability;
+  /** Applied to a subagent's tools after the gated-credit wrapper, e.g. the example-run policy. */
+  wrapChildTools?: (tools: ICompletionOptionTools[]) => ICompletionOptionTools[];
 }
 
 // Reuse the role enum validated at the API boundary by QuestStartBodySchema so the
@@ -1024,6 +1026,7 @@ export class ToolBuilder {
     externalTools,
     toolAvailability,
     servingModel,
+    wrapChildTools,
   }: BuildToolsArgs): ICompletionOptionTools[] | undefined {
     const tools = buildSharedTools(
       {
@@ -1258,7 +1261,10 @@ export class ToolBuilder {
         toolAvailability,
         // Subagents get the same wrapper the returned array does, so a failed inner call drops
         // its gate estimate instead of leaving this turn looking over-committed.
-        wrapChildTools: childTools => this.trackGatedCalls(childTools),
+        wrapChildTools: childTools => {
+          const tracked = this.trackGatedCalls(childTools);
+          return wrapChildTools ? wrapChildTools(tracked) : tracked;
+        },
       }
     );
     return this.trackGatedCalls(tools);

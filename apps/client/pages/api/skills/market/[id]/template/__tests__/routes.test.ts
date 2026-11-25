@@ -164,7 +164,12 @@ describe('template routes', () => {
     await run();
     expect(complete.mock.calls[0][1]).toContain('Summarize it.');
     expect(res._getJSONData()).toEqual({
-      draft: { headline: 'Three bullets', inputs: [{ label: 'Article', required: true }], examplePrompt: 'Go' },
+      draft: {
+        headline: 'Three bullets',
+        inputs: [{ label: 'Article', required: true }],
+        examplePrompt: 'Go',
+        takesFile: false,
+      },
       generatedFromVersionId: 'version-1',
     });
   });
@@ -181,7 +186,7 @@ describe('template routes', () => {
     await run();
     expect(res._getStatusCode()).toBe(200);
     expect(res._getJSONData()).toEqual({
-      draft: { headline: '', inputs: [], examplePrompt: '' },
+      draft: { headline: '', inputs: [], examplePrompt: '', takesFile: false },
       generatedFromVersionId: 'version-1',
     });
   });

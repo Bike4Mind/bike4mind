@@ -1592,6 +1592,46 @@ describe('ChatCompletionProcess', () => {
         expect(usageEventsRecord.mock.calls[0][0].costUsd).toBeCloseTo(0.0025, 9);
       });
 
+      it('records a normal turn against the payer it debited', async () => {
+        const { body, usageEventsRecord } = await arrange(false);
+
+        await service.process({ body, logger: mockLogger });
+
+        expect(usageEventsRecord).toHaveBeenCalledTimes(1);
+        const [event] = usageEventsRecord.mock.calls[0];
+        expect(event).toMatchObject({ userId: 'user1', ownerId: 'user1', ownerType: 'User', creditsCharged: 5 });
+        expect(event.platformPaid).toBeUndefined();
+      });
+
+      it("records an example run's cost against the platform and charges no one", async () => {
+        const { body, incrementCredits, usageEventsRecord } = await arrange(false);
+        mockDb.apiKeys = { findByUserIdAndType: vi.fn(), findByUserIdAndTypes: vi.fn() };
+
+        await service.process({
+          body,
+          logger: mockLogger,
+          exampleRun: { onStep: vi.fn(), listingId: 'listing-1' },
+        });
+
+        expect(usageEventsRecord).toHaveBeenCalledTimes(1);
+        const [event] = usageEventsRecord.mock.calls[0];
+        expect(event).toMatchObject({
+          userId: 'platform',
+          ownerId: 'platform',
+          ownerType: 'Platform',
+          feature: 'chat',
+          source: 'system',
+          creditsCharged: 0,
+          inputTokens: expect.any(Number),
+          providerOutputTokens: 50,
+          platformPaid: { reason: 'template_example_run', listingId: 'listing-1' },
+        });
+        expect(event.costUsd).toBeCloseTo(0.0025, 9);
+        expect(event.reservedCredits).toBeUndefined();
+        expect(incrementCredits).not.toHaveBeenCalled();
+        expect(mockDb.creditTransactions.createTransaction).not.toHaveBeenCalled();
+      });
+
       it('prices an aborted turn at the requested model and records the cost it ran at', async () => {
         const { body, usageEventsRecord } = await arrange(true);
         mockedGetLlmByModel.mockReturnValue({

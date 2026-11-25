@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { settingsMap } from '@bike4mind/common';
+import { SKILL_TEMPLATE_FREE_RUN_OPERATIONS_MODEL, settingsMap } from '@bike4mind/common';
+import { Logger } from '@bike4mind/observability';
 
 const h = vi.hoisted(() => ({
   rows: [] as { settingName: string; settingValue: unknown }[],
@@ -48,6 +49,8 @@ import {
   FREE_RUN_COOKIE,
   FREE_RUN_PER_IP_DAILY,
   buildFreeRunMessages,
+  completeFreeRun,
+  FreeRunTimeoutError,
   freeRunCookieHeader,
   freeRunPageState,
   hasUsedFreeRun,
@@ -360,5 +363,86 @@ describe('freeRunPageState', () => {
     await expect(
       freeRunPageState({ freeRunEnabled: true, ...over }, listing(visibility), undefined)
     ).resolves.toBeNull();
+  });
+});
+
+describe('completeFreeRun', () => {
+  type Callback = (parts: string[], info?: { inputTokens?: number; outputTokens?: number }) => Promise<void>;
+  const record = vi.fn(async () => null);
+  const run = (complete: (callback: Callback) => Promise<void>) => {
+    h.opsModel.mockResolvedValue({
+      modelInfo: { id: 'ops-model', backend: 'openai', pricing: { input: 1, output: 2 } },
+      llm: { complete: (_m: string, _msgs: unknown, _o: unknown, callback: Callback) => complete(callback) },
+    });
+    return completeFreeRun({
+      model: SKILL_TEMPLATE_FREE_RUN_OPERATIONS_MODEL,
+      system: 'system',
+      user: 'visitor text',
+      maxTokens: 500,
+      listingId: 'listing-1',
+      ledger: { usageEvents: { record } },
+      logger: new Logger({ metadata: {} }),
+    });
+  };
+
+  it('records the run as platform-paid usage for the listing, with nothing about the visitor', async () => {
+    await expect(run(async callback => callback(['# Answer'], { inputTokens: 120, outputTokens: 80 }))).resolves.toBe(
+      '# Answer'
+    );
+
+    await vi.waitFor(() => expect(record).toHaveBeenCalledTimes(1));
+    const row = record.mock.calls[0][0] as Record<string, unknown>;
+    expect(row).toMatchObject({
+      userId: 'platform',
+      ownerId: 'platform',
+      ownerType: 'Platform',
+      feature: 'operations',
+      source: 'system',
+      model: 'ops-model',
+      creditsCharged: 0,
+      providerInputTokens: 120,
+      providerOutputTokens: 80,
+      status: 'ok',
+      platformPaid: { reason: 'template_free_run', listingId: 'listing-1' },
+    });
+    expect(JSON.stringify(row)).not.toContain('visitor text');
+    expect(JSON.stringify(row)).not.toContain('# Answer');
+  });
+
+  it('records a run that ran past the timeout once the provider ends it', async () => {
+    vi.useFakeTimers();
+    let finish: () => void = () => {};
+    const pending = run(
+      callback =>
+        new Promise<void>(resolve => {
+          finish = () => void callback(['late'], { inputTokens: 50, outputTokens: 10 }).then(resolve);
+        })
+    );
+    const outcome = expect(pending).rejects.toBeInstanceOf(FreeRunTimeoutError);
+    await vi.advanceTimersByTimeAsync(45_000);
+    await outcome;
+    expect(record).not.toHaveBeenCalled();
+
+    vi.useRealTimers();
+    finish();
+    await vi.waitFor(() => expect(record).toHaveBeenCalledTimes(1));
+    expect(record.mock.calls[0][0]).toMatchObject({ status: 'timeout', providerInputTokens: 50 });
+  });
+
+  it('records the billed usage of a run that failed after the provider reported it', async () => {
+    await expect(
+      run(async callback => {
+        await callback([], { inputTokens: 30 });
+        throw new Error('stream broke');
+      })
+    ).rejects.toThrow('stream broke');
+    await vi.waitFor(() => expect(record).toHaveBeenCalledTimes(1));
+    expect(record.mock.calls[0][0]).toMatchObject({ status: 'error', providerInputTokens: 30 });
+  });
+
+  it('records nothing when the provider reported no usage', async () => {
+    await expect(run(async () => {})).rejects.toThrow('Free run returned no text');
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(record).not.toHaveBeenCalled();
   });
 });

@@ -1,4 +1,5 @@
 // apps/client/pages/api/skills/market/[id]/template/draft.ts
+import { usageEventRepository } from '@bike4mind/database';
 import { baseApi } from '@client/server/middlewares/baseApi';
 import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { resolveUserRateLimitPerMin } from '@bike4mind/server-utils/utils/userRateTier';
@@ -24,12 +25,17 @@ const handler = baseApi({ auth: 'jwtOnly' })
   )
   .post(async (req, res) => {
     const user = req.user!;
-    const { snapshot, versionId } = await approvedSnapshotForDraft(user, String(req.query.id));
+    const listingId = String(req.query.id);
+    const { snapshot, versionId } = await approvedSnapshotForDraft(user, listingId);
 
     let draft = EMPTY_TEMPLATE_DRAFT;
     try {
       const llm = await getOperationsClassifierLlm(req.logger, user.id, { maxTokens: 800 });
-      draft = await draftTemplateCopy(snapshot, llm);
+      draft = await draftTemplateCopy(snapshot, llm, {
+        ledger: { usageEvents: usageEventRepository },
+        listingId,
+        logger: req.logger,
+      });
     } catch (error) {
       req.logger.warn('[skill-market] template draft failed', {
         error: error instanceof Error ? error.message : String(error),

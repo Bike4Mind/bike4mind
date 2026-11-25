@@ -254,4 +254,28 @@ describe('SkillsFeature', () => {
     expect(content).toContain('## Skill Invoked: /mine');
     expect(content).not.toContain('UNTRUSTED_SKILL_CONTENT');
   });
+
+  it("expands an example run's approved skill instead of looking the name up or listing a catalog", async () => {
+    const findAccessibleByNamesForUser = vi
+      .fn()
+      .mockResolvedValue([makeSkill({ name: 'summarize', body: 'Live edited body: $ARGUMENTS' })]);
+    const listAccessibleInvocableForUser = vi.fn().mockResolvedValue([makeSkill({ name: 'other' })]);
+    const feature = new SkillsFeature(makeContext({ findAccessibleByNamesForUser, listAccessibleInvocableForUser }));
+    const quest = makeQuest();
+
+    await feature.beforeDataGathering({
+      ...baseArgs,
+      quest: quest as never,
+      message: '/summarize the user input',
+      exampleRunSkill: { name: 'summarize', body: 'Approved body: $ARGUMENTS' },
+    });
+    const messages = await feature.getContextMessages(quest as never, undefined as never, '', undefined as never, 0);
+
+    expect(findAccessibleByNamesForUser).not.toHaveBeenCalled();
+    expect(listAccessibleInvocableForUser).not.toHaveBeenCalled();
+    expect(messages).toHaveLength(1);
+    expect(messages[0]?.content).toContain('## Skill Invoked: /summarize');
+    expect(messages[0]?.content).toContain('Approved body: the user input');
+    expect(messages[0]?.content).not.toContain('Live edited body');
+  });
 });

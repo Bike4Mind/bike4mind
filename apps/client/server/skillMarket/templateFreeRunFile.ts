@@ -26,6 +26,14 @@ export const FREE_RUN_FILE_TEXT_MAX_CHARS = 60_000;
 export const FREE_RUN_FILE_ACCEPT =
   'application/pdf,image/png,image/jpeg,image/gif,image/webp,text/plain,.txt,.md,.csv';
 
+/** Whether a stored file is one of the FREE_RUN_FILE_ACCEPT types, by its mime type or name. */
+export function isFreeRunFileType(mime: string, name: string): boolean {
+  const accept = FREE_RUN_FILE_ACCEPT.split(',');
+  const base = mime.split(';')[0].trim().toLowerCase();
+  const lower = name.toLowerCase();
+  return accept.some(entry => (entry.startsWith('.') ? lower.endsWith(entry) : entry === base));
+}
+
 export const freeRunFileMaxBytes = (maxMb: number): number =>
   Math.min(Math.floor(maxMb * 1024 * 1024), FREE_RUN_FILE_TRANSPORT_MAX_BYTES);
 

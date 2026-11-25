@@ -11,7 +11,7 @@ type Props = {
   imageUrl: string | null;
 };
 
-/** How the public template page will look, drawn from the unsaved form. */
+/** How the public template page will look before the first save, drawn from the unsaved form (TemplateLivePreview after). */
 const TemplatePreview: FC<Props> = ({ skillName, headline, inputs, examplePrompt, imageUrl }) => {
   const labelled = inputs.filter(input => input.label.trim());
   return (

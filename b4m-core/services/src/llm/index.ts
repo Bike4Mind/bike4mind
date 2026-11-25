@@ -33,6 +33,13 @@ export {
   type RoundGate,
 } from '../completionCreditBudget';
 export { buildToolUsageEvent, recordToolUsageEvent } from './tools/ToolBuilder';
+export {
+  EXAMPLE_PLACEHOLDER,
+  exampleRunToolMode,
+  platformPaidUsageEvent,
+  type ExampleRunMode,
+  type ExampleRunStep,
+} from './tools/exampleRunTools';
 export { buildSubagentUsageMeta, type SubagentUsageMeta } from './tools/implementation/delegateToAgent';
 export * from './systemPromptDisclosure';
 export * from './toolAvailability';

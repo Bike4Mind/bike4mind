@@ -13,6 +13,17 @@ import { escapeHtml } from '@bike4mind/utils/escapeHtml';
 import { prepareShareMeta } from '@server/services/publish/prepareShareMeta';
 import { isLive } from './template';
 import { FREE_RUN_FILE_ACCEPT, formatFileCap } from './templateFreeRunFile';
+import {
+  EXAMPLE_STYLE,
+  TEMPLATE_EXAMPLE_SCRIPT_HASH,
+  exampleScriptTag,
+  paperclipIcon,
+  renderExampleWindow,
+  renderStaticInputBar,
+  type TemplatePageExampleView,
+} from './templatePageExample';
+
+export { TEMPLATE_EXAMPLE_SCRIPT_HASH } from './templatePageExample';
 
 /**
  * The public template page at `/t/<slug>` (pages/api/skills/template/serve.ts): static HTML whose only
@@ -21,15 +32,26 @@ import { FREE_RUN_FILE_ACCEPT, formatFileCap } from './templateFreeRunFile';
 
 export type ServableTemplate = Pick<
   ISkillListingTemplate,
-  'listingId' | 'slug' | 'headline' | 'inputs' | 'previewImage' | 'examplePrompt' | 'freeRunEnabled'
+  | 'listingId'
+  | 'slug'
+  | 'headline'
+  | 'inputs'
+  | 'previewImage'
+  | 'examplePrompt'
+  | 'freeRunEnabled'
+  | 'takesFile'
+  | 'example'
 > & { _id: unknown };
+
+export const SERVABLE_TEMPLATE_FIELDS =
+  'listingId slug headline inputs previewImage examplePrompt freeRunEnabled takesFile example';
 
 /** A published template whose listing the market still serves, or null (the page 404s). */
 export async function findServableTemplate(
   slug: string
 ): Promise<{ template: ServableTemplate; listing: ISkillListing } | null> {
   const template = await SkillListingTemplate.findOne({ slug, status: 'published' })
-    .select('listingId slug headline inputs previewImage examplePrompt freeRunEnabled')
+    .select(SERVABLE_TEMPLATE_FIELDS)
     .lean<ServableTemplate>();
   if (!template) return null;
   const listing = await findListing(template.listingId);
@@ -50,6 +72,16 @@ export interface TemplatePageView {
   skillName: string;
   headline: string;
   inputs: Pick<ISkillTemplateInput, 'label' | 'required'>[];
+  /** The listing author's display name; empty falls back to a generic byline. */
+  authorName?: string | null;
+  /** Null or a zero count renders no rating. */
+  rating?: { sum: number; count: number } | null;
+  /** Display names of the connectors the skill needs, e.g. "GitHub". */
+  connectors?: string[];
+  /** The skill works on a file: the input bar shows a paperclip. */
+  takesFile?: boolean;
+  /** The stored example run; null keeps the single-column page. */
+  example?: TemplatePageExampleView | null;
   /** The `<img src>`; null shows no image. */
   imageSrc: string | null;
   /** 0 renders no starter-credit line. */
@@ -67,6 +99,8 @@ export interface TemplatePageView {
         file?: { maxBytes: number } | null;
       }
     | { state: 'used' }
+    /** The owner preview: the box is drawn but inert, with no script. */
+    | { state: 'preview' }
     | null;
 }
 
@@ -78,13 +112,11 @@ const PAGE_STYLE = `
   *{box-sizing:border-box}
   body{margin:0;background:var(--bg);color:var(--fg);font-family:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;line-height:1.5}
   main{max-width:44rem;margin:0 auto;padding:3rem 1rem 4rem}
-  .badge{display:inline-block;font-size:.85rem;font-weight:600;color:var(--muted);border:1px solid var(--line);border-radius:999px;padding:.2rem .75rem;margin:0 0 1rem}
-  .badge code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--fg)}
-  h1{font-size:clamp(1.6rem,4vw,2.25rem);line-height:1.2;margin:0 0 1.5rem}
-  h2{font-size:.8rem;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin:0 0 .5rem}
-  .chips{display:flex;flex-wrap:wrap;gap:.5rem;margin:0 0 1.75rem;padding:0;list-style:none}
-  .chip{border:1.5px solid var(--fg);border-radius:999px;padding:.25rem .8rem;font-size:.95rem}
-  .chip.optional{border-style:dashed;color:var(--muted);border-color:var(--muted)}
+  h1{font-size:clamp(1.6rem,4vw,2.25rem);line-height:1.2;margin:0 0 .75rem}
+  .byline{color:var(--muted);margin:0 0 1rem}
+  .needs{display:flex;align-items:center;gap:.45rem;font-size:.9rem;font-weight:600;margin:0 0 .5rem}
+  .needs::before{content:"";flex:none;width:.5rem;height:.5rem;border-radius:50%;background:var(--accent)}
+  .lead .cta{margin-top:1rem}
   .preview{display:block;width:100%;height:auto;aspect-ratio:1200/630;object-fit:cover;border-radius:12px;border:1px solid var(--line);background:var(--card);margin:0 0 1.75rem}
   .cta{display:inline-block;background:var(--accent);color:var(--accent-fg);text-decoration:none;font-weight:600;padding:.75rem 1.4rem;border-radius:10px}
   .cta:focus-visible{outline:3px solid var(--fg);outline-offset:2px}
@@ -108,22 +140,24 @@ const PAGE_STYLE = `
   [hidden]{display:none !important}
 `;
 
-function inputsBlock(inputs: TemplatePageView['inputs']): string {
-  if (inputs.length === 0) return '';
-  const chips = inputs
-    .map(
-      input =>
-        `<li class="chip${input.required ? '' : ' optional'}" data-testid="template-page-input-chip" data-required="${
-          input.required ? 'true' : 'false'
-        }">${escapeHtml(input.label)}${input.required ? '' : '<span class="sr"> (optional)</span>'}</li>`
-    )
-    .join('');
-  return `<h2>You bring</h2>\n<ul class="chips" data-testid="template-page-inputs">${chips}</ul>`;
+function shareDescription(view: TemplatePageView): string {
+  const author = view.authorName?.trim();
+  return `Try the /${view.skillName} skill on ${view.brandName}${author ? `, by ${author}` : ''}.`;
 }
 
-function shareDescription(view: TemplatePageView): string {
-  const bring = view.inputs.map(input => (input.required ? input.label : `${input.label} (optional)`)).join(', ');
-  return `${view.brandName} skill /${view.skillName}.${bring ? ` You bring: ${bring}.` : ''}`;
+function bylineBlock(view: TemplatePageView): string {
+  const author = view.authorName?.trim() || 'a Bike4Mind user';
+  const rating = view.rating && view.rating.count > 0 ? view.rating : null;
+  const stars = rating
+    ? ` \u00b7 <span data-testid="template-page-rating">\u2605 ${(rating.sum / rating.count).toFixed(1)} (${rating.count})</span>`
+    : '';
+  return `<p class="byline" data-testid="template-page-byline">by ${escapeHtml(author)}${stars}</p>`;
+}
+
+function connectorsBlock(connectors: readonly string[] | undefined): string {
+  return (connectors ?? [])
+    .map(name => `<p class="needs" data-testid="template-page-connector">Needs ${escapeHtml(name)} connected</p>`)
+    .join('\n');
 }
 
 // Inline script for the free-run box; its CSP hash is TEMPLATE_FREE_RUN_SCRIPT_HASH, so it reads all
@@ -251,6 +285,50 @@ export const TURNSTILE_ORIGIN = 'https://challenges.cloudflare.com';
 export const MERMAID_SCRIPT_SRC = 'https://cdn.jsdelivr.net/npm/mermaid@11.17.2/dist/mermaid.min.js';
 const MERMAID_SCRIPT_INTEGRITY = 'sha384-EOXBFmc3gx5mb+vn0vPvvGqACToJD24hhacX5Yx+8NUUQrHIle/Qi5Bg9o3zKwW2';
 
+/** CSP every template page response starts from (pages/api/skills/template/serve.ts and the owner preview). */
+export const TEMPLATE_PAGE_BASE_CSP: readonly string[] = [
+  "default-src 'none'",
+  "style-src 'unsafe-inline'",
+  // A member render, the preview and example media are signed on the storage origin, which differs per deployment.
+  "img-src 'self' data: https:",
+  'media-src https:',
+  "base-uri 'none'",
+  "form-action 'none'",
+  "frame-ancestors 'self'",
+];
+
+/**
+ * The page's CSP: the example script by hash when it plays, and for a live free-run box its script,
+ * the Turnstile widget and, for a diagram, mermaid.
+ */
+export function templatePageCsp(view: Pick<TemplatePageView, 'freeRun' | 'example'>): string {
+  const scripts: string[] = [];
+  const extra: string[] = [];
+  if (view.freeRun?.state === 'open') {
+    scripts.push(TEMPLATE_FREE_RUN_SCRIPT_HASH, TURNSTILE_ORIGIN, MERMAID_SCRIPT_SRC);
+    extra.push(`frame-src ${TURNSTILE_ORIGIN}`, "connect-src 'self'");
+  }
+  if (view.example) scripts.unshift(TEMPLATE_EXAMPLE_SCRIPT_HASH);
+  return [...TEMPLATE_PAGE_BASE_CSP, ...(scripts.length ? [`script-src ${scripts.join(' ')}`] : []), ...extra].join(
+    '; '
+  );
+}
+
+/**
+ * The preview route's page as the editor frames it in a srcDoc, which never sees response headers:
+ * the CSP as a meta tag (frame-ancestors cannot be set that way), and links opening a new context,
+ * which the frame's sandbox refuses, so the app never loads inside it.
+ */
+export function withPreviewFrameGuards(html: string, csp: string): string {
+  const policy = csp
+    .split('; ')
+    .filter(directive => !directive.startsWith('frame-ancestors'))
+    .join('; ');
+  return html
+    .replace('<head>', `<head>\n<meta http-equiv="Content-Security-Policy" content="${escapeHtml(policy)}">`)
+    .replace(/<a /g, '<a target="_blank" rel="noopener noreferrer" ');
+}
+
 const freeRunRunPath = (slug: string): string => `/api/skills/template/run/${encodeURIComponent(slug)}`;
 
 function signupBlock(slug: string, brand: string, visible: boolean): string {
@@ -268,10 +346,45 @@ function fileRow(file: { maxBytes: number } | null | undefined): string {
 </div>`;
 }
 
-function freeRunBlock(view: TemplatePageView, brand: string): { html: string; script: boolean } {
+const fileCapLabel = (maxBytes: number) => `Attach one file: PDF, image or text, up to ${formatFileCap(maxBytes)}`;
+
+/** The paperclip of the example input bar, wired to the free-run file input. */
+function barFileButton(file: { maxBytes: number }): string {
+  const label = escapeHtml(fileCapLabel(file.maxBytes));
+  return `<span data-testid="template-page-free-run-file-row"><label for="free-run-file" class="ex-clip" title="${label}" data-testid="template-page-example-paperclip">${paperclipIcon()}<span class="sr">${label}</span></label><input id="free-run-file" class="ex-file-input" type="file" accept="${escapeHtml(FREE_RUN_FILE_ACCEPT)}" data-testid="template-page-free-run-file"></span>`;
+}
+
+const inputPlaceholder = (view: TemplatePageView): string => view.inputs[0]?.label || 'Message';
+
+function previewRunBlock(view: TemplatePageView, bar: boolean): string {
+  const note = 'Visitors can try the skill free here.';
+  if (bar) {
+    return `<div class="ex-run" data-testid="template-page-free-run-preview">
+${renderStaticInputBar({ slug: view.slug, placeholder: inputPlaceholder(view), takesFile: Boolean(view.takesFile) })}
+<div class="ex-run-foot"><button type="button" disabled>Try it free</button><p class="status">${note}</p></div>
+</div>`;
+  }
+  return `<div class="run" data-testid="template-page-free-run-preview">
+<label for="free-run-preview-input">Try it free</label>
+<textarea id="free-run-preview-input" disabled placeholder="Paste your text here"></textarea>
+<button type="button" disabled>Try it free</button>
+<p class="status">${note}</p>
+</div>`;
+}
+
+/**
+ * The free-run box: a card on the single-column page, or the chat window's input bar (`bar`) when the
+ * page shows the example. Both keep the ids FREE_RUN_SCRIPT reads.
+ */
+function freeRunBlock(view: TemplatePageView, brand: string, bar: boolean): { html: string; script: boolean } {
   const freeRun = view.freeRun;
   if (!freeRun) return { html: '', script: false };
-  if (freeRun.state === 'used') return { html: signupBlock(view.slug, brand, true), script: false };
+  if (freeRun.state === 'used') {
+    const signup = signupBlock(view.slug, brand, true);
+    return { html: bar ? `<div class="ex-run">${signup}</div>` : signup, script: false };
+  }
+  if (freeRun.state === 'preview') return { html: previewRunBlock(view, bar), script: false };
+  const file = freeRun.file && (!bar || view.takesFile) ? freeRun.file : null;
   const attrs = [
     ['data-run-url', freeRunRunPath(view.slug)],
     ['data-site-key', freeRun.siteKey],
@@ -280,27 +393,59 @@ function freeRunBlock(view: TemplatePageView, brand: string): { html: string; sc
     ['data-turnstile-src', TURNSTILE_SCRIPT_SRC],
     ['data-mermaid-src', MERMAID_SCRIPT_SRC],
     ['data-mermaid-integrity', MERMAID_SCRIPT_INTEGRITY],
-    ...(freeRun.file
+    ...(file
       ? [
-          ['data-file-max-bytes', String(freeRun.file.maxBytes)],
-          ['data-file-max-label', formatFileCap(freeRun.file.maxBytes)],
+          ['data-file-max-bytes', String(file.maxBytes)],
+          ['data-file-max-label', formatFileCap(file.maxBytes)],
         ]
       : []),
   ]
     .map(([name, value]) => `${name}="${escapeHtml(value)}"`)
     .join(' ');
+  const textarea = (placeholder: string, extra: string) =>
+    `<textarea id="free-run-input"${extra} maxlength="${freeRun.inputMaxChars}" placeholder="${escapeHtml(
+      placeholder
+    )}" data-testid="template-page-free-run-input"></textarea>`;
+  const widget = '<div id="free-run-widget" class="widget" data-testid="template-page-free-run-widget"></div>';
+  const button =
+    '<button id="free-run-btn" type="submit" data-testid="template-page-free-run-btn">Try it free</button>';
+  const status =
+    '<p id="free-run-status" class="status" role="status" aria-live="polite" data-testid="template-page-free-run-status"></p>';
+  const result = '<div id="free-run-result" class="result" hidden data-testid="template-page-free-run-result"></div>';
+  if (bar) {
+    return {
+      script: true,
+      html: `<section id="free-run" class="ex-run" ${attrs} data-testid="template-page-free-run">
+<form id="free-run-form" data-testid="template-page-free-run-form">
+<label for="free-run-input" class="sr">Try it free</label>
+<div class="ex-input" data-testid="template-page-example-input">
+<span class="ex-skill-chip">${escapeHtml(`/${view.slug}`)}</span>
+${textarea(inputPlaceholder(view), ' rows="2"')}
+${file ? barFileButton(file) : ''}
+</div>
+<div class="ex-run-foot">
+${widget}
+${button}
+${status}
+</div>
+</form>
+${result}
+${signupBlock(view.slug, brand, false)}
+</section>`,
+    };
+  }
   return {
     script: true,
     html: `<section id="free-run" ${attrs} data-testid="template-page-free-run">
 <form id="free-run-form" class="run" data-testid="template-page-free-run-form">
 <label for="free-run-input">Try it free</label>
-<textarea id="free-run-input" maxlength="${freeRun.inputMaxChars}" placeholder="Paste your text here" data-testid="template-page-free-run-input"></textarea>
-${fileRow(freeRun.file)}
-<div id="free-run-widget" class="widget" data-testid="template-page-free-run-widget"></div>
-<button id="free-run-btn" type="submit" data-testid="template-page-free-run-btn">Try it free</button>
-<p id="free-run-status" class="status" role="status" aria-live="polite" data-testid="template-page-free-run-status"></p>
+${textarea('Paste your text here', '')}
+${fileRow(file)}
+${widget}
+${button}
+${status}
 </form>
-<div id="free-run-result" class="result" hidden data-testid="template-page-free-run-result"></div>
+${result}
 ${signupBlock(view.slug, brand, false)}
 </section>`,
   };
@@ -310,6 +455,7 @@ export function renderTemplatePage(view: TemplatePageView): string {
   const brand = escapeHtml(view.brandName);
   const name = escapeHtml(view.skillName);
   const headline = escapeHtml(view.headline);
+  const example = view.example ?? null;
   const meta = view.share
     ? prepareShareMeta({
         title: view.headline,
@@ -319,16 +465,54 @@ export function renderTemplatePage(view: TemplatePageView): string {
         ...(view.share.imageUrl ? { imageUrl: view.share.imageUrl } : {}),
       }).metaTags
     : '';
-  const image = view.imageSrc
-    ? `<img class="preview" src="${escapeHtml(view.imageSrc)}" width="1200" height="630" alt="Example result of /${name}" data-testid="template-page-preview-image">`
-    : '';
-  const run = freeRunBlock(view, brand);
+  const run = freeRunBlock(view, brand, Boolean(example));
+  const lead = [
+    `<h1 data-testid="template-page-headline">${headline}</h1>`,
+    bylineBlock(view),
+    connectorsBlock(view.connectors),
+  ]
+    .filter(Boolean)
+    .join('\n');
+  const tryButton = `<a class="cta" href="${escapeHtml(templateTryPath(view.slug))}" data-testid="template-page-try-btn">Try with ${brand}</a>`;
   const credits =
     view.starterCredits > 0
       ? `<p class="credits" data-testid="template-page-starter-credits">New accounts start with ${escapeHtml(
           view.starterCredits.toLocaleString('en-US')
         )} free credits.</p>`
       : '';
+
+  let body: string;
+  if (example) {
+    const inputBar =
+      run.html ||
+      renderStaticInputBar({
+        slug: view.slug,
+        placeholder: inputPlaceholder(view),
+        takesFile: Boolean(view.takesFile),
+      });
+    body = `<main class="wide" data-testid="template-page">
+<div class="cols">
+<div class="lead" data-testid="template-page-lead">
+${lead}
+${tryButton}
+${credits}
+</div>
+${renderExampleWindow({ example, slug: view.slug, skillName: view.skillName, inputBar })}
+</div>
+</main>${run.script ? `\n<script>${FREE_RUN_SCRIPT}</script>` : ''}
+${exampleScriptTag()}`;
+  } else {
+    const image = view.imageSrc
+      ? `<img class="preview" src="${escapeHtml(view.imageSrc)}" width="1200" height="630" alt="Example result of /${name}" data-testid="template-page-preview-image">`
+      : '';
+    body = `<main data-testid="template-page">
+${lead}
+${image}
+${run.html}
+${tryButton}
+${credits}
+</main>${run.script ? `\n<script>${FREE_RUN_SCRIPT}</script>` : ''}`;
+  }
 
   return `<!doctype html>
 <html lang="en">
@@ -337,18 +521,10 @@ export function renderTemplatePage(view: TemplatePageView): string {
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex,nofollow">
 <title>${headline}</title>${meta ? `\n${meta}` : ''}
-<style>${PAGE_STYLE}</style>
+<style>${PAGE_STYLE}${example ? EXAMPLE_STYLE : ''}</style>
 </head>
 <body>
-<main data-testid="template-page">
-<p class="badge" data-testid="template-page-badge">${brand} skill <code>/${name}</code></p>
-<h1 data-testid="template-page-headline">${headline}</h1>
-${inputsBlock(view.inputs)}
-${image}
-${run.html}
-<a class="cta" href="${escapeHtml(templateTryPath(view.slug))}" data-testid="template-page-try-btn">Try with ${brand}</a>
-${credits}
-</main>${run.script ? `\n<script>${FREE_RUN_SCRIPT}</script>` : ''}
+${body}
 </body>
 </html>`;
 }

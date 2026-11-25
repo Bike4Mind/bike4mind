@@ -765,6 +765,14 @@ export interface ChatChildReport {
   replyTruncated?: boolean;
 }
 
+/** What a waiting child is blocked on, for its live card in the parent's thread. See ChatMessage.childWaiting. */
+export interface ChatChildWaiting {
+  sessionId: string;
+  reason?: 'approval' | 'decision' | 'message';
+  /** The parked call, e.g. "bash gh pr merge 12". Withheld when a device-local child reports to a hosted parent. */
+  summary?: string;
+}
+
 export interface ChatMessage {
   id: string;
   role: ChatRole;
@@ -870,6 +878,12 @@ export interface ChatMessage {
   childReport?: ChatChildReport;
   /** The child this settled report is from. Set even when `childReport` is withheld from a hosted parent. */
   reportedChildId?: string;
+  /**
+   * Set with `system` on the notice a spawned session leaves when it starts waiting on the user,
+   * so the thread can fold every notice from one child into its live card (ChildSessionCards).
+   * Absent on notices stored before this field existed. See ChatService.noteChildWaiting.
+   */
+  childWaiting?: ChatChildWaiting;
   /**
    * Artifacts parsed out of this reply. Their markup is NOT in `content`, which holds the prose
    * around them; the wire rebuilds it from here (restoreArtifactMarkup) so the model still sees
