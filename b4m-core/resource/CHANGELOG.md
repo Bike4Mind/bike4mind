@@ -1,5 +1,15 @@
 # @bike4mind/resource
 
+## 3.6.0
+
+### Minor Changes
+
+- [#8465](https://github.com/Bike4Mind/bike4mind/pull/8465) [`8ba6c23`](https://github.com/Bike4Mind/bike4mind/commit/8ba6c23d597ff8dfdf966418b1b1818dbe3592a3) Thanks [@maconard](https://github.com/maconard)! - asynchronous function calls for runs longer than a request can wait
+
+### Patch Changes
+
+- [#8353](https://github.com/Bike4Mind/bike4mind/pull/8353) [`8611b8e`](https://github.com/Bike4Mind/bike4mind/commit/8611b8e90d2fb3ac5daab00f1c2ffb8761785c4a) Thanks [@poysama](https://github.com/poysama)! - remove LiveOps triage
+
 ## 3.5.0
 
 ### Minor Changes

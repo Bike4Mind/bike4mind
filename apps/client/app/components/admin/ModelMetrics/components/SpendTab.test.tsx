@@ -44,7 +44,7 @@ describe('SpendTabView', () => {
   it('flags a truncated account list as "top N of M" (byAccount < Active Accounts KPI)', () => {
     // spendMockData: 7 account rows, Active Accounts KPI = 47.
     render(<SpendTabView data={spendMockData} />, { wrapper: TestWrapper });
-    expect(screen.getByText('Top Spend by Account')).toBeInTheDocument();
+    expect(screen.getByText('Top spend by account')).toBeInTheDocument();
     expect(screen.getByTestId('spend-account-truncation')).toHaveTextContent('Showing top 7 of 47 accounts by spend.');
   });
 
@@ -55,7 +55,7 @@ describe('SpendTabView', () => {
       byAccount: spendMockData.byAccount.slice(0, 2),
     };
     render(<SpendTabView data={data} />, { wrapper: TestWrapper });
-    expect(screen.getByText('Spend by Account')).toBeInTheDocument();
+    expect(screen.getByText('Spend by account')).toBeInTheDocument();
     expect(screen.queryByTestId('spend-account-truncation')).not.toBeInTheDocument();
   });
 
