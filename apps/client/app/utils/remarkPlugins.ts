@@ -43,10 +43,15 @@ const CODE_SPAN_SPLITTER = /(```[\s\S]*?```|~~~[\s\S]*?~~~|`[^`\n]*`)/g;
 // LaTeX's own delimiters. CommonMark reads `\(` and `\[` as backslash escapes, so without this the
 // parser drops the backslash and prints "( a^2 )". The lookbehind requires an even run of
 // backslashes before the delimiter: `\\[2pt]` is a LaTeX line break, not an opening bracket.
-export const UNESCAPED = String.raw`(?<=(?:^|[^\\])(?:\\\\)*)`;
-// Check each delimiter literal before looking back over escape pairs.
-const INLINE_PAREN_SPAN = new RegExp(String.raw`(?=\\\()${UNESCAPED}\\\(([^\n]*?)(?=\\\))${UNESCAPED}\\\)`, 'g');
-const INLINE_BRACKET_SPAN = new RegExp(String.raw`(?=\\\[)${UNESCAPED}\\\[([^\n]*?)(?=\\\])${UNESCAPED}\\\]`, 'g');
+// The lookbehind follows the literal on purpose. Leading the pattern it walks the backslash run back
+// from every position, quadratic on a long run. V8's regexp optimizer hides that by scanning for
+// the literal first, but V8 drops the optimizer once an isolate has compiled about 10k regexps (a
+// tab open for a long session, a reused test worker), and the same input then took 30s.
+export const unescapedDelimiter = (delimiter: string) => String.raw`\\${delimiter}(?<=(?:^|[^\\])(?:\\\\)*\\.)`;
+const inlineSpan = (open: string, close: string) =>
+  new RegExp(String.raw`${unescapedDelimiter(open)}([^\n]*?)${unescapedDelimiter(close)}`, 'g');
+const INLINE_PAREN_SPAN = inlineSpan(String.raw`\(`, String.raw`\)`);
+const INLINE_BRACKET_SPAN = inlineSpan(String.raw`\[`, String.raw`\]`);
 // `\[` opening its line (after indentation or blockquote markers) and `\]` closing a line. The body
 // may not cross a blank line, so an unclosed `\[` cannot swallow the paragraphs that follow, nor
 // hold another unescaped `\[`/`\]`, so `\[ a \] and \[ b \]` is left to the inline pass instead of
