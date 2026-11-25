@@ -419,7 +419,7 @@ describe('[strategy]/callback - guards and refusal metric line', () => {
     );
     let pending: Promise<unknown> | undefined;
     const { req, res } = makeReqRes();
-    req.logger = { info };
+    req.logger = { ...log, info };
     await handler(req, res, vi.fn());
     await pending;
     expect(info.mock.calls.filter(c => c[0] === 'oauth-signup-refused')).toHaveLength(count);
