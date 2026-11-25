@@ -344,6 +344,12 @@ export class HostRuntime {
     await this.pullRequests?.().forget(sessionId);
   }
 
+  async deleteSessionTree(sessionId: string, nestedIds: readonly string[], removeWorktree: boolean) {
+    const result = await this.service.deleteSessionTree(sessionId, nestedIds, removeWorktree);
+    for (const id of result.deleted) await this.pullRequests?.().forget(id);
+    return result;
+  }
+
   sendMessage(request: SendMessageRequest) {
     return this.service.send(request.sessionId, request.text, request.attachments, {
       notes: rendererNotes(request.notes),

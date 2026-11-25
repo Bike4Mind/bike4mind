@@ -4,6 +4,7 @@ import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import type { ChatProject } from '@shared/chat';
 import type {
   AppWorktree,
+  SessionWorktreeRemoval,
   WorkspaceOwner,
   WorktreeRemoval,
   WorktreeState,
@@ -439,6 +440,17 @@ async function removeWorktree(projectDirectory: string, path: string): Promise<v
 
 type InspectedWorktreeRemoval = WorktreeRemoval & { preservedRef?: string };
 
+type InspectedSessionRemoval = SessionWorktreeRemoval & { preservedRef?: string };
+
+/** States whose checkout a conversation delete still removes; the branch keeps any commits. */
+const DISCARDABLE: ReadonlySet<WorktreeState> = new Set(['dirty', 'unpushed', 'unverified']);
+
+function discardNotice(removal: WorktreeRemoval, state: WorktreeState): string | null {
+  if (removal.safe) return null;
+  if (state === 'dirty') return `${removal.reason} will be discarded; branch ${removal.branch} is kept`;
+  return `Branch ${removal.branch} is kept: ${removal.reason}`;
+}
+
 type Inspection = { removal: InspectedWorktreeRemoval; state: WorktreeState };
 
 function containsPath(directory: string, path: string): boolean {
@@ -558,12 +570,15 @@ async function canonicalWorktreeRoot(directory: string): Promise<{ container: st
   return { container, root };
 }
 
-/** Shared by the delete dialog and execution: uncertainty always keeps the checkout. */
+/**
+ * Shared by the delete dialog and execution. Another owner, a nested checkout or a hold keeps the
+ * checkout; uncommitted files and unproven commits only keep the branch.
+ */
 export async function inspectWorktreeRemoval(
   project: ChatProject | undefined,
   otherProjects: readonly (ChatProject | undefined)[],
   options: OrphanListOptions = {}
-): Promise<InspectedWorktreeRemoval | null> {
+): Promise<InspectedSessionRemoval | null> {
   if (!hasAppWorkspaceBranch(project)) return null;
   const path = await canonical(project.workingDirectory);
   if (!path) return null;
@@ -576,7 +591,17 @@ export async function inspectWorktreeRemoval(
   const entry = await registeredAt(entries, path);
   if (entry?.branch !== branch || (await canonical(project.directory)) === path) return null;
   const bases = project.branch ? [project.branch] : [];
-  return (await inspectCheckout({ path, branch, container, entries, others: otherProjects, bases, options })).removal;
+  const { removal, state } = await inspectCheckout({
+    path,
+    branch,
+    container,
+    entries,
+    others: otherProjects,
+    bases,
+    options,
+  });
+  const removable = removal.safe || DISCARDABLE.has(state);
+  return { ...removal, removable, reason: (removable && discardNotice(removal, state)) || removal.reason };
 }
 
 const FALLBACK_BASES = ['main', 'master'];
@@ -713,12 +738,16 @@ export async function removeSessionWorktree(
   options: OrphanListOptions = {}
 ): Promise<void> {
   const inspection = await inspectWorktreeRemoval(project, otherProjects, options);
-  if (!inspection?.safe || !inspection.preservedRef) {
+  if (!inspection?.removable) {
     throw new Error(inspection?.reason ?? 'This is not an app-created worktree');
   }
   const held = options.hold?.();
   if (held) throw new Error(held);
-  await removeWorktreeAt(project.directory, inspection.path, inspection.branch, inspection.preservedRef);
+  if (inspection.safe && inspection.preservedRef) {
+    await removeWorktreeAt(project.directory, inspection.path, inspection.branch, inspection.preservedRef);
+    return;
+  }
+  await git(project.directory, ['worktree', 'remove', '--force', gitArgumentPath(project.directory, inspection.path)]);
 }
 
 /** Removes the checkout, then its branch with `-d` only, judged against the ref that proved it preserved. */

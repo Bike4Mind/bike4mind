@@ -66,24 +66,32 @@ describe('session worktree removal', () => {
   });
 
   // Untracked rather than modified: a modified file shows in any status, an untracked one only with the flag.
-  it('refuses uncommitted changes, including changes after inspection', async () => {
+  it('discards uncommitted changes, including changes after inspection, and keeps the branch', async () => {
     const project = await fixture();
     expect((await inspectWorktreeRemoval(project, []))?.safe).toBe(true);
     await writeFile(join(project.workingDirectory, 'new.txt'), 'work\n');
-    expect(await inspectWorktreeRemoval(project, [])).toMatchObject({ safe: false, reason: '1 uncommitted file' });
-    await expect(removeSessionWorktree(project, [])).rejects.toThrow('1 uncommitted file');
-    expect((await stat(project.workingDirectory)).isDirectory()).toBe(true);
-  });
-
-  it('refuses local commits absent from the base and upstream', async () => {
-    const project = await fixture();
-    await git(project.workingDirectory, ['commit', '--allow-empty', '-qm', 'local']);
     expect(await inspectWorktreeRemoval(project, [])).toMatchObject({
       safe: false,
-      reason: '1 commit not pushed or merged',
+      removable: true,
+      reason: `1 uncommitted file will be discarded; branch ${project.workspaceBranch} is kept`,
     });
-    await expect(removeSessionWorktree(project, [])).rejects.toThrow('not pushed or merged');
-    expect((await stat(project.workingDirectory)).isDirectory()).toBe(true);
+    await removeSessionWorktree(project, []);
+    await expect(stat(project.workingDirectory)).rejects.toMatchObject({ code: 'ENOENT' });
+    await git(project.directory, ['show-ref', '--verify', `refs/heads/${project.workspaceBranch}`]);
+  });
+
+  it('removes the checkout but keeps a branch with local commits absent from the base and upstream', async () => {
+    const project = await fixture();
+    await git(project.workingDirectory, ['commit', '--allow-empty', '-qm', 'local']);
+    const tip = (await git(project.directory, ['rev-parse', `refs/heads/${project.workspaceBranch}`])).trim();
+    expect(await inspectWorktreeRemoval(project, [])).toMatchObject({
+      safe: false,
+      removable: true,
+      reason: `Branch ${project.workspaceBranch} is kept: 1 commit not pushed or merged`,
+    });
+    await removeSessionWorktree(project, []);
+    await expect(stat(project.workingDirectory)).rejects.toMatchObject({ code: 'ENOENT' });
+    expect((await git(project.directory, ['rev-parse', `refs/heads/${project.workspaceBranch}`])).trim()).toBe(tip);
   });
 
   it('accepts commits preserved in the configured upstream', async () => {
@@ -117,23 +125,25 @@ describe('session worktree removal', () => {
     await git(project.directory, ['branch', '--set-upstream-to=origin/pushed', project.workspaceBranch!]);
     await git(project.workingDirectory, ['commit', '--allow-empty', '-qm', 'merged']);
     await git(project.directory, ['merge', '--ff-only', project.workspaceBranch!]);
-    expect(await inspectWorktreeRemoval(project, [])).toMatchObject({
-      safe: false,
-      reason: '1 commit not pushed or merged',
-    });
-    await expect(removeSessionWorktree(project, [])).rejects.toThrow('not pushed or merged');
-    expect((await stat(project.workingDirectory)).isDirectory()).toBe(true);
+    expect(await inspectWorktreeRemoval(project, [])).toMatchObject({ safe: false, removable: true });
+    await removeSessionWorktree(project, []);
+    await expect(stat(project.workingDirectory)).rejects.toMatchObject({ code: 'ENOENT' });
+    await git(project.directory, ['show-ref', '--verify', `refs/heads/${project.workspaceBranch}`]);
     expect((await git(project.directory, ['config', '--get', `branch.${project.workspaceBranch}.merge`])).trim()).toBe(
       'refs/heads/pushed'
     );
   });
 
-  it('keeps ignored files that Git would otherwise delete with the checkout', async () => {
+  it('counts ignored files among what removal discards', async () => {
     const project = await fixture();
     await writeFile(join(project.workingDirectory, 'ignored'), 'generated\n');
-    expect((await inspectWorktreeRemoval(project, []))?.safe).toBe(false);
-    await expect(removeSessionWorktree(project, [])).rejects.toThrow('1 uncommitted file');
-    expect((await stat(join(project.workingDirectory, 'ignored'))).isFile()).toBe(true);
+    expect(await inspectWorktreeRemoval(project, [])).toMatchObject({
+      safe: false,
+      removable: true,
+      reason: expect.stringContaining('1 uncommitted file will be discarded'),
+    });
+    await removeSessionWorktree(project, []);
+    await expect(stat(project.workingDirectory)).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
   it('keeps an ignored nested worktree and its uncommitted files', async () => {
@@ -143,7 +153,7 @@ describe('session worktree removal', () => {
     const uncommitted = join(nested, 'uncommitted.txt');
     await writeFile(uncommitted, 'keep this work\n');
     expect(await git(project.workingDirectory, ['status', '--porcelain', '-z', '--untracked-files=all'])).toBe('');
-    expect(await inspectWorktreeRemoval(project, [])).toMatchObject({ safe: false });
+    expect(await inspectWorktreeRemoval(project, [])).toMatchObject({ safe: false, removable: false });
     await expect(removeSessionWorktree(project, [])).rejects.toThrow();
     expect((await stat(uncommitted)).isFile()).toBe(true);
   });
@@ -520,21 +530,76 @@ describe('session deletion integration', () => {
     }
   });
 
-  it.each(['shared', 'dirty'])('rechecks %s state after releasing resources', async change => {
+  it('rechecks shared state after releasing resources', async () => {
     const { project, store, session, service } = await serviceFixture(async (store, project) => {
-      if (change === 'dirty') {
-        await writeFile(join(project.workingDirectory, 'late.txt'), 'keep this');
-        return;
-      }
       const other = await store.create(undefined, { project });
       await store.setArchived(other.id, true);
     });
     try {
-      await expect(service.deleteSession(session.id, true)).rejects.toThrow(
-        change === 'shared' ? 'another conversation' : 'uncommitted file'
-      );
+      await expect(service.deleteSession(session.id, true)).rejects.toThrow('another conversation');
       expect(await store.get(session.id)).not.toBeNull();
       expect((await stat(project.workingDirectory)).isDirectory()).toBe(true);
+    } finally {
+      service.dispose();
+    }
+  });
+
+  it('removes a checkout dirtied while resources are released and keeps its branch', async () => {
+    let dirtied = false;
+    const { project, store, session, service } = await serviceFixture(async (_store, project) => {
+      if (dirtied) return;
+      dirtied = true;
+      await writeFile(join(project.workingDirectory, 'late.txt'), 'scratch');
+    });
+    try {
+      await service.deleteSession(session.id, true);
+      expect(await store.get(session.id)).toBeNull();
+      await expect(stat(project.workingDirectory)).rejects.toMatchObject({ code: 'ENOENT' });
+      await git(project.directory, ['show-ref', '--verify', `refs/heads/${project.workspaceBranch}`]);
+    } finally {
+      service.dispose();
+    }
+  });
+
+  it('deletes named nested sessions deepest first, then the parent and its shared checkout', async () => {
+    const { project, store, session, service } = await serviceFixture();
+    try {
+      const shared = { ...project, workspace: false, workspaceBranch: project.workspaceBranch };
+      const child = await store.create(undefined, {
+        project: shared,
+        origin: { parentSessionId: session.id, depth: 1, seedPrompt: 'child' },
+      });
+      const grandchild = await store.create(undefined, {
+        origin: { parentSessionId: child.id, depth: 2, seedPrompt: 'grandchild' },
+      });
+      const unrelated = await store.create();
+      expect(await service.inspectSessionWorktreeRemoval(session.id)).toMatchObject({ removable: false });
+      expect(await service.inspectSessionWorktreeRemoval(session.id, [child.id])).toMatchObject({ removable: true });
+      const result = await service.deleteSessionTree(session.id, [child.id, grandchild.id, unrelated.id], true);
+      expect(result).toEqual({ deleted: [grandchild.id, child.id, session.id], error: null });
+      expect((await store.list()).map(summary => summary.id)).toEqual([unrelated.id]);
+      await expect(stat(project.workingDirectory)).rejects.toMatchObject({ code: 'ENOENT' });
+    } finally {
+      service.dispose();
+    }
+  });
+
+  it('leaves unnamed nested sessions and reports a failure with what was deleted', async () => {
+    const { store, session, service } = await serviceFixture(async store => {
+      const other = await store.create(undefined, { project: (await store.get(session.id))!.project });
+      await store.setArchived(other.id, true);
+    });
+    try {
+      const kept = await store.create(undefined, {
+        origin: { parentSessionId: session.id, depth: 1, seedPrompt: 'kept' },
+      });
+      const named = await store.create(undefined, {
+        origin: { parentSessionId: session.id, depth: 1, seedPrompt: 'named' },
+      });
+      const result = await service.deleteSessionTree(session.id, [named.id], true);
+      expect(result).toEqual({ deleted: [named.id], error: expect.stringContaining('another conversation') });
+      expect(await store.get(kept.id)).not.toBeNull();
+      expect(await store.get(session.id)).not.toBeNull();
     } finally {
       service.dispose();
     }

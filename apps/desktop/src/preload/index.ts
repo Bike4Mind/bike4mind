@@ -327,8 +327,10 @@ const api: DesktopApi = {
       ipcRenderer.invoke(IPC_CHANNELS.chatRenameSession, sessionId, title),
     deleteSession: (sessionId: string, removeWorktree?: boolean) =>
       ipcRenderer.invoke(IPC_CHANNELS.chatDeleteSession, sessionId, removeWorktree),
-    inspectWorktreeRemoval: (sessionId: string) =>
-      ipcRenderer.invoke(IPC_CHANNELS.chatInspectWorktreeRemoval, sessionId),
+    deleteSessionTree: (sessionId: string, nestedIds: string[], removeWorktree?: boolean) =>
+      ipcRenderer.invoke(IPC_CHANNELS.chatDeleteSessionTree, sessionId, nestedIds, removeWorktree),
+    inspectWorktreeRemoval: (sessionId: string, alsoDeleting?: string[]) =>
+      ipcRenderer.invoke(IPC_CHANNELS.chatInspectWorktreeRemoval, sessionId, alsoDeleting),
     listWorktrees: (directory: string) => ipcRenderer.invoke(IPC_CHANNELS.chatListWorktrees, directory),
     removeWorktrees: (directory: string, paths?: string[]) =>
       ipcRenderer.invoke(IPC_CHANNELS.chatRemoveWorktrees, directory, paths),
