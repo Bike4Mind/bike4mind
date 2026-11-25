@@ -111,6 +111,22 @@ describe('setCallableFunctionSources', () => {
     });
     expect(h.setSources).not.toHaveBeenCalled();
   });
+
+  it('counts each source at the most one fetch can return against the total, with the data files', async () => {
+    const MIB = 1024 * 1024;
+    const limits = { fileBytes: 100 * MIB, totalBytes: 10 * MIB };
+    withFunction([]);
+    (h.fn!.pin as { dataPins: unknown[] }).dataPins = [{ name: 'taken.csv', bytes: 2 * MIB }];
+    await setCallableFunctionSources(OWNER, FN_ID, [live('a.csv'), live('b.csv')], { ...deps, limits });
+    const three = [live('a.csv'), live('b.csv'), live('c.csv')];
+    const refusal = setCallableFunctionSources(OWNER, FN_ID, three, { ...deps, limits });
+    await expect(refusal).rejects.toMatchObject({
+      statusCode: 400,
+      message: expect.stringMatching(/14 MB, over this tool's 10 MB total/),
+      additionalInfo: { code: 'source_total_too_large', limit: 10 * MIB, needed: 14 * MIB },
+    });
+    expect(h.setSources).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe('pinned sources', () => {
@@ -148,6 +164,14 @@ describe('readCallableFunctionSource', () => {
       expect(browser.entry).toEqual(read.entry);
       expect(sha(browser.bytes.toString())).toBe(read.entry.sha256);
     }
+  });
+
+  it('answers a live source with the bytes it fetched and stores nothing', async () => {
+    withFunction([live()]);
+    const read = await readCallableFunctionSource(OWNER, FN_ID, 'rates.csv', deps);
+    expect(read.bytes.toString()).toBe(originData);
+    expect(storage.upload).not.toHaveBeenCalled();
+    expect(storage.download).not.toHaveBeenCalled();
   });
 
   it('is not found for another owner and for a name that is not a source', async () => {
@@ -198,6 +222,7 @@ describe('through the guarded fetch, against an origin whose data changes', () =
       sha256: sha('x,y\n1,2\n'),
       bytes: 8,
     });
-    expect(objects.get(`data/${FN_ID}/${sha('x,y\n1,3\n')}`)?.toString()).toBe('x,y\n1,3\n');
+    expect(objects.get(`data/.live/${FN_ID}/${sha('x,y\n1,3\n')}`)?.toString()).toBe('x,y\n1,3\n');
+    expect(objects.has(`data/${FN_ID}/${sha('x,y\n1,3\n')}`)).toBe(false);
   });
 });

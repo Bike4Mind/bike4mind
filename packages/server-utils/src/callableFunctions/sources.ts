@@ -18,9 +18,11 @@ import {
 import { adminSettingsRepository, artifactRepository, callableFunctionRepository } from '@bike4mind/database';
 import { dataOriginReservedHosts } from '@bike4mind/services/llm/artifactGating';
 import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
-import { callableFunctionDataKey } from './dataKeys';
+import { callableFunctionDataKey, callableFunctionLiveSourceKey } from './dataKeys';
 import {
+  callableFunctionSourceMaxBytes,
   getCallableFunctionDataStorage,
+  megabytes,
   resolveCallableFunctionDataLimits,
   type CallableFunctionDataLimits,
   type CallableFunctionDataStorage,
@@ -32,11 +34,8 @@ import {
   type CallableFunctionSourceFetcher,
 } from './fetchSource';
 
-/**
- * Data sources declared on a saved function: URLs on the admin-listed data origins (`pythonArtifactDataOrigins`),
- * fetched outside the sandbox and stored by hash under the function's prefix, so calls read them through the same
- * signed links as pinned files. A `live` source is fetched on every call; a `pinned` one at promotion.
- */
+// URLs on the admin-listed data origins, fetched outside the sandbox and stored by hash so calls read them through
+// signed links: a `live` source on every call, under a prefix that expires; a `pinned` one at promotion.
 
 export interface CallableFunctionSourceDeps {
   fetcher?: CallableFunctionSourceFetcher;
@@ -49,7 +48,7 @@ export interface CallableFunctionSourceDeps {
 }
 
 /** The `pythonArtifactDataOrigins` setting, validated as every other reader validates it. */
-export async function loadCallableFunctionSourceOrigins(): Promise<string[]> {
+async function loadCallableFunctionSourceOrigins(): Promise<string[]> {
   const settings = await getSettingsMap({ adminSettings: adminSettingsRepository });
   return resolvePythonArtifactDataOrigins(
     getSettingsValue('pythonArtifactDataOrigins', settings),
@@ -66,6 +65,7 @@ async function readHead(actor: { id: string }, artifactId: string) {
 }
 
 const MODES: ReadonlySet<string> = new Set(CALLABLE_FUNCTION_SOURCE_MODES);
+const MIB = 1024 * 1024;
 
 /** The url's origin when it is an https URL without user info, else null. */
 function sourceOrigin(url: string): string | null {
@@ -80,7 +80,7 @@ function sourceOrigin(url: string): string | null {
 
 /**
  * Replaces the function's sources and returns it to draft. Refuses an unsafe name, a name a data file or another
- * source holds, more sources than the data files leave room for, and a URL whose origin is not listed.
+ * source holds, more sources or bytes than the data files leave room for, and a URL whose origin is not listed.
  */
 export async function setCallableFunctionSources(
   actor: { id: string },
@@ -96,6 +96,18 @@ export async function setCallableFunctionSources(
       `A tool can have at most ${CALLABLE_FUNCTION_DATA_LIMITS.maxPins} data files and sources together.`,
       { code: 'data_pin_limit', limit: CALLABLE_FUNCTION_DATA_LIMITS.maxPins }
     );
+  }
+  if (sources.length > 0) {
+    const limits = deps.limits ?? (await resolveCallableFunctionDataLimits(actor));
+    const needed =
+      pins.reduce((sum, pin) => sum + pin.bytes, 0) + sources.length * callableFunctionSourceMaxBytes(limits);
+    if (needed > limits.totalBytes) {
+      throw new BadRequestError(
+        `These sources can fetch up to ${megabytes(callableFunctionSourceMaxBytes(limits))} each, which with the data ` +
+          `files is ${Math.ceil(needed / MIB)} MB, over this tool's ${megabytes(limits.totalBytes)} total.`,
+        { code: 'source_total_too_large', limit: limits.totalBytes, needed }
+      );
+    }
   }
   const taken = new Set(pins.map(pin => pin.name));
   let origins = deps.origins;
@@ -138,9 +150,10 @@ export async function setCallableFunctionSources(
 
 type SourceOwner = Pick<ICallableFunctionDocument, 'id' | 'userId' | 'sources' | 'pin'>;
 
-/** What one source resolved to for a call, and its bytes when they were fetched for it. */
-export interface CallableFunctionSourceRead {
+/** What one source resolved to for a call, the key its bytes are stored under, and the bytes when fetched for it. */
+interface CallableFunctionSourceRead {
   entry: CallableFunctionStampData;
+  key: string;
   body?: Buffer;
 }
 
@@ -160,28 +173,27 @@ async function resolveDeps(fn: SourceOwner, deps: CallableFunctionSourceDeps): P
   };
 }
 
-/** Fetches through the guarded fetch, capped by the owner's per-file data limit, and stores the bytes by hash. */
-async function fetchAndStore(fn: SourceOwner, source: ICallableFunctionSource, deps: Resolved) {
-  const fetched = await deps.fetcher({
+/** Fetches through the guarded fetch, capped by the owner's per-file data limit. */
+const fetchSource = (source: ICallableFunctionSource, deps: Resolved) =>
+  deps.fetcher({
     url: source.url,
     origins: deps.origins,
     maxBodyBytes: deps.limits.fileBytes,
     timeoutMs: CALLABLE_FUNCTION_SOURCE_TIMEOUT_MS,
   });
-  await deps.storage.upload(fetched.body, callableFunctionDataKey(fn.id, fetched.sha256), {
-    ContentType: 'application/octet-stream',
-  });
-  return fetched;
-}
+
+const store = (deps: Resolved, body: Buffer, key: string) =>
+  deps.storage.upload(body, key, { ContentType: 'application/octet-stream' });
 
 /**
  * Each source as one call reads it: a `pinned` source promotion froze is read from its stored copy; every other
- * source is fetched now, stored, and stamped `live` with the time it was fetched. Throws `CallableFunctionSourceError`.
+ * source is fetched now and stamped `live` with the time it was fetched, and stored for the call's link unless
+ * `store` is false. Throws `CallableFunctionSourceError`.
  */
 export async function resolveCallableFunctionSources(
   fn: SourceOwner,
   deps: CallableFunctionSourceDeps = {},
-  only?: string
+  { only, store: storeLive = true }: { only?: string; store?: boolean } = {}
 ): Promise<CallableFunctionSourceRead[]> {
   const sources = (fn.sources ?? []).filter(source => only === undefined || source.name === only);
   if (sources.length === 0) return [];
@@ -190,9 +202,17 @@ export async function resolveCallableFunctionSources(
   return Promise.all(
     sources.map(async (source): Promise<CallableFunctionSourceRead> => {
       const pin = source.mode === 'pinned' ? frozen.find(entry => entry.name === source.name) : undefined;
-      if (pin) return { entry: { name: pin.name, mode: 'pinned', sha256: pin.sha256, bytes: pin.bytes } };
-      const fetched = await fetchAndStore(fn, source, resolved);
+      if (pin) {
+        return {
+          entry: { name: pin.name, mode: 'pinned', sha256: pin.sha256, bytes: pin.bytes },
+          key: callableFunctionDataKey(fn.id, pin.sha256),
+        };
+      }
+      const fetched = await fetchSource(source, resolved);
+      const key = callableFunctionLiveSourceKey(fn.id, fetched.sha256);
+      if (storeLive) await store(resolved, fetched.body, key);
       return {
+        key,
         entry: {
           name: source.name,
           mode: 'live',
@@ -216,7 +236,8 @@ export async function fetchPinnedCallableFunctionSources(
   const resolved = await resolveDeps(fn, deps);
   return Promise.all(
     pinned.map(async source => {
-      const fetched = await fetchAndStore(fn, source, resolved);
+      const fetched = await fetchSource(source, resolved);
+      await store(resolved, fetched.body, callableFunctionDataKey(fn.id, fetched.sha256));
       return {
         name: source.name,
         sha256: fetched.sha256,
@@ -227,7 +248,10 @@ export async function fetchPinnedCallableFunctionSources(
   );
 }
 
-/** One source's bytes and stamp entry for the owner's browser at `/data/<name>`, read as a call would read it. */
+/**
+ * One source's bytes and stamp entry for the owner's browser at `/data/<name>`, read as a call would read it. A live
+ * source's bytes go straight back to the browser and are not stored.
+ */
 export async function readCallableFunctionSource(
   actor: { id: string },
   functionId: string,
@@ -239,16 +263,12 @@ export async function readCallableFunctionSource(
   if (!fn.sources?.some(source => source.name === name)) throw new NotFoundError('Source not found');
   let read: CallableFunctionSourceRead | undefined;
   try {
-    [read] = await resolveCallableFunctionSources(fn, deps, name);
+    [read] = await resolveCallableFunctionSources(fn, deps, { only: name, store: false });
   } catch (error) {
     if (error instanceof CallableFunctionSourceError) throw new BadGatewayError(error.message, { code: error.code });
     throw error;
   }
   if (!read) throw new NotFoundError('Source not found');
-  const bytes =
-    read.body ??
-    (await (deps.storage ?? getCallableFunctionDataStorage()).download(
-      callableFunctionDataKey(fn.id, read.entry.sha256)
-    ));
+  const bytes = read.body ?? (await (deps.storage ?? getCallableFunctionDataStorage()).download(read.key));
   return { entry: read.entry, bytes };
 }

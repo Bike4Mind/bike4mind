@@ -487,6 +487,17 @@ describe('promotion within the budget', () => {
     expect(h.calls).toHaveLength(1);
   });
 
+  it('runs a recorded pass again on a function with sources', async () => {
+    h.fn = {
+      ...h.fn,
+      sources: [{ name: 'rates.csv', url: 'https://data.example.com/rates.csv', mode: 'live' }],
+      caseResults: recordOf([passOf(TEST_CASE)]),
+    };
+    h.results = [dispatched({ outputs: { deflection: 4 } })];
+    await promoteCallableFunction(OWNER, FUNCTION_ID, { runner });
+    expect(h.calls).toHaveLength(1);
+  });
+
   it('never reuses a recorded failure', async () => {
     h.fn = { ...h.fn, caseResults: recordOf([passOf(TEST_CASE, { passed: false, outcome: 'error' })]) };
     h.results = [dispatched({ outputs: { deflection: 5 } })];

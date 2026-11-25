@@ -575,7 +575,7 @@ describe('ownership', () => {
     await callableFunctionRepository.setSources(view.id, OWNER_KEY, read!, []);
     const storage = { deletePrefix: vi.fn(async () => 1) };
     await deleteCallableFunction(OWNER, view.id, storage as never);
-    expect(storage.deletePrefix).toHaveBeenCalledWith(`data/${view.id}/`);
+    expect(storage.deletePrefix.mock.calls).toEqual([[`data/${view.id}/`], [`data/.live/${view.id}/`]]);
     expect(await CallableFunction.countDocuments({})).toBe(0);
   });
 });

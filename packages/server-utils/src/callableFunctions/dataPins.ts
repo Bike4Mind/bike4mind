@@ -28,7 +28,13 @@ import { S3Storage } from '@bike4mind/fab-pipeline';
 import { Logger } from '@bike4mind/observability';
 import { fabFilesService, scopedSettingsService } from '@bike4mind/services';
 import { getFilesStorage } from '../utils/storage/index';
-import { callableFunctionDataKey, callableFunctionDataPrefix, callableFunctionDataStagingKey } from './dataKeys';
+import {
+  callableFunctionDataKey,
+  callableFunctionDataPrefix,
+  callableFunctionDataStagingKey,
+  callableFunctionLiveSourcePrefix,
+} from './dataKeys';
+import { CALLABLE_FUNCTION_SOURCE_LAMBDA_MAX_BYTES } from './fetchSource';
 
 /**
  * Data files pinned to a saved function: copied once by hash under the function's own prefix in the function-data
@@ -160,11 +166,15 @@ export async function resolveCallableFunctionDataLimits(user: { id: string }): P
   };
 }
 
+/** The most one source fetch can return, which each source holds of the per-function total. */
+export const callableFunctionSourceMaxBytes = (limits: CallableFunctionDataLimits): number =>
+  Math.min(limits.fileBytes, CALLABLE_FUNCTION_SOURCE_LAMBDA_MAX_BYTES);
+
 const userOwner = (actor: { id: string }) => ({ ownerType: 'user' as const, ownerKey: actor.id });
 const notFound = () => new NotFoundError('Tool not found');
 const changed = () =>
   new ConflictError('The tool changed since you opened it. Reload it and try again.', { code: 'version_changed' });
-const megabytes = (bytes: number) => `${Math.floor(bytes / MIB)} MB`;
+export const megabytes = (bytes: number) => `${Math.floor(bytes / MIB)} MB`;
 
 async function readHead(actor: { id: string }, artifactId: string) {
   const artifact = await artifactRepository.findOne({ id: artifactId, userId: actor.id });
@@ -235,7 +245,8 @@ export async function pinCallableFunctionData(
   }
 
   const limits = deps.limits ?? (await resolveCallableFunctionDataLimits(actor));
-  const pinnedBytes = pins.reduce((sum, pin) => sum + pin.bytes, 0);
+  const pinnedBytes =
+    pins.reduce((sum, pin) => sum + pin.bytes, 0) + sources.length * callableFunctionSourceMaxBytes(limits);
   const checkSize = (bytes: number) => {
     if (bytes > limits.fileBytes) {
       throw new BadRequestError(`A data file can be at most ${megabytes(limits.fileBytes)}.`, {
@@ -244,7 +255,8 @@ export async function pinCallableFunctionData(
       });
     }
     if (pinnedBytes + bytes > limits.totalBytes) {
-      throw new BadRequestError(`A tool's data files can add up to at most ${megabytes(limits.totalBytes)}.`, {
+      const total = megabytes(limits.totalBytes);
+      throw new BadRequestError(`A tool's data files and sources can add up to at most ${total}.`, {
         code: 'data_total_too_large',
         limit: limits.totalBytes,
       });
@@ -411,32 +423,35 @@ export async function signCallableFunctionDataLinks(
   return signCallableFunctionDataEntries(fn.id, fn.pin.dataPins ?? [], storage);
 }
 
-/** The same links for stored objects of one function named by hash, such as its fetched sources. */
+/** The same links for stored objects of one function named by key, such as its fetched sources. */
 export async function signCallableFunctionDataEntries(
   functionId: string,
-  entries: { name: string; sha256: string; bytes: number }[],
+  entries: { name: string; sha256: string; bytes: number; key?: string }[],
   storage?: CallableFunctionDataStorage
 ): Promise<CallableFunctionDataLink[]> {
   if (entries.length === 0) return [];
   const signer = storage ?? getCallableFunctionDataStorage();
   return Promise.all(
-    entries.map(async ({ name, sha256, bytes }) => ({
+    entries.map(async ({ name, sha256, bytes, key }) => ({
       name,
       sha256,
       bytes,
-      url: await signer.getSignedUrl(callableFunctionDataKey(functionId, sha256), 'get', {
+      url: await signer.getSignedUrl(key ?? callableFunctionDataKey(functionId, sha256), 'get', {
         expiresIn: CALLABLE_FUNCTION_DATA_LINK_SECONDS,
       }),
     }))
   );
 }
 
-/** Deletes every data object of one function. */
+/** Deletes every data object of one function, its live source fetches included. */
 export async function deleteCallableFunctionDataObjects(
   functionId: string,
   storage: CallableFunctionDataStorage = getCallableFunctionDataStorage()
 ): Promise<number> {
-  return storage.deletePrefix(callableFunctionDataPrefix(functionId));
+  return (
+    (await storage.deletePrefix(callableFunctionDataPrefix(functionId))) +
+    (await storage.deletePrefix(callableFunctionLiveSourcePrefix(functionId)))
+  );
 }
 
 /**

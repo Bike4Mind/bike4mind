@@ -395,10 +395,11 @@ describe('dispatchFunctionCall outcomes', () => {
       ]);
       const payload = runner.mock.calls[0]![0] as CallableFunctionRunPayload & { data?: { url: string }[] };
       expect(payload.data?.map(entry => entry.url)).toEqual([
-        `${ORIGIN}/data/${FUNCTION_ID}/${sha(origin)}?signed`,
+        `${ORIGIN}/data/.live/${FUNCTION_ID}/${sha(origin)}?signed`,
         `${ORIGIN}/data/${FUNCTION_ID}/${frozen.sha256}?signed`,
       ]);
-      expect(stored.get(`data/${FUNCTION_ID}/${sha(origin)}`)?.toString()).toBe(origin);
+      expect([...stored.keys()]).toEqual([`data/.live/${FUNCTION_ID}/${sha(origin)}`]);
+      expect(stored.get(`data/.live/${FUNCTION_ID}/${sha(origin)}`)?.toString()).toBe(origin);
       expect(onlyRow().dataHashes).toEqual([sha(origin), frozen.sha256]);
     });
 
@@ -431,8 +432,8 @@ describe('dispatchFunctionCall outcomes', () => {
         sources: { ...deps(), fetcher: slow },
       });
       await vi.advanceTimersByTimeAsync(20_000);
-      await expect(pending).resolves.toMatchObject({ outcome: 'timeout', reason: 'wait_exceeded' });
       expect(runner.mock.calls[0][0]).toMatchObject({ limits: { timeoutMs: 12_000 } });
+      await expect(pending).resolves.toMatchObject({ outcome: 'timeout', reason: 'wait_exceeded' });
     });
 
     it('answers source_unavailable without running when a source is refused', async () => {

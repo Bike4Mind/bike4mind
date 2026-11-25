@@ -1,8 +1,7 @@
 import { DEFAULT_LAMBDA_ENVIRONMENT } from './constants';
 
-// Fetches callable function data sources from admin-listed public origins. Deliberately no `vpc` and no `link`: it
-// reaches arbitrary public hosts, so it holds no route to private resources and no secrets. The dispatcher stores
-// what it returns (packages/server-utils/src/callableFunctions/sources.ts).
+// Fetches function data sources from admin-listed public origins, so no `vpc` and no `link`: no private route and no
+// secrets. The dispatcher stores what it returns (packages/server-utils/src/callableFunctions/sources.ts).
 export const callableFunctionSourceFetch = new sst.aws.Function('callableFunctionSourceFetch', {
   handler: 'apps/workers/src/callableFunctions/sourceFetch.handler',
   runtime: 'nodejs24.x',

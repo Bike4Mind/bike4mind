@@ -347,6 +347,33 @@ describe('CallableFunctionModel', () => {
     });
   });
 
+  describe('setSources', () => {
+    it('returns a live function to draft and drops the frozen source pins', async () => {
+      const created = await callableFunctionRepository.create(fn());
+      const sourcePin = { name: 'base.csv', sha256: 'b'.repeat(64), bytes: 8, fetchedAt: new Date(0) };
+      const live = await callableFunctionRepository.promote(
+        created.id,
+        OWNER,
+        { updatedAt: created.updatedAt },
+        {
+          seq: 1,
+          runtime: { kind: 'pyodide-server', version: '0.25.1', packages: [] },
+          lastServerRun: { at: new Date(), passed: 1, failed: 0, results: [] },
+          trustLabel: 'verified',
+          contract: created.contract,
+          sourcePins: [sourcePin],
+        }
+      );
+      expect(live).toMatchObject({ state: 'live', pin: { sourcePins: [{ name: 'base.csv' }] } });
+      const updated = await callableFunctionRepository.setSources(created.id, OWNER, { updatedAt: live!.updatedAt }, [
+        { name: 'base.csv', url: 'https://data.example.com/base.csv', mode: 'pinned' },
+      ]);
+      expect(updated?.state).toBe('draft');
+      expect(updated?.pin.sourcePins).toBeUndefined();
+      expect(updated?.trustLabel).toBeUndefined();
+    });
+  });
+
   describe('setDataPins', () => {
     it('returns a live function to draft and drops its promoted runtime and label', async () => {
       const created = await callableFunctionRepository.create(fn());

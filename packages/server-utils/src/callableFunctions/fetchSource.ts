@@ -2,13 +2,10 @@ import { createHash } from 'node:crypto';
 import { InvokeCommand, LambdaClient } from '@aws-sdk/client-lambda';
 import { PinnedFetchError, createPinnedFetch } from '@bike4mind/fab-pipeline/ssrf';
 
-/**
- * Fetches a saved function's data source outside the sandbox, through the pinned fetch remote MCP uses (configured as
- * in b4m-core/mcp/src/remote/RemoteMcpClient.ts). Shared by the web tier and the `callableFunctionSourceFetch`
- * Lambda (infra/callableFunctionSourceFetch.ts), so this file holds no database, Config, or secrets.
- */
+// A function's data source fetch, through remote MCP's pinned fetch (b4m-core/mcp/src/remote/RemoteMcpClient.ts). The
+// source fetch Lambda (infra/callableFunctionSourceFetch.ts) runs it too, so no database, Config, or secrets here.
 
-export const CALLABLE_FUNCTION_SOURCE_ERROR_CODES = [
+const CALLABLE_FUNCTION_SOURCE_ERROR_CODES = [
   'source_origin_unlisted',
   'source_blocked',
   'source_redirect_blocked',
@@ -53,7 +50,7 @@ export interface CallableFunctionSourceFetchTestOnly {
   allowLoopbackHttp?: boolean;
 }
 
-export const CALLABLE_FUNCTION_SOURCE_MAX_REDIRECTS = 3;
+const CALLABLE_FUNCTION_SOURCE_MAX_REDIRECTS = 3;
 export const CALLABLE_FUNCTION_SOURCE_TIMEOUT_MS = 15_000;
 const MAX_TIMEOUT_MS = 30_000;
 const MAX_URL_CHARS = 2048;
@@ -71,7 +68,7 @@ const MESSAGES: Record<CallableFunctionSourceErrorCode, string> = {
   source_origin_unlisted: 'The source is not on a listed data origin.',
   source_blocked: 'The source resolves to an address that is not allowed.',
   source_redirect_blocked: 'The source redirected somewhere it may not.',
-  source_too_large: 'The source is larger than the data file limit.',
+  source_too_large: 'The source is larger than the data file limit or the 4 MB a source fetch can return.',
   source_timeout: 'The source did not answer in time.',
   source_status: 'The source did not answer with its data.',
   source_failed: 'The source could not be read.',
@@ -89,11 +86,8 @@ function toSourceError(error: unknown, violation: PinnedFetchError | undefined):
   return sourceError('source_failed');
 }
 
-/**
- * One GET: refused unless the URL's origin is listed; private and internal addresses refused on every connection and
- * redirect hop; redirects only within the origin and at most three; the body capped at `maxBodyBytes`; the whole
- * request, body included, within `timeoutMs`.
- */
+// One GET on a listed origin: private addresses refused on every connection, at most three same-origin redirects,
+// the body within `maxBodyBytes`, and the whole request within `timeoutMs`.
 export async function fetchCallableFunctionSource(
   request: CallableFunctionSourceFetchRequest,
   testOnly: CallableFunctionSourceFetchTestOnly = {}
@@ -140,7 +134,7 @@ export async function fetchCallableFunctionSource(
 }
 
 /** Names the fetch Lambda; when unset, sources are fetched in this process (tests, local development, self-host). */
-export const CALLABLE_FUNCTION_SOURCE_FETCH_NAME_ENV = 'CALLABLE_FUNCTION_SOURCE_FETCH_FUNCTION_NAME';
+const CALLABLE_FUNCTION_SOURCE_FETCH_NAME_ENV = 'CALLABLE_FUNCTION_SOURCE_FETCH_FUNCTION_NAME';
 
 /** What one Lambda reply carries once base64 encoded, under the 6 MB synchronous response limit. */
 export const CALLABLE_FUNCTION_SOURCE_LAMBDA_MAX_BYTES = 4 * 1024 * 1024;

@@ -532,9 +532,12 @@ export async function dispatchFunctionCall(
     }
     // Fetched outside the sandbox before the run, so the runtime keeps its closed network and reads them as files.
     let sources: CallableFunctionStampData[] = [];
+    let sourceKeys: string[] = [];
     if (fn.sources?.length) {
       try {
-        sources = (await resolveCallableFunctionSources(fn, options.sources)).map(read => read.entry);
+        const reads = await resolveCallableFunctionSources(fn, options.sources);
+        sources = reads.map(read => read.entry);
+        sourceKeys = reads.map(read => read.key);
       } catch (error) {
         Logger.error('[CALLABLE_FUNCTION_SOURCE_FAILED]', describeRunnerError(error));
         const errorClass = error instanceof CallableFunctionSourceError ? error.code : undefined;
@@ -554,7 +557,11 @@ export async function dispatchFunctionCall(
       try {
         const links = [
           ...(pins.length > 0 ? await (options.signData ?? signCallableFunctionDataLinks)(fn) : []),
-          ...(await signCallableFunctionDataEntries(fn.id, sources, options.sources?.storage)),
+          ...(await signCallableFunctionDataEntries(
+            fn.id,
+            sources.map((entry, index) => ({ ...entry, key: sourceKeys[index] })),
+            options.sources?.storage
+          )),
         ];
         data = links.map(link => ({ ...link, prefix: fn.id }));
       } catch (error) {
