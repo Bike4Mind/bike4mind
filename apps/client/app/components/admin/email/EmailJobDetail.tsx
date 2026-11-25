@@ -478,7 +478,12 @@ export default function EmailJobDetail({ jobId, onBack }: EmailJobDetailProps) {
       <EmptyState
         title="No recipients found"
         action={
-          <Button variant="outlined" onClick={handlePreviewRecipients} data-testid={`${testId}-refresh-btn`}>
+          <Button
+            variant="outlined"
+            onClick={handlePreviewRecipients}
+            loading={previewRecipientsMutation.isPending}
+            data-testid={`${testId}-refresh-btn`}
+          >
             Refresh recipients
           </Button>
         }
@@ -762,7 +767,8 @@ export default function EmailJobDetail({ jobId, onBack }: EmailJobDetailProps) {
                         getRowId={getRecipientId}
                         pagination={false}
                         framed={false}
-                        maxHeight="20rem"
+                        // At most five rows, so the table never needs its own scroll box.
+                        maxHeight="none"
                         // The form column is a fixed half of the page, so the table squeezes to fit it.
                         minWidth="0"
                         onRetry={handlePreviewRecipients}
