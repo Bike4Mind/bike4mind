@@ -54,6 +54,7 @@ describe('/api/jupyter/execute', () => {
   let mockReq: {
     body: Record<string, unknown>;
     user: { id: string } | null;
+    logger: Record<string, Mock>;
   };
   let mockRes: {
     status: Mock;
@@ -76,6 +77,7 @@ describe('/api/jupyter/execute', () => {
     mockReq = {
       body: {},
       user: { id: 'user-123' },
+      logger: { error: vi.fn(), warn: vi.fn(), info: vi.fn() },
     };
 
     mockRes = {

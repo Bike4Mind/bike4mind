@@ -361,10 +361,6 @@ const handler = baseApi()
   .post(async (req, res) => {
     const newFeedbackData = CreateFeedbackRequestSchema.parse(req.body);
     const authenticated = req.isAuthenticated();
-    if (authenticated) {
-      console.log('Authenticated');
-    }
-
     const {
       userId,
       content,
@@ -528,7 +524,6 @@ const handler = baseApi()
 
     let slack: FeedbackChannelDelivery;
     if (getSettingsValue('EnableFeedBackToSlack', settings)) {
-      console.log('Sending feedback to Slack is enabled');
       slack = await postFeedbackToSlack({
         type: type || 'CS',
         organization,
@@ -561,8 +556,6 @@ const handler = baseApi()
       );
     } else {
       const feedbackEmails = emailRoute.recipients;
-      console.log(`Sending feedback to all of these folks: ${feedbackEmails}`);
-      console.log('Sending feedback to email is enabled');
       // Content is sanitized from truncatedContent (not the raw request body) so the email
       // never carries more text than the reporter was told was saved - see the create-response
       // comment below for why the same truncated string is used everywhere.

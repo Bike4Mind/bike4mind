@@ -57,7 +57,7 @@ const handler = adminApi({
         return res.status(400).json({ success: false, error: error.message });
       }
 
-      console.error('Error sending test email:', error);
+      req.logger.error('Error sending test email', { error });
       return res.status(500).json({
         success: false,
         // A rejected Lambda invoke carries raw AWS SDK text, so it stays in the log above.

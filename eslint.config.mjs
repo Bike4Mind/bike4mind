@@ -884,6 +884,13 @@ export default defineConfig([
     rules: { 'no-console': 'error' },
   },
 
+  // API routes log through req.logger (or a module Logger), same rationale as the server-utils block above.
+  {
+    files: ['apps/client/pages/api/**/*.{ts,tsx}'],
+    ignores: ['**/*.{test,spec}.{ts,tsx}', '**/__tests__/**', '**/__test__/**'],
+    rules: { 'no-console': 'error' },
+  },
+
   // The stdio MCP servers use stdout as the JSON-RPC channel, so log through shared/stderrLog instead.
   {
     files: ['b4m-core/mcp/src/**/*.{ts,mts,cts}'],
