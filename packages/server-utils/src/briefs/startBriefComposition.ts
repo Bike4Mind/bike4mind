@@ -154,7 +154,6 @@ const defaultScheduledDeps: ScheduledBriefDeps = {
     );
     return sections.some(items => items.length > 0);
   },
-  notifyHeldRuns: (userId, block) => notifyHeldBlockRuns(userId, block),
 };
 
 /**
@@ -250,6 +249,7 @@ const defaultBlockDeps: BlockBriefDeps = {
     );
     return sections.some(items => items.length > 0);
   },
+  notifyHeldRuns: (userId, block) => notifyHeldBlockRuns(userId, block),
 };
 
 /**

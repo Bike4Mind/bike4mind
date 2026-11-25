@@ -1,7 +1,6 @@
 import type { PushNotificationEvent } from '@bike4mind/common';
 import { agentExecutionRepository, type BusyBlockInterval } from '@bike4mind/database';
 import { Logger } from '@bike4mind/observability';
-import { publishPushNotification } from '../utils/pushNotifications';
 
 const logger = new Logger({ metadata: { service: 'notifyHeldBlockRuns' } });
 
@@ -13,7 +12,9 @@ export type HeldBlockRunsDeps = {
 
 const defaultDeps: HeldBlockRunsDeps = {
   runs: agentExecutionRepository,
-  push: event => publishPushNotification(event, logger),
+  // Lazy: pushNotifications reads SST config at load, and startBriefComposition (imported by SST-less
+  // tests) imports this module.
+  push: async event => (await import('../utils/pushNotifications')).publishPushNotification(event, logger),
   logger,
 };
 
