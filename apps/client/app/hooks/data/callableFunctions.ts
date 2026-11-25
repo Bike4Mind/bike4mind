@@ -4,13 +4,16 @@ import { isAxiosError } from 'axios';
 import type {
   CallableFunctionCallSummary,
   CallableFunctionExample,
+  CallableFunctionGrantVisibility,
   CallableFunctionSlugHolder,
   FunctionContract,
   FunctionContractChange,
   FunctionContractProblem,
   ICallableFunctionPublic,
+  ICallableFunctionShared,
   McpToolApprovalMode,
 } from '@bike4mind/common';
+import type { CallableFunctionShareView } from '@pages/api/callable-functions/[id]/grants';
 import type { CallableFunctionsStatus } from '@pages/api/callable-functions/status';
 import type { CallableFunctionTestRun } from '@pages/api/callable-functions/[id]/test-run';
 import type { CallableFunctionPromotion } from '@pages/api/callable-functions/[id]/promote';
@@ -251,6 +254,71 @@ export function useCallableFunctionCalls(id: string) {
     queryKey: callsQueryKey(id),
     queryFn: async () =>
       (await api.get<CallableFunctionCallSummary>(`${COLLECTION}/${encodeURIComponent(id)}/calls`)).data,
+  });
+}
+
+const shareQueryKey = (id: string) => [...CALLABLE_FUNCTIONS_LIST_QUERY_KEY, id, 'grants'] as const;
+
+/**
+ * The owner's share of the tool: its grants and the named people's names. Not kept once nothing watches it: the share
+ * dialog seeds its form from this once, so a cached copy from before a save would be saved back over it.
+ */
+export function useCallableFunctionShare(id: string, enabled = true) {
+  return useQuery({
+    queryKey: shareQueryKey(id),
+    queryFn: async () =>
+      (await api.get<CallableFunctionShareView>(`${COLLECTION}/${encodeURIComponent(id)}/grants`)).data,
+    enabled,
+    gcTime: 0,
+  });
+}
+
+/**
+ * Removes the cached share after a save instead of refetching it: a refetch in flight keeps the query alive past
+ * `gcTime: 0`, so a dialog reopened meanwhile would seed its form from the pre-save share.
+ */
+function useDropShare() {
+  const queryClient = useQueryClient();
+  return (id: string) => queryClient.removeQueries({ queryKey: shareQueryKey(id) });
+}
+
+export interface CallableFunctionShareInput {
+  visibility: CallableFunctionGrantVisibility;
+  projectId?: string;
+  organizationId?: string;
+  userIds: string[];
+}
+
+/** Replaces the tool's share; only a live tool can be shared. */
+export const useShareCallableFunction = () => {
+  const invalidate = useInvalidateCallableFunctions();
+  const dropShare = useDropShare();
+  return useMutation({
+    mutationFn: async ({ id, ...share }: CallableFunctionShareInput & { id: string }) =>
+      (await api.put<ICallableFunctionPublic>(`${COLLECTION}/${encodeURIComponent(id)}/grants`, share)).data,
+    onSuccess: (_fn, { id }) => dropShare(id),
+    onSettled: invalidate,
+  });
+};
+
+export const useStopSharingCallableFunction = () => {
+  const invalidate = useInvalidateCallableFunctions();
+  const dropShare = useDropShare();
+  return useMutation({
+    mutationFn: async (id: string) =>
+      (await api.delete<ICallableFunctionPublic>(`${COLLECTION}/${encodeURIComponent(id)}/grants`)).data,
+    onSuccess: (_fn, id) => dropShare(id),
+    onSettled: invalidate,
+  });
+};
+
+/** Tools other people shared with this person, each pending review. */
+export function useSharedCallableFunctions() {
+  const hasAccessToken = useAccessToken(s => !!s.accessToken);
+  return useQuery({
+    queryKey: [...CALLABLE_FUNCTIONS_LIST_QUERY_KEY, 'shared'],
+    queryFn: async () => (await api.get<ICallableFunctionShared[]>(`${COLLECTION}/shared`)).data,
+    enabled: hasAccessToken,
   });
 }
 

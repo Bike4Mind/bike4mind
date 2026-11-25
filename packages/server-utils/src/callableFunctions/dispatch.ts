@@ -34,6 +34,7 @@ import {
   type CallableFunctionRunner,
   type CallableFunctionTenant,
 } from './runtimeRunner';
+import { canCallFunction } from './sharing';
 
 /**
  * The one way a saved function runs: every surface (the test run now; REST, chat, agent runs, and MCP later) calls
@@ -48,6 +49,7 @@ export type CallableFunctionDispatchReason =
   | 'setting_off'
   | 'not_found'
   | 'not_caller'
+  | 'pending_review'
   | 'disabled'
   | 'source_deleted'
   | 'not_live'
@@ -379,10 +381,10 @@ export async function recordCallableFunctionRefusal(
 }
 
 /**
- * Checks, in order, the setting, the record, the caller (the owner only), the status, the input size, and the
- * inputs, then runs the pinned code, checks the outputs, and stamps the result. Every path, a throw included, writes
- * one call-log row with hashes and sizes only. Another owner's function answers `not_found`, as a missing one does;
- * only the row says `not_caller`.
+ * Checks, in order, the setting, the record, the caller (`canCallFunction`; a recipient is refused as pending
+ * review), the status, the input size, and the inputs, then runs the pinned code, checks the outputs, and stamps the
+ * result. Every path, a throw included, writes one call-log row with hashes and sizes only. A function the caller
+ * cannot call answers `not_found`, as a missing one does; only the row says `not_caller`.
  */
 export async function dispatchFunctionCall(
   request: DispatchFunctionCallRequest,
@@ -416,9 +418,10 @@ export async function dispatchFunctionCall(
     row.codeHash = fn.pin.contentHash;
     if (fn.pin.seq !== undefined) row.pinSeq = fn.pin.seq;
 
-    if (fn.ownerType !== 'user' || fn.ownerKey !== caller.id) {
-      return finish({ outcome: 'refused', reason: 'not_found' }, 'not_caller');
-    }
+    const access = await canCallFunction(caller, fn);
+    if (!access) return finish({ outcome: 'refused', reason: 'not_found' }, 'not_caller');
+    // A recipient calls only after reviewing the shared function, which no surface offers yet.
+    if (access !== 'owner') return refuse('pending_review');
 
     const status = effectiveCallableFunctionStatus(fn, await readHead(fn));
     if (status === 'disabled' || status === 'source_deleted') return refuse(status);

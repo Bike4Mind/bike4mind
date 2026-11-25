@@ -1,10 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import {
+  CALLABLE_FUNCTION_PROTECTED_FIELDS,
   CALLABLE_FUNCTION_SLUG_PATTERN,
+  CallableFunctionGrantVisibilitySchema,
   callableFunctionTrustLabel,
   effectiveCallableFunctionStatus,
   toCallableFunctionDetail,
   toCallableFunctionPublic,
+  toCallableFunctionShared,
   type ICallableFunctionDocument,
 } from './CallableFunctionTypes';
 import type { FunctionContract } from '../../schemas/functionContract';
@@ -83,6 +86,7 @@ describe('toCallableFunctionPublic', () => {
         'description',
         'enabled',
         'examples',
+        'grants',
         'id',
         'latestVersion',
         'pin',
@@ -131,6 +135,37 @@ describe('toCallableFunctionPublic', () => {
       latestVersion: null,
       updateAvailable: false,
     });
+  });
+});
+
+describe('sharing', () => {
+  const grants = {
+    visibility: 'project' as const,
+    projectId: 'project-1',
+    userIds: ['user-2'],
+  };
+
+  it('shows the owner the grants', () => {
+    expect(toCallableFunctionPublic(doc(), { version: 2 }).grants).toBeNull();
+    expect(toCallableFunctionPublic(doc({ grants }), { version: 2 }).grants).toEqual(grants);
+  });
+
+  it('shows a recipient no code, artifact, examples, grants, or owner fields, and always pending review', () => {
+    const view = toCallableFunctionShared(
+      doc({ state: 'live', trustLabel: 'verified', grants, pin: { ...doc().pin, seq: 2 } }),
+      'project'
+    );
+    expect(Object.keys(view).sort()).toEqual(
+      ['description', 'id', 'pin', 'sharedVia', 'slug', 'status', 'trustLabel', 'updatedAt'].sort()
+    );
+    expect(Object.keys(view.pin).sort()).toEqual(['pinnedAt', 'seq', 'version']);
+    expect(view).toMatchObject({ status: 'pending_review', sharedVia: 'project', trustLabel: 'verified' });
+    expect(JSON.stringify(view)).not.toMatch(/def run|artifact-1|user-2/);
+  });
+
+  it('has no public rung and protects the grants', () => {
+    expect(CallableFunctionGrantVisibilitySchema.options).toEqual(['private', 'project', 'organization']);
+    expect(CALLABLE_FUNCTION_PROTECTED_FIELDS).toContain('grants');
   });
 });
 

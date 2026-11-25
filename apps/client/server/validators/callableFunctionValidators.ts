@@ -1,4 +1,10 @@
-import { CALLABLE_FUNCTION_EXAMPLE_LIMITS, FUNCTION_CONTRACT_LIMITS, MCP_TOOL_APPROVAL_MODES } from '@bike4mind/common';
+import {
+  CALLABLE_FUNCTION_EXAMPLE_LIMITS,
+  CALLABLE_FUNCTION_GRANT_LIMITS,
+  CallableFunctionGrantVisibilitySchema,
+  FUNCTION_CONTRACT_LIMITS,
+  MCP_TOOL_APPROVAL_MODES,
+} from '@bike4mind/common';
 import { z } from 'zod';
 
 // Bodies of pages/api/callable-functions/**. `.strict()` everywhere: the hash, the pin, the name, the state, and
@@ -67,6 +73,16 @@ export const callableFunctionExamplesBodySchema = z
           .strict()
       )
       .max(CALLABLE_FUNCTION_EXAMPLE_LIMITS.maxExamples),
+  })
+  .strict();
+
+/** The whole share, replaced at once; the registry checks the owner belongs to the project or organization named. */
+export const callableFunctionGrantsBodySchema = z
+  .object({
+    visibility: CallableFunctionGrantVisibilitySchema,
+    projectId: z.string().trim().min(1).max(64).optional(),
+    organizationId: z.string().trim().min(1).max(64).optional(),
+    userIds: z.array(z.string().trim().min(1).max(64)).max(CALLABLE_FUNCTION_GRANT_LIMITS.maxUserIds),
   })
   .strict();
 
