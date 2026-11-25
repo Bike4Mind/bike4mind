@@ -970,6 +970,29 @@ describe('modes', () => {
   });
 });
 
+describe('Studio mode', () => {
+  it('keeps a Studio session Studio across a fresh read, with no project', async () => {
+    const { store, directory } = await freshStore();
+    const created = await store.create(MODEL, { mode: 'studio' });
+    expect(created.mode).toBe('studio');
+
+    const reopened = new SessionStore(directory, MODEL);
+    const read = await reopened.get(created.id);
+    expect(read?.mode).toBe('studio');
+    expect(read?.project).toBeUndefined();
+    expect((await reopened.list()).find(entry => entry.id === created.id)?.mode).toBe('studio');
+  });
+
+  it('reads a mode it does not know as Chat', async () => {
+    const { store, directory } = await freshStore();
+    const created = await store.create(MODEL);
+    const file = join(directory, `${created.id}.json`);
+    const raw = JSON.parse(await readFile(file, 'utf8')) as Record<string, unknown>;
+    await writeFile(file, JSON.stringify({ ...raw, mode: 'agents' }), 'utf8');
+    expect((await new SessionStore(directory, MODEL).get(created.id))?.mode).toBe('chat');
+  });
+});
+
 describe('prompt cache TTL', () => {
   const MODEL = 'claude-opus-5-5';
 

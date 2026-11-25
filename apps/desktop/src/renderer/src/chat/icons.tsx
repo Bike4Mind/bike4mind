@@ -910,3 +910,32 @@ export function RecordIcon() {
     </Glyph>
   );
 }
+
+/** The place rail's glyphs: 17px, one size up from the sidebar's, per the rail spec. */
+const RAIL_GLYPH = 17;
+
+export function RailChatIcon() {
+  return (
+    <Glyph size={RAIL_GLYPH}>
+      <path d="M13.5 7.5c0 2.5-2.5 4.5-5.5 4.5a6.5 6.5 0 0 1-2-.3L3 13l.8-2.5a4.2 4.2 0 0 1-1.3-3C2.5 5 5 3 8 3s5.5 2 5.5 4.5z" />
+    </Glyph>
+  );
+}
+
+export function RailCodeIcon() {
+  return (
+    <Glyph size={RAIL_GLYPH}>
+      <path d="M5.5 4.5 2 8l3.5 3.5M10.5 4.5 14 8l-3.5 3.5" />
+    </Glyph>
+  );
+}
+
+/** A four-point spark: making something, rather than any one medium. */
+export function RailStudioIcon() {
+  return (
+    <Glyph size={RAIL_GLYPH}>
+      <path d="M8 2.5c.4 2.6 1.9 4.1 4.5 4.5-2.6.4-4.1 1.9-4.5 4.5-.4-2.6-1.9-4.1-4.5-4.5 2.6-.4 4.1-1.9 4.5-4.5z" />
+      <path d="M12.5 11v2.5M11.25 12.25h2.5" />
+    </Glyph>
+  );
+}

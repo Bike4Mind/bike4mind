@@ -12,7 +12,7 @@ import { clearLastSession } from './lastSession';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
-vi.mock('./CustomizePanel', () => ({ CustomizeNavItem: () => null, CustomizeScreen: () => null }));
+vi.mock('./CustomizePanel', () => ({ CustomizeScreen: () => null, useCustomizeAttention: () => undefined }));
 // Only its send matters here, and its pickers and menus are a good share of every render.
 vi.mock('./Composer', () => ({
   Composer: ({ onSend }: { onSend: (text: string) => void }) => (

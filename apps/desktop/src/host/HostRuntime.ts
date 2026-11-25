@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import { ChatModels } from '@bike4mind/common';
-import type { ChatApprovalAnswer, SendMessageRequest } from '@shared/chat';
+import type { ChatApprovalAnswer, ChatSessionMode, SendMessageRequest } from '@shared/chat';
 import { ApprovalModePreference } from '../main/chat/ApprovalModePreference';
 import { ChatService, type ChatServiceDeps, type ChatServiceLogger } from '../main/chat/ChatService';
 import { createCompletionRunMinter } from '../main/chat/completionRuns';
@@ -254,8 +254,8 @@ export class HostRuntime {
     return this.service.getSession(sessionId, viewed);
   }
 
-  createSession() {
-    return this.service.createSession();
+  createSession(mode?: Exclude<ChatSessionMode, 'code'>) {
+    return this.service.createSession(mode);
   }
 
   renameSession(sessionId: string, title: string) {

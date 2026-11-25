@@ -12,6 +12,7 @@ import type { AttentionOpenEvent } from '@shared/attention';
 import type { AuthState } from '@shared/auth';
 import { DEFAULT_PROMPT_CACHE_TTL, type PromptCacheTtl } from '@bike4mind/common';
 import type { ChatArtifact, ChatModelOption, ChatSessionMode, ChatSessionSummary } from '@shared/chat';
+import type { StudioMediaKind } from '@shared/studio';
 import { promptHistory } from '@shared/threadRewind';
 import type { SkillMarketListingRef } from '@shared/skillMarket';
 import type { SkillsScope } from '@shared/skills';
@@ -47,7 +48,20 @@ import { readBrowserPaneOpen, writeBrowserPaneOpen } from './agentBrowser';
 import { ApprovalModePill } from './ApprovalModePill';
 import { Composer } from './Composer';
 import { useLoop } from './LoopBar';
-import { CustomizeNavItem, CustomizeScreen } from './CustomizePanel';
+import { CustomizeScreen, useCustomizeAttention } from './CustomizePanel';
+import { PlaceRail, type RailAccountContext } from './rail/PlaceRail';
+import {
+  isSessionPlace,
+  readPlaceMemory,
+  writePlaceMemory,
+  type Place,
+  type SessionPlace,
+  type StudioArea,
+} from './rail/places';
+import { STUDIO_STARTING, useStudioSession } from './rail/studioSession';
+import { usePlaceShortcuts } from './rail/shortcuts';
+import { StudioMain, StudioSidebar } from './rail/StudioPlace';
+import { readSidebarWidth } from './sidebarWidth';
 import type { ModelsInUse } from '../models/InstalledTab';
 import type { ComposerFill } from './composerInput';
 import { ModelsScreen } from '../models/ModelsScreen';
@@ -226,14 +240,13 @@ function SessionHeader({ title, onRename }: { title: string; onRename: (title: s
 type ChatScreen = 'conversation' | 'artifacts' | 'mission-control' | 'customize' | 'skill-market' | 'models';
 
 /**
- * The sidebar's account strip, given the dot that says whether a reply is running.
+ * The rail's account slot, given the turn dot and the screens this shell owns.
  *
- * A function rather than a node because the two halves are owned in different places: this
- * component knows the turn state, and the account strip knows where a glyph goes in its own
- * row. Handing the finished dot down keeps both where they belong - see TurnDot.
+ * A function rather than a node because the halves are owned in different places: this
+ * component knows the turn state and its screens, and the slot knows the account and the
+ * routes. Handing them down keeps both where they belong - see TurnDot.
  */
-/** `spentAt` ticks when a turn settles, for anything in the strip that reads the balance. */
-export type AccountStrip = (status: ReactNode, spentAt: number) => ReactNode;
+export type AccountStrip = (context: RailAccountContext) => ReactNode;
 
 /** How long the first-run tavern intro plays before it is marked seen (ms). */
 const ORCHESTRATOR_INTRO_MS = 1500;
@@ -282,6 +295,7 @@ export function ChatShell({
     sessions,
     loading,
     reload,
+    createStudio,
     creatingCode,
     codeError,
     clearCodeError,
@@ -306,9 +320,22 @@ export function ChatShell({
   } = useSidebarSections();
   const [activeId, setActiveId] = useState<string | null>(null);
   const [remembered] = useState(readLastSession);
-  const [mode, setMode] = useState<ChatSessionMode>(remembered?.mode ?? 'chat');
+  const [placeMemory] = useState(readPlaceMemory);
+  const [place, setPlace] = useState<Place>(placeMemory?.place ?? remembered?.mode ?? 'chat');
+  // The session mode the list filters by and New starts. A session place sets it; Studio leaves
+  // it alone, so the conversation open underneath stays open for the return trip.
+  const [mode, setModeOnly] = useState<SessionPlace>(
+    placeMemory && isSessionPlace(placeMemory.place) ? placeMemory.place : (remembered?.mode ?? 'chat')
+  );
+  /** Opening a session in a mode takes the user to that mode's place. */
+  const setMode = useCallback((next: SessionPlace) => {
+    setModeOnly(next);
+    setPlace(next);
+  }, []);
   const onRestore = useCallback((session: ChatSessionSummary | null) => {
-    setMode(session?.mode ?? 'chat');
+    const restoredMode = session && isSessionPlace(session.mode) ? session.mode : 'chat';
+    setModeOnly(current => (session ? restoredMode : current));
+    setPlace(current => (current === 'studio' || !session ? current : restoredMode));
     if (session) setActiveId(session.id);
   }, []);
   const restoring = useLastSession({ remembered, loading, sessions, activeId, onRestore });
@@ -403,6 +430,9 @@ export function ChatShell({
   useModelBackgroundBuilds(persistedId, darkMode);
   const [modelOpen, setModelOpen] = useState(false);
   const [studioOpen, setStudioOpen] = useState(false);
+  const [studioArea, setStudioArea] = useState<StudioArea>(placeMemory?.studio ?? 'create');
+  const [studioKind, setStudioKind] = useState<StudioMediaKind | null>(null);
+  const inStudio = place === 'studio';
   const [studioRegion, studioWidth] = useElementWidth();
   const studioContainer = useRef<HTMLDivElement | null>(null);
   const setStudioRegion = useCallback(
@@ -413,7 +443,18 @@ export function ChatShell({
     [studioRegion]
   );
   const studioAccountKey = `${auth?.environment.url ?? ''}:${auth?.user?.id ?? ''}:${auth?.status ?? ''}`;
-  const liveStudio = useStudioController(persistedId, studioOpen && !suppliedStudio, studioAccountKey);
+  // The Studio place saves into its own session; the pane beside a conversation saves into that one.
+  const studioSession = useStudioSession({
+    active: inStudio,
+    loading,
+    sessions,
+    remembered: placeMemory?.studioSession ?? null,
+    create: createStudio,
+  });
+  const studioSelect = studioSession.select;
+  const studioTarget = inStudio ? studioSession.sessionId : persistedId;
+  const studioPlaceReason = studioSession.error ?? (studioSession.sessionId ? undefined : STUDIO_STARTING);
+  const liveStudio = useStudioController(studioTarget, (studioOpen || inStudio) && !suppliedStudio, studioAccountKey);
   const studio = suppliedStudio ?? liveStudio;
   // Per conversation rather than one flag: see terminalPanelState.ts.
   const [terminalSessions, setTerminalSessions] = useState(readTerminalOpenSessions);
@@ -529,12 +570,19 @@ export function ChatShell({
     (sessionId: string) => {
       // History search spans both modes, so the owning mode follows the selected result.
       const selected = sessions.find(session => session.id === sessionId);
-      if (selected) setMode(selected.mode);
       setScreen('conversation');
+      // A Studio session is never a conversation in the list: it opens as the Studio place's Create.
+      if (selected?.mode === 'studio') {
+        studioSelect(selected.id);
+        setStudioArea('create');
+        setPlace('studio');
+        return;
+      }
+      if (selected) setMode(selected.mode);
       setActiveId(sessionId);
       markSessionViewed(sessionId);
     },
-    [sessions]
+    [sessions, studioSelect]
   );
 
   const terminalOpen = !!activeId && terminalSessions.includes(activeId);
@@ -1230,7 +1278,7 @@ export function ChatShell({
       // Reread before opening it: the shell reselects away from an open session the list lacks.
       await reload();
       if (activeIdRef.current !== origin) return;
-      setMode(result.session.mode);
+      if (isSessionPlace(result.session.mode)) setMode(result.session.mode);
       setScreen('conversation');
       setActiveId(result.session.id);
       setComposerFocus(request => request + 1);
@@ -1283,6 +1331,57 @@ export function ChatShell({
       session.mode === mode && (importedInline || !isUntouchedImport(session));
     setActiveId(sessions.find(candidate)?.id ?? null);
   }, [settling, activeId, sessions, mode, importedInline, draftActive, sessionDraft.session?.mode, screen]);
+
+  // The last session open in each session place, so returning to Chat or Code lands where the
+  // user left it rather than on the most recent row. Stored with the place itself; see places.ts.
+  const placeItems = useRef<{ chat?: string; code?: string }>({ chat: placeMemory?.chat, code: placeMemory?.code });
+  const activeSessionMode = sessions.find(session => session.id === activeId)?.mode;
+  useEffect(() => {
+    if (activeId && activeSessionMode && isSessionPlace(activeSessionMode))
+      placeItems.current[activeSessionMode] = activeId;
+    writePlaceMemory({
+      place,
+      ...placeItems.current,
+      studio: studioArea,
+      ...(studioSession.sessionId ? { studioSession: studioSession.sessionId } : {}),
+    });
+  }, [place, activeId, activeSessionMode, studioArea, studioSession.sessionId]);
+
+  const selectPlace = useCallback(
+    (next: Place) => {
+      setScreen('conversation');
+      setPlace(next);
+      if (!isSessionPlace(next)) return;
+      setModeOnly(next);
+      if (activeSessionMode === next) return;
+      // Left unset, the reselect effect above opens the place's most recent session instead.
+      const rememberedId = placeItems.current[next];
+      const target = sessions.find(
+        session => session.id === rememberedId && session.mode === next && !session.archived
+      );
+      if (target) setActiveId(target.id);
+    },
+    [sessions, activeSessionMode]
+  );
+  usePlaceShortcuts({ onPlace: selectPlace, onToggleSidebar: () => setCollapsed(current => !current) });
+
+  /**
+   * A rail click also drives the sidebar, so a collapsed one is always a click away: any icon
+   * reopens it, and the active place's icon hides it again. The digit shortcuts only switch place.
+   */
+  const selectPlaceFromRail = (next: Place) => {
+    if (collapsed) {
+      setCollapsed(false);
+      selectPlace(next);
+      return;
+    }
+    if (next === place && screen === 'conversation') {
+      setCollapsed(true);
+      return;
+    }
+    selectPlace(next);
+  };
+  const customizeAttention = useCustomizeAttention();
 
   /** First-run and explicit New share the renderer-only draft lifecycle. */
   const startSession = useCallback(
@@ -1685,51 +1784,81 @@ export function ChatShell({
         </Box>
       )}
 
-      <SessionList
-        sessions={sessions}
-        mode={mode}
-        onModeChange={setMode}
-        loading={loading}
-        activeId={selectedRosterId ?? activeId}
-        statuses={statuses}
-        prSummaries={prSummaries}
-        collapsed={collapsed}
-        onToggleCollapsed={() => setCollapsed(current => !current)}
-        onSelect={selectSidebarSession}
-        onCreate={() => void onCreate()}
-        onOpenArtifacts={() => setScreen('artifacts')}
-        onOpenMissionControl={() => setScreen('mission-control')}
-        onCreateInProject={directory => void onCreateInProject(directory)}
-        onCreateInSection={sectionId => void onCreateInSection(sectionId)}
-        onDelete={setDeleteSessionId}
-        onTogglePin={session => void togglePin(session)}
-        onToggleArchived={session => void toggleArchived(session)}
-        onRename={(session, title) => void rename(session, title)}
-        onDownload={session => void exportSession(session)}
-        downloadError={exportError}
-        onDismissDownloadError={clearExportError}
-        renameError={renameError}
-        onDismissRenameError={clearRenameError}
-        userSections={userSections}
-        sectionActions={sectionActions}
-        sectionError={sectionError}
-        onDismissSectionError={dismissSectionError}
-        customize={<CustomizeNavItem onOpen={() => setScreen('customize')} />}
-        onOpenModels={() => setScreen('models')}
-        syncHints={
-          onOpenImportSettings
-            ? (empty, fallback) => (
-                <SidebarSyncHints empty={empty} fallback={fallback} onOpenSettings={onOpenImportSettings} />
-              )
-            : undefined
-        }
-        footer={account?.(
-          <TurnDot
-            state={turnState({ streaming: turnOpen, disabled: !activeId || creatingCode, notReady: unbound })}
-          />,
-          conversation.settledTurns
-        )}
+      <PlaceRail
+        place={place}
+        sidebarCollapsed={collapsed}
+        onSelect={selectPlaceFromRail}
+        account={account?.({
+          status: (
+            <TurnDot
+              state={turnState({ streaming: turnOpen, disabled: !activeId || creatingCode, notReady: unbound })}
+            />
+          ),
+          spentAt: conversation.settledTurns,
+          customizeAttention,
+          onOpenCustomize: () => setScreen('customize'),
+          onOpenModels: () => setScreen('models'),
+        })}
       />
+
+      {inStudio ? (
+        !collapsed && (
+          <StudioSidebar
+            width={readSidebarWidth()}
+            area={studioArea}
+            kind={studioKind}
+            controller={studio && studio.sessionId === studioSession.sessionId ? studio : undefined}
+            unavailableReason={studioPlaceReason}
+            onSelectKind={kind => {
+              setScreen('conversation');
+              setStudioArea('create');
+              setStudioKind(kind);
+            }}
+            onSelectArea={area => {
+              setScreen('conversation');
+              setStudioArea(area);
+            }}
+            onToggleCollapsed={() => setCollapsed(current => !current)}
+          />
+        )
+      ) : (
+        <SessionList
+          sessions={sessions}
+          mode={mode}
+          loading={loading}
+          activeId={selectedRosterId ?? activeId}
+          statuses={statuses}
+          prSummaries={prSummaries}
+          collapsed={collapsed}
+          onToggleCollapsed={() => setCollapsed(current => !current)}
+          onSelect={selectSidebarSession}
+          onCreate={() => void onCreate()}
+          onOpenArtifacts={() => setScreen('artifacts')}
+          onOpenMissionControl={() => setScreen('mission-control')}
+          onCreateInProject={directory => void onCreateInProject(directory)}
+          onCreateInSection={sectionId => void onCreateInSection(sectionId)}
+          onDelete={setDeleteSessionId}
+          onTogglePin={session => void togglePin(session)}
+          onToggleArchived={session => void toggleArchived(session)}
+          onRename={(session, title) => void rename(session, title)}
+          onDownload={session => void exportSession(session)}
+          downloadError={exportError}
+          onDismissDownloadError={clearExportError}
+          renameError={renameError}
+          onDismissRenameError={clearRenameError}
+          userSections={userSections}
+          sectionActions={sectionActions}
+          sectionError={sectionError}
+          onDismissSectionError={dismissSectionError}
+          syncHints={
+            onOpenImportSettings
+              ? (empty, fallback) => (
+                  <SidebarSyncHints empty={empty} fallback={fallback} onOpenSettings={onOpenImportSettings} />
+                )
+              : undefined
+          }
+        />
+      )}
 
       {screen !== 'conversation' && updateNotice}
       {screen === 'artifacts' ? (
@@ -1764,6 +1893,16 @@ export function ChatShell({
           sessionId={activeId}
           onClose={() => setScreen('conversation')}
           onOpenSkillMarket={openSkillMarket}
+        />
+      ) : inStudio ? (
+        <StudioMain
+          area={studioArea}
+          onAreaChange={setStudioArea}
+          kind={studioKind}
+          onKindChange={setStudioKind}
+          controller={studio && studio.sessionId === studioSession.sessionId ? studio : undefined}
+          ready={!!studioSession.sessionId}
+          unavailableReason={studioPlaceReason}
         />
       ) : (
         <Box
@@ -2447,7 +2586,7 @@ export function ChatShell({
 
         It is mounted only when there is something to show, so a panel left open never eats
         width on a conversation that has no background commands. */}
-      {tasksOpen && background.processes.length > 0 && (
+      {tasksOpen && background.processes.length > 0 && !inStudio && (
         <BackgroundTaskPanel
           processes={background.processes}
           wide={tasksWide}
@@ -2459,11 +2598,11 @@ export function ChatShell({
       )}
 
       {/* macOS only: `available` is false elsewhere, so the pane and its button never draw. */}
-      {simulatorOpen && simulatorView.available && screen === 'conversation' && (
+      {simulatorOpen && simulatorView.available && screen === 'conversation' && !inStudio && (
         <SimulatorPane state={simulatorView} onClose={toggleSimulator} />
       )}
 
-      {openFile && openFile.sessionId === activeId && screen === 'conversation' && (
+      {openFile && openFile.sessionId === activeId && screen === 'conversation' && !inStudio && (
         <FilePane
           key={openFile.sessionId}
           sessionId={openFile.sessionId}
@@ -2477,7 +2616,7 @@ export function ChatShell({
         />
       )}
 
-      {modelOpen && modelAvailable && (
+      {modelOpen && modelAvailable && !inStudio && (
         <ModelPane
           engine={modelEngine}
           dark={darkMode}
@@ -2496,7 +2635,7 @@ export function ChatShell({
         conversation screen - the artifacts and customize screens take the whole pane and a web
         page floating over them would be unreachable - and it is told to stand down while the
         drop overlay is up, which is drawn in the React tree and so would be behind it. */}
-      {browserOpen && browserAvailable && screen === 'conversation' && (
+      {browserOpen && browserAvailable && screen === 'conversation' && !inStudio && (
         <BrowserPane
           sessionId={activeId}
           suspended={drop.over || (panelShown && !panelDocked)}

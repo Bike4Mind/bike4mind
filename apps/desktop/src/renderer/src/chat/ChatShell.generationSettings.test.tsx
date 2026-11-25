@@ -11,7 +11,7 @@ import { ChatShell } from './ChatShell';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
-vi.mock('./CustomizePanel', () => ({ CustomizeNavItem: () => null, CustomizeScreen: () => null }));
+vi.mock('./CustomizePanel', () => ({ CustomizeScreen: () => null, useCustomizeAttention: () => undefined }));
 // The 3D engine's iframe would make jsdom boot a whole extra window on every mount.
 vi.mock('./model3d/modelEngineFrame', async importOriginal => ({
   ...(await importOriginal<typeof import('./model3d/modelEngineFrame')>()),
@@ -179,13 +179,13 @@ async function openParams() {
 }
 
 describe('Params across a chat switch', () => {
-  it('closes on Mod+2 from inside the dialog and saves nothing typed in the old chat', async () => {
+  it('closes on the session chord (Alt+2 off macOS) from inside the dialog and saves nothing typed in the old chat', async () => {
     await renderShell();
     expect(el('chat-session-title').textContent).toBe('First');
     await openParams();
     await fill('temperature', '0.5');
     const temperature = el('generation-settings-temperature-input');
-    await press(temperature, { key: '2', code: 'Digit2', ctrlKey: true });
+    await press(temperature, { key: '2', code: 'Digit2', altKey: true });
     expect(el('chat-session-title').textContent).toBe('Second');
     expect(find('generation-settings-menu')).toBeNull();
     await act(async () => temperature.blur());
@@ -207,7 +207,7 @@ describe('Params across a chat switch', () => {
     await press(temperature, { key: 'Enter' });
     expect(setSessionGeneration).toHaveBeenLastCalledWith('first', { temperature: 0.5 });
 
-    await press(temperature, { key: '2', code: 'Digit2', ctrlKey: true });
+    await press(temperature, { key: '2', code: 'Digit2', altKey: true });
     expect(el('chat-session-title').textContent).toBe('Second');
     await openParams();
     await fill('topK', '30');
@@ -321,7 +321,7 @@ describe('Composer chat settings across a chat switch', () => {
       const open = () => document.querySelector(`[data-testid^="${option}"]`);
       expect(open(), button).not.toBeNull();
 
-      await press(el(button), { key: digit, code: `Digit${digit}`, ctrlKey: true });
+      await press(el(button), { key: digit, code: `Digit${digit}`, altKey: true });
       expect(el('chat-session-title').textContent).toBe(title);
       expect(open(), button).toBeNull();
     }

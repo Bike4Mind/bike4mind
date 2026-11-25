@@ -50,6 +50,11 @@ export const rootPolicySchema = z.strictObject({
    */
   serverRunId: z.string().min(1).optional(),
   /**
+   * The organization the server run was minted for, and so the payer of every call attached to it.
+   * Absent for a Personal run, and on runs stored before payers were bound.
+   */
+  serverRunOrganizationId: z.string().min(1).optional(),
+  /**
    * The run's credit budget, sent when the server run is minted and raised in place after. Absent
    * for a run without one. Every completion in the run, root and workers, is charged against it.
    */
