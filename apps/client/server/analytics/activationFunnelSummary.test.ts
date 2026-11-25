@@ -1,3 +1,4 @@
+import { Logger } from '@bike4mind/observability';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({ classify: vi.fn(), verdicts: vi.fn() }));
@@ -84,10 +85,10 @@ describe('getActivationFunnel', () => {
     mocks.classify
       .mockResolvedValueOnce({ members: [member('a', 'cameBack')], tooNewIds: [] })
       .mockRejectedValueOnce(new Error('more than 20,000 signups'));
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const warn = vi.spyOn(Logger.prototype, 'warn').mockImplementation(() => {});
     const funnel = await getActivationFunnel({ ...query, compare: 'prev' }, NOW);
     expect(funnel).toMatchObject({ status: 'ok', activationRate: { value: 100, previous: null } });
-    expect(warn).toHaveBeenCalledWith(expect.stringContaining('previous-period'), expect.any(Error));
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('previous-period'), { error: expect.any(Error) });
     warn.mockRestore();
   });
 
@@ -133,7 +134,7 @@ describe('getActivationFunnel', () => {
 
   it('keeps the current funnel when the previous period runs out of budget', async () => {
     vi.useFakeTimers();
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const warn = vi.spyOn(Logger.prototype, 'warn').mockImplementation(() => {});
     try {
       mocks.classify
         .mockResolvedValueOnce({ members: [member('a', 'cameBack')], tooNewIds: [] })
@@ -141,7 +142,7 @@ describe('getActivationFunnel', () => {
       const result = getActivationFunnel({ ...query, compare: 'prev' }, NOW);
       await vi.advanceTimersByTimeAsync(40_000);
       expect(await result).toMatchObject({ status: 'ok', activationRate: { value: 100, previous: null } });
-      expect(warn).toHaveBeenCalledWith(expect.stringContaining('previous-period'), expect.anything());
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('previous-period'), { error: expect.anything() });
     } finally {
       warn.mockRestore();
       vi.useRealTimers();

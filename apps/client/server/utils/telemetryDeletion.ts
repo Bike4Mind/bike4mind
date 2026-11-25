@@ -2,6 +2,9 @@ import { Quest, TelemetryAuditLogModel } from '@bike4mind/database';
 import { getClientIp, truncateIp } from '@bike4mind/server-utils/utils/ip';
 import { regenerateUserTelemetryHashes } from './telemetryHashLookup';
 import { normalizeTelemetryUserId } from './telemetryIdentity';
+import { Logger } from '@bike4mind/observability';
+
+const logger = new Logger({ metadata: { service: 'telemetryDeletion' } });
 
 export interface TelemetryDeletionResult {
   /** True only when the re-check ran and found no matching document still carrying telemetry. */
@@ -52,12 +55,12 @@ export async function triggerTelemetryDeletion(
     remainingCount = await Quest.countDocuments(filter);
   } catch (err) {
     error = err instanceof Error ? err.message : 'Unknown error';
-    console.error('[Telemetry] Opt-out deletion failed:', error);
+    logger.error('[Telemetry] Opt-out deletion failed', { error: err });
   }
 
   const verified = remainingCount === 0;
   if (!error && !verified) {
-    console.error(`[Telemetry] Opt-out deletion left ${remainingCount} document(s) with telemetry`);
+    logger.error('[Telemetry] Opt-out deletion left documents with telemetry', { remainingCount });
   }
 
   // Audit the deletion - wrapped in try/catch so audit failure doesn't mask the deletion outcome
@@ -79,10 +82,7 @@ export async function triggerTelemetryDeletion(
       },
     });
   } catch (auditErr) {
-    console.warn(
-      '[TelemetryAudit] Failed to log deletion:',
-      auditErr instanceof Error ? auditErr.message : 'Unknown error'
-    );
+    logger.warn('[TelemetryAudit] Failed to log deletion', { error: auditErr });
   }
 
   return { verified, deletedCount, ...(remainingCount !== undefined && { remainingCount }) };

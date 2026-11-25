@@ -1,3 +1,4 @@
+import { Logger } from '@bike4mind/observability';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ForbiddenError } from '@bike4mind/common';
 vi.mock('@bike4mind/server-utils/auth/riskEvidence', () => ({
@@ -25,7 +26,7 @@ vi.mock('./signupNetworkAlerts', () => ({
 import { readNetworkMeta, recordLoginEvent, recordSignupNetwork, type NetworkRequest } from './networkMeta';
 import { requestRiskEvidenceRefresh } from '@bike4mind/server-utils/auth/riskEvidence';
 
-const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+const warn = vi.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
 
 function reqWith(headers: Record<string, string>): NetworkRequest {
   return { headers: { 'user-agent': 'Mozilla/5.0', ...headers }, socket: {} };
@@ -163,14 +164,16 @@ describe('recordSignupNetwork', () => {
     expect(record).toHaveBeenCalledWith(
       expect.objectContaining({ userId: 'u1', type: 'signup', method: 'google', ip: '203.0.113.7' })
     );
-    expect(requestRiskEvidenceRefresh).toHaveBeenCalledWith('u1', 'signup', console);
+    expect(requestRiskEvidenceRefresh).toHaveBeenCalledWith('u1', 'signup', expect.any(Logger));
   });
 
   it('still logs the signup event when the user write fails, and never throws', async () => {
     updateOne.mockRejectedValueOnce(new Error('db down'));
 
     await expect(recordSignupNetwork({ req: AWS_REQUEST, userId: 'u1', method: 'otc' })).resolves.toBeUndefined();
-    expect(warn).toHaveBeenCalledWith('[auth] signup network metadata not recorded', 'db down');
+    expect(warn).toHaveBeenCalledWith('[auth] signup network metadata not recorded', {
+      error: expect.objectContaining({ message: 'db down' }),
+    });
     expect(record).toHaveBeenCalledWith(expect.objectContaining({ userId: 'u1', type: 'signup' }));
   });
 
@@ -178,7 +181,9 @@ describe('recordSignupNetwork', () => {
     record.mockRejectedValueOnce(new Error('db down'));
 
     await expect(recordSignupNetwork({ req: AWS_REQUEST, userId: 'u1', method: 'otc' })).resolves.toBeUndefined();
-    expect(warn).toHaveBeenCalledWith('[auth] signup event not recorded', 'db down');
+    expect(warn).toHaveBeenCalledWith('[auth] signup event not recorded', {
+      error: expect.objectContaining({ message: 'db down' }),
+    });
   });
 });
 
@@ -193,13 +198,15 @@ describe('recordLoginEvent', () => {
     expect(record).toHaveBeenCalledWith(
       expect.objectContaining({ userId: 'u1', type: 'login', method: 'otc', asn: 16509 })
     );
-    expect(requestRiskEvidenceRefresh).toHaveBeenCalledWith('u1', 'login', console);
+    expect(requestRiskEvidenceRefresh).toHaveBeenCalledWith('u1', 'login', expect.any(Logger));
   });
 
   it('never throws when the write fails', async () => {
     record.mockRejectedValueOnce(new Error('db down'));
     await expect(recordLoginEvent({ req: AWS_REQUEST, userId: 'u1', method: 'otc' })).resolves.toBeUndefined();
-    expect(warn).toHaveBeenCalledWith('[auth] login event not recorded', 'db down');
+    expect(warn).toHaveBeenCalledWith('[auth] login event not recorded', {
+      error: expect.objectContaining({ message: 'db down' }),
+    });
   });
 
   it('does not enqueue new risk work after the purge claim', async () => {

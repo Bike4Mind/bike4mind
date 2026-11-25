@@ -13,6 +13,9 @@ import { userService } from '@bike4mind/services';
 import { escapeRegex } from '@bike4mind/utils/escapeRegex';
 import { signupProtection } from '@bike4mind/server-utils/auth/signupProtection';
 import { isPayingOrganization } from '@server/entitlements/orgPaidStanding';
+import { Logger } from '@bike4mind/observability';
+
+const logger = new Logger({ metadata: { service: 'orgInviteBonus' } });
 
 /**
  * Marks `userId` as having signed up through organization invite `inviteId`. The caller decides
@@ -30,7 +33,7 @@ export async function recordOrgSignupInvite(userId: string, inviteId: string): P
   const invitedAt = (invite as { createdAt?: unknown }).createdAt;
   const createdAt = user.createdAt;
   if (!(invitedAt instanceof Date) || !(createdAt instanceof Date)) {
-    console.warn('[org-invite-bonus] invite or account has no creation date; leaving the account unmarked');
+    logger.warn('[org-invite-bonus] invite or account has no creation date; leaving the account unmarked');
     return false;
   }
   if (createdAt.getTime() < invitedAt.getTime()) return false;
