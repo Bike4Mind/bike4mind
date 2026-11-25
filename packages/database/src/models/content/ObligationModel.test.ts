@@ -117,6 +117,14 @@ describe('obligationRepository.listForUser', () => {
     const pending = await obligationRepository.listForUser('user-me', { limit: 10, status: 'pending' });
     expect(pending.map(o => o._id.toString())).toEqual([ids[2], ids[1]]);
   });
+
+  it('reads nothing for a malformed id and treats a malformed cursor as the first page', async () => {
+    const { obligation } = await obligationRepository.create(invoice());
+    expect(await obligationRepository.findByIdForUser('not-an-id', 'user-me')).toBeNull();
+    expect(await obligationRepository.applyUpdate('not-an-id', 'user-me', { payee: 'X' })).toBeNull();
+    const page = await obligationRepository.listForUser('user-me', { limit: 5, cursor: 'garbage' });
+    expect(page.map(o => o._id.toString())).toEqual([obligation._id.toString()]);
+  });
 });
 
 describe('obligationRepository.listDueForBrief', () => {

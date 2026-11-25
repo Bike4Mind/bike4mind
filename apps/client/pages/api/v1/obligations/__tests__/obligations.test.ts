@@ -56,6 +56,7 @@ vi.mock('@bike4mind/database', () => ({
   },
 }));
 
+import { encodeCursor } from '@server/utils/cursorPagination';
 import indexHandler from '../index';
 import idHandler from '../[id]';
 
@@ -152,6 +153,25 @@ describe('/api/v1/obligations', () => {
     expect(last._getJSONData().next_cursor).toBeNull();
   });
 
+  it('resumes after the row a returned cursor names', async () => {
+    mocks.listForUser.mockResolvedValueOnce([row(), row()]);
+    const first = await call(indexHandler, 'GET', { validatedQuery: { limit: 1 } });
+    const cursor = first._getJSONData().next_cursor;
+
+    mocks.listForUser.mockResolvedValueOnce([]);
+    await call(indexHandler, 'GET', { validatedQuery: { limit: 1, cursor } });
+    expect(mocks.listForUser).toHaveBeenLastCalledWith('u1', { cursor: ID, limit: 2, status: undefined });
+  });
+
+  it('422s a malformed, foreign-scope or non-id cursor without reading', async () => {
+    for (const cursor of ['garbage', encodeCursor('v1.other', ID), encodeCursor('v1.obligations', 'not-an-id')]) {
+      await expect(call(indexHandler, 'GET', { validatedQuery: { limit: 1, cursor } })).rejects.toMatchObject({
+        statusCode: 422,
+      });
+    }
+    expect(mocks.listForUser).not.toHaveBeenCalled();
+  });
+
   it('404s a foreign or malformed id on read and update', async () => {
     mocks.findByIdForUser.mockResolvedValue(null);
     await expect(call(idHandler, 'GET', { validatedParams: { id: 'not-an-id' } })).rejects.toMatchObject({
@@ -232,6 +252,22 @@ describe('/api/v1/obligations', () => {
     await expect(patch({ status: 'confirmed' })).rejects.toMatchObject({ statusCode: 404 });
     expect(mocks.addFileToWritableLake).not.toHaveBeenCalled();
     expect(mocks.applyUpdate).not.toHaveBeenCalled();
+  });
+
+  it('404s a new lake destination on a pending obligation while data lakes are off', async () => {
+    mocks.isFeatureEnabled.mockResolvedValue(false);
+    await expect(patch({ destination_lake_id: 'lake-2' })).rejects.toMatchObject({ statusCode: 404 });
+    expect(mocks.applyUpdate).not.toHaveBeenCalled();
+  });
+
+  it('lets an AI-only key clear the destination, since that files nothing', async () => {
+    await call(idHandler, 'PATCH', {
+      apiKeyInfo: { scopes: ['ai:chat'] },
+      validated: { destination_lake_id: null },
+      validatedParams: { id: ID },
+    });
+    expect(mocks.addFileToWritableLake).not.toHaveBeenCalled();
+    expect(mocks.applyUpdate).toHaveBeenLastCalledWith(ID, 'u1', { destinationLakeId: null, destinationName: null });
   });
 
   it('keeps a confirmed obligation editable and files a changed destination into the new lake only', async () => {
