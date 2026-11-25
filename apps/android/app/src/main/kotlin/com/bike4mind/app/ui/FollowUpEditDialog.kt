@@ -31,6 +31,7 @@ import com.bike4mind.kit.briefs.BriefDecision
 import com.bike4mind.kit.briefs.BriefDecisionEdit
 import com.bike4mind.kit.briefs.BriefDraftReply
 import com.bike4mind.kit.briefs.FollowUpKind
+import com.bike4mind.kit.briefs.followUpEdit
 import java.time.Instant
 import java.time.LocalTime
 import java.time.ZoneId
@@ -61,7 +62,7 @@ fun FollowUpEditDialog(decision: BriefDecision, saving: Boolean, error: String?,
     var pickingDate by remember { mutableStateOf(false) }
     var pickingTime by remember { mutableStateOf(false) }
 
-    val edit = buildEdit(decision, kind, text, BriefDraftReply(to.trim(), subject.trim(), body.trim()), remindAt.toInstant(), initialRemindAt.toInstant())
+    val edit = followUpEdit(decision, kind, text, BriefDraftReply(to, subject, body), remindAt.toInstant(), initialRemindAt.toInstant())
     val complete = edit.text?.isNotEmpty() != false &&
         edit.draftReply?.let { it.to.isNotEmpty() && it.subject.isNotEmpty() && it.body.isNotEmpty() } != false
 
@@ -130,14 +131,3 @@ fun FollowUpEditDialog(decision: BriefDecision, saving: Boolean, error: String?,
         )
     }
 }
-
-private fun buildEdit(decision: BriefDecision, kind: FollowUpKind?, text: String, draft: BriefDraftReply, remindAt: Instant, initialRemindAt: Instant): BriefDecisionEdit =
-    BriefDecisionEdit(
-        text = text.trim().takeIf { it != decision.text },
-        // An email without a draft yet compares as blank fields, so untouched ones do not block a text-only save.
-        draftReply = draft.takeIf { kind == FollowUpKind.FOLLOW_UP_EMAIL && it != (decision.draftReply ?: BriefDraftReply("", "", "")).trimmed() },
-        remindAt = remindAt.takeIf { kind == FollowUpKind.REMINDER && it != initialRemindAt },
-    )
-
-// The form trims what it sends, so the server draft is compared trimmed too or an untouched email reads as edited.
-private fun BriefDraftReply.trimmed() = BriefDraftReply(to.trim(), subject.trim(), body.trim())

@@ -58,6 +58,7 @@ import com.bike4mind.kit.briefs.BriefState
 import com.bike4mind.kit.briefs.BriefStatus
 import com.bike4mind.kit.briefs.FollowUpKind
 import com.bike4mind.kit.briefs.FollowUpState
+import com.bike4mind.kit.briefs.mailtoUri
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.time.format.FormatStyle
@@ -162,6 +163,7 @@ fun BriefScreen(graph: AppGraph, briefId: String?, onBack: () -> Unit, onOpenSes
                         errors = state.followUpErrors,
                         onResolve = { decision, outcome -> controller.resolveFollowUp(decision, outcome, handOff) },
                         onEdit = { decision, edit, onSaved -> controller.editFollowUp(decision, edit, onSaved) },
+                        onOpenMail = handOff,
                     ),
                 )
             }
@@ -284,6 +286,7 @@ private class FollowUpActions(
     val errors: Map<String, String>,
     val onResolve: (BriefDecision, BriefDecisionOutcome) -> Unit,
     val onEdit: (BriefDecision, BriefDecisionEdit, () -> Unit) -> Unit,
+    val onOpenMail: (BriefDraftReply) -> Unit,
 )
 
 @Composable
@@ -330,6 +333,12 @@ private fun FollowUpControls(decision: BriefDecision, followUp: BriefFollowUp, a
             FollowUpState.PENDING, FollowUpState.UNKNOWN -> null
         }
         label?.let { Text(it, style = MaterialTheme.typography.labelMedium, modifier = Modifier.testTag("brief-followup-state")) }
+        // Approval is recorded before the mail handoff, so a draft the mail app never opened can still be sent.
+        if (followUp.state == FollowUpState.APPROVED && followUp.kind == FollowUpKind.FOLLOW_UP_EMAIL && draft != null) {
+            OutlinedButton(onClick = { actions.onOpenMail(draft) }, modifier = Modifier.testTag("brief-followup-open-mail-btn")) {
+                Text(stringResource(R.string.brief_followup_open_mail))
+            }
+        }
     }
     // A 409 refetch can settle the follow-up under an open dialog; there is nothing left to save then.
     if (editing && followUp.isActionable) {
@@ -348,8 +357,7 @@ private fun FollowUpControls(decision: BriefDecision, followUp: BriefFollowUp, a
  * too, since many mail apps ignore the extras on ACTION_SENDTO.
  */
 private fun mailIntent(draft: BriefDraftReply): Intent {
-    val uri = "mailto:" + Uri.encode(draft.to.trim(), "@") + "?subject=" + Uri.encode(draft.subject) + "&body=" + Uri.encode(draft.body)
-    return Intent(Intent.ACTION_SENDTO, Uri.parse(uri)).apply {
+    return Intent(Intent.ACTION_SENDTO, Uri.parse(draft.mailtoUri())).apply {
         putExtra(Intent.EXTRA_SUBJECT, draft.subject)
         putExtra(Intent.EXTRA_TEXT, draft.body)
     }

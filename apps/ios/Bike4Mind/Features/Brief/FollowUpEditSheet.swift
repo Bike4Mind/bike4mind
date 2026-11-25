@@ -86,19 +86,9 @@ struct FollowUpEditSheet: View {
 
   /// Only the fields the user changed, so an unchanged draft is never re-sent.
   private var edit: BriefDecisionEdit {
-    var edit = BriefDecisionEdit()
-    let trimmedText = text.trimmingCharacters(in: .whitespacesAndNewlines)
-    if trimmedText != decision.text { edit.text = trimmedText }
-    if kind == .followUpEmail {
-      let draft = BriefDraftReply(
-        to: to.trimmingCharacters(in: .whitespacesAndNewlines),
-        subject: subject.trimmingCharacters(in: .whitespacesAndNewlines),
-        body: emailBody.trimmingCharacters(in: .whitespacesAndNewlines))
-      // An email without a draft yet compares as blank fields, so untouched ones do not block a text-only save.
-      if draft != decision.draftReply ?? BriefDraftReply(to: "", subject: "", body: "") { edit.draftReply = draft }
-    }
-    if kind == .reminder, remindAt != initialRemindAt { edit.remindAt = remindAt }
-    return edit
+    BriefDecisionEdit(
+      changing: decision, kind: kind, text: text, draft: BriefDraftReply(to: to, subject: subject, body: emailBody),
+      remindAt: remindAt, initialRemindAt: initialRemindAt)
   }
 
   private var isComplete: Bool {

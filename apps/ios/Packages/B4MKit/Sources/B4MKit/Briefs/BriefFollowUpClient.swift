@@ -28,6 +28,23 @@ public struct BriefDecisionEdit: Equatable, Sendable, Encodable {
 
   public var isEmpty: Bool { text == nil && draftReply == nil && remindAt == nil }
 
+  /// The fields an edit form changed against `decision`. The form sends trimmed values, so the server draft is
+  /// compared trimmed too, or an untouched email reads as edited. Twin of the Android kit `followUpEdit`.
+  public init(
+    changing decision: BriefDecision, kind: BriefFollowUpKind?, text: String, draft: BriefDraftReply,
+    remindAt: Date, initialRemindAt: Date
+  ) {
+    self.init()
+    let trimmedText = text.trimmingCharacters(in: .whitespacesAndNewlines)
+    if trimmedText != decision.text { self.text = trimmedText }
+    if kind == .followUpEmail {
+      // An email without a draft yet compares as blank fields, so untouched ones do not block a text-only save.
+      let current = (decision.draftReply ?? BriefDraftReply(to: "", subject: "", body: "")).trimmed
+      if draft.trimmed != current { self.draftReply = draft.trimmed }
+    }
+    if kind == .reminder, remindAt != initialRemindAt { self.remindAt = remindAt }
+  }
+
   public func encode(to encoder: any Encoder) throws {
     var container = encoder.container(keyedBy: CodingKeys.self)
     try container.encodeIfPresent(text, forKey: .text)
@@ -125,5 +142,14 @@ extension BriefClient: BriefFollowUpAPI {
       throw BriefDecisionFailure.invalid(reason.flatMap { $0.isEmpty ? nil : $0 } ?? Self.fallbackInvalidDecision)
     default: throw BriefDecisionFailure.api(APIError(status: response.status))
     }
+  }
+}
+
+extension BriefDraftReply {
+  fileprivate var trimmed: BriefDraftReply {
+    BriefDraftReply(
+      to: to.trimmingCharacters(in: .whitespacesAndNewlines),
+      subject: subject.trimmingCharacters(in: .whitespacesAndNewlines),
+      body: body.trimmingCharacters(in: .whitespacesAndNewlines))
   }
 }

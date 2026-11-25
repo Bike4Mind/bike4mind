@@ -122,6 +122,39 @@ final class BriefFollowUpClientTests: XCTestCase {
     XCTAssertEqual(
       url.absoluteString, "mailto:sam@example.com?subject=Q%26A%20%2B%20notes&body=a%3Db%3F%0Athanks")
   }
+
+  func testUntouchedPaddedFormIsNotAnEdit() {
+    let decision = emailDecision(.pending)
+    let edit = BriefDecisionEdit(
+      changing: decision, kind: .followUpEmail, text: " \(decision.text) ",
+      draft: BriefDraftReply(to: " sam@example.com", subject: "Notes ", body: "Here they are."),
+      remindAt: Date(timeIntervalSince1970: 0), initialRemindAt: Date(timeIntervalSince1970: 0))
+    XCTAssertTrue(edit.isEmpty)
+  }
+
+  func testChangedRecipientSendsTheWholeTrimmedDraft() {
+    let decision = emailDecision(.pending)
+    let edit = BriefDecisionEdit(
+      changing: decision, kind: .followUpEmail, text: decision.text,
+      draft: BriefDraftReply(to: " alex@example.com ", subject: "Notes", body: "Here they are."),
+      remindAt: Date(timeIntervalSince1970: 0), initialRemindAt: Date(timeIntervalSince1970: 0))
+    XCTAssertEqual(
+      edit,
+      BriefDecisionEdit(draftReply: BriefDraftReply(to: "alex@example.com", subject: "Notes", body: "Here they are.")))
+  }
+
+  func testReminderTimeIsSentOnlyForAReminderThatChanged() {
+    let decision = emailDecision(.pending)
+    let start = Date(timeIntervalSince1970: 0)
+    let later = start.addingTimeInterval(3600)
+    func edit(_ kind: BriefFollowUpKind, _ remindAt: Date) -> BriefDecisionEdit {
+      BriefDecisionEdit(
+        changing: decision, kind: kind, text: decision.text, draft: draft, remindAt: remindAt, initialRemindAt: start)
+    }
+    XCTAssertEqual(edit(.reminder, later).remindAt, later)
+    XCTAssertNil(edit(.reminder, start).remindAt)
+    XCTAssertNil(edit(.actionItem, later).remindAt)
+  }
 }
 
 private actor FakeFollowUpAPI: BriefFollowUpAPI {

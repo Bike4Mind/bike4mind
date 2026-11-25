@@ -132,6 +132,7 @@
     <string name="brief_followup_edit">Edit</string>
     <string name="brief_followup_dismiss">Dismiss</string>
     <string name="brief_followup_approved">Approved</string>
+    <string name="brief_followup_open_mail">Open in mail app</string>
     <string name="brief_followup_dismissed">Dismissed</string>
     <string name="brief_followup_edit_title">Edit follow-up</string>
     <string name="brief_followup_text">Text</string>

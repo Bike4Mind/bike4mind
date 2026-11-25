@@ -68,6 +68,38 @@ data class BriefDecisionEdit(val text: String? = null, val draftReply: BriefDraf
         get() = text == null && draftReply == null && remindAt == null
 }
 
+/**
+ * The fields an edit form changed against [decision]. The form sends trimmed values, so the server draft is compared
+ * trimmed too, or an untouched email reads as edited. Twin of B4MKit `BriefDecisionEdit(changing:)`.
+ */
+fun followUpEdit(decision: BriefDecision, kind: FollowUpKind?, text: String, draft: BriefDraftReply, remindAt: Instant, initialRemindAt: Instant): BriefDecisionEdit {
+    val sent = draft.trimmed()
+    // An email without a draft yet compares as blank fields, so untouched ones do not block a text-only save.
+    val current = (decision.draftReply ?: BriefDraftReply("", "", "")).trimmed()
+    return BriefDecisionEdit(
+        text = text.trim().takeIf { it != decision.text },
+        draftReply = sent.takeIf { kind == FollowUpKind.FOLLOW_UP_EMAIL && it != current },
+        remindAt = remindAt.takeIf { kind == FollowUpKind.REMINDER && it != initialRemindAt },
+    )
+}
+
+private fun BriefDraftReply.trimmed() = BriefDraftReply(to.trim(), subject.trim(), body.trim())
+
+/**
+ * A `mailto:` URI that opens the device mail app with this draft. `? & = #` are percent-encoded in every field, so a
+ * recipient cannot add headers such as `bcc`. Encodes like android.net.Uri.encode, which the kit cannot call.
+ */
+fun BriefDraftReply.mailtoUri(): String =
+    "mailto:" + percentEncode(to.trim(), keep = "@") + "?subject=" + percentEncode(subject) + "&body=" + percentEncode(body)
+
+private fun percentEncode(value: String, keep: String = ""): String = buildString {
+    for (byte in value.toByteArray(Charsets.UTF_8)) {
+        val code = byte.toInt() and 0xff
+        val char = code.toChar()
+        if (code < 0x80 && (char.isLetterOrDigit() || char in "-_.!~*'()" || char in keep)) append(char) else append("%%%02X".format(code))
+    }
+}
+
 enum class BriefDecisionOutcome(val wire: String) { APPROVE("approve"), DISMISS("dismiss") }
 
 data class BriefDecision(

@@ -381,8 +381,17 @@ private struct BriefScreen: View {
             .accessibilityIdentifier("brief-followup-dismiss-btn")
         }
       }
-    } else if let label = followUpStateLabel(followUp.state) {
-      statusText(label, id: "brief-followup-state")
+    } else {
+      if let label = followUpStateLabel(followUp.state) {
+        statusText(label, id: "brief-followup-state")
+      }
+      // Approval is recorded before the mail handoff, so a draft the mail app never opened can still be sent.
+      if followUp.kind == .followUpEmail, followUp.state == .approved, let url = decision.draftReply?.mailtoURL {
+        Button("Open in Mail") { openMail(url) }
+          .buttonStyle(.bordered)
+          .accessibilityLabel("Open in Mail: \(decision.text)")
+          .accessibilityIdentifier("brief-followup-open-mail-btn")
+      }
     }
   }
 
@@ -410,10 +419,14 @@ private struct BriefScreen: View {
     Task {
       guard model.brief?.id == briefID else { return }
       if let draft = await model.resolveFollowUp(decision, outcome), let url = draft.mailtoURL {
-        openURL(url) { accepted in
-          if !accepted { noMailApp = true }
-        }
+        openMail(url)
       }
+    }
+  }
+
+  private func openMail(_ url: URL) {
+    openURL(url) { accepted in
+      if !accepted { noMailApp = true }
     }
   }
 
