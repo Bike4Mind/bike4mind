@@ -29,6 +29,8 @@ set -euo pipefail
 
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 
+node "$SCRIPT_DIR/check-provider-call-inventory.mjs"
+
 ALLOWLIST="scripts/contract-gate-allowlist.txt"
 ALLOWLIST_API_KEY="scripts/contract-gate-api-key-allowlist.txt"
 ALLOWLIST_UNMETERED="scripts/unmetered-llm-route-allowlist.txt"
