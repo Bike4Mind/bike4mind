@@ -106,6 +106,23 @@ class MediaImageLoaderTest {
         loader { png(color = Color.RED) }.thumbnail(item())
 
         assertEquals(listOf(0xFF, 0xD8), tiles().single().readBytes().take(2).map { it.toInt() and 0xFF })
+
+        val cached = loader().thumbnail(item(url = null))!!
+        val pixel = cached.getPixel(0, 0)
+        assertEquals(255, Color.alpha(pixel))
+        assertTrue(Color.red(pixel) > 200 && Color.green(pixel) < 60 && Color.blue(pixel) < 60)
+    }
+
+    @Test
+    fun aSemiTransparentPixelIsEnoughToKeepThePng() = runTest {
+        val bitmap = Bitmap.createBitmap(8, 8, Bitmap.Config.ARGB_8888).apply {
+            eraseColor(Color.RED)
+            setPixel(0, 0, Color.argb(254, 255, 0, 0))
+        }
+        val bytes = ByteArrayOutputStream().also { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) }.toByteArray()
+        loader { bytes }.thumbnail(item())
+
+        assertEquals(listOf(0x89, 0x50), tiles().single().readBytes().take(2).map { it.toInt() and 0xFF })
     }
 
     @Test
