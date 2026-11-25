@@ -635,6 +635,18 @@ describe('orchestrate mode in the chat shell', () => {
     press('Escape');
     expectNormalLayout();
 
+    // The dock counts as hidden while filled, so a scene click cannot close it behind the user's back.
+    press('f');
+    await act(async () => el(`orchestrator-tavern-agent-${CHILD.id}`).click());
+    act(() => el('orchestrator-fill-exit-btn').click());
+    expect(query('orchestrator-dock')).not.toBeNull();
+
+    // Opening the conversation from the scene leaves fill window rather than opening it out of sight.
+    press('f');
+    await act(async () => el('orchestrator-tavern-innkeeper').click());
+    expectNormalLayout();
+    expect(document.activeElement).toBe(el('chat-composer-input'));
+
     // Leaving the Agent view drops it, so coming back opens the normal layout.
     press('f');
     act(() => el('chat-surface-toggle-chat').click());

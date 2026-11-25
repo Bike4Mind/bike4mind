@@ -937,6 +937,10 @@ export function ChatShell({
   const threadHost = useRef<HTMLDivElement | null>(null);
   const dockToggle = useRef<HTMLButtonElement | null>(null);
   const [conversationRequest, setConversationRequest] = useState(0);
+  // Fill window: the stage takes the whole window, with the rail, sidebar, header, session panel, dock and
+  // composer out of the way until Exit or Escape. Never settles: its own header is already minimal.
+  const fillWindow = useFillWindow(orchestrating && activeId !== null && screen === 'conversation' && !inStudio);
+
   // Focus lands on the header toggle, the way back in, rather than on a dock that just hid.
   const closeDock = useCallback(() => {
     setDockOpen(false);
@@ -948,6 +952,8 @@ export function ChatShell({
   );
   const readParentReport = useCallback(
     (reportId: string) => {
+      // The conversation is hidden while the window is filled, so reading it leaves fill window.
+      fillWindow.setOn(false);
       setDockOpen(true);
       setConversationRequest(request => request + 1);
       // After the dock is shown again, or a hidden dock would scroll nothing into view.
@@ -959,17 +965,14 @@ export function ChatShell({
         window.setTimeout(() => reply.removeAttribute('data-report-highlight'), REPORT_HIGHLIGHT_MS);
       });
     },
-    [setDockOpen]
+    [setDockOpen, fillWindow.setOn]
   );
   const focusParentChat = useCallback(() => {
+    fillWindow.setOn(false);
     setDockOpen(true);
     setConversationRequest(request => request + 1);
     setComposerFocus(request => request + 1);
-  }, [setDockOpen]);
-
-  // Fill window: the stage takes the whole window, with the rail, sidebar, header, session panel, dock and
-  // composer out of the way until Exit or Escape. Never settles: its own header is already minimal.
-  const fillWindow = useFillWindow(orchestrating && activeId !== null && screen === 'conversation' && !inStudio);
+  }, [setDockOpen, fillWindow.setOn]);
 
   // The ambient Tavern: after a quiet spell the dock and composer settle out and leave the scene.
   const ambient = useAmbientSettle({
@@ -1047,7 +1050,7 @@ export function ChatShell({
     },
     [sendToConversation, modelSessionId, conversationId, modelOption]
   );
-  const dockVisible = orchestratorPrefs.dockOpen && !ambient.settled;
+  const dockVisible = orchestratorPrefs.dockOpen && !ambient.settled && !fillWindow.on;
   useEffect(() => {
     if (!persistedId || screen !== 'conversation' || (orchestrating && !dockVisible)) return;
     const acknowledge = () => markSessionViewed(persistedId);
@@ -1729,11 +1732,7 @@ export function ChatShell({
     </VideoJobsContext.Provider>
   );
 
-  const threadDockMode: ThreadDockMode = !orchestratorShown
-    ? 'chat'
-    : dockVisible && !fillWindow.on
-      ? 'docked'
-      : 'hidden';
+  const threadDockMode: ThreadDockMode = !orchestratorShown ? 'chat' : dockVisible ? 'docked' : 'hidden';
   const sceneConversation =
     orchestratorShown &&
     !orchestratorPrefs.focus &&
