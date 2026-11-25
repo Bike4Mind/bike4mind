@@ -17,7 +17,7 @@ import { publishPushNotification, briefDeepLink } from '@bike4mind/server-utils/
 import { aiAccessDeniedMessage } from '@bike4mind/services/userService/accountState';
 import type { CompletionInfo } from '@bike4mind/llm-adapters';
 import type { Logger } from '@bike4mind/observability';
-import { PENDING_ACTION_TTL_MS, type PushNotificationEvent } from '@bike4mind/common';
+import { BRIEF_LIMITS, PENDING_ACTION_TTL_MS, type PushNotificationEvent } from '@bike4mind/common';
 import { recordSessionOperationalUsage } from '@workers/events/recordSessionOperationalUsage';
 import { payerCanFundSessionOperation } from '@workers/events/sessionOperationalCreditGate';
 import {
@@ -29,6 +29,8 @@ import {
   buildBriefPrompt,
   emptyBrief,
   hasActivity,
+  hasModelActivity,
+  reminderBrief,
   type BriefActivity,
   type ComposedBrief,
 } from './briefCompose.composition';
@@ -59,7 +61,7 @@ export type BriefComposeDeps = {
   users: Pick<typeof userRepository, 'findById'>;
   briefs: Pick<
     typeof assistantBriefRepository,
-    'findById' | 'markReady' | 'markFailed' | 'discardComposing' | 'removeEmailSourcedItems'
+    'findById' | 'markReady' | 'markFailed' | 'discardComposing' | 'removeEmailSourcedItems' | 'markRemindersSurfaced'
   >;
   loadActivity(brief: IAssistantBrief, now: Date): Promise<BriefActivity>;
   /** Whether the call may run: 'ok', or why not (AI access held, or the balance cannot cover it). */
@@ -120,7 +122,7 @@ export async function composeBrief(
     const activity = await deps.loadActivity(brief, now);
 
     let composed: ComposedBrief;
-    if (hasActivity(activity)) {
+    if (hasModelActivity(activity)) {
       const gate = await deps.canCompose(input.userId);
       if (gate !== 'ok') {
         // A scheduled start the user cannot pay for is dropped like an empty one, so a held account or an
@@ -136,6 +138,8 @@ export async function composeBrief(
       const instructions = await loadInstructionsSafely(deps, input.userId);
       const reply = await deps.complete(input.userId, input.briefId, buildBriefPrompt(activity, instructions));
       composed = assembleBrief(reply, activity);
+    } else if (hasActivity(activity)) {
+      composed = reminderBrief(activity);
     } else if (input.scheduled) {
       // A scheduled brief with nothing to report is dropped: no row, no push.
       await briefs.discardComposing(input.briefId);
@@ -150,6 +154,7 @@ export async function composeBrief(
 
     await settleBriefedEmails(deps, input.userId, briefedEmailIds(composed), composedAt);
     await settleBriefedDelegations(deps, input.userId, briefedDelegationIds(composed, activity), composedAt);
+    await settleSurfacedReminders(deps, input.userId, activity, composedAt);
 
     const { body, briefAction } = briefPushContent(composed, activity);
     await deps.push({
@@ -243,6 +248,16 @@ async function settleBriefedDelegations(deps: BriefComposeDeps, userId: string, 
   }
 }
 
+/** Never throws, like settleBriefedEmails: an unmarked reminder is listed again in the next brief rather than lost. */
+async function settleSurfacedReminders(deps: BriefComposeDeps, userId: string, activity: BriefActivity, at: Date) {
+  if (activity.reminders.length === 0) return;
+  try {
+    await deps.briefs.markRemindersSurfaced(userId, activity.reminders, at);
+  } catch (error) {
+    deps.logger.warn('[Brief] marking reminders surfaced failed; they will be listed again', { userId, error });
+  }
+}
+
 async function loadActivity(brief: IAssistantBrief, now: Date): Promise<BriefActivity> {
   const { items } = await agentExecutionRepository.findByUserIdPaginated(
     brief.userId,
@@ -259,6 +274,8 @@ async function loadActivity(brief: IAssistantBrief, now: Date): Promise<BriefAct
   // Pending rather than windowed: an item a failed brief or a section cap left out is carried to the next brief.
   const emails = await loadPendingBriefEmails(brief.userId, brief.periodEnd);
   const delegations = await loadPendingBriefDelegations(brief.userId, brief.periodEnd, now);
+  // Capped at the section size so every loaded reminder fits ahead of the other happened items.
+  const reminders = await assistantBriefRepository.findDueReminders(brief.userId, now, BRIEF_LIMITS.itemsPerSection);
 
   return {
     periodStart: brief.periodStart,
@@ -292,6 +309,7 @@ async function loadActivity(brief: IAssistantBrief, now: Date): Promise<BriefAct
       status: item.status,
       result: item.result,
     })),
+    reminders: reminders.map(({ briefId, decisionId, text }) => ({ briefId, decisionId, text })),
   };
 }
 

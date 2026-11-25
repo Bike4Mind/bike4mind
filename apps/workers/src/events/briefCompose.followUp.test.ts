@@ -123,6 +123,7 @@ describe('composeBrief for a follow-up brief', () => {
         markFailed: vi.fn().mockResolvedValue(true),
         discardComposing: vi.fn(),
         removeEmailSourcedItems: vi.fn(),
+        markRemindersSurfaced: vi.fn(),
       },
       loadActivity: vi.fn(),
       canCompose: vi.fn().mockResolvedValue('ok'),

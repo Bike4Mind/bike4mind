@@ -96,6 +96,7 @@ const run = (publisher: ScheduledBriefDeps['publishCompose'] = publishCompose) =
           hasRunsSince: async (id, since) =>
             (await agentExecutionRepository.findByUserIdPaginated(id, { fromDate: since }, { limit: 1 })).items.length >
             0,
+          hasDueReminders: async (id, now) => (await assistantBriefRepository.findDueReminders(id, now, 1)).length > 0,
           hasPendingEmails: async (id, end) =>
             (
               await Promise.all(EMAIL_TRIAGE_KINDS.map(kind => emailTriageItemRepository.listPending(id, end, 1, kind)))
@@ -292,6 +293,7 @@ describe('runBriefScheduleReconcile', () => {
             questions: [],
             emails: [],
             delegations: [],
+            reminders: [],
           }),
           canCompose: async () => 'ok',
           loadInstructions: async () => [],

@@ -8,6 +8,8 @@ import {
   buildBriefPrompt,
   emptyBrief,
   hasActivity,
+  hasModelActivity,
+  reminderBrief,
   type BriefActivity,
 } from './briefCompose.composition';
 
@@ -30,6 +32,7 @@ const baseActivity = (): BriefActivity => ({
   questions: [],
   emails: [],
   delegations: [],
+  reminders: [],
 });
 
 const question = (n: number) => ({
@@ -57,6 +60,32 @@ describe('hasActivity', () => {
     expect(hasActivity({ ...emailActivity(), runs: [], approvals: [] })).toBe(true);
     expect(hasActivity({ ...baseActivity(), runs: [] })).toBe(true);
     expect(hasActivity({ ...baseActivity(), approvals: [] })).toBe(true);
+  });
+});
+
+describe('due reminders', () => {
+  const reminder = (n: number) => ({ briefId: 'b0', decisionId: `fu-reminder-${n}`, text: `Call vendor ${n}` });
+
+  it('count as activity on their own, but not as activity for the model', () => {
+    const only = { ...baseActivity(), runs: [], approvals: [], reminders: [reminder(1)] };
+    expect(hasActivity(only)).toBe(true);
+    expect(hasModelActivity(only)).toBe(false);
+  });
+
+  it('make a reminder-only brief with no model call', () => {
+    const brief = reminderBrief({ ...baseActivity(), reminders: [reminder(1), reminder(2)] });
+    expect(brief.headline).toBe('You have 2 reminders.');
+    expect(brief.happened).toEqual([
+      { id: 'h1', text: 'Reminder: Call vendor 1' },
+      { id: 'h2', text: 'Reminder: Call vendor 2' },
+    ]);
+    expect(brief.decisions).toEqual([]);
+  });
+
+  it('lead the happened section of a composed brief, ahead of model text', () => {
+    const reply = JSON.stringify({ headline: 'Busy day.', happened: ['Model note'] });
+    const brief = assembleBrief(reply, { ...baseActivity(), reminders: [reminder(1)] });
+    expect(brief.happened.map(item => item.text)).toEqual(['Reminder: Call vendor 1', 'Model note']);
   });
 });
 

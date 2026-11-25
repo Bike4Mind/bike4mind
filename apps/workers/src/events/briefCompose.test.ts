@@ -20,6 +20,7 @@ const activeActivity = {
   questions: [],
   emails: [],
   delegations: [],
+  reminders: [],
 };
 
 function makeDeps(overrides: Partial<BriefComposeDeps> = {}) {
@@ -32,6 +33,7 @@ function makeDeps(overrides: Partial<BriefComposeDeps> = {}) {
       markFailed: vi.fn().mockResolvedValue(true),
       discardComposing: vi.fn().mockResolvedValue(true),
       removeEmailSourcedItems: vi.fn().mockResolvedValue(0),
+      markRemindersSurfaced: vi.fn().mockResolvedValue(undefined),
     },
     loadActivity: vi.fn().mockResolvedValue(activeActivity),
     canCompose: vi.fn().mockResolvedValue('ok'),
@@ -51,17 +53,49 @@ function makeDeps(overrides: Partial<BriefComposeDeps> = {}) {
       markFailed: ReturnType<typeof vi.fn>;
       discardComposing: ReturnType<typeof vi.fn>;
       removeEmailSourcedItems: ReturnType<typeof vi.fn>;
+      markRemindersSurfaced: ReturnType<typeof vi.fn>;
     };
     push: ReturnType<typeof vi.fn>;
     complete: ReturnType<typeof vi.fn>;
     emails: { markBriefed: ReturnType<typeof vi.fn>; storedEmailIds: ReturnType<typeof vi.fn> };
     delegations: { markBriefed: ReturnType<typeof vi.fn> };
-    logger: { error: ReturnType<typeof vi.fn> };
+    logger: { error: ReturnType<typeof vi.fn>; warn: ReturnType<typeof vi.fn> };
   };
   return deps;
 }
 
 describe('composeBrief', () => {
+  const reminders = [{ briefId: 'b0', decisionId: 'fu-reminder-1', text: 'Call the vendor' }];
+  const reminderOnly = { ...activeActivity, runs: [], approvals: [], reminders };
+
+  it('lists due reminders without a model call and marks them surfaced only after the brief is stored', async () => {
+    const deps = makeDeps({ loadActivity: vi.fn().mockResolvedValue(reminderOnly) });
+    await composeBrief(deps, { briefId: 'b1', userId: 'u1', scheduled: true });
+    expect(deps.complete).not.toHaveBeenCalled();
+    expect(deps.briefs.discardComposing).not.toHaveBeenCalled();
+    const [, composed] = deps.briefs.markReady.mock.calls[0];
+    expect(composed.happened).toEqual([{ id: 'h1', text: 'Reminder: Call the vendor' }]);
+    expect(deps.briefs.markRemindersSurfaced).toHaveBeenCalledWith('u1', reminders, expect.any(Date));
+    expect(deps.briefs.markReady.mock.invocationCallOrder[0]).toBeLessThan(
+      deps.briefs.markRemindersSurfaced.mock.invocationCallOrder[0]
+    );
+    expect(deps.push).toHaveBeenCalledWith(expect.objectContaining({ body: 'You have a reminder.' }));
+  });
+
+  it('leaves reminders unmarked when the brief was not stored, and swallows a failed mark', async () => {
+    const notStored = makeDeps({ loadActivity: vi.fn().mockResolvedValue(reminderOnly) });
+    notStored.briefs.markReady.mockResolvedValue(false);
+    await composeBrief(notStored, { briefId: 'b1', userId: 'u1' });
+    expect(notStored.briefs.markRemindersSurfaced).not.toHaveBeenCalled();
+
+    const failing = makeDeps({ loadActivity: vi.fn().mockResolvedValue(reminderOnly) });
+    failing.briefs.markRemindersSurfaced.mockRejectedValue(new Error('db down'));
+    await composeBrief(failing, { briefId: 'b1', userId: 'u1' });
+    expect(failing.briefs.markFailed).not.toHaveBeenCalled();
+    expect(failing.push).toHaveBeenCalled();
+    expect(failing.logger.warn).toHaveBeenCalled();
+  });
+
   it('composes, stores and pushes brief_ready with the brief id', async () => {
     const deps = makeDeps();
     await composeBrief(deps, { briefId: 'b1', userId: 'u1' });

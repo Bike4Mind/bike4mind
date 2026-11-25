@@ -56,6 +56,13 @@ export type BriefDelegation = {
   result: string | null;
 };
 
+/** An approved follow-up reminder that has come due; listed verbatim, never passed through the model. */
+export type BriefReminder = {
+  briefId: string;
+  decisionId: string;
+  text: string;
+};
+
 export type BriefActivity = {
   periodStart: Date;
   periodEnd: Date;
@@ -64,6 +71,7 @@ export type BriefActivity = {
   questions: BriefQuestion[];
   emails: BriefEmail[];
   delegations: BriefDelegation[];
+  reminders: BriefReminder[];
 };
 
 export type ComposedBrief = {
@@ -88,6 +96,10 @@ const clip = (text: string, limit: number): string => {
 };
 
 export const hasActivity = (activity: BriefActivity): boolean =>
+  hasModelActivity(activity) || activity.reminders.length > 0;
+
+/** Activity the model is asked to summarize; due reminders alone are listed without a model call. */
+export const hasModelActivity = (activity: BriefActivity): boolean =>
   activity.runs.length > 0 ||
   activity.approvals.length > 0 ||
   activity.questions.length > 0 ||
@@ -98,6 +110,18 @@ export const hasActivity = (activity: BriefActivity): boolean =>
 export const emptyBrief = (): ComposedBrief => ({
   headline: 'Nothing new since your last brief.',
   happened: [],
+  handled: [],
+  decisions: [],
+});
+
+const reminderItems = (activity: BriefActivity): UnnumberedItem[] =>
+  activity.reminders.map(reminder => ({ text: `Reminder: ${reminder.text}` }));
+
+/** A brief whose only news is due reminders. */
+export const reminderBrief = (activity: BriefActivity): ComposedBrief => ({
+  headline:
+    activity.reminders.length === 1 ? 'You have a reminder.' : `You have ${activity.reminders.length} reminders.`,
+  happened: toItems('h', reminderItems(activity), []),
   handled: [],
   decisions: [],
 });
@@ -277,6 +301,8 @@ export function assembleBrief(reply: string, activity: BriefActivity): ComposedB
     happened: toItems(
       'h',
       [
+        // Reminders lead: the loader caps them at the section size, so the model can never push one out.
+        ...reminderItems(activity),
         ...emailsOfKind(activity, 'fyi').map(emailItem),
         ...delegationsOf(activity, ['pending', 'failed']).map(delegationItem),
       ],

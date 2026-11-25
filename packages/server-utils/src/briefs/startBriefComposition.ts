@@ -138,6 +138,8 @@ export type ScheduledBriefDeps = Deps & {
   hasRunsSince(userId: string, since: Date): Promise<boolean>;
   /** Whether the user has triaged email not yet briefed as of `end`; unwindowed, like the composer's load. */
   hasPendingEmails(userId: string, end: Date): Promise<boolean>;
+  /** Whether an approved reminder is due at `now` and no brief has listed it yet. */
+  hasDueReminders(userId: string, now: Date): Promise<boolean>;
 };
 
 const defaultScheduledDeps: ScheduledBriefDeps = {
@@ -153,12 +155,13 @@ const defaultScheduledDeps: ScheduledBriefDeps = {
     );
     return sections.some(items => items.length > 0);
   },
+  hasDueReminders: async (userId, now) => (await assistantBriefRepository.findDueReminders(userId, now, 1)).length > 0,
 };
 
 /**
  * The automatic path into the composer, shared by the schedule and agent-run completion: skips users whose
- * schedule is off, users who turned brief pushes off, and windows with no agent runs and no pending triaged
- * email (the worker derives approvals and questions from the runs' sessions, so those two are its only
+ * schedule is off, users who turned brief pushes off, and windows with no agent runs, no pending triaged
+ * email and no due reminder (the worker derives approvals and questions from the runs' sessions, so those two are its only
  * activity sources), so none of them costs a model call or leaves a row behind. Then claims the per-user
  * debounce, needing `claimGapMs` since the last claim of either path, so concurrent starts collapse into one brief.
  */
@@ -176,11 +179,12 @@ async function startGatedBrief(
   if (await deps.briefs.findActiveComposing(userId, now)) return 'in_flight';
 
   const { periodStart, periodEnd } = await activityWindow(userId, deps, now);
-  const [hasRuns, hasEmails] = await Promise.all([
+  const [hasRuns, hasEmails, hasReminders] = await Promise.all([
     deps.hasRunsSince(userId, periodStart),
     deps.hasPendingEmails(userId, periodEnd),
+    deps.hasDueReminders(userId, now),
   ]);
-  if (!hasRuns && !hasEmails) return 'no_activity';
+  if (!hasRuns && !hasEmails && !hasReminders) return 'no_activity';
 
   const claim = await deps.users.claimBriefStart(userId, now, claimGapMs);
   if (!claim) return 'debounced';
