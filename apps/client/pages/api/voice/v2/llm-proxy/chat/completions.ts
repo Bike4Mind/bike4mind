@@ -15,7 +15,7 @@ import {
   featureNames,
   type ToolDefinition,
 } from '@bike4mind/services/llm';
-import { getSettingsMap, getSettingsValue, type IQueueService } from '@bike4mind/utils';
+import { getSettingsMap, getSettingsValue, NotFoundError, type IQueueService } from '@bike4mind/utils';
 import { stripToolOutputMarker } from '@bike4mind/utils/artifactParser';
 import { type Logger, describeErrorCause } from '@bike4mind/observability';
 import {
@@ -463,14 +463,14 @@ const handler = ipGatedApi.post(async (req, res) => {
     }
     // Flat strings next to `err`: the alert sink prints each field with `${value}`, which turned
     // the nested error object into `[object Object]`.
-    // A credit refusal is an expected outcome, not a pipeline fault; the spoken fallback below still runs.
+    // A credit refusal or a missing session is an expected outcome, not a pipeline fault; the spoken fallback below still runs.
     const failureFields = {
       err,
       errorName: err instanceof Error ? err.name : typeof err,
       errorMessage: err instanceof Error ? err.message : String(err),
       errorCause: describeErrorCause(err),
     };
-    if (isTerminalCreditRefusal(err)) {
+    if (isTerminalCreditRefusal(err) || err instanceof NotFoundError) {
       req.logger.warn(failureFields, '[voice-v2/llm-proxy] full pipeline failed');
     } else {
       req.logger.error(failureFields, '[voice-v2/llm-proxy] full pipeline failed');
