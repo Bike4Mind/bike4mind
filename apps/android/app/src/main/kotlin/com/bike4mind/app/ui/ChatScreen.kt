@@ -64,9 +64,9 @@ class ChatViewModel(graph: AppGraph, sessionId: String?) : ViewModel() {
     }
 }
 
+/** [composeDraft] non-null (a launcher shortcut) fills the composer and focuses it; nothing is sent until send. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-/** [composeDraft] non-null (a launcher shortcut) fills the composer and focuses it; nothing is sent until send. */
 fun ChatScreen(graph: AppGraph, sessionId: String?, onBack: () -> Unit, composeDraft: String? = null) {
     // Scoped by AppRoot's ScreenScope: cleared (and the controller stopped) when this chat closes.
     val model = viewModel { ChatViewModel(graph, sessionId) }
