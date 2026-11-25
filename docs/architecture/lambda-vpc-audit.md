@@ -84,6 +84,7 @@ The four handlers declared in `infra/queues.ts` whose source is generated outsid
 | `apps/client/server/websocket/reauthConnection.func` | `infra/subscriberFanout.ts` | MongoDB; linked: `allSecrets`, `websocketApi` | Yes | Connects to MongoDB. |
 | `apps/client/server/websocket/voiceSessionEnded.func` | `infra/websocket.ts` | MongoDB; linked: `allSecrets`, `websocketApi` | Yes | Connects to MongoDB. |
 | `apps/client/server/websocket/voiceSessionSendTranscript.func` | `infra/websocket.ts` | MongoDB; linked: `allSecrets`, `websocketApi` | Yes | Connects to MongoDB. |
+| `apps/workers/src/callableFunctions/sourceFetch.handler` | `infra/callableFunctionSourceFetch.ts` | none | No | Outside the VPC by design: fetches callable function data sources from listed public origins, so it must hold no private route. |
 | `apps/workers/src/cli/tools.handler.handler` | `infra/cliToolHandler.ts` | MongoDB; linked: `allSecrets` | Yes | Connects to MongoDB. |
 | `apps/workers/src/cron/abuseAssessmentSweep.handler` | `infra/cron.ts` | MongoDB; linked: `allSecrets` | Yes | Connects to MongoDB. |
 | `apps/workers/src/cron/accountCampaignSweep.handler` | `infra/cron.ts` | MongoDB; linked: `allSecrets` | Yes | Connects to MongoDB. |
