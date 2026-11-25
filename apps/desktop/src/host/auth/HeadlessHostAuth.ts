@@ -6,6 +6,7 @@ import { AuthService, type AuthServiceDeps } from '../../main/auth/AuthService';
 import { normalizeSelection, validateSelection } from '../../main/auth/environment';
 import { TokenVault, type VaultFile } from '../../main/auth/tokenVault';
 import { createVaultFile } from '../../main/auth/vaultFile';
+import { accountOf } from '../server/hostControl';
 import { createPermissionProtectedCipher } from './permissionProtectedCipher';
 import { ensurePrivateDirectory, restrictMode } from './privateDirectory';
 
@@ -110,9 +111,7 @@ class HeadlessHostAuthService implements HeadlessHostAuth {
   }
 
   status(): HostAuthStatus {
-    const state = this.service.getState();
-    if (state.status !== 'signed-in' || !state.user) return { account: null };
-    return { account: { userId: state.user.id, environmentUrl: state.environment.url } };
+    return { account: accountOf(this.service.getState()) };
   }
 
   cancelSignIn(): Promise<void> {

@@ -93,10 +93,6 @@ describe('HostServer', () => {
       [
         'background/stop',
         'fs/browse',
-        'host/auth/start',
-        'host/auth/status',
-        'host/info',
-        'host/initialize',
         'project/recent',
         'request/respond',
         'session/create',
@@ -132,6 +128,10 @@ describe('HostServer', () => {
     ['draft/defaults', []],
     ['project/forgetRecent', {}],
     ['project/inspect', { directory: 3 }],
+    ['host/initialize', { clientId: 'c1' }],
+    ['host/info', 'now'],
+    ['host/auth/start', 3],
+    ['host/auth/status', []],
   ];
   it.each(invalidParams)('rejects invalid params for %s without calling the runtime', async (method, params) => {
     const { client, runtime } = serve();
