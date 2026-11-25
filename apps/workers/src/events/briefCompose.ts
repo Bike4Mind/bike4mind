@@ -1,6 +1,7 @@
 import { withEventContext } from '@workers/utils/eventContext';
 import { loadPendingBriefEmails } from './loadPendingBriefEmails';
 import { loadPendingBriefDelegations } from './loadPendingBriefDelegations';
+import { notifyHeldBlockRuns } from '@bike4mind/server-utils/briefs/notifyHeldBlockRuns';
 import { BriefEvents } from '@bike4mind/server-utils/utils/eventBus';
 import {
   agentExecutionRepository,
@@ -65,6 +66,8 @@ export type BriefComposeDeps = {
   /** The user's standing instruction texts. A failing load means the brief is composed without them. */
   loadInstructions(userId: string): Promise<string[]>;
   push(event: PushNotificationEvent): Promise<void>;
+  /** Summary push for runs a busy block held, sent when that block's brief is discarded or fails. */
+  notifyHeldRuns(userId: string, block: { start: Date; end: Date }): Promise<void>;
   /** `markBriefed` records the triage items a ready brief carried; the rest stay pending for the next brief. */
   emails: Pick<typeof emailTriageItemRepository, 'markBriefed' | 'storedEmailIds'>;
   /** Records the settled delegated items a ready brief carried; pending ones stay for a later brief. */
@@ -122,6 +125,7 @@ export async function composeBrief(
         } else {
           await briefs.markFailed(input.briefId, gate);
         }
+        await notifyIfBlockBrief(deps, brief);
         return;
       }
       const instructions = await loadInstructionsSafely(deps, input.userId);
@@ -130,6 +134,7 @@ export async function composeBrief(
     } else if (input.scheduled) {
       // A scheduled brief with nothing to report is dropped: no row, no push.
       await briefs.discardComposing(input.briefId);
+      await notifyIfBlockBrief(deps, brief);
       return;
     } else {
       composed = emptyBrief();
@@ -156,7 +161,12 @@ export async function composeBrief(
   } catch (error) {
     logger.error('[Brief] composition failed', { briefId: input.briefId, error });
     await briefs.markFailed(input.briefId, 'composition_failed');
+    await notifyIfBlockBrief(deps, brief);
   }
+}
+
+async function notifyIfBlockBrief(deps: BriefComposeDeps, brief: IAssistantBrief) {
+  if (brief.trigger === 'busy_block' && brief.busyBlock) await deps.notifyHeldRuns(brief.userId, brief.busyBlock);
 }
 
 /**
@@ -213,7 +223,7 @@ export async function loadActivity(brief: IAssistantBrief, now: Date): Promise<B
   // Pending rather than windowed: an item a failed brief or a section cap left out is carried to the next brief.
   // A block brief takes only the block's arrivals; earlier pending items wait for the next regular brief.
   const emails = await loadPendingBriefEmails(brief.userId, brief.periodEnd, block?.start);
-  const delegations = await loadPendingBriefDelegations(brief.userId, brief.periodEnd, now);
+  const delegations = await loadPendingBriefDelegations(brief.userId, brief.periodEnd, now, block?.start);
 
   return {
     periodStart: brief.periodStart,
@@ -295,6 +305,7 @@ export const handler = withEventContext(async (event, logger) => {
         return reply;
       },
       push: pushEvent => publishPushNotification(pushEvent, logger),
+      notifyHeldRuns: (userId, block) => notifyHeldBlockRuns(userId, block),
       emails: emailTriageItemRepository,
       delegations: delegatedItemRepository,
       logger,

@@ -9,6 +9,7 @@ import {
   type IAssistantBrief,
 } from '@bike4mind/database';
 import { BRIEF_MAX_WINDOW_MS, BRIEF_MIN_GAP_MS, SCHEDULED_BRIEF_MIN_GAP_MS, briefWindow } from './briefSchedule';
+import { notifyHeldBlockRuns } from './notifyHeldBlockRuns';
 import { BriefComposeRejectedError, publishBriefCompose } from './publishBriefCompose';
 import { Logger } from '@bike4mind/observability';
 
@@ -153,6 +154,7 @@ const defaultScheduledDeps: ScheduledBriefDeps = {
     );
     return sections.some(items => items.length > 0);
   },
+  notifyHeldRuns: (userId, block) => notifyHeldBlockRuns(userId, block),
 };
 
 /**
@@ -227,6 +229,8 @@ export type BlockBriefDeps = Deps & {
   hasRunsBetween(userId: string, start: Date, end: Date): Promise<boolean>;
   /** Whether triaged email not yet briefed arrived in `[start, end)`. */
   hasEmailsBetween(userId: string, start: Date, end: Date): Promise<boolean>;
+  /** Sends the summary for runs whose pushes the block held, when no block brief will report them. */
+  notifyHeldRuns(userId: string, block: BusyBlockInterval): Promise<void>;
 };
 
 const defaultBlockDeps: BlockBriefDeps = {
@@ -263,7 +267,10 @@ export async function startBlockBrief(
 ): Promise<BlockBriefOutcome> {
   const user = await deps.users.findById(userId);
   if (!user) return 'user_missing';
-  if (user.preferences?.busyBlockBrief?.enabled !== true) return 'busy_off';
+  if (user.preferences?.busyBlockBrief?.enabled !== true) {
+    await deps.notifyHeldRuns(userId, block);
+    return 'busy_off';
+  }
   if (!isPushCategoryEnabled(user.preferences?.pushNotifications, 'brief_ready')) return 'push_off';
   if (await deps.briefs.findActiveComposing(userId, deps.now())) return 'in_flight';
 
@@ -272,7 +279,11 @@ export async function startBlockBrief(
     deps.hasRunsBetween(userId, window.periodStart, window.periodEnd),
     deps.hasEmailsBetween(userId, block.start, block.end),
   ]);
-  if (!hasRuns && !hasEmails) return 'no_activity';
+  // A run created before the straddle lookback can still finish in the block with its push held.
+  if (!hasRuns && !hasEmails) {
+    await deps.notifyHeldRuns(userId, block);
+    return 'no_activity';
+  }
 
   const { created } = await beginComposition(userId, deps, { scheduled: true, window, busyBlock: block });
   return created ? 'enqueued' : 'in_flight';

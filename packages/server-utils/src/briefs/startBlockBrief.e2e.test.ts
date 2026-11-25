@@ -74,6 +74,7 @@ const makeDeps = () => {
     hasRunsBetween: async (userId, start, end) =>
       (await agentExecutionRepository.findByUserIdPaginated(userId, { fromDate: start, toDate: end }, { limit: 1 }))
         .items.length > 0,
+    notifyHeldRuns: async () => undefined,
     hasEmailsBetween: async (userId, start, end) =>
       (
         await Promise.all(

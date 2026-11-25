@@ -549,6 +549,23 @@ describe('deliverPush', () => {
     });
   });
 
+  it('never holds the busy-block summary push', async () => {
+    const { deps } = makeDeps([{ token: 'tok-a', environment: 'production', id: 'dest-1' }], {
+      loadRecipient: vi.fn(async () => ({ preferences: undefined, redactContent: false, inBusyBlock: true })),
+    });
+    const event = {
+      ...EVENT,
+      category: 'agent_completed' as const,
+      busyBlockDigest: true as const,
+      destinationId: 'dest-1',
+      destinationSid: 'sid-live',
+    };
+
+    const result = await deliverPush(event, deps, logger);
+
+    expect(result).not.toEqual({ status: 'skipped', reason: 'busy_block_hold' });
+  });
+
   it.each(PUSH_NOTIFICATION_CATEGORIES)(
     'holds %s only when it is a held category inside a busy block',
     async category => {

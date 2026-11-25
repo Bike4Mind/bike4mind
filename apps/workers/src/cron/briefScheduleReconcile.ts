@@ -29,6 +29,7 @@ import {
   type BlockBriefOutcome,
   type ScheduledBriefOutcome,
 } from '@bike4mind/server-utils/briefs/startBriefComposition';
+import { notifyHeldBlockRuns } from '@bike4mind/server-utils/briefs/notifyHeldBlockRuns';
 import { Config } from '@bike4mind/server-utils/utils/config';
 import { Resource } from 'sst';
 
@@ -53,6 +54,8 @@ export type BriefScheduleReconcileDeps = {
   >;
   startScheduledBrief: (userId: string) => Promise<ScheduledBriefOutcome>;
   startBlockBrief: (userId: string, block: { start: Date; end: Date }) => Promise<BlockBriefOutcome>;
+  /** Summary push for a block dropped as stale; defaults to notifyHeldBlockRuns. */
+  notifyHeldBlockRuns?: (userId: string, block: { start: Date; end: Date }) => Promise<void>;
   /** True once the run should stop claiming users. */
   outOfTime: () => boolean;
 };
@@ -214,6 +217,7 @@ async function reconcileBlockBriefs(
     const withinRetryWindow = now.getTime() - ended.getTime() < RETRY_WINDOW_MS;
     if (!withinRetryWindow) {
       result.stale++;
+      await (deps.notifyHeldBlockRuns ?? notifyHeldBlockRuns)(user.id, block);
       continue;
     }
 

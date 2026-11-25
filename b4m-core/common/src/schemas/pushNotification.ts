@@ -50,6 +50,11 @@ export const PushNotificationEventSchema = z.object({
    * notification category with approve/deny or reply actions. The client re-fetches the brief before acting.
    */
   briefAction: z.enum(['approval', 'question']).optional(),
+  /**
+   * `agent_completed` only: the one summary sent for runs finished during a busy block whose block brief did
+   * not land (notifyHeldBlockRuns in packages/server-utils/src/briefs). Never held itself.
+   */
+  busyBlockDigest: z.literal(true).optional(),
 });
 
 export type PushNotificationEvent = z.infer<typeof PushNotificationEventSchema>;
