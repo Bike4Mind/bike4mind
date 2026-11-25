@@ -24,8 +24,9 @@ const TINT: Record<CreditsOrbTone, string> = {
 
 /**
  * A glass orb whose fill is the remaining balance. Quiet while ok (a hairline ring and a faint
- * fill, no colour); low and critical tint the fill and the ring, so a near-empty orb still shows it. Pure CSS, and nothing in it moves except a
- * level change easing, which reduced motion turns off.
+ * fill, no colour); low and critical tint the fill and the ring, so a near-empty orb still shows
+ * it. Pure CSS, and nothing in it moves except a level change easing, which reduced motion turns
+ * off.
  */
 export function CreditsOrbFace({ tone, level }: { tone: CreditsOrbTone; level: number }) {
   const attention = tone === 'low' || tone === 'critical';
@@ -114,10 +115,13 @@ export function CreditsOrb({
             {state.balance === null ? 'Balance unavailable' : `${formatCredits(state.balance)} credits`}
           </Typography>
         </Stack>
-        <Divider />
-        <MenuItem onClick={onTopUp} data-testid="rail-credits-top-up-btn">
-          Top up
-        </MenuItem>
+        {/* /billing tops up the personal account, so an organization pool offers none, as in the menu. */}
+        {glance.organization ? null : <Divider />}
+        {glance.organization ? null : (
+          <MenuItem onClick={onTopUp} data-testid="rail-credits-top-up-btn">
+            Top up
+          </MenuItem>
+        )}
       </Menu>
     </Dropdown>
   );

@@ -38,6 +38,10 @@ describe('creditsOrbState', () => {
     expect(creditsOrbState(personal(0, 1000, 10))).toMatchObject({ tone: 'critical', level: 0, balance: 0 });
   });
 
+  it('is full, not empty, for a positive balance with no recent burn', () => {
+    expect(creditsOrbState(personal(10_000, 0, null))).toMatchObject({ tone: 'ok', level: 1 });
+  });
+
   it('is unknown, with no fill, before any balance is read', () => {
     const glance: CreditsGlance = {
       profile: null,
@@ -53,7 +57,7 @@ describe('creditsOrbState', () => {
     const organization: BillingAccount = { id: 'org-1', name: 'Acme', personal: false, credits: 48_200 };
     const outlook = creditOutlook({ balance: 48_200, burnPerDay: 0, refillAt: null, expiring: undefined, now: NOW });
     const glance: CreditsGlance = { ...personal(5, 1, null), organization, outlook };
-    expect(creditsOrbState(glance).balance).toBe(48_200);
+    expect(creditsOrbState(glance)).toMatchObject({ balance: 48_200, level: 1, tone: 'ok' });
   });
 });
 

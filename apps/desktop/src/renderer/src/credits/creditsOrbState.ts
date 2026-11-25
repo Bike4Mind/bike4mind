@@ -1,5 +1,6 @@
 import type { CreditsGlance } from './useCreditsGlance';
 import type { CreditTone } from './creditOutlook';
+import { formatCredits } from './CreditsGlance';
 
 export type CreditsOrbTone = CreditTone | 'unknown';
 
@@ -25,11 +26,15 @@ const TONE_PHRASE: Record<CreditsOrbTone, string> = {
 export function creditsOrbState({ outlook, organization, profile }: CreditsGlance): CreditsOrbState {
   const balance = organization ? organization.credits : (profile?.credits.balance ?? null);
   if (outlook.kind === 'unknown') return { tone: 'unknown', level: 0, balance };
-  return { tone: outlook.tone, level: outlook.ringFill, balance };
+  // The ring leaves `idle` (no burn to project from) empty because a number sits beside it; the
+  // orb has none until clicked, so an idle balance that is positive reads as full, not out.
+  const hasBalance = balance !== null && balance > 0;
+  const level = outlook.kind === 'idle' && hasBalance ? 1 : outlook.ringFill;
+  return { tone: outlook.tone, level, balance };
 }
 
 /** The orb's accessible name; always carries the state, since colour alone cannot. */
 export function creditsOrbLabel(state: CreditsOrbState): string {
-  const balance = state.balance === null ? '' : `, ${Math.round(state.balance).toLocaleString()} credits`;
+  const balance = state.balance === null ? '' : `, ${formatCredits(state.balance)} credits`;
   return `Credits: ${TONE_PHRASE[state.tone]}${state.tone === 'unknown' ? '' : balance}`;
 }

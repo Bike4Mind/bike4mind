@@ -181,7 +181,7 @@ export function SignedInRailAccount({
   context: RailAccountContext;
 }) {
   const [feedbackOpen, setFeedbackOpen] = useState(false);
-  const [accountMenuOpen, setMenuOpen] = useState(false);
+  const [accountMenuOpen, setAccountMenuOpen] = useState(false);
   const [orbOpen, setOrbOpen] = useState(false);
   // Either surface opening asks for a fresh read; refreshGate decides whether one happens.
   const menuOpen = accountMenuOpen || orbOpen;
@@ -200,7 +200,7 @@ export function SignedInRailAccount({
       <CreditsOrb glance={credits} onOpenChange={setOrbOpen} onTopUp={() => void navigate({ to: '/billing' })} />
       <RailAccountButton
         dot={dot}
-        onOpenChange={setMenuOpen}
+        onOpenChange={setAccountMenuOpen}
         face={
           // `src` is a b4m-media: URL main wrote to disk; Joy falls back to the initials when it
           // is missing or fails to load, so they are both the placeholder and the final answer.
