@@ -1,4 +1,5 @@
 import { Logger } from '@bike4mind/observability';
+import { configureSecretsAtRest } from '@bike4mind/utils/security';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { AuthStrategy, PENDING_FREE_CREDITS_TAG } from '@bike4mind/common';
 import { ACCOUNT_LINK_VERIFICATION_REQUIRED, ACCOUNT_LINK_EMAIL_MISMATCH } from './oauthAccountLink';
@@ -146,6 +147,7 @@ const runStandard = (
 
 beforeEach(() => {
   mockFindOne.mockReset();
+  configureSecretsAtRest(undefined);
   mockUpdateOne.mockReset();
   mockCreate.mockReset();
   mockRevokeAllByUserId.mockReset();
