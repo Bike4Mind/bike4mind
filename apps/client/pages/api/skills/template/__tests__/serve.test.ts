@@ -10,6 +10,8 @@ const h = vi.hoisted(() => ({
   audience: vi.fn(),
   credits: vi.fn(),
   freeRun: vi.fn(),
+  snapshot: vi.fn(),
+  signMedia: vi.fn(),
   baseApiOptions: [] as unknown[],
 }));
 
@@ -51,13 +53,26 @@ vi.mock('@server/skillMarket/templatePage', async () => {
   );
   return { ...actual, findServableTemplate: h.find, recordTemplateView: h.record };
 });
-vi.mock('@server/skillMarket/templateFreeRun', () => ({ freeRunPageState: h.freeRun }));
+vi.mock('@server/skillMarket/templateFreeRun', () => ({
+  freeRunPageState: h.freeRun,
+  renderFreeRunResult: (md: string) => ({ html: `<p>${md.replace(/</g, '&lt;')}</p>`, hasDiagram: false }),
+}));
+vi.mock('@server/skillMarket/template', () => ({
+  isLive: () => true,
+  approvedSnapshotOf: h.snapshot,
+  requireOwnListing: vi.fn(),
+}));
+vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
+  getFilesStorage: () => ({ getSignedUrl: h.signMedia }),
+  getGeneratedImageStorage: () => ({ getSignedUrl: h.signMedia }),
+}));
 vi.mock('@server/utils/starterCredits', () => ({ getOpenSignupStarterCredits: h.credits }));
 vi.mock('@client/config/general', () => ({ getBrandName: () => 'Acme' }));
 
 import handler from '../serve';
 import {
   MERMAID_SCRIPT_SRC,
+  TEMPLATE_EXAMPLE_SCRIPT_HASH,
   TEMPLATE_FREE_RUN_SCRIPT_HASH,
   TEMPLATE_LOADER_SCRIPT_HASH,
 } from '@server/skillMarket/templatePage';
@@ -86,6 +101,9 @@ const listing = (over: Record<string, unknown> = {}) => ({
   hiddenByReports: false,
   deletedAt: null,
   shareToken: 'share-token',
+  authorName: 'Ada',
+  ratingSum: 0,
+  ratingCount: 0,
   ...over,
 });
 
@@ -112,6 +130,8 @@ beforeEach(() => {
   h.audience.mockResolvedValue({ orgIds: [], spaceIds: [] });
   h.credits.mockResolvedValue(2500);
   h.freeRun.mockResolvedValue(null);
+  h.snapshot.mockResolvedValue({ snapshot: { allowedTools: [] }, versionId: 'v1' });
+  h.signMedia.mockImplementation(async (key: string) => `https://media.example.com/${key}?sig=1`);
 });
 
 describe('GET /t/[slug]', () => {
@@ -171,12 +191,12 @@ describe('GET /t/[slug]', () => {
       expect(html).toContain('<meta property="og:url" content="https://localhost:3000/t/article-bullets">');
       expect(html).toContain(`<meta property="og:image" content="https://localhost:3000${imagePath}">`);
       expect(html).toContain('<meta name="twitter:card" content="summary_large_image">');
-      expect(html).toContain(
-        '<meta name="description" content="Acme skill /article-bullets. You bring: An article, A tone (optional).">'
-      );
+      expect(html).toContain('<meta name="description" content="Try the /article-bullets skill on Acme, by Ada.">');
       expect(html).toContain('<meta name="robots" content="noindex,nofollow">');
       expect(html).toContain(`src="${imagePath}"`);
-      expect(html).toContain('Acme skill <code>/article-bullets</code>');
+      expect(html).not.toContain('template-page-badge');
+      expect(html).not.toContain('template-page-input-chip');
+      expect(html).toContain('data-testid="template-page-byline">by Ada</p>');
       expect(html).toContain('href="/skills/market/try/article-bullets"');
       expect(html).toContain('New accounts start with 2,500 free credits.');
       expect(html).not.toContain('<script');
@@ -274,7 +294,7 @@ describe('GET /t/[slug]', () => {
         headline: '<script>alert(1)</script>',
         inputs: [{ label: '"><img src=x onerror=alert(1)>', required: true }],
       }),
-      listing: listing({ name: 'a"b<c' }),
+      listing: listing({ name: 'a"b<c', authorName: '<b>x</b>' }),
     });
     const { res, run } = call({ slug: 'article-bullets' });
     await run();
@@ -283,8 +303,51 @@ describe('GET /t/[slug]', () => {
     expect(html).not.toContain('<script>alert(1)</script>');
     expect(html).not.toContain('<img src=x');
     expect(html).toContain('&lt;script&gt;alert(1)&lt;/script&gt;');
-    expect(html).toContain('&quot;&gt;&lt;img src=x onerror=alert(1)&gt;');
+    expect(html).toContain('&lt;b&gt;x&lt;/b&gt;');
     expect(html).toContain('/a&quot;b&lt;c');
+  });
+
+  describe('example run', () => {
+    const csp = (res: { getHeader: (name: string) => unknown }) => String(res.getHeader('Content-Security-Policy'));
+    const withExample = (over: Record<string, unknown> = {}) =>
+      template({
+        example: {
+          status: 'failed',
+          enabled: true,
+          prompt: 'Summarize this',
+          reply: 'Five bullets',
+          steps: [],
+          media: { kind: 'image', items: [{ key: 'gen/a.png', mime: 'image/png', bytes: 10 }] },
+          ...over,
+        },
+      });
+
+    it('plays a stored example, admitting its script by hash and signed media', async () => {
+      h.find.mockResolvedValue({ template: withExample(), listing: listing() });
+      const { res, run } = call({ slug: 'article-bullets' });
+      await run();
+      const html = body(res);
+      expect(html).toContain('data-testid="template-page-example"');
+      expect(html).toContain('<p>Five bullets</p>');
+      expect(html).toContain('src="https://media.example.com/gen/a.png?sig=1"');
+      expect(csp(res)).toContain(`script-src ${TEMPLATE_EXAMPLE_SCRIPT_HASH}`);
+      expect(csp(res)).toContain('media-src https:');
+    });
+
+    it('keeps the single-column page when the author turned the demo off', async () => {
+      h.find.mockResolvedValue({ template: withExample({ enabled: false }), listing: listing() });
+      const { res, run } = call({ slug: 'article-bullets' });
+      await run();
+      expect(body(res)).not.toContain('template-page-example');
+      expect(csp(res)).not.toContain('script-src');
+    });
+
+    it('lists the connectors the approved version needs', async () => {
+      h.snapshot.mockResolvedValue({ snapshot: { allowedTools: ['github__list_issues'] }, versionId: 'v1' });
+      const { res, run } = call({ slug: 'article-bullets' });
+      await run();
+      expect(body(res)).toContain('Needs GitHub connected');
+    });
   });
 
   describe('free run', () => {

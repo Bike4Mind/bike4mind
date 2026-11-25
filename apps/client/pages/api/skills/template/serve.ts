@@ -1,26 +1,22 @@
 import type { NextFunction, Request, Response } from 'express';
-import { SKILL_TEMPLATE_SLUG_MAX, SKILL_TEMPLATE_SLUG_PATTERN, skillTemplatePreviewImagePath } from '@bike4mind/common';
+import { SKILL_TEMPLATE_SLUG_MAX, SKILL_TEMPLATE_SLUG_PATTERN } from '@bike4mind/common';
 import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { resolveDocOrigin } from '@bike4mind/server-utils/services/publish/viewerSecurity';
 import { audienceIdsFor, canSeeListing } from '@bike4mind/server-utils/skillMarket/market';
-import { getBrandName } from '@client/config/general';
 import { baseApi } from '@server/middlewares/baseApi';
 import { optionalJwtAuth } from '@server/middlewares/optionalJwtAuth';
 import { renderNotFoundPage } from '@server/services/publish/renderNotFoundPage';
-import { isPublicTemplatePage, templateImageDeps, templatePageImageFile } from '@server/skillMarket/templateImage';
-import { freeRunPageState } from '@server/skillMarket/templateFreeRun';
+import { isPublicTemplatePage } from '@server/skillMarket/templateImage';
 import {
-  MERMAID_SCRIPT_SRC,
-  TEMPLATE_FREE_RUN_SCRIPT_HASH,
-  TEMPLATE_LOADER_SCRIPT_HASH,
-  TURNSTILE_ORIGIN,
   findServableTemplate,
   recordTemplateView,
   renderTemplateLoaderShell,
   renderTemplatePage,
-  type ServableTemplate,
+  templatePageCsp,
+  TEMPLATE_LOADER_SCRIPT_HASH,
+  TEMPLATE_PAGE_BASE_CSP,
 } from '@server/skillMarket/templatePage';
-import { getOpenSignupStarterCredits } from '@server/utils/starterCredits';
+import { buildTemplatePageView } from '@server/skillMarket/templatePageView';
 
 /**
  * GET /t/<slug> (rewritten here by next.config.mjs): a published template's public page, modeled on
@@ -31,24 +27,10 @@ import { getOpenSignupStarterCredits } from '@server/utils/starterCredits';
 
 const optionalJwtShim = optionalJwtAuth();
 
-const BASE_CSP = [
-  "default-src 'none'",
-  "style-src 'unsafe-inline'",
-  // A member render signs its image on the storage origin, which differs per deployment.
-  "img-src 'self' data: https:",
-  "base-uri 'none'",
-  "form-action 'none'",
-  "frame-ancestors 'self'",
-];
-const PAGE_CSP = BASE_CSP.join('; ');
-// A page with the free-run box also runs its script, the Turnstile widget and, for a diagram, mermaid.
-const FREE_RUN_PAGE_CSP = [
-  ...BASE_CSP,
-  `script-src ${TEMPLATE_FREE_RUN_SCRIPT_HASH} ${TURNSTILE_ORIGIN} ${MERMAID_SCRIPT_SRC}`,
-  `frame-src ${TURNSTILE_ORIGIN}`,
-  "connect-src 'self'",
-].join('; ');
-const LOADER_CSP = [...BASE_CSP, `script-src ${TEMPLATE_LOADER_SCRIPT_HASH}`, "connect-src 'self'"].join('; ');
+const PAGE_CSP = TEMPLATE_PAGE_BASE_CSP.join('; ');
+const LOADER_CSP = [...TEMPLATE_PAGE_BASE_CSP, `script-src ${TEMPLATE_LOADER_SCRIPT_HASH}`, "connect-src 'self'"].join(
+  '; '
+);
 
 function runShim(
   shim: (req: Request, res: Response, next: NextFunction) => unknown,
@@ -109,32 +91,15 @@ const handler = baseApi({ auth: false, allowedMethods: ['GET'] })
     }
 
     const origin = resolveDocOrigin(req.headers.host, req.headers['x-forwarded-proto']);
-    const [imageSrc, starterCredits, freeRun] = await Promise.all([
-      imageSrcFor(template, listing, isPublic),
-      isPublic ? getOpenSignupStarterCredits() : Promise.resolve(0),
-      freeRunPageState(template, listing, req.headers.cookie).catch(error => {
-        req.logger?.warn('template page: free-run state unreadable', error);
-        return null;
-      }),
-    ]);
-    const brandName = getBrandName();
-    const html = renderTemplatePage({
-      slug: template.slug,
-      skillName: listing.name,
-      headline: template.headline,
-      inputs: template.inputs,
-      imageSrc,
-      starterCredits,
-      brandName,
-      share: isPublic
-        ? {
-            canonicalUrl: `${origin}/t/${encodeURIComponent(template.slug)}`,
-            imageUrl: imageSrc ? `${origin}${imageSrc}` : null,
-            siteName: process.env.APP_NAME || brandName,
-          }
-        : null,
-      freeRun,
+    const view = await buildTemplatePageView({
+      template,
+      listing,
+      isPublic,
+      origin,
+      cookieHeader: req.headers.cookie,
+      logger: req.logger,
     });
+    const html = renderTemplatePage(view);
 
     await recordTemplateView(template).catch(error =>
       req.logger?.warn('template page: view count update failed', error)
@@ -146,23 +111,8 @@ const handler = baseApi({ auth: false, allowedMethods: ['GET'] })
       res.setHeader('Content-Security-Policy', "default-src 'none'; sandbox");
       return res.status(200).send(html);
     }
-    return sendHtml(res, 200, html, freeRun?.state === 'open' ? FREE_RUN_PAGE_CSP : PAGE_CSP);
+    return sendHtml(res, 200, html, templatePageCsp(view));
   });
-
-/**
- * Public pages point at the cacheable public image route; a member-only page signs the file directly,
- * because that route serves nothing for a listing outside the public audience.
- */
-async function imageSrcFor(
-  template: ServableTemplate,
-  listing: Parameters<typeof templatePageImageFile>[1],
-  isPublic: boolean
-): Promise<string | null> {
-  const file = await templatePageImageFile(template, listing);
-  if (!file || !template.previewImage) return null;
-  if (isPublic) return skillTemplatePreviewImagePath(template.slug, template.previewImage.fabFileId);
-  return templateImageDeps().signFileUrl(file.filePath, file.mimeType);
-}
 
 export default handler;
 

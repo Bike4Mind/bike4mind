@@ -90,19 +90,6 @@ describe('renderTemplatePage', () => {
     share: null,
   };
 
-  it('draws required inputs solid and optional ones dashed', () => {
-    const html = renderTemplatePage(view);
-    expect(html).toContain(
-      '<li class="chip" data-testid="template-page-input-chip" data-required="true">An article</li>'
-    );
-    expect(html).toContain('class="chip optional" data-testid="template-page-input-chip" data-required="false">A tone');
-    expect(html).toMatch(/\.chip\.optional\{border-style:dashed/);
-  });
-
-  it('leaves out the inputs block when the template lists none', () => {
-    expect(renderTemplatePage({ ...view, inputs: [] })).not.toContain('You bring');
-  });
-
   describe('free run', () => {
     const open = { state: 'open', siteKey: 'site-"key', inputMaxChars: 8000 } as const;
 
