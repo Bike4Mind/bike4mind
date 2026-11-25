@@ -45,6 +45,13 @@ describe('userRepository interruption feedback', () => {
     expect(await userRepository.getInterruptionFeedback(userId)).toEqual({ agent_completed: true });
   });
 
+  it('persists a patch when the stored feedback is null', async () => {
+    const userId = await insertUser({ preferences: { interruptionFeedback: null } });
+    expect(await userRepository.setInterruptionFeedback(userId, { agent_failed: true })).toEqual({
+      agent_failed: true,
+    });
+  });
+
   it('keeps the other category on a partial patch', async () => {
     const userId = await insertUser();
     await userRepository.setInterruptionFeedback(userId, { agent_completed: true });

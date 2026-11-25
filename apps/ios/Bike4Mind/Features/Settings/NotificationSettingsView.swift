@@ -63,7 +63,9 @@ private struct NotificationSettingsContent: View {
     .task(id: scenePhase) { if scenePhase == .active { await model.load() } }
     .task { await brief.load() }
     .task { await busyBlocks.load() }
-    .task { await interruptions.load() }
+    .task(id: scenePhase) {
+      if scenePhase == .active && !interruptions.isLoaded { await interruptions.load() }
+    }
   }
 
   private var masterSection: some View {

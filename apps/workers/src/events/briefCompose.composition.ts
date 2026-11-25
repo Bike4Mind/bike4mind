@@ -426,10 +426,16 @@ export function briefPushContent(
 /**
  * The push categories a busy-block brief reports, which sendPush checks against the user's interruption
  * feedback. Decisions count as approval_needed and every non-run section as brief_ready, so neither can be held.
+ * Only a terminal completed or failed run is teachable; any other status (in flight, paused at a gate, awaiting
+ * permission, aborted) counts as brief_ready so it never lets the push be held.
  */
 export function blockBriefPushCategories(brief: ComposedBrief, activity: BriefActivity): PushNotificationCategory[] {
   const categories = new Set<PushNotificationCategory>();
-  for (const run of activity.runs) categories.add(run.status === 'failed' ? 'agent_failed' : 'agent_completed');
+  for (const run of activity.runs) {
+    if (run.status === 'completed') categories.add('agent_completed');
+    else if (run.status === 'failed') categories.add('agent_failed');
+    else categories.add('brief_ready');
+  }
   if (brief.decisions.length > 0 || activity.approvals.length > 0 || activity.questions.length > 0) {
     categories.add('approval_needed');
   }

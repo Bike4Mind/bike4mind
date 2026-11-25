@@ -2016,6 +2016,11 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
     }
     if (Object.keys(set).length > 0) {
       await this.ensurePreferencesObject(userId);
+      await this.model.updateOne(
+        { _id: userId, 'preferences.interruptionFeedback': null },
+        { $set: { 'preferences.interruptionFeedback': {} } },
+        { runValidators: true }
+      );
       await this.model.updateOne({ _id: userId }, { $set: set }, { runValidators: true });
     }
     return this.getInterruptionFeedback(userId);

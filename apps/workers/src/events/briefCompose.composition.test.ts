@@ -429,6 +429,19 @@ describe('blockBriefPushCategories', () => {
     expect(blockBriefPushCategories(emptyBrief(), activity)).toEqual(['agent_completed', 'agent_failed']);
   });
 
+  it.each(['pending', 'running', 'continuing', 'awaiting_permission', 'awaiting_subagent', 'paused', 'aborted'])(
+    'maps a %s run to brief_ready, never a teachable run category',
+    status => {
+      const activity = { ...runsOnly(), runs: [{ ...failed, id: 'r9', status, errorMessage: undefined }] };
+      expect(blockBriefPushCategories(emptyBrief(), activity)).toEqual(['brief_ready']);
+    }
+  );
+
+  it('keeps a completed run with an in-flight one unholdable', () => {
+    const activity = { ...runsOnly(), runs: [...runsOnly().runs, { ...failed, id: 'r9', status: 'paused' }] };
+    expect(blockBriefPushCategories(emptyBrief(), activity)).toEqual(['agent_completed', 'brief_ready']);
+  });
+
   it('adds approval_needed for a decision, an approval or a question', () => {
     expect(blockBriefPushCategories(emptyBrief(), baseActivity())).toEqual(['agent_completed', 'approval_needed']);
     expect(blockBriefPushCategories(emptyBrief(), { ...runsOnly(), questions: [question(1)] })).toContain(
