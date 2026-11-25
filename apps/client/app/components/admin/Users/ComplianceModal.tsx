@@ -3,6 +3,8 @@ import { Alert, Button, Chip, LinearProgress, Stack, Typography } from '@mui/joy
 import type { UserComplianceResponse } from '@bike4mind/common';
 import { AdminDialog } from '@client/app/components/admin/shared/AdminDialog';
 import { DataTable, type DataColumn } from '@client/app/components/admin/shared/DataTable';
+import { Dash } from '@client/app/components/admin/shared/Dash';
+import { EmptyState } from '@client/app/components/admin/shared/EmptyState';
 import { create } from 'zustand';
 import { useShallow } from 'zustand/react/shallow';
 import { getErrorMessage } from '@client/app/utils/error';
@@ -21,8 +23,13 @@ const fmt = (d: string | Date | null | undefined) => (d ? new Date(d).toLocaleSt
 type Incident = UserComplianceResponse['moderationIncidents'][number] & { rowId: string };
 type AuthEvent = UserComplianceResponse['recentAuthEvents'][number] & { rowId: string };
 
-// The API caps both lists (ROW_LIMIT in pages/api/admin/users/[userId]/compliance.ts), so they render unpaged.
 const TABLE_MAX_HEIGHT = '40vh';
+
+const Mono = ({ children }: { children: string }) => (
+  <Typography level="body-sm" sx={{ fontFamily: 'code', color: 'inherit' }}>
+    {children}
+  </Typography>
+);
 
 const INCIDENT_COLUMNS: DataColumn<Incident>[] = [
   { id: 'when', label: 'When', width: '11rem', render: m => fmt(m.createdAt) },
@@ -41,8 +48,13 @@ const AUTH_EVENT_COLUMNS: DataColumn<AuthEvent>[] = [
   { id: 'event', label: 'Event', render: e => e.event },
   // actorUserId is only set for admin-driven events (e.g. session_revoked) - a self-initiated
   // logout has no distinct actor to show.
-  { id: 'actor', label: 'Actor', render: e => e.actorUserId ?? '-' },
-  { id: 'ip', label: 'IP', render: e => e.actorIp },
+  {
+    id: 'actor',
+    label: 'Actor',
+    wrap: true,
+    render: e => (e.actorUserId ? <Mono>{e.actorUserId}</Mono> : <Dash title="No actor" />),
+  },
+  { id: 'ip', label: 'IP', wrap: true, render: e => <Mono>{e.actorIp}</Mono> },
   { id: 'userAgent', label: 'User agent', wrap: true, render: e => e.userAgent },
 ];
 
@@ -108,10 +120,11 @@ const ComplianceModal = () => {
               rows={incidents}
               columns={INCIDENT_COLUMNS}
               getRowId={getRowId}
+              // The API caps both lists (ROW_LIMIT in pages/api/admin/users/[userId]/compliance.ts), so neither pages.
               pagination={false}
               maxHeight={TABLE_MAX_HEIGHT}
               onRetry={() => void refetch()}
-              empty="No incidents."
+              empty={<EmptyState title="No incidents" action={null} />}
             />
           </Stack>
 
@@ -141,7 +154,7 @@ const ComplianceModal = () => {
               pagination={false}
               maxHeight={TABLE_MAX_HEIGHT}
               onRetry={() => void refetch()}
-              empty="No recent events."
+              empty={<EmptyState title="No recent events" action={null} />}
             />
           </Stack>
         </Stack>

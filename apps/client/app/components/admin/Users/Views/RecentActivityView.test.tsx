@@ -62,6 +62,8 @@ describe('RecentActivityView', () => {
     expect(within(table).getAllByTestId(/^admin-table-row-/)).toHaveLength(10);
     expect(within(table).getByText('user-9')).toBeInTheDocument();
     expect(within(table).queryByText('user-10')).toBeNull();
+    // DataTable only ellipsizes a td or its direct Typography child.
+    expect(within(table).getByText('user-9').parentElement?.tagName).toBe('TD');
     expect(screen.queryByTestId('recent-activity-mobile-summary-10')).toBeNull();
     expect(screen.queryByTestId('admin-table-footer')).toBeNull();
   });

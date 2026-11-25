@@ -128,8 +128,12 @@ describe('ComplianceModal', () => {
   it('shows each empty list as its own message', () => {
     mockData.mockReturnValue({ data: NEVER_ACCEPTED, isLoading: false });
     render(<ComplianceModal />, { wrapper: TestWrapper });
-    expect(screen.getByText('No incidents.')).toBeInTheDocument();
-    expect(screen.getByText('No recent events.')).toBeInTheDocument();
+    expect(within(screen.getByTestId('compliance-incidents-table')).getByTestId('admin-empty-state')).toHaveTextContent(
+      'No incidents'
+    );
+    expect(within(screen.getByTestId('compliance-auth-events')).getByTestId('admin-empty-state')).toHaveTextContent(
+      'No recent events'
+    );
   });
 
   it('formats incident labels with confidence and shows a dash for a missing actor', () => {
@@ -163,9 +167,10 @@ describe('ComplianceModal', () => {
     render(<ComplianceModal />, { wrapper: TestWrapper });
     expect(screen.getByText('Explicit (98%), Violence (50%)')).toBeInTheDocument();
     const logoutRow = screen.getByText('logout').closest('tr') as HTMLElement;
-    expect(within(logoutRow).getByText('-')).toBeInTheDocument();
+    expect(within(logoutRow).getByLabelText('No actor')).toHaveTextContent('\u2014');
     const revokedRow = screen.getByText('session_revoked').closest('tr') as HTMLElement;
-    expect(within(revokedRow).getByText('admin-1')).toBeInTheDocument();
+    expect(within(revokedRow).getByText('admin-1').closest('td')).toHaveAttribute('data-cell-wrap');
+    expect(within(revokedRow).getByText('5.6.7.8').closest('td')).toHaveAttribute('data-cell-wrap');
   });
 
   it('renders every returned row without a pager', () => {

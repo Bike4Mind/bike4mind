@@ -26,22 +26,29 @@ interface IActivityMetadata {
 
 const formatTime = (datetime: Date) => new Date(datetime).toLocaleString();
 
+const Mono = ({ children }: { children: string }) => (
+  <Typography level="body-sm" sx={{ fontFamily: 'code', color: 'inherit' }}>
+    {children}
+  </Typography>
+);
+
 const COLUMNS: DataColumn<IActivityLog>[] = [
   {
     id: 'userId',
     label: 'User ID',
-    render: row => <Box sx={{ fontFamily: 'monospace' }}>{row.userId}</Box>,
+    render: row => <Mono>{row.userId}</Mono>,
   },
   {
     id: 'clientIp',
     label: 'IP Address',
     width: '10rem',
-    render: row => <Box sx={{ fontFamily: 'monospace' }}>{row.clientIp}</Box>,
+    wrap: true,
+    render: row => <Mono>{row.clientIp}</Mono>,
   },
   {
     id: 'path',
     label: 'Endpoint',
-    render: row => <Box sx={{ fontFamily: 'monospace' }}>{row.path}</Box>,
+    render: row => <Mono>{row.path}</Mono>,
   },
   { id: 'datetime', label: 'Time', width: '12rem', render: row => formatTime(row.datetime) },
 ];
@@ -76,7 +83,7 @@ const RecentActivityRow: React.FC<{ activity: IActivityLog; index: number }> = (
         sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', p: 1, cursor: 'pointer' }}
       >
         <Stack direction="column" sx={{ flex: 1, minWidth: 0 }}>
-          <Typography level="body-sm" fontWeight={600} noWrap sx={{ fontFamily: 'monospace' }}>
+          <Typography level="body-sm" fontWeight={600} noWrap sx={{ fontFamily: 'code' }}>
             {activity.path}
           </Typography>
           <Typography level="body-xs" color="neutral" noWrap>
@@ -91,11 +98,14 @@ const RecentActivityRow: React.FC<{ activity: IActivityLog; index: number }> = (
       {expanded && (
         <Stack spacing={1} sx={{ px: 1, pb: 1 }}>
           {DETAIL_FIELDS.map(field => (
-            <Stack key={field.label} direction="row" spacing={1} alignItems="center" sx={{ minWidth: 0 }}>
+            <Stack key={field.label} direction="row" spacing={1} alignItems="baseline" sx={{ minWidth: 0 }}>
               <Typography level="body-xs" fontWeight={600} sx={{ minWidth: 60 }}>
                 {field.label}:
               </Typography>
-              <Typography level="body-xs" noWrap sx={field.mono ? { fontFamily: 'monospace' } : undefined}>
+              <Typography
+                level="body-xs"
+                sx={{ minWidth: 0, overflowWrap: 'anywhere', ...(field.mono && { fontFamily: 'code' }) }}
+              >
                 {field.value(activity)}
               </Typography>
             </Stack>
