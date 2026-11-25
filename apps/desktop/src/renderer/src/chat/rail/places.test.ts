@@ -22,8 +22,13 @@ describe('place memory', () => {
     expect(readPlaceMemory()).toBeNull();
     window.localStorage.setItem('b4m.chat.places', '{not json');
     expect(readPlaceMemory()).toBeNull();
-    window.localStorage.setItem('b4m.chat.places', JSON.stringify({ place: 'agents' }));
+    window.localStorage.setItem('b4m.chat.places', JSON.stringify({ place: 'library' }));
     expect(readPlaceMemory()).toBeNull();
+  });
+
+  it('restores the Agents place', () => {
+    writePlaceMemory({ place: 'agents', chat: 'c1' });
+    expect(readPlaceMemory()).toEqual({ place: 'agents', chat: 'c1' });
   });
 
   it('drops fields of the wrong shape rather than the whole memory', () => {

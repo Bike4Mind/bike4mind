@@ -930,6 +930,17 @@ export function RailCodeIcon() {
   );
 }
 
+/** A tray with an item landing in it: what is waiting on the user, across every place. */
+export function RailAgentsIcon() {
+  return (
+    <Glyph size={RAIL_GLYPH}>
+      <path d="M2.5 9.5h3l1 1.75h3l1-1.75h3" />
+      <path d="M2.5 9.5v3a1 1 0 0 0 1 1h9a1 1 0 0 0 1-1v-3L12 4.5a1 1 0 0 0-.95-.7h-6.1a1 1 0 0 0-.95.7z" />
+      <path d="M6.25 6.75h3.5" />
+    </Glyph>
+  );
+}
+
 /** A four-point spark: making something, rather than any one medium. */
 export function RailStudioIcon() {
   return (
