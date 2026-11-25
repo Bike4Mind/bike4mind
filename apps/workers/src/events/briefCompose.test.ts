@@ -39,6 +39,7 @@ function makeDeps(overrides: Partial<BriefComposeDeps> = {}) {
     complete: vi.fn().mockResolvedValue(JSON.stringify({ headline: 'Done.', handled: ['Did a thing.'] })),
     loadInstructions: vi.fn().mockResolvedValue([]),
     push: vi.fn().mockResolvedValue(undefined),
+    notifyHeldRuns: vi.fn().mockResolvedValue(undefined),
     emails: {
       markBriefed: vi.fn().mockResolvedValue(0),
       storedEmailIds: vi.fn((_userId: string, ids: string[]) => Promise.resolve(ids)),
@@ -54,6 +55,7 @@ function makeDeps(overrides: Partial<BriefComposeDeps> = {}) {
       removeEmailSourcedItems: ReturnType<typeof vi.fn>;
     };
     push: ReturnType<typeof vi.fn>;
+    notifyHeldRuns: ReturnType<typeof vi.fn>;
     complete: ReturnType<typeof vi.fn>;
     emails: { markBriefed: ReturnType<typeof vi.fn>; storedEmailIds: ReturnType<typeof vi.fn> };
     delegations: { markBriefed: ReturnType<typeof vi.fn> };
@@ -211,6 +213,42 @@ describe('composeBrief', () => {
     expect(deps.briefs.discardComposing).not.toHaveBeenCalled();
     expect(deps.complete).toHaveBeenCalledOnce();
     expect(deps.push).toHaveBeenCalledOnce();
+  });
+
+  describe('busy-block brief that does not land', () => {
+    const block = { start: new Date('2026-11-17T00:00:00Z'), end: new Date('2026-11-17T00:30:00Z') };
+    const blockBrief = () => brief({ trigger: 'busy_block', busyBlock: block });
+
+    it('sends the held-runs summary when the balance gate discards it', async () => {
+      const deps = makeDeps({ canCompose: vi.fn().mockResolvedValue('insufficient_credits') });
+      deps.briefs.findById = vi.fn().mockResolvedValue(blockBrief());
+      await composeBrief(deps, { briefId: 'b1', userId: 'u1', scheduled: true });
+
+      expect(deps.briefs.discardComposing).toHaveBeenCalledWith('b1');
+      expect(deps.notifyHeldRuns).toHaveBeenCalledWith('u1', block);
+      expect(deps.push).not.toHaveBeenCalled();
+    });
+
+    it('sends the held-runs summary when composition fails', async () => {
+      const deps = makeDeps({ complete: vi.fn().mockRejectedValue(new Error('model down')) });
+      deps.briefs.findById = vi.fn().mockResolvedValue(blockBrief());
+      await composeBrief(deps, { briefId: 'b1', userId: 'u1', scheduled: true });
+
+      expect(deps.briefs.markFailed).toHaveBeenCalledWith('b1', 'composition_failed');
+      expect(deps.notifyHeldRuns).toHaveBeenCalledWith('u1', block);
+    });
+
+    it('sends no summary when the block brief is delivered, or for a regular scheduled discard', async () => {
+      const delivered = makeDeps();
+      delivered.briefs.findById = vi.fn().mockResolvedValue(blockBrief());
+      await composeBrief(delivered, { briefId: 'b1', userId: 'u1', scheduled: true });
+      expect(delivered.push).toHaveBeenCalledWith(expect.objectContaining({ category: 'brief_ready' }));
+      expect(delivered.notifyHeldRuns).not.toHaveBeenCalled();
+
+      const regular = makeDeps({ canCompose: vi.fn().mockResolvedValue('insufficient_credits') });
+      await composeBrief(regular, { briefId: 'b1', userId: 'u1', scheduled: true });
+      expect(regular.notifyHeldRuns).not.toHaveBeenCalled();
+    });
   });
 
   it('composes a scheduled brief whose only activity is an obligation coming due', async () => {

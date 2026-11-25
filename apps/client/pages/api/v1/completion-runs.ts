@@ -19,7 +19,7 @@ import {
 export default nextRouteForContract(createCompletionRunContract, {
   rateLimit: perUserRateLimit('POST /api/v1/completion-runs'),
 }).post(async (req, res) => {
-  if (req.validated.evaluation) assertEvaluationAuthorized(req.user.id);
+  if (req.validated.evaluation) await assertEvaluationAuthorized(req.user.id);
   const caller = await resolveCompletionRunCaller(
     { userId: req.user.id, apiKeyInfo: req.apiKeyInfo },
     req.validated.organization_id

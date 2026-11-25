@@ -8,7 +8,9 @@ import {
   BriefScheduleResponseSchema,
   BriefScheduleSchema,
   BriefSchema,
+  BusyBlocksResponseSchema,
   PendingDecisionCountSchema,
+  PutBusyBlocksSchema,
 } from '../../schemas/brief';
 import { ApiErrorSchema } from '../../schemas/chat';
 
@@ -20,7 +22,8 @@ const JWT_ONLY_NOTE =
 /**
  * Assistant briefs for native clients. Served by apps/client/pages/api/v1/briefs/index.ts (compose, list),
  * apps/client/pages/api/v1/briefs/[id].ts (read), .../[id]/decisions/[decisionId]/reply.ts (reply) and
- * apps/client/pages/api/v1/briefs/schedule.ts (schedule). Composition runs in apps/workers/src/events/briefCompose.ts.
+ * apps/client/pages/api/v1/briefs/schedule.ts (schedule) and
+ * apps/client/pages/api/v1/briefs/busy-blocks.ts (busy blocks). Composition runs in apps/workers/src/events/briefCompose.ts.
  */
 export const composeBriefContract = defineEndpoint({
   method: 'post',
@@ -129,6 +132,54 @@ export const putBriefScheduleContract = defineEndpoint({
     429: { description: 'Per-user rate limit exceeded.', schema: ApiErrorSchema },
   },
   codeSample: { authToken: '<access_token>', body: BRIEF_SCHEDULE_EXAMPLE, streaming: false },
+});
+
+const BUSY_BLOCKS_NOTE =
+  "Authenticate with a JWT access token of the signed-in user. The busy blocks are the caller's own; only " +
+  'start and end times are accepted, never event titles or attendees. A brief is composed after a block ' +
+  'ends only when something arrived during it.';
+
+const BUSY_BLOCKS_EXAMPLE = {
+  enabled: true,
+  blocks: [{ start: '2026-11-20T15:00:00.000Z', end: '2026-11-20T16:00:00.000Z' }],
+};
+
+export const getBusyBlocksContract = defineEndpoint({
+  method: 'get',
+  path: '/api/v1/briefs/busy-blocks',
+  operationId: 'getBusyBlocks',
+  summary: 'Get your busy blocks',
+  description: 'Reads the synced busy blocks and when the next block brief is due. ' + BUSY_BLOCKS_NOTE,
+  tags: ['AI'],
+  auth: 'jwtOnly',
+  responses: {
+    200: { description: 'Your busy blocks.', schema: BusyBlocksResponseSchema },
+    401: { description: 'Missing or invalid JWT.', schema: ApiErrorSchema },
+    429: { description: 'Per-user rate limit exceeded.', schema: ApiErrorSchema },
+  },
+  codeSample: { authToken: '<access_token>', streaming: false },
+});
+
+export const putBusyBlocksContract = defineEndpoint({
+  method: 'put',
+  path: '/api/v1/briefs/busy-blocks',
+  operationId: 'putBusyBlocks',
+  summary: 'Sync your busy blocks',
+  description:
+    "Replaces the stored busy blocks with the device calendar's next busy intervals and returns them merged, " +
+    'with the next due time. Blocks more than 72 hours out and blocks already briefed are dropped. ' +
+    BUSY_BLOCKS_NOTE,
+  tags: ['AI'],
+  auth: 'jwtOnly',
+  request: PutBusyBlocksSchema,
+  requestExample: BUSY_BLOCKS_EXAMPLE,
+  responses: {
+    200: { description: 'The stored busy blocks.', schema: BusyBlocksResponseSchema },
+    400: { description: 'Malformed JSON request body.', schema: ApiErrorSchema },
+    401: { description: 'Missing or invalid JWT.', schema: ApiErrorSchema },
+    429: { description: 'Per-user rate limit exceeded.', schema: ApiErrorSchema },
+  },
+  codeSample: { authToken: '<access_token>', body: BUSY_BLOCKS_EXAMPLE, streaming: false },
 });
 
 export const replyToBriefDecisionContract = defineEndpoint({

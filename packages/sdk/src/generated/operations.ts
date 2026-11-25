@@ -261,6 +261,10 @@ export const operations = {
     method: 'GET',
     path: '/api/v1/briefs/schedule',
   },
+  getBusyBlocks: {
+    method: 'GET',
+    path: '/api/v1/briefs/busy-blocks',
+  },
   getClaudeBundleZip: {
     method: 'GET',
     path: '/api/v1/skills/market/bundles/{id}/claude-plugin.zip',
@@ -588,6 +592,10 @@ export const operations = {
   putBriefSchedule: {
     method: 'PUT',
     path: '/api/v1/briefs/schedule',
+  },
+  putBusyBlocks: {
+    method: 'PUT',
+    path: '/api/v1/briefs/busy-blocks',
   },
   raiseCompletionRunBudget: {
     method: 'POST',

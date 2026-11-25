@@ -249,6 +249,10 @@ export const SELF_VIEW_PASSTHROUGH_FIELDS = {
   deletion: true,
   nextBriefAt: true,
   lastBriefStartedAt: true,
+  busyBlocks: true,
+  busyBlocksSyncedAt: true,
+  nextBlockBriefAt: true,
+  lastBlockBriefEnd: true,
   suspensionReasonCategory: true,
 } as const satisfies Record<SelfViewPassthroughField, true>;
 

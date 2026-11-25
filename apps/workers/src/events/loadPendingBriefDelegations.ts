@@ -5,7 +5,7 @@ import { delegatedItemRepository } from '@bike4mind/database';
 export const DELEGATION_STALE_MS = 60 * 60 * 1000;
 
 /** Unbriefed items survive failed briefs and section caps; three sections' worth covers every place one can land. */
-export async function loadPendingBriefDelegations(userId: string, end: Date, now: Date) {
+export async function loadPendingBriefDelegations(userId: string, end: Date, now: Date, since?: Date) {
   await delegatedItemRepository.failStale(userId, new Date(now.getTime() - DELEGATION_STALE_MS), now);
-  return delegatedItemRepository.listUnbriefed(userId, end, BRIEF_LIMITS.itemsPerSection * 3);
+  return delegatedItemRepository.listUnbriefed(userId, end, BRIEF_LIMITS.itemsPerSection * 3, since);
 }
