@@ -36,4 +36,12 @@ describe('randomUuid', () => {
     });
     expect(randomUuid()).toBe(expected);
   });
+
+  it.each([
+    ['an empty crypto', {}],
+    ['no crypto', undefined],
+  ])('throws a named error with %s', (_label, stub) => {
+    vi.stubGlobal('crypto', stub);
+    expect(() => randomUuid()).toThrow('randomUuid: Web Crypto is unavailable in this runtime');
+  });
 });
