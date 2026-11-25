@@ -2,45 +2,58 @@ import { ObligationModel, safeDropIndex } from '@bike4mind/database';
 import { type MigrationFile } from './index';
 
 const UNIQUE_FILE_INDEX = 'userId_1_fileId_1';
+const MAX_REPORTED_DUPLICATE_GROUPS = 5;
 
-// IndexOptionsConflict and IndexKeySpecsConflict: an index of the same name or key exists with other options.
-const INDEX_CONFLICT_CODES: ReadonlySet<unknown> = new Set([85, 86]);
+type StoredIndex = Awaited<ReturnType<typeof ObligationModel.collection.indexes>>[number];
 
-// Matched on the code alone: an instanceof check breaks when a bundle carries two copies of the driver.
-function isIndexConflict(error: unknown): boolean {
-  return typeof error === 'object' && error !== null && 'code' in error && INDEX_CONFLICT_CODES.has(error.code);
+/** True for a stored copy that is not the plain unique index the model declares. */
+function differsFromDeclared(index: StoredIndex): boolean {
+  return (
+    index.unique !== true ||
+    index.partialFilterExpression !== undefined ||
+    index.sparse === true ||
+    index.collation !== undefined
+  );
 }
 
-async function hasPartialUniqueFileIndex(): Promise<boolean> {
-  const indexes = await ObligationModel.collection.indexes();
-  return indexes.some(index => index.name === UNIQUE_FILE_INDEX && index.partialFilterExpression !== undefined);
+/** Fails before any index is touched when stored rows would break the unique `{ userId, fileId }` build. */
+async function assertNoDuplicateFiles(): Promise<void> {
+  const duplicates = await ObligationModel.aggregate<{ ids: unknown[] }>([
+    // A missing fileId and a null one collide in a unique index, so they are grouped together.
+    { $group: { _id: { userId: '$userId', fileId: { $ifNull: ['$fileId', null] } }, ids: { $push: '$_id' } } },
+    { $match: { 'ids.1': { $exists: true } } },
+    { $limit: MAX_REPORTED_DUPLICATE_GROUPS },
+  ]);
+  if (duplicates.length === 0) return;
+
+  const detail = duplicates.map(group => `[${group.ids.map(String).join(', ')}]`).join('; ');
+  throw new Error(
+    `Cannot build the unique { userId, fileId } obligation index: rows share a user and file. ` +
+      `Keep one row per group and rerun. Row ids by group: ${detail}`
+  );
 }
 
 /**
- * Ensure the obligation indexes exist: the unique `{ userId, fileId }` that makes a hand-off idempotent,
- * `{ userId, status, dueDate }` for the brief's due-soon read and `{ userId, _id: -1 }` for the list. The
- * migration exists because autoIndex is off outside tests.
+ * Ensure the obligation indexes exist; autoIndex is off outside tests.
  *
- * A database that ran a pre-release build of the model holds the unique index with a partial filter on
- * `fileId`, and MongoDB refuses to build an index whose name matches one with other options. That copy
- * is dropped and rebuilt; any other conflict is rethrown untouched. `fileId` is a required string, so the
- * filter excluded no stored row and the rebuild meets no duplicate among them. MongoDB cannot change an
- * index's options in place, so uniqueness is unenforced between the drop and the rebuild.
- *
- * Idempotent: createIndexes is a no-op for indexes that already exist.
+ * A database that ran a pre-release build of the model holds the unique index with other options, which
+ * MongoDB will not build over, so that copy is dropped first. Uniqueness is unenforced until the rebuild
+ * lands: a duplicate written in that window fails the build, and the rerun reports its row ids.
  */
 const migration: MigrationFile = {
   id: 20261125033000,
   name: 'ensure obligation indexes',
 
   up: async () => {
-    try {
-      await ObligationModel.createIndexes();
-    } catch (error) {
-      if (!isIndexConflict(error) || !(await hasPartialUniqueFileIndex())) throw error;
+    await ObligationModel.createCollection();
+    await assertNoDuplicateFiles();
+
+    const indexes = await ObligationModel.collection.indexes();
+    if (indexes.some(index => index.name === UNIQUE_FILE_INDEX && differsFromDeclared(index))) {
       await safeDropIndex(ObligationModel.collection, UNIQUE_FILE_INDEX);
-      await ObligationModel.createIndexes();
     }
+
+    await ObligationModel.createIndexes();
   },
 
   down: async () => {
