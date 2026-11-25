@@ -193,7 +193,8 @@ export async function deliverPush(
     return { status: 'skipped', reason: 'category_disabled' };
   }
   // The brief is already ready and listed; only the push announcing it is held. The notifyHeldBlockRuns
-  // summary is never held: it sends only when no block brief landed, so it is the one place those runs show up.
+  // summary is never held: it sends only when the block brief does not cover the runs (discarded, failed or
+  // limited to reminders), so it is the one place those runs show up.
   if (
     event.category === 'brief_ready' &&
     event.blockEndCategories &&
