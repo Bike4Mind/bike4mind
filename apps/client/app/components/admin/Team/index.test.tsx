@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, within } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { getThemeConfig } from '@client/app/utils/themes';
@@ -10,17 +10,15 @@ const mocks = vi.hoisted(() => ({
     error: null as Error | null,
     refetch: vi.fn(),
   },
+  mutation: { mutateAsync: vi.fn(), isPending: false },
 }));
 
-vi.mock('@client/app/hooks/data/admin', () => {
-  const mutation = { mutateAsync: vi.fn(), isPending: false };
-  return {
-    useGetTeamMembers: () => mocks.team,
-    useCreateTeamMember: () => mutation,
-    useUpdateTeamMember: () => mutation,
-    useDeleteTeamMember: () => mutation,
-  };
-});
+vi.mock('@client/app/hooks/data/admin', () => ({
+  useGetTeamMembers: () => mocks.team,
+  useCreateTeamMember: () => mocks.mutation,
+  useUpdateTeamMember: () => mocks.mutation,
+  useDeleteTeamMember: () => mocks.mutation,
+}));
 
 import Team from './index';
 
@@ -41,7 +39,13 @@ describe('Team', () => {
   beforeEach(() => {
     Object.assign(mocks.team, { data: members, isLoading: false, error: null });
     mocks.team.refetch.mockClear();
+    mocks.mutation.mutateAsync.mockReset();
   });
+
+  const openRowAction = (id: string, action: 'edit' | 'delete') => {
+    fireEvent.click(screen.getByTestId(`team-member-actions-${id}`));
+    fireEvent.click(screen.getByTestId(`team-member-${action}-btn-${id}`));
+  };
 
   it('opens with the page header: title, count, description, help and the create action', () => {
     renderTeam();
@@ -83,7 +87,7 @@ describe('Team', () => {
     mocks.team.error = new Error('boom');
     renderTeam();
 
-    expect(screen.getByTestId('team-member-card-m1')).toBeInTheDocument();
+    expect(screen.getByTestId('team-member-row-m1')).toBeInTheDocument();
     expect(screen.queryByTestId('admin-error-state')).not.toBeInTheDocument();
   });
 
@@ -99,12 +103,72 @@ describe('Team', () => {
     expect(screen.getByTestId('team-member-name-input')).toBeInTheDocument();
   });
 
-  it('renders the members as cards sorted by name', () => {
+  it('renders the members as table rows sorted by name', () => {
     renderTeam();
 
-    const cards = screen.getAllByTestId(/^team-member-card-/);
-    expect(cards.map(card => card.getAttribute('data-testid'))).toEqual(['team-member-card-m1', 'team-member-card-m2']);
+    const table = screen.getByTestId('team-members-table');
+    const rows = within(table).getAllByTestId(/^team-member-row-/);
+    expect(rows.map(row => row.getAttribute('data-testid'))).toEqual(['team-member-row-m1', 'team-member-row-m2']);
     expect(screen.getByTestId('team-member-role-m1')).toHaveTextContent('Lead');
     expect(screen.queryByTestId('admin-empty-state')).not.toBeInTheDocument();
+  });
+
+  it('shows a dash for a member without email or role', () => {
+    renderTeam();
+
+    const row = screen.getByTestId('team-member-row-m2');
+    expect(screen.queryByTestId('team-member-role-m2')).not.toBeInTheDocument();
+    expect(within(row).getAllByText('\u2014').length).toBeGreaterThanOrEqual(2);
+  });
+
+  it('opens the edit dialog prefilled from the row actions menu', () => {
+    renderTeam();
+    openRowAction('m1', 'edit');
+
+    expect(screen.getByTestId('team-member-edit-dialog')).toBeInTheDocument();
+    expect(screen.getByTestId('team-member-edit-name-input').querySelector('input')).toHaveValue('Ada Example');
+  });
+
+  it('opens the edit dialog on row click but not on a phone link click', () => {
+    renderTeam();
+
+    fireEvent.click(screen.getByTestId('team-member-phone-m2'));
+    expect(screen.queryByTestId('team-member-edit-dialog')).not.toBeInTheDocument();
+
+    fireEvent.click(within(screen.getByTestId('team-member-row-m2')).getByText('Zed Example'));
+    expect(screen.getByTestId('team-member-edit-name-input').querySelector('input')).toHaveValue('Zed Example');
+  });
+
+  it('confirms removal in an alert dialog instead of window.confirm', async () => {
+    const confirmSpy = vi.spyOn(window, 'confirm');
+    mocks.mutation.mutateAsync.mockResolvedValue(undefined);
+    renderTeam();
+
+    openRowAction('m1', 'delete');
+    const dialog = screen.getByTestId('team-member-delete-dialog');
+    expect(dialog).toHaveAttribute('role', 'alertdialog');
+    expect(dialog).toHaveTextContent('Remove Ada Example from the team list?');
+
+    fireEvent.click(screen.getByTestId('team-member-delete-cancel-btn'));
+    await waitFor(() => expect(screen.queryByTestId('team-member-delete-dialog')).not.toBeInTheDocument());
+    expect(mocks.mutation.mutateAsync).not.toHaveBeenCalled();
+
+    openRowAction('m1', 'delete');
+    fireEvent.click(screen.getByTestId('team-member-delete-confirm-btn'));
+    await waitFor(() => expect(screen.queryByTestId('team-member-delete-dialog')).not.toBeInTheDocument());
+    expect(mocks.mutation.mutateAsync).toHaveBeenCalledWith('m1');
+    expect(confirmSpy).not.toHaveBeenCalled();
+    confirmSpy.mockRestore();
+  });
+
+  it('shows the page error when removal fails', async () => {
+    mocks.mutation.mutateAsync.mockRejectedValue(new Error('remove failed'));
+    renderTeam();
+
+    openRowAction('m2', 'delete');
+    fireEvent.click(screen.getByTestId('team-member-delete-confirm-btn'));
+
+    expect(await screen.findByTestId('team-member-delete-error')).toHaveTextContent('remove failed');
+    await waitFor(() => expect(screen.queryByTestId('team-member-delete-dialog')).not.toBeInTheDocument());
   });
 });

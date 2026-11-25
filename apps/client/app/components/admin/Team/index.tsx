@@ -1,5 +1,4 @@
 import {
-  Card,
   Grid,
   Typography,
   Stack,
@@ -8,21 +7,11 @@ import {
   FormLabel,
   Input,
   Button,
-  IconButton,
-  Divider,
   Chip,
-  Tooltip,
-  Modal,
-  ModalDialog,
-  DialogTitle,
-  DialogContent,
-  DialogActions,
+  ListDivider,
+  MenuItem,
 } from '@mui/joy';
 import React, { useMemo, useState } from 'react';
-import PhoneIcon from '@mui/icons-material/Phone';
-import PersonIcon from '@mui/icons-material/Person';
-import DeleteIcon from '@mui/icons-material/Delete';
-import EditIcon from '@mui/icons-material/Edit';
 import AddIcon from '@mui/icons-material/Add';
 import {
   useCreateTeamMember,
@@ -32,16 +21,72 @@ import {
 } from '@client/app/hooks/data/admin';
 import { IInternalTeamMemberDocument } from '@bike4mind/common';
 import ContextHelpButton from '@client/app/components/help/ContextHelpButton';
-import { AdminPageHeader, EmptyState, ErrorState, LoadingState } from '../shared';
+import {
+  AdminDialog,
+  AdminDialogFooter,
+  AdminPageHeader,
+  Dash,
+  DataTable,
+  type DataColumn,
+  EmptyState,
+  ErrorState,
+  LoadingState,
+  RowActionsMenu,
+} from '../shared';
 import { ADMIN_REGION_GAP } from '../shared/adminStyles';
+
+const columns: DataColumn<IInternalTeamMemberDocument>[] = [
+  { id: 'name', label: 'Name', render: member => member.name },
+  {
+    id: 'phone',
+    label: 'Phone',
+    width: '11rem',
+    render: member => (
+      <Typography
+        level="body-sm"
+        component="a"
+        href={`tel:${member.phone}`}
+        sx={{ color: 'inherit', textDecoration: 'none', '&:hover': { textDecoration: 'underline' } }}
+        data-testid={`team-member-phone-${member.id}`}
+      >
+        {member.phone}
+      </Typography>
+    ),
+  },
+  { id: 'email', label: 'Email', render: member => member.email || <Dash /> },
+  {
+    id: 'role',
+    label: 'Role',
+    width: '9rem',
+    render: member =>
+      member.role ? (
+        <Chip size="sm" variant="soft" color="neutral" data-testid={`team-member-role-${member.id}`}>
+          {member.role}
+        </Chip>
+      ) : (
+        <Dash />
+      ),
+  },
+  {
+    id: 'department',
+    label: 'Department',
+    width: '9rem',
+    render: member =>
+      member.department ? (
+        <span data-testid={`team-member-department-${member.id}`}>{member.department}</span>
+      ) : (
+        <Dash />
+      ),
+  },
+];
 
 const Team: React.FC = () => {
   const { data: teamMembers, isLoading, error, refetch } = useGetTeamMembers();
   const deleteMember = useDeleteTeamMember();
   const [isCreateModalOpen, setCreateModalOpen] = useState(false);
   const [editingMember, setEditingMember] = useState<IInternalTeamMemberDocument | null>(null);
+  const [pendingDelete, setPendingDelete] = useState<IInternalTeamMemberDocument | null>(null);
   const [deleteError, setDeleteError] = useState<string | null>(null);
-  const [deletingId, setDeletingId] = useState<string | null>(null);
 
   const sortedMembers = useMemo(
     () => [...(teamMembers ?? [])].sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' })),
@@ -49,18 +94,19 @@ const Team: React.FC = () => {
   );
   const openCreateModal = () => setCreateModalOpen(true);
 
-  const handleDeleteMember = async (id: string, name: string) => {
-    const shouldDelete = window.confirm(`Remove ${name} from the team list?`);
-    if (!shouldDelete) return;
+  const closeDeleteDialog = () => {
+    if (!deleteMember.isPending) setPendingDelete(null);
+  };
 
-    setDeletingId(id);
+  const confirmDelete = async () => {
+    if (!pendingDelete) return;
     setDeleteError(null);
     try {
-      await deleteMember.mutateAsync(id);
+      await deleteMember.mutateAsync(pendingDelete.id);
     } catch (err) {
       setDeleteError(err instanceof Error ? err.message : 'Failed to remove team member.');
     } finally {
-      setDeletingId(null);
+      setPendingDelete(null);
     }
   };
 
@@ -112,116 +158,75 @@ const Team: React.FC = () => {
           }
         />
       ) : (
-        <Grid container spacing={2}>
-          {sortedMembers.map(member => (
-            <Grid xs={12} sm={6} md={4} lg={3} key={member.id}>
-              <Card
-                variant="outlined"
-                sx={{
-                  p: 2,
-                  height: '100%',
-                  display: 'flex',
-                  flexDirection: 'column',
-                  justifyContent: 'space-between',
-                  transition: 'all 0.2s ease',
-                  '&:hover': {
-                    boxShadow: 'md',
-                    transform: 'translateY(-2px)',
-                  },
-                }}
-                data-testid={`team-member-card-${member.id}`}
+        <DataTable
+          label="Team members"
+          testId="team-members-table"
+          rowTestId={member => `team-member-row-${member.id}`}
+          rows={sortedMembers}
+          columns={columns}
+          getRowId={member => member.id}
+          onRetry={() => void refetch()}
+          onRowActivate={setEditingMember}
+          minWidth="46rem"
+          rowActions={member => (
+            <RowActionsMenu
+              testId={`team-member-actions-${member.id}`}
+              ariaLabel={`Actions for ${member.name}`}
+              stopRowClick
+            >
+              <MenuItem data-testid={`team-member-edit-btn-${member.id}`} onClick={() => setEditingMember(member)}>
+                Edit
+              </MenuItem>
+              <ListDivider />
+              <MenuItem
+                color="danger"
+                data-testid={`team-member-delete-btn-${member.id}`}
+                onClick={() => setPendingDelete(member)}
               >
-                <Stack spacing={1.5}>
-                  <Stack direction="row" spacing={1} alignItems="center" justifyContent="space-between">
-                    <Stack direction="row" spacing={1} alignItems="center">
-                      <PersonIcon sx={{ color: 'primary.500', fontSize: 20 }} />
-                      <Typography level="title-md" sx={{ fontWeight: 600 }}>
-                        {member.name}
-                      </Typography>
-                    </Stack>
-                    <Stack direction="row" spacing={0.5}>
-                      <Tooltip title="Edit member">
-                        <span>
-                          <IconButton
-                            size="sm"
-                            variant="soft"
-                            color="primary"
-                            onClick={() => setEditingMember(member)}
-                            data-testid={`team-member-edit-btn-${member.id}`}
-                          >
-                            <EditIcon fontSize="small" />
-                          </IconButton>
-                        </span>
-                      </Tooltip>
-                      <Tooltip title="Remove member">
-                        <span>
-                          <IconButton
-                            size="sm"
-                            variant="soft"
-                            color="danger"
-                            onClick={() => handleDeleteMember(member.id, member.name)}
-                            disabled={deleteMember.isPending && deletingId === member.id}
-                            data-testid={`team-member-delete-btn-${member.id}`}
-                          >
-                            <DeleteIcon fontSize="small" />
-                          </IconButton>
-                        </span>
-                      </Tooltip>
-                    </Stack>
-                  </Stack>
-                  <Stack direction="row" spacing={1} alignItems="center">
-                    <PhoneIcon sx={{ color: 'success.500', fontSize: 18 }} />
-                    <Typography
-                      level="body-sm"
-                      component="a"
-                      href={`tel:${member.phone}`}
-                      sx={{
-                        color: 'text.secondary',
-                        textDecoration: 'none',
-                        '&:hover': {
-                          color: 'primary.500',
-                          textDecoration: 'underline',
-                        },
-                      }}
-                      data-testid={`team-member-phone-${member.id}`}
-                    >
-                      {member.phone}
-                    </Typography>
-                  </Stack>
-                  {(member.email || member.role || member.department) && <Divider />}
-                  <Stack spacing={0.5}>
-                    {member.email && (
-                      <Typography level="body-sm" sx={{ color: 'text.secondary' }}>
-                        {member.email}
-                      </Typography>
-                    )}
-                    <Stack direction="row" spacing={1} sx={{ flexWrap: 'wrap' }}>
-                      {member.role && (
-                        <Chip size="sm" variant="soft" color="primary" data-testid={`team-member-role-${member.id}`}>
-                          {member.role}
-                        </Chip>
-                      )}
-                      {member.department && (
-                        <Chip
-                          size="sm"
-                          variant="soft"
-                          color="neutral"
-                          data-testid={`team-member-department-${member.id}`}
-                        >
-                          {member.department}
-                        </Chip>
-                      )}
-                    </Stack>
-                  </Stack>
-                </Stack>
-              </Card>
-            </Grid>
-          ))}
-        </Grid>
+                Remove
+              </MenuItem>
+            </RowActionsMenu>
+          )}
+        />
       )}
       <CreateTeamMemberModal open={isCreateModalOpen} onClose={() => setCreateModalOpen(false)} />
       {editingMember && (
-        <EditTeamMemberModal member={editingMember} open={!!editingMember} onClose={() => setEditingMember(null)} />
+        <EditTeamMemberModal
+          key={editingMember.id}
+          member={editingMember}
+          open={!!editingMember}
+          onClose={() => setEditingMember(null)}
+        />
+      )}
+      {pendingDelete && (
+        <AdminDialog
+          role="alertdialog"
+          title="Remove team member"
+          onClose={closeDeleteDialog}
+          closeDisabled={deleteMember.isPending}
+          data-testid="team-member-delete-dialog"
+        >
+          <Typography level="body-md">Remove {pendingDelete.name} from the team list?</Typography>
+          <AdminDialogFooter>
+            <Button
+              variant="plain"
+              color="neutral"
+              onClick={closeDeleteDialog}
+              disabled={deleteMember.isPending}
+              data-testid="team-member-delete-cancel-btn"
+            >
+              Cancel
+            </Button>
+            <Button
+              color="danger"
+              loading={deleteMember.isPending}
+              onClick={() => void confirmDelete()}
+              data-testid="team-member-delete-confirm-btn"
+            >
+              Remove
+            </Button>
+          </AdminDialogFooter>
+        </AdminDialog>
       )}
     </Stack>
   );
@@ -288,86 +293,93 @@ const CreateTeamMemberModal: React.FC<CreateTeamMemberModalProps> = ({ open, onC
   };
 
   return (
-    <Modal open={open} onClose={handleClose}>
-      <ModalDialog sx={{ width: 500 }}>
-        <DialogTitle>Create team member</DialogTitle>
-        <DialogContent>Fill in the details to add the teammate to the internal contact list.</DialogContent>
-        <form onSubmit={handleSubmit}>
-          <Stack spacing={2}>
-            <Grid container spacing={2}>
-              <Grid xs={12} sm={6}>
-                <FormControl required>
-                  <FormLabel>Name</FormLabel>
-                  <Input
-                    value={formValues.name}
-                    onChange={handleInputChange('name')}
-                    placeholder="Jane Doe"
-                    data-testid="team-member-name-input"
-                  />
-                </FormControl>
-              </Grid>
-              <Grid xs={12} sm={6}>
-                <FormControl required>
-                  <FormLabel>Phone</FormLabel>
-                  <Input
-                    value={formValues.phone}
-                    onChange={handleInputChange('phone')}
-                    placeholder="+1 555 123 4567"
-                    data-testid="team-member-phone-input"
-                  />
-                </FormControl>
-              </Grid>
-              <Grid xs={12}>
-                <FormControl>
-                  <FormLabel>Email</FormLabel>
-                  <Input
-                    value={formValues.email}
-                    onChange={handleInputChange('email')}
-                    placeholder="name@company.com"
-                    data-testid="team-member-email-input"
-                  />
-                </FormControl>
-              </Grid>
-              <Grid xs={12} sm={6}>
-                <FormControl>
-                  <FormLabel>Role</FormLabel>
-                  <Input
-                    value={formValues.role}
-                    onChange={handleInputChange('role')}
-                    placeholder="Lead"
-                    data-testid="team-member-role-input"
-                  />
-                </FormControl>
-              </Grid>
-              <Grid xs={12} sm={6}>
-                <FormControl>
-                  <FormLabel>Department</FormLabel>
-                  <Input
-                    value={formValues.department}
-                    onChange={handleInputChange('department')}
-                    placeholder="Ops"
-                    data-testid="team-member-department-input"
-                  />
-                </FormControl>
-              </Grid>
+    <AdminDialog
+      open={open}
+      onClose={handleClose}
+      closeDisabled={createMember.isPending}
+      title="Create team member"
+      width={500}
+      anchorTop
+      data-testid="team-member-create-dialog"
+    >
+      <Typography level="body-sm" sx={{ mb: 2 }}>
+        Fill in the details to add the teammate to the internal contact list.
+      </Typography>
+      <form onSubmit={handleSubmit}>
+        <Stack spacing={2}>
+          <Grid container spacing={2}>
+            <Grid xs={12} sm={6}>
+              <FormControl required>
+                <FormLabel>Name</FormLabel>
+                <Input
+                  value={formValues.name}
+                  onChange={handleInputChange('name')}
+                  placeholder="Jane Doe"
+                  data-testid="team-member-name-input"
+                />
+              </FormControl>
             </Grid>
-            {formError && (
-              <Alert color="danger" variant="soft" data-testid="team-member-form-error">
-                {formError}
-              </Alert>
-            )}
-            <DialogActions sx={{ justifyContent: 'flex-end' }}>
-              <Button variant="outlined" color="neutral" onClick={handleClose} disabled={createMember.isPending}>
-                Cancel
-              </Button>
-              <Button type="submit" loading={createMember.isPending} data-testid="team-member-submit-btn">
-                {createMember.isPending ? 'Creating...' : 'Create team member'}
-              </Button>
-            </DialogActions>
-          </Stack>
-        </form>
-      </ModalDialog>
-    </Modal>
+            <Grid xs={12} sm={6}>
+              <FormControl required>
+                <FormLabel>Phone</FormLabel>
+                <Input
+                  value={formValues.phone}
+                  onChange={handleInputChange('phone')}
+                  placeholder="+1 555 123 4567"
+                  data-testid="team-member-phone-input"
+                />
+              </FormControl>
+            </Grid>
+            <Grid xs={12}>
+              <FormControl>
+                <FormLabel>Email</FormLabel>
+                <Input
+                  value={formValues.email}
+                  onChange={handleInputChange('email')}
+                  placeholder="name@company.com"
+                  data-testid="team-member-email-input"
+                />
+              </FormControl>
+            </Grid>
+            <Grid xs={12} sm={6}>
+              <FormControl>
+                <FormLabel>Role</FormLabel>
+                <Input
+                  value={formValues.role}
+                  onChange={handleInputChange('role')}
+                  placeholder="Lead"
+                  data-testid="team-member-role-input"
+                />
+              </FormControl>
+            </Grid>
+            <Grid xs={12} sm={6}>
+              <FormControl>
+                <FormLabel>Department</FormLabel>
+                <Input
+                  value={formValues.department}
+                  onChange={handleInputChange('department')}
+                  placeholder="Ops"
+                  data-testid="team-member-department-input"
+                />
+              </FormControl>
+            </Grid>
+          </Grid>
+          {formError && (
+            <Alert color="danger" variant="soft" data-testid="team-member-form-error">
+              {formError}
+            </Alert>
+          )}
+          <AdminDialogFooter>
+            <Button variant="outlined" color="neutral" onClick={handleClose} disabled={createMember.isPending}>
+              Cancel
+            </Button>
+            <Button type="submit" loading={createMember.isPending} data-testid="team-member-submit-btn">
+              {createMember.isPending ? 'Creating...' : 'Create team member'}
+            </Button>
+          </AdminDialogFooter>
+        </Stack>
+      </form>
+    </AdminDialog>
   );
 };
 
@@ -387,16 +399,6 @@ const EditTeamMemberModal: React.FC<EditTeamMemberModalProps> = ({ open, onClose
     department: member.department || '',
   });
   const [formError, setFormError] = useState<string | null>(null);
-
-  React.useEffect(() => {
-    setFormValues({
-      name: member.name,
-      phone: member.phone,
-      email: member.email || '',
-      role: member.role || '',
-      department: member.department || '',
-    });
-  }, [member]);
 
   const handleInputChange = (field: keyof typeof formValues) => (event: React.ChangeEvent<HTMLInputElement>) => {
     setFormValues(prev => ({ ...prev, [field]: event.target.value }));
@@ -433,86 +435,93 @@ const EditTeamMemberModal: React.FC<EditTeamMemberModalProps> = ({ open, onClose
   };
 
   return (
-    <Modal open={open} onClose={handleClose}>
-      <ModalDialog sx={{ width: 500 }}>
-        <DialogTitle>Edit team member</DialogTitle>
-        <DialogContent>Update the details for this team member.</DialogContent>
-        <form onSubmit={handleSubmit}>
-          <Stack spacing={2}>
-            <Grid container spacing={2}>
-              <Grid xs={12} sm={6}>
-                <FormControl required>
-                  <FormLabel>Name</FormLabel>
-                  <Input
-                    value={formValues.name}
-                    onChange={handleInputChange('name')}
-                    placeholder="Jane Doe"
-                    data-testid="team-member-edit-name-input"
-                  />
-                </FormControl>
-              </Grid>
-              <Grid xs={12} sm={6}>
-                <FormControl required>
-                  <FormLabel>Phone</FormLabel>
-                  <Input
-                    value={formValues.phone}
-                    onChange={handleInputChange('phone')}
-                    placeholder="+1 555 123 4567"
-                    data-testid="team-member-edit-phone-input"
-                  />
-                </FormControl>
-              </Grid>
-              <Grid xs={12}>
-                <FormControl>
-                  <FormLabel>Email</FormLabel>
-                  <Input
-                    value={formValues.email}
-                    onChange={handleInputChange('email')}
-                    placeholder="name@company.com"
-                    data-testid="team-member-edit-email-input"
-                  />
-                </FormControl>
-              </Grid>
-              <Grid xs={12} sm={6}>
-                <FormControl>
-                  <FormLabel>Role</FormLabel>
-                  <Input
-                    value={formValues.role}
-                    onChange={handleInputChange('role')}
-                    placeholder="Lead"
-                    data-testid="team-member-edit-role-input"
-                  />
-                </FormControl>
-              </Grid>
-              <Grid xs={12} sm={6}>
-                <FormControl>
-                  <FormLabel>Department</FormLabel>
-                  <Input
-                    value={formValues.department}
-                    onChange={handleInputChange('department')}
-                    placeholder="Ops"
-                    data-testid="team-member-edit-department-input"
-                  />
-                </FormControl>
-              </Grid>
+    <AdminDialog
+      open={open}
+      onClose={handleClose}
+      closeDisabled={updateMember.isPending}
+      title="Edit team member"
+      width={500}
+      anchorTop
+      data-testid="team-member-edit-dialog"
+    >
+      <Typography level="body-sm" sx={{ mb: 2 }}>
+        Update the details for this team member.
+      </Typography>
+      <form onSubmit={handleSubmit}>
+        <Stack spacing={2}>
+          <Grid container spacing={2}>
+            <Grid xs={12} sm={6}>
+              <FormControl required>
+                <FormLabel>Name</FormLabel>
+                <Input
+                  value={formValues.name}
+                  onChange={handleInputChange('name')}
+                  placeholder="Jane Doe"
+                  data-testid="team-member-edit-name-input"
+                />
+              </FormControl>
             </Grid>
-            {formError && (
-              <Alert color="danger" variant="soft" data-testid="team-member-edit-form-error">
-                {formError}
-              </Alert>
-            )}
-            <DialogActions sx={{ justifyContent: 'flex-end' }}>
-              <Button variant="outlined" color="neutral" onClick={handleClose} disabled={updateMember.isPending}>
-                Cancel
-              </Button>
-              <Button type="submit" loading={updateMember.isPending} data-testid="team-member-edit-submit-btn">
-                {updateMember.isPending ? 'Updating...' : 'Update team member'}
-              </Button>
-            </DialogActions>
-          </Stack>
-        </form>
-      </ModalDialog>
-    </Modal>
+            <Grid xs={12} sm={6}>
+              <FormControl required>
+                <FormLabel>Phone</FormLabel>
+                <Input
+                  value={formValues.phone}
+                  onChange={handleInputChange('phone')}
+                  placeholder="+1 555 123 4567"
+                  data-testid="team-member-edit-phone-input"
+                />
+              </FormControl>
+            </Grid>
+            <Grid xs={12}>
+              <FormControl>
+                <FormLabel>Email</FormLabel>
+                <Input
+                  value={formValues.email}
+                  onChange={handleInputChange('email')}
+                  placeholder="name@company.com"
+                  data-testid="team-member-edit-email-input"
+                />
+              </FormControl>
+            </Grid>
+            <Grid xs={12} sm={6}>
+              <FormControl>
+                <FormLabel>Role</FormLabel>
+                <Input
+                  value={formValues.role}
+                  onChange={handleInputChange('role')}
+                  placeholder="Lead"
+                  data-testid="team-member-edit-role-input"
+                />
+              </FormControl>
+            </Grid>
+            <Grid xs={12} sm={6}>
+              <FormControl>
+                <FormLabel>Department</FormLabel>
+                <Input
+                  value={formValues.department}
+                  onChange={handleInputChange('department')}
+                  placeholder="Ops"
+                  data-testid="team-member-edit-department-input"
+                />
+              </FormControl>
+            </Grid>
+          </Grid>
+          {formError && (
+            <Alert color="danger" variant="soft" data-testid="team-member-edit-form-error">
+              {formError}
+            </Alert>
+          )}
+          <AdminDialogFooter>
+            <Button variant="outlined" color="neutral" onClick={handleClose} disabled={updateMember.isPending}>
+              Cancel
+            </Button>
+            <Button type="submit" loading={updateMember.isPending} data-testid="team-member-edit-submit-btn">
+              {updateMember.isPending ? 'Updating...' : 'Update team member'}
+            </Button>
+          </AdminDialogFooter>
+        </Stack>
+      </form>
+    </AdminDialog>
   );
 };
 

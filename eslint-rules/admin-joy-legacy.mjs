@@ -6,7 +6,6 @@ const componentsByFile = {
   'AdminWhatsNewModalsTab.tsx': ['Modal'],
   'MigrateUsersTab.tsx': ['Card', 'Modal'],
   'SreAgentTab.tsx': ['Card', 'Modal', 'Table'],
-  'Team/index.tsx': ['Card', 'Modal'],
   'email/EmailActivityHistory.tsx': ['Table'],
   'email/EmailJobDetail.tsx': ['Table', 'Modal'],
   'email/EmailJobsPanel.tsx': ['Table'],
