@@ -949,7 +949,7 @@ export function ChatShell({
   const [conversationRequest, setConversationRequest] = useState(0);
   // Fill window: the stage takes the whole window, with the rail, sidebar, header, session panel, dock and
   // composer out of the way until Exit or Escape. Never settles: its own header is already minimal.
-  const fillWindow = useFillWindow(orchestrating && activeId !== null && screen === 'conversation' && !inStudio);
+  const fillWindow = useFillWindow(orchestrating && activeId !== null && screen === 'conversation' && inSessionPlace);
 
   // Focus lands on the header toggle, the way back in, rather than on a dock that just hid.
   const closeDock = useCallback(() => {
@@ -1891,7 +1891,12 @@ export function ChatShell({
             syncHints={
               onOpenImportSettings
                 ? (empty, fallback) => (
-                    <SidebarSyncHints empty={empty} fallback={fallback} onOpenSettings={onOpenImportSettings} />
+                    <SidebarSyncHints
+                      empty={empty}
+                      fallback={fallback}
+                      showWebSync={mode === 'chat'}
+                      onOpenSettings={onOpenImportSettings}
+                    />
                   )
                 : undefined
             }

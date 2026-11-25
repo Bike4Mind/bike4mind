@@ -58,17 +58,26 @@ describe('fillWindowKeyAction', () => {
     expect(fillWindowKeyAction(keyEvent('Escape', document.body), false)).toBeNull();
   });
 
-  it('leaves a shortcut with a modifier to the app', () => {
-    for (const modifier of ['metaKey', 'ctrlKey', 'altKey'] as const)
-      expect(fillWindowKeyAction(keyEvent('f', document.body, { [modifier]: true }), false)).toBeNull();
+  it.each([['metaKey'], ['ctrlKey'], ['altKey'], ['isComposing'], ['repeat']] as const)(
+    'ignores a key with %s set',
+    flag => {
+      expect(fillWindowKeyAction(keyEvent('f', document.body, { [flag]: true }), false)).toBeNull();
+      expect(fillWindowKeyAction(keyEvent('Escape', document.body, { [flag]: true }), true)).toBeNull();
+    }
+  );
+
+  it.each(['input', 'textarea', 'select'] as const)('ignores keys typed into a %s', tag => {
+    const field = mount(document.createElement(tag));
+    expect(fillWindowKeyAction(keyEvent('f', field), false)).toBeNull();
+    expect(fillWindowKeyAction(keyEvent('Escape', field), true)).toBeNull();
   });
 
-  it('ignores keys typed into a field', () => {
-    for (const tag of ['input', 'textarea'] as const) {
-      const field = mount(document.createElement(tag));
-      expect(fillWindowKeyAction(keyEvent('f', field), false)).toBeNull();
-      expect(fillWindowKeyAction(keyEvent('Escape', field), true)).toBeNull();
-    }
+  it('ignores keys typed into a contenteditable element', () => {
+    const editor = mount(document.createElement('div'));
+    // jsdom does not derive isContentEditable from the attribute.
+    Object.defineProperty(editor, 'isContentEditable', { value: true });
+    expect(fillWindowKeyAction(keyEvent('f', editor), false)).toBeNull();
+    expect(fillWindowKeyAction(keyEvent('Escape', editor), true)).toBeNull();
   });
 
   it('leaves the Tavern dialogue box its own keys', () => {
@@ -79,11 +88,12 @@ describe('fillWindowKeyAction', () => {
     expect(fillWindowKeyAction(keyEvent('f', choice), true)).toBeNull();
   });
 
-  it('leaves keys inside an open menu or dialog alone', () => {
-    const menu = mount(document.createElement('div'));
-    menu.setAttribute('role', 'menu');
-    expect(fillWindowKeyAction(keyEvent('Escape', menu), true)).toBeNull();
-    expect(fillWindowKeyAction(keyEvent('f', menu), false)).toBeNull();
+  it.each(['dialog', 'menu', 'listbox'])('leaves keys inside an open %s alone', role => {
+    const overlay = mount(document.createElement('div'));
+    overlay.setAttribute('role', role);
+    const item = overlay.appendChild(document.createElement('button'));
+    expect(fillWindowKeyAction(keyEvent('Escape', item), true)).toBeNull();
+    expect(fillWindowKeyAction(keyEvent('f', item), false)).toBeNull();
   });
 });
 
@@ -97,6 +107,13 @@ describe('useFillWindow', () => {
 
     expect(press('Escape').defaultPrevented).toBe(true);
     expect(result.current.on).toBe(false);
+  });
+
+  it('does not flicker while F is held down', () => {
+    const { result } = renderHook({ available: true });
+    press('f');
+    for (let i = 0; i < 3; i++) press('f', document.body, { repeat: true });
+    expect(result.current.on).toBe(true);
   });
 
   it('enters and leaves through setOn, the header buttons', () => {

@@ -655,6 +655,29 @@ describe('orchestrate mode in the chat shell', () => {
     expect(hidden('chat-shell-navigation')).toBe(false);
     expect(hidden('chat-composer-region')).toBe(false);
     expect(query('orchestrator-fill-exit-btn')).toBeNull();
+
+    // The Agents place has no stage and so no Exit: going there leaves full window, for good.
+    const sessionPlace = document.querySelector('[data-testid^="place-rail-"][aria-current="page"]');
+    if (!(sessionPlace instanceof HTMLElement)) throw new Error('no current place on the rail');
+    press('f');
+    act(() => el('place-rail-agents-btn').click());
+    expect(query('agents-place')).not.toBeNull();
+    expect(hidden('chat-shell-navigation')).toBe(false);
+    await act(async () => sessionPlace.click());
+    expect(query('orchestrator-fill-exit-btn')).toBeNull();
+    expect(hidden('chat-shell-navigation')).toBe(false);
+  });
+
+  it('keeps the ambient settle off while the window is filled', async () => {
+    window.localStorage.setItem(INTRO_SEEN_KEY, '1');
+    await openParent();
+    await enterOrchestrate();
+    act(() => el('orchestrator-fill-window-btn').click());
+    vi.useFakeTimers();
+    act(() => window.dispatchEvent(new MouseEvent('pointermove', { bubbles: true })));
+    await act(async () => vi.advanceTimersByTime(46000));
+    expect(query('orchestrator-ambient-talk-btn')).toBeNull();
+    expect(query('orchestrator-fill-exit-btn')).not.toBeNull();
   });
 
   it('plays the tavern intro on the first entry only, then marks it seen', async () => {
