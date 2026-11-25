@@ -74,7 +74,9 @@ export async function loadAgentMcpTools(
   const approvalRequiredCustomToolNames: string[] = [];
   const customToolNames: string[] = [];
 
-  if (!opts.enableMCPServer) {
+  // Callable functions answer to their own setting, so their host still lists with the MCP server off.
+  const listsCustomTools = Boolean(deps.customMcp && (opts.enableMCPServer || deps.customMcp.listsWithoutMcpServer));
+  if (!opts.enableMCPServer && !listsCustomTools) {
     logger.info('[AgentExecutor][MCP] EnableMCPServer is off - 0 MCP tools loaded');
     return {
       mcpToolsByServer,
@@ -85,7 +87,7 @@ export async function loadAgentMcpTools(
     };
   }
 
-  const servers = await deps.mcpServers.find({ enabled: true, userId: opts.userId });
+  const servers = opts.enableMCPServer ? await deps.mcpServers.find({ enabled: true, userId: opts.userId }) : [];
 
   for (const server of servers) {
     try {
@@ -136,9 +138,16 @@ export async function loadAgentMcpTools(
   // Own try/catch: a custom-connector failure drops custom tools only. There is no approval hook
   // here - the executor's permission gate pauses every tool that is not in `approvedTools`. An agent
   // run carries no Tools-menu choice, so no platform connector is listed.
-  if (deps.customMcp) {
+  if (deps.customMcp && listsCustomTools) {
     try {
-      for (const connection of await loadCustomMcpConnections(deps.customMcp, opts.userId, logger)) {
+      const listOptions = opts.enableMCPServer ? {} : { mcpServerOff: true };
+      for (const connection of await loadCustomMcpConnections(
+        deps.customMcp,
+        opts.userId,
+        logger,
+        undefined,
+        listOptions
+      )) {
         const tools = generateCustomMcpTools(connection, { userId: opts.userId, host: deps.customMcp });
         mcpToolsByServer[connection.slug] = tools;
         customToolNames.push(...tools.map(tool => tool.name));

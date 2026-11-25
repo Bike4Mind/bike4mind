@@ -5,7 +5,7 @@ import Typography from '@mui/joy/Typography';
 import { SOUND_PACK_EVENTS } from '@shared/mods';
 import { SOUND_EVENT_LABEL, setSoundEventEnabled, setSoundVolume, useSoundSettings } from './soundSettings';
 
-/** Settings: the master volume and an on/off per event. The master switch (Orchestrator sounds) mutes all of it. */
+/** Settings: the master volume and an on/off per event. The master switch (Play sounds) mutes all of it. */
 export function SoundMixControl() {
   const { volume, toggles } = useSoundSettings();
   return (

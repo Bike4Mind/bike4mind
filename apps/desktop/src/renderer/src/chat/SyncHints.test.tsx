@@ -59,6 +59,10 @@ const setWebSettings = vi.fn(async (patch: { enabled?: boolean }) => {
   current = { ...current, web: { ...current.web, settings: { enabled: patch.enabled === true } } };
   return current;
 });
+const syncWeb = vi.fn(async () => {
+  current = { ...current, web: { ...current.web, lastSyncAt: new Date().toISOString() } };
+  return current;
+});
 const openExternal = vi.fn(async () => undefined);
 const onOpenSettings = vi.fn();
 let root: Root;
@@ -66,7 +70,7 @@ let host: HTMLElement;
 
 const theme = extendTheme({});
 
-async function mount(state: ClaudeImportState, empty: boolean) {
+async function mount(state: ClaudeImportState, empty: boolean, showWebSync = false) {
   current = state;
   Object.assign(window, {
     b4m: {
@@ -77,6 +81,7 @@ async function mount(state: ClaudeImportState, empty: boolean) {
         dismissHint,
         setCodeSettings,
         setWebSettings,
+        syncWeb,
       },
     },
   });
@@ -86,6 +91,7 @@ async function mount(state: ClaudeImportState, empty: boolean) {
         <SidebarSyncHints
           empty={empty}
           fallback={<span data-testid="chat-sessions-empty">No conversations yet.</span>}
+          showWebSync={showWebSync}
           onOpenSettings={onOpenSettings}
         />
       </CssVarsProvider>
@@ -185,5 +191,81 @@ describe('hint card accessibility', () => {
     expect(card?.getAttribute('role')).toBe('region');
     const heading = document.getElementById(card?.getAttribute('aria-labelledby') ?? '');
     expect(heading?.textContent).toContain('Bring your chats along');
+  });
+});
+
+describe('web sync status line', () => {
+  const synced = (lastSyncAt: string | null, extra: Partial<ClaudeImportState['web']> = {}) => {
+    const state = stateWith({ web: true });
+    return { ...state, web: { ...state.web, lastSyncAt, ...extra } };
+  };
+  const text = () => query('sidebar-web-sync-text')?.textContent;
+
+  it('stays out of lists that are not chat lists', async () => {
+    await mount(synced(new Date().toISOString()), false, false);
+    expect(query('sidebar-web-sync-status')).toBeNull();
+  });
+
+  it('says when the web last synced, above the list, and syncs again on demand', async () => {
+    await mount(synced(new Date(Date.now() - 5 * 60_000).toISOString()), false, true);
+    expect(text()).toBe('Synced from web - 5m ago');
+    await click('sidebar-web-sync-now-btn');
+    expect(syncWeb).toHaveBeenCalledOnce();
+    expect(text()).toBe('Synced from web - just now');
+  });
+
+  it('explains a sync that has never run and offers Sync now', async () => {
+    await mount(synced(null), false, true);
+    expect(text()).toBe('Not synced from web yet');
+    await click('sidebar-web-sync-now-btn');
+    expect(syncWeb).toHaveBeenCalledOnce();
+  });
+
+  it('shows a running sync without a second trigger', async () => {
+    await mount(synced(null, { running: true }), false, true);
+    expect(text()).toBe('Syncing from web...');
+    expect(query('sidebar-web-sync-now-btn')).toBeNull();
+  });
+
+  it('shows a failed sync, with a retry', async () => {
+    await mount(
+      synced(new Date().toISOString(), { error: 'Could not read your notebooks from Bike4Mind web.' }),
+      false,
+      true
+    );
+    expect(text()).toBe('Could not sync from web');
+    await click('sidebar-web-sync-now-btn');
+    expect(syncWeb).toHaveBeenCalledOnce();
+  });
+
+  it('points a user with web notebooks but sync off at the setting', async () => {
+    await mount(stateWith({ webNotebooks: 30 }), false, true);
+    expect(text()).toBe('Web conversations not synced');
+    await click('sidebar-web-sync-setup-btn');
+    expect(onOpenSettings).toHaveBeenCalledExactlyOnceWith('b4m-web');
+    expect(setWebSettings).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['the web has no notebooks', stateWith({ webNotebooks: 0 })],
+    ['the user is signed out', stateWith({ signedIn: false })],
+  ])('says nothing when %s', async (_, state) => {
+    await mount(state, false, true);
+    expect(query('sidebar-web-sync-status')).toBeNull();
+  });
+
+  it('leaves the "not synced" pointer to the empty-sidebar card when the card offers web', async () => {
+    await mount(stateWith(), true, true);
+    expect(query('sidebar-empty-sync-web-btn')).not.toBeNull();
+    expect(query('sidebar-web-sync-status')).toBeNull();
+  });
+
+  it('keeps the status above the empty-sidebar card once sync is on', async () => {
+    await mount(synced(new Date().toISOString()), true, true);
+    expect(text()).toBe('Synced from web - just now');
+    const status = query('sidebar-web-sync-status');
+    const card = query('sidebar-empty-sync-card');
+    expect(card).not.toBeNull();
+    expect(status!.compareDocumentPosition(card!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 });

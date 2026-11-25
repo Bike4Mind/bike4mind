@@ -41,7 +41,9 @@ const h = vi.hoisted(() => {
         .filter(id => id === SESSION_ID)
         .map(id => ({ id, _id: id, userId: OWNER_ID, users: [{ userId: COLLABORATOR_ID }] }))
     ),
-    runOrgFeedbackSummary: vi.fn(async () => undefined),
+    runOrgFeedbackSummary: vi.fn<
+      (message: unknown, logger: unknown, checkBudget: (minimumRemainingMs?: number) => void) => Promise<void>
+    >(async () => undefined),
     planFindById: vi.fn(),
     questFind: vi.fn(() => ({
       lean: async () => [{ _id: 'q1', sessionId: SESSION_ID, reply: `![fig](${OWNER_IMAGE_URL})`, images: [] }],
@@ -516,7 +518,8 @@ describe('questExport queue multiplex', () => {
       ],
     };
 
-    await dispatch(event as never, exportContext as never, makeLogger() as never);
+    const remaining = vi.fn(() => 120000);
+    await dispatch(event as never, { getRemainingTimeInMillis: remaining } as never, makeLogger() as never);
 
     expect(h.runOrgFeedbackSummary).toHaveBeenCalledWith(
       expect.objectContaining({ summaryJobId: 'sum-1' }),
@@ -524,6 +527,15 @@ describe('questExport queue multiplex', () => {
       expect.any(Function)
     );
     expect(h.planFindById).not.toHaveBeenCalled();
+
+    const checkBudget = h.runOrgFeedbackSummary.mock.calls[0][2];
+    expect(() => checkBudget(120000)).not.toThrow();
+    remaining.mockReturnValue(119999);
+    expect(() => checkBudget(120000)).toThrow('Quest export run budget exhausted');
+    remaining.mockReturnValue(1000);
+    expect(() => checkBudget()).not.toThrow();
+    remaining.mockReturnValue(999);
+    expect(() => checkBudget()).toThrow('Quest export run budget exhausted');
   });
 
   it('still exports an untagged legacy message', async () => {

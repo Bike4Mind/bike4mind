@@ -1,6 +1,7 @@
 import { DISCOVERY_PRICE_NOTE_PREFIX, type IModelPrice, type IModelPriceRepository } from '@bike4mind/common';
 import seedFile from './modelPrices.seed.json';
 import type { ModelPriceSeedEntry } from './generateModelPriceSeed';
+import { Logger } from '@bike4mind/observability';
 
 const FAR_FUTURE = new Date('9999-01-01T00:00:00Z');
 
@@ -100,9 +101,10 @@ export async function seedModelPrices(
         // deployments keep billing from the stale row. Be loud about it.
         // Strict equality only: a strictly newer row just means an older-code
         // instance is booting after a newer seed landed (rollback / canary).
-        console.warn(
-          `[modelPriceCatalog] seed entry for ${entry.modelId} (${entry.unit}) differs from the newest seed row but generatedAt (${seed.generatedAt}) was not bumped; ` +
-            'regenerate the seed instead of editing entries: pnpm --filter @bike4mind/database generate:model-price-seed'
+        Logger.warn(
+          '[modelPriceCatalog] seed entry differs from the newest seed row but generatedAt was not bumped; ' +
+            'regenerate the seed instead of editing entries: pnpm --filter @bike4mind/database generate:model-price-seed',
+          { modelId: entry.modelId, unit: entry.unit, generatedAt: seed.generatedAt }
         );
       }
       if (provenance === 'operator' || alreadyCurrent || samePrice) {

@@ -256,7 +256,7 @@ describe('local model and history reachability', () => {
     expect(el('chat-session-title').textContent).toBe('First');
     // Web conversations stay out of the primary Chat and Code navigation.
     expect(document.querySelector('[data-testid="handoff-server-conversations-btn"]')).toBeNull();
-    expect(host?.textContent).not.toContain('Open web conversations');
+    expect(host?.textContent).not.toContain('Open Bike4Mind web');
     await openBrowser();
     expect(el('browser-pane-history').dataset.enabled).toBe('false');
     let resolveSession!: (session: ChatSession) => void;

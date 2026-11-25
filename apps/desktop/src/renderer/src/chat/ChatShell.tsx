@@ -155,6 +155,7 @@ import { OrchestrateToggle } from './orchestrator/OrchestrateToggle';
 import { ExampleQuestStrip } from './orchestrator/exampleQuests';
 import { markSessionViewed } from './markSessionViewed';
 import { ambientHeld, isEditable, isPrintableKey, useAmbientSettle } from './orchestrator/ambient';
+import { inTavernDialogue } from './orchestrator/tavern/dialogue';
 import type { AgentActions, InnkeeperDesk, StageAmbient } from './orchestrator/OrchestratorStage';
 import { OrchestratorSurface } from './orchestrator/OrchestratorSurface';
 import {
@@ -924,6 +925,14 @@ export function ChatShell({
   const orchestratorView = orchestratorLayout.panes[0].view;
   // The ambient settle and the in-scene conversation are a single scene's; a split stage has neither.
   const orchestratorSplit = orchestratorLayout.panes.length > 1;
+  // The Tavern asks its agents' questions in its own dialogue box (OrchestratorStage inSceneDecisions), so
+  // the tray above the composer keeps only this conversation's own decisions while that scene is up.
+  const agentDecisionsInScene =
+    orchestrating &&
+    !presentingStage &&
+    !orchestratorSplit &&
+    orchestratorView === 'tavern' &&
+    !orchestratorPrefs.focus;
   const threadHost = useRef<HTMLDivElement | null>(null);
   const dockToggle = useRef<HTMLButtonElement | null>(null);
   const [conversationRequest, setConversationRequest] = useState(0);
@@ -970,7 +979,7 @@ export function ChatShell({
     // A reply streaming in is something to watch arrive, not to hide.
     held: () => conversation.streaming || ambientHeld(document),
     onSettledKey: event => {
-      if (!isPrintableKey(event) || isEditable(event.target)) return;
+      if (!isPrintableKey(event) || isEditable(event.target) || inTavernDialogue(event.target)) return;
       event.preventDefault();
       focusParentChat();
     },
@@ -1853,7 +1862,12 @@ export function ChatShell({
           syncHints={
             onOpenImportSettings
               ? (empty, fallback) => (
-                  <SidebarSyncHints empty={empty} fallback={fallback} onOpenSettings={onOpenImportSettings} />
+                  <SidebarSyncHints
+                    empty={empty}
+                    fallback={fallback}
+                    showWebSync={mode === 'chat'}
+                    onOpenSettings={onOpenImportSettings}
+                  />
                 )
               : undefined
           }
@@ -2350,7 +2364,15 @@ export function ChatShell({
                 <>
                   <HeldRelayCard held={heldRelays.held} onResolve={heldRelays.resolve} onOpenSession={selectSession} />
 
-                  <TaskDecisionCards sessionId={persistedId} decisions={taskDecisions} onOpenSession={selectSession} />
+                  <TaskDecisionCards
+                    sessionId={persistedId}
+                    decisions={
+                      agentDecisionsInScene
+                        ? taskDecisions.filter(entry => entry.sessionId === persistedId)
+                        : taskDecisions
+                    }
+                    onOpenSession={selectSession}
+                  />
 
                   <SpawnSuggestionTray
                     suggestions={spawnSuggestions.suggestions}

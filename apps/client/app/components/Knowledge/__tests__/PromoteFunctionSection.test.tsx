@@ -10,6 +10,7 @@ const h = vi.hoisted(() => ({
   setExamples: { mutate: vi.fn(), isPending: false },
   calls: { data: undefined as unknown, isError: false },
   callsFor: vi.fn(),
+  stopSharing: { mutate: vi.fn(), isPending: false },
 }));
 
 vi.mock('@client/app/contexts/ApiContext', () => ({ api: {} }));
@@ -21,6 +22,10 @@ vi.mock('@client/app/hooks/data/callableFunctions', async importOriginal => ({
     h.callsFor(id);
     return h.calls;
   },
+  useStopSharingCallableFunction: () => h.stopSharing,
+}));
+vi.mock('../ShareFunctionDialog', () => ({
+  default: ({ tool }: { tool: { slug: string } }) => <div data-testid="python-function-share-dialog">{tool.slug}</div>,
 }));
 
 import PromoteFunctionSection from '../PromoteFunctionSection';
@@ -65,6 +70,7 @@ const tool = (overrides: Partial<ICallableFunctionPublic> = {}): ICallableFuncti
     updateAvailable: false,
     trustLabel: null,
     examples: [],
+    grants: null,
     createdAt: new Date(),
     updatedAt: new Date(),
     ...overrides,
@@ -98,6 +104,66 @@ beforeEach(() => {
   h.setExamples = { mutate: vi.fn(), isPending: false };
   h.calls = { data: { since: new Date(), total: 0, outcomes: {}, recent: [] }, isError: false };
   h.callsFor.mockReset();
+  h.stopSharing = { mutate: vi.fn(), isPending: false };
+});
+
+describe('sharing', () => {
+  it('a draft cannot be shared', () => {
+    renderSection(tool());
+    expect(screen.getByTestId('python-function-share-btn')).toBeDisabled();
+    expect(screen.getByTestId('python-function-share-status').textContent).toContain('Promote the tool to share it.');
+  });
+
+  it('a live tool opens the share dialog', () => {
+    renderSection(live('verified'));
+    expect(screen.getByTestId('python-function-share-status').textContent).toBe('Not shared.');
+    expect(screen.queryByTestId('python-function-share-stop-btn')).toBeNull();
+    fireEvent.click(screen.getByTestId('python-function-share-btn'));
+    expect(screen.getByTestId('python-function-share-dialog').textContent).toBe(CONTRACT.name);
+  });
+
+  it('a shared tool says with whom and stops sharing', () => {
+    renderSection({
+      ...live('unverified'),
+      grants: { visibility: 'organization', organizationId: 'org-1', userIds: ['p-1', 'p-2'] },
+    });
+    expect(screen.getByTestId('python-function-share-status').textContent).toBe(
+      'Shared with 2 people and the members of an organization.'
+    );
+    fireEvent.click(screen.getByTestId('python-function-share-stop-btn'));
+    expect(h.stopSharing.mutate).toHaveBeenCalledWith('fn-1', expect.anything());
+    expect(screen.queryByTestId('python-function-share-stop-error')).toBeNull();
+  });
+
+  it("shows why Stop sharing failed, in the server's words", () => {
+    h.stopSharing.mutate.mockImplementation((_id: string, handlers: { onError: (error: unknown) => void }) =>
+      handlers.onError(axiosError(404, { error: 'Tool not found', code: 'not_found' }))
+    );
+    renderSection({ ...live('verified'), grants: { visibility: 'private', userIds: ['p-1'] } });
+    fireEvent.click(screen.getByTestId('python-function-share-stop-btn'));
+    expect(screen.getByTestId('python-function-share-stop-error').textContent).toContain('Tool not found');
+  });
+
+  it('a private share whose people were all erased reads as not shared', () => {
+    renderSection({ ...live('verified'), grants: { visibility: 'private', userIds: [] } });
+    expect(screen.getByTestId('python-function-share-status').textContent).toBe('Not shared.');
+    expect(screen.getByTestId('python-function-share-btn').textContent).toBe('Share');
+    expect(screen.queryByTestId('python-function-share-stop-btn')).toBeNull();
+  });
+
+  it('a repinned draft that still has a share says promoting shares it again', () => {
+    renderSection(tool({ grants: { visibility: 'private', userIds: ['p-1'] } }));
+    expect(screen.getByTestId('python-function-share-status').textContent).toBe(
+      'Paused until the next promotion, which shares it again.'
+    );
+  });
+
+  it('a draft with no share keeps the promote line', () => {
+    renderSection(tool({ grants: null }));
+    expect(screen.getByTestId('python-function-share-status').textContent).toBe(
+      'Promote the tool to share it. A share covers the live version.'
+    );
+  });
 });
 
 describe('PromoteFunctionSection', () => {

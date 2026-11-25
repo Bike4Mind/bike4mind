@@ -581,7 +581,7 @@ export const softDeletePlugin = (
     // which throws "path 'userId' is matched twice" when CASL generates $or
     // filters containing both root userId and nested users.userId paths.
     const softDeleteFilter = { ...castFilter, deletedAt: null };
-    console.debug(`Soft deleting one document with filter: ${JSON.stringify(softDeleteFilter)}`);
+    Logger.debug('Soft deleting one document', { filter: softDeleteFilter });
     return this.collection
       .updateOne(softDeleteFilter, { $set: { deletedAt: new Date() } }, withAlsSession(this, options))
       .then((result: any) => ({
@@ -598,7 +598,7 @@ export const softDeletePlugin = (
     // Perform a soft delete by updating the `deletedAt` field.
     // Use raw MongoDB driver to bypass Mongoose 8's path inference (see deleteOne above).
     const softDeleteFilter = { ...castFilter, deletedAt: null };
-    console.debug(`Soft deleting many documents with filter: ${JSON.stringify(softDeleteFilter)}`);
+    Logger.debug('Soft deleting many documents', { filter: softDeleteFilter });
     return this.collection
       .updateMany(softDeleteFilter, { $set: { deletedAt: new Date() } }, withAlsSession(this, options))
       .then((result: any) => ({
@@ -764,18 +764,18 @@ export function compareMongoIds(a: string | mongoose.Types.ObjectId, b: string |
 export async function safeDropIndex(collection: mongoose.Collection, indexName: string) {
   try {
     await collection.dropIndex(indexName);
-    console.log(`✓ Dropped index: ${indexName}`);
+    Logger.info('Dropped index', { indexName });
   } catch (error) {
     if (error instanceof mongoose.mongo.MongoError && error.code === 27) {
-      console.log(`⚠ Index not found (skipping): ${indexName}`);
+      Logger.info('Index not found (skipping)', { indexName });
     } else if (error instanceof mongoose.mongo.MongoError && error.code === 26) {
       // NamespaceNotFound: the collection itself does not exist yet, so there is no index
       // to drop - as "safe" a no-op as a missing index. Surfaced as a test-order flake:
       // a migration test calling this in beforeEach fails only when no earlier test in the
       // shard happened to create the collection.
-      console.log(`⚠ Collection not found (skipping): ${indexName}`);
+      Logger.info('Collection not found (skipping)', { indexName });
     } else if (error instanceof Error && error.message?.includes('index not found')) {
-      console.log(`⚠ Index not found (skipping): ${indexName}`);
+      Logger.info('Index not found (skipping)', { indexName });
     } else {
       throw error;
     }

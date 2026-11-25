@@ -107,8 +107,8 @@ describe('feature adoption view', () => {
     await waitFor(() => expect(screen.getByTestId('adoption-export')).not.toBeDisabled());
     const create = vi.fn(() => 'blob:export');
     const revoke = vi.fn();
-    Object.defineProperty(URL, 'createObjectURL', { configurable: true, value: create });
-    Object.defineProperty(URL, 'revokeObjectURL', { configurable: true, value: revoke });
+    Object.defineProperty(URL, 'createObjectURL', { configurable: true, writable: true, value: create });
+    Object.defineProperty(URL, 'revokeObjectURL', { configurable: true, writable: true, value: revoke });
     const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
     fireEvent.click(screen.getByTestId('adoption-export'));
     const blob = create.mock.calls[0]?.[0] as Blob | undefined;

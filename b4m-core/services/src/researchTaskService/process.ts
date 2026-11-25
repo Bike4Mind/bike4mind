@@ -19,6 +19,7 @@ import {
   IApiKeyRepository,
   IOrganizationRepository,
   assertAuthOriginMatchesApiKey,
+  limitConcurrency,
 } from '@bike4mind/common';
 import { NotFoundError, BadRequestError } from '@bike4mind/utils';
 import type { ICompletionBackend } from '@bike4mind/llm-adapters';
@@ -35,7 +36,6 @@ import * as tagService from '../tagService';
 import * as taskSchedulerService from '../taskSchedulerService';
 import { htmlToMarkdown } from '../lib/turndown';
 import { getLinksFromHtml } from '../lib/cheerio';
-import pLimit from 'p-limit';
 import { FunctionQueueRunner } from '@bike4mind/utils';
 import { findOrUpdateExistingResearchData, createSendStatusUpdate } from './utils';
 import { performDeepResearch } from '../llm/tools/implementation/deepResearch';
@@ -495,7 +495,7 @@ const processScrape = async (
     logger?.info(`🎉 [RESEARCH_COMPLETE] Task ${researchTask.id} completed successfully with ${files.length} files`);
   };
 
-  const sequential = pLimit(1);
+  const sequential = limitConcurrency(1);
 
   await Promise.all(urls.map((url, index) => sequential(async () => scrapeUrl(url, index + 1))));
 

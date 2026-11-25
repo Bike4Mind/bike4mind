@@ -124,6 +124,7 @@ The table below remains the literal-update inventory, not proof that all databas
 | BillingMismatch | `resolvedBy` | enum | `billing/BillingMismatchModel.ts#BillingMismatchRepository.resolveMissing` | repository-check | `literal` | writes "reconciliation" |
 | BillingMismatch | `status` | enum | `billing/BillingMismatchModel.ts#BillingMismatchRepository.resolveForSubscription` | repository-check | `literal` | writes "resolved" |
 | BillingMismatch | `status` | enum | `billing/BillingMismatchModel.ts#BillingMismatchRepository.resolveMissing` | repository-check | `literal` | writes "resolved" |
+| CallableFunction | `approval` | enum | `ai/CallableFunctionModel.ts#CallableFunctionRepository.setApproval` | schema | `runValidators` | update call passes runValidators |
 | CallableFunction | `description` | maxlength | `ai/CallableFunctionModel.ts#CallableFunctionRepository.repin` | schema | `runValidators` | update call passes runValidators |
 | CallableFunction | `pin.contentHash` | match | `ai/CallableFunctionModel.ts#CallableFunctionRepository.repin` | schema | `runValidators` | update call passes runValidators |
 | CallableFunction | `pin.version` | min | `ai/CallableFunctionModel.ts#CallableFunctionRepository.repin` | schema | `runValidators` | update call passes runValidators |
@@ -131,6 +132,7 @@ The table below remains the literal-update inventory, not proof that all databas
 | CallableFunction | `examples.name` | maxlength | `ai/CallableFunctionModel.ts#CallableFunctionRepository.setExamples` | schema | `runValidators` | update call passes runValidators |
 | CallableFunction | `examples.tolerance.abs` | min | `ai/CallableFunctionModel.ts#CallableFunctionRepository.setExamples` | schema | `runValidators` | update call passes runValidators |
 | CallableFunction | `examples.tolerance.rel` | min | `ai/CallableFunctionModel.ts#CallableFunctionRepository.setExamples` | schema | `runValidators` | update call passes runValidators |
+| CallableFunction | `grants.visibility` | enum | `ai/CallableFunctionModel.ts#CallableFunctionRepository.setGrants` | schema | `runValidators` | update call passes runValidators |
 | CallableFunction | `pin.runtime.kind` | maxlength | `ai/CallableFunctionModel.ts#CallableFunctionRepository.promote` | schema | `runValidators` | update call passes runValidators |
 | CallableFunction | `pin.runtime.kind` | maxlength | `ai/CallableFunctionModel.ts#CallableFunctionRepository.repin` | schema | `runValidators` | update call passes runValidators |
 | CallableFunction | `pin.runtime.lockHash` | match | `ai/CallableFunctionModel.ts#CallableFunctionRepository.promote` | schema | `runValidators` | update call passes runValidators |
@@ -143,6 +145,8 @@ The table below remains the literal-update inventory, not proof that all databas
 | CallableFunction | `state` | enum | `ai/CallableFunctionModel.ts#CallableFunctionRepository.promote` | schema | `runValidators` | update call passes runValidators |
 | CallableFunction | `state` | enum | `ai/CallableFunctionModel.ts#CallableFunctionRepository.repin` | schema | `runValidators` | update call passes runValidators |
 | CallableFunction | `trustLabel` | enum | `ai/CallableFunctionModel.ts#CallableFunctionRepository.promote` | schema | `runValidators` | update call passes runValidators |
+| CallableFunctionReview | `approval` | enum | `ai/CallableFunctionReviewModel.ts#CallableFunctionReviewRepository.save` | schema | `runValidators` | update call passes runValidators |
+| CallableFunctionReview | `reviewHash` | match | `ai/CallableFunctionReviewModel.ts#CallableFunctionReviewRepository.save` | schema | `runValidators` | update call passes runValidators |
 | CompletionRun | `budgetCredits` | min | `billing/CompletionRunModel.ts#CompletionRunRepository.raiseBudget` | schema | `runValidators` | Passes runValidators; the sole caller (POST completion-runs/{runId}/budget) also validates the body as an int of at least 1. |
 | CreditTransaction | `reversalReason` | enum | `billing/CreditTransactionModel.ts#CreditTransactionRepository.markPurchaseReversed` | route-schema | `apps/client/pages/api/stripe/webhook.ts#reversePurchaseStanding` | Webhook and reconcile script pass literals refunded or dispute_lost only |
 | CreditTransaction | `status` | enum | `billing/CreditTransactionModel.ts#CreditTransactionRepository.updateTransactionStatus` | route-schema | `apps/client/pages/api/stripe/webhook.ts#CreditPurchaseStatus.Failed` | Sole caller passes enum constant CreditPurchaseStatus.Failed |

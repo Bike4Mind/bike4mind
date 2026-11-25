@@ -95,7 +95,6 @@ final class SceneWireTests: XCTestCase {
     XCTAssertEqual(handle.kind, .scene)
     XCTAssertEqual(handle.id, "664f1c2b9a1e4d0012ab34cd")
     XCTAssertEqual(handle.prompt, "Beach")
-    XCTAssertTrue(handle.isCancellable)
     let requests = await transport.requests
     let request = try XCTUnwrap(requests.first)
     XCTAssertEqual(request.httpMethod, "POST")
@@ -364,7 +363,7 @@ private actor GatedSceneAPI: StudioAPI {
   }
 
   func models(for kind: GenerationKind) async throws -> [GenerationModel] { [] }
-  func generate(_ request: GenerationRequest) async throws -> GenerationHandle { throw APIError.notFound }
+  func generate(_ request: GenerationRequest) async throws -> [GenerationHandle] { throw APIError.notFound }
   func editImage(_ request: ImageEditRequest) async throws -> GenerationHandle { throw APIError.notFound }
 
   func composeScene(_ request: SceneRequest) async throws -> GenerationHandle {
@@ -378,7 +377,6 @@ private actor GatedSceneAPI: StudioAPI {
   }
 
   func cancel(_ handle: GenerationHandle) async throws {}
-  func createSession(name: String) async throws -> String { "s" }
 }
 
 @MainActor

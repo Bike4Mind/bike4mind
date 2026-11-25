@@ -60,14 +60,14 @@ async function setup() {
       case '/api/ai/elevenlabs-voices':
         data = { voices: [] };
         break;
-      case '/api/studio/image-jobs?limit=1':
-        data = { data: [] };
-        break;
-      case '/api/studio/image-jobs': {
+      case '/api/v1/image-jobs': {
         paid(config);
-        data = { groupId: 'group', jobs: [{ id: 'remote', state: 'queued', output: null, error: null }] };
+        data = { group_id: 'group', data: [queuedImageJob] };
         break;
       }
+      case '/api/v1/image-jobs/remote':
+        data = queuedImageJob;
+        break;
       default:
         throw new Error(`Unexpected fixture request ${config.url}`);
     }
@@ -119,6 +119,22 @@ async function setup() {
     },
   };
 }
+
+const queuedImageJob = {
+  id: 'remote',
+  object: 'image_generation',
+  state: 'pending',
+  model: 'gpt-image-2',
+  mode: 'generate',
+  prompt: 'Prepared garden',
+  group_id: 'group',
+  source: 'studio',
+  error: null,
+  output: null,
+  credits: { reserved: null, settled: null },
+  created_at: '2026-01-01T00:00:00.000Z',
+  updated_at: '2026-01-01T00:00:00.000Z',
+};
 
 describe('registered Studio authorization', () => {
   it('uploads a reference image the user picked although the session has no granted folders', async () => {

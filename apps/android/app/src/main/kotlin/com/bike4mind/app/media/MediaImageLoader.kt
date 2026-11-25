@@ -97,8 +97,9 @@ class MediaImageLoader(private val http: HttpClient, directory: File, environmen
         try {
             directory.mkdirs()
             val temp = File(directory, file.name + ".tmp")
-            // JPEG has no alpha channel and would flatten a transparent image onto black.
-            val format = if (bitmap.hasAlpha()) Bitmap.CompressFormat.PNG else Bitmap.CompressFormat.JPEG
+            // JPEG has no alpha channel and would flatten a transparent image onto black; an opaque one stays JPEG,
+            // which is several times smaller.
+            val format = if (isTransparent(bitmap)) Bitmap.CompressFormat.PNG else Bitmap.CompressFormat.JPEG
             temp.outputStream().use { bitmap.compress(format, JPEG_QUALITY, it) }
             if (!temp.renameTo(file)) temp.delete()
         } catch (failure: IOException) {
@@ -118,6 +119,20 @@ class MediaImageLoader(private val http: HttpClient, directory: File, environmen
 
         /** A decode may use up to this many times maxPx squared pixels, so a very wide image still fits the heap. */
         private const val PIXEL_HEADROOM = 8L
+
+        /**
+         * Whether any pixel is not fully opaque. [Bitmap.hasAlpha] only says the format has an alpha channel, which
+         * every decoded RGBA PNG has, transparent or not. Reads one row at a time to keep the scan's memory small.
+         */
+        fun isTransparent(bitmap: Bitmap): Boolean {
+            if (!bitmap.hasAlpha()) return false
+            val row = IntArray(bitmap.width)
+            for (y in 0 until bitmap.height) {
+                bitmap.getPixels(row, 0, bitmap.width, 0, y, bitmap.width, 1)
+                if (row.any { it ushr 24 != 0xFF }) return true
+            }
+            return false
+        }
 
         fun memoryBudgetKb(): Int = (Runtime.getRuntime().maxMemory() / 1024 / 8).toInt()
 

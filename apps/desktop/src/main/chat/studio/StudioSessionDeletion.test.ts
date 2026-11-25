@@ -32,7 +32,7 @@ async function setup() {
   const attachments = new AttachmentStore(join(root, 'attachments'), logger);
   const workspaces = new StudioWorkspaceStore(join(root, 'studio'), sessions);
   const media = new MediaStore(join(root, 'media'));
-  const paid = vi.fn(async () => ({ groupId: 'group', jobs: [{ id: 'remote' }] }));
+  const paid = vi.fn(async () => ({ group_id: 'group', data: [{ id: 'remote' }] }));
   const authorize = vi.fn(async () => true);
   const generation = new StudioGenerationService({
     workspaces,
@@ -40,7 +40,7 @@ async function setup() {
     authorize,
     connection: () => ({
       scope: sessionScopeKey(account),
-      client: { createStudioImages: paid } as unknown as MediaApiClient,
+      client: { createImageJobGroup: paid } as unknown as MediaApiClient,
     }),
   });
   const live = new StudioLiveService({

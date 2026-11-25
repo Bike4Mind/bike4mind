@@ -1,5 +1,6 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { withTransaction } from '@bike4mind/db-core';
+import { Logger } from '@bike4mind/observability';
 import { beforeAll, afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { userService } from '@bike4mind/services';
 import { CURRENT_POLICY_VERSION, newSignupGrant, PENDING_FREE_CREDITS_TAG } from '@bike4mind/common';
@@ -143,7 +144,7 @@ describe('committed grant band telemetry', () => {
     );
     expect(emitRiskBand).not.toHaveBeenCalled();
     update.mockRestore();
-    const warning = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const warning = vi.spyOn(Logger, 'warn').mockImplementation(() => {});
     expect((await userService.releaseSignupTranche(user.id, { ...adapters, emitRiskBand })).creditsGranted).toBe(12);
     expect((await userService.releaseSignupTranche(user.id, { ...adapters, emitRiskBand })).creditsGranted).toBe(0);
     expect(emitRiskBand).toHaveBeenCalledExactlyOnceWith('full');
@@ -372,7 +373,7 @@ describe('staged signup ledger', () => {
   it.each(['malformed policy', 'invalid policy', 'invalid enabled policy'])(
     'holds and diagnoses %s without minting credits or exposing private inputs',
     async failure => {
-      const warning = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+      const warning = vi.spyOn(Logger, 'warn').mockImplementation(() => undefined);
       const user = await createUser();
       const policy =
         failure === 'malformed policy'
@@ -409,7 +410,7 @@ describe('staged signup ledger', () => {
   );
 
   it('keeps a failed observation collection retryable and grants exactly once after recovery', async () => {
-    const warning = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const warning = vi.spyOn(Logger, 'warn').mockImplementation(() => undefined);
     const user = await createUser();
     const policy = JSON.stringify({
       enabled: true,
@@ -563,7 +564,7 @@ describe('staged signup ledger', () => {
   });
 
   it('does not wait on a stalled shadow collection under a disabled policy', async () => {
-    const warning = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const warning = vi.spyOn(Logger, 'warn').mockImplementation(() => undefined);
     const stalledCollector = vi.fn(() => new Promise<never>(() => undefined));
     const user = await createUser();
     expect(
@@ -575,7 +576,7 @@ describe('staged signup ledger', () => {
   });
 
   it('grants in full when a shadow collector query fails server-side', async () => {
-    const warning = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const warning = vi.spyOn(Logger, 'warn').mockImplementation(() => undefined);
     const collectRiskSignals = vi.fn(async () => {
       await User.aggregate([{ $match: { $unknownOperator: 1 } }]);
       return { datacenter: false };
@@ -590,7 +591,7 @@ describe('staged signup ledger', () => {
   });
 
   it('grants in full and records no signals when shadow collection fails under a disabled policy', async () => {
-    const warning = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const warning = vi.spyOn(Logger, 'warn').mockImplementation(() => undefined);
     const failingCollector = vi.fn(async () => {
       throw new Error('lookup timeout');
     });

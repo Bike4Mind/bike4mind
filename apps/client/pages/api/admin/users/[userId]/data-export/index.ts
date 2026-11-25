@@ -1,4 +1,3 @@
-import { v4 as uuidv4 } from 'uuid';
 import {
   ADMIN_DATA_EXPORT_DENIED_ACTION,
   ADMIN_DATA_EXPORT_FAILED_ACTION,
@@ -71,7 +70,7 @@ const handler = adminApi({
       });
     }
 
-    const exportJobId = uuidv4();
+    const exportJobId = crypto.randomUUID();
     try {
       await recordAdminActionFromRequest(req, {
         action: ADMIN_DATA_EXPORT_REQUESTED_ACTION,

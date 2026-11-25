@@ -1,18 +1,13 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Box, Text, useInput, useStdin } from 'ink';
 import Spinner from 'ink-spinner';
-import jwt from 'jsonwebtoken';
 import open from 'open';
 import axios from 'axios';
 import { OAuthClient, type DeviceFlowResponse } from '../auth/OAuthClient';
 import { ApiClient } from '../auth/ApiClient';
 import type { ConfigStore } from '../storage/ConfigStore';
 import { copyToClipboard, type CopyResult } from '../utils/copyToClipboard';
-
-interface JwtPayload {
-  id: string;
-  [key: string]: unknown;
-}
+import { decodeJwtUserId } from '../utils/jwtUserId';
 
 interface LoginFlowProps {
   apiUrl?: string;
@@ -160,8 +155,7 @@ export function LoginFlow({
         tokenIssued.current = true;
 
         // Step 3: Decode access token to get userId
-        const decoded = jwt.decode(tokens.access_token) as JwtPayload | null;
-        const userId = decoded?.id || '';
+        const userId = decodeJwtUserId(tokens.access_token);
 
         // Step 4: Calculate expiry time
         const expiresAt = new Date(Date.now() + tokens.expires_in * 1000).toISOString();

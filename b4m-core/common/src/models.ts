@@ -878,6 +878,7 @@ export const sumOneHourCacheWrites = (turns: readonly TurnUsage[] | undefined): 
 // Alarm-only: billing behavior is unchanged.
 const alarmIfUnpriced = (model: ModelInfo, cost: number, usage: number): number => {
   if (cost === 0 && usage > 0 && !model.freeToRun) {
+    // eslint-disable-next-line no-console -- alarm signal in pure pricing code shared with the browser bundle
     console.error(
       `[UNPRICED_MODEL] ${model.id} (${model.backend}) computed $0 for ${usage} tokens; its pricing map is missing or zero`
     );
