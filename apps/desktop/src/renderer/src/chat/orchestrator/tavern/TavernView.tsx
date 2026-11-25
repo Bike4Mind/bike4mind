@@ -739,7 +739,8 @@ export function TavernView({
   );
   const needsYou = new Map([...needsYouGroupsByCarrier].map(([id, group]) => [id, group.length]));
   // One place to answer: with the dialogue box up, a waiting sprite keeps only its "Needs you!" marker.
-  const dialogue = inSceneDecisions && answerFromBubble && !settled;
+  // It stays up at last call too, when someone away from the keyboard is most likely to come back to it.
+  const dialogue = inSceneDecisions && answerFromBubble;
   // Until everyone is seated the bubble rides inside the walking sprite; after that it stands on its own with buttons.
   const answerBubbles =
     answerFromBubble && arrived && !dialogue ? needsYouGroupsByCarrier : new Map<string, string[]>();

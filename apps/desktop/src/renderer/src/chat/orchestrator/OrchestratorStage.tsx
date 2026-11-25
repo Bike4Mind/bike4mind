@@ -459,7 +459,8 @@ export function OrchestratorStage({
   };
 
   // The parent first: it is the one whose answer everything else is waiting behind.
-  const askingAgent = parentNeedsYou ? undefined : firstNeedsYou;
+  // An agent's request is the Tavern dialogue box's to show; the card keeps the parent's.
+  const askingAgent = parentNeedsYou || inSceneDecisions ? undefined : firstNeedsYou;
   const needsYouCard = settled && (parentNeedsYou || askingAgent) && (
     <NeedsYouCard
       key={askingAgent?.id ?? 'parent'}

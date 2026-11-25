@@ -32,7 +32,7 @@ const approval = (sessionId: string, id: string, extra: Partial<ChatToolCall> = 
   collectsSecrets: false,
 });
 
-const render = (frontKey?: string) =>
+const render = (frontKey?: string, focusRequest?: number) =>
   themed.render(
     <TavernDialogue
       agents={[agentFixture('a', 'needs-you'), agentFixture('b', 'needs-you')]}
@@ -41,6 +41,7 @@ const render = (frontKey?: string) =>
       frontKey={frontKey}
       onFrontChange={onFrontChange}
       onOpenDetails={onOpenDetails}
+      focusRequest={focusRequest}
       look="wood"
     />
   );
@@ -148,6 +149,14 @@ describe('TavernDialogue', () => {
     await press('Escape');
     expect(query('tavern-dialogue')).toBeNull();
     expect(query('tavern-dialogue-minimized')).not.toBeNull();
+  });
+
+  it('comes back from the minimized tab and takes focus on a focus request', async () => {
+    await render();
+    await press('Escape');
+    expect(query('tavern-dialogue')).toBeNull();
+    await render(undefined, 1);
+    expect(document.activeElement).toBe(el('tavern-dialogue'));
   });
 
   it('brings a clicked character forward by session id', async () => {

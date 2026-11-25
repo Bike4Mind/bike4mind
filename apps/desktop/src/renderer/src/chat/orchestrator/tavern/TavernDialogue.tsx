@@ -119,12 +119,18 @@ export function TavernDialogue({
   const index = queueIndex(queue, frontKey);
   const front = queue[index] as PendingDecision | undefined;
 
+  // A focus request un-minimizes the box, then focuses it once it is back on screen.
+  const focusPending = useRef(false);
   useEffect(() => {
     if (!focusRequest) return;
+    focusPending.current = true;
     setMinimized(false);
-    // After the un-minimize renders the box.
-    requestAnimationFrame(() => boxRef.current?.focus());
   }, [focusRequest]);
+  useEffect(() => {
+    if (!focusPending.current || minimized || !boxRef.current) return;
+    focusPending.current = false;
+    boxRef.current.focus();
+  });
 
   if (!front) {
     return loadError ? (
@@ -331,7 +337,7 @@ function QueueNav({
       sx={{ ml: 'auto', display: 'flex', alignItems: 'center', gap: '0.3em', fontSize: '0.85em', color: colors.muted }}
     >
       <Box component="button" type="button" aria-label="Previous request" onClick={() => onMove(-1)} sx={arrowSx}>
-        {'\u25c2'}
+        {'\u2039'}
       </Box>
       {shown.map((decision, position) => {
         const src = portraitOf(decision.sessionId);
@@ -364,7 +370,7 @@ function QueueNav({
       {queue.length > QUEUE_PORTRAITS && <span>{`+${queue.length - QUEUE_PORTRAITS}`}</span>}
       <span data-testid="tavern-dialogue-position">{`${index + 1} of ${queue.length}`}</span>
       <Box component="button" type="button" aria-label="Next request" onClick={() => onMove(1)} sx={arrowSx}>
-        {'\u25b8'}
+        {'\u203a'}
       </Box>
     </Box>
   );

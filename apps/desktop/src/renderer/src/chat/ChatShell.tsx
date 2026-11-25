@@ -924,6 +924,14 @@ export function ChatShell({
   const orchestratorView = orchestratorLayout.panes[0].view;
   // The ambient settle and the in-scene conversation are a single scene's; a split stage has neither.
   const orchestratorSplit = orchestratorLayout.panes.length > 1;
+  // The Tavern asks its agents' questions in its own dialogue box (OrchestratorStage inSceneDecisions), so
+  // the tray above the composer keeps only this conversation's own decisions while that scene is up.
+  const agentDecisionsInScene =
+    orchestrating &&
+    !presentingStage &&
+    !orchestratorSplit &&
+    orchestratorView === 'tavern' &&
+    !orchestratorPrefs.focus;
   const threadHost = useRef<HTMLDivElement | null>(null);
   const dockToggle = useRef<HTMLButtonElement | null>(null);
   const [conversationRequest, setConversationRequest] = useState(0);
@@ -2350,7 +2358,15 @@ export function ChatShell({
                 <>
                   <HeldRelayCard held={heldRelays.held} onResolve={heldRelays.resolve} onOpenSession={selectSession} />
 
-                  <TaskDecisionCards sessionId={persistedId} decisions={taskDecisions} onOpenSession={selectSession} />
+                  <TaskDecisionCards
+                    sessionId={persistedId}
+                    decisions={
+                      agentDecisionsInScene
+                        ? taskDecisions.filter(entry => entry.sessionId === persistedId)
+                        : taskDecisions
+                    }
+                    onOpenSession={selectSession}
+                  />
 
                   <SpawnSuggestionTray
                     suggestions={spawnSuggestions.suggestions}
