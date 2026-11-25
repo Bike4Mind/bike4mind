@@ -5,6 +5,7 @@ import {
   ORG_MODEL_NOT_ALLOWED_ERROR_CODE,
   ORG_TOOL_NOT_ALLOWED_ERROR_CODE,
   ForbiddenError,
+  NotFoundError,
   ChatModels,
 } from '@bike4mind/common';
 import { ChatCompletionInvoke } from './ChatCompletionInvoke';
@@ -87,6 +88,36 @@ describe('ChatCompletionInvoke.invoke - session access', () => {
 
     expect(mockedGetAvailableModels).not.toHaveBeenCalled();
     expect(mockDb.quests.create).not.toHaveBeenCalled();
+    expect(mockDb.sessions.update).not.toHaveBeenCalled();
+  });
+
+  it('refuses a missing session with a 404 logged at warn, before any quest, credit or session write', async () => {
+    mockDb.sessions.findById.mockResolvedValue(null);
+    const logger = { log: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+    const admitQuestStart = vi.fn();
+    const invoke = new ChatCompletionInvoke({
+      db: mockDb,
+      logger,
+      user: { id: OWNER_ID, tags: [] },
+      invokeLambda: vi.fn(),
+      admitQuestStart,
+    } as unknown as ConstructorParameters<typeof ChatCompletionInvoke>[0]);
+
+    const rejection = invoke.invoke({
+      body: { ...body, questId: 'quest-1', enableQuestMaster: true },
+      userId: OWNER_ID,
+      authOrigin: 'session',
+    });
+    await expect(rejection).rejects.toBeInstanceOf(NotFoundError);
+    await expect(rejection).rejects.toMatchObject({ statusCode: 404, message: 'Session not found' });
+
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('session not found'));
+    expect(logger.error).not.toHaveBeenCalled();
+    expect(admitQuestStart).not.toHaveBeenCalled();
+    expect(mockedGetAvailableModels).not.toHaveBeenCalled();
+    expect(mockDb.quests.findById).not.toHaveBeenCalled();
+    expect(mockDb.quests.create).not.toHaveBeenCalled();
+    expect(mockDb.quests.update).not.toHaveBeenCalled();
     expect(mockDb.sessions.update).not.toHaveBeenCalled();
   });
 
