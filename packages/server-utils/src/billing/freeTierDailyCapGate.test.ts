@@ -114,7 +114,7 @@ describe('checkFreeTierDailySpendCap', () => {
       await expect(result).rejects.toBeInstanceOf(TooManyRequestsError);
       return;
     }
-    await expect(result).resolves.toBeUndefined();
+    await expect(result).resolves.toMatchObject({ resetAt: new Date('2026-10-28T00:00:00.000Z') });
   });
 
   it.each(['settings', 'user', 'tier'] as const)('fails open when the %s lookup rejects', async source => {
@@ -219,7 +219,10 @@ describe('checkFreeTierDailySpendCap', () => {
     findDailySpendByUserMock.mockResolvedValue(300);
 
     // Under cap - should NOT throw
-    await expect(callGate(makeUser(1 * 60 * 60 * 1000))).resolves.toBeUndefined();
+    await expect(callGate(makeUser(1 * 60 * 60 * 1000))).resolves.toMatchObject({
+      limitCredits: 500,
+      remainingCredits: 200,
+    });
   });
 
   it('throws when day-1 cap is exceeded', async () => {
@@ -289,7 +292,10 @@ describe('checkFreeTierDailySpendCap', () => {
     findDailySpendByUserMock.mockResolvedValue(150);
 
     // A day-1 cap of 0 would refuse any spend; falling back to the steady-state 200 lets 150 through.
-    await expect(callGate(makeUser(1 * 60 * 60 * 1000))).resolves.toBeUndefined();
+    await expect(callGate(makeUser(1 * 60 * 60 * 1000))).resolves.toMatchObject({
+      limitCredits: 200,
+      remainingCredits: 50,
+    });
   });
 
   it('falls back to steady-state cap when days-2-7 cap is 0', async () => {
@@ -303,7 +309,7 @@ describe('checkFreeTierDailySpendCap', () => {
     findDailySpendByUserMock.mockResolvedValue(150);
 
     // A days-2-7 cap of 0 would refuse any spend; falling back to the steady-state 200 lets 150 through.
-    await expect(callGate(makeUser(2 * DAY_MS))).resolves.toBeUndefined();
+    await expect(callGate(makeUser(2 * DAY_MS))).resolves.toMatchObject({ limitCredits: 200, remainingCredits: 50 });
   });
 
   it('fails open on a transient DB error', async () => {
@@ -334,7 +340,7 @@ describe('checkFreeTierDailySpendCap', () => {
     const user = makeUser(10 * DAY_MS);
 
     findDailySpendByUserMock.mockResolvedValue(199);
-    await expect(callGate(user)).resolves.toBeUndefined();
+    await expect(callGate(user)).resolves.toMatchObject({ limitCredits: 200, remainingCredits: 1 });
 
     findDailySpendByUserMock.mockResolvedValue(200);
     await expect(callGate(user)).rejects.toBeInstanceOf(TooManyRequestsError);
@@ -487,6 +493,72 @@ describe('checkFreeTierDailySpendCap', () => {
     });
   });
 
+  describe('daily allowance', () => {
+    const creditCap = (steadyCap: number, systemCapUsd?: number) =>
+      getSettingsValueMock.mockImplementation((key: string) => {
+        if (key === 'enforceCredits') return true;
+        if (key === 'freeTierDailySpendCapCredits') return steadyCap;
+        if (key === 'freeTierDailySystemCostCapUsd') return systemCapUsd;
+        return undefined;
+      });
+
+    beforeEach(() => resolveUserRateTierMock.mockResolvedValue('free'));
+
+    it('returns the limit, what is left rounded down, and the next UTC midnight', async () => {
+      creditCap(1000);
+      findDailySpendByUserMock.mockResolvedValue(812.4);
+
+      await expect(callGate(makeUser(10 * DAY_MS))).resolves.toEqual({
+        limitCredits: 1000,
+        remainingCredits: 187,
+        resetAt: new Date('2026-10-28T00:00:00.000Z'),
+      });
+    });
+
+    it('returns nothing when only the system cost cap is configured', async () => {
+      creditCap(0, 0.1);
+      systemCostUsdByUserSinceMock.mockResolvedValue(0);
+
+      await expect(callGate(makeUser(10 * DAY_MS))).resolves.toBeUndefined();
+    });
+
+    it('carries the allowance headers on the credit-cap refusal with nothing remaining', async () => {
+      creditCap(1000);
+      findDailySpendByUserMock.mockResolvedValue(1043);
+
+      const error = (await callGate(makeUser(10 * DAY_MS)).catch((caught: unknown) => caught)) as TooManyRequestsError;
+
+      expect(error.additionalInfo?.rateLimitHeaders).toEqual({
+        'X-Daily-Credits-Limit': 1000,
+        'X-Daily-Credits-Remaining': 0,
+        'X-Daily-Credits-Reset': Date.parse('2026-10-28T00:00:00.000Z') / 1000,
+      });
+    });
+
+    it('reports nothing remaining when the system cost cap refuses a caller with credits left', async () => {
+      creditCap(1000, 0.1);
+      findDailySpendByUserMock.mockResolvedValue(100);
+      systemCostUsdByUserSinceMock.mockResolvedValue(0.2);
+
+      const error = (await callGate(makeUser(10 * DAY_MS)).catch((caught: unknown) => caught)) as TooManyRequestsError;
+
+      expect(error.additionalInfo?.rateLimitHeaders).toMatchObject({
+        'X-Daily-Credits-Limit': 1000,
+        'X-Daily-Credits-Remaining': 0,
+      });
+    });
+
+    it('sends no allowance headers when only the system cost cap refuses', async () => {
+      creditCap(0, 0.1);
+      systemCostUsdByUserSinceMock.mockResolvedValue(0.2);
+
+      const error = (await callGate(makeUser(10 * DAY_MS)).catch((caught: unknown) => caught)) as TooManyRequestsError;
+
+      expect(isFreeTierDailyCapError(error)).toBe(true);
+      expect(error.additionalInfo).not.toHaveProperty('rateLimitHeaders');
+    });
+  });
+
   describe('system cost cap', () => {
     const settingsWith = (steadyCap: number | undefined, systemCapUsd: number | undefined) =>
       getSettingsValueMock.mockImplementation((key: string) => {
@@ -519,7 +591,10 @@ describe('checkFreeTierDailySpendCap', () => {
       findDailySpendByUserMock.mockResolvedValue(10);
       systemCostUsdByUserSinceMock.mockResolvedValue(0.09);
 
-      await expect(callGate(makeUser(10 * DAY_MS))).resolves.toBeUndefined();
+      await expect(callGate(makeUser(10 * DAY_MS))).resolves.toMatchObject({
+        limitCredits: 200,
+        remainingCredits: 190,
+      });
     });
 
     it('checks the credit cap first and skips the system read once it trips', async () => {
@@ -532,9 +607,9 @@ describe('checkFreeTierDailySpendCap', () => {
 
     it('skips the system read when its cap is unset or 0', async () => {
       settingsWith(200, undefined);
-      await expect(callGate(makeUser(10 * DAY_MS))).resolves.toBeUndefined();
+      await expect(callGate(makeUser(10 * DAY_MS))).resolves.toMatchObject({ limitCredits: 200 });
       settingsWith(200, 0);
-      await expect(callGate(makeUser(10 * DAY_MS))).resolves.toBeUndefined();
+      await expect(callGate(makeUser(10 * DAY_MS))).resolves.toMatchObject({ limitCredits: 200 });
 
       expect(systemCostUsdByUserSinceMock).not.toHaveBeenCalled();
     });

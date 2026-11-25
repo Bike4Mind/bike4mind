@@ -7,6 +7,7 @@ import {
   UnprocessableEntityError,
   redactSessionForClient,
   chatMessageResponseSchema,
+  setFreeTierDailyCreditHeaders,
 } from '@bike4mind/common';
 import { ChatCompletionInvoke } from '@bike4mind/services/llm/ChatCompletionInvoke';
 import { SQSService } from '@bike4mind/utils';
@@ -104,13 +105,14 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.AI_CHAT] })
     await assertSpendNotFrozen(spendFreezeSubjectForRequest(req, effectiveOrgId ?? null), {
       db: { spendFreezes: spendFreezeRepository },
     });
-    await checkFreeTierDailySpendCap({
+    const dailyAllowance = await checkFreeTierDailySpendCap({
       user: req.user,
       req,
       billingOrganizationId: effectiveOrgId,
       usageEventRepository,
       logger: req.logger,
     });
+    setFreeTierDailyCreditHeaders(res, dailyAllowance);
     // The turn is queued and finishes elsewhere, so only the token quota applies here.
     await admitRequestCompletion(req, { holdSlot: false });
 

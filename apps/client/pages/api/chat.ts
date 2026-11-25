@@ -53,6 +53,7 @@ import {
   type ChatToolMode,
   type RequestBodyOf,
   type SimplifiedChatRequest,
+  setFreeTierDailyCreditHeaders,
 } from '@bike4mind/common';
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
 import { isApiKeyAuth } from '@server/middlewares/apiKeyAuth';
@@ -216,13 +217,14 @@ async function handleChat(
   await assertSpendNotFrozen(spendFreezeSubjectForRequest(req, organizationId ?? null), {
     db: { spendFreezes: spendFreezeRepository },
   });
-  await checkFreeTierDailySpendCap({
+  const dailyAllowance = await checkFreeTierDailySpendCap({
     user: req.user,
     req,
     billingOrganizationId: organizationId,
     usageEventRepository,
     logger: req.logger,
   });
+  setFreeTierDailyCreditHeaders(res, dailyAllowance);
 
   // Resolve the notebook only AFTER the org check: an API-key/newConversation caller gets a
   // freshly created notebook, and a request that resolveActiveOrg rejects (403/404) must not have

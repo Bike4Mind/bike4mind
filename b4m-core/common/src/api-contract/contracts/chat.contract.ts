@@ -173,7 +173,10 @@ export const chatContract = defineEndpoint({
     429: {
       description:
         'Per-user rate limit exceeded. A free-tier daily credit cap hit is distinguished by ' +
-        '`errorCode: daily_free_limit_reached` and a `Retry-After` header until the next UTC midnight.',
+        '`errorCode: daily_free_limit_reached` and a `Retry-After` header until the next UTC midnight. ' +
+        'Free-tier turns also carry `X-Daily-Credits-Limit`, `X-Daily-Credits-Remaining` and ' +
+        '`X-Daily-Credits-Reset` (Unix epoch seconds) on the accepted response, and on this refusal ' +
+        'with nothing remaining.',
       schema: ApiErrorSchema,
     },
     502: {

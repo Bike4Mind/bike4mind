@@ -1,5 +1,9 @@
-import type { IUserDocument } from '@bike4mind/common';
-import { DAILY_FREE_LIMIT_REACHED_ERROR_CODE, TooManyRequestsError } from '@bike4mind/common';
+import type { FreeTierDailyAllowance, IUserDocument } from '@bike4mind/common';
+import {
+  DAILY_FREE_LIMIT_REACHED_ERROR_CODE,
+  freeTierDailyCreditHeaderValues,
+  TooManyRequestsError,
+} from '@bike4mind/common';
 import { adminSettingsRepository } from '@bike4mind/database';
 import type { ILogger } from '@bike4mind/observability';
 import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
@@ -71,6 +75,8 @@ export async function isFreeTierCapUser(
  * has already spent their daily credit allowance or their daily system cost
  * allowance (provider USD of system-sourced work, which often bills 0 credits).
  * No-op when enforceCredits is off, the user is on a paid/bypass tier, or no cap is configured.
+ * Returns today's credit allowance when the credit cap applies, for the caller to expose as headers;
+ * the 429 carries the same headers with nothing remaining.
  *
  * Call this AFTER `assertAiAccessAllowed` and BEFORE the credit hold, so a
  * capped user never produces a dangling hold that the sweep has to clean up.
@@ -88,35 +94,41 @@ export async function checkFreeTierDailySpendCap({
   req?: ActiveSubscriptionsRequest;
   /** When set, the turn bills an org rather than the user personally; the personal cap does not apply. */
   billingOrganizationId?: string | null;
-}): Promise<void> {
+}): Promise<FreeTierDailyAllowance | undefined> {
   try {
     const settings = await getSettingsMap({ adminSettings: adminSettingsRepository });
 
     const enforceCredits = getSettingsValue('enforceCredits', settings) === true;
-    if (!enforceCredits) return;
+    if (!enforceCredits) return undefined;
 
     // Org-billed turns are settled against the org's shared pool, not the user's personal credits.
-    if (billingOrganizationId) return;
+    if (billingOrganizationId) return undefined;
 
     const steadyCap = getSettingsValue('freeTierDailySpendCapCredits', settings) ?? 0;
     const systemCapUsd = getSettingsValue('freeTierDailySystemCostCapUsd', settings) ?? 0;
-    if (steadyCap <= 0 && systemCapUsd <= 0) return;
+    if (steadyCap <= 0 && systemCapUsd <= 0) return undefined;
 
     // Reuse a resolved user; ID-only callers defer their lookup until enforcement is enabled.
     const user = 'user' in input && input.user ? input.user : await input.userRepository.findById(input.userId);
-    if (!user) return;
+    if (!user) return undefined;
     // A degraded org-seat lookup cannot establish that the caller is free. Let the error
     // reach the fail-open handler instead of denying a paid seat's personal turn.
-    if (!(await isFreeTierCapUser(user, req, { strict: true }))) return;
+    if (!(await isFreeTierCapUser(user, req, { strict: true }))) return undefined;
 
     const now = new Date();
     const startOfDay = utcMidnight(now);
+    const resetAt = new Date(startOfDay.getTime() + DAY_MS);
+    let allowance: FreeTierDailyAllowance | undefined;
     const capReached = (message: string, detail: Record<string, unknown>) => {
       logger.info('[freeTierDailyCapGate] daily cap reached', { userId: user.id, ...detail });
       return new TooManyRequestsError(message, {
         errorCode: DAILY_FREE_LIMIT_REACHED_ERROR_CODE,
         // Seconds until the next UTC midnight; becomes the Retry-After header.
-        retryAfter: Math.ceil((startOfDay.getTime() + DAY_MS - now.getTime()) / 1000),
+        retryAfter: Math.ceil((resetAt.getTime() - now.getTime()) / 1000),
+        // Either cap ends the day, so nothing is left even when the system-cost cap is the one that refused.
+        ...(allowance
+          ? { rateLimitHeaders: freeTierDailyCreditHeaderValues({ ...allowance, remainingCredits: 0 }) }
+          : {}),
       });
     };
 
@@ -135,6 +147,7 @@ export async function checkFreeTierDailySpendCap({
       }
 
       const todaySpend = await usageEventRepository.findDailySpendByUser(user.id, startOfDay);
+      allowance = { limitCredits: cap, remainingCredits: Math.max(0, Math.floor(cap - todaySpend)), resetAt };
       if (todaySpend >= cap) {
         await recordUserLimitEvent({
           userId: user.id,
@@ -162,9 +175,11 @@ export async function checkFreeTierDailySpendCap({
         });
       }
     }
+    return allowance;
   } catch (err) {
     if (err instanceof TooManyRequestsError) throw err;
     // Fail open: a transient DB or settings read failure must not block the user.
     logger.warn('[freeTierDailyCapGate] cap check failed; allowing request', { error: err });
+    return undefined;
   }
 }

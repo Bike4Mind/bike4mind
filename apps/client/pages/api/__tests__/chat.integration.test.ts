@@ -394,6 +394,27 @@ describe('POST /api/chat (integration — scope enforcement via real middleware 
     expect(mockInvoke).not.toHaveBeenCalled();
   });
 
+  it('sets the daily credit headers from the cap gate on an accepted turn', async () => {
+    validateWithScopes([ApiKeyScope.AI_CHAT]);
+    mockCheckFreeTierDailySpendCap.mockResolvedValueOnce({
+      limitCredits: 2500,
+      remainingCredits: 640,
+      resetAt: new Date('2026-11-25T00:00:00.000Z'),
+    });
+    const { req, res } = fire();
+    await handler(req, res);
+    expect(res.getHeader('X-Daily-Credits-Limit')).toBe(2500);
+    expect(res.getHeader('X-Daily-Credits-Remaining')).toBe(640);
+    expect(res.getHeader('X-Daily-Credits-Reset')).toBe(Date.parse('2026-11-25T00:00:00.000Z') / 1000);
+  });
+
+  it('sets no daily credit headers when the cap does not apply', async () => {
+    validateWithScopes([ApiKeyScope.AI_CHAT]);
+    const { req, res } = fire();
+    await handler(req, res);
+    expect(res.getHeader('X-Daily-Credits-Remaining')).toBeUndefined();
+  });
+
   it.each([
     ['API key', VALID_KEY, { message: 'hello' }],
     ['new conversation', null, { message: 'hello', newConversation: true }],

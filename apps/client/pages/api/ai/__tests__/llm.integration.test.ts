@@ -245,6 +245,20 @@ describe('POST /api/ai/llm (integration - ai:chat scope enforcement)', () => {
     mockInvoke.mockResolvedValue({ id: 'quest-1', status: 'pending' });
   });
 
+  it('sets the daily credit headers from the cap gate on an accepted turn', async () => {
+    validateWithScopes([ApiKeyScope.AI_CHAT]);
+    mockCheckFreeTierDailySpendCap.mockResolvedValueOnce({
+      limitCredits: 2500,
+      remainingCredits: 640,
+      resetAt: new Date('2026-11-25T00:00:00.000Z'),
+    });
+    const { req, res } = fire();
+    await handler(req, res);
+    expect(res.getHeader('X-Daily-Credits-Limit')).toBe(2500);
+    expect(res.getHeader('X-Daily-Credits-Remaining')).toBe(640);
+    expect(res.getHeader('X-Daily-Credits-Reset')).toBe(Date.parse('2026-11-25T00:00:00.000Z') / 1000);
+  });
+
   it('returns the daily cap response before creating a session or dispatching a quest', async () => {
     validateWithScopes([ApiKeyScope.AI_CHAT]);
     mockCheckFreeTierDailySpendCap.mockRejectedValueOnce(

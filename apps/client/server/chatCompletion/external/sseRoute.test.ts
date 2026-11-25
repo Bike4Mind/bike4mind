@@ -367,6 +367,41 @@ describe('JWT rate limiting', () => {
   });
 });
 
+describe('free-tier daily credit headers', () => {
+  it('sends the allowance headers with the stream', async () => {
+    mockCheckFreeTierDailySpendCap.mockResolvedValueOnce({
+      limitCredits: 2500,
+      remainingCredits: 640,
+      resetAt: new Date('2026-11-25T00:00:00.000Z'),
+    });
+    const res = await post();
+    await res.text();
+    expect(res.headers.get('x-daily-credits-limit')).toBe('2500');
+    expect(res.headers.get('x-daily-credits-remaining')).toBe('640');
+    expect(res.headers.get('x-daily-credits-reset')).toBe(String(Date.parse('2026-11-25T00:00:00.000Z') / 1000));
+  });
+
+  it('sends the refusal headers on a daily cap 429', async () => {
+    mockCheckFreeTierDailySpendCap.mockRejectedValueOnce(
+      new TooManyRequestsError('Daily free usage limit reached.', {
+        errorCode: DAILY_FREE_LIMIT_REACHED_ERROR_CODE,
+        retryAfter: 3600,
+        rateLimitHeaders: { 'X-Daily-Credits-Limit': 2500, 'X-Daily-Credits-Remaining': 0 },
+      })
+    );
+    const res = await post();
+    const body = await expectJsonError(res, 429);
+    expect(res.headers.get('x-daily-credits-remaining')).toBe('0');
+    expect(body).not.toHaveProperty('rateLimitHeaders');
+  });
+
+  it('sends no allowance headers when the cap does not apply', async () => {
+    const res = await post();
+    await res.text();
+    expect(res.headers.get('x-daily-credits-remaining')).toBeNull();
+  });
+});
+
 describe('API-key completion outcome evidence', () => {
   it('records a daily-cap refusal without starting provider work', async () => {
     mockCheckFreeTierDailySpendCap.mockRejectedValueOnce(

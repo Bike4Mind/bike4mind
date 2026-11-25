@@ -1,4 +1,9 @@
-import { DAILY_FREE_LIMIT_REACHED_ERROR_CODE, isSpendFrozenError, type ApiCompletionOutcome } from '@bike4mind/common';
+import {
+  DAILY_FREE_LIMIT_REACHED_ERROR_CODE,
+  isSpendFrozenError,
+  setFreeTierDailyCreditHeaders,
+  type ApiCompletionOutcome,
+} from '@bike4mind/common';
 import { resolveCompletionBillingOrgId } from '@server/billing/resolveCompletionBillingOrgId';
 import { createCompletionCreditHolds } from '@server/billing/completionCreditHolds';
 import { assertEvaluationAuthorized, evaluationTransport } from '@server/completionRuns/evaluation';
@@ -412,13 +417,15 @@ export function registerExternalRoutes(app: Express, track: (p: Promise<void>) =
       );
 
       // Daily spend cap before the credit hold; applies to all free-tier users regardless of auth method.
-      await checkFreeTierDailySpendCap({
+      const dailyAllowance = await checkFreeTierDailySpendCap({
         userId,
         userRepository,
         billingOrganizationId,
         usageEventRepository,
         logger,
       });
+      // Headers are still unsent here; onReady flushes them with the stream.
+      setFreeTierDailyCreditHeaders(res, dailyAllowance);
 
       // Tracked, not awaited: the drain waits for it, the stream does not.
       if (platformEndUser) track(recordPlatformEndUserSeen(platformEndUser, logger));

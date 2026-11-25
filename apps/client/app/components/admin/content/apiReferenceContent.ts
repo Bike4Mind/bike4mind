@@ -4,6 +4,8 @@ import {
   API_KEY_RATE_LIMIT_DEFAULTS,
   API_KEY_RATE_LIMIT_HEADER_NAMES,
   API_KEY_RATE_LIMIT_HEADERS,
+  FREE_TIER_DAILY_CREDIT_HEADER_NAMES,
+  FREE_TIER_DAILY_CREDIT_HEADERS,
   MAX_REQUEST_ID_LENGTH,
 } from '@bike4mind/common';
 import type { ApiKeyScopeOption } from '@bike4mind/server-utils/app/constants/apiKeyScopes';
@@ -115,6 +117,18 @@ stream.
 
 Some reads and job polls are exempt from the per-day ceiling and count only against the
 per-minute one; the Rate limits section of the [generated API docs](/api/v1/docs) lists them.
+
+### Free-tier daily credits
+
+A Free-tier account also has a daily credit allowance that resets at midnight UTC. It is separate
+from the request ceilings above. \`POST /api/chat\`, \`POST /api/ai/llm\` and the streaming completions
+endpoint report it on every turn a Free-tier account starts:
+
+${FREE_TIER_DAILY_CREDIT_HEADER_NAMES.map(header => `- \`${header}\`: ${FREE_TIER_DAILY_CREDIT_HEADERS[header]}`).join('\n')}
+
+The allowance is checked before a turn starts, never during one. Once it is spent, the next turn
+gets \`429\` with \`errorCode: daily_free_limit_reached\`, a \`Retry-After\` until midnight UTC, and
+these headers with nothing remaining. Paid and organization-billed turns carry none of them.
 
 ---
 

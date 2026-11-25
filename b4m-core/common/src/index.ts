@@ -196,6 +196,7 @@ export * from './utils/retrievalRate';
 export * from './utils/answerDiagnosis';
 export * from './utils/requestId';
 export * from './apiKeyRateLimitHeaders';
+export * from './freeTierDailyCreditHeaders';
 export * from './utils/inviteToken';
 export * from './utils/artifactPublishSlug';
 export * from './utils/anonymousSessionId';

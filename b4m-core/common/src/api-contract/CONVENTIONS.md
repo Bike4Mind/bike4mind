@@ -458,6 +458,11 @@ who declared the status, not off the status number.
 There is no unwindowed `X-RateLimit-Limit`/`-Remaining`/`-Reset`. A client reading those
 names gets `undefined`.
 
+The free-tier daily credit cap sets its own three headers, `X-Daily-Credits-{Limit,Remaining,Reset}`
+(`freeTierDailyCreditHeaders.ts`). They appear only on a Free-tier caller's turn, whatever the auth
+mode, and on its `daily_free_limit_reached` 429. They are credits, not requests, and reset at UTC
+midnight rather than on a rolling window.
+
 ---
 
 ## 7. Deprecation
