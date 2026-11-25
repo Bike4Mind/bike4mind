@@ -23,6 +23,7 @@ export * from './callableFunctionData';
 export * from './callableFunctionRuntime';
 export * from './chatCompletion';
 export * from './previewSleep';
+import './secretsAtRestKeyAccess';
 export * from './web';
 export * from './callableFunctionDataPolicy';
 export * from './llm';

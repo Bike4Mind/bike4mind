@@ -76,7 +76,13 @@ export default $config({
     // Runs ahead of every Function's handler module so raw console output is redacted like Logger output.
     const { consoleRedactionBanner } = await import('./infra/consoleRedactionBanner');
     const CONSOLE_REDACTION_BANNER = consoleRedactionBanner($cli.paths.root);
+    // Loaded here so the grant below exists before any Function is declared; undefined where the stage has no key.
+    const { secretsAtRestKey, secretsAtRestDecryptPermission } = await import('./infra/secretsAtRestKey');
     $transform(sst.aws.Function, args => {
+      if (secretsAtRestKey) {
+        const grant = secretsAtRestDecryptPermission(secretsAtRestKey.arn, $app.stage);
+        args.permissions = $output(args.permissions).apply(permissions => [...(permissions ?? []), grant]);
+      }
       args.nodejs = $output(args.nodejs).apply(nodejs => {
         const esbuild = { ...(nodejs?.esbuild ?? {}) };
         const external = Array.isArray(esbuild.external) ? [...esbuild.external] : [];
