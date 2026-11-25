@@ -55,7 +55,7 @@ function fakeRuntime(eventLog = new SessionEventLog({ epoch: 'epoch-1' })) {
     ),
     deleteSessionTree: vi.fn(async (sessionId: string, nestedIds: readonly string[]) => ({
       deleted: [...nestedIds, sessionId],
-      error: null,
+      error: null as string | null,
     })),
     respondToApproval: vi.fn(),
     answerTaskDecision: vi.fn(async () => undefined),
@@ -293,6 +293,13 @@ describe('HostServer', () => {
       const result = await client().call('session/deleteTree', { sessionId: 'p', nestedIds: ['c1', 'c2'] });
       expect(resultOf(result)).toEqual({ deleted: ['c1', 'c2', 'p'], error: null });
       expect(runtime.deleteSessionTree).toHaveBeenCalledWith('p', ['c1', 'c2'], false, []);
+    });
+
+    it('relays a partial failure with what was deleted before it', async () => {
+      const { client, runtime } = serve();
+      runtime.deleteSessionTree.mockResolvedValueOnce({ deleted: ['c1'], error: 'c2 is busy' });
+      const result = await client().call('session/deleteTree', { sessionId: 'p', nestedIds: ['c1', 'c2'] });
+      expect(resultOf(result)).toEqual({ deleted: ['c1'], error: 'c2 is busy' });
     });
   });
 

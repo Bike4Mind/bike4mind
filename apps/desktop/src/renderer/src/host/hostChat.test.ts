@@ -120,12 +120,18 @@ describe('hostChat', () => {
       });
     });
 
-    it('places nothing for a refused create or one with no section', async () => {
+    it('places nothing for a refused create', async () => {
       const { chat, local } = setup({ 'session/create': () => ({ ok: false, error: 'gone' }) });
       expect(await chat.createCodeSession({ directory: '/gone', sectionId: 'sec-1' })).toEqual({
         ok: false,
         error: 'gone',
       });
+      expect(local.moveToSection).not.toHaveBeenCalled();
+    });
+
+    it('places nothing when no section was asked for', async () => {
+      const { chat, local } = setup({ 'session/create': created });
+      expect(await chat.createCodeSession({ directory: '/work' })).toEqual({ ok: true, session: summary('code-1') });
       expect(local.moveToSection).not.toHaveBeenCalled();
     });
   });
