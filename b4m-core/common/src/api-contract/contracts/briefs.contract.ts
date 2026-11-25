@@ -26,8 +26,9 @@ const JWT_ONLY_NOTE =
 /**
  * Assistant briefs for native clients. Served by apps/client/pages/api/v1/briefs/index.ts (compose, list),
  * apps/client/pages/api/v1/briefs/follow-ups.ts (follow-up intake), apps/client/pages/api/v1/briefs/[id].ts (read), .../[id]/decisions/[decisionId]/reply.ts (reply),
- * .../[id]/decisions/[decisionId]/index.ts + resolve.ts (follow-up edit, approve, dismiss) and
- * apps/client/pages/api/v1/briefs/schedule.ts (schedule) and .../busy-blocks.ts (busy blocks). Composition runs in apps/workers/src/events/briefCompose.ts.
+ * .../[id]/decisions/[decisionId]/index.ts + resolve.ts (follow-up edit, approve, dismiss),
+ * apps/client/pages/api/v1/briefs/schedule.ts (schedule) and
+ * apps/client/pages/api/v1/briefs/busy-blocks.ts (busy blocks). Composition runs in apps/workers/src/events/briefCompose.ts.
  */
 export const composeBriefContract = defineEndpoint({
   method: 'post',

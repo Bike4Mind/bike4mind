@@ -317,7 +317,7 @@ export async function loadActivity(brief: IAssistantBrief, now: Date): Promise<B
   // A block brief takes only the block's arrivals; earlier pending items wait for the next regular brief.
   const emails = await loadPendingBriefEmails(brief.userId, brief.periodEnd, block?.start);
   const delegations = await loadPendingBriefDelegations(brief.userId, brief.periodEnd, now, block?.start);
-  // Capped so every loaded reminder fits in the brief.
+  // Capped at the section size so every loaded reminder fits ahead of the other happened items.
   const reminders = await assistantBriefRepository.findDueReminders(brief.userId, now, BRIEF_LIMITS.itemsPerSection);
   const obligations = await loadDueBriefObligations(brief.userId, now);
 

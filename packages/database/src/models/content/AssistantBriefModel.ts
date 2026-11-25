@@ -185,10 +185,10 @@ export const assistantBriefRepository = {
     userId: string;
     periodStart: Date;
     periodEnd: Date;
-    trigger?: 'busy_block';
-    busyBlock?: { start: Date; end: Date };
     origin?: 'followUp';
     followUpInput?: { transcript: string; timeZone?: string };
+    trigger?: 'busy_block';
+    busyBlock?: { start: Date; end: Date };
   }): Promise<IAssistantBrief> {
     const followUpInput = input.followUpInput && {
       ...input.followUpInput,
@@ -235,8 +235,8 @@ export const assistantBriefRepository = {
   },
 
   /**
-   * Activity-only pending decisions: the latest ready brief's id, and the approval ref and reply stamp
-   * of each decision in the latest regular ready brief plus the busy-block briefs readied since it. A block
+   * What the pending-decisions count reads: the latest ready brief's id, and the approval ref and reply stamp
+   * of each decision in the latest regular ready brief (follow-up memo briefs excluded) plus the busy-block briefs readied since it. A block
    * brief does not replace the regular one, and the email it carried is not briefed again.
    */
   async findLatestReadyDecisionRefs(userId: string): Promise<{
