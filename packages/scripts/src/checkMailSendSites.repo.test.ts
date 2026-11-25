@@ -33,6 +33,7 @@ const ALLOWLIST: Record<string, string> = {
   [`${MAILER_DIR}/sesTransport.ts`]: 'the SES transport',
   [`${MAILER_DIR}/queuedMailer.ts`]: 'self-host has no event bus; mail goes to the SMTP mailer',
   [`${MAILER_DIR}/testEmail.ts`]: 'self-host test email runs in-process through the SMTP mailer',
+  [`${MAILER_DIR}/sender.ts`]: "parses the sender with nodemailer's address parser; sends nothing",
 };
 
 const SCAN_ROOTS = ['apps', 'b4m-core', 'packages', 'infra', 'scripts'];

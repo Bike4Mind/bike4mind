@@ -28,7 +28,10 @@ vi.mock('../../integrations/slack/slack', () => ({
   postEmailMirrorToSlack: vi.fn().mockResolvedValue(undefined),
 }));
 
+vi.mock('@bike4mind/database', () => ({ adminSettingsRepository: { findOne: vi.fn().mockResolvedValue(null) } }));
+
 vi.mock('@bike4mind/common', () => ({
+  MAIL_FROM_SETTING_MAX_LENGTH: 320,
   isPlaceholderValue: (value: string | undefined | null) => {
     if (!value) return true;
     const normalized = value.trim().toLowerCase();

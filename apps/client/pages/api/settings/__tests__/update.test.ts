@@ -60,7 +60,8 @@ vi.mock('@server/middlewares/baseApi', () => ({
 vi.mock('@server/middlewares/asyncHandler', () => ({
   asyncHandler: (handler: (...a: unknown[]) => unknown) => handler,
 }));
-vi.mock('@bike4mind/server-utils/utils/config', () => ({ Config: { SECRET_ENCRYPTION_KEY: 'a'.repeat(64) } }));
+const configValues = vi.hoisted((): Record<string, string | undefined> => ({ SECRET_ENCRYPTION_KEY: 'a'.repeat(64) }));
+vi.mock('@bike4mind/server-utils/utils/config', () => ({ Config: configValues }));
 vi.mock('@server/utils/publicSettingsArtifact', () => ({
   materializePublicSettingsArtifactSafe: vi.fn(() => Promise.resolve()),
 }));
@@ -125,7 +126,7 @@ describe('settings/update settings that constrain delegated admins', () => {
     }
   );
 
-  it('protects approval, audit alerting and MFA policy settings', () => {
+  it('protects approval, audit alerting, MFA policy and system email sender settings', () => {
     expect([...FULL_ADMIN_SETTING_KEYS]).toEqual(
       expect.arrayContaining([
         'AdminApprovalsEnabled',
@@ -138,6 +139,7 @@ describe('settings/update settings that constrain delegated admins', () => {
         'enforceMFA',
         'allowTrustedDevices',
         'signupGrantUnprotectedMaxCredits',
+        'mailFrom',
       ])
     );
   });
@@ -569,6 +571,60 @@ describe('settings/update blocked email domain list', () => {
       { $set: { settingValue: ['kashre.com', 'xzcoot.com'] } },
       expect.anything()
     );
+  });
+});
+
+describe('settings/update system email sender', () => {
+  beforeEach(() => {
+    stored = null;
+    findOneAndUpdate.mockReset();
+    vi.clearAllMocks();
+    vi.stubEnv('B4M_SELF_HOST', '');
+    vi.stubEnv('MAIL_STATUS_TRANSPORT', 'ses');
+    configValues.MAIL_FROM = 'Example <noreply@example.com>';
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    delete configValues.MAIL_FROM;
+  });
+
+  it('stores a named sender on the MAIL_FROM domain, trimmed', async () => {
+    stageWriteResult('mailFrom', 'Support <support@example.com>');
+    await runHandler('mailFrom', '  Support <support@example.com> ');
+    expect(findOneAndUpdate).toHaveBeenCalledWith(
+      { settingName: 'mailFrom' },
+      { $set: { settingValue: 'Support <support@example.com>' } },
+      expect.anything()
+    );
+  });
+
+  it('stores an empty value, which falls back to the MAIL_FROM secret', async () => {
+    stageWriteResult('mailFrom', '');
+    await runHandler('mailFrom', '');
+    expect(findOneAndUpdate).toHaveBeenCalledWith(
+      { settingName: 'mailFrom' },
+      { $set: { settingValue: '' } },
+      expect.anything()
+    );
+  });
+
+  it.each([
+    ['a line break', 'support@example.com\r\nBcc: x@example.com', 'Use one line'],
+    ['an overlong value', `${'a'.repeat(320)}@example.com`, 'at most 320 characters'],
+    ['two senders', 'a@example.com, b@example.com', 'Enter one sender'],
+    ['no address', 'Support', 'Enter one sender'],
+    ['another domain on SES', 'support@other.com', 'domain of the MAIL_FROM secret (example.com)'],
+  ])('refuses %s without saving it', async (_label, value, message) => {
+    await expect(runHandler('mailFrom', value)).rejects.toThrow(message);
+    expect(findOneAndUpdate).not.toHaveBeenCalled();
+  });
+
+  it('allows another domain on SMTP', async () => {
+    vi.stubEnv('MAIL_STATUS_TRANSPORT', 'smtp');
+    stageWriteResult('mailFrom', 'support@other.com');
+    await runHandler('mailFrom', 'support@other.com');
+    expect(findOneAndUpdate).toHaveBeenCalled();
   });
 });
 
