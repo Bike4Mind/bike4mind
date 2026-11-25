@@ -667,9 +667,12 @@ describe('synchronous stop', () => {
     h.limitMs.value = 300_000;
     const res = await pastBudget();
     expect(res.status).toBe(504);
-    expect(res.body).toEqual({ error: FUNCTION_SYNC_STOP_MESSAGE, errorCode: 'request_timeout' });
+    expect(res.body).toMatchObject({ error: FUNCTION_SYNC_STOP_MESSAGE, errorCode: 'request_timeout' });
     expect(FUNCTION_SYNC_STOP_MESSAGE).toContain('"mode": "async"');
-    expect(h.runner.mock.calls[0][0].limits.timeoutMs).toBe(FUNCTION_INVOKE_BUDGET_MS);
+    // The route's deadline starts at the request's arrival, so the run gets what is left of the 45 s.
+    const { timeoutMs } = h.runner.mock.calls[0][0].limits;
+    expect(timeoutMs).toBeLessThanOrEqual(FUNCTION_INVOKE_BUDGET_MS);
+    expect(timeoutMs).toBeGreaterThan(FUNCTION_INVOKE_BUDGET_MS - 5_000);
   });
 
   it('does not name async mode when async mode would stop at the same limit', async () => {
