@@ -36,7 +36,7 @@ const read = (path: string) => {
 function methodBody(text: string, name: string): string {
   const start = text.indexOf(`\n  async ${name}(`);
   expect(start).toBeGreaterThan(-1);
-  const next = text.slice(start + 1).search(/\n {2}(?:[a-z]|\/\*\*|private |async |readonly )/);
+  const next = text.slice(start + 1).search(/\n {2}(?:[a-z]|\/\*\*)/);
   return text.slice(start, next === -1 ? undefined : start + 1 + next);
 }
 
@@ -99,6 +99,17 @@ describe('the run budget raise path', () => {
     const lifts = [...service.matchAll(/budgetPaused: undefined/g)];
     expect(lifts).toHaveLength(1);
     expect(methodBody(service, 'raiseRunBudget')).toContain('budgetPaused: undefined');
+  });
+
+  // A run with no server run has only this local budget, so a second writer would raise it unchecked.
+  it('writes a new local budget only where the budget is raised', () => {
+    expect(filesMatching(/\.setRunBudget\(/)).toEqual(['main/chat/ChatService.ts']);
+    const service = read('main/chat/ChatService.ts');
+    const budgetWrites = [...service.matchAll(/\.setRunBudget\(([^;]*?)\);/g)].filter(([, args]) =>
+      /\bbudgetCredits\b/.test(args)
+    );
+    expect(budgetWrites).toHaveLength(1);
+    expect(methodBody(service, 'raiseRunBudget')).toContain(budgetWrites[0][0]);
   });
 
   it('exposes the raise to the renderer only through its own Raise-and-resume row', () => {
