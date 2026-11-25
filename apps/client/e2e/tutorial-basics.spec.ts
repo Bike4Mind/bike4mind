@@ -17,14 +17,17 @@ test.describe('basics tutorial', () => {
   test.setTimeout(240_000);
 
   let priorSetting: unknown;
+  let flipped = false;
 
   test.beforeAll(async ({ request }) => {
     const adminToken = getTestUsers().admin.accessToken;
     priorSetting = (await apiGetAdminSettings(request, adminToken)).get('EnableCoreTutorials');
     await apiUpdateAdminSetting(request, adminToken, 'EnableCoreTutorials', true);
+    flipped = true;
   });
 
   test.afterAll(async ({ request }) => {
+    if (!flipped) return;
     await apiUpdateAdminSetting(
       request,
       getTestUsers().admin.accessToken,
