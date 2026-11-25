@@ -36,6 +36,7 @@ export { buildToolUsageEvent, recordToolUsageEvent } from './tools/ToolBuilder';
 export {
   EXAMPLE_PLACEHOLDER,
   exampleRunToolMode,
+  platformPaidUsageEvent,
   type ExampleRunMode,
   type ExampleRunStep,
 } from './tools/exampleRunTools';

@@ -12,6 +12,7 @@ import {
   questRepository,
   sessionRepository,
   User,
+  usageEventRepository,
   userRepository,
 } from '@bike4mind/database';
 import {
@@ -36,6 +37,7 @@ import { parseArtifacts } from '@bike4mind/utils/artifactParser';
 import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import { ImageModerationBlockedError, RekognitionImageModerationService } from '@bike4mind/utils/imageModeration';
 import { getOperationsClassifierLlm, type ClassifierLlm } from './classifySkill';
+import { completeSample } from './templateExampleSampleUsage';
 import { approvedSnapshotOf, isLive, writeTemplateExample } from './template';
 import {
   EXAMPLE_RUN_STALE_MS,
@@ -58,7 +60,11 @@ type QuestStartBody = z.infer<typeof QuestStartBodySchema>;
 export type TemplateExampleRunDeps = {
   processQuest: (params: QuestStartBody, logger: Logger, exampleRun: ExampleRunMode) => Promise<void>;
   /** The platform's operations text model; it also writes a generated sample file. */
-  textModel: () => Promise<{ modelId: string; complete: (system: string, user: string) => Promise<string> }>;
+  textModel: () => Promise<{
+    modelId: string;
+    /** Records its usage as platform-paid for the listing (templateExampleSampleUsage.ts). */
+    complete: (system: string, user: string, usage: { listingId: string; logger: Logger }) => Promise<string>;
+  }>;
   /** Stores a generated sample as a file the author owns and returns its id. */
   storeSample: (userId: string, text: string, fileName: string) => Promise<string>;
   /** Deletes a generated sample the author no longer needs. */
@@ -102,7 +108,8 @@ export const sampleFileName = (skillName: string) =>
 async function resolveSampleFile(
   payload: TemplateExampleDispatch,
   snapshot: ISkillSnapshot,
-  deps: TemplateExampleRunDeps
+  deps: TemplateExampleRunDeps,
+  logger: Logger
 ): Promise<ISkillTemplateExampleSampleFile | null> {
   if (!payload.takesFile) return null;
   if (payload.sampleFile) {
@@ -115,7 +122,10 @@ async function resolveSampleFile(
   }
   const model = await deps.textModel();
   const text = (
-    await model.complete(SAMPLE_SYSTEM, buildSampleRequest(snapshot, payload.prompt, randomBytes(9).toString('hex')))
+    await model.complete(SAMPLE_SYSTEM, buildSampleRequest(snapshot, payload.prompt, randomBytes(9).toString('hex')), {
+      listingId: payload.listingId,
+      logger,
+    })
   )
     .trim()
     .slice(0, SAMPLE_MAX_CHARS);
@@ -188,7 +198,7 @@ export async function runTemplateExample(
     }
     const { snapshot, versionId } = await approvedSnapshotOf(listing);
 
-    sampleFile = await resolveSampleFile(payload, snapshot, deps);
+    sampleFile = await resolveSampleFile(payload, snapshot, deps, logger);
     const { modelId } = await deps.textModel();
     const now = new Date();
     const session = await sessionRepository.create({
@@ -387,30 +397,22 @@ export const templateExampleRunDeps = (
 ): TemplateExampleRunDeps => ({
   processQuest,
   textModel: async () => {
-    const { modelId, llm } = await OperationsModelService.getOperationsTextModel();
+    const { modelId, llm, modelInfo } = await OperationsModelService.getOperationsTextModel();
     return {
       modelId,
-      complete: async (system, user) => {
-        let raw = '';
-        let timer: ReturnType<typeof setTimeout> | undefined;
-        await Promise.race([
-          llm.complete(
-            modelId,
-            [
-              { role: 'system' as const, content: system },
-              { role: 'user' as const, content: user },
-            ],
-            { maxTokens: 1200, stream: false },
-            async (parts: (string | null | undefined)[]) => {
-              raw += parts.filter(Boolean).join('');
-            }
-          ),
-          new Promise<never>((_, reject) => {
-            timer = setTimeout(() => reject(new Error('The sample file timed out')), SAMPLE_TIMEOUT_MS);
-          }),
-        ]).finally(() => clearTimeout(timer));
-        return raw;
-      },
+      complete: (system, user, usage) =>
+        completeSample(
+          {
+            llm,
+            modelInfo,
+            ledger: { usageEvents: usageEventRepository },
+            listingId: usage.listingId,
+            timeoutMs: SAMPLE_TIMEOUT_MS,
+            logger: usage.logger,
+          },
+          system,
+          user
+        ),
     };
   },
   storeSample: storeSampleFile,
