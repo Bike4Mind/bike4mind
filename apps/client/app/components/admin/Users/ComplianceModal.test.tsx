@@ -128,12 +128,9 @@ describe('ComplianceModal', () => {
   it('shows each empty list as its own message', () => {
     mockData.mockReturnValue({ data: NEVER_ACCEPTED, isLoading: false });
     render(<ComplianceModal />, { wrapper: TestWrapper });
-    expect(within(screen.getByTestId('compliance-incidents-table')).getByTestId('admin-empty-state')).toHaveTextContent(
-      'No incidents'
-    );
-    expect(within(screen.getByTestId('compliance-auth-events')).getByTestId('admin-empty-state')).toHaveTextContent(
-      'No recent events'
-    );
+    const [incidents, events] = screen.getAllByTestId('admin-empty-state');
+    expect(incidents).toHaveTextContent('No incidents');
+    expect(events).toHaveTextContent('No recent events');
   });
 
   it('formats incident labels with confidence and shows a dash for a missing actor', () => {
