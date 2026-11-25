@@ -223,4 +223,47 @@ class ObligationHandoffControllerTest {
         )
         assertEquals(listOf(LakeOption("l1", "Bills")), wire.lakes())
     }
+
+    @Test
+    fun theWireMapsRejectionsDismissalsAndOtherStatuses() = runTest {
+        var status = HttpStatusCode.UnprocessableEntity
+        val wire = ObligationsWire(
+            ServerEnvironment.Custom("https://app.example.test"),
+            HttpClient(MockEngine { respond("""{"error":"nothing readable"}""", status) }),
+        )
+        for (rejected in listOf(HttpStatusCode.BadRequest, HttpStatusCode.UnprocessableEntity, HttpStatusCode.BadGateway)) {
+            status = rejected
+            val failure = assertFailsWith<CaptureRejectedException> { wire.handOff("file-1", null) }
+            assertEquals("nothing readable", failure.message)
+        }
+        status = HttpStatusCode.Conflict
+        assertFailsWith<ObligationDismissedException> { wire.update("ob-1", ObligationPatch()) }
+        status = HttpStatusCode.InternalServerError
+        assertEquals(500, assertFailsWith<ApiException> { wire.handOff("file-1", null) }.status)
+    }
+
+    @Test
+    fun failuresMapToTheirProblem() = runTest {
+        suspend fun problemAfterStart(failure: Exception): HandoffProblem? {
+            val api = FakeObligations(mutableListOf(Result.failure(failure)), Result.success(extracted))
+            val controller = controller(api)
+            controller.start(scan, "text")
+            assertEquals(HandoffPhase.FAILED, controller.state.value.phase)
+            return controller.state.value.problem
+        }
+        assertEquals(HandoffProblem.OFFLINE, problemAfterStart(java.io.IOException("down")))
+        assertEquals(HandoffProblem.NOT_FOUND, problemAfterStart(ApiException(404)))
+        assertEquals(HandoffProblem.GENERIC, problemAfterStart(ApiException(500)))
+        assertEquals(HandoffProblem.REJECTED, problemAfterStart(CaptureRejectedException("nope")))
+    }
+
+    @Test
+    fun aDismissedObligationFailsTheConfirm() = runTest {
+        val api = FakeObligations(mutableListOf(Result.success(extracted)), Result.failure(ObligationDismissedException()))
+        val controller = controller(api)
+        controller.start(scan, "text")
+        controller.confirm()
+        assertEquals(HandoffPhase.REVIEWING, controller.state.value.phase)
+        assertEquals(HandoffProblem.DISMISSED, controller.state.value.problem)
+    }
 }

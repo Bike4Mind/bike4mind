@@ -245,4 +245,58 @@ final class ObligationHandoffModelTests: XCTestCase {
       XCTAssertEqual(error as? ObligationError, .stillChecking)
     }
   }
+
+  func testClientMapsHandOffRejectionsToTheServersMessage() async throws {
+    for status in [400, 422, 502] {
+      let transport = FakeTransport { _ in (status, Data(#"{"error":"nothing readable"}"#.utf8)) }
+      let client = CaptureClient(
+        baseURL: URL(string: "https://app.example.test")!, tokens: FakeTokens(), transport: transport)
+      do {
+        _ = try await client.handOff(fileID: "file-1", text: nil)
+        XCTFail("expected rejected for \(status)")
+      } catch {
+        XCTAssertEqual(error as? ObligationError, .rejected(message: "nothing readable"))
+      }
+    }
+    let transport = FakeTransport { _ in (500, Data("{}".utf8)) }
+    let client = CaptureClient(
+      baseURL: URL(string: "https://app.example.test")!, tokens: FakeTokens(), transport: transport)
+    do {
+      _ = try await client.handOff(fileID: "file-1", text: nil)
+      XCTFail("expected a generic failure")
+    } catch {
+      XCTAssertEqual(error as? APIError, APIError(status: 500))
+    }
+  }
+
+  func testClientMapsAConflictingPatchToDismissed() async throws {
+    let transport = FakeTransport { _ in (409, Data("{}".utf8)) }
+    let client = CaptureClient(
+      baseURL: URL(string: "https://app.example.test")!, tokens: FakeTokens(), transport: transport)
+    do {
+      _ = try await client.update(id: "ob-1", patch: ObligationPatch())
+      XCTFail("expected dismissed")
+    } catch {
+      XCTAssertEqual(error as? ObligationError, .dismissed)
+    }
+  }
+
+  func testDismissedAndOfflineFailuresShowTheirOwnMessages() async throws {
+    let dismissed = FakeObligationAPI(handOff: [.success(extracted)], update: .failure(ObligationError.dismissed))
+    let first = try model(dismissed)
+    await first.start()
+    await first.confirm()
+    XCTAssertEqual(first.saveProblem, "This bill was dismissed and can't be changed.")
+    XCTAssertEqual(first.phase, .reviewing)
+
+    let offline = FakeObligationAPI(handOff: [.failure(APIError.offline)], update: .success(extracted))
+    let second = try model(offline)
+    await second.start()
+    XCTAssertEqual(second.phase, .failed(message: "You're offline. Please try again when you're connected."))
+
+    let generic = FakeObligationAPI(handOff: [.failure(APIError(status: 500))], update: .success(extracted))
+    let third = try model(generic)
+    await third.start()
+    XCTAssertEqual(third.phase, .failed(message: "Something went wrong. Please try again."))
+  }
 }
