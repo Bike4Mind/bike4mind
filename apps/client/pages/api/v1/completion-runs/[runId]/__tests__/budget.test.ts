@@ -6,6 +6,7 @@ import {
   ConflictError,
   CreditHolderType,
   NotFoundError,
+  RaiseCompletionRunBudgetRequestSchema,
   RUN_BUDGET_NOT_RAISED_ERROR_CODE,
   RUN_NOT_FOUND_ERROR_CODE,
 } from '@bike4mind/common';
@@ -108,6 +109,32 @@ describe('POST /api/v1/completion-runs/{runId}/budget', () => {
 
     expect(error).toBeInstanceOf(ConflictError);
     expect(error).toMatchObject({ additionalInfo: { errorCode: RUN_BUDGET_NOT_RAISED_ERROR_CODE } });
+  });
+
+  it('raises by run id and owner alone: a body naming a worker role or another root session adds nothing', async () => {
+    completionRunRepository.findById.mockResolvedValue(storedRun({ rootSessionId: 'root-a' }));
+    completionRunRepository.raiseBudget.mockResolvedValue({ kind: 'raised', run: storedRun({ budgetCredits: 800 }) });
+    const validated = RaiseCompletionRunBudgetRequestSchema.parse({
+      budgetCredits: 800,
+      role: 'worker',
+      rootSessionId: 'root-b',
+      committedCredits: 0,
+    });
+
+    expect(validated).toEqual({ budgetCredits: 800 });
+    await call(800, { validated });
+
+    expect(completionRunRepository.raiseBudget.mock.calls).toEqual([[RUN_ID, 800]]);
+  });
+
+  it("refuses another account's run even when the request names that run's root session", async () => {
+    completionRunRepository.findById.mockResolvedValue(
+      storedRun({ userId: 'user-2', ownerId: 'user-2', rootSessionId: 'root-a' })
+    );
+    const validated = RaiseCompletionRunBudgetRequestSchema.parse({ budgetCredits: 800, rootSessionId: 'root-a' });
+
+    await expect(call(800, { validated })).rejects.toBeInstanceOf(NotFoundError);
+    expect(completionRunRepository.raiseBudget).not.toHaveBeenCalled();
   });
 
   it("never touches another account's run", async () => {
