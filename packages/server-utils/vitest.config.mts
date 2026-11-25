@@ -1,3 +1,4 @@
+import path from 'node:path';
 import { defineConfig } from 'vitest/config';
 import { sharedTest } from '../../vitest.shared';
 
@@ -20,6 +21,11 @@ const laneFiles = INTEGRATION_LANE
     : { exclude: ['**/node_modules/**', '**/*.e2e.test.ts', REPO_LANE_GLOB] };
 
 export default defineConfig({
+  resolve: {
+    // Overlay modules the generated premium glue pulls into tests may import `@server/*`; resolve it as
+    // apps/workers/vitest.config.mts does. Package source itself must not use the alias (eslint.config.mjs).
+    alias: { '@server': path.resolve(__dirname, '../../apps/client/server') },
+  },
   test: {
     ...sharedTest,
     environment: 'node',

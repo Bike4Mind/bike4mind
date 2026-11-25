@@ -89,6 +89,30 @@ describe('premium data subject registry', () => {
     expect(out).not.toContain('gamma');
   });
 
+  it('lists the model names an overlay source registers, contributing or not', () => {
+    writeOverlay('alpha', { dataSubjectRegistryExport: '@bike4mind/premium-alpha/data-subject' });
+    writeOverlay('gamma', {});
+    const write = (dir: string, file: string, source: string) => {
+      mkdirSync(join(sandbox, 'packages/premium', dir, 'src', ...file.split('/').slice(0, -1)), { recursive: true });
+      writeFileSync(join(sandbox, 'packages/premium', dir, 'src', file), source);
+    };
+    write('alpha', 'models/Note.ts', "export const Note = mongoose.model<INote>('AlphaNote', schema);\n");
+    write(
+      'gamma',
+      'models/Log.ts',
+      "export const Log =\n  mongoose.models.GammaLog ||\n  mongoose.model(\n    'GammaLog',\n    s\n  );\n"
+    );
+    write('gamma', 'models/Seen.ts', "const ModelName = 'GammaSeen';\nmongoose.model<ISeen>(ModelName, schema);\n");
+    write('gamma', 'models/Log.test.ts', "mongoose.model('GammaTestOnly', s);\n");
+    write('gamma', 'models/Old.ts', "// mongoose.model('GammaCommented', s);\n/* model('GammaBlock', s) */\n");
+    const out = generate();
+    expect(out).toContain('premiumDeclaredModelNames: readonly string[] = ["AlphaNote","GammaLog","GammaSeen"];');
+  });
+
+  it('emits an empty declared model list when no overlay is mounted', () => {
+    expect(generate()).toContain('premiumDeclaredModelNames: readonly string[] = [];');
+  });
+
   it('rejects a specifier that is not a module path', () => {
     writeOverlay('alpha', { dataSubjectRegistryExport: "x'; process.exit(1); '" });
     const result = runCodegen();
