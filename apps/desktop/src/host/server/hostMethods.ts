@@ -6,7 +6,8 @@ import {
   type HostProtocolVersion,
   type HostResult,
 } from '@shared/hostProtocol';
-import type { HostAccount, HostControl } from './hostControl';
+import type { HostAccount } from '../auth/hostAccount';
+import type { HostControl } from './hostControl';
 import { HostMethodError } from './HostMethodError';
 
 export const hostControlMethods = ['host/initialize', 'host/info', 'host/auth/start', 'host/auth/status'] as const;

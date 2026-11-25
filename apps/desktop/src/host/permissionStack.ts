@@ -31,13 +31,13 @@ export type HostPermissionStackOptions = {
 export function createHostPermissionStack(options: HostPermissionStackOptions): HostPermissionStack {
   const { environment, protection, auth, logger } = options;
   const dataDirectory = environment.dataDirectory;
-  // The trust file is its own file beside tool-access.json, and for the same reason: both record
+  // The trust file is its own file beside the permission rules, and for the same reason: both record
   // a consent the user gave once and should not be asked for again on every launch.
   const projectTrust = new ProjectTrustStore(join(dataDirectory, 'project-skill-trust.json'), directory =>
     appWorktreeMainCheckout(directory, mainCheckoutOf)
   );
   const skills = new SkillCatalog(projectTrust, accountSkillsProvider(auth, dataDirectory), logger);
-  // App-wide like approval-mode.json. Claude Code's files are only ever read; the protected roots
+  // App-wide like the approval mode. Claude Code's files are only ever read; the protected roots
   // are folders no allow rule may cover, since a call writing there would grant itself more.
   const home = environment.homeDirectory;
   const claudeCode = new ClaudeCodeSettings({ home, logger, onChange: () => permissions.invalidate() });
