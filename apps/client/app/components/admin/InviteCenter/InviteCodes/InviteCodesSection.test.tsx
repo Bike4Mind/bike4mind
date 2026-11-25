@@ -147,14 +147,16 @@ describe('RegistrationInvitesTab', () => {
     render(<RegistrationInvitesTab />, { wrapper: Wrapper });
 
     expect(screen.getAllByTestId('invite-code-card')).toHaveLength(25);
-    fireEvent.click(within(screen.getByTestId('invite-table')).getAllByRole('checkbox')[0]);
+    fireEvent.click(within(screen.getByTestId('admin-table-select-page')).getByRole('checkbox'));
     const bar = await screen.findByTestId('admin-bulk-action-bar');
     expect(bar).toHaveTextContent('25 selected');
 
     fireEvent.click(screen.getByTestId('admin-select-all-matching-btn'));
     await waitFor(() => expect(screen.getByTestId('admin-bulk-action-bar')).toHaveTextContent('40 selected'));
 
-    fireEvent.click(screen.getByRole('button', { name: 'Set Multiple Used' }));
+    fireEvent.click(
+      within(screen.getByTestId('admin-bulk-action-bar')).getByRole('button', { name: 'Set Multiple Used' })
+    );
     const call = mocks.updateMutate.mock.calls[0][0] as { ids: string[]; status: RegInviteStatusType };
     expect(call.status).toBe(RegInviteStatusType.used);
     expect([...call.ids].sort()).toEqual(all.map(i => i.id).sort());

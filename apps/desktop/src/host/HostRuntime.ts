@@ -18,6 +18,7 @@ import { SessionActivity } from '../main/chat/SessionActivity';
 import { BackgroundJobsFeed } from '../main/chat/backgroundJobsFeed';
 import { BACKGROUND_EXIT_HOLD_MS } from '../main/chat/backgroundWake';
 import { sessionScopeForChat } from '../main/chat/sessionScope';
+import { SessionEventLog } from '../main/chat/SessionEventLog';
 import { SessionStore } from '../main/chat/SessionStore';
 import { TurnExtensionsPreference } from '../main/chat/TurnExtensionsPreference';
 import { AccessStore } from '../main/chat/tools/AccessStore';
@@ -91,6 +92,8 @@ export class HostRuntime {
   readonly background: BackgroundProcessRegistry;
   readonly foreground: ForegroundCommandRegistry;
   readonly service: ChatService;
+  /** One sequence per session across the service and the emitters that bypass it. */
+  readonly eventLog = new SessionEventLog();
   private readonly pullRequests: HostCollaborators['pullRequests'];
 
   constructor(options: HostRuntimeOptions) {
@@ -171,9 +174,9 @@ export class HostRuntime {
     );
     this.background = new BackgroundProcessRegistry({
       output: (sessionId, processId, stream, text) =>
-        events.streamEvent({ type: 'background-output', sessionId, processId, stream, text }),
+        events.streamEvent(this.eventLog.append({ type: 'background-output', sessionId, processId, stream, text })),
       status: (sessionId, process) => {
-        events.streamEvent({ type: 'background-status', sessionId, process });
+        events.streamEvent(this.eventLog.append({ type: 'background-status', sessionId, process }));
         // Only ever fires from start/finish, after `background` has been assigned.
         backgroundJobs.update(sessionId, this.background.wakingJobs(sessionId), process.status);
       },
@@ -224,6 +227,7 @@ export class HostRuntime {
         return deferredTools.current();
       },
       getApiClient: () => auth.getApiClient(),
+      eventLog: this.eventLog,
       isDeviceLocal: () => sessionScopeForChat(auth.getState())?.local === true,
       getEnvironmentUrl: () => auth.getState().environment.url,
       emit: event => {

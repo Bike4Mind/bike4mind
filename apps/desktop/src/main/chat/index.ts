@@ -549,7 +549,7 @@ export function registerChat(
         : null;
     },
     emit: (sessionId, job) => {
-      broadcast({ type: 'video-job', sessionId, job });
+      broadcast(runtime.eventLog.append({ type: 'video-job', sessionId, job }));
       if (job.state === 'succeeded' && job.media)
         void studioIntegration
           .indexChatSession(sessionId, true)

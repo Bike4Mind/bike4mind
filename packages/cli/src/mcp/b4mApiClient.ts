@@ -470,6 +470,10 @@ export class B4mApiClient {
     ).data;
   }
 
+  async undoConfigChange(lakeId: string, eventId: string) {
+    return this.sdk.call('undoDataLakeConfigChange', { params: { id: lakeId, event_id: eventId } });
+  }
+
   async sendChat(args: {
     notebookId?: string;
     message: string;

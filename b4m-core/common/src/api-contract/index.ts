@@ -117,6 +117,7 @@ export {
   listDataLakeProposalsContract,
   decideDataLakeProposalContract,
   getDataLakeConfigHistoryContract,
+  undoDataLakeConfigChangeContract,
 } from './contracts/dataLakeResearch.contract';
 export { listImageModelsContract } from './contracts/imageModels.contract';
 export {

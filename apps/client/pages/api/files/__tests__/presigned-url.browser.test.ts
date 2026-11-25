@@ -1,5 +1,5 @@
 import { createHash, createHmac } from 'node:crypto';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { S3Storage } from '../../../../../../b4m-core/fab-pipeline/src/storage/S3Storage';
 
 const h = vi.hoisted(() => ({ findOne: vi.fn(), findAccessibleById: vi.fn(), options: undefined as unknown }));
@@ -51,9 +51,14 @@ async function urls(filePaths: string[], expiresIn = '600', audience?: string) {
   return json.mock.calls[0][0].urls as (string | null)[];
 }
 
-beforeEach(async () => {
+const importHandler = async () => (await import('../presigned-url')).default as unknown as typeof handler;
+
+beforeAll(async () => {
+  handler = await importHandler();
+});
+
+beforeEach(() => {
   vi.clearAllMocks();
-  vi.resetModules();
   vi.stubEnv('AWS_REGION', 'us-east-2');
   vi.stubEnv('AWS_ACCESS_KEY_ID', 'fixture-access');
   vi.stubEnv('AWS_SECRET_ACCESS_KEY', 'fixture-secret');
@@ -62,7 +67,6 @@ beforeEach(async () => {
   vi.stubEnv('S3_PRESIGN_ENDPOINT', 'https://objects.example.invalid:9443');
   h.findOne.mockResolvedValue({ _id: 'file-1', moderationStatus: 'clean' });
   h.findAccessibleById.mockResolvedValue(true);
-  handler = (await import('../presigned-url')).default as unknown as typeof handler;
 });
 afterEach(() => vi.unstubAllEnvs());
 
@@ -108,9 +112,14 @@ describe('generic file browser download signing', () => {
   it('retains AWS addressing when neither custom endpoint is configured', async () => {
     vi.stubEnv('AWS_ENDPOINT_URL_S3', '');
     vi.stubEnv('S3_PRESIGN_ENDPOINT', '');
+    const shared = handler;
     vi.resetModules();
-    handler = (await import('../presigned-url')).default as unknown as typeof handler;
-    expect(new URL((await urls(['owned/report.txt']))[0]!).hostname).toBe('files-bucket.s3.us-east-2.amazonaws.com');
+    handler = await importHandler();
+    try {
+      expect(new URL((await urls(['owned/report.txt']))[0]!).hostname).toBe('files-bucket.s3.us-east-2.amazonaws.com');
+    } finally {
+      handler = shared;
+    }
   });
 
   it.each(['browser', 'server'])(

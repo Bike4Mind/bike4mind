@@ -653,6 +653,10 @@ export const operations = {
     method: 'POST',
     path: '/api/v1/agents/{id}/transfer-credits',
   },
+  undoDataLakeConfigChange: {
+    method: 'POST',
+    path: '/api/v1/data-lakes/{id}/config-history/{event_id}/undo',
+  },
   unpublishArtifact: {
     method: 'DELETE',
     path: '/api/v1/artifacts/{id}/publish',

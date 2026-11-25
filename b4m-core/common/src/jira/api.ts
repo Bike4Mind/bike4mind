@@ -672,7 +672,7 @@ export class JiraApi {
    * AI-facing formatter drops or transforms - e.g. time-tracking
    * (`timespent`/`timeoriginalestimate`), `resolutiondate`, or the original
    * description body (the formatter flattens ADF and strips HTML, which would
-   * destroy embedded markers such as the liveops `<!-- fingerprint:... -->` comment).
+   * destroy embedded markers such as a `<!-- fingerprint:... -->` comment).
    * Prefer {@link searchIssues} for anything user/LLM-facing.
    */
   async searchIssuesRaw(params: {

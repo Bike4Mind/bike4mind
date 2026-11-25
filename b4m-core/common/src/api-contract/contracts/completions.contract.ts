@@ -125,7 +125,7 @@ export const createCompletionContract = defineEndpoint({
       description:
         'The API key does not hold any of the required scopes, the account is suspended (`errorCode: "account_suspended"`), ' +
         'a free-tier account named a model outside the free-tier allowlist (`errorCode: "model_requires_subscription"`), ' +
-        `or the caller's organization policy does not allow the model (\`errorCode: "org_model_not_allowed"\`). ${SPEND_FROZEN_FORBIDDEN_NOTE}`,
+        `the caller's organization policy does not allow the model (\`errorCode: "org_model_not_allowed"\`), a signed-in caller named an \`organization_id\` they are not a member of, or an organization-billed API key named a different \`organization_id\` (\`errorCode: "billing_organization_mismatch"\`). ${SPEND_FROZEN_FORBIDDEN_NOTE}`,
       schema: ModelPolicyForbiddenErrorSchema,
     },
     404: {

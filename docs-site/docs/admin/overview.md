@@ -112,7 +112,6 @@ The General Ops section contains tabs for system configuration and operational t
 | Documentation | Internal documentation management |
 | Modals | Configure application modals |
 | What's New | Manage "What's New" announcement modals |
-| LiveOps Triage | Live operations triage (conditional, hidden on fork production environments) |
 | Secrets Rotation | Manage secret rotation schedules |
 | System Secrets | View and manage system secrets |
 | Identity Providers | Configure identity provider integrations |

@@ -43,9 +43,24 @@ describe('InboxBadge', () => {
   });
 
   it('shows the dot for an invite still pending for the current user', () => {
-    h.invites = [{ id: 'i1', recipients: { pending: ['member@example.com'] } }];
+    h.invites = [{ id: 'i1', type: 'Project', remaining: 1, recipients: { pending: ['member@example.com'] } }];
     renderBadge();
     expect(screen.getByTestId('inbox-badge')).toHaveAttribute('data-unread', 'true');
+  });
+
+  it('shows the dot for a pending Space invite', () => {
+    h.invites = [{ id: 's1', type: 'Space', remaining: 1, recipients: { pending: ['member@example.com'] } }];
+    renderBadge();
+    expect(screen.getByTestId('inbox-badge')).toHaveAttribute('data-unread', 'true');
+  });
+
+  it('stays quiet for an invite the list would not show, so badge and list agree', () => {
+    h.invites = [
+      { id: 'u1', type: 'Space', remaining: 0, recipients: { pending: ['member@example.com'] } },
+      { id: 'u2', type: 'Mystery', remaining: 1, recipients: { pending: ['member@example.com'] } },
+    ];
+    renderBadge();
+    expect(screen.getByTestId('inbox-badge')).toHaveAttribute('data-unread', 'false');
   });
 
   it('hides the dot when nothing is pending or unread', () => {

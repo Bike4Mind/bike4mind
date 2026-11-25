@@ -57,8 +57,7 @@ export function isValidSessionId(id: string): boolean {
 }
 
 export type AgentRenameOutcome =
-  | { ok: true; summary: ChatSessionSummary }
-  | { ok: false; reason: 'user-title' | 'missing' };
+  { ok: true; summary: ChatSessionSummary } | { ok: false; reason: 'user-title' | 'missing' };
 
 /**
  * Whether an agent may replace this session's title. Unlocked and agent-set titles are fair game.
@@ -706,6 +705,11 @@ export class SessionStore implements SessionWritesStore {
   async get(id: string): Promise<ChatSession | null> {
     const directory = await this.directoryFor(false);
     return directory ? this.read(directory, id) : null;
+  }
+
+  /** `get`, ordered after the writes already queued for the session. */
+  getAfterWrites(id: string): Promise<ChatSession | null> {
+    return this.serialize(id, () => this.get(id));
   }
 
   async resolveStudioWorkspace(id: string, expectedScope = this.scopeKey()): Promise<StudioWorkspaceIdentity | null> {

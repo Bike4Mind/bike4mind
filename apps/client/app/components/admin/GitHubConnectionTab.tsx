@@ -753,7 +753,7 @@ const GitHubConnectionTab: React.FC = () => {
               <Alert color="warning" size="sm" data-testid="github-repos-empty-alert">
                 <Typography level="body-sm">
                   <strong>Security:</strong> An empty whitelist blocks ALL repository access (fail-closed). You must add
-                  at least one repository for LiveOps Triage and other GitHub features to work.
+                  at least one repository for system automation and other GitHub features to work.
                 </Typography>
               </Alert>
             ) : (
@@ -917,7 +917,7 @@ const GitHubConnectionTab: React.FC = () => {
     >
       <AdminPageHeader
         title="GitHub connection"
-        description="The system GitHub API connection that automation such as LiveOps triage and scheduled tasks uses."
+        description="The system GitHub API connection that system automation, such as scheduled tasks, uses."
         actions={
           <>
             <Button
@@ -1153,7 +1153,7 @@ const GitHubConnectionTab: React.FC = () => {
           if (!disconnecting) setDisconnectModalOpen(false);
         }}
         title="Disconnect GitHub"
-        description="System automation (LiveOps Triage, scheduled tasks) will no longer be able to access GitHub APIs until a new connection is configured."
+        description="System automation, such as scheduled tasks, will no longer be able to access GitHub APIs until a new connection is configured."
         reasonPresets={ADMIN_REASON_PRESETS.githubDisconnect}
         // The route takes no reason yet, so the reason is collected but not sent.
         reasonAudited={false}
@@ -1217,7 +1217,7 @@ const GitHubConnectionTab: React.FC = () => {
           if (!savingRepos) setShowEmptyWarningModal(false);
         }}
         title="Save an empty repository whitelist"
-        description="Saving an empty whitelist will block ALL GitHub repository access. LiveOps Triage and other GitHub features will not work until repositories are added."
+        description="Saving an empty whitelist will block ALL GitHub repository access. System automation and other GitHub features will not work until repositories are added."
         reasonPresets={ADMIN_REASON_PRESETS.githubRepoAccess}
         // The route takes no reason yet, so the reason is collected but not sent.
         reasonAudited={false}

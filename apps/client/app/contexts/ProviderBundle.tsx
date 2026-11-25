@@ -20,6 +20,7 @@ import SendToDataLakeModal from '@client/app/components/DataLakeWizard/SendToDat
 import MFAEnforcementWrapper from '../components/auth/MFAEnforcementWrapper';
 import EmailVerificationBanner from '@client/app/components/EmailVerificationBanner';
 import OrgDomainJoinBanner from '@client/app/components/OrgDomainJoinBanner';
+import SpaceDomainJoinBanner from '@client/app/components/SpaceDomainJoinBanner';
 import CommandPalette from '../components/CommandPalette';
 import StudioJobCompletedListener from '@client/app/components/Studio/completion/StudioJobCompletedListener';
 import { useDataLakeBatchCompletionSync } from '@client/app/hooks/data/dataLakeWizard';
@@ -91,6 +92,7 @@ export const ProviderBundle: React.FC<ProviderBundleProps> = ({ children }) => {
           <CommandPalette />
           <EmailVerificationBanner />
           <OrgDomainJoinBanner />
+          <SpaceDomainJoinBanner />
           {children}
         </UIProviders>
       </SessionProviders>

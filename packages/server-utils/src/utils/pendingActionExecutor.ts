@@ -3,6 +3,7 @@ import { IUserDocument, isImageServeable, type PendingActionResolutionOutcome } 
 import { Quest, Session, fabFileRepository } from '@bike4mind/database';
 import { SlackDevWorkspace, OrgSlackWorkspace } from '@bike4mind/database/infra';
 import { isValidObjectId } from './objectId';
+import { isPushDeliveryConfigured, publishApprovalResolvedPush } from './pushNotifications';
 import { buildFileLinkUrl } from '../files/fileLinkToken';
 import { downloadAttachmentUrl } from './downloadAttachmentUrl';
 import { isFeatureEnabled } from '../middlewares/featureFlag';
@@ -36,7 +37,38 @@ export async function claimPendingAction(
       $set: { pendingActionResolution: { ts: pendingActionTs, outcome, at: new Date() } },
     }
   );
-  return claimed !== null;
+  if (!claimed) return false;
+  await clearApprovalPush(claimed, pendingActionTs, outcome);
+  return true;
+}
+
+/**
+ * Replaces the delivered `approval_needed` notification once its action is claimed from any surface.
+ * Goes to the same person the approval push went to (the turn's requester, else the session owner).
+ * Best effort: a failure here must never fail or undo the claim.
+ */
+async function clearApprovalPush(
+  quest: { _id: unknown; sessionId?: string; promptMeta?: { session?: { userId?: string } } | null },
+  pendingActionTs: number,
+  outcome: PendingActionResolutionOutcome
+): Promise<void> {
+  if (!isPushDeliveryConfigured()) return;
+  const logger = new Logger({ metadata: { handler: 'clearApprovalPush' } });
+  try {
+    if (!quest.sessionId) return;
+    const session = quest.promptMeta?.session?.userId ? null : await Session.findById(quest.sessionId).select('userId');
+    const userId = quest.promptMeta?.session?.userId ?? session?.userId?.toString();
+    if (!userId) return;
+    await publishApprovalResolvedPush(
+      { userId, sessionId: quest.sessionId, questId: String(quest._id), pendingActionTs },
+      outcome,
+      logger
+    );
+  } catch (error) {
+    logger.warn('[PendingActionExecutor] failed to publish the approval-cleared push', {
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
 }
 
 /**

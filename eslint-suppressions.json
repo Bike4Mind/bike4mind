@@ -250,8 +250,6 @@
   "packages/database/src/models/infra/ops/AdminSettingsModel.ts": { "b4m/require-update-validators": { "count": 2 } },
   "packages/database/src/models/infra/ops/CacheModel.ts": { "b4m/require-update-validators": { "count": 16 } },
   "packages/database/src/models/infra/ops/FallbackLakeSettingModel.ts": { "b4m/require-update-validators": { "count": 1 } },
-  "packages/database/src/models/infra/ops/LiveopsTriageConfigModel.ts": { "b4m/require-update-validators": { "count": 5 } },
-  "packages/database/src/models/infra/ops/LiveopsTriageRunModel.ts": { "b4m/require-update-validators": { "count": 4 } },
   "packages/database/src/models/infra/ops/OverwatchProductModel.ts": { "b4m/require-update-validators": { "count": 1 } },
   "packages/database/src/models/infra/ops/ScopedSettingModel.ts": { "b4m/require-update-validators": { "count": 1 } },
   "packages/database/src/models/infra/ops/SreErrorPatternModel.ts": { "b4m/require-update-validators": { "count": 5 } },
@@ -394,7 +392,6 @@
   "packages/server-utils/src/s3/moderationScan.ts": { "b4m/require-update-validators": { "count": 4 } },
   "packages/server-utils/src/s3/storageCharge.ts": { "b4m/require-update-validators": { "count": 2 } },
   "packages/server-utils/src/s3/uploadSizeGate.ts": { "b4m/require-update-validators": { "count": 1 } },
-  "packages/server-utils/src/services/liveopsTriageService.ts": { "b4m/require-update-validators": { "count": 1 } },
   "packages/server-utils/src/skillMarket/market.ts": { "b4m/require-update-validators": { "count": 2 } },
   "packages/server-utils/src/tutorials/drafts/store.ts": { "b4m/require-update-validators": { "count": 3 } },
   "packages/server-utils/src/tutorials/effectiveModules.ts": { "b4m/require-update-validators": { "count": 2 } },
@@ -891,11 +888,6 @@
       "count": 1
     }
   },
-  "apps/client/app/components/admin/EmbedKeysTab.test.tsx": {
-    "@typescript-eslint/no-explicit-any": {
-      "count": 1
-    }
-  },
   "apps/client/app/components/admin/EventMetrics/hooks/useEventMetricsState.ts": {
     "@typescript-eslint/no-explicit-any": {
       "count": 2
@@ -1077,11 +1069,6 @@
     }
   },
   "apps/client/app/components/organizations/Member.tsx": {
-    "@typescript-eslint/no-explicit-any": {
-      "count": 1
-    }
-  },
-  "apps/client/app/components/profile/UserApiKeysTab.test.tsx": {
     "@typescript-eslint/no-explicit-any": {
       "count": 1
     }
@@ -1582,16 +1569,6 @@
   "apps/client/pages/api/admin/integration-audit-logs/index.ts": {
     "b4m/no-raw-entity-response": {
       "count": 1
-    }
-  },
-  "apps/client/pages/api/admin/liveops-triage-configs/[id].ts": {
-    "b4m/no-raw-entity-response": {
-      "count": 2
-    }
-  },
-  "apps/client/pages/api/admin/liveops-triage-configs/index.ts": {
-    "b4m/no-raw-entity-response": {
-      "count": 2
     }
   },
   "apps/client/pages/api/admin/mementos/__tests__/reembed-ledger.test.ts": {

@@ -76,7 +76,6 @@ const ADMIN_TAB_TO_SLUG: Readonly<Record<Exclude<AdminTab, RetiredTab>, string>>
   [AdminTab.WhatsNewModals]: 'whats-new-modals',
   [AdminTab.SlackMetrics]: 'slack-metrics',
   [AdminTab.SystemSecrets]: 'system-secrets',
-  [AdminTab.LiveOpsTriage]: 'live-ops-triage',
   [AdminTab.EmailMarketing]: 'email-marketing',
   [AdminTab.WebhookAuditLogs]: ADMIN_WEBHOOK_AUDIT_LOGS_TAB_SLUG,
   [AdminTab.GitHubConnection]: 'github-connection',
@@ -140,7 +139,10 @@ export const ADMIN_TAB_SLUG_REDIRECTS: ReadonlyMap<string, AdminTabRedirect> = n
   ['subscribers', { tab: AdminTab.Waitlist }],
   [RETIRED_TAB_SLUGS[AdminTab.RegistrationInvites], { tab: AdminTab.Waitlist, search: { inviteSection: 'invites' } }],
   [RETIRED_TAB_SLUGS[AdminTab.PartnerSignupRules], { tab: AdminTab.Waitlist, search: { inviteSection: 'partners' } }],
-  [RETIRED_TAB_SLUGS[AdminTab.HeldSignupGrants], { tab: AdminTab.Waitlist, search: { inviteSection: 'pending', heldGrants: 'open' } }],
+  [
+    RETIRED_TAB_SLUGS[AdminTab.HeldSignupGrants],
+    { tab: AdminTab.Waitlist, search: { inviteSection: 'pending', heldGrants: 'open' } },
+  ],
   [
     RETIRED_TAB_SLUGS[AdminTab.SecOpsTriage],
     { tab: AdminTab.SecurityDashboard, search: { [SECURITY_VIEW_PARAM]: 'scans' } },

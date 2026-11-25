@@ -1564,6 +1564,11 @@ export interface ChatSession extends ChatSessionMeta {
   replyInFlight?: { messageId: string; startedAt: number };
   /** The worktree being cut right now, added the same way; see the 'workspace' stream event. */
   preparingWorkspace?: WorkspacePreparation;
+  /**
+   * The last stream event this read already reflects, added by ChatService.getSession. A client
+   * applies only events with a higher `seq` on top of it, so none is lost or applied twice.
+   */
+  eventCursor?: EventCursor;
 }
 
 /** What exporting a conversation did; `saved` is false when the user dismissed the save dialog. */
@@ -1612,7 +1617,20 @@ export type ModelPhase =
 /** A newer context notice of the same kind replaces the older one for a conversation. */
 export type ContextNoticeKind = 'context-size' | 'no-tools' | 'run-budget';
 
-export type ChatStreamEvent =
+/**
+ * Where a client stands in one session's event stream. `epoch` names the host process lifetime
+ * that numbered the events, so a cursor from before a restart is recognisably stale; `seq` is
+ * the last event the client has. See main/chat/SessionEventLog.ts.
+ */
+export type EventCursor = { epoch: string; seq: number };
+
+/**
+ * A stream event as it leaves the host: `seq` numbers it within its session (SessionEventLog).
+ * Optional only so an event can be built before it is stamped.
+ */
+export type ChatStreamEvent = ChatStreamEventBody & { seq?: number };
+
+type ChatStreamEventBody =
   | {
       type: 'start';
       sessionId: string;

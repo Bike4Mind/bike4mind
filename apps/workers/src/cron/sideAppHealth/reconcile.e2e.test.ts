@@ -13,6 +13,7 @@ import {
   createMongoServer,
   MONGO_TEST_TIMEOUT_MS,
 } from '../../../../../packages/database/src/__test__/createMongoServer';
+import { classifyHealthRow } from '@bike4mind/server-utils/sideApps/health/rows';
 import { collectHealthRows } from './collect';
 import { reconcileAlerts, type ReconcileContext } from './reconcile';
 
@@ -313,5 +314,39 @@ describe('collectHealthRows against MongoDB', () => {
     const flat = await collectHealthRows(from, to, false);
     expect(flat.every(row => row.hourStart === 0)).toBe(true);
     expect(await collectHealthRows(new Date(hour.getTime() + 3 * 60 * 60 * 1000), to, true)).toEqual([]);
+  });
+
+  it('carries the failure code of a failed completion into the row and its failure reason', async () => {
+    const codedHour = new Date('2026-11-19T09:00:00.000Z');
+    const observation = (outcome: string, failureCode?: string) => ({
+      requestId: 'r',
+      requestedModel: 'm',
+      startedAt: 's',
+      outcome,
+      failureCode,
+    });
+    await ApiKeyUsageLog.collection.insertMany([
+      {
+        oauthClientId: 'coded',
+        timestamp: new Date(codedHour.getTime() + 60_000),
+        endpoint: '/api/chat',
+        statusCode: 202,
+        completionObservation: observation('failed', 'some_code'),
+      },
+      {
+        oauthClientId: 'coded',
+        timestamp: new Date(codedHour.getTime() + 120_000),
+        endpoint: '/api/chat',
+        statusCode: 202,
+        completionObservation: observation('failed', 'other_code'),
+      },
+    ]);
+
+    const rows = await collectHealthRows(codedHour, new Date(codedHour.getTime() + 60 * 60 * 1000), true);
+    const reasons = rows
+      .map(row => classifyHealthRow(row))
+      .map(event => (event?.kind === 'failure' ? event.reason : ''));
+    expect(rows).toHaveLength(2);
+    expect(reasons.sort()).toEqual(['completion_failed other_code', 'completion_failed some_code']);
   });
 });

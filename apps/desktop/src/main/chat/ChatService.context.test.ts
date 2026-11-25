@@ -278,8 +278,8 @@ describe('ChatService context boundaries', () => {
       expect(messages[boundary + 1]).toMatchObject({ role: 'user', content: 'carry on' });
 
       expect(progress()).toEqual([
-        { type: 'auto-compact', sessionId: id, running: true },
-        { type: 'auto-compact', sessionId: id, running: false },
+        { type: 'auto-compact', sessionId: id, seq: expect.any(Number), running: true },
+        { type: 'auto-compact', sessionId: id, seq: expect.any(Number), running: false },
       ]);
     });
 

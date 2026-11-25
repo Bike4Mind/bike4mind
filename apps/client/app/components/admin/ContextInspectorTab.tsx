@@ -781,7 +781,7 @@ const AlertSettingsSection = ({ alertSettings }: { alertSettings: ContextTelemet
     save: value => saveSettings.mutateAsync({ key: 'contextTelemetryAlerts', value }),
   });
 
-  // Fetch available Slack workspaces (same as LiveOps Triage)
+  // Fetch available Slack workspaces
   const { data: workspacesData, isError: isWorkspacesError } = useQuery({
     queryKey: ['slackWorkspaces'],
     queryFn: async () => {

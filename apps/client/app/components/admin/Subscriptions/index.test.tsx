@@ -3,7 +3,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import type { ReactNode } from 'react';
 import { Blob as NodeBlob } from 'node:buffer';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type {
   AdminSubscriptionRow,
   AdminSubscriptionsListResponse,
@@ -67,6 +67,8 @@ const row = (overrides: Partial<AdminSubscriptionRow> = {}): AdminSubscriptionRo
   periodEndsAt: '2026-11-01T00:00:00.000Z',
   canceledAt: null,
   createdAt: '2026-10-01T00:00:00.000Z',
+  ownerAlert: null,
+  cancelAt: null,
   ...overrides,
 });
 
@@ -97,13 +99,13 @@ const SUMMARY: AdminSubscriptionsSummary = {
   searchTruncated: false,
 };
 
-let listRows: AdminSubscriptionRow[] = [];
+const list = { rows: [] as AdminSubscriptionRow[] };
 
 const listResponse = (): AdminSubscriptionsListResponse => ({
-  subscriptions: listRows,
-  total: listRows.length,
+  subscriptions: list.rows,
+  total: list.rows.length,
   page: 1,
-  totalPages: listRows.length > 0 ? 1 : 0,
+  totalPages: list.rows.length > 0 ? 1 : 0,
   searchTruncated: false,
   mismatchTruncated: false,
 });
@@ -125,6 +127,13 @@ const listParams = () =>
     .map(([, config]) => (config as { params: unknown }).params);
 const lastListParams = () => listParams().at(-1);
 
+/** Under fake timers: runs the 300ms search debounce and everything queued behind it. */
+const advance = (ms: number) => act(() => vi.advanceTimersByTimeAsync(ms));
+
+afterEach(() => {
+  vi.useRealTimers();
+});
+
 beforeEach(() => {
   user.currentUser = { isAdmin: true };
   apiGet.mockReset();
@@ -134,7 +143,7 @@ beforeEach(() => {
   notifications.warning.mockReset();
   notifications.error.mockReset();
   window.localStorage.clear();
-  listRows = [row(), compedRow];
+  list.rows = [row(), compedRow];
   apiGet.mockImplementation(async (url: string, config?: { params?: Record<string, unknown> }) => {
     if (url === SUMMARY_PATH)
       return { data: config?.params?.cancel === 'scheduled' ? { ...SUMMARY, total: 4 } : SUMMARY };
@@ -195,7 +204,7 @@ describe('AdminSubscriptions', () => {
 
   describe('Plan', () => {
     it('labels the interval from what Stripe bills, over the catalog plan', async () => {
-      listRows = [
+      list.rows = [
         row({ billedInterval: { interval: 'year', intervalCount: 1 } }),
         row({ id: 's3', ownerId: 'u3', billedInterval: { interval: 'month', intervalCount: 3 } }),
         row({ id: 's4', ownerId: 'u4', billedInterval: null }),
@@ -207,7 +216,7 @@ describe('AdminSubscriptions', () => {
     });
 
     it('marks a price the catalog does not know as an unknown plan, with its billed interval and amount', async () => {
-      listRows = [row({ plan: { priceId: 'price_legacy', name: null, interval: null } })];
+      list.rows = [row({ plan: { priceId: 'price_legacy', name: null, interval: null } })];
       renderTab();
       const chip = await screen.findByTestId('admin-subscriptions-unknown-plan-s1');
       expect(chip.textContent).toBe('Unknown plan');
@@ -226,7 +235,7 @@ describe('AdminSubscriptions', () => {
     });
 
     it('shows comps a dash, never a number, even when the row carries an amount', async () => {
-      listRows = [compedRow, row({ id: 's3', ownerId: 'u3', source: 'admin_grant' })];
+      list.rows = [compedRow, row({ id: 's3', ownerId: 'u3', source: 'admin_grant' })];
       renderTab();
       for (const id of ['s2', 's3']) {
         const cell = await screen.findByTestId(`admin-subscriptions-mrr-${id}`);
@@ -236,7 +245,7 @@ describe('AdminSubscriptions', () => {
     });
 
     it('marks a paying row with no mirrored amount as not synced, and a canceled one as none', async () => {
-      listRows = [
+      list.rows = [
         row({ mrr: null }),
         row({ id: 's4', status: 'canceled', canceledAt: '2026-10-02T00:00:00.000Z', mrr: null }),
       ];
@@ -251,7 +260,7 @@ describe('AdminSubscriptions', () => {
     });
 
     it('shows a row billed in another currency in that currency', async () => {
-      listRows = [row({ mrr: { amount: 1800, currency: 'cad' } })];
+      list.rows = [row({ mrr: { amount: 1800, currency: 'cad' } })];
       renderTab();
       const cell = await screen.findByTestId('admin-subscriptions-mrr-s1');
       expect(cell.textContent).toBe('CA$18.00');
@@ -375,10 +384,14 @@ describe('AdminSubscriptions', () => {
       'MRR at risk from past due subscriptions, daily, last 30 days',
     ]);
 
+    vi.useFakeTimers();
     fireEvent.change(screen.getByTestId('admin-subscriptions-search-input'), { target: { value: 'ada' } });
-    await waitFor(() => expect(screen.queryAllByTestId('admin-stat-sparkline')).toHaveLength(0));
+    await advance(300);
+    expect(screen.queryAllByTestId('admin-stat-sparkline')).toHaveLength(0);
     fireEvent.change(screen.getByTestId('admin-subscriptions-search-input'), { target: { value: '' } });
-    await waitFor(() => expect(screen.getAllByTestId('admin-stat-sparkline')).toHaveLength(3));
+    await advance(300);
+    expect(screen.getAllByTestId('admin-stat-sparkline')).toHaveLength(3);
+    vi.useRealTimers();
 
     fireEvent.click(screen.getByTestId('admin-subscriptions-views-comped-btn'));
     await waitFor(() => expect(screen.queryAllByTestId('admin-stat-sparkline')).toHaveLength(0));
@@ -431,12 +444,14 @@ describe('AdminSubscriptions', () => {
   it('does not put a cleared search back while its debounce catches up', async () => {
     renderTab();
     await screen.findByTestId('admin-subscriptions-row-s1');
+    vi.useFakeTimers();
     fireEvent.change(screen.getByTestId('admin-subscriptions-search-input'), { target: { value: 'ada' } });
-    await waitFor(() => expect(lastListParams()).toEqual(expect.objectContaining({ search: 'ada' })));
+    await advance(300);
+    expect(lastListParams()).toEqual(expect.objectContaining({ search: 'ada' }));
 
     const before = listParams().length;
     fireEvent.click(screen.getByTestId('admin-subscriptions-views-comped-btn'));
-    await act(() => new Promise(resolve => setTimeout(resolve, 500)));
+    await advance(500);
     expect(listParams().slice(before)).not.toContainEqual(expect.objectContaining({ search: 'ada' }));
     expect(lastListParams()).toEqual(expect.objectContaining({ source: 'admin_grant' }));
     expect(lastListParams()).not.toHaveProperty('search');
@@ -487,7 +502,7 @@ describe('AdminSubscriptions', () => {
 
   describe('empty states', () => {
     beforeEach(() => {
-      listRows = [];
+      list.rows = [];
     });
 
     it('gives an empty built-in view positive copy and a way to every subscription', async () => {
@@ -504,9 +519,12 @@ describe('AdminSubscriptions', () => {
     it('names and clears both search and filters when search returns nothing', async () => {
       renderTab();
       await screen.findByText('No paying subscriptions yet');
+      vi.useFakeTimers();
       fireEvent.change(screen.getByTestId('admin-subscriptions-search-input'), {
         target: { value: 'missing@example.com' },
       });
+      await advance(300);
+      vi.useRealTimers();
       const clear = await screen.findByTestId('admin-subscriptions-empty-clear-btn');
       expect(clear).toHaveTextContent('Clear search and filters');
       fireEvent.click(clear);

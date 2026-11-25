@@ -1,6 +1,5 @@
 export default {
   'AdminDashboardTab.tsx': [[3, '230f0025f26e9c84']],
-  'AdminLiveOpsTriageMultiConfigTab.tsx': [[9, '17ff7f5c5aec666c']],
   'AdminModalTab.tsx': [
     [2, '43dca498ff9a0de5'],
     [22, '68e1a4506bbca636'],

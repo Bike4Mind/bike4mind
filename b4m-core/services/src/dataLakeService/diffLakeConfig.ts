@@ -204,7 +204,7 @@ export function grantChange(
  */
 export function proposalReviewChange(
   proposal: { title?: string; sourceUrl: string },
-  decision: 'approved' | 'declined' | 'restored'
+  decision: 'approved' | 'declined' | 'restored' | 'unapproved'
 ): ILakeConfigLiteralChange {
   const title = proposal.title?.trim();
   const label = title ? `${title} (${proposal.sourceUrl})` : proposal.sourceUrl;
