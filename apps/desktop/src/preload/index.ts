@@ -46,6 +46,7 @@ import type {
 import type { HfTokenStatus, HubSearchRequest, ModelPull, ModelPullRequest } from '@shared/models';
 import {
   IPC_CHANNELS,
+  type ArchiveQuestion,
   type BrowserFreezeFrameRequest,
   type BrowserGoRequest,
   type BrowserNavigateRequest,
@@ -301,8 +302,7 @@ const api: DesktopApi = {
     },
     setApprovalMode: (sessionId: string, mode: ChatApprovalMode) =>
       ipcRenderer.invoke(IPC_CHANNELS.chatSetApprovalMode, sessionId, mode),
-    setSessionArchived: (sessionId: string, archived: boolean) =>
-      ipcRenderer.invoke(IPC_CHANNELS.chatSetSessionArchived, sessionId, archived),
+    confirmArchive: (question: ArchiveQuestion) => ipcRenderer.invoke(IPC_CHANNELS.chatConfirmArchive, question),
     exportSession: (sessionId: string) => ipcRenderer.invoke(IPC_CHANNELS.chatExportSession, sessionId),
     exportLocalData: () => ipcRenderer.invoke(IPC_CHANNELS.chatExportLocalData),
     listSessions: () => ipcRenderer.invoke(IPC_CHANNELS.chatListSessions),

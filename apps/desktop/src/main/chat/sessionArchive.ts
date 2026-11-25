@@ -1,4 +1,5 @@
 import type { ChatSessionSummary } from '@shared/chat';
+import type { ArchiveAnswer, ArchiveQuestion } from '@shared/ipc';
 import type { ChatService } from './ChatService';
 import type { SessionStore } from './SessionStore';
 
@@ -42,8 +43,6 @@ export type ArchiveConfirmation = {
 };
 
 export type ArchiveConfirmationAnswer = { response: number; checkboxChecked: boolean };
-
-export type ConfirmArchive = (confirmation: ArchiveConfirmation) => Promise<ArchiveConfirmationAnswer>;
 
 type ArchiveService = Pick<
   ChatService,
@@ -92,7 +91,8 @@ function confirmationFacts(
   return facts;
 }
 
-export function archiveConfirmationDialog(facts: ArchiveConfirmationFacts): ArchiveConfirmation {
+/** `facts` may come from any host, so a kept child's status is any string it reports. */
+export function archiveConfirmationDialog(facts: ArchiveQuestion): ArchiveConfirmation {
   return {
     type: 'question',
     message: `Archive "${facts.parentTitle}"?`,
@@ -113,29 +113,10 @@ export function archiveConfirmationDialog(facts: ArchiveConfirmationFacts): Arch
 }
 
 /** The decision a message box answer stands for; null when the user cancelled. */
-export function archiveDecisionFrom(
-  facts: ArchiveConfirmationFacts,
-  answer: ArchiveConfirmationAnswer
-): ArchiveDecision | null {
+export function archiveDecisionFrom(facts: ArchiveQuestion, answer: ArchiveConfirmationAnswer): ArchiveAnswer | null {
   if (answer.response !== 0) return null;
   return {
     confirmed: true,
     archiveChildIds: answer.checkboxChecked ? facts.finished.map(child => child.id) : [],
   };
-}
-
-/**
- * The two-step archive for a client that asks its user through a message box: the first call
- * returns the question when one is needed, the second carries the answer.
- */
-export async function archiveAskingFirst(
-  archive: (decision?: ArchiveDecision) => Promise<SessionArchiveResult>,
-  confirm: ConfirmArchive
-): Promise<ChatSessionSummary | null> {
-  const first = await archive();
-  if (!first.confirmationRequired) return first.summary;
-  const facts = first.confirmationRequired;
-  const decision = archiveDecisionFrom(facts, await confirm(archiveConfirmationDialog(facts)));
-  if (!decision) return null;
-  return (await archive(decision)).summary;
 }

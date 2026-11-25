@@ -1,6 +1,27 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { ChatSessionSummary } from '@shared/chat';
-import { archiveAskingFirst, archiveFromSidebar, type ArchiveDecision, type ConfirmArchive } from './sessionArchive';
+import {
+  archiveConfirmationDialog,
+  archiveDecisionFrom,
+  archiveFromSidebar,
+  type ArchiveConfirmation,
+  type ArchiveConfirmationAnswer,
+  type ArchiveDecision,
+} from './sessionArchive';
+
+/** The client's half: ask when the first answer carries a question, then send the decision. */
+async function archiveAskingFirst(
+  archive: (decision?: ArchiveDecision) => ReturnType<typeof archiveFromSidebar>,
+  confirm: (confirmation: ArchiveConfirmation) => Promise<ArchiveConfirmationAnswer>
+): Promise<ChatSessionSummary | null> {
+  const first = await archive();
+  if (!first.confirmationRequired) return first.summary;
+  const decision = archiveDecisionFrom(
+    first.confirmationRequired,
+    await confirm(archiveConfirmationDialog(first.confirmationRequired))
+  );
+  return decision ? (await archive(decision)).summary : null;
+}
 
 const session = (id: string, parentSessionId?: string): ChatSessionSummary => ({
   id,
@@ -27,7 +48,10 @@ function setup(children: string[] = []) {
     archiveFinishedChildren: vi.fn(async () => undefined),
   };
   const store = { scopeKey: vi.fn(() => 'scope') };
-  const confirm = vi.fn<ConfirmArchive>(async () => ({ response: 0, checkboxChecked: true }));
+  const confirm = vi.fn<(confirmation: ArchiveConfirmation) => Promise<ArchiveConfirmationAnswer>>(async () => ({
+    response: 0,
+    checkboxChecked: true,
+  }));
   const archive = (decision?: ArchiveDecision) => archiveFromSidebar(service, store, parent.id, true, decision);
   return {
     service,

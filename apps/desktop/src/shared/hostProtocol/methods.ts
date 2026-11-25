@@ -43,7 +43,7 @@ const sessionIdParams = z.object({ sessionId: z.string() });
 const recentFoldersResult = z.object({ folders: z.array(z.object({ path: z.string(), name: z.string() })) });
 
 /** The facts a client shows before archiving a parent; `status` stays a string so a newer host may add one. */
-const archiveConfirmationSchema = z.object({
+export const archiveConfirmationSchema = z.object({
   parentTitle: z.string(),
   finished: z.array(z.object({ id: z.string(), title: z.string() })),
   kept: z.array(z.object({ id: z.string(), title: z.string(), status: z.string() })),

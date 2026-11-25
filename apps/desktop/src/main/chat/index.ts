@@ -48,6 +48,7 @@ import type {
 import type { ShareDirectoryResult } from '@shared/directoryRequest';
 import {
   IPC_CHANNELS,
+  type ArchiveAnswer,
   type BrowserFreezeFrameRequest,
   type BrowserGoAction,
   type BrowserGoRequest,
@@ -81,7 +82,8 @@ import { registerImageMenuIpc } from './imageMenuIpc';
 import { registerFilePathLinkIpc } from './filePathLinks';
 import { registerSessionExportIpc } from './sessionExportIpc';
 import { registerLocalDataExportIpc } from './localDataExportIpc';
-import { archiveAskingFirst } from './sessionArchive';
+import { archiveConfirmationDialog, archiveDecisionFrom } from './sessionArchive';
+import { archiveConfirmationSchema } from '@shared/hostProtocol';
 import { registerSessionCreateIpc } from './sessionCreateIpc';
 import { registerSessionOrchestrateIpc } from './sessionOrchestrateIpc';
 import { placeNewSession, registerSidebarIpc } from './sidebarIpc';
@@ -752,15 +754,15 @@ export function registerChat(
     broadcast: location => send(IPC_CHANNELS.chatSpawnLocation, location),
   });
   ipcMain.handle(IPC_CHANNELS.chatListCreationTools, (_event, model: string) => service.listCreationTools(model));
-  ipcMain.handle(IPC_CHANNELS.chatSetSessionArchived, (event, sessionId: unknown, archived: unknown) => {
-    if (typeof sessionId !== 'string' || typeof archived !== 'boolean') return null;
-    return archiveAskingFirst(
-      decision => runtime.setSessionArchived(sessionId, archived, decision),
-      options => {
-        const window = BrowserWindow.fromWebContents(event.sender);
-        return window ? dialog.showMessageBox(window, options) : dialog.showMessageBox(options);
-      }
-    );
+  // Archiving itself goes through session/setArchived; only the question is asked here, where
+  // Electron's dialog lives.
+  ipcMain.handle(IPC_CHANNELS.chatConfirmArchive, async (event, raw: unknown): Promise<ArchiveAnswer | null> => {
+    const question = archiveConfirmationSchema.safeParse(raw);
+    if (!question.success) return null;
+    const options = archiveConfirmationDialog(question.data);
+    const window = BrowserWindow.fromWebContents(event.sender);
+    const answer = await (window ? dialog.showMessageBox(window, options) : dialog.showMessageBox(options));
+    return archiveDecisionFrom(question.data, answer);
   });
   ipcMain.handle(IPC_CHANNELS.chatListSkills, (_event, raw: unknown) => {
     const scope = parseSkillsScope(raw);

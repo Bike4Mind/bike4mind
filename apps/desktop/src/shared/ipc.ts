@@ -1,4 +1,5 @@
 import type { HostBridgeApi } from './hostBridge';
+import type { HostResult } from './hostProtocol';
 import type { SkinSummary, SoundPackSummary } from './mods';
 import type { NewSessionDefaults } from './sessionDefaults';
 import type { StudioApi } from './studioIpc';
@@ -264,7 +265,7 @@ export const IPC_CHANNELS = {
    * there is deliberately no tool, no MCP surface and no model-facing path to this channel.
    */
   chatSetApprovalMode: 'chat:set-approval-mode',
-  chatSetSessionArchived: 'chat:set-session-archived',
+  chatConfirmArchive: 'chat:confirm-archive',
   chatExportSession: 'chat:export-session',
   chatExportLocalData: 'chat:export-local-data',
   chatListSessions: 'chat:list-sessions',
@@ -817,6 +818,12 @@ export interface CreatedSession {
   placementFailed?: boolean;
 }
 
+/** What session/setArchived asks before archiving a parent with sub-sessions. */
+export type ArchiveQuestion = NonNullable<HostResult<'session/setArchived'>['confirmationRequired']>;
+
+/** The user's yes, with the finished sub-sessions they chose to archive along with the parent. */
+export type ArchiveAnswer = { confirmed: true; archiveChildIds: string[] };
+
 /** A Code session's create request, plus the same optional section the Chat one takes. */
 export type CreateCodeSessionIpcRequest = CreateCodeSessionRequest & CreateSessionRequest;
 
@@ -1067,8 +1074,11 @@ export interface DesktopApi {
      * response to the user clicking it, and from nowhere else - see IPC_CHANNELS above.
      */
     setApprovalMode(sessionId: string, mode: ChatApprovalMode): Promise<ChatSessionSummary | null>;
-    /** Move a conversation into or out of the sidebar's Archived section. Reversible. */
-    setSessionArchived(sessionId: string, archived: boolean): Promise<ChatSessionSummary | null>;
+    /**
+     * Asks this machine's user, in a native dialog, the question session/setArchived answered
+     * with; null when they cancel. Local only, whichever host the session lives on.
+     */
+    confirmArchive(question: ArchiveQuestion): Promise<ArchiveAnswer | null>;
     /** Save a conversation as Markdown or JSON, by the extension picked in the save dialog. Rejects on a write failure. */
     exportSession(sessionId: string): Promise<ChatSessionExportResult>;
     /** Export this account's local conversations, their files, and project memories into a selected folder. */
