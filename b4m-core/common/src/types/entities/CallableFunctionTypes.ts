@@ -287,7 +287,7 @@ export interface ICallableFunctionShared {
   /** The live pin's interface hash; a review names it, so an interface changed since is not approved unseen. */
   reviewHash: string;
   review: ICallableFunctionReviewView | null;
-  /** Names of the data files and sources the live pin reads; the record carries none yet. */
+  /** Names only of the data files and sources the live pin reads: never their bytes or a link to them. */
   dataPins: string[];
   sources: string[];
   updatedAt: Date;
@@ -348,9 +348,6 @@ export function toCallableFunctionPublic(
   };
 }
 
-// Fails typecheck once the record gains `dataPins`: read those and its sources from it instead.
-const NO_DATA_PINS: 'dataPins' extends keyof ICallableFunction ? never : readonly string[] = [];
-
 /** An allowlist, like {@link toCallableFunctionPublic}, for a caller who is not the owner. */
 export function toCallableFunctionShared(
   doc: ICallableFunctionDocument | ICallableFunctionSharedSource,
@@ -376,7 +373,7 @@ export function toCallableFunctionShared(
           current: review.reviewHash === reviewHash,
         }
       : null,
-    dataPins: [...NO_DATA_PINS],
+    dataPins: (doc.pin.dataPins ?? []).map(({ name }) => name),
     sources: [],
     pin: {
       version: doc.pin.version,
