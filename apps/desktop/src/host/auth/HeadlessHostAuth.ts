@@ -6,7 +6,7 @@ import { AuthService, type AuthServiceDeps } from '../../main/auth/AuthService';
 import { normalizeSelection, validateSelection } from '../../main/auth/environment';
 import { TokenVault, type VaultFile } from '../../main/auth/tokenVault';
 import { createVaultFile } from '../../main/auth/vaultFile';
-import { permissionProtectedCipher } from './permissionProtectedCipher';
+import { createPermissionProtectedCipher } from './permissionProtectedCipher';
 import { ensurePrivateDirectory, restrictMode } from './privateDirectory';
 
 const VAULT_FILE_NAME = 'auth-vault.json';
@@ -57,7 +57,7 @@ class HeadlessHostAuthService implements HeadlessHostAuth {
   private starting: Promise<HostSignInStart> | null = null;
 
   constructor(private readonly options: HeadlessHostAuthOptions) {
-    this.vault = new TokenVault(permissionProtectedCipher, this.privateVaultFile(), options.logger);
+    this.vault = new TokenVault(createPermissionProtectedCipher(), this.privateVaultFile(), options.logger);
     this.service = new AuthService({
       vault: this.vault,
       logger: options.logger,

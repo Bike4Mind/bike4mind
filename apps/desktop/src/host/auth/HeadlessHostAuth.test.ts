@@ -145,10 +145,7 @@ describe('createHeadlessHostAuth', () => {
     approval.resolve(grant);
     await vi.waitFor(() => expect(auth.status()).toEqual({ account: { userId: 'user-1', environmentUrl: HOSTED } }));
     expect(auth.getApiClient()).not.toBeNull();
-    expect(auth.getState().storage).toBe('file-permissions');
-
-    const vault = JSON.parse(await readFile(join(dataDirectory, VAULT_FILE), 'utf8')) as { tokens: object };
-    expect(Object.keys(vault.tokens)).toHaveLength(1);
+    expect(auth.getState().storage).toBe(POSIX ? 'file-permissions' : 'unavailable');
 
     const logged = JSON.stringify([logger.debug.mock.calls, logger.warn.mock.calls, logger.error.mock.calls]);
     expect(logged).not.toContain(ACCESS_TOKEN);
@@ -181,6 +178,9 @@ describe('createHeadlessHostAuth', () => {
     const dataDirectory = await scratchDirectory();
     await signedIn(dataDirectory);
 
+    const vault = JSON.parse(await readFile(join(dataDirectory, VAULT_FILE), 'utf8')) as { tokens: object };
+    expect(Object.keys(vault.tokens)).toHaveLength(1);
+
     expect((await stat(dataDirectory)).mode & 0o777).toBe(0o700);
     expect((await stat(join(dataDirectory, VAULT_FILE))).mode & 0o777).toBe(0o600);
   });
@@ -196,7 +196,7 @@ describe('createHeadlessHostAuth', () => {
     expect((await stat(dataDirectory)).mode & 0o777).toBe(0o700);
   });
 
-  it('stays signed in across a restart without another device flow', async () => {
+  it.skipIf(!POSIX)('stays signed in across a restart without another device flow', async () => {
     const dataDirectory = await scratchDirectory();
     const first = await signedIn(dataDirectory);
     first.auth.dispose();
@@ -208,7 +208,7 @@ describe('createHeadlessHostAuth', () => {
     expect(second.device.initiateDeviceFlow).not.toHaveBeenCalled();
   });
 
-  it('clears the stored tokens on sign-out', async () => {
+  it.skipIf(!POSIX)('clears the stored tokens on sign-out', async () => {
     const dataDirectory = await scratchDirectory();
     const { auth } = await signedIn(dataDirectory);
 
@@ -221,6 +221,15 @@ describe('createHeadlessHostAuth', () => {
     const restarted = build(dataDirectory);
     await restarted.auth.initialize();
     expect(restarted.auth.status()).toEqual({ account: null });
+  });
+
+  it.skipIf(POSIX)('keeps tokens off disk on Windows, where file modes restrict nothing', async () => {
+    const dataDirectory = await scratchDirectory();
+    const { auth } = await signedIn(dataDirectory);
+
+    expect(auth.getState().storage).toBe('unavailable');
+    const vault = JSON.parse(await readFile(join(dataDirectory, VAULT_FILE), 'utf8')) as { tokens: object };
+    expect(vault.tokens).toEqual({});
   });
 
   it.each([

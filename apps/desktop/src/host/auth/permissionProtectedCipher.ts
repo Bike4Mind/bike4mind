@@ -6,11 +6,14 @@ import type { SecretCipher } from '../../main/auth/tokenVault';
  * directory), like `~/.ssh`. Anyone with that OS account's or root's file access can read them.
  *
  * This is an encoding, not encryption: it reports `isEncryptionAvailable()` false and declares
- * `file-permissions`, which is what lets the vault persist under it and report so.
+ * `file-permissions`, which is what lets the vault persist under it and report so. On Windows,
+ * POSIX modes restrict nothing, so it declares no protection and the vault stays memory-only.
  */
-export const permissionProtectedCipher: SecretCipher = {
-  atRestProtection: 'file-permissions',
-  isEncryptionAvailable: () => false,
-  encryptString: plainText => Buffer.from(plainText, 'utf8'),
-  decryptString: encoded => encoded.toString('utf8'),
-};
+export function createPermissionProtectedCipher(platform: NodeJS.Platform = process.platform): SecretCipher {
+  return {
+    ...(platform === 'win32' ? {} : { atRestProtection: 'file-permissions' as const }),
+    isEncryptionAvailable: () => false,
+    encryptString: plainText => Buffer.from(plainText, 'utf8'),
+    decryptString: encoded => encoded.toString('utf8'),
+  };
+}
