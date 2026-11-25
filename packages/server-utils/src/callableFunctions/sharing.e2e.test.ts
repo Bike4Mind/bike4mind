@@ -138,12 +138,15 @@ async function seedLiveFunction(grants?: ICallableFunctionGrants) {
     userId: OWNER.id,
     slug: CONTRACT.name,
     description: CONTRACT.description,
-    state: 'live',
     enabled: true,
-    trustLabel: 'unverified',
-    pin: { artifactId: ARTIFACT_ID, version: 1, contentHash, source: SOURCE, pinnedAt: new Date(), seq: 1 },
+    pin: { artifactId: ARTIFACT_ID, version: 1, contentHash, source: SOURCE, pinnedAt: new Date() },
     contract: CONTRACT,
   });
+  // `create` writes only drafts; promotion's fields go straight to the collection.
+  await CallableFunction.collection.updateOne(
+    { _id: new mongoose.Types.ObjectId(fn.id) },
+    { $set: { state: 'live', trustLabel: 'unverified', 'pin.seq': 1 } }
+  );
   if (grants) await callableFunctionRepository.setGrants(fn.id, { ownerType: 'user', ownerKey: OWNER.id }, grants);
   return fn.id;
 }
