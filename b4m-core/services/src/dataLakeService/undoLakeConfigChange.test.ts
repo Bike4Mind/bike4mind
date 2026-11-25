@@ -590,6 +590,33 @@ describe('undoLakeConfigChange', () => {
       expect(ctx.actions.removeFile).toHaveBeenCalledWith('file-1', expect.objectContaining({ undoesEventId: hex(1) }));
     });
 
+    describe('result entry file name', () => {
+      const FILE_ID = hex(77);
+      const withFiles = (files: Record<string, unknown>[]) => {
+        ctx.world.file.push(fileEvent(1, { action: 'removed', fabFileId: FILE_ID, createdAt: T(5) }));
+        ctx.world.removals.add(FILE_ID);
+        const findOne = ctx.adapters.db.lakeMembershipChangeEvents.findOne as ReturnType<typeof vi.fn>;
+        const original = findOne.getMockImplementation()!;
+        findOne.mockImplementation(async (f: Record<string, unknown>) =>
+          f._id === hex(1) ? original(f) : fileEvent(2, { id: f._id, fabFileId: FILE_ID, createdAt: NOW })
+        );
+        ctx.adapters.db.fabFiles = { find: vi.fn(async () => files as never) };
+      };
+
+      it('names the file the undo re-added', async () => {
+        withFiles([{ id: FILE_ID, fileName: 'report.pdf' }]);
+
+        const result = await undoLakeConfigChange(hex(1), LAKE, ctx.adapters);
+
+        expect(result.entry).toMatchObject({ kind: 'file', fileName: 'report.pdf' });
+      });
+
+      it('leaves the name off when the file no longer exists', async () => {
+        withFiles([{ id: FILE_ID, fileName: 'report.pdf', deletedAt: new Date() }]);
+        expect((await undoLakeConfigChange(hex(1), LAKE, ctx.adapters)).entry).not.toHaveProperty('fileName');
+      });
+    });
+
     it('refuses to undo an add after the file was removed and re-added', async () => {
       ctx.world.file.push(fileEvent(1), fileEvent(2, { action: 'removed' }), fileEvent(3));
 

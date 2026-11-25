@@ -374,6 +374,7 @@ export const DERIVED_API_KEY_SCOPE_ENDPOINTS: Readonly<Partial<Record<ApiKeyScop
     'GET /api/v1/data-lakes',
     'GET /api/v1/data-lakes/:id',
     'GET /api/v1/data-lakes/:id/config-history',
+    'POST /api/v1/data-lakes/:id/config-history/:event_id/undo',
     'GET|POST|DELETE /api/v1/data-lakes/:id/files/:file_id',
     'GET /api/v1/data-lakes/:id/proposals',
     'POST /api/v1/data-lakes/:id/proposals/:proposal_id',

@@ -10,6 +10,7 @@ import {
   ApiKeyScope,
   DATA_LAKE_READ_API_KEY_SCOPES,
   DATA_LAKE_WRITE_API_KEY_SCOPES,
+  ConflictError,
   ForbiddenError,
   NotFoundError,
   TooManyRequestsError,
@@ -19,6 +20,7 @@ import {
   getDataLakeConfigHistoryContract,
   getDataLakeResearchConfigContract,
   getDataLakeResearchRunContract,
+  undoDataLakeConfigChangeContract,
   listDataLakeProposalsContract,
   listDataLakeResearchConfigsContract,
   listDataLakeResearchRunsContract,
@@ -55,6 +57,7 @@ const h = vi.hoisted(() => ({
   restore: vi.fn(),
   findProposal: vi.fn(),
   history: vi.fn(),
+  undo: vi.fn(),
   recordRead: vi.fn(),
   touch: vi.fn(),
 }));
@@ -103,6 +106,7 @@ vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({
     return (_req: unknown, _res: unknown, next: () => void) => next();
   },
 }));
+vi.mock('@bike4mind/server-utils/utils/config', () => ({ isDevelopment: () => false }));
 vi.mock('@bike4mind/server-utils/utils/userRateTier', () => ({ resolveUserRateLimitPerMin: () => 60 }));
 // Two distinct contexts: the admin one bypasses lake access and must never be built on these routes.
 vi.mock('@bike4mind/server-utils/dataLakes/toAccessContext', () => ({
@@ -119,6 +123,7 @@ vi.mock('@bike4mind/server-utils/dataLakes/proposalAdmissionDeps', () => ({ admi
 vi.mock('@bike4mind/server-utils/dataLakes/serializeLakeClaim', () => ({
   serializeLakeClaim: async (fn: () => Promise<unknown>) => fn(),
 }));
+vi.mock('@server/dataLakes/research/undoHandler', () => ({ undoLakeConfigChangeHandler: h.undo }));
 vi.mock('@server/dataLakes/recordLakeRead', () => ({ recordLakeRead: h.recordRead }));
 vi.mock('sst', () => ({
   Resource: {
@@ -150,6 +155,7 @@ vi.mock('@bike4mind/database', () => ({
   lakeConfigUndoClaimRepository: {},
   lakeConfigSnapshotRepository: {},
   lakeMembershipChangeEventRepository: {},
+  fabFileRepository: {},
   organizationRepository: {},
   spendFreezeRepository: {},
   userApiKeyRepository: {},
@@ -197,6 +203,7 @@ const { default: runOne } = await import('@pages/api/v1/data-lakes/[id]/research
 const { default: proposalsIndex } = await import('@pages/api/v1/data-lakes/[id]/proposals/index');
 const { default: proposalOne } = await import('@pages/api/v1/data-lakes/[id]/proposals/[proposal_id]');
 const { default: configHistory } = await import('@pages/api/v1/data-lakes/[id]/config-history');
+const { default: undoChange } = await import('@pages/api/v1/data-lakes/[id]/config-history/[event_id]/undo');
 // The limiters are built once, at module load, before any beforeEach clears the recorder.
 const rateLimitBuckets = h.rateLimitOptions.map(o => o.bucket);
 
@@ -337,6 +344,7 @@ beforeEach(() => {
 const CFG = '65a0000000000000000000c1';
 const RUN = '65a0000000000000000000d1';
 const PROP = '65a0000000000000000000e1';
+const EVT = '65a0000000000000000000f1';
 
 describe('scopes', () => {
   const READ = [...DATA_LAKE_READ_API_KEY_SCOPES];
@@ -353,6 +361,7 @@ describe('scopes', () => {
     ['listDataLakeProposals', listDataLakeProposalsContract, READ],
     ['decideDataLakeProposal', decideDataLakeProposalContract, WRITE],
     ['getDataLakeConfigHistory', getDataLakeConfigHistoryContract, READ],
+    ['undoDataLakeConfigChange', undoDataLakeConfigChangeContract, WRITE],
   ] as const;
 
   it.each(ops)('%s declares its scopes and the 403 scope envelope', (_name, contract, scopes) => {
@@ -370,12 +379,12 @@ describe('scopes', () => {
   it('hands the contract scopes to the API-key chain for every route', () => {
     const required = h.baseApiOptions.map(o => o?.requiredScopes);
     expect(required.filter(s => JSON.stringify(s) === JSON.stringify(READ))).toHaveLength(6);
-    expect(required.filter(s => JSON.stringify(s) === JSON.stringify(WRITE))).toHaveLength(5);
+    expect(required.filter(s => JSON.stringify(s) === JSON.stringify(WRITE))).toHaveLength(6);
   });
 
   it('uses one stable rate-limit bucket per route family, with no lake id in it', () => {
-    expect(rateLimitBuckets.filter(Boolean)).toHaveLength(11);
-    expect(new Set(rateLimitBuckets).size).toBe(7);
+    expect(rateLimitBuckets.filter(Boolean)).toHaveLength(12);
+    expect(new Set(rateLimitBuckets).size).toBe(8);
     for (const bucket of rateLimitBuckets) expect(bucket).toMatch(/^\/api\/v1\/data-lakes\/\[id\]\//);
   });
 });
@@ -396,11 +405,13 @@ describe('manage gate', () => {
       () => call(proposalOne, { method: 'POST', query: { proposal_id: PROP }, body: { decision: 'decline' } }),
     ],
     ['config history', () => call(configHistory, {})],
+    ['undo', () => call(undoChange, { method: 'POST', query: { event_id: EVT } })],
   ];
 
   it.each(cases)('refuses a caller who can read but not manage the lake: %s', async (_name, run) => {
     h.canManage.value = false;
     h.findProposal.mockResolvedValue(proposalDoc(PROP));
+    h.undo.mockImplementation(async () => (gated(), { entry: null, notes: [] }));
     expect((await run()).status).toBe(403);
     expect(h.createConfig).not.toHaveBeenCalled();
     expect(h.startRun).not.toHaveBeenCalled();
@@ -786,5 +797,76 @@ describe('config history', () => {
     h.canManage.value = false;
     const res = await call(configHistory, {});
     expect(res.thrown).toBeInstanceOf(ForbiddenError);
+  });
+});
+
+describe('undo a config change', () => {
+  const undoRow = {
+    kind: 'config',
+    eventId: '65a0000000000000000000f2',
+    changedAt: T0,
+    principalKind: 'apiKey',
+    principalId: '65a0000000000000000000aa',
+    manageRung: 'creator',
+    action: 'update-research-config',
+    changes: [],
+    undoable: true,
+    undoesEventId: EVT,
+  };
+
+  it('undoes the row on the member context and maps the entry, with notes', async () => {
+    h.undo.mockResolvedValue({ entry: undoRow, notes: ['Scheduled research is on hold.'] });
+    const res = await call(undoChange, { method: 'POST', query: { event_id: EVT }, apiKey: true });
+    expect(res.status).toBe(200);
+    expect(h.undo.mock.calls[0].slice(1, 3)).toEqual([LAKE_ID, EVT]);
+    expect(h.undo.mock.calls[0][3]).toMatchObject({ isAdmin: false });
+    expect(res.body).toMatchObject({
+      data: { kind: 'config', event_id: undoRow.eventId, undoable: true, undone_by_event_id: null },
+      notes: ['Scheduled research is on hold.'],
+    });
+    expect(JSON.stringify(res.body)).not.toContain('65a0000000000000000000aa');
+    expect(h.adminReached).not.toHaveBeenCalled();
+  });
+
+  it('returns a null entry when the History write did not persist', async () => {
+    h.undo.mockResolvedValue({ entry: null, notes: [] });
+    const res = await call(undoChange, { method: 'POST', query: { event_id: EVT } });
+    expect(res.body).toEqual({ data: null, notes: [] });
+  });
+
+  it('keeps the 403 for a caller who can read but not manage the lake', async () => {
+    h.undo.mockRejectedValue(new ForbiddenError('You do not have permission to manage this data lake'));
+    const res = await call(undoChange, { method: 'POST', query: { event_id: EVT } });
+    expect(res.status).toBe(403);
+  });
+
+  it('answers 404 for a foreign lake and for an unknown event', async () => {
+    h.undo.mockRejectedValue(new NotFoundError('History entry not found'));
+    expect((await call(undoChange, { method: 'POST', query: { event_id: EVT } })).status).toBe(404);
+    h.undo.mockRejectedValue(new NotFoundError('Data lake not found'));
+    expect((await call(undoChange, { method: 'POST', query: { id: OTHER_LAKE_ID, event_id: EVT } })).status).toBe(404);
+  });
+
+  it('answers 409 on a second undo', async () => {
+    h.undo.mockResolvedValueOnce({ entry: null, notes: [] });
+    h.undo.mockRejectedValueOnce(new ConflictError('Already undone'));
+    expect((await call(undoChange, { method: 'POST', query: { event_id: EVT } })).status).toBe(200);
+    const second = await call(undoChange, { method: 'POST', query: { event_id: EVT } });
+    expect(second.status).toBe(409);
+    expect(second.body).toMatchObject({ error: 'Already undone' });
+  });
+
+  it('declares the 403, 404 and 409 envelopes', () => {
+    expect(Object.keys(undoDataLakeConfigChangeContract.responses)).toEqual(
+      expect.arrayContaining(['200', '403', '404', '409', '429'])
+    );
+  });
+
+  it('is capped at 120 an hour in its own bucket', () => {
+    const limiter = h.rateLimitOptions.find(o => o.bucket === '/api/v1/data-lakes/[id]/config-history/undo') as
+      | { limit: () => number; windowMs: number }
+      | undefined;
+    expect(limiter?.windowMs).toBe(60 * 60 * 1000);
+    expect(limiter?.limit()).toBe(120);
   });
 });

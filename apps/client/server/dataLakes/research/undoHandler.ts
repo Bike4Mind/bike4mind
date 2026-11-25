@@ -45,7 +45,7 @@ const membershipDb = {
 };
 
 /**
- * One Undo, shared by the SPA route and (in a later change) the public route. The manage gate and the
+ * One Undo, shared by the SPA route and the public v1 route. The manage gate and the
  * whole undo run in one transaction, so a grant revoke committing mid-request collides on the lake
  * doc and the retry re-reads live grants, and a refused undo leaves no claim behind.
  *
@@ -74,6 +74,7 @@ export async function undoLakeConfigChangeHandler(
         lakeMembershipRemovals: lakeMembershipRemovalRepository,
         dataLakeResearchConfigs: dataLakeResearchConfigRepository,
         dataLakeProposals: dataLakeProposalRepository,
+        fabFiles: fabFileRepository,
       },
       actions: {
         updateResearchConfig: (configId, input, audit) =>

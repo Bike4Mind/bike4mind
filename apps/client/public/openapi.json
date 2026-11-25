@@ -21324,6 +21324,17 @@
                             "null"
                           ]
                         },
+                        "undoable": {
+                          "type": "boolean",
+                          "description": "True when POST .../config-history/{event_id}/undo can reverse this row: not yet undone, and supported."
+                        },
+                        "undone_by_event_id": {
+                          "type": [
+                            "string",
+                            "null"
+                          ],
+                          "description": "The row that undid this one. Null when this row was not undone, or the undoing row is outside the window."
+                        },
                         "target": {
                           "type": "object",
                           "properties": {
@@ -21515,6 +21526,8 @@
                         "changed_at",
                         "principal_kind",
                         "principal_name",
+                        "undoable",
+                        "undone_by_event_id",
                         "manage_rung",
                         "action",
                         "changes"
@@ -21550,6 +21563,17 @@
                             "null"
                           ]
                         },
+                        "undoable": {
+                          "type": "boolean",
+                          "description": "True when POST .../config-history/{event_id}/undo can reverse this row: not yet undone, and supported."
+                        },
+                        "undone_by_event_id": {
+                          "type": [
+                            "string",
+                            "null"
+                          ],
+                          "description": "The row that undid this one. Null when this row was not undone, or the undoing row is outside the window."
+                        },
                         "target": {
                           "type": "object",
                           "properties": {
@@ -21570,6 +21594,13 @@
                             "id"
                           ],
                           "description": "The file the row is about."
+                        },
+                        "file_name": {
+                          "type": [
+                            "string",
+                            "null"
+                          ],
+                          "description": "The name of the file. Null when the file no longer exists."
                         },
                         "action": {
                           "type": "string",
@@ -21598,7 +21629,10 @@
                         "changed_at",
                         "principal_kind",
                         "principal_name",
+                        "undoable",
+                        "undone_by_event_id",
                         "target",
+                        "file_name",
                         "action",
                         "origin"
                       ]
@@ -21634,6 +21668,373 @@
         },
         "required": [
           "data"
+        ]
+      },
+      "undoDataLakeConfigChangeResponse200": {
+        "type": "object",
+        "properties": {
+          "data": {
+            "oneOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "enum": [
+                      "config"
+                    ]
+                  },
+                  "event_id": {
+                    "type": "string"
+                  },
+                  "changed_at": {
+                    "type": "string"
+                  },
+                  "principal_kind": {
+                    "type": "string",
+                    "enum": [
+                      "user",
+                      "agent",
+                      "apiKey",
+                      "system"
+                    ]
+                  },
+                  "principal_name": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "undoable": {
+                    "type": "boolean",
+                    "description": "True when POST .../config-history/{event_id}/undo can reverse this row: not yet undone, and supported."
+                  },
+                  "undone_by_event_id": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "description": "The row that undid this one. Null when this row was not undone, or the undoing row is outside the window."
+                  },
+                  "target": {
+                    "type": "object",
+                    "properties": {
+                      "kind": {
+                        "type": "string",
+                        "enum": [
+                          "researchConfig",
+                          "proposal",
+                          "file"
+                        ]
+                      },
+                      "id": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "kind",
+                      "id"
+                    ],
+                    "description": "The thing the row is about. Absent on older rows."
+                  },
+                  "manage_rung": {
+                    "type": "string",
+                    "enum": [
+                      "platform-admin",
+                      "grant-owner",
+                      "creator",
+                      "grant-curator",
+                      "org-admin",
+                      "org-grant",
+                      "system"
+                    ]
+                  },
+                  "action": {
+                    "type": "string",
+                    "enum": [
+                      "update",
+                      "visibility",
+                      "transfer-ownership",
+                      "archive",
+                      "unarchive",
+                      "delete",
+                      "restore",
+                      "promote",
+                      "demote",
+                      "purge",
+                      "auto-activate",
+                      "grant-access",
+                      "revoke-access",
+                      "membership-succession",
+                      "approve-proposal",
+                      "auto-approve-proposal",
+                      "decline-proposal",
+                      "restore-proposal",
+                      "create-research-config",
+                      "update-research-config",
+                      "delete-research-config",
+                      "start-research-run",
+                      "complete-research-run",
+                      "create",
+                      "upload-files"
+                    ]
+                  },
+                  "changes": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "field": {
+                          "type": "string"
+                        },
+                        "kind": {
+                          "type": "string",
+                          "enum": [
+                            "literal",
+                            "fingerprint"
+                          ]
+                        },
+                        "before": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "number"
+                            },
+                            {
+                              "type": "boolean"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ],
+                          "description": "A literal change only. Absent means unset on that side."
+                        },
+                        "after": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "number"
+                            },
+                            {
+                              "type": "boolean"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ],
+                          "description": "A literal change only. Absent means unset on that side."
+                        },
+                        "truncated": {
+                          "type": "boolean",
+                          "description": "A literal string value was clipped."
+                        },
+                        "before_fingerprint": {
+                          "type": "object",
+                          "properties": {
+                            "present": {
+                              "type": "boolean"
+                            },
+                            "length": {
+                              "type": "integer"
+                            }
+                          },
+                          "required": [
+                            "present",
+                            "length"
+                          ],
+                          "description": "A fingerprint change only. Size, never the text."
+                        },
+                        "after_fingerprint": {
+                          "type": "object",
+                          "properties": {
+                            "present": {
+                              "type": "boolean"
+                            },
+                            "length": {
+                              "type": "integer"
+                            }
+                          },
+                          "required": [
+                            "present",
+                            "length"
+                          ],
+                          "description": "A fingerprint change only. Size, never the text."
+                        },
+                        "text_unchanged": {
+                          "type": "boolean",
+                          "description": "A fingerprint change only. The two sides are the same text."
+                        }
+                      },
+                      "required": [
+                        "field",
+                        "kind"
+                      ]
+                    }
+                  },
+                  "lever_changes": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "lever": {
+                          "type": "string"
+                        },
+                        "before": {
+                          "description": "Absent or null means unset. A feed address is origin and path only."
+                        },
+                        "after": {
+                          "description": "Null on a delete, which records the setting as it stood."
+                        }
+                      },
+                      "required": [
+                        "lever"
+                      ]
+                    },
+                    "description": "Absent on older rows."
+                  },
+                  "admitted_fab_file_id": {
+                    "type": "string",
+                    "description": "The file an approval admitted."
+                  }
+                },
+                "required": [
+                  "kind",
+                  "event_id",
+                  "changed_at",
+                  "principal_kind",
+                  "principal_name",
+                  "undoable",
+                  "undone_by_event_id",
+                  "manage_rung",
+                  "action",
+                  "changes"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "enum": [
+                      "file"
+                    ]
+                  },
+                  "event_id": {
+                    "type": "string"
+                  },
+                  "changed_at": {
+                    "type": "string"
+                  },
+                  "principal_kind": {
+                    "type": "string",
+                    "enum": [
+                      "user",
+                      "agent",
+                      "apiKey",
+                      "system"
+                    ]
+                  },
+                  "principal_name": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "undoable": {
+                    "type": "boolean",
+                    "description": "True when POST .../config-history/{event_id}/undo can reverse this row: not yet undone, and supported."
+                  },
+                  "undone_by_event_id": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "description": "The row that undid this one. Null when this row was not undone, or the undoing row is outside the window."
+                  },
+                  "target": {
+                    "type": "object",
+                    "properties": {
+                      "kind": {
+                        "type": "string",
+                        "enum": [
+                          "researchConfig",
+                          "proposal",
+                          "file"
+                        ]
+                      },
+                      "id": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "kind",
+                      "id"
+                    ],
+                    "description": "The file the row is about."
+                  },
+                  "file_name": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "description": "The name of the file. Null when the file no longer exists."
+                  },
+                  "action": {
+                    "type": "string",
+                    "enum": [
+                      "file-added",
+                      "file-removed"
+                    ]
+                  },
+                  "origin": {
+                    "type": "string",
+                    "enum": [
+                      "connector",
+                      "person"
+                    ]
+                  },
+                  "undoes_event_id": {
+                    "type": "string"
+                  },
+                  "caused_by_event_id": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "event_id",
+                  "changed_at",
+                  "principal_kind",
+                  "principal_name",
+                  "undoable",
+                  "undone_by_event_id",
+                  "target",
+                  "file_name",
+                  "action",
+                  "origin"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The History row the undo wrote. Null when that best-effort write did not persist; the undo still happened."
+          },
+          "notes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Consequences of the undo in words, for example a schedule put on hold."
+          }
+        },
+        "required": [
+          "data",
+          "notes"
         ]
       },
       "listImageModelsResponse200": {
@@ -70615,6 +71016,486 @@
             "lang": "Python",
             "label": "requests",
             "source": "import requests\n\nres = requests.get(\n    \"https://your-deployment.example.com/api/v1/data-lakes/<id>/config-history\",\n    headers={\"Authorization\": \"Bearer b4m_live_<key>\"},\n)"
+          }
+        ]
+      }
+    },
+    "/api/v1/data-lakes/{id}/config-history/{event_id}/undo": {
+      "post": {
+        "operationId": "undoDataLakeConfigChange",
+        "summary": "Undo a config change",
+        "description": "Reverses one config-history row through the ordinary service for the inverse change: a lever edit, a config create or delete, a proposal approval, decline or restore, or a file add or remove. Take `event_id` from the config-history route, and only rows with `undoable: true` apply. A change can be undone once. Returns the row the undo wrote, which may itself be undoable, and `notes` for consequences such as a schedule put on hold. The refusal is a 409 when the row was already undone, a later change touched the same item, the old value no longer passes the current checks (the message names the field), the config no longer exists, or the stored copy needed to restore it has expired.",
+        "tags": [
+          "Data Lake Research"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "apiKeyAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "required": true,
+            "name": "event_id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The undo was applied.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/undoDataLakeConfigChangeResponse200"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-RateLimit-Limit-Minute": {
+                "description": "Request quota per minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Minute": {
+                "description": "Requests remaining in the current minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Minute": {
+                "description": "Unix epoch (seconds) when the minute window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Limit-Day": {
+                "description": "Request quota per day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Day": {
+                "description": "Requests remaining in the current day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Day": {
+                "description": "Unix epoch (seconds) when the day window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid credentials.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The API key lacks `datalake:write`, the caller can read this lake but may not manage it, or Data Lakes are disabled on this deployment.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScopeForbiddenResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-RateLimit-Limit-Minute": {
+                "description": "Request quota per minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Minute": {
+                "description": "Requests remaining in the current minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Minute": {
+                "description": "Unix epoch (seconds) when the minute window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Limit-Day": {
+                "description": "Request quota per day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Day": {
+                "description": "Requests remaining in the current day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Day": {
+                "description": "Unix epoch (seconds) when the day window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No lake with that id is visible to the caller. A lake that exists but is not yours to read is reported as 404 too, so lake ids cannot be probed through this endpoint. The same 404 answers a history row that does not exist in this lake.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-RateLimit-Limit-Minute": {
+                "description": "Request quota per minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Minute": {
+                "description": "Requests remaining in the current minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Minute": {
+                "description": "Unix epoch (seconds) when the minute window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Limit-Day": {
+                "description": "Request quota per day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Day": {
+                "description": "Requests remaining in the current day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Day": {
+                "description": "Unix epoch (seconds) when the day window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "405": {
+            "description": "The path does not serve this HTTP method.",
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Allow": {
+                "description": "The methods this path serves. GET implies HEAD.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Already undone, a later change touched the same item, the old value is no longer valid, the config no longer exists, or the stored copy to restore from has expired.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-RateLimit-Limit-Minute": {
+                "description": "Request quota per minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Minute": {
+                "description": "Requests remaining in the current minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Minute": {
+                "description": "Unix epoch (seconds) when the minute window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Limit-Day": {
+                "description": "Request quota per day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Day": {
+                "description": "Requests remaining in the current day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Day": {
+                "description": "Unix epoch (seconds) when the day window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Request failed validation.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-RateLimit-Limit-Minute": {
+                "description": "Request quota per minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Minute": {
+                "description": "Requests remaining in the current minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Minute": {
+                "description": "Unix epoch (seconds) when the minute window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Limit-Day": {
+                "description": "Request quota per day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Day": {
+                "description": "Requests remaining in the current day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Day": {
+                "description": "Unix epoch (seconds) when the day window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "426": {
+            "description": "The request declared a client build (`X-Client-Name` + `X-Client-Version`) older than the minimum this API still serves for that client. Upgrade to `minimum_version` or later. Never sent to a request that omits either header.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UpgradeRequiredResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-RateLimit-Limit-Minute": {
+                "description": "Request quota per minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Minute": {
+                "description": "Requests remaining in the current minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Minute": {
+                "description": "Unix epoch (seconds) when the minute window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Limit-Day": {
+                "description": "Request quota per day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Day": {
+                "description": "Requests remaining in the current day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Day": {
+                "description": "Unix epoch (seconds) when the day window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Per-user rate limit exceeded.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-RateLimit-Limit-Minute": {
+                "description": "Request quota per minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Minute": {
+                "description": "Requests remaining in the current minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Minute": {
+                "description": "Unix epoch (seconds) when the minute window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Limit-Day": {
+                "description": "Request quota per day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Day": {
+                "description": "Requests remaining in the current day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Day": {
+                "description": "Unix epoch (seconds) when the day window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          }
+        },
+        "x-required-scopes": [
+          "datalake:write"
+        ],
+        "x-codeSamples": [
+          {
+            "lang": "curl",
+            "label": "curl",
+            "source": "curl -s -X POST \"https://your-deployment.example.com/api/v1/data-lakes/<id>/config-history/<event_id>/undo\" \\\n  -H \"Authorization: Bearer b4m_live_<key>\""
+          },
+          {
+            "lang": "JavaScript",
+            "label": "fetch",
+            "source": "const res = await fetch(\"https://your-deployment.example.com/api/v1/data-lakes/<id>/config-history/<event_id>/undo\", {\n  method: \"POST\",\n  headers: {\n    \"Authorization\": \"Bearer b4m_live_<key>\",\n  },\n});"
+          },
+          {
+            "lang": "Python",
+            "label": "requests",
+            "source": "import requests\n\nres = requests.post(\n    \"https://your-deployment.example.com/api/v1/data-lakes/<id>/config-history/<event_id>/undo\",\n    headers={\"Authorization\": \"Bearer b4m_live_<key>\"},\n)"
           }
         ]
       }

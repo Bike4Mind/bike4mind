@@ -1377,4 +1377,10 @@ describe('B4mApiClient lake research routes', () => {
     await client.getConfigHistory('l1', 20, true);
     expect(sent().url).toBe(`${BASE}/config-history?limit=20&include=files`);
   });
+
+  it('undoes a history row with a POST and returns the entry and notes', async () => {
+    mockFetch.mockResolvedValue(jsonResponse({ data: { event_id: 'e2' }, notes: ['n'] }));
+    await expect(client.undoConfigChange('l1', 'e1')).resolves.toEqual({ data: { event_id: 'e2' }, notes: ['n'] });
+    expect(sent()).toMatchObject({ url: `${BASE}/config-history/e1/undo`, method: 'POST' });
+  });
 });

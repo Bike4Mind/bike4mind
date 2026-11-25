@@ -518,6 +518,15 @@ describe('file entries and the retention footnote', () => {
     expect(screen.getByText('fab-123')).toBeTruthy();
   });
 
+  it('shows the file name instead of the id, and the id when the file is gone', () => {
+    const { unmount } = renderSection({ view: view({ entries: [fileEntry({ fileName: 'handbook.pdf' })] }) });
+    expect(screen.getByTestId('datalake-config-history-file-name').textContent).toBe('handbook.pdf');
+    expect(screen.queryByText('fab-123')).toBeNull();
+    unmount();
+    renderSection({ view: view({ entries: [fileEntry()] }) });
+    expect(screen.getByTestId('datalake-config-history-file-name').textContent).toBe('fab-123');
+  });
+
   it('labels a removal', () => {
     renderSection({ view: view({ entries: [fileEntry({ action: 'file-removed' })] }) });
     expect(screen.getByText('File removed')).toBeTruthy();

@@ -37,7 +37,12 @@ const DAY_MS = 24 * 60 * 60 * 1000;
  * Which inverse a config event has. Pure and shared by the History view and the undo service, so the
  * button and the handler cannot disagree. Rows from before structured targets existed have no plan.
  */
-export function classifyConfigUndo(event: ConfigEventFacts, now: Date = new Date()): UndoClassification {
+export function classifyConfigUndo(
+  event: ConfigEventFacts,
+  now: Date = new Date(),
+  /** False when the target config no longer exists (deleted, or recreated under a new id). Unknown is treated as live. */
+  targetConfigLive = true
+): UndoClassification {
   const target = event.target;
   switch (event.action) {
     case 'update-research-config':
@@ -47,7 +52,8 @@ export function classifyConfigUndo(event: ConfigEventFacts, now: Date = new Date
     case 'create-research-config':
       if (target?.kind !== 'researchConfig') return {};
       // A create that carries `undoesEventId` is a recreate: it has no inverse of its own.
-      return event.undoesEventId ? { note: UNDO_DELETE_RECREATED_NOTE } : { plan: 'create-config' };
+      if (event.undoesEventId) return { note: UNDO_DELETE_RECREATED_NOTE };
+      return targetConfigLive ? { plan: 'create-config' } : {};
     case 'delete-research-config':
       if (target?.kind !== 'researchConfig' || !event.leverChanges) return {};
       return now.getTime() - event.createdAt.getTime() > LAKE_CONFIG_SNAPSHOT_TTL_DAYS * DAY_MS
