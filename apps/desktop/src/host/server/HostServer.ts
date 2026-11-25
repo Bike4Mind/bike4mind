@@ -1,0 +1,265 @@
+import type { ChatStreamEvent } from '@shared/chat';
+import {
+  HOST_ERROR_CODES,
+  hostFailure,
+  hostMethods,
+  hostNotification,
+  hostResult,
+  isHostMethod,
+  type HostMethod,
+  type HostNotification,
+  type HostNotificationName,
+  type HostNotificationParams,
+  type HostParams,
+  type HostRequest,
+  type HostResponse,
+  type HostResult,
+} from '@shared/hostProtocol';
+import { sessionForRenderer } from '../../main/chat/ChatService';
+import type { HostRuntime } from '../HostRuntime';
+import type { HostEventSink } from '../ports';
+import type { HostEventSource } from './HostEventRelay';
+
+/**
+ * Methods the protocol defines that this host does not serve yet, each answered with "method not
+ * found". Each one leaves this list in the change that gives HostRuntime a method to back it.
+ */
+export const pendingHostMethods = [
+  'host/initialize',
+  'host/info',
+  'host/auth/start',
+  'host/auth/status',
+  'session/create',
+  'session/setArchived',
+  'request/respond',
+  'background/stop',
+  'fs/browse',
+  'project/recent',
+] as const satisfies readonly HostMethod[];
+
+type PendingHostMethod = (typeof pendingHostMethods)[number];
+export type ServedHostMethod = Exclude<HostMethod, PendingHostMethod>;
+
+export type HostServerRuntime = Pick<
+  HostRuntime,
+  | 'listSessions'
+  | 'getSession'
+  | 'renameSession'
+  | 'deleteSession'
+  | 'sendMessage'
+  | 'stopReply'
+  | 'sessionStatuses'
+  | 'draftDefaults'
+  | 'listModels'
+  | 'queuedMessages'
+  | 'cancelQueued'
+  | 'sendQueuedNow'
+> & {
+  service: Pick<HostRuntime['service'], 'eventsSince'>;
+  eventLog: Pick<HostRuntime['eventLog'], 'cursor'>;
+};
+
+export type HostServerLogger = { warn(message: string): void };
+
+/** One client's side of the server: what it is subscribed to and where its notifications go. */
+type Connection = {
+  readonly subscriptions: Set<string>;
+  notify(notification: HostNotification): void;
+};
+
+export type HostServerConnection = {
+  /** Never rejects: every failure, a handler's included, comes back as a JSON-RPC error response. */
+  handle(request: HostRequest): Promise<HostResponse>;
+  /** Drops the connection's subscriptions; nothing more is sent to it. */
+  close(): void;
+};
+
+type Handler<M extends ServedHostMethod> = (
+  params: HostParams<M>,
+  connection: Connection
+) => HostResult<M> | Promise<HostResult<M>>;
+type Handlers = { [M in ServedHostMethod]: Handler<M> };
+
+/** A failure a handler means to send as-is, rather than as an internal error. */
+class HostMethodError extends Error {
+  constructor(
+    readonly code: number,
+    message: string,
+    readonly data?: unknown
+  ) {
+    super(message);
+  }
+}
+
+const pendingMethods: ReadonlySet<string> = new Set(pendingHostMethods);
+
+const isServed = (method: HostMethod): method is ServedHostMethod => !pendingMethods.has(method);
+
+const errorMessage = (error: unknown): string => (error instanceof Error ? error.message : String(error));
+
+function notification<N extends HostNotificationName>(name: N, params: HostNotificationParams<N>): HostNotification {
+  return hostNotification(name, params);
+}
+
+/**
+ * Serves the host protocol for one HostRuntime: validates each request against its method's
+ * schema, calls the runtime and maps its answer to the protocol's result shape. Every client
+ * gets its own connection; a session's stream events go only to the connections subscribed to
+ * it, while list-level changes go to all of them.
+ */
+export class HostServer {
+  private readonly connections = new Set<Connection>();
+  private readonly handlers: Handlers;
+  private readonly unsubscribe: () => void;
+
+  constructor(
+    private readonly runtime: HostServerRuntime,
+    events: HostEventSource,
+    private readonly logger: HostServerLogger
+  ) {
+    this.handlers = this.createHandlers();
+    this.unsubscribe = events.subscribe(this.eventSink());
+  }
+
+  connect(notify: (notification: HostNotification) => void): HostServerConnection {
+    const connection: Connection = { subscriptions: new Set(), notify };
+    this.connections.add(connection);
+    return {
+      handle: request => this.handle(request, connection),
+      close: () => {
+        connection.subscriptions.clear();
+        this.connections.delete(connection);
+      },
+    };
+  }
+
+  /** Stops watching the runtime and drops every connection. */
+  dispose(): void {
+    this.unsubscribe();
+    this.connections.clear();
+  }
+
+  private async handle(request: HostRequest, connection: Connection): Promise<HostResponse> {
+    const { id, method } = request;
+    if (!isHostMethod(method) || !isServed(method)) {
+      return hostFailure(id, HOST_ERROR_CODES.methodNotFound, `Method not found: ${method}`);
+    }
+    try {
+      return hostResult(id, await this.invoke(method, request.params, connection));
+    } catch (error) {
+      if (error instanceof HostMethodError) return hostFailure(id, error.code, error.message, error.data);
+      this.logger.warn(`HOST: ${method} failed: ${errorMessage(error)}`);
+      return hostFailure(id, HOST_ERROR_CODES.internalError, errorMessage(error));
+    }
+  }
+
+  private async invoke<M extends ServedHostMethod>(
+    method: M,
+    rawParams: unknown,
+    connection: Connection
+  ): Promise<HostResult<M>> {
+    const { params: paramsSchema, result: resultSchema } = hostMethods[method];
+    const params = paramsSchema.safeParse(rawParams);
+    if (!params.success) {
+      throw new HostMethodError(HOST_ERROR_CODES.invalidParams, `Invalid params for ${method}`, params.error.issues);
+    }
+    const handler: Handler<M> = this.handlers[method];
+    const result = resultSchema.safeParse(await handler(params.data as HostParams<M>, connection));
+    // The runtime answered with something the protocol does not allow: a host bug, not the caller's.
+    if (!result.success) throw new Error(`Result of ${method} does not match the protocol`);
+    return result.data as HostResult<M>;
+  }
+
+  private createHandlers(): Handlers {
+    const runtime = this.runtime;
+    return {
+      'session/list': async () => ({ sessions: await runtime.listSessions() }),
+      'session/get': async ({ sessionId, viewed }) => {
+        const session = await runtime.getSession(sessionId, viewed === true);
+        return {
+          session: sessionForRenderer(session),
+          cursor: session?.eventCursor ?? runtime.eventLog.cursor(sessionId),
+        };
+      },
+      'session/rename': async ({ sessionId, title }) => ({
+        summary: await runtime.renameSession(sessionId, title),
+      }),
+      'session/delete': async ({ sessionId, removeWorktree }) => {
+        await runtime.deleteSession(sessionId, removeWorktree === true);
+        return {};
+      },
+      'session/subscribe': ({ sessionId, after }, connection) => this.subscribe(connection, sessionId, after),
+      'session/unsubscribe': ({ sessionId }, connection) => {
+        connection.subscriptions.delete(sessionId);
+        return {};
+      },
+      'session/statuses': () => ({ statuses: runtime.sessionStatuses() }),
+      'turn/send': request => runtime.sendMessage(request),
+      'turn/stop': ({ sessionId }) => {
+        runtime.stopReply(sessionId);
+        return {};
+      },
+      'queue/list': async ({ sessionId }) => ({ queued: await runtime.queuedMessages(sessionId) }),
+      'queue/cancel': ({ sessionId, queuedId }) => {
+        runtime.cancelQueued(sessionId, queuedId);
+        return {};
+      },
+      'queue/sendNow': ({ sessionId, queuedId }) => {
+        runtime.sendQueuedNow(sessionId, queuedId);
+        return {};
+      },
+      'model/list': async ({ force }) => ({ models: await runtime.listModels(force ?? false) }),
+      'draft/defaults': async () => ({ defaults: await runtime.draftDefaults() }),
+    };
+  }
+
+  // Synchronous from the replay read to the subscription being recorded, so no live event can
+  // land between them and be either lost or sent twice.
+  private subscribe(
+    connection: Connection,
+    sessionId: string,
+    after: HostParams<'session/subscribe'>['after']
+  ): HostResult<'session/subscribe'> {
+    const replay = after ? this.runtime.service.eventsSince(sessionId, after) : { ok: true as const, events: [] };
+    if (!replay.ok) {
+      throw new HostMethodError(
+        HOST_ERROR_CODES.snapshotRequired,
+        'The events after this cursor are no longer held; read the session again',
+        { sessionId }
+      );
+    }
+    connection.subscriptions.add(sessionId);
+    for (const event of replay.events) this.sendEvent(connection, event);
+    return { cursor: this.runtime.eventLog.cursor(sessionId) };
+  }
+
+  private sendEvent(connection: Connection, event: ChatStreamEvent): void {
+    if (event.seq === undefined) {
+      this.logger.warn(`HOST: dropped an unsequenced ${event.type} event for ${event.sessionId}`);
+      return;
+    }
+    connection.notify(notification('session/event', { sessionId: event.sessionId, seq: event.seq, event }));
+  }
+
+  private broadcast(message: HostNotification): void {
+    for (const connection of this.connections) connection.notify(message);
+  }
+
+  private eventSink(): HostEventSink {
+    return {
+      streamEvent: event => {
+        for (const connection of this.connections) {
+          if (connection.subscriptions.has(event.sessionId)) this.sendEvent(connection, event);
+        }
+      },
+      sessionSummary: summary => this.broadcast(notification('session/summaryChanged', { summary })),
+      // Sent whether or not the status itself moved, as the renderer IPC push is: a background
+      // job starting or ending changes only the event's detail, and the sidebar draws that too.
+      sessionStatus: event => this.broadcast(notification('session/statusChanged', { event })),
+      queueChanged: event => this.broadcast(notification('session/queueChanged', { event })),
+      taskDecisions: decisions => this.broadcast(notification('session/taskDecisionsChanged', { decisions })),
+      // The protocol has no loop notification yet; Desktop's renderer still takes it over IPC.
+      loopChanged: () => undefined,
+    };
+  }
+}
