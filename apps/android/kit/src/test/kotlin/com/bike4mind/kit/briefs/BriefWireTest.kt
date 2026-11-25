@@ -64,6 +64,14 @@ class BriefWireTest {
     }
 
     @Test
+    fun anObligationSourcedItemDecodes() = runTest {
+        val brief = wire(body = """{"id":"b1","status":"ready","createdAt":"x","composedAt":null,"periodStart":"2026-11-17T09:00:00Z","periodEnd":"2026-11-18T09:00:00Z","headline":null,"happened":[{"id":"h1","text":"Due Dec 5: City Water ${'$'}120.50","source":{"kind":"obligation","obligationId":"ob-1"}}],"handled":[],"decisions":[]}""")
+            .brief("b1")
+
+        assertEquals(listOf(BriefItem("h1", "Due Dec 5: City Water ${'$'}120.50")), brief.happened)
+    }
+
+    @Test
     fun aMissingBriefIsA404() = runTest {
         val failure = assertFailsWith<ApiException> { wire(HttpStatusCode.NotFound, "{}").brief("b1") }
         assertEquals(404, failure.status)

@@ -278,25 +278,34 @@ final class AppServices {
     return current.studio
   }
 
-  /// Uploads a frame grabbed from a video so it can be edited or animated. The PUT carries no `Authorization`
-  /// header: the presigned signature is the credential.
+  /// Uploads a frame grabbed from a video so it can be edited or animated.
   var frameUploader: FrameUploader {
     #if DEBUG
       if FixtureServices.isEnabled { return FixtureServices.frameUploader }
     #endif
     return FrameUploader(
       capture: CaptureClient(baseURL: auth.environment.baseURL, tokens: auth), media: media,
-      put: { url, data, contentType in
-        var request = URLRequest(url: url)
-        request.httpMethod = "PUT"
-        request.setValue(contentType, forHTTPHeaderField: "Content-Type")
-        // Create-only: the URL names a freshly minted key, so the PUT must never overwrite one.
-        request.setValue("*", forHTTPHeaderField: "If-None-Match")
-        let (_, response) = try await URLSession.shared.upload(for: request, from: data)
-        guard let status = (response as? HTTPURLResponse)?.statusCode, (200..<300).contains(status) else {
-          throw APIError.malformedResponse
-        }
-      })
+      put: Self.presignedPut)
+  }
+
+  /// Hands a scanned bill to the assistant. The scan is uploaded with the user's own token, like any capture.
+  func obligationHandoffModel(file: URL, text: String) -> ObligationHandoffModel {
+    ObligationHandoffModel(
+      file: file, text: text, api: CaptureClient(baseURL: auth.environment.baseURL, tokens: auth),
+      destinations: capture.destinations, put: Self.presignedPut)
+  }
+
+  /// The PUT carries no `Authorization` header: the presigned signature is the credential.
+  private static let presignedPut: FrameUploader.Put = { url, data, contentType in
+    var request = URLRequest(url: url)
+    request.httpMethod = "PUT"
+    request.setValue(contentType, forHTTPHeaderField: "Content-Type")
+    // Create-only: the URL names a freshly minted key, so the PUT must never overwrite one.
+    request.setValue("*", forHTTPHeaderField: "If-None-Match")
+    let (_, response) = try await URLSession.shared.upload(for: request, from: data)
+    guard let status = (response as? HTTPURLResponse)?.statusCode, (200..<300).contains(status) else {
+      throw APIError.malformedResponse
+    }
   }
 
   @ObservationIgnored private var studioTrackerState: (environment: ServerEnvironment, tracker: GenerationTracker)?
