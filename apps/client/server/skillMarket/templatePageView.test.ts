@@ -54,6 +54,7 @@ import {
   buildTemplatePageView,
   findOwnPreviewTemplate,
   requiredConnectors,
+  signExampleMedia,
   templatePageExampleOf,
 } from './templatePageView';
 import type { ServableTemplate } from './templatePage';
@@ -143,8 +144,8 @@ describe('templatePageExampleOf', () => {
         media: {
           kind: 'carousel',
           items: [
-            { key: 'a.png', mime: 'image/png', bytes: 1, width: 10, height: 20 },
-            { key: 'b.png', mime: 'image/png', bytes: 1 },
+            { key: 'a.png', mime: 'image/png', bytes: 1, moderation: 'clean', width: 10, height: 20 },
+            { key: 'b.png', mime: 'image/png', bytes: 1, moderation: 'clean' },
           ],
         },
       })
@@ -177,6 +178,37 @@ describe('templatePageExampleOf', () => {
     expect(h.signFile).not.toHaveBeenCalled();
   });
 
+  it.each([['blocked'], ['error'], [undefined]] as const)(
+    'never signs or shows an image whose moderation verdict is %s',
+    async moderation => {
+      const view = await templatePageExampleOf(
+        example({
+          media: {
+            kind: 'carousel',
+            items: [
+              { key: 'ok.png', mime: 'image/png', bytes: 1, moderation: 'clean' },
+              { key: 'bad.png', mime: 'image/png', bytes: 1, ...(moderation ? { moderation } : {}) },
+            ],
+          },
+        })
+      );
+      expect(view?.media).toEqual({
+        kind: 'image',
+        items: [
+          { src: 'https://gen.example.com/ok.png?sig=1', mime: 'image/png', width: undefined, height: undefined },
+        ],
+      });
+      expect(h.signGenerated).not.toHaveBeenCalledWith('bad.png', expect.anything(), expect.anything());
+    }
+  );
+
+  it('signExampleMedia refuses an image without a clean verdict', async () => {
+    await expect(signExampleMedia({ key: 'old.png', mime: 'image/png', bytes: 1 })).rejects.toThrow(
+      'not passed moderation'
+    );
+    expect(h.signGenerated).not.toHaveBeenCalled();
+  });
+
   it('drops media it cannot sign, and a carousel left with one slide shows as an image', async () => {
     h.signGenerated.mockImplementation(async (key: string) => {
       if (key === 'b.png') throw new Error('gone');
@@ -187,8 +219,8 @@ describe('templatePageExampleOf', () => {
         media: {
           kind: 'carousel',
           items: [
-            { key: 'a.png', mime: 'image/png', bytes: 1 },
-            { key: 'b.png', mime: 'image/png', bytes: 1 },
+            { key: 'a.png', mime: 'image/png', bytes: 1, moderation: 'clean' },
+            { key: 'b.png', mime: 'image/png', bytes: 1, moderation: 'clean' },
           ],
         },
       })

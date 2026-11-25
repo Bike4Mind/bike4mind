@@ -606,6 +606,44 @@ describe('example run scan', () => {
     expect(await writeTemplateExample(hidden, running, result, { 'example.enabled': true }, scanDeps)).toBeNull();
   });
 
+  it.each([
+    ['clean', { status: 'published', scanStatus: 'passed' }],
+    ['blocked', { status: 'draft', scanStatus: 'failed' }],
+    ['error', { status: 'draft', scanStatus: 'error' }],
+    [undefined, { status: 'draft', scanStatus: 'error' }],
+  ] as const)('a shown example image moderated %s lands with the matching verdict', async (moderation, expected) => {
+    const runAt = new Date('2026-11-25T12:00:00.000Z');
+    const listingId = await makeListing();
+    await publishedTemplate(listingId);
+    await seedExample(listingId, { status: 'running', runAt });
+    const item = { key: 'generated/one.png', mime: 'image/png', bytes: 10, ...(moderation ? { moderation } : {}) };
+    const landed = await writeTemplateExample(
+      listingId,
+      { 'example.status': 'running', 'example.runAt': runAt },
+      { $set: { 'example.status': 'ready', 'example.media': { kind: 'image', items: [item] } } },
+      { 'example.enabled': true },
+      scanDeps
+    );
+    expect(landed).toMatchObject(expected);
+    if (moderation === 'blocked') {
+      expect(landed?.scanFindings).toEqual(
+        expect.arrayContaining([expect.objectContaining({ rule: 'example_image_moderation', severity: 'critical' })])
+      );
+    }
+  });
+
+  it('publishing keeps the draft when the shown example has an image that was never moderated', async () => {
+    const listingId = await makeListing();
+    await call(templateHandler, 'PUT', listingId, AUTHOR, copy);
+    await seedExample(listingId, {
+      media: { kind: 'image', items: [{ key: 'old.png', mime: 'image/png', bytes: 1 }] },
+    });
+    llm.calls.length = 0;
+    const res = await call(publishHandler, 'POST', listingId);
+    expect(template(res)).toMatchObject({ status: 'draft', scanStatus: 'error' });
+    expect(scanned()).toEqual([]);
+  });
+
   it('a run that finishes during a publish scan takes over the claim, so the old verdict cannot publish it', async () => {
     const runAt = new Date('2026-11-25T12:00:00.000Z');
     const listingId = await makeListing();

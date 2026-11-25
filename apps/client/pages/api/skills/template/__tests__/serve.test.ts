@@ -358,7 +358,7 @@ describe('GET /t/[slug]', () => {
           prompt: 'Summarize this',
           reply: 'Five bullets',
           steps: [],
-          media: { kind: 'image', items: [{ key: 'gen/a.png', mime: 'image/png', bytes: 10 }] },
+          media: { kind: 'image', items: [{ key: 'gen/a.png', mime: 'image/png', bytes: 10, moderation: 'clean' }] },
           ...over,
         },
       });

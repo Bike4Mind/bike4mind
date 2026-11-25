@@ -18,16 +18,21 @@ import {
   questReplyText,
   wrapUntrustedSkillBody,
   type ISkillSnapshot,
+  type ISkillTemplateExampleMedia,
   type ISkillTemplateExampleMediaItem,
   type ISkillTemplateExampleSampleFile,
   type ISkillTemplateExampleStep,
 } from '@bike4mind/common';
 import type { Logger } from '@bike4mind/observability';
 import { QuestStartBodySchema, type ExampleRunMode } from '@bike4mind/services/llm';
+import { moderateImageOrThrow } from '@bike4mind/services/llm/imageModerationGate';
+import { imageModerationIncidents } from '@bike4mind/server-utils/moderation/imageModerationIncidents';
 import { OperationsModelService } from '@bike4mind/server-utils/services/operationsModelService';
 import { findListing } from '@bike4mind/server-utils/skillMarket/market';
 import { getFilesStorage, getGeneratedImageStorage } from '@bike4mind/server-utils/utils/storage/index';
 import { parseArtifacts } from '@bike4mind/utils/artifactParser';
+import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
+import { ImageModerationBlockedError, RekognitionImageModerationService } from '@bike4mind/utils/imageModeration';
 import { getOperationsClassifierLlm, type ClassifierLlm } from './classifySkill';
 import { approvedSnapshotOf, isLive, writeTemplateExample } from './template';
 import {
@@ -55,9 +60,16 @@ export type TemplateExampleRunDeps = {
   storeSample: (userId: string, text: string, fileName: string) => Promise<string>;
   /** Size and type of a generated media object; null when it cannot be read. */
   mediaInfo: (key: string, kind: 'image' | 'video') => Promise<{ bytes: number; mime: string } | null>;
+  /**
+   * Checks a generated image through the platform image moderation gate (imageModerationGate.ts);
+   * throws ImageModerationBlockedError on a block and any other error when the check fails.
+   */
+  checkImage: (key: string, mime: string, meta: ExampleImageMeta, logger: Logger) => Promise<void>;
   /** The scan classifier, used when the result lands on a published page and must be re-scanned. */
   getClassifier: (logger: Logger, userId: string) => Promise<ClassifierLlm>;
 };
+
+type ExampleImageMeta = { userId: string; sessionId: string; questId: string; model: string };
 
 const SAMPLE_MAX_CHARS = 4000;
 
@@ -116,6 +128,32 @@ async function collectMedia(
     if (info) items.push({ key, mime: info.mime, bytes: info.bytes });
   }
   return items;
+}
+
+/**
+ * Records each image's moderation verdict. A failed check is kept as 'error' rather than thrown, so the
+ * rest of the run still lands; the template scan and the page both treat it as not cleared.
+ */
+export async function moderateExampleMedia(
+  media: ISkillTemplateExampleMedia | null,
+  check: (item: ISkillTemplateExampleMediaItem) => Promise<void>
+): Promise<ISkillTemplateExampleMedia | null> {
+  if (!media) return null;
+  const items = await Promise.all(
+    media.items.map(async item => {
+      if (!item.mime.startsWith('image/')) return item;
+      try {
+        await check(item);
+        return { ...item, moderation: 'clean' as const };
+      } catch (error) {
+        return {
+          ...item,
+          moderation: error instanceof ImageModerationBlockedError ? ('blocked' as const) : ('error' as const),
+        };
+      }
+    })
+  );
+  return { ...media, items };
 }
 
 /** Runs one example and stores it, or marks it failed and gives the author's run back. */
@@ -200,7 +238,10 @@ export async function runTemplateExample(
     const replyText = finished && finished.type !== 'error' ? questReplyText(finished) : null;
     if (!finished || !replyText?.trim()) throw new Error('The run did not produce a reply');
     const { reply, artifact } = harvestExampleReply(replyText, parseArtifacts);
-    const media = selectExampleMedia(await collectMedia(finished, deps));
+    const imageMeta = { userId: payload.userId, sessionId: session.id, questId: quest.id, model: modelId };
+    const media = await moderateExampleMedia(selectExampleMedia(await collectMedia(finished, deps)), item =>
+      deps.checkImage(item.key, item.mime, imageMeta, logger)
+    );
     if (!reply && !artifact && !media) throw new Error('The run did not produce a reply');
 
     // Only the run in flight at `runAt` may land; the author's `enabled` switch is kept.
@@ -300,6 +341,21 @@ export const templateExampleRunDeps = (
   },
   storeSample: storeSampleFile,
   getClassifier: getOperationsClassifierLlm,
+  checkImage: async (key, mime, meta, logger) => {
+    const [buffer, settings] = await Promise.all([
+      getGeneratedImageStorage().download(key),
+      getSettingsMap({ adminSettings: adminSettingsRepository }),
+    ]);
+    await moderateImageOrThrow({
+      service: new RekognitionImageModerationService(logger),
+      enabled: getSettingsValue('ImageModerationEnabled', settings) ?? true,
+      incidents: imageModerationIncidents,
+      buffer,
+      mimeType: mime,
+      incidentMeta: { ...meta, provider: 'skill-template-example', surface: 'generation' },
+      logger,
+    });
+  },
   mediaInfo: async (key, kind) => {
     const storage = kind === 'image' ? getGeneratedImageStorage() : getFilesStorage();
     const meta = await storage.getMetadata(key);

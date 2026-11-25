@@ -39,6 +39,8 @@ vi.mock('./template', () => ({
   isLive: (listing: { status: string }) => listing.status === 'approved',
   writeTemplateExample: h.write,
 }));
+vi.mock('@bike4mind/services/llm/imageModerationGate', () => ({ moderateImageOrThrow: vi.fn() }));
+vi.mock('@bike4mind/server-utils/moderation/imageModerationIncidents', () => ({ imageModerationIncidents: {} }));
 vi.mock('./classifySkill', () => ({ getOperationsClassifierLlm: vi.fn() }));
 vi.mock('./templateExample', async importOriginal => ({
   ...(await importOriginal<typeof import('./templateExample')>()),
@@ -46,7 +48,13 @@ vi.mock('./templateExample', async importOriginal => ({
 }));
 vi.mock('./templateFreeRun', () => ({ renderFreeRunResult: (md: string) => ({ html: `<p>${md}</p>` }) }));
 
-import { runTemplateExample, sampleFileName, type TemplateExampleRunDeps } from './templateExampleRun';
+import { ImageModerationBlockedError } from '@bike4mind/utils/imageModeration';
+import {
+  moderateExampleMedia,
+  runTemplateExample,
+  sampleFileName,
+  type TemplateExampleRunDeps,
+} from './templateExampleRun';
 import type { TemplateExampleDispatch } from './templateExample';
 
 const logger = new Logger({ metadata: {} });
@@ -71,6 +79,7 @@ const deps = (overrides: Partial<TemplateExampleRunDeps> = {}): TemplateExampleR
   textModel: vi.fn(async () => ({ modelId: 'ops-model', complete: vi.fn(async () => '# Sample notes') })),
   storeSample: vi.fn(async () => 'sample-file-1'),
   mediaInfo: vi.fn(async () => ({ bytes: 1000, mime: 'image/png' })),
+  checkImage: vi.fn(async () => undefined),
   getClassifier: vi.fn(async () => ({ model: 'stub', complete: vi.fn() })),
   ...overrides,
 });
@@ -132,7 +141,10 @@ describe('runTemplateExample', () => {
           'example.reply': 'Here is the plan.',
           'example.replyTrimmedTo': null,
           'example.artifact': { type: 'code', title: 'Launch plan', html: '<p># Steps</p>' },
-          'example.media': { kind: 'image', items: [{ key: 'generated/one.png', mime: 'image/png', bytes: 1000 }] },
+          'example.media': {
+            kind: 'image',
+            items: [{ key: 'generated/one.png', mime: 'image/png', bytes: 1000, moderation: 'clean' }],
+          },
           'example.sampleFile': null,
           'example.steps': [
             { label: 'Searched issues in example-org/app', simulated: true },
@@ -150,6 +162,23 @@ describe('runTemplateExample', () => {
     expect(d.getClassifier).toHaveBeenCalledWith(logger, 'author-1');
     expect(h.fail).not.toHaveBeenCalled();
     expect(h.release).not.toHaveBeenCalled();
+  });
+
+  it('moderates each harvested image as the run, recording a block instead of dropping the run', async () => {
+    const blocked = new ImageModerationBlockedError([{ name: 'Explicit', confidence: 99 }] as never);
+    const d = deps({ checkImage: vi.fn(async () => Promise.reject(blocked)) });
+    await runTemplateExample(payload(), logger, d);
+    expect(d.checkImage).toHaveBeenCalledWith(
+      'generated/one.png',
+      'image/png',
+      { userId: 'author-1', sessionId: 'session-1', questId: 'quest-1', model: 'ops-model' },
+      logger
+    );
+    expect(h.write.mock.calls[0][2].$set['example.media']).toEqual({
+      kind: 'image',
+      items: [{ key: 'generated/one.png', mime: 'image/png', bytes: 1000, moderation: 'blocked' }],
+    });
+    expect(h.fail).not.toHaveBeenCalled();
   });
 
   it('generates a sample file the author owns when the skill takes one', async () => {
@@ -211,5 +240,31 @@ describe('runTemplateExample', () => {
     );
     expect(h.fail).toHaveBeenCalledWith('l1', RUN_AT, 'provider down');
     expect(h.release).toHaveBeenCalled();
+  });
+});
+
+describe('moderateExampleMedia', () => {
+  const image = { key: 'a.png', mime: 'image/png', bytes: 1 };
+  const video = { key: 'v.mp4', mime: 'video/mp4', bytes: 1, durationS: 5 };
+
+  it.each([
+    ['clean', async () => undefined],
+    ['blocked', async () => Promise.reject(new ImageModerationBlockedError([] as never))],
+    ['error', async () => Promise.reject(new Error('Rekognition throttled'))],
+  ] as const)('records %s from the moderation check', async (verdict, check) => {
+    expect(await moderateExampleMedia({ kind: 'image', items: [image] }, check)).toEqual({
+      kind: 'image',
+      items: [{ ...image, moderation: verdict }],
+    });
+  });
+
+  it('leaves videos to their FabFile moderation and passes null through', async () => {
+    const check = vi.fn();
+    expect(await moderateExampleMedia({ kind: 'video', items: [video] }, check)).toEqual({
+      kind: 'video',
+      items: [video],
+    });
+    expect(check).not.toHaveBeenCalled();
+    expect(await moderateExampleMedia(null, check)).toBeNull();
   });
 });

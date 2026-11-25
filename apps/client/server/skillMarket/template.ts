@@ -438,12 +438,36 @@ export async function scanTemplatePreviewImage(
   return [];
 }
 
+/**
+ * The shown example's images, by the verdict harvest recorded (templateExampleRun.ts moderateExampleMedia).
+ * A blocked image fails the scan; one whose check errored or never ran is a scan error, so it fails closed.
+ */
+export function scanTemplateExampleImages(example: ISkillTemplateExample | null | undefined): {
+  findings: ISkillScanFinding[];
+  error: string | null;
+} {
+  if (!example?.enabled) return { findings: [], error: null };
+  const images = (example.media?.items ?? []).filter(item => item.mime.startsWith('image/'));
+  const findings: ISkillScanFinding[] = images.some(item => item.moderation === 'blocked')
+    ? [
+        {
+          rule: 'example_image_moderation',
+          severity: 'critical',
+          message: 'Example image: blocked by image moderation. Run the example again or switch it off.',
+          source: 'rules',
+        },
+      ]
+    : [];
+  const unchecked = images.some(item => item.moderation !== 'clean' && item.moderation !== 'blocked');
+  return { findings, error: unchecked ? 'An example image could not be checked. Run the example again.' : null };
+}
+
 const onePerRule = (findings: ISkillScanFinding[]) => [...new Map(findings.map(f => [f.rule, f])).values()];
 
 /**
- * The market scan over the template copy, the shown example run and the preview image. Every field
- * is shown on a public page, so each also gets the public-text rules (links, markup, hidden
- * characters), one finding per rule; example findings carry an `example_` rule and say which part.
+ * The market scan over the template copy, the shown example run (text and images) and the preview
+ * image. Every field is shown on a public page, so each also gets the public-text rules (links, markup,
+ * hidden characters), one finding per rule; example findings carry an `example_` rule and say which part.
  */
 export async function scanTemplate(
   listing: Pick<ISkillListing, 'name'>,
@@ -463,11 +487,12 @@ export async function scanTemplate(
     )
   );
   const imageFindings = await scanTemplatePreviewImage(template.previewImage);
-  return scanSkillSnapshot(templateScanSnapshot(listing, template), settings, getClassifier, [
-    ...publicFindings,
-    ...exampleFindings,
-    ...imageFindings,
-  ]);
+  const exampleImages = scanTemplateExampleImages(template.example);
+  const findings = [...publicFindings, ...exampleFindings, ...imageFindings, ...exampleImages.findings];
+  if (exampleImages.error && exampleImages.findings.length === 0) {
+    return { status: 'error', findings, error: exampleImages.error };
+  }
+  return scanSkillSnapshot(templateScanSnapshot(listing, template), settings, getClassifier, findings);
 }
 
 /**

@@ -3,6 +3,7 @@ import {
   SKILL_TEMPLATE_EXAMPLE_ARTIFACT_HTML_MAX,
   SKILL_TEMPLATE_EXAMPLE_ARTIFACT_TITLE_MAX,
   SKILL_TEMPLATE_EXAMPLE_CAROUSEL_MAX_SLIDES,
+  SKILL_TEMPLATE_EXAMPLE_IMAGE_MODERATION,
   SKILL_TEMPLATE_EXAMPLE_PROMPT_MAX,
   SKILL_TEMPLATE_EXAMPLE_REPLY_MAX,
   SKILL_TEMPLATE_EXAMPLE_STEP_LABEL_MAX,
@@ -58,6 +59,7 @@ const SkillTemplateExampleSchema = new Schema(
                   durationS: { type: Number, min: 0 },
                   width: { type: Number, min: 0 },
                   height: { type: Number, min: 0 },
+                  moderation: { type: String, enum: SKILL_TEMPLATE_EXAMPLE_IMAGE_MODERATION },
                 },
                 { _id: false }
               ),

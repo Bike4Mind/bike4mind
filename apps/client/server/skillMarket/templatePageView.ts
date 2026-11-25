@@ -49,11 +49,13 @@ export function requiredConnectors(allowedTools: readonly string[] | undefined):
 }
 
 /**
- * A browser URL for an example media file: images live in the generated-images bucket (no FabFile row),
- * videos in the files bucket and are signed only while their FabFile row has passed moderation.
+ * A browser URL for an example media file: images live in the generated-images bucket (no FabFile row)
+ * and are signed only with a 'clean' verdict from harvest; videos live in the files bucket and are
+ * signed only while their FabFile row has passed moderation.
  */
 export async function signExampleMedia(item: ISkillTemplateExampleMediaItem): Promise<string> {
   const isVideo = item.mime.startsWith('video/');
+  if (!isVideo && item.moderation !== 'clean') throw new Error('Example image has not passed moderation');
   if (isVideo) {
     const file = await FabFile.findOne({ filePath: item.key, deletedAt: null })
       .select('moderationStatus mimeType')
@@ -93,7 +95,10 @@ export async function templatePageExampleOf(
   const artifactHtml = example.artifact
     ? sanitizeStoredExampleArtifactHtml(example.artifact.type, example.artifact.html)
     : '';
-  const mediaItems = example.media?.items.length ? example.media.items : [];
+  // Checked here as well as in signExampleMedia, so an injected signer cannot show an unmoderated image.
+  const mediaItems = (example.media?.items ?? []).filter(
+    item => item.mime.startsWith('video/') || item.moderation === 'clean'
+  );
   const signed = await Promise.all(mediaItems.map(item => sign(item).catch(() => null)));
   const items = mediaItems.flatMap((item, i) => {
     const src = signed[i];

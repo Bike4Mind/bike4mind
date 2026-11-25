@@ -310,7 +310,15 @@ export interface ISkillTemplateExampleMediaItem {
   durationS?: number;
   width?: number;
   height?: number;
+  /**
+   * An image's check by the platform image moderation gate, recorded at harvest. A generated image has
+   * no FabFile row, so this is its only verdict; anything but 'clean' never shows on a template page.
+   */
+  moderation?: SkillTemplateExampleImageModeration;
 }
+
+export const SKILL_TEMPLATE_EXAMPLE_IMAGE_MODERATION = ['clean', 'blocked', 'error'] as const;
+export type SkillTemplateExampleImageModeration = (typeof SKILL_TEMPLATE_EXAMPLE_IMAGE_MODERATION)[number];
 
 export interface ISkillTemplateExampleMedia {
   kind: 'video' | 'image' | 'carousel';
