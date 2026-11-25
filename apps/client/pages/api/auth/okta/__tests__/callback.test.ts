@@ -269,7 +269,7 @@ describe('/api/auth/okta/callback — account-link email-equality gate', () => {
     // The prune's failure is reported, not swallowed silently.
     expect(reqLogger.warn).toHaveBeenCalledWith(
       'Failed to end realtime connections; the sweep will retry',
-      expect.any(Error)
+      { error: expect.any(Error) }
     );
   });
 
