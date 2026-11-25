@@ -44,6 +44,8 @@ final class AppServices {
   let pendingActions: any PendingActionAPI
   /// The server-composed assistant brief, on whichever server the app currently points at.
   let briefs: any BriefAPI
+  /// Follow-up memos and their proposed action items, emails and reminders, on whichever server the app points at.
+  let briefFollowUps: any BriefFollowUpAPI
   /// The standing instructions the brief composer follows, on whichever server the app points at.
   let instructions: any InstructionAPI
   /// Answers an approval from a notification button.
@@ -136,6 +138,7 @@ final class AppServices {
       return BriefClient(baseURL: auth.environment.baseURL, tokens: auth)
     }
     briefs = briefAPI
+    briefFollowUps = ForwardingBriefFollowUpAPI { BriefClient(baseURL: auth.environment.baseURL, tokens: auth) }
     instructions = ForwardingInstructionAPI {
       #if DEBUG
         if FixtureServices.isEnabled { return FixtureServices.instructionAPI }
@@ -516,6 +519,25 @@ struct ForwardingBriefAPI: BriefAPI {
 
   func reply(briefID: String, decisionID: String, text: String, choiceIndex: Int?) async throws -> BriefReplyResult {
     try await provider().reply(briefID: briefID, decisionID: decisionID, text: text, choiceIndex: choiceIndex)
+  }
+}
+
+/// Routes follow-up calls to whichever server the app currently points at (it can change in debug builds).
+struct ForwardingBriefFollowUpAPI: BriefFollowUpAPI {
+  let provider: @MainActor @Sendable () -> any BriefFollowUpAPI
+
+  func followUp(transcript: String, timeZone: String?) async throws -> Brief {
+    try await provider().followUp(transcript: transcript, timeZone: timeZone)
+  }
+
+  func editDecision(briefID: String, decisionID: String, edit: BriefDecisionEdit) async throws -> BriefDecision {
+    try await provider().editDecision(briefID: briefID, decisionID: decisionID, edit: edit)
+  }
+
+  func resolveDecision(
+    briefID: String, decisionID: String, outcome: BriefDecisionOutcome
+  ) async throws -> BriefDecision {
+    try await provider().resolveDecision(briefID: briefID, decisionID: decisionID, outcome: outcome)
   }
 }
 

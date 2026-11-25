@@ -8,16 +8,22 @@ struct BriefView: View {
   let briefID: String?
 
   var body: some View {
-    BriefScreen(api: services.briefs, pendingActions: services.pendingActions, briefID: briefID)
+    BriefScreen(
+      api: services.briefs, pendingActions: services.pendingActions, followUps: services.briefFollowUps,
+      briefID: briefID)
   }
 }
 
 private struct BriefScreen: View {
   @State private var model: BriefViewModel
   @Environment(AppServices.self) private var services
+  @Environment(\.openURL) private var openURL
+  @State private var editingFollowUp: BriefDecision?
 
-  init(api: any BriefAPI, pendingActions: any PendingActionAPI, briefID: String?) {
-    _model = State(initialValue: BriefViewModel(api: api, briefID: briefID, pendingActions: pendingActions))
+  init(api: any BriefAPI, pendingActions: any PendingActionAPI, followUps: any BriefFollowUpAPI, briefID: String?) {
+    _model = State(
+      initialValue: BriefViewModel(
+        api: api, briefID: briefID, pendingActions: pendingActions, followUps: followUps))
   }
 
   var body: some View {
@@ -30,6 +36,11 @@ private struct BriefScreen: View {
         services.refreshWidgetPendingDecisions()
       }
       .onDisappear { model.cancel() }
+      .sheet(item: $editingFollowUp) { decision in
+        FollowUpEditSheet(
+          decision: decision, failure: { model.followUpFailure(for: decision) },
+          save: { edit in await model.editFollowUp(decision, edit) })
+      }
       .refreshable {
         await model.refresh()
         services.refreshWidgetPendingDecisions()
@@ -210,6 +221,8 @@ private struct BriefScreen: View {
             } else if let question = decision.question {
               questionControls(decision, question)
               openConversationButton(decision, sessionID: question.sessionID)
+            } else if let followUp = decision.followUp {
+              followUpControls(decision, followUp)
             }
           }
           .frame(maxWidth: .infinity, alignment: .leading)
@@ -323,6 +336,79 @@ private struct BriefScreen: View {
     return Binding(
       get: { model.brief?.id == briefID ? model.replyDrafts[id] ?? "" : "" },
       set: { model.setReplyDraft($0, decisionID: id, briefID: briefID) })
+  }
+
+  @ViewBuilder
+  private func followUpControls(_ decision: BriefDecision, _ followUp: BriefFollowUpRef) -> some View {
+    let local = model.followUpStates[decision.id]
+    if let detail = followUpDetail(followUp) {
+      statusText(detail, id: "brief-followup-kind")
+    }
+    if followUp.kind == .followUpEmail, let draft = decision.draftReply {
+      VStack(alignment: .leading, spacing: Tokens.Spacing.xs) {
+        Text("To: \(draft.to)")
+        Text("Subject: \(draft.subject)")
+        Text(draft.body).lineLimit(6)
+      }
+      .font(Tokens.Typography.caption)
+      .foregroundStyle(Tokens.Palette.primaryText)
+      .accessibilityIdentifier("brief-followup-draft")
+    }
+    if followUp.isActionable {
+      if case .failed(let failure) = local {
+        statusText(failure.message, id: "brief-followup-error")
+      }
+      if local == .submitting {
+        ProgressView()
+          .accessibilityIdentifier("brief-followup-progress")
+      } else {
+        HStack(spacing: Tokens.Spacing.s) {
+          Button("Approve") { resolveFollowUp(decision, .approve) }
+            .buttonStyle(.borderedProminent)
+            .accessibilityLabel("Approve: \(decision.text)")
+            .accessibilityIdentifier("brief-followup-approve-btn")
+          Button("Edit") { editingFollowUp = decision }
+            .buttonStyle(.bordered)
+            .accessibilityLabel("Edit: \(decision.text)")
+            .accessibilityIdentifier("brief-followup-edit-btn")
+          Button("Dismiss", role: .destructive) { resolveFollowUp(decision, .dismiss) }
+            .buttonStyle(.bordered)
+            .accessibilityLabel("Dismiss: \(decision.text)")
+            .accessibilityIdentifier("brief-followup-dismiss-btn")
+        }
+      }
+    } else if let label = followUpStateLabel(followUp.state) {
+      statusText(label, id: "brief-followup-state")
+    }
+  }
+
+  private func followUpDetail(_ followUp: BriefFollowUpRef) -> String? {
+    switch followUp.kind {
+    case .actionItem: "Action item"
+    case .followUpEmail: "Follow-up email"
+    case .reminder:
+      followUp.remindAt.map { "Reminder, \($0.formatted(date: .abbreviated, time: .shortened))" }
+        ?? "Reminder, no time set yet"
+    case .unknown: nil
+    }
+  }
+
+  private func followUpStateLabel(_ state: BriefFollowUpState) -> String? {
+    switch state {
+    case .approved: "Approved"
+    case .dismissed: "Dismissed"
+    case .pending, .unknown: nil
+    }
+  }
+
+  private func resolveFollowUp(_ decision: BriefDecision, _ outcome: BriefDecisionOutcome) {
+    let briefID = model.brief?.id
+    Task {
+      guard model.brief?.id == briefID else { return }
+      if let draft = await model.resolveFollowUp(decision, outcome), let url = draft.mailtoURL {
+        openURL(url)
+      }
+    }
   }
 
   private func decide(_ decision: BriefDecision, _ answer: PendingActionDecision) {
