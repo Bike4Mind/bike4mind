@@ -255,6 +255,7 @@ export async function runTemplateExample(
         onStep: step => steps.push(step),
         skill: { name: snapshot.name, body: snapshot.body },
         abortSignal,
+        listingId: payload.listingId,
       })
     );
 

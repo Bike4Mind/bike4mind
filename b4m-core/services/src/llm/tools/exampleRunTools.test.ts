@@ -1,11 +1,12 @@
 import { describe, it, expect, vi } from 'vitest';
 import type { ICompletionOptionTools } from '@bike4mind/llm-adapters';
-import { ApiKeyType } from '@bike4mind/common';
+import { ApiKeyType, CreditHolderType, type IUsageEventInput } from '@bike4mind/common';
 import { getEffectiveApiKey } from '../../apiKeyService';
 import {
   applyExampleRunPolicy,
   exampleRunToolMode,
   exampleRunWiring,
+  platformPaidUsageEvent,
   withoutUserApiKeys,
   exampleStepLabel,
   simulatedToolResult,
@@ -123,6 +124,9 @@ describe('exampleRunWiring', () => {
     const db = { apiKeys: { findByUserIdAndType: vi.fn(), findByUserIdAndTypes: vi.fn() } };
     expect(wiring.toolDb(db)).toBe(db);
     expect(wiring.pinnedSkill).toBeUndefined();
+    expect(wiring.recordsPlatformUsage).toBe(false);
+    const usageEvents = { record: vi.fn() };
+    expect(wiring.usageEvents(usageEvents)).toBe(usageEvents);
   });
 
   it('takes platform keys, drops the payer gates and research mode, and pins the skill in an example run', () => {
@@ -172,5 +176,75 @@ describe('withoutUserApiKeys', () => {
     expect(await wrapped.apiKeys.findByUserIdAndTypes()).toEqual([]);
     expect(wrapped.apiKeys.other()).toBe('kept');
     expect(wrapped.adminSettings).toBe(db.adminSettings);
+  });
+});
+
+describe('platform-paid usage', () => {
+  const authorEvent: IUsageEventInput = {
+    requestId: 'quest-1',
+    userId: 'author-1',
+    ownerId: 'org-1',
+    ownerType: CreditHolderType.Organization,
+    sessionId: 'session-1',
+    projectId: 'project-1',
+    feature: 'chat',
+    provider: 'anthropic',
+    model: 'claude',
+    inputTokens: 100,
+    outputTokens: 50,
+    cachedInputTokens: 0,
+    cacheWriteTokens: 0,
+    costUsd: 0.0025,
+    creditsCharged: 5,
+    reservedCredits: 9,
+    source: 'web',
+    status: 'ok',
+  };
+
+  it('re-owns a row to the platform, keeps its cost and charges nothing', () => {
+    expect(platformPaidUsageEvent(authorEvent, 'listing-1')).toMatchObject({
+      requestId: 'quest-1',
+      userId: 'platform',
+      ownerId: 'platform',
+      ownerType: 'Platform',
+      projectId: undefined,
+      source: 'system',
+      model: 'claude',
+      inputTokens: 100,
+      outputTokens: 50,
+      costUsd: 0.0025,
+      creditsCharged: 0,
+      reservedCredits: undefined,
+      platformPaid: { reason: 'template_example_run', listingId: 'listing-1' },
+    });
+  });
+
+  it('records the settlement row and tool rows of an example run against the platform', async () => {
+    const wiring = exampleRunWiring({ onStep: vi.fn(), listingId: 'listing-1' });
+    expect(wiring.recordsPlatformUsage).toBe(true);
+    const record = vi.fn(async () => null);
+    const usageEvents = { record, summary: vi.fn(() => 'kept') };
+
+    await wiring.usageEvents(usageEvents)!.record(authorEvent);
+    expect(wiring.usageEvents(usageEvents)!.summary()).toBe('kept');
+
+    const operationalBilling = { creditTransactions: {} };
+    const toolDb = wiring.toolDb({
+      apiKeys: { findByUserIdAndType: vi.fn(), findByUserIdAndTypes: vi.fn() },
+      usageEvents,
+      operationalBilling,
+    });
+    await toolDb.usageEvents!.record({ ...authorEvent, feature: 'operations' });
+
+    expect(record).toHaveBeenCalledTimes(2);
+    for (const [event] of record.mock.calls as unknown as [IUsageEventInput][]) {
+      expect(event).toMatchObject({
+        ownerType: 'Platform',
+        ownerId: 'platform',
+        userId: 'platform',
+        creditsCharged: 0,
+      });
+    }
+    expect(toolDb.operationalBilling).toBeUndefined();
   });
 });

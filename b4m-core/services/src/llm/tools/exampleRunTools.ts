@@ -1,4 +1,10 @@
-import { getToolSideEffects } from '@bike4mind/common';
+import {
+  PLATFORM_USAGE_OWNER_ID,
+  PLATFORM_USAGE_OWNER_TYPE,
+  getToolSideEffects,
+  type IUsageEventInput,
+  type IUsageEventRepository,
+} from '@bike4mind/common';
 import type { ICompletionOptionTools } from '@bike4mind/llm-adapters';
 
 /**
@@ -22,6 +28,8 @@ export interface ExampleRunMode {
   skill?: { name: string; body: string };
   /** Ends the turn at the run's deadline; the caller settles the quest. */
   abortSignal?: AbortSignal;
+  /** The skill listing whose template example this is, stamped on the run's platform-paid usage rows. */
+  listingId?: string;
 }
 
 export type ExampleRunToolMode = 'real' | 'simulated';
@@ -262,6 +270,55 @@ export function withoutUserApiKeys<D extends { apiKeys: ApiKeyReads }>(db: D): D
   return { ...db, apiKeys };
 }
 
+type UsageRecorder = Pick<IUsageEventRepository, 'record'>;
+
+/**
+ * The run's usage rows as platform-paid: owned by the platform, not the author or their org, and
+ * never charged, so no per-user/per-org spend view, cap, budget or freeze counts them.
+ */
+export function platformPaidUsageEvent(event: IUsageEventInput, listingId: string | undefined): IUsageEventInput {
+  return {
+    ...event,
+    userId: PLATFORM_USAGE_OWNER_ID,
+    ownerId: PLATFORM_USAGE_OWNER_ID,
+    ownerType: PLATFORM_USAGE_OWNER_TYPE,
+    projectId: undefined,
+    creditsCharged: 0,
+    writtenOffCredits: undefined,
+    reservedCredits: undefined,
+    fundingBreakdown: undefined,
+    apiKeyId: undefined,
+    // Platform-initiated, so user-activity analytics that skip 'system' traffic skip these rows.
+    source: 'system',
+    platformPaid: { reason: 'template_example_run', listingId },
+  };
+}
+
+function withPlatformPaidUsage<R extends UsageRecorder>(repo: R, listingId: string | undefined): R {
+  return new Proxy(repo, {
+    get(target, prop, receiver) {
+      if (prop === 'record')
+        return (event: IUsageEventInput) => target.record(platformPaidUsageEvent(event, listingId));
+      const value = Reflect.get(target, prop, receiver);
+      return typeof value === 'function' ? value.bind(target) : value;
+    },
+  });
+}
+
+type ExampleToolDb = { apiKeys: ApiKeyReads; usageEvents?: UsageRecorder; operationalBilling?: unknown };
+
+/**
+ * The tool db of an example run: platform keys, tool usage rows re-owned to the platform, and no
+ * operational billing, so a tool's own model calls never debit the author.
+ */
+function exampleToolDb<D extends ExampleToolDb>(db: D, exampleRun: ExampleRunMode): D {
+  return {
+    ...withoutUserApiKeys(db),
+    usageEvents: db.usageEvents && withPlatformPaidUsage(db.usageEvents, exampleRun.listingId),
+    operationalBilling: undefined,
+  };
+}
+
 /**
  * Every point where ChatCompletionProcess.process differs for an example run, so each one is tested
  * here (exampleRunTools.test.ts). Without `exampleRun` each is the normal turn's behavior.
@@ -279,7 +336,14 @@ export function exampleRunWiring(exampleRun: ExampleRunMode | undefined) {
     childTools: exampleRun
       ? (tools: ICompletionOptionTools[]): ICompletionOptionTools[] => applyExampleRunPolicy(tools, exampleRun)
       : undefined,
-    toolDb: <D extends { apiKeys: ApiKeyReads }>(db: D): D => (exampleRun ? withoutUserApiKeys(db) : db),
+    toolDb: <D extends ExampleToolDb>(db: D): D => (exampleRun ? exampleToolDb(db, exampleRun) : db),
+    /**
+     * The settlement usage rows still write when credits are off, re-owned to the platform, so the
+     * run's model cost shows in platform reporting without touching the author's spend.
+     */
+    recordsPlatformUsage: !!exampleRun,
+    usageEvents: <R extends UsageRecorder>(repo: R | undefined): R | undefined =>
+      exampleRun && repo ? withPlatformPaidUsage(repo, exampleRun.listingId) : repo,
     pinnedSkill: exampleRun?.skill,
   };
 }
