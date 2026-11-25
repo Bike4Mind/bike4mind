@@ -9,6 +9,7 @@ type WindowFixture = {
   isDestroyed(): boolean;
   show: ReturnType<typeof vi.fn>;
   focus: ReturnType<typeof vi.fn>;
+  webContents: { on: ReturnType<typeof vi.fn>; off: ReturnType<typeof vi.fn> };
 };
 const h = vi.hoisted(() => ({
   handler: null as null | (() => Promise<void>),
@@ -35,7 +36,7 @@ vi.mock('electron', () => ({
       h.options.push(options);
       h.windows.push(this);
     }
-    webContents = { setWindowOpenHandler: vi.fn(), on: vi.fn(), getUserAgent: () => 'Electron' };
+    webContents = { setWindowOpenHandler: vi.fn(), on: vi.fn(), off: vi.fn(), getUserAgent: () => 'Electron' };
     on(event: string, callback: () => void) {
       if (event === 'closed') this.closed = callback;
     }
@@ -278,6 +279,33 @@ describe('desktop server conversations handoff surface', () => {
           extraHeaders: 'Content-Type: application/json',
         }
       );
+    });
+
+    it.each([
+      ['answers with a server error', 500, true],
+      ['lands on notebooks', 200, false],
+    ])('falls back to the plain web sign-in only when the redeem page %s', async (_label, status, fallsBack) => {
+      const warning = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+      try {
+        const api = { post: vi.fn().mockResolvedValue({ code: 'one-time-code' }) };
+        h.loadURL.mockImplementationOnce(async (url: string) => {
+          const [, onNavigate] = h.windows[0].webContents.on.mock.calls.find(([event]) => event === 'did-navigate')!;
+          const landed = status < 400 ? 'https://app.example.test/notebooks' : url;
+          onNavigate({}, landed, status);
+        });
+        registerSessionHandoff(authFor(initialState(), api));
+        await open();
+
+        expect(h.windows[0].webContents.off).toHaveBeenCalledWith('did-navigate', expect.any(Function));
+        expect(h.loadURL).toHaveBeenCalledTimes(fallsBack ? 2 : 1);
+        if (fallsBack) {
+          expect(h.loadURL).toHaveBeenLastCalledWith('https://app.example.test/notebooks', {
+            userAgent: 'Electron B4M-Server-Conversations',
+          });
+        }
+      } finally {
+        warning.mockRestore();
+      }
     });
 
     it.each([

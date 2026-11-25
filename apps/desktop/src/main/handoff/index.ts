@@ -141,12 +141,29 @@ export function registerSessionHandoff(auth: AuthService): void {
       await opened.loadURL(new URL('/notebooks', base).href, { userAgent });
       return;
     }
-    // A POST navigation keeps the code out of the URL, history and access logs; the server answers
-    // with the refresh cookie and a 303 to /notebooks.
-    await opened.loadURL(new URL(WEB_SESSION_REDEEM_PATH, base).href, {
-      userAgent,
-      postData: [{ type: 'rawData', bytes: Buffer.from(JSON.stringify({ code })) }],
-      extraHeaders: 'Content-Type: application/json',
-    });
+    // Electron counts an HTTP error page as a successful load, so watch the status of the redeem
+    // page itself: a server error there would otherwise leave the window on a raw error body.
+    let redeemFailedWith: number | null = null;
+    const onNavigate = (_event: Electron.Event, url: string, httpResponseCode: number) => {
+      if (new URL(url).pathname === WEB_SESSION_REDEEM_PATH && httpResponseCode >= 400) {
+        redeemFailedWith = httpResponseCode;
+      }
+    };
+    opened.webContents.on('did-navigate', onNavigate);
+    try {
+      // A POST navigation keeps the code out of the URL, history and access logs; the server answers
+      // with the refresh cookie and a 303 to /notebooks.
+      await opened.loadURL(new URL(WEB_SESSION_REDEEM_PATH, base).href, {
+        userAgent,
+        postData: [{ type: 'rawData', bytes: Buffer.from(JSON.stringify({ code })) }],
+        extraHeaders: 'Content-Type: application/json',
+      });
+    } finally {
+      if (!opened.isDestroyed()) opened.webContents.off('did-navigate', onNavigate);
+    }
+    if (redeemFailedWith === null) return;
+    if (opened.isDestroyed() || companion?.window !== opened || currentScope() !== nextScope) return;
+    console.warn('handoff: the web session redeem failed, falling back to web sign-in', redeemFailedWith);
+    await opened.loadURL(new URL('/notebooks', base).href, { userAgent });
   });
 }

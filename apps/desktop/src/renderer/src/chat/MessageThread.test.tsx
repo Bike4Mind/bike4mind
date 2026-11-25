@@ -2,11 +2,11 @@
 import { CssVarsProvider } from '@mui/joy/styles';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
-import type { ChatAttachment, ChatMessage, ChatToolCall } from '@shared/chat';
+import { type ChatAttachment, type ChatMessage, type ChatToolCall, RUN_BUDGET_STOP } from '@shared/chat';
 import { formatModelEditNote } from '@shared/modelEdit';
 import type { SkillSource } from '@shared/skills';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { awaitingApprovalKey, MessageThread } from './MessageThread';
+import { awaitingApprovalKey, budgetPausedReplyIndex, MessageThread } from './MessageThread';
 import { QuoteChip } from './QuoteChip';
 import { REGENERATE_WARNING_TEXT, REWIND_WARNING_TEXT } from './RewindControls';
 import { SessionOpenerContext } from './SessionLink';
@@ -25,6 +25,24 @@ window.matchMedia ??= ((query: string) => ({
   removeEventListener: () => {},
   dispatchEvent: () => false,
 })) as typeof window.matchMedia;
+
+describe('budgetPausedReplyIndex', () => {
+  const at = '2026-11-25T00:00:00.000Z';
+  const prompt: ChatMessage = { id: 'u', role: 'user', content: 'Plan it', createdAt: at };
+  const paused: ChatMessage = { id: 'a', role: 'assistant', content: '', createdAt: at, stopReason: RUN_BUDGET_STOP };
+  const report: ChatMessage = { id: 'r', role: 'user', content: 'Agent finished', createdAt: at, system: true };
+
+  it('keeps the raise on a paused reply that only app notices followed', () => {
+    expect(budgetPausedReplyIndex([prompt, paused])).toBe(1);
+    expect(budgetPausedReplyIndex([prompt, paused, report, report])).toBe(1);
+  });
+
+  it('offers nothing once the user typed after it, or when the last reply was not paused', () => {
+    expect(budgetPausedReplyIndex([prompt, paused, prompt])).toBe(-1);
+    expect(budgetPausedReplyIndex([prompt, { ...paused, stopReason: undefined }, report])).toBe(-1);
+    expect(budgetPausedReplyIndex([report])).toBe(-1);
+  });
+});
 
 describe('awaiting a prompt', () => {
   const call = (overrides: Partial<ChatToolCall> = {}): ChatToolCall => ({

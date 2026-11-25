@@ -79,7 +79,7 @@ struct MediaDetailView: View {
     .turnIntoFlow(request: $turnInto, context: studioEdit)
     .fullScreenCover(isPresented: $isEditing) {
       if let studioEdit {
-        RegionEditView(item: model.item, api: studioEdit.api, media: studioEdit.media, tracker: studioEdit.tracker)
+        RegionEditView(item: model.item, api: studioEdit.api, tracker: studioEdit.tracker)
       }
     }
   }

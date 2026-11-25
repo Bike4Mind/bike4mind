@@ -1,21 +1,22 @@
 import Foundation
 
 /// Hand-written wire format for Studio's public v1 routes. Keep in sync with the contracts in
-/// b4m-core/common/src/api-contract/contracts (image generation and edit, video, music, scene composition, models,
-/// quest poll, session create) and `GenerationJobUpdatedAction` in b4m-core/common/src/schemas/actions.ts.
+/// b4m-core/common/src/api-contract/contracts (video, music, scene composition, models), the image job schemas in
+/// b4m-core/common/src/schemas/imageJobs.ts and `GenerationJobUpdatedAction` in b4m-core/common/src/schemas/actions.ts.
 /// Hand-written rather than generated because the committed OpenAPI snapshot predates `edit_regions`.
 enum StudioWire {
-  static let imageGenerationsPath = "api/v1/image-generations"
-  static let imageEditsPath = "api/v1/image-edits"
-  static let sessionsPath = "api/v1/sessions"
   static let modelsPath = "api/v1/models"
 
   static let sceneCompositionsPath = "api/v1/scene-compositions"
+  static let imageJobsPath = "api/v1/image-jobs"
+  /// `IMAGE_JOB_COUNT_MAX` (b4m-core/common/src/schemas/imageJobs.ts): the models listing allows more images than a
+  /// job request does.
+  static let imageJobCountMaximum = 4
 
-  /// The job collection a kind's handles live under; images are quests and have none.
-  static func jobsPath(_ kind: GenerationKind) -> String? {
+  /// The job collection a kind's handles live under.
+  static func jobsPath(_ kind: GenerationKind) -> String {
     switch kind {
-    case .image: nil
+    case .image: imageJobsPath
     case .video: "api/v1/video-generations"
     case .music: "api/v1/music-generations"
     case .scene: sceneCompositionsPath
@@ -49,50 +50,63 @@ enum StudioWire {
     }
   }
 
-  /// Optional keys are left out when nil, so the server applies the model default.
-  struct ImageGenerationBody: Encodable {
-    let prompt: String
-    let model: String
-    let n: Int
-    let size: String?
-    let quality: String?
-    let seed: Int?
-    let background: String?
-    /// The create bar has no conversation for the server to resolve a follow-up against.
-    let promptResolution = "literal"
-    let organizationID = PersonalBilling()
+  /// `CreateImageJobBodySchema`: strict, so only declared keys go. Optional keys are left out when nil, so the
+  /// server applies the model default.
+  struct ImageJobBody: Encodable {
+    struct Input: Encodable, Equatable {
+      let role: String
+      let fileID: String
 
-    init(prompt: String, model: String, params: GenerationParams = GenerationParams()) {
-      self.prompt = prompt
-      self.model = model
-      n = params[.count]?.number.map { Int($0) } ?? 1
-      size = params[.size]?.text
-      quality = params[.quality]?.text
-      seed = params[.seed]?.number.map { Int($0) }
-      background = params[.transparentBackground]?.flag == true ? "transparent" : nil
+      enum CodingKeys: String, CodingKey {
+        case role
+        case fileID = "file_id"
+      }
     }
-
-    enum CodingKeys: String, CodingKey {
-      case prompt, model, n, size, quality, seed, background
-      case promptResolution = "prompt_resolution"
-      case organizationID = "organization_id"
-    }
-  }
-
-  struct ImageEditBody: Encodable {
-    struct Region: Encodable {
+    struct Region: Encodable, Equatable {
       let prompt: String
       let bbox: [Double]
     }
-    let prompt: String
     let model: String
-    let sessionId: String
-    let image: String
-    let editRegions: [Region]
+    let mode: String
+    let prompt: String
+    let inputs: [Input]?
+    let size: String?
+    let quality: String?
+    let seed: Int?
+    let transparentBackground: Bool?
+    let editRegions: [Region]?
+    let count: Int?
     let organizationID = PersonalBilling()
 
+    init(prompt: String, model: String, params: GenerationParams = GenerationParams()) {
+      self.model = model
+      mode = "generate"
+      self.prompt = prompt
+      inputs = nil
+      size = params[.size]?.text
+      quality = params[.quality]?.text
+      seed = params[.seed]?.number.map { Int($0) }
+      transparentBackground = params[.transparentBackground]?.flag == true ? true : nil
+      editRegions = nil
+      count = params[.count]?.number.map { Int($0) }
+    }
+
+    init(edit request: ImageEditRequest) {
+      model = request.modelID
+      mode = "edit"
+      prompt = request.summaryPrompt
+      inputs = [Input(role: "edit_source", fileID: request.sourceFileID)]
+      size = nil
+      quality = nil
+      seed = nil
+      transparentBackground = nil
+      editRegions = request.regions.map { Region(prompt: $0.prompt, bbox: $0.bbox) }
+      count = nil
+    }
+
     enum CodingKeys: String, CodingKey {
-      case prompt, model, sessionId, image
+      case model, mode, prompt, inputs, size, quality, seed, count
+      case transparentBackground = "transparent_background"
       case editRegions = "edit_regions"
       case organizationID = "organization_id"
     }
@@ -186,34 +200,15 @@ enum StudioWire {
     }
   }
 
-  struct SessionBody: Encodable {
-    let name: String
-  }
-
   static func encode(_ value: some Encodable) throws -> Data {
     try JSONEncoder().encode(value)
   }
 
   // MARK: Responses
 
-  struct ImageGenerationReply: Decodable {
-    struct Quest: Decodable { let id: String }
-    let quest: Quest
-  }
-
-  struct QuestReply: Decodable {
-    let id: String
-  }
-
-  struct QuestPoll: Decodable {
-    struct File: Decodable {
-      let url: String?
-      let isImage: Bool?
-    }
-    let status: String?
-    let type: String?
-    let errorCode: String?
-    let files: [File]?
+  /// `CreateImageJobResponseSchema`: one job per image, in request order.
+  struct ImageJobsReply: Decodable {
+    let data: [Job]
   }
 
   struct Job: Decodable {
@@ -238,11 +233,6 @@ enum StudioWire {
   struct ErrorEnvelope: Decodable {
     let error: String?
     let errorCode: String?
-  }
-
-  struct SessionReply: Decodable {
-    let id: String?
-    let _id: String?
   }
 
   struct ImageModelsPage: Decodable {
@@ -286,7 +276,8 @@ enum StudioWire {
           sizes: sizes, defaultSize: sizes.isEmpty ? nil : sizing?.defaultSize,
           // An omitted quality is the server's default (GPT-Image renders at medium), not `auto`, so `auto` stays a choice.
           qualities: supports?.qualities ?? [],
-          maxImages: max(1, supports?.maxImages ?? 1), seed: supports?.seed ?? false,
+          maxImages: min(max(1, supports?.maxImages ?? 1), StudioWire.imageJobCountMaximum),
+          seed: supports?.seed ?? false,
           transparentBackground: supports?.transparentBackground ?? false,
           maxReferenceImages: supports?.maxReferenceImages ?? 0, edit: supports?.edit ?? false,
           requiresInputImage: supports?.requiresInputImage ?? false)
@@ -470,20 +461,6 @@ enum StudioWire {
     let urls = [job.output?.url].compactMap { $0.flatMap(URL.init(string:)) }
     return GenerationStatus(phase: phase, resultURLs: urls, resultFileID: job.output?.fileID)
   }
-
-  /// A quest `stopped`, or `type: "error"`, is a failure even with a 200; `errorCode` is set only for credit
-  /// refusals.
-  static func status(of quest: QuestPoll) -> GenerationStatus {
-    if quest.type == "error" || quest.status == "stopped" {
-      return GenerationStatus(phase: .failed(GenerationFailure(code: quest.errorCode)))
-    }
-    guard quest.status == "done" else {
-      return GenerationStatus(phase: quest.status == "running" ? .running(progress: nil) : .queued)
-    }
-    let urls = (quest.files ?? []).filter { $0.isImage ?? true }.compactMap { $0.url.flatMap(URL.init(string:)) }
-    guard !urls.isEmpty else { return GenerationStatus(phase: .failed(.other(code: "no_output"))) }
-    return GenerationStatus(phase: .succeeded, resultURLs: urls)
-  }
 }
 
 /// The realtime `generation_job_updated` frame. It carries no URL, so a success still needs a fetch.
@@ -562,49 +539,56 @@ public struct StudioClient: StudioAPI {
     }
   }
 
-  public func generate(_ request: GenerationRequest) async throws -> GenerationHandle {
+  /// One handle per job: an image request for several images makes several jobs, each with its own result.
+  public func generate(_ request: GenerationRequest) async throws -> [GenerationHandle] {
     let startedAt = now()
     switch request.kind {
     case .image:
       let body = try StudioWire.encode(
-        StudioWire.ImageGenerationBody(prompt: request.prompt, model: request.modelID, params: request.params))
-      let response = try await requester.send(method: "POST", path: StudioWire.imageGenerationsPath, jsonBody: body)
-      guard response.status == 200 else { throw StudioWire.refusal(status: response.status, body: response.body) }
-      let reply = try StudioWire.decode(StudioWire.ImageGenerationReply.self, from: response.body)
-      return GenerationHandle(
-        kind: .image, id: reply.quest.id, prompt: request.prompt, startedAt: startedAt, modelID: request.modelID,
-        params: request.params)
+        StudioWire.ImageJobBody(prompt: request.prompt, model: request.modelID, params: request.params))
+      let jobs = try await createImageJobs(body)
+      return jobs.map {
+        GenerationHandle(
+          kind: .image, id: $0.id, prompt: request.prompt, startedAt: startedAt, modelID: request.modelID,
+          params: request.params)
+      }
     case .scene:
       throw StudioRequestError(
         status: 422, code: "invalid_request", serverMessage: "A Scene is composed from files, not a prompt.")
     case .video, .music:
-      guard let path = StudioWire.jobsPath(request.kind) else { throw APIError.notFound }
       let body = try StudioWire.encode(
         StudioWire.JobBody(
           kind: request.kind, model: request.modelID, prompt: request.prompt, params: request.params,
           inputs: request.inputs))
-      let response = try await requester.send(method: "POST", path: path, jsonBody: body)
+      let response = try await requester.send(
+        method: "POST", path: StudioWire.jobsPath(request.kind), jsonBody: body)
       guard response.status == 202 || response.status == 200 else {
         throw StudioWire.refusal(status: response.status, body: response.body)
       }
       let job = try StudioWire.decode(StudioWire.Job.self, from: response.body)
-      return GenerationHandle(
-        kind: request.kind, id: job.id, prompt: request.prompt, startedAt: startedAt, modelID: request.modelID,
-        params: request.params)
+      return [
+        GenerationHandle(
+          kind: request.kind, id: job.id, prompt: request.prompt, startedAt: startedAt, modelID: request.modelID,
+          params: request.params)
+      ]
     }
   }
 
   public func editImage(_ request: ImageEditRequest) async throws -> GenerationHandle {
-    let body = try StudioWire.encode(
-      StudioWire.ImageEditBody(
-        prompt: request.summaryPrompt, model: request.modelID, sessionId: request.sessionID,
-        image: request.imageURL.absoluteString,
-        editRegions: request.regions.map { .init(prompt: $0.prompt, bbox: $0.bbox) }))
+    let body = try StudioWire.encode(StudioWire.ImageJobBody(edit: request))
     let startedAt = now()
-    let response = try await requester.send(method: "POST", path: StudioWire.imageEditsPath, jsonBody: body)
-    guard response.status == 200 else { throw StudioWire.refusal(status: response.status, body: response.body) }
-    let quest = try StudioWire.decode(StudioWire.QuestReply.self, from: response.body)
-    return GenerationHandle(kind: .image, id: quest.id, prompt: request.summaryPrompt, startedAt: startedAt)
+    guard let job = try await createImageJobs(body).first else { throw APIError.malformedResponse }
+    return GenerationHandle(kind: .image, id: job.id, prompt: request.summaryPrompt, startedAt: startedAt)
+  }
+
+  private func createImageJobs(_ body: Data) async throws -> [StudioWire.Job] {
+    let response = try await requester.send(method: "POST", path: StudioWire.imageJobsPath, jsonBody: body)
+    guard response.status == 202 || response.status == 200 else {
+      throw StudioWire.refusal(status: response.status, body: response.body)
+    }
+    let jobs = try StudioWire.decode(StudioWire.ImageJobsReply.self, from: response.body).data
+    guard !jobs.isEmpty else { throw APIError.malformedResponse }
+    return jobs
   }
 
   public func composeScene(_ request: SceneRequest) async throws -> GenerationHandle {
@@ -620,29 +604,15 @@ public struct StudioClient: StudioAPI {
 
   public func status(of handle: GenerationHandle) async throws -> GenerationStatus {
     let id = try StudioWire.safeID(handle.id)
-    guard let jobsPath = StudioWire.jobsPath(handle.kind) else {
-      let response = try await requester.send(method: "GET", path: "api/v1/quests/\(id)")
-      guard response.status == 200 else { throw APIError(status: response.status) }
-      return StudioWire.status(of: try StudioWire.decode(StudioWire.QuestPoll.self, from: response.body))
-    }
-    let response = try await requester.send(method: "GET", path: "\(jobsPath)/\(id)")
+    let response = try await requester.send(method: "GET", path: "\(StudioWire.jobsPath(handle.kind))/\(id)")
     guard response.status == 200 else { throw APIError(status: response.status) }
     return StudioWire.status(of: try StudioWire.decode(StudioWire.Job.self, from: response.body))
   }
 
   public func cancel(_ handle: GenerationHandle) async throws {
-    guard handle.isCancellable, let jobsPath = StudioWire.jobsPath(handle.kind) else { return }
     let id = try StudioWire.safeID(handle.id)
-    let response = try await requester.send(method: "POST", path: "\(jobsPath)/\(id)/cancel")
+    let response = try await requester.send(
+      method: "POST", path: "\(StudioWire.jobsPath(handle.kind))/\(id)/cancel")
     guard response.status == 200 else { throw StudioWire.refusal(status: response.status, body: response.body) }
-  }
-
-  public func createSession(name: String) async throws -> String {
-    let body = try StudioWire.encode(StudioWire.SessionBody(name: name))
-    let response = try await requester.send(method: "POST", path: StudioWire.sessionsPath, jsonBody: body)
-    guard response.status == 200 || response.status == 201 else { throw APIError(status: response.status) }
-    let reply = try StudioWire.decode(StudioWire.SessionReply.self, from: response.body)
-    guard let id = reply.id ?? reply._id else { throw APIError.malformedResponse }
-    return id
   }
 }
