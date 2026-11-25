@@ -74,6 +74,7 @@ export async function undoLakeConfigChangeHandler(
         lakeMembershipRemovals: lakeMembershipRemovalRepository,
         dataLakeResearchConfigs: dataLakeResearchConfigRepository,
         dataLakeProposals: dataLakeProposalRepository,
+        fabFiles: fabFileRepository,
       },
       actions: {
         updateResearchConfig: (configId, input, audit) =>

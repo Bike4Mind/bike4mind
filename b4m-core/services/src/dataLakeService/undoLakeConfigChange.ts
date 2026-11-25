@@ -6,6 +6,7 @@ import {
   type IDataLakeProposalRepository,
   type IDataLakeResearchConfigDocument,
   type IDataLakeResearchConfigRepository,
+  type IFabFileRepository,
   type ILakeConfigChangeEventDocument,
   type ILakeConfigChangeEventRepository,
   type ILakeConfigLeverChange,
@@ -66,6 +67,8 @@ export interface UndoLakeConfigChangeAdapters {
     lakeMembershipRemovals: Pick<ILakeMembershipRemovalRepository, 'findLive'>;
     dataLakeResearchConfigs: Pick<IDataLakeResearchConfigRepository, 'findByIdInLake' | 'listByLake'>;
     dataLakeProposals: Pick<IDataLakeProposalRepository, 'findById' | 'countPendingByLakes'>;
+    /** Absent: the result entry for a file row carries no name. */
+    fabFiles?: Pick<IFabFileRepository, 'find'>;
   };
   actions: UndoActions;
   now?: Date;
@@ -452,6 +455,13 @@ async function perform(
   }
 }
 
+/** A deleted or unknown file has no name to show, so the entry stays unnamed. */
+async function findFileName(fabFileId: string, db: UndoLakeConfigChangeAdapters['db']): Promise<string | undefined> {
+  if (!db.fabFiles || !isObjectIdShaped(fabFileId)) return undefined;
+  const [file] = await db.fabFiles.find({ _id: { $in: [fabFileId] } });
+  return file && !file.deletedAt && file.fileName ? file.fileName : undefined;
+}
+
 async function loadResultEntry(
   stream: 'config' | 'file',
   undoEventId: string,
@@ -462,7 +472,13 @@ async function loadResultEntry(
   try {
     if (stream === 'file') {
       const row = await db.lakeMembershipChangeEvents.findOne({ _id: undoEventId, dataLakeId: lakeId });
-      return row ? { ...toLakeFileHistoryEntry(row), undoable: !!classifyFileUndo(row, now).plan } : null;
+      if (!row) return null;
+      const fileName = await findFileName(row.fabFileId, db);
+      return {
+        ...toLakeFileHistoryEntry(row),
+        ...(fileName ? { fileName } : {}),
+        undoable: !!classifyFileUndo(row, now).plan,
+      };
     }
     const row = await db.lakeConfigChangeEvents.findOne({ _id: undoEventId, dataLakeId: lakeId });
     return row ? { ...toLakeConfigHistoryEntry(row), undoable: !!classifyConfigUndo(row, now).plan } : null;
