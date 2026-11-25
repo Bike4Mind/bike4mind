@@ -2,7 +2,7 @@
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { CssVarsProvider } from '@mui/joy/styles';
-import type { ChatSession, ChatSessionMode, ChatSessionSummary } from '@shared/chat';
+import type { ChatSession, ChatSessionMode, ChatSessionStatusEvent, ChatSessionSummary } from '@shared/chat';
 import { EMPTY_SIDEBAR_SECTIONS } from '@shared/sidebarSections';
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
 import { desktopTheme } from '../theme';
@@ -53,6 +53,8 @@ const SESSIONS = [
 /** What listSessions returns; a test without a Studio session drops it. */
 let listed: ChatSessionSummary[] = SESSIONS;
 let openNotice: ((event: { sessionId: string; rootId: string }) => void) | null = null;
+let statusSnapshot: ChatSessionStatusEvent[] = [];
+let pushStatus: ((event: ChatSessionStatusEvent) => void) | null = null;
 let createSession: Mock<(request?: { mode?: string }) => Promise<{ session: ChatSessionSummary }>>;
 
 /**
@@ -78,6 +80,8 @@ beforeEach(() => {
   window.localStorage.clear();
   listed = SESSIONS;
   openNotice = null;
+  statusSnapshot = [];
+  pushStatus = null;
   createSession = vi.fn(async (request?: { mode?: string }) => ({
     session: summary('s-new', 'New chat', request?.mode === 'studio' ? 'studio' : 'chat', 59),
   }));
@@ -100,7 +104,11 @@ beforeEach(() => {
         createSession: (request?: { mode?: string }) => createSession(request),
         getSession: async (id: string) => ({ ...SESSIONS.find(entry => entry.id === id), messages: [] }) as ChatSession,
         getQueuedMessages: async () => [],
-        getSessionStatuses: async () => [],
+        getSessionStatuses: async () => statusSnapshot,
+        onSessionStatus: (listener: typeof pushStatus) => {
+          pushStatus = listener;
+          return () => undefined;
+        },
         listModels: async () => ({ models: [] }),
       }),
       attention: quietBridge({
@@ -316,5 +324,55 @@ describe('places on the rail', () => {
     await act(async () => el('place-rail-code-btn').click());
     expect(el('sidebar-place-title').textContent).toBe('Code');
     expect(el('place-rail-code-btn').getAttribute('aria-current')).toBe('page');
+  });
+
+  it('badges Agents with what needs the user, and opens a board entry in its own place', async () => {
+    statusSnapshot = [{ sessionId: 'k2', status: 'needs-action' }];
+    await mount();
+    expect(el('place-rail-agents-badge').textContent).toBe('1');
+    expect(el('place-rail-agents-btn').getAttribute('aria-label')).toBe('Agents, 1 needs you');
+
+    await press({ key: '4', code: 'Digit4', ctrlKey: true });
+    expect(el('place-rail-agents-btn').getAttribute('aria-current')).toBe('page');
+    // The board is the place: no session list beside it.
+    expect(find('chat-session-item')).toBeNull();
+    expect(el('agents-place-group-waiting').textContent).toContain('Lambda code');
+
+    await act(async () => el('agents-place-entry-k2').click());
+    expect(el('place-rail-code-btn').getAttribute('aria-current')).toBe('page');
+    expect(openTitle()).toBe('Lambda code');
+  });
+
+  it('moves the badge and the board with pushed status events, down to the empty state', async () => {
+    await mount();
+    await act(async () => el('place-rail-agents-btn').click());
+    expect(find('agents-place-empty')).not.toBeNull();
+    expect(find('place-rail-agents-badge')).toBeNull();
+
+    await act(async () => pushStatus?.({ sessionId: 'c2', status: 'needs-action', unreadReply: true }));
+    expect(el('place-rail-agents-badge').textContent).toBe('1');
+    expect(el('agents-place-group-finished').textContent).toContain('Beta chat');
+
+    await act(async () => pushStatus?.({ sessionId: 'c2', status: 'done' }));
+    expect(find('place-rail-agents-badge')).toBeNull();
+    expect(find('agents-place-empty')).not.toBeNull();
+  });
+
+  it('stays on Agents after a restart rather than jumping to the restored session', async () => {
+    await mount();
+    await act(async () => el('place-rail-agents-btn').click());
+    await unmount();
+
+    await mount();
+    expect(el('place-rail-agents-btn').getAttribute('aria-current')).toBe('page');
+    expect(find('agents-place')).not.toBeNull();
+  });
+
+  it('never hides the sidebar from the Agents icon, which has none', async () => {
+    await mount();
+    await act(async () => el('place-rail-agents-btn').click());
+    await act(async () => el('place-rail-agents-btn').click());
+    await act(async () => el('place-rail-chat-btn').click());
+    expect(find('chat-session-item')).not.toBeNull();
   });
 });
