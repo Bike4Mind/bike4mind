@@ -76,6 +76,7 @@ import {
   functionInputHash,
   readServerContract,
 } from './dispatch';
+import { CallableFunctionSourceError } from './fetchSource';
 
 const OWNER = { id: 'owner-1' };
 const FUNCTION_ID = '6650f0a1b2c3d4e5f6a7b8c9';
@@ -347,6 +348,86 @@ describe('dispatchFunctionCall outcomes', () => {
     const browserData = pins.map(({ name, sha256, bytes }) => ({ name, mode: 'pinned', sha256, bytes }));
     expect(result.stamp?.data).toEqual(browserData);
     expect(onlyRow().dataHashes).toEqual(pins.map(pin => pin.sha256));
+  });
+
+  describe('sources', () => {
+    const sha = (text: string) => createHash('sha256').update(text).digest('hex');
+    const ORIGIN = 'https://data.example.com';
+    let origin = 'a,b\n1,2\n';
+    const fetcher = vi.fn(async () => ({
+      body: Buffer.from(origin),
+      sha256: sha(origin),
+      bytes: Buffer.byteLength(origin),
+      fetchedAt: new Date().toISOString(),
+    }));
+    const stored = new Map<string, Buffer>();
+    const storage = {
+      upload: vi.fn(async (body: Buffer, key: string) => void stored.set(key, body)),
+      getSignedUrl: vi.fn(async (key: string) => `${ORIGIN}/${key}?signed`),
+    };
+    const frozen = { name: 'pinned.csv', sha256: sha('frozen'), bytes: 6, fetchedAt: new Date(0) };
+    const deps = () => ({
+      fetcher,
+      storage: storage as never,
+      origins: [ORIGIN],
+      limits: { fileBytes: 1024, totalBytes: 4096 },
+    });
+    const withSources = () => {
+      fetcher.mockClear();
+      h.fn = record({
+        sources: [
+          { name: 'live.csv', url: `${ORIGIN}/live.csv`, mode: 'live' },
+          { name: 'pinned.csv', url: `${ORIGIN}/pinned.csv`, mode: 'pinned' },
+        ],
+        pin: { ...(record().pin as object), sourcePins: [frozen] },
+      });
+    };
+
+    it('stamps a live source with its hash and fetch time and a pinned one with its frozen hash', async () => {
+      withSources();
+      origin = 'a,b\n1,2\n';
+      const runner = runnerOf(ok());
+      const result = await dispatchFunctionCall(call(), { runner, sources: deps() });
+
+      expect(result.stamp?.data).toEqual([
+        { name: 'live.csv', mode: 'live', sha256: sha(origin), bytes: 8, fetched_at: expect.any(String) },
+        { name: 'pinned.csv', mode: 'pinned', sha256: frozen.sha256, bytes: 6 },
+      ]);
+      const payload = runner.mock.calls[0]![0] as CallableFunctionRunPayload & { data?: { url: string }[] };
+      expect(payload.data?.map(entry => entry.url)).toEqual([
+        `${ORIGIN}/data/${FUNCTION_ID}/${sha(origin)}?signed`,
+        `${ORIGIN}/data/${FUNCTION_ID}/${frozen.sha256}?signed`,
+      ]);
+      expect(stored.get(`data/${FUNCTION_ID}/${sha(origin)}`)?.toString()).toBe(origin);
+      expect(onlyRow().dataHashes).toEqual([sha(origin), frozen.sha256]);
+    });
+
+    it('gives a live source two hashes across a data change and keeps the pinned hash', async () => {
+      withSources();
+      origin = 'a,b\n1,2\n';
+      const first = await dispatchFunctionCall(call(), { runner: runnerOf(ok()), sources: deps() });
+      origin = 'a,b\n1,3\n';
+      const second = await dispatchFunctionCall(call(), { runner: runnerOf(ok()), sources: deps() });
+
+      const hashOf = (stamp: typeof first.stamp, name: string) => stamp?.data.find(e => e.name === name)?.sha256;
+      expect(hashOf(first.stamp, 'live.csv')).toBe(sha('a,b\n1,2\n'));
+      expect(hashOf(second.stamp, 'live.csv')).toBe(sha('a,b\n1,3\n'));
+      expect(hashOf(second.stamp, 'pinned.csv')).toBe(hashOf(first.stamp, 'pinned.csv'));
+      expect(fetcher).toHaveBeenCalledTimes(2);
+    });
+
+    it('answers source_unavailable without running when a source is refused', async () => {
+      withSources();
+      const runner = runnerOf(ok());
+      const refusing = vi.fn(async () => {
+        throw new CallableFunctionSourceError('source_redirect_blocked', 'refused');
+      });
+      const result = await dispatchFunctionCall(call(), { runner, sources: { ...deps(), fetcher: refusing } });
+
+      expect(result).toMatchObject({ outcome: 'error', reason: 'source_unavailable' });
+      expect(runner).not.toHaveBeenCalled();
+      expect(onlyRow()).toMatchObject({ reason: 'source_unavailable', errorClass: 'source_redirect_blocked' });
+    });
   });
 
   it('answers data_unavailable without running when the links cannot be signed', async () => {

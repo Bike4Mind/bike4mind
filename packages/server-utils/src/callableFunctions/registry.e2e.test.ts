@@ -603,6 +603,7 @@ async function promoteDirectly(id: string, seq = 1) {
       seq,
       runtime: { kind: 'pyodide-server', version: '0.25.1', packages: [] },
       lastServerRun: { at: new Date(), passed: 1, failed: 0, results: [] },
+      sourcePins: [],
       trustLabel: 'verified',
       contract: fn!.contract,
     }
@@ -839,6 +840,7 @@ describe('callableFunctionRepository.promote', () => {
         seq: 1,
         runtime: { kind: 'pyodide-server', version: '0.25.1', packages: [] },
         lastServerRun: { at: new Date(), passed: 1, failed: 0, results: [] },
+        sourcePins: [],
         trustLabel: 'unverified',
         contract: read!.contract,
       }

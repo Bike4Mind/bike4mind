@@ -203,14 +203,18 @@ export async function pinCallableFunctionData(
     );
   }
   const pins = fn.pin.dataPins ?? [];
-  if (pins.some(pin => pin.name === input.name)) {
-    throw new ConflictError(`A data file named ${input.name} is already pinned.`, { code: 'data_name_taken' });
+  const sources = fn.sources ?? [];
+  if (pins.some(pin => pin.name === input.name) || sources.some(source => source.name === input.name)) {
+    throw new ConflictError(`A data file or source named ${input.name} already exists.`, { code: 'data_name_taken' });
   }
-  if (pins.length >= CALLABLE_FUNCTION_DATA_LIMITS.maxPins) {
-    throw new ConflictError(`A tool can have at most ${CALLABLE_FUNCTION_DATA_LIMITS.maxPins} data files.`, {
-      code: 'data_pin_limit',
-      limit: CALLABLE_FUNCTION_DATA_LIMITS.maxPins,
-    });
+  if (pins.length + sources.length >= CALLABLE_FUNCTION_DATA_LIMITS.maxPins) {
+    throw new ConflictError(
+      `A tool can have at most ${CALLABLE_FUNCTION_DATA_LIMITS.maxPins} data files and sources.`,
+      {
+        code: 'data_pin_limit',
+        limit: CALLABLE_FUNCTION_DATA_LIMITS.maxPins,
+      }
+    );
   }
 
   const file = await fabFilesService.assertFabFileAccessById(actor, input.fileId, {
@@ -310,10 +314,13 @@ export async function unpinCallableFunctionData(
   const kept = pins.filter(pin => pin !== removed);
   const updated = await callableFunctionRepository.setDataPins(fn.id, userOwner(actor), fn, kept);
   if (!updated) throw changed();
-  // Read again: a pin of the same bytes may have committed since. A failed delete leaves an orphan for the prefix
-  // delete; the unpin itself has already happened.
+  // Read again: a pin or source pin of the same bytes may have committed since. A failed delete leaves an orphan
+  // for the prefix delete; the unpin itself has already happened.
   const fresh = await callableFunctionRepository.findByIdForOwner(fn.id, userOwner(actor));
-  const stillNamed = (fresh?.pin.dataPins ?? kept).some(pin => pin.sha256 === removed.sha256);
+  const latest = fresh?.pin ?? { dataPins: kept, sourcePins: fn.pin.sourcePins };
+  const stillNamed = [...(latest.dataPins ?? []), ...(latest.sourcePins ?? [])].some(
+    entry => entry.sha256 === removed.sha256
+  );
   if (!stillNamed) {
     try {
       await (deps.storage ?? getCallableFunctionDataStorage()).delete(callableFunctionDataKey(fn.id, removed.sha256));
@@ -401,12 +408,23 @@ export async function signCallableFunctionDataLinks(
   fn: { id: string; pin: { dataPins?: ICallableFunctionDataPin[] } },
   storage: CallableFunctionDataStorage = getCallableFunctionDataStorage()
 ): Promise<CallableFunctionDataLink[]> {
+  return signCallableFunctionDataEntries(fn.id, fn.pin.dataPins ?? [], storage);
+}
+
+/** The same links for stored objects of one function named by hash, such as its fetched sources. */
+export async function signCallableFunctionDataEntries(
+  functionId: string,
+  entries: { name: string; sha256: string; bytes: number }[],
+  storage?: CallableFunctionDataStorage
+): Promise<CallableFunctionDataLink[]> {
+  if (entries.length === 0) return [];
+  const signer = storage ?? getCallableFunctionDataStorage();
   return Promise.all(
-    (fn.pin.dataPins ?? []).map(async ({ name, sha256, bytes }) => ({
+    entries.map(async ({ name, sha256, bytes }) => ({
       name,
       sha256,
       bytes,
-      url: await storage.getSignedUrl(callableFunctionDataKey(fn.id, sha256), 'get', {
+      url: await signer.getSignedUrl(callableFunctionDataKey(functionId, sha256), 'get', {
         expiresIn: CALLABLE_FUNCTION_DATA_LINK_SECONDS,
       }),
     }))
