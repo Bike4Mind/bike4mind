@@ -1,3 +1,5 @@
+import { execFileSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import { describe, it, expect } from 'vitest';
 import { promoteInlineLatexDollars } from './remarkPlugins';
 
@@ -201,6 +203,36 @@ describe('promoteInlineLatexDollars', () => {
       const start = performance.now();
       expect(promoteInlineLatexDollars(text)).toBe(text);
       expect(performance.now() - start).toBeLessThan(500);
+    });
+
+    // The timing above only holds while V8 optimizes the regexps, and V8 stops once an isolate has
+    // compiled about 10k of them: the inline spans then took ~30s here, intermittently, in whichever
+    // reused test worker got that far. A child process with the optimizer off makes that state
+    // deterministic without degrading this worker for the files after it.
+    it('stays linear on long backslash runs without the V8 regexp optimizer', () => {
+      const script = `
+        const { promoteInlineLatexDollars, unescapedDelimiter } = await import(process.argv[1]);
+        const run = '\\\\'.repeat(100_000);
+        const timed = fn => { const start = performance.now(); fn(); return performance.now() - start; };
+        const anyDelimiter = new RegExp(unescapedDelimiter('[()[\\\\]]'), 'g');
+        console.log(JSON.stringify([
+          timed(() => promoteInlineLatexDollars('\\\\[ ' + run)),
+          timed(() => promoteInlineLatexDollars('\\\\[ ' + run + ' \\\\]')),
+          timed(() => promoteInlineLatexDollars('see \\\\( ' + run + '\\\\) here')),
+          timed(() => [...(run + '\\\\(').matchAll(anyDelimiter)]),
+        ]));`;
+      const out = execFileSync(
+        process.execPath,
+        [
+          '--no-regexp-optimization',
+          '--input-type=module',
+          '-e',
+          script,
+          fileURLToPath(import.meta.url).replace(/\.test\.ts$/, '.ts'),
+        ],
+        { encoding: 'utf8', timeout: 20_000, stdio: ['ignore', 'pipe', 'ignore'] }
+      );
+      for (const ms of JSON.parse(out) as number[]) expect(ms).toBeLessThan(500);
     });
 
     it('treats a bracket right after inline code as mid-line', () => {

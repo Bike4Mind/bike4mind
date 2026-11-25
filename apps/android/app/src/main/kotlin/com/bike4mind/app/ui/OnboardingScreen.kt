@@ -57,7 +57,7 @@ fun OnboardingScreen(onFinish: () -> Unit) {
 
     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
         Column(
-            modifier = Modifier.widthIn(max = 600.dp).fillMaxSize().safeDrawingPadding().padding(Spacing.l),
+            modifier = Modifier.widthIn(max = CONTENT_MAX_WIDTH).fillMaxSize().safeDrawingPadding().padding(Spacing.l),
             verticalArrangement = Arrangement.spacedBy(Spacing.l),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
@@ -66,7 +66,7 @@ fun OnboardingScreen(onFinish: () -> Unit) {
             }
             PageIndicator(count = pages.size, current = pager.currentPage)
             Button(
-                modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).testTag("onboarding-next-btn"),
+                modifier = Modifier.fillMaxWidth().heightIn(min = BUTTON_MIN_HEIGHT).testTag("onboarding-next-btn"),
                 onClick = {
                     if (isLastPage) onFinish() else scope.launch { pager.animateScrollToPage(pager.currentPage + 1) }
                 },
@@ -89,7 +89,7 @@ private fun OnboardingPageContent(page: OnboardingPage) {
             painter = painterResource(page.icon()),
             contentDescription = null,
             tint = MaterialTheme.colorScheme.primary,
-            modifier = Modifier.size(64.dp),
+            modifier = Modifier.size(ICON_SIZE),
         )
         Text(
             page.title,
@@ -116,10 +116,15 @@ private fun PageIndicator(count: Int, current: Int) {
     ) {
         repeat(count) { index ->
             val color = if (index == current) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant
-            Box(Modifier.size(8.dp).background(color, CircleShape))
+            Box(Modifier.size(DOT_SIZE).background(color, CircleShape))
         }
     }
 }
+
+private val CONTENT_MAX_WIDTH = 600.dp
+private val BUTTON_MIN_HEIGHT = 48.dp
+private val ICON_SIZE = 64.dp
+private val DOT_SIZE = 8.dp
 
 private fun OnboardingPage.icon(): Int = when (id) {
     "notifications" -> R.drawable.ic_onboarding_notifications

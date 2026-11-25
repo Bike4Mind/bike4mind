@@ -182,6 +182,7 @@ export interface ToolBuilderConfig {
   imageProcessorLambdaName?: string;
   getMcpClient: IChatCompletionServiceOptions['getMcpClient'];
   customMcp?: IChatCompletionServiceOptions['customMcp'];
+  customMcpDeadline?: IChatCompletionServiceOptions['customMcpDeadline'];
   // State maps owned by ChatCompletionProcess. Passed by reference so mutations
   // inside tool callbacks (credit accounting, subagent telemetry) propagate back
   // without further synchronization.
@@ -815,6 +816,17 @@ export class ToolBuilder {
     const customMcpToolNames = new Set<string>();
 
     if (!enableMCPServer) {
+      // Callable functions answer to their own setting, so they are offered with the MCP server off.
+      if (this.deps.customMcp?.listsWithoutMcpServer) {
+        await this.addCustomMcpTools(mcpToolsByServer, customMcpToolNames, {
+          disabledMcpConnections,
+          enabledPlatformMcpConnections,
+          logger,
+          disableUserIntegrations,
+          onPendingAction,
+          mcpServerOff: true,
+        });
+      }
       logger.info(
         `⏱️ [${Date.now() - processStartTime}ms] MCP tools setup completed (0 tools) in ${Date.now() - mcpToolsStartTime}ms`
       );
@@ -894,33 +906,13 @@ export class ToolBuilder {
       }
     }
 
-    // Custom connectors follow their own enabled switch, narrowed by the composer's opt-out list;
-    // a platform connector is listed only when the composer switched it on. `requestedMcpServers`
-    // names built-in servers only. A failure here drops custom tools only, never the built-ins above.
-    if (this.deps.customMcp && onPendingAction && !disableUserIntegrations) {
-      try {
-        const userId = this.deps.user.id;
-        const switchedOff = new Set(disabledMcpConnections ?? []);
-        const platformConnectionIds = enabledPlatformMcpConnections ?? [];
-        const connections = await loadCustomMcpConnections(this.deps.customMcp, userId, logger, undefined, {
-          platformConnectionIds,
-        });
-        for (const connection of connections) {
-          // The slug opt-out list is for the user's own connectors; a platform one is switched on by id.
-          if (switchedOff.has(connection.slug) && !platformConnectionIds.includes(connection.connectionId)) continue;
-          const tools = generateCustomMcpTools(connection, {
-            userId,
-            host: this.deps.customMcp,
-            requestApproval: onPendingAction,
-            platformConnectionIds,
-          });
-          mcpToolsByServer[connection.slug] = tools;
-          tools.forEach(tool => customMcpToolNames.add(tool.name));
-        }
-      } catch (customError) {
-        logger.error('[MCP] Failed to load custom connector tools - continuing without them:', customError);
-      }
-    }
+    await this.addCustomMcpTools(mcpToolsByServer, customMcpToolNames, {
+      disabledMcpConnections,
+      enabledPlatformMcpConnections,
+      logger,
+      disableUserIntegrations,
+      onPendingAction,
+    });
 
     const totalTools = Object.values(mcpToolsByServer).reduce((sum, tools) => sum + tools.length, 0);
 
@@ -941,6 +933,62 @@ export class ToolBuilder {
     );
 
     return { mcpToolsByServer, serverAgentConfig: { selectedRepositories, githubUsername }, customMcpToolNames };
+  }
+
+  /**
+   * Custom connectors follow their own enabled switch, narrowed by the composer's opt-out list;
+   * a platform connector is listed only when the composer switched it on. A failure here drops
+   * custom tools only, never the built-ins.
+   */
+  private async addCustomMcpTools(
+    mcpToolsByServer: Record<string, Array<{ name: string } & ICompletionOptionTools>>,
+    customMcpToolNames: Set<string>,
+    {
+      disabledMcpConnections,
+      enabledPlatformMcpConnections,
+      logger,
+      disableUserIntegrations,
+      onPendingAction,
+      mcpServerOff,
+    }: Pick<
+      BuildMcpToolsArgs,
+      | 'disabledMcpConnections'
+      | 'enabledPlatformMcpConnections'
+      | 'logger'
+      | 'disableUserIntegrations'
+      | 'onPendingAction'
+    > & { mcpServerOff?: boolean }
+  ): Promise<void> {
+    const host = this.deps.customMcp;
+    if (!host || !onPendingAction || disableUserIntegrations) return;
+    try {
+      const userId = this.deps.user.id;
+      const switchedOff = new Set(disabledMcpConnections ?? []);
+      const platformConnectionIds = enabledPlatformMcpConnections ?? [];
+      const connections = await loadCustomMcpConnections(
+        host,
+        userId,
+        logger,
+        undefined,
+        { platformConnectionIds, headless: Boolean(this.deps.apiKeyId), mcpServerOff },
+        // Before the cap, so a switched-off connection never takes another's tool slots. The slug
+        // opt-out list is for the user's own connectors; a platform one is switched on by id.
+        connection => switchedOff.has(connection.slug) && !platformConnectionIds.includes(connection.connectionId)
+      );
+      for (const connection of connections) {
+        const tools = generateCustomMcpTools(connection, {
+          userId,
+          host,
+          requestApproval: onPendingAction,
+          platformConnectionIds,
+          deadline: this.deps.customMcpDeadline,
+        });
+        mcpToolsByServer[connection.slug] = tools;
+        tools.forEach(tool => customMcpToolNames.add(tool.name));
+      }
+    } catch (customError) {
+      logger.error('[MCP] Failed to load custom connector tools - continuing without them:', customError);
+    }
   }
 
   /**

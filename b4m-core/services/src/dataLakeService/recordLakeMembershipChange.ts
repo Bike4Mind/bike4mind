@@ -6,6 +6,7 @@ import type {
 } from '@bike4mind/common';
 import type { ManageActor } from './manageRule';
 import type { LakeConfigAuditLogger } from './resolveLakeConfigAuditRetention';
+import { Logger } from '@bike4mind/observability';
 
 /** Reuses the config-audit logger shape (rather than declaring a near-duplicate) so a single
  * `{ db, logger }` can satisfy both audit adapters' interfaces without a cast at every call site
@@ -56,7 +57,7 @@ export async function recordLakeMembershipChange(
   const logAuditLoss = (msg: string, meta: Record<string, unknown>) => {
     if (logger?.error) return logger.error(msg, meta);
     if (logger?.warn) return logger.warn(msg, meta);
-    return console.error(msg, meta);
+    return Logger.error(msg, meta);
   };
 
   try {

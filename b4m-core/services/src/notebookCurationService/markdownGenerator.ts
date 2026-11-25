@@ -58,7 +58,7 @@ export function generateTranscriptMarkdown(
 
   // Table of Contents
   if (opts.includeTableOfContents) {
-    sections.push(generateTableOfContents(artifacts));
+    sections.push(generateTableOfContents(artifacts, Boolean(session.summary)));
   }
 
   // Summary Section
@@ -107,10 +107,10 @@ function generateHeader(session: CurationSession, messages: CurationMessage[], a
 /**
  * Generate table of contents
  */
-function generateTableOfContents(artifacts: ExtractedArtifact[]): string {
+function generateTableOfContents(artifacts: ExtractedArtifact[], hasSummary: boolean): string {
   const sections = ['## Table of Contents\n'];
 
-  sections.push('- [Summary](#summary)');
+  if (hasSummary) sections.push('- [Summary](#summary)');
   sections.push('- [Conversation](#conversation)');
 
   if (artifacts.length > 0) {

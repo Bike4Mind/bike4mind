@@ -231,7 +231,7 @@ export const OPERATIONS_GUIDE: readonly AdminGuideEntry[] = [
     views: ['admin.slack_metrics'],
     settings: [],
     howTo: [
-      'Open Slack Metrics to see the Slack Event Activity, Agent Usage, Intent Breakdown, Export Formats and Export Success Rate charts.',
+      'Open Slack Metrics to see the Slack event activity, agent usage, intent breakdown, export formats and export success rate charts.',
       'If a filter leaves nothing to show, clear it. A No Slack events yet message means the integration has not recorded any activity.',
     ],
     keywords: ['slack usage', 'message analytics', 'slack stats', 'slack activity', 'agent usage'],

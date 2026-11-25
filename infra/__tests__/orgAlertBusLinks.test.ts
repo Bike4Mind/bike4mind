@@ -71,6 +71,7 @@ const NOT_TRACED_TO_AN_ORG_EVENT = new Set([
   `${WORKERS}/s3/appFileUploadComplete`,
   `${WORKERS}/s3/historyUploadComplete`,
   ...[
+    'callableFunctionCall',
     'dataLakeCleanup',
     'driveDisconnectPurge',
     'driveLakeIngest',

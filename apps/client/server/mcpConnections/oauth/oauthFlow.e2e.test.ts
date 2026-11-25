@@ -133,6 +133,8 @@ beforeAll(async () => {
   vi.stubEnv('APP_URL', 'https://app.example.com');
   mongo = await createMongoServer();
   await mongoose.connect(mongo.getUri());
+  // The converge-on-one-client test depends on this collection's unique index.
+  await McpOAuthClientRegistration.init();
 });
 afterAll(async () => {
   await mongoose.disconnect();

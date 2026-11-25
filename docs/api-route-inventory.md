@@ -36,7 +36,7 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 
 ## Summary
 
-1287 routes: 138 contracted, 11 aliases of another route, 358 with no static caller in `apps/client/app`.
+1292 routes: 139 contracted, 11 aliases of another route, 360 with no static caller in `apps/client/app`.
 
 | Area | Routes | Contracted | jwt+key | jwt | optional | handler | No static caller |
 | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -59,7 +59,7 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | blog-integration | 1 | 0 | 1 | 0 | 0 | 0 | 0 |
 | briefcase | 3 | 0 | 3 | 0 | 0 | 0 | 0 |
 | business-links | 5 | 0 | 5 | 0 | 0 | 0 | 0 |
-| callable-functions | 8 | 0 | 0 | 8 | 0 | 0 | 0 |
+| callable-functions | 11 | 0 | 0 | 11 | 0 | 0 | 0 |
 | cc-bridge | 6 | 0 | 5 | 0 | 0 | 1 | 4 |
 | chat | 1 | 1 | 1 | 0 | 0 | 0 | 0 |
 | chat-completion-status | 1 | 0 | 1 | 0 | 0 | 0 | 0 |
@@ -98,7 +98,7 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | keep | 1 | 0 | 0 | 1 | 0 | 0 | 1 |
 | lattice | 7 | 0 | 7 | 0 | 0 | 0 | 0 |
 | logout | 1 | 0 | 1 | 0 | 0 | 0 | 0 |
-| mcp | 5 | 0 | 5 | 0 | 0 | 0 | 0 |
+| mcp | 6 | 0 | 6 | 0 | 0 | 0 | 1 |
 | mcp-connections | 8 | 0 | 0 | 7 | 0 | 1 | 5 |
 | mcp-servers | 18 | 0 | 16 | 0 | 0 | 2 | 6 |
 | mementos | 7 | 0 | 7 | 0 | 0 | 0 | 0 |
@@ -154,7 +154,7 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | user | 2 | 0 | 1 | 1 | 0 | 0 | 0 |
 | user-api-keys | 8 | 0 | 7 | 1 | 0 | 0 | 1 |
 | users | 36 | 0 | 27 | 9 | 0 | 0 | 5 |
-| v1 | 136 | 132 | 117 | 12 | 0 | 7 | 122 |
+| v1 | 137 | 133 | 118 | 12 | 0 | 7 | 123 |
 | voice | 6 | 0 | 5 | 0 | 0 | 1 | 2 |
 | webhooks | 12 | 0 | 7 | 0 | 0 | 5 | 5 |
 | websocket | 1 | 0 | 0 | 1 | 0 | 0 | 0 |
@@ -759,9 +759,12 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | `/api/callable-functions/[id]` | GET, PATCH, DELETE | jwt | - | - | no | - | 1: `hooks/data/callableFunctions.ts` |
 | `/api/callable-functions/[id]/calls` | GET | jwt | - | - | no | - | 1: `hooks/data/callableFunctions.ts` |
 | `/api/callable-functions/[id]/examples` | PUT | jwt | - | - | no | - | 1: `hooks/data/callableFunctions.ts` |
+| `/api/callable-functions/[id]/grants` | GET, PUT, DELETE | jwt | - | - | no | - | 1: `hooks/data/callableFunctions.ts` |
 | `/api/callable-functions/[id]/pin` | POST | jwt | - | - | no | - | 1: `hooks/data/callableFunctions.ts` |
 | `/api/callable-functions/[id]/promote` | POST | jwt | - | - | no | - | 1: `hooks/data/callableFunctions.ts` |
+| `/api/callable-functions/[id]/review` | PUT, PATCH | jwt | - | - | no | - | 1: `hooks/data/callableFunctions.ts` |
 | `/api/callable-functions/[id]/test-run` | POST | jwt | - | - | no | - | 1: `hooks/data/callableFunctions.ts` |
+| `/api/callable-functions/shared` | GET | jwt | - | - | no | - | 1: `hooks/data/callableFunctions.ts` |
 | `/api/callable-functions/status` | GET | jwt | - | - | no | - | 1: `hooks/data/callableFunctions.ts` |
 
 ### cc-bridge
@@ -1163,6 +1166,7 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | `/api/mcp/confirm` | POST | jwt+key | - | - | no | - | 1: `components/Session/PromptReplies.tsx` |
 | `/api/mcp/delete-attachment` | POST | jwt+key | - | - | no | - | 1: `components/Session/PromptReplies.tsx` |
 | `/api/mcp/download-attachment` | POST | jwt+key | - | - | no | - | 1: `components/Session/PromptReplies.tsx` |
+| `/api/mcp/functions` | POST | jwt+key | `functions:invoke` | - | no | - | 0 |
 | `/api/mcp/github/repositories` | GET, POST, PATCH | jwt+key | - | - | no | - | 1: `components/ProfileModal/SettingsTabContent/GitHubIntegrationSection.tsx` |
 | `/api/mcp/github/status` | POST | jwt+key | - | - | no | - | 2: `components/ProfileModal/SettingsTabContent/GitHubIntegrationSection.tsx`, `hooks/data/useGitHubConnectionStatus.ts` |
 
@@ -1925,6 +1929,7 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | `/api/v1/functions` | GET | jwt+key | `functions:invoke` | - | yes | - | 0 |
 | `/api/v1/functions/[id]` | GET | jwt+key | `functions:invoke` | - | yes | - | 0 |
 | `/api/v1/functions/[id]/invoke` | POST | jwt+key | `functions:invoke` | - | yes | - | 0 |
+| `/api/v1/functions/calls/[call_id]` | GET | jwt+key | `functions:invoke` | - | yes | - | 0 |
 | `/api/v1/handoff-devices` | GET | jwt | - | - | yes | - | 1: `components/Session/SessionHandoff.tsx` |
 | `/api/v1/image-edits` | POST | jwt+key | `ai:generate` | - | yes | - | 0 |
 | `/api/v1/image-generations` | POST | jwt+key | `ai:generate` | - | yes | - | 0 |

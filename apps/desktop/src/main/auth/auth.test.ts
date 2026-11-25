@@ -101,6 +101,59 @@ describe('tokenVault', () => {
       expect(file.contents).toBeNull();
     });
 
+    describe('with a cipher that declares file-permission protection instead of encryption', () => {
+      const permissionCipher: SecretCipher = {
+        atRestProtection: 'file-permissions',
+        isEncryptionAvailable: () => false,
+        encryptString: plain => Buffer.from(plain, 'utf8'),
+        decryptString: encoded => encoded.toString('utf8'),
+      };
+
+      it('persists tokens and reports file-permission storage rather than encryption', async () => {
+        const file = memoryFile();
+        const vault = new TokenVault(permissionCipher, file, silentLogger);
+
+        expect(vault.storageStatus()).toBe('file-permissions');
+        await vault.setTokens('https://b4m.example.com', TOKENS);
+
+        const restarted = new TokenVault(permissionCipher, file, silentLogger);
+        expect(await restarted.getTokens('https://b4m.example.com')).toEqual(TOKENS);
+      });
+
+      it('applies a conditional refresh write against the persisted copy', async () => {
+        const file = memoryFile();
+        const vault = new TokenVault(permissionCipher, file, silentLogger);
+        const store = vault.storeFor('https://b4m.example.com');
+        await store.setAuthTokens(TOKENS);
+
+        const rotated = { ...TOKENS, accessToken: 'access-2', refreshToken: 'refresh-2' };
+        expect(await store.setAuthTokens(rotated, 'stale-refresh')).toBe(false);
+        expect(await store.setAuthTokens(rotated, TOKENS.refreshToken)).toBe(true);
+
+        const restarted = new TokenVault(permissionCipher, file, silentLogger);
+        expect(await restarted.getTokens('https://b4m.example.com')).toEqual(rotated);
+      });
+
+      it('removes cleared tokens from disk', async () => {
+        const file = memoryFile();
+        const vault = new TokenVault(permissionCipher, file, silentLogger);
+        await vault.setTokens('https://b4m.example.com', TOKENS);
+
+        await vault.clearTokens('https://b4m.example.com');
+
+        expect(JSON.parse(file.contents!).tokens).toEqual({});
+      });
+    });
+
+    it('treats a cipher that can encrypt as encrypted storage even if it also declares file permissions', () => {
+      const vault = new TokenVault(
+        { ...fakeCipher(true), atRestProtection: 'file-permissions' },
+        memoryFile(),
+        silentLogger
+      );
+      expect(vault.storageStatus()).toBe('available');
+    });
+
     it('discards an unreadable blob instead of wedging the environment', async () => {
       const file = memoryFile(
         JSON.stringify({ version: 1, tokens: { 'https://b4m.example.com': Buffer.from('garbage').toString('base64') } })

@@ -88,13 +88,19 @@ describe('CallableFunctionModel', () => {
   });
 
   describe('indexes', () => {
-    it('declares the unique name index and no index on the artifact', async () => {
+    it('declares the unique name index, the three grant indexes and no index on the artifact', async () => {
       const byName = new Map((await CallableFunction.collection.indexes()).map(index => [index.name, index]));
       expect(byName.get('callablefn_owner_slug')).toMatchObject({
         key: { ownerType: 1, ownerKey: 1, slug: 1 },
         unique: true,
       });
-      expect([...byName.keys()].sort()).toEqual(['_id_', 'callablefn_owner_slug']);
+      expect([...byName.keys()].sort()).toEqual([
+        '_id_',
+        'callablefn_grant_org_state',
+        'callablefn_grant_project',
+        'callablefn_grant_users',
+        'callablefn_owner_slug',
+      ]);
     });
 
     it('refuses a second function with the same slug for one owner', async () => {

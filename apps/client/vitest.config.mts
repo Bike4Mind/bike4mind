@@ -68,10 +68,17 @@ const NODE_PROJECT_INCLUDE = NODE_TEST_ROOTS.flatMap(root =>
 // order-dependent test from a real failure. The integration lane stays isolated: one mongod a file.
 const REUSE_WORKERS = !INTEGRATION_LANE && !REPO_LANE && process.env.CLIENT_TEST_ISOLATE !== '1';
 
-// Files that cannot share a worker: each pins process state before a module node loads only once
-// per process (the settings schema in @bike4mind/common reads B4M_SELF_HOST as it loads), so they
-// would see, or leave behind, another file's copy. Each gets a fresh worker of its own.
-const ISOLATED_NODE_TESTS = REUSE_WORKERS ? ['server/utils/creditPreflight.selfhost.test.ts'] : [];
+// Files that cannot share a worker. Each gets a fresh worker of its own, under the node environment.
+// - creditPreflight.selfhost pins process state before a module node loads only once per process
+//   (the settings schema in @bike4mind/common reads B4M_SELF_HOST as it loads), so it would see, or
+//   leave behind, another file's copy.
+// - remarkPlugins times regexes that are linear only when V8 optimizes them. V8 stops optimizing
+//   new regexps once a process has compiled 1MB of regexp code and holds 16MB of executable code
+//   (TooMuchRegExpCode in V8's regexp.cc), and a reused jsdom worker passes both within a few
+//   component files. No file causes it, so there is nothing to restore. Pure string code: no DOM.
+const ISOLATED_NODE_TESTS = REUSE_WORKERS
+  ? ['server/utils/creditPreflight.selfhost.test.ts', 'app/utils/remarkPlugins.test.ts']
+  : [];
 
 const LANE_EXCLUDE = [
   '**/node_modules/**',
@@ -92,18 +99,15 @@ const projectTest = {
   setupFiles: [
     ...(REUSE_WORKERS ? [path.resolve(__dirname, 'vitest.setup.reuse.ts')] : []),
     path.resolve(__dirname, 'vitest.setup.ts'),
+    ...(INTEGRATION_LANE ? [path.resolve(__dirname, 'vitest.setup.integration.ts')] : []),
   ],
   // forks, not threads: a worker thread ignores a test's process.env.TZ change.
   ...(REUSE_WORKERS ? { isolate: false, pool: 'forks' as const } : {}),
-  // Raise the 15s shared floor to 30s. Load-bearing for the integration lane, which holds ~60
-  // real-Mongo suites (createMongoServer/createMongoReplSet): their first write per worker pays an
-  // unavoidable, legitimate cold-start: Mongoose builds every model's indexes on connect (needed
-  // for correctness - the rate-limit suite depends on one, so autoIndex CANNOT be disabled) plus
-  // first-collection creation. Measured at 16-22s under that lane's file parallelism, so 15s (a
-  // unit-test budget) fails 4-ish suites at random - the exact flake. This is not a hang mask: it
-  // is the right budget for integration tests. Attempts to shrink the cold-start instead were
-  // dead ends - autoIndex:false breaks index-dependent suites, and a single shared mongod
-  // serializes every worker's index builds and made it markedly worse.
+  // Raise the 15s shared floor to 30s. Load-bearing for the integration lane, whose real-Mongo
+  // suites (createMongoServer/createMongoReplSet) pay a mongod cold start that a unit-test budget
+  // does not cover under that lane's file parallelism. This is not a hang mask: it is the right
+  // budget for integration tests. vitest.setup.integration.ts keeps that cold start small by
+  // building collections and indexes only for the models a suite asks for.
   testTimeout: 30000,
   // Integration-lane only: these suites exercise real concurrency (compare-and-set races,
   // multi-document transactions) against a real mongod under CI's worker-capped, oversubscribed
@@ -142,9 +146,6 @@ const projectVite = () => ({
   define: {
     global: 'globalThis',
     'process.env': {},
-  },
-  optimizeDeps: {
-    include: ['uuid'],
   },
 });
 
@@ -211,8 +212,8 @@ export default defineConfig({
           // Left unset in the unit lane on purpose: vitest's own default include applies, so this
           // project is the catch-all and no test file can match zero projects.
           ...(LANE_INCLUDE ? { include: LANE_INCLUDE } : {}),
-          // Excludes exactly what the node project includes - same list, not a restatement of it.
-          exclude: [...LANE_EXCLUDE, ...NODE_PROJECT_INCLUDE],
+          // Excludes exactly what the node projects include - same lists, not a restatement of them.
+          exclude: [...LANE_EXCLUDE, ...NODE_PROJECT_INCLUDE, ...ISOLATED_NODE_TESTS],
         },
       },
     ],

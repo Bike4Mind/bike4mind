@@ -42,6 +42,7 @@ import {
   signupGrantBudgetDay,
   type SignupGrantBudgetReservation,
 } from './signupGrantBudget';
+import { Logger } from '@bike4mind/observability';
 
 type GrantAdapters = FreeCreditAdapters & {
   /** Held-release job only: pays a payment unlock whose hold has reached `releaseAt` by this time. */
@@ -245,7 +246,7 @@ async function releaseStage(
         try {
           shadowSignals = await withShadowTimeout(adapters.collectRiskSignals(user));
         } catch {
-          console.warn('[signup-risk] Shadow observation collection failed; signals not recorded');
+          Logger.warn('[signup-risk] Shadow observation collection failed; signals not recorded');
         }
       }
     }
@@ -284,7 +285,7 @@ async function releaseStage(
             } catch {
               // Infrastructure failures are retryable, unlike a completed review decision.
               // Do not log collector contents: they can contain private signup observations.
-              console.warn('[signup-risk] Observation collection failed; signup grant remains pending for retry');
+              Logger.warn('[signup-risk] Observation collection failed; signup grant remains pending for retry');
               throw new Error('Signup risk observation collection unavailable; retry the signup grant');
             }
           } else if (adapters.collectRiskSignals && parsedPolicy.success) {
@@ -306,7 +307,7 @@ async function releaseStage(
           };
           assessedBand = assessment.band;
           if (assessment.status === 'unavailable') {
-            console.warn('[signup-risk] Assessment unavailable; holding signup grant');
+            Logger.warn('[signup-risk] Assessment unavailable; holding signup grant');
           }
         }
         target = assessment.credits;
@@ -491,14 +492,14 @@ async function releaseStage(
       try {
         await adapters.emitRiskBand(assessedBand);
       } catch {
-        console.warn('[signup-risk] Band telemetry failed after grant commit');
+        Logger.warn('[signup-risk] Band telemetry failed after grant commit');
       }
     }
     // A later paying release retries a bonus an exhausted pool or a failure left unpaid. Inside a caller's
     // transaction a failed bonus write would abort the caller's commit, so it waits for that later release.
     if ((expected === 'pending_email' || grantResult.creditsGranted > 0) && !callerTransactionSession()) {
       await payInviteBonus(userId, adapters).catch(() => {
-        console.warn('[signup-grant] Invite bonus payout failed; a later release retries it');
+        Logger.warn('[signup-grant] Invite bonus payout failed; a later release retries it');
       });
     }
     return grantResult;

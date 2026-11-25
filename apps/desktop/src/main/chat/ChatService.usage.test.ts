@@ -1115,7 +1115,14 @@ describe('runBudget', () => {
         interval: 5,
       });
       await idle(root.id);
-      expect((await lastReply(root.id))?.stopReason).toBe(RUN_BUDGET_STOP);
+      // The stopped worker's report lands under the planner after its stopped turn, on a timing
+      // that varies by machine: wait for it, so the planner's last message is a known one.
+      await vi.waitUntil(async () => (await lastReply(root.id))?.reportedChildId === worker.id, {
+        timeout: 5000,
+        interval: 5,
+      });
+      const plannerTurn = (await store.get(root.id))?.messages.findLast(message => message.role === 'assistant');
+      expect(plannerTurn?.stopReason).toBe(RUN_BUDGET_STOP);
       const opened = streams.length;
 
       await expect(service.raiseRunBudget(worker.id, 2000)).resolves.toMatchObject({ ok: true });
