@@ -1,22 +1,12 @@
 // Recorded 2026-10-27. These pre-toolkit screens need tab-level layout/interaction migrations;
 // swapping primitives alone would change form, dialog and table behavior. Remove entries as migrated.
 const componentsByFile = {
-  'AdminDashboardTab.tsx': ['Card'],
   'AdminModalTab.tsx': ['Card', 'Table'],
   'AdminModalTabNew.tsx': ['Modal', 'Card'],
   'AdminWhatsNewModalsTab.tsx': ['Modal'],
-  'IntegrationDemandTab.tsx': ['Table'],
-  'IntegrationHealth/components/IntegrationDetailPanel.tsx': ['Table'],
   'MigrateUsersTab.tsx': ['Card', 'Modal'],
-  'ModelMetrics/components/RawDataTab.tsx': ['Table', 'Card'],
-  'ModelMetrics/components/SpendTab.tsx': ['Table'],
-  'RateLimits/components/OverviewTab.tsx': ['Table'],
-  'RateLimits/index.tsx': ['Table'],
-  'ScopedOverridesByScope.tsx': ['Card'],
   'SreAgentTab.tsx': ['Card', 'Modal', 'Table'],
   'Team/index.tsx': ['Card', 'Modal'],
-  'Users/ComplianceModal.tsx': ['Table'],
-  'Users/Views/RecentActivityView.tsx': ['Card'],
   'email/EmailActivityHistory.tsx': ['Table'],
   'email/EmailJobDetail.tsx': ['Table', 'Modal'],
   'email/EmailJobsPanel.tsx': ['Table'],

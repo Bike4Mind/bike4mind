@@ -1,10 +1,9 @@
 import React, { FC, useState, useEffect } from 'react';
 import { ReadyState, useWebsocket } from '@/app/contexts/WebsocketContext';
-import { Box, IconButton, Tooltip, Typography, useTheme } from '@mui/joy';
+import { Box, CircularProgress, IconButton, Tooltip, Typography, useTheme } from '@mui/joy';
 import type { Theme } from '@mui/joy/styles';
 import CloudDoneIcon from '@mui/icons-material/CloudDone';
 import PendingIcon from '@mui/icons-material/Pending';
-import CircleLoader from 'react-spinners/CircleLoader';
 import CloudDownloadIcon from '@mui/icons-material/CloudDownload';
 import CloudOffIcon from '@mui/icons-material/CloudOff';
 import BugReportIcon from '@mui/icons-material/BugReport';
@@ -103,7 +102,18 @@ const NetworkStatus: FC<IProps> = () => {
 
   const stateIcons = {
     [ReadyState.UNINSTANTIATED]: <PendingIcon sx={{ fontSize: '16px' }} />,
-    [ReadyState.CONNECTING]: <CircleLoader size={14} color={theme.palette.neutral.softColor} />,
+    [ReadyState.CONNECTING]: (
+      <CircularProgress
+        data-testid="network-status-connecting"
+        sx={{
+          '--CircularProgress-size': '14px',
+          '--CircularProgress-trackThickness': '1.5px',
+          '--CircularProgress-progressThickness': '1.5px',
+          '--CircularProgress-trackColor': 'transparent',
+          '--CircularProgress-progressColor': theme.palette.neutral.softColor,
+        }}
+      />
+    ),
     [ReadyState.OPEN]: <CloudDoneIcon sx={{ fontSize: '16px' }} />,
     [ReadyState.CLOSING]: <CloudDownloadIcon sx={{ fontSize: '16px' }} />,
     [ReadyState.CLOSED]: <CloudOffIcon sx={{ fontSize: '16px' }} />,

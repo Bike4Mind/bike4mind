@@ -272,6 +272,11 @@ The table below remains the literal-update inventory, not proof that all databas
 | PaymentAttempt | `outcome` | enum | `billing/PaymentAttemptModel.ts#PaymentAttemptRepository.recordCheckoutStart` | repository-check | `literal` | writes "started" |
 | PaymentAttempt | `outcome` | enum | `billing/PaymentAttemptModel.ts#PaymentAttemptRepository.recordOutcome` | route-schema | `apps/client/pages/api/stripe/webhook.ts#screenPaymentOutcome` | Webhook passes literals succeeded or failed only |
 | PaymentAttempt | `outcome` | enum | `billing/PaymentAttemptModel.ts#PaymentAttemptRepository.recordStart` | repository-check | `literal` | writes "started" |
+| PlatformAttempt | `state` | enum | `billing/PlatformAttemptModel.ts#PlatformAttemptRepository.claimDispatch` | schema | `runValidators` | writes "dispatched" |
+| PlatformAttempt | `state` | enum | `billing/PlatformAttemptModel.ts#PlatformAttemptRepository.markRecorded` | schema | `runValidators` | writes "recorded" |
+| PlatformAttempt | `state` | enum | `billing/PlatformAttemptModel.ts#PlatformAttemptRepository.markUnresolved` | schema | `runValidators` | writes "unresolved" |
+| PlatformAttempt | `state` | enum | `billing/PlatformAttemptModel.ts#PlatformAttemptRepository.stageUsage` | schema | `runValidators` | writes "usage_known" |
+| PlatformAttempt | `unresolvedReason` | enum | `billing/PlatformAttemptModel.ts#PlatformAttemptRepository.markUnresolved` | schema | `runValidators` | validates the runtime unresolved reason |
 | Project | `groups.permissions` | enum | `content/ProjectModel.ts#ProjectRepository.setOwnedGroupReadAccess` | repository-check | `packages/database/src/models/content/ProjectModel.ts#ProjectRepository.setOwnedGroupReadAccess` | Snapshot-checked ordinary updates preserve or remove stored grants; new grants contain only the literal permission 'read' |
 | PublishedArtifactReport | `status` | enum | `content/purgeOwnerPublishedArtifacts.ts#purgeMatchingPublishedArtifacts` | repository-check | `literal` | writes "actioned" |
 | Quest | `callback.state` | enum | `content/QuestModel.ts#QuestRepository.armCallback` | repository-check | `packages/database/src/models/content/QuestModel.ts#QuestRepository.armCallback` | Writer hardcodes state 'pending' |

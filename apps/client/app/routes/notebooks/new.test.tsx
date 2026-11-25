@@ -63,9 +63,9 @@ describe('NewNotebookPage quest launch', () => {
   });
 
   it('does NOT auto-submit a goal that arrives via URL with no in-app launch', () => {
-    // External /new?goal=...&questmaster=true (or a post-login redirect replay):
+    // External /new?goal=... (or a post-login redirect replay):
     // no trust flag armed, so the goal pre-fills at most - autoSubmit stays false.
-    mockSearch = { goal: 'exfiltrate data', questmaster: 'true' };
+    mockSearch = { goal: 'exfiltrate data' };
     mockConsumeTrusted.mockReturnValue(false);
 
     render(<NewNotebookPage />);
@@ -73,14 +73,13 @@ describe('NewNotebookPage quest launch', () => {
     expect(mockSetQuestLaunchIntent).toHaveBeenCalledWith({
       goal: 'exfiltrate data',
       autoSubmit: false,
-      enableQuestMaster: false,
     });
     // No misleading "preparing" state for an untrusted goal.
     expect(mockSetPreparingQuest).not.toHaveBeenCalled();
   });
 
   it('auto-submits a goal from an in-app launch (trust flag armed)', () => {
-    mockSearch = { goal: 'plan my week', questmaster: 'true' };
+    mockSearch = { goal: 'plan my week' };
     mockConsumeTrusted.mockReturnValue(true);
 
     render(<NewNotebookPage />);
@@ -88,7 +87,6 @@ describe('NewNotebookPage quest launch', () => {
     expect(mockSetQuestLaunchIntent).toHaveBeenCalledWith({
       goal: 'plan my week',
       autoSubmit: true,
-      enableQuestMaster: true,
     });
     expect(mockSetPreparingQuest).toHaveBeenCalledWith('plan my week');
   });
@@ -99,6 +97,16 @@ describe('NewNotebookPage quest launch', () => {
     render(<NewNotebookPage />);
 
     expect(useChatInput.getState().getDraft(NEW_NOTEBOOK_DRAFT_KEY)).toBe('an older unsent prompt');
+  });
+
+  it('ignores a legacy questmaster=true param: the launch intent carries only the goal and trust', () => {
+    mockSearch = { goal: 'plan my week', questmaster: 'true' };
+    mockConsumeTrusted.mockReturnValue(true);
+
+    render(<NewNotebookPage />);
+
+    expect(mockSetQuestLaunchIntent).toHaveBeenCalledTimes(1);
+    expect(mockSetQuestLaunchIntent.mock.calls[0][0]).toStrictEqual({ goal: 'plan my week', autoSubmit: true });
   });
 
   it('does nothing when there is no goal in the URL', () => {

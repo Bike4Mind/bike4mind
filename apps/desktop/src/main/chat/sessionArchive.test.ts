@@ -1,7 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { MessageBoxOptions, MessageBoxReturnValue } from 'electron';
 import type { ChatSessionSummary } from '@shared/chat';
-import { archiveFromSidebar } from './sessionArchive';
+import { archiveAskingFirst, archiveFromSidebar, type ArchiveDecision, type ConfirmArchive } from './sessionArchive';
 
 const session = (id: string, parentSessionId?: string): ChatSessionSummary => ({
   id,
@@ -28,17 +27,66 @@ function setup(children: string[] = []) {
     archiveFinishedChildren: vi.fn(async () => undefined),
   };
   const store = { scopeKey: vi.fn(() => 'scope') };
-  const confirm = vi.fn<(options: MessageBoxOptions) => Promise<MessageBoxReturnValue>>(async () => ({
-    response: 0,
-    checkboxChecked: true,
-  }));
+  const confirm = vi.fn<ConfirmArchive>(async () => ({ response: 0, checkboxChecked: true }));
+  const archive = (decision?: ArchiveDecision) => archiveFromSidebar(service, store, parent.id, true, decision);
   return {
     service,
     store,
     confirm,
-    run: (archived = true) => archiveFromSidebar(service, store, parent.id, archived, confirm),
+    archive,
+    run: (archived = true) =>
+      archived ? archiveAskingFirst(archive, confirm) : archiveFromSidebar(service, store, parent.id, false),
   };
 }
+
+describe('archiving a parent session', () => {
+  it('changes nothing without confirmation and returns what the question needs', async () => {
+    const { service, archive } = setup(['finished', 'running', 'waiting']);
+
+    await expect(archive()).resolves.toEqual({
+      summary: null,
+      confirmationRequired: {
+        parentTitle: 'parent',
+        finished: [{ id: 'finished', title: 'finished' }],
+        kept: [
+          { id: 'running', title: 'running', status: 'running' },
+          { id: 'waiting', title: 'waiting', status: 'waiting' },
+        ],
+      },
+    });
+    expect(service.setSessionArchived).not.toHaveBeenCalled();
+  });
+
+  it('archives the parent and only the children the decision names once confirmed', async () => {
+    const { service, archive } = setup(['finished', 'running']);
+
+    await expect(archive({ confirmed: true, archiveChildIds: ['finished'] })).resolves.toMatchObject({
+      summary: { id: 'parent' },
+    });
+    expect(service.setSessionArchived).toHaveBeenCalledWith('parent', true);
+    expect(service.archiveFinishedChildren).toHaveBeenCalledWith('parent', ['finished'], 'scope');
+  });
+
+  it('archives a childless session and restores one without asking', async () => {
+    const { service, archive } = setup();
+
+    await expect(archive()).resolves.toMatchObject({ summary: { id: 'parent' } });
+    await archiveFromSidebar(service, { scopeKey: () => 'scope' }, 'parent', false);
+    expect(service.setSessionArchived.mock.calls).toEqual([
+      ['parent', true],
+      ['parent', false],
+    ]);
+    expect(service.archiveFinishedChildren).not.toHaveBeenCalled();
+  });
+
+  it('does nothing for a session the current account does not have', async () => {
+    const { service, archive } = setup(['finished']);
+    service.listSessions.mockResolvedValue([]);
+
+    await expect(archive({ confirmed: true, archiveChildIds: ['finished'] })).resolves.toEqual({ summary: null });
+    expect(service.setSessionArchived).not.toHaveBeenCalled();
+  });
+});
 
 describe('sidebar archive confirmation', () => {
   it('offers finished children default-on and lists running and waiting children as kept', async () => {
@@ -89,9 +137,9 @@ describe('sidebar archive confirmation', () => {
   });
 
   it('does not archive across an account switch while confirming', async () => {
-    const { service, store, confirm, run } = setup(['finished']);
+    const { service, confirm, run } = setup(['finished']);
     confirm.mockImplementation(async () => {
-      store.scopeKey.mockReturnValue('other');
+      service.listSessions.mockResolvedValue([]);
       return { response: 0, checkboxChecked: true };
     });
     await run();

@@ -17,7 +17,6 @@ import {
   DashboardParamsSchema,
   PromptMetaZodSchema,
   b4mLLMTools,
-  QuestMasterParamsSchema,
   ResearchModeParamsSchema,
   GenerateImageToolCallSchema,
   AudioGenerationToolCallSchema,
@@ -30,6 +29,9 @@ import {
   EnabledPlatformMcpConnectionsSchema,
 } from '@bike4mind/common';
 
+// Not strict: a body queued by an older server can still carry the retired QuestMaster fields
+// (enableQuestMaster, questMaster, questMasterStartId, questAdmittedAs). They are stripped on
+// parse and nothing reads them.
 export const QuestStartBodySchema = z
   .object({
     userId: z.string(),
@@ -41,11 +43,6 @@ export const QuestStartBodySchema = z
     fabFileIds: z.array(z.string()),
     params: ChatCompletionCreateInputSchema,
     dashboardParams: DashboardParamsSchema.optional(),
-    enableQuestMaster: z.boolean().optional(),
-    /** Server-generated admission id, never copied from the client request. */
-    questMasterStartId: z.string().optional(),
-    /** Invoke-time admission, preserved across queue redelivery and subscription changes. */
-    questAdmittedAs: z.enum(['subscriber', 'free']).optional(),
     enableMementos: z.boolean().optional(),
     enableArtifacts: z.boolean().optional(),
     /** See ChatCompletionInvokeParamsSchema.promptMode - must stay in sync with it. */
@@ -100,7 +97,6 @@ export const QuestStartBodySchema = z
     enabledPlatformMcpConnections: EnabledPlatformMcpConnectionsSchema,
     projectId: z.string().optional(),
     organizationId: z.string().nullable().optional(),
-    questMaster: QuestMasterParamsSchema.optional(),
     toolPromptId: z.string().optional(),
     researchMode: ResearchModeParamsSchema.optional(),
     fallbackModel: z.string().optional(),

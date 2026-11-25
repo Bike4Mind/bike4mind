@@ -6,6 +6,7 @@ import { useConversation, type ProjectBindingController } from './useChat';
 import { setWorktreeByDefault } from './worktreeDefault';
 import type { ChatProject } from '@shared/chat';
 import { newSessionInProject } from './newSessionInProject';
+import { chatBackedHostBridge } from '../__fixtures__/chatBackedHostBridge';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -47,6 +48,7 @@ describe('projectPicker', () => {
       vi.stubGlobal('requestAnimationFrame', () => 0);
       vi.stubGlobal('cancelAnimationFrame', () => undefined);
       (window as unknown as { b4m: unknown }).b4m = {
+        host: chatBackedHostBridge(),
         chat: {
           getSession: async () => ({ id: SESSION, messages: [], project: PROJECT }),
           getQueuedMessages: async () => [],

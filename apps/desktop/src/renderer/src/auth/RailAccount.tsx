@@ -20,9 +20,9 @@ import { updateAttention } from '@shared/update';
 import {
   BillingIcon,
   ConversationIcon,
+  ExternalLinkIcon,
   GearIcon,
   ModelsIcon,
-  NewWindowIcon,
   SignOutIcon,
   SlidersIcon,
   UserIcon,
@@ -57,7 +57,7 @@ const displayNameOf = (state: AuthState) =>
 
 // Says where the click goes, so it is not mistaken for syncing web conversations into this app: that is
 // the 'Bike4Mind web' group in the session list (see chat/WebSyncStatus).
-const OPEN_WEB_HINT = 'Opens the full web app in its own window, signed in';
+const OPEN_WEB_HINT = 'Opens the web app in your browser';
 
 type DotTone = 'warning' | 'neutral';
 
@@ -323,7 +323,7 @@ export function SignedInRailAccount({
           testId="account-feedback-btn"
         />
         <Row
-          icon={<NewWindowIcon />}
+          icon={<ExternalLinkIcon />}
           label="Open Bike4Mind web"
           tooltip={OPEN_WEB_HINT}
           onClick={() => void window.b4m.attention.openServerSessions()}

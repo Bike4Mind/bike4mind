@@ -114,8 +114,6 @@ async function callRoute(body: Record<string, unknown> = {}, currentCredits = 1_
   return { res, logger };
 }
 
-let consoleError: ReturnType<typeof vi.spyOn>;
-
 beforeEach(() => {
   vi.clearAllMocks();
   mockIncrementCredits.mockReset();
@@ -129,13 +127,9 @@ beforeEach(() => {
   }));
   mockOpenVoiceHold.mockResolvedValue(true);
   mockFindActiveFreeze.mockResolvedValue(null);
-  // The web server is a Lambda: console.error lines carry the ERROR prefix the log monitor alerts on,
-  // so the handled-failure paths must stay off it as well as off req.logger.error.
-  consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
 });
 
 afterEach(() => {
-  consoleError.mockRestore();
   vi.useRealTimers();
 });
 
@@ -167,7 +161,6 @@ describe('POST /api/ai/voice-sessions upstream failures', () => {
     expect(res._getJSONData()).toMatchObject({ code: VOICE_SESSION_ERROR.unavailable });
     // An error-level log reaches the LiveOps alert filter; a rejected key is not a server fault.
     expect(logger.error).not.toHaveBeenCalled();
-    expect(consoleError).not.toHaveBeenCalled();
     expect(logger.warn).toHaveBeenCalled();
   });
 
@@ -226,7 +219,6 @@ describe('POST /api/ai/voice-sessions upstream failures', () => {
     expect(res._getStatusCode()).toBe(502);
     expect(res._getJSONData()).toMatchObject({ code: VOICE_SESSION_ERROR.unavailable });
     expect(logger.error).not.toHaveBeenCalled();
-    expect(consoleError).not.toHaveBeenCalled();
     expect(mockPost).not.toHaveBeenCalled();
     expect(mockIncrementCredits).not.toHaveBeenCalled();
     expect(mockCreateSession).not.toHaveBeenCalled();

@@ -13,7 +13,6 @@ vi.mock('@client/app/utils/llm', () => ({
 }));
 
 import { handleLLMCommand, isModelAccessRefusal } from './LLMCommand';
-import { useQuestMasterUpgrade } from '../subscription/questMasterUpgrade';
 
 type HandlerArgs = Parameters<typeof handleLLMCommand>[0];
 
@@ -47,18 +46,6 @@ describe('handleLLMCommand - a model turned off after the picker loaded', () => 
   beforeEach(() => {
     post.mockReset();
     toastError.mockReset();
-    useQuestMasterUpgrade.getState().close();
-  });
-
-  it('opens the Questmaster upgrade prompt for the typed second-quest refusal without a generic toast', async () => {
-    const error = refusal(403, 'Free quest already started');
-    error.response!.data = { errorCode: 'free_quest_limit_reached' };
-    post.mockRejectedValue(error);
-
-    await expect(send(vi.fn())).rejects.toBe(error);
-
-    expect(useQuestMasterUpgrade.getState().isOpen).toBe(true);
-    expect(toastError).not.toHaveBeenCalled();
   });
 
   it('refetches model access on the admission refusal, so the picker drops the model', async () => {
@@ -79,7 +66,42 @@ describe('handleLLMCommand - a model turned off after the picker loaded', () => 
 
     expect(invalidateQueries).not.toHaveBeenCalled();
     expect(toastError).toHaveBeenCalledWith('session.errors.noPermission');
-    expect(useQuestMasterUpgrade.getState().isOpen).toBe(false);
+  });
+});
+
+describe('handleLLMCommand - request body', () => {
+  beforeEach(() => {
+    post.mockReset();
+    toastError.mockReset();
+  });
+
+  it('never forwards the retired QuestMaster flags, even from a caller that still passes them', async () => {
+    post.mockRejectedValue(refusal(403, 'Session belongs to another user'));
+
+    await expect(
+      handleLLMCommand({
+        params: 'hello world',
+        currentSession: { id: 'session-1' },
+        model: 'model-1',
+        workBenchFiles: [],
+        promptFileIds: [],
+        queryClient: { invalidateQueries: vi.fn() },
+        tools: [],
+        userId: 'user-1',
+        modelConfigurations: [],
+        sendJsonMessage: vi.fn(),
+        skipRapidReply: true,
+        enableQuestMaster: true,
+        questMaster: { questMasterPlanId: 'plan-1', questId: 'q-1', subQuestId: 'sq-1' },
+      } as unknown as HandlerArgs)
+    ).rejects.toBeInstanceOf(AxiosError);
+
+    expect(post).toHaveBeenCalledTimes(1);
+    const [url, body] = post.mock.calls[0];
+    expect(url).toBe('/api/ai/llm');
+    expect(body.message).toContain('hello world');
+    expect(Object.keys(body)).not.toContain('enableQuestMaster');
+    expect(Object.keys(body)).not.toContain('questMaster');
   });
 });
 

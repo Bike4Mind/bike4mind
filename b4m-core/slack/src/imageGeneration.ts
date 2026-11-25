@@ -83,7 +83,6 @@ export async function triggerImageGeneration(params: TriggerImageGenerationParam
             'Call image_generation with the user prompt EXACTLY as-is in a SINGLE tool call. Do NOT rewrite, simplify, or split the prompt into multiple calls.',
         },
       ],
-      enableQuestMaster: false,
       enableMementos: false,
       enableArtifacts: false,
       enableAgents: false,

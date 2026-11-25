@@ -25,7 +25,8 @@ describe('on macOS', () => {
     expect(matchPlaceShortcut(chord('Digit2', { metaKey: true }), mac)).toBe('code');
     expect(matchPlaceShortcut(chord('Digit3', { metaKey: true }), mac)).toBe('studio');
     expect(matchPlaceShortcut(chord('Digit4', { metaKey: true }), mac)).toBe('agents');
-    expect(matchPlaceShortcut(chord('Digit5', { metaKey: true }), mac)).toBeNull();
+    expect(matchPlaceShortcut(chord('Digit5', { metaKey: true }), mac)).toBe('library');
+    expect(matchPlaceShortcut(chord('Digit6', { metaKey: true }), mac)).toBeNull();
   });
 
   it('opens the nth session with Ctrl+1..9, no longer with Cmd', () => {

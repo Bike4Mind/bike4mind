@@ -11,7 +11,6 @@ interface UseProgrammaticSubmitParams {
   handleSendClick: (
     prompt?: string,
     options?: {
-      forceEnableQuestMaster?: boolean;
       toolsOverride?: B4MLLMTools[];
       systemContext?: string;
       forceAgent?: boolean;

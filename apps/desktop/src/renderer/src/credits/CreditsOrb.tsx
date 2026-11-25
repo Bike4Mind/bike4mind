@@ -7,6 +7,7 @@ import MenuItem from '@mui/joy/MenuItem';
 import Stack from '@mui/joy/Stack';
 import Tooltip from '@mui/joy/Tooltip';
 import Typography from '@mui/joy/Typography';
+import { keyframes } from '@mui/system';
 import { RailTooltipTitle } from '../chat/rail/PlaceRail';
 import { formatCredits } from './CreditsGlance';
 import { creditsOrbLabel, creditsOrbState, type CreditsOrbTone } from './creditsOrbState';
@@ -15,21 +16,40 @@ import type { CreditsGlance } from './useCreditsGlance';
 const ORB_SIZE = 28;
 const REDUCED_MOTION = '@media (prefers-reduced-motion: reduce)';
 
-const TINT: Record<CreditsOrbTone, string> = {
-  ok: 'var(--joy-palette-neutral-500)',
-  unknown: 'var(--joy-palette-neutral-500)',
-  low: 'var(--joy-palette-warning-500)',
+const RING: Record<CreditsOrbTone, string> = {
+  ok: 'color-mix(in srgb, var(--joy-palette-text-tertiary) 55%, transparent)',
+  unknown: 'color-mix(in srgb, var(--joy-palette-text-tertiary) 55%, transparent)',
+  low: 'var(--joy-palette-warning-400)',
   critical: 'var(--joy-palette-danger-500)',
 };
 
+const TEXT: Record<CreditsOrbTone, string> = {
+  ok: 'var(--joy-palette-text-secondary)',
+  unknown: 'var(--joy-palette-text-tertiary)',
+  low: 'var(--joy-palette-warning-plainColor)',
+  critical: 'var(--joy-palette-danger-plainColor)',
+};
+
+const halo = (tone: CreditsOrbTone, percent: number) =>
+  `0 0 0 3px color-mix(in srgb, ${RING[tone]} ${percent}%, transparent)`;
+
+const pulse = (tone: CreditsOrbTone) => keyframes`
+  0%, 100% { box-shadow: inset 0 0 0 1.5px ${RING[tone]}, ${halo(tone, 22)}; }
+  50% { box-shadow: inset 0 0 0 1.5px ${RING[tone]}, ${halo(tone, 6)}; }
+`;
+const PULSE: Partial<Record<CreditsOrbTone, ReturnType<typeof keyframes>>> = {
+  low: pulse('low'),
+  critical: pulse('critical'),
+};
+
 /**
- * A glass orb whose fill is the remaining balance. Quiet while ok (a hairline ring and a faint
- * fill, no colour); low and critical tint the fill and the ring, so a near-empty orb still shows
- * it. Pure CSS, and nothing in it moves except a level change easing, which reduced motion turns
- * off.
+ * The orb face: the balance as text inside a status ring. Neutral while the runway is long or
+ * unknown; amber when low and red when critical, with a slow halo pulse that reduced motion
+ * holds still. No fill: a balance has no maximum to fill toward.
  */
-export function CreditsOrbFace({ tone, level }: { tone: CreditsOrbTone; level: number }) {
+export function CreditsOrbFace({ tone, compact }: { tone: CreditsOrbTone; compact: string | null }) {
   const attention = tone === 'low' || tone === 'critical';
+  const text = compact ?? '-';
   return (
     <Box
       component="span"
@@ -37,29 +57,28 @@ export function CreditsOrbFace({ tone, level }: { tone: CreditsOrbTone; level: n
       data-testid="rail-credits-orb-face"
       data-tone={tone}
       sx={{
-        position: 'relative',
-        display: 'block',
+        display: 'grid',
+        placeItems: 'center',
         width: ORB_SIZE,
         height: ORB_SIZE,
         borderRadius: '50%',
-        overflow: 'hidden',
-        boxShadow: attention
-          ? `inset 0 0 0 1.5px color-mix(in srgb, ${TINT[tone]} 85%, transparent)`
-          : 'inset 0 0 0 1px var(--joy-palette-divider)',
-        '&::before': {
-          content: '""',
-          position: 'absolute',
-          left: '-30%',
-          right: '-30%',
-          bottom: 0,
-          height: `${Math.round(Math.min(1, Math.max(0, level)) * 100)}%`,
-          background: `color-mix(in srgb, ${TINT[tone]} ${attention ? 72 : 24}%, transparent)`,
-          borderRadius: '42% 46% 0 0 / 14% 12% 0 0',
-          transition: 'height 0.9s cubic-bezier(.2,.8,.2,1)',
-          [REDUCED_MOTION]: { transition: 'none' },
-        },
+        color: TEXT[tone],
+        // Four characters ("300k", "123M") need a size down to stay inside the ring.
+        fontSize: text.length >= 4 ? '8px' : '9.5px',
+        fontWeight: 650,
+        letterSpacing: text.length >= 4 ? '-0.04em' : '-0.02em',
+        fontVariantNumeric: 'tabular-nums',
+        lineHeight: 1,
+        whiteSpace: 'nowrap',
+        boxShadow: `inset 0 0 0 1.5px ${RING[tone]}${attention ? `, ${halo(tone, 22)}` : ''}`,
+        ...(attention && {
+          animation: `${PULSE[tone]} 2.4s ease-in-out infinite`,
+          [REDUCED_MOTION]: { animation: 'none' },
+        }),
       }}
-    />
+    >
+      {text}
+    </Box>
   );
 }
 
@@ -103,7 +122,7 @@ export function CreditsOrb({
             '&:hover': { bgcolor: 'neutral.plainHoverBg' },
           }}
         >
-          <CreditsOrbFace tone={state.tone} level={state.level} />
+          <CreditsOrbFace tone={state.tone} compact={state.compact} />
         </MenuButton>
       </Tooltip>
       <Menu size="sm" placement="right-end" sx={{ minWidth: 200 }} data-testid="rail-credits-popover">
@@ -114,6 +133,21 @@ export function CreditsOrb({
           <Typography level="title-md" sx={{ fontVariantNumeric: 'tabular-nums' }} data-testid="rail-credits-balance">
             {state.balance === null ? 'Balance unavailable' : `${formatCredits(state.balance)} credits`}
           </Typography>
+          {state.runway === null ? null : (
+            <Typography
+              level="body-xs"
+              data-testid="rail-credits-runway"
+              textColor={
+                state.tone === 'critical'
+                  ? 'danger.plainColor'
+                  : state.tone === 'low'
+                    ? 'warning.plainColor'
+                    : 'text.tertiary'
+              }
+            >
+              {state.runway}
+            </Typography>
+          )}
         </Stack>
         {/* /billing tops up the personal account, so an organization pool offers none, as in the menu. */}
         {glance.organization ? null : <Divider />}

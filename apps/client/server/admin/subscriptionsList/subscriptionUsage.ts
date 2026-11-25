@@ -44,8 +44,11 @@ export async function loadSubscriptionUsage(docs: SubscriptionDoc[], now = new D
     ...new Map(docs.map(doc => [usageOwnerKey(doc), { ownerType: doc.ownerType, ownerId: doc.ownerId }])).values(),
   ];
   const [first, latest, groups, organizations, ctx, markers] = await Promise.all([
-    UsageEvent.findOne({}, { createdAt: 1 }).sort({ createdAt: 1 }).maxTimeMS(DEADLINE).lean<{ createdAt: Date }>(),
-    UsageEvent.findOne({ createdAt: { $lt: now } }, { createdAt: 1 })
+    UsageEvent.findOne({ 'attribution.kind': { $ne: 'platform_operation' } }, { createdAt: 1 })
+      .sort({ createdAt: 1 })
+      .maxTimeMS(DEADLINE)
+      .lean<{ createdAt: Date }>(),
+    UsageEvent.findOne({ 'attribution.kind': { $ne: 'platform_operation' }, createdAt: { $lt: now } }, { createdAt: 1 })
       .sort({ createdAt: -1 })
       .maxTimeMS(DEADLINE)
       .lean<{ createdAt: Date }>(),

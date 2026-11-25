@@ -66,7 +66,6 @@ export class SkillsFeature implements ChatCompletionFeature {
     historyCount: number;
     fabFileIds: string[];
     questId: string;
-    questMaster: unknown;
     exampleRunSkill?: { name: string; body: string };
   }): Promise<{ shouldContinue: boolean }> {
     const { message, quest, exampleRunSkill } = args;

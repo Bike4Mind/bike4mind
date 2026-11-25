@@ -117,7 +117,7 @@ const handler = baseApi({ auth: 'jwtOnly' }).post(async (req, res) => {
       }
     } catch (updateErr) {
       // Non-fatal - continue with execution even if quest update fails
-      console.warn(`[Jupyter Execute] Failed to update quest ${questId}:`, updateErr);
+      req.logger.warn('Failed to update quest', { questId, error: updateErr });
     }
   }
 
@@ -161,8 +161,6 @@ const handler = baseApi({ auth: 'jwtOnly' }).post(async (req, res) => {
       hint: 'All CLI connections may be stale. Try reconnecting the CLI.',
     });
   }
-
-  console.log(`[Jupyter Execute] Sent notebook execution to CLI for user ${userId}, requestId=${requestId}`);
 
   res.json({
     requestId,

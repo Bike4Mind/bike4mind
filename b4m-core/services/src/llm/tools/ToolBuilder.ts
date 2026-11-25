@@ -6,7 +6,7 @@ import {
   IMessage,
   IUserDocument,
   IOrganizationDocument,
-  IUsageEventInput,
+  IAttributedUsageEventInput,
   IUsageEventRepository,
   UsageEventFeature,
   ModelInfo,
@@ -87,7 +87,7 @@ export function buildToolUsageEvent(params: {
    * reads these features to unlock its gears.
    */
   feature?: UsageEventFeature;
-}): IUsageEventInput {
+}): IAttributedUsageEventInput {
   const { quest, user, organization } = params;
   return {
     requestId: quest.id,
@@ -120,7 +120,7 @@ export async function recordToolUsageEvent(
   db: { usageEvents?: Pick<IUsageEventRepository, 'record'> },
   logger: Logger,
   toolName: string,
-  event: IUsageEventInput
+  event: IAttributedUsageEventInput
 ): Promise<void> {
   try {
     await db.usageEvents?.record(event);

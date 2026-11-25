@@ -1517,6 +1517,7 @@ describe('UsageEventRepository.costByFundingCohort', () => {
         costUsd: { granted: 2.75, purchased: 0.25, subscription: 0, unknown: 0 },
         credits: { granted: 115, purchased: 25, subscription: 0, unknown: 0 },
         unattributedCostUsd: 0.5,
+        platformCostUsd: 0,
       },
       {
         cohortWeek: new Date('2026-10-12T00:00:00Z'),
@@ -1524,6 +1525,7 @@ describe('UsageEventRepository.costByFundingCohort', () => {
         costUsd: { granted: 0, purchased: 0, subscription: 4, unknown: 0 },
         credits: { granted: 0, purchased: 0, subscription: 10, unknown: 0 },
         unattributedCostUsd: 0,
+        platformCostUsd: 0,
       },
     ]);
   });

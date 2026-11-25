@@ -1,6 +1,8 @@
+import type { HostBridgeApi } from './hostBridge';
 import type { SkinSummary, SoundPackSummary } from './mods';
 import type { NewSessionDefaults } from './sessionDefaults';
 import type { StudioApi } from './studioIpc';
+import type { LibraryApi } from './library';
 import type { PendingTaskDecision, RolePolicy, TaskAction, TaskDecisionAnswer } from './orchestration';
 import type { AppWorktree, WorktreeRemoval, WorktreeSweepItem } from './worktreeRemoval';
 import type { LoopResult, LoopState } from './loop';
@@ -148,6 +150,7 @@ import type {
 } from './models';
 import type { AccountUsageResult, LocalUsageResult, UsageWindowId } from './usage';
 import type { FleetState } from './fleet';
+import type { LaunchSignals } from './launchSignals';
 import type {
   ModelBuildReport,
   ModelCaptureRequestEvent,
@@ -174,6 +177,8 @@ import type { WatchDecision, WatchPreferences, WatchPreferencesPatch, WatchSnaps
  * anything that needs a token is a main-process job.
  */
 export const IPC_CHANNELS = {
+  hostRequest: 'host:request',
+  hostNotification: 'host:notification',
   studioGet: 'studio:get',
   studioPage: 'studio:page',
   studioJobAction: 'studio:job-action',
@@ -183,6 +188,9 @@ export const IPC_CHANNELS = {
   studioUploadReference: 'studio:upload-reference',
   studioAssetAction: 'studio:asset-action',
   studioChanged: 'studio:changed',
+  libraryPage: 'library:page',
+  libraryMedia: 'library:media',
+  libraryLocate: 'library:locate',
   getAppInfo: 'app:get-info',
   setTheme: 'app:set-theme',
   authGetState: 'auth:get-state',
@@ -266,6 +274,7 @@ export const IPC_CHANNELS = {
   chatUpdateProject: 'chat:update-project',
   chatPickProjectDirectory: 'chat:pick-project-directory',
   chatListRecentFolders: 'chat:list-recent-folders',
+  chatLaunchSignals: 'chat:launch-signals',
   chatRemoveRecentFolder: 'chat:remove-recent-folder',
   chatInspectProject: 'chat:inspect-project',
   chatWorkspaceChanges: 'chat:workspace-changes',
@@ -844,6 +853,8 @@ export interface OrchestrateMiniApi {
 
 export interface DesktopApi {
   studio: StudioApi;
+  host: HostBridgeApi;
+  library: LibraryApi;
   getAppInfo(): Promise<AppInfo>;
   /** App-menu items (Cmd+N, Cmd+,) that act on the renderer's views. */
   appMenu: {
@@ -1079,6 +1090,8 @@ export interface DesktopApi {
     pickProjectDirectory(): Promise<string | null>;
     /** Recently used project folders that still exist, most recent first. */
     listRecentFolders(): Promise<RecentFolder[]>;
+    /** Local hints for which place a first launch opens on; see shared/launchSignals.ts. */
+    launchSignals(): Promise<LaunchSignals>;
     /** Forget one; the folder itself is untouched. Resolves to the list that is left. */
     removeRecentFolder(directory: string): Promise<RecentFolder[]>;
     /** Read a directory's branches, for the branch chip. */
@@ -1601,6 +1614,7 @@ export interface DesktopApi {
   };
   /** OS notices for sessions that need the user while the app is not focused. */
   attention: {
+    /** Opens the signed-in environment's web app in the default browser. */
     openServerSessions(): Promise<void>;
     /**
      * Of `sessionIds`, the ones this window may announce. Every open window sees the same entry into

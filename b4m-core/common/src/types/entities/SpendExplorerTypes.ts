@@ -9,6 +9,7 @@ import { CreditHolderType } from './CreditHolderTypes';
 export const ACCOUNT_SEGMENTS = ['internal', 'partner', 'customer'] as const;
 export const AccountSegmentSchema = z.enum(ACCOUNT_SEGMENTS);
 export type AccountSegment = z.infer<typeof AccountSegmentSchema>;
+export type SpendSegment = AccountSegment | 'platform';
 export const DEFAULT_ACCOUNT_SEGMENT: AccountSegment = 'customer';
 
 /** A user is internal only through `IUser.isInternal`, so the stored user segment can only mark a partner. */
@@ -95,7 +96,7 @@ export type SpendBreakdownActor = {
 export type SpendBreakdown = {
   totalCostUsd: number;
   byProvider: Array<{ provider: string; costUsd: number }>;
-  bySegment: Array<{ segment: AccountSegment; costUsd: number }>;
+  bySegment: Array<{ segment: SpendSegment; costUsd: number }>;
   topActors: SpendBreakdownActor[];
 };
 
@@ -159,7 +160,7 @@ export type SpendAccountRow = {
 export type SpendAccountsResponse = {
   totalCostUsd: number;
   byProvider: Array<{ provider: string; costUsd: number }>;
-  bySegment: Array<{ segment: AccountSegment; costUsd: number }>;
+  bySegment: Array<{ segment: SpendSegment; costUsd: number }>;
   accounts: SpendAccountRow[];
 };
 

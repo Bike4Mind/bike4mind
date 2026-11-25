@@ -18,7 +18,6 @@ export const QuestStartBodySchema = z.object({
   fabFileIds: z.array(z.string()),
   params: ChatCompletionCreateInputSchema,
   dashboardParams: DashboardParamsSchema.optional(),
-  enableQuestMaster: z.boolean().optional(),
   enableMementos: z.boolean().optional(),
   enableArtifacts: z.boolean().optional(),
   promptMeta: PromptMetaZodSchema,

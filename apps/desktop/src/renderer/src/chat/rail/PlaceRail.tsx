@@ -5,7 +5,7 @@ import Stack from '@mui/joy/Stack';
 import Tooltip from '@mui/joy/Tooltip';
 import Typography from '@mui/joy/Typography';
 import { stateJoyColor } from '../orchestrator/statePalette';
-import { RailAgentsIcon, RailChatIcon, RailCodeIcon, RailStudioIcon } from '../icons';
+import { RailAgentsIcon, RailChatIcon, RailCodeIcon, RailLibraryIcon, RailStudioIcon } from '../icons';
 import { hiddenScrollbarSx } from '../layout';
 import { PLACES, placeHasSidebar, type Place } from './places';
 import { placeShortcutLabel, sidebarShortcutLabel } from './shortcuts';
@@ -32,6 +32,7 @@ const ICONS: Record<Place, () => ReactNode> = {
   code: RailCodeIcon,
   studio: RailStudioIcon,
   agents: RailAgentsIcon,
+  library: RailLibraryIcon,
 };
 
 /** A tooltip's label with its shortcut beside it, dimmer, so the label is read first. */

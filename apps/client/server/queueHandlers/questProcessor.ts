@@ -10,7 +10,6 @@ import {
   mongoose,
   adminSettingsRepository,
   userRepository,
-  questMasterPlanRepository,
   Connection,
   fabFileRepository,
   fabFileChunkRepository,
@@ -64,18 +63,10 @@ import { createChatLiveActivity, publishChatCompletedPush } from './questProcess
 import { recordFirstChatValue } from '@server/analytics/funnel';
 import { summarizeSession, contextSummarizeSession } from '@bike4mind/server-utils/managers/sessionManager';
 import { getUserEntitlements } from '@bike4mind/server-utils/entitlements/index';
-import { admitQuestStart, releaseQuestStart } from '@bike4mind/server-utils/entitlements/questStartAllowance';
 import { resolveThinkingVisibility } from '@bike4mind/server-utils/utils/thinkingVisibility';
 import { operationalBillingAdapters } from '@bike4mind/server-utils/billing/operationalBilling';
 import { accessibleBy } from '@casl/mongoose';
-import {
-  FREE_QUEST_LIMIT_REACHED_ERROR_CODE,
-  getQuestErrorCode,
-  IUserDocument,
-  Permission,
-  SPEND_FROZEN_ERROR_CODE,
-  isSpendFrozenError,
-} from '@bike4mind/common';
+import { IUserDocument, Permission, SPEND_FROZEN_ERROR_CODE, isSpendFrozenError } from '@bike4mind/common';
 import { LLMEvents, SessionEvents } from '@bike4mind/server-utils/utils/eventBus';
 import {
   getSharedTokenizer,
@@ -101,7 +92,6 @@ import { createImageJobs } from '@bike4mind/services/imageJobs';
 import { resolveImageJobFiles } from '@bike4mind/server-utils/generations/resolveImageJobFiles';
 import { resolveCallableFunctionsEnabled } from '@bike4mind/server-utils/callableFunctions/access';
 import { getMcpClientAdapter } from '@bike4mind/server-utils/utils/getMcpClientAdapter';
-import { createCompletionMeter } from '@bike4mind/server-utils/billing/meterPlatformCompletion';
 import { functionAndConnectorToolHost } from '@bike4mind/server-utils/callableFunctions/functionToolHost';
 import {
   checkFreeTierDailySpendCap,
@@ -133,7 +123,6 @@ export const getStaticOptions = () => {
     db: {
       sessions: sessionRepository,
       quests: questRepository,
-      questMasterPlans: questMasterPlanRepository,
       users: userRepository,
       apiKeys: apiKeyRepository,
       adminSettings: adminSettingsRepository,
@@ -212,8 +201,6 @@ export const getStaticOptions = () => {
     // (e.g. a tag-less, entitlement-only subscriber). Pure function ref - safe to cache; the
     // per-request, per-user resolution happens inside ChatCompletionProcess.resolveEntitlementKeys.
     getEntitlements: getUserEntitlements,
-    admitQuestStart,
-    releaseQuestStart,
     getThinkingVisibility: resolveThinkingVisibility,
     autoNameSession: autoNameSessionAdapter,
     notifyModerationEscalation: publishModerationEscalation,
@@ -455,15 +442,6 @@ export async function processQuest(
       // starts none: images render in-process with credits off, video, music and audio jobs are unavailable.
       audioToolJobs: exampleRun ? undefined : buildAudioToolJobs(),
       onStatusUpdate: liveActivity.onStatusUpdate,
-      createCompletionMeter: exampleRun
-        ? undefined
-        : ({ organizationId, featureLabel }) =>
-            createCompletionMeter(user, logger, featureLabel, {
-              sessionId: params.sessionId,
-              organizationId,
-              apiKeyId: params.apiKeyId,
-              apiKeyBillingOwnerType: params.apiKeyBillingOwnerType,
-            }),
     });
     logger.debug('ChatCompletionProcess instantiation', { durationMs: Date.now() - optionsStartTime });
 
@@ -517,17 +495,6 @@ export async function processQuest(
     });
   } catch (error) {
     await liveActivity.end('failed');
-    if (getQuestErrorCode(error) === FREE_QUEST_LIMIT_REACHED_ERROR_CODE) {
-      const message = (error as Error).message;
-      await questRepository.settleIfUnfinished(params.questId, {
-        status: 'done',
-        type: 'error',
-        errorCode: FREE_QUEST_LIMIT_REACHED_ERROR_CODE,
-        reply: message,
-        replies: [message],
-      });
-      return;
-    }
     throw error;
   }
   await liveActivity.end();

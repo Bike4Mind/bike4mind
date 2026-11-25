@@ -235,7 +235,6 @@ const handler = adminApi({
             frequency_penalty: 0,
           },
           promptMeta,
-          enableQuestMaster: false,
           enableMementos: true,
           enableArtifacts: true,
           enableAgents: false,
@@ -245,7 +244,6 @@ const handler = adminApi({
           ...requestTurnAuth(req),
           // Optional schema fields - declared for QuestStartBodySchema type conformance
           dashboardParams: undefined,
-          questMaster: undefined,
           researchMode: undefined,
           imageConfig: undefined,
         };

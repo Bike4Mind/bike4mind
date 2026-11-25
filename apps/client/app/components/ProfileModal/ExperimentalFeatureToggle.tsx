@@ -215,17 +215,6 @@ export default function ExperimentalFeatureToggle() {
         />
       )}
       <FeatureContainer
-        title="Quest Master"
-        featureKey="enableQuestMaster"
-        description="Enable our AI model agnostic agentic Quest Master."
-        helpId="features/quest-master"
-        enabled={isFeatureEnabled('enableQuestMaster')}
-        disabled={!getServerSettingValue('EnableQuestMaster')}
-        disabledReason={!getServerSettingValue('EnableQuestMaster') ? 'Disabled by administrator' : undefined}
-        loading={false}
-        onChange={() => handleToggle('enableQuestMaster')}
-      />
-      <FeatureContainer
         title="Rapid Reply"
         featureKey="enableRapidReply"
         description="Get instant acknowledgments using fast mini models while your full response is being prepared."

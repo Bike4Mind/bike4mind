@@ -116,7 +116,7 @@ Summary:`;
       };
     }
   } catch (error) {
-    if (!isTerminalCreditRefusal(error)) console.error('Blog enhancement error:', error);
+    if (!isTerminalCreditRefusal(error)) req.logger.error('Blog enhancement error', { error });
     throw error;
   }
 }
@@ -147,7 +147,7 @@ const handler = baseApi().post(
     } catch (error) {
       // A credit refusal (422 out of credits, 429 free-tier daily cap) must surface with its own status instead of degrading to a generic 500; the error handler logs it at warn.
       if (error instanceof UnprocessableEntityError || isTerminalCreditRefusal(error)) throw error;
-      console.error('Blog enhance error:', error);
+      req.logger.error('Blog enhance error', { error });
       return res.status(500).json({
         success: false,
         message: error instanceof Error ? error.message : 'Failed to enhance blog content',

@@ -475,7 +475,7 @@ export interface IClientUsageEntry {
 
 export interface IUser extends ICreditHolder {
   id: string;
-  /** Durable admission id; deleting a QuestMaster plan never restores the allowance. */
+  /** Stored data only: written by the retired in-chat QuestMaster free start, read by nothing. */
   freeQuestStartId?: string;
   username: string;
   name: string;

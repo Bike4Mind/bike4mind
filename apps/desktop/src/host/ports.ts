@@ -29,6 +29,26 @@ export type HostEventSink = {
   loopChanged(sessionId: string, state: LoopState | null): void;
 };
 
+/**
+ * The one encryption port every secret store and the auth vault take. Electron's safeStorage
+ * satisfies it on Desktop (secrets/appSecretCipher.ts); a headless host, which has no keychain
+ * session, uses host/auth/permissionProtectedCipher.ts. Kept a port so a store can be tested
+ * without Electron and the "only after app ready" rule stays a construction-order concern.
+ */
+export type SecretCipher = {
+  isEncryptionAvailable(): boolean;
+  encryptString(plainText: string): Buffer;
+  decryptString(encrypted: Buffer): string;
+  /** True for a blob in an older format that the store should re-save (see secrets/appSecretCipher.ts). */
+  needsReencrypt?(encrypted: Buffer): boolean;
+  /**
+   * Declared only by a cipher that does not encrypt and relies on the file's owner-only
+   * permissions instead. Without it, the auth vault keeps tokens in memory only when the
+   * cipher cannot encrypt.
+   */
+  readonly atRestProtection?: 'file-permissions';
+};
+
 export type HostAuth = Pick<AuthService, 'getApiClient' | 'getState'>;
 
 /** Capabilities that need a desktop session (windows, the screen, a GPU image decoder); a headless host has none. */

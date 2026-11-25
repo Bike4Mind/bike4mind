@@ -621,9 +621,6 @@ apps/client/pages/api/publish/widget.ts
 apps/client/pages/api/pyodide-sandbox.ts
 apps/client/pages/api/qa/runs.ts
 apps/client/pages/api/qa/uploads.ts
-apps/client/pages/api/quest-master-plans/[id]/index.ts
-apps/client/pages/api/quest-plans/[id]/export.ts
-apps/client/pages/api/quest-plans/[id]/progress.ts
 apps/client/pages/api/quests/[id]/check-timeout.ts
 apps/client/pages/api/quests/[id]/client-timing.ts
 apps/client/pages/api/quests/[id]/files.ts
@@ -662,7 +659,6 @@ apps/client/pages/api/sessions/[id]/clone.ts
 apps/client/pages/api/sessions/[id]/favorite.ts
 apps/client/pages/api/sessions/[id]/files.ts
 apps/client/pages/api/sessions/[id]/index.ts
-apps/client/pages/api/sessions/[id]/questmaster-plans/index.ts
 apps/client/pages/api/sessions/[id]/summary.ts
 apps/client/pages/api/sessions/[id]/surface.ts
 apps/client/pages/api/sessions/[id]/tag.ts

@@ -4,7 +4,8 @@ import type { McpServerInput, McpServersState } from '@shared/mcp';
 import { findTool } from '../tools/registry';
 import type { ToolContext } from '../tools/types';
 import { McpManager, redactSecrets } from './McpManager';
-import { McpServerStore, type SecretCipher, type StoreFile } from './McpServerStore';
+import { McpServerStore, type StoreFile } from './McpServerStore';
+import type { SecretCipher } from '../../../host/ports';
 
 /**
  * These tests drive a REAL MCP server: a child process speaking JSON-RPC over stdio, not a

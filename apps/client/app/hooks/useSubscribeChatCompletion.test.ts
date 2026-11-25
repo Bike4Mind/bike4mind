@@ -432,6 +432,31 @@ describe('useSubscribeChatCompletion - rapid-reply acks', () => {
     await stream(ack({ questId: 'own-q' }));
     expect(result.current.chatCompletion.rapidReply?.content).toBe('On it');
   });
+
+  const doneFrame = (id: string, replies: string[]) => ({
+    action: 'streamed_chat_completion',
+    quest: { id, sessionId: 's1', type: 'message', status: 'done', replies },
+  });
+
+  it('keeps the rapid reply when the complete frame carries no replies', async () => {
+    const { result } = mount('s1');
+    await stream(ack({ sessionId: 's1' }));
+    expect(result.current.chatCompletion.rapidReply?.content).toBe('On it');
+
+    await stream(doneFrame('rapid-keep-q', []));
+    expect(result.current.chatCompletion.completed).toBe(true);
+    expect(result.current.chatCompletion.rapidReply?.content).toBe('On it');
+  });
+
+  it('clears the rapid reply when the complete frame carries the main replies', async () => {
+    const { result } = mount('s1');
+    await stream(ack({ sessionId: 's1' }));
+    expect(result.current.chatCompletion.rapidReply?.content).toBe('On it');
+
+    await stream(doneFrame('rapid-clear-q', ['The full answer']));
+    expect(result.current.chatCompletion.completed).toBe(true);
+    expect(result.current.chatCompletion.rapidReply).toBeUndefined();
+  });
 });
 
 describe('useSubscribeChatCompletion - first turn in the notebook shell (one provider throughout)', () => {

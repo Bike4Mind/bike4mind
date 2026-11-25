@@ -17,9 +17,12 @@ import {
   reviewBodySchema,
   confirmationParams,
 } from '../helpers/schemas.js';
-import { getErrorMessage, hasStatus, isRateLimitError } from '../helpers/errors.js';
+import { createStderrLogger } from '../../shared/stderrLog.js';
+import { getErrorMessage, errorLogFields, hasStatus, isRateLimitError } from '../helpers/errors.js';
 import { createPreviewResponse } from '../../shared/confirmation-helpers.js';
 import { TOOL_CREATE_REVIEW, TOOL_APPROVE_PR, TOOL_REQUEST_CHANGES } from '../constants.js';
+
+const log = createStderrLogger('github');
 
 // Type for review comment from schema
 type ReviewComment = z.infer<typeof reviewCommentSchema>;
@@ -40,8 +43,6 @@ async function executeReview(params: {
   const { owner, repo, pull_number, event, body, comments, commit_id, toolName } = params;
   const fullRepoName = `${owner}/${repo}`;
 
-  console.error(`[${toolName}] Attempting to create ${event} review on PR #${pull_number}: ${fullRepoName}`);
-
   try {
     // Fetch PR details to validate state and get current commit SHA
     let prDetails;
@@ -52,7 +53,7 @@ async function executeReview(params: {
         pull_number,
       });
     } catch (error) {
-      console.error(`[${toolName}] ERROR fetching PR: ${getErrorMessage(error)}`);
+      log.error('pr lookup failed', { toolName, ...errorLogFields(error) });
       if (hasStatus(error, 404)) {
         return createErrorResponse(error, {
           suggestion: `Pull request #${pull_number} was not found in ${fullRepoName}. Verify the PR number is correct.`,
@@ -123,12 +124,10 @@ async function executeReview(params: {
 
     // Audit logging for APPROVE and REQUEST_CHANGES events (both affect merge status)
     if (event === 'APPROVE' || event === 'REQUEST_CHANGES') {
-      console.error(`[${toolName}] AUDIT: ${event} review created on PR #${pull_number} by authenticated user`);
+      log.info('audit: review affecting merge status created', { toolName, event, number: pull_number });
     }
 
-    console.error(`[${toolName}] SUCCESS: ${event} review created on PR #${pull_number}`);
-    console.error(`[${toolName}] Review ID: ${result.data.id}`);
-    console.error(`[${toolName}] Review URL: ${result.data.html_url}`);
+    log.info('succeeded', { toolName, number: pull_number });
 
     return createSuccessResponse({
       review: {
@@ -146,7 +145,7 @@ async function executeReview(params: {
       },
     });
   } catch (error) {
-    console.error(`[${toolName}] ERROR: ${getErrorMessage(error)}`);
+    log.error('failed', { toolName, ...errorLogFields(error) });
 
     // Handle rate limiting
     if (isRateLimitError(error)) {
@@ -240,7 +239,7 @@ export function registerReviewTools(server: McpServer) {
           currentHeadSha = pr.data.head.sha;
         } catch (error) {
           prFetchError = getErrorMessage(error);
-          console.error(`[${TOOL_CREATE_REVIEW}] Warning: Could not fetch PR for preview: ${prFetchError}`);
+          log.warn('could not fetch PR for preview', { toolName: TOOL_CREATE_REVIEW, ...errorLogFields(error) });
         }
 
         const previewData: Record<string, unknown> = {
