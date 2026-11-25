@@ -1114,12 +1114,8 @@ describe('runBudget', () => {
         timeout: 5000,
         interval: 5,
       });
-      // The planner's refused round can land after the worker's, so wait for it rather than for idle.
-      await vi.waitUntil(async () => (await lastReply(root.id))?.stopReason === RUN_BUDGET_STOP, {
-        timeout: 5000,
-        interval: 5,
-      });
       await idle(root.id);
+      expect((await lastReply(root.id))?.stopReason).toBe(RUN_BUDGET_STOP);
       const opened = streams.length;
 
       await expect(service.raiseRunBudget(worker.id, 2000)).resolves.toMatchObject({ ok: true });
