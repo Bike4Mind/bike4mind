@@ -698,9 +698,6 @@ importers:
       '@types/sanitize-html':
         specifier: ^2.16.1
         version: 2.16.1
-      '@types/speakeasy':
-        specifier: ^2.0.10
-        version: 2.0.10
       '@types/yauzl':
         specifier: ^3.4.0
         version: 3.4.0
@@ -728,9 +725,6 @@ importers:
       serwist:
         specifier: 9.5.3
         version: 9.5.3(browserslist@4.28.9)(typescript@5.9.3)
-      speakeasy:
-        specifier: ^2.0.0
-        version: 2.0.0
       tsx:
         specifier: ^4.23.0
         version: 4.23.0
@@ -1145,9 +1139,6 @@ importers:
       qrcode:
         specifier: ^1.5.4
         version: 1.5.4
-      speakeasy:
-        specifier: ^2.0.0
-        version: 2.0.0
       zod:
         specifier: ^4.6.6
         version: 4.6.6
@@ -1161,9 +1152,6 @@ importers:
       '@types/qrcode':
         specifier: ^1.5.6
         version: 1.5.6
-      '@types/speakeasy':
-        specifier: ^2.0.10
-        version: 2.0.10
       tsdown:
         specifier: ^0.22.3
         version: 0.22.14(@typescript/native-preview@7.0.0-dev.20260707.2)(tsx@4.23.0)(typescript@5.9.3)(unrun@0.2.37)
@@ -2266,9 +2254,6 @@ importers:
       '@bike4mind/auth':
         specifier: workspace:*
         version: link:../../b4m-core/auth
-      '@types/speakeasy':
-        specifier: ^2.0.10
-        version: 2.0.10
       '@types/yargs':
         specifier: ^17.0.35
         version: 17.0.35
@@ -2290,9 +2275,6 @@ importers:
       prettier:
         specifier: ^3.9.6
         version: 3.9.6
-      speakeasy:
-        specifier: ^2.0.0
-        version: 2.0.0
       tsx:
         specifier: ^4.23.0
         version: 4.23.0
@@ -6198,9 +6180,6 @@ packages:
   '@types/sinonjs__fake-timers@15.0.1':
     resolution: {integrity: sha512-Ko2tjWJq8oozHzHV+reuvS5KYIRAokHnGbDwGh/J64LntgpbuylF74ipEL24HCyRjf9FOlBiBHWBR1RlVKsI1w==}
 
-  '@types/speakeasy@2.0.10':
-    resolution: {integrity: sha512-QVRlDW5r4yl7p7xkNIbAIC/JtyOcClDIIdKfuG7PWdDT1MmyhtXSANsildohy0K+Lmvf/9RUtLbNLMacvrVwxA==}
-
   '@types/stats.js@0.17.4':
     resolution: {integrity: sha512-jIBvWWShCvlBqBNIZt0KAshWpvSjhkwkEu4ZUcASoAvhmrgAUI2t1dXrjSL4xXVLB4FznPrIsX3nKXFl/Dt4vA==}
 
@@ -7026,9 +7005,6 @@ packages:
 
   base-64@1.0.0:
     resolution: {integrity: sha512-kwDPIFCGx0NZHog36dj+tHiwP4QMzsZ3AgMViUBKI0+V5n4U0ufTCUMhnQ04diaRI8EX/QcPfql7zlhZ7j4zgg==}
-
-  base32.js@0.0.1:
-    resolution: {integrity: sha512-EGHIRiegFa62/SsA1J+Xs2tIzludPdzM064N9wjbiEgHnGnJ1V0WEpA4pEwCYT5nDvZk3ubf0shqaCS7k6xeUQ==}
 
   base64-arraybuffer@1.0.2:
     resolution: {integrity: sha512-I3yl4r9QB5ZRY3XuJVEPfc2XhZO6YweFPI+UovAzn+8/hb3oJ6lnysaFcjVpkCPfVWFUDvoZ8kmVDP7WyRtYtQ==}
@@ -11924,10 +11900,6 @@ packages:
 
   spawndamnit@3.0.1:
     resolution: {integrity: sha512-MmnduQUuHCoFckZoWnXsTg7JaiLBJrKFj9UI2MbRPGaJeVpsLcVBu6P/IGZovziM/YBsellCmsprgNA+w0CzVg==}
-
-  speakeasy@2.0.0:
-    resolution: {integrity: sha512-lW2A2s5LKi8rwu77ewisuUOtlCydF/hmQSOJjpTqTj1gZLkNgTaYnyvfxy2WBr4T/h+9c4g8HIITfj83OkFQFw==}
-    engines: {node: '>= 0.10.0'}
 
   split-on-first@3.0.0:
     resolution: {integrity: sha512-qxQJTx2ryR0Dw0ITYyekNQWpz6f8dGd7vffGNflQQ3Iqj9NJ6qiZ7ELpZsJ/QBhIVAiDfXdag3+Gp8RvWa62AA==}
@@ -17685,10 +17657,6 @@ snapshots:
 
   '@types/sinonjs__fake-timers@15.0.1': {}
 
-  '@types/speakeasy@2.0.10':
-    dependencies:
-      '@types/node': 24.12.3
-
   '@types/stats.js@0.17.4': {}
 
   '@types/statuses@2.0.6': {}
@@ -18539,8 +18507,6 @@ snapshots:
       bare-path: 3.0.0
 
   base-64@1.0.0: {}
-
-  base32.js@0.0.1: {}
 
   base64-arraybuffer@1.0.2:
     optional: true
@@ -24563,10 +24529,6 @@ snapshots:
     dependencies:
       cross-spawn: 7.0.6
       signal-exit: 4.1.0
-
-  speakeasy@2.0.0:
-    dependencies:
-      base32.js: 0.0.1
 
   split-on-first@3.0.0: {}
 
