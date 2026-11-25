@@ -191,7 +191,6 @@ describe('priceCatalogBootstrap.connectDB', () => {
   });
 
   it('reports the catalog as seeded when only the price seed fails', async () => {
-    const warn = logWarn;
     seedModelPrices.mockRejectedValue(new Error('mongo down'));
 
     vi.resetModules();
