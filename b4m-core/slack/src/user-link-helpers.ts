@@ -2,6 +2,7 @@ import { Logger } from '@bike4mind/observability';
 import { ISlackDevWorkspaceDocument } from '@bike4mind/common';
 import { getSlackDeps, getSlackDb } from './di/registry';
 import type { BaseStatePayload } from './di/types';
+import { selectSlackAppRow } from './slackAppSelection';
 
 const logger = new Logger();
 
@@ -19,6 +20,8 @@ const USER_LINK_AUDIENCE = 'slack-user-link' as const;
 
 export interface UserLinkStatePayload extends BaseStatePayload {
   userId: string;
+  /** Slack app row the flow was started with; absent on states minted before the app was carried. */
+  workspaceId?: string;
 }
 
 export interface GetWorkspaceResult {
@@ -33,18 +36,23 @@ export interface GetWorkspaceError {
 }
 
 /**
- * Find the first workspace with OAuth credentials configured
- * Used to get client_id and client_secret for the OAuth flow
+ * Find the workspace whose OAuth credentials the flow uses: the active row named by `workspaceId`, or the
+ * first active row with credentials when none is named. Used to get client_id and client_secret.
  *
  * Uses findAllActiveWithCredentials because slackClientId has select: false
  */
-export async function getOAuthWorkspaceWithCredentials(): Promise<GetWorkspaceResult | GetWorkspaceError> {
+export async function getOAuthWorkspaceWithCredentials(
+  workspaceId?: string
+): Promise<GetWorkspaceResult | GetWorkspaceError> {
   const { slackDevWorkspaceRepository } = getSlackDb() as any;
   const allWorkspaces = await slackDevWorkspaceRepository.findAllActiveWithCredentials();
-  const workspaceForCreds = allWorkspaces.find((ws: any) => ws.slackClientId);
+  const workspaceForCreds = selectSlackAppRow<{ id: string; slackClientId?: string; slackClientSecret?: string }>(
+    allWorkspaces,
+    workspaceId
+  );
 
   if (!workspaceForCreds) {
-    logger.error('🔐 No workspace with OAuth credentials found');
+    logger.error('🔐 No workspace with OAuth credentials found', { requestedWorkspaceId: workspaceId });
     return {
       success: false,
       error: 'no_oauth_configured',
@@ -88,11 +96,11 @@ export function buildUserLinkRedirectUri(
  * Uses shared jwtStateStore utilities with algorithm pinning and OIDC claims
  * Token expires in 10 minutes
  */
-export function generateUserLinkStateToken(userId: string, nonceHash?: string): string {
+export function generateUserLinkStateToken(userId: string, nonceHash?: string, workspaceId?: string): string {
   const { jwtStateStore } = getSlackDeps();
-  return jwtStateStore.createStateToken<{ userId: string }>(
+  return jwtStateStore.createStateToken<{ userId: string; workspaceId?: string }>(
     { audience: USER_LINK_AUDIENCE, expiresIn: '10m' },
-    { userId },
+    { userId, ...(workspaceId ? { workspaceId } : {}) },
     nonceHash
   );
 }

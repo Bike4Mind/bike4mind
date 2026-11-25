@@ -138,7 +138,7 @@ describe('the rail avatar, signed in', () => {
       'account-billing-btn',
       'account-profile-btn',
       'account-feedback-btn',
-      'account-web-conversations-btn',
+      'account-open-web-btn',
       'auth-signout-btn',
     ]);
   });
@@ -188,10 +188,23 @@ describe('the rail avatar, signed in', () => {
     expect(byTestId('account-billing-btn')).toBeNull();
   });
 
-  it('opens the existing web-conversation window action', () => {
+  it('labels the web-app row as leaving for the web app, not as syncing web conversations', async () => {
     mount(<SignedInRailAccount state={signedIn} update={controllerIn('idle')} context={contextWith()} />);
     open();
-    act(() => byTestId('account-web-conversations-btn')?.click());
+    const row = byTestId('account-open-web-btn');
+    expect(row?.textContent).toBe('Open Bike4Mind web');
+    expect(document.body.textContent).not.toContain('web conversations');
+    await act(async () => {
+      row?.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
+      await new Promise(resolve => setTimeout(resolve, 200));
+    });
+    expect(document.body.textContent).toContain('Opens the full web app in its own window, signed in');
+  });
+
+  it('opens the signed-in web app window', () => {
+    mount(<SignedInRailAccount state={signedIn} update={controllerIn('idle')} context={contextWith()} />);
+    open();
+    act(() => byTestId('account-open-web-btn')?.click());
     const b4m = (window as unknown as { b4m: { attention: { openServerSessions: () => void } } }).b4m;
     expect(b4m.attention.openServerSessions).toHaveBeenCalledExactlyOnceWith();
   });
@@ -301,7 +314,7 @@ describe('the next step the update label takes', () => {
   );
 });
 
-describe('the credits glance on the rail avatar', () => {
+describe('the credits orb above the rail avatar', () => {
   async function mountWith(balance: number, creditsSpent: number) {
     mount(
       <SignedInRailAccount state={signedIn} update={controllerIn('idle')} context={contextWith()} />,
@@ -310,13 +323,22 @@ describe('the credits glance on the rail avatar', () => {
     await act(async () => undefined);
   }
 
-  it('shows nothing extra on the avatar while credits are fine', async () => {
+  it('sits directly above the avatar, and the avatar carries no credits dot', async () => {
     await mountWith(300_000, 1000);
+    const orb = byTestId('rail-credits-orb');
+    expect(orb?.nextElementSibling).toBe(byTestId('place-rail-account-btn'));
     expect(byTestId('credits-avatar-dot')).toBeNull();
-    expect(byTestId('credits-glance')).toBeNull();
   });
 
-  it('opens with the balance and runway at the top of the account menu', async () => {
+  it('stays quiet while credits are fine', async () => {
+    await mountWith(300_000, 1000);
+    expect(byTestId('rail-credits-orb')?.getAttribute('data-tone')).toBe('ok');
+    expect(byTestId('rail-credits-orb')?.getAttribute('aria-label')).toBe(
+      `Credits: ok, ${(300_000).toLocaleString()} credits`
+    );
+  });
+
+  it('opens the balance and runway at the top of the account menu', async () => {
     await mountWith(300_000, 1000);
     await act(async () => byTestId('place-rail-account-btn')?.click());
     const glance = byTestId('credits-glance');
@@ -326,11 +348,40 @@ describe('the credits glance on the rail avatar', () => {
     expect(byTestId('credits-top-up-btn')).toBeNull();
   });
 
-  it('puts a dot on the avatar and offers a top-up when credits run out before the refill', async () => {
+  it('turns low and offers a top-up in the account menu when credits run out before the refill', async () => {
     await mountWith(4000, 1000);
-    expect(byTestId('credits-avatar-dot')?.getAttribute('aria-label')).toBe('Credits running low');
+    expect(byTestId('rail-credits-orb')?.getAttribute('data-tone')).toBe('low');
+    expect(byTestId('rail-credits-orb')?.getAttribute('aria-label')).toMatch(/^Credits: running low/);
     await act(async () => byTestId('place-rail-account-btn')?.click());
     expect(byTestId('credits-verdict')?.textContent).toMatch(/^Runs out /);
     expect(byTestId('credits-top-up-btn')).not.toBeNull();
+  });
+
+  it('opens a popover with the balance, the payer and Top up, which goes to billing', async () => {
+    await mountWith(4000, 1000);
+    await act(async () => byTestId('rail-credits-orb')?.click());
+    expect(byTestId('rail-credits-balance')?.textContent).toBe(`${(4000).toLocaleString()} credits`);
+    expect(byTestId('rail-credits-payer')?.textContent).toBe('Paying: Personal');
+    await act(async () => byTestId('rail-credits-top-up-btn')?.click());
+    expect(navigate).toHaveBeenCalledWith({ to: '/billing' });
+  });
+
+  it('adds no credit reads while idle: only the mount read, however long the window sits open', async () => {
+    vi.useFakeTimers();
+    try {
+      const bridge = creditsBridge(4000, 1000);
+      const getProfile = vi.fn(bridge.account.getProfile);
+      const getHistory = vi.fn(bridge.usage.getHistory);
+      mount(<SignedInRailAccount state={signedIn} update={controllerIn('idle')} context={contextWith()} />, {
+        account: { ...bridge.account, getProfile },
+        usage: { getHistory },
+      });
+      await act(async () => undefined);
+      await act(async () => vi.advanceTimersByTimeAsync(10 * 60_000));
+      expect(getProfile).toHaveBeenCalledTimes(1);
+      expect(getHistory).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

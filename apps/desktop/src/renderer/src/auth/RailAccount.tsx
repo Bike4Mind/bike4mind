@@ -20,9 +20,9 @@ import { updateAttention } from '@shared/update';
 import {
   BillingIcon,
   ConversationIcon,
-  ExternalLinkIcon,
   GearIcon,
   ModelsIcon,
+  NewWindowIcon,
   SignOutIcon,
   SlidersIcon,
   UserIcon,
@@ -30,7 +30,8 @@ import {
 import { railButtonSx, RailTooltipTitle, type RailAccountContext } from '../chat/rail/PlaceRail';
 import type { AppUpdateController } from '../chat/useAppUpdate';
 import { RuntimeInfo } from '../components/RuntimeInfo';
-import { CreditsAvatarDot, CreditsMenuHeader } from '../credits/CreditsGlance';
+import { CreditsMenuHeader } from '../credits/CreditsGlance';
+import { CreditsOrb } from '../credits/CreditsOrb';
 import { useAccountSelection } from '../credits/useAccountSelection';
 import { useCreditsGlance } from '../credits/useCreditsGlance';
 import { AccountSwitcher } from './AccountSwitcher';
@@ -53,6 +54,10 @@ function initials(name: string): string {
 
 const displayNameOf = (state: AuthState) =>
   state.user?.nickname || state.user?.username || state.user?.email || state.user?.id || 'Signed in';
+
+// Says where the click goes, so it is not mistaken for syncing web conversations into this app: that is
+// the 'Bike4Mind web' group in the session list (see chat/WebSyncStatus).
+const OPEN_WEB_HINT = 'Opens the full web app in its own window, signed in';
 
 type DotTone = 'warning' | 'neutral';
 
@@ -127,20 +132,28 @@ function Row({
   label,
   onClick,
   end,
+  tooltip,
   testId,
 }: {
   icon: ReactNode;
   label: string;
   onClick: () => void;
   end?: ReactNode;
+  tooltip?: string;
   testId: string;
 }) {
-  return (
+  const item = (
     <MenuItem onClick={onClick} data-testid={testId}>
       <ListItemDecorator>{icon}</ListItemDecorator>
       <Box sx={{ flex: 1 }}>{label}</Box>
       {end}
     </MenuItem>
+  );
+  if (!tooltip) return item;
+  return (
+    <Tooltip title={tooltip} placement="right" variant="soft" size="sm" data-testid={`${testId}-tooltip`}>
+      {item}
+    </Tooltip>
   );
 }
 
@@ -180,7 +193,10 @@ export function SignedInRailAccount({
   context: RailAccountContext;
 }) {
   const [feedbackOpen, setFeedbackOpen] = useState(false);
-  const [menuOpen, setMenuOpen] = useState(false);
+  const [accountMenuOpen, setAccountMenuOpen] = useState(false);
+  const [orbOpen, setOrbOpen] = useState(false);
+  // Either surface opening asks for a fresh read; refreshGate decides whether one happens.
+  const menuOpen = accountMenuOpen || orbOpen;
   const accountSelection = useAccountSelection(menuOpen, context.spentAt ?? 0);
   const credits = useCreditsGlance(context.spentAt ?? 0, menuOpen, accountSelection.selection?.selected ?? null);
   const navigate = useNavigate();
@@ -193,24 +209,22 @@ export function SignedInRailAccount({
 
   return (
     <>
+      <CreditsOrb glance={credits} onOpenChange={setOrbOpen} onTopUp={() => void navigate({ to: '/billing' })} />
       <RailAccountButton
         dot={dot}
-        onOpenChange={setMenuOpen}
+        onOpenChange={setAccountMenuOpen}
         face={
           // `src` is a b4m-media: URL main wrote to disk; Joy falls back to the initials when it
           // is missing or fails to load, so they are both the placeholder and the final answer.
-          <Box sx={{ position: 'relative', display: 'inline-flex' }}>
-            <Avatar
-              variant="soft"
-              color="neutral"
-              src={user?.photoUrl}
-              alt=""
-              sx={{ '--Avatar-size': '26px', fontSize: 11 }}
-            >
-              {initials(displayName)}
-            </Avatar>
-            <CreditsAvatarDot outlook={credits.outlook} />
-          </Box>
+          <Avatar
+            variant="soft"
+            color="neutral"
+            src={user?.photoUrl}
+            alt=""
+            sx={{ '--Avatar-size': '26px', fontSize: 11 }}
+          >
+            {initials(displayName)}
+          </Avatar>
         }
       >
         {/* Balance and runway first, so they are one click from anywhere. */}
@@ -309,10 +323,11 @@ export function SignedInRailAccount({
           testId="account-feedback-btn"
         />
         <Row
-          icon={<ExternalLinkIcon />}
-          label="Open web conversations"
+          icon={<NewWindowIcon />}
+          label="Open Bike4Mind web"
+          tooltip={OPEN_WEB_HINT}
           onClick={() => void window.b4m.attention.openServerSessions()}
-          testId="account-web-conversations-btn"
+          testId="account-open-web-btn"
         />
         <ListDivider />
         <Row

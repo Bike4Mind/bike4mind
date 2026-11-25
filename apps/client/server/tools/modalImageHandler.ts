@@ -1,6 +1,5 @@
 import { S3Client, CopyObjectCommand } from '@aws-sdk/client-s3';
 import { Resource } from 'sst';
-import { v4 as uuidv4 } from 'uuid';
 import { FabFile } from '@bike4mind/database';
 import { BadRequestError, isImageServeable } from '@bike4mind/common';
 import { MODAL_IMAGE_PREFIX, extractModalImageKey } from './modalImageUrls';
@@ -68,7 +67,7 @@ export class ModalImageHandler {
     }
 
     const fileExt = sourceKey.includes('.') ? sourceKey.split('.').pop() : 'jpg';
-    const permanentKey = `${MODAL_IMAGE_PREFIX}${uuidv4()}.${fileExt}`;
+    const permanentKey = `${MODAL_IMAGE_PREFIX}${crypto.randomUUID()}.${fileExt}`;
     try {
       await s3Client.send(
         new CopyObjectCommand({

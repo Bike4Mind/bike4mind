@@ -76,15 +76,18 @@ describe('UsageReceiptDrawer', () => {
     expect(screen.getByTestId('usage-receipt-ledger')).toHaveTextContent('18 written off');
   });
 
-  it('labels a background job by its operation', () => {
+  it.each([
+    ['notebook_naming', 'Notebook naming'],
+    ['org_feedback_summary', 'Feedback summary'],
+  ] as const)('labels the %s background job by its operation', (operation, label) => {
     mocks.receipt.mockReturnValue({
-      data: receiptOf([{ ...cappedCall, feature: 'operations', source: 'system', operation: 'notebook_naming' }]),
+      data: receiptOf([{ ...cappedCall, feature: 'operations', source: 'system', operation }]),
       isLoading: false,
       isError: false,
       refetch: vi.fn(),
     });
     renderDrawer();
-    expect(screen.getByTestId('usage-receipt-source')).toHaveTextContent('System \u00b7 Notebook naming');
+    expect(screen.getByTestId('usage-receipt-source')).toHaveTextContent('System \u00b7 ' + label);
   });
 
   it('says "not recorded" for rows written before the receipt fields existed', () => {

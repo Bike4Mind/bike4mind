@@ -10,9 +10,6 @@ import {
   MusicGenerationSchema,
   VideoGenerationSchema,
   ttsBase64ResponseSchema,
-  ImageJobRequestSchema,
-  GENERATION_JOB_STATES,
-  type ImageJobRequest,
   type CreateFileUploadResponse,
   type CreateImageJobBody,
   type CreateVideoGenerationBody,
@@ -38,15 +35,6 @@ import {
   withRunFallback,
 } from '../completions';
 import { parseMusicModels } from './musicModels';
-
-const studioImageJobSchema = z.object({
-  id: z.string(),
-  groupId: z.string().nullable(),
-  state: z.enum(GENERATION_JOB_STATES),
-  output: z.object({ fileId: z.string().nullable(), contentType: z.string(), bytes: z.number() }).nullable(),
-  error: z.object({ code: z.string(), message: z.string() }).nullable(),
-});
-export type StudioRemoteImageJob = z.infer<typeof studioImageJobSchema>;
 
 /**
  * The orchestration run a turn's paid calls are charged to. Read at call time: the turn drops a
@@ -156,33 +144,14 @@ export class MediaApiClient {
     );
   }
 
-  /** The route takes `organization_id` beside `{ count, request }` and bills that account. */
-  async createStudioImages(request: ImageJobRequest, count: number, key: string) {
-    const body = {
-      request: ImageJobRequestSchema.parse(request),
-      count: z.number().int().min(1).max(4).parse(count),
-      ...(await this.payer('/api/studio/image-jobs', key)),
-    };
-    return z.object({ groupId: z.string(), jobs: z.array(studioImageJobSchema).min(1).max(4) }).parse(
-      await this.api.post<unknown>('/api/studio/image-jobs', body, {
-        timeout: TIMEOUT_MS.submit,
-        headers: { 'Idempotency-Key': key },
-      })
-    );
-  }
-
-  async listStudioImages(cursor?: string) {
-    const query = new URLSearchParams({ limit: '100', ...(cursor ? { cursor } : {}) });
-    return z
-      .object({ data: z.array(studioImageJobSchema), next_cursor: z.string().nullable() })
-      .parse(await this.api.get<unknown>(`/api/studio/image-jobs?${query}`, { timeout: TIMEOUT_MS.download }));
-  }
-
   /**
-   * Start an image job. Returns as soon as it is queued; the image renders server-side.
-   * `idempotencyKey` makes a retried submit of the same call return the same job, not a second bill.
+   * Start image jobs: `count` of them sharing a group id, one image each. Returns as soon as they are queued; the
+   * images render server-side. `idempotencyKey` makes a retried submit return the same jobs, not a second bill.
    */
-  async createImageJob(body: CreateImageJobBody, idempotencyKey: string): Promise<PublicImageJob[]> {
+  async createImageJobGroup(
+    body: CreateImageJobBody,
+    idempotencyKey: string
+  ): Promise<{ group_id: string; data: PublicImageJob[] }> {
     try {
       const payer = await this.payer('/api/v1/image-jobs', idempotencyKey);
       const response = await this.withRun(run =>
@@ -192,10 +161,15 @@ export class MediaApiClient {
           { timeout: TIMEOUT_MS.submit, headers: { 'Idempotency-Key': idempotencyKey } }
         )
       );
-      return CreateImageJobResponseSchema.parse(response).data;
+      return CreateImageJobResponseSchema.parse(response);
     } catch (error) {
       throw toPaidCallError(error, 'Image generation');
     }
+  }
+
+  /** createImageJobGroup for a caller that only follows the jobs. */
+  async createImageJob(body: CreateImageJobBody, idempotencyKey: string): Promise<PublicImageJob[]> {
+    return (await this.createImageJobGroup(body, idempotencyKey)).data;
   }
 
   async getImageJob(jobId: string, signal?: AbortSignal): Promise<PublicImageJob> {

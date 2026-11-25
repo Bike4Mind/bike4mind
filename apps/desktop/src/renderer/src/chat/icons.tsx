@@ -735,6 +735,17 @@ export function ExternalLinkIcon() {
   );
 }
 
+/** Opens in a window of its own inside this app: a window frame with an arrow leaving it. */
+export function NewWindowIcon() {
+  return (
+    <Glyph>
+      <path d="M7 3.5H3.5a1 1 0 00-1 1v8a1 1 0 001 1h8a1 1 0 001-1V9" />
+      <path d="M2.5 6.5H5" />
+      <path d="M9.5 2.5h4v4M13.5 2.5 8.5 7.5" />
+    </Glyph>
+  );
+}
+
 /** Blank-chat suggestion: a framed picture, a sun over a hill. */
 export function ImageIcon() {
   return (
@@ -926,6 +937,17 @@ export function RailCodeIcon() {
   return (
     <Glyph size={RAIL_GLYPH}>
       <path d="M5.5 4.5 2 8l3.5 3.5M10.5 4.5 14 8l-3.5 3.5" />
+    </Glyph>
+  );
+}
+
+/** A tray with an item landing in it: what is waiting on the user, across every place. */
+export function RailAgentsIcon() {
+  return (
+    <Glyph size={RAIL_GLYPH}>
+      <path d="M2.5 9.5h3l1 1.75h3l1-1.75h3" />
+      <path d="M2.5 9.5v3a1 1 0 0 0 1 1h9a1 1 0 0 0 1-1v-3L12 4.5a1 1 0 0 0-.95-.7h-6.1a1 1 0 0 0-.95.7z" />
+      <path d="M6.25 6.75h3.5" />
     </Glyph>
   );
 }

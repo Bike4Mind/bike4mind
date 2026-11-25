@@ -1,5 +1,5 @@
 import axios from 'axios';
-import prettyBytes from 'pretty-bytes';
+import { prettyBytes } from './prettyBytes';
 import {
   DEFAULT_STORAGE_LIMIT_MB,
   describeStorageLimitError,

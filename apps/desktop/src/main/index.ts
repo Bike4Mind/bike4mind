@@ -427,6 +427,12 @@ void app.whenReady().then(async () => {
   createWindow();
   claudeImport.start();
   app.on('browser-window-focus', () => claudeImport.onWindowFocus());
+  // Blur fires before the next window's focus; check after it settles so a hop between windows keeps polling.
+  app.on('browser-window-blur', () =>
+    setImmediate(() => {
+      if (!BrowserWindow.getFocusedWindow()) claudeImport.onAppBlur();
+    })
+  );
   onAuthStateChanged(closeBrowsersOnScopeChange(auth.getState(), () => browser.closeAll()));
   let importScope = sessionScopeKeyOf(auth.getState());
   onAuthStateChanged(state => {

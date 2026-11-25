@@ -29,7 +29,7 @@ import { closingText, plainText, snippetOf } from '@shared/agentOutcome';
 import { effectiveContextLimit, occupiedTokens } from '@shared/contextLimit';
 import { LOCAL_SERVER_ID } from '@shared/modelServers';
 import type { ModelSettings } from '@shared/modelSettings';
-import { alertableSessions } from '@shared/needsYou';
+import { alertableSessions, needsYouBadgeCount } from '@shared/needsYou';
 import { activeTodos } from '@shared/todos';
 import { ArtifactLibraryPanel } from './ArtifactLibraryPanel';
 import { MissionControl } from './missionControl/MissionControl';
@@ -49,9 +49,12 @@ import { ApprovalModePill } from './ApprovalModePill';
 import { Composer } from './Composer';
 import { useLoop } from './LoopBar';
 import { CustomizeScreen, useCustomizeAttention } from './CustomizePanel';
+import { AgentsPlace } from './rail/AgentsPlace';
+import { agentsBoard } from './rail/agentsBoard';
 import { PlaceRail, type RailAccountContext } from './rail/PlaceRail';
 import {
   isSessionPlace,
+  placeHasSidebar,
   readPlaceMemory,
   writePlaceMemory,
   type Place,
@@ -337,7 +340,8 @@ export function ChatShell({
   const onRestore = useCallback((session: ChatSessionSummary | null) => {
     const restoredMode = session && isSessionPlace(session.mode) ? session.mode : 'chat';
     setModeOnly(current => (session ? restoredMode : current));
-    setPlace(current => (current === 'studio' || !session ? current : restoredMode));
+    // Studio and Agents are not where a session opens, so a restore leaves the user there.
+    setPlace(current => (!isSessionPlace(current) || !session ? current : restoredMode));
     if (session) setActiveId(session.id);
   }, []);
   const restoring = useLastSession({ remembered, loading, sessions, activeId, onRestore });
@@ -408,6 +412,9 @@ export function ChatShell({
     loaded: statusesLoaded,
   } = useSessionStatusFeed();
   const prSummaries = usePrSummaries();
+  // Both derive from the pushed status feed and the session list, so they move with no polling.
+  const needsYou = useMemo(() => needsYouBadgeCount(statuses, sessions), [statuses, sessions]);
+  const board = useMemo(() => agentsBoard(sessions, statuses, unreadReplies), [sessions, statuses, unreadReplies]);
   const [collapsed, setCollapsed] = useState(false);
   const [screen, setScreen] = useState<ChatScreen>('conversation');
   useEffect(() => {
@@ -435,6 +442,9 @@ export function ChatShell({
   const [studioArea, setStudioArea] = useState<StudioArea>(placeMemory?.studio ?? 'create');
   const [studioKind, setStudioKind] = useState<StudioMediaKind | null>(null);
   const inStudio = place === 'studio';
+  const inAgents = place === 'agents';
+  // The conversation's side panels (tasks, browser, files, model, simulator) belong to Chat and Code.
+  const inSessionPlace = isSessionPlace(place);
   const [studioRegion, studioWidth] = useElementWidth();
   const studioContainer = useRef<HTMLDivElement | null>(null);
   const setStudioRegion = useCallback(
@@ -1389,6 +1399,10 @@ export function ChatShell({
    * reopens it, and the active place's icon hides it again. The digit shortcuts only switch place.
    */
   const selectPlaceFromRail = (next: Place) => {
+    if (!placeHasSidebar(next)) {
+      selectPlace(next);
+      return;
+    }
     if (collapsed) {
       setCollapsed(false);
       selectPlace(next);
@@ -1811,6 +1825,7 @@ export function ChatShell({
           place={place}
           sidebarCollapsed={collapsed}
           onSelect={selectPlaceFromRail}
+          needsYou={needsYou}
           account={account?.({
             status: (
               <TurnDot
@@ -1844,7 +1859,7 @@ export function ChatShell({
               onToggleCollapsed={() => setCollapsed(current => !current)}
             />
           )
-        ) : (
+        ) : inAgents ? null : (
           <SessionList
             sessions={sessions}
             mode={mode}
@@ -1928,6 +1943,8 @@ export function ChatShell({
           ready={!!studioSession.sessionId}
           unavailableReason={studioPlaceReason}
         />
+      ) : inAgents ? (
+        <AgentsPlace groups={board} onOpen={selectSession} onOpenMissionControl={() => setScreen('mission-control')} />
       ) : (
         <Box
           ref={setStudioRegion}
@@ -2625,7 +2642,7 @@ export function ChatShell({
 
         It is mounted only when there is something to show, so a panel left open never eats
         width on a conversation that has no background commands. */}
-      {tasksOpen && background.processes.length > 0 && !inStudio && (
+      {tasksOpen && background.processes.length > 0 && inSessionPlace && (
         <BackgroundTaskPanel
           processes={background.processes}
           wide={tasksWide}
@@ -2637,11 +2654,11 @@ export function ChatShell({
       )}
 
       {/* macOS only: `available` is false elsewhere, so the pane and its button never draw. */}
-      {simulatorOpen && simulatorView.available && screen === 'conversation' && !inStudio && (
+      {simulatorOpen && simulatorView.available && screen === 'conversation' && inSessionPlace && (
         <SimulatorPane state={simulatorView} onClose={toggleSimulator} />
       )}
 
-      {openFile && openFile.sessionId === activeId && screen === 'conversation' && !inStudio && (
+      {openFile && openFile.sessionId === activeId && screen === 'conversation' && inSessionPlace && (
         <FilePane
           key={openFile.sessionId}
           sessionId={openFile.sessionId}
@@ -2655,7 +2672,7 @@ export function ChatShell({
         />
       )}
 
-      {modelOpen && modelAvailable && !inStudio && (
+      {modelOpen && modelAvailable && inSessionPlace && (
         <ModelPane
           engine={modelEngine}
           dark={darkMode}
@@ -2674,7 +2691,7 @@ export function ChatShell({
         conversation screen - the artifacts and customize screens take the whole pane and a web
         page floating over them would be unreachable - and it is told to stand down while the
         drop overlay is up, which is drawn in the React tree and so would be behind it. */}
-      {browserOpen && browserAvailable && screen === 'conversation' && !inStudio && (
+      {browserOpen && browserAvailable && screen === 'conversation' && inSessionPlace && (
         <BrowserPane
           sessionId={activeId}
           suspended={drop.over || (panelShown && !panelDocked)}

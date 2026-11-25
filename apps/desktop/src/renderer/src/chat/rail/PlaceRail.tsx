@@ -1,11 +1,13 @@
 import type { ReactNode } from 'react';
-import Box from '@mui/joy/Box';
+import Badge from '@mui/joy/Badge';
 import IconButton from '@mui/joy/IconButton';
 import Stack from '@mui/joy/Stack';
 import Tooltip from '@mui/joy/Tooltip';
 import Typography from '@mui/joy/Typography';
-import { RailChatIcon, RailCodeIcon, RailStudioIcon } from '../icons';
-import { PLACES, type Place } from './places';
+import { stateJoyColor } from '../orchestrator/statePalette';
+import { RailAgentsIcon, RailChatIcon, RailCodeIcon, RailStudioIcon } from '../icons';
+import { hiddenScrollbarSx } from '../layout';
+import { PLACES, placeHasSidebar, type Place } from './places';
 import { placeShortcutLabel, sidebarShortcutLabel } from './shortcuts';
 
 export const RAIL_WIDTH = 48;
@@ -29,6 +31,7 @@ const ICONS: Record<Place, () => ReactNode> = {
   chat: RailChatIcon,
   code: RailCodeIcon,
   studio: RailStudioIcon,
+  agents: RailAgentsIcon,
 };
 
 /** A tooltip's label with its shortcut beside it, dimmer, so the label is read first. */
@@ -66,11 +69,14 @@ export function PlaceRail({
   place,
   sidebarCollapsed = false,
   onSelect,
+  needsYou = 0,
   account,
 }: {
   place: Place;
   sidebarCollapsed?: boolean;
   onSelect: (place: Place) => void;
+  /** Sessions waiting on the user, badged on Agents: the dock badge's count (needsYouBadgeCount). */
+  needsYou?: number;
   /** The avatar slot at the foot of the rail. */
   account?: ReactNode;
 }) {
@@ -86,48 +92,81 @@ export function PlaceRail({
         gap: 0.5,
         pt: 1.5,
         pb: 1.25,
+        overflow: 'hidden',
         borderRight: '1px solid',
         borderColor: 'divider',
         bgcolor: 'background.level1',
       }}
       data-testid="place-rail"
     >
-      {PLACES.map(({ place: value, label, digit }) => {
-        const Icon = ICONS[value];
-        const active = place === value;
-        return (
-          <Tooltip
-            key={value}
-            title={
-              active ? (
-                <RailTooltipTitle
-                  label={sidebarCollapsed ? 'Show sidebar' : 'Hide sidebar'}
-                  shortcut={sidebarShortcutLabel()}
-                />
-              ) : (
-                <RailTooltipTitle label={label} shortcut={placeShortcutLabel(digit)} />
-              )
-            }
-            placement="right"
-            size="sm"
-            variant="outlined"
-            enterDelay={400}
-          >
-            <IconButton
-              variant="plain"
-              aria-label={label}
-              aria-current={active ? 'page' : undefined}
-              onClick={() => onSelect(value)}
-              sx={railButtonSx(active)}
-              data-testid={`place-rail-${value}-btn`}
+      {/* The places scroll when the window is too short for them, so the account cluster below
+          (credits orb and avatar) is never pushed over them and never leaves the rail. */}
+      <Stack
+        sx={{
+          flex: 1,
+          minHeight: 0,
+          width: '100%',
+          alignItems: 'center',
+          gap: 0.5,
+          py: 0.25,
+          overflowY: 'auto',
+          ...hiddenScrollbarSx,
+        }}
+        data-testid="rail-places"
+      >
+        {PLACES.map(({ place: value, label, digit }) => {
+          const Icon = ICONS[value];
+          const active = place === value;
+          const badge = value === 'agents' ? needsYou : 0;
+          return (
+            <Tooltip
+              key={value}
+              title={
+                active && placeHasSidebar(value) ? (
+                  <RailTooltipTitle
+                    label={sidebarCollapsed ? 'Show sidebar' : 'Hide sidebar'}
+                    shortcut={sidebarShortcutLabel()}
+                  />
+                ) : (
+                  <RailTooltipTitle label={label} shortcut={placeShortcutLabel(digit)} />
+                )
+              }
+              placement="right"
+              size="sm"
+              variant="outlined"
+              enterDelay={400}
             >
-              <Icon />
-            </IconButton>
-          </Tooltip>
-        );
-      })}
-      <Box sx={{ flex: 1 }} />
-      {account}
+              <IconButton
+                variant="plain"
+                aria-label={badge > 0 ? `${label}, ${badge} ${badge === 1 ? 'needs' : 'need'} you` : label}
+                aria-current={active ? 'page' : undefined}
+                onClick={() => onSelect(value)}
+                sx={railButtonSx(active)}
+                data-testid={`place-rail-${value}-btn`}
+              >
+                {badge > 0 ? (
+                  <Badge
+                    badgeContent={badge}
+                    max={99}
+                    size="sm"
+                    color={stateJoyColor('needs-you')}
+                    badgeInset="-2px -4px auto auto"
+                    slotProps={{ badge: { 'aria-hidden': true, 'data-testid': `place-rail-${value}-badge` } }}
+                    sx={{ '--Badge-minHeight': '15px', '--Badge-paddingX': '3px' }}
+                  >
+                    <Icon />
+                  </Badge>
+                ) : (
+                  <Icon />
+                )}
+              </IconButton>
+            </Tooltip>
+          );
+        })}
+      </Stack>
+      <Stack sx={{ alignItems: 'center', gap: 0.5, flexShrink: 0 }} data-testid="rail-foot">
+        {account}
+      </Stack>
     </Stack>
   );
 }

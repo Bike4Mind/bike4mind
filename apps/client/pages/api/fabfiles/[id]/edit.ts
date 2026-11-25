@@ -35,7 +35,6 @@ import {
   appendEditedVersion,
   MAX_OFFICE_EDIT_BYTES,
 } from '@bike4mind/utils';
-import { v4 as uuidv4 } from 'uuid';
 import { getAvailableModels, getLlmByModel } from '@bike4mind/llm-adapters';
 import { apiKeyService, fabFilesService } from '@bike4mind/services';
 import { OperationsModelService } from '@bike4mind/server-utils/services/operationsModelService';
@@ -457,7 +456,7 @@ Return only the edited content without any markdown code blocks or explanations.
                 existingVersions: file.versions,
                 newFileSize: newBuffer.length,
                 now,
-                nonce: uuidv4(),
+                nonce: crypto.randomUUID(),
                 maxEditedVersions,
               });
               await fabFilesService.assertRewriteFits(file, newBuffer.length, rewriteStorageDb, user);

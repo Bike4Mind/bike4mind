@@ -767,6 +767,39 @@ const Subheading = ({ children, sx }: { children: ReactNode; sx?: { mb: number }
   </Typography>
 );
 
+// EnableContextTelemetry staged like the alert settings below, so the header switch also waits for the
+// page SaveBar. The chip shows the saved value, not the draft.
+const TelemetryCollectionControl = ({ saved }: { saved: boolean }) => {
+  const updateSettings = useUpdateSettings();
+  const { value, setValue, pending } = useSettingsDraft('EnableContextTelemetry', saved, {
+    name: 'Telemetry collection',
+    save: next => updateSettings.mutateAsync({ key: 'EnableContextTelemetry', value: next }),
+  });
+  return (
+    <Stack direction="row" alignItems="center" gap={1}>
+      <Switch
+        checked={value}
+        onChange={e => setValue(e.target.checked)}
+        disabled={pending}
+        slotProps={{
+          input: {
+            'aria-label': 'Telemetry collection',
+            'data-testid': 'context-inspector-telemetry-toggle',
+          },
+        }}
+      />
+      <Typography level="body-sm" sx={{ color: 'admin.inkSecondary' }}>
+        Telemetry collection
+      </Typography>
+      <StatusChip
+        tone={saved ? 'good' : 'neutral'}
+        label={saved ? 'Enabled' : 'Disabled'}
+        data-testid="context-inspector-telemetry-chip"
+      />
+    </Stack>
+  );
+};
+
 // The contextTelemetryAlerts setting as one staged draft: edits wait for the page SaveBar, which
 // sends the whole object in one write, and Discard returns the form to the stored value.
 const AlertSettingsSection = ({ alertSettings }: { alertSettings: ContextTelemetryAlerts | undefined }) => {
@@ -1484,10 +1517,8 @@ export function ContextInspectorTab() {
   const [isDuplicateIssue, setIsDuplicateIssue] = useState(false);
   const [duplicateIssueNumber, setDuplicateIssueNumber] = useState(0);
 
-  // Telemetry enabled toggle
   const telemetryEnabledRaw = useGetSettingsValue('EnableContextTelemetry');
   const telemetryEnabled = telemetryEnabledRaw === true || telemetryEnabledRaw === 'true';
-  const updateSettings = useUpdateSettings();
 
   // Alert settings
   const alertSettingsRaw = useGetSettingsValue('contextTelemetryAlerts');
@@ -1502,13 +1533,6 @@ export function ContextInspectorTab() {
 
   // Analysis mutation
   const analyzeMutation = useAnalyzeTelemetry();
-
-  const handleToggleTelemetry = () => {
-    updateSettings.mutate({
-      key: 'EnableContextTelemetry',
-      value: !telemetryEnabled,
-    });
-  };
 
   const handleAnalyze = (id: string) => {
     setSelectedEntryId(id);
@@ -1567,54 +1591,28 @@ export function ContextInspectorTab() {
 
   return (
     <Stack gap={ADMIN_REGION_GAP} sx={{ minWidth: 0 }} data-testid="context-inspector-root">
-      <AdminPageHeader
-        title="Context inspector"
-        description="Context window, latency and anomaly telemetry for recent completions, with Slack and GitHub alerts."
-        actions={
-          <>
-            <Stack direction="row" alignItems="center" gap={1}>
-              <Switch
-                checked={telemetryEnabled}
-                onChange={handleToggleTelemetry}
-                disabled={updateSettings.isPending}
-                slotProps={{
-                  input: {
-                    'aria-label': 'Telemetry collection',
-                    'data-testid': 'context-inspector-telemetry-toggle',
-                  },
-                }}
-              />
-              <Typography level="body-sm" sx={{ color: 'admin.inkSecondary' }}>
-                Telemetry collection
-              </Typography>
-              <StatusChip
-                tone={telemetryEnabled ? 'good' : 'neutral'}
-                label={telemetryEnabled ? 'Enabled' : 'Disabled'}
-                data-testid="context-inspector-telemetry-chip"
-              />
-            </Stack>
-            <Button
-              size="sm"
-              variant="outlined"
-              startDecorator={<RefreshIcon />}
-              onClick={() => refetch()}
-              loading={isFetching}
-              data-testid="context-inspector-refresh-btn"
-            >
-              Refresh
-            </Button>
-          </>
-        }
-      />
-
-      {/* The page is a settings page for the alert settings: one SaveBar and leave-page guard for the
-          staged form. The telemetry switch in the header stays an instant write, as a mode toggle. */}
+      {/* A settings page for the telemetry switch and the alert settings: both stage into one SaveBar
+          and leave-page guard. The chip and the disabled banner follow the saved value. */}
       <SettingsDraftProvider>
-        {updateSettings.error && (
-          <Alert color="danger" data-testid="context-inspector-telemetry-error">
-            Could not change telemetry collection: {updateSettings.error.message}
-          </Alert>
-        )}
+        <AdminPageHeader
+          title="Context inspector"
+          description="Context window, latency and anomaly telemetry for recent completions, with Slack and GitHub alerts."
+          actions={
+            <>
+              <TelemetryCollectionControl saved={telemetryEnabled} />
+              <Button
+                size="sm"
+                variant="outlined"
+                startDecorator={<RefreshIcon />}
+                onClick={() => refetch()}
+                loading={isFetching}
+                data-testid="context-inspector-refresh-btn"
+              >
+                Refresh
+              </Button>
+            </>
+          }
+        />
 
         {!telemetryEnabled && (
           <Alert color="warning" data-testid="context-inspector-disabled-banner">
