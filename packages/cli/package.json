@@ -66,7 +66,6 @@
     "@modelcontextprotocol/sdk": "1.32.1",
     "@opensearch-project/opensearch": "2.11.0",
     "@smithy/node-http-handler": "^4.12.1",
-    "async-mutex": "^0.5.0",
     "axios": "1.20.0",
     "better-sqlite3": "^13.0.3",
     "cheerio": "1.2.0",

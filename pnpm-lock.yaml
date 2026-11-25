@@ -1611,9 +1611,6 @@ importers:
       '@mendable/firecrawl-js':
         specifier: ^1.29.3
         version: 1.29.3
-      async-mutex:
-        specifier: ^0.5.0
-        version: 0.5.0
       axios:
         specifier: 1.20.0
         version: 1.20.0
@@ -1967,9 +1964,6 @@ importers:
       '@smithy/node-http-handler':
         specifier: ^4.12.1
         version: 4.12.1
-      async-mutex:
-        specifier: ^0.5.0
-        version: 0.5.0
       axios:
         specifier: 1.20.0
         version: 1.20.0

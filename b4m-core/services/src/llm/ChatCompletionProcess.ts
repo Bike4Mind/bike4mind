@@ -81,6 +81,7 @@ import {
   withholdsReasoning,
   type ThinkingVisibility,
   readOrgModelPolicy,
+  createMutex,
 } from '@bike4mind/common';
 import { fallbackThinkingVisibility } from '../thinkingVisibility';
 import { resolveUsageProject } from './usageProject';
@@ -246,7 +247,6 @@ import { logLlmUsageSettled } from './llmUsageSettledLog';
 import type { SubagentTelemetryData } from './tools/implementation/delegateToAgent';
 import { createHmac } from 'crypto';
 import { MongoAbility } from '@casl/ability';
-import { Mutex } from 'async-mutex';
 import { z } from 'zod';
 import { getEffectiveLLMApiKeys, sharedAdminKeyProviders } from '../apiKeyService';
 import { findKeyModerationExceptionCategories, moderationExceptionCovers } from './moderationException';
@@ -615,7 +615,7 @@ export function resolveModelAwareHistoryCount({
  */
 const SESSION_LENGTH_WARNING_THRESHOLD = 100;
 
-const questSaveMutex = new Mutex();
+const questSaveMutex = createMutex();
 // Identity and server-owned keys; `deletedAt` belongs to soft delete, never to a turn's save.
 // `lakeSaveCount` moves only by claimLakeSaveSlot's atomic $inc; writing the in-memory copy back
 // would reset the count to what it was when the turn loaded the quest.

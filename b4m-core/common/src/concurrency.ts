@@ -29,3 +29,23 @@ export function limitConcurrency(limit: number): <T>(task: () => Promise<T> | T)
     }
   };
 }
+
+/**
+ * Serializes async tasks in submission order. A task that throws rejects only its own
+ * `runExclusive` call; the next task still runs. An empty task works as a barrier that
+ * resolves once everything submitted before it has settled.
+ */
+export function createMutex(): { runExclusive<T>(task: () => Promise<T> | T): Promise<T> } {
+  let tail: Promise<void> = Promise.resolve();
+
+  return {
+    runExclusive<T>(task: () => Promise<T> | T): Promise<T> {
+      const run = tail.then(() => task());
+      tail = run.then(
+        () => undefined,
+        () => undefined
+      );
+      return run;
+    },
+  };
+}

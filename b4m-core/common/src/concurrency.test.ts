@@ -1,5 +1,5 @@
-import { describe, expect, it } from 'vitest';
-import { limitConcurrency } from './concurrency';
+import { describe, expect, it, vi } from 'vitest';
+import { createMutex, limitConcurrency } from './concurrency';
 
 const tick = () => new Promise<void>(resolve => setTimeout(resolve, 0));
 
@@ -151,5 +151,77 @@ describe('limitConcurrency', () => {
   it('accepts Infinity as an unbounded cap', async () => {
     const limit = limitConcurrency(Infinity);
     expect(await Promise.all([limit(async () => 1), limit(async () => 2)])).toEqual([1, 2]);
+  });
+});
+
+describe('createMutex', () => {
+  it('runs tasks one at a time in submission order', async () => {
+    const mutex = createMutex();
+    const events: string[] = [];
+    const run = (name: string) =>
+      mutex.runExclusive(async () => {
+        events.push(`start ${name}`);
+        await tick();
+        events.push(`end ${name}`);
+        return name;
+      });
+
+    const results = await Promise.all([run('a'), run('b'), run('c')]);
+    expect(results).toEqual(['a', 'b', 'c']);
+    expect(events).toEqual(['start a', 'end a', 'start b', 'end b', 'start c', 'end c']);
+  });
+
+  it('releases the lock when a task throws and rejects only that call', async () => {
+    const mutex = createMutex();
+    const failing = mutex.runExclusive(async () => {
+      throw new Error('boom');
+    });
+    const following = mutex.runExclusive(async () => 'ran');
+    await expect(failing).rejects.toThrow('boom');
+    expect(await following).toBe('ran');
+  });
+
+  it('keeps working after a rejection that nobody awaited yet', async () => {
+    const mutex = createMutex();
+    const failing = mutex.runExclusive(() => {
+      throw new Error('sync boom');
+    });
+    failing.catch(() => undefined);
+    await tick();
+    expect(await mutex.runExclusive(() => 42)).toBe(42);
+  });
+
+  it('lets an empty task act as a barrier for everything submitted before it', async () => {
+    const mutex = createMutex();
+    let saved = false;
+    void mutex.runExclusive(async () => {
+      await tick();
+      await tick();
+      saved = true;
+    });
+    await mutex.runExclusive(async () => {});
+    expect(saved).toBe(true);
+  });
+
+  it('uses independent locks per instance', async () => {
+    const a = createMutex();
+    const b = createMutex();
+    let release!: () => void;
+    const held = new Promise<void>(resolve => {
+      release = resolve;
+    });
+    const blocked = a.runExclusive(() => held);
+    expect(await b.runExclusive(() => 'free')).toBe('free');
+    release();
+    await blocked;
+  });
+
+  it('calls the task with no arguments', async () => {
+    const mutex = createMutex();
+    await mutex.runExclusive(async () => 'previous result');
+    const task = vi.fn(async () => 'next');
+    await mutex.runExclusive(task);
+    expect(task).toHaveBeenCalledTimes(1);
+    expect(task.mock.calls[0]).toEqual([]);
   });
 });
