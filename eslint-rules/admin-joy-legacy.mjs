@@ -14,7 +14,6 @@ const componentsByFile = {
   'email/EmailActivityHistory.tsx': ['Table'],
   'email/EmailJobDetail.tsx': ['Table', 'Modal'],
   'email/EmailJobsPanel.tsx': ['Table'],
-  'email/EmailTemplatesPanel.tsx': ['Table', 'Modal'],
 };
 
 const migrationReasons = {

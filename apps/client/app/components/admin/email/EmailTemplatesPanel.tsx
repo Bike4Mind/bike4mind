@@ -1,19 +1,5 @@
 import { useState } from 'react';
-import {
-  Button,
-  Table,
-  Sheet,
-  Typography,
-  Modal,
-  ModalDialog,
-  IconButton,
-  Chip,
-  Stack,
-  DialogTitle,
-  DialogContent,
-  DialogActions,
-  Tooltip,
-} from '@mui/joy';
+import { Button, Typography, IconButton, Chip, Stack, Tooltip } from '@mui/joy';
 import AddIcon from '@mui/icons-material/Add';
 import EditIcon from '@mui/icons-material/Edit';
 import DeleteIcon from '@mui/icons-material/Delete';
@@ -26,7 +12,15 @@ import {
   useEmailJobs,
 } from '@client/app/hooks/data/emailMarketing';
 import { EmailCategory, IEmailTemplateDocument } from '@bike4mind/common';
-import { EmptyState, ErrorState, LoadingState } from '../shared';
+import {
+  AdminDialog,
+  AdminDialogFooter,
+  DataTable,
+  type DataColumn,
+  EmptyState,
+  ErrorState,
+  LoadingState,
+} from '../shared';
 import { ADMIN_REGION_GAP } from '../shared/adminStyles';
 import EmailTemplateEditor from './EmailTemplateEditor';
 
@@ -37,6 +31,46 @@ const CATEGORY_LABELS: Record<EmailCategory, string> = {
   [EmailCategory.ANNOUNCEMENT]: 'Announcement',
   [EmailCategory.TRANSACTIONAL]: 'Transactional',
 };
+
+const columns: DataColumn<IEmailTemplateDocument>[] = [
+  {
+    id: 'name',
+    label: 'Name',
+    width: '25%',
+    wrap: true,
+    render: template => (
+      <>
+        <Typography level="body-sm" fontWeight="md">
+          {template.name}
+        </Typography>
+        <Typography level="body-xs" sx={{ color: 'neutral.500' }}>
+          {template.slug}
+        </Typography>
+      </>
+    ),
+  },
+  {
+    id: 'category',
+    label: 'Category',
+    width: '15%',
+    render: template => (
+      <Chip size="sm" variant="soft">
+        {CATEGORY_LABELS[template.category] || template.category}
+      </Chip>
+    ),
+  },
+  { id: 'subject', label: 'Subject', render: template => template.subject },
+  {
+    id: 'status',
+    label: 'Status',
+    width: '7rem',
+    render: template => (
+      <Chip color={template.isActive ? 'success' : 'neutral'} size="sm" variant="soft">
+        {template.isActive ? 'Active' : 'Inactive'}
+      </Chip>
+    ),
+  },
+];
 
 export default function EmailTemplatesPanel() {
   const { data: templates, isLoading, isError, refetch } = useEmailTemplates({ limit: 100 });
@@ -102,6 +136,60 @@ export default function EmailTemplatesPanel() {
 
   const existingSlugs = templates?.data?.map((t: IEmailTemplateDocument) => t.slug) || [];
 
+  const renderRowActions = (template: IEmailTemplateDocument) => {
+    const usingJobs = getJobsUsingTemplate(template.id);
+    return (
+      <>
+        <IconButton
+          size="sm"
+          variant="plain"
+          onClick={() => handleOpenEdit(template.id)}
+          data-testid={`edit-template-${template.id}`}
+        >
+          <EditIcon />
+        </IconButton>
+        <Tooltip title="Clone template">
+          <IconButton
+            size="sm"
+            variant="plain"
+            color="primary"
+            onClick={() => handleClone(template.id)}
+            loading={cloneMutation.isPending}
+            data-testid={`clone-template-${template.id}`}
+          >
+            <ContentCopyIcon />
+          </IconButton>
+        </Tooltip>
+        {isTemplateInUse(template.id) ? (
+          <Tooltip
+            title={`Cannot delete: Used by ${usingJobs.length} campaign(s): ${usingJobs.slice(0, 3).join(', ')}${usingJobs.length > 3 ? '...' : ''}`}
+          >
+            <IconButton
+              size="sm"
+              variant="plain"
+              color="neutral"
+              disabled
+              sx={{ opacity: 0.5 }}
+              data-testid={`template-in-use-${template.id}`}
+            >
+              <LockIcon />
+            </IconButton>
+          </Tooltip>
+        ) : (
+          <IconButton
+            size="sm"
+            variant="plain"
+            color="danger"
+            onClick={() => setDeleteConfirmId(template.id)}
+            data-testid={`delete-template-${template.id}`}
+          >
+            <DeleteIcon />
+          </IconButton>
+        )}
+      </>
+    );
+  };
+
   // Show editor view
   if (isCreating || editingTemplateId) {
     return (
@@ -128,134 +216,65 @@ export default function EmailTemplatesPanel() {
       ) : isError && !templates ? (
         <ErrorState message="Could not load templates." onRetry={() => void refetch()} />
       ) : (
-        <Sheet variant="outlined" sx={{ borderRadius: 'sm', overflow: 'auto' }}>
-          <Table stickyHeader>
-            <thead>
-              <tr>
-                <th style={{ width: '25%' }}>Name</th>
-                <th style={{ width: '15%' }}>Category</th>
-                <th style={{ width: '35%' }}>Subject</th>
-                <th style={{ width: '10%' }}>Status</th>
-                <th style={{ width: '15%' }}>Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              {templates?.data?.length === 0 && (
-                <tr>
-                  <td colSpan={5}>
-                    <EmptyState
-                      title="No templates yet"
-                      description="A template holds the subject and body that a campaign sends."
-                      action={
-                        <Button
-                          size="sm"
-                          variant="outlined"
-                          startDecorator={<AddIcon />}
-                          onClick={handleOpenCreate}
-                          data-testid="email-templates-empty-create-btn"
-                        >
-                          New template
-                        </Button>
-                      }
-                    />
-                  </td>
-                </tr>
-              )}
-              {templates?.data?.map((template: IEmailTemplateDocument) => {
-                const inUse = isTemplateInUse(template.id);
-                const usingJobs = getJobsUsingTemplate(template.id);
-
-                return (
-                  <tr key={template.id}>
-                    <td>
-                      <Typography level="body-sm" fontWeight="md">
-                        {template.name}
-                      </Typography>
-                      <Typography level="body-xs" sx={{ color: 'neutral.500' }}>
-                        {template.slug}
-                      </Typography>
-                    </td>
-                    <td>
-                      <Chip size="sm" variant="soft">
-                        {CATEGORY_LABELS[template.category] || template.category}
-                      </Chip>
-                    </td>
-                    <td>
-                      <Typography level="body-sm" noWrap sx={{ maxWidth: 300 }}>
-                        {template.subject}
-                      </Typography>
-                    </td>
-                    <td>
-                      <Chip color={template.isActive ? 'success' : 'neutral'} size="sm" variant="soft">
-                        {template.isActive ? 'Active' : 'Inactive'}
-                      </Chip>
-                    </td>
-                    <td>
-                      <Stack direction="row" spacing={1}>
-                        <IconButton
-                          size="sm"
-                          variant="plain"
-                          onClick={() => handleOpenEdit(template.id)}
-                          data-testid={`edit-template-${template.id}`}
-                        >
-                          <EditIcon />
-                        </IconButton>
-                        <Tooltip title="Clone template">
-                          <IconButton
-                            size="sm"
-                            variant="plain"
-                            color="primary"
-                            onClick={() => handleClone(template.id)}
-                            loading={cloneMutation.isPending}
-                            data-testid={`clone-template-${template.id}`}
-                          >
-                            <ContentCopyIcon />
-                          </IconButton>
-                        </Tooltip>
-                        {inUse ? (
-                          <Tooltip
-                            title={`Cannot delete: Used by ${usingJobs.length} campaign(s): ${usingJobs.slice(0, 3).join(', ')}${usingJobs.length > 3 ? '...' : ''}`}
-                          >
-                            <IconButton size="sm" variant="plain" color="neutral" disabled sx={{ opacity: 0.5 }}>
-                              <LockIcon />
-                            </IconButton>
-                          </Tooltip>
-                        ) : (
-                          <IconButton
-                            size="sm"
-                            variant="plain"
-                            color="danger"
-                            onClick={() => setDeleteConfirmId(template.id)}
-                            data-testid={`delete-template-${template.id}`}
-                          >
-                            <DeleteIcon />
-                          </IconButton>
-                        )}
-                      </Stack>
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </Table>
-        </Sheet>
+        <DataTable<IEmailTemplateDocument>
+          label="Email templates"
+          testId="email-templates-table"
+          rows={templates?.data ?? []}
+          columns={columns}
+          getRowId={template => template.id}
+          onRetry={() => void refetch()}
+          empty={
+            <EmptyState
+              title="No templates yet"
+              description="A template holds the subject and body that a campaign sends."
+              action={
+                <Button
+                  size="sm"
+                  variant="outlined"
+                  startDecorator={<AddIcon />}
+                  onClick={handleOpenCreate}
+                  data-testid="email-templates-empty-create-btn"
+                >
+                  New template
+                </Button>
+              }
+            />
+          }
+          rowActions={renderRowActions}
+          actionsWidth="7.5rem"
+        />
       )}
 
-      {/* Delete Confirmation Modal */}
-      <Modal open={!!deleteConfirmId} onClose={() => setDeleteConfirmId(null)}>
-        <ModalDialog variant="outlined" role="alertdialog">
-          <DialogTitle>Delete Template?</DialogTitle>
-          <DialogContent>Are you sure you want to delete this template? This action cannot be undone.</DialogContent>
-          <DialogActions>
-            <Button variant="plain" color="neutral" onClick={() => setDeleteConfirmId(null)}>
-              Cancel
-            </Button>
-            <Button variant="solid" color="danger" onClick={handleDelete} loading={deleteMutation.isPending}>
-              Delete
-            </Button>
-          </DialogActions>
-        </ModalDialog>
-      </Modal>
+      <AdminDialog
+        open={!!deleteConfirmId}
+        onClose={() => setDeleteConfirmId(null)}
+        title="Delete template"
+        role="alertdialog"
+        data-testid="delete-template-dialog"
+      >
+        <Typography level="body-md">
+          Are you sure you want to delete this template? This action cannot be undone.
+        </Typography>
+        <AdminDialogFooter>
+          <Button
+            variant="plain"
+            color="neutral"
+            onClick={() => setDeleteConfirmId(null)}
+            data-testid="delete-template-cancel-btn"
+          >
+            Cancel
+          </Button>
+          <Button
+            variant="solid"
+            color="danger"
+            onClick={handleDelete}
+            loading={deleteMutation.isPending}
+            data-testid="delete-template-confirm-btn"
+          >
+            Delete
+          </Button>
+        </AdminDialogFooter>
+      </AdminDialog>
     </Stack>
   );
 }

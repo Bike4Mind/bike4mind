@@ -15,5 +15,4 @@ export default {
   'email/EmailActivityHistory.tsx': [[2, '5d7be40ee2063946']],
   'email/EmailJobDetail.tsx': [[2, '81717d4fa42f09a7']],
   'email/EmailJobsPanel.tsx': [[2, '101fad654099d594']],
-  'email/EmailTemplatesPanel.tsx': [[2, 'f9c81b2ddcc066d8']],
 };
