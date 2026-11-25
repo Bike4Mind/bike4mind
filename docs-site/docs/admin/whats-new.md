@@ -43,11 +43,12 @@ Both the Active and Archived tables share the same structure:
 | **Status** | Chip showing Active, Disabled, Expired, or Expiring Soon with color coding |
 | **Expiry** | Days remaining until expiry, with color coding (green for more than 7 days, warning for 7 days or fewer, danger for expired, neutral for no expiry) |
 | **Source** | Where the modal originated: `self` for modals authored on this deployment, `production` only on modals left over from a retired production import |
-| **Actions** | View, Edit, Enable/Disable toggle, and Delete buttons |
+
+Click a row to open its preview. Each row also has a "..." actions menu with **View modal**, **Edit modal**, **Enable modal** / **Disable modal**, and **Delete modal**.
 
 ### Creating a Modal
 
-Click "Create Modal" to open a dialog with the following fields:
+Click "Create modal" to open a dialog with the following fields:
 
 | Field | Required | Description |
 |-------|----------|-------------|
@@ -58,23 +59,23 @@ Click "Create Modal" to open a dialog with the following fields:
 
 ### Editing a Modal
 
-Click the Edit icon on any row to open the edit dialog, pre-populated with the current values. The same fields are available as in the create dialog.
+Choose **Edit modal** from a row's "..." menu to open the edit dialog, pre-populated with the current values. The same fields are available as in the create dialog.
 
 ### Previewing a Modal
 
-Click the View icon to open a preview dialog showing the title, subtitle, full description, enabled status, source, generated date, and expiry information.
+Click a row, or choose **View modal** from its "..." menu, to open a preview dialog showing the title, subtitle, full description, enabled status, source, generated date, and expiry information.
 
 ### Deleting a Modal
 
-Click the Delete icon to open a confirmation dialog. This action is permanent and cannot be undone.
+Choose **Delete modal** from a row's "..." menu to open a confirmation dialog. Type the modal's title (or the word `delete` for an untitled modal) to enable the **Delete modal** button. You can pick an optional reason; it is not recorded, but the deletion itself appears in the Admin log. Deleting is permanent. If the delete fails, the dialog stays open so you can retry.
 
 ### Toggling a Modal
 
-Click the power icon to enable or disable a modal. Disabled modals move to the Archived section.
+Choose **Enable modal** or **Disable modal** from a row's "..." menu. Disabled modals move to the Archived section.
 
 ### Pagination
 
-Both the Active and Archived sections support pagination with configurable items per page. Pagination controls appear when the number of modals exceeds the selected page size.
+Both the Active and Archived tables page their rows. Choose 25, 50, or 100 rows per page (default: 25), and use the previous and next page buttons below each table.
 
 ## Weekly Highlights to Slack
 
