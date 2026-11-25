@@ -167,6 +167,8 @@
       "inputs": [
         "$TURBO_DEFAULT$",
         ".turbo/test-context",
+        "$TURBO_ROOT$/b4m-core/services/src/billing/platformAccounting.ts",
+        "$TURBO_ROOT$/b4m-core/services/src/billing/priceCompletionUsage.ts",
         "$TURBO_ROOT$/packages/server-utils/src/auth/ability.ts",
         "$TURBO_ROOT$/packages/scripts/migrate/migrations/20260921241039_ensure-admin-ai-attempt-retention.ts"
       ]
