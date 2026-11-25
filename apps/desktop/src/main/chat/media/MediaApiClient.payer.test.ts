@@ -37,9 +37,9 @@ function harness(runPayer?: BillingPayer) {
 const CASES: [string, string, Submit][] = [
   ['createImageJob', '/api/v1/image-jobs', (c, key) => c.createImageJob({ prompt: 'p', model: 'm' } as never, key)],
   [
-    'createStudioImages',
-    '/api/studio/image-jobs',
-    (c, key) => c.createStudioImages({ model: 'test-image', mode: 'generate', prompt: 'p' }, 1, key),
+    'createImageJobGroup',
+    '/api/v1/image-jobs',
+    (c, key) => c.createImageJobGroup({ model: 'm', mode: 'generate', prompt: 'p', count: 2 } as never, key),
   ],
   [
     'createVideoGeneration',
@@ -55,9 +55,6 @@ const CASES: [string, string, Submit][] = [
   ['generateSoundEffect', '/api/ai/sound-effects', c => c.generateSoundEffect({ text: 'boom' } as never)],
 ];
 
-// Studio's image call is made from the Studio pane on a client with no orchestration run.
-const RUN_CASES = CASES.filter(([name]) => name !== 'createStudioImages');
-
 describe('MediaApiClient payer', () => {
   it.each(CASES)('%s states the payer on %s, read at submit time', async (_name, path, call) => {
     const { submitted, pay } = harness();
@@ -69,20 +66,6 @@ describe('MediaApiClient payer', () => {
     pay({ organization_id: 'org-1' });
     const organization = await submitted(call);
     expect(organization[0]).toBe(path);
-    expect(organization[1]).toHaveProperty('organization_id', 'org-1');
-  });
-
-  it('reads the payer per submit on /api/studio/image-jobs', async () => {
-    const { submitted, pay } = harness();
-    const call: Submit = (c, key) =>
-      c.createStudioImages({ model: 'test-image', mode: 'generate', prompt: 'p' }, 1, key);
-
-    const personal = await submitted(call);
-    expect(personal[0]).toBe('/api/studio/image-jobs');
-    expect(personal[1]).toHaveProperty('organization_id', null);
-
-    pay({ organization_id: 'org-1' });
-    const organization = await submitted(call);
     expect(organization[1]).toHaveProperty('organization_id', 'org-1');
   });
 
@@ -100,7 +83,7 @@ describe('MediaApiClient payer', () => {
     }
   );
 
-  it.each(RUN_CASES)(
+  it.each(CASES)(
     "%s bills an organization run's payer on %s after the selection switches",
     async (_name, _path, call) => {
       const { submitted, pay } = harness({ organization_id: 'org-1' });
@@ -112,7 +95,7 @@ describe('MediaApiClient payer', () => {
     }
   );
 
-  it.each(RUN_CASES)(
+  it.each(CASES)(
     '%s states null for a Personal run on %s after an organization is selected',
     async (_name, _path, call) => {
       const { submitted, pay } = harness({ organization_id: null });

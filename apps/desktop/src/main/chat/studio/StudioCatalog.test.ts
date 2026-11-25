@@ -4,7 +4,9 @@ import { AxiosError, type AxiosAdapter, type AxiosResponse } from 'axios';
 import type { ModelCatalog } from '../ModelCatalog';
 import { readStudioCatalog } from './StudioCatalog';
 
-function catalogWith(probe: { status: number; data: unknown }) {
+function catalogWith(
+  imageModels: { status: number; data: unknown } = { status: 200, data: { models: [{ id: 'gpt-image-2' }] } }
+) {
   const api = new AuthenticatedApiClient({
     baseUrl: 'https://example.test',
     tokenStore: {
@@ -22,7 +24,7 @@ function catalogWith(probe: { status: number; data: unknown }) {
     let data: unknown;
     switch (config.url) {
       case '/api/v1/image-models':
-        data = { models: [{ id: 'gpt-image-2' }] };
+        ({ status, data } = imageModels);
         break;
       case '/api/v1/music-models':
         data = { models: [] };
@@ -32,9 +34,6 @@ function catalogWith(probe: { status: number; data: unknown }) {
         break;
       case '/api/ai/elevenlabs-voices':
         data = { voices: [] };
-        break;
-      case '/api/studio/image-jobs?limit=1':
-        ({ status, data } = probe);
         break;
       default:
         throw new Error('Unexpected request');
@@ -49,20 +48,17 @@ function catalogWith(probe: { status: number; data: unknown }) {
 }
 
 describe('Studio image availability', () => {
-  it('hides image creation when the authenticated image route is disabled', async () => {
-    const { run, transport } = catalogWith({
-      status: 403,
-      data: { error: 'Feature not available', code: 'FEATURE_DISABLED' },
-    });
-    expect((await run()).images).toEqual([]);
+  it('lists the public image models, reading only GET routes and no Studio-only route', async () => {
+    const { run, transport } = catalogWith();
+    expect((await run()).images.map(image => image.id)).toEqual(['gpt-image-2']);
     expect(transport.mock.calls.every(([config]) => config.method === 'get')).toBe(true);
+    expect(transport.mock.calls.some(([config]) => config.url?.startsWith('/api/studio/'))).toBe(false);
   });
-  it('retains available images when the read-only capability probe succeeds', async () => {
-    expect((await catalogWith({ status: 200, data: { data: [] } }).run()).images.map(image => image.id)).toEqual([
-      'gpt-image-2',
-    ]);
+  it('drops a listed model this build has no capabilities for', async () => {
+    const { run } = catalogWith({ status: 200, data: { models: [{ id: 'gpt-image-2' }, { id: 'not-a-model' }] } });
+    expect((await run()).images.map(image => image.id)).toEqual(['gpt-image-2']);
   });
-  it.each([401, 403, 500])('does not hide an unrelated HTTP %i failure as feature availability', async status => {
+  it.each([401, 403, 500])('fails loudly when the image model list answers HTTP %i', async status => {
     await expect(catalogWith({ status, data: { error: 'Something else' } }).run()).rejects.toThrow();
   });
 });

@@ -27,7 +27,7 @@ const PACE = "at last week's pace";
 
 const REDUCED_MOTION = '@media (prefers-reduced-motion: reduce)';
 
-function formatCredits(value: number): string {
+export function formatCredits(value: number): string {
   return Math.round(value).toLocaleString();
 }
 
@@ -298,36 +298,5 @@ export function CreditsMenuHeader({ glance, onTopUp }: { glance: CreditsGlance; 
         </Link>
       )}
     </Stack>
-  );
-}
-
-/** A soft dot on the avatar, shown only when credits need attention. No modal, no sound. */
-export function CreditsAvatarDot({ outlook }: { outlook: CreditOutlook }) {
-  if (outlook.kind === 'unknown' || outlook.tone === 'ok') return null;
-  const color = `var(--joy-palette-${TONE_COLOR[outlook.tone]}-500)`;
-  return (
-    <Box
-      component="span"
-      role="img"
-      aria-label={outlook.tone === 'critical' ? 'Credits almost out' : 'Credits running low'}
-      data-testid="credits-avatar-dot"
-      sx={{
-        position: 'absolute',
-        top: -1,
-        right: -1,
-        width: 9,
-        height: 9,
-        borderRadius: '50%',
-        bgcolor: color,
-        boxShadow: '0 0 0 2px var(--joy-palette-background-body)',
-        '@keyframes creditsPulse': {
-          '50%': {
-            boxShadow: `0 0 0 2px var(--joy-palette-background-body), 0 0 0 5px color-mix(in srgb, ${color} 30%, transparent)`,
-          },
-        },
-        animation: 'creditsPulse 2.4s ease-in-out infinite',
-        [REDUCED_MOTION]: { animation: 'none' },
-      }}
-    />
   );
 }

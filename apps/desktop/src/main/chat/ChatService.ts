@@ -1137,6 +1137,8 @@ export class ChatService {
 
   /** Agent turns that ended since each Orchestrate parent was last woken; see wakeParentForAgents. */
   private readonly agentWakes = new AgentWakeLedger();
+  /** Sessions whose turn just ended on a run-budget pause, read once by settleQueue. */
+  private readonly budgetStoppedTurns = new Set<string>();
 
   /**
    * Agents whose turn has ended but whose report is not recorded yet. A sibling settling in that
@@ -2230,7 +2232,8 @@ export class ChatService {
     const scope = this.deps.store.scopeKey();
     try {
       for (const id of new Set([policy.rootSessionId, session.id])) {
-        await this.deps.store.setRunBudget(id, policy.rootRunId, { budgetPaused: true }, scope);
+        const updated = await this.deps.store.setRunBudget(id, policy.rootRunId, { budgetPaused: true }, scope);
+        if (updated) this.deps.summaryChanged?.(updated);
       }
     } catch (err) {
       this.deps.logger.warn(`CHAT: could not record the run pause: ${err instanceof Error ? err.message : err}`);
@@ -2346,6 +2349,9 @@ export class ChatService {
       if (result.ok) resumed += 1;
       else this.deps.logger.warn(`CHAT: could not resume ${id} after a budget raise: ${result.error}`);
     }
+    // An agent that settled during the pause left its parent a wake it could not take. A parent
+    // resumed above is busy and is woken when that turn completes; an idle one is woken now.
+    for (const id of ids) await this.wakeParentForAgents(id);
     return { ok: true, resumed };
   }
 
@@ -5577,6 +5583,7 @@ export class ChatService {
       // again can fix, and AuthService is showing the one notice that says so.
       const expired = err instanceof SessionRevokedError || err instanceof NotAuthenticatedError;
       const budgetStopped = err instanceof RunBudgetExhaustedError;
+      if (budgetStopped) this.budgetStoppedTurns.add(sessionId);
       // Written here, never by the model: the run has no budget left to explain itself with.
       const message = expired
         ? SESSION_PAUSED_MESSAGE
@@ -5769,6 +5776,7 @@ export class ChatService {
    * to the composer, where the user decides whether it still says what they meant.
    */
   private settleQueue(sessionId: string, outcome: TurnOutcome): void {
+    const budgetStopped = this.budgetStoppedTurns.delete(sessionId);
     if (outcome !== 'completed') this.loops.pauseWaiting(sessionId);
     // A promotion outranks the outcome, and is checked before it rather than under 'aborted',
     // because the turn may equally have finished by itself in the moment between the click and
@@ -5790,7 +5798,9 @@ export class ChatService {
     }
     // A stopped or failed turn is not followed by an automatic one. Exits after this still wake.
     this.wake?.discard(sessionId);
-    this.agentWakes.hold(sessionId);
+    // A budget pause is not the user saying "not now": the agents' news waits for the raise,
+    // which wakes the parent with it (raiseRunBudget). wakeParentForAgents skips a paused run.
+    if (!budgetStopped) this.agentWakes.hold(sessionId);
     const reason = outcome === 'aborted' ? 'stopped' : outcome === 'expired' ? 'session-expired' : 'failed';
     const stranded = this.deps.queue?.releaseAll(sessionId, reason) ?? [];
     void this.strandRelay(sessionId, stranded).catch(() => undefined);
@@ -8076,6 +8086,8 @@ export class ChatService {
     if (await this.agentStillRunning(parentId)) return;
     const parent = await this.deps.store.get(parentId);
     if (!parent || parent.archived || !orchestratesAgents(parent)) return;
+    // The wake would be refused for the same budget; the batch waits for raiseRunBudget.
+    if ((await this.governingPolicy(parent))?.budgetPaused) return;
     // Re-read after the awaits: a turn or an agent that started in the gap calls this again.
     if (this.parentBusy(parentId) || this.agentRunningNow(parentId)) return;
 

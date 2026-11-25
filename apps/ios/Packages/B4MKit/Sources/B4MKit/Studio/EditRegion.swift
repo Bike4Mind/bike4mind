@@ -14,7 +14,7 @@ public struct EditRegion: Identifiable, Equatable, Sendable {
     self.prompt = prompt
   }
 
-  /// `[y_min, x_min, y_max, x_max]`, the BFL order the image-edits route takes (vertical axis first).
+  /// `[y_min, x_min, y_max, x_max]`, the BFL order the image job API takes (vertical axis first).
   public var bbox: [Double] {
     [rect.minY, rect.minX, rect.maxY, rect.maxX].map { Double($0) }
   }
