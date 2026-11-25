@@ -7,6 +7,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { EventEmitter } from 'events';
 import { createMocks } from 'node-mocks-http';
 import type { NextApiRequest, NextApiResponse } from 'next';
+import { BadRequestError, ConflictError, NotFoundError } from '@bike4mind/common';
 
 const h = vi.hoisted(() => ({
   enabled: true,
@@ -149,6 +150,27 @@ describe('PUT [id]/grants', () => {
     expect(h.shareCallableFunction).not.toHaveBeenCalled();
   });
 
+  it.each([
+    ["404 for a tool that is not the caller's", new NotFoundError('Tool not found'), 404, undefined],
+    [
+      '409 for a tool that is not live',
+      new ConflictError('Promote the tool before sharing it.', { code: 'not_live' }),
+      409,
+      'not_live',
+    ],
+    [
+      '400 with the code for a share naming nobody',
+      new BadRequestError('Name at least one person.', { code: 'no_recipients' }),
+      400,
+      'no_recipients',
+    ],
+  ])('answers %s', async (_name, failure, status, code) => {
+    h.shareCallableFunction.mockRejectedValue(failure);
+    const res = await fire(grantsRoute, { body: SHARE });
+    expect(res._getStatusCode()).toBe(status);
+    if (code) expect(res._getJSONData()).toMatchObject({ code });
+  });
+
   it('is 403 with the setting off', async () => {
     h.enabled = false;
     expect((await fire(grantsRoute, { body: SHARE }))._getStatusCode()).toBe(403);
@@ -162,6 +184,19 @@ describe('GET and DELETE [id]/grants', () => {
     expect(h.getCallableFunctionShare).toHaveBeenCalledWith(JWT_USER, FUNCTION_ID);
     expect((await fire(grantsRoute, { method: 'DELETE' }))._getJSONData()).toMatchObject({ grants: null });
     expect(h.revokeCallableFunctionShare).toHaveBeenCalledWith(JWT_USER, FUNCTION_ID);
+  });
+
+  it('is 403 on read with the setting off', async () => {
+    h.enabled = false;
+    expect((await fire(grantsRoute, { method: 'GET' }))._getStatusCode()).toBe(403);
+    expect(h.getCallableFunctionShare).not.toHaveBeenCalled();
+  });
+
+  it("answers 404 when the tool is not the caller's", async () => {
+    h.getCallableFunctionShare.mockRejectedValue(new NotFoundError('Tool not found'));
+    expect((await fire(grantsRoute, { method: 'GET' }))._getStatusCode()).toBe(404);
+    h.revokeCallableFunctionShare.mockRejectedValue(new NotFoundError('Tool not found'));
+    expect((await fire(grantsRoute, { method: 'DELETE' }))._getStatusCode()).toBe(404);
   });
 
   it('stops sharing with the setting off, as delete does', async () => {
