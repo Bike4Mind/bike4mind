@@ -2953,9 +2953,29 @@ export interface paths {
     put?: never;
     /**
      * Call a live function
-     * @description Runs one live function on the server with `input` and returns its `output` with a `stamp`: the function, pin, code hash, input hash, runtime, and packages the call ran on, so a result can be traced and repeated. The inputs are checked against `input_schema` before anything runs and the outputs against `output_schema` after. Calls are synchronous and time-limited; each one is logged with hashes and sizes only, never the inputs or outputs.
+     * @description Runs one live function on the server with `input` and returns its `output` with a `stamp`: the function, pin, code hash, input hash, runtime, and packages the call ran on, so a result can be traced and repeated. The inputs are checked against `input_schema` before anything runs and the outputs against `output_schema` after. A call is synchronous by default and stops at 45 s. With `mode: "async"` every check is made first, then the call answers 202 with a `call_id`, runs to the organization's time limit, and keeps its result for 24 hours at `GET /api/v1/functions/calls/{call_id}`. Each call is logged with hashes and sizes only, never the inputs or outputs.
      */
     post: operations['invokeFunction'];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/v1/functions/calls/{call_id}': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * Poll an asynchronous function call
+     * @description Reads an asynchronous call: `queued`, `running`, or `finished` with its `outcome`, `output`, and `stamp`. Only the person whose key made the call can read it, and a result is kept 24 hours.
+     */
+    get: operations['getFunctionCall'];
+    put?: never;
+    post?: never;
     delete?: never;
     options?: never;
     head?: never;
@@ -3092,6 +3112,67 @@ export interface components {
       };
       sessionId: string;
       images?: string[];
+    };
+    /** @description Read at `GET /api/v1/functions/calls/{call_id}`. A call that ran and failed still polls as `200` with `status: "finished"`; check `outcome` before reading `output`. */
+    invokeFunction202PollResult: {
+      call_id: string;
+      /**
+       * @description `queued` and `running` carry nothing else; poll again. `finished` carries how the call ended.
+       * @enum {string}
+       */
+      status: 'queued' | 'running' | 'finished';
+      /**
+       * @description How a finished call ended: `ok` carries `output`; any other outcome carries `error`.
+       * @enum {string}
+       */
+      outcome?:
+        'ok' | 'input_invalid' | 'output_invalid' | 'error' | 'timeout' | 'memory' | 'output_too_large' | 'refused';
+      /** @description The outputs, checked against `output_schema`. */
+      output?: {
+        [key: string]: unknown;
+      };
+      /** @description What the call ran on: the code, inputs, runtime, and packages, by hash and version. */
+      stamp?: {
+        function_id: string;
+        slug: string;
+        pin_version: number;
+        pin_seq: number | null;
+        /** @description sha256 hex of the pinned code. */
+        code_hash: string;
+        /** @description sha256 hex of the canonical JSON of the validated inputs. */
+        input_hash: string;
+        runtime: {
+          kind: string;
+          version: string;
+          lock_hash: string | null;
+        };
+        packages: {
+          name: string;
+          version: string;
+        }[];
+        /** @description Each data file the call read, by hash. Empty while functions read no data files. */
+        data: {
+          name: string;
+          mode: string;
+          sha256: string;
+          bytes: number;
+          fetched_at?: string;
+        }[];
+        /** @description Other functions the call used. Always empty today. */
+        uses: unknown[];
+        /** @enum {string|null} */
+        trust_label: 'verified' | 'unverified' | null;
+        /** @enum {string} */
+        surface: 'test' | 'rest' | 'chat' | 'agent' | 'mcp';
+        duration_ms: number;
+        called_at: string;
+      };
+      error?: string;
+      problems?: {
+        /** @description The field, as a dotted path from the inputs, such as `span`. */
+        path: string;
+        message: string;
+      }[];
     };
     sendChatMessageResponse200:
       | {
@@ -15415,6 +15496,12 @@ export interface components {
         called_at: string;
       };
     };
+    invokeFunctionResponse202: {
+      /** @description Poll `GET /api/v1/functions/calls/{call_id}` for the result. */
+      call_id: string;
+      /** @enum {string} */
+      status: 'queued';
+    };
     invokeFunctionResponse422: {
       error: string;
       request_id?: string;
@@ -15543,6 +15630,71 @@ export interface components {
       input: {
         [key: string]: unknown;
       };
+      /**
+       * @description `sync` (default) answers with the result and stops at 45 s. `async` answers 202 with a `call_id` once every check has passed, runs to the organization's time limit, and keeps the result for 24 hours at `GET /api/v1/functions/calls/{call_id}`.
+       * @enum {string}
+       */
+      mode?: 'sync' | 'async';
+    };
+    getFunctionCallResponse200: {
+      call_id: string;
+      /**
+       * @description `queued` and `running` carry nothing else; poll again. `finished` carries how the call ended.
+       * @enum {string}
+       */
+      status: 'queued' | 'running' | 'finished';
+      /**
+       * @description How a finished call ended: `ok` carries `output`; any other outcome carries `error`.
+       * @enum {string}
+       */
+      outcome?:
+        'ok' | 'input_invalid' | 'output_invalid' | 'error' | 'timeout' | 'memory' | 'output_too_large' | 'refused';
+      /** @description The outputs, checked against `output_schema`. */
+      output?: {
+        [key: string]: unknown;
+      };
+      /** @description What the call ran on: the code, inputs, runtime, and packages, by hash and version. */
+      stamp?: {
+        function_id: string;
+        slug: string;
+        pin_version: number;
+        pin_seq: number | null;
+        /** @description sha256 hex of the pinned code. */
+        code_hash: string;
+        /** @description sha256 hex of the canonical JSON of the validated inputs. */
+        input_hash: string;
+        runtime: {
+          kind: string;
+          version: string;
+          lock_hash: string | null;
+        };
+        packages: {
+          name: string;
+          version: string;
+        }[];
+        /** @description Each data file the call read, by hash. Empty while functions read no data files. */
+        data: {
+          name: string;
+          mode: string;
+          sha256: string;
+          bytes: number;
+          fetched_at?: string;
+        }[];
+        /** @description Other functions the call used. Always empty today. */
+        uses: unknown[];
+        /** @enum {string|null} */
+        trust_label: 'verified' | 'unverified' | null;
+        /** @enum {string} */
+        surface: 'test' | 'rest' | 'chat' | 'agent' | 'mcp';
+        duration_ms: number;
+        called_at: string;
+      };
+      error?: string;
+      problems?: {
+        /** @description The field, as a dotted path from the inputs, such as `span`. */
+        path: string;
+        message: string;
+      }[];
     };
   };
   responses: never;
@@ -46592,6 +46744,29 @@ export interface operations {
           'application/json': components['schemas']['invokeFunctionResponse200'];
         };
       };
+      /** @description With `mode: "async"`: every check passed and the call is queued. Nothing ran yet; poll `call_id` for how it ends. */
+      202: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['invokeFunctionResponse202'];
+        };
+      };
       /** @description Missing or invalid credentials. */
       401: {
         headers: {
@@ -46777,7 +46952,7 @@ export interface operations {
           'application/json': components['schemas']['invokeFunctionResponse502'];
         };
       };
-      /** @description No function runtime is available, the runtime was slow to start, or it did not answer. Try again later. */
+      /** @description No function runtime is available, the runtime was slow to start or did not answer, or an asynchronous call could not be queued. Try again later. */
       503: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
@@ -46800,7 +46975,7 @@ export interface operations {
           'application/json': components['schemas']['ErrorResponse'];
         };
       };
-      /** @description The call ran past its time limit and was stopped (`errorCode: "request_timeout"`). */
+      /** @description The call ran past its time limit and was stopped (`errorCode: "request_timeout"`). When the organization's limit is longer than the 45 s a synchronous call may take, `error` says to send `mode: "async"`. */
       504: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
@@ -46821,6 +46996,182 @@ export interface operations {
         };
         content: {
           'application/json': components['schemas']['invokeFunctionResponse504'];
+        };
+      };
+    };
+  };
+  getFunctionCall: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        /** @description The `call_id` an asynchronous invoke answered with. */
+        call_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description The call as it stands. */
+      200: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['getFunctionCallResponse200'];
+        };
+      };
+      /** @description Missing or invalid credentials. */
+      401: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The API key lacks `functions:invoke`, or callable functions are turned off for the key owner or one of their organizations. */
+      403: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ScopeForbiddenResponse'];
+        };
+      };
+      /** @description No call with that id was made by the key owner, or its result is more than 24 hours old. Another person's call answers this same 404. */
+      404: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The path does not serve this HTTP method. */
+      405: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description The methods this path serves. GET implies HEAD. */
+          Allow?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Request failed validation. */
+      422: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The request declared a client build (`X-Client-Name` + `X-Client-Version`) older than the minimum this API still serves for that client. Upgrade to `minimum_version` or later. Never sent to a request that omits either header. */
+      426: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['UpgradeRequiredResponse'];
+        };
+      };
+      /** @description Per-user rate limit exceeded. Honor `Retry-After`. */
+      429: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
         };
       };
     };

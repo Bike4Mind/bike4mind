@@ -1,5 +1,7 @@
-import type { Logger } from '@bike4mind/observability';
+import { Logger } from '@bike4mind/observability';
 import { sessionRepository, userRepository } from '@bike4mind/database';
+
+const moduleLogger = new Logger({ metadata: { service: 'signupLanding' } });
 
 // The SPA route `/notebooks/$id` (apps/client/app/router.tsx); the id is a Session id.
 const NOTEBOOK_PATH = /^\/notebooks\/([a-f0-9]{24})(?:[/?#]|$)/i;
@@ -34,7 +36,7 @@ export async function recordSignupLanding(
     if (!ownerId || ownerId === input.userId) return;
     await userRepository.recordSignupLanding(input.userId, ownerId, input.now ?? new Date());
   } catch (error) {
-    (logger ?? console).warn('Signup landing was not recorded', {
+    (logger ?? moduleLogger).warn('Signup landing was not recorded', {
       userId: input.userId,
       errorName: error instanceof Error ? error.name : typeof error,
     });

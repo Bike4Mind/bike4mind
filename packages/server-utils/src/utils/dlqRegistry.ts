@@ -309,6 +309,18 @@ const DLQ_REGISTRY = [
     describe: firstEntity(entityAt('Export job', 'exportJobId'), entityAt('Feedback summary job', 'summaryJobId')),
   },
   {
+    label: 'callable-function-call',
+    displayName: 'Callable Function Call',
+    application: 'CallableFunctionCall',
+    sourceQueue: 'callableFunctionCallQueue',
+    description: 'Runs one asynchronous call of a saved Python function.',
+    replay: 'safe',
+    replayNote:
+      'A job dead-lettered before its claim runs the call on replay. One already claimed is skipped, and ends the call as an error if its worker was lost.',
+    owner: 'Chat',
+    describe: entityAt('Call', 'callId'),
+  },
+  {
     label: 'account-data-export',
     displayName: 'Account Data Export',
     application: 'AccountDataExport',

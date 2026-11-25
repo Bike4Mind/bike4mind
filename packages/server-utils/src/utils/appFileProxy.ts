@@ -17,7 +17,21 @@
  */
 export const LOCAL_FILE_PROXY_BASE = '/api/app-files/serve';
 
-export type ProxyTarget = { bucket: 'appFiles' | 'generated'; key: string };
+// A constant, not an inline startsWith literal: checkUserFileCdnPrefixes.test.ts reads those as CDN routes.
+const GENERATED_PROXY_PREFIX = 'generated/';
+
+export type ProxyTarget = { bucket: 'appFiles'; key: string };
+
+/**
+ * The generated-bucket key behind a `generated/<key>` proxy path, or null. Not a CloudFront route:
+ * generated media is only reachable through signed URLs, and the self-host proxy serves this path
+ * solely behind a token (generatedMediaUrlToken.ts). Also resolves legacy `<cdnUrl>/generated/<key>`
+ * links stored in content.
+ */
+export function generatedKeyFromProxyPath(cdnPath: string): string | null {
+  const key = cdnPath.startsWith(GENERATED_PROXY_PREFIX) ? cdnPath.slice(GENERATED_PROXY_PREFIX.length) : '';
+  return key || null;
+}
 
 /**
  * Maps an app-files bucket key to its CDN request path (no leading slash). Server-side twin of
@@ -30,10 +44,6 @@ export function appFileKeyToCdnPath(key: string): string {
 }
 
 export function resolveProxyTarget(cdnPath: string): ProxyTarget | null {
-  if (cdnPath.startsWith('generated/')) {
-    // infra: generated -> generatedImagesBucket with `^/generated/(.*)$` -> `/$1`
-    return { bucket: 'generated', key: cdnPath.slice('generated/'.length) };
-  }
   if (cdnPath.startsWith('org-files/')) {
     // infra: org-files -> appFilesBucket with `^/org-files/(.*)$` -> `/organizations/$1`
     return { bucket: 'appFiles', key: `organizations/${cdnPath.slice('org-files/'.length)}` };

@@ -1,3 +1,4 @@
+import { Logger } from '@bike4mind/observability';
 import { describe, it, expect, vi } from 'vitest';
 import {
   deploymentMediaOrigins,
@@ -14,14 +15,14 @@ describe('deploymentMediaOrigins', () => {
   });
 
   it('ignores an endpoint that is unsafe for a CSP source list', () => {
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const warn = vi.spyOn(Logger.prototype, 'warn').mockImplementation(() => {});
     expect(resolveObjectStoreOrigin('http://store.test; script-src *')).toBe('');
     expect(resolveObjectStoreOrigin('ftp://store.test')).toBe('');
     warn.mockRestore();
   });
 
   it('takes the upstream feed origin over https only', () => {
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const warn = vi.spyOn(Logger.prototype, 'warn').mockImplementation(() => {});
     expect(resolveWhatsNewUpstreamOrigin(' https://up.test/api/v1/whats-new ')).toBe('https://up.test');
     expect(resolveWhatsNewUpstreamOrigin('http://up.test/api/v1/whats-new')).toBe('');
     expect(resolveWhatsNewUpstreamOrigin(undefined)).toBe('');
