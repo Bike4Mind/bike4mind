@@ -1,3 +1,4 @@
+import { randomUuid } from '@bike4mind/common';
 import { isQuotaExceededError, TTL } from '@client/app/utils/localStorageUtils';
 
 // Key prefix for localStorage
@@ -16,7 +17,7 @@ interface IdempotencyEntry {
  * @returns A unique UUID v4 string
  */
 export function generateIdempotencyKey(): string {
-  return crypto.randomUUID();
+  return randomUuid();
 }
 
 /**
