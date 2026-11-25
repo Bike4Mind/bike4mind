@@ -40,24 +40,27 @@ describe('QuestStartBodySchema.disableUserIntegrations', () => {
   });
 });
 
-describe('QuestStartBodySchema quest admission', () => {
-  it('preserves the subscriber admission across queue serialization', () => {
-    const sent = JSON.parse(
-      JSON.stringify({
-        ...body,
-        enableQuestMaster: true,
-        questMasterStartId: 'paid-start',
-        questAdmittedAs: 'subscriber',
-      })
-    );
-    expect(QuestStartBodySchema.parse(sent)).toMatchObject({
-      questMasterStartId: 'paid-start',
-      questAdmittedAs: 'subscriber',
-    });
+// Bodies queued by an older server still carry the retired QuestMaster fields; they must parse and
+// arrive at the worker without them.
+describe('QuestStartBodySchema retired QuestMaster fields', () => {
+  const legacy = {
+    ...body,
+    enableQuestMaster: true,
+    questMasterStartId: 'paid-start',
+    questAdmittedAs: 'unknown-classification',
+    questMaster: { questMasterPlanId: 'p1', questId: 'q1', subQuestId: 's1' },
+  };
+
+  it('parses a body queued with them', () => {
+    expect(() => QuestStartBodySchema.parse(JSON.parse(JSON.stringify(legacy)))).not.toThrow();
   });
 
-  it('rejects an unknown admission classification', () => {
-    expect(() => QuestStartBodySchema.parse({ ...body, questAdmittedAs: 'unknown' })).toThrow();
+  it('strips them from the parsed body', () => {
+    const parsed = QuestStartBodySchema.parse(legacy);
+    expect(parsed).not.toHaveProperty('enableQuestMaster');
+    expect(parsed).not.toHaveProperty('questMasterStartId');
+    expect(parsed).not.toHaveProperty('questAdmittedAs');
+    expect(parsed).not.toHaveProperty('questMaster');
   });
 });
 

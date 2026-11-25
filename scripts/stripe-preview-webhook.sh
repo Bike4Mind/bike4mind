@@ -36,6 +36,7 @@ ENABLED_EVENTS=(
   customer.deleted
   customer.subscription.deleted
   customer.subscription.updated
+  invoice.payment_action_required
   invoice.payment_failed
   invoice.payment_succeeded
   payment_intent.payment_failed

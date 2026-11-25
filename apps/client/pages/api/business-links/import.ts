@@ -136,7 +136,7 @@ const handler = baseApi().post(
             created++;
           }
         } catch (error) {
-          console.error('Error processing row:', error);
+          req.logger.error('Error processing row', { error });
           errors++;
         }
       }
@@ -158,7 +158,7 @@ const handler = baseApi().post(
         },
       });
     } catch (error) {
-      console.error('Import error:', error);
+      req.logger.error('Import error', { error });
       return res.status(500).json({ message: 'Failed to import CSV', error: String(error) });
     }
   })

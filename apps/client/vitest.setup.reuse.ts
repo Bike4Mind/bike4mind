@@ -166,6 +166,8 @@ if (typeof window !== 'undefined') {
     document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab' }));
     window.history.replaceState(null, '', '/');
     document.title = '';
+    // cleanup() only unmounts what Testing Library rendered: a node a test appended by hand stays.
+    document.body.replaceChildren();
     for (const element of [document.documentElement, document.body]) {
       for (const attribute of [...element.attributes]) element.removeAttribute(attribute.name);
     }

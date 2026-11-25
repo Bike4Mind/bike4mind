@@ -17,18 +17,13 @@ import {
   Organization,
   Project,
   Quest,
-  QuestMasterPlan,
   realtimeConnectionRepository,
   User,
 } from '@bike4mind/database';
 import { Session as SessionModel } from '@bike4mind/database/auth';
 import { accessibleBy } from '@casl/mongoose';
 import { Subscription } from '@bike4mind/server-utils/models/Subscription';
-import {
-  adminSettingsSubscriptionScope,
-  inviteSubscriptionScope,
-  questMasterPlanSubscriptionScope,
-} from '@server/websocket/subscriptionScopes';
+import { adminSettingsSubscriptionScope, inviteSubscriptionScope } from '@server/websocket/subscriptionScopes';
 import { sendToConnection, withWebSocketContext } from '@bike4mind/server-utils/websocket/utils';
 import { verifyWsSubscriberToken } from '@server/websocket/verifyWsAccessToken';
 import { closeConnection } from '@bike4mind/server-utils/websocket/closeConnection';
@@ -168,14 +163,6 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
     isOwnQuestSession =
       !!requestedSessionId &&
       accessibleSessions.some(s => s._id.toString() === requestedSessionId && s.userId === user.id);
-  } else if (collectionName === QuestMasterPlan.collection.collectionName) {
-    const accessibleSessions = await SessionModel.find(accessibleBy(userAbility).ofType(SessionModel), { _id: true });
-    // Plan access is user-based (owner/shared/public) with a session-based
-    // fallback for legacy and session-visibility plans
-    scope = questMasterPlanSubscriptionScope(
-      user._id.toString(),
-      accessibleSessions.map(s => s._id)
-    );
   } else if (collectionName === Invite.collection.collectionName) {
     const canShareProjectsQuery = accessibleBy(userAbility, Permission.share).ofType(Project);
     const shareableProjectIds = await Project.find(canShareProjectsQuery).distinct('_id');

@@ -56,6 +56,7 @@ const run = (query: Record<string, string | null> = {}, isAdmin = true) => {
   >;
   const { req, res } = createMocks({ method: 'GET', query: sent });
   (req as Record<string, unknown>).user = { id: 'admin1', isAdmin };
+  (req as Record<string, unknown>).logger = { error: vi.fn(), warn: vi.fn(), info: vi.fn() };
   return { req, res };
 };
 

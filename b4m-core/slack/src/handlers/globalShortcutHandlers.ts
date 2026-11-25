@@ -1058,7 +1058,6 @@ export async function processQuickAskInDM(
         historyCount: 5,
         fabFileIds: [],
         questId: createdQuest.id, // Use existing quest
-        enableQuestMaster: false,
         enableMementos: false,
         enableArtifacts: false,
         enableAgents: false,

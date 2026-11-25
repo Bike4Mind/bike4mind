@@ -183,7 +183,7 @@
   "packages/database/src/models/auth/SignupProtectionModel.ts": { "b4m/require-update-validators": { "count": 9 } },
   "packages/database/src/models/auth/SubscriberModel.ts": { "b4m/require-update-validators": { "count": 2 } },
   "packages/database/src/models/auth/TrustedDeviceModel.ts": { "b4m/require-update-validators": { "count": 2 } },
-  "packages/database/src/models/auth/UserModel.ts": { "b4m/require-update-validators": { "count": 50 } },
+  "packages/database/src/models/auth/UserModel.ts": { "b4m/require-update-validators": { "count": 48 } },
   "packages/database/src/models/auth/UserUsagePatternSignalsModel.ts": { "b4m/require-update-validators": { "count": 2 } },
   "packages/database/src/models/auth/WsConnectTicketModel.ts": { "b4m/require-update-validators": { "count": 1 } },
   "packages/database/src/models/auth/oauthClientAdmin.ts": { "b4m/require-update-validators": { "count": 2 } },
@@ -2835,11 +2835,6 @@
       "count": 7
     }
   },
-  "apps/client/pages/api/sessions/[id]/questmaster-plans/__tests__/index.test.ts": {
-    "@typescript-eslint/no-explicit-any": {
-      "count": 5
-    }
-  },
   "apps/client/pages/api/sessions/__tests__/auth-behavior.integration.test.ts": {
     "@typescript-eslint/no-explicit-any": {
       "count": 2
@@ -4027,16 +4022,6 @@
       "count": 51
     }
   },
-  "b4m-core/services/src/llm/QuestMasterHistoryBudget.test.ts": {
-    "@typescript-eslint/no-explicit-any": {
-      "count": 18
-    }
-  },
-  "b4m-core/services/src/llm/QuestMasterStatus.test.ts": {
-    "@typescript-eslint/no-explicit-any": {
-      "count": 39
-    }
-  },
   "b4m-core/services/src/llm/ResearchModeService.test.ts": {
     "@typescript-eslint/no-explicit-any": {
       "count": 14
@@ -4049,7 +4034,7 @@
   },
   "b4m-core/services/src/llm/features/AgentDetectionFeature.ts": {
     "@typescript-eslint/no-explicit-any": {
-      "count": 4
+      "count": 3
     }
   },
   "b4m-core/services/src/llm/intentClassifier.test.ts": {
@@ -4647,11 +4632,6 @@
   "b4m-core/utils/src/promptModeration/index.test.ts": {
     "@typescript-eslint/no-explicit-any": {
       "count": 6
-    }
-  },
-  "b4m-core/utils/src/questMaster.ts": {
-    "@typescript-eslint/no-explicit-any": {
-      "count": 3
     }
   },
   "b4m-core/utils/src/slack.integration.test.ts": {

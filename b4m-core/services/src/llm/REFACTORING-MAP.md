@@ -42,7 +42,6 @@ calls threaded through `process()`). The 18-step split below is a proposed
 | creditDeduction | Charge credits once the call completes | `deductCreditsWithOrgSupport` (`creditService/deductCreditsWithOrgSupport.ts`) and `subtractCredits` (`creditService/subtractCredits.ts`), called from `process()` | Yes (own module), but invoked inline, not as a Feature |
 | memento | Persist/recall long-term memory for the session | `MementoFeature` class - `ChatCompletionFeatures.ts` | Yes (Feature class) |
 | projectContext | Pull in project-scoped context/config | `ProjectFeature` class - `ChatCompletionFeatures.ts` | Yes (Feature class) |
-| questMaster | QuestMaster-specific status/behavior | `QuestMasterFeature` class - `ChatCompletionFeatures.ts` | Yes (Feature class) |
 | researchMode | Deep-research mode orchestration | `ResearchModeService` class - `ResearchModeService.ts` | Yes (own class, not a `ChatCompletionFeature`) |
 | statusUpdates | Push progress/status to the client mid-request | `StatusManager` class - `StatusManager.ts`, invoked via `this.sendStatusUpdate(...)` throughout `process()` | Yes (own class) |
 | performanceTracking | Time each pipeline phase, emit telemetry | `PipelineTimer` (from `@bike4mind/llm-adapters`) + `TelemetryBuilder` (from `../telemetry`), used in `process()` | Yes (both are real, reusable classes) |

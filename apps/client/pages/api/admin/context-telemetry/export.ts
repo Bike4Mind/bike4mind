@@ -66,7 +66,7 @@ const handler = adminApi({
       durationMs,
       metadata: { targetUserId: userId, recordCount: telemetryData.length },
     }).catch(err => {
-      console.warn('[TelemetryAudit] Failed to log DSAR export:', err instanceof Error ? err.message : 'Unknown error');
+      req.logger.warn('Failed to log DSAR export', { error: err });
     });
 
     res.json({

@@ -14,7 +14,6 @@ vi.mock('@client/app/contexts/LLMContext', async () => {
     useLLM: create<Record<string, unknown>>(() => ({
       tools: [],
       toolMode: 'smart',
-      isQuestMasterEnabled: false,
       isAgentsEnabled: false,
       agentMode: { enabled: false, source: 'toggle' },
       isLatticeEnabled: false,

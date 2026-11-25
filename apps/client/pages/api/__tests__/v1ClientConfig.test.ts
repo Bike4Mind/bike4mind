@@ -69,7 +69,8 @@ vi.mock('@bike4mind/utils', async importOriginal => ({
 
 const { default: handler, config: routeConfig } = await import('@pages/api/v1/client-config');
 const { default: publicHandler } = await import('@pages/api/v1/client-config/public');
-const { CLIENT_CONFIG_FEATURE_SETTINGS } = await import('@server/utils/clientConfigFeatures');
+const { CLIENT_CONFIG_FEATURE_SETTINGS, RETIRED_CLIENT_CONFIG_FEATURES } =
+  await import('@server/utils/clientConfigFeatures');
 
 const logger = { log: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() };
 
@@ -180,6 +181,7 @@ describe('GET /api/v1/client-config', () => {
     expect(body.server).toMatchObject({ status: 'live', support_email: 'help@example.com' });
     expect(body.features.agents).toBe(true);
     expect(body.features.data_lakes).toBe(false);
+    expect(body.features.quest_master).toBe(false);
     expect(body.limits.max_upload_size_mb).toBe(64);
     expect(getCallerModelList).toHaveBeenCalledWith({ id: 'u1', isAdmin: false }, logger, {
       organizationId: undefined,
@@ -266,7 +268,9 @@ describe('GET /api/v1/client-config', () => {
       'max_upload_size_mb',
     ]);
 
-    expect(Object.keys(body.features).sort()).toEqual(Object.keys(CLIENT_CONFIG_FEATURE_SETTINGS).sort());
+    expect(Object.keys(body.features).sort()).toEqual(
+      [...Object.keys(CLIENT_CONFIG_FEATURE_SETTINGS), ...Object.keys(RETIRED_CLIENT_CONFIG_FEATURES)].sort()
+    );
 
     // serverStatus is already public (unauthenticated /api/settings/serverStatus); DefaultAPIModel is publicSafe.
     const published = [

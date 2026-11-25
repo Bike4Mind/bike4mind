@@ -42,7 +42,10 @@ await import('../migrate');
 
 const ADMIN = { id: 'admin-1', isAdmin: true };
 const run = (usersData: unknown[], sendEmail = false, orgId?: string, user: object = ADMIN) =>
-  h.handler!({ body: { usersData, sendEmail, orgId }, user, ability: {}, logger: {} }, { json: vi.fn() });
+  h.handler!(
+    { body: { usersData, sendEmail, orgId }, user, ability: {}, logger: { error: vi.fn() } },
+    { json: vi.fn() }
+  );
 
 describe('POST /api/reg-invites/migrate', () => {
   beforeEach(() => {
@@ -133,7 +136,7 @@ describe('POST /api/reg-invites/migrate', () => {
         body: { usersData: [{ email: 'a@b.test', name: 'A' }], sendEmail: false },
         user: { id: 'admin-1', isAdmin: true },
         ability: {},
-        logger: {},
+        logger: { error: vi.fn() },
       },
       res
     );
