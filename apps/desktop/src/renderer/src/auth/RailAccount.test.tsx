@@ -198,10 +198,10 @@ describe('the rail avatar, signed in', () => {
       row?.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
       await new Promise(resolve => setTimeout(resolve, 200));
     });
-    expect(document.body.textContent).toContain('Opens the full web app in its own window, signed in');
+    expect(document.body.textContent).toContain('Opens the web app in your browser');
   });
 
-  it('opens the signed-in web app window', () => {
+  it('asks main to open the web app in the browser', () => {
     mount(<SignedInRailAccount state={signedIn} update={controllerIn('idle')} context={contextWith()} />);
     open();
     act(() => byTestId('account-open-web-btn')?.click());
