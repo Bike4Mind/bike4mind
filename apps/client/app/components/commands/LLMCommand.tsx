@@ -191,7 +191,17 @@ export async function handleLLMCommand(
             queryClient,
             questId,
             currentSession?.id,
-            { replies: [], reply: undefined, prompt: userPrompt, timestamp: new Date(), status: undefined },
+            {
+              replies: [],
+              reply: undefined,
+              prompt: userPrompt,
+              timestamp: new Date(),
+              status: undefined,
+              // The cache merges the server ack over the cached quest, and the ack omits the plan id
+              // the server cleared, so without these the retry would keep showing the legacy plan note.
+              questMasterPlanId: undefined,
+              questMasterReply: undefined,
+            },
             cb
           )
       : currentSession?.id || tmpSessionId
