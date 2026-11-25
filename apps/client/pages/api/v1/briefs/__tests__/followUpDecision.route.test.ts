@@ -3,7 +3,9 @@
  * PATCH /api/v1/briefs/{id}/decisions/{decisionId} and POST .../resolve. `baseApi` is stubbed but
  * `nextRouteForContract` is not, so request validation runs for real; the repositories are mocked.
  */
+import { HTTPError } from '@bike4mind/common';
 import { createMocks } from 'node-mocks-http';
+import { httpErrorToResponse } from '@server/middlewares/errorHandler';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const { assistantBriefRepository, userRepository, baseApiOptions } = vi.hoisted(() => ({
@@ -86,6 +88,15 @@ const call = async (method: 'PATCH' | 'POST', decisionId: string, body: unknown,
 };
 const edit = (decisionId: string, body: unknown, userId?: string) => call('PATCH', decisionId, body, userId);
 const resolve = (decisionId: string, outcome: string, userId?: string) => call('POST', decisionId, { outcome }, userId);
+// What a real client receives: baseApi's errorHandler renders a thrown HTTPError through this.
+const onTheWire = async (request: Promise<unknown>) => {
+  const error = await request.then(
+    () => expect.fail('expected the route to throw'),
+    (thrown: unknown) => thrown
+  );
+  expect(error).toBeInstanceOf(HTTPError);
+  return httpErrorToResponse(error as HTTPError, 'req-1');
+};
 
 describe('follow-up decision routes', () => {
   beforeEach(() => {
@@ -152,12 +163,15 @@ describe('follow-up decision routes', () => {
   });
 
   it('409s an edit after the follow-up was resolved, and an edit that loses the race', async () => {
-    await expect(edit('fu-done', { text: 'x' })).rejects.toMatchObject({
+    await expect(onTheWire(edit('fu-done', { text: 'x' }))).resolves.toMatchObject({
       status: 409,
-      additionalInfo: { errorCode: 'decision_closed' },
+      body: { errorCode: 'decision_closed' },
     });
     assistantBriefRepository.editFollowUpDecision.mockResolvedValue(false);
-    await expect(edit('fu-action-1', { text: 'x' })).rejects.toMatchObject({ statusCode: 409 });
+    await expect(onTheWire(edit('fu-action-1', { text: 'x' }))).resolves.toMatchObject({
+      status: 409,
+      body: { errorCode: 'decision_closed' },
+    });
   });
 
   it('rejects an unknown outcome', async () => {
@@ -205,9 +219,9 @@ describe('follow-up decision routes', () => {
 
   it('409s a second approve and never pulls forward for it', async () => {
     assistantBriefRepository.resolveFollowUpDecision.mockResolvedValue(false);
-    await expect(resolve('fu-reminder-1', 'approve')).rejects.toMatchObject({
+    await expect(onTheWire(resolve('fu-reminder-1', 'approve'))).resolves.toMatchObject({
       status: 409,
-      additionalInfo: { errorCode: 'decision_closed' },
+      body: { errorCode: 'decision_closed' },
     });
     expect(userRepository.pullNextBriefAtForward).not.toHaveBeenCalled();
   });
