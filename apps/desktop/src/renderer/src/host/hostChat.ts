@@ -31,6 +31,7 @@ export type DeleteOptions = {
 /**
  * The renderer's chat calls over the host protocol, each sent to the host its session lives on
  * (see hostForSession). Failures reject with HostRequestError, whose message is the host's.
+ * pickProjectDirectory is not here: it is a native picker, valid only for the local host.
  */
 export function createHostChat(client: HostClient, local: () => LocalDesktop) {
   return {

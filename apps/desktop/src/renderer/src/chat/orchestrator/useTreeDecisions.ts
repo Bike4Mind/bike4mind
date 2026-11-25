@@ -1,3 +1,4 @@
+import { hostChat } from '../../host/hostChat';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ChatHeldRelay, ChatMessage } from '@shared/chat';
 import { pendingDecisionsOf, type PendingDecision } from '@shared/pendingDecisions';
@@ -20,7 +21,7 @@ export interface TreeDecisions {
 }
 
 async function loadSource(id: string, key: string): Promise<LoadedSource> {
-  const [session, held] = await Promise.all([window.b4m.chat.getSession(id, false), window.b4m.chat.getHeldRelays(id)]);
+  const [session, held] = await Promise.all([hostChat.getSession(id, false), window.b4m.chat.getHeldRelays(id)]);
   return { key, messages: session?.messages ?? [], held };
 }
 

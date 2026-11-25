@@ -9,7 +9,7 @@ import { createHostChat, type LocalDesktop } from './hostChat';
 const summary = (id: string, extra: Partial<ChatSessionSummary> = {}) =>
   ({ id, title: id, ...extra }) as ChatSessionSummary;
 const question = { parentTitle: 'Parent', finished: [{ id: 'c1', title: 'Done' }], kept: [] };
-const sections = { sections: [], placements: {} } as unknown as SidebarSectionsState;
+const sections: SidebarSectionsState = { sections: [], assignments: {} };
 
 function setup(answers: Partial<Record<HostMethod, (params: unknown) => unknown>> = {}) {
   const request = vi.fn(async (_hostId: string, method: HostMethod, params?: unknown) => {

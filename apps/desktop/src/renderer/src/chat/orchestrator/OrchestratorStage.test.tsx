@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { chatBackedHostBridge } from '../../__fixtures__/chatBackedHostBridge';
 import { act } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ambientHeld } from './ambient';
@@ -45,6 +46,7 @@ const pressEscape = (init: KeyboardEventInit = {}) =>
 beforeEach(() => {
   Element.prototype.scrollIntoView = vi.fn();
   (window as unknown as { b4m: unknown }).b4m = {
+    host: chatBackedHostBridge(),
     chat: {
       getSession: vi.fn().mockResolvedValue(null),
       getHeldRelays: vi.fn().mockResolvedValue([]),
@@ -344,7 +346,7 @@ describe('OrchestratorStage', () => {
     expect(el('orchestrator-peek-drawer').textContent).toContain('Agent w2');
     expect(el('orchestrator-peek-conversation').contains(el('chat-message-assistant'))).toBe(true);
     expect(el('chat-message-assistant').textContent).toContain('Working on the second task.');
-    expect(window.b4m.chat.getSession).toHaveBeenCalledWith('w2', false);
+    expect(window.b4m.chat.getSession).toHaveBeenCalledWith('w2');
     expect((el('orchestrator-peek-reply-input') as HTMLTextAreaElement).value, 'draft is per agent').toBe('');
   });
 
@@ -445,7 +447,7 @@ describe('OrchestratorStage', () => {
         onStreamEvent: vi.fn(() => () => undefined),
         onQueueChanged: vi.fn(() => () => undefined),
       };
-      (window as unknown as { b4m: unknown }).b4m = { chat };
+      (window as unknown as { b4m: unknown }).b4m = { host: chatBackedHostBridge(), chat };
       await renderSettled([agentFixture('n', 'needs-you'), agentFixture('w', 'working')]);
       const card = el('orchestrator-needs-you-card');
       expect(card.hasAttribute('data-ambient-quiet')).toBe(true);

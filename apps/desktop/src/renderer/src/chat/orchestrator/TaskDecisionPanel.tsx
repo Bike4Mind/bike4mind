@@ -1,3 +1,4 @@
+import { hostChat } from '../../host/hostChat';
 import { useEffect, useState, type ReactNode } from 'react';
 import Box from '@mui/joy/Box';
 import Stack from '@mui/joy/Stack';
@@ -50,7 +51,7 @@ export function TaskDecisionPanel({ agent, compact = false }: { agent: AgentView
     let current = true;
     async function load() {
       try {
-        const catalog = await window.b4m.chat.listModels();
+        const catalog = await hostChat.listModels();
         if (current) setModels(catalog.models);
       } catch (failure) {
         if (current) setError(`Could not load model names: ${String(failure)}`);

@@ -1,3 +1,4 @@
+import { hostChat } from '../../../host/hostChat';
 import { useState } from 'react';
 import Box from '@mui/joy/Box';
 import type { ChatApprovalAnswer } from '@shared/chat';
@@ -169,9 +170,9 @@ function AgentAnswer({
     }
   };
   const respond = (approvalId: string, answer: ChatApprovalAnswer) =>
-    void send(approvalId, () => window.b4m.chat.respondToApproval(approvalId, answer));
+    void send(approvalId, () => hostChat.respondToApproval(agent.id, approvalId, answer));
   const decide = (decisionId: string, answer: TaskDecisionAnswer) =>
-    void send(decisionId, () => window.b4m.chat.answerTaskDecision(agent.id, decisionId, answer));
+    void send(decisionId, () => hostChat.answerTaskDecision(agent.id, decisionId, answer));
 
   const prompt = plan.kind === 'approve' ? plan.summary : plan.prompt;
   const open = (

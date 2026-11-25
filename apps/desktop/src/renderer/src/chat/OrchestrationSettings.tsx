@@ -1,3 +1,4 @@
+import { hostChat } from '../host/hostChat';
 import { useEffect, useState } from 'react';
 import Stack from '@mui/joy/Stack';
 import Select from '@mui/joy/Select';
@@ -46,7 +47,7 @@ export function OrchestrationSettings() {
     let current = true;
     async function load() {
       try {
-        const [saved, catalog] = await Promise.all([window.b4m.chat.getRolePolicy(), window.b4m.chat.listModels()]);
+        const [saved, catalog] = await Promise.all([window.b4m.chat.getRolePolicy(), hostChat.listModels()]);
         if (current) {
           setPolicy(saved);
           setModels(catalog.models);

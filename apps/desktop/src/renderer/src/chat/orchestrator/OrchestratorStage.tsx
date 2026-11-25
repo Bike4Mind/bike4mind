@@ -464,6 +464,7 @@ export function OrchestratorStage({
       openPr,
       openRoot: () => onParentFocus?.(),
       stop: actions.stop,
+      sessionOfApproval: approvalId => snapshot?.approvals?.find(entry => entry.id === approvalId)?.sessionId,
     });
   };
 

@@ -1,3 +1,4 @@
+import { hostChat } from '../host/hostChat';
 import { useState } from 'react';
 import Alert from '@mui/joy/Alert';
 import Button from '@mui/joy/Button';
@@ -31,7 +32,7 @@ export function MessageSessionDialog({
     setSending(true);
     setError(null);
     try {
-      const result = await window.b4m.chat.sendMessage({ sessionId: session.id, text: text.trim() });
+      const result = await hostChat.sendMessage({ sessionId: session.id, text: text.trim() });
       if (result.ok) {
         onClose();
         return;

@@ -2430,7 +2430,8 @@ describe('session placement', () => {
 
   async function mount(
     chat: { createSession?: unknown; createCodeSession?: unknown; listSessions?: unknown; onStreamEvent?: unknown },
-    mode: ChatSessionMode = 'chat'
+    mode: ChatSessionMode = 'chat',
+    sidebarStubs: Record<string, unknown> = {}
   ) {
     (window as unknown as { b4m: unknown }).b4m = {
       host: chatBackedHostBridge(),
@@ -2440,7 +2441,7 @@ describe('session placement', () => {
         onStreamEvent: vi.fn(() => () => {}),
         ...chat,
       },
-      sidebar: { getSections: vi.fn(() => Promise.resolve(work)) },
+      sidebar: { getSections: vi.fn(() => Promise.resolve(work)), ...sidebarStubs },
     };
     const seen: Placement[] = [];
     let controller: SessionsController | null = null;
@@ -2532,17 +2533,36 @@ describe('session placement', () => {
 
     it('draws a new Code session inside its section from its first render', async () => {
       const createCodeSession = vi.fn((): Promise<CreateCodeSessionResult> =>
-        Promise.resolve({ ok: true, session: summary('fresh', { mode: 'code' }), sidebarSections: placed })
+        Promise.resolve({ ok: true, session: summary('fresh', { mode: 'code' }) })
       );
-      const { seen, start } = await mount({ createCodeSession }, 'code');
+      const moveSession = vi.fn(() => Promise.resolve(placed));
+      const { seen, start } = await mount({ createCodeSession }, 'code', { moveSession });
 
       await start((sessions, place, failure) =>
         sessions.createCode({}, { sectionId: 'work', placed: place, failed: failure })
       );
 
-      expect(createCodeSession).toHaveBeenCalledWith({ sectionId: 'work' });
+      expect(createCodeSession).toHaveBeenCalledWith({});
+      expect(moveSession).toHaveBeenCalledWith('fresh', 'work');
       expect(seen.at(-1)).toBe('work');
       expect(seen).not.toContain('loose');
+    });
+
+    it('falls back to the default list when a Code session could not be moved into its section', async () => {
+      const createCodeSession = vi.fn((): Promise<CreateCodeSessionResult> =>
+        Promise.resolve({ ok: true, session: summary('fresh', { mode: 'code' }) })
+      );
+      const moveSession = vi.fn(() => Promise.reject(new Error('section gone')));
+      const placedSpy = vi.fn();
+      const { seen, start, failed } = await mount({ createCodeSession }, 'code', { moveSession });
+
+      await start((sessions, _place, failure) =>
+        sessions.createCode({}, { sectionId: 'work', placed: placedSpy, failed: failure })
+      );
+
+      expect(placedSpy).not.toHaveBeenCalled();
+      expect(failed).toHaveBeenCalled();
+      expect(seen.at(-1)).toBe('loose');
     });
 
     it('asks for no section and adds the row to the default list from plain New', async () => {

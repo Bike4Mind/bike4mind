@@ -1,3 +1,4 @@
+import { hostChat } from '../host/hostChat';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Box from '@mui/joy/Box';
 import Button from '@mui/joy/Button';
@@ -265,7 +266,7 @@ export function PermissionsSettings({
   }, []);
 
   useEffect(() => {
-    window.b4m.chat
+    hostChat
       .listRecentFolders()
       .then(setFolders)
       .catch(() => undefined);

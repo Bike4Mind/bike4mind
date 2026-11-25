@@ -1,3 +1,4 @@
+import { hostChat } from '../../host/hostChat';
 import { useEffect, useMemo, useState } from 'react';
 import type { ChatMessage } from '@shared/chat';
 import { pendingCallsIn } from '@shared/needsYou';
@@ -53,7 +54,7 @@ export function useQuickApprovals(
   useEffect(() => {
     let stale = false;
     const reads = sessions.map(({ sessionId }) =>
-      window.b4m.chat.getSession(sessionId).then(
+      hostChat.getSession(sessionId).then(
         session => quickApprovalsIn(sessionId, session?.messages ?? []),
         (): ViewApproval[] => []
       )

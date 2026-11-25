@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { chatBackedHostBridge } from '../__fixtures__/chatBackedHostBridge';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import type { ChatModelCatalog, ChatModelOption } from '@shared/chat';
@@ -60,6 +61,7 @@ beforeEach(() => {
   getStatus.mockResolvedValue(status(false));
   Object.assign(window, {
     b4m: {
+      host: chatBackedHostBridge(),
       chat: {
         listModels,
         onModelsChanged: (listener: () => void) => {
