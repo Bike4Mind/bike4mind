@@ -298,7 +298,6 @@ export function TakesEmpty() {
   );
 }
 
-/** The "Takes" section heading above the grid. */
 export function TakesHeading({ count }: { count: number }) {
   return (
     <Box sx={{ display: 'flex', alignItems: 'baseline', gap: 1 }}>
