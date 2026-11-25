@@ -100,9 +100,12 @@ describe('handOffDocument', () => {
     expect(deps.complete).not.toHaveBeenCalled();
   });
 
-  it('402s an unfunded payer before the model call', async () => {
+  it('422s an unfunded payer as insufficient_credits before the model call', async () => {
     const { deps } = makeDeps({ canFund: vi.fn(async () => false) });
-    await expect(handOffDocument('user-me', { file_id: FILE_ID }, deps)).rejects.toMatchObject({ statusCode: 402 });
+    await expect(handOffDocument('user-me', { file_id: FILE_ID }, deps)).rejects.toMatchObject({
+      statusCode: 422,
+      errorCode: 'insufficient_credits',
+    });
     expect(deps.complete).not.toHaveBeenCalled();
   });
 

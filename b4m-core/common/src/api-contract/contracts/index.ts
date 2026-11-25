@@ -30,6 +30,12 @@ import {
   getPendingDecisionCountContract,
 } from './briefs.contract';
 import { createDelegationContract, getDelegationContract } from './delegations.contract';
+import {
+  getObligationContract,
+  handOffObligationContract,
+  listObligationsContract,
+  updateObligationContract,
+} from './obligations.contract';
 import { registerPushTokenContract, unregisterPushTokenContract } from './pushTokens.contract';
 import { listHandoffDevicesContract, sendSessionHandoffContract } from './sessionHandoff.contract';
 import {
@@ -236,6 +242,10 @@ export const CONTRACTS: readonly EndpointContract[] = [
   getPendingDecisionCountContract,
   createDelegationContract,
   getDelegationContract,
+  handOffObligationContract,
+  listObligationsContract,
+  getObligationContract,
+  updateObligationContract,
   registerPushTokenContract,
   unregisterPushTokenContract,
   listHandoffDevicesContract,

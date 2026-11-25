@@ -1,5 +1,5 @@
 import mongoose from 'mongoose';
-import type { AccessContext, ObligationHandoffRequest } from '@bike4mind/common';
+import { insufficientCreditsError, type AccessContext, type ObligationHandoffRequest } from '@bike4mind/common';
 import { dataLakeService } from '@bike4mind/services';
 import {
   adminSettingsRepository,
@@ -16,7 +16,6 @@ import type { Logger } from '@bike4mind/observability';
 import {
   BadGatewayError,
   ConflictError,
-  HTTPError,
   NotFoundError,
   UnprocessableEntityError,
 } from '@bike4mind/server-utils/utils/errors';
@@ -78,7 +77,7 @@ export async function handOffDocument(
 
   const lakes = await deps.listLakes();
   if (!(await deps.canFund(userId))) {
-    throw new HTTPError(402, 'Not enough credits to read this document');
+    throw insufficientCreditsError('Not enough credits to read this document');
   }
 
   const { reply, model, recordUsage } = await deps.complete(userId, buildExtractionPrompt(text, lakes));

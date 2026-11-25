@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { isCalendarDate } from './settings';
+import { paginatedResponseSchema } from './pagination';
 
 /**
  * Wire schemas for obligations (`/api/v1/obligations`): a scanned bill, receipt or letter the user handed to
@@ -89,3 +90,17 @@ export const ObligationUpdateRequestSchema = z.object({
   status: z.enum(['confirmed', 'dismissed']).optional(),
 });
 export type ObligationUpdateRequest = z.infer<typeof ObligationUpdateRequestSchema>;
+
+export const ObligationIdParamSchema = z.object({
+  id: z.string().min(1).describe('The obligation id returned by `POST /api/v1/obligations`.'),
+});
+
+export const ListObligationsQuerySchema = z.object({
+  status: ObligationStatusSchema.optional().describe('Only obligations in this status.'),
+  limit: z.coerce.number().int().min(1).max(50).default(25),
+  cursor: z.string().min(1).optional(),
+});
+export type ListObligationsQuery = z.infer<typeof ListObligationsQuerySchema>;
+
+export const ListObligationsResponseSchema = paginatedResponseSchema(ObligationSchema);
+export type ListObligationsResponse = z.infer<typeof ListObligationsResponseSchema>;
