@@ -476,6 +476,15 @@ describe('visibility, groups and children', () => {
     expect(result.dropped).toEqual([{ file: 'summary', ref: 'chat', reason: 'unknown_group' }]);
   });
 
+  it('drops a group whose name fails the text policy and its rows with it', () => {
+    const result = projectPublicSnapshot(
+      makeProjectionInput({ groups: [{ slug: 'platform', name: 'Plat\nform', order: 0 }] })
+    );
+    expect(result.summary.groups).toEqual([]);
+    expect(result.dropped).toContainEqual({ file: 'summary', ref: 'platform', reason: 'group_text_policy' });
+    expect(result.dropped).toContainEqual({ file: 'summary', ref: 'chat', reason: 'unknown_group' });
+  });
+
   it('nests child rows under a public parent, and drops them when the parent is not public', () => {
     const { summary } = projectPublicSnapshot(makeRichInput());
     const parent = summary.components.find(c => c.slug === 'sign-in');

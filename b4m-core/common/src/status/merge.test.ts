@@ -93,6 +93,11 @@ describe('summary unavailable', () => {
     expect(merged.components).toEqual([]);
     expect(mergeStatusSources(makeSummary(), null, null, NOW, { lastGoodSummary: lastGood }).lastKnown).toBeNull();
   });
+
+  it('offers no last good summary when its savedAt cannot be parsed', () => {
+    const lastGood = { summary: makeSummary(), savedAt: 'bad' };
+    expect(mergeStatusSources(null, null, null, NOW, { lastGoodSummary: lastGood }).lastKnown).toBeNull();
+  });
 });
 
 describe('freshness', () => {
@@ -743,6 +748,30 @@ describe('break-glass timestamp bounds', () => {
 
   it('rejects an entry whose optional timestamp cannot be parsed', () => {
     expect(clampBreakGlassEntry(entry({ resolvedAt: '2026-13-45T00:00:00Z' }), context)).toBeNull();
+  });
+
+  it('rejects an entry with an unparseable updatedAt, startedAt, update at or update editedAt', () => {
+    const bad = '2026-13-45T00:00:00Z';
+    const update = makeHead().latestUpdates[0];
+    expect(clampBreakGlassEntry(entry({ updatedAt: bad }), context)).toBeNull();
+    expect(clampBreakGlassEntry(entry({ startedAt: bad }), context)).toBeNull();
+    expect(clampBreakGlassEntry(entry({ latestUpdates: [{ ...update, at: bad }] }), context)).toBeNull();
+    expect(clampBreakGlassEntry(entry({ latestUpdates: [{ ...update, editedAt: bad }] }), context)).toBeNull();
+  });
+
+  it('leaves an entry with an unparseable timestamp out of the merge instead of throwing', () => {
+    const update = makeHead().latestUpdates[0];
+    const merged = mergeStatusSources(
+      makeSummary(),
+      makeBreakglass([
+        entry({ id: 'bg00000002', latestUpdates: [{ ...update, at: '2026-13-45T00:00:00Z' }] }),
+        entry({ id: 'bg00000003', updatedAt: '2026-13-45T00:00:00Z' }),
+      ]),
+      null,
+      NOW
+    );
+    expect(merged.incidents.map(i => i.id)).not.toContain('bg00000002');
+    expect(merged.incidents.map(i => i.id)).not.toContain('bg00000003');
   });
 
   describe('external override window', () => {
