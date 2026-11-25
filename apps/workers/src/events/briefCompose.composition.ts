@@ -56,6 +56,16 @@ export type BriefDelegation = {
   result: string | null;
 };
 
+export type BriefObligation = {
+  obligationId: string;
+  payee: string | null;
+  amount: number | null;
+  currency: string | null;
+  /** `YYYY-MM-DD`. */
+  dueDate: string;
+  summary: string;
+};
+
 export type BriefActivity = {
   periodStart: Date;
   periodEnd: Date;
@@ -64,6 +74,7 @@ export type BriefActivity = {
   questions: BriefQuestion[];
   emails: BriefEmail[];
   delegations: BriefDelegation[];
+  obligations: BriefObligation[];
 };
 
 export type ComposedBrief = {
@@ -92,7 +103,8 @@ export const hasActivity = (activity: BriefActivity): boolean =>
   activity.approvals.length > 0 ||
   activity.questions.length > 0 ||
   activity.emails.length > 0 ||
-  activity.delegations.length > 0;
+  activity.delegations.length > 0 ||
+  activity.obligations.length > 0;
 
 /** What the brief says when nothing happened; no model call is made for it. */
 export const emptyBrief = (): ComposedBrief => ({
@@ -169,6 +181,7 @@ export function buildBriefPrompt(activity: BriefActivity, instructions: readonly
     `Questions your agents asked the user and are waiting on: ${JSON.stringify(questions)}`,
     `Emails triaged for the user (counts only): ${JSON.stringify(emailCounts)}`,
     `Items the user delegated to you (counts only): ${JSON.stringify(delegationCounts)}`,
+    `Confirmed bills and payments coming due soon (count only): ${activity.obligations.length}`,
     'The triaged emails and delegated items are listed in the brief separately: mention them in the headline if',
     'notable, never in happened, handled or decisions.',
     '',
@@ -224,6 +237,27 @@ const delegationItem = (item: BriefDelegation): UnnumberedItem => ({
   source: { kind: 'delegation', delegationId: item.delegationId },
 });
 
+const formatAmount = (amount: number, currency: string): string => {
+  try {
+    return new Intl.NumberFormat('en-US', { style: 'currency', currency }).format(amount);
+  } catch {
+    return `${amount} ${currency}`;
+  }
+};
+
+const formatDueDay = (day: string): string =>
+  new Date(`${day}T00:00:00.000Z`).toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' });
+
+/** Written from the confirmed record, never by the model; null fields fall back to the extracted summary. */
+const obligationItem = (item: BriefObligation): UnnumberedItem => {
+  const amount = item.amount !== null && item.currency ? formatAmount(item.amount, item.currency) : null;
+  const what = item.payee && amount ? `${item.payee} ${amount}` : item.payee || amount || item.summary;
+  return {
+    text: `Due ${formatDueDay(item.dueDate)}: ${what || 'a payment'}`,
+    source: { kind: 'obligation', obligationId: item.obligationId },
+  };
+};
+
 /**
  * Validates the model reply and joins it to the real activity. Throws on a malformed reply so the
  * caller marks the brief failed instead of storing a half-formed one.
@@ -277,6 +311,7 @@ export function assembleBrief(reply: string, activity: BriefActivity): ComposedB
     happened: toItems(
       'h',
       [
+        ...activity.obligations.map(obligationItem),
         ...emailsOfKind(activity, 'fyi').map(emailItem),
         ...delegationsOf(activity, ['pending', 'failed']).map(delegationItem),
       ],

@@ -20,6 +20,7 @@ const activeActivity = {
   questions: [],
   emails: [],
   delegations: [],
+  obligations: [],
 };
 
 function makeDeps(overrides: Partial<BriefComposeDeps> = {}) {

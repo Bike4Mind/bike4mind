@@ -292,6 +292,7 @@ describe('runBriefScheduleReconcile', () => {
             questions: [],
             emails: [],
             delegations: [],
+            obligations: [],
           }),
           canCompose: async () => 'ok',
           loadInstructions: async () => [],

@@ -30,6 +30,7 @@ const baseActivity = (): BriefActivity => ({
   questions: [],
   emails: [],
   delegations: [],
+  obligations: [],
 });
 
 const question = (n: number) => ({
@@ -297,5 +298,64 @@ describe('brief edge wording', () => {
     expect(brief.headline).toBe('Your brief');
     expect(brief.handled[0].text).toHaveLength(BRIEF_LIMITS.itemText);
     expect(brief.handled[0].text.endsWith('...')).toBe(true);
+  });
+});
+
+describe('confirmed obligations in the brief', () => {
+  const obligation = (n: number, over: Partial<BriefActivity['obligations'][number]> = {}) => ({
+    obligationId: `ob${n}`,
+    payee: 'Example Utilities',
+    amount: 120.5,
+    currency: 'USD',
+    dueDate: '2026-11-20',
+    summary: 'Power bill',
+    ...over,
+  });
+  const reply = JSON.stringify({ headline: 'Quiet day', happened: ['Model note'], handled: [], decisions: [] });
+
+  it('counts as activity on its own and reaches the prompt as a count, never its text', () => {
+    const activity = { ...baseActivity(), runs: [], approvals: [], obligations: [obligation(1)] };
+    expect(hasActivity(activity)).toBe(true);
+    const prompt = buildBriefPrompt(activity);
+    expect(prompt).toContain('coming due soon (count only): 1');
+    expect(prompt).not.toContain('Example Utilities');
+  });
+
+  it('leads happened with a record-written item ahead of fyi email and model text', () => {
+    const activity = {
+      ...baseActivity(),
+      emails: [{ emailId: 'e1', kind: 'fyi' as const, summary: 'Newsletter' }],
+      obligations: [obligation(1)],
+    };
+    const brief = assembleBrief(reply, activity);
+    expect(brief.happened.map(item => item.text)).toEqual([
+      'Due Nov 20: Example Utilities $120.50',
+      'Newsletter',
+      'Model note',
+    ]);
+    expect(brief.happened[0].source).toEqual({ kind: 'obligation', obligationId: 'ob1' });
+  });
+
+  it('falls back to the summary when payee and amount are missing', () => {
+    const activity = { ...baseActivity(), obligations: [obligation(1, { payee: null, amount: null, currency: null })] };
+    expect(assembleBrief(reply, activity).happened[0].text).toBe('Due Nov 20: Power bill');
+  });
+
+  it('keeps obligations when the section cap cuts the rest', () => {
+    const activity = {
+      ...baseActivity(),
+      emails: Array.from({ length: BRIEF_LIMITS.itemsPerSection }, (_, i) => ({
+        emailId: `e${i}`,
+        kind: 'fyi' as const,
+        summary: `fyi ${i}`,
+      })),
+      obligations: [obligation(1), obligation(2, { dueDate: '2026-11-22' })],
+    };
+    const happened = assembleBrief(reply, activity).happened;
+    expect(happened).toHaveLength(BRIEF_LIMITS.itemsPerSection);
+    expect(happened.slice(0, 2).map(item => item.source)).toEqual([
+      { kind: 'obligation', obligationId: 'ob1' },
+      { kind: 'obligation', obligationId: 'ob2' },
+    ]);
   });
 });

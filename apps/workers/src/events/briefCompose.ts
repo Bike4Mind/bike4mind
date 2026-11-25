@@ -1,6 +1,7 @@
 import { withEventContext } from '@workers/utils/eventContext';
 import { loadPendingBriefEmails } from './loadPendingBriefEmails';
 import { loadPendingBriefDelegations } from './loadPendingBriefDelegations';
+import { loadDueBriefObligations } from './loadDueBriefObligations';
 import { BriefEvents } from '@bike4mind/server-utils/utils/eventBus';
 import {
   agentExecutionRepository,
@@ -207,6 +208,7 @@ async function loadActivity(brief: IAssistantBrief, now: Date): Promise<BriefAct
   // Pending rather than windowed: an item a failed brief or a section cap left out is carried to the next brief.
   const emails = await loadPendingBriefEmails(brief.userId, brief.periodEnd);
   const delegations = await loadPendingBriefDelegations(brief.userId, brief.periodEnd, now);
+  const obligations = await loadDueBriefObligations(brief.userId, now);
 
   return {
     periodStart: brief.periodStart,
@@ -239,6 +241,14 @@ async function loadActivity(brief: IAssistantBrief, now: Date): Promise<BriefAct
       intent: item.intent,
       status: item.status,
       result: item.result,
+    })),
+    obligations: obligations.map(item => ({
+      obligationId: item._id.toString(),
+      payee: item.payee,
+      amount: item.amountValue,
+      currency: item.currency,
+      dueDate: (item.dueDate ?? now).toISOString().slice(0, 10),
+      summary: item.summary,
     })),
   };
 }
