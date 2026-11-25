@@ -93,21 +93,20 @@ describe('createWrappedStageDataKey', () => {
 });
 
 describe('parseSecretListing', () => {
-  const listing = [
-    'OTHER=a',
-    'SECRET_ENCRYPTION_KEY_WRAPPED=own',
-    '',
-    '# fallback',
-    'SECRET_ENCRYPTION_KEY_WRAPPED=inherited',
-  ];
+  const NAME = 'SECRET_ENCRYPTION_KEY_WRAPPED';
+  const fallback = ['# fallback', 'OTHER=a', `${NAME}=inherited`, 'PEM=-----BEGIN', 'MIIE=', '-----END'];
 
-  it('reads the stage value and ignores the fallback section', () => {
-    expect(parseSecretListing(listing.join('\n'), 'SECRET_ENCRYPTION_KEY_WRAPPED')).toBe('own');
+  it('reads the stage value from its own section, after the fallback section', () => {
+    const listing = [...fallback, '', '# app/stage', 'E2E=x', `${NAME}=own`].join('\n');
+    expect(parseSecretListing(listing, NAME)).toBe('own');
   });
 
   it('does not report a fallback-only value as set', () => {
-    expect(parseSecretListing(listing.filter(l => l !== listing[1]).join('\n'), 'SECRET_ENCRYPTION_KEY_WRAPPED')).toBe(
-      undefined
-    );
+    const listing = [...fallback, '', '# app/stage', 'E2E=x'].join('\n');
+    expect(parseSecretListing(listing, NAME)).toBeUndefined();
+  });
+
+  it('reads a listing that has no section headers', () => {
+    expect(parseSecretListing(`A=1\n${NAME}=own`, NAME)).toBe('own');
   });
 });

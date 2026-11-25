@@ -12,14 +12,15 @@ export const SECRETS_AT_REST_PURPOSE = 'secrets-at-rest';
 export const WRAPPED_SECRET_NAME = 'SECRET_ENCRYPTION_KEY_WRAPPED';
 
 /**
- * Reads a secret's own value from `sst secret list` output. The listing ends with a `# fallback` section
- * of values inherited from the fallback stage; those are not this stage's, so parsing stops there.
- * The header text is assumed from the SST CLI and not verified against a live listing.
+ * Reads a secret's own value from `sst secret list` output. The listing is sectioned: a `# fallback`
+ * section of inherited values first, then the stage's own under a `# <app>/<stage>` header. Only values
+ * outside the fallback section count. A multi-line value (a PEM key) never matches `NAME=`.
  */
 export function parseSecretListing(listing: string, name: string): string | undefined {
+  let inFallback = false;
   for (const line of listing.split('\n')) {
-    if (/^#.*fallback/i.test(line)) return undefined;
-    if (line.startsWith(`${name}=`)) return line.slice(name.length + 1).trim();
+    if (line.startsWith('#')) inFallback = /fallback/i.test(line);
+    else if (!inFallback && line.startsWith(`${name}=`)) return line.slice(name.length + 1).trim();
   }
   return undefined;
 }
