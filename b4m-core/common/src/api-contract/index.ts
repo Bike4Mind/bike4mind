@@ -30,6 +30,8 @@ export {
   getBriefContract,
   getBriefScheduleContract,
   putBriefScheduleContract,
+  getBusyBlocksContract,
+  putBusyBlocksContract,
   replyToBriefDecisionContract,
   editBriefDecisionContract,
   resolveBriefDecisionContract,

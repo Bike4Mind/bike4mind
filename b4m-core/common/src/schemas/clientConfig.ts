@@ -44,7 +44,7 @@ export const ClientConfigFeaturesSchema = z.object({
   mcp_server: z.boolean(),
   custom_mcp_connectors: z.boolean(),
   mementos: z.boolean(),
-  quest_master: z.boolean(),
+  quest_master: z.boolean().describe('Deprecated: the in-chat QuestMaster plan feature was removed. Always false.'),
   rapid_reply: z.boolean(),
   research_engine: z.boolean(),
   team_plan: z.boolean(),

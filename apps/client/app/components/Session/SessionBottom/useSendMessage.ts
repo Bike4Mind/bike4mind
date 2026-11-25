@@ -110,7 +110,6 @@ interface UseSendMessageParams {
 }
 
 interface SendClickOptions {
-  forceEnableQuestMaster?: boolean;
   toolsOverride?: B4MLLMTools[];
   /**
    * Extra system context for this one send (a programmatic launch's `systemContext`).
@@ -233,7 +232,6 @@ export function useSendMessage({
     size,
     quality,
     style,
-    isQuestMasterEnabled,
     isMementosEnabled,
     isArtifactsEnabled,
     isAgentsEnabled,
@@ -262,7 +260,6 @@ export function useSendMessage({
       s.size,
       s.quality,
       s.style,
-      s.isQuestMasterEnabled,
       s.isMementosEnabled,
       s.isArtifactsEnabled,
       s.isAgentsEnabled,
@@ -283,7 +280,6 @@ export function useSendMessage({
       s.disableAutoRouteForThisSession,
     ])
   );
-  const { setState: setLLM } = useLLM;
 
   const [chatInputValue, setChatInputValue, clearDraft] = useChatInput(
     useShallow(s => [s.chatInputValue, s.setChatInputValue, s.clearDraft])
@@ -326,7 +322,6 @@ export function useSendMessage({
   const dispatchedRef = useRef(false);
   const [stoppingMessage, setStoppingMessage] = useState<boolean>(false);
   const [pendingAutoSubmitGoal, setPendingAutoSubmitGoal] = useState<string | null>(null);
-  const [enableQuestMasterOnSubmit, setEnableQuestMasterOnSubmit] = useState(false);
 
   // Consume a quest launch intent from the /quests page (auto-submit).
   // The /new route records it in a useLayoutEffect, which runs before this
@@ -342,9 +337,6 @@ export function useSendMessage({
       if (intent.autoSubmit) {
         // eslint-disable-next-line react-hooks/set-state-in-effect
         setPendingAutoSubmitGoal(intent.goal);
-        if (intent.enableQuestMaster) {
-          setEnableQuestMasterOnSubmit(true);
-        }
       }
     }
   }, [setChatInputValue, isOnNewNotebookRoute]);
@@ -866,7 +858,6 @@ export function useSendMessage({
           promptFileIds: messageLevelFileIds,
           messageOnlyFileIds: sentMessageOnlyFileIds,
           optimisticSessionId: optimisticTmpId ?? undefined,
-          enableQuestMaster: options?.forceEnableQuestMaster ?? isQuestMasterEnabled,
           enableMementos: isMementosEnabled,
           enableArtifacts: isArtifactsEnabled,
           enableAgents: isAgentsEnabled,
@@ -917,7 +908,6 @@ export function useSendMessage({
           sendJsonMessage,
           promptFileIds: messageLevelFileIds,
           messageOnlyFileIds: sentMessageOnlyFileIds,
-          enableQuestMaster: options?.forceEnableQuestMaster ?? isQuestMasterEnabled,
           enableMementos: isMementosEnabled,
           enableArtifacts: isArtifactsEnabled,
           enableAgents: isAgentsEnabled,
@@ -1327,10 +1317,6 @@ export function useSendMessage({
       }
     }
 
-    if (isQuestMasterEnabled) {
-      setLLM({ isQuestMasterEnabled: false });
-    }
-
     if (data?.session.id) {
       recordSessionActivity(data.session.id);
     }
@@ -1388,19 +1374,15 @@ export function useSendMessage({
   // Auto-submit quest goal when websocket is ready (from /quests New Quest modal)
   useEffect(() => {
     if (pendingAutoSubmitGoal && readyState === ReadyState.OPEN && !submitting) {
-      console.log('🚀 Auto-submitting quest goal:', pendingAutoSubmitGoal, 'enableQM:', enableQuestMasterOnSubmit);
       const goal = pendingAutoSubmitGoal;
-      const shouldEnableQM = enableQuestMasterOnSubmit;
       // eslint-disable-next-line react-hooks/set-state-in-effect
       setPendingAutoSubmitGoal(null);
-
-      setEnableQuestMasterOnSubmit(false);
       setTimeout(() => {
-        handleSendClick(goal, { forceEnableQuestMaster: shouldEnableQM });
+        handleSendClick(goal);
       }, 150);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pendingAutoSubmitGoal, readyState, submitting, enableQuestMasterOnSubmit]);
+  }, [pendingAutoSubmitGoal, readyState, submitting]);
 
   // Programmatic submit + briefcase launch handling, extracted to a dedicated
   // hook. Owns the /opti null-session guard, nonce dedup, and timer cleanup.

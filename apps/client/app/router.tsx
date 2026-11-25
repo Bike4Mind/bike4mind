@@ -396,10 +396,9 @@ export const newRoute = createRoute({
   path: '/new',
   validateSearch: (
     search: Record<string, unknown>
-  ): { projectId?: string; questmaster?: string; goal?: string; article?: string; passage?: string } => {
+  ): { projectId?: string; goal?: string; article?: string; passage?: string } => {
     return {
       projectId: optionalStringParam(search, 'projectId'),
-      questmaster: optionalStringParam(search, 'questmaster'),
       goal: optionalStringParam(search, 'goal'),
       // Data Lake article deep link, forwarded here from the retired /data-lakes route (#1943).
       article: optionalStringParam(search, 'article'),

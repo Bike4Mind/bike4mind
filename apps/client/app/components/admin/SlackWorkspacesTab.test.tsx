@@ -383,6 +383,31 @@ describe('SlackWorkspacesTab dialogs', () => {
     );
   });
 
+  it('locks the export dates while the export runs and unlocks them when it fails', async () => {
+    let rejectPost: (reason: unknown) => void = () => undefined;
+    mocks.post.mockImplementation(() => new Promise((_, reject) => (rejectPost = reject)));
+    renderTab();
+    await loaded();
+
+    await openExport('T1');
+    await screen.findByTestId('slack-export-dialog');
+    fireEvent.click(screen.getByTestId('slack-export-date-start-input-set-btn'));
+    fireEvent.change(screen.getByTestId('slack-export-date-start-input'), { target: { value: '2026-01-02' } });
+    fireEvent.change(screen.getByTestId('slack-export-channel-id-input'), { target: { value: 'C0123' } });
+    fireEvent.click(screen.getByTestId('slack-export-confirm-btn'));
+    await waitFor(() => expect(mocks.post).toHaveBeenCalledTimes(1));
+
+    expect(screen.getByTestId('slack-export-date-start-input')).toBeDisabled();
+    expect(screen.getByTestId('slack-export-date-start-input-clear-btn')).toBeDisabled();
+    expect(screen.getByTestId('slack-export-date-end-input-set-btn')).toBeDisabled();
+
+    await act(async () => rejectPost(new Error('Server error')));
+    await waitFor(() => expect(screen.getByTestId('slack-export-date-start-input')).toBeEnabled());
+    expect(screen.getByTestId('slack-export-date-start-input')).toHaveValue('2026-01-02');
+    expect(screen.getByTestId('slack-export-date-start-input-clear-btn')).toBeEnabled();
+    expect(screen.getByTestId('slack-export-date-end-input-set-btn')).toBeEnabled();
+  });
+
   it('confirms cancelling a background export in a danger ActionDialog before the DELETE', async () => {
     const job = { id: 'job-1', channelId: 'C0123', format: 'json', status: 'processing', progress: 40 };
     routeGets(WORKSPACES, { ...job, currentStep: 'Fetching messages', createdAt: '2026-01-05T00:00:00.000Z' });

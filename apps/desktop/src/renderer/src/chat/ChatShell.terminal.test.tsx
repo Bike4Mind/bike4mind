@@ -7,6 +7,7 @@ import { EMPTY_SIDEBAR_SECTIONS } from '@shared/sidebarSections';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { desktopTheme } from '../theme';
 import { ChatShell } from './ChatShell';
+import { chatBackedHostBridge } from '../__fixtures__/chatBackedHostBridge';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -92,6 +93,7 @@ beforeEach(() => {
   );
   (window as unknown as { b4m: unknown }).b4m = new Proxy(
     {
+      host: chatBackedHostBridge(),
       chat: quietBridge({
         listSessions: async () => SESSIONS,
         getSession: async (id: string) =>

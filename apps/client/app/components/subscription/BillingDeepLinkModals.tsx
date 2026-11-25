@@ -8,7 +8,6 @@ import {
 } from '@client/app/utils/billingDeepLink';
 import { useRouter, useRouterState } from '@tanstack/react-router';
 import { useCallback } from 'react';
-import QuestMasterUpgradePrompt from './QuestMasterUpgradePrompt';
 
 /** History-state flag for an open that did not ask for a section (the account menu's Billing row). */
 const OVERVIEW_STATE_KEY = 'billingOverview';
@@ -51,19 +50,16 @@ export function useBillingView() {
  * so every open state has a URL.
  */
 const BillingDeepLinkModals = () => {
-  const { view, focusSection, closeView, openView } = useBillingView();
+  const { view, focusSection, closeView } = useBillingView();
   const isCreditsEnabled = !!useGetSettingsValue('enforceCredits');
 
   return (
-    <>
-      <BillingModal
-        open={isCreditsEnabled && !!view}
-        focus={focusSection ? view : undefined}
-        entry={focusSection ? 'deep_link' : 'profile_menu'}
-        onClose={closeView}
-      />
-      <QuestMasterUpgradePrompt onUpgrade={isCreditsEnabled ? () => openView('plans') : undefined} />
-    </>
+    <BillingModal
+      open={isCreditsEnabled && !!view}
+      focus={focusSection ? view : undefined}
+      entry={focusSection ? 'deep_link' : 'profile_menu'}
+      onClose={closeView}
+    />
   );
 };
 

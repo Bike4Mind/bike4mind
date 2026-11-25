@@ -11,6 +11,8 @@ import ListItem from '@mui/joy/ListItem';
 import ListItemButton from '@mui/joy/ListItemButton';
 import ListItemContent from '@mui/joy/ListItemContent';
 import ListItemDecorator from '@mui/joy/ListItemDecorator';
+import Option from '@mui/joy/Option';
+import Select from '@mui/joy/Select';
 import Stack from '@mui/joy/Stack';
 import Switch from '@mui/joy/Switch';
 import ToggleButtonGroup from '@mui/joy/ToggleButtonGroup';
@@ -72,6 +74,7 @@ import {
   type ReplyStatsPrefs,
 } from './replyStatsPrefs';
 import { PermissionsSettings, permissionsSummary, usePermissions } from './PermissionsSettings';
+import { LAUNCH_PLACE_OPTIONS, useLaunchPlace, type LaunchPlace } from './rail/launchPlace';
 import { promptSuggestionsSummary, usePromptSuggestionModel, usePromptSuggestions } from './promptSuggestions';
 import { SuggestionModelPicker } from './SuggestionModelPicker';
 import { THEME_MODES, currentThemeMode, themeModeSummary, type ResolvedThemeMode, type ThemeMode } from './themeMode';
@@ -135,6 +138,35 @@ function appearanceEntry(
           </Button>
         ))}
       </ToggleButtonGroup>
+    ),
+  };
+}
+
+function launchPlaceEntry(value: LaunchPlace, setValue: (next: LaunchPlace) => void): ConfigEntry {
+  const label = LAUNCH_PLACE_OPTIONS.find(option => option.value === value)?.label ?? 'Last used';
+  return {
+    id: 'launch-place',
+    icon: null,
+    label: 'Open on launch',
+    summary: label,
+    description: 'Applies next time the app opens.',
+    control: (
+      <Select
+        size="sm"
+        value={value}
+        onChange={(_event, next) => {
+          if (next) setValue(next);
+        }}
+        slotProps={{ button: { 'aria-label': 'Open on launch' } }}
+        data-testid="settings-launch-place-select"
+        sx={{ minWidth: 140 }}
+      >
+        {LAUNCH_PLACE_OPTIONS.map(option => (
+          <Option key={option.value} value={option.value} data-testid={`settings-launch-place-${option.value}-option`}>
+            {option.label}
+          </Option>
+        ))}
+      </Select>
     ),
   };
 }
@@ -727,6 +759,7 @@ function useSettingsEntries(
   const update = useAppUpdate();
   const { mode, setMode } = useColorScheme();
   const theme = useTheme();
+  const [launchPlace, setLaunchPlace] = useLaunchPlace();
   const [suggestions, toggleSuggestions] = usePromptSuggestions();
   const [suggestionModel] = usePromptSuggestionModel();
   const [permissions, setPermissions, permissionsError, retryPermissions] = usePermissions();
@@ -746,6 +779,7 @@ function useSettingsEntries(
   const curatedList = useCuratedListSettings();
 
   const entries: ConfigEntry[] = [
+    launchPlaceEntry(launchPlace, setLaunchPlace),
     appearanceEntry(mode, setMode, theme.palette.mode),
     menuBarEntry(menuBar, toggleMenuBar),
     suggestionsEntry(suggestions, toggleSuggestions, suggestionModel),

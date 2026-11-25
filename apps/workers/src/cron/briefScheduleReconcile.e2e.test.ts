@@ -6,6 +6,7 @@ import {
   AgentExecutionModel,
   AssistantBriefModel,
   EMAIL_TRIAGE_KINDS,
+  EmailTriageItemModel,
   User,
   agentExecutionRepository,
   assistantBriefRepository,
@@ -13,6 +14,7 @@ import {
   userRepository,
 } from '@bike4mind/database';
 import {
+  startBlockBrief,
   startBriefComposition,
   startScheduledBrief,
   type ScheduledBriefDeps,
@@ -62,6 +64,8 @@ afterAll(async () => {
 });
 beforeEach(async () => {
   publishCompose.mockClear();
+  notifyHeldRuns.mockClear();
+  notifyStaleBlock.mockClear();
   network.events.mockReset().mockResolvedValue({ $metadata: {}, FailedEntryCount: 0, Entries: [{ EventId: 'e1' }] });
   network.queue.mockReset().mockResolvedValue({ $metadata: {}, MessageId: 'm1' });
   vi.stubEnv('B4M_SELF_HOST', 'false');
@@ -69,6 +73,7 @@ beforeEach(async () => {
     User.collection.deleteMany({}),
     AssistantBriefModel.collection.deleteMany({}),
     AgentExecutionModel.collection.deleteMany({}),
+    EmailTriageItemModel.collection.deleteMany({}),
   ]);
 });
 afterEach(() => vi.unstubAllEnvs());
@@ -84,6 +89,9 @@ const insertRun = (userId: string) =>
     createdAt: minutesAgo(60),
   });
 const nextBriefAtOf = async (userId: string) => (await userRepository.getBriefSchedule(userId)).nextBriefAt;
+
+const notifyHeldRuns = vi.fn(async (_userId: string, _block: { start: Date; end: Date }) => {});
+const notifyStaleBlock = vi.fn(async (_userId: string, _block: { start: Date; end: Date }) => {});
 
 const run = (publisher: ScheduledBriefDeps['publishCompose'] = publishCompose) =>
   runBriefScheduleReconcile(
@@ -106,6 +114,25 @@ const run = (publisher: ScheduledBriefDeps['publishCompose'] = publishCompose) =
           publishCompose: publisher,
           now: () => new Date(),
         }),
+      startBlockBrief: (userId, block) =>
+        startBlockBrief(userId, block, {
+          briefs: assistantBriefRepository,
+          runs: agentExecutionRepository,
+          users: userRepository,
+          hasRunsBetween: async (id, start, end) =>
+            (await agentExecutionRepository.findByUserIdPaginated(id, { fromDate: start, toDate: end }, { limit: 1 }))
+              .items.length > 0,
+          hasEmailsBetween: async (id, start, end) =>
+            (
+              await Promise.all(
+                EMAIL_TRIAGE_KINDS.map(kind => emailTriageItemRepository.listPending(id, end, 1, kind, start))
+              )
+            ).some(items => items.length > 0),
+          notifyHeldRuns,
+          publishCompose: publisher,
+          now: () => new Date(),
+        }),
+      notifyHeldBlockRuns: notifyStaleBlock,
       outOfTime: () => false,
     },
     now
@@ -423,5 +450,132 @@ describe('runBriefScheduleReconcile', () => {
     expect(await nextBriefAtOf(userId)).toBeNull();
     expect((await run()).due).toBe(0);
     expect(publishCompose).not.toHaveBeenCalled();
+  });
+});
+
+describe('runBriefScheduleReconcile block briefs', () => {
+  const block = { start: minutesAgo(40), end: minutesAgo(10) };
+  const later = { start: now.getTime() + 60 * 60_000, end: now.getTime() + 90 * 60_000 };
+  const laterBlock = { start: new Date(later.start), end: new Date(later.end) };
+  const insertBlockUser = (preferences: object = { busyBlockBrief: { enabled: true } }) =>
+    insertUser({ preferences, busyBlocks: [block, laterBlock], nextBlockBriefAt: block.end });
+  const insertEmail = (userId: string, emailId: string, createdAt: Date) =>
+    EmailTriageItemModel.collection.insertOne({
+      userId,
+      emailId,
+      kind: EMAIL_TRIAGE_KINDS[0],
+      summary: 's',
+      briefedAt: null,
+      createdAt,
+    });
+  const blockState = async (userId: string) => {
+    const doc = await User.collection.findOne({ _id: new mongoose.Types.ObjectId(userId) });
+    return { next: doc?.nextBlockBriefAt ?? null, last: doc?.lastBlockBriefEnd ?? null };
+  };
+
+  it('starts one brief with the block bounds across two concurrent runs, then moves to the next block', async () => {
+    const userId = await insertBlockUser();
+    await insertEmail(userId, 'before', minutesAgo(60));
+    await insertEmail(userId, 'inside', minutesAgo(20));
+
+    const [a, b] = await Promise.all([run(), run()]);
+
+    expect(a.blocks.enqueued + b.blocks.enqueued).toBe(1);
+    expect(a.blocks.claimedElsewhere + b.blocks.claimedElsewhere).toBe(1);
+    const briefs = await AssistantBriefModel.find({ userId }).lean();
+    expect(briefs).toHaveLength(1);
+    expect(briefs[0]).toMatchObject({ trigger: 'busy_block', busyBlock: block });
+    expect(publishCompose).toHaveBeenCalledTimes(1);
+    expect(await blockState(userId)).toEqual({ next: laterBlock.end, last: block.end });
+
+    const again = await run();
+    expect(again.blocks.due).toBe(0);
+    expect(await AssistantBriefModel.countDocuments({ userId })).toBe(1);
+  });
+
+  it('writes no row when nothing arrived during the block, and still claims it', async () => {
+    const userId = await insertBlockUser();
+    await insertEmail(userId, 'before', minutesAgo(60));
+
+    expect((await run()).blocks.no_activity).toBe(1);
+    expect(await AssistantBriefModel.countDocuments({ userId })).toBe(0);
+    expect(publishCompose).not.toHaveBeenCalled();
+    expect(await blockState(userId)).toEqual({ next: laterBlock.end, last: block.end });
+    expect(notifyHeldRuns).toHaveBeenCalledWith(userId, block);
+  });
+
+  it('claims without starting when the opt-in was turned off', async () => {
+    const userId = await insertBlockUser({ busyBlockBrief: { enabled: false } });
+    await insertEmail(userId, 'inside', minutesAgo(20));
+
+    expect((await run()).blocks.busy_off).toBe(1);
+    expect(await AssistantBriefModel.countDocuments({ userId })).toBe(0);
+    expect(notifyHeldRuns).not.toHaveBeenCalled();
+  });
+
+  it('does not re-arm a claimed block when the calendar re-syncs it', async () => {
+    const userId = await insertBlockUser();
+    await insertEmail(userId, 'inside', minutesAgo(20));
+    await run();
+
+    const state = await userRepository.setBusyBlocks(userId, { enabled: true, blocks: [block, laterBlock] }, now);
+
+    expect(state.nextBlockBriefAt).toEqual(laterBlock.end);
+    expect((await run()).blocks.due).toBe(0);
+    expect(await AssistantBriefModel.countDocuments({ userId })).toBe(1);
+  });
+
+  it('hands a block back when the start throws, so the next run starts it', async () => {
+    const userId = await insertBlockUser();
+    await insertEmail(userId, 'inside', minutesAgo(20));
+
+    publishCompose.mockRejectedValueOnce(new BriefComposeRejectedError());
+
+    expect((await run()).blocks.failed).toBe(1);
+    expect(await blockState(userId)).toEqual({ next: block.end, last: null });
+    expect(await AssistantBriefModel.countDocuments({ userId })).toBe(0);
+
+    expect((await run()).blocks.enqueued).toBe(1);
+  });
+
+  it('hands a block back when another brief is composing, so a later run starts it', async () => {
+    const userId = await insertBlockUser();
+    await insertEmail(userId, 'inside', minutesAgo(20));
+    const composing = await assistantBriefRepository.createComposing({ userId, periodStart: now, periodEnd: now });
+
+    expect((await run()).blocks.in_flight).toBe(1);
+    expect(await blockState(userId)).toEqual({ next: block.end, last: null });
+
+    await AssistantBriefModel.deleteOne({ _id: composing._id });
+    expect((await run()).blocks.enqueued).toBe(1);
+    expect(await AssistantBriefModel.findOne({ userId }).lean()).toMatchObject({ busyBlock: block });
+  });
+
+  it('claims and drops a block that ended past the retry window', async () => {
+    const old = { start: new Date(now.getTime() - RETRY_WINDOW_MS - 30 * 60_000), end: minutesAgo(61) };
+    const userId = await insertUser({
+      preferences: { busyBlockBrief: { enabled: true } },
+      busyBlocks: [old],
+      nextBlockBriefAt: old.end,
+    });
+    await insertEmail(userId, 'inside', minutesAgo(65));
+
+    expect((await run()).blocks.stale).toBe(1);
+    expect(await AssistantBriefModel.countDocuments({ userId })).toBe(0);
+    expect(await blockState(userId)).toEqual({ next: null, last: old.end });
+    expect(notifyStaleBlock).toHaveBeenCalledTimes(1);
+    expect(notifyStaleBlock).toHaveBeenCalledWith(userId, old);
+    expect(notifyHeldRuns).not.toHaveBeenCalled();
+  });
+
+  it('counts a due end with no stored block as unscheduled', async () => {
+    const userId = await insertUser({
+      preferences: { busyBlockBrief: { enabled: true } },
+      busyBlocks: [laterBlock],
+      nextBlockBriefAt: block.end,
+    });
+
+    expect((await run()).blocks.unscheduled).toBe(1);
+    expect(await blockState(userId)).toEqual({ next: laterBlock.end, last: block.end });
   });
 });

@@ -1,5 +1,7 @@
 import type { EventBridgeEvent } from 'aws-lambda';
 import {
+  isHeldDuringBusyBlock,
+  isInBusyBlock,
   isPushCategoryEnabled,
   PENDING_ACTION_DECISIONS,
   type LiveActivityContentState,
@@ -106,6 +108,8 @@ export const REDACTED_PUSH_COPY: Record<PushNotificationCategory, { title: strin
 export type PushRecipient = {
   preferences: PushNotificationPreferences | null | undefined;
   redactContent: boolean;
+  /** Inside a synced calendar busy block now; BUSY_BLOCK_HELD_CATEGORIES are not delivered. */
+  inBusyBlock?: boolean;
 };
 
 export const APPROVAL_RESOLVED_COPY: Record<
@@ -149,7 +153,7 @@ export type SendPushDeps = {
 };
 
 export type PushDeliveryResult =
-  | { status: 'skipped'; reason: 'no_tokens' | 'no_recipient' | 'category_disabled' }
+  | { status: 'skipped'; reason: 'no_tokens' | 'no_recipient' | 'category_disabled' | 'busy_block_hold' }
   | { status: 'sent'; delivered: number; pruned: number; failed: number };
 
 export async function deliverPush(
@@ -180,6 +184,18 @@ export async function deliverPush(
   if (!isPushCategoryEnabled(recipient.preferences, event.category)) {
     logger.info('[Push] category disabled by user preference', { category: event.category });
     return { status: 'skipped', reason: 'category_disabled' };
+  }
+  // Held, not queued: the brief composed when the block ends reports these runs, and when that brief does not
+  // land notifyHeldBlockRuns sends one summary instead. With brief_ready off no block brief is composed
+  // (startBlockBrief returns push_off), so nothing is held.
+  if (
+    !event.busyBlockDigest &&
+    recipient.inBusyBlock &&
+    isHeldDuringBusyBlock(event.category) &&
+    isPushCategoryEnabled(recipient.preferences, 'brief_ready')
+  ) {
+    logger.info('[Push] held during a calendar busy block', { category: event.category });
+    return { status: 'skipped', reason: 'busy_block_hold' };
   }
 
   const collapseId = collapseIdFor(event);
@@ -683,6 +699,7 @@ export async function loadPushRecipient(userId: string): Promise<PushRecipient |
   return {
     preferences: user.preferences?.pushNotifications,
     redactContent: organization?.redactPushContent === true,
+    inBusyBlock: isInBusyBlock(user, new Date()),
   };
 }
 

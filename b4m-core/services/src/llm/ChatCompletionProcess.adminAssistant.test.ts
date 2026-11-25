@@ -220,7 +220,6 @@ describe('ChatCompletionProcess admin assistant gate', () => {
       fabfiles: {},
       fabfilechunks: {},
       adminSettings: { findOne: vi.fn().mockResolvedValue(null) },
-      questMasterPlans: {},
       connections: {},
       creditTransactions: {},
       agents: {},

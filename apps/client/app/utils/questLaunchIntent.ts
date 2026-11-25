@@ -10,7 +10,6 @@
 export interface QuestLaunchIntent {
   goal: string;
   autoSubmit: boolean;
-  enableQuestMaster: boolean;
 }
 
 let pendingIntent: QuestLaunchIntent | null = null;

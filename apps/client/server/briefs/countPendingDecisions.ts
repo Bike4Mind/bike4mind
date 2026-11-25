@@ -4,10 +4,9 @@ import { assistantBriefRepository, questRepository, sessionRepository } from '@b
 /**
  * Decisions waiting on the user (GET /api/v1/pending-decisions): the approvals still open in notebooks
  * they own, inside the window the pending-actions endpoints accept an answer in, plus the non-approval
- * decisions of their latest ready activity brief (follow-up memo briefs excluded), the one a client shows by default, less the questions already
- * answered from it and the follow-ups already approved or dismissed. A brief's approval decision is never
- * counted from the brief: while open it is already among the approvals, and once answered or lapsed it is
- * no longer waiting.
+ * decisions of the latest regular activity brief and busy-block briefs readied since it, excluding memo
+ * follow-up briefs, answered questions and resolved follow-ups. A brief's approval decision is never
+ * counted from the brief: while open it is already among approvals, and after resolution it is no longer pending.
  */
 export async function countPendingDecisions(userId: string, now: number = Date.now()): Promise<PendingDecisionCount> {
   const [approvals, brief] = await Promise.all([

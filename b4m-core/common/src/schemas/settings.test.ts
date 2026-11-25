@@ -1396,7 +1396,6 @@ describe('SimulatorComputeCreditsPerRound', () => {
   it('sorts beside the Hardware Compute settings in the admin tab', () => {
     expect(setting.order).toBeGreaterThan(settingsMap.HardwareComputeMaxUsdPerUserPerDay.order);
     expect(setting.order).toBeLessThan(settingsMap.EnableDataLakeSlackAdd.order);
-    expect(setting.order).toBeLessThan(settingsMap.EnableQuestMaster.order);
   });
 });
 
@@ -1700,7 +1699,7 @@ describe('broadcastSafeSettingKeys', () => {
 
   it('keeps the non-sensitive settings clients render live', () => {
     expect(broadcastSafeSettingKeys()).toEqual(
-      expect.arrayContaining(['EnableQuestMaster', 'EnableArtifacts', 'modelListRevision', 'modelAccessRevision'])
+      expect.arrayContaining(['EnableArtifacts', 'modelListRevision', 'modelAccessRevision'])
     );
   });
 

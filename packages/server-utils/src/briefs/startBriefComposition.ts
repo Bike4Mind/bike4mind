@@ -5,9 +5,11 @@ import {
   EMAIL_TRIAGE_KINDS,
   emailTriageItemRepository,
   userRepository,
+  type BusyBlockInterval,
   type IAssistantBrief,
 } from '@bike4mind/database';
 import { BRIEF_MAX_WINDOW_MS, BRIEF_MIN_GAP_MS, SCHEDULED_BRIEF_MIN_GAP_MS, briefWindow } from './briefSchedule';
+import { notifyHeldBlockRuns } from './notifyHeldBlockRuns';
 import { BriefComposeRejectedError, publishBriefCompose } from './publishBriefCompose';
 import { Logger } from '@bike4mind/observability';
 
@@ -58,6 +60,30 @@ async function activityWindow(userId: string, deps: Deps, now: Date): Promise<{ 
   return straddling ? { ...window, periodStart: straddling } : window;
 }
 
+/**
+ * A busy block's window: its end, and its start moved back to the creation of the earliest run that was
+ * still going when the block began, so a run started before the block and finished in it is listed.
+ */
+async function blockWindow(
+  userId: string,
+  deps: Deps,
+  block: BusyBlockInterval
+): Promise<{ periodStart: Date; periodEnd: Date }> {
+  const straddling = await deps.runs.findEarliestStraddlingRunCreatedAt(
+    userId,
+    block.start,
+    new Date(block.start.getTime() - BRIEF_MAX_WINDOW_MS)
+  );
+  return { periodStart: straddling ?? block.start, periodEnd: block.end };
+}
+
+type CompositionOptions = {
+  scheduled?: boolean;
+  /** An explicit window that replaces activityWindow; set together with `busyBlock` for a block brief. */
+  window?: { periodStart: Date; periodEnd: Date };
+  busyBlock?: BusyBlockInterval;
+};
+
 /** Publishes the compose event; a rejected publish discards the row so a retry starts clean. */
 async function publishOrDiscard(
   brief: IAssistantBrief,
@@ -84,14 +110,19 @@ async function publishOrDiscard(
 async function beginComposition(
   userId: string,
   deps: Deps,
-  options: { scheduled?: boolean }
+  options: CompositionOptions
 ): Promise<{ brief: IAssistantBrief; created: boolean }> {
   const inFlight = await deps.briefs.findActiveComposing(userId, deps.now());
   if (inFlight) return { brief: inFlight, created: false };
 
-  const { periodStart, periodEnd } = await activityWindow(userId, deps, deps.now());
+  const { periodStart, periodEnd } = options.window ?? (await activityWindow(userId, deps, deps.now()));
 
-  const brief = await deps.briefs.createComposing({ userId, periodStart, periodEnd });
+  const brief = await deps.briefs.createComposing({
+    userId,
+    periodStart,
+    periodEnd,
+    ...(options.busyBlock && { trigger: 'busy_block' as const, busyBlock: options.busyBlock }),
+  });
   await publishOrDiscard(brief, deps, { userId, ...(options.scheduled ? { scheduled: true } : {}) });
   return { brief, created: true };
 }
@@ -103,7 +134,7 @@ async function beginComposition(
 export async function startBriefComposition(
   userId: string,
   deps: Deps = defaultDeps,
-  options: { scheduled?: boolean } = {}
+  options: CompositionOptions = {}
 ): Promise<IAssistantBrief> {
   return (await beginComposition(userId, deps, options)).brief;
 }
@@ -221,4 +252,71 @@ export function startEventBrief(
   deps: ScheduledBriefDeps = defaultScheduledDeps
 ): Promise<ScheduledBriefOutcome> {
   return startGatedBrief(userId, deps, BRIEF_MIN_GAP_MS);
+}
+
+export type BlockBriefOutcome = 'busy_off' | 'enqueued' | 'in_flight' | 'no_activity' | 'push_off' | 'user_missing';
+
+export type BlockBriefDeps = Deps & {
+  users: Pick<typeof userRepository, 'findById'>;
+  /** Whether the user started any agent run in `[start, end]`. */
+  hasRunsBetween(userId: string, start: Date, end: Date): Promise<boolean>;
+  /** Whether triaged email not yet briefed arrived in `[start, end)`. */
+  hasEmailsBetween(userId: string, start: Date, end: Date): Promise<boolean>;
+  /** Sends the summary for runs whose pushes the block held, when no block brief will report them. */
+  notifyHeldRuns(userId: string, block: BusyBlockInterval): Promise<void>;
+};
+
+const defaultBlockDeps: BlockBriefDeps = {
+  ...defaultDeps,
+  users: userRepository,
+  hasRunsBetween: async (userId, start, end) => {
+    const { items } = await agentExecutionRepository.findByUserIdPaginated(
+      userId,
+      { fromDate: start, toDate: end },
+      { limit: 1 }
+    );
+    return items.length > 0;
+  },
+  hasEmailsBetween: async (userId, start, end) => {
+    const sections = await Promise.all(
+      EMAIL_TRIAGE_KINDS.map(kind => emailTriageItemRepository.listPending(userId, end, 1, kind, start))
+    );
+    return sections.some(items => items.length > 0);
+  },
+  notifyHeldRuns: (userId, block) => notifyHeldBlockRuns(userId, block),
+};
+
+/**
+ * Starts the brief for one ended busy block, covering email that arrived during it and runs created from the
+ * block start, or from the earliest run still going at block start (so runs created after that one are
+ * listed too, even ones that finished before the block). Skips users who turned
+ * the opt-in or brief pushes off and blocks with no runs and no triaged email. No debounce claim: the
+ * caller's per-block claim on `nextBlockBriefAt` is the idempotency. Published as scheduled, so the
+ * composer drops a brief that comes out empty or cannot be paid for.
+ */
+export async function startBlockBrief(
+  userId: string,
+  block: BusyBlockInterval,
+  deps: BlockBriefDeps = defaultBlockDeps
+): Promise<BlockBriefOutcome> {
+  const user = await deps.users.findById(userId);
+  if (!user) return 'user_missing';
+  // sendPush holds nothing while the opt-in is off, so there is nothing to summarize.
+  if (user.preferences?.busyBlockBrief?.enabled !== true) return 'busy_off';
+  if (!isPushCategoryEnabled(user.preferences?.pushNotifications, 'brief_ready')) return 'push_off';
+  if (await deps.briefs.findActiveComposing(userId, deps.now())) return 'in_flight';
+
+  const window = await blockWindow(userId, deps, block);
+  const [hasRuns, hasEmails] = await Promise.all([
+    deps.hasRunsBetween(userId, window.periodStart, window.periodEnd),
+    deps.hasEmailsBetween(userId, block.start, block.end),
+  ]);
+  // A run created before the straddle lookback can still finish in the block with its push held.
+  if (!hasRuns && !hasEmails) {
+    await deps.notifyHeldRuns(userId, block);
+    return 'no_activity';
+  }
+
+  const { created } = await beginComposition(userId, deps, { scheduled: true, window, busyBlock: block });
+  return created ? 'enqueued' : 'in_flight';
 }

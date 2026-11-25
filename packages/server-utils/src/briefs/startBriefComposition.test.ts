@@ -5,7 +5,9 @@ import {
   startBriefComposition,
   startEventBrief,
   startFollowUpComposition,
+  startBlockBrief,
   startScheduledBrief,
+  type BlockBriefDeps,
   type ScheduledBriefDeps,
 } from './startBriefComposition';
 import { BRIEF_MIN_GAP_MS, SCHEDULED_BRIEF_MIN_GAP_MS } from './briefSchedule';
@@ -257,5 +259,36 @@ describe.each([
     deps.publishCompose.mockRejectedValue(cause);
     deps.users.releaseBriefStart.mockRejectedValue(new Error('release failed'));
     await expect(start('u1', asDeps(deps))).rejects.toMatchObject({ retrySafe: true, cause });
+  });
+});
+
+describe('startBlockBrief held-runs summary', () => {
+  const block = { start: new Date('2026-11-17T04:00:00Z'), end: new Date('2026-11-17T05:00:00Z') };
+  const optedIn = { preferences: { busyBlockBrief: { enabled: true } } };
+  const makeBlockDeps = (over: { user?: object; hasRuns?: boolean } = {}) => ({
+    ...makeGatedDeps({ user: over.user ?? optedIn }),
+    hasRunsBetween: vi.fn().mockResolvedValue(over.hasRuns ?? false),
+    hasEmailsBetween: vi.fn().mockResolvedValue(false),
+    notifyHeldRuns: vi.fn().mockResolvedValue(undefined),
+  });
+  const asBlockDeps = (deps: ReturnType<typeof makeBlockDeps>) => deps as unknown as BlockBriefDeps;
+
+  it('sends none when the opt-in is off, since no push was held', async () => {
+    const deps = makeBlockDeps({ user: { preferences: { busyBlockBrief: { enabled: false } } } });
+    expect(await startBlockBrief('u1', block, asBlockDeps(deps))).toBe('busy_off');
+    expect(deps.notifyHeldRuns).not.toHaveBeenCalled();
+  });
+
+  it('sends one for a block with no activity to brief', async () => {
+    const deps = makeBlockDeps();
+    expect(await startBlockBrief('u1', block, asBlockDeps(deps))).toBe('no_activity');
+    expect(deps.notifyHeldRuns).toHaveBeenCalledWith('u1', block);
+    expect(deps.publishCompose).not.toHaveBeenCalled();
+  });
+
+  it('sends none when the block brief starts', async () => {
+    const deps = makeBlockDeps({ hasRuns: true });
+    expect(await startBlockBrief('u1', block, asBlockDeps(deps))).toBe('enqueued');
+    expect(deps.notifyHeldRuns).not.toHaveBeenCalled();
   });
 });

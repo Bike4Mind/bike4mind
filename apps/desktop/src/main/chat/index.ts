@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { registerOrchestrationIpc } from './orchestrationIpc';
 import { createStudioDiagnostics } from './studio/StudioDiagnostics';
 import { registerStudio } from './studio/registerStudio';
+import { homedir } from 'node:os';
 import { registerLibrary } from './library/registerLibrary';
 import { copyFile, readFile, stat, writeFile } from 'node:fs/promises';
 import { isAbsolute, join, resolve } from 'node:path';
@@ -139,6 +140,7 @@ import {
 } from './capabilities/capabilityHandlers';
 import { SkillCatalog } from './skills/SkillCatalog';
 import { parseSkillsScope, skillsTrustTargetSchema } from './skills/scope';
+import { detectLaunchSignals } from './launchSignals';
 import { appWorktreeMainCheckout, SpareWorktrees } from './project/workspace';
 import { folderToRemember } from './project/recentFolderToRecord';
 import type { BackgroundProcessRegistry } from './tools/BackgroundProcessRegistry';
@@ -154,6 +156,8 @@ import { appWindows, focusedAppWindow } from '../windows';
 import { registerClaudeImport } from '../claudeImport';
 import type { ClaudeImportService } from '../claudeImport/ClaudeImportService';
 import { HostRuntime, hostProtectedLocations, type HostEnvironment, type HostEventSink } from '../../host';
+import { HostEventRelay } from '../../host/server';
+import type { LocalHost } from '../host/registerHostConnections';
 
 const editMessageRequestSchema = z.object({
   sessionId: z.string(),
@@ -265,6 +269,8 @@ function permissionLists(value: unknown): PermissionRuleLists | null {
 
 export interface RegisteredChat {
   service: ChatService;
+  /** The runtime and a tee of its pushes, for main/host to serve through the host protocol. */
+  host: LocalHost;
   /** Background processes, exposed so main/index.ts can tear them down on every quit path. */
   background: BackgroundProcessRegistry;
   /** MCP connections, torn down on the same two quit passes for the same reason. */
@@ -633,9 +639,10 @@ export function registerChat(
   };
 
   // Annotated: the machine tools' callbacks read the runtime's store, so inference would cycle.
+  const hostEvents = new HostEventRelay(error => logger.warn(`HOST: a protocol listener failed: ${String(error)}`));
   const runtime: HostRuntime = new HostRuntime({
     environment,
-    events,
+    events: hostEvents.tee(events),
     auth,
     logger,
     protection,
@@ -960,6 +967,9 @@ export function registerChat(
 
   ipcMain.handle(IPC_CHANNELS.chatPickProjectDirectory, (event): Promise<string | null> => pickDirectory(event.sender));
   ipcMain.handle(IPC_CHANNELS.chatListRecentFolders, () => runtime.listRecentFolders());
+  ipcMain.handle(IPC_CHANNELS.chatLaunchSignals, () =>
+    detectLaunchSignals({ home: homedir(), recentFolders: () => runtime.listRecentFolders() })
+  );
   ipcMain.handle(IPC_CHANNELS.chatRemoveRecentFolder, (_event, directory: unknown) =>
     typeof directory === 'string' ? runtime.forgetRecentFolder(directory) : runtime.listRecentFolders()
   );
@@ -1446,6 +1456,7 @@ export function registerChat(
 
   return {
     service,
+    host: { runtime, events: hostEvents, logger },
     background,
     mcp,
     browser,
