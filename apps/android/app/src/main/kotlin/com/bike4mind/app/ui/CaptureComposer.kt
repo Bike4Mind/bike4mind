@@ -43,6 +43,7 @@ import androidx.core.content.ContextCompat
 import com.bike4mind.app.R
 import com.bike4mind.app.capture.CaptureFiles
 import com.bike4mind.app.capture.PickedFile
+import com.bike4mind.app.capture.ScanText
 import com.bike4mind.kit.capture.CaptureFailure
 import com.bike4mind.kit.capture.ComposerAttachment
 import com.bike4mind.kit.capture.DictationState
@@ -54,10 +55,17 @@ import kotlinx.coroutines.launch
 
 /**
  * The composer's Attach button and its menu: take a photo, scan a document, choose a file, or dictate. Every
- * file arrives in [onPicked] as a local copy; [onDictate] starts recording once the microphone is allowed.
+ * file arrives in [onPicked] as a local copy; [onDictate] starts recording once the microphone is allowed. With
+ * [onScanned], a scan goes there instead, with the text read from its pages on device ("" when none).
  */
 @Composable
-fun AttachMenu(onPicked: (PickedFile) -> Unit, onDictate: () -> Unit, onProblem: (String) -> Unit, enabled: Boolean) {
+fun AttachMenu(
+    onPicked: (PickedFile) -> Unit,
+    onDictate: () -> Unit,
+    onProblem: (String) -> Unit,
+    enabled: Boolean,
+    onScanned: ((PickedFile, String) -> Unit)? = null,
+) {
     val context = LocalContext.current
     val resources = LocalResources.current
     val scope = rememberCoroutineScope()
@@ -81,10 +89,13 @@ fun AttachMenu(onPicked: (PickedFile) -> Unit, onDictate: () -> Unit, onProblem:
     }
     val scan = rememberLauncherForActivityResult(ActivityResultContracts.StartIntentSenderForResult()) { result ->
         if (result.resultCode != Activity.RESULT_OK) return@rememberLauncherForActivityResult
-        val pdf = GmsDocumentScanningResult.fromActivityResultIntent(result.data)?.pdf?.uri ?: return@rememberLauncherForActivityResult
+        val scanned = GmsDocumentScanningResult.fromActivityResultIntent(result.data)
+        val pdf = scanned?.pdf?.uri ?: return@rememberLauncherForActivityResult
+        val pages = scanned.pages.orEmpty().map { it.imageUri }
         scope.launch {
             val name = resources.getString(R.string.capture_scan_name, CaptureFiles.stamp())
-            CaptureFiles.copy(context, pdf, name, "application/pdf")?.let(onPicked) ?: onProblem(readFailed)
+            val picked = CaptureFiles.copy(context, pdf, name, "application/pdf") ?: return@launch onProblem(readFailed)
+            if (onScanned == null) onPicked(picked) else onScanned(picked, ScanText.read(context, pages))
         }
     }
     val choose = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri: Uri? ->
@@ -129,7 +140,7 @@ fun AttachMenu(onPicked: (PickedFile) -> Unit, onDictate: () -> Unit, onProblem:
                     val activity = context.findActivity() ?: return@DropdownMenuItem onProblem(noScanner)
                     val options = GmsDocumentScannerOptions.Builder()
                         .setGalleryImportAllowed(true)
-                        .setResultFormats(GmsDocumentScannerOptions.RESULT_FORMAT_PDF)
+                        .setResultFormats(GmsDocumentScannerOptions.RESULT_FORMAT_PDF, GmsDocumentScannerOptions.RESULT_FORMAT_JPEG)
                         .setScannerMode(GmsDocumentScannerOptions.SCANNER_MODE_FULL)
                         .build()
                     GmsDocumentScanning.getClient(options).getStartScanIntent(activity)
