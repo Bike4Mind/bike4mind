@@ -10,7 +10,7 @@ on:
   push:
     branches: [main]
   pull_request:
-    types: [opened, synchronize, reopened, ready_for_review]
+    types: [opened, synchronize, reopened]
     # NOTE: no workflow-level paths-ignore. The `changes` gate below evaluates
     # the per-PR (merge-base) diff and skips the build/test legs on non-deployable
     # changes, while still reporting the required CI Complete/Run Tests checks (a
@@ -42,21 +42,14 @@ jobs:
   # Cheap, always runs, so the required checks always have a status to
   # report. Logic + the default exclude list live in the local composite
   # action. Fails open on all three.
-  #
-  # A draft PR reports `deployable` and `docs-changed` as 'false', so it takes the
-  # same skip path as a non-deployable change: the build, test and docs legs skip
-  # (published-dts too, through its `needs: core-build`), and Run Tests / CI
-  # Complete still report green. Marking it ready fires `ready_for_review`, which
-  # re-runs the whole workflow on the real signals. The secret and leak-shape scans
-  # are ungated and still run on drafts.
   changes:
     # Root of the whole DAG.
     runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
     permissions:
       contents: read
     outputs:
-      deployable: ${{ github.event.pull_request.draft == true && 'false' || contains(github.event.pull_request.labels.*.name, 'ci:full') && 'true' || steps.filter.outputs.deployable }}
-      docs-changed: ${{ github.event.pull_request.draft == true && 'false' || steps.filter.outputs.docs-changed }}
+      deployable: ${{ contains(github.event.pull_request.labels.*.name, 'ci:full') && 'true' || steps.filter.outputs.deployable }}
+      docs-changed: ${{ steps.filter.outputs.docs-changed }}
       published-changed: ${{ steps.filter.outputs.published-changed }}
       changed-files: ${{ steps.changed-files.outputs.files }}
       related-safe: ${{ steps.changed-files.outputs.related-safe }}
@@ -73,11 +66,11 @@ jobs:
       # the range does not resolve, or past 3000 files (job outputs are capped at 1 MB).
       - name: List the PR's changed files
         id: changed-files
-        if: github.event_name == 'pull_request'
+        # An empty list output takes the selector's full-run fallback.
+        if: github.event_name == 'pull_request' && !contains(github.event.pull_request.labels.*.name, 'ci:full')
         env:
           PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
           PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-          FORCE_FULL: ${{ contains(github.event.pull_request.labels.*.name, 'ci:full') }}
         run: node scripts/ci-related-tests.mjs diff
 
   # Build the core packages once and publish their dist/ as an artifact. The
@@ -1395,6 +1388,9 @@ jobs:
   # contention each serial hop costs ~10-15 min of queue wait for ~5 s of work.
   # The shard assertion below must stay equivalent to the one in `test`.
   #
+  # The `changes` result check is a guard in case `changes` is ever given an `if:`: aggregating
+  # without selection having run must not report a pass.
+  #
   # NOTE: this job name IS the required-check context. Renaming it must happen
   # in lockstep with editing both rulesets, or a required check with no matching
   # job hangs every PR.
@@ -1415,7 +1411,7 @@ jobs:
       - verify-docs-build
       - docs-scan-gate
       - published-dts
-    if: ${{ !cancelled() }}
+    if: ${{ !cancelled() && needs.changes.result != 'skipped' }}
     runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
     permissions:
       contents: read

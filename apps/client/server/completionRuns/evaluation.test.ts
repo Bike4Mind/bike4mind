@@ -2,8 +2,13 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ModelBackend, type ModelInfo, type CompletionEvaluationState } from '@bike4mind/common';
 import { evaluationTransport, initialEvaluation, assertEvaluationAuthorized } from './evaluation';
 
-const db = vi.hoisted(() => ({ state: undefined as unknown as CompletionEvaluationState, queue: Promise.resolve() }));
+const db = vi.hoisted(() => ({
+  state: undefined as unknown as CompletionEvaluationState,
+  queue: Promise.resolve(),
+  settings: {} as Record<string, string>,
+}));
 vi.mock('@bike4mind/database', () => ({
+  adminSettingsRepository: { getSettingsValue: async (name: string) => db.settings[name] },
   completionRunRepository: {
     updateEvaluation: (_id: string, change: (state: CompletionEvaluationState) => CompletionEvaluationState) => {
       const result = db.queue.then(() => {
@@ -28,7 +33,7 @@ const model = {
 } as ModelInfo;
 const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
 beforeEach(() => {
-  vi.stubEnv('B4M_EVALUATION_MODEL_IDS', `${model.id},alias`);
+  db.settings = { evaluationModelIds: `${model.id},alias` };
   db.queue = Promise.resolve();
   db.state = initialEvaluation({
     version: 1,
@@ -95,16 +100,23 @@ describe('evaluation provider reservations', () => {
     await expect(evaluationTransport('run', id(1)).admit(model, model.id, 100)).rejects.toThrow('already exists');
     expect(db.state.committedProviderUsd).toBe(0);
   });
-  it('requires a deployment-controlled account grant', () => {
-    vi.stubEnv('B4M_EVALUATION_USER_IDS', 'allowed');
-    expect(() => assertEvaluationAuthorized('other')).toThrow(
-      expect.objectContaining({
-        message: expect.stringContaining('not enabled'),
-        additionalInfo: { errorCode: 'evaluation_not_enabled' },
-      })
+  it('requires an admin-granted account, read on every call', async () => {
+    const refused = expect.objectContaining({
+      message: expect.stringContaining('not enabled'),
+      additionalInfo: { errorCode: 'evaluation_not_enabled' },
+    });
+    await expect(assertEvaluationAuthorized('allowed')).rejects.toThrow(refused);
+    db.settings.evaluationUserIds = ' other , allowed ,';
+    await expect(assertEvaluationAuthorized('other')).resolves.toBeUndefined();
+    await expect(assertEvaluationAuthorized('allowed')).resolves.toBeUndefined();
+    await expect(assertEvaluationAuthorized('')).rejects.toThrow(refused);
+  });
+  it('refuses dispatch to a model removed from the evaluationModelIds setting', async () => {
+    db.settings.evaluationModelIds = 'alias';
+    await expect(evaluationTransport('run', id(1)).admit(model, model.id, 100)).rejects.toThrow(
+      'not enabled in the evaluationModelIds admin setting'
     );
-    expect(() => assertEvaluationAuthorized('allowed')).not.toThrow();
-    vi.unstubAllEnvs();
+    expect(db.state.receipts).toEqual([]);
   });
   it('retains all reservations for invalid authoritative usage and preserves pricing across catalog changes', async () => {
     const first = evaluationTransport('run', id(1));
