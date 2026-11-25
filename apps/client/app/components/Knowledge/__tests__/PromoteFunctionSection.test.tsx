@@ -70,6 +70,7 @@ const tool = (overrides: Partial<ICallableFunctionPublic> = {}): ICallableFuncti
     updateAvailable: false,
     trustLabel: null,
     examples: [],
+    dataPins: [],
     grants: null,
     createdAt: new Date(),
     updatedAt: new Date(),

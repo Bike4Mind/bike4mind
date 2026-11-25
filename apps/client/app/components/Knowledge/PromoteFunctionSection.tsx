@@ -374,9 +374,6 @@ function shareSummary(tool: ICallableFunctionPublic): string {
   return `Shared with ${parts.join(' and ')}.`;
 }
 
-// Fails typecheck once the public record gains `dataPins`: pass those and its sources to the dialog instead.
-const NO_DATA_PINS: 'dataPins' extends keyof ICallableFunctionPublic ? never : string[] = [];
-
 function ShareBlock({ tool, live }: { tool: ICallableFunctionPublic; live: boolean }) {
   const [open, setOpen] = useState(false);
   const [stopError, setStopError] = useState<string | null>(null);
@@ -426,7 +423,14 @@ function ShareBlock({ tool, live }: { tool: ICallableFunctionPublic; live: boole
           {stopError}
         </Alert>
       )}
-      {open && <ShareFunctionDialog tool={tool} dataPins={NO_DATA_PINS} sources={[]} onClose={() => setOpen(false)} />}
+      {open && (
+        <ShareFunctionDialog
+          tool={tool}
+          dataPins={tool.dataPins.map(pin => pin.name)}
+          sources={[]}
+          onClose={() => setOpen(false)}
+        />
+      )}
     </Stack>
   );
 }

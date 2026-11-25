@@ -38,6 +38,7 @@ import {
   callableFunctionReviewRepository,
 } from '@bike4mind/database';
 import { Logger } from '@bike4mind/observability';
+import { deleteCallableFunctionDataObjects, type CallableFunctionDataStorage } from './dataPins';
 
 /**
  * Saved callable functions behind pages/api/callable-functions/**. Every operation is owner-scoped: another
@@ -379,8 +380,20 @@ export async function summarizeCallableFunctionCalls(
   return callableFunctionCallRepository.summarizeForCaller(fn.id, actor.id, since, RECENT_CALLS);
 }
 
-/** The pinned code and recipients' reviews go with the record; the artifact is not touched. */
-export async function deleteCallableFunction(actor: CallableFunctionActor, id: string): Promise<void> {
+/**
+ * The pinned code, data files, and recipients' reviews go with the record; the artifact and the files the data came
+ * from are not touched.
+ */
+export async function deleteCallableFunction(
+  actor: CallableFunctionActor,
+  id: string,
+  storage?: CallableFunctionDataStorage
+): Promise<void> {
+  const fn = await callableFunctionRepository.findByIdForOwner(id, userOwner(actor));
+  if (!fn) throw notFound();
+  // The objects first: a record left behind by a failed delete can be deleted again, an object without one cannot.
+  // Unpinning deletes a file's object, so a function with no pins has none.
+  if (fn.pin.dataPins?.length) await deleteCallableFunctionDataObjects(fn.id, storage);
   if (!(await callableFunctionRepository.deleteForOwner(id, userOwner(actor)))) throw notFound();
   await callableFunctionReviewRepository.deleteForFunction(id);
 }

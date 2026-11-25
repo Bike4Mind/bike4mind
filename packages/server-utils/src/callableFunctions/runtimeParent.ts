@@ -24,6 +24,7 @@ import {
   CALLABLE_FUNCTION_START_BUDGET_MS,
   type CallableFunctionLimits,
 } from './runtimeLimits';
+import { prepareRunData, validRunData, type CallableFunctionRunData, type DataFetch } from './runtimeData';
 
 /**
  * The parent half of the server runtime for Python functions: one fresh child process per run,
@@ -68,6 +69,8 @@ export const CALLABLE_FUNCTION_REASONS = [
   'result_too_large',
   'limit_above_ceiling',
   'start_timeout',
+  'data_unavailable',
+  'data_hash_mismatch',
 ] as const;
 export type CallableFunctionReason = (typeof CALLABLE_FUNCTION_REASONS)[number];
 
@@ -79,6 +82,8 @@ export type CallableFunctionRunPayload =
       contract: FunctionContract;
       params: Record<string, unknown>;
       limits?: CallableFunctionCallLimits;
+      /** Links signed for this call, never the bytes. */
+      data?: CallableFunctionRunData[];
     };
 
 export interface CallableFunctionRunResult {
@@ -115,6 +120,8 @@ export interface CallableFunctionChildRequest {
   code: string;
   paramsJson: string | null;
   pyodideVersion: string;
+  /** The call's read-only data directory, mounted at `/data`; null when it has no data files. */
+  dataDir: string | null;
 }
 
 /** One reply line on the child's stdout. Its strings come from guest code and are checked here. */
@@ -149,6 +156,9 @@ export interface CallableFunctionChildOptions {
   limits?: Partial<CallableFunctionLimits>;
   startBudgetMs?: number;
   nodePath?: string;
+  /** Where data files are cached between calls; a directory under the OS temp directory by default. */
+  dataCacheDir?: string;
+  fetchData?: DataFetch;
 }
 
 // The outputs and the contract travel as JSON strings inside the reply, so escaping can double them; a
@@ -162,11 +172,18 @@ export const CALLABLE_FUNCTION_MAX_REPLY_BYTES =
 const MEMORY_POLL_MS = 100;
 
 /** The node flags every child runs under; the test-only child switches are never among them. */
-export function callableFunctionChildArgs(childPath: string, pyodideDir: string, memoryMb: number): string[] {
+export function callableFunctionChildArgs(
+  childPath: string,
+  pyodideDir: string,
+  memoryMb: number,
+  dataDir: string | null = null
+): string[] {
   return [
     '--permission',
     `--allow-fs-read=${childPath}`,
     `--allow-fs-read=${pyodideDir}`,
+    // Read only: no --allow-fs-write, so the guest cannot change or add a file under /data.
+    ...(dataDir ? [`--allow-fs-read=${dataDir}`] : []),
     '--disallow-code-generation-from-strings',
     `--max-old-space-size=${memoryMb}`,
     childPath,
@@ -253,7 +270,7 @@ async function runChild(
   }
   const child = spawn(
     options.nodePath ?? process.execPath,
-    callableFunctionChildArgs(childPath, pyodideDir, limits.memoryMb),
+    callableFunctionChildArgs(childPath, pyodideDir, limits.memoryMb, request.dataDir),
     {
       // Empty on purpose; the assertion only satisfies Next's ProcessEnv, which makes NODE_ENV required.
       env: {} as NodeJS.ProcessEnv,
@@ -492,7 +509,7 @@ const safePaths = (problems: FunctionContractProblem[]): FunctionContractProblem
 
 const PAYLOAD_KEYS = {
   read_contract: ['op', 'code', 'limits'],
-  call: ['op', 'code', 'contract', 'params', 'limits'],
+  call: ['op', 'code', 'contract', 'params', 'limits', 'data'],
 } as const;
 
 // Only the known keys, so the caps on each one bound the whole request (Lambda takes at most 6 MB).
@@ -501,6 +518,7 @@ function validPayload(payload: unknown): payload is CallableFunctionRunPayload {
   if (payload.op !== 'read_contract' && payload.op !== 'call') return false;
   const keys: readonly string[] = PAYLOAD_KEYS[payload.op];
   if (!Object.keys(payload).every(key => keys.includes(key))) return false;
+  if (payload.data !== undefined && !validRunData(payload.data)) return false;
   return payload.op === 'read_contract' || (isObject(payload.params) && payload.contract !== undefined);
 }
 
@@ -558,17 +576,32 @@ export async function runCallableFunctionInChild(
     if (problems.length > 0) return finish({ outcome: 'input_invalid', problems });
   }
 
-  const run = await runChild(
-    {
-      op: payload.op,
-      glue: functionCallGluePy(limits.outputBytes),
-      code: payload.code,
-      paramsJson,
-      pyodideVersion: PYODIDE_VERSION,
-    },
-    options,
-    limits
-  );
+  const data = await prepareRunData(payload.op === 'call' ? payload.data : undefined, {
+    cacheDir: options.dataCacheDir,
+    fetchData: options.fetchData,
+  });
+  if (!data.ok) {
+    return data.reason === 'data_hash_mismatch'
+      ? finish({ outcome: 'data_mismatch', reason: data.reason })
+      : finish({ outcome: 'error', reason: data.reason });
+  }
+  let run: ChildRun;
+  try {
+    run = await runChild(
+      {
+        op: payload.op,
+        glue: functionCallGluePy(limits.outputBytes),
+        code: payload.code,
+        paramsJson,
+        pyodideVersion: PYODIDE_VERSION,
+        dataDir: data.dir,
+      },
+      options,
+      limits
+    );
+  } finally {
+    await data.release();
+  }
   child.startMs = run.startMs;
   if (run.kind === 'spawn_failed') return refused('runtime_unavailable');
   // The lock is the parent's own file, so an outcome with no reply still names it; packages need the reply.

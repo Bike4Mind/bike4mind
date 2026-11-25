@@ -22,6 +22,8 @@ import {
 } from '@bike4mind/database';
 import { Logger } from '@bike4mind/observability';
 import { resolveCallableFunctionsEnabled } from './access';
+import { callableFunctionStampData, signCallableFunctionDataLinks, type CallableFunctionDataLink } from './dataPins';
+import type { CallableFunctionRunData } from './runtimeData';
 import {
   CALLABLE_FUNCTION_DEFAULT_TIMEOUT_MS,
   CALLABLE_FUNCTION_LIMITS,
@@ -129,6 +131,8 @@ export interface CallableFunctionDispatchOptions {
    * its wait is what the runtime takes for `timeoutMs`, not the surface's synchronous cap.
    */
   callId?: string;
+  /** Signs the links for one call's data files; the function-data bucket's signer by default. */
+  signData?: (fn: ICallableFunctionDocument) => Promise<CallableFunctionDataLink[]>;
 }
 
 export type { CallableFunctionStamp };
@@ -175,7 +179,7 @@ export function buildCallableFunctionStamp(input: {
     input_hash: input.inputHash,
     runtime: { kind: RUNTIME_KIND, version: PYODIDE_VERSION, lock_hash: input.run.runtime?.lockHash ?? null },
     packages,
-    data: [],
+    data: callableFunctionStampData(input.fn.pin.dataPins),
     uses: [],
     trust_label: input.fn.state === 'live' ? (input.fn.trustLabel ?? null) : null,
     surface: input.surface,
@@ -503,9 +507,29 @@ export async function dispatchFunctionCall(
     }
     const timeoutMs = limitWithin(requestedMs, waitMs);
     const outputBytesCap = Math.min(caps.outputBytes, CALLABLE_FUNCTION_LIMITS.outputBytes);
+    const pins = fn.pin.dataPins ?? [];
+    row.dataHashes = pins.map(pin => pin.sha256);
+    let data: CallableFunctionRunData[] | undefined;
+    if (pins.length > 0) {
+      // Links for exactly this function's pins, valid for minutes; the runtime gets links, never the bytes.
+      try {
+        const links = await (options.signData ?? signCallableFunctionDataLinks)(fn);
+        data = links.map(link => ({ ...link, prefix: fn.id }));
+      } catch (error) {
+        Logger.error('[CALLABLE_FUNCTION_DATA_SIGN_FAILED]', describeRunnerError(error));
+        return finish({ outcome: 'error', reason: 'data_unavailable' });
+      }
+    }
     const run = await runWithin(
       runner,
-      { op: 'call', code: fn.pin.source, contract, params, limits: { timeoutMs, outputBytes: outputBytesCap } },
+      {
+        op: 'call',
+        code: fn.pin.source,
+        contract,
+        params,
+        limits: { timeoutMs, outputBytes: outputBytesCap },
+        ...(data ? { data } : {}),
+      },
       waitMs,
       { callerUserId: caller.id, codeHash: fn.pin.contentHash }
     );

@@ -311,6 +311,60 @@ describe('dispatchFunctionCall outcomes', () => {
     });
   });
 
+  it("hands the runner signed links for this function's pins only, never bytes, and stamps what it read", async () => {
+    const pins = ['b.csv', 'a.csv'].map((name, i) => ({
+      name,
+      sha256: String(i).repeat(64),
+      bytes: 8 + i,
+      sourceFileId: `file-${i}`,
+      pinnedAt: new Date(0),
+    }));
+    h.fn = record({ pin: { ...(record().pin as object), dataPins: pins } });
+    const signData = vi.fn(async (fn: { id: string }) =>
+      pins.map(({ name, sha256, bytes }) => ({
+        name,
+        sha256,
+        bytes,
+        url: `https://data.example.com/${fn.id}/${sha256}`,
+      }))
+    );
+    const runner = runnerOf(ok());
+
+    const result = await dispatchFunctionCall(call(), { runner, signData });
+
+    expect(signData).toHaveBeenCalledWith(expect.objectContaining({ id: FUNCTION_ID }));
+    const payload = runner.mock.calls[0]![0] as CallableFunctionRunPayload & { data?: { prefix: string }[] };
+    expect(payload.data).toEqual(
+      pins.map(({ name, sha256, bytes }) => ({
+        name,
+        sha256,
+        bytes,
+        prefix: FUNCTION_ID,
+        url: `https://data.example.com/${FUNCTION_ID}/${sha256}`,
+      }))
+    );
+    // The browser panel builds its stamp's list from the same pins in the same shape.
+    const browserData = pins.map(({ name, sha256, bytes }) => ({ name, mode: 'pinned', sha256, bytes }));
+    expect(result.stamp?.data).toEqual(browserData);
+    expect(onlyRow().dataHashes).toEqual(pins.map(pin => pin.sha256));
+  });
+
+  it('answers data_unavailable without running when the links cannot be signed', async () => {
+    h.fn = record({
+      pin: {
+        ...(record().pin as object),
+        dataPins: [{ name: 'a.csv', sha256: 'a'.repeat(64), bytes: 1, sourceFileId: 'f', pinnedAt: new Date(0) }],
+      },
+    });
+    const runner = runnerOf(ok());
+    const signData = vi.fn(async () => {
+      throw new Error('no credentials');
+    });
+    const result = await dispatchFunctionCall(call(), { runner, signData });
+    expect(result).toMatchObject({ outcome: 'error', reason: 'data_unavailable' });
+    expect(runner).not.toHaveBeenCalled();
+  });
+
   it.each([
     ['timeout', ok({ outcome: 'timeout', outputs: undefined })],
     ['memory', ok({ outcome: 'memory', outputs: undefined })],

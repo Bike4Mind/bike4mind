@@ -9,7 +9,12 @@ const SHA256 = /^[0-9a-f]{64}$/;
  * (FUNCTION_DATA_KEY_PREFIX in infra/callableFunctionNetwork.ts), which leaves other top-level segments free.
  */
 export function callableFunctionDataKey(prefix: string, sha256: string): string {
-  if (!PREFIX.test(prefix)) throw new Error('A function-data prefix is 1 to 128 letters, digits, "_", or "-".');
   if (!SHA256.test(sha256)) throw new Error('A function-data hash is 64 lowercase hex characters.');
-  return `data/${prefix}/${sha256}`;
+  return `${callableFunctionDataPrefix(prefix)}${sha256}`;
+}
+
+/** `data/<prefix>/`: every object of one tenant or function, for a delete by prefix. */
+export function callableFunctionDataPrefix(prefix: string): string {
+  if (!PREFIX.test(prefix)) throw new Error('A function-data prefix is 1 to 128 letters, digits, "_", or "-".');
+  return `data/${prefix}/`;
 }
