@@ -244,6 +244,7 @@ export default function EmailJobsPanel() {
         size="sm"
         variant="plain"
         onClick={() => handleOpenEdit(job)}
+        aria-label="View or edit campaign"
         data-testid={`edit-job-${job.id}`}
         title="View/Edit campaign"
       >
@@ -256,6 +257,7 @@ export default function EmailJobsPanel() {
         onClick={() => handleClone(job.id)}
         loading={cloneMutation.isPending}
         title="Clone campaign"
+        aria-label="Clone campaign"
         data-testid={`clone-job-${job.id}`}
       >
         <ContentCopyIcon />

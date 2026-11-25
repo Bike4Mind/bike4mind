@@ -167,6 +167,7 @@ export default function EmailTemplatesPanel() {
         size="sm"
         variant="plain"
         onClick={() => handleOpenEdit(template.id)}
+        aria-label="Edit template"
         data-testid={`edit-template-${template.id}`}
       >
         <EditIcon />
@@ -178,6 +179,7 @@ export default function EmailTemplatesPanel() {
           color="primary"
           onClick={() => handleClone(template.id)}
           loading={cloneMutation.isPending}
+          aria-label="Clone template"
           data-testid={`clone-template-${template.id}`}
         >
           <ContentCopyIcon />
@@ -189,6 +191,7 @@ export default function EmailTemplatesPanel() {
           variant="plain"
           color="danger"
           onClick={() => setDeleteConfirmId(template.id)}
+          aria-label="Delete template"
           data-testid={`delete-template-${template.id}`}
         >
           <DeleteIcon />
