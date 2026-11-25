@@ -1,3 +1,4 @@
+import type { IAttributedUsageEvent } from '@bike4mind/common';
 import { UsageEvent } from '../billing/UsageEventModel';
 
 export type CompletionCohortSpend = {
@@ -12,6 +13,7 @@ export async function loadCompletionCohortExposure(userIds: readonly string[], n
   const ids = [...new Set(userIds)].slice(0, 500);
   const rows = await UsageEvent.find({
     userId: { $in: ids },
+    'attribution.kind': { $ne: 'platform_operation' },
     feature: 'completion_api',
     status: 'ok',
     createdAt: { $gte: new Date(now.getTime() - 86_400_000), $lt: now },
@@ -20,7 +22,7 @@ export async function loadCompletionCohortExposure(userIds: readonly string[], n
     .sort({ createdAt: -1 })
     .limit(5_001)
     .maxTimeMS(10_000)
-    .lean();
+    .lean<Array<Pick<IAttributedUsageEvent, 'userId' | 'creditsCharged' | 'fundingBreakdown'>>>();
   const totals = new Map<string, CompletionCohortSpend>();
   for (const row of rows.slice(0, 5_000)) {
     const total = totals.get(row.userId) ?? {
