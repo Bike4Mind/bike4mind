@@ -134,6 +134,7 @@ import { canHoldWorktree, worktreeByDefault } from './worktreeDefault';
 import { presentReply } from './codeStream';
 import { seedOnArrival } from './firstRunSeed';
 import { readLastSession, useLastSession } from './lastSession';
+import { launchPlace, resolveLaunch, useFirstLaunchPlace } from './rail/launchPlace';
 import { newSessionInProject } from './newSessionInProject';
 import { isSessionDraft, useSessionDraft } from './useSessionDraft';
 import { roundsOf } from './replyRounds';
@@ -326,14 +327,15 @@ export function ChatShell({
     dismissError: dismissSectionError,
   } = useSidebarSections();
   const [activeId, setActiveId] = useState<string | null>(null);
-  const [remembered] = useState(readLastSession);
   const [placeMemory] = useState(readPlaceMemory);
-  const [place, setPlace] = useState<Place>(placeMemory?.place ?? remembered?.mode ?? 'chat');
+  const [launch] = useState(() =>
+    resolveLaunch({ preference: launchPlace(), memory: placeMemory, lastSession: readLastSession() })
+  );
+  const remembered = launch.session;
+  const [place, setPlace] = useState<Place>(launch.place);
   // The session mode the list filters by and New starts. A session place sets it; Studio leaves
   // it alone, so the conversation open underneath stays open for the return trip.
-  const [mode, setModeOnly] = useState<SessionPlace>(
-    placeMemory && isSessionPlace(placeMemory.place) ? placeMemory.place : (remembered?.mode ?? 'chat')
-  );
+  const [mode, setModeOnly] = useState<SessionPlace>(launch.mode);
   /** Opening a session in a mode takes the user to that mode's place. */
   const setMode = useCallback((next: SessionPlace) => {
     setModeOnly(next);
@@ -347,9 +349,10 @@ export function ChatShell({
     if (session) setActiveId(session.id);
   }, []);
   const restoring = useLastSession({ remembered, loading, sessions, activeId, onRestore });
+  const detectingFirstPlace = useFirstLaunchPlace(launch.firstLaunch, setMode);
   // Until this is false the shell does not know which conversation it will show, so it draws
   // none of the empty-state copy that would otherwise flash up before the real one.
-  const settling = loading || restoring;
+  const settling = loading || restoring || detectingFirstPlace;
   const [importedInline] = useImportedInline();
 
   const [addFolderAlerts, setAddFolderAlerts] = useState<Record<string, AddFolderAlert>>({});
