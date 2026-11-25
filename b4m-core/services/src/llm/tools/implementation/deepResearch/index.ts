@@ -254,7 +254,7 @@ export async function performDeepResearch(
           message: `Failed to extract content from ${url}`,
           depth: state.depth,
         });
-        Logger.warn('Deep Research: failed to extract content', { url });
+        Logger.warn('Deep Research: failed to extract content', { url, error });
         return [];
       }
     });
