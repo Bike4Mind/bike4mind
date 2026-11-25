@@ -24,7 +24,7 @@ const mocks = vi.hoisted(() => ({
   findUserById: vi.fn(),
   findRotation: vi.fn(),
   validateApiKey: vi.fn(),
-  store: new Map<string, Record<string, unknown> & { id: string; userId: string }>(),
+  store: new Map<string, StoredComposition>(),
 }));
 
 vi.mock('@bike4mind/server-utils/auth/mfaEnforcement', async orig => ({
