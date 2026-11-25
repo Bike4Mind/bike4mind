@@ -20,5 +20,6 @@ export default defineConfig({
     // and data shards, so the 15s unit-test budget can flake their first write. Keep in sync with
     // apps/client/vitest.config.mts and packages/database/vitest.config.ts.
     testTimeout: 30000,
+    setupFiles: ['./vitest.setup.ts'],
   },
 });
