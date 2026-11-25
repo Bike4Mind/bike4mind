@@ -1,5 +1,5 @@
 import React from 'react';
-import { Box, Chip, LinearProgress, Sheet, Stack, Table, Typography } from '@mui/joy';
+import { Box, Chip, LinearProgress, Sheet, Stack, Typography } from '@mui/joy';
 import Alert from '@mui/joy/Alert';
 import WarningAmberIcon from '@mui/icons-material/WarningAmber';
 import { useTheme } from '@mui/joy/styles';
@@ -11,6 +11,7 @@ import {
   type SpendKpi,
   type SpendKpiFormat,
 } from '@bike4mind/common';
+import { DataTable, EmptyState, type DataColumn } from '../../shared';
 
 // Nivo's generics fight strict TS here; the same assertion is used in AnalyticsTab.
 const ResponsiveLineChart = ResponsiveLine as any;
@@ -130,6 +131,84 @@ const KpiCard: React.FC<{ kpi: SpendKpi }> = ({ kpi }) => {
   );
 };
 
+type SpendAccountRow = SpendData['byAccount'][number];
+
+// DataTable requires a retry handler; the parent owns the spend query's error state and `empty` has no action.
+const noRetry = () => undefined;
+
+const accountColumns: DataColumn<SpendAccountRow>[] = [
+  {
+    id: 'account',
+    label: 'Account',
+    width: '14rem',
+    wrap: true,
+    render: row => (
+      <Stack direction="row" spacing={0.5} alignItems="center" useFlexGap flexWrap="wrap">
+        <span>{row.accountName}</span>
+        {row.flags.map(flag => (
+          <Chip
+            key={flag}
+            size="sm"
+            variant="soft"
+            color="warning"
+            title={`Flagged: ${FLAG_INFO[flag].limit}`}
+            data-testid={`spend-account-flag-${flag}`}
+          >
+            {FLAG_INFO[flag].label}
+          </Chip>
+        ))}
+      </Stack>
+    ),
+  },
+  {
+    id: 'estCost',
+    label: 'Est. cost',
+    width: '7rem',
+    numeric: true,
+    render: row => formatKpiValue(row.estCost, 'currency'),
+  },
+  {
+    id: 'requests',
+    label: 'Requests',
+    width: '7rem',
+    numeric: true,
+    render: row => row.requests.toLocaleString('en-US'),
+  },
+  {
+    id: 'creditsUsed',
+    label: 'Credits',
+    width: '7rem',
+    numeric: true,
+    render: row => row.creditsUsed.toLocaleString('en-US'),
+  },
+  {
+    id: 'costPerRequest',
+    label: 'Cost / req',
+    width: '7rem',
+    numeric: true,
+    render: row => `$${row.costPerRequest.toFixed(4)}`,
+  },
+  {
+    id: 'errorRate',
+    label: 'Error rate',
+    width: '7rem',
+    numeric: true,
+    render: row => formatKpiValue(row.errorRate, 'percent'),
+  },
+  {
+    id: 'p95',
+    label: 'p95',
+    width: '7rem',
+    numeric: true,
+    // 0 means no event carried latencyMs, not an instant response.
+    render: row => (
+      <span data-testid={`spend-account-p95-${row.accountId}`}>
+        {row.p95LatencyMs > 0 ? formatKpiValue(row.p95LatencyMs, 'ms') : '--'}
+      </span>
+    ),
+  },
+];
+
 export const SpendTabView: React.FC<SpendTabViewProps> = ({ data }) => {
   const theme = useTheme();
 
@@ -187,7 +266,7 @@ export const SpendTabView: React.FC<SpendTabViewProps> = ({ data }) => {
       {/* Section 2: Spend by account */}
       <Box>
         <Typography level="h4" sx={{ mb: accountsTruncated ? 0.5 : 2 }}>
-          {accountsTruncated ? 'Top Spend by Account' : 'Spend by Account'}
+          {accountsTruncated ? 'Top spend by account' : 'Spend by account'}
         </Typography>
         {accountsTruncated && (
           <Typography level="body-xs" sx={{ color: 'text.secondary', mb: 2 }} data-testid="spend-account-truncation">
@@ -196,60 +275,25 @@ export const SpendTabView: React.FC<SpendTabViewProps> = ({ data }) => {
           </Typography>
         )}
         {flaggedCount > 0 && <FlagBanner flaggedCount={flaggedCount} />}
-        {/* Bounded height gives Table stickyHeader a scroll container to stick within. */}
-        <Sheet variant="outlined" sx={{ borderRadius: 'md', overflow: 'auto', maxHeight: 480 }}>
-          <Table stickyHeader hoverRow size="sm" data-testid="spend-by-account-table">
-            <thead>
-              <tr>
-                <th>Account</th>
-                <th style={{ textAlign: 'right' }}>Est. Cost</th>
-                <th style={{ textAlign: 'right' }}>Requests</th>
-                <th style={{ textAlign: 'right' }}>Credits</th>
-                <th style={{ textAlign: 'right' }}>Cost / Req</th>
-                <th style={{ textAlign: 'right' }}>Error Rate</th>
-                <th style={{ textAlign: 'right' }}>p95</th>
-              </tr>
-            </thead>
-            <tbody>
-              {data.byAccount.map(row => (
-                <tr key={row.accountId} data-testid={`spend-account-row-${row.accountId}`}>
-                  <td>
-                    <Stack direction="row" spacing={0.5} alignItems="center" useFlexGap flexWrap="wrap">
-                      <span>{row.accountName}</span>
-                      {row.flags.map(flag => (
-                        <Chip
-                          key={flag}
-                          size="sm"
-                          variant="soft"
-                          color="warning"
-                          title={`Flagged: ${FLAG_INFO[flag].limit}`}
-                          data-testid={`spend-account-flag-${flag}`}
-                        >
-                          {FLAG_INFO[flag].label}
-                        </Chip>
-                      ))}
-                    </Stack>
-                  </td>
-                  <td style={{ textAlign: 'right' }}>{formatKpiValue(row.estCost, 'currency')}</td>
-                  <td style={{ textAlign: 'right' }}>{row.requests.toLocaleString('en-US')}</td>
-                  <td style={{ textAlign: 'right' }}>{row.creditsUsed.toLocaleString('en-US')}</td>
-                  <td style={{ textAlign: 'right' }}>${row.costPerRequest.toFixed(4)}</td>
-                  <td style={{ textAlign: 'right' }}>{formatKpiValue(row.errorRate, 'percent')}</td>
-                  {/* 0 means no event carried latencyMs, not an instant response. */}
-                  <td style={{ textAlign: 'right' }} data-testid={`spend-account-p95-${row.accountId}`}>
-                    {row.p95LatencyMs > 0 ? formatKpiValue(row.p95LatencyMs, 'ms') : '--'}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </Table>
-        </Sheet>
+        <DataTable<SpendAccountRow>
+          rows={data.byAccount}
+          columns={accountColumns}
+          getRowId={row => row.accountId}
+          label="Spend by account"
+          onRetry={noRetry}
+          empty={<EmptyState title="No account spend in this window" action={null} />}
+          testId="spend-by-account-table"
+          rowTestId={row => `spend-account-row-${row.accountId}`}
+          pagination={false}
+          maxHeight="480px"
+          minWidth="56rem"
+        />
       </Box>
 
       {/* Section 3: Cost by model (bar table) */}
       <Box>
         <Typography level="h4" sx={{ mb: 2 }}>
-          Cost by Model
+          Cost by model
         </Typography>
         <Sheet variant="outlined" sx={{ borderRadius: 'md', p: 2 }}>
           <Stack spacing={1.5} data-testid="spend-by-model-bars">
@@ -291,7 +335,7 @@ export const SpendTabView: React.FC<SpendTabViewProps> = ({ data }) => {
       {/* Section 4: Daily cost line chart */}
       <Box>
         <Typography level="h4" sx={{ mb: 2 }}>
-          Daily Cost
+          Daily cost
         </Typography>
         <Box sx={{ height: 300 }} data-testid="spend-daily-cost-chart">
           <ResponsiveLineChart
