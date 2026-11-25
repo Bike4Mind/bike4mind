@@ -59,6 +59,7 @@ export const EXAMPLE_RUN_STALE_MS = 15 * 60_000;
 /** Session surface that keeps example-run notebooks out of the author's notebook list (SessionModel). */
 export const TEMPLATE_EXAMPLE_SESSION_SURFACE = 'skill-template-example';
 /** The ChatCompletion internal route (chatCompletion/internal/route.ts). */
+// Must be in DIRECT_PATHS in infra/chatCompletion.ts, or the load balancer answers 403.
 export const TEMPLATE_EXAMPLE_DISPATCH_PATH = '/template-example';
 
 export {

@@ -226,9 +226,10 @@ function natEgressCidrs() {
 }
 
 // Paths callers reach on the load balancer directly rather than through CloudFront: the quest
-// dispatch (dispatchQuest.ts, from the frontend and worker Lambdas) and the status probe
-// (pages/api/chat-completion-status.ts). Both leave through the VPC NAT.
-const DIRECT_PATHS = ['/process', '/health'] as const;
+// dispatch (dispatchQuest.ts, from the frontend and worker Lambdas), a skill template's example
+// run (server/skillMarket/templateExample.ts, same signed dispatch) and the status probe
+// (pages/api/chat-completion-status.ts). All leave through the VPC NAT.
+const DIRECT_PATHS = ['/process', '/template-example', '/health'] as const;
 const forwardListen = originDomain ? ('443/https' as const) : ('80/http' as const);
 
 // With origin verification on, the forwarding listener has no unconditional rule, so SST gives it
