@@ -7,11 +7,13 @@ import type {
   CallableFunctionExample,
   CallableFunctionGrantVisibility,
   CallableFunctionSlugHolder,
+  CallableFunctionStampData,
   FunctionContract,
   FunctionContractChange,
   FunctionContractProblem,
   ICallableFunctionPublic,
   ICallableFunctionShared,
+  ICallableFunctionSource,
   McpToolApprovalMode,
 } from '@bike4mind/common';
 import type { CallableFunctionShareView } from '@pages/api/callable-functions/[id]/grants';
@@ -358,6 +360,15 @@ export const usePinCallableFunctionData = () => {
   });
 };
 
+export const useSetCallableFunctionSources = () => {
+  const invalidate = useInvalidateCallableFunctions();
+  return useMutation({
+    mutationFn: async ({ id, sources }: { id: string; sources: ICallableFunctionSource[] }) =>
+      (await api.put<ICallableFunctionPublic>(`${COLLECTION}/${encodeURIComponent(id)}/sources`, { sources })).data,
+    onSettled: invalidate,
+  });
+};
+
 export const useUnpinCallableFunctionData = () => {
   const invalidate = useInvalidateCallableFunctions();
   return useMutation({
@@ -419,6 +430,41 @@ export async function fetchCallableFunctionDataFiles(
         cached.catch(() => dataBytesByHash.delete(pin.sha256));
       }
       return { name: pin.name, bytes: (await cached).slice(0) };
+    })
+  );
+}
+
+const headerOf = (headers: unknown, name: string): string | undefined => {
+  if (typeof headers !== 'object' || headers === null) return undefined;
+  const value = (headers as Record<string, unknown>)[name];
+  return typeof value === 'string' ? value : undefined;
+};
+
+/**
+ * Each source's bytes for `/data/<name>` in the browser, read through the owner-only route that fetches them as a
+ * server call would, with the stamp entry a server call would write. Throws when a source cannot be read.
+ */
+export async function fetchCallableFunctionSources(
+  id: string,
+  sources: ICallableFunctionPublic['sources']
+): Promise<{ name: string; bytes: ArrayBuffer; entry: CallableFunctionStampData }[]> {
+  return Promise.all(
+    sources.map(async source => {
+      const response = await api.get<ArrayBuffer>(
+        `${COLLECTION}/${encodeURIComponent(id)}/sources/${encodeURIComponent(source.name)}`,
+        { responseType: 'arraybuffer' }
+      );
+      const bytes = response.data;
+      const sha256 = hex(await globalThis.crypto.subtle.digest('SHA-256', bytes));
+      if (sha256 !== headerOf(response.headers, 'x-data-sha256')) {
+        throw new Error(`The source ${source.name} does not match the hash it was read with.`);
+      }
+      const fetchedAt = headerOf(response.headers, 'x-data-fetched-at');
+      const entry: CallableFunctionStampData =
+        headerOf(response.headers, 'x-data-mode') === 'pinned' || !fetchedAt
+          ? { name: source.name, mode: 'pinned', sha256, bytes: bytes.byteLength }
+          : { name: source.name, mode: 'live', sha256, bytes: bytes.byteLength, fetched_at: fetchedAt };
+      return { name: source.name, bytes, entry };
     })
   );
 }
