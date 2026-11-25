@@ -68,6 +68,11 @@ import type { SimulatorFrame, SimulatorPaneInput, SimulatorViewState } from '@sh
 // passthrough: a passthrough would let renderer code reach every handler main ever
 // registers, which defeats the point of keeping the auth handlers out of its reach.
 const api: DesktopApi = {
+  library: {
+    page: request => ipcRenderer.invoke(IPC_CHANNELS.libraryPage, request),
+    media: ref => ipcRenderer.invoke(IPC_CHANNELS.libraryMedia, ref),
+    locate: ref => ipcRenderer.invoke(IPC_CHANNELS.libraryLocate, ref),
+  },
   studio: {
     get: sessionId => ipcRenderer.invoke(IPC_CHANNELS.studioGet, sessionId),
     page: request => ipcRenderer.invoke(IPC_CHANNELS.studioPage, request),

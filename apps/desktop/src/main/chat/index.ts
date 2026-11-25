@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { registerOrchestrationIpc } from './orchestrationIpc';
 import { createStudioDiagnostics } from './studio/StudioDiagnostics';
 import { registerStudio } from './studio/registerStudio';
+import { registerLibrary } from './library/registerLibrary';
 import { copyFile, readFile, stat, writeFile } from 'node:fs/promises';
 import { basename, isAbsolute, join, resolve } from 'node:path';
 import { PERMISSION_LISTS, type PermissionRuleLists, type PermissionScope } from '@shared/permissions';
@@ -726,6 +727,7 @@ export function registerChat(
     videoJobs: sessionId => videoJobs.list(sessionId),
     changed: event => send(IPC_CHANNELS.studioChanged, event),
   });
+  registerLibrary({ ipc: ipcMain, directory: userData, sessions: store, media, auth });
   service.studioDisposed = studioIntegration.dispose;
   service.studioWithSessionDeletion = studioIntegration.withSessionDeletion;
 
