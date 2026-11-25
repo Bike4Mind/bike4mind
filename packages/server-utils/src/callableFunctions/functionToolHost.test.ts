@@ -129,7 +129,7 @@ describe('listing', () => {
 
     h.customMcpOn = true;
     const both = await functionAndConnectorToolHost('chat').listConnections(USER);
-    expect(both.map(offer => offer.slug)).toEqual(['fn', 'docs']);
+    expect(both.map(offer => offer.slug)).toEqual(['_fn', 'docs']);
   });
 
   it('offers each function under the llm projection, read-only, with its approval and review hash', async () => {
@@ -137,8 +137,8 @@ describe('listing', () => {
     const llm = projectFunctionSchema(CONTRACT, 'llm');
     const hash = await reviewHash(CONTRACT);
     expect(offer).toMatchObject({
-      connectionId: 'fn',
-      slug: 'fn',
+      connectionId: '_fn',
+      slug: '_fn',
       displayName: 'Functions',
       urlHost: 'functions',
       allowWriteTools: true,
@@ -195,15 +195,15 @@ describe('listing', () => {
     const off = await host.listConnections(USER, { mcpServerOff: true });
     const on = await host.listConnections(USER);
 
-    expect(off.map(offer => offer.slug)).toEqual(['fn']);
-    expect(on.map(offer => offer.slug)).toEqual(['fn', 'docs']);
+    expect(off.map(offer => offer.slug)).toEqual(['_fn']);
+    expect(on.map(offer => offer.slug)).toEqual(['_fn', 'docs']);
   });
 });
 
 describe('calling', () => {
   const call = (host = createFunctionToolHost('chat'), overrides: Record<string, unknown> = {}) =>
     host.callTool({
-      connectionId: 'fn',
+      connectionId: '_fn',
       userId: USER,
       toolName: CONTRACT.name,
       args: { load: 1, span: 2 },
@@ -220,6 +220,7 @@ describe('calling', () => {
       functionId: '6650f0a1b2c3d4e5f6a7b8c9',
       args: { load: 1, span: 2 },
       surface: 'chat',
+      approved: false,
     });
     expect(result).toEqual({
       content: [{ type: 'text', text: JSON.stringify({ output: { deflection: 0.0042 }, stamp: STAMP }) }],
@@ -370,13 +371,13 @@ describe('chat tool generation over the offer', () => {
     const [offer] = await loadCustomMcpConnections(host, USER, logger);
     const tools = generateCustomMcpTools(offer!, { userId: USER, host, requestApproval });
 
-    const answer = await tools.find(tool => tool.name === `fn__${CONTRACT.name}`)!.toolFn({ load: 1, span: 2 });
-    expect(answer).toContain('<untrusted_tool_result connector="fn" host="functions" label="verified">');
+    const answer = await tools.find(tool => tool.name === `_fn__${CONTRACT.name}`)!.toolFn({ load: 1, span: 2 });
+    expect(answer).toContain('<untrusted_tool_result connector="_fn" host="functions" label="verified">');
     expect(answer).toContain('"stamp":{"function_id":"f"');
 
-    await tools.find(tool => tool.name === 'fn__asks_first')!.toolFn({ load: 1, span: 2 });
+    await tools.find(tool => tool.name === '_fn__asks_first')!.toolFn({ load: 1, span: 2 });
     expect(requestApproval).toHaveBeenCalledWith(
-      expect.objectContaining({ connectionId: 'fn', toolName: 'asks_first' })
+      expect.objectContaining({ connectionId: '_fn', toolName: 'asks_first' })
     );
     expect(dispatch).toHaveBeenCalledTimes(1);
   });

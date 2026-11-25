@@ -514,8 +514,6 @@ export const RESERVED_MCP_CONNECTION_SLUGS: ReadonlySet<string> = new Set([
   'bike4mind',
   'slack',
   'system',
-  // The namespace of the callable functions the function host offers beside connectors.
-  'fn',
   ...Object.values(McpServerName),
 ]);
 

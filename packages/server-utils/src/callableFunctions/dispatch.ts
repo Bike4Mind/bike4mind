@@ -50,6 +50,8 @@ export type CallableFunctionDispatchReason =
   | 'not_caller'
   | 'disabled'
   | 'source_deleted'
+  | 'not_live'
+  | 'approval_required'
   | 'input_too_large'
   | 'wait_exceeded'
   | 'budget_exhausted'
@@ -94,6 +96,8 @@ export interface DispatchFunctionCallRequest {
   args: unknown;
   surface: CallableFunctionCallSurface;
   apiKeyId?: string;
+  /** Server-supplied approval for a chat/agent call; omitted is not approved. */
+  approved?: boolean;
 }
 
 export interface CallableFunctionDispatchOptions {
@@ -417,6 +421,10 @@ export async function dispatchFunctionCall(
 
     const status = effectiveCallableFunctionStatus(fn, await readHead(fn));
     if (status === 'disabled' || status === 'source_deleted') return refuse(status);
+    if (surface === 'chat' || surface === 'agent') {
+      if (status !== 'live') return refuse('not_live');
+      if (fn.approval === 'always_ask' && request.approved !== true) return refuse('approval_required');
+    }
 
     // Measured before validation, so an input of any size is never walked.
     const caps = CALLABLE_FUNCTION_SURFACE_CAPS[surface];

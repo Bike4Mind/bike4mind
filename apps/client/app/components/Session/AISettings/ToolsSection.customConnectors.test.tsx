@@ -146,15 +146,15 @@ describe('ToolsSection - Functions row', () => {
     ).toBeTruthy();
   });
 
-  it('switches off by adding fn to the opt-out list, and back on by removing it', () => {
+  it('switches off by adding the function key to the opt-out list, and back on by removing it', () => {
     mocks.functions.on = true;
     mocks.state.disabledMcpConnections = ['docs'];
     const first = render(<ToolsSection />, { wrapper: Wrapper });
     fireEvent.click(toggle(first.container)!);
-    expect(mocks.useLLM.setState).toHaveBeenCalledWith({ disabledMcpConnections: ['docs', 'fn'] });
+    expect(mocks.useLLM.setState).toHaveBeenCalledWith({ disabledMcpConnections: ['docs', '_fn'] });
     first.unmount();
 
-    mocks.state.disabledMcpConnections = ['docs', 'fn'];
+    mocks.state.disabledMcpConnections = ['docs', '_fn'];
     const { container } = render(<ToolsSection />, { wrapper: Wrapper });
     expect(toggle(container)!.getAttribute('aria-checked')).toBe('false');
     fireEvent.click(toggle(container)!);

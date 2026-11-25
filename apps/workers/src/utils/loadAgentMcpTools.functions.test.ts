@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest';
+import { beforeEach, describe, it, expect, vi } from 'vitest';
 import { classifyToolPermission, parseFunctionContract } from '@bike4mind/common';
 import type { Logger } from '@bike4mind/observability';
 import { loadAgentMcpTools, withAutoApprovedCustomTools } from './loadAgentMcpTools';
@@ -59,6 +59,11 @@ import { customMcpToolHost } from '@bike4mind/server-utils/mcpConnections/custom
 
 const logger = { info: vi.fn(), warn: vi.fn(), debug: vi.fn(), error: vi.fn() } as unknown as Logger;
 
+beforeEach(() => {
+  vi.mocked(customMcpToolHost.listConnections).mockReset();
+  vi.mocked(customMcpToolHost.listConnections).mockResolvedValue([]);
+});
+
 describe('loadAgentMcpTools - callable functions', () => {
   it('seeds a default function so it runs without a card, and holds an always-ask one at the permission card', async () => {
     h.offered = [fn('beam_midspan_deflection', 'default'), fn('asks_first', 'always_ask')];
@@ -78,19 +83,19 @@ describe('loadAgentMcpTools - callable functions', () => {
       { userId: 'u1', enableMCPServer: true }
     );
 
-    expect(loaded.customToolNames).toEqual(['fn__beam_midspan_deflection', 'fn__asks_first']);
-    expect(loaded.autoApprovedCustomToolNames).toEqual(['fn__beam_midspan_deflection']);
-    expect(loaded.approvalRequiredCustomToolNames).toEqual(['fn__asks_first']);
+    expect(loaded.customToolNames).toEqual(['_fn__beam_midspan_deflection', '_fn__asks_first']);
+    expect(loaded.autoApprovedCustomToolNames).toEqual(['_fn__beam_midspan_deflection']);
+    expect(loaded.approvalRequiredCustomToolNames).toEqual(['_fn__asks_first']);
 
     const approved = withAutoApprovedCustomTools(
-      ['fn__asks_first'],
+      ['_fn__asks_first'],
       loaded.autoApprovedCustomToolNames,
       loaded.approvalRequiredCustomToolNames
     );
-    expect(classifyToolPermission('fn__beam_midspan_deflection', approved, [])).toBe('allowed');
-    expect(classifyToolPermission('fn__asks_first', approved, [])).toBe('needs_approval');
+    expect(classifyToolPermission('_fn__beam_midspan_deflection', approved, [])).toBe('allowed');
+    expect(classifyToolPermission('_fn__asks_first', approved, [])).toBe('needs_approval');
 
-    const beam = loaded.mcpToolsByServer.fn!.find(tool => tool.name === 'fn__beam_midspan_deflection')!;
+    const beam = loaded.mcpToolsByServer._fn!.find(tool => tool.name === '_fn__beam_midspan_deflection')!;
     const out = await beam.toolFn({ load: 1 });
     expect(dispatch).toHaveBeenCalledWith(
       expect.objectContaining({ functionId: 'id-beam_midspan_deflection', surface: 'agent' })
@@ -111,9 +116,60 @@ describe('loadAgentMcpTools - callable functions', () => {
       { userId: 'u1', enableMCPServer: false }
     );
 
-    expect(loaded.customToolNames).toEqual(['fn__beam_midspan_deflection']);
-    expect(loaded.autoApprovedCustomToolNames).toEqual(['fn__beam_midspan_deflection']);
+    expect(loaded.customToolNames).toEqual(['_fn__beam_midspan_deflection']);
+    expect(loaded.autoApprovedCustomToolNames).toEqual(['_fn__beam_midspan_deflection']);
     expect(find).not.toHaveBeenCalled();
     expect(customMcpToolHost.listConnections).not.toHaveBeenCalled();
   });
+});
+
+it('keeps a legacy fn connector separate from function automatic approvals', async () => {
+  h.offered = [fn('beam_midspan_deflection', 'default')];
+  vi.mocked(customMcpToolHost.listConnections).mockResolvedValueOnce([
+    {
+      connectionId: 'legacy-connector',
+      slug: 'fn',
+      displayName: 'Legacy connector',
+      urlHost: 'mcp.example.test',
+      allowWriteTools: true,
+      requireApprovalForAll: false,
+      tools: [
+        {
+          name: 'beam_midspan_deflection',
+          description: 'Write an item',
+          inputSchema: {},
+          descriptionRawHash: 'legacy-description',
+          firstSeenAt: new Date('2026-11-01T00:00:00Z'),
+          state: 'active',
+          enabled: true,
+          approval: 'default',
+          annotations: { readOnlyHint: false },
+        },
+      ],
+    },
+  ]);
+  const host = functionAndConnectorToolHost('agent');
+  const loaded = await loadAgentMcpTools(
+    {
+      mcpServers: { find: vi.fn(async () => []), update: vi.fn() },
+      getMcpClient: vi.fn(),
+      customMcp: host,
+      logger,
+    },
+    { userId: 'u1', enableMCPServer: true }
+  );
+  const approved = withAutoApprovedCustomTools(
+    [],
+    loaded.autoApprovedCustomToolNames,
+    loaded.approvalRequiredCustomToolNames
+  );
+  const legacyTool = 'fn__beam_midspan_deflection';
+  expect(classifyToolPermission(legacyTool, approved, [])).toBe('needs_approval');
+  expect(loaded.mcpToolsByServer.fn?.map(tool => tool.name)).toEqual([legacyTool]);
+  const functionTools = Object.entries(loaded.mcpToolsByServer)
+    .filter(([name]) => name !== 'fn')
+    .flatMap(([, tools]) => tools);
+  expect(functionTools).toHaveLength(1);
+  expect(classifyToolPermission(functionTools[0]!.name, approved, [])).toBe('allowed');
+  expect(new Set(loaded.customToolNames).size).toBe(2);
 });

@@ -44,6 +44,7 @@ import { HEADER_ICON_BUTTON_SX } from './headerIconButtonSx';
 import { useIsMobile } from '@client/app/hooks/useIsMobile';
 import { PropsWithChildren, useEffect, useMemo, useState, useCallback, createContext, useContext } from 'react';
 import {
+  CALLABLE_FUNCTION_TOOL_CONNECTION_ID,
   B4MLLMTools,
   IMcpServerResponse,
   type ICallableFunctionPublic,
@@ -270,7 +271,11 @@ const ToolLabel = ({ name, description, descriptionTitle, dim = false, agentOnly
 const AGENT_ONLY_MCP_NOTE = 'Agent mode only - mention an @agent to use it in chat';
 
 // The function host's offer is switched like a user's own connector, by its reserved slug `fn`.
-const FUNCTIONS_CONNECTION = { id: 'fn', slug: 'fn', ownerType: 'user' } as const;
+const FUNCTIONS_CONNECTION = {
+  id: CALLABLE_FUNCTION_TOOL_CONNECTION_ID,
+  slug: CALLABLE_FUNCTION_TOOL_CONNECTION_ID,
+  ownerType: 'user',
+} as const;
 
 // Chat offers the oldest MAX_CALLABLE_FUNCTIONS_PER_TURN live tools, the same order the list arrives in.
 const functionsRowDescription = (functions: ICallableFunctionPublic[]) => {

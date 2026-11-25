@@ -227,8 +227,8 @@ describe('ToolBuilder buildMcpTools - custom connectors', () => {
   describe('the function offer', () => {
     const functions = {
       ...connection,
-      connectionId: 'fn',
-      slug: 'fn',
+      connectionId: '_fn',
+      slug: '_fn',
       displayName: 'Functions',
       urlHost: 'functions',
       tools: [connection.tools[0]],
@@ -263,7 +263,7 @@ describe('ToolBuilder buildMcpTools - custom connectors', () => {
 
     it('is switched off in the Tools menu by its slug, keeping the connectors', async () => {
       const { mcpToolsByServer } = await run(builderWith(hostOf() as never), undefined, {
-        disabledMcpConnections: ['fn'],
+        disabledMcpConnections: ['_fn'],
       });
       expect(Object.keys(mcpToolsByServer)).toEqual(['acme']);
     });
@@ -278,8 +278,8 @@ describe('ToolBuilder buildMcpTools - custom connectors', () => {
 
       const { mcpToolsByServer, customMcpToolNames } = await run(builder, undefined, { enableMCPServer: false });
 
-      expect(Object.keys(mcpToolsByServer)).toEqual(['fn']);
-      expect([...customMcpToolNames]).toEqual(['fn__search']);
+      expect(Object.keys(mcpToolsByServer)).toEqual(['_fn']);
+      expect([...customMcpToolNames]).toEqual(['_fn__search']);
       expect(host.listConnections.mock.calls[0]![1]).toMatchObject({ mcpServerOff: true });
       const builtInServers = (builder as unknown as { deps: { db: { mcpServers: { find: () => unknown } } } }).deps.db
         .mcpServers.find;
@@ -299,7 +299,7 @@ describe('ToolBuilder buildMcpTools - custom connectors', () => {
       const offered = await run(builderWith(composed as never), undefined, { enableMCPServer: false });
       const refused = await run(builderWith(connectorsOnly as never), undefined, { enableMCPServer: false });
 
-      expect(Object.keys(offered.mcpToolsByServer)).toEqual(['fn']);
+      expect(Object.keys(offered.mcpToolsByServer)).toEqual(['_fn']);
       expect(refused.mcpToolsByServer).toEqual({});
       expect(connectorsOnly.listConnections).not.toHaveBeenCalled();
     });
@@ -316,9 +316,9 @@ describe('ToolBuilder buildMcpTools - custom connectors', () => {
         callTool: vi.fn(),
       };
       const { mcpToolsByServer } = await run(builderWith(host as never), undefined, {
-        disabledMcpConnections: ['fn'],
+        disabledMcpConnections: ['_fn'],
       });
-      expect(mcpToolsByServer.fn).toBeUndefined();
+      expect(mcpToolsByServer._fn).toBeUndefined();
       expect(mcpToolsByServer.acme).toHaveLength(25);
       expect(mcpToolsByServer.beta).toHaveLength(15);
     });

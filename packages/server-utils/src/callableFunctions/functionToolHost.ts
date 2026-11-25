@@ -1,4 +1,5 @@
 import {
+  CALLABLE_FUNCTION_TOOL_CONNECTION_ID as FUNCTION_CONNECTION_ID,
   MAX_CALLABLE_FUNCTIONS_PER_TURN,
   projectFunctionSchema,
   reviewHash,
@@ -20,8 +21,7 @@ import { composeToolHosts } from './composeToolHosts';
 import { dispatchFunctionCall, recordCallableFunctionRefusal, type DispatchFunctionCallResult } from './dispatch';
 import { listOfferedCallableFunctions } from './registry';
 
-/** The connection id and slug of the function offer, reserved for it in `RESERVED_MCP_CONNECTION_SLUGS`. */
-export const FUNCTION_CONNECTION_ID = 'fn';
+export { FUNCTION_CONNECTION_ID };
 
 /** Functions are listed first, so they get their own share of the 40 custom tools a turn may carry. */
 export const MAX_FUNCTION_TOOLS_PER_TURN = MAX_CALLABLE_FUNCTIONS_PER_TURN;
@@ -91,7 +91,7 @@ function toCallResult(call: DispatchFunctionCallResult): CustomMcpToolCallResult
 }
 
 /**
- * Offers the caller's live, turned-on functions as one `fn` connection beside custom connectors. Gated by the
+ * Offers the caller's live, turned-on functions under an internal namespace beside custom connectors. Gated by the
  * callable functions setting alone, whatever custom MCP's setting is; every call goes through the dispatcher,
  * which checks the setting, owner, and status again.
  */
@@ -151,7 +151,7 @@ export function createFunctionToolHost(
           await recordRefusal({ caller, functionId: fn.id, surface }, 'approval_required', fn);
           return { result: textResult({ outcome: 'refused', reason: 'approval_required' }, true) };
         }
-        const request = { caller, functionId: fn.id, args, surface };
+        const request = { caller, functionId: fn.id, args, surface, approved };
         const call =
           deadline === undefined
             ? await dispatch(request)

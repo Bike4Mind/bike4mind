@@ -14,6 +14,7 @@ import {
   type IMcpConnectionDocument,
   type IMcpConnectionSummary,
 } from './McpConnectionTypes';
+import { CALLABLE_FUNCTION_TOOL_CONNECTION_ID } from './CallableFunctionTypes';
 import { McpServerName } from './McpServerTypes';
 
 describe('McpConnectionSlugSchema', () => {
@@ -41,9 +42,14 @@ describe('McpConnectionSlugSchema', () => {
     expect(isValidMcpConnectionSlug(slug)).toBe(false);
   });
 
+  it('keeps the function namespace outside valid connector slugs without reserving legacy fn', () => {
+    expect(isValidMcpConnectionSlug('fn')).toBe(true);
+    expect(isValidMcpConnectionSlug(CALLABLE_FUNCTION_TOOL_CONNECTION_ID)).toBe(false);
+  });
+
   it('reserves every built-in server name and the first-party names', () => {
     for (const name of Object.values(McpServerName)) expect(RESERVED_MCP_CONNECTION_SLUGS.has(name)).toBe(true);
-    for (const name of ['mcp', 'b4m', 'bike4mind', 'slack', 'system', 'fn']) {
+    for (const name of ['mcp', 'b4m', 'bike4mind', 'slack', 'system']) {
       expect(isValidMcpConnectionSlug(name)).toBe(false);
     }
     expect(McpConnectionSlugSchema.safeParse('github').error?.issues[0]?.message).toBe('This slug is reserved');

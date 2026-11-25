@@ -11,6 +11,9 @@ import type { McpToolApprovalMode } from './McpConnectionTypes';
  * {@link toCallableFunctionPublic} or {@link toCallableFunctionDetail}.
  */
 
+/** Internal tool namespace: connector slugs must start with a lowercase letter. */
+export const CALLABLE_FUNCTION_TOOL_CONNECTION_ID = '_fn';
+
 export const CALLABLE_FUNCTION_OWNER_TYPES = ['user'] as const;
 export type CallableFunctionOwnerType = (typeof CALLABLE_FUNCTION_OWNER_TYPES)[number];
 

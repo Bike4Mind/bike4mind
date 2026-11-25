@@ -270,7 +270,7 @@ describe('PendingActionButtons (MCP confirmation card)', () => {
       tool: 'beam_midspan_deflection',
       params: { load: 2000 },
       ts: Date.now(),
-      customConnector: { connectionId: 'fn', slug: 'fn', displayName: 'Functions', urlHost: 'functions' },
+      customConnector: { connectionId: '_fn', slug: '_fn', displayName: 'Functions', urlHost: 'functions' },
     });
 
     fireEvent.click(screen.getByTestId('mcp-confirm-btn'));

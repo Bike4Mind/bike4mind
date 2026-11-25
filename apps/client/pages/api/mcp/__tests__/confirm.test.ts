@@ -33,7 +33,7 @@ vi.mock('@bike4mind/server-utils/callableFunctions/access', () => ({ assertCalla
 vi.mock('@bike4mind/server-utils/callableFunctions/functionToolHost', () => {
   const host = { listConnections: vi.fn(), callTool: vi.fn() };
   return {
-    FUNCTION_CONNECTION_ID: 'fn',
+    FUNCTION_CONNECTION_ID: '_fn',
     createFunctionToolHost: vi.fn(() => host),
     isFunctionToolStillOffered: vi.fn(),
   };
@@ -645,11 +645,11 @@ describe('POST /api/mcp/confirm - function actions', () => {
     tool: 'beam_midspan_deflection',
     params: { load: 1, span: 2 },
     ts,
-    customConnector: { connectionId: 'fn', slug: 'fn', displayName: 'Functions', urlHost: 'functions' },
+    customConnector: { connectionId: '_fn', slug: '_fn', displayName: 'Functions', urlHost: 'functions' },
   });
   const confirm = () => post({ questId: QUEST_ID, sessionId: SESSION_ID, confirmed: true, pendingActionTs: ts });
   const held = (returnValue = 'Awaiting your approval: beam_midspan_deflection') => ({
-    name: 'fn__beam_midspan_deflection',
+    name: '_fn__beam_midspan_deflection',
     returnValue,
   });
 
@@ -684,7 +684,7 @@ describe('POST /api/mcp/confirm - function actions', () => {
     expect(claimPendingAction).toHaveBeenCalledWith(QUEST_ID, ts, 'approved');
     expect(functionHost.callTool).toHaveBeenCalledWith(
       expect.objectContaining({
-        connectionId: 'fn',
+        connectionId: '_fn',
         userId: 'user-1',
         toolName: 'beam_midspan_deflection',
         args: { load: 1, span: 2 },
@@ -714,7 +714,7 @@ describe('POST /api/mcp/confirm - function actions', () => {
       {
         $set: {
           'promptMeta.functionCalls.0.returnValue':
-            '<untrusted_tool_result connector="fn" host="functions" label="unverified">\n' +
+            '<untrusted_tool_result connector="_fn" host="functions" label="unverified">\n' +
             `${body.output}\n</untrusted_tool_result>`,
           'promptMeta.functionCalls.0.success': true,
         },
@@ -730,7 +730,7 @@ describe('POST /api/mcp/confirm - function actions', () => {
       promptMeta: {
         functionCalls: [
           held('Awaiting your approval: first'),
-          { name: 'fn__other', returnValue: 'Awaiting your approval: other' },
+          { name: '_fn__other', returnValue: 'Awaiting your approval: other' },
           held('Awaiting your approval: second'),
         ],
       },
