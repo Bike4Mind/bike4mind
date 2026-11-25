@@ -12,8 +12,8 @@ struct RegionEditView: View {
   @FocusState private var focusedRegion: UUID?
   @Environment(\.dismiss) private var dismiss
 
-  init(item: MediaItem, api: any StudioAPI, media: any MediaAPI, tracker: GenerationTracker) {
-    _model = State(initialValue: RegionEditViewModel(item: item, api: api, media: media, tracker: tracker))
+  init(item: MediaItem, api: any StudioAPI, tracker: GenerationTracker) {
+    _model = State(initialValue: RegionEditViewModel(item: item, api: api, tracker: tracker))
   }
 
   var body: some View {
