@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import type { IModal } from '@bike4mind/common';
 import { getThemeConfig } from '@client/app/utils/themes';
@@ -135,6 +135,33 @@ describe('EditModalNew wizard', () => {
     fireEvent.click(screen.getByTestId('admin-modal-wizard-dialog-close-btn'));
     fireEvent.click(screen.getByTestId('admin-modal-wizard-cancel-btn'));
     expect(onClose).toHaveBeenCalledTimes(2);
+  });
+
+  it('leaves closing to the caller, so a failed save keeps the draft open', async () => {
+    const onClose = vi.fn();
+    // The parent toasts a failed save and resolves without closing.
+    const onSave = vi.fn().mockResolvedValue(undefined);
+    renderEditor(existing, onSave, onClose);
+    for (let i = 0; i < 5; i++) next();
+    clickButton('Update modal');
+    await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(screen.getByTestId('admin-modal-wizard-save-btn')).not.toBeDisabled());
+    expect(onClose).not.toHaveBeenCalled();
+    expect(screen.getByTestId('admin-modal-wizard-dialog')).toBeTruthy();
+  });
+
+  it('asks before discarding an edited draft and keeps it on Keep editing', () => {
+    const onClose = vi.fn();
+    renderEditor(existing, vi.fn(), onClose);
+    fireEvent.click(screen.getByTestId('admin-modal-wizard-type-banner'));
+    fireEvent.click(screen.getByTestId('admin-modal-wizard-cancel-btn'));
+    expect(onClose).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByTestId('admin-modal-wizard-keep-btn'));
+    expect(onClose).not.toHaveBeenCalled();
+    expect(screen.getByText('Message')).toBeTruthy();
+    fireEvent.click(screen.getByTestId('admin-modal-wizard-cancel-btn'));
+    fireEvent.click(screen.getByTestId('admin-modal-wizard-discard-btn'));
+    expect(onClose).toHaveBeenCalledTimes(1);
   });
 
   it('ignores a backdrop click but closes on Escape', () => {

@@ -15,8 +15,8 @@ import { useGetPresignedUrl } from '@client/app/hooks/data/fabFiles';
 import { getErrorMessage } from '@client/app/utils/error';
 
 import EditModalNew from './AdminModalTabNew';
+import { DeleteModalDialog } from './DeleteModalDialog';
 import {
-  ActionDialog,
   AdminPageHeader,
   AdminSearchInput,
   DataTable,
@@ -25,7 +25,6 @@ import {
   StatusChip,
   type DataColumn,
 } from './shared';
-import { ADMIN_REASON_PRESETS } from './shared/adminReason';
 import { ADMIN_REGION_GAP } from './shared/adminStyles';
 
 const modalRowId = (modal: IModalDocument) => modal._id?.toString() ?? '';
@@ -136,6 +135,7 @@ const ModalsAdminTab: React.FC = () => {
   const [previewData, setPreviewData] = useState<IModal | null>(null);
   const [isPreviewOpen, setIsPreviewOpen] = useState<boolean>(false);
   const [modalToDelete, setModalToDelete] = useState<IModalDocument | null>(null);
+  const [togglingId, setTogglingId] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
 
   // Exclude What's New modals since they have their own dedicated admin tab
@@ -183,17 +183,18 @@ const ModalsAdminTab: React.FC = () => {
     generatePreviewData();
   }, [previewModalData, getPresignedUrl]);
 
-  const handleToggleModalProperty = async (modal: IModalDocument, property: 'enabled' | 'isBanner') => {
+  const handleToggleEnabled = async (modal: IModalDocument) => {
+    if (!modal._id) return;
+    setTogglingId(modalRowId(modal));
     try {
-      const updatedModal = { ...modal, [property]: !modal[property] };
-      if (modal._id) {
-        await updateModal(modal._id, updatedModal);
-        toast.success(`Modal ${property} ${updatedModal[property] ? 'enabled' : 'disabled'} successfully`);
-        queryClient.invalidateQueries({ queryKey: ['modals'] });
-      }
+      await updateModal(modal._id, { ...modal, enabled: !modal.enabled });
+      toast.success(modal.enabled ? 'Modal disabled' : 'Modal enabled');
+      await queryClient.invalidateQueries({ queryKey: ['modals'] });
     } catch (error) {
-      console.error('Error updating modal %s:', property, error);
-      toast.error(`Failed to update modal ${property}`);
+      console.error('Error updating modal:', error);
+      toast.error('Failed to update modal');
+    } finally {
+      setTogglingId(null);
     }
   };
 
@@ -250,8 +251,6 @@ const ModalsAdminTab: React.FC = () => {
     setModalToDelete(null);
   };
 
-  const deleteTitle = modalToDelete?.title?.trim();
-
   return (
     <Stack sx={{ gap: ADMIN_REGION_GAP, minWidth: 0 }} data-testid="admin-modals-tab">
       <AdminPageHeader
@@ -290,7 +289,7 @@ const ModalsAdminTab: React.FC = () => {
         testId="admin-modals-table"
         rowTestId={modal => `admin-modals-row-${modalRowId(modal)}`}
         loading={modals.isLoading}
-        error={modals.isError ? `Couldn't load modals: ${getErrorMessage(modals.error)}` : undefined}
+        error={modals.isError && !modals.data ? `Couldn't load modals: ${getErrorMessage(modals.error)}` : undefined}
         onRetry={() => modals.refetch()}
         pageResetKey={searchQuery}
         onRowActivate={handleEditClick}
@@ -323,6 +322,7 @@ const ModalsAdminTab: React.FC = () => {
             <RowActionsMenu
               testId={`admin-modals-row-actions-${id}`}
               ariaLabel={`Actions for ${modal.title || 'modal'}`}
+              loading={togglingId === id}
               stopRowClick
             >
               <MenuItem onClick={() => handleEditClick(modal)} data-testid={`admin-modals-row-edit-${id}`}>
@@ -331,10 +331,7 @@ const ModalsAdminTab: React.FC = () => {
               <MenuItem onClick={() => handlePreviewClick(modal)} data-testid={`admin-modals-row-preview-${id}`}>
                 Preview modal
               </MenuItem>
-              <MenuItem
-                onClick={() => handleToggleModalProperty(modal, 'enabled')}
-                data-testid={`admin-modals-row-toggle-${id}`}
-              >
+              <MenuItem onClick={() => handleToggleEnabled(modal)} data-testid={`admin-modals-row-toggle-${id}`}>
                 {modal.enabled ? 'Disable modal' : 'Enable modal'}
               </MenuItem>
               <ListDivider />
@@ -360,20 +357,12 @@ const ModalsAdminTab: React.FC = () => {
         />
       )}
 
-      <ActionDialog
-        open={!!modalToDelete}
+      <DeleteModalDialog
+        modal={modalToDelete}
         onClose={() => setModalToDelete(null)}
-        title="Delete modal"
-        description={`"${deleteTitle || 'Untitled modal'}" is removed for every user. This cannot be undone.`}
-        reasonPresets={ADMIN_REASON_PRESETS.modalDelete}
-        // DELETE /api/modals/[id]/delete logs the deletion but takes no reason.
-        reasonAudited={false}
-        typedConfirm={{ expected: deleteTitle || 'delete', noun: deleteTitle ? 'modal title' : 'word delete' }}
-        confirmLabel="Delete modal"
-        tone="danger"
-        onConfirm={handleDeleteConfirmed}
+        onDelete={handleDeleteConfirmed}
         data-testid="admin-modals-delete-dialog"
-        testIds={{ confirm: 'admin-modals-delete-confirm-btn' }}
+        confirmTestId="admin-modals-delete-confirm-btn"
       />
 
       {isPreviewOpen && previewData && (

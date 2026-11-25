@@ -54,7 +54,7 @@ Pagination controls appear below the table. Choose 25, 50, or 100 rows per page 
 
 ## Creating a Modal
 
-Click "Create modal" to open the wizard in a dialog. A progress stepper at the top shows where you are, and the footer holds Back, Cancel, and Next. On the last step, Next becomes "Create modal" (or "Create banner"). Close the dialog with its close button, Cancel, or Esc. Clicking outside the dialog does not close it, so a stray click never discards your entries.
+Click "Create modal" to open the wizard in a dialog. A progress stepper at the top shows where you are, and the footer holds Back, Cancel, and Next. On the last step, Next becomes "Create modal" (or "Create banner"). Close the dialog with its close button, Cancel, or Esc. Clicking outside the dialog does not close it, and if you have made changes, closing asks you to confirm before your entries are discarded. If a save fails, the wizard stays open with your entries.
 
 ### Wizard Steps
 

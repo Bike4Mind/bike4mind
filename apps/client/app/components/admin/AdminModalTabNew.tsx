@@ -65,7 +65,8 @@ interface EditModalProps {
   isOpen: boolean;
   onClose: () => void;
   modalData: IModal | null;
-  onSave: (data: IModal) => void;
+  /** Resolves once the save settles; the caller closes the wizard only on success. */
+  onSave: (data: IModal) => Promise<void>;
   isEditMode: boolean;
 }
 
@@ -161,6 +162,10 @@ const EditModalNew: React.FC<EditModalProps> = ({ isOpen, onClose, modalData, on
         },
       }
   );
+
+  const initialFields = useRef(modalFields);
+  const [saving, setSaving] = useState(false);
+  const [confirmDiscard, setConfirmDiscard] = useState(false);
 
   // Stored and uploaded video URLs pass the form check whatever their host (see AdminModalVideoFields)
   const [trustedVideoUrls, setTrustedVideoUrls] = useState<ReadonlySet<string>>(
@@ -353,7 +358,14 @@ const EditModalNew: React.FC<EditModalProps> = ({ isOpen, onClose, modalData, on
     setCurrentStep(prev => Math.max(prev - 1, 0));
   };
 
-  const handleSave = () => {
+  const requestClose = () => {
+    if (saving) return;
+    const dirty = files.length > 0 || JSON.stringify(modalFields) !== JSON.stringify(initialFields.current);
+    if (dirty) setConfirmDiscard(true);
+    else onClose();
+  };
+
+  const handleSave = async () => {
     if (!modalFields.numberOfAgrees?.type || !modalFields.numberOfViews?.type) {
       toast.error('Please configure the view and agree counters');
       setCurrentStep(steps.findIndex(s => s.id === 'behavior'));
@@ -366,8 +378,12 @@ const EditModalNew: React.FC<EditModalProps> = ({ isOpen, onClose, modalData, on
       return;
     }
 
-    onSave(modalFields.isBanner ? { ...modalFields, video: null } : modalFields);
-    onClose();
+    setSaving(true);
+    try {
+      await onSave(modalFields.isBanner ? { ...modalFields, video: null } : modalFields);
+    } finally {
+      setSaving(false);
+    }
   };
 
   const renderStepContent = () => {
@@ -940,9 +956,9 @@ const EditModalNew: React.FC<EditModalProps> = ({ isOpen, onClose, modalData, on
     <>
       <AdminDialog
         open={isOpen}
-        // A stray backdrop click must not discard the wizard's unsaved state.
+        // A stray backdrop click is ignored; every other close path asks first when the draft has edits.
         onClose={reason => {
-          if (reason !== 'backdropClick') onClose();
+          if (reason !== 'backdropClick') requestClose();
         }}
         width={1120}
         anchorTop
@@ -990,11 +1006,11 @@ const EditModalNew: React.FC<EditModalProps> = ({ isOpen, onClose, modalData, on
             >
               Back
             </Button>
-            <Button variant="plain" color="neutral" onClick={onClose} data-testid="admin-modal-wizard-cancel-btn">
+            <Button variant="plain" color="neutral" onClick={requestClose} data-testid="admin-modal-wizard-cancel-btn">
               Cancel
             </Button>
             {currentStep === steps.length - 1 ? (
-              <Button variant="solid" onClick={handleSave} data-testid="admin-modal-wizard-save-btn">
+              <Button variant="solid" onClick={handleSave} loading={saving} data-testid="admin-modal-wizard-save-btn">
                 {isEditMode ? 'Update' : 'Create'} {noun}
               </Button>
             ) : (
@@ -1004,6 +1020,36 @@ const EditModalNew: React.FC<EditModalProps> = ({ isOpen, onClose, modalData, on
             )}
           </AdminDialogFooter>
         </Box>
+      </AdminDialog>
+
+      <AdminDialog
+        open={confirmDiscard}
+        onClose={() => setConfirmDiscard(false)}
+        width={420}
+        title="Discard unsaved changes?"
+        data-testid="admin-modal-wizard-discard-dialog"
+      >
+        <Typography level="body-sm">Closing discards your edits to this {noun}.</Typography>
+        <AdminDialogFooter>
+          <Button
+            variant="plain"
+            color="neutral"
+            onClick={() => setConfirmDiscard(false)}
+            data-testid="admin-modal-wizard-keep-btn"
+          >
+            Keep editing
+          </Button>
+          <Button
+            color="danger"
+            onClick={() => {
+              setConfirmDiscard(false);
+              onClose();
+            }}
+            data-testid="admin-modal-wizard-discard-btn"
+          >
+            Discard changes
+          </Button>
+        </AdminDialogFooter>
       </AdminDialog>
 
       {showPreview &&

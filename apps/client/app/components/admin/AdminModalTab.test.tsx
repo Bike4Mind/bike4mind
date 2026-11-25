@@ -11,6 +11,7 @@ const mocks = vi.hoisted(() => ({
   remove: vi.fn(),
   update: vi.fn(),
   create: vi.fn(),
+  toastSuccess: vi.fn(),
 }));
 
 vi.mock('@client/app/hooks/data/modals', () => ({ useGetModals: mocks.modals }));
@@ -20,6 +21,7 @@ vi.mock('@client/app/utils/modalsAPICalls', () => ({
   updateModal: mocks.update,
   createModal: mocks.create,
 }));
+vi.mock('sonner', () => ({ toast: { success: mocks.toastSuccess, error: vi.fn() } }));
 vi.mock('@client/app/components/help/ContextHelpButton', () => ({ default: () => null }));
 vi.mock('@client/app/components/modals/GenericModal', () => ({
   default: ({ title }: { title?: string }) => <div data-testid="generic-modal-preview">{title}</div>,
@@ -144,6 +146,13 @@ describe('ModalsAdminTab', () => {
     expect(screen.getByTestId('edit-modal-new')).toHaveTextContent('Modal a');
   });
 
+  it('keeps the loaded rows when a background refetch fails', () => {
+    mocks.modals.mockReturnValue(listResult([modal('a')], { isError: true, error: new Error('offline') }));
+    renderTab();
+    expect(rowIds()).toEqual(['admin-modals-row-a']);
+    expect(screen.queryByText(/Couldn't load modals/)).toBeNull();
+  });
+
   it('disables a modal from the row menu', async () => {
     mocks.modals.mockReturnValue(listResult([modal('a')]));
     mocks.update.mockResolvedValue(undefined);
@@ -152,6 +161,7 @@ describe('ModalsAdminTab', () => {
     await openMenu('a');
     await userEvent.click(screen.getByTestId('admin-modals-row-toggle-a'));
     expect(mocks.update).toHaveBeenCalledWith('a', expect.objectContaining({ enabled: false }));
+    await waitFor(() => expect(mocks.toastSuccess).toHaveBeenCalledWith('Modal disabled'));
   });
 
   it('deletes a modal only after its title is typed', async () => {

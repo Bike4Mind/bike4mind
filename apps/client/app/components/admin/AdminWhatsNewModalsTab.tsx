@@ -105,7 +105,6 @@ import ContextHelpButton from '@client/app/components/help/ContextHelpButton';
 import { OptionalDateInput } from '@client/app/components/common/OptionalDateInput';
 import type { AdminStatusTone } from '@client/app/utils/themes/admin';
 import {
-  ActionDialog,
   AdminDialog,
   AdminDialogFooter,
   AdminPageHeader,
@@ -116,8 +115,8 @@ import {
   StatusChip,
   type DataColumn,
 } from './shared';
-import { ADMIN_REASON_PRESETS } from './shared/adminReason';
 import { ADMIN_REGION_GAP } from './shared/adminStyles';
+import { DeleteModalDialog } from './DeleteModalDialog';
 
 // Layout constants
 const MODAL_MAX_WIDTH = 600;
@@ -928,22 +927,11 @@ function ModalsSection({
         )}
       </AdminDialog>
 
-      <ActionDialog
-        open={!!modalToDelete}
+      <DeleteModalDialog
+        modal={modalToDelete}
         onClose={() => setDeleteConfirmModal(null)}
-        title="Delete modal"
-        description={`"${modalToDelete?.title || 'Untitled modal'}" is removed for every user. This cannot be undone.`}
-        reasonPresets={ADMIN_REASON_PRESETS.modalDelete}
-        // DELETE /api/modals/[id]/delete logs the deletion but takes no reason.
-        reasonAudited={false}
-        typedConfirm={{
-          expected: modalToDelete?.title?.trim() || 'delete',
-          noun: modalToDelete?.title?.trim() ? 'modal title' : 'word delete',
-        }}
-        confirmLabel="Delete modal"
-        tone="danger"
         pending={deleteModal.isPending}
-        onConfirm={async () => {
+        onDelete={async () => {
           if (!modalToDelete?._id) return;
           try {
             await deleteModal.mutateAsync(modalToDelete._id.toString());
@@ -953,7 +941,7 @@ function ModalsSection({
           }
         }}
         data-testid="whats-new-delete-confirm-dialog"
-        testIds={{ confirm: 'whats-new-delete-confirm-btn' }}
+        confirmTestId="whats-new-delete-confirm-btn"
       />
 
       <DataTable
