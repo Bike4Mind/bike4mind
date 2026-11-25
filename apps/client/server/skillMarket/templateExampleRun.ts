@@ -14,6 +14,7 @@ import {
 } from '@bike4mind/database';
 import {
   KnowledgeType,
+  isImageServeable,
   questReplyText,
   wrapUntrustedSkillBody,
   type ISkillSnapshot,
@@ -83,8 +84,8 @@ async function resolveSampleFile(
   if (!payload.takesFile) return null;
   if (payload.sampleFile) {
     const file = await fabFileRepository.findById(payload.sampleFile.fabFileId);
-    // Uploaded files are re-checked: the author may have deleted the file since choosing it.
-    if (file && file.userId === payload.userId && !file.deletedAt && file.moderationStatus !== 'blocked') {
+    // Re-checked: the author may have deleted the file since choosing it, and only a moderated upload is reused.
+    if (file && file.userId === payload.userId && !file.deletedAt && isImageServeable(file)) {
       return { ...payload.sampleFile, source: 'upload' };
     }
   }

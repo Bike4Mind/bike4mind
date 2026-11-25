@@ -170,13 +170,25 @@ describe('runTemplateExample', () => {
   });
 
   it("uses the author's uploaded sample while they still own it", async () => {
-    h.findFile.mockResolvedValue({ userId: 'author-1' });
+    h.findFile.mockResolvedValue({ userId: 'author-1', moderationStatus: 'clean' });
     const d = deps();
     const sampleFile = { fabFileId: 'up-1', name: 'brief.pdf', mime: 'application/pdf' };
     await runTemplateExample(payload({ takesFile: true, sampleFile }), logger, d);
     expect(d.storeSample).not.toHaveBeenCalled();
     expect(h.write.mock.calls[0][2].$set['example.sampleFile']).toEqual({ ...sampleFile, source: 'upload' });
   });
+
+  it.each(['pending', 'scanning', 'blocked', undefined])(
+    'writes a fresh sample instead of reusing an upload that is %s',
+    async moderationStatus => {
+      h.findFile.mockResolvedValue({ userId: 'author-1', moderationStatus });
+      const d = deps();
+      const sampleFile = { fabFileId: 'up-1', name: 'brief.pdf', mime: 'application/pdf' };
+      await runTemplateExample(payload({ takesFile: true, sampleFile }), logger, d);
+      expect(d.storeSample).toHaveBeenCalled();
+      expect(h.write.mock.calls[0][2].$set['example.sampleFile']).toMatchObject({ source: 'generated' });
+    }
+  );
 
   it.each([
     ['the listing is no longer live', () => h.findListing.mockResolvedValue({ status: 'withdrawn' })],

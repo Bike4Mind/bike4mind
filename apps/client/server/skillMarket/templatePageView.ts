@@ -1,12 +1,14 @@
-import { SkillListingTemplate } from '@bike4mind/database';
+import { FabFile, SkillListingTemplate, fabFileRepository } from '@bike4mind/database';
 import {
   NotFoundError,
   getMcpProviderMetadata,
+  isImageServeable,
   skillTemplateFreeRunEligibility,
   skillTemplatePreviewImagePath,
   type ISkillListing,
   type ISkillTemplateExample,
   type ISkillTemplateExampleMediaItem,
+  type ISkillTemplateExampleSampleFile,
 } from '@bike4mind/common';
 import type { Logger } from '@bike4mind/observability';
 import type { MarketActor } from '@bike4mind/server-utils/skillMarket/market';
@@ -46,14 +48,31 @@ export function requiredConnectors(allowedTools: readonly string[] | undefined):
   return [...servers].map(server => CONNECTOR_NAMES[server] ?? server.charAt(0).toUpperCase() + server.slice(1));
 }
 
-/** A browser URL for an example media file: images live in the generated-images bucket, videos in files. */
+/**
+ * A browser URL for an example media file: images live in the generated-images bucket (no FabFile row),
+ * videos in the files bucket and are signed only while their FabFile row has passed moderation.
+ */
 export async function signExampleMedia(item: ISkillTemplateExampleMediaItem): Promise<string> {
-  const storage = item.mime.startsWith('video/') ? getFilesStorage() : getGeneratedImageStorage();
+  const isVideo = item.mime.startsWith('video/');
+  if (isVideo) {
+    const file = await FabFile.findOne({ filePath: item.key, deletedAt: null })
+      .select('moderationStatus mimeType')
+      .lean();
+    if (!file || !isImageServeable(file)) throw new Error('Example video has not passed moderation');
+  }
+  const storage = isVideo ? getFilesStorage() : getGeneratedImageStorage();
   return storage.getSignedUrl(item.key, 'get', {
     expiresIn: MEDIA_URL_TTL_SECONDS,
     audience: 'browser',
     ...storageReadOverrides({ mimeType: item.mime, key: item.key }),
   });
+}
+
+/** Whether the sample file's card may show: an upload that is still being scanned or was blocked is not named. */
+export async function sampleFileServeable(file: ISkillTemplateExampleSampleFile): Promise<boolean> {
+  if (!file.fabFileId) return true;
+  const row = await fabFileRepository.findById(file.fabFileId);
+  return Boolean(row && !row.deletedAt && isImageServeable(row));
 }
 
 /**
@@ -62,7 +81,8 @@ export async function signExampleMedia(item: ISkillTemplateExampleMediaItem): Pr
  */
 export async function templatePageExampleOf(
   example: ISkillTemplateExample | null | undefined,
-  sign: (item: ISkillTemplateExampleMediaItem) => Promise<string> = signExampleMedia
+  sign: (item: ISkillTemplateExampleMediaItem) => Promise<string> = signExampleMedia,
+  sampleOk: (file: ISkillTemplateExampleSampleFile) => Promise<boolean> = sampleFileServeable
 ): Promise<TemplatePageExampleView | null> {
   if (!example?.enabled || !example.reply?.trim()) return null;
   const reply =
@@ -79,6 +99,7 @@ export async function templatePageExampleOf(
     const src = signed[i];
     return src ? [{ src, mime: item.mime, width: item.width, height: item.height }] : [];
   });
+  const showSample = example.sampleFile ? await sampleOk(example.sampleFile).catch(() => false) : false;
   const media =
     example.media && items.length > 0
       ? {
@@ -92,9 +113,10 @@ export async function templatePageExampleOf(
     steps: (example.steps ?? []).map(step => ({ label: step.label, simulated: Boolean(step.simulated) })),
     artifact: artifactHtml.trim() ? { title: example.artifact?.title ?? '', html: artifactHtml } : null,
     media,
-    sampleFile: example.sampleFile
-      ? { name: example.sampleFile.name, mime: example.sampleFile.mime, pages: example.sampleFile.pages }
-      : null,
+    sampleFile:
+      example.sampleFile && showSample
+        ? { name: example.sampleFile.name, mime: example.sampleFile.mime, pages: example.sampleFile.pages }
+        : null,
   };
 }
 

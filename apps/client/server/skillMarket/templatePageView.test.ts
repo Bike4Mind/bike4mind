@@ -12,10 +12,14 @@ const h = vi.hoisted(() => ({
   signGenerated: vi.fn(),
   signFileUrl: vi.fn(),
   credits: vi.fn(),
+  findFabFile: vi.fn(),
+  findSampleFile: vi.fn(),
 }));
 
 vi.mock('@bike4mind/database', () => ({
   SkillListingTemplate: { findOne: h.findOne, updateOne: vi.fn() },
+  FabFile: { findOne: () => ({ select: () => ({ lean: h.findFabFile }) }) },
+  fabFileRepository: { findById: h.findSampleFile },
   adminSettingsRepository: {},
   apiKeyRepository: {},
   cacheRepository: {},
@@ -98,6 +102,8 @@ beforeEach(() => {
   h.signGenerated.mockImplementation(async (key: string) => `https://gen.example.com/${key}?sig=1`);
   h.signFile.mockImplementation(async (key: string) => `https://files.example.com/${key}?sig=1`);
   h.credits.mockResolvedValue(2500);
+  h.findFabFile.mockResolvedValue({ moderationStatus: 'clean', mimeType: 'video/mp4' });
+  h.findSampleFile.mockResolvedValue({ moderationStatus: 'clean' });
 });
 
 describe('requiredConnectors', () => {
@@ -162,6 +168,15 @@ describe('templatePageExampleOf', () => {
     expect(video?.media?.items[0].src).toBe('https://files.example.com/v.mp4?sig=1');
   });
 
+  it.each([['pending'], ['blocked'], [null]])('does not sign a video whose file is %s', async status => {
+    h.findFabFile.mockResolvedValue(status === null ? null : { moderationStatus: status });
+    const video = await templatePageExampleOf(
+      example({ media: { kind: 'video', items: [{ key: 'v.mp4', mime: 'video/mp4', bytes: 1, durationS: 9 }] } })
+    );
+    expect(video?.media).toBeNull();
+    expect(h.signFile).not.toHaveBeenCalled();
+  });
+
   it('drops media it cannot sign, and a carousel left with one slide shows as an image', async () => {
     h.signGenerated.mockImplementation(async (key: string) => {
       if (key === 'b.png') throw new Error('gone');
@@ -202,6 +217,21 @@ describe('templatePageExampleOf', () => {
     expect(view?.artifact).toEqual({ title: 'Plan', html: '<p>doc</p>' });
     expect(view?.sampleFile).toEqual({ name: 'brief.pdf', mime: 'application/pdf', pages: 2 });
     expect(view?.steps).toEqual([{ label: 'Posted a comment', simulated: true }]);
+  });
+
+  it.each([
+    [{ moderationStatus: 'pending' }],
+    [{ moderationStatus: 'blocked' }],
+    [{ moderationStatus: 'clean', deletedAt: new Date() }],
+    [null],
+  ])('hides the sample file card while its file is not serveable (%o)', async row => {
+    h.findSampleFile.mockResolvedValue(row);
+    const view = await templatePageExampleOf(
+      example({
+        sampleFile: { name: 'brief.pdf', mime: 'application/pdf', source: 'upload', fabFileId: 'f9' },
+      })
+    );
+    expect(view?.sampleFile).toBeNull();
   });
 });
 
