@@ -123,6 +123,8 @@ const ALLOWED_ENDPOINTS = [
   'GET /api/v1/image-models',
   'GET /api/v1/me',
   'GET /api/v1/models',
+  'GET|PATCH /api/v1/obligations/:id',
+  'GET|POST /api/v1/obligations',
   'GET /api/v1/music-generations/:id',
   'GET /api/v1/music-models',
   'GET /api/v1/quests/:id',

@@ -80,10 +80,10 @@ const SITES: Record<string, Array<[call: string, why: string]>> = {
   'apps/workers/src/emailIngestion/emailAnalyzer.ts': [
     ['recordOperationalUsage(', 'record-only (bypassCreditBilling)'],
   ],
-  'apps/workers/src/events/recordSessionOperationalUsage.ts': [
+  'packages/server-utils/src/billing/recordSessionOperationalUsage.ts': [
     [
       'recordOperationalUsage(',
-      'gated-by payerCanFundSessionOperation (its freeze refusal) in each session-event handler',
+      'gated-by payerCanFundSessionOperation (its freeze refusal) in each session-event handler and by the credit check in the document hand-off',
     ],
   ],
   'apps/workers/src/queueHandlers/fabFileVectorize.ts': [
