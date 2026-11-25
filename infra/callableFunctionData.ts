@@ -18,12 +18,11 @@ if (onNamedSubnets) {
   );
 }
 
-function createDataBucket() {
-  const bucket = new aws.s3.Bucket(
-    'CallableFunctionDataBucket',
-    { forceDestroy: !retained },
-    { retainOnDelete: retained }
-  );
+export const callableFunctionDataBucket = onNamedSubnets
+  ? undefined
+  : new aws.s3.Bucket('CallableFunctionDataBucket', { forceDestroy: !retained }, { retainOnDelete: retained });
+
+function secureDataBucket(bucket: aws.s3.Bucket) {
   const publicAccessBlock = new aws.s3.BucketPublicAccessBlock('CallableFunctionDataPublicAccessBlock', {
     bucket: bucket.bucket,
     ...BLOCK_ALL_PUBLIC_ACCESS,
@@ -32,25 +31,24 @@ function createDataBucket() {
     bucket: bucket.bucket,
     rules: [{ applyServerSideEncryptionByDefault: { sseAlgorithm: 'AES256' } }],
   });
-  return { bucket, publicAccessBlock };
+  return publicAccessBlock;
 }
 
-const data = onNamedSubnets ? undefined : createDataBucket();
-
-export const callableFunctionDataBucket = data?.bucket;
-export const callableFunctionDataPublicAccessBlock = data?.publicAccessBlock;
+export const callableFunctionDataPublicAccessBlock = callableFunctionDataBucket
+  ? secureDataBucket(callableFunctionDataBucket)
+  : undefined;
 
 /** The web API function's bucket variable and object grant; neither on a stage without function data. */
 export const callableFunctionDataForWeb: {
   environment: Record<string, $util.Output<string>>;
   permissions: Array<{ actions: string[]; resources: $util.Output<string>[] }>;
-} = data
+} = callableFunctionDataBucket
   ? {
-      environment: { CALLABLE_FUNCTION_DATA_BUCKET: data.bucket.bucket },
+      environment: { CALLABLE_FUNCTION_DATA_BUCKET: callableFunctionDataBucket.bucket },
       permissions: [
         {
           actions: FUNCTION_DATA_DISPATCHER_ACTIONS,
-          resources: [$interpolate`${data.bucket.arn}/${FUNCTION_DATA_KEY_PREFIX}*`],
+          resources: [$interpolate`${callableFunctionDataBucket.arn}/${FUNCTION_DATA_KEY_PREFIX}*`],
         },
       ],
     }

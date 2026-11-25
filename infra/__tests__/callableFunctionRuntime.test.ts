@@ -331,20 +331,26 @@ describe('callable function data bucket', () => {
     expect(encryption).toMatch(/bucket: bucket\.bucket,/);
     expect(encryption).toMatch(/sseAlgorithm: 'AES256'/);
     expect(data).not.toMatch(/\bpolicy\b|website|acl|cors/i);
-    expect(functionBody('createDataBucket', data)).toMatch(/new aws\.s3\.Bucket\(/);
+    expect(functionBody('secureDataBucket', data)).toMatch(
+      /'CallableFunctionDataPublicAccessBlock'[^]*'CallableFunctionDataEncryption'/
+    );
   });
 
   it('creates no bucket, variable, or grant on a stage that names subnets, and says so on the deploy', () => {
     expect(data).toMatch(
       /const onNamedSubnets = namedSubnetIdsOf\(process\.env\.CALLABLE_FUNCTION_SUBNET_IDS\)\.length > 0;/
     );
-    expect(data).toMatch(/const data = onNamedSubnets \? undefined : createDataBucket\(\);/);
-    expect(data.match(/createDataBucket\(\)/g)).toHaveLength(2);
+    expect(data).toMatch(
+      /export const callableFunctionDataBucket = onNamedSubnets\s*\? undefined\s*: new aws\.s3\.Bucket\('CallableFunctionDataBucket',/
+    );
+    expect(data.match(/secureDataBucket\(/g)).toHaveLength(2);
+    expect(data).toMatch(
+      /export const callableFunctionDataPublicAccessBlock = callableFunctionDataBucket\s*\? secureDataBucket\(callableFunctionDataBucket\)\s*: undefined;/
+    );
     expect(data).toMatch(
       /if \(onNamedSubnets\) \{\s*console\.warn\(\s*'Function data is not available on this stage: [^']*'\s*\);/
     );
-    expect(data).toMatch(/export const callableFunctionDataBucket = data\?\.bucket;/);
-    expect(data).toMatch(/export const callableFunctionDataForWeb: \{[^=]*\} = data\s*\?/);
+    expect(data).toMatch(/export const callableFunctionDataForWeb: \{[^=]*\} = callableFunctionDataBucket\s*\?/);
     expect(data).toMatch(/: \{ environment: \{\}, permissions: \[\] \};/);
   });
 
@@ -367,9 +373,9 @@ describe('callable function data bucket', () => {
   });
 
   it("gives the web API function the bucket's name and its data/ object permissions by statement, not by link", () => {
-    expect(data).toMatch(/environment: \{ CALLABLE_FUNCTION_DATA_BUCKET: data\.bucket\.bucket \},/);
+    expect(data).toMatch(/environment: \{ CALLABLE_FUNCTION_DATA_BUCKET: callableFunctionDataBucket\.bucket \},/);
     expect(data).toMatch(
-      /permissions: \[\s*\{\s*actions: FUNCTION_DATA_DISPATCHER_ACTIONS,\s*resources: \[\$interpolate`\$\{data\.bucket\.arn\}\/\$\{FUNCTION_DATA_KEY_PREFIX\}\*`\],\s*\},\s*\],/
+      /permissions: \[\s*\{\s*actions: FUNCTION_DATA_DISPATCHER_ACTIONS,\s*resources: \[\$interpolate`\$\{callableFunctionDataBucket\.arn\}\/\$\{FUNCTION_DATA_KEY_PREFIX\}\*`\],\s*\},\s*\],/
     );
     expect(web).toMatch(/\.\.\.callableFunctionDataForWeb\.permissions,/);
     expect(web).toMatch(/\.\.\.callableFunctionDataForWeb\.environment,/);
