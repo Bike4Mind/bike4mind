@@ -71,7 +71,6 @@ jobs:
         env:
           PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
           PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-          FORCE_FULL: ${{ contains(github.event.pull_request.labels.*.name, 'ci:full') }}
         run: node scripts/ci-related-tests.mjs diff
 
   # Build the core packages once and publish their dist/ as an artifact. The
@@ -1388,6 +1387,9 @@ jobs:
   # jobs wait for a runner side by side instead of in series: under runner
   # contention each serial hop costs ~10-15 min of queue wait for ~5 s of work.
   # The shard assertion below must stay equivalent to the one in `test`.
+  #
+  # The `changes` result check is a guard in case `changes` is ever given an `if:`: aggregating
+  # without selection having run must not report a pass.
   #
   # NOTE: this job name IS the required-check context. Renaming it must happen
   # in lockstep with editing both rulesets, or a required check with no matching
