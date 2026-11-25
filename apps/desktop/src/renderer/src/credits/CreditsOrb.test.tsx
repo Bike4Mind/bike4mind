@@ -3,7 +3,7 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { CssVarsProvider } from '@mui/joy/styles';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { BillingAccount } from '@shared/account';
+import type { AccountProfile, BillingAccount } from '@shared/account';
 import { CreditsOrb } from './CreditsOrb';
 import { creditOutlook } from './creditOutlook';
 import type { CreditsGlance } from './useCreditsGlance';
@@ -60,5 +60,29 @@ describe('CreditsOrb popover', () => {
     expect(byTestId('rail-credits-payer')?.textContent).toBe('Paying: Acme');
     expect(byTestId('rail-credits-top-up-btn')).toBeNull();
     expect(byTestId('rail-credits-orb-face')?.getAttribute('data-tone')).toBe('ok');
+    expect(byTestId('rail-credits-orb-face')?.textContent).toBe('48k');
+    expect(byTestId('rail-credits-runway')?.textContent).toBe('Organization pool');
+  });
+
+  it('shows a healthy personal balance as text in a neutral ring, with Top up', async () => {
+    const outlook = creditOutlook({ balance: 38_099, burnPerDay: 0, refillAt: null, expiring: undefined, now: NOW });
+    const profile = { credits: { balance: 38_099, monthlyAllowance: null }, tier: 'free' } as AccountProfile;
+    await mountOpen({ profile, organization: null, outlook, burnPerDay: null, readAt: NOW });
+    expect(byTestId('rail-credits-payer')?.textContent).toBe('Paying: Personal');
+    expect(byTestId('rail-credits-top-up-btn')).not.toBeNull();
+    const face = byTestId('rail-credits-orb-face');
+    expect(face?.getAttribute('data-tone')).toBe('ok');
+    expect(face?.textContent).toBe('38k');
+    expect(byTestId('rail-credits-runway')).toBeNull();
+  });
+
+  it('marks a low balance amber and says how long it lasts', async () => {
+    const outlook = creditOutlook({ balance: 4212, burnPerDay: 800, refillAt: null, expiring: undefined, now: NOW });
+    const profile = { credits: { balance: 4212, monthlyAllowance: null }, tier: 'free' } as AccountProfile;
+    await mountOpen({ profile, organization: null, outlook, burnPerDay: 800, readAt: NOW });
+    const face = byTestId('rail-credits-orb-face');
+    expect(face?.getAttribute('data-tone')).toBe('low');
+    expect(face?.textContent).toBe('4.2k');
+    expect(byTestId('rail-credits-runway')?.textContent).toBe('About 5 days at your recent usage');
   });
 });
