@@ -1,4 +1,9 @@
-import type { CallableFunctionCallOutcome, ICallableFunctionResultDocument } from '@bike4mind/common';
+import {
+  CONCURRENCY_LIMIT_EXCEEDED_ERROR_CODE,
+  TooManyRequestsError,
+  type CallableFunctionCallOutcome,
+  type ICallableFunctionResultDocument,
+} from '@bike4mind/common';
 import { callableFunctionCallRepository, callableFunctionResultRepository } from '@bike4mind/database';
 import {
   dispatchFunctionCall,
@@ -8,10 +13,12 @@ import {
 } from './dispatch';
 import {
   CALLABLE_FUNCTION_CALL_CONSUMER_TIMEOUT_SECONDS,
+  CALLABLE_FUNCTION_CALL_QUEUE_MAX_RECEIVES,
+  CALLABLE_FUNCTION_CALL_QUEUE_VISIBILITY_TIMEOUT_SECONDS,
   CALLABLE_FUNCTION_QUEUED_MAX_TIMEOUT_MS,
 } from './runtimeParent';
 import type { CallableFunctionRunner } from './runtimeRunner';
-import { resolveCallableFunctionTimeLimitMs } from './timeLimit';
+import { resolveCallableFunctionPendingCallLimit, resolveCallableFunctionTimeLimitMs } from './timeLimit';
 
 /**
  * Asynchronous calls: the API queues one after the dispatcher's checks, the worker in
@@ -27,13 +34,33 @@ export interface CallableFunctionCallJob {
 const LOST_WORKER_AFTER_MS = CALLABLE_FUNCTION_CALL_CONSUMER_TIMEOUT_SECONDS * 1000;
 
 /**
+ * A job still unclaimed this long after it was queued has used every receive the queue allows, so it is on the
+ * dead-letter queue and nothing will run it.
+ */
+export const UNCLAIMED_AFTER_MS =
+  CALLABLE_FUNCTION_CALL_QUEUE_VISIBILITY_TIMEOUT_SECONDS * CALLABLE_FUNCTION_CALL_QUEUE_MAX_RECEIVES * 1000;
+
+const pendingSince = (now = Date.now()) => ({
+  queuedSince: new Date(now - UNCLAIMED_AFTER_MS),
+  runningSince: new Date(now - LOST_WORKER_AFTER_MS),
+});
+
+/**
  * Makes every check a synchronous call makes, then writes the row as `queued`, keeps the inputs in a result
- * document, and sends one job. A refusal comes back as the dispatcher's result and nothing is queued.
+ * document, and sends one job. A refusal comes back as the dispatcher's result and nothing is queued. A caller
+ * already at `CallableFunctionPendingCallLimit` queued or running calls is refused with a 429 first.
  */
 export async function queueFunctionCall(
   request: DispatchFunctionCallRequest & { args: Record<string, unknown> },
   options: { send: (job: CallableFunctionCallJob) => Promise<unknown>; runner?: CallableFunctionRunner | null }
 ): Promise<DispatchFunctionCallResult> {
+  const limit = await resolveCallableFunctionPendingCallLimit(request.caller);
+  if ((await callableFunctionResultRepository.countPending(request.caller.id, pendingSince())) >= limit) {
+    throw new TooManyRequestsError(
+      `At most ${limit} asynchronous calls may be queued or running at once. Send this one when one finishes.`,
+      { errorCode: CONCURRENCY_LIMIT_EXCEEDED_ERROR_CODE, limit }
+    );
+  }
   return dispatchFunctionCall(request, {
     ...(options.runner !== undefined ? { runner: options.runner } : {}),
     enqueue: async callId => {
@@ -109,11 +136,21 @@ export async function runQueuedFunctionCall(
   }
 }
 
-/** The caller's own call while its result is kept; another person's id reads as a missing one. */
+/**
+ * The caller's own call while its result is kept; another person's id reads as a missing one. A call still
+ * `queued` past every receive is ended `error`/`worker_lost` here, the one place that sees it.
+ */
 export async function readFunctionCall(
   caller: Pick<CallableFunctionCaller, 'id'>,
   callId: string
 ): Promise<ICallableFunctionResultDocument | null> {
   if (!/^[0-9a-f]{24}$/.test(callId)) return null;
+  const call = await callableFunctionResultRepository.findForCaller(callId, caller.id);
+  if (call?.state !== 'queued') return call;
+  const { queuedSince } = pendingSince();
+  if (call.createdAt >= queuedSince) return call;
+  if (await callableFunctionResultRepository.endUnclaimed(callId, queuedSince)) {
+    await callableFunctionCallRepository.rewrite(callId, { outcome: 'error', reason: 'worker_lost' });
+  }
   return callableFunctionResultRepository.findForCaller(callId, caller.id);
 }

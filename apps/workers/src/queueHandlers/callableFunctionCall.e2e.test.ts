@@ -43,9 +43,10 @@ vi.mock('@bike4mind/server-utils/callableFunctions/timeLimit', () => ({
     if (h.limitFails) throw new Error('settings unavailable');
     return h.limitMs;
   },
+  resolveCallableFunctionPendingCallLimit: async () => 10,
 }));
 
-const { queueFunctionCall, readFunctionCall, runQueuedFunctionCall } =
+const { UNCLAIMED_AFTER_MS, queueFunctionCall, readFunctionCall, runQueuedFunctionCall } =
   await import('@bike4mind/server-utils/callableFunctions/asyncCalls');
 const { CALLABLE_FUNCTION_QUEUED_MAX_TIMEOUT_MS } =
   await import('@bike4mind/server-utils/callableFunctions/runtimeParent');
@@ -435,6 +436,38 @@ describe('a queued call', () => {
       await runQueuedFunctionCall({ callId: call.callId }, { runner: okRunner() });
       await handleCallableFunctionCallRecords(event({ callId: call.callId }), logger);
       expect((await rows()).map(r => r.outcome)).toEqual(['ok']);
+    });
+  });
+
+  describe('when the job is never claimed', () => {
+    const queueAndAge = async (ageMs: number) => {
+      const { call } = await queue();
+      await CallableFunctionResult.collection.updateOne(
+        { callId: call.callId },
+        { $set: { createdAt: new Date(Date.now() - ageMs) } }
+      );
+      return call.callId;
+    };
+
+    it('reads a call queued past every receive as error worker_lost, ends its row, and never runs it', async () => {
+      const callId = await queueAndAge(UNCLAIMED_AFTER_MS + 1_000);
+      expect(await readFunctionCall(OWNER, callId)).toMatchObject({
+        state: 'finished',
+        outcome: 'error',
+        reason: 'worker_lost',
+      });
+      expect((await rows()).map(r => [r.outcome, r.reason])).toEqual([['error', 'worker_lost']]);
+      expect((await CallableFunctionResult.findOne({ callId }).lean())?.input).toBeUndefined();
+
+      const runner = okRunner();
+      expect(await runQueuedFunctionCall({ callId }, { runner })).toBeNull();
+      expect(runner).not.toHaveBeenCalled();
+    });
+
+    it('leaves a call still inside its receives queued', async () => {
+      const callId = await queueAndAge(UNCLAIMED_AFTER_MS - 60_000);
+      expect(await readFunctionCall(OWNER, callId)).toMatchObject({ state: 'queued' });
+      expect((await rows()).map(r => r.outcome)).toEqual(['queued']);
     });
   });
 

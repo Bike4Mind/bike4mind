@@ -145,9 +145,12 @@ The table below remains the literal-update inventory, not proof that all databas
 | CallableFunction | `state` | enum | `ai/CallableFunctionModel.ts#CallableFunctionRepository.repin` | schema | `runValidators` | update call passes runValidators |
 | CallableFunction | `trustLabel` | enum | `ai/CallableFunctionModel.ts#CallableFunctionRepository.promote` | schema | `runValidators` | update call passes runValidators |
 | CallableFunctionResult | `outcome` | enum | `ai/CallableFunctionResultModel.ts#CallableFunctionResultRepository.endLost` | schema | `runValidators` | update call passes runValidators |
+| CallableFunctionResult | `outcome` | enum | `ai/CallableFunctionResultModel.ts#CallableFunctionResultRepository.endUnclaimed` | schema | `runValidators` | update call passes runValidators |
 | CallableFunctionResult | `reason` | match | `ai/CallableFunctionResultModel.ts#CallableFunctionResultRepository.endLost` | schema | `runValidators` | update call passes runValidators |
+| CallableFunctionResult | `reason` | match | `ai/CallableFunctionResultModel.ts#CallableFunctionResultRepository.endUnclaimed` | schema | `runValidators` | update call passes runValidators |
 | CallableFunctionResult | `state` | enum | `ai/CallableFunctionResultModel.ts#CallableFunctionResultRepository.claim` | schema | `runValidators` | update call passes runValidators |
 | CallableFunctionResult | `state` | enum | `ai/CallableFunctionResultModel.ts#CallableFunctionResultRepository.endLost` | schema | `runValidators` | update call passes runValidators |
+| CallableFunctionResult | `state` | enum | `ai/CallableFunctionResultModel.ts#CallableFunctionResultRepository.endUnclaimed` | schema | `runValidators` | update call passes runValidators |
 | CallableFunctionResult | `state` | enum | `ai/CallableFunctionResultModel.ts#CallableFunctionResultRepository.finish` | schema | `runValidators` | update call passes runValidators |
 | CallableFunctionReview | `approval` | enum | `ai/CallableFunctionReviewModel.ts#CallableFunctionReviewRepository.save` | schema | `runValidators` | update call passes runValidators |
 | CallableFunctionReview | `reviewHash` | match | `ai/CallableFunctionReviewModel.ts#CallableFunctionReviewRepository.save` | schema | `runValidators` | update call passes runValidators |

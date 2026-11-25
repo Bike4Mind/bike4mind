@@ -91,7 +91,7 @@ curl https://app.bike4mind.com/api/v1/functions/calls/<call-id> \
   -H 'Authorization: Bearer <your-api-key>'
 ```
 
-`status` is `queued`, then `running`, then `finished`. A finished call carries `outcome`. When `outcome` is `ok`, the answer has `output` and `stamp`, as a waiting call does. Any other outcome carries `error`, and `stamp` when the function ran. A call is readable only by the user who made it, for 24 hours. After that, or for any other id, the poll answers `404`.
+`status` is `queued`, then `running`, then `finished`. A finished call carries `outcome`. When `outcome` is `ok`, the answer has `output` and `stamp`, as a waiting call does. Any other outcome carries `error`, and `stamp` when the function ran. A call is readable only by the user who made it, for 24 hours. After that, or for any other id, the poll answers `404`. A call that stopped before it finished, or that was still queued 40 minutes after it was sent, reads `finished` with `outcome` set to `error` and an `error` asking you to send it again.
 
 ## Limits
 
@@ -107,7 +107,7 @@ Errors use the shared error envelope described in [Errors](./errors.md).
 - `404`: the function is not one of your live functions, or a polled call is not yours or has expired.
 - `413`: the input is larger than 5 MB.
 - `422`: an input does not fit `input_schema`. The `error` names the first field, for example `Input span must be a number.`, and `problems` lists every field with its `path` and `message`.
-- `429`: you passed the rate limit.
+- `429`: you passed the rate limit, or you already have as many asynchronous calls queued or running as your organization's **Callable Function Pending Call Limit** allows (10 unless it sets another). In the second case `errorCode` is `concurrency_limit_exceeded` and `limit` is the cap; send the call again when one finishes.
 - `502`: the function raised an error, ran out of memory, returned outputs that do not fit `output_schema`, or returned too much. `outcome` names which, and `stamp` is included.
 - `503`: no function runtime is available, the runtime was slow to start or did not answer, or the call could not be queued; try again later. On a self-hosted install, where `"mode": "async"` is not available, an asynchronous call also answers `503`.
 - `504`: the call ran past its time limit. `errorCode` is `request_timeout`. When your time limit is longer than 45 seconds, the `error` says to send `"mode": "async"`.

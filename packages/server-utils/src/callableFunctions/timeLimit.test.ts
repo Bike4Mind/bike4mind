@@ -16,7 +16,7 @@ vi.mock('@bike4mind/services', () => ({
   },
 }));
 
-const { resolveCallableFunctionTimeLimitMs } = await import('./timeLimit');
+const { resolveCallableFunctionPendingCallLimit, resolveCallableFunctionTimeLimitMs } = await import('./timeLimit');
 const {
   CALLABLE_FUNCTION_CALL_CONSUMER_TIMEOUT_SECONDS,
   CALLABLE_FUNCTION_LAMBDA_TIMEOUT_SECONDS,
@@ -49,5 +49,16 @@ describe('resolveCallableFunctionTimeLimitMs', () => {
   it('caps a stored value above what a queued call can run', async () => {
     state.seconds = [825, 900];
     expect(await resolveCallableFunctionTimeLimitMs({ id: 'u1' })).toBe(CALLABLE_FUNCTION_QUEUED_MAX_TIMEOUT_MS);
+  });
+});
+
+describe('resolveCallableFunctionPendingCallLimit', () => {
+  it('takes the lowest of the organizations, and the default for one with no value', async () => {
+    state.seconds = [4, 7];
+    expect(await resolveCallableFunctionPendingCallLimit({ id: 'u1' })).toBe(4);
+    state.seconds = [undefined, 50];
+    expect(await resolveCallableFunctionPendingCallLimit({ id: 'u1' })).toBe(
+      settingsMap.CallableFunctionPendingCallLimit.defaultValue
+    );
   });
 });

@@ -85,6 +85,30 @@ class CallableFunctionResultRepository extends BaseRepository<ICallableFunctionR
   }
 
   /**
+   * Ends a call still `queued` since before `queuedBefore` as `error`/`worker_lost`, guarded so a claim that lands
+   * first wins. Returns true when this call ended it.
+   */
+  async endUnclaimed(callId: string, queuedBefore: Date): Promise<boolean> {
+    const ended = await this.model.updateOne(
+      { callId, state: 'queued', createdAt: { $lt: queuedBefore } },
+      { $set: { state: 'finished', outcome: 'error', reason: 'worker_lost' }, $unset: { input: 1 } },
+      { runValidators: true }
+    );
+    return ended.modifiedCount === 1;
+  }
+
+  /** The caller's calls still `queued` since `queuedSince` or `running` since `runningSince`. */
+  async countPending(callerUserId: string, since: { queuedSince: Date; runningSince: Date }): Promise<number> {
+    return this.model.countDocuments({
+      callerUserId,
+      $or: [
+        { state: 'queued', createdAt: { $gte: since.queuedSince } },
+        { state: 'running', updatedAt: { $gte: since.runningSince } },
+      ],
+    });
+  }
+
+  /**
    * Stores how the call ended and drops its inputs. Outputs over the 5 MB cap are not stored; the call reads
    * `output_too_large` instead. Returns the outcome as stored.
    */

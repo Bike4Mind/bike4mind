@@ -33,6 +33,7 @@ const h = vi.hoisted(() => ({
   runner: vi.fn(),
   runnerConfigured: { value: true },
   limitMs: { value: 30_000 },
+  pendingLimit: { value: 10 },
   results: new Map<string, Record<string, unknown>>(),
   sent: [] as { url: string; message: Record<string, unknown> }[],
   sendFails: { value: false },
@@ -40,6 +41,7 @@ const h = vi.hoisted(() => ({
 
 vi.mock('@bike4mind/server-utils/callableFunctions/timeLimit', () => ({
   resolveCallableFunctionTimeLimitMs: async () => h.limitMs.value,
+  resolveCallableFunctionPendingCallLimit: async () => h.pendingLimit.value,
 }));
 vi.mock('@bike4mind/server-utils/utils/dlqRegistry', () => ({
   getSourceQueueUrl: (name: string) => `queue://${name}`,
@@ -153,6 +155,10 @@ vi.mock('@bike4mind/database', async () => ({
       h.results.set(callId, { ...h.results.get(callId), ...end, state: 'finished' });
       return end.outcome;
     },
+    countPending: async (callerUserId: string) =>
+      [...h.results.values()].filter(
+        doc => doc.callerUserId === callerUserId && (doc.state === 'queued' || doc.state === 'running')
+      ).length,
     findForCaller: async (callId: string, callerUserId: string) => {
       const doc = h.results.get(callId);
       return doc && doc.callerUserId === callerUserId ? doc : null;
@@ -164,6 +170,7 @@ const { default: listRoute } = await import('@pages/api/v1/functions/index');
 const { default: getRoute } = await import('@pages/api/v1/functions/[id]/index');
 const { default: invokeRoute, config: invokeConfig } = await import('@pages/api/v1/functions/[id]/invoke');
 const { default: pollRoute } = await import('@pages/api/v1/functions/calls/[call_id]');
+const { queueFunctionCall } = await import('@bike4mind/server-utils/callableFunctions/asyncCalls');
 const {
   FUNCTION_INVOKE_BUDGET_MS,
   FUNCTION_CALL_STOPPED_MESSAGE,
@@ -273,6 +280,7 @@ beforeEach(() => {
   h.enabled.value = true;
   h.runnerConfigured.value = true;
   h.limitMs.value = 30_000;
+  h.pendingLimit.value = 10;
   h.results = new Map();
   h.sent = [];
   h.sendFails.value = false;
@@ -742,6 +750,28 @@ describe('async invoke and poll', () => {
     expect(h.calls).toHaveLength(1);
     expect(h.calls[0]).toMatchObject({ outcome: 'error', reason: 'queue_failed' });
     expect([...h.results.values()][0]).toMatchObject({ state: 'finished', outcome: 'error' });
+  });
+
+  it("answers 429 naming the cap once the caller's queued and running calls reach it, and queues nothing", async () => {
+    h.pendingLimit.value = 2;
+    const first = (await asyncInvoke()).body.call_id as string;
+    expect((await asyncInvoke()).status).toBe(202);
+    h.results.set(first, { ...h.results.get(first), state: 'running' });
+
+    const refused = await asyncInvoke();
+    expect(refused.status).toBe(429);
+    expect(refused.body.error).toContain('At most 2 asynchronous calls');
+    // The route's error handler spreads additionalInfo into the body; this file's `call` keeps only the message.
+    const request = { caller: { id: 'u1' }, functionId: LIVE_ID, args: { load: 1, span: 2 }, surface: 'rest' as const };
+    await expect(queueFunctionCall(request, { send: async () => undefined })).rejects.toMatchObject({
+      statusCode: 429,
+      additionalInfo: { errorCode: 'concurrency_limit_exceeded', limit: 2 },
+    });
+    expect(h.calls).toHaveLength(2);
+    expect(h.sent).toHaveLength(2);
+
+    h.results.set(first, { ...h.results.get(first), state: 'finished', outcome: 'ok' });
+    expect((await asyncInvoke()).status).toBe(202);
   });
 
   it('polls queued, running, then the output and stamp', async () => {
