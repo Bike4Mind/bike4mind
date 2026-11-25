@@ -69,7 +69,9 @@ export function shareDataSentence(dataPins: string[], sources: string[]): string
 const isNamedOnProject = (project: IProjectDocument, userId: string) =>
   project.userId === userId ||
   (project.users ?? []).some(
-    user => user.userId === userId && (user.permissions.includes('read') || user.permissions.includes('write'))
+    user =>
+      user.userId === userId &&
+      (user.permissions as string[]).some(permission => ['read', 'write'].includes(permission))
   );
 
 function ShareForm({
