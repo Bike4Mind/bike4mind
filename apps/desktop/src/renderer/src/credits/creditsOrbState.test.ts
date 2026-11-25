@@ -80,6 +80,15 @@ describe('creditsOrbState', () => {
     expect(creditsOrbState(personal(20_000, 1000, 25)).tone).toBe('ok');
   });
 
+  it('stays neutral inside a week of runway when the refill lands first', () => {
+    // 5 days of runway, refill in 2: the menu calls this covered, so the orb must not go amber.
+    expect(creditsOrbState(personal(5000, 1000, 2)).tone).toBe('ok');
+  });
+
+  it('is critical inside two days of runway even when the refill lands first', () => {
+    expect(creditsOrbState(personal(1500, 1000, 1)).tone).toBe('critical');
+  });
+
   it("shows an organization pool's balance, neutral, since its burn is not known", () => {
     expect(creditsOrbState(organizationPays(48_200))).toEqual({
       tone: 'ok',

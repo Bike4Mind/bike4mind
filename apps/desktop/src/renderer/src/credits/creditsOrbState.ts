@@ -46,14 +46,16 @@ export function creditsOrbState({ outlook, organization, profile }: CreditsGlanc
 }
 
 /**
- * The orb's tone from days of runway alone: low inside a week, critical inside two days or at
- * zero. Unlike the menu ring's tone, a refill landing later does not turn a long runway amber:
+ * The orb's tone: critical inside two days or at zero, low inside a week unless a refill lands
+ * first. Unlike the menu ring's tone, a refill landing later does not turn a long runway amber:
  * the orb is a glance, and "short of the refill" by a day on a month of runway is not urgent.
+ * A covered runway matches the menu ring (`creditOutlook`): ok, critical only inside two days.
  */
 function orbTone(outlook: Exclude<CreditOutlook, { kind: 'unknown' }>): CreditTone {
   if (outlook.kind === 'empty') return 'critical';
   if (outlook.kind === 'idle') return 'ok';
   if (outlook.runwayDays < CRITICAL_RUNWAY_DAYS) return 'critical';
+  if (outlook.kind === 'covered') return 'ok';
   if (outlook.runwayDays < LOW_RUNWAY_DAYS_WITHOUT_REFILL) return 'low';
   return 'ok';
 }
