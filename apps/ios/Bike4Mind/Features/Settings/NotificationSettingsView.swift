@@ -7,7 +7,8 @@ struct NotificationSettingsView: View {
   var body: some View {
     NotificationSettingsContent(
       push: services.push, prefs: services.notificationPrefs, settings: services.systemSettings,
-      briefSchedule: services.briefSchedule)
+      briefSchedule: services.briefSchedule, busyBlocks: services.busyBlocks, calendar: services.busyBlockReader,
+      busyBlockSyncer: services.busyBlockSyncer)
   }
 }
 
@@ -18,14 +19,20 @@ private struct NotificationSettingsContent: View {
 
   @State private var model: NotificationSettingsViewModel
   @State private var brief: BriefScheduleViewModel
+  @State private var busyBlocks: BusyBlockBriefViewModel
+  private let settings: any SystemSettingsOpening
   @Environment(\.scenePhase) private var scenePhase
 
   init(
     push: PushRegistrationCoordinator, prefs: any NotificationPrefsService, settings: any SystemSettingsOpening,
-    briefSchedule: any BriefScheduleAPI
+    briefSchedule: any BriefScheduleAPI, busyBlocks: any BusyBlocksAPI, calendar: any BusyBlockReader,
+    busyBlockSyncer: BusyBlockSyncer
   ) {
+    self.settings = settings
     _model = State(initialValue: NotificationSettingsViewModel(push: push, prefs: prefs, settings: settings))
     _brief = State(initialValue: BriefScheduleViewModel(api: briefSchedule))
+    _busyBlocks = State(
+      initialValue: BusyBlockBriefViewModel(api: busyBlocks, reader: calendar, syncer: busyBlockSyncer))
   }
 
   var body: some View {
@@ -36,6 +43,10 @@ private struct NotificationSettingsContent: View {
         // An enabled schedule stays visible with pushes off: it still composes and bills, so it must stay switchable.
         if model.isMasterEnabled || brief.schedule.enabled {
           briefScheduleSection
+        }
+        // Same rule as the schedule: an enabled opt-in stays switchable with pushes off.
+        if model.isMasterEnabled || busyBlocks.isEnabled {
+          busyBlockSection
         }
         if Self.showsCategoryPreferences, model.isMasterEnabled {
           categorySection
@@ -49,6 +60,7 @@ private struct NotificationSettingsContent: View {
     // Reloads on return from iOS Settings, where the user may have changed the system switch.
     .task(id: scenePhase) { if scenePhase == .active { await model.load() } }
     .task { await brief.load() }
+    .task { await busyBlocks.load() }
   }
 
   private var masterSection: some View {
@@ -133,6 +145,36 @@ private struct NotificationSettingsContent: View {
     } footer: {
       Text(briefFooter)
     }
+  }
+
+  private var busyBlockSection: some View {
+    Section {
+      Toggle(
+        "Brief After Busy Blocks",
+        isOn: Binding(
+          get: { busyBlocks.isEnabled },
+          set: { isOn in Task { await busyBlocks.setEnabled(isOn) } })
+      )
+      .disabled(!busyBlocks.isLoaded || busyBlocks.isSaving)
+      .accessibilityIdentifier("settings-busy-block-brief-toggle")
+
+      if busyBlocks.isAccessDenied {
+        Button("Open Settings") { settings.openAppSettings() }
+          .accessibilityIdentifier("settings-busy-block-open-settings")
+      }
+    } footer: {
+      Text(busyBlockFooter)
+    }
+  }
+
+  private var busyBlockFooter: String {
+    if let error = busyBlocks.errorMessage { return error }
+    if busyBlocks.isAccessDenied {
+      return "Bike4Mind needs calendar access for this. Allow Full Access in iOS Settings, then turn it on again."
+    }
+    return
+      "Hold run updates while a calendar event marks you busy, then get one brief of what happened when it ends. "
+      + "Only event start and end times leave this device."
   }
 
   private func weekdayChip(_ day: BriefScheduleViewModel.Weekday) -> some View {
