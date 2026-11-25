@@ -67,6 +67,7 @@ function request(userId: string, emails: string[], staleQuota = 1) {
   Object.assign(req, {
     user: { id: userId, emailVerified: true, numReferralsAvailable: staleQuota, regInvites: [] },
     ability: {},
+    logger: { error: vi.fn(), warn: vi.fn(), info: vi.fn() },
     body: { userName: 'Sender', friendEmail: emails, emailTitle: 'Join', emailBody: 'Welcome' },
   });
   return {
