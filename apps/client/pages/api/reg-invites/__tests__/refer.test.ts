@@ -238,6 +238,20 @@ describe('/api/reg-invites/refer — passwordless email content', () => {
     expect(body).toContain('href="https://signup.example.com/register?source=email&amp;campaign=invite"');
     expect(createRegInvite).not.toHaveBeenCalled();
   });
+
+  it('escapes quotes in the invite code and in the registration link attribute', async () => {
+    mockInviteFind.mockResolvedValue([{ code: `a"b'c`, userId: 'user-1', status: 'open' }]);
+    vi.mocked(getSettingsMap).mockResolvedValueOnce({
+      RegistrationLink: `https://signup.example.com/register?x="1"&y='2'`,
+    });
+    const { req, res } = makeReqRes({ id: 'user-1', emailVerified: true });
+
+    await invokeHandler(req, res);
+
+    const { body } = mockEmailPublish.mock.calls[0][0] as { body: string };
+    expect(body).toContain('Invite code: <strong>a&quot;b&#39;c</strong>');
+    expect(body).toContain('href="https://signup.example.com/register?x=&quot;1&quot;&amp;y=&#39;2&#39;"');
+  });
 });
 
 describe('/api/reg-invites/refer - duplicate addresses', () => {

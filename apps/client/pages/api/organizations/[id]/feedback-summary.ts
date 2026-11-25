@@ -19,7 +19,6 @@ import { verifyOrgPermission } from '@bike4mind/server-utils/utils/orgAccess';
 import { resolveInstantWindow } from '@server/utils/orgFeedbackWindow';
 import { sendToQueue } from '@bike4mind/server-utils/utils/sqs';
 import { Request, Response } from 'express';
-import { v4 as uuidv4 } from 'uuid';
 import { Resource } from 'sst';
 import { z } from 'zod';
 
@@ -124,7 +123,7 @@ const handler = baseApi()
       // construction.
       const { from, to } = resolveInstantWindow(startDate, endDate);
 
-      const summaryJobId = uuidv4();
+      const summaryJobId = crypto.randomUUID();
       const window = { startDate: from, endDate: to };
 
       try {

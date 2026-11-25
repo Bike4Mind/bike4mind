@@ -13,6 +13,7 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.async
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.runCurrent
@@ -102,6 +103,46 @@ class MediaFirstPageStoreTest {
 
         assertNull(store.seeded(null))
         assertNull(cache.load(null))
+    }
+
+    @Test
+    fun aDiskReadInFlightAtSignOutDoesNotSeed() = runTest {
+        val gate = CompletableDeferred<Unit>()
+        val backing = InMemoryMediaListCache().apply { save(PAGE, null) }
+        // Reads the page before the gate, as a slow disk read would, so the wipe cannot empty it in the meantime.
+        val cache = object : MediaListCache by backing {
+            override suspend fun load(kind: MediaKind?): MediaPage? {
+                val page = backing.load(kind)
+                gate.await()
+                return page
+            }
+        }
+        val store = MediaFirstPageStore(FakeMediaApi(), cache)
+
+        val seed = async { store.seeded(null) }
+        runCurrent()
+        store.invalidate()
+        gate.complete(Unit)
+
+        assertNull(seed.await())
+        assertNull(store.seeded(null))
+    }
+
+    @Test
+    fun aCachedRowOfAKindTheGalleryCannotShowIsDroppedNotFatal() = runTest {
+        val cache = fileCache(dispatcher = StandardTestDispatcher(testScheduler))
+        directory.mkdirs()
+        File(directory, "media-staging.example.test-all.json").writeText(
+            """{"items":[""" +
+                """{"id":"a","kind":"image","fileName":"a.png","mimeType":"image/png","createdAtMillis":0},""" +
+                """{"id":"d","kind":"document","fileName":"d.pdf","mimeType":"application/pdf","createdAtMillis":0}""" +
+                """],"hasMore":true}""",
+        )
+
+        val page = cache.load(null)
+
+        assertEquals(listOf("a"), page?.items?.map { it.id })
+        assertEquals(true, page?.hasMore)
     }
 
     @Test

@@ -1,3 +1,4 @@
+import { limitConcurrency } from '@bike4mind/common';
 import { adminApi } from '@server/middlewares/adminApi';
 import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
@@ -6,7 +7,6 @@ import { z } from 'zod';
 import { slackDevWorkspaceRepository } from '@bike4mind/database';
 import { decryptToken } from '@bike4mind/server-utils/security/tokenEncryption';
 import { buildContentDisposition } from '@bike4mind/utils/contentDisposition';
-import pLimit from 'p-limit';
 import { escapeCsvField } from '@bike4mind/server-utils/integrations/slack/slackExportCsv';
 import {
   isSlackUserValidationError,
@@ -645,7 +645,7 @@ const handler = adminApi({ adminPermissions: { POST: 'settings:manage' } }).post
       if (threadParents.length > 0) {
         Logger.info('📥 Fetching thread replies concurrently', { threadCount: threadParents.length });
 
-        const limit = pLimit(20);
+        const limit = limitConcurrency(20);
         let threadsFetched = 0;
         let threadsFailed = 0;
 
@@ -718,7 +718,7 @@ const handler = adminApi({ adminPermissions: { POST: 'settings:manage' } }).post
       }
 
       // Resolve users with error tracking
-      const limit = pLimit(10);
+      const limit = limitConcurrency(10);
       const userPromises = Array.from(userIds).map(userId =>
         limit(async () => {
           if (userCache.has(userId)) return;

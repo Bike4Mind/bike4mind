@@ -182,8 +182,7 @@ If you see unexpected type errors after pulling from `main`, rebuild: `pnpm i -r
 │   └── mcp/ slack/ voice/ optihashi/ ...    # Capabilities
 ├── packages/
 │   ├── database/            # Mongoose models & migrations
-│   ├── typescript-config/   # Shared tsconfig
-│   └── eslint-config/       # Shared ESLint config
+│   └── typescript-config/   # Shared tsconfig
 ├── docs-site/               # Docusaurus documentation site
 └── infra/                   # SST/AWS infrastructure for the hosted service
 ```

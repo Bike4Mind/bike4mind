@@ -19,6 +19,7 @@ const envNumber = (name: string, raw: string | undefined, fallback: number): num
   if (raw === undefined || raw === '') return fallback;
   const parsed = Number(raw);
   if (Number.isFinite(parsed) && parsed > 0) return parsed;
+  // eslint-disable-next-line no-console -- shared with the browser bundle, which cannot take a server logger
   console.warn(`[pricing] Ignoring invalid ${name}="${raw}"; using default ${fallback}`);
   return fallback;
 };
@@ -71,6 +72,7 @@ const USD_TO_CREDITS_RATE = envNumber(
 export const CREDITS_PER_USD_COST = (() => {
   const derived = Math.round(PRICE_MARGIN / USD_TO_CREDITS_RATE);
   if (Number.isFinite(derived) && derived >= 1) return derived;
+  // eslint-disable-next-line no-console -- shared with the browser bundle, which cannot take a server logger
   console.warn(`[pricing] Env-configured margin/rate derive ${derived} credits per USD cost; using defaults`);
   return Math.round(DEFAULT_PRICE_MARGIN / DEFAULT_USD_TO_CREDITS_RATE);
 })();
@@ -154,6 +156,7 @@ const cryptoUniform = (): number => {
   }
   if (!warnedNonCryptoRng) {
     warnedNonCryptoRng = true;
+    // eslint-disable-next-line no-console -- shared with the browser bundle, which cannot take a server logger
     console.warn('[pricing] globalThis.crypto unavailable; billing rounding falls back to Math.random');
   }
   return Math.random();

@@ -96,19 +96,21 @@ export interface InvokeAnswer {
   body: Record<string, unknown>;
 }
 
-const TIMEOUT_MESSAGE = 'The call ran past its time limit.';
+export const TIMEOUT_MESSAGE = 'The call ran past its time limit.';
 
-const FUNCTION_RUNTIME_FAULT_MESSAGE = 'The function runtime did not answer. Try again later.';
+export const FUNCTION_RUNTIME_FAULT_MESSAGE = 'The function runtime did not answer. Try again later.';
 
 // Refusals about the function or its caller; any other refusal comes from the runtime.
 const FUNCTION_NOT_FOUND_REASONS = new Set(['not_found', 'not_caller', 'disabled', 'source_deleted']);
 
 const errorMessage = (errorClass?: string) => `The function raised an error${errorClass ? ` (${errorClass})` : ''}.`;
 
+export const OUTPUT_TOO_LARGE_MESSAGE = 'The function returned more than a call can carry.';
+
 const FAILURE_MESSAGES: Record<string, string> = {
   memory: 'The function ran out of memory.',
   output_invalid: 'The function returned outputs that do not fit its output schema.',
-  output_too_large: 'The function returned more than a call can carry.',
+  output_too_large: OUTPUT_TOO_LARGE_MESSAGE,
 };
 
 /** The HTTP answer for one dispatcher result. Refusals the route did not catch first still map to their status. */

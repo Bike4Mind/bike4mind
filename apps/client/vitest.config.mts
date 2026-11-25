@@ -143,9 +143,6 @@ const projectVite = () => ({
     global: 'globalThis',
     'process.env': {},
   },
-  optimizeDeps: {
-    include: ['uuid'],
-  },
 });
 
 export default defineConfig({

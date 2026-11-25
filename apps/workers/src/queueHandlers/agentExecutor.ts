@@ -318,7 +318,7 @@ import { resolveAndBuildMementosPreamble } from '@workers/utils/getFirstIteratio
 import { resolveExecutionMementoGates } from '@bike4mind/server-utils/utils/resolveExecutionMementoGates';
 import { getFirstIterationSkillsPreamble } from '@workers/utils/getFirstIterationSkillsPreamble';
 import { getMcpClientAdapter } from '@bike4mind/server-utils/utils/getMcpClientAdapter';
-import { customMcpToolHost } from '@bike4mind/server-utils/mcpConnections/customMcpToolHost';
+import { functionAndConnectorToolHost } from '@bike4mind/server-utils/callableFunctions/functionToolHost';
 import { loadAgentMcpTools, withAutoApprovedCustomTools, type AgentMcpTools } from '@workers/utils/loadAgentMcpTools';
 import { SQSClient, SendMessageCommand } from '@aws-sdk/client-sqs';
 import { ApiGatewayManagementApiClient, PostToConnectionCommand } from '@aws-sdk/client-apigatewaymanagementapi';
@@ -753,7 +753,12 @@ async function loadMcpToolsSafe(userId: string, logger: Logger): Promise<AgentMc
   const enableMCPServer = (await adminSettingsRepository.getSettingsValue('EnableMCPServer')) ?? false;
   try {
     return await loadAgentMcpTools(
-      { mcpServers: mcpServerRepository, getMcpClient: getMcpClientAdapter, customMcp: customMcpToolHost, logger },
+      {
+        mcpServers: mcpServerRepository,
+        getMcpClient: getMcpClientAdapter,
+        customMcp: functionAndConnectorToolHost('agent'),
+        logger,
+      },
       { userId, enableMCPServer }
     );
   } catch (err) {

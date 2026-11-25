@@ -77,8 +77,9 @@ describe('public /api/v1/functions routes gate on functions:invoke through their
     });
   });
 
-  it('opens exactly the three functions routes to a functions:invoke key', () => {
+  it('opens exactly the MCP endpoint and the three functions routes to a functions:invoke key', () => {
     expect(DERIVED_API_KEY_SCOPE_ENDPOINTS[ApiKeyScope.FUNCTIONS_INVOKE]).toEqual([
+      'POST /api/mcp/functions',
       'GET /api/v1/functions',
       'GET /api/v1/functions/:id',
       'POST /api/v1/functions/:id/invoke',

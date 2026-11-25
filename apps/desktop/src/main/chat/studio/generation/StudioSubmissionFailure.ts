@@ -1,12 +1,20 @@
-import { MUSIC_VALIDATION_ERROR_CODES, VIDEO_VALIDATION_ERROR_CODES } from '@bike4mind/common';
+import {
+  IMAGE_JOB_API_ERROR_CODES,
+  MUSIC_VALIDATION_ERROR_CODES,
+  VIDEO_VALIDATION_ERROR_CODES,
+} from '@bike4mind/common';
 import { toMediaError } from '../../media/MediaApiClient';
 import type { StudioGenerationRequest } from './StudioGenerationService';
 
+// POST /api/v1/image-jobs refuses before admission with 422 (credits included, no 402), 400 for a contract or
+// storage failure. idempotency_key_reused stays unknown: an earlier request with that key may have been billed.
 const imageRefusals: Readonly<Record<number, ReadonlySet<string>>> = {
-  400: new Set(['invalid_request', 'invalid_count', 'storage_quota_exceeded']),
-  402: new Set(['insufficient_credits']),
-  403: new Set(['FEATURE_DISABLED']),
-  422: new Set(['model_unavailable', 'unsupported_by_model', 'input_image_not_found', 'unsupported_input_image']),
+  400: new Set(['invalid_request', 'storage_limit_exceeded', 'org_storage_limit_exceeded']),
+  422: new Set<string>(
+    IMAGE_JOB_API_ERROR_CODES.filter(
+      code => code !== 'idempotency_key_reused' && code !== 'invalid_idempotency_key' && code !== 'not_cancellable'
+    )
+  ),
 };
 const commonRefusals = [
   'invalid_request',

@@ -23,7 +23,7 @@ import {
 import { issueStateNonce, NONCE_SLOT } from '@bike4mind/server-utils/auth/oauthFlowCookie';
 
 const handler = baseApi().post(
-  asyncHandler<{}, { url: string }, unknown, { id?: string }>(async (req, res) => {
+  asyncHandler<{}, { url: string }, unknown, { id?: string; workspaceId?: string }>(async (req, res) => {
     const orgId = req.query.id!;
     const user = req.user!;
 
@@ -46,7 +46,9 @@ const handler = baseApi().post(
       throw new BadRequestError('A Slack workspace is already connected to this organization');
     }
 
-    const appCredentials = await getSystemSlackAppCredentials();
+    // The Slack app the request names; without one, the first active app with credentials.
+    const requestedWorkspaceId = typeof req.query.workspaceId === 'string' ? req.query.workspaceId : undefined;
+    const appCredentials = await getSystemSlackAppCredentials(requestedWorkspaceId);
     if (!appCredentials) {
       throw new BadRequestError('Slack integration is not configured. Please contact support.');
     }
@@ -56,7 +58,8 @@ const handler = baseApi().post(
     const state = generateOrgSlackConnectStateToken(
       canonicalOrgId,
       user.id,
-      issueStateNonce(res, NONCE_SLOT.orgSlackConnect)
+      issueStateNonce(res, NONCE_SLOT.orgSlackConnect),
+      appCredentials.workspaceId
     );
 
     const baseUrl = `${req.headers['x-forwarded-proto'] || 'https'}://${req.headers.host}`;

@@ -38,6 +38,17 @@ describe('resolveForeignInput', () => {
 });
 
 describe('packagesReachedByForeignInputs (real turbo.json)', () => {
+  it.each([
+    'apps/workers/src/services/newProvider.ts',
+    'b4m-core/services/src/newProvider.ts',
+    'packages/server-utils/src/newProvider.ts',
+    'scripts/unmetered-provider-call-allowlist.txt',
+    'scripts/unmetered-llm-route-allowlist.txt',
+  ])('runs and invalidates the client provider guard for %s', file => {
+    expect(reached([file], ['test'])).toContain('@bike4mind/client');
+    expect(reached([file], ['test:integration'])).toContain('@bike4mind/client');
+  });
+
   it('runs workers when only apps/client source changed', () => {
     expect(reached(['apps/client/server/utils/foo.ts'])).toContain('@bike4mind/workers');
   });

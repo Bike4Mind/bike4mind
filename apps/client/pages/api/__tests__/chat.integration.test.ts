@@ -95,6 +95,9 @@ const {
 }));
 
 vi.mock('@bike4mind/server-utils/mcpConnections/customMcpToolHost', () => ({ customMcpToolHost: fakeCustomMcpHost }));
+vi.mock('@bike4mind/server-utils/callableFunctions/functionToolHost', () => ({
+  functionAndConnectorToolHost: vi.fn(() => fakeCustomMcpHost),
+}));
 
 const mockResolveCallableFunctions = vi.hoisted(() => vi.fn(async (_user: unknown) => true));
 vi.mock('@bike4mind/server-utils/callableFunctions/access', () => ({
@@ -1670,8 +1673,11 @@ describe('POST /api/chat (integration - wait path promptDetails exposure)', () =
 
   it('registers the custom connector host on the inline process options, matching the queued path', async () => {
     const { req, res } = fire({ body: { message: 'hello', sessionId: 'sess-1', wait: true } });
+    const before = Date.now();
     await handler(req, res);
     expect(processCtorOptions.value?.customMcp).toBe(fakeCustomMcpHost);
+    expect(processCtorOptions.value?.customMcpDeadline).toBeGreaterThanOrEqual(before + waitTurnLimits.budgetMs);
+    expect(processCtorOptions.value?.customMcpDeadline).toBeLessThanOrEqual(Date.now() + waitTurnLimits.budgetMs);
   });
 
   it('hands process() an apiKey origin and the key id, matching what the async path stores', async () => {

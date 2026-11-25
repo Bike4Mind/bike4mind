@@ -1,5 +1,6 @@
 import { JiraApi } from '@bike4mind/common';
 import type { JiraConfig } from '@bike4mind/common';
+import { Logger } from '@bike4mind/observability';
 import { AtlassianTokenManager } from '@bike4mind/server-utils/integrations/jira/atlassianTokenManager';
 
 /**
@@ -28,5 +29,5 @@ export async function getJiraClient(userId: string): Promise<JiraApi | null> {
     authHeader: `Bearer ${tokens.accessToken}`,
   };
 
-  return new JiraApi(config);
+  return new JiraApi(config, { logger: Logger.globalInstance });
 }

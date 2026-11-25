@@ -1,10 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import {
+  CALLABLE_FUNCTION_PROTECTED_FIELDS,
   CALLABLE_FUNCTION_SLUG_PATTERN,
+  CallableFunctionGrantVisibilitySchema,
   callableFunctionTrustLabel,
   effectiveCallableFunctionStatus,
   toCallableFunctionDetail,
   toCallableFunctionPublic,
+  toCallableFunctionShared,
   type ICallableFunctionDocument,
 } from './CallableFunctionTypes';
 import type { FunctionContract } from '../../schemas/functionContract';
@@ -78,10 +81,12 @@ describe('toCallableFunctionPublic', () => {
     const view = toCallableFunctionPublic(doc(), { version: 2 });
     expect(Object.keys(view).sort()).toEqual(
       [
+        'approval',
         'createdAt',
         'description',
         'enabled',
         'examples',
+        'grants',
         'id',
         'latestVersion',
         'pin',
@@ -130,6 +135,80 @@ describe('toCallableFunctionPublic', () => {
       latestVersion: null,
       updateAvailable: false,
     });
+  });
+});
+
+describe('sharing', () => {
+  const grants = {
+    visibility: 'project' as const,
+    projectId: 'project-1',
+    userIds: ['user-2'],
+  };
+
+  it('shows the owner the grants', () => {
+    expect(toCallableFunctionPublic(doc(), { version: 2 }).grants).toBeNull();
+    expect(toCallableFunctionPublic(doc({ grants }), { version: 2 }).grants).toEqual(grants);
+  });
+
+  const hash = 'a'.repeat(64);
+  const review = {
+    functionId: 'fn-1',
+    userId: 'user-2',
+    reviewHash: hash,
+    approval: 'always_ask' as const,
+    enabled: true,
+    reviewedAt: new Date(),
+  };
+  const shared = (reviewed: typeof review | null) =>
+    toCallableFunctionShared(
+      doc({
+        state: 'live',
+        trustLabel: 'verified',
+        grants,
+        pin: { ...doc().pin, seq: 2 },
+        contract: { ...contract, tests: [{ name: 'secret case', input: {}, expected: {} }] },
+      }),
+      'project',
+      { ownerName: 'Owner Name', reviewHash: hash, review: reviewed }
+    );
+
+  it('shows a recipient the interface but no code, tests, artifact, examples, grants, or owner ids', () => {
+    const view = shared(null);
+    expect(Object.keys(view).sort()).toEqual(
+      [
+        'dataPins',
+        'description',
+        'id',
+        'inputs',
+        'outputs',
+        'ownerName',
+        'pin',
+        'review',
+        'reviewHash',
+        'sharedVia',
+        'slug',
+        'sources',
+        'status',
+        'trustLabel',
+        'updatedAt',
+      ].sort()
+    );
+    expect(Object.keys(view.pin).sort()).toEqual(['pinnedAt', 'seq', 'version']);
+    expect(view).toMatchObject({ status: 'pending_review', sharedVia: 'project', trustLabel: 'verified' });
+    expect(view.inputs).toEqual(contract.inputs);
+    expect(JSON.stringify(view)).not.toMatch(/def run|artifact-1|user-2|secret case/);
+  });
+
+  it('reads reviewed only while the review names the current hash and is on', () => {
+    expect(shared(review)).toMatchObject({ status: 'reviewed', review: { approval: 'always_ask', current: true } });
+    expect(shared({ ...review, enabled: false }).status).toBe('disabled');
+    const stale = shared({ ...review, reviewHash: 'b'.repeat(64), enabled: false });
+    expect(stale).toMatchObject({ status: 'pending_review', review: { current: false } });
+  });
+
+  it('has no public rung and protects the grants', () => {
+    expect(CallableFunctionGrantVisibilitySchema.options).toEqual(['private', 'project', 'organization']);
+    expect(CALLABLE_FUNCTION_PROTECTED_FIELDS).toContain('grants');
   });
 });
 

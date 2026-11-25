@@ -14,7 +14,6 @@ import { resolveBrowserAppFileUploadUrl } from '@server/utils/browserUploadUrl';
 import { recordAdminSettingChange } from '@bike4mind/server-utils/utils/adminSettingsAudit';
 import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 import mime from 'mime-types';
-import { v4 as uuidv4 } from 'uuid';
 import { Resource } from 'sst';
 import { z } from 'zod';
 import { Logger } from '@bike4mind/observability';
@@ -111,7 +110,7 @@ const handler = adminApi({
         }
 
         // Create new file key and AppFile record
-        const fileKey = `custom-${logoType}-logo-${uuidv4()}.${ext}`;
+        const fileKey = `custom-${logoType}-logo-${crypto.randomUUID()}.${ext}`;
         // Store the full S3 path for storage operations
         const s3Key = `admin/logos/${fileKey}`;
         // Store only the filename in the database for URL construction

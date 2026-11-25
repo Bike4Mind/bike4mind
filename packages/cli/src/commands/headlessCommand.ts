@@ -6,7 +6,6 @@
  */
 
 import { randomBytes } from 'crypto';
-import { v4 as uuidv4 } from 'uuid';
 import { SessionStore, ConfigStore } from '../storage';
 import { CustomCommandStore } from '../storage/CustomCommandStore.js';
 import { RemoteSkillSource } from '../storage/RemoteSkillSource.js';
@@ -165,7 +164,7 @@ export async function handleHeadlessCommand(options: HeadlessOptions): Promise<v
 
   // Stable per-run id stamped on every stream-json event (including a fatal
   // error emitted from the catch below), so consumers can correlate a run.
-  const runId = uuidv4();
+  const runId = crypto.randomUUID();
 
   try {
     const config = await configStore.load();
@@ -287,7 +286,7 @@ export async function handleHeadlessCommand(options: HeadlessOptions): Promise<v
 
     // Create session
     const session: Session = {
-      id: uuidv4(),
+      id: crypto.randomUUID(),
       name: `Headless ${new Date().toISOString()}`,
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
@@ -528,9 +527,9 @@ export async function handleHeadlessCommand(options: HeadlessOptions): Promise<v
     const finalSession: Session = {
       ...session,
       messages: [
-        { id: uuidv4(), role: 'user', content: fullPrompt, timestamp: new Date().toISOString() },
+        { id: crypto.randomUUID(), role: 'user', content: fullPrompt, timestamp: new Date().toISOString() },
         {
-          id: uuidv4(),
+          id: crypto.randomUUID(),
           role: 'assistant',
           content: result.finalAnswer,
           ...(richContent ? { richContent } : {}),

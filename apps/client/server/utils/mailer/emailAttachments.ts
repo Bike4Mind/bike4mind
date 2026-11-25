@@ -1,6 +1,5 @@
 import { getFilesStorage } from '@bike4mind/server-utils/utils/storage/index';
 import { buildFileLinkUrl } from '@bike4mind/server-utils/files/fileLinkToken';
-import { v4 as uuid } from 'uuid';
 import { escapeHtml } from '@client/app/utils/htmlEscape';
 
 // EventBridge has a 256 KB limit per event
@@ -64,7 +63,7 @@ function calculateEventBridgeSize(emailBody: string, attachments: EmailAttachmen
 async function uploadFilesAndGenerateLinks(attachments: EmailAttachment[], userId: string): Promise<SharedFileInfo[]> {
   const uploadPromises = attachments.map(async att => {
     const timestamp = Date.now();
-    const randomId = uuid().slice(0, 8);
+    const randomId = crypto.randomUUID().slice(0, 8);
     const sanitizedFilename = att.filename.replace(/[^a-zA-Z0-9._-]/g, '_');
     const s3Path = `${SHARED_EMAIL_FILES_PREFIX}${userId}/${timestamp}-${randomId}/${sanitizedFilename}`;
 
