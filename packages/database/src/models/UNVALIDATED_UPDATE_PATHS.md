@@ -306,6 +306,7 @@ The table below remains the literal-update inventory, not proof that all databas
 | SkillListingTemplate | `example.media.items.height` | min | `ai/SkillListingTemplateModel.ts#startSkillTemplateExampleRun` | schema | `runValidators` | update call passes runValidators |
 | SkillListingTemplate | `example.media.items.key` | maxlength | `ai/SkillListingTemplateModel.ts#startSkillTemplateExampleRun` | schema | `runValidators` | update call passes runValidators |
 | SkillListingTemplate | `example.media.items.mime` | maxlength | `ai/SkillListingTemplateModel.ts#startSkillTemplateExampleRun` | schema | `runValidators` | update call passes runValidators |
+| SkillListingTemplate | `example.media.items.moderation` | enum | `ai/SkillListingTemplateModel.ts#startSkillTemplateExampleRun` | schema | `runValidators` | update call passes runValidators |
 | SkillListingTemplate | `example.media.items.width` | min | `ai/SkillListingTemplateModel.ts#startSkillTemplateExampleRun` | schema | `runValidators` | update call passes runValidators |
 | SkillListingTemplate | `example.media.kind` | enum | `ai/SkillListingTemplateModel.ts#startSkillTemplateExampleRun` | schema | `runValidators` | update call passes runValidators |
 | SkillListingTemplate | `example.prompt` | maxlength | `ai/SkillListingTemplateModel.ts#startSkillTemplateExampleRun` | schema | `runValidators` | update call passes runValidators |
