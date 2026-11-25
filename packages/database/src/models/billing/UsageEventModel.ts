@@ -59,6 +59,7 @@ import {
 import { EXECUTED_MODEL_GROUP_KEY, spendBreakdownPipeline, spendTimelinePipeline } from './spendExplorerPipelines';
 import { spendActorIdsPipeline, spendFeaturesPipeline, spendFeatureUsersPipeline } from './spendFeaturePipelines';
 import { loadCreditHolderFundingSnapshot, type LoadCreditHolderFundingSnapshot } from './creditHolderFundingSnapshot';
+import { Logger } from '@bike4mind/observability';
 
 export type IUsageEventDocument = IUsageEvent & IMongoDocument;
 
@@ -291,10 +292,10 @@ export class UsageEventRepository extends BaseRepository<IUsageEventDocument> im
       const { lots, currentCredits } = await this.loadFundingSnapshot(event.ownerId, event.ownerType);
       return attributeChargeToFundingSources(lots, currentCredits, event.creditsCharged);
     } catch (error) {
-      console.warn('[UsageEvent] Funding breakdown lookup failed; recording without it', {
+      Logger.warn('[UsageEvent] Funding breakdown lookup failed; recording without it', {
         ownerId: event.ownerId,
         ownerType: event.ownerType,
-        error: error instanceof Error ? error.message : String(error),
+        error,
       });
       return undefined;
     }

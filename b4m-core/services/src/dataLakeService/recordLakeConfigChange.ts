@@ -10,6 +10,7 @@ import type {
 } from '@bike4mind/common';
 import { resolveLakeManageRung, type LakeGrant, type ManageActor } from './manageRule';
 import { resolveLakeConfigAuditRetention, type LakeConfigAuditLogger } from './resolveLakeConfigAuditRetention';
+import { Logger } from '@bike4mind/observability';
 
 /**
  * The audit half of a config-write service's adapters. BOTH repositories are optional, and a
@@ -116,7 +117,7 @@ export async function recordLakeConfigChange(
   const logAuditLoss = (msg: string, meta: Record<string, unknown>) => {
     if (logger?.error) return logger.error(msg, meta);
     if (logger?.warn) return logger.warn(msg, meta);
-    return console.error(msg, meta);
+    return Logger.error(msg, meta);
   };
 
   try {

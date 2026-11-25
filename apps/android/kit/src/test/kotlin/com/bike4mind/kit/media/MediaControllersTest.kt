@@ -234,6 +234,65 @@ class MediaGalleryControllerTest {
     }
 
     @Test
+    fun aNextPageInFlightWhenTheFilterChangesNeverLandsOnTheNewFilter() = runTest {
+        val api = FakeMediaApi().apply {
+            pages[null] = listOf(page("a", "b", hasMore = true), page("c"))
+            pages[MediaKind.VIDEO] = listOf(page("v", kind = MediaKind.VIDEO))
+            pageGates[2] = CompletableDeferred()
+        }
+        val gallery = gallery(api)
+        gallery.load()
+        runCurrent()
+        gallery.loadMore()
+        runCurrent()
+        assertTrue(gallery.state.value.loadingMore)
+
+        gallery.select(MediaKind.VIDEO)
+        runCurrent()
+        api.pageGates.getValue(2).complete(Unit)
+        runCurrent()
+
+        val state = gallery.state.value
+        assertEquals(MediaKind.VIDEO, state.kind)
+        assertEquals(listOf("v"), state.items.map { it.id })
+        assertFalse(state.loadingMore)
+    }
+
+    @Test
+    fun noNextPageIsFetchedWhileARefreshIsRunning() = runTest {
+        val api = FakeMediaApi().apply { pages[null] = listOf(page("a", "b", hasMore = true), page("c")) }
+        val gallery = gallery(api)
+        gallery.load()
+        runCurrent()
+
+        api.pageGates[1] = CompletableDeferred()
+        gallery.refresh()
+        runCurrent()
+        gallery.loadMore()
+        runCurrent()
+
+        assertEquals(listOf<Pair<MediaKind?, Int>>(null to 1, null to 1), api.listCalls)
+    }
+
+    @Test
+    fun theNextPageIsFetchedOnlyOnceACellIsWithinThePrefetchDistance() = runTest {
+        val first = Array(10) { "i$it" }
+        val api = FakeMediaApi().apply { pages[null] = listOf(page(*first, hasMore = true), page("next")) }
+        val gallery = gallery(api)
+        gallery.load()
+        runCurrent()
+
+        // Ten cells and a prefetch distance of six: cell 3 is still too far from the end, cell 4 is not.
+        gallery.loadMoreIfNeeded(index = 3)
+        runCurrent()
+        assertEquals(listOf<Pair<MediaKind?, Int>>(null to 1), api.listCalls)
+
+        gallery.loadMoreIfNeeded(index = 4)
+        runCurrent()
+        assertEquals(listOf<Pair<MediaKind?, Int>>(null to 1, null to 2), api.listCalls)
+    }
+
+    @Test
     fun selectingTheSameFilterDoesNothing() = runTest {
         val api = FakeMediaApi().apply { pages[null] = listOf(page("a")) }
         val gallery = gallery(api)

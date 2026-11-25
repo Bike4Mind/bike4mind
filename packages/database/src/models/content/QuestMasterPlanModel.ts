@@ -14,6 +14,7 @@ import mongoose, { Model, Schema } from 'mongoose';
 import BaseRepository from '@bike4mind/db-core';
 import { softDeletePlugin } from '../../utils/mongo';
 import { ForbiddenError, NotFoundError } from '@bike4mind/utils';
+import { Logger } from '@bike4mind/observability';
 
 export const QuestMasterDataSchema: Schema<QuestMasterData> = new Schema<QuestMasterData>(
   {
@@ -224,7 +225,7 @@ class QuestMasterPlanRepository extends BaseRepository<IQuestMasterPlanDocument>
   private scheduleMetricsUpdate(planId: string): void {
     this.updateMetrics(planId).catch(err => {
       // Log with structured format for easier debugging
-      console.warn('[QuestMasterPlan] Metrics update failed', { planId, error: err.message });
+      Logger.warn('[QuestMasterPlan] Metrics update failed', { planId, error: err });
     });
   }
 

@@ -21,9 +21,7 @@ import {
   Typography,
 } from '@mui/joy';
 import {
-  DIMENSIONLESS_UNIT,
   FUNCTION_CONTRACT_GLOBAL,
-  FUNCTION_CONTRACT_LIMITS,
   FUNCTION_ENTRY_POINT,
   capFunctionProblems,
   compareFunctionOutput,
@@ -37,6 +35,8 @@ import {
   type FunctionOutputMismatch,
   type FunctionTestCase,
   type ICallableFunctionPublic,
+  type McpToolApprovalMode,
+  MAX_CALLABLE_FUNCTIONS_PER_TURN,
 } from '@bike4mind/common';
 import { toast } from 'sonner';
 import {
@@ -49,6 +49,7 @@ import {
   useDeleteCallableFunction,
   useRepinCallableFunction,
   useRunCallableFunctionTests,
+  useSetCallableFunctionApproval,
   useSetCallableFunctionEnabled,
 } from '@client/app/hooks/data/callableFunctions';
 import type {
@@ -59,6 +60,7 @@ import { usePyodide } from '@client/app/hooks/usePyodide';
 import { PYTHON_SCRIPT_BUSY } from '@client/app/utils/pyodideManager';
 import ProblemList, { dangerAlertSx } from './FunctionProblemList';
 import BreakingChangeDialog from './BreakingChangeDialog';
+import { ContractTable, unitLabel } from './FunctionContractTable';
 import PromoteFunctionSection from './PromoteFunctionSection';
 import SaveFunctionDialog from './SaveFunctionDialog';
 
@@ -118,60 +120,6 @@ const errorMessage = (error: unknown): string => (error instanceof Error ? error
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
-
-/** "a", "a or b", "a, b, or c". */
-const listWithOr = (items: string[]): string =>
-  items.length < 3 ? items.join(' or ') : `${items.slice(0, -1).join(', ')}, or ${items[items.length - 1]}`;
-
-const unitLabel = (field: FunctionField): string =>
-  field.type === 'number' || field.type === 'integer' ? (field.unit === DIMENSIONLESS_UNIT ? 'none' : field.unit) : '-';
-
-const TYPE_LABELS: Record<FunctionField['type'], string> = {
-  number: 'Number',
-  integer: 'Whole number',
-  string: 'Text',
-  boolean: 'True or false',
-  array: 'List',
-  object: 'Group',
-};
-
-const typeLabel = (field: FunctionField): string =>
-  field.type === 'string' && field.enum ? 'Choice' : TYPE_LABELS[field.type];
-
-function rangeLabel(field: FunctionField): string {
-  switch (field.type) {
-    case 'number':
-    case 'integer': {
-      if (field.enum) return `one of ${listWithOr(field.enum.map(String))}`;
-      const lower =
-        field.exclusiveMinimum !== undefined
-          ? `greater than ${field.exclusiveMinimum}`
-          : field.minimum !== undefined
-            ? `at least ${field.minimum}`
-            : null;
-      const upper =
-        field.exclusiveMaximum !== undefined
-          ? `less than ${field.exclusiveMaximum}`
-          : field.maximum !== undefined
-            ? `at most ${field.maximum}`
-            : null;
-      return [lower, upper].filter(Boolean).join(' and ') || 'any';
-    }
-    case 'string':
-      return field.enum
-        ? `one of ${listWithOr(field.enum)}`
-        : `up to ${field.maxLength ?? FUNCTION_CONTRACT_LIMITS.maxStringLength} characters`;
-    case 'array':
-      if (field.minItems !== undefined && field.maxItems !== undefined) {
-        return `${field.minItems} to ${field.maxItems} items`;
-      }
-      if (field.minItems !== undefined) return `at least ${field.minItems} items`;
-      if (field.maxItems !== undefined) return `at most ${field.maxItems} items`;
-      return 'any';
-    default:
-      return '-';
-  }
-}
 
 function formatValue(value: unknown): string {
   if (typeof value === 'string') return value;
@@ -292,43 +240,6 @@ const FailureBlock = ({ error, output }: { error: string; output: string }) => (
     <PrintedOutput output={output} />
   </Stack>
 );
-
-const ContractTable = ({ schema, testId }: { schema: FunctionObjectField; testId: string }) => {
-  const required = new Set(schema.required ?? []);
-  return (
-    <Box sx={{ overflowX: 'auto' }}>
-      <Table
-        size="sm"
-        borderAxis="xBetween"
-        data-testid={testId}
-        sx={{ tableLayout: 'auto', '& th': { whiteSpace: 'nowrap' } }}
-      >
-        <thead>
-          <tr>
-            <th>Name</th>
-            <th>Type</th>
-            <th>Unit</th>
-            <th>Range</th>
-            <th>Required</th>
-          </tr>
-        </thead>
-        <tbody>
-          {Object.entries(schema.properties).map(([name, field]) => (
-            <tr key={name}>
-              <td>
-                <code>{name}</code>
-              </td>
-              <td>{typeLabel(field)}</td>
-              <td>{unitLabel(field)}</td>
-              <td>{rangeLabel(field)}</td>
-              <td>{required.has(name) ? 'Yes' : 'No'}</td>
-            </tr>
-          ))}
-        </tbody>
-      </Table>
-    </Box>
-  );
-};
 
 function FieldControl({
   name,
@@ -793,6 +704,16 @@ const failureToast = (title: string) => (error: unknown) => {
 
 const DELETE_TITLE = 'Delete this tool?';
 
+const FUNCTION_OFFER_CAP_LINE = `Chat and agent runs offer up to ${MAX_CALLABLE_FUNCTIONS_PER_TURN} of your live tools, oldest first.`;
+
+// A function cannot write anywhere, so `default` already runs it without a card; `always_allow` would read the same.
+type FunctionApproval = Extract<McpToolApprovalMode, 'default' | 'always_ask'>;
+const FUNCTION_APPROVALS: readonly FunctionApproval[] = ['default', 'always_ask'];
+const FUNCTION_APPROVAL_LABELS: Record<FunctionApproval, string> = {
+  default: 'Run without asking',
+  always_ask: 'Always ask',
+};
+
 /** Turn off or Turn on, and Delete, for one tool; `testIdPrefix` keeps the named tool's ids apart from the others'. */
 function ToolControls({
   tool,
@@ -804,6 +725,7 @@ function ToolControls({
   onDelete: (tool: ICallableFunctionPublic) => void;
 }) {
   const setEnabled = useSetCallableFunctionEnabled();
+  const setApproval = useSetCallableFunctionApproval();
   // The button is disabled while loading, which drops focus to the page body; put it back once it settles.
   const enableRef = useRef<HTMLButtonElement>(null);
   const [refocus, setRefocus] = useState(false);
@@ -836,6 +758,31 @@ function ToolControls({
         >
           {tool.enabled ? 'Turn off' : 'Turn on'}
         </Button>
+      )}
+      {tool.status !== 'source_deleted' && (
+        <Select<FunctionApproval>
+          size="sm"
+          value={tool.approval === 'always_ask' ? 'always_ask' : 'default'}
+          disabled={setApproval.isPending}
+          onChange={(_, approval) =>
+            approval &&
+            approval !== tool.approval &&
+            setApproval.mutate(
+              { id: tool.id, approval },
+              { onError: failureToast('Could not change when chat asks before a call.') }
+            )
+          }
+          slotProps={{
+            button: { 'aria-label': `When chat runs ${tool.slug}`, 'data-testid': `${testIdPrefix}-approval` },
+          }}
+          sx={{ minWidth: '170px' }}
+        >
+          {FUNCTION_APPROVALS.map(mode => (
+            <Option key={mode} value={mode} data-testid={`${testIdPrefix}-approval-${mode}`}>
+              {FUNCTION_APPROVAL_LABELS[mode]}
+            </Option>
+          ))}
+        </Select>
       )}
       <Button
         size="sm"
@@ -986,6 +933,11 @@ function FunctionSaveSection({ save, contract }: { save: PythonFunctionSave; con
           )}
           <ToolControls key={saved.id} tool={saved} testIdPrefix="python-function" onDelete={setDeleting} />
         </Stack>
+        {saved.status !== 'source_deleted' && (
+          <Typography level="body-xs" textColor="text.tertiary" data-testid="python-function-offer-cap">
+            {FUNCTION_OFFER_CAP_LINE}
+          </Typography>
+        )}
         {saved.status !== 'source_deleted' && (
           <Box sx={{ pt: 1 }}>
             <PromoteFunctionSection

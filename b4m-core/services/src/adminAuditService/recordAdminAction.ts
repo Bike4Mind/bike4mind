@@ -11,6 +11,7 @@ import {
   type StoredAuditContext,
 } from '@bike4mind/common';
 import { redactAuditPayload, redactChange } from './redactAuditPayload';
+import { Logger } from '@bike4mind/observability';
 
 export type RecordAdminActionInput = {
   action: AdminAuditAction;
@@ -104,7 +105,7 @@ export const recordAdminAction = async (
     if (write === 'strict') throw error;
     const meta = { action: input.action, error };
     if (adapters.logger) adapters.logger.error('[ADMIN_AUDIT_WRITE_FAILED]', meta);
-    else console.error('[ADMIN_AUDIT_WRITE_FAILED]', meta);
+    else Logger.error('[ADMIN_AUDIT_WRITE_FAILED]', meta);
     return null;
   }
 };

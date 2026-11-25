@@ -1,7 +1,6 @@
 import { outboundActionGate } from '@server/auth/assertOutboundActionAllowed';
 import { assertPublicationPublicLink } from '@server/services/publish/organizationPolicy';
 import { baseApi } from '@server/middlewares/baseApi';
-import { v4 as uuidv4 } from 'uuid';
 import { getPublishedArtifactsStorage } from '@bike4mind/server-utils/utils/storage/index';
 import { PublishedArtifact } from '@bike4mind/database';
 import {
@@ -160,7 +159,7 @@ const handler = baseApi({
   };
 
   // ── Issue draft + presigned PUT URLs ──
-  const draftId = uuidv4();
+  const draftId = crypto.randomUUID();
   const draftPrefix = `drafts/${draftId}/`;
   const expiresAt = new Date(Date.now() + PRESIGNED_URL_EXPIRY_SECONDS * 1000).toISOString();
 

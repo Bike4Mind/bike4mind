@@ -1,6 +1,7 @@
 import type { IModelCatalogRepository, IModelCatalogRow } from '@bike4mind/common';
 import seedFile from './modelCatalog.seed.json';
 import type { ModelCatalogSeedEntry } from './generateModelCatalogSeed';
+import { Logger } from '@bike4mind/observability';
 
 const FAR_FUTURE = new Date('9999-01-01T00:00:00Z');
 
@@ -116,9 +117,10 @@ export async function seedModelCatalog(
         // deployments keep the stale row. Be loud about it. Strict equality
         // only: a strictly newer row just means an older-code instance is
         // booting after a newer seed landed (rollback / canary).
-        console.warn(
-          `[modelCatalog] seed entry for ${entry.modelId} differs from the newest seed row but generatedAt (${seed.generatedAt}) was not bumped; ` +
-            'regenerate the seed instead of editing entries: pnpm --filter @bike4mind/database generate:model-catalog-seed'
+        Logger.warn(
+          '[modelCatalog] seed entry differs from the newest seed row but generatedAt was not bumped; ' +
+            'regenerate the seed instead of editing entries: pnpm --filter @bike4mind/database generate:model-catalog-seed',
+          { modelId: entry.modelId, generatedAt: seed.generatedAt }
         );
       }
       if (provenance === 'operator' || alreadyCurrent || sameRow) {

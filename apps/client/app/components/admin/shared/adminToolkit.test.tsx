@@ -18,6 +18,7 @@ import {
   EmptyState,
   ErrorState,
   BulkActionBar,
+  ChartSection,
   type AdminSelection,
 } from './index';
 import { relativeTime } from './EntityHeader';
@@ -132,6 +133,33 @@ describe('admin layout primitives', () => {
     expect(screen.getByTestId('identity-card')).toHaveTextContent('Identity');
     expect(screen.getByTestId('fact-name')).toHaveTextContent('Ada');
     expect(screen.getByTestId('fact-plan')).toHaveTextContent('-');
+  });
+
+  it('shows inline help right after the section title, before the action', () => {
+    renderToolkit(
+      <SectionCard title="Usage" help={<span data-testid="usage-help">?</span>} action={<button>Act</button>}>
+        <Fact label="Events">3</Fact>
+      </SectionCard>
+    );
+    const heading = screen.getByRole('heading', { name: 'Usage' });
+    const help = screen.getByTestId('usage-help');
+    expect(heading.compareDocumentPosition(help) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(
+      help.compareDocumentPosition(screen.getByRole('button', { name: 'Act' })) & Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy();
+  });
+
+  it('passes chart section help through to its title bar', () => {
+    renderToolkit(
+      <ChartSection
+        title="Trend"
+        testId="trend"
+        help={<span data-testid="trend-help">?</span>}
+        body={{ kind: 'notice', content: 'Nothing yet' }}
+      />
+    );
+    expect(within(screen.getByTestId('trend')).getByTestId('trend-help')).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Trend' })).toBeInTheDocument();
   });
 
   it('hands a custom section body over without a definition list', () => {

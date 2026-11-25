@@ -10,7 +10,6 @@
  * the transcript together - or stays queued for the host to run as a follow-up
  * turn (turnController.ts) or restore to the input on cancel (index.tsx ESC).
  */
-import { v4 as uuidv4 } from 'uuid';
 import type { Message } from '../storage';
 import { useCliStore } from '../store';
 
@@ -41,7 +40,7 @@ export function deliverSteers(signal: AbortSignal): { feedback: string; steers: 
 
   const timestamp = new Date().toISOString();
   const steerMessages: Message[] = steers.map(text => ({
-    id: uuidv4(),
+    id: crypto.randomUUID(),
     role: 'user',
     content: text,
     timestamp,

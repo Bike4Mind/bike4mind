@@ -9,6 +9,9 @@ vi.mock('../services/publish/purgeUserPublishedArtifacts', () => ({
 vi.mock('../auth/signupNetworkLimits', () => ({
   retainDeletedSignupTraces: vi.fn(async () => undefined),
 }));
+vi.mock('../callableFunctions/reviews', () => ({
+  deleteReviewsOfOwnedCallableFunctions: vi.fn(async () => undefined),
+}));
 vi.mock('./subjectErasureExecutor', () => ({
   SubjectErasureExecutor: class {
     run = h.run;

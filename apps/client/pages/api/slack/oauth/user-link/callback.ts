@@ -75,12 +75,12 @@ const handler = baseApi({ auth: false }).get(async (req, res) => {
     auditLogger.failure(stateResult.error || 'invalid_state');
     return res.redirect(`/profile?tab=integrations&slack_error=${stateResult.error}`);
   }
-  const { userId } = stateResult.payload;
+  const { userId, workspaceId } = stateResult.payload;
   auditLogger.setUserId(userId);
   const codePrefix = (code as string).substring(0, 10) + '...'; // Truncated for security
 
   try {
-    const workspaceResult = await getOAuthWorkspaceWithCredentials();
+    const workspaceResult = await getOAuthWorkspaceWithCredentials(workspaceId);
     if (!workspaceResult.success) {
       auditLogger.failure(workspaceResult.error || 'workspace_error');
       return res.redirect(`/profile?tab=integrations&slack_error=${workspaceResult.error}`);

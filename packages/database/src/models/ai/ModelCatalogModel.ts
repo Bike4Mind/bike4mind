@@ -12,6 +12,7 @@ import {
   ModelCatalogRowInput,
   ModelCatalogRowRead,
 } from '@bike4mind/common';
+import { Logger } from '@bike4mind/observability';
 
 /** The one source rowsInForce never collapses; see its docstring for why. */
 const OPERATOR_SOURCE: CatalogRowSource = 'operator';
@@ -111,9 +112,7 @@ export class ModelCatalogRepository
   async rowsInForce(at: Date = new Date()): Promise<IModelCatalogRow[]> {
     const { rows, rejected, rejectedModelIds } = await this.rowsInForceWithRejects(at);
     if (rejected > 0) {
-      console.error(
-        `[modelCatalog] CatalogRowsRejected=${rejected}: dropped unreadable rows for ${rejectedModelIds.join(', ')}`
-      );
+      Logger.error('[modelCatalog] CatalogRowsRejected: dropped unreadable rows', { rejected, rejectedModelIds });
     }
     return rows;
   }

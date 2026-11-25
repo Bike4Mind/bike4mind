@@ -8,6 +8,7 @@ import { type ChatModelOption, type ChatStreamEvent, RUN_BUDGET_STOP } from '@sh
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { addUsage, ChatService } from './ChatService';
 import { MediaStore } from './media/MediaStore';
+import { MessageQueue } from './MessageQueue';
 import type { ModelCatalog } from './ModelCatalog';
 import { SessionStore } from './SessionStore';
 import type { AccessStore } from './tools/AccessStore';
@@ -717,6 +718,8 @@ describe('runBudget', () => {
         emit: event => void events.push(event),
         mintCompletionRun: mint,
         media: new MediaStore(await mkdtemp(join(tmpdir(), 'b4m-budget-media-'))),
+        // A planner is woken for its agents through the queue.
+        queue: new MessageQueue(() => undefined),
       };
       service = new ChatService(deps);
     });
@@ -1060,6 +1063,120 @@ describe('runBudget', () => {
       expect((await policyOf(root.id))?.budgetPaused).toBeUndefined();
       for (const stream of streams) stream.end();
     });
+    /** Streams every request except the ones `refuse` picks, which the server rejects for the budget. */
+    const refuseWhen = (refuse: (body: Wire) => boolean | Promise<boolean>) => {
+      const streamed = completions.getMockImplementation()!;
+      completions.mockImplementation(async (url, rawBody, ...rest) => {
+        if (await refuse(rawBody as Wire)) throw exhausted();
+        return streamed(url, rawBody, ...rest);
+      });
+    };
+    const spawnWorker = (index: number) => {
+      streams[index].write(
+        toolUse({
+          id: 'spawn-0',
+          name: 'session_spawn',
+          args: { prompt: 'Do the task', title: 'Fixed child title', contract },
+        })
+      );
+      streams[index].write(frame('[DONE]'));
+    };
+    const workerOf = (rootId: string) =>
+      vi.waitUntil(async () => (await store.list()).find(session => session.origin?.parentSessionId === rootId), {
+        timeout: 5000,
+        interval: 5,
+      });
+    /** Whether an agents-settled wake reached the planner's transcript. */
+    const rootWokeForAgents = async (rootId: string) =>
+      ((await store.get(rootId))?.messages ?? []).some(message => message.automatic?.kind === 'agents-settled');
+    const rootRequestsSince = (start: number) =>
+      completions.mock.calls.slice(start).filter(([, body]) => (body as Wire).run?.role === 'root').length;
+
+    it('wakes the planner once its worker finishes after a raise that resumed the worker', async () => {
+      const root = await budgeted(500);
+      await service.send(root.id, 'Delegate the bounded task');
+      await waitStream(0);
+      // The worker's first request is refused, then the planner's next round over the same spent run.
+      let refusedWorker = false;
+      let rootCalls = 1;
+      refuseWhen(async body => {
+        if (body.run?.role === 'worker' && !refusedWorker) {
+          refusedWorker = true;
+          return true;
+        }
+        if (body.run?.role !== 'root' || ++rootCalls !== 2) return false;
+        await vi.waitUntil(() => refusedWorker, { timeout: 5000, interval: 5 });
+        return true;
+      });
+      spawnWorker(0);
+      const worker = await workerOf(root.id);
+      await vi.waitUntil(async () => (await lastReply(worker.id))?.stopReason === RUN_BUDGET_STOP, {
+        timeout: 5000,
+        interval: 5,
+      });
+      await idle(root.id);
+      // The stopped worker's report lands under the planner after its stopped turn, on a timing
+      // that varies by machine: wait for it, so the planner's last message is a known one.
+      await vi.waitUntil(async () => (await lastReply(root.id))?.reportedChildId === worker.id, {
+        timeout: 5000,
+        interval: 5,
+      });
+      const plannerTurn = (await store.get(root.id))?.messages.findLast(message => message.role === 'assistant');
+      expect(plannerTurn?.stopReason).toBe(RUN_BUDGET_STOP);
+      const opened = streams.length;
+
+      await expect(service.raiseRunBudget(worker.id, 2000)).resolves.toMatchObject({ ok: true });
+      // Finish every stream as it opens until the planner has been woken for the finished worker.
+      for (let next = opened; !(await rootWokeForAgents(root.id)); next += 1) {
+        await vi.waitUntil(() => streams.length > next, { timeout: 5000, interval: 5 });
+        finish(next);
+        await idle(worker.id);
+      }
+      for (const stream of streams) stream.end();
+    });
+
+    it('resumes a planner whose own turn the budget stopped, even after a worker report landed under it', async () => {
+      const root = await budgeted(500);
+      await service.send(root.id, 'Delegate the bounded task');
+      await waitStream(0);
+      let rootCalls = 1;
+      // Held until the worker is streaming, so the pause lands while its request is in flight.
+      refuseWhen(async body => {
+        if (body.run?.role !== 'root' || ++rootCalls !== 2) return false;
+        await vi.waitUntil(() => streams.length > 1, { timeout: 5000, interval: 5 });
+        return true;
+      });
+      spawnWorker(0);
+      const worker = await workerOf(root.id);
+      await vi.waitUntil(async () => (await lastReply(root.id))?.stopReason === RUN_BUDGET_STOP, {
+        timeout: 5000,
+        interval: 5,
+      });
+      await idle(root.id);
+      expect((await policyOf(root.id))?.budgetPaused).toBe(true);
+      expect(deps.summaryChanged).toHaveBeenCalledWith(
+        expect.objectContaining({
+          id: root.id,
+          orchestrationPolicy: expect.objectContaining({ budgetPaused: true }),
+        })
+      );
+      // The worker's request was already streaming when the planner was refused, so it finishes.
+      await waitStream(1);
+      finish(1);
+      await idle(worker.id);
+      await vi.waitUntil(async () => (await lastReply(root.id))?.role === 'user', { timeout: 5000, interval: 5 });
+      // Not woken while paused: the wake would only be refused for the same budget.
+      expect(rootRequestsSince(0)).toBe(2);
+      const before = completions.mock.calls.length;
+
+      await expect(service.raiseRunBudget(root.id, 2000)).resolves.toMatchObject({ ok: true });
+      await vi.waitUntil(() => rootRequestsSince(before) > 0, { timeout: 5000, interval: 5 });
+      await waitStream(2);
+      finish(2, 'Summary of the work');
+      await idle(root.id);
+      expect((await lastReply(root.id))?.content).toContain('Summary of the work');
+    });
+
     it('pauses the run when a paid tool is refused for the budget, and the raise resumes it', async () => {
       const root = await budgeted(500);
       budgetState = { budgetCredits: 500, committedCredits: 480, reservedCredits: 0, remainingCredits: 20 };

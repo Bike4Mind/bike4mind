@@ -12,6 +12,7 @@ import {
   type FunctionContractProblem,
   type ICallableFunctionCall,
   type ICallableFunctionDocument,
+  type ICallableFunctionSummary,
 } from '@bike4mind/common';
 import {
   artifactRepository,
@@ -33,6 +34,8 @@ import {
   type CallableFunctionRunner,
   type CallableFunctionTenant,
 } from './runtimeRunner';
+import { hasCurrentReview } from './reviews';
+import { canCallFunction } from './sharing';
 
 /**
  * The one way a saved function runs: every surface (the test run now; REST, chat, agent runs, and MCP later) calls
@@ -47,8 +50,11 @@ export type CallableFunctionDispatchReason =
   | 'setting_off'
   | 'not_found'
   | 'not_caller'
+  | 'review_required'
   | 'disabled'
   | 'source_deleted'
+  | 'not_live'
+  | 'approval_required'
   | 'input_too_large'
   | 'wait_exceeded'
   | 'budget_exhausted'
@@ -61,7 +67,8 @@ const MIB = 1024 * 1024;
 /**
  * Per surface: input and output caps (5 MB is the runtime's ceiling; results that go into a model's context get
  * 256 KB) and the longest the dispatcher waits for one run. Every surface answers synchronously within the web
- * function's 60 s (`infra/web.ts`), so no wait passes 45 s.
+ * function's 60 s (`infra/web.ts`), so no wait passes 45 s. An MCP answer carries the output twice, so its cap is
+ * 2 MB to leave room in the web function's 6 MB response.
  */
 export const CALLABLE_FUNCTION_SURFACE_CAPS: Record<
   CallableFunctionCallSurface,
@@ -69,7 +76,7 @@ export const CALLABLE_FUNCTION_SURFACE_CAPS: Record<
 > = {
   test: { inputBytes: 5 * MIB, outputBytes: 5 * MIB, waitMs: 45_000 },
   rest: { inputBytes: 5 * MIB, outputBytes: 5 * MIB, waitMs: 45_000 },
-  mcp: { inputBytes: 5 * MIB, outputBytes: 5 * MIB, waitMs: 45_000 },
+  mcp: { inputBytes: 5 * MIB, outputBytes: 2 * MIB, waitMs: 45_000 },
   chat: { inputBytes: 5 * MIB, outputBytes: 256 * 1024, waitMs: 45_000 },
   agent: { inputBytes: 5 * MIB, outputBytes: 256 * 1024, waitMs: 45_000 },
 };
@@ -93,6 +100,8 @@ export interface DispatchFunctionCallRequest {
   args: unknown;
   surface: CallableFunctionCallSurface;
   apiKeyId?: string;
+  /** Server-supplied approval for a chat/agent call; omitted is not approved. */
+  approved?: boolean;
 }
 
 export interface CallableFunctionDispatchOptions {
@@ -338,11 +347,46 @@ async function readHead(fn: ICallableFunctionDocument) {
   return artifact ? { version: artifact.version, deletedAt: artifact.deletedAt } : null;
 }
 
+const callRow = (
+  { caller, functionId, surface, apiKeyId }: Omit<DispatchFunctionCallRequest, 'args'>,
+  startedAt: Date
+): ICallableFunctionCall => ({
+  op: 'call',
+  functionId: functionId.slice(0, 64),
+  callerUserId: caller.id,
+  ...(apiKeyId ? { apiKeyId } : {}),
+  ...(caller.organizationId ? { organizationId: caller.organizationId } : {}),
+  surface,
+  dataHashes: [],
+  startedAt,
+  durationMs: 0,
+  outcome: 'refused',
+});
+
+/** Refusals a tool host makes before it reaches the dispatcher. */
+export type CallableFunctionHostRefusal = 'not_found' | 'not_live' | 'approval_required';
+
+/** Writes the one `refused` row for a call a tool host turned away, shaped as the dispatcher's own rows. */
+export async function recordCallableFunctionRefusal(
+  request: Omit<DispatchFunctionCallRequest, 'args'>,
+  reason: CallableFunctionHostRefusal,
+  fn?: Pick<ICallableFunctionSummary, 'userId' | 'pin'>
+): Promise<{ id: string }> {
+  const row = callRow(request, new Date());
+  if (fn) {
+    row.ownerUserId = fn.userId;
+    row.codeHash = fn.pin.contentHash;
+    if (fn.pin.seq !== undefined) row.pinSeq = fn.pin.seq;
+  }
+  return withCallRow(row, write => write({ durationMs: 0, outcome: 'refused', reason }));
+}
+
 /**
- * Checks, in order, the setting, the record, the caller (the owner only), the status, the input size, and the
- * inputs, then runs the pinned code, checks the outputs, and stamps the result. Every path, a throw included, writes
- * one call-log row with hashes and sizes only. Another owner's function answers `not_found`, as a missing one does;
- * only the row says `not_caller`.
+ * Checks, in order, the setting, the record, the caller (`canCallFunction`; a recipient also needs a current,
+ * enabled review of the interface the call runs against), the status, the input size, and the inputs, then runs the
+ * pinned code, checks the outputs, and stamps the result. Every path, a throw included, writes one call-log row with
+ * hashes and sizes only. A function the caller cannot call answers `not_found`, as a missing one does; only the row
+ * says `not_caller`.
  */
 export async function dispatchFunctionCall(
   request: DispatchFunctionCallRequest,
@@ -350,18 +394,7 @@ export async function dispatchFunctionCall(
 ): Promise<DispatchFunctionCallResult> {
   const { caller, functionId, args, surface, apiKeyId } = request;
   const startedAt = new Date();
-  const row: ICallableFunctionCall = {
-    op: 'call',
-    functionId: functionId.slice(0, 64),
-    callerUserId: caller.id,
-    ...(apiKeyId ? { apiKeyId } : {}),
-    ...(caller.organizationId ? { organizationId: caller.organizationId } : {}),
-    surface,
-    dataHashes: [],
-    startedAt,
-    durationMs: 0,
-    outcome: 'refused',
-  };
+  const row = callRow({ caller, functionId, surface, apiKeyId }, startedAt);
 
   return withCallRow(row, async write => {
     const finish = async (
@@ -387,12 +420,19 @@ export async function dispatchFunctionCall(
     row.codeHash = fn.pin.contentHash;
     if (fn.pin.seq !== undefined) row.pinSeq = fn.pin.seq;
 
-    if (fn.ownerType !== 'user' || fn.ownerKey !== caller.id) {
-      return finish({ outcome: 'refused', reason: 'not_found' }, 'not_caller');
+    const contract = options.contract ?? fn.contract;
+    const access = await canCallFunction(caller, fn);
+    if (!access) return finish({ outcome: 'refused', reason: 'not_found' }, 'not_caller');
+    if (access !== 'owner' && !(await hasCurrentReview(caller.id, { id: fn.id, contract }))) {
+      return refuse('review_required');
     }
 
     const status = effectiveCallableFunctionStatus(fn, await readHead(fn));
     if (status === 'disabled' || status === 'source_deleted') return refuse(status);
+    if (surface === 'chat' || surface === 'agent') {
+      if (status !== 'live') return refuse('not_live');
+      if (fn.approval === 'always_ask' && request.approved !== true) return refuse('approval_required');
+    }
 
     // Measured before validation, so an input of any size is never walked.
     const caps = CALLABLE_FUNCTION_SURFACE_CAPS[surface];
@@ -401,7 +441,6 @@ export async function dispatchFunctionCall(
       return finish({ outcome: 'input_invalid', reason: 'input_too_large' });
     }
 
-    const contract = options.contract ?? fn.contract;
     if (isObject(args)) row.inputHash = functionInputHash(args);
     const problems = validateFunctionValue(contract.inputs, args);
     if (problems.length > 0) return finish({ outcome: 'input_invalid', problems });

@@ -441,10 +441,24 @@ describe('shell approval of git programs, sourced files and fresh folders', () =
       GIT_COMMITTER_NAME: 't',
       GIT_COMMITTER_EMAIL: 't@t',
     };
+    // maintenance.auto=false: since git 2.47 a commit starts `git maintenance run --auto --detach`, which
+    // creates and removes .git/objects/maintenance.lock while cpSync below copies the repository (ENOENT).
     const git = (repo: string, ...args: string[]): void => {
-      execFileSync('git', ['-C', repo, '-c', 'core.hooksPath=/dev/null', '-c', 'commit.gpgsign=false', ...args], {
-        env,
-      });
+      execFileSync(
+        'git',
+        [
+          '-C',
+          repo,
+          '-c',
+          'core.hooksPath=/dev/null',
+          '-c',
+          'commit.gpgsign=false',
+          '-c',
+          'maintenance.auto=false',
+          ...args,
+        ],
+        { env }
+      );
     };
     vi.stubEnv('HOME', home);
     vi.stubEnv('XDG_CONFIG_HOME', join(home, '.config'));

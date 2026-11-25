@@ -81,6 +81,19 @@ const BUDGET_STOP_LABELS: Record<string, string> = {
  * happened and here is what to do about it" - the chip alone read as a dead end, which is
  * exactly what it no longer is.
  */
+/**
+ * The reply a run-budget pause stopped, when only app notices (an agent's report, a waiting
+ * notice) landed under it: its raise row is still the way the run resumes, so it stays on offer.
+ */
+export function budgetPausedReplyIndex(messages: readonly ChatMessage[]): number {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (message.role === 'assistant') return message.stopReason === RUN_BUDGET_STOP ? index : -1;
+    if (!message.system) return -1;
+  }
+  return -1;
+}
+
 function StopReasonRow({
   reason,
   onContinue,
@@ -160,7 +173,7 @@ function ServerCredentialsRow() {
         size="sm"
         variant="soft"
         color="primary"
-        onClick={() => void navigate({ to: '/settings', search: { section: 'servers' } })}
+        onClick={() => void navigate({ to: '/settings', search: { section: 'models', setting: 'model-servers' } })}
         data-testid="chat-server-credentials-btn"
       >
         Open Model servers
@@ -1064,6 +1077,7 @@ export function MessageThread({
   const liveReplyId = streaming ? (liveTurn?.messageId ?? last?.id) : undefined;
   const warnings = useMemo(() => editWarnings(messages), [messages]);
   const regenerable = !streaming && onRegenerate ? regenerableReply(messages) : null;
+  const budgetPaused = useMemo(() => budgetPausedReplyIndex(messages), [messages]);
   const regenerateWarns = useMemo(() => (regenerable ? turnsChangedThings([regenerable]) : false), [regenerable]);
   // Through a ref so UserTurn's memo holds: the callback changes with every thread update.
   const editRef = useRef(onEditMessage);
@@ -1108,8 +1122,11 @@ export function MessageThread({
           onRespond={onRespond}
           {...(onMove ? { onMove } : {})}
           // Only the last turn, and only while nothing is running: resuming writes back
-          // into its own message, so a Continue on an older one would edit history.
-          {...(index === messages.length - 1 && !streaming ? { onContinue, sessionId } : {})}
+          // into its own message, so a Continue on an older one would edit history. A budget
+          // pause is the exception: its raise row resumes the run, not this message.
+          {...((index === messages.length - 1 || index === budgetPaused) && !streaming
+            ? { onContinue, sessionId }
+            : {})}
           {...(regenerable?.id === message.id && onRegenerate ? { onRegenerate, regenerateWarns } : {})}
           {...(index === messages.length - 1 && streaming ? { status, live: true } : {})}
           {...(skipRounds > 0 ? { skipRounds } : {})}

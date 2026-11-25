@@ -126,6 +126,7 @@ export const USAGE_EVENT_OPERATIONS = [
   'assistant_brief',
   'delegated_item',
   'document_obligation',
+  'org_feedback_summary',
 ] as const;
 
 export type UsageEventOperation = (typeof USAGE_EVENT_OPERATIONS)[number];

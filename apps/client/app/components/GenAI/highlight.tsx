@@ -1,5 +1,5 @@
 import { ReactNode } from 'react';
-import escapeStringRegexp from 'escape-string-regexp';
+import { escapeRegex } from '@bike4mind/utils/escapeRegex';
 
 // Pre-compiled regex patterns for validation
 const SAFE_SEARCH_PATTERN = /^[\w\s\-.,!?]+$/;
@@ -16,7 +16,7 @@ export const highlightTextSearch = (node: ReactNode[] | string, search?: string)
 
   const markText = (text: string, pidx: number) => {
     // Escape special characters in the search string
-    const escapedSearch = escapeStringRegexp(search.slice(0, MAX_SEARCH_LENGTH));
+    const escapedSearch = escapeRegex(search.slice(0, MAX_SEARCH_LENGTH));
 
     // Pre-compile the regex pattern
     const searchPattern = new RegExp(`(${escapedSearch})`, 'gi');

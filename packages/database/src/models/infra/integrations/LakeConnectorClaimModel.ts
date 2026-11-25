@@ -1,6 +1,7 @@
 import { IMongoDocument } from '@bike4mind/common';
 import mongoose, { Schema, Model, model } from 'mongoose';
 import BaseRepository from '@bike4mind/db-core';
+import { Logger } from '@bike4mind/observability';
 
 export const LAKE_CONNECTOR_CLAIM_KINDS = ['github', 'googleDrive'] as const;
 export type LakeConnectorClaimKind = (typeof LAKE_CONNECTOR_CLAIM_KINDS)[number];
@@ -119,10 +120,9 @@ export const lakeConnectorClaimRepository = new LakeConnectorClaimRepository(Lak
  */
 export async function releaseLakeClaimBestEffort(connectionId: string): Promise<void> {
   await lakeConnectorClaimRepository.releaseByConnectionId(connectionId).catch((err: unknown) => {
-    console.warn(
-      `releaseLakeClaimBestEffort: failed to release lake claim for connection ${connectionId}; ` +
-        'the stale claim may refuse other connector kinds until its grace window passes',
-      err
+    Logger.warn(
+      'releaseLakeClaimBestEffort: failed to release lake claim; the stale claim may refuse other connector kinds until its grace window passes',
+      { connectionId, error: err }
     );
   });
 }

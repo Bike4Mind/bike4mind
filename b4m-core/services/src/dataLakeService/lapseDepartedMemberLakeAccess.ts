@@ -8,6 +8,7 @@ import { grantChange, ownershipChange } from './diffLakeConfig';
 import { lakeConfigWriteStamp } from './lakeConfigWriteStamp';
 import { resolveEffectiveOwnerIds, type LakeGrant, type ManageActor } from './manageRule';
 import { recordLakeConfigChange, type LakeConfigAuditAdapters } from './recordLakeConfigChange';
+import { Logger } from '@bike4mind/observability';
 
 export interface LapseDepartedMemberLakeAccessAdapters extends LakeConfigAuditAdapters {
   // The event repo is REQUIRED here, matching `transferLakeOwnership`: the only callers are the
@@ -404,7 +405,7 @@ async function passOnCreatedLakes(
         // Both members of `LakeConfigAuditLogger` are optional, and it falls back to console so the
         // stamp can never quietly name an older edit with nothing anywhere to say why. Called
         // through a closure rather than by reference so a logger whose method needs `this` works.
-        const warn = (msg: string, meta: unknown) => (logger?.warn ? logger.warn(msg, meta) : console.warn(msg, meta));
+        const warn = (msg: string, meta: unknown) => (logger?.warn ? logger.warn(msg, meta) : Logger.warn(msg, meta));
         warn('[dataLakes] ownership passed on but the lake was not found for the actor stamp', {
           dataLakeId: lake.id,
         });

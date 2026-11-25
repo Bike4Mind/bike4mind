@@ -1,7 +1,7 @@
 import type { AuthenticatedApiClient } from '@bike4mind/client-auth';
 import { AxiosError, AxiosHeaders } from 'axios';
 import { describe, expect, it, vi } from 'vitest';
-import { MediaApiClient, type MediaToolError } from './MediaApiClient';
+import { MediaApiClient, MediaToolError } from './MediaApiClient';
 
 describe('image', () => {
   const jobBody = {
@@ -35,6 +35,43 @@ describe('image', () => {
       expect(post.mock.calls[0][2].headers).toEqual({ 'Idempotency-Key': 'key-1' });
       expect(jobs).toHaveLength(1);
       expect(jobs[0].state).toBe('pending');
+    });
+
+    it('returns the group id beside the jobs for a multi-image submit', async () => {
+      const post = vi.fn().mockResolvedValue({ group_id: 'grp1', data: [jobBody, { ...jobBody, id: 'job 2' }] });
+      const group = await clientWith({ post }).createImageJobGroup(
+        { model: 'gpt-image-2', mode: 'generate', prompt: 'p', count: 2 },
+        'key-2'
+      );
+      expect(post.mock.calls[0][1]).toMatchObject({ count: 2 });
+      expect(group.group_id).toBe('grp1');
+      expect(group.data.map(job => job.id)).toEqual(['job 1', 'job 2']);
+    });
+
+    it('rejects a create response that is not the public image-job shape', async () => {
+      // The retired Studio route answered { groupId, jobs }; reading it as v1 must fail loudly, not as zero jobs.
+      const post = vi.fn().mockResolvedValue({ groupId: 'grp1', jobs: [jobBody] });
+      await expect(
+        clientWith({ post }).createImageJobGroup({ model: 'gpt-image-2', mode: 'generate', prompt: 'p' }, 'key-3')
+      ).rejects.toThrow();
+    });
+
+    it('surfaces a 422 insufficient_credits refusal as a credits notice', async () => {
+      const response = {
+        status: 422,
+        statusText: 'Unprocessable Entity',
+        headers: {},
+        config: { headers: new AxiosHeaders() },
+        data: { error: 'Not enough credits for 2 images.', errorCode: 'insufficient_credits' },
+      };
+      const post = vi.fn().mockRejectedValue(new AxiosError('422', 'ERR_BAD_REQUEST', undefined, undefined, response));
+      const error = await clientWith({ post })
+        .createImageJobGroup({ model: 'gpt-image-2', mode: 'generate', prompt: 'p' }, 'key-4')
+        .catch((caught: unknown) => caught);
+      if (!(error instanceof MediaToolError)) throw new Error('expected a MediaToolError');
+      expect(error).toMatchObject({ status: 422, code: 'insufficient_credits' });
+      expect(error.message).toContain('Not enough credits');
+      expect(error.notice).toMatchObject({ kind: 'insufficient-credits' });
     });
 
     it('reads a job by encoded id and forwards the abort signal', async () => {

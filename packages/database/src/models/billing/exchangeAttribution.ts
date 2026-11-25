@@ -1,6 +1,7 @@
 import mongoose from 'mongoose';
 import { CreditHolderType, type PayerStanding } from '@bike4mind/common';
 import { UserApiKey } from '../auth/UserApiKeyModel';
+import { Logger } from '@bike4mind/observability';
 
 const CACHE_TTL_MS = 60_000;
 const CACHE_MAX_ENTRIES = 5_000;
@@ -47,7 +48,7 @@ async function resolveFacts(apiKeyId: string): Promise<{ facts: ExchangeKeyFacts
   if (cached && cached.expiresAt > Date.now()) return { facts: cached.facts };
   // A read inside a transaction joins it, and a failed read aborts the whole settlement.
   if (hasActiveTransaction()) {
-    console.warn('[exchange-attribution] cold cache inside a transaction, attribution dropped', { apiKeyId });
+    Logger.warn('[exchange-attribution] cold cache inside a transaction, attribution dropped', { apiKeyId });
     return undefined;
   }
   try {
@@ -57,7 +58,7 @@ async function resolveFacts(apiKeyId: string): Promise<{ facts: ExchangeKeyFacts
     if (cache.size > CACHE_MAX_ENTRIES) cache.delete(cache.keys().next().value as string);
     return { facts };
   } catch {
-    console.warn('[exchange-attribution] key read failed, attribution dropped', { apiKeyId });
+    Logger.warn('[exchange-attribution] key read failed, attribution dropped', { apiKeyId });
     return undefined;
   }
 }

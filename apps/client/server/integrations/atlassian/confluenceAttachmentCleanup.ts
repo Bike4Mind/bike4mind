@@ -49,7 +49,7 @@ export async function cleanupConfluencePageContent(
   }
 
   const config = buildAtlassianConfig({ accessToken, cloudId, siteUrl: getEnv('ATLASSIAN_SITE_URL') });
-  const confluence = new ConfluenceApi(config.confluence);
+  const confluence = new ConfluenceApi(config.confluence, { logger });
 
   const page = await confluence.getPageStorage({ pageId });
   if (!page.storage) {

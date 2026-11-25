@@ -24,6 +24,7 @@ const OPERATION_LABELS: Readonly<Record<string, string>> = {
   assistant_brief: 'Assistant brief',
   delegated_item: 'Delegated item',
   document_obligation: 'Scanned document',
+  org_feedback_summary: 'Feedback summary',
 };
 
 const FEATURE_LABELS: Readonly<Record<string, string>> = {
