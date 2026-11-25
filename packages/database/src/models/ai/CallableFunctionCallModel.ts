@@ -1,8 +1,8 @@
 import {
   CALLABLE_FUNCTION_CALL_OPS,
-  CALLABLE_FUNCTION_CALL_OUTCOMES,
+  CALLABLE_FUNCTION_CALL_ROW_OUTCOMES,
   CALLABLE_FUNCTION_CALL_SURFACES,
-  type CallableFunctionCallOutcome,
+  type CallableFunctionCallRowOutcome,
   type CallableFunctionCallSummary,
   type ICallableFunctionCall,
   type ICallableFunctionCallDocument,
@@ -46,7 +46,7 @@ const CallableFunctionCallSchema = new Schema<ICallableFunctionCallDocument>(
     initMs: { type: Number, min: 0 },
     inputBytes: { type: Number, min: 0 },
     outputBytes: { type: Number, min: 0 },
-    outcome: { type: String, enum: CALLABLE_FUNCTION_CALL_OUTCOMES, required: true },
+    outcome: { type: String, enum: CALLABLE_FUNCTION_CALL_ROW_OUTCOMES, required: true },
     reason: { type: String, match: CODE },
     errorClass: { type: String, match: CLASS_NAME },
   },
@@ -85,6 +85,13 @@ class CallableFunctionCallRepository extends BaseRepository<ICallableFunctionCal
     }
   }
 
+  /** Overwrites a queued call's row with how it went, so an asynchronous call keeps the one row it was queued as. */
+  async rewrite(id: string, row: Partial<ICallableFunctionCall>): Promise<ICallableFunctionCallDocument> {
+    const updated = await this.model.findByIdAndUpdate(id, { $set: row }, { new: true, runValidators: true });
+    if (!updated) throw new Error('Callable function call row not found');
+    return updated;
+  }
+
   /** One caller's calls of one function since `since`, read through `callablefncall_function_started`. */
   async summarizeForCaller(
     functionId: string,
@@ -95,7 +102,7 @@ class CallableFunctionCallRepository extends BaseRepository<ICallableFunctionCal
     // Contract reads are logged too, but they are not calls of the function.
     const match = { functionId, callerUserId, op: 'call', startedAt: { $gte: since } };
     const [counts, recent] = await Promise.all([
-      this.model.aggregate<{ _id: CallableFunctionCallOutcome; count: number }>([
+      this.model.aggregate<{ _id: CallableFunctionCallRowOutcome; count: number }>([
         { $match: match },
         { $group: { _id: '$outcome', count: { $sum: 1 } } },
       ]),

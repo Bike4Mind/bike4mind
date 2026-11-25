@@ -87,7 +87,6 @@ import { Logger } from '@bike4mind/observability';
 import { MongoAbility } from '@casl/ability';
 import { fileTypeFromBuffer } from 'file-type';
 import mongoose from 'mongoose';
-import { v4 as uuidv4 } from 'uuid';
 import { z } from 'zod';
 import { recordGeneratedImages } from './recordGeneratedImages';
 import { saveGeneratedImage, type SaveGeneratedAssetFn } from './saveGeneratedImage';
@@ -491,7 +490,7 @@ export class ImageGenerationService {
           promptEnhancement,
           organizationId,
           intent,
-          generationId: uuidv4(),
+          generationId: crypto.randomUUID(),
           adminRoleWithheld,
           apiKeyId,
           apiKeyBillingOwnerType,
@@ -1575,7 +1574,7 @@ export class ImageGenerationService {
 
           const buffer = await downloadImageAsBuffer(image);
           const fileType = await fileTypeFromBuffer(buffer);
-          const filename = `${uuidv4()}.${fileType?.ext ?? 'png'}`;
+          const filename = `${crypto.randomUUID()}.${fileType?.ext ?? 'png'}`;
 
           await moderateImageOrThrow({
             service: this.imageModerationService,

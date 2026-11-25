@@ -25,6 +25,8 @@ import { resolveCallableFunctionsEnabled } from './access';
 import {
   CALLABLE_FUNCTION_DEFAULT_TIMEOUT_MS,
   CALLABLE_FUNCTION_LIMITS,
+  CALLABLE_FUNCTION_PARENT_MARGIN_MS,
+  CALLABLE_FUNCTION_START_BUDGET_MS,
   type CallableFunctionReason,
   type CallableFunctionRunPayload,
   type CallableFunctionRunResult,
@@ -58,7 +60,8 @@ export type CallableFunctionDispatchReason =
   | 'input_too_large'
   | 'wait_exceeded'
   | 'budget_exhausted'
-  | 'dispatch_failed';
+  | 'dispatch_failed'
+  | 'queue_failed';
 
 export type CallableFunctionCallReason = CallableFunctionReason | CallableFunctionDispatchReason;
 
@@ -116,12 +119,24 @@ export interface CallableFunctionDispatchOptions {
   deadline?: number;
   /** Refuses with `budget_exhausted`, without running, when less than this is left once the checks are done. */
   minWaitMs?: number;
+  /**
+   * Queues the call instead of running it: after every check passes, the row is written as `queued` and this
+   * receives its id. A throw marks the row `error` with `queue_failed`.
+   */
+  enqueue?: (callId: string) => Promise<void>;
+  /**
+   * Runs a queued call, overwriting its `queued` row rather than writing a second one. It answers no request, so
+   * its wait is what the runtime takes for `timeoutMs`, not the surface's synchronous cap.
+   */
+  callId?: string;
 }
 
 export type { CallableFunctionStamp };
 
-export interface DispatchFunctionCallResult {
-  outcome: CallableFunctionCallOutcome;
+export interface DispatchFunctionCallResult<
+  Outcome extends CallableFunctionCallOutcome | 'queued' = CallableFunctionCallOutcome | 'queued',
+> {
+  outcome: Outcome;
   reason?: CallableFunctionCallReason;
   errorClass?: string;
   problems?: FunctionContractProblem[];
@@ -169,9 +184,8 @@ export function buildCallableFunctionStamp(input: {
   };
 }
 
-/** The wait for one run: what the caller has left, never more than the surface allows. */
-const waitFor = (surface: CallableFunctionCallSurface, waitMs?: number) =>
-  Math.max(0, Math.floor(Math.min(waitMs ?? Infinity, CALLABLE_FUNCTION_SURFACE_CAPS[surface].waitMs)));
+/** The wait for one run: what the caller has left, never more than `capMs`. */
+const waitFor = (capMs: number, waitMs?: number) => Math.max(0, Math.floor(Math.min(waitMs ?? Infinity, capMs)));
 
 /** A time limit the runtime accepts: whole, at least 1 ms, and never longer than the wait. */
 const limitWithin = (timeoutMs: number, waitMs: number) => Math.max(1, Math.floor(Math.min(timeoutMs, waitMs)));
@@ -218,21 +232,27 @@ type RowFields = Pick<ICallableFunctionCall, 'durationMs' | 'outcome'> &
 
 /**
  * Runs `body` with a writer for its one call-log row. A failed write is tried once more and then thrown; any other
- * throw before the row is written writes one `error` row with `dispatch_failed`, and the throw goes on.
+ * throw before the row is written writes one `error` row with `dispatch_failed`, and the throw goes on. With
+ * `queuedCallId` the writer overwrites that queued row instead of inserting one.
  */
 async function withCallRow<T>(
   row: ICallableFunctionCall,
+  queuedCallId: string | undefined,
   body: (write: (fields: RowFields) => Promise<{ id: string }>) => Promise<T>
 ): Promise<T> {
-  const callId = new mongoose.Types.ObjectId().toHexString();
+  const callId = queuedCallId ?? new mongoose.Types.ObjectId().toHexString();
   let written = false;
+  const save = (doc: ICallableFunctionCall) =>
+    queuedCallId
+      ? callableFunctionCallRepository.rewrite(callId, doc)
+      : callableFunctionCallRepository.record(doc, callId);
   const write = async (fields: RowFields) => {
     written = true;
     const doc: ICallableFunctionCall = { ...row, ...fields };
     try {
-      return await callableFunctionCallRepository.record(doc, callId);
+      return await save(doc);
     } catch {
-      return callableFunctionCallRepository.record(doc, callId);
+      return save(doc);
     }
   };
   try {
@@ -301,8 +321,11 @@ export async function readServerContract(
     durationMs: 0,
     outcome: 'refused',
   };
-  return withCallRow(row, async write => {
-    const waitMs = Math.min(waitFor(surface, options.waitMs), CALLABLE_FUNCTION_CONTRACT_READ_WAIT_MS);
+  return withCallRow(row, undefined, async write => {
+    const waitMs = waitFor(
+      Math.min(CALLABLE_FUNCTION_SURFACE_CAPS[surface].waitMs, CALLABLE_FUNCTION_CONTRACT_READ_WAIT_MS),
+      options.waitMs
+    );
     const timeoutMs = limitWithin(CALLABLE_FUNCTION_CONTRACT_READ_TIMEOUT_MS, waitMs);
     const run = await runWithin(
       options.runner,
@@ -378,7 +401,7 @@ export async function recordCallableFunctionRefusal(
     row.codeHash = fn.pin.contentHash;
     if (fn.pin.seq !== undefined) row.pinSeq = fn.pin.seq;
   }
-  return withCallRow(row, write => write({ durationMs: 0, outcome: 'refused', reason }));
+  return withCallRow(row, undefined, write => write({ durationMs: 0, outcome: 'refused', reason }));
 }
 
 /**
@@ -386,8 +409,16 @@ export async function recordCallableFunctionRefusal(
  * enabled review of the interface the call runs against), the status, the input size, and the inputs, then runs the
  * pinned code, checks the outputs, and stamps the result. Every path, a throw included, writes one call-log row with
  * hashes and sizes only. A function the caller cannot call answers `not_found`, as a missing one does; only the row
- * says `not_caller`.
+ * says `not_caller`. With `enqueue`, a call that passes every check is queued instead of run.
  */
+export function dispatchFunctionCall(
+  request: DispatchFunctionCallRequest,
+  options?: CallableFunctionDispatchOptions & { enqueue?: undefined }
+): Promise<DispatchFunctionCallResult<CallableFunctionCallOutcome>>;
+export function dispatchFunctionCall(
+  request: DispatchFunctionCallRequest,
+  options: CallableFunctionDispatchOptions
+): Promise<DispatchFunctionCallResult>;
 export async function dispatchFunctionCall(
   request: DispatchFunctionCallRequest,
   options: CallableFunctionDispatchOptions = {}
@@ -396,7 +427,7 @@ export async function dispatchFunctionCall(
   const startedAt = new Date();
   const row = callRow({ caller, functionId, surface, apiKeyId }, startedAt);
 
-  return withCallRow(row, async write => {
+  return withCallRow(row, options.callId, async write => {
     const finish = async (
       result: Omit<DispatchFunctionCallResult, 'callId' | 'durationMs'> & { durationMs?: number },
       rowReason: CallableFunctionCallReason | undefined = result.reason
@@ -447,13 +478,30 @@ export async function dispatchFunctionCall(
 
     const runner = options.runner === undefined ? selectCallableFunctionRunner() : options.runner;
     if (!runner) return finish({ outcome: 'refused', reason: 'runtime_unavailable' });
+
+    if (options.enqueue) {
+      const queued = await finish({ outcome: 'queued' });
+      try {
+        await options.enqueue(queued.callId);
+      } catch {
+        await callableFunctionCallRepository.rewrite(queued.callId, { outcome: 'error', reason: 'queue_failed' });
+        return { ...queued, outcome: 'error', reason: 'queue_failed' };
+      }
+      return queued;
+    }
+
     const params = args as Record<string, unknown>;
     const inputHash = row.inputHash ?? functionInputHash(params);
-    const waitMs = waitFor(surface, options.deadline === undefined ? options.waitMs : options.deadline - Date.now());
+    const requestedMs = options.timeoutMs ?? CALLABLE_FUNCTION_DEFAULT_TIMEOUT_MS;
+    const capMs =
+      options.callId === undefined
+        ? caps.waitMs
+        : requestedMs + CALLABLE_FUNCTION_START_BUDGET_MS + CALLABLE_FUNCTION_PARENT_MARGIN_MS;
+    const waitMs = waitFor(capMs, options.deadline === undefined ? options.waitMs : options.deadline - Date.now());
     if (options.minWaitMs !== undefined && waitMs < options.minWaitMs) {
       return finish({ outcome: 'refused', reason: 'budget_exhausted' });
     }
-    const timeoutMs = limitWithin(options.timeoutMs ?? CALLABLE_FUNCTION_DEFAULT_TIMEOUT_MS, waitMs);
+    const timeoutMs = limitWithin(requestedMs, waitMs);
     const outputBytesCap = Math.min(caps.outputBytes, CALLABLE_FUNCTION_LIMITS.outputBytes);
     const run = await runWithin(
       runner,

@@ -12,6 +12,12 @@ describe('escapeRegex', () => {
     expect(escapeRegex('.*+?^${}()|[]\\')).toBe('\\.\\*\\+\\?\\^\\$\\{\\}\\(\\)\\|\\[\\]\\\\');
   });
 
+  it('keeps a hyphen literal, which only needs escaping inside a character class', () => {
+    expect(escapeRegex('a-b')).toBe('a-b');
+    expect(new RegExp(escapeRegex('a-b')).test('a-b')).toBe(true);
+    expect(new RegExp(escapeRegex('a-b')).test('a b')).toBe(false);
+  });
+
   it('leaves ordinary alphanumeric input untouched but escapes the dot in an email', () => {
     expect(escapeRegex('normalUsername123')).toBe('normalUsername123');
     // `.` is a metacharacter, so it is escaped; the rest is untouched.

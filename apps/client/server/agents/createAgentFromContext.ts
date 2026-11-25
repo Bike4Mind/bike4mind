@@ -26,7 +26,6 @@ import { isDuplicateKeyError } from '@bike4mind/server-utils/utils/isDuplicateKe
 import { apiKeyService, meterCompletionBackend } from '@bike4mind/services';
 import { createRequestCompletionMeter } from '@bike4mind/server-utils/billing/meterPlatformCompletion';
 import { createAttachmentLakeAccess } from '@bike4mind/server-utils/dataLakes/attachmentLakeAccess';
-import { v4 as uuidv4 } from 'uuid';
 
 // Maximum characters of file content to include in the agent generation prompt.
 // ~30k chars is about 8.5k tokens, leaving room for conversation context + output.
@@ -329,7 +328,7 @@ IMPORTANT: Return ONLY valid JSON with no additional text, no markdown formattin
 
   // Create the agent object (projectId will be set when saving)
   const agent: Partial<IAgent> = {
-    id: uuidv4(),
+    id: crypto.randomUUID(),
     userId,
     name: agentName,
     description: agentProfile.description || `An AI agent created from conversation context`,
@@ -358,7 +357,7 @@ IMPORTANT: Return ONLY valid JSON with no additional text, no markdown formattin
       growthChallenge: agentProfile.personality?.growthChallenge || '',
       personalityComplexity: 'complex' as const,
       generationTimestamp: new Date().toISOString(),
-      uniqueId: uuidv4(),
+      uniqueId: crypto.randomUUID(),
     },
     capabilities: [
       JSON.stringify({
@@ -453,7 +452,7 @@ export async function createAgentFromContext({
   } catch (error) {
     if (!isDuplicateKeyError(error)) throw error;
     agentProject = await projectRepository.create(
-      makeAgentProjectDoc(`${agentName} Agent Project (${uuidv4().slice(0, 8)})`)
+      makeAgentProjectDoc(`${agentName} Agent Project (${crypto.randomUUID().slice(0, 8)})`)
     );
   }
   if (!agentProject) {

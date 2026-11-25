@@ -197,6 +197,14 @@ export async function resolveFunctionId(
   throw new Error(`No live function has the slug "${ref}". ${LIST_FIX}`);
 }
 
+// The CLI never asks for async mode, so a queued answer means the server ignored the request's mode.
+async function invokeSync(client: B4mApiClient, id: string, input: Record<string, unknown>) {
+  const res = await client.invokeFunction(id, input);
+  if (!('output' in res))
+    throw new Error('The server queued the call instead of running it; the CLI calls functions synchronously.');
+  return { output: res.output, stamp: res.stamp };
+}
+
 /** `slugs` keeps each resolved slug for the server's life: a slug is fixed and unique per owner. */
 export async function callFunction(
   client: B4mApiClient,
@@ -206,16 +214,14 @@ export async function callFunction(
   const cached = slugs.get(args.function);
   if (cached) {
     try {
-      const { output, stamp } = await client.invokeFunction(cached, args.input);
-      return { output, stamp };
+      return await invokeSync(client, cached, args.input);
     } catch (error) {
       if (!(error instanceof B4mApiError && error.status === 404)) throw error;
       slugs.delete(args.function);
     }
   }
   const id = await resolveFunctionId(client, args.function, slugs);
-  const { output, stamp } = await client.invokeFunction(id, args.input);
-  return { output, stamp };
+  return await invokeSync(client, id, args.input);
 }
 
 export function registerFunctionTools(server: McpServer, client: B4mApiClient): void {

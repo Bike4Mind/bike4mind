@@ -184,6 +184,7 @@ const REGISTERED_WITHOUT_CONSUMER: Record<string, string> = {
     'optional; notebook and message deletes hand it purge leftovers, logged and dropped with no URL',
   renderJobQueue:
     'optional; drained by the render-worker compose profile, a separate process from the self-host worker',
+  callableFunctionCallQueue: 'optional; the invoke route answers mode async with 503 on self-host and queues nothing',
 };
 
 /**

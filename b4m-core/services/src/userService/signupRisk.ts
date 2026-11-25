@@ -6,6 +6,7 @@ import {
   type SignupGrantRiskSignal,
   type SignupRiskPolicy,
 } from '@bike4mind/common';
+import { Logger } from '@bike4mind/observability';
 
 // The policy schema lives in @bike4mind/common so the settings save route can check it; these names are kept.
 export { SIGNUP_GRANT_RISK_SIGNALS as SIGNUP_RISK_SIGNALS, signupRiskPolicySchema, type SignupRiskPolicy };
@@ -111,7 +112,7 @@ export async function assessSignupGrant(
   }
   const decision = evaluateSignupRisk(policy, signals, signupCredits);
   if (decision.status === 'unavailable') {
-    console.warn('[signup-risk] Assessment unavailable; holding signup grant');
+    Logger.warn('[signup-risk] Assessment unavailable; holding signup grant');
   }
   const result = await adapters.commit(decision);
   if (result.applied) {
@@ -119,7 +120,7 @@ export async function assessSignupGrant(
     try {
       await adapters.emitBand(result.decision.band);
     } catch {
-      console.warn('[signup-risk] Band telemetry failed after grant commit');
+      Logger.warn('[signup-risk] Band telemetry failed after grant commit');
     }
   }
   return result;

@@ -22,6 +22,25 @@ import requireUpdateValidators from './eslint-rules/require-update-validators.mj
  * - b4m-core packages (with import restrictions)
  * - packages/*
  */
+// Core server packages under the no-console rule (see the block that uses these). Append as packages convert.
+const CORE_NO_CONSOLE_SRC = [
+  'b4m-core/db-core',
+  'b4m-core/agents',
+  'b4m-core/utils',
+  'b4m-core/llm-adapters',
+  'packages/database',
+  'b4m-core/services',
+  'b4m-core/common',
+].map(pkg => `${pkg}/src/**/*.{ts,tsx,mts,cts}`);
+const CORE_NO_CONSOLE_EXEMPT_SCRIPTS = [
+  'b4m-core/llm-adapters/src/syncModelDescriptions.ts',
+  'packages/database/src/seeds/regenerateModelPriceSeed.ts',
+  'packages/database/src/seeds/regenerateModelCatalogSeed.ts',
+  'packages/database/src/utils/testModelStats.ts',
+  'b4m-core/common/src/openapi/generate.ts',
+  'b4m-core/common/src/openapi/generateDeployment.ts',
+];
+
 // B4Mv3 Track 1 — deprecated facade import restrictions.
 // Extracted as consts so they can be spread into blocks that also carry other rules.
 // flat-config last-rule-wins means only the last matching no-restricted-imports rule
@@ -460,7 +479,7 @@ export default defineConfig([
 
   // CommonJS files (legacy configs, scripts, etc.)
   {
-    files: ['**/*.cjs', 'packages/eslint-config/**/*.js'],
+    files: ['**/*.cjs'],
     languageOptions: {
       sourceType: 'commonjs',
       globals: {
@@ -862,6 +881,29 @@ export default defineConfig([
   {
     files: ['apps/workers/src/**/*.{ts,mts,cts}'],
     ignores: ['**/*.{test,spec}.{ts,tsx}', '**/__tests__/**', '**/__test__/**'],
+    rules: { 'no-console': 'error' },
+  },
+
+  // apps/client/server is covered too. server/scripts and the tutorials apply CLI print for a person at a
+  // terminal by design, and *.integration.ts files are run by hand, so those stay on console.
+  {
+    files: ['apps/client/server/**/*.{ts,tsx}'],
+    ignores: [
+      '**/*.{test,spec}.{ts,tsx}',
+      '**/__tests__/**',
+      '**/__test__/**',
+      'apps/client/server/scripts/**',
+      'apps/client/server/tutorials/apply/cli.ts',
+      '**/*.integration.ts',
+    ],
+    rules: { 'no-console': 'error' },
+  },
+
+  // Core server packages log through the Logger too (same rationale as the server-utils block above).
+  // CORE_NO_CONSOLE_EXEMPT_SCRIPTS are CLI scripts run with tsx whose stdout is their output.
+  {
+    files: CORE_NO_CONSOLE_SRC,
+    ignores: ['**/*.{test,spec}.{ts,tsx}', '**/__tests__/**', '**/__test__/**', ...CORE_NO_CONSOLE_EXEMPT_SCRIPTS],
     rules: { 'no-console': 'error' },
   },
 

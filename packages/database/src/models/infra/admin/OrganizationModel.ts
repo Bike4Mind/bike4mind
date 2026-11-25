@@ -19,6 +19,7 @@ import BaseRepository from '@bike4mind/db-core';
 import { escapeRegex } from '@bike4mind/utils/escapeRegex';
 import { ShareableDocumentRepository, ShareableDocumentSchema } from '../../content/SharableDocumentModel';
 import User from '../../auth/UserModel';
+import { Logger } from '@bike4mind/observability';
 
 export interface IOrganizationObject extends HydratedDocument<IOrganizationDocument> {}
 
@@ -913,9 +914,9 @@ export class OrganizationRepository extends BaseRepository<IOrganizationDocument
     ]);
 
     if (result.matchedCount === 0) {
-      console.warn(
-        `updateUserDetails: No userDetails entry found for user ${userId} in organization ${organizationId}. ` +
-          'Credits were deducted from the org but usage was not tracked for this user.'
+      Logger.warn(
+        'updateUserDetails: No userDetails entry found; credits were deducted from the org but usage was not tracked for this user',
+        { userId, organizationId }
       );
     }
   }

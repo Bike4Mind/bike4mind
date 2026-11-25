@@ -15,6 +15,9 @@ import {
 import { daysBetween, resolveOverviewWindow } from './analyticsOverview';
 import { shiftDay } from '@bike4mind/server-utils/analytics/analyticsRollup';
 import { signupVerdictUserIds } from '@bike4mind/server-utils/analytics/realSignup';
+import { Logger } from '@bike4mind/observability';
+
+const logger = new Logger({ metadata: { service: 'activationFunnelSummary' } });
 
 // ms. The whole request, kept well inside the 60s API Lambda so a slow funnel fails with a handled 504.
 const FUNNEL_BUDGET_MS = 40_000;
@@ -74,7 +77,7 @@ export async function getActivationFunnel(query: AnalyticsOverviewQuery, now: Da
   // of the budget, and its failure must not hide the funnel. Its too-new count is never shown, so it is not read.
   const previous = window.previous
     ? await withinBudget(judgedMembers(window.previous, legitOnly, now, expiresAt, false), expiresAt).catch(error => {
-        console.warn('activation funnel: previous-period comparison failed', error);
+        logger.warn('activation funnel: previous-period comparison failed', { error });
         return undefined;
       })
     : undefined;

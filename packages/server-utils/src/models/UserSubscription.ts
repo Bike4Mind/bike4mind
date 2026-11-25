@@ -6,7 +6,7 @@
 import { mongoose } from '@bike4mind/database';
 import BaseRepository from '@bike4mind/database';
 import { IUserSubscriptionRepository, IUserSubscription } from '../lib/userSubscriptions/types';
-import escapeStringRegexp from 'escape-string-regexp';
+import { escapeRegex } from '@bike4mind/utils/escapeRegex';
 import { executeFacetCompatible, convertPipelineForDocumentDB } from '@bike4mind/database';
 
 const UserSubscriptionSchema = new mongoose.Schema<IUserSubscription>(
@@ -128,7 +128,7 @@ class UserSubscriptionRepository extends BaseRepository<IUserSubscription> imple
     if (search && search.trim() !== '') {
       const MAX_SEARCH_LENGTH = 100; // Prevent extremely long search patterns
       const safeSearch = search.slice(0, MAX_SEARCH_LENGTH);
-      const searchRegex = new RegExp(escapeStringRegexp(safeSearch), 'i');
+      const searchRegex = new RegExp(escapeRegex(safeSearch), 'i');
       pipeline.splice(2, 0, {
         $match: {
           $or: [{ 'user.email': { $regex: searchRegex } }, { 'user.name': { $regex: searchRegex } }],

@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { Alert, Box, Button, Chip, FormControl, FormLabel, Input, Stack, Table, Textarea, Typography } from '@mui/joy';
 import type {
-  CallableFunctionCallOutcome,
+  CallableFunctionCallRowOutcome,
   CallableFunctionExample,
   FunctionContract,
   FunctionContractProblem,
@@ -19,7 +19,7 @@ import {
 import ProblemList, { dangerAlertSx } from './FunctionProblemList';
 import ShareFunctionDialog from './ShareFunctionDialog';
 
-const OUTCOME_LABELS: Record<CallableFunctionCallOutcome, string> = {
+const OUTCOME_LABELS: Record<CallableFunctionCallRowOutcome, string> = {
   ok: 'Returned',
   input_invalid: 'Inputs refused',
   output_invalid: 'Outputs refused',
@@ -28,6 +28,8 @@ const OUTCOME_LABELS: Record<CallableFunctionCallOutcome, string> = {
   memory: 'Out of memory',
   output_too_large: 'Output too large',
   refused: 'Refused',
+  queued: 'Queued',
+  running: 'Running',
 };
 
 const LABEL_HELP = {
@@ -311,7 +313,7 @@ function CallsBlock({ tool }: { tool: ICallableFunctionPublic }) {
   const { data, isError } = useCallableFunctionCalls(tool.id);
   const counts = data
     ? Object.entries(data.outcomes)
-        .map(([outcome, count]) => `${OUTCOME_LABELS[outcome as CallableFunctionCallOutcome] ?? outcome} ${count}`)
+        .map(([outcome, count]) => `${OUTCOME_LABELS[outcome as CallableFunctionCallRowOutcome] ?? outcome} ${count}`)
         .join(', ')
     : '';
   return (
