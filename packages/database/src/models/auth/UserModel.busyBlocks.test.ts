@@ -116,3 +116,48 @@ describe('userRepository busy blocks', () => {
     expect(await userRepository.getBusyBlocks(userId)).toEqual({ enabled: false, blocks: [], nextBlockBriefAt: null });
   });
 });
+
+describe('userRepository block brief claims', () => {
+  it('finds ended blocks earliest first and skips users with none due', async () => {
+    const named = (n: string) => ({ username: n, email: `${n}@example.com` });
+    const later = await insertUser({ ...named('a'), busyBlocks: [block(-20, -5)], nextBlockBriefAt: at(-5) });
+    const earlier = await insertUser({ ...named('b'), busyBlocks: [block(-30, -10)], nextBlockBriefAt: at(-10) });
+    await insertUser({ ...named('c'), busyBlocks: [block(10, 20)], nextBlockBriefAt: at(20) });
+    await insertUser(named('d'));
+
+    const due = await userRepository.findDueBlockBriefs(NOW, 10);
+
+    expect(due.map(u => u.id)).toEqual([earlier, later]);
+    expect(due[0]).toMatchObject({ blocks: [block(-30, -10)], nextBlockBriefAt: at(-10), lastBlockBriefEnd: null });
+  });
+
+  it('claims a due block once and releases it back', async () => {
+    const userId = await insertUser({ busyBlocks: [block(-30, -10), block(10, 20)], nextBlockBriefAt: at(-10) });
+    const expected = { nextBlockBriefAt: at(-10), lastBlockBriefEnd: null };
+    const claimed = { nextBlockBriefAt: at(20), lastBlockBriefEnd: at(-10) };
+
+    expect(await userRepository.advanceNextBlockBriefAt(userId, expected, claimed)).toBe(true);
+    expect(await userRepository.advanceNextBlockBriefAt(userId, expected, claimed)).toBe(false);
+    expect(await raw(userId)).toMatchObject({ nextBlockBriefAt: at(20), lastBlockBriefEnd: at(-10) });
+
+    expect(await userRepository.advanceNextBlockBriefAt(userId, claimed, expected)).toBe(true);
+    const doc = await raw(userId);
+    expect(doc?.nextBlockBriefAt).toEqual(at(-10));
+    expect(doc?.lastBlockBriefEnd).toBeUndefined();
+  });
+
+  it('unsets the due time when the last block is claimed', async () => {
+    const userId = await insertUser({ busyBlocks: [block(-30, -10)], nextBlockBriefAt: at(-10) });
+
+    expect(
+      await userRepository.advanceNextBlockBriefAt(
+        userId,
+        { nextBlockBriefAt: at(-10), lastBlockBriefEnd: null },
+        { nextBlockBriefAt: null, lastBlockBriefEnd: at(-10) }
+      )
+    ).toBe(true);
+    const doc = await raw(userId);
+    expect(doc?.nextBlockBriefAt).toBeUndefined();
+    expect(doc?.lastBlockBriefEnd).toEqual(at(-10));
+  });
+});

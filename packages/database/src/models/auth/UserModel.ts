@@ -2036,6 +2036,52 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
     return result.modifiedCount === 1;
   }
 
+  /** Users with a busy block that has ended, earliest first. Uses the `user_nextBlockBriefAt` partial index. */
+  async findDueBlockBriefs(
+    now: Date,
+    limit: number
+  ): Promise<{ id: string; blocks: BusyBlockInterval[]; nextBlockBriefAt: Date; lastBlockBriefEnd: Date | null }[]> {
+    const users = await this.model
+      .find(
+        { nextBlockBriefAt: { $type: 'date', $lte: now } },
+        { busyBlocks: 1, nextBlockBriefAt: 1, lastBlockBriefEnd: 1 }
+      )
+      .sort({ nextBlockBriefAt: 1 })
+      .limit(limit)
+      .lean<(Pick<IUserDocument, 'busyBlocks' | 'lastBlockBriefEnd'> & { _id: unknown; nextBlockBriefAt: Date })[]>();
+    return users.map(user => ({
+      id: String(user._id),
+      blocks: (user.busyBlocks ?? []).map(({ start, end }) => ({ start, end })),
+      nextBlockBriefAt: user.nextBlockBriefAt,
+      lastBlockBriefEnd: user.lastBlockBriefEnd ?? null,
+    }));
+  }
+
+  /**
+   * Compare-and-set on the block-brief pair (`nextBlockBriefAt`, `lastBlockBriefEnd`); null means unset.
+   * Claiming a due block moves the pair forward, and releasing it for a retry moves it back. False means
+   * the pair changed since the caller read it (another run claimed the block, or a sync re-armed it).
+   */
+  async advanceNextBlockBriefAt(
+    userId: string,
+    expected: { nextBlockBriefAt: Date | null; lastBlockBriefEnd: Date | null },
+    next: { nextBlockBriefAt: Date | null; lastBlockBriefEnd: Date | null }
+  ): Promise<boolean> {
+    const $set: Record<string, Date> = {};
+    const $unset: Record<string, 1> = {};
+    for (const key of ['nextBlockBriefAt', 'lastBlockBriefEnd'] as const) {
+      const value = next[key];
+      if (value) $set[key] = value;
+      else $unset[key] = 1;
+    }
+    const result = await this.model.updateOne(
+      { _id: userId, nextBlockBriefAt: expected.nextBlockBriefAt, lastBlockBriefEnd: expected.lastBlockBriefEnd },
+      { ...(Object.keys($set).length ? { $set } : {}), ...(Object.keys($unset).length ? { $unset } : {}) },
+      { runValidators: true }
+    );
+    return result.modifiedCount === 1;
+  }
+
   /**
    * Claims the shared brief-start debounce when no brief started within `minGapMs` of `now`, returning the
    * replaced value for releaseBriefStart; null when refused. A stored value in the future counts as recent.
