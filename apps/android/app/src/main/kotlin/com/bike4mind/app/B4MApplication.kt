@@ -49,8 +49,8 @@ class B4MApplication : Application() {
             capture.load()
             if (capture.jobs.value.any { it.stage == CaptureStage.PENDING }) CaptureWorker.schedule(this@B4MApplication)
         }
-        // A force-stop or reinstall drops the calendar trigger, and a revoked calendar permission restarts the
-        // process: this sync clears the blocks and re-arms the trigger.
+        // A revoked calendar permission kills the process without restarting it, so the next launch is where the
+        // blocks get cleared; it also re-arms a trigger the worker gave up on.
         scope.launch {
             val current = graph ?: return@launch
             try {

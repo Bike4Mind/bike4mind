@@ -95,6 +95,15 @@ class CalendarBusyBlockReaderTest {
     }
 
     @Test
+    fun aGrantMadeInSystemSettingsReadsAsDeniedOnceRevoked() {
+        shadowOf(app).grantPermissions(Manifest.permission.READ_CALENDAR)
+        assertEquals(BusyBlockAccess.AUTHORIZED, reader.access())
+
+        shadowOf(app).denyPermissions(Manifest.permission.READ_CALENDAR)
+        assertEquals(BusyBlockAccess.DENIED, reader.access())
+    }
+
+    @Test
     fun noProviderReadsNothing() {
         assertEquals(emptyList<CalendarEventSample>(), reader.events(Instant.EPOCH, Instant.EPOCH.plusSeconds(60)))
     }

@@ -17,7 +17,7 @@ import java.time.Duration
 
 /**
  * Re-syncs busy blocks when the device calendar changes. A content-URI trigger is a JobScheduler job, so it is
- * best-effort: Doze and standby buckets defer it, and a force-stop drops it. The foreground sync in
+ * best-effort: Doze and standby buckets defer it and some OEM battery managers drop it. The foreground sync in
  * [syncInForeground] is the guaranteed path; the server's 24h freshness bound covers a trigger that never fires.
  */
 class BusyBlockSyncWorker(context: Context, parameters: WorkerParameters) : CoroutineWorker(context, parameters) {
@@ -79,7 +79,7 @@ class BusyBlockSyncWorker(context: Context, parameters: WorkerParameters) : Coro
         /** Throttled by the syncer, so every resume can call it. Does nothing while signed out. */
         suspend fun syncInForeground(context: Context, graph: AppGraph) {
             if (graph.session.accessToken() == null) return
-            follow(context, graph.busyBlockSyncer.sync())
+            graph.busyBlockSyncer.sync { enabled -> follow(context, enabled) }
         }
     }
 }

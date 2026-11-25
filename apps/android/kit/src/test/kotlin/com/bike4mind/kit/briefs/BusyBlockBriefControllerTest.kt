@@ -9,6 +9,7 @@ import kotlin.test.assertFalse
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.async
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceUntilIdle
@@ -28,9 +29,9 @@ class BusyBlockBriefControllerTest {
         availability = Availability.BUSY,
     )
 
-    private fun TestScope.controller() = BusyBlockBriefController(
+    private fun TestScope.controller(syncer: BusyBlockSyncer = BusyBlockSyncer(api, reader) { now }) = BusyBlockBriefController(
         api,
-        BusyBlockSyncer(api, reader) { now },
+        syncer,
         this,
         io = StandardTestDispatcher(testScheduler),
         onSaved = { saved += it },
@@ -134,6 +135,33 @@ class BusyBlockBriefControllerTest {
         assertEquals(listOf(true), api.saves.map { it.first })
         assertTrue(controller.state.value.isEnabled)
         assertNull(controller.state.value.error)
+    }
+
+    @Test
+    fun turningOffWaitsForAnInFlightSyncSoTheSyncCannotReEnable() = runTest {
+        api.enabled = true
+        reader.events = listOf(meeting)
+        val syncer = BusyBlockSyncer(api, reader) { now }
+        val controller = controller(syncer)
+        val gate = CompletableDeferred<Unit>()
+        api.saveGate = gate
+
+        val sync = async { syncer.sync(force = true) { saved += it } }
+        runCurrent()
+        controller.setEnabled(false)
+        runCurrent()
+        assertEquals(1, api.saves.size)
+
+        api.saveGate = null
+        gate.complete(Unit)
+        advanceUntilIdle()
+
+        assertEquals(true, sync.await())
+        assertEquals(listOf(true, false), api.saves.map { it.first })
+        assertEquals(emptyList(), api.saves.last().second)
+        assertFalse(api.enabled)
+        assertEquals(listOf(true, false), saved)
+        assertFalse(controller.state.value.isEnabled)
     }
 
     private class FakeApi : BusyBlocksApi {

@@ -37,8 +37,11 @@ class CalendarBusyBlockReader(
     private val permissions: BusyBlockPermissionStore,
 ) : BusyBlockReader {
     override fun access(): BusyBlockAccess = when {
-        ContextCompat.checkSelfPermission(context, Manifest.permission.READ_CALENDAR) == PackageManager.PERMISSION_GRANTED ->
+        ContextCompat.checkSelfPermission(context, Manifest.permission.READ_CALENDAR) == PackageManager.PERMISSION_GRANTED -> {
+            // A grant made in system settings never passed through the request, and a later revoke must read as denied.
+            if (!permissions.requested) permissions.markRequested()
             BusyBlockAccess.AUTHORIZED
+        }
         permissions.requested -> BusyBlockAccess.DENIED
         else -> BusyBlockAccess.NOT_DETERMINED
     }

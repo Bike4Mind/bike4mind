@@ -103,6 +103,46 @@ class BusyBlockSyncerTest {
         assertEquals(1, api.saves.size)
     }
 
+    @Test
+    fun aSyncStartedDuringAUserSaveIsSkipped() = runTest {
+        val gate = CompletableDeferred<Unit>()
+        val save = async { syncer.userSave { gate.await() } }
+        runCurrent()
+
+        assertNull(syncer.sync(force = true))
+        assertEquals(0, api.stateCalls)
+        gate.complete(Unit)
+        save.await()
+    }
+
+    @Test
+    fun aUserSaveRunsAfterTheInFlightSyncHasActedOnItsResult() = runTest {
+        val order = mutableListOf<String>()
+        val gate = CompletableDeferred<Unit>()
+        api.stateGate = gate
+
+        val sync = async { syncer.sync(force = true) { order += "sync:$it" } }
+        runCurrent()
+        val save = async { syncer.userSave { order += "user" } }
+        runCurrent()
+        assertEquals(emptyList(), order)
+        gate.complete(Unit)
+
+        assertEquals(true, sync.await())
+        save.await()
+        assertEquals(listOf("sync:true", "user"), order)
+    }
+
+    @Test
+    fun resetLetsTheNextAccountSyncInsideTheInterval() = runTest {
+        assertEquals(true, syncer.sync())
+        now += Duration.ofSeconds(5)
+        syncer.reset()
+
+        assertEquals(true, syncer.sync())
+        assertEquals(2, api.saves.size)
+    }
+
     private class FakeApi : BusyBlocksApi {
         var enabled = true
         var failure: Exception? = null

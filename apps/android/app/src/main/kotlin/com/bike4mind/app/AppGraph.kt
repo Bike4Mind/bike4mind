@@ -192,6 +192,7 @@ class AppGraph(context: Context, val environment: ServerEnvironment) {
      */
     suspend fun onSessionEnded() {
         BusyBlockSyncWorker.cancel(appContext)
+        busyBlockSyncer.reset()
         capture.discardAll()
         mediaFirstPages.invalidate()
         mediaImages.clear()

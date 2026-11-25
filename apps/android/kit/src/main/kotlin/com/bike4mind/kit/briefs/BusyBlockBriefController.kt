@@ -26,7 +26,8 @@ data class BusyBlockBriefState(
 /**
  * Drives the "Brief after busy blocks" switch in Settings > Notifications. Twin of apps/ios BusyBlockBriefViewModel,
  * except that the permission request belongs to the host: it asks, then passes the answer to [setEnabled].
- * [onSaved] gets the server's opt-in after each save, so the host can start or stop its calendar-change trigger.
+ * [onSaved] gets the server's opt-in after each save, so the host can start or stop its calendar-change trigger; it
+ * runs on [io] under the syncer's lock, ordered after any in-flight sync's own result.
  */
 class BusyBlockBriefController(
     private val api: BusyBlocksApi,
@@ -65,9 +66,12 @@ class BusyBlockBriefController(
         }
         scope.launch {
             try {
-                val saved = withContext(io) { api.save(enabled = on, blocks = if (on) syncer.currentBlocks() else emptyList()) }
+                val saved = withContext(io) {
+                    syncer.userSave {
+                        api.save(enabled = on, blocks = if (on) syncer.currentBlocks() else emptyList()).also { onSaved(it.enabled) }
+                    }
+                }
                 mutableState.update { it.copy(isEnabled = saved.enabled, isSaving = false) }
-                onSaved(saved.enabled)
             } catch (cancelled: CancellationException) {
                 mutableState.update { it.copy(isEnabled = previous, isSaving = false) }
                 throw cancelled
