@@ -199,6 +199,7 @@ export class GeminiBackend implements ICompletionBackend {
         supportsTools: true,
         logoFile: 'Google_logo.png',
         rank: 3,
+        releaseDate: '2026-11-18',
         description:
           "Google's Gemini 4 Neon, a thinking model for agentic and coding work with text, image, audio, video and PDF input.",
       },
