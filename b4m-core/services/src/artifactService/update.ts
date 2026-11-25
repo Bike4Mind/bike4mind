@@ -11,6 +11,7 @@ import {
 import { Logger } from '@bike4mind/observability';
 import { secureParameters, NotFoundError, UnauthorizedError } from '@bike4mind/utils';
 import { z } from 'zod';
+import type { CreateInput } from './create';
 
 const updateArtifactSchema = z.object({
   id: z.string(),
@@ -41,11 +42,14 @@ type UpdateArtifactParameters = z.infer<typeof updateArtifactSchema>;
 
 interface UpdateArtifactAdapters {
   db: {
-    artifacts: Pick<IArtifactRepository, 'findOne' | 'updateWithWriteAccess'>;
-    artifactContents: Pick<IArtifactContentRepository, 'createOrUpdate' | 'delete' | 'findLatestContent'>;
+    artifacts: Pick<
+      IArtifactRepository,
+      'findOne' | 'updateWithWriteAccess' | 'claimNextVersionNumber' | 'seedVersionCounter'
+    >;
+    artifactContents: Pick<IArtifactContentRepository, 'create' | 'delete' | 'findLatestContent'>;
     artifactVersions: Pick<
       IArtifactVersionRepository,
-      'createOrUpdate' | 'delete' | 'findByArtifactId' | 'findOne' | 'update'
+      'create' | 'delete' | 'findByArtifactId' | 'update' | 'updateMany' | 'count'
     >;
   };
 }
@@ -111,7 +115,6 @@ export const update = async (
   if (visibility !== undefined) updateData.visibility = visibility;
   if (status !== undefined) updateData.status = status;
   if (tags !== undefined) updateData.tags = tags;
-  if (versionTag !== undefined) updateData.versionTag = versionTag;
   if (metadata !== undefined) updateData.metadata = { ...artifact.metadata, ...metadata };
 
   // Handle permissions update
@@ -122,18 +125,69 @@ export const update = async (
     };
   }
 
-  let newVersion = null;
-  let newContent = null;
-  let deactivatedVersionId: string | null = null;
+  let newVersion: IArtifactVersionDocument | undefined;
+  let newContent: IArtifactContentDocument | undefined;
+  let versionNumber = 0;
+  // Version pointer fields; written only when the save beat every higher version to the pointer.
+  const versionUpdate: Record<string, unknown> = {};
 
-  // Before any version or content row is written, a claim that touches only updatedAt: a writer
-  // revoked (or an artifact deleted) since the check above is refused here and leaves nothing behind.
-  // Metadata waits for the single gated write at the end, so a failed save never half-applies it.
-  const claimVersionWrite = async () => {
-    const claimed = await db.artifacts.updateWithWriteAccess(userId, { id: artifact.id, updatedAt: new Date() });
-    if (!claimed) {
+  // Allocates atomically under the write-access filter so a writer revoked since the check above is refused
+  // before any row is written; metadata waits for the final gated write so a failed save never half-applies it.
+  const allocateVersionNumber = async () => {
+    let claimed = await db.artifacts.claimNextVersionNumber(userId, artifact.id);
+    if (claimed === null) {
+      // Counter not seeded yet (artifact predates it): seed from the highest existing number, then claim again.
+      const allVersions = await db.artifactVersions.findByArtifactId(artifact.id);
+      const seed = allVersions.reduce((max, v) => Math.max(max, v.version || 0), artifact.version || 0);
+      await db.artifacts.seedVersionCounter(userId, artifact.id, seed);
+      claimed = await db.artifacts.claimNextVersionNumber(userId, artifact.id);
+    }
+    if (claimed === null) {
       throw new UnauthorizedError('Write access denied');
     }
+    return claimed;
+  };
+
+  // Inserts the content and version rows for `versionNumber`, leaving only the highest-numbered row active.
+  const writeVersionRows = async (
+    versionNumber: number,
+    contentFields: Pick<IArtifactContentDocument, 'content' | 'contentHash' | 'contentSize' | 'mimeType' | 'encoding'>,
+    defaults: { changes: string[]; changeDescription: string }
+  ) => {
+    const newContent = await db.artifactContents.create({
+      artifactId: artifact.id,
+      version: versionNumber,
+      ...contentFields,
+    } satisfies CreateInput<IArtifactContentDocument> as Parameters<IArtifactContentRepository['create']>[0]);
+
+    const newVersion = await db.artifactVersions.create({
+      artifactId: artifact.id,
+      version: versionNumber,
+      contentId: newContent._id,
+      parentVersionId: artifact.currentVersionId,
+      changes: changes || defaults.changes,
+      changeDescription: changeDescription || versionMessage || defaults.changeDescription,
+      ...(versionTag !== undefined && { versionTag }),
+      createdBy: userId,
+      isActive: true,
+    } satisfies CreateInput<IArtifactVersionDocument> as Parameters<IArtifactVersionRepository['create']>[0]);
+
+    await db.artifactVersions.updateMany(
+      { artifactId: artifact.id, version: { $lt: versionNumber }, isActive: true },
+      { isActive: false },
+      { runValidators: true }
+    );
+    // A higher-numbered save inserted its row first: it keeps the active flag.
+    if (
+      (await db.artifactVersions.count({ artifactId: artifact.id, version: { $gt: versionNumber }, isActive: true })) >
+      0
+    ) {
+      // any: `id` is not a known key of Partial<IArtifactVersionDocument>
+      await db.artifactVersions.update({ id: newVersion._id, isActive: false } as any);
+      newVersion.isActive = false;
+    }
+
+    return { newContent, newVersion };
   };
 
   // Handle content update (creates new version)
@@ -143,136 +197,54 @@ export const update = async (
 
     // Check if content actually changed OR if forced version creation is requested
     if (contentHash !== artifact.contentHash || createNewVersion) {
-      await claimVersionWrite();
-
-      // Get the highest version number from the database
-      const allVersions = await db.artifactVersions.findByArtifactId(artifact.id);
-
-      // Calculate highest version from both artifactVersions collection and artifact.version field
-      const versionsFromCollection = allVersions.reduce((max, v) => {
-        const versionNum = v.version || 0;
-        return versionNum > max ? versionNum : max;
-      }, 0);
-
-      const artifactVersion = artifact.version || 0;
-
-      const highestVersion = Math.max(versionsFromCollection, artifactVersion);
-      const newVersionNumber = highestVersion + 1;
-
-      // Create or update content record
-      newContent = await db.artifactContents.createOrUpdate({
-        artifactId: artifact.id,
-        version: newVersionNumber,
-        content,
-        contentHash,
-        contentSize,
-        mimeType: getMimeTypeFromArtifact(artifact),
-        encoding: 'utf8',
-      });
-
-      // Deactivate current version
-      if (artifact.currentVersionId) {
-        // Use findOne to avoid ObjectId casting issues
-        const currentVersionDoc = await db.artifactVersions.findOne({ _id: artifact.currentVersionId } as any);
-        if (currentVersionDoc) {
-          await db.artifactVersions.update({
-            id: currentVersionDoc._id,
-            isActive: false,
-          } as any);
-          deactivatedVersionId = currentVersionDoc._id;
-        }
-      }
-
-      // Create or update version record
-      newVersion = await db.artifactVersions.createOrUpdate({
-        artifactId: artifact.id,
-        version: newVersionNumber,
-        contentId: newContent?._id,
-        parentVersionId: artifact.currentVersionId,
-        changes: changes || ['Content updated'],
-        changeDescription: changeDescription || versionMessage || 'Updated artifact content',
-        ...(versionTag !== undefined && { versionTag }),
-        createdBy: userId,
-        isActive: true,
-      });
-
-      // Update artifact with new version info
-      updateData.version = newVersionNumber;
-      updateData.currentVersionId = newVersion._id;
-      updateData.contentHash = contentHash;
-      updateData.contentSize = contentSize;
+      versionNumber = await allocateVersionNumber();
+      ({ newContent, newVersion } = await writeVersionRows(
+        versionNumber,
+        { content, contentHash, contentSize, mimeType: getMimeTypeFromArtifact(artifact), encoding: 'utf8' },
+        { changes: ['Content updated'], changeDescription: 'Updated artifact content' }
+      ));
+      versionUpdate.contentHash = contentHash;
+      versionUpdate.contentSize = contentSize;
     }
   } else if (createNewVersion) {
     // Handle case where we want to create a new version without content changes
-    // Get the highest version number from the database
-    const allVersions = await db.artifactVersions.findByArtifactId(artifact.id);
-
-    // Calculate highest version from both artifactVersions collection and artifact.version field
-    const versionsFromCollection = allVersions.reduce((max, v) => {
-      const versionNum = v.version || 0;
-      return versionNum > max ? versionNum : max;
-    }, 0);
-
-    const artifactVersion = artifact.version || 0;
-
-    const highestVersion = Math.max(versionsFromCollection, artifactVersion);
-    const newVersionNumber = highestVersion + 1;
-
     const currentContent = await db.artifactContents.findLatestContent(artifact.id);
     if (currentContent) {
-      await claimVersionWrite();
-
-      // Create or update content record with same content
-      newContent = await db.artifactContents.createOrUpdate({
-        artifactId: artifact.id,
-        version: newVersionNumber,
-        content: currentContent.content,
-        contentHash: currentContent.contentHash,
-        contentSize: currentContent.contentSize,
-        mimeType: currentContent.mimeType,
-        encoding: currentContent.encoding,
-      });
-
-      // Deactivate current version
-      if (artifact.currentVersionId) {
-        // Use findOne to avoid ObjectId casting issues
-        const currentVersionDoc = await db.artifactVersions.findOne({ _id: artifact.currentVersionId } as any);
-        if (currentVersionDoc) {
-          await db.artifactVersions.update({
-            id: currentVersionDoc._id,
-            isActive: false,
-          } as any);
-          deactivatedVersionId = currentVersionDoc._id;
-        }
-      }
-
-      // Create or update version record
-      newVersion = await db.artifactVersions.createOrUpdate({
-        artifactId: artifact.id,
-        version: newVersionNumber,
-        contentId: newContent._id,
-        parentVersionId: artifact.currentVersionId,
-        changes: changes || ['Version created'],
-        changeDescription: changeDescription || versionMessage || 'Created new version',
-        ...(versionTag !== undefined && { versionTag }),
-        createdBy: userId,
-        isActive: true,
-      });
-
-      // Update artifact with new version info
-      updateData.version = newVersionNumber;
-      updateData.currentVersionId = newVersion._id;
+      versionNumber = await allocateVersionNumber();
+      ({ newContent, newVersion } = await writeVersionRows(
+        versionNumber,
+        {
+          content: currentContent.content,
+          contentHash: currentContent.contentHash,
+          contentSize: currentContent.contentSize,
+          mimeType: currentContent.mimeType,
+          encoding: currentContent.encoding,
+        },
+        { changes: ['Version created'], changeDescription: 'Created new version' }
+      ));
     }
   }
 
+  if (newVersion) {
+    versionUpdate.version = versionNumber;
+    versionUpdate.currentVersionId = newVersion._id;
+  }
   // An explicit new version without a tag must not inherit the previous version's tag on the artifact.
-  if (newVersion && createNewVersion && versionTag === undefined) updateData.versionTag = null;
+  if (versionTag !== undefined) (newVersion ? versionUpdate : updateData).versionTag = versionTag;
+  else if (newVersion && createNewVersion) versionUpdate.versionTag = null;
 
-  // One gated write for metadata and the version pointer together.
-  const updatedArtifact = await db.artifacts.updateWithWriteAccess(userId, updateData);
+  // One gated write for metadata and the version pointer together. The pointer only moves forward:
+  // a save that lost the race to a higher version keeps its row but leaves the pointer alone.
+  let updatedArtifact = await db.artifacts.updateWithWriteAccess(
+    userId,
+    { ...updateData, ...versionUpdate },
+    newVersion ? { version: { $lt: versionNumber } } : undefined
+  );
+  if (!updatedArtifact && newVersion) {
+    updatedArtifact = await db.artifacts.updateWithWriteAccess(userId, updateData);
+  }
   if (!updatedArtifact) {
-    if (newVersion)
-      await rollbackVersionRows(adapters, artifact.id, newVersion._id, newContent?._id, deactivatedVersionId);
+    if (newVersion) await rollbackVersionRows(adapters, artifact.id, newVersion._id, newContent?._id);
     throw new UnauthorizedError('Write access denied');
   }
 
@@ -291,16 +263,14 @@ export const update = async (
 };
 
 /**
- * Undoes a refused save's version rows. Versions upsert on {artifactId, version}, so a concurrent
- * saver that computed the same number shares these rows: when the artifact now points at them, they
- * belong to that saver and are left alone. Best-effort, not transactional; each step is independent.
+ * Undoes a refused save's rows, then reactivates the highest remaining version if none is active.
+ * Best-effort, not transactional; each step is independent.
  */
 async function rollbackVersionRows(
   { db }: UpdateArtifactAdapters,
   artifactId: string,
   versionId: string,
-  contentId: string | undefined,
-  deactivatedVersionId: string | null
+  contentId: string | undefined
 ) {
   const step = async (label: string, run: () => Promise<unknown>) => {
     try {
@@ -310,26 +280,20 @@ async function rollbackVersionRows(
     }
   };
 
-  // An unreadable artifact counts as adopted: orphan rows are recoverable, a deleted live version is not.
-  let adopted = true;
-  await step('re-read', async () => {
-    const current = await db.artifacts.findOne({ id: artifactId });
-    adopted = String(current?.currentVersionId) === String(versionId);
-  });
-  if (adopted) return;
-
   await step('delete version', () => db.artifactVersions.delete(String(versionId)));
   if (contentId) await step('delete content', () => db.artifactContents.delete(String(contentId)));
-  if (deactivatedVersionId) {
-    await step('reactivate previous version', () =>
-      // any: `id` is not a known key of Partial<IArtifactVersionDocument>
-      db.artifactVersions.update({ id: deactivatedVersionId, isActive: true } as any)
-    );
-  }
+  await step('reactivate highest version', async () => {
+    if ((await db.artifactVersions.count({ artifactId, isActive: true })) > 0) return;
+    const rows = await db.artifactVersions.findByArtifactId(artifactId);
+    // findByArtifactId sorts by version descending
+    const [highest] = rows;
+    // any: `id` is not a known key of Partial<IArtifactVersionDocument>
+    if (highest) await db.artifactVersions.update({ id: highest._id, isActive: true } as any);
+  });
 }
 
 /**
- * Check if user can write to artifact. Must stay in sync with ArtifactRepository.updateWithWriteAccess.
+ * Check if user can write to artifact. Must stay in sync with ArtifactRepository.writeAccessFilter.
  */
 function canUserWriteArtifact(userId: string, artifact: any): boolean {
   // Owner always has write access
