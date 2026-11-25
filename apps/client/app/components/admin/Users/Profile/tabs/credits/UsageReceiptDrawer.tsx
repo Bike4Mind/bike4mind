@@ -23,6 +23,7 @@ const OPERATION_LABELS: Readonly<Record<string, string>> = {
   memento: 'Memory extraction',
   assistant_brief: 'Assistant brief',
   delegated_item: 'Delegated item',
+  org_feedback_summary: 'Feedback summary',
 };
 
 const FEATURE_LABELS: Readonly<Record<string, string>> = {

@@ -222,10 +222,16 @@ export {
   isCustomToolOffered,
   CUSTOM_MCP_DATA_NOTICE,
   MAX_CUSTOM_TOOLS_PER_TURN,
+  CUSTOM_MCP_OUTPUT_TOO_LARGE_BODY,
+  CUSTOM_MCP_AWAITING_APPROVAL_PREFIX,
+  customMcpResultBody,
+  customMcpResultText,
   type CustomMcpToolHost,
   type CustomMcpListOptions,
   type CustomMcpConnectionOffer,
+  type CustomMcpOfferedTool,
   type CustomMcpToolCallInput,
+  type CustomMcpToolCallResult,
   type CustomMcpApprovalRequest,
 } from './customMcpTools';
 

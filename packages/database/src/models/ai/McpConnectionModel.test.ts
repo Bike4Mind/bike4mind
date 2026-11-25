@@ -532,6 +532,28 @@ describe('McpConnectionModel', () => {
       expect((await mcpConnectionRepository.listForOrg('org-1')).map(c => c.slug)).toEqual(['orgdef']);
     });
 
+    it('listForUser returns connections oldest first whatever order they were stored in', async () => {
+      const at = (day: number) => new Date(Date.UTC(2026, 0, day));
+      for (const [slug, day] of [
+        ['newest', 3],
+        ['oldest', 1],
+        ['middle', 2],
+      ] as const) {
+        await McpConnection.collection.insertOne({
+          ...baseConnection({ slug }),
+          urlEnc: `enc:url-${slug}`,
+          createdAt: at(day),
+          updatedAt: at(day),
+        });
+      }
+
+      expect((await mcpConnectionRepository.listForUser('user-1')).map(c => c.slug)).toEqual([
+        'oldest',
+        'middle',
+        'newest',
+      ]);
+    });
+
     it('findByIdForOwner and deleteForOwner refuse another owner', async () => {
       const created = await mcpConnectionRepository.create(baseConnection());
       const stranger = { ownerType: 'user' as const, ownerKey: 'user-2' };

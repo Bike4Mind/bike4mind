@@ -13,6 +13,8 @@ export type ChartSectionBody =
 
 type ChartSectionProps = {
   title: string;
+  /** Inline help beside the title, passed to SectionCard. */
+  help?: ReactNode;
   /** Prefixes the section's test ids: `-skeleton`, `-caption`, `-table-toggle-btn`. */
   testId: string;
   body: ChartSectionBody;
@@ -23,7 +25,7 @@ type ChartSectionProps = {
  * A chart in a SectionCard with its one-line takeaway, a "View as table" fallback, and a chart-shaped
  * skeleton (docs/admin-subscriptions-spec.md 5.7).
  */
-export function ChartSection({ title, testId, body, skeletonHeight = CHART_HEIGHT }: ChartSectionProps) {
+export function ChartSection({ title, help, testId, body, skeletonHeight = CHART_HEIGHT }: ChartSectionProps) {
   const [asTable, setAsTable] = useState(false);
   let content: ReactNode;
   if (body.kind === 'loading') {
@@ -53,6 +55,7 @@ export function ChartSection({ title, testId, body, skeletonHeight = CHART_HEIGH
   return (
     <SectionCard
       title={title}
+      help={help}
       body="custom"
       data-testid={testId}
       action={

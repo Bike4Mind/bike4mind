@@ -20,16 +20,26 @@ export const aiHolders = {
   },
   CallableFunction: {
     kind: 'holder',
-    references: [{ path: 'userId', matchBy: 'userId', action: 'deleteDocument', where: { ownerType: 'user' } }],
+    references: [
+      { path: 'userId', matchBy: 'userId', action: 'deleteDocument', where: { ownerType: 'user' } },
+      { path: 'grants.userIds', matchBy: 'userId', action: 'pullFromArray' },
+    ],
+    // Recipients' reviews name the function, not its owner, so they are deleted before the functions are.
+    beforeErasure: ['deleteReviewsOfOwnedCallableFunctions'],
   },
   CallableFunctionCall: {
     kind: 'holder',
     references: [
       { path: 'callerUserId', matchBy: 'userId', action: 'deleteDocument' },
-      { path: 'ownerUserId', matchBy: 'userId', action: 'deleteDocument' },
+      // A recipient's call is the recipient's record; the function's owner is only named on it.
+      { path: 'ownerUserId', matchBy: 'userId', action: 'anonymize' },
     ],
     // A digest of the function's source, not a credential; listed because the name matches the secret pattern.
     secretPaths: ['codeHash'],
+  },
+  CallableFunctionReview: {
+    kind: 'holder',
+    references: [{ path: 'userId', matchBy: 'userId', action: 'deleteDocument' }],
   },
   CodeAgentEvent: {
     kind: 'holder',

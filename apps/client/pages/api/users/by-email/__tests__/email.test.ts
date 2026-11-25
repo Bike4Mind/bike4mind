@@ -9,6 +9,7 @@ const h = vi.hoisted(() => ({
   found: null as null | { id: string; name: string },
   select: vi.fn(),
   findOne: vi.fn(),
+  sharesMembership: vi.fn(),
 }));
 
 vi.mock('@server/middlewares/baseApi', () => {
@@ -31,6 +32,7 @@ vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({
   },
 }));
 vi.mock('@bike4mind/database', () => ({ User: { findOne: h.findOne } }));
+vi.mock('@bike4mind/database/infra', () => ({ organizationRepository: { sharesMembership: h.sharesMembership } }));
 
 import '../[email]';
 
@@ -46,6 +48,7 @@ describe('GET /api/users/by-email/[email]', () => {
     h.found = null;
     h.select.mockReset().mockImplementation(() => Promise.resolve(h.found));
     h.findOne.mockReset().mockReturnValue({ select: h.select });
+    h.sharesMembership.mockReset().mockResolvedValue(false);
   });
 
   it('is rate limited on a stable bucket, not per email', () => {
@@ -53,17 +56,40 @@ describe('GET /api/users/by-email/[email]', () => {
     expect(h.rateLimitOptions).toEqual({ limit: 60, windowMs: 60 * 1000, bucket: 'users-by-email' });
   });
 
-  it('returns null for an unknown email', async () => {
-    const res = await lookup('nobody@example.com');
-    expect(res._getJSONData()).toBeNull();
-  });
-
-  it('looks up the exact email and loads only the name', async () => {
+  it('resolves a user who shares an organization with the caller, loading only the name', async () => {
     h.found = { id: 'u1', name: 'Ada' };
+    h.sharesMembership.mockResolvedValue(true);
     const res = await lookup('ada@example.com');
 
     expect(h.findOne).toHaveBeenCalledWith({ email: 'ada@example.com' });
     expect(h.select).toHaveBeenCalledWith('name');
+    expect(h.sharesMembership).toHaveBeenCalledWith('caller', 'u1');
+    expect(res._getStatusCode()).toBe(200);
     expect(res._getJSONData()).toEqual({ id: 'u1', name: 'Ada' });
+  });
+
+  it('answers an out-of-scope user exactly as it answers an unknown address', async () => {
+    h.found = { id: 'u2', name: 'Grace' };
+    h.sharesMembership.mockResolvedValue(false);
+    const outOfScope = await lookup('grace@example.com');
+
+    h.found = null;
+    const notFound = await lookup('nobody@example.com');
+
+    expect(h.sharesMembership).toHaveBeenNthCalledWith(1, 'caller', 'u2');
+    for (const res of [outOfScope, notFound]) {
+      expect(res._getStatusCode()).toBe(200);
+      expect(res._getData()).toBe('null');
+    }
+  });
+
+  it('runs the same queries for an unknown address, against an id that matches no one', async () => {
+    const res = await lookup('nobody@example.com');
+
+    expect(h.findOne).toHaveBeenCalledTimes(1);
+    expect(h.sharesMembership).toHaveBeenCalledTimes(1);
+    const [, targetId] = h.sharesMembership.mock.calls[0];
+    expect(targetId).toMatch(/^[0-9a-f]{24}$/);
+    expect(res._getJSONData()).toBeNull();
   });
 });

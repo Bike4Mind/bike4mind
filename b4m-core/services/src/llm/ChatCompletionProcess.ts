@@ -1337,6 +1337,7 @@ export class ChatCompletionProcess {
   private getScopeFilter: IChatCompletionServiceOptions['getScopeFilter'];
   private getMcpClient: IChatCompletionServiceOptions['getMcpClient'];
   private customMcp: IChatCompletionServiceOptions['customMcp'];
+  private customMcpDeadline: IChatCompletionServiceOptions['customMcpDeadline'];
   private statusManager: StatusManager | null = null;
   private systemFilesCache: Map<string, [string[], string[]]> | null = null;
   private abortControllers: Map<string, AbortController> | null = null;
@@ -1427,6 +1428,7 @@ export class ChatCompletionProcess {
     this.getThinkingVisibility = options.getThinkingVisibility;
     this.getMcpClient = options.getMcpClient;
     this.customMcp = options.customMcp;
+    this.customMcpDeadline = options.customMcpDeadline;
     this.features = options.features || new Map<featureNames, ChatCompletionFeature>();
     this.tokenizer = options.tokenizer;
     this.slackWebhookUrl = options.slackWebhookUrl;
@@ -3813,6 +3815,7 @@ export class ChatCompletionProcess {
         imageProcessorLambdaName: this.imageProcessorLambdaName,
         getMcpClient: this.getMcpClient,
         customMcp: this.customMcp,
+        customMcpDeadline: this.customMcpDeadline,
         toolCreditsMap: this.toolCreditsMap,
         toolCreditModels: this.toolCreditModels,
         subagentTelemetryData: this.subagentTelemetryData,

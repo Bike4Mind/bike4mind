@@ -1,13 +1,10 @@
 import React, { useState, useMemo, useCallback } from 'react';
 import {
   Box,
-  Card,
-  Grid,
   Stack,
   Typography,
   Button,
   FormControl,
-  Tooltip,
   Divider,
   Checkbox,
   Dropdown,
@@ -17,19 +14,12 @@ import {
   IconButton,
 } from '@mui/joy';
 import SharedPaginationControls from '@client/app/components/admin/Subscriptions/components/PaginationControls';
-import SearchOffIcon from '@mui/icons-material/SearchOff';
-import CalendarTodayIcon from '@mui/icons-material/CalendarToday';
-import CategoryIcon from '@mui/icons-material/Category';
-import EmailIcon from '@mui/icons-material/Email';
-import InfoIcon from '@mui/icons-material/Info';
-import NumbersIcon from '@mui/icons-material/Numbers';
 import FilterAltIcon from '@mui/icons-material/FilterAlt';
 import KeyboardArrowDownIcon from '@mui/icons-material/KeyboardArrowDown';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import DownloadIcon from '@mui/icons-material/Download';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import ExpandLessIcon from '@mui/icons-material/ExpandLess';
-import { useIsMobile } from '@client/app/hooks/useIsMobile';
 import { useExportToCSV } from '@client/app/hooks/useExportToCSV';
 import { fetchCounterLogs, type CounterLogRow } from '@client/app/utils/userAPICalls';
 import { useAnalyticsStore, ALL_VALUE, isAllOrganizations } from './store';
@@ -38,6 +28,9 @@ import { UserActivityFilters } from './filters/UserActivityFilters';
 import { collectUserActivityRows, MAX_EXPORT_ROWS } from './exportUserActivity';
 import { buildUserActivityRequest } from './userActivityRequest';
 import { AnalyticsErrorCard } from './AnalyticsErrorCard';
+import { DataTable, EmptyState, SettingsSection, type DataColumn } from '../../shared';
+
+type KeyedRow = { item: CounterLogRow; key: string };
 
 interface UserActivityTabProps {
   rows: CounterLogRow[];
@@ -48,7 +41,6 @@ interface UserActivityTabProps {
 }
 
 export const UserActivityTab: React.FC<UserActivityTabProps> = ({ rows, total, isFetching, error, onRefresh }) => {
-  const isMobile = useIsMobile();
   const [expandedMetadata, setExpandedMetadata] = useState<Set<string>>(new Set());
   const [isExporting, setIsExporting] = useState(false);
   const [exportNote, setExportNote] = useState<string | null>(null);
@@ -189,10 +181,61 @@ export const UserActivityTab: React.FC<UserActivityTabProps> = ({ rows, total, i
   const rowKey = (item: CounterLogRow, index: number) =>
     `${item.date}-${item.counterName}-${item.userEmail}-${item.metadata?.reportId}-${index}`;
 
+  const keyedRows = rows.map((item, index) => ({ item, key: rowKey(item, index) }));
+  const columns: DataColumn<KeyedRow>[] = [
+    { id: 'date', label: 'Date', width: '8rem', render: ({ item }) => item.date },
+    { id: 'event', label: 'Action', width: '14rem', render: ({ item }) => item.counterName },
+    { id: 'email', label: 'User Email', width: '14rem', render: ({ item }) => item.userEmail || 'N/A' },
+    {
+      id: 'metadata',
+      label: 'Metadata',
+      wrap: true,
+      render: ({ item, key }) => {
+        const hasMetadata = Object.keys(item.metadata || {}).length > 0;
+        const expanded = hasMetadata && expandedMetadata.has(key);
+        return (
+          <Box sx={{ py: 0.5 }}>
+            <Stack direction="row" alignItems="center" spacing={1}>
+              <Typography level="body-sm" sx={{ flex: 1, wordBreak: 'break-word' }}>
+                {getMetadataSummary(item.metadata)}
+              </Typography>
+              {hasMetadata && (
+                <IconButton
+                  size="sm"
+                  variant="plain"
+                  aria-label={expanded ? 'Hide metadata' : 'Show metadata'}
+                  aria-expanded={expanded}
+                  data-testid="user-activity-metadata-toggle-btn"
+                  onClick={() => toggleMetadataExpansion(key)}
+                >
+                  {expanded ? <ExpandLessIcon /> : <ExpandMoreIcon />}
+                </IconButton>
+              )}
+            </Stack>
+            {expanded && (
+              <Box
+                sx={{ borderRadius: 'sm', maxHeight: 150, overflow: 'auto' }}
+                data-testid="user-activity-metadata-json"
+              >
+                <Typography
+                  level="body-xs"
+                  sx={{ whiteSpace: 'pre-wrap', fontFamily: 'monospace', fontSize: '0.75rem' }}
+                >
+                  {JSON.stringify(item.metadata, null, 2)}
+                </Typography>
+              </Box>
+            )}
+          </Box>
+        );
+      },
+    },
+    { id: 'count', label: 'Count', numeric: true, width: '5rem', render: ({ item }) => item.count || 0 },
+  ];
+
   return (
     <Box>
       {/* User Activity Specific Filters */}
-      <Card sx={{ mb: 1 }}>
+      <SettingsSection sx={{ mb: 1 }}>
         <Stack spacing={2}>
           <Stack
             direction={{ xs: 'column', sm: 'row' }}
@@ -339,7 +382,7 @@ export const UserActivityTab: React.FC<UserActivityTabProps> = ({ rows, total, i
             </>
           )}
         </Stack>
-      </Card>
+      </SettingsSection>
 
       {/* Results */}
       {error ? (
@@ -368,187 +411,29 @@ export const UserActivityTab: React.FC<UserActivityTabProps> = ({ rows, total, i
               disabled={isFetching}
             />
           )}
-          {rows.length === 0 ? (
-            <Card variant="outlined" sx={{ p: 4, textAlign: 'center' }} data-testid="user-activity-empty">
-              <Stack alignItems="center" spacing={2}>
-                <SearchOffIcon sx={{ fontSize: 48, color: 'neutral.500' }} />
-                <Typography level="body-lg">No data found</Typography>
-              </Stack>
-            </Card>
-          ) : isMobile ? (
-            /* Mobile: card-per-row layout */
-            <Stack spacing={1}>
-              {rows.map((item, index) => {
-                const itemKey = rowKey(item, index);
-                const hasMetadata = Object.keys(item.metadata || {}).length > 0;
-                return (
-                  <Card
-                    variant="outlined"
-                    key={itemKey}
-                    data-testid="user-activity-row"
-                    sx={{ bgcolor: index % 2 ? 'background.level1' : 'background.level2', p: 1.5 }}
-                  >
-                    <Stack direction="row" justifyContent="space-between" alignItems="flex-start" spacing={1}>
-                      <Box sx={{ flex: 1, minWidth: 0 }}>
-                        <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 0.5 }}>
-                          <Typography level="body-xs" color="primary" sx={{ whiteSpace: 'nowrap' }}>
-                            {item.date}
-                          </Typography>
-                          <Typography level="body-xs" sx={{ color: 'text.tertiary' }}>
-                            ·
-                          </Typography>
-                          <Typography
-                            level="body-xs"
-                            fontWeight="bold"
-                            sx={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
-                          >
-                            {item.counterName}
-                          </Typography>
-                        </Stack>
-                        <Typography level="body-xs" sx={{ color: 'text.secondary', mb: hasMetadata ? 0.5 : 0 }}>
-                          {item.userEmail || 'N/A'}
-                        </Typography>
-                        {hasMetadata && (
-                          <Typography
-                            level="body-xs"
-                            sx={{
-                              color: 'text.tertiary',
-                              overflow: 'hidden',
-                              textOverflow: 'ellipsis',
-                              whiteSpace: 'nowrap',
-                            }}
-                          >
-                            {getMetadataSummary(item.metadata)}
-                          </Typography>
-                        )}
-                        {expandedMetadata.has(itemKey) && hasMetadata && (
-                          <Box sx={{ mt: 0.5, borderRadius: 'sm', maxHeight: 150, overflow: 'auto' }}>
-                            <Typography
-                              level="body-xs"
-                              sx={{ whiteSpace: 'pre-wrap', fontFamily: 'monospace', fontSize: '0.75rem' }}
-                            >
-                              {JSON.stringify(item.metadata, null, 2)}
-                            </Typography>
-                          </Box>
-                        )}
-                      </Box>
-                      <Stack alignItems="flex-end" spacing={0.5} sx={{ flexShrink: 0 }}>
-                        <Typography level="body-sm" fontWeight="bold">
-                          ×{item.count || 0}
-                        </Typography>
-                        {hasMetadata && (
-                          <IconButton size="sm" variant="plain" onClick={() => toggleMetadataExpansion(itemKey)}>
-                            {expandedMetadata.has(itemKey) ? <ExpandLessIcon /> : <ExpandMoreIcon />}
-                          </IconButton>
-                        )}
-                      </Stack>
-                    </Stack>
-                  </Card>
-                );
-              })}
-            </Stack>
-          ) : (
-            /* Desktop: sticky-header grid layout */
-            <Box sx={{ maxHeight: 'calc(100vh - 100px)', overflow: 'auto' }}>
-              <Card
-                variant="outlined"
-                sx={{ p: 1, mb: 1, position: 'sticky', top: 0, zIndex: 1, bgcolor: 'background.body' }}
-              >
-                <Grid container spacing={1} alignItems="center">
-                  <Grid xs={1.3}>
-                    <Tooltip title="Date">
-                      <Typography level="title-sm" startDecorator={<CalendarTodayIcon />}>
-                        Date
-                      </Typography>
-                    </Tooltip>
-                  </Grid>
-                  <Grid xs={2.7}>
-                    <Tooltip title="Action">
-                      <Typography level="title-sm" startDecorator={<CategoryIcon />}>
-                        Action
-                      </Typography>
-                    </Tooltip>
-                  </Grid>
-                  <Grid xs={3}>
-                    <Tooltip title="User Email">
-                      <Typography level="title-sm" startDecorator={<EmailIcon />}>
-                        User Email
-                      </Typography>
-                    </Tooltip>
-                  </Grid>
-                  <Grid xs={4}>
-                    <Tooltip title="Metadata">
-                      <Typography level="title-sm" startDecorator={<InfoIcon />}>
-                        Metadata
-                      </Typography>
-                    </Tooltip>
-                  </Grid>
-                  <Grid xs={1}>
-                    <Tooltip title="Count">
-                      <Typography level="title-sm" startDecorator={<NumbersIcon />}>
-                        Count
-                      </Typography>
-                    </Tooltip>
-                  </Grid>
-                </Grid>
-              </Card>
-              {rows.map((item, index) => {
-                const itemKey = rowKey(item, index);
-                return (
-                  <Card
-                    variant="outlined"
-                    key={itemKey}
-                    data-testid="user-activity-row"
-                    sx={{ mb: 1, bgcolor: index % 2 ? 'background.level1' : 'background.level2' }}
-                  >
-                    <Grid container spacing={1} alignItems="center">
-                      <Grid xs={1.3}>
-                        <Typography color="primary" level="body-sm">
-                          {item.date}
-                        </Typography>
-                      </Grid>
-                      <Grid xs={2.7}>
-                        <Typography level="body-sm">{item.counterName}</Typography>
-                      </Grid>
-                      <Grid xs={3}>
-                        <Typography level="body-sm">{item.userEmail || 'N/A'}</Typography>
-                      </Grid>
-                      <Grid xs={4}>
-                        <Stack direction="row" alignItems="center" spacing={1}>
-                          <Typography
-                            level="body-sm"
-                            sx={{ flex: 1, wordBreak: 'break-word', whiteSpace: 'normal', lineHeight: 1 }}
-                          >
-                            {getMetadataSummary(item.metadata)}
-                          </Typography>
-                          {Object.keys(item.metadata || {}).length > 0 && (
-                            <IconButton size="sm" variant="plain" onClick={() => toggleMetadataExpansion(itemKey)}>
-                              {expandedMetadata.has(itemKey) ? <ExpandLessIcon /> : <ExpandMoreIcon />}
-                            </IconButton>
-                          )}
-                        </Stack>
-                        {expandedMetadata.has(itemKey) && Object.keys(item.metadata || {}).length > 0 && (
-                          <Box sx={{ borderRadius: 'sm', maxHeight: 150, overflow: 'auto' }}>
-                            <Typography
-                              level="body-xs"
-                              sx={{ whiteSpace: 'pre-wrap', fontFamily: 'monospace', fontSize: '0.75rem' }}
-                            >
-                              {JSON.stringify(item.metadata, null, 2)}
-                            </Typography>
-                          </Box>
-                        )}
-                      </Grid>
-                      <Grid xs={1}>
-                        <Typography level="body-sm" textAlign="center">
-                          {item.count || 0}
-                        </Typography>
-                      </Grid>
-                    </Grid>
-                  </Card>
-                );
-              })}
-            </Box>
-          )}
+          <DataTable
+            label="User activity"
+            testId="user-activity-table"
+            rows={keyedRows}
+            columns={columns}
+            getRowId={row => row.key}
+            rowTestId={() => 'user-activity-row'}
+            minWidth="57rem"
+            pagination={false}
+            onRetry={onRefresh}
+            empty={
+              <Box data-testid="user-activity-empty">
+                <EmptyState
+                  title="No activity found"
+                  action={
+                    <Button variant="outlined" onClick={onRefresh} data-testid="user-activity-empty-refresh-btn">
+                      Refresh
+                    </Button>
+                  }
+                />
+              </Box>
+            }
+          />
         </Box>
       )}
     </Box>
