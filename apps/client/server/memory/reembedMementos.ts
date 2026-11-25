@@ -134,7 +134,7 @@ export async function reembedMementosForUser(
       stats.failed += 1;
       const message = `memento ${String(memento._id)}: ${err instanceof Error ? err.message : String(err)}`;
       stats.errors.push(message);
-      logger.error('Memento re-embed failed', { userId, detail: message });
+      logger.error('Memento re-embed failed', { userId, mementoId: String(memento._id), error: err });
     }
   }
 
