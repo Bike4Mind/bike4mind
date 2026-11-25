@@ -12,7 +12,6 @@ import { LinkifiedText } from './ExternalLink';
 import { BranchIcon, ChevronIcon } from './icons';
 import { displayText } from './relayRows';
 import { SessionLink } from './SessionLink';
-import { messageScope } from './threadFind';
 
 const STATE_LABEL: Record<ChildCardState, string> = {
   'needs-you': 'Needs you',
@@ -148,11 +147,7 @@ function HistoryEntry({ message }: { message: ChatMessage }) {
       <Typography level="body-xs" textColor="text.tertiary" sx={{ flexShrink: 0, fontVariantNumeric: 'tabular-nums' }}>
         {Number.isNaN(at.getTime()) ? '' : at.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
       </Typography>
-      <Typography
-        level="body-xs"
-        sx={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}
-        data-find-scope={messageScope(message.id)}
-      >
+      <Typography level="body-xs" sx={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
         <LinkifiedText text={message.childWaiting ? waitingLine(message.childWaiting) : displayText(message)} />
       </Typography>
     </Box>
