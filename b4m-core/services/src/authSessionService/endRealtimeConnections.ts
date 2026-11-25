@@ -31,7 +31,7 @@ export const endRealtimeConnections = async (
   } catch (error) {
     const message = 'Failed to end realtime connections; the sweep will retry';
     if (logger) logger.warn(message, error as Error);
-    else console.warn(message, error);
+    else Logger.warn(message, error as Error);
     return [];
   }
 };

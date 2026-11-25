@@ -1,5 +1,6 @@
 import { buildSuspensionNotice, type IUserRepository } from '@bike4mind/common';
 import { escapeHtml, wrapEmail } from '../notificationEmail';
+import { Logger } from '@bike4mind/observability';
 
 export interface AccountSuspendedNotifyDeps {
   db: { users: Pick<IUserRepository, 'findActiveEmailsByIds'> };
@@ -46,7 +47,7 @@ export async function notifyAccountSuspended(
   deps: AccountSuspendedNotifyDeps
 ): Promise<void> {
   const warn = (msg: string, meta: unknown) =>
-    deps.logger?.warn ? deps.logger.warn(msg, meta) : console.warn(msg, meta);
+    deps.logger?.warn ? deps.logger.warn(msg, meta) : Logger.warn(msg, meta);
   try {
     const emailRows = await deps.db.users.findActiveEmailsByIds([context.userId]);
     if (emailRows.length === 0) {

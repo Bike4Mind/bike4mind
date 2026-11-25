@@ -34,6 +34,7 @@ import { subtractCreditsWithLedgerRow } from '../creditService/subtractCredits';
 import { MODERATION_POLICY } from './moderationPolicy';
 import { entersBlockedState } from './accountState';
 import { endRealtimeConnections } from '../authSessionService/endRealtimeConnections';
+import { Logger } from '@bike4mind/observability';
 
 const MAX_CREDIT_VALUE = 1_000_000_000;
 
@@ -165,7 +166,7 @@ async function sendFriendRequestsToOrgMembers(
       );
     } catch (error) {
       if (error instanceof BadRequestError) {
-        console.log(`Error sending friend request to ${memberId}: ${error.message}`);
+        Logger.warn('Error sending friend request', { memberId, error });
         return;
       }
       throw error;
