@@ -126,11 +126,18 @@ describe('node.position seen by components while streaming equals the single par
 });
 
 describe('footnote section placement while streaming', () => {
-  it('never shows a footnote section mid-reply while streaming', () => {
+  it('shows the footnote section only at the end of the reply while streaming', () => {
     const text = 'Claim[^1] made.\n\n[^1]: Source.\n\nMore analysis follows here.\n\nAnd a conclusion';
     const { container: base } = render(<Base text={text} components={{}} />);
     const { container: streamed } = render(<Subject text={text} streaming components={{}} />);
     expect(base.lastElementChild?.tagName).toBe('SECTION');
-    expect(streamed.querySelector('section')).toBeNull();
+    expect(streamed.querySelectorAll('section')).toHaveLength(1);
+    expect(streamed.lastElementChild?.tagName).toBe('SECTION');
+  });
+
+  it('resolves a reference-style link while streaming once its definition has arrived', () => {
+    const text = 'See [the docs][d] first.\n\n[d]: https://example.com/docs\n\nMore text';
+    const { container } = render(<Subject text={text} streaming components={{}} />);
+    expect(container.querySelector('a')?.getAttribute('href')).toBe('https://example.com/docs');
   });
 });

@@ -92,23 +92,26 @@ describe('StreamingMarkdown render and parse counts per frame', () => {
     expect(vi.mocked(split.createBlockParser)).not.toHaveBeenCalled();
   });
 
-  it('costs little to rebuild the parser on every render when the parent passes new remarkPlugins each time', () => {
-    const view = render(<Subject text="a" streaming plugins={[...assistantReplyRemarkPlugins]} />);
-    vi.mocked(split.createBlockParser).mockClear();
-    const start = performance.now();
-    for (let i = 0; i < 50; i++) {
-      act(() => view.rerender(<Subject text={`a\n\nb${i}`} streaming plugins={[...assistantReplyRemarkPlugins]} />));
+  it.skipIf(!process.env.B4M_PERF)(
+    'costs little to rebuild the parser on every render when the parent passes new remarkPlugins each time',
+    () => {
+      const view = render(<Subject text="a" streaming plugins={[...assistantReplyRemarkPlugins]} />);
+      vi.mocked(split.createBlockParser).mockClear();
+      const start = performance.now();
+      for (let i = 0; i < 50; i++) {
+        act(() => view.rerender(<Subject text={`a\n\nb${i}`} streaming plugins={[...assistantReplyRemarkPlugins]} />));
+      }
+      const elapsed = performance.now() - start;
+      expect(vi.mocked(split.createBlockParser)).toHaveBeenCalledTimes(50);
+      const t0 = performance.now();
+      for (let i = 0; i < 200; i++) split.createBlockParser([...assistantReplyRemarkPlugins])('x');
+      const perParser = (performance.now() - t0) / 200;
+      console.log(
+        `50 frames with unstable plugins ${elapsed.toFixed(1)} ms; parser build + first parse ${perParser.toFixed(3)} ms`
+      );
+      expect(perParser).toBeLessThan(2);
     }
-    const elapsed = performance.now() - start;
-    expect(vi.mocked(split.createBlockParser)).toHaveBeenCalledTimes(50);
-    const t0 = performance.now();
-    for (let i = 0; i < 200; i++) split.createBlockParser([...assistantReplyRemarkPlugins])('x');
-    const perParser = (performance.now() - t0) / 200;
-    console.log(
-      `50 frames with unstable plugins ${elapsed.toFixed(1)} ms; parser build + first parse ${perParser.toFixed(3)} ms`
-    );
-    expect(perParser).toBeLessThan(2);
-  });
+  );
 });
 
 describe.skipIf(!process.env.B4M_PERF)('StreamingMarkdown cost breakdown', () => {

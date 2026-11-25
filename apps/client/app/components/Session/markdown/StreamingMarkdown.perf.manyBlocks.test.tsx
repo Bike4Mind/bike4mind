@@ -7,6 +7,7 @@ import { appendFileSync } from 'fs';
 import { assistantReplyRemarkPlugins } from '@client/app/utils/remarkPlugins';
 import { StreamingMarkdown } from './StreamingMarkdown';
 import { splitStreamingBlocks } from './streamingSplit';
+import { replyParser } from './streamingSplitTestUtils';
 
 const components: Components = {};
 const remarkPlugins: Options['remarkPlugins'] = [...assistantReplyRemarkPlugins];
@@ -55,7 +56,7 @@ const lastFrames = (text: string, el: (t: string) => React.ReactElement, frames 
 };
 
 const offsetsCost = (text: string) => {
-  const { blocks, tail } = splitStreamingBlocks(text);
+  const { blocks, tail } = splitStreamingBlocks(text, replyParser);
   const parts = [...blocks, tail];
   const countLines = (t: string) => t.split('\n').length - 1;
   const start = performance.now();

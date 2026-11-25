@@ -1,15 +1,11 @@
 import { unified } from 'unified';
 import remarkParse from 'remark-parse';
 import type { Options } from 'react-markdown';
-import { assistantReplyRemarkPlugins } from '@client/app/utils/remarkPlugins';
-
-export interface StreamingSplit {
-  committed: string;
-  tail: string;
-}
 
 export interface StreamingBlocks {
   blocks: string[];
+  /** The blocks joined, kept so a frame checks and skips the settled prefix without rebuilding it. */
+  committed: string;
   tail: string;
   /** A link reference or footnote definition was seen; those resolve across blocks only in one parse. */
   crossBlock: boolean;
@@ -37,8 +33,6 @@ export const createBlockParser = (remarkPlugins: Options['remarkPlugins']): Bloc
     .use(remarkPlugins ?? []);
   return text => processor.parse(text) as BlockNode;
 };
-
-const defaultParser = createBlockParser(assistantReplyRemarkPlugins);
 
 const CROSS_BLOCK_TYPES = new Set(['definition', 'footnoteDefinition']);
 const hasCrossBlock = (node: BlockNode): boolean =>
@@ -111,14 +105,12 @@ export const countSettleCandidates = (text: string, list: StreamingBlocks['tailL
  */
 export const splitStreamingBlocks = (
   text: string,
-  parse: BlockParser = defaultParser,
+  parse: BlockParser,
   prev?: StreamingBlocks,
   final = false
 ): StreamingBlocks => {
-  const kept = prev && text.startsWith(prev.blocks.join('')) ? prev : undefined;
-  const blocks = kept ? [...kept.blocks] : [];
-  let settledCrossBlock = kept?.settledCrossBlock ?? false;
-  const tailStart = kept ? kept.blocks.join('').length : 0;
+  const kept = prev && text.startsWith(prev.committed) ? prev : undefined;
+  const tailStart = kept ? kept.committed.length : 0;
   const tail = text.slice(tailStart);
   if (
     !final &&
@@ -126,9 +118,11 @@ export const splitStreamingBlocks = (
     countSettleCandidates(tail, kept.tailList) <= kept.settleCandidates &&
     (kept.pendingLineAt === null || tail.indexOf('\n', kept.pendingLineAt) === -1)
   ) {
-    return { ...kept, blocks, tail };
+    return { ...kept, tail };
   }
 
+  const blocks = kept ? [...kept.blocks] : [];
+  let settledCrossBlock = kept?.settledCrossBlock ?? false;
   const nodes = parse(tail).children ?? [];
   let blockStart = 0;
   let settledNodes = 0;
@@ -170,6 +164,7 @@ export const splitStreamingBlocks = (
   }
   return {
     blocks,
+    committed: text.slice(0, tailStart + blockStart),
     tail: rest,
     crossBlock: settledCrossBlock || nodes.slice(settledNodes).some(hasCrossBlock),
     settledCrossBlock,
@@ -177,10 +172,4 @@ export const splitStreamingBlocks = (
     tailList,
     pendingLineAt: pendingLineAt === null ? null : pendingLineAt - blockStart,
   };
-};
-
-/** The settled blocks joined back together, and the live tail. */
-export const splitStreamingMarkdown = (text: string): StreamingSplit => {
-  const { blocks, tail } = splitStreamingBlocks(text);
-  return { committed: blocks.join(''), tail };
 };

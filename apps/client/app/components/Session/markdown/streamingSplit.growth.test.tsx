@@ -5,6 +5,7 @@ import ReactMarkdown, { type Options } from 'react-markdown';
 import rehypeKatex from 'rehype-katex';
 import { assistantReplyRemarkPlugins } from '@client/app/utils/remarkPlugins';
 import { splitStreamingBlocks } from './streamingSplit';
+import { replyParser } from './streamingSplitTestUtils';
 
 const remarkPlugins: Options['remarkPlugins'] = [...assistantReplyRemarkPlugins];
 const rehypePlugins: Options['rehypePlugins'] = [rehypeKatex];
@@ -19,7 +20,7 @@ const md = (text: string) =>
     : '';
 
 const splitRender = (text: string) => {
-  const { blocks, tail } = splitStreamingBlocks(text);
+  const { blocks, tail } = splitStreamingBlocks(text, replyParser);
   return [...blocks, tail].map(md).join('');
 };
 
@@ -51,7 +52,7 @@ describe('splitStreamingBlocks render oracle across frames', () => {
   it('leaves reference links raw until completion when their definitions trail the reply', () => {
     const text = 'text [a] [b]\n\n[a]: http://a\n\n[b]: http://b';
     expect(splitRender(text)).toBe('<p>text [a] [b]</p>');
-    expect(splitStreamingBlocks(text).crossBlock).toBe(true);
+    expect(splitStreamingBlocks(text, replyParser).crossBlock).toBe(true);
   });
 });
 
@@ -64,7 +65,7 @@ describe('settled blocks only grow across frames', () => {
     for (const text of corpus) {
       let prev: string[] = [];
       for (const frame of frames(text)) {
-        const { blocks } = splitStreamingBlocks(frame);
+        const { blocks } = splitStreamingBlocks(frame, replyParser);
         expect(blocks.slice(0, prev.length)).toEqual(prev);
         prev = blocks;
       }
@@ -72,8 +73,8 @@ describe('settled blocks only grow across frames', () => {
   });
 
   it('a partial `[x]` line that becomes a definition keeps the block before it settled and flags the reply', () => {
-    const a = splitStreamingBlocks('text [a]\n\n[a]');
-    const b = splitStreamingBlocks('text [a]\n\n[a]: http://a');
+    const a = splitStreamingBlocks('text [a]\n\n[a]', replyParser);
+    const b = splitStreamingBlocks('text [a]\n\n[a]: http://a', replyParser);
     expect(a.blocks).toEqual(['text [a]\n\n']);
     expect(a.crossBlock).toBe(false);
     expect(b.blocks).toEqual(['text [a]\n\n']);

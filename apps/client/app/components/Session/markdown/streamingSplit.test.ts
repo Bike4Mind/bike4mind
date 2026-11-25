@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { splitStreamingMarkdown } from './streamingSplit';
+import { splitStreamingMarkdown } from './streamingSplitTestUtils';
 
 describe('splitStreamingMarkdown', () => {
   it('cuts at the last top-level blank line', () => {

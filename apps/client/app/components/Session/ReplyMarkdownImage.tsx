@@ -9,9 +9,7 @@ type Props = Pick<ComponentProps<typeof ImageContainer>, 'src' | 'alt' | 'onSend
 };
 
 export function ReplyMarkdownImage({ src, alt, onSendMessage, approvedSources }: Props) {
-  const [approvedSource, setApprovedSource] = useState<string | null>(() =>
-    src && approvedSources?.has(src) ? src : null
-  );
+  const [approvedSource, setApprovedSource] = useState<string | null>(null);
   if (!src || /^(?:\/mnt\/|\/tmp\/|file:|sandbox:)/i.test(src) || src.includes('/mnt/data/')) return null;
   let imageUrl: URL;
   try {
@@ -21,7 +19,7 @@ export function ReplyMarkdownImage({ src, alt, onSendMessage, approvedSources }:
   }
   if (!['https:', 'http:'].includes(imageUrl.protocol)) return null;
 
-  if (approvedSource !== src) {
+  if (approvedSource !== src && !approvedSources?.has(src)) {
     return (
       <Button
         data-testid="reply-image-load-btn"

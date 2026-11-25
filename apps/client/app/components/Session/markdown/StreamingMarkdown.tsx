@@ -52,16 +52,19 @@ interface SplitState {
   streaming: boolean;
   streamedHere: boolean;
   split: StreamingBlocks | null;
+  crossBlock: boolean;
 }
 
-const INITIAL: SplitState = { text: '', streaming: false, streamedHere: false, split: null };
+const INITIAL: SplitState = { text: '', streaming: false, streamedHere: false, split: null, crossBlock: false };
 
 /**
  * Renders a reply's markdown. While streaming, each settled block and the live tail parse
  * separately and render as siblings keyed by block index, so a block keeps its React identity
  * (and any per-block state) when it settles. A reply that streamed here keeps that structure
- * once complete, unless it holds a definition that only one parse can resolve across blocks; a
- * reply mounted complete is always one parse.
+ * once complete. A link reference or footnote definition only resolves across blocks in one
+ * parse, so from the frame one is seen the reply is one parse for as long as it only grows,
+ * which leaves at most one switch between the two structures. A reply mounted complete is
+ * always one parse.
  */
 export const StreamingMarkdown = ({ text, streaming, ...options }: StreamingMarkdownProps) => {
   const parse = useMemo(() => createBlockParser(options.remarkPlugins), [options.remarkPlugins]);
@@ -70,27 +73,30 @@ export const StreamingMarkdown = ({ text, streaming, ...options }: StreamingMark
   let current = state;
   if (state.text !== text || state.streaming !== streaming) {
     const streamedHere = state.streamedHere || streaming;
+    let crossBlock = state.crossBlock && text.startsWith(state.text);
     let split: StreamingBlocks | null = null;
-    if (streaming || streamedHere) {
+    if (!crossBlock && (streaming || streamedHere)) {
       split = splitStreamingBlocks(text, parse, state.split ?? undefined, !streaming);
-      if (!streaming && split.crossBlock) split = null;
+      if (split.crossBlock) {
+        crossBlock = true;
+        split = null;
+      }
     }
-    current = { text, streaming, streamedHere, split };
+    current = { text, streaming, streamedHere, split, crossBlock };
     setState(current);
   }
 
-  const parts = useMemo(() => {
-    if (!current.split) return null;
-    const { blocks, tail } = current.split;
-    const texts = tail ? [...blocks, tail] : blocks;
-    const offsets = texts.reduce<number[]>((acc, _, i) => {
-      acc.push(i === 0 ? 0 : acc[i - 1] + countLines(texts[i - 1]));
-      return acc;
-    }, []);
-    return texts.map((part, i) => ({ text: part, lineOffset: offsets[i] }));
-  }, [current.split]);
+  // `blocks` keeps its identity on frames that settle nothing, so the line counts are not redone.
+  const blocks = current.split?.blocks;
+  const lineOffsets = useMemo(() => {
+    const offsets = [0];
+    for (const block of blocks ?? []) offsets.push(offsets[offsets.length - 1] + countLines(block));
+    return offsets;
+  }, [blocks]);
 
-  if (!parts) return <MarkdownBlock key={0} text={text} lineOffset={0} {...options} />;
+  if (!current.split || !blocks) return <MarkdownBlock key={0} text={text} lineOffset={0} {...options} />;
+  const { tail } = current.split;
+  const parts = tail ? [...blocks, tail] : blocks;
 
   // The newline between siblings is what a single parse emits between its top-level nodes.
   return (
@@ -98,7 +104,7 @@ export const StreamingMarkdown = ({ text, streaming, ...options }: StreamingMark
       {parts.map((part, i) => (
         <React.Fragment key={i}>
           {i > 0 && '\n'}
-          <MarkdownBlock text={part.text} lineOffset={part.lineOffset} {...options} />
+          <MarkdownBlock text={part} lineOffset={lineOffsets[i]} {...options} />
         </React.Fragment>
       ))}
     </>

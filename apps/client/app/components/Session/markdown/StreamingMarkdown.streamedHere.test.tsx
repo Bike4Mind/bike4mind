@@ -241,7 +241,7 @@ describe('streamedHere lifecycle', () => {
   });
 });
 
-describe('cost of re-rendering a completed reply that streamed here', () => {
+describe.skipIf(!process.env.B4M_PERF)('cost of re-rendering a completed reply that streamed here', () => {
   it('re-renders a 200 KB completed reply with many unterminated bracket lines in under 100 ms', () => {
     const text = 'Log:\n\n' + '[ unterminated bracket line\n'.repeat(8000);
     const { rerender } = render(<Subject text={text} streaming />);

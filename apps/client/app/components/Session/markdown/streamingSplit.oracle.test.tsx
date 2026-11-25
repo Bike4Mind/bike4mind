@@ -4,7 +4,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import ReactMarkdown, { type Options } from 'react-markdown';
 import rehypeKatex from 'rehype-katex';
 import { assistantReplyRemarkPlugins, promoteInlineLatexDollars } from '@client/app/utils/remarkPlugins';
-import { splitStreamingMarkdown } from './streamingSplit';
+import { splitStreamingMarkdown } from './streamingSplitTestUtils';
 
 const remarkPlugins: Options['remarkPlugins'] = [...assistantReplyRemarkPlugins];
 const rehypePlugins: Options['rehypePlugins'] = [rehypeKatex];
