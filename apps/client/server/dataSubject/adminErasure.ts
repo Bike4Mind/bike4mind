@@ -7,8 +7,8 @@ import {
 } from '@bike4mind/common';
 import { User, mongoose, userRepository } from '@bike4mind/database';
 import { findOwnedOrganizations } from '@server/users/accountDeletion';
-import { SubjectErasurePlan } from './subjectErasurePlan';
-import { assertEveryModelClassified } from './subjectMatcher';
+import { SubjectErasurePlan } from '@bike4mind/server-utils/dataSubject/subjectErasurePlan';
+import { assertEveryModelClassified } from '@bike4mind/server-utils/dataSubject/subjectMatcher';
 
 type AdminActor = Parameters<typeof assertCanActOnAdminTarget>[0];
 

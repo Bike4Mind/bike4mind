@@ -1,6 +1,5 @@
 import { defineConfig } from 'vitest/config';
 import path from 'path';
-import tsconfigPaths from 'vite-tsconfig-paths';
 import { sharedTest } from '../../vitest.shared';
 
 const client = path.resolve(__dirname, '../client');
@@ -10,8 +9,8 @@ const client = path.resolve(__dirname, '../client');
 // with a capped worker pool. Inline with the unit suites they contend for mongod and CPU and flake.
 const INTEGRATION_LANE = process.env.WORKERS_TEST_LANE === 'integration';
 export default defineConfig({
-  plugins: [tsconfigPaths()],
   resolve: {
+    tsconfigPaths: true,
     // Mirrors apps/client/vitest.config.mts so the interim @server/@client bridge resolves the
     // same way under test as it does in tsconfig.json.
     alias: {

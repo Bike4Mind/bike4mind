@@ -48,13 +48,21 @@ export async function collectHealthRows(from: Date, to: Date, bucketed: boolean)
 
   const [usage, quests, agents, refusals] = await Promise.all([
     ApiKeyUsageLog.aggregate<
-      Counted<{ clientId: string; hour?: Date; endpoint: string; completionOutcome?: string; statusClass: StatusClass }>
+      Counted<{
+        clientId: string;
+        hour?: Date;
+        endpoint: string;
+        completionOutcome?: string;
+        completionFailureCode?: string;
+        statusClass: StatusClass;
+      }>
     >(
       stage(
         { oauthClientId: { $exists: true }, ...range('timestamp') },
         groupId('$timestamp', bucketed, {
           endpoint: '$endpoint',
           completionOutcome: '$completionObservation.outcome',
+          completionFailureCode: '$completionObservation.failureCode',
           statusClass: statusClassExpression,
         })
       )

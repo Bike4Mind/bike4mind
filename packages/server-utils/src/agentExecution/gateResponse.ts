@@ -152,10 +152,10 @@ export async function handleGateResponse(
 
   // Note: checkpointDepth is not carried here - same limitation as the permission_response path in
   // apps/client/server/websocket/agentExecute.ts. Gate resumes are user-driven and cannot cause a
-  // runaway loop on their own, and are likewise bounded by the persisted `lambdaInvocationCount`
-  // guard (MAX_LAMBDA_HANDOFFS).
+  // runaway loop on their own, so like a permission resume this click does not spend the executor's
+  // MAX_LAMBDA_HANDOFFS budget (`resumedBy: 'user'`); a timeout self-dispatch after it still does.
   try {
-    await dispatchAgentExecution({ executionId: cmd.executionId, connectionId }, executorTarget);
+    await dispatchAgentExecution({ executionId: cmd.executionId, connectionId, resumedBy: 'user' }, executorTarget);
   } catch (error) {
     // A lost ACK may still have queued work. Only an explicit rejection permits rollback.
     if (error instanceof AgentExecutorRejectedError) {

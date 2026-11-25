@@ -21,6 +21,7 @@ import { studioColor } from '../design/studioTokens';
 import BrandKitPanel from './BrandKitPanel';
 import BriefPanel from './BriefPanel';
 import ClipInspector from './ClipInspector';
+import DirectButton from './DirectButton';
 import HookVariationButton from './HookVariationButton';
 import { probeMediaDurationMs } from './probeMediaDuration';
 import { ExportPanel } from './ExportPanel';
@@ -259,15 +260,17 @@ const ProductionEditor = ({ composition }: { composition: StudioCompositionRespo
               ))}
             </Stack>
           </Stack>
-          <Chip
-            variant="soft"
-            color={STATUS_COLOR[status.kind]}
-            data-testid="production-save-status"
-            data-status={status.kind}
-            sx={{ marginLeft: 'auto' }}
-          >
-            {status.kind === 'error' ? `${STATUS_LABEL.error}: ${status.message}` : STATUS_LABEL[status.kind]}
-          </Chip>
+          <Stack direction="row" spacing={1} alignItems="center" sx={{ marginLeft: 'auto' }}>
+            <DirectButton composition={composition} blocked={blocksNavigation} />
+            <Chip
+              variant="soft"
+              color={STATUS_COLOR[status.kind]}
+              data-testid="production-save-status"
+              data-status={status.kind}
+            >
+              {status.kind === 'error' ? `${STATUS_LABEL.error}: ${status.message}` : STATUS_LABEL[status.kind]}
+            </Chip>
+          </Stack>
           <ExportPanel
             compositionId={composition.id}
             timeline={timeline}

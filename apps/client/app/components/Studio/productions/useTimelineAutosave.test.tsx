@@ -1,8 +1,8 @@
 import type { ReactNode } from 'react';
-import { act, renderHook, waitFor } from '@testing-library/react';
+import { act, renderHook } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { AxiosError, type AxiosResponse } from 'axios';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { defaultStudioTimeline, type StudioTimeline } from '@bike4mind/common';
 import { addCaptionClip } from './timelineEdits';
 
@@ -11,7 +11,7 @@ const h = vi.hoisted(() => ({ patch: vi.fn(), toastError: vi.fn() }));
 vi.mock('@client/app/contexts/ApiContext', () => ({ api: { get: vi.fn(), post: vi.fn(), patch: h.patch } }));
 vi.mock('sonner', () => ({ toast: { error: h.toastError } }));
 
-import { useTimelineAutosave } from './useTimelineAutosave';
+import { SAVE_DEBOUNCE_MS, useTimelineAutosave } from './useTimelineAutosave';
 
 const ID = 'c'.repeat(24);
 const CONTEXT = {};
@@ -74,8 +74,15 @@ const sentTexts = () =>
     return track?.kind === 'captions' ? track.clips[0].text : null;
   });
 
+const advance = (ms: number) => act(() => vi.advanceTimersByTimeAsync(ms));
+
 beforeEach(() => {
   vi.clearAllMocks();
+  vi.useFakeTimers();
+});
+
+afterEach(() => {
+  vi.useRealTimers();
 });
 
 describe('useTimelineAutosave', () => {
@@ -88,10 +95,11 @@ describe('useTimelineAutosave', () => {
 
     rerender({ draft: withCaption('One') });
     expect(result.current.status.kind).toBe('pending');
-    await act(() => new Promise(resolve => setTimeout(resolve, 400)));
+    await advance(400);
     expect(h.patch).not.toHaveBeenCalled();
 
-    await waitFor(() => expect(result.current.status.kind).toBe('saved'));
+    await advance(SAVE_DEBOUNCE_MS);
+    expect(result.current.status.kind).toBe('saved');
     expect(h.patch).toHaveBeenCalledTimes(1);
     expect(h.patch.mock.calls[0][0]).toBe(`/api/studio/compositions/${ID}`);
   });
@@ -105,15 +113,18 @@ describe('useTimelineAutosave', () => {
     const { result, rerender } = renderAutosave();
 
     rerender({ draft: withCaption('One') });
-    await waitFor(() => expect(h.patch).toHaveBeenCalledTimes(1));
+    await advance(SAVE_DEBOUNCE_MS);
+    expect(h.patch).toHaveBeenCalledTimes(1);
     rerender({ draft: withCaption('Two') });
-    await act(() => new Promise(resolve => setTimeout(resolve, 1_200)));
+    await advance(1_200);
     expect(h.patch).toHaveBeenCalledTimes(1);
 
     await act(async () => first.resolve(savedResponse(withCaption('One'))));
-    await waitFor(() => expect(h.patch).toHaveBeenCalledTimes(2));
+    await advance(SAVE_DEBOUNCE_MS + 50);
+    expect(h.patch).toHaveBeenCalledTimes(2);
     expect(sentTexts()).toEqual(['One', 'Two']);
-    await waitFor(() => expect(result.current.status.kind).toBe('saved'));
+    await advance(50);
+    expect(result.current.status.kind).toBe('saved');
   });
 
   it('sends a pending edit when the editor unmounts', async () => {
@@ -123,7 +134,8 @@ describe('useTimelineAutosave', () => {
     const { rerender, unmount } = renderAutosave();
     rerender({ draft: withCaption('Leaving') });
     unmount();
-    await waitFor(() => expect(h.patch).toHaveBeenCalledTimes(1));
+    await advance(50);
+    expect(h.patch).toHaveBeenCalledTimes(1);
     expect(sentTexts()).toEqual(['Leaving']);
   });
 
@@ -132,12 +144,13 @@ describe('useTimelineAutosave', () => {
     const { result, rerender } = renderAutosave();
     rerender({ draft: withCaption('One') });
 
-    await waitFor(() => expect(result.current.status.kind).toBe('error'));
+    await advance(SAVE_DEBOUNCE_MS + 50);
+    expect(result.current.status.kind).toBe('error');
     expect(result.current.status).toMatchObject({
       message: 'Invalid composition',
       issues: [{ code: 'unknown_file' }],
     });
-    await act(() => new Promise(resolve => setTimeout(resolve, 1_200)));
+    await advance(1_200);
     expect(h.patch).toHaveBeenCalledTimes(1);
   });
 
@@ -148,11 +161,13 @@ describe('useTimelineAutosave', () => {
     );
     const { result, rerender, unmount } = renderAutosave();
     rerender({ draft: withCaption('Flaky') });
-    await waitFor(() => expect(result.current.status.kind).toBe('error'));
+    await advance(SAVE_DEBOUNCE_MS + 50);
+    expect(result.current.status.kind).toBe('error');
     expect(result.current.blocksNavigation).toBe(false);
 
     unmount();
-    await waitFor(() => expect(h.patch).toHaveBeenCalledTimes(2));
+    await advance(50);
+    expect(h.patch).toHaveBeenCalledTimes(2);
     expect(sentTexts()).toEqual(['Flaky', 'Flaky']);
   });
 
@@ -160,11 +175,12 @@ describe('useTimelineAutosave', () => {
     h.patch.mockRejectedValue(unprocessable());
     const { result, rerender, unmount } = renderAutosave();
     rerender({ draft: withCaption('Rejected') });
-    await waitFor(() => expect(result.current.status.kind).toBe('error'));
+    await advance(SAVE_DEBOUNCE_MS + 50);
+    expect(result.current.status.kind).toBe('error');
     expect(result.current.blocksNavigation).toBe(true);
 
     unmount();
-    await act(() => new Promise(resolve => setTimeout(resolve, 200)));
+    await advance(200);
     expect(h.patch).toHaveBeenCalledTimes(1);
   });
 
@@ -179,7 +195,7 @@ describe('useTimelineAutosave', () => {
     expect(result.current.status.kind).toBe('invalid');
     expect(result.current.blocksNavigation).toBe(true);
     unmount();
-    await act(() => new Promise(resolve => setTimeout(resolve, 1_000)));
+    await advance(1_000);
     expect(h.patch).not.toHaveBeenCalled();
   });
 });

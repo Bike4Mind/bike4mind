@@ -5,3 +5,10 @@ export { fetchAnthropicHourlyUsage, fetchOpenAIHourlyUsage } from './providerUsa
 export type { ProviderHourlyUsage } from './providerUsageFetchers';
 export { priceProviderUsage, resolveUsageModel } from './providerUsagePricing';
 export type { ProviderUsagePrice, UsageReportProvider } from './providerUsagePricing';
+export {
+  ANTHROPIC_DEFAULT_WORKSPACE_ID,
+  AnthropicSpendScopeSchema,
+  OpenAISpendScopeSchema,
+  parseProviderSpendScope,
+} from './providerSpendScope';
+export type { AnthropicSpendScope, OpenAISpendScope, ProviderSpendScopes } from './providerSpendScope';

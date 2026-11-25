@@ -4,8 +4,8 @@ import android.content.Context
 import android.os.Build
 import android.util.Log
 import androidx.core.app.NotificationManagerCompat
-import androidx.core.net.toUri
 import com.bike4mind.app.capture.MediaAudioRecorder
+import com.bike4mind.app.media.MediaImageLoader
 import com.bike4mind.app.push.AgentRunNotifications
 import com.bike4mind.app.push.FcmClient
 import com.bike4mind.app.push.SharedPreferencesPushTokenMemory
@@ -43,7 +43,14 @@ import com.bike4mind.kit.briefs.BriefWire
 import com.bike4mind.kit.chat.ChatController
 import com.bike4mind.kit.chat.ChatSendWire
 import com.bike4mind.kit.chat.LiveChatBackend
+import com.bike4mind.kit.credits.CreditsController
 import com.bike4mind.kit.environment.ServerEnvironment
+import com.bike4mind.kit.media.FileMediaListCache
+import com.bike4mind.kit.media.MediaDetailController
+import com.bike4mind.kit.media.MediaFirstPageStore
+import com.bike4mind.kit.media.MediaGalleryController
+import com.bike4mind.kit.media.MediaItem
+import com.bike4mind.kit.media.MediaWire
 import com.bike4mind.kit.networking.B4MTransport
 import com.bike4mind.kit.networking.ClientIdentity
 import com.bike4mind.kit.networking.ClientUpgradeSignal
@@ -96,6 +103,13 @@ class AppGraph(context: Context, val environment: ServerEnvironment) {
         AIApi(environment.baseUrl, engine) { transport.install(it) },
     )
     private val briefs = BriefWire(environment, http)
+    private val media = MediaWire(environment, http)
+
+    /** Page 1 of the Studio gallery per filter, kept on disk so the gallery opens stale-first. */
+    private val mediaFirstPages = MediaFirstPageStore(
+        media,
+        FileMediaListCache(File(context.cacheDir, "media"), environment) { message, failure -> Log.w("B4MMedia", message, failure) },
+    )
     private val account = AccountWire(environment, http) { session.accessToken()?.let(AccountProfile::userId) }
     private val stepUp = StepUpWire(environment, http)
     private val chatSend = ChatSendWire(environment, http)
@@ -115,12 +129,15 @@ class AppGraph(context: Context, val environment: ServerEnvironment) {
 
     // Presigned storage URLs carry their own signature; a bearer token or the identity headers would break it.
     private val storageHttp = HttpClient(engine)
+
+    /** Gallery tiles and full images, fetched from presigned storage URLs through [storageHttp]. */
+    val mediaImages = MediaImageLoader(storageHttp, File(context.cacheDir, "media-thumbnails"), environment)
     private val captureWire = CaptureWire(environment, http, storageHttp)
     private val transcription = TranscriptionWire(environment, http, storageHttp)
 
     /** Shares from other apps, run by app/capture/CaptureWorker. One queue per server, like the tokens. */
     val capture = CaptureEngine(
-        CaptureJobStore(File(context.filesDir, "capture/" + environment.baseUrl.toUri().host.orEmpty())),
+        CaptureJobStore(File(context.filesDir, "capture/" + environment.host)),
         captureWire,
         TurnSender { message, sessionId, fileIds -> chatSend.send(message, sessionId, fileIds) },
     )
@@ -145,7 +162,23 @@ class AppGraph(context: Context, val environment: ServerEnvironment) {
     /** [briefId] null shows the latest brief. */
     fun brief(briefId: String?, scope: CoroutineScope) = BriefController(briefs, briefId, scope)
 
+    fun mediaGallery(scope: CoroutineScope) = MediaGalleryController(media, mediaFirstPages, scope)
+
+    fun mediaDetail(item: MediaItem, scope: CoroutineScope) = MediaDetailController(item, media, scope)
+
+    /**
+     * The session ended: queued shares belong to the account that made them, and the next account must never see
+     * this one's gallery, from memory or disk.
+     */
+    suspend fun onSessionEnded() {
+        capture.discardAll()
+        mediaFirstPages.invalidate()
+        mediaImages.clear()
+    }
+
     fun settings(scope: CoroutineScope) = SettingsController(account, scope)
+
+    fun credits(scope: CoroutineScope) = CreditsController({ accountApi.getCreditBalance().requireBody().balance }, scope)
 
     fun accountDeletion(scope: CoroutineScope) = AccountDeletionController(account, scope, ::endSessionAfterDeletion)
 

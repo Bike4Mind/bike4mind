@@ -30,7 +30,10 @@ vi.mock('@bike4mind/database', () => ({
   dataLakeRepository: {},
   dataLakeAccessGrantRepository: {},
   lakeConfigChangeEventRepository: {},
+  lakeConfigUndoClaimRepository: {},
   lakeMembershipChangeEventRepository: {},
+  dataLakeResearchConfigRepository: {},
+  fabFileRepository: {},
   userRepository: {},
   userApiKeyRepository: { mock: 'userApiKeyRepository' },
 }));

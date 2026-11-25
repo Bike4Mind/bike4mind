@@ -99,6 +99,9 @@ vi.mock('@bike4mind/database', () => ({
   platformEndUserRepository: { recordSeen: mockRecordPlatformEndUser },
 }));
 
+const mockResolveActiveOrg = vi.hoisted(() => vi.fn());
+vi.mock('@bike4mind/server-utils/utils/resolveActiveOrg', () => ({ resolveActiveOrg: mockResolveActiveOrg }));
+
 const mockResolveContractAuth = vi.hoisted(() => vi.fn());
 vi.mock('@bike4mind/server-utils/utils/apiKeyTrust', () => ({
   resolveUntrustedKeyLimits: async (_owner: unknown, key: { rateLimit: unknown }) => ({
@@ -146,6 +149,7 @@ vi.mock('@bike4mind/server-utils/utils/config', () => ({
 const mockEmitProcessingFailed = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 vi.mock('../processingFailedMetric', () => ({ emitProcessingFailed: mockEmitProcessingFailed }));
 
+import { userRepository } from '@bike4mind/database';
 import { registerExternalRoutes } from './sseRoute';
 import { toPlatformEndUserProviderId } from '@bike4mind/llm-adapters';
 import {
@@ -397,6 +401,18 @@ describe('API-key completion outcome evidence', () => {
       expect.objectContaining({
         statusCode: 200,
         completionObservation: expect.objectContaining({ outcome: 'failed' }),
+      })
+    );
+  });
+
+  it('records the failure code when a provider error fails the request', async () => {
+    mockExecuteCompletion.mockRejectedValueOnce(Object.assign(new Error('provider failed'), { status: 503 }));
+    const res = await post();
+    expect(res.status).toBe(500);
+    await res.text();
+    expect(mockApiUsage.logUsage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        completionObservation: expect.objectContaining({ outcome: 'failed', failureCode: 'http_503' }),
       })
     );
   });
@@ -1393,6 +1409,91 @@ describe('daily cap billing target', () => {
   });
 });
 
+describe('POST /api/ai/v1/completions - billing organization choice', () => {
+  const jwtUser = { id: 'user-1', isAdmin: false };
+  const asJwt = () => {
+    mockResolveContractAuth.mockResolvedValueOnce({ method: 'jwt', userId: 'user-1' });
+    vi.mocked(userRepository.findById).mockResolvedValueOnce(jwtUser as never);
+  };
+  const orgBilledKey = () =>
+    mockResolveContractAuth.mockResolvedValueOnce({
+      method: 'apiKey',
+      userId: 'user-1',
+      apiKeyInfo: { keyId: 'key-1', userId: 'user-1', organizationId: 'org-1', billingOwnerType: 'Organization' },
+    });
+  const expectBilledTo = (organizationId: string | undefined) => {
+    expect(mockExecuteCompletion).toHaveBeenCalledWith(
+      expect.objectContaining({ billingOrganizationId: organizationId })
+    );
+    expect(mockCheckFreeTierDailySpendCap).toHaveBeenCalledWith(
+      expect.objectContaining({ billingOrganizationId: organizationId })
+    );
+    expect(mockFindActiveFreeze).toHaveBeenCalledWith(
+      expect.objectContaining({ organizationId: organizationId ?? null })
+    );
+  };
+
+  it.each([
+    ['omitted', {}],
+    ['null', { organization_id: null }],
+  ])('bills a signed-in caller personally when organization_id is %s', async (_label, extra) => {
+    asJwt();
+    await (await post({ ...COMPLETION, ...extra })).text();
+
+    expectBilledTo(undefined);
+    expect(mockResolveActiveOrg).not.toHaveBeenCalled();
+  });
+
+  it('bills the named organization when the signed-in caller may use it', async () => {
+    asJwt();
+    mockResolveActiveOrg.mockResolvedValueOnce('org-2');
+    await (await post({ ...COMPLETION, organization_id: ' org-2 ' })).text();
+
+    expect(mockResolveActiveOrg).toHaveBeenCalledWith({ user: jwtUser }, 'org-2');
+    expectBilledTo('org-2');
+  });
+
+  it('refuses an organization the signed-in caller may not use before any completion', async () => {
+    asJwt();
+    mockResolveActiveOrg.mockRejectedValueOnce(
+      new ForbiddenError('You are not a member of the selected organization.')
+    );
+
+    await expectJsonError(await post({ ...COMPLETION, organization_id: 'org-9' }), 403);
+
+    expect(mockExecuteCompletion).not.toHaveBeenCalled();
+    expect(mockCheckFreeTierDailySpendCap).not.toHaveBeenCalled();
+    expect(mockFindActiveFreeze).not.toHaveBeenCalled();
+  });
+
+  it('refuses an organization-billed key that names another organization', async () => {
+    orgBilledKey();
+
+    const body = await expectJsonError(await post({ ...COMPLETION, organization_id: 'org-2' }), 403);
+
+    expect(body.errorCode).toBe('billing_organization_mismatch');
+    expect(mockExecuteCompletion).not.toHaveBeenCalled();
+  });
+
+  it('refuses an organization-billed key that asks for personal credits', async () => {
+    orgBilledKey();
+
+    await expectJsonError(await post({ ...COMPLETION, organization_id: null }), 403);
+
+    expect(mockExecuteCompletion).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['omitted', {}],
+    ["set to the key's organization", { organization_id: 'org-1' }],
+  ])('bills the key organization when organization_id is %s', async (_label, extra) => {
+    orgBilledKey();
+    await (await post({ ...COMPLETION, ...extra })).text();
+
+    expectBilledTo('org-1');
+  });
+});
+
 describe('POST /api/ai/v1/completions - run attribution', () => {
   const RUN_ID = '0b6f3c2e-7d4a-4f51-9a8e-2c1d5e6f7a80';
   const RUN = { runId: RUN_ID, role: 'worker', purpose: 'explore', taskId: 'task-1' };
@@ -1414,6 +1515,23 @@ describe('POST /api/ai/v1/completions - run attribution', () => {
     expect(res.status).toBe(200);
     expect(mockFindCompletionRun).toHaveBeenCalledWith(RUN_ID);
     expect(mockExecuteCompletion).toHaveBeenCalledWith(expect.objectContaining({ run: RUN }));
+  });
+
+  it('rejects evaluation attribution without a verified run before provider execution', async () => {
+    await expectJsonError(await post({ ...COMPLETION, evaluation: { version: 1, requestId: RUN_ID } }), 400);
+    expect(mockExecuteCompletion).not.toHaveBeenCalled();
+  });
+
+  it('requires evaluation attribution on an evaluation run', async () => {
+    mockFindCompletionRun.mockResolvedValueOnce(storedRun({ evaluation: { version: 1 } }));
+    await expectJsonError(await post({ ...COMPLETION, run: RUN }), 400);
+    expect(mockExecuteCompletion).not.toHaveBeenCalled();
+  });
+
+  it('rejects evaluation attribution on an ordinary run', async () => {
+    mockFindCompletionRun.mockResolvedValueOnce(storedRun());
+    await expectJsonError(await post({ ...COMPLETION, run: RUN, evaluation: { version: 1, requestId: RUN_ID } }), 400);
+    expect(mockExecuteCompletion).not.toHaveBeenCalled();
   });
 
   it('refuses an unknown run with a 404 before the stream opens or the provider is called', async () => {
@@ -1473,6 +1591,33 @@ describe('POST /api/ai/v1/completions - run attribution', () => {
     mockFindCompletionRun.mockResolvedValueOnce(storedRun({ ownerType: 'Organization', ownerId: 'org-A' }));
 
     const body = await expectJsonError(await post({ ...COMPLETION, run: RUN }), 404);
+
+    expect(body.errorCode).toBe('run_not_found');
+    expect(mockExecuteCompletion).not.toHaveBeenCalled();
+  });
+
+  it('honours a run minted for an organization when the completion names that organization', async () => {
+    mockResolveContractAuth.mockResolvedValueOnce({ method: 'jwt', userId: 'user-1' });
+    vi.mocked(userRepository.findById).mockResolvedValueOnce({ id: 'user-1', isAdmin: false } as never);
+    mockResolveActiveOrg.mockResolvedValueOnce('org-2');
+    mockFindCompletionRun.mockResolvedValueOnce(storedRun({ ownerType: 'Organization', ownerId: 'org-2' }));
+
+    const res = await post({ ...COMPLETION, run: RUN, organization_id: 'org-2' });
+    await res.text();
+
+    expect(res.status).toBe(200);
+    expect(mockExecuteCompletion).toHaveBeenCalledWith(
+      expect.objectContaining({ run: RUN, billingOrganizationId: 'org-2' })
+    );
+  });
+
+  it('refuses a personal run on a completion that names an organization, since the payers differ', async () => {
+    mockResolveContractAuth.mockResolvedValueOnce({ method: 'jwt', userId: 'user-1' });
+    vi.mocked(userRepository.findById).mockResolvedValueOnce({ id: 'user-1', isAdmin: false } as never);
+    mockResolveActiveOrg.mockResolvedValueOnce('org-2');
+    mockFindCompletionRun.mockResolvedValueOnce(storedRun());
+
+    const body = await expectJsonError(await post({ ...COMPLETION, run: RUN, organization_id: 'org-2' }), 404);
 
     expect(body.errorCode).toBe('run_not_found');
     expect(mockExecuteCompletion).not.toHaveBeenCalled();

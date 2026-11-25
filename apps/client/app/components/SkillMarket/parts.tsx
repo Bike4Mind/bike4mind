@@ -12,6 +12,7 @@ import ErrorIcon from '@mui/icons-material/Error';
 import WarningAmberIcon from '@mui/icons-material/WarningAmber';
 import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined';
 import { diffLines } from 'diff';
+import { useMarketMe } from '@client/app/hooks/data/skillMarket';
 import type {
   ISkillFile,
   ISkillHonestSummary,
@@ -85,11 +86,19 @@ const VISIBILITY: Record<SkillListingVisibility, { label: string; icon: ReactEle
   unlisted: { label: 'Unlisted', icon: <LinkIcon /> },
 };
 
-export const VisibilityChip: FC<{ visibility: SkillListingVisibility }> = ({ visibility }) => (
-  <Chip size="sm" variant="soft" color="neutral" startDecorator={VISIBILITY[visibility].icon}>
-    {VISIBILITY[visibility].label}
-  </Chip>
-);
+/** `spaceId` names the Space on a Space listing when the viewer is a member; otherwise the chip says "Space". */
+export const VisibilityChip: FC<{ visibility: SkillListingVisibility; spaceId?: string }> = ({
+  visibility,
+  spaceId,
+}) => {
+  const { data: me } = useMarketMe();
+  const spaceName = visibility === 'space' ? me?.spaces?.find(s => s.id === spaceId)?.name : undefined;
+  return (
+    <Chip size="sm" variant="soft" color="neutral" startDecorator={VISIBILITY[visibility].icon}>
+      {spaceName ?? VISIBILITY[visibility].label}
+    </Chip>
+  );
+};
 
 const TIER: Record<SkillRiskTier, { label: string; color: 'success' | 'warning' | 'danger'; hint: string }> = {
   clean: { label: 'Low risk', color: 'success', hint: 'No findings that need a human' },

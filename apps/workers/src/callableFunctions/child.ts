@@ -362,7 +362,7 @@ async function runRequest(
   pyodide: PyodideInterface,
   request: CallableFunctionChildRequest,
   initMs: number
-): Promise<CallableFunctionChildReply> {
+): Promise<Extract<CallableFunctionChildReply, { ok: true }>> {
   const text = (value: unknown): string | undefined => (typeof value === 'string' ? value : undefined);
   pyodide.globals.set('_fn_code', request.code);
   pyodide.globals.set('_fn_params_json', request.op === 'call' ? request.paramsJson : null);
@@ -454,9 +454,11 @@ async function main(): Promise<void> {
       lockDown(pyodide);
       locked = true;
     }
+    // Read before guest code runs, so the guest cannot change what the stamp names.
+    const packages = Object.keys(pyodide.loadedPackages).sort();
     // The parent's time limit starts here; no guest code has run yet.
     await send({ started: true });
-    await send(await runRequest(pyodide, request, initMs));
+    await send({ ...(await runRequest(pyodide, request, initMs)), packages });
     if (!reuse) break;
   }
   proc.exit(0);

@@ -46,7 +46,7 @@ vi.mock('@bike4mind/database', () => ({
   adminAiSuggestionRepository: { transition: h.transition },
   withTransaction: (fn: () => Promise<unknown>) => fn(),
 }));
-vi.mock('@server/admin/dlq/triage', () => ({ visibleDlqSuggestion: h.suggestion }));
+vi.mock('@bike4mind/server-utils/admin/dlq/triage', () => ({ visibleDlqSuggestion: h.suggestion }));
 vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({
   parseAdminActionReason: (value: unknown) => {
     if (typeof value !== 'string' || value.trim().length < 5) throw new BadRequestError('Reason required');

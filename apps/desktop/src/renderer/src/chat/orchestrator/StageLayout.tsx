@@ -8,8 +8,7 @@ import {
   type PointerEvent as ReactPointerEvent,
   type ReactNode,
 } from 'react';
-import { MIN_PANE_FRACTION, resizePanes, type OrchestratorLayout } from './orchestratorLayout';
-import type { OrchestratorViewId } from './orchestratorViews';
+import { MIN_PANE_FRACTION, resizePanes, type OrchestratorLayout, type OrchestratorPane } from './orchestratorLayout';
 import { ORCHESTRATOR_VIEW_INFO } from './ViewSwitcher';
 
 /** One arrow-key press on a resize handle, as a fraction of the stage. */
@@ -20,8 +19,8 @@ const PANE_SELECTOR = '[data-orchestrator-pane]';
 interface StageLayoutProps {
   layout: OrchestratorLayout;
   onLayoutChange(layout: OrchestratorLayout): void;
-  /** Draws one pane's view; every pane is given the same view props by the stage. */
-  renderPane(view: OrchestratorViewId): ReactNode;
+  /** Draws one pane: its view, of the active session or of the session the pane is pinned to. */
+  renderPane(pane: OrchestratorPane, index: number): ReactNode;
 }
 
 /**
@@ -37,7 +36,7 @@ export function StageLayout({ layout, onLayoutChange, renderPane }: StageLayoutP
   // A layout set from elsewhere mid-drag (a reset, a session switch) wins: the drag is dropped, not saved over it.
   useEffect(() => () => cancelDrag.current?.(), [layout]);
 
-  if (shown.panes.length === 1) return <>{renderPane(shown.panes[0].view)}</>;
+  if (shown.panes.length === 1) return <>{renderPane(shown.panes[0], 0)}</>;
 
   const row = shown.split === 'row';
 
@@ -143,7 +142,7 @@ export function StageLayout({ layout, onLayoutChange, renderPane }: StageLayoutP
                 '&:focus-visible': { outline: '2px solid', outlineColor: 'focusVisible', outlineOffset: -2 },
               }}
             >
-              {renderPane(pane.view)}
+              {renderPane(pane, index)}
             </Box>
           </Fragment>
         );

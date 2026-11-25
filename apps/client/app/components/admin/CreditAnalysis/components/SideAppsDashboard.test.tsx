@@ -65,6 +65,7 @@ const response: SideAppsResponse = {
       },
       requests: { total: 10, byTier: { paid: 4, unpaid: 4, unrecorded: 2 }, byEndpoint: [] },
       outcomes: { completed: 8, failed: 1, interrupted: 1, failureRate: 0.2 },
+      topFailureCodes: [{ code: 'http_503', count: 1 }],
       refusals: refusals([{ reason: 'scope_exceeded', class: 'policy', count: 2 }]),
     },
   ],
@@ -129,6 +130,7 @@ describe('SideAppsDashboard', () => {
     expect(strip).toHaveTextContent('20.0%');
     expect(screen.getByTestId('side-apps-note')).toHaveTextContent(/at most 90 days/);
     expect(screen.getByTestId('side-apps-row-app-a')).toHaveTextContent('App A');
+    expect(screen.getByTestId('side-apps-failure-rate-app-a')).toHaveAttribute('title', 'http_503: 1');
     expect(screen.queryByTestId('side-apps-drilldown')).toBeNull();
   });
 

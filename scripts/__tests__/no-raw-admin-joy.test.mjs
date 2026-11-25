@@ -98,7 +98,7 @@ describe('repository config', () => {
   const eslint = new ESLint({ cwd: root });
 
   it('does not transfer a removed Modal exception to a new declaration in the same file', async () => {
-    const filePath = path.join(admin, 'CreateSlackAppModal.tsx');
+    const filePath = path.join(admin, 'AdminWhatsNewModalsTab.tsx');
     const original = readFileSync(filePath, 'utf8');
     const declaration = original.match(/import \{[\s\S]*?\} from '@mui\/joy';/)?.[0];
     expect(declaration).toBeTruthy();
@@ -117,7 +117,7 @@ describe('repository config', () => {
   });
 
   it('rejects additional imports while the original legacy declaration remains', async () => {
-    const filePath = path.join(admin, 'CreateSlackAppModal.tsx');
+    const filePath = path.join(admin, 'AdminWhatsNewModalsTab.tsx');
     const code = readFileSync(filePath, 'utf8') + "\nimport { Modal as AnotherDialog } from '@mui/joy';";
     const [result] = await eslint.lintText(code, { filePath });
     expect(result.messages.filter(message => message.ruleId === 'b4m/no-raw-admin-joy').map(m => m.messageId)).toEqual([

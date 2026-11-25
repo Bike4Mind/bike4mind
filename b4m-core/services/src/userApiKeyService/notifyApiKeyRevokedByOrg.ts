@@ -1,5 +1,6 @@
 import { escapeHtml, wrapEmail } from '../notificationEmail';
 import type { ApiKeyReownedNotifyDeps } from './notifyApiKeyReowned';
+import { Logger } from '@bike4mind/observability';
 
 export type ApiKeyRevokedByOrgNotifyDeps = ApiKeyReownedNotifyDeps;
 
@@ -29,7 +30,7 @@ export async function notifyApiKeyRevokedByOrg(
   deps: ApiKeyRevokedByOrgNotifyDeps
 ): Promise<void> {
   const warn = (msg: string, meta: unknown) =>
-    deps.logger?.warn ? deps.logger.warn(msg, meta) : console.warn(msg, meta);
+    deps.logger?.warn ? deps.logger.warn(msg, meta) : Logger.warn(msg, meta);
   try {
     const emailRows = await deps.db.users.findActiveEmailsByIds([context.holderUserId]);
     if (emailRows.length === 0) {

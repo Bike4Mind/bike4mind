@@ -10,7 +10,6 @@ const h = vi.hoisted(() => ({
   sessionResult: undefined as { leftoverSessionIds: string[]; leftoverKeys: string[]; ownerIds: string[] } | undefined,
   runPurge: vi.fn(),
   deleteGenerated: vi.fn(),
-  cdnSend: vi.fn(),
   enqueue: vi.fn(),
 }));
 
@@ -25,13 +24,6 @@ vi.mock('@bike4mind/database', async importOriginal => ({
 }));
 vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
   getGeneratedImageStorage: () => ({ delete: h.deleteGenerated }),
-}));
-vi.mock('@bike4mind/server-utils/services/cdn/invalidateRouterCdn', async importOriginal => ({
-  ...(await importOriginal<typeof import('@bike4mind/server-utils/services/cdn/invalidateRouterCdn')>()),
-  createCdnInvalidationBatch: () => {
-    const paths: string[] = [];
-    return { add: (path: string) => paths.push(path), flush: async () => h.cdnSend(paths) };
-  },
 }));
 vi.mock('@bike4mind/server-utils/sessions/generatedMediaPurgeQueue', async importOriginal => ({
   ...(await importOriginal<typeof import('@bike4mind/server-utils/sessions/generatedMediaPurgeQueue')>()),
@@ -70,7 +62,6 @@ beforeEach(() => {
   h.deletedIds = [];
   h.sessionResult = { leftoverSessionIds: [], leftoverKeys: [], ownerIds: [] };
   h.deleteGenerated.mockResolvedValue(undefined);
-  h.cdnSend.mockResolvedValue(undefined);
   h.enqueue.mockResolvedValue(true);
 });
 
@@ -99,6 +90,13 @@ describe('generatedMediaPurge', () => {
       expect.objectContaining({ deletedSessionIds: new Set() })
     );
     expect(h.enqueue).not.toHaveBeenCalled();
+  });
+
+  it('accepts a spreadsheet key with spaces and non-ASCII characters', async () => {
+    h.sessionResult = { leftoverSessionIds: [], leftoverKeys: [], ownerIds: ['u1'] };
+    const key = 'Caf\u00e9 Q3 Report-1a2b3c4d.xlsx';
+    await run({ kind: 'keys', keys: [key], ownerIds: ['u1'] });
+    expect(h.runPurge).toHaveBeenCalledWith({ keys: [key], ownerIds: ['u1'] }, expect.anything());
   });
 
   it('drops a keys message with a key outside the generated-content shape or no owners', async () => {

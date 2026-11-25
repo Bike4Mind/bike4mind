@@ -32,6 +32,16 @@ describe('classifyHealthRow', () => {
     expect(classifyHealthRow(usage({ statusClass: '5xx' }))).toMatchObject({ kind: 'failure', ourFault: true });
   });
 
+  it('names the failure code on a failed completion and keeps the old text without one', () => {
+    expect(classifyHealthRow(usage({ completionOutcome: 'failed', completionFailureCode: 'http_503' }))).toMatchObject({
+      reason: 'completion_failed http_503',
+    });
+    expect(classifyHealthRow(usage({ completionOutcome: 'failed' }))).toMatchObject({ reason: 'completion_failed' });
+    expect(classifyHealthRow(usage({ completionOutcome: 'failed', completionFailureCode: null }))).toMatchObject({
+      reason: 'completion_failed',
+    });
+  });
+
   it('classifies terminal quest and agent states, a charged failed agent run included', () => {
     expect(classifyHealthRow({ source: 'quest', clientId: 'a', hourStart: H, count: 1, status: 'done' })).toEqual({
       kind: 'success',

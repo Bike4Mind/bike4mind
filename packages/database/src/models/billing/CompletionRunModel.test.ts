@@ -62,6 +62,69 @@ describe('CompletionRunModel', () => {
   });
 
   describe('run budget', () => {
+    it('atomically persists evaluation updates across repository restarts', async () => {
+      const run = await completionRunRepository.create({
+        userId: 'u',
+        ownerType: CreditHolderType.User,
+        ownerId: 'u',
+        rootSessionId: 'root',
+        evaluation: {
+          version: 1,
+          revision: 0,
+          limits: { version: 1, maxProviderUsd: 150, maxTokens: 10000, maxRequests: 100, modelIds: ['model'] },
+          committedProviderUsd: 0,
+          committedTokens: 0,
+          committedRequests: 0,
+          receipts: [],
+        },
+      });
+      await Promise.all(
+        Array.from({ length: 20 }, () =>
+          completionRunRepository.updateEvaluation(run.runId, state => {
+            state.committedRequests++;
+            return state;
+          })
+        )
+      );
+      expect((await completionRunRepository.findById(run.runId))?.evaluation?.committedRequests).toBe(20);
+    });
+    it('mints the same evaluation atomically on concurrent retries and never resets its limits or spend', async () => {
+      const input = {
+        userId: 'u',
+        ownerType: CreditHolderType.User as const,
+        ownerId: 'u',
+        rootSessionId: 'recovery-root',
+        evaluation: {
+          version: 1 as const,
+          revision: 0,
+          limits: { version: 1 as const, maxProviderUsd: 150, maxTokens: 10000, maxRequests: 100, modelIds: ['model'] },
+          committedProviderUsd: 0,
+          committedTokens: 0,
+          committedRequests: 0,
+          receipts: [],
+        },
+      };
+      const runs = await Promise.all(Array.from({ length: 10 }, () => completionRunRepository.create(input)));
+      expect(new Set(runs.map(run => run.runId)).size).toBe(1);
+      await completionRunRepository.updateEvaluation(runs[0].runId, state => ({
+        ...state,
+        committedRequests: 1,
+        committedProviderUsd: 2,
+      }));
+      expect((await completionRunRepository.create(input)).evaluation).toMatchObject({
+        committedRequests: 1,
+        committedProviderUsd: 2,
+      });
+      await expect(
+        completionRunRepository.create({
+          ...input,
+          evaluation: { ...input.evaluation, limits: { ...input.evaluation.limits, maxProviderUsd: 149 } },
+        })
+      ).rejects.toMatchObject({
+        message: expect.stringContaining('different policy'),
+        additionalInfo: { errorCode: 'evaluation_identity_conflict' },
+      });
+    });
     const owner = { userId: 'user-1', ownerType: CreditHolderType.User, ownerId: 'user-1' } as const;
 
     it('records a budget with nothing committed, and no counter for a run without one', async () => {
@@ -109,6 +172,53 @@ describe('CompletionRunModel', () => {
         budgetCredits: 100,
         committedCredits: 100,
       });
+    });
+
+    it('caps what a claim takes above its minimum at its share of the rest', async () => {
+      const { runId } = await completionRunRepository.create({ ...owner, budgetCredits: 251 });
+
+      // A parent sized to its full output budget no longer takes the whole run, so a worker still fits:
+      // 20 + half of the other 231.
+      await expect(completionRunRepository.claimBudget(runId, 251, 20, 0.5)).resolves.toEqual({
+        kind: 'claimed',
+        credits: 136,
+      });
+      await expect(completionRunRepository.claimBudget(runId, 200, 20, 0.5)).resolves.toEqual({
+        kind: 'claimed',
+        credits: 68,
+      });
+      // A claim smaller than its share is taken whole.
+      await expect(completionRunRepository.claimBudget(runId, 30, 20, 0.5)).resolves.toEqual({
+        kind: 'claimed',
+        credits: 30,
+      });
+      await expect(completionRunRepository.claimBudget(runId, 100, 20, 0.5)).resolves.toMatchObject({
+        kind: 'exhausted',
+        committedCredits: 234,
+      });
+    });
+
+    it('shares only the headroom past a large minimum, so a long-context round keeps its output room', async () => {
+      const { runId } = await completionRunRepository.create({ ...owner, budgetCredits: 500 });
+
+      // Halving the whole 500 would leave this round no more than its 263 minimum.
+      await expect(completionRunRepository.claimBudget(runId, 1850, 263, 0.5)).resolves.toEqual({
+        kind: 'claimed',
+        credits: 382,
+      });
+      // A top-up asks for no minimum: the share then applies to all that is left.
+      await expect(completionRunRepository.claimBudget(runId, 1850, 0, 0.5)).resolves.toEqual({
+        kind: 'claimed',
+        credits: 59,
+      });
+    });
+
+    it('rejects a share outside (0, 1]', async () => {
+      const { runId } = await completionRunRepository.create({ ...owner, budgetCredits: 100 });
+
+      await expect(completionRunRepository.claimBudget(runId, 50, 10, 0)).rejects.toThrow('maxShareOfRemaining');
+      await expect(completionRunRepository.claimBudget(runId, 50, 10, 1.5)).rejects.toThrow('maxShareOfRemaining');
+      await expect(completionRunRepository.findById(runId)).resolves.toMatchObject({ committedCredits: 0 });
     });
 
     it('releases the unused part of a claim on settlement and the whole claim on a refund', async () => {

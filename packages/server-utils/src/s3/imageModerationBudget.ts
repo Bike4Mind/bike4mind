@@ -7,7 +7,7 @@ import { resolveUserRateTier, type RateTierUser, type UserRateTier } from '../ut
 
 /**
  * Per-user daily allowance of moderation detector calls for uploaded images, spent by
- * scanUploadedObject (moderationScan.ts): one per still image, one per sampled frame of an animation.
+ * scanUploadedObject (moderationScan.ts): one per still image, one per distinct frame of an animation.
  * Same tier shape as the hourly upload allowance in server/files/fileUploadBudget.ts.
  */
 

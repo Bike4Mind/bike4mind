@@ -4,7 +4,7 @@ import BaseRepository from '@bike4mind/db-core';
 import { organizationContentPolicyPlugin } from '../../utils/organizationSharingPolicy';
 
 // Mongoose document interface - omit 'id' from BaseArtifact to avoid conflict with Document._id
-export interface IArtifactDocument extends Omit<BaseArtifact, 'id'>, Document {
+export interface IArtifactDocument extends Omit<BaseArtifact, 'id'>, Document<string> {
   id: string; // Custom id field
   softDelete(): Promise<IArtifactDocument>;
   restore(): Promise<IArtifactDocument>;
@@ -273,6 +273,24 @@ export const Artifact: Model<IArtifactDocument> =
 const PUBLIC_ARTIFACT_LIST_FIELDS =
   'id type title description version versionTag status tags sessionId projectId visibility createdAt updatedAt';
 
+type PublicArtifactListItem = Pick<
+  IArtifactDocument,
+  | '_id'
+  | 'id'
+  | 'type'
+  | 'title'
+  | 'description'
+  | 'version'
+  | 'versionTag'
+  | 'status'
+  | 'tags'
+  | 'sessionId'
+  | 'projectId'
+  | 'visibility'
+  | 'createdAt'
+  | 'updatedAt'
+>;
+
 export class ArtifactRepository extends BaseRepository<IArtifactDocument> {
   constructor(model: Model<IArtifactDocument>) {
     super(model);
@@ -358,7 +376,7 @@ export class ArtifactRepository extends BaseRepository<IArtifactDocument> {
       .select(PUBLIC_ARTIFACT_LIST_FIELDS)
       .sort({ _id: -1 })
       .limit(limit + 1)
-      .lean()
+      .lean<PublicArtifactListItem[]>()
       .exec();
 
     const hasMore = result.length > limit;

@@ -76,6 +76,7 @@ const BriefSchema = new mongoose.Schema(
     summary: { type: String, maxlength: limits.briefSummaryMaxLength },
     audience: { type: String, maxlength: limits.briefFieldMaxLength },
     callToAction: { type: String, maxlength: limits.briefFieldMaxLength },
+    tone: { type: String, maxlength: limits.briefFieldMaxLength },
     productFileId: { type: String },
   },
   { _id: false }

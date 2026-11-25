@@ -21,6 +21,8 @@ const MESSAGES: Record<MusicGenerationApiErrorCode, string> = {
   insufficient_credits: 'You do not have enough credits for this song.',
   idempotency_key_reused: 'This request was already sent with different settings. Try again.',
   invalid_idempotency_key: 'The request could not be sent. Try again.',
+  run_not_found: 'The run this request belongs to was not found.',
+  run_budget_exhausted: 'The run does not have enough budget left for this song.',
   // Sent only by the cancel route, for a song the provider is already composing (billed whatever happens).
   not_cancellable: "This song is already being composed and can't be cancelled.",
 };

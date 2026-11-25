@@ -40,6 +40,7 @@ import {
   githubWebhookQueueDLQ,
   webhookDeliveryQueueDLQ,
   slackExportQueueDLQ,
+  callableFunctionCallQueueDLQ,
   questExportQueueDLQ,
   accountDataExportQueueDLQ,
   accountErasureQueueDLQ,
@@ -57,7 +58,6 @@ import {
   githubLakeRevokeQueueDLQ,
   generationJobDLQ,
   renderJobDLQ,
-  liveOpsTriageQueueDLQ,
   tavernHeartbeatQueueDLQ,
   deepAgentWakeQueueDLQ,
   sreFixQueueDLQ,
@@ -72,6 +72,7 @@ import {
 } from './queues';
 import {
   telemetryAlertDeadLetter,
+  moderationAlertsDeadLetter,
   sessionEnrichmentDeadLetter,
   billingEventsDeadLetter,
   emailEventsDeadLetter,
@@ -376,6 +377,13 @@ const DLQ_DESCRIPTORS: InfraDlqDescriptor[] = [
     queue: slackExportQueueDLQ,
   },
   {
+    label: 'callable-function-call',
+    displayName: 'Callable Function Call',
+    application: 'CallableFunctionCall',
+    sourceQueue: 'callableFunctionCallQueue',
+    queue: callableFunctionCallQueueDLQ,
+  },
+  {
     label: 'quest-export',
     displayName: 'Quest Export',
     application: 'QuestExport',
@@ -493,13 +501,6 @@ const DLQ_DESCRIPTORS: InfraDlqDescriptor[] = [
     application: 'GenerationJob',
     sourceQueue: 'renderJobQueue',
     queue: renderJobDLQ,
-  },
-  {
-    label: 'liveops-triage',
-    displayName: 'LiveOps Triage',
-    application: 'LiveOpsTriage',
-    sourceQueue: 'liveOpsTriageQueue',
-    queue: liveOpsTriageQueueDLQ,
   },
   // SRE Agent DLQs
   {
@@ -763,6 +764,12 @@ if (isMonitoredStage) {
     displayName: 'Telemetry Alert Rule',
     application: 'TelemetryAlerts',
     queue: telemetryAlertDeadLetter.queue,
+  });
+  createDlqAlarms({
+    label: 'moderation-alerts',
+    displayName: 'Moderation Escalation Alerts',
+    application: 'ModerationAlerts',
+    queue: moderationAlertsDeadLetter.queue,
   });
   createDlqAlarms({
     label: 'session-enrichment',

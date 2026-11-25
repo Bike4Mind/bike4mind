@@ -16,6 +16,10 @@ import type { CompletionMessage } from './completions';
 import type { WireTool as DeclaredTool } from './deferredTools';
 import { promptFootprint, type BlockFootprint } from '../../../test-utils/requestFootprint';
 
+vi.mock('../git/hostGitArgs', async importOriginal =>
+  (await import('./plainFolderGit.testHelper')).skipGitOutsideRepositories(await importOriginal())
+);
+
 type WireTool = { toolSchema: { name: string; defer_loading?: boolean } };
 type WireMessage = { role: string; content: unknown; cache?: boolean };
 type Body = { messages: WireMessage[]; options: { tools: WireTool[] } };

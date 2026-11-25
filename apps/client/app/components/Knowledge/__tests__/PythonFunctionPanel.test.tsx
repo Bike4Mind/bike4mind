@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import React from 'react';
-import { render, screen, fireEvent, within, waitFor, act } from '@testing-library/react';
+import { render, screen, fireEvent, within, waitFor, act, cleanup } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 import { PYTHON_SCRIPT_BUSY } from '@client/app/utils/pyodideManager';
@@ -14,6 +14,7 @@ const fns = vi.hoisted(() => ({
   query: vi.fn(),
   repin: { mutate: vi.fn(), isPending: false },
   setEnabled: { mutate: vi.fn(), isPending: false },
+  setApproval: { mutate: vi.fn(), isPending: false },
   remove: { mutate: vi.fn(), isPending: false },
   dialog: vi.fn(),
   toastError: vi.fn(),
@@ -28,6 +29,7 @@ vi.mock('@client/app/hooks/data/callableFunctions', async importOriginal => ({
   },
   useRepinCallableFunction: () => fns.repin,
   useSetCallableFunctionEnabled: () => fns.setEnabled,
+  useSetCallableFunctionApproval: () => fns.setApproval,
   useDeleteCallableFunction: () => fns.remove,
 }));
 vi.mock('../SaveFunctionDialog', () => ({
@@ -37,6 +39,12 @@ vi.mock('../SaveFunctionDialog', () => ({
   },
 }));
 vi.mock('sonner', () => ({ toast: { error: fns.toastError } }));
+// Its own behavior is in PromoteFunctionSection.test.tsx; here only where it mounts and why it is blocked.
+vi.mock('../PromoteFunctionSection', () => ({
+  default: ({ blocked }: { blocked: string | null }) => (
+    <div data-testid="promote-section-stub">{blocked ?? 'ready'}</div>
+  ),
+}));
 
 import PythonFunctionPanel, { type PythonFunctionSave } from '../PythonFunctionPanel';
 
@@ -392,6 +400,174 @@ describe('PythonFunctionPanel', () => {
     }
     expect(callFunction).toHaveBeenCalledTimes(1);
   });
+
+  it('reads hex or other non-decimal text in a number field as text, so the contract check names the field', async () => {
+    callFunction.mockResolvedValueOnce(described());
+    renderPanel();
+    await screen.findByTestId('python-function-call-btn', {}, { timeout: 2000 });
+
+    fillSampleInputs();
+    for (const text of ['0x10', '0b1', 'Infinity']) {
+      fireEvent.change(screen.getByTestId('python-function-input-span'), { target: { value: text } });
+      fireEvent.click(screen.getByTestId('python-function-call-btn'));
+      expect((await screen.findByTestId('python-function-problems')).textContent).toContain('span: must be a number');
+    }
+    expect(callFunction).toHaveBeenCalledTimes(1);
+  });
+
+  it('holds Call function after an edit until the new code is read, then calls with that code', async () => {
+    callFunction.mockResolvedValueOnce(described());
+    const { rerender } = renderPanel();
+    await screen.findByTestId('python-function-call-btn', {}, { timeout: 2000 });
+    fillSampleInputs();
+
+    const edited = `${CODE}\n# edited`;
+    callFunction.mockResolvedValueOnce(described());
+    rerender(false, edited);
+    const button = screen.getByTestId('python-function-call-btn') as HTMLButtonElement;
+    expect(button.disabled).toBe(true);
+    fireEvent.click(button);
+    expect(callFunction).toHaveBeenCalledTimes(1);
+
+    await waitFor(() => expect(callFunction).toHaveBeenLastCalledWith(edited, null, []), { timeout: 2000 });
+    callFunction.mockResolvedValueOnce({ success: true, value: { deflection: 1 }, output: '', executionTime: 1 });
+    await waitFor(() =>
+      expect((screen.getByTestId('python-function-call-btn') as HTMLButtonElement).disabled).toBe(false)
+    );
+    fireEvent.click(screen.getByTestId('python-function-call-btn'));
+    await screen.findByTestId('python-function-result');
+    expect(callFunction).toHaveBeenLastCalledWith(edited, expect.objectContaining({ span: 4 }), []);
+  });
+});
+
+describe('PythonFunctionPanel tests', () => {
+  const STEEL_INPUT = { load: 1000, span: 4, elastic_modulus: 2e11, second_moment: 8e-6 };
+  const testedContract = () => ({
+    ...sampleContract(),
+    tests: [
+      { name: '4 m steel beam', input: STEEL_INPUT, expected: { deflection: 0.0020833 }, tolerance: { rel: 0.001 } },
+      {
+        name: '2 m steel beam',
+        input: { ...STEEL_INPUT, span: 2 },
+        expected: { deflection: 0.00013021 },
+        tolerance: { rel: 0.001 },
+      },
+    ],
+  });
+  const returned = (deflection: unknown) => ({ success: true, value: { deflection }, output: '', executionTime: 2 });
+
+  beforeEach(() => {
+    callFunction.mockReset();
+  });
+
+  const openTests = async () => {
+    renderPanel();
+    return screen.findByTestId('python-function-tests', {}, { timeout: 2000 });
+  };
+  const statuses = () => screen.getAllByTestId('python-function-test-status').map(cell => cell.textContent);
+
+  it('runs each case through run in turn and shows each pass', async () => {
+    callFunction
+      .mockResolvedValueOnce(described(testedContract()))
+      .mockResolvedValueOnce(returned(0.00208333))
+      .mockResolvedValueOnce(returned(0.000130208));
+    const section = await openTests();
+    expect(statuses()).toEqual(['-', '-']);
+
+    fireEvent.click(within(section).getByTestId('python-function-tests-run-btn'));
+
+    await waitFor(() => expect(statuses()).toEqual(['Passed', 'Passed']));
+    expect(callFunction).toHaveBeenNthCalledWith(2, CODE, STEEL_INPUT, []);
+    expect(callFunction).toHaveBeenNthCalledWith(3, CODE, { ...STEEL_INPUT, span: 2 }, []);
+    expect(screen.getAllByTestId('python-function-test-row').map(row => row.textContent)).toEqual([
+      '4 m steel beamPassed (2 ms)',
+      '2 m steel beamPassed (2 ms)',
+    ]);
+    expect(screen.queryByTestId('python-function-test-failure')).toBeNull();
+  });
+
+  it('names the failing field and both values, and stops at the first failure', async () => {
+    callFunction.mockResolvedValueOnce(described(testedContract())).mockResolvedValueOnce(returned(0.0031));
+    const section = await openTests();
+
+    fireEvent.click(within(section).getByTestId('python-function-tests-run-btn'));
+
+    const failure = await screen.findByTestId('python-function-test-failure');
+    expect(failure.textContent).toBe(
+      '4 m steel beam: output deflection expected 0.0020833, got 0.0031 (tolerance 0.001 relative).'
+    );
+    expect(statuses()).toEqual(['Failed', 'Not run']);
+    expect(callFunction).toHaveBeenCalledTimes(2);
+  });
+
+  it('quotes text values in the failure line and lets a long one wrap', async () => {
+    const labeled = {
+      ...sampleContract(),
+      outputs: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['label'],
+        properties: { label: { type: 'string' } },
+      },
+      tests: [{ name: 'blank label', input: STEEL_INPUT, expected: { label: '' } }],
+    };
+    callFunction
+      .mockResolvedValueOnce(described(labeled))
+      .mockResolvedValueOnce({ success: true, value: { label: ' ' }, output: '', executionTime: 1 });
+    const section = await openTests();
+    fireEvent.click(within(section).getByTestId('python-function-tests-run-btn'));
+
+    const failure = await screen.findByTestId('python-function-test-failure');
+    expect(failure.textContent).toBe('blank label: output label expected "", got " ".');
+    expect(getComputedStyle(within(failure).getByText(/blank label/)).wordBreak).toBe('break-word');
+  });
+
+  it('announces the results politely to screen readers', async () => {
+    callFunction.mockResolvedValueOnce(described(testedContract()));
+    const section = await openTests();
+    expect(within(section).getByTestId('python-function-test-results').getAttribute('aria-live')).toBe('polite');
+  });
+
+  it('says when run left an expected output out', async () => {
+    callFunction
+      .mockResolvedValueOnce(described(testedContract()))
+      .mockResolvedValueOnce({ success: true, value: {}, output: '', executionTime: 1 });
+    const section = await openTests();
+    fireEvent.click(within(section).getByTestId('python-function-tests-run-btn'));
+
+    const problems = await screen.findByTestId('python-function-problems');
+    expect(problems.textContent).toContain('deflection: is required');
+    expect(statuses()).toEqual(['Failed', 'Not run']);
+  });
+
+  it('shows the error of a case that raised or passed the time limit, then lets the tests run again', async () => {
+    callFunction.mockResolvedValueOnce(described(testedContract())).mockResolvedValueOnce({
+      success: false,
+      error: 'Stopped at the time limit of 30 s.',
+      output: '',
+      executionTime: 0,
+    });
+    const section = await openTests();
+    fireEvent.click(within(section).getByTestId('python-function-tests-run-btn'));
+
+    expect((await screen.findByTestId('python-function-error')).textContent).toContain(
+      '4 m steel beam: Stopped at the time limit of 30 s.'
+    );
+    expect(statuses()).toEqual(['Failed', 'Not run']);
+    const runButton = within(section).getByTestId('python-function-tests-run-btn') as HTMLButtonElement;
+    await waitFor(() => expect(runButton.disabled).toBe(false));
+
+    callFunction.mockResolvedValueOnce(returned(0.0020833)).mockResolvedValueOnce(returned(0.00013021));
+    fireEvent.click(runButton);
+    await waitFor(() => expect(statuses()).toEqual(['Passed', 'Passed']));
+  });
+
+  it('offers no Tests section when the contract declares none', async () => {
+    callFunction.mockResolvedValueOnce(described());
+    renderPanel();
+    await screen.findByTestId('python-function-call-btn', {}, { timeout: 2000 });
+    expect(screen.queryByTestId('python-function-tests')).toBeNull();
+  });
 });
 
 describe('PythonFunctionPanel save controls', () => {
@@ -443,6 +619,7 @@ describe('PythonFunctionPanel save controls', () => {
     fns.query.mockReset();
     fns.repin = { mutate: vi.fn(), isPending: false };
     fns.setEnabled = { mutate: vi.fn(), isPending: false };
+    fns.setApproval = { mutate: vi.fn(), isPending: false };
     fns.remove = { mutate: vi.fn(), isPending: false };
     fns.dialog.mockReset();
     fns.toastError.mockReset();
@@ -538,6 +715,39 @@ describe('PythonFunctionPanel save controls', () => {
     expect(screen.getByTestId('python-function-delete-btn').textContent).toBe('Delete');
   });
 
+  it('mounts promotion under a saved tool, blocked while the tool is off or pinned to another version', async () => {
+    fns.saved = { data: savedView(), isLoading: false };
+    await renderReady(TARGET);
+    expect(screen.getByTestId('promote-section-stub').textContent).toBe('ready');
+    cleanup();
+
+    fns.saved = { data: savedView({ enabled: false, status: 'disabled' }), isLoading: false };
+    await renderReady(TARGET);
+    expect(screen.getByTestId('promote-section-stub').textContent).toBe('Turn the tool on to promote it.');
+    cleanup();
+
+    fns.saved = { data: newerVersion(), isLoading: false };
+    await renderReady({ artifactId: 'artifact-1', version: 4, blocked: null });
+    expect(screen.getByTestId('promote-section-stub').textContent).toBe(
+      'Promotion runs the saved version 3. Update the tool to promote this version.'
+    );
+  });
+
+  it('live: says so in the status, and shows no promotion once the artifact is deleted', async () => {
+    fns.saved = { data: savedView({ state: 'live', status: 'live' }), isLoading: false };
+    await renderReady(TARGET);
+    expect(statusText()).toBe('Live tool, pinned to version 3.');
+    expect(screen.getByTestId('python-function-offer-cap').textContent).toBe(
+      'Chat and agent runs offer up to 20 of your live tools, oldest first.'
+    );
+    cleanup();
+
+    fns.saved = { data: savedView({ status: 'source_deleted' }), isLoading: false };
+    await renderReady(TARGET);
+    expect(screen.queryByTestId('promote-section-stub')).toBeNull();
+    expect(screen.queryByTestId('python-function-offer-cap')).toBeNull();
+  });
+
   it('a newer version is available: says so and Update repins to the version shown with the contract read', async () => {
     fns.saved = { data: newerVersion(), isLoading: false };
     await renderReady({ artifactId: 'artifact-1', version: 4, blocked: null });
@@ -585,6 +795,18 @@ describe('PythonFunctionPanel save controls', () => {
     fireEvent.click(screen.getByTestId('python-function-enable-btn'));
 
     expect(fns.setEnabled.mutate).toHaveBeenCalledWith({ id: 'fn-1', enabled: false }, expect.anything());
+  });
+
+  it('shows when chat runs the tool and sets Always ask', async () => {
+    fns.saved = { data: savedView(), isLoading: false };
+    await renderReady(TARGET);
+
+    const select = screen.getByTestId('python-function-approval');
+    expect(select.textContent).toBe('Run without asking');
+    fireEvent.click(select);
+    fireEvent.click(await screen.findByTestId('python-function-approval-always_ask'));
+
+    expect(fns.setApproval.mutate).toHaveBeenCalledWith({ id: 'fn-1', approval: 'always_ask' }, expect.anything());
   });
 
   it.each([
@@ -793,6 +1015,21 @@ describe('PythonFunctionPanel save controls', () => {
       expect(statusText()).toBe(
         'A newer version is available. This tool is pinned to version 3, and the artifact is at version 4.'
       );
+    });
+
+    it('for a promoted tool, names the promotion and updates anyway to a draft only when confirmed', async () => {
+      const promotedRefusal = refusal();
+      Object.assign(promotedRefusal.response.data, { promotedSeq: 2 });
+      await refuseUpdate(promotedRefusal);
+
+      const dialog = await screen.findByTestId('breaking-change-dialog');
+      expect(within(dialog).getByTestId('breaking-change-dialog-promoted').textContent).toBe(
+        'Version 4 changes the contract of beam_midspan_deflection since promotion 2 in ways that could break its callers. Updating anyway returns the tool to a draft, and promotion will refuse this version.'
+      );
+      expect(fns.repin.mutate).toHaveBeenCalledTimes(1);
+      fireEvent.click(within(dialog).getByTestId('breaking-change-dialog-accept-btn'));
+      expect(fns.repin.mutate).toHaveBeenCalledTimes(2);
+      expect(fns.repin.mutate.mock.calls[1]![0]).toMatchObject({ expectedVersion: 4, acceptBreaking: true });
     });
 
     it('any other refusal stays a toast', async () => {

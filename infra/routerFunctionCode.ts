@@ -53,7 +53,6 @@ export function noindexResponseInjection(stage: string): string {
 // KEEP IN SYNC with both; packages/scripts/src/checkUserFileCdnPrefixes.test.ts is the guard.
 // Bare prefixes: router.ts bakes routePrefix in per stage.
 export const userFileCdnPrefixes = [
-  '/generated/',
   '/proxied-images/',
   '/admin-logos/',
   '/profile-photos/',

@@ -1,8 +1,9 @@
 import { create } from 'zustand';
 
+import type { CreditAnalysisTab } from './creditTabSearch';
+
 /** Inner tab values of the Credit Analytics tab; must match the Tab/TabPanel values in ./index.tsx. */
-export type CreditAnalysisTab =
-  'users' | 'margins' | 'org-usage' | 'api-usage' | 'side-apps' | 'ledger' | 'adjustments' | 'economy';
+export type { CreditAnalysisTab };
 
 /**
  * Inner-tab state for Credit Analytics, sticky for the whole SPA session: leaving Credit Analytics

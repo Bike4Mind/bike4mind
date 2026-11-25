@@ -45,6 +45,7 @@ import {
   NOTEBOOK_ID_PATTERN,
 } from './b4mApiClient.js';
 import { RESEARCH_TOOL_META, registerResearchTools } from './researchTools.js';
+import { FUNCTION_TOOL_META, registerFunctionTools } from './functionTools.js';
 import { logger } from '../utils/Logger.js';
 
 /** Static metadata for each tool, used for registration and the `mcp serve` help text. */
@@ -234,6 +235,7 @@ export const TOOL_META: ToolMeta[] = [
     scope: 'bob:read',
   },
   ...RESEARCH_TOOL_META,
+  ...FUNCTION_TOOL_META,
 ];
 
 export const TOOL_NAMES = TOOL_META.map(t => t.name);
@@ -1666,4 +1668,5 @@ export function registerTools(server: McpServer, client: B4mApiClient): void {
   );
 
   registerResearchTools(server, client, run);
+  registerFunctionTools(server, client);
 }

@@ -23,6 +23,7 @@ on:
       - 'b4m-core/**'
       - 'packages/**'
       - 'Dockerfile'
+      - 'selfhost/kubernetes/files/validate-secrets.cjs'
       # The deps stage copies and runs this script for the overlay install, so a rename or
       # deletion breaks every image build (the COPY has no source) without running this gate.
       - 'scripts/link-premium-overlays.mjs'
@@ -62,6 +63,7 @@ on:
       - 'b4m-core/**'
       - 'packages/**'
       - 'Dockerfile'
+      - 'selfhost/kubernetes/files/validate-secrets.cjs'
       # The deps stage copies and runs this script for the overlay install, so a rename or
       # deletion breaks every image build (the COPY has no source) without running this gate.
       - 'scripts/link-premium-overlays.mjs'

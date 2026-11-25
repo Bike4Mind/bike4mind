@@ -1,3 +1,4 @@
+import { getAbortAwareRetrySignal, reportUsageOnAbort, retryAbortAware } from './abortAwareRetry';
 import {
   ARTIFACT_REMOVED_PLACEHOLDER,
   ChatModels,
@@ -20,6 +21,7 @@ import { ChatCompletionChunk, ChatCompletionCreateParams } from 'openai/resource
 import { Stream } from 'openai/streaming';
 import { Logger } from '@bike4mind/observability';
 import { executeToolsBatch, shouldEndTurnAfterTools, toolFailureLogLevel } from './executeToolsBatch';
+import { attachPreToolText } from './replayPreToolText';
 import { recordToolResult, type RecordableToolUse } from './recordToolResult';
 import {
   declaredArtifactType,
@@ -310,6 +312,7 @@ export class XAIBackend implements ICompletionBackend {
     callback: (text: (string | null | undefined)[], completionInfo: CompletionInfo) => Promise<void>,
     toolsUsed: Array<RecordableToolUse> = []
   ): Promise<void> {
+    const retrySignal = getAbortAwareRetrySignal(options);
     this.currentModel = model;
     options = {
       temperature: 0.9,
@@ -432,14 +435,26 @@ export class XAIBackend implements ICompletionBackend {
       }
     }
 
-    const response = await this._api.chat.completions.create(parameters, {
-      signal: options.abortSignal,
-      headers,
-    });
+    const create = () =>
+      this._api.chat.completions.create(parameters, {
+        signal: options.abortSignal,
+        ...(retrySignal ? { maxRetries: 0 } : {}),
+        headers,
+      });
+    const response = retrySignal ? await retryAbortAware(create, retrySignal) : await create();
     let inputTokens = 0;
     let outputTokens = 0;
 
     if (!(response instanceof Stream)) {
+      if (retrySignal?.aborted) {
+        await reportUsageOnAbort(
+          retrySignal,
+          callback,
+          response.usage
+            ? usageSoFar(response.usage.prompt_tokens, turnCacheReads(response.usage), xaiOutputTokens(response.usage))
+            : undefined
+        );
+      }
       const streamedText: string[] = [];
       const responseUsage = () =>
         usageSoFar(response.usage?.prompt_tokens || 0, turnCacheReads(response.usage), xaiOutputTokens(response.usage));
@@ -459,7 +474,7 @@ export class XAIBackend implements ICompletionBackend {
           continue;
         }
 
-        if (c.message.tool_calls && c.message.tool_calls.length > 0) {
+        if (!retrySignal && c.message.tool_calls && c.message.tool_calls.length > 0) {
           // Track all tools first
           for (const toolCall of c.message.tool_calls) {
             if (toolCall.type !== 'function') continue;
@@ -676,6 +691,7 @@ export class XAIBackend implements ICompletionBackend {
         ...(finishReason ? { stopReason: finishReason } : {}),
       };
       await callback(streamedText, completionInfo);
+      retrySignal?.throwIfAborted();
       return;
     }
 
@@ -874,6 +890,7 @@ export class XAIBackend implements ICompletionBackend {
         let artifactGuard = inheritedArtifactGuard;
 
         // Inject results in original order
+        const roundMessagesStart = messages.length;
         for (const outcome of outcomes) {
           if (outcome.ok) {
             // For tools that return artifacts (like recharts), stream the result directly -
@@ -917,6 +934,8 @@ export class XAIBackend implements ICompletionBackend {
             );
           }
         }
+
+        attachPreToolText(messages, roundMessagesStart, streamedRoundText);
 
         const requestedToolNames = func.flatMap(tool => (tool.name ? [tool.name] : []));
         if (shouldEndTurnAfterTools(requestedToolNames, options.tools, streamedRoundText)) {

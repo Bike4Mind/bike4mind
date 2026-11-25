@@ -1,5 +1,5 @@
 export type OrchestratorViewId =
-  'tavern' | 'aquarium' | 'office' | 'board' | 'table' | 'tile-wall' | 'swimlanes' | 'constellation' | 'transit';
+  'tavern' | 'aquarium' | 'office' | 'board' | 'table' | 'plan' | 'tile-wall' | 'swimlanes' | 'constellation' | 'transit';
 /** Menu and Mod+Shift+[ / ] order: the scenes, then the layouts (ViewSwitcher groups them the same way). */
 export const ORCHESTRATOR_VIEWS: readonly OrchestratorViewId[] = [
   'tavern',
@@ -7,6 +7,7 @@ export const ORCHESTRATOR_VIEWS: readonly OrchestratorViewId[] = [
   'office',
   'board',
   'table',
+  'plan',
   'tile-wall',
   'swimlanes',
   'constellation',

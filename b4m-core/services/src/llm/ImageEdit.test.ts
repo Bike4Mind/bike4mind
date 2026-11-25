@@ -5,9 +5,13 @@ import {
   CreditHolderType,
   EditImageRequestBodySchema,
   ImageModels,
+  BadRequestError,
   IMAGES_PER_EDIT_REQUEST,
   insufficientCreditsError,
   ModelBackend,
+  RUN_BUDGET_EXHAUSTED_ERROR_CODE,
+  UnprocessableEntityError,
+  type CompletionRunAttribution,
   type IUserDocument,
   type ModelInfo,
 } from '@bike4mind/common';
@@ -303,7 +307,7 @@ describe('ImageEditService.process model dispatch', () => {
     expect(editSpy).not.toHaveBeenCalled();
   });
 
-  it('refuses a paid-only edit before enqueueing and gates the remapped model', async () => {
+  it('refuses a paid-only edit before enqueueing and gates the selected model', async () => {
     const refusal = new Error('paid plan required');
     const assertAdmission = vi.fn(async () => {
       throw refusal;
@@ -318,13 +322,12 @@ describe('ImageEditService.process model dispatch', () => {
           questId: 'quest1',
           prompt: 'edit',
           model: ImageModels.GPT_IMAGE_2,
-          background: 'transparent',
           image: 'https://example.invalid/image.png',
           fabFileIds: ['mask1'],
         },
       })
     ).rejects.toBe(refusal);
-    expect(assertAdmission).toHaveBeenCalledWith('user1', ImageModels.GPT_IMAGE_1_5, undefined, undefined);
+    expect(assertAdmission).toHaveBeenCalledWith('user1', ImageModels.GPT_IMAGE_2, undefined, undefined);
     expect(enqueue).not.toHaveBeenCalled();
   });
 
@@ -477,13 +480,30 @@ describe('ImageEditService.process model dispatch', () => {
     });
   });
 
-  it('steps a gpt-image-2 selection down to gpt-image-1.5 when background is transparent', async () => {
-    await run(ImageModels.GPT_IMAGE_2, { background: 'transparent', output_format: 'png' });
+  it('refuses a transparent background on a model that cannot render one with a 400 instead of stepping down', async () => {
+    const enqueue = vi.fn();
+    const { service } = makeService({}, enqueue);
+    await expect(
+      service.invoke({
+        userId: 'user1',
+        body: {
+          sessionId: 'session1',
+          questId: 'quest1',
+          prompt: 'edit',
+          model: ImageModels.GPT_IMAGE_2,
+          background: 'transparent',
+          image: 'https://example.invalid/image.png',
+          fabFileIds: ['mask1'],
+        },
+      })
+    ).rejects.toBeInstanceOf(BadRequestError);
+    expect(enqueue).not.toHaveBeenCalled();
+  });
 
-    expect(editSpy.mock.calls[0][2]).toMatchObject({
-      model: ImageModels.GPT_IMAGE_1_5,
-      background: 'transparent',
-    });
+  it('leaves a request without a transparent background untouched on gpt-image-2', async () => {
+    await run(ImageModels.GPT_IMAGE_2, { output_format: 'png' });
+
+    expect(editSpy.mock.calls[0][2]).toMatchObject({ model: ImageModels.GPT_IMAGE_2 });
   });
 
   it('rejects a model that cannot edit instead of silently substituting one', async () => {
@@ -636,10 +656,158 @@ describe('ImageEditService.process model dispatch', () => {
       expect(quest.creditHolds.settle).not.toHaveBeenCalled();
     });
 
+    describe('on a redelivered message', () => {
+      const deliver = (service: ImageEditService) =>
+        service.process({
+          body: {
+            sessionId: 'session1',
+            questId: 'quest1',
+            userId: 'user1',
+            prompt: 'make it blue',
+            model: ImageModels.GPT_IMAGE_1_5,
+            image: 'https://example.invalid/source.png',
+            fabFileIds: ['mask1'],
+          } as never,
+          logger: silentLogger,
+        });
+      const makeBilledService = (reused: boolean) => {
+        const built = makeService({ creditTransactions: { create: vi.fn() } });
+        if (reused) {
+          const firstDeliveryHold = built.creditHolds.hold.getMockImplementation()!;
+          built.creditHolds.hold.mockImplementationOnce(async params => ({
+            ...(await firstDeliveryHold(params)),
+            reused: true as const,
+          }));
+        }
+        return built;
+      };
+
+      it('keys the hold on the quest id', async () => {
+        const { service, creditHolds } = makeBilledService(false);
+
+        await deliver(service);
+
+        expect(creditHolds.hold).toHaveBeenCalledWith(expect.objectContaining({ holdKey: 'image_edit:quest1' }));
+      });
+
+      it('leaves a reused hold for its first delivery when the render fails', async () => {
+        const { service, creditHolds } = makeBilledService(true);
+        editSpy.mockRejectedValueOnce(new Error('provider down'));
+
+        await deliver(service);
+
+        expect(creditHolds.release).not.toHaveBeenCalled();
+      });
+
+      it('still settles a reused hold when the render succeeds', async () => {
+        const { service, creditHolds } = makeBilledService(true);
+        editSpy.mockResolvedValueOnce({ type: 'success', dataUrl: 'https://example.invalid/edited.png' });
+
+        await deliver(service);
+
+        expect(creditHolds.settle).toHaveBeenCalledOnce();
+      });
+    });
+
     it('does not offer the provider an image count it would render and we would discard', async () => {
       await runBilled({ n: 5 });
 
       expect(editSpy.mock.calls[0][2]).not.toHaveProperty('n');
+    });
+
+    describe('with a completion run', () => {
+      const completionRun: CompletionRunAttribution = {
+        runId: '6f1c2a3b-4d5e-4f60-8a7b-9c0d1e2f3a4b',
+        role: 'worker',
+        purpose: 'tool',
+      };
+      const editBody = {
+        sessionId: 'session1',
+        questId: 'quest1',
+        prompt: 'make it blue',
+        model: ImageModels.GPT_IMAGE_1_5,
+        image: 'https://example.invalid/source.png',
+        fabFileIds: ['mask1'],
+      };
+      const plainEditCredits = () =>
+        estimateImageCredits(gptImage, IMAGES_PER_EDIT_REQUEST, { model: gptImage.id, inputImageCount: 1 })
+          .requiredCredits;
+
+      it('claims the run with the hold and tags the settled ledger entry with it', async () => {
+        editSpy.mockResolvedValue({ type: 'success', dataUrl: 'https://example.invalid/edited.png' });
+        const quest = await runBilled({ run: completionRun });
+
+        expect(quest.creditHolds.hold).toHaveBeenCalledWith(expect.objectContaining({ run: completionRun }));
+        expect(quest.creditHolds.settle).toHaveBeenCalledWith(
+          expect.anything(),
+          expect.any(Number),
+          expect.objectContaining({ type: 'image_edit_usage', run: completionRun }),
+          expect.anything()
+        );
+      });
+
+      it('releases the run-claiming hold when the provider call rejects', async () => {
+        const quest = await runBilled({ run: completionRun });
+
+        const hold = await quest.creditHolds.hold.mock.results[0]?.value;
+        expect(quest.creditHolds.release).toHaveBeenCalledWith(hold, expect.anything());
+        expect(quest.creditHolds.settle).not.toHaveBeenCalled();
+      });
+
+      it('fails the quest with run_budget_exhausted when the run cannot fit the hold', async () => {
+        const { service, creditHolds } = makeService({ creditTransactions: { create: vi.fn() } });
+        creditHolds.hold.mockRejectedValueOnce(
+          new UnprocessableEntityError("This run's credit budget is used up", {
+            errorCode: RUN_BUDGET_EXHAUSTED_ERROR_CODE,
+          })
+        );
+
+        await service.process({
+          body: { ...editBody, userId: 'user1', run: completionRun } as never,
+          logger: silentLogger,
+        });
+
+        expect(vi.mocked(service['db'].quests.update)).toHaveBeenCalledWith(
+          expect.objectContaining({ status: 'done', errorCode: 'run_budget_exhausted' })
+        );
+        expect(editSpy).not.toHaveBeenCalled();
+      });
+
+      it('sends no run to the hold or the ledger without one', async () => {
+        editSpy.mockResolvedValue({ type: 'success', dataUrl: 'https://example.invalid/edited.png' });
+        const quest = await runBilled({});
+
+        expect(quest.creditHolds.hold.mock.calls[0][0]).not.toHaveProperty('run');
+        expect(quest.creditHolds.settle.mock.calls[0][2]).not.toHaveProperty('run');
+      });
+
+      it('checks the run has room for the edit before queueing it with the run', async () => {
+        const assertHeadroom = vi.fn(async () => undefined);
+        const enqueued: unknown[] = [];
+        const { service } = makeService({}, async body => {
+          enqueued.push(body);
+        });
+
+        await service.invoke({ userId: 'user1', body: editBody, run: { attribution: completionRun, assertHeadroom } });
+
+        expect(assertHeadroom).toHaveBeenCalledWith(plainEditCredits());
+        expect(enqueued).toEqual([expect.objectContaining({ run: completionRun })]);
+      });
+
+      it('refuses before queueing when the run has no room', async () => {
+        const refusal = new UnprocessableEntityError('used up', { errorCode: RUN_BUDGET_EXHAUSTED_ERROR_CODE });
+        const startImageEditProcess = vi.fn();
+        const { service } = makeService({}, startImageEditProcess);
+
+        await expect(
+          service.invoke({
+            userId: 'user1',
+            body: editBody,
+            run: { attribution: completionRun, assertHeadroom: async () => Promise.reject(refusal) },
+          })
+        ).rejects.toBe(refusal);
+        expect(startImageEditProcess).not.toHaveBeenCalled();
+      });
     });
   });
 

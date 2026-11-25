@@ -18,4 +18,17 @@ describe('en.json organization plurals', () => {
     expect(i18n.t('organization.x_credits', { count: 1, amount: '1' })).toBe('1 credit');
     expect(i18n.t('organization.x_credits', { count: 1200, amount: '1,200' })).toBe('1,200 credits');
   });
+
+  it('resolves the referral milestone lines through i18next plural suffixes', async () => {
+    const i18n = i18next.createInstance();
+    await i18n.init({ lng: 'en', resources: { en: { translation: en } } });
+    expect(i18n.t('referral.milestone_next', { count: 1, credits: '500' })).toBe(
+      '<strong>1 more active friend</strong> to earn a <strong>500 credit</strong> bonus.'
+    );
+    expect(i18n.t('referral.milestone_next', { count: 3, credits: '1,500' })).toBe(
+      '<strong>3 more active friends</strong> to earn a <strong>1,500 credit</strong> bonus.'
+    );
+    expect(i18n.t('referral.milestone_chip', { count: 1, credits: '200' })).toBe('1 friend: 200');
+    expect(i18n.t('referral.milestone_chip', { count: 5, credits: '500' })).toBe('5 friends: 500');
+  });
 });

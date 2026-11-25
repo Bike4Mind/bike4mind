@@ -99,6 +99,8 @@ RUN groupadd -r nodejs && useradd -r -g nodejs nextjs
 COPY --from=builder --chown=nextjs:nodejs /app/apps/client/.next/standalone ./
 COPY --from=builder --chown=nextjs:nodejs /app/apps/client/.next/static ./apps/client/.next/static
 COPY --from=builder --chown=nextjs:nodejs /app/apps/client/public ./apps/client/public
+# Startup check run by the self-host Compose validate-secrets service.
+COPY --chown=nextjs:nodejs selfhost/kubernetes/files/validate-secrets.cjs ./selfhost/validate-secrets.cjs
 
 USER nextjs
 EXPOSE 3000

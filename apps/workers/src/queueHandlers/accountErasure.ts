@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { dispatchWithLogger } from '@bike4mind/server-utils/queueHandlers/utils';
 import { completeAccountDeletion } from '@bike4mind/server-utils/users/completeAccountDeletion';
-import { erasureRegistry } from '@server/dataSubject/erasureRegistry';
+import { erasureRegistry } from '@bike4mind/server-utils/dataSubject/erasureRegistry';
 
 const AccountErasurePayload = z.object({ userId: z.string().min(1) });
 

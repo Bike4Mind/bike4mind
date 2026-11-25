@@ -23,6 +23,7 @@ import { useAdminRoleList } from '../../useAdminRoleList';
 import { describeProvenance, permissionProvenance } from '../adminAccessModel';
 import { SignupClassificationCard } from '../SignupClassificationCard';
 import { DetectionLinkedAccountsCard } from '../DetectionLinkedAccountsCard';
+import { InterventionHoldsCard } from '../../../InterventionHolds';
 import { UserNotesCard } from './UserNotesCard';
 import { OrganizationsCard } from './OrganizationsCard';
 import { ClientsCard } from './ClientsCard';
@@ -337,6 +338,7 @@ type OverviewTabProps = {
 export const OverviewTab: React.FC<OverviewTabProps> = ({ user, onAction, onViewActivity, onViewCredits, onAudit }) => (
   <Stack gap={2}>
     <DetectionLinkedAccountsCard userId={user.id} />
+    <InterventionHoldsCard userId={user.id} />
     <Box
       sx={{
         display: 'grid',

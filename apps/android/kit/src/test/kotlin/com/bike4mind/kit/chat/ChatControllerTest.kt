@@ -8,6 +8,7 @@ import com.bike4mind.kit.approvals.PendingActionFailure
 import com.bike4mind.kit.approvals.PendingActionOutcome
 import com.bike4mind.kit.approvals.PendingActionResult
 import com.bike4mind.kit.approvals.PendingActionTarget
+import com.bike4mind.kit.networking.ApiException
 import com.bike4mind.kit.realtime.RealtimeFrames.StreamedCompletion
 import com.bike4mind.kit.sessions.PendingAction
 import com.bike4mind.kit.sessions.Quest
@@ -29,6 +30,7 @@ class ChatControllerTest {
     private class FakeBackend : ChatBackend {
         val frames = Channel<StreamedCompletion>(Channel.UNLIMITED)
         var receipt: ChatReceipt = ChatReceipt.Accepted("q1", "s-new")
+        var sendFailure: Exception? = null
         var polled: Quest? = null
         var polls = 0
         val sent = mutableListOf<Pair<String, String?>>()
@@ -52,6 +54,7 @@ class ChatControllerTest {
         }
         override suspend fun send(message: String, sessionId: String?, fileIds: List<String>): ChatReceipt {
             sent += message to sessionId
+            sendFailure?.let { throw it }
             return receipt
         }
         override fun completions(): Flow<StreamedCompletion> = frames.receiveAsFlow()
@@ -128,6 +131,107 @@ class ChatControllerTest {
 
         assertEquals(ChatError.Refused("insufficient_credits", "Out of credits"), chat.state.value.error)
         assertEquals(emptyList<Quest>(), chat.state.value.turns)
+    }
+
+    @Test
+    fun aFailedSendIsKeptAndRetriesWithTheSameText() = runTest {
+        val backend = FakeBackend().apply { sendFailure = java.io.IOException("offline") }
+        val chat = controller(backend, sessionId = "s1")
+        var accepted = 0
+
+        chat.send("Hi", listOf("f1")) { accepted++ }
+        runCurrent()
+        val failed = chat.state.value.failedSends.single()
+        assertEquals(FailedSend(failed.id, "Hi", listOf("f1")), failed)
+        assertFalse(chat.state.value.sending)
+        assertTrue(chat.state.value.turns.isEmpty())
+        assertEquals(0, accepted)
+
+        backend.sendFailure = null
+        chat.retry(failed.id)
+        runCurrent()
+        assertEquals(listOf<Pair<String, String?>>("Hi" to "s1", "Hi" to "s1"), backend.sent.toList())
+        assertTrue(chat.state.value.failedSends.isEmpty())
+        assertEquals("Hi", chat.state.value.turns.single().prompt)
+        assertEquals(1, accepted)
+    }
+
+    @Test
+    fun aRetryThatFailsAgainKeepsTheMessageForAnotherTry() = runTest {
+        val backend = FakeBackend().apply { sendFailure = java.io.IOException("offline") }
+        val chat = controller(backend, sessionId = "s1")
+
+        chat.send("Hi")
+        runCurrent()
+        val failed = chat.state.value.failedSends.single()
+        chat.retry(failed.id)
+        runCurrent()
+
+        assertEquals(listOf(failed), chat.state.value.failedSends)
+        assertEquals(2, backend.sent.size)
+        assertFalse(chat.state.value.sending)
+    }
+
+    @Test
+    fun aRetryWhileSendingIsIgnored() = runTest {
+        val backend = FakeBackend().apply { sendFailure = java.io.IOException("offline") }
+        val chat = controller(backend, sessionId = "s1")
+        chat.send("First")
+        runCurrent()
+        val failed = chat.state.value.failedSends.single()
+
+        backend.sendFailure = null
+        chat.send("Second")
+        chat.retry(failed.id)
+        runCurrent()
+
+        assertEquals(listOf("First", "Second"), backend.sent.map { it.first })
+        assertEquals(listOf(failed), chat.state.value.failedSends)
+    }
+
+    @Test
+    fun aRetryOfAnUnknownIdDoesNothing() = runTest {
+        val backend = FakeBackend()
+        val chat = controller(backend, sessionId = "s1")
+
+        chat.retry("failed-99")
+        runCurrent()
+
+        assertTrue(backend.sent.isEmpty())
+        assertFalse(chat.state.value.sending)
+    }
+
+    @Test
+    fun onAcceptedRunsOnceAfterRepeatedFailures() = runTest {
+        val backend = FakeBackend().apply { sendFailure = java.io.IOException("offline") }
+        val chat = controller(backend, sessionId = "s1")
+        var accepted = 0
+
+        chat.send("Hi") { accepted++ }
+        runCurrent()
+        chat.retry(chat.state.value.failedSends.single().id)
+        runCurrent()
+        backend.sendFailure = null
+        chat.retry(chat.state.value.failedSends.single().id)
+        runCurrent()
+
+        assertEquals(1, accepted)
+        assertTrue(chat.state.value.failedSends.isEmpty())
+    }
+
+    @Test
+    fun aServerErrorKeepsItsReasonAndAnOfflineSendHasNone() = runTest {
+        val backend = FakeBackend().apply { sendFailure = ApiException(403) }
+        val chat = controller(backend, sessionId = "s1")
+
+        chat.send("Hi")
+        runCurrent()
+        assertEquals("The server answered HTTP 403", chat.state.value.failedSends.single().reason)
+
+        backend.sendFailure = java.io.IOException("offline")
+        chat.send("Again")
+        runCurrent()
+        assertNull(chat.state.value.failedSends.last().reason)
     }
 
     private class FakeRuns(var receipt: AgentRunReceipt = AgentRunReceipt("e1", "q-run", "s1")) : AgentRunStarter {

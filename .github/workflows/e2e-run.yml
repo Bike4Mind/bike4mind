@@ -348,6 +348,7 @@ jobs:
           E2E_PREVIEW_SKIPPED: ${{ steps.e2e.outputs.preview_skipped }}
           E2E_CANCELLED: ${{ job.status == 'cancelled' }}
           E2E_JOB_STATUS: ${{ job.status }}
+          E2E_SUITE_NAME: ${{ inputs.suite_name }}
         run: node scripts/e2e-outcome.mjs
 
       # Shadow mode: stores the run for /status; the Slack post below still runs.
@@ -475,7 +476,7 @@ jobs:
                   "fields": [
                     {
                       "type": "mrkdwn",
-                      "text": "*Status*\n${{ steps.results.outputs.label || 'Setup/deployment failed' }}"
+                      "text": "*Status*\n${{ steps.results.outputs.slack_status || ':x: Setup/deployment failed' }}"
                     },
                     {
                       "type": "mrkdwn",
@@ -492,17 +493,10 @@ jobs:
                     },
                     {
                       "type": "mrkdwn",
-                      "text": "*Results*\n${{ steps.results.outputs.summary || 'No test results available' }}"
+                      "text": "*Results*\n${{ steps.results.outputs.slack_results || 'No test results available' }}"
                     }
                   ]
-                },
-                {
-                  "type": "section",
-                  "text": {
-                    "type": "mrkdwn",
-                    "text": "*${{ inputs.suite_name && format('{0} Run Summary', inputs.suite_name) || 'Test Run Summary' }}*\n${{ steps.results.outputs.spec_summary }}"
-                  }
-                }${{ steps.credits.outputs.credits_block }},
+                }${{ steps.results.outputs.slack_spec_blocks }}${{ steps.credits.outputs.credits_block }},
                 {
                   "type": "actions",
                   "elements": [

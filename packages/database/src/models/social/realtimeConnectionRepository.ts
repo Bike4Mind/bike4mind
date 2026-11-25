@@ -12,6 +12,7 @@ import { UserApiKey } from '../auth/UserApiKeyModel';
 import User from '../auth/UserModel';
 import { Connection } from './ConnectionModel';
 import { QuerySubscription } from './QuerySubscriptionModel';
+import { Logger } from '@bike4mind/observability';
 
 const ID_CHUNK_SIZE = 500;
 
@@ -481,7 +482,7 @@ async function removeStaleSubscribers({
         await QuerySubscription.deleteMany({ _id: { $in: affectedIds }, subscribers: { $size: 0 } });
         removed += affected.length;
       } catch (error) {
-        console.warn(`[realtimeConnectionRepository] Failed to remove stale subscribers of ${connectionId}`, error);
+        Logger.warn('[realtimeConnectionRepository] Failed to remove stale subscribers', { connectionId, error });
       }
     }
     if (rows.length < batchSize) break;

@@ -41,9 +41,12 @@ type UpdateArtifactParameters = z.infer<typeof updateArtifactSchema>;
 
 interface UpdateArtifactAdapters {
   db: {
-    artifacts: IArtifactRepository;
-    artifactContents: IArtifactContentRepository;
-    artifactVersions: IArtifactVersionRepository;
+    artifacts: Pick<IArtifactRepository, 'findOne' | 'updateWithWriteAccess'>;
+    artifactContents: Pick<IArtifactContentRepository, 'createOrUpdate' | 'delete' | 'findLatestContent'>;
+    artifactVersions: Pick<
+      IArtifactVersionRepository,
+      'createOrUpdate' | 'delete' | 'findByArtifactId' | 'findOne' | 'update'
+    >;
   };
 }
 
@@ -215,9 +218,7 @@ export const update = async (
     const highestVersion = Math.max(versionsFromCollection, artifactVersion);
     const newVersionNumber = highestVersion + 1;
 
-    // Get the current content
-    const currentContentArray = await db.artifactContents.findByArtifactId(artifact.id);
-    const currentContent = currentContentArray?.[0]; // Get the latest content
+    const currentContent = await db.artifactContents.findLatestContent(artifact.id);
     if (currentContent) {
       await claimVersionWrite();
 

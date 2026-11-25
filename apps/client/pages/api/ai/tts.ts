@@ -17,6 +17,7 @@ import { createSpeechJob, inlineMinStepMs } from '@bike4mind/services/audioJobs'
 import { getCreateSpeechJobDeps, readAudioJobOutput } from '@bike4mind/server-utils/generationJobs/audioJobWiring';
 import { adminRoleWithheldFor } from '@bike4mind/server-utils/auth/apiKeyAdminScope';
 import { resolveAudioBillingOrgId } from '@server/billing/resolveAudioBillingOrgId';
+import { resolvePaidCallRun } from '@server/completionRuns/paidCallRun';
 import {
   awaitInlineAudioJob,
   createAudioJobKeepingAudioOnFullQuota,
@@ -72,6 +73,7 @@ const handler = nextRouteForContract(synthesizeSpeechContract).post(async (req, 
     preview,
     organization_id,
     end_user_id,
+    run,
   } = req.validated;
   // Validated so a platform can send the field on every AI route; no TTS provider takes an end-user id.
   resolvePlatformEndUser(end_user_id, { userId: req.user?.id, apiKeyInfo: req.apiKeyInfo });
@@ -80,7 +82,11 @@ const handler = nextRouteForContract(synthesizeSpeechContract).post(async (req, 
 
   // Omitted keeps the historical personal default; a key bills its own account (resolveAudioBillingOrgId 403s any
   // other target). Undefined is a user-billed key, which bills the user.
-  const billingOrganizationId = await resolveAudioBillingOrgId(req, organization_id, 'user');
+  // A run bills the account it is bound to, so the charge lands where the run's usage read looks for it.
+  const paidRun = await resolvePaidCallRun(req, run, organization_id);
+  const billingOrganizationId = paidRun
+    ? paidRun.billingOrganizationId
+    : await resolveAudioBillingOrgId(req, organization_id, 'user');
   // As the v1 media routes: 'studio' is any first-party session.
   const source: GenerationJobSource = req.apiKeyInfo ? 'api' : 'studio';
   const created = await createAudioJobKeepingAudioOnFullQuota(
@@ -97,6 +103,7 @@ const handler = nextRouteForContract(synthesizeSpeechContract).post(async (req, 
           apiKeyId: req.apiKeyInfo?.keyId,
           saveToFiles,
           preferredVoice: user.preferredVoice,
+          ...(paidRun && { run: paidRun.attribution }),
         },
         getCreateSpeechJobDeps()
       ),

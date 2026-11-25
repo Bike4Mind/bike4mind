@@ -12,6 +12,9 @@ import { StandardUnit } from '@aws-sdk/client-cloudwatch';
 import { ApiKeyScope, API_KEY_RATE_LIMIT_HEADER_NAMES, isShadowTier } from '@bike4mind/common';
 import { persistedIsAdmin } from '@bike4mind/server-utils/auth/apiKeyAdminScope';
 import { resolveRouteTemplate } from '@bike4mind/server-utils/utils/resolveRouteTemplate';
+import { Logger } from '@bike4mind/observability';
+
+const logger = new Logger({ metadata: { service: 'apiKeyRateLimit' } });
 
 export interface ApiKeyRateLimitOptions {
   /**
@@ -129,7 +132,7 @@ export const apiKeyRateLimit =
       }
 
       // For other errors (e.g., database connection issues), log and pass through
-      console.error('[API_KEY_RATE_LIMIT] Error checking rate limit:', error);
+      logger.error('Error checking rate limit', { error });
       return next(error);
     }
   };

@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { AdminAiConfigSchema, FEEDBACK_AI_POLICY } from '@bike4mind/common';
 const mocks = vi.hoisted(() => ({ config: vi.fn(), readiness: vi.fn() }));
 vi.mock('./embedAdminAi', () => ({ loadFeedbackAiConfig: mocks.config }));
-vi.mock('./readiness', () => ({ getAdminAiClassReadiness: mocks.readiness }));
+vi.mock('@bike4mind/server-utils/admin/ai/readiness', () => ({ getAdminAiClassReadiness: mocks.readiness }));
 import { feedbackAiVisible } from './feedbackVisibility';
 beforeEach(() => vi.resetAllMocks());
 describe('feedback visibility readiness', () => {

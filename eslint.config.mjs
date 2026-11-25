@@ -22,6 +22,25 @@ import requireUpdateValidators from './eslint-rules/require-update-validators.mj
  * - b4m-core packages (with import restrictions)
  * - packages/*
  */
+// Core server packages under the no-console rule (see the block that uses these). Append as packages convert.
+const CORE_NO_CONSOLE_SRC = [
+  'b4m-core/db-core',
+  'b4m-core/agents',
+  'b4m-core/utils',
+  'b4m-core/llm-adapters',
+  'packages/database',
+  'b4m-core/services',
+  'b4m-core/common',
+].map(pkg => `${pkg}/src/**/*.{ts,tsx,mts,cts}`);
+const CORE_NO_CONSOLE_EXEMPT_SCRIPTS = [
+  'b4m-core/llm-adapters/src/syncModelDescriptions.ts',
+  'packages/database/src/seeds/regenerateModelPriceSeed.ts',
+  'packages/database/src/seeds/regenerateModelCatalogSeed.ts',
+  'packages/database/src/utils/testModelStats.ts',
+  'b4m-core/common/src/openapi/generate.ts',
+  'b4m-core/common/src/openapi/generateDeployment.ts',
+];
+
 // B4Mv3 Track 1 — deprecated facade import restrictions.
 // Extracted as consts so they can be spread into blocks that also carry other rules.
 // flat-config last-rule-wins means only the last matching no-restricted-imports rule
@@ -460,7 +479,7 @@ export default defineConfig([
 
   // CommonJS files (legacy configs, scripts, etc.)
   {
-    files: ['**/*.cjs', 'packages/eslint-config/**/*.js'],
+    files: ['**/*.cjs'],
     languageOptions: {
       sourceType: 'commonjs',
       globals: {
@@ -789,6 +808,37 @@ export default defineConfig([
     },
   },
 
+  // apps/desktop/src/host - the agent runtime that a headless remote host also runs, where there is
+  // no Electron to load. It may import apps/desktop/src/main/chat, so this catches a direct import
+  // only; HostRuntime.electronFree.test.ts catches one that arrives through a dependency. Repeats
+  // the B4Mv3 facade guards from the apps/** block above (no-restricted-imports is last-rule-wins).
+  {
+    files: ['apps/desktop/src/host/**/*.ts'],
+    rules: {
+      'no-restricted-imports': [
+        'error',
+        {
+          paths: [
+            ...b4mv3RestrictedPaths,
+            {
+              name: 'electron',
+              message:
+                'src/host runs headless on remote machines. Take the capability through a port in src/host/ports.ts instead.',
+            },
+          ],
+          patterns: [
+            ...b4mv3RestrictedPatterns,
+            {
+              group: ['electron/*'],
+              message:
+                'src/host runs headless on remote machines. Take the capability through a port in src/host/ports.ts instead.',
+            },
+          ],
+        },
+      ],
+    },
+  },
+
   // Freezes the interim @server/* bridge into apps/client: existing uses are baselined in
   // eslint-suppressions.json, so only new ones fail. Tests are included because vi.mock needs the alias too.
   {
@@ -831,6 +881,29 @@ export default defineConfig([
   {
     files: ['apps/workers/src/**/*.{ts,mts,cts}'],
     ignores: ['**/*.{test,spec}.{ts,tsx}', '**/__tests__/**', '**/__test__/**'],
+    rules: { 'no-console': 'error' },
+  },
+
+  // apps/client/server is covered too. server/scripts and the tutorials apply CLI print for a person at a
+  // terminal by design, and *.integration.ts files are run by hand, so those stay on console.
+  {
+    files: ['apps/client/server/**/*.{ts,tsx}'],
+    ignores: [
+      '**/*.{test,spec}.{ts,tsx}',
+      '**/__tests__/**',
+      '**/__test__/**',
+      'apps/client/server/scripts/**',
+      'apps/client/server/tutorials/apply/cli.ts',
+      '**/*.integration.ts',
+    ],
+    rules: { 'no-console': 'error' },
+  },
+
+  // Core server packages log through the Logger too (same rationale as the server-utils block above).
+  // CORE_NO_CONSOLE_EXEMPT_SCRIPTS are CLI scripts run with tsx whose stdout is their output.
+  {
+    files: CORE_NO_CONSOLE_SRC,
+    ignores: ['**/*.{test,spec}.{ts,tsx}', '**/__tests__/**', '**/__test__/**', ...CORE_NO_CONSOLE_EXEMPT_SCRIPTS],
     rules: { 'no-console': 'error' },
   },
 

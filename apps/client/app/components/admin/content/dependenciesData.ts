@@ -262,14 +262,6 @@ export const PACKAGES: PackageInfo[] = [
     keyDependencies: [],
     workspaceDependencies: [],
   },
-  {
-    name: '@bike4mind/eslint-config',
-    version: '1.0.0',
-    description: 'Shared ESLint configuration',
-    type: 'package',
-    keyDependencies: [],
-    workspaceDependencies: [],
-  },
 ];
 
 // Shared (cross-cutting) dependencies

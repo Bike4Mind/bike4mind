@@ -1,6 +1,7 @@
 import mongoose, { Schema } from 'mongoose';
 
-export type CreditRewardSource = 'gear' | 'referral_first_answer' | 'preference_arena' | 'referral_subscription';
+export type CreditRewardSource =
+  'gear' | 'referral_first_answer' | 'preference_arena' | 'referral_subscription' | 'referral_milestone';
 /** `paused` is a blocked account's reward: out of the queue, its heldAt kept so unblock restores its place. */
 export type HeldCreditRewardStatus = 'held' | 'paid' | 'void' | 'paused';
 
@@ -31,7 +32,7 @@ const heldCreditRewardSchema = new Schema<HeldCreditRewardDoc>(
     credits: { type: Number, required: true, min: 1 },
     source: {
       type: String,
-      enum: ['gear', 'referral_first_answer', 'preference_arena', 'referral_subscription'],
+      enum: ['gear', 'referral_first_answer', 'preference_arena', 'referral_subscription', 'referral_milestone'],
       required: true,
     },
     reason: { type: String, required: true },

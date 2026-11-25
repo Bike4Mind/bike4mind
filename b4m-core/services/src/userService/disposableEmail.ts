@@ -19,6 +19,7 @@ import {
   settingsMap,
 } from '@bike4mind/common';
 import type { DisposableListSource, DisposableRefusalSource, SignupProtection } from '@bike4mind/common';
+import { Logger } from '@bike4mind/observability';
 
 /**
  * Privacy alias forwarders: real users hide a real inbox behind them, so they are never treated as
@@ -144,11 +145,11 @@ const recordRefusal = async (
   signupProtection: SignupProtection | undefined
 ): Promise<void> => {
   const domain = emailDomainOf(email) ?? '';
-  console.log(JSON.stringify({ event: 'disposable-email-refused', domain, sources }));
+  Logger.info('disposable-email-refused', { event: 'disposable-email-refused', domain, sources });
   try {
     await signupProtection?.recordDisposableRefusal?.({ domain, sources });
   } catch (error) {
-    console.warn('Disposable refusal record failed', { domain, error: String(error) });
+    Logger.warn('Disposable refusal record failed', { domain, error });
   }
 };
 

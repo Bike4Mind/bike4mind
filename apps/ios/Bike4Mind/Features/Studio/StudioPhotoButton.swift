@@ -79,7 +79,7 @@ struct StudioPhotoButton: View {
       }
     }
     .fullScreenCover(item: $editing) { photo in
-      RegionEditView(item: photo, api: context.api, media: context.media, tracker: context.tracker)
+      RegionEditView(item: photo, api: context.api, tracker: context.tracker)
     }
     .alert(
       "Couldn't use that photo", isPresented: Binding(get: { problem != nil }, set: { if !$0 { problem = nil } })

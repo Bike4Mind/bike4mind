@@ -1,4 +1,3 @@
-import { v4 as uuidv4 } from 'uuid';
 import type { ICompletionOptionTools } from '@bike4mind/llm-adapters';
 import type { WorkflowBlocker } from '../storage/types.js';
 
@@ -60,7 +59,7 @@ export function createBlockerTools(store: BlockerStore): ICompletionOptionTools[
       }
 
       const blocker: WorkflowBlocker = {
-        id: uuidv4(),
+        id: crypto.randomUUID(),
         createdAt: new Date().toISOString(),
         description: params.description.trim(),
         status: 'open',

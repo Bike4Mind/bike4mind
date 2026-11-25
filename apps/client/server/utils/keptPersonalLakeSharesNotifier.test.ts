@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeAll, beforeEach, afterEach } from 'vitest';
 import { Logger } from '@bike4mind/observability';
 
 const h = vi.hoisted(() => ({
@@ -106,11 +106,16 @@ describe('reportAndNotifyKeptPersonalLakeShares through the queued mailer', () =
     ],
   };
 
-  beforeEach(async () => {
+  let realNotify: typeof import('@bike4mind/services').dataLakeService.notifyKeptPersonalLakeShares;
+  beforeAll(async () => {
+    const { dataLakeService } = await vi.importActual<typeof import('@bike4mind/services')>('@bike4mind/services');
+    realNotify = dataLakeService.notifyKeptPersonalLakeShares;
+  });
+
+  beforeEach(() => {
     vi.clearAllMocks();
     vi.stubEnv('B4M_SELF_HOST', 'false');
-    const { dataLakeService } = await vi.importActual<typeof import('@bike4mind/services')>('@bike4mind/services');
-    h.notifyKeptPersonalLakeShares.mockImplementation(dataLakeService.notifyKeptPersonalLakeShares);
+    h.notifyKeptPersonalLakeShares.mockImplementation(realNotify);
     h.reportKeptPersonalLakeShares.mockResolvedValue(shares);
     h.users.findByIds.mockResolvedValue([{ id: 'departed-1', name: 'Dana Departed' }]);
     h.users.findActiveEmailsByIds.mockResolvedValue([

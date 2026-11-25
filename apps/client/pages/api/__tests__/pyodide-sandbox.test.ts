@@ -17,7 +17,7 @@ import reactSandboxHandler from '../react-artifact-sandbox';
 
 type Handler = (req: NextApiRequest, res: NextApiResponse) => unknown;
 
-async function invokeHandler(target: Handler, method = 'GET') {
+async function invokeHandler(target: Handler, method = 'GET', query: Record<string, string> = {}) {
   const headers: Record<string, string> = {};
   const res = {
     setHeader: vi.fn((key: string, value: string) => {
@@ -28,10 +28,7 @@ async function invokeHandler(target: Handler, method = 'GET') {
     end: vi.fn((body?: string) => body),
   } as unknown as NextApiResponse & { send: ReturnType<typeof vi.fn>; status: ReturnType<typeof vi.fn> };
 
-  const body = await target(
-    { method, query: {}, headers: { host: 'app.example.com' } } as unknown as NextApiRequest,
-    res
-  );
+  const body = await target({ method, query, headers: { host: 'app.example.com' } } as unknown as NextApiRequest, res);
   return { headers, res, body: typeof body === 'string' ? body : String(res.send.mock.calls[0]?.[0] ?? '') };
 }
 
@@ -95,9 +92,10 @@ describe('/api/pyodide-sandbox CSP', () => {
     expect(headers['Content-Security-Policy']).toBe(CSP_WITH_NO_DATA_ORIGINS);
   });
 
-  it('caches the shell, but not a response built after a failed settings read', async () => {
+  it('caches the shell in the browser only, and not a response built after a failed settings read', async () => {
     const { headers } = await invoke();
-    expect(headers['Cache-Control']).toBe('public, max-age=300, s-maxage=300');
+    // Both frames share this path, so a shared cache must not hold either one.
+    expect(headers['Cache-Control']).toBe('private, max-age=300');
 
     dataOrigins.degraded = true;
     const degraded = await invoke();
@@ -174,6 +172,47 @@ describe('/api/pyodide-sandbox data origins', () => {
     dataOrigins.current = ['https://cdn.jsdelivr.net', 'https://data.example.com'];
     const connectSrc = directives((await invoke()).headers['Content-Security-Policy'])['connect-src'];
     expect(connectSrc).toBe('https://cdn.jsdelivr.net https://data.example.com');
+  });
+
+  it('names only the Pyodide distribution path in script-src and connect-src under ?network=none', async () => {
+    dataOrigins.current = LISTED;
+    const { headers, body } = await invokeHandler(handler, 'GET', { network: 'none' });
+    const parsed = directives(headers['Content-Security-Policy']);
+
+    // The path, not the host: the same CDN serves any npm or GitHub file to a host-wide source.
+    expect(parsed['connect-src']).toBe('https://cdn.jsdelivr.net/pyodide/v0.25.1/full/');
+    expect(parsed['script-src']).toBe(
+      "'unsafe-inline' blob: 'wasm-unsafe-eval' https://cdn.jsdelivr.net/pyodide/v0.25.1/full/"
+    );
+    expect(headers['Content-Security-Policy']).not.toContain('data.example.com');
+    expect(headers['Cache-Control']).toBe('private, max-age=300');
+    expect(body).toContain('pyodide-sandbox-ready');
+  });
+
+  it("keeps an operator mirror's full path in the network-free frame, since Pyodide loads from it", async () => {
+    vi.stubEnv('PYODIDE_BASE_URL', 'https://mirror.internal.example/pyodide/v0.25.1/full');
+    dataOrigins.current = LISTED;
+    const parsed = directives(
+      (await invokeHandler(handler, 'GET', { network: 'none' })).headers['Content-Security-Policy']
+    );
+    const expected = [
+      'https://cdn.jsdelivr.net/pyodide/v0.25.1/full/',
+      'https://mirror.internal.example/pyodide/v0.25.1/full/',
+    ];
+    expect(parsed['connect-src'].split(' ').sort()).toEqual(expected);
+    expect(parsed['script-src'].split(' ').slice(3).sort()).toEqual(expected);
+  });
+
+  it.each([
+    ['injects a second source', 'https://evil.example/pyodide/; connect-src *'],
+    ['would split the header', 'https://evil.example/a,connect-src/'],
+    ['is not http(s)', 'ftp://mirror.internal.example/pyodide/'],
+  ])('refuses a mirror that %s in the network-free frame', async (_label, raw) => {
+    vi.stubEnv('PYODIDE_BASE_URL', raw);
+    const csp = (await invokeHandler(handler, 'GET', { network: 'none' })).headers['Content-Security-Policy'];
+    expect(directives(csp)['connect-src']).toBe('https://cdn.jsdelivr.net/pyodide/v0.25.1/full/');
+    expect(csp).not.toContain('evil.example');
+    expect(csp).not.toContain('mirror.internal.example');
   });
 
   it.each([

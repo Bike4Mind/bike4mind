@@ -308,12 +308,25 @@ describe('imageEditTool - OpenAI branch', () => {
     );
   });
 
-  it('steps a gpt-image-2 edit model down to gpt-image-1.5 when background is transparent', async () => {
+  it('refuses a transparent background on gpt-image-2 instead of stepping down', async () => {
     const context = createFakeContext();
-    context.onStart = vi.fn();
 
     const { toolFn } = imageEditTool.implementation(context, {
       editModel: ImageModels.GPT_IMAGE_2,
+      background: 'transparent',
+    } as GenerateImageToolCall);
+
+    const result = await toolFn({ image: PNG_DATA_URL, prompt: 'remove the background' });
+
+    expect(result).toContain('cannot render a transparent background');
+    expect(mockEditSpy).not.toHaveBeenCalled();
+  });
+
+  it('keeps a transparent background on a capable edit model', async () => {
+    const context = createFakeContext();
+
+    const { toolFn } = imageEditTool.implementation(context, {
+      editModel: ImageModels.GPT_IMAGE_1_5,
       background: 'transparent',
     } as GenerateImageToolCall);
 
@@ -323,10 +336,6 @@ describe('imageEditTool - OpenAI branch', () => {
       expect.anything(),
       expect.anything(),
       expect.objectContaining({ model: ImageModels.GPT_IMAGE_1_5, background: 'transparent' })
-    );
-    expect(context.onStart).toHaveBeenCalledWith(
-      'edit_image',
-      expect.objectContaining({ model: ImageModels.GPT_IMAGE_1_5 })
     );
   });
 });
@@ -872,7 +881,7 @@ describe('imageEditTool - generation lineage', () => {
 });
 
 describe('imageEdit model admission', () => {
-  it('refuses before provider execution and admits the resolved transparent-image model', async () => {
+  it('refuses before provider execution and admits the selected model', async () => {
     const refusal = new Error('paid plan required');
     const assertAdmission = vi.fn(async (_modelId: string) => {
       throw refusal;
@@ -883,10 +892,8 @@ describe('imageEdit model admission', () => {
       model: ImageModels.GPT_IMAGE_2,
       editModel: ImageModels.GPT_IMAGE_2,
     });
-    await expect(
-      toolFn({ prompt: 'transparent image', background: 'transparent', image: 'data:image/png;base64,AAAA' })
-    ).rejects.toBe(refusal);
+    await expect(toolFn({ prompt: 'an image', image: 'data:image/png;base64,AAAA' })).rejects.toBe(refusal);
     expect(createToolModelAdmission).toHaveBeenLastCalledWith(context);
-    expect(assertAdmission).toHaveBeenCalledWith(ImageModels.GPT_IMAGE_1_5);
+    expect(assertAdmission).toHaveBeenCalledWith(ImageModels.GPT_IMAGE_2);
   });
 });

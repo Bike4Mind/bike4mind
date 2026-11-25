@@ -7,7 +7,7 @@ import { join } from 'node:path';
 /** The data-subject registry imports the generated file statically, so it must exist (empty) with nothing mounted. */
 
 const REAL_SCRIPT = join(__dirname, '../scripts/generate-premium-glue.mjs');
-const GENERATED = 'apps/client/server/premium-generated/premiumDataSubjectRegistry.generated.ts';
+const GENERATED = 'packages/server-utils/src/premium-generated/premiumDataSubjectRegistry.generated.ts';
 
 let sandbox: string;
 let script: string;
@@ -72,7 +72,7 @@ beforeEach(() => {
 describe('premium data subject registry', () => {
   it('emits the empty typed form when no overlay contributes', () => {
     const out = generate();
-    expect(out).toContain(`import type { ContributedDataHolderRegistry } from '@server/dataSubject/types';`);
+    expect(out).toContain(`import type { ContributedDataHolderRegistry } from '../dataSubject/types';`);
     expect(out).toContain('premiumDataSubjectRegistries: readonly ContributedDataHolderRegistry[] = [];');
   });
 
@@ -82,11 +82,9 @@ describe('premium data subject registry', () => {
     writeOverlay('gamma', {});
     const out = generate();
     expect(out).toContain(
-      `import { dataSubjectRegistry as registry0 } from '../../../../packages/premium/alpha/src/data-subject';`
+      `import { dataSubjectRegistry as registry0 } from '../../../premium/alpha/src/data-subject';`
     );
-    expect(out).toContain(
-      `import { dataSubjectRegistry as registry1 } from '../../../../packages/premium/beta/src/data-subject';`
-    );
+    expect(out).toContain(`import { dataSubjectRegistry as registry1 } from '../../../premium/beta/src/data-subject';`);
     expect(out).toContain('= [\n  registry0,\n  registry1\n];');
     expect(out).not.toContain('gamma');
   });

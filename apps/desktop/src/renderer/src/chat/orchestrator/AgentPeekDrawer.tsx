@@ -10,14 +10,17 @@ import Textarea from '@mui/joy/Textarea';
 import Typography from '@mui/joy/Typography';
 import { useTheme } from '@mui/joy/styles';
 import { isStoppableState } from '@shared/agentState';
-import type { ChatApprovalAnswer, ChatMessage, ChatQueuedMessage, ChatToolCall } from '@shared/chat';
+import type { ChatApprovalAnswer, ChatMessage, ChatQueuedMessage, ChatToolCall, SendMessageResult } from '@shared/chat';
 import { useEffect, useId, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
 import { CaretDownIcon } from '../icons';
 import { ToolCallList } from '../ToolCallList';
 import { MessageThread } from '../MessageThread';
+import { HeldRelayRow } from '../HeldRelayCard';
+import { useHeldRelays } from '../useHeldRelays';
 import { TaskDecisionPanel } from './TaskDecisionPanel';
 import { markSessionViewed } from '../markSessionViewed';
 import { activityLabel } from './activity';
+import { AgentPrIndicator } from './AgentPrIndicator';
 import { AgentStateChip } from './AgentStateChip';
 import type { AgentActions } from './OrchestratorStage';
 import type { AgentView } from './roster';
@@ -39,6 +42,8 @@ interface AgentPeekDrawerProps {
   actions: AgentActions;
   skin?: AgentDetailsSkin;
   visible?: boolean;
+  /** Opens the in-app PR details, as the views' badges do. */
+  onOpenPr?(id: string): void;
 }
 
 function errorText(error: unknown): string {
@@ -134,7 +139,7 @@ export function refreshKeyOf(agent: AgentView): string {
  * through the same `respondToApproval` call. An answered card goes at once rather than waiting for
  * the status push, so a second click can never answer it twice.
  */
-export function PendingRequests({ calls }: { calls: ChatToolCall[] }) {
+export function PendingRequests({ calls, onAnswered }: { calls: ChatToolCall[]; onAnswered?(): void }) {
   const [answered, setAnswered] = useState<ReadonlySet<string>>(() => new Set());
   const [error, setError] = useState<string | null>(null);
   const open = calls.filter(call => call.approvalId && !answered.has(call.approvalId));
@@ -142,7 +147,7 @@ export function PendingRequests({ calls }: { calls: ChatToolCall[] }) {
   const respond = (approvalId: string, answer: ChatApprovalAnswer) => {
     setError(null);
     setAnswered(current => new Set(current).add(approvalId));
-    window.b4m.chat.respondToApproval(approvalId, answer).catch((caught: unknown) => {
+    window.b4m.chat.respondToApproval(approvalId, answer).then(onAnswered, (caught: unknown) => {
       setAnswered(current => {
         const next = new Set(current);
         next.delete(approvalId);
@@ -290,7 +295,7 @@ function ReplyBox({ agentId, actionButton, onSent }: { agentId: string; actionBu
   );
 }
 
-export function AgentPeekDrawer({ agent, onClose, actions, skin, visible = true }: AgentPeekDrawerProps) {
+export function AgentPeekDrawer({ agent, onClose, actions, skin, visible = true, onOpenPr }: AgentPeekDrawerProps) {
   const mode = useTheme().palette.mode;
   const palette = skin?.[mode];
   const [actionsOpen, setActionsOpen] = useState(false);
@@ -307,6 +312,19 @@ export function AgentPeekDrawer({ agent, onClose, actions, skin, visible = true 
   const { messages, loadError } = useSessionMessages(agent.id, `${refreshKeyOf(agent)}\n${revision}`, visible);
   const refresh = () => setRevision(value => value + 1);
   const canStop = isStoppableState(agent.state);
+  const heldRelays = useHeldRelays(visible ? agent.id : null);
+
+  // Continue and Retry are also on the Needs-you strip; main refuses the second click as `busy`.
+  const rerun = (start: (sessionId: string) => Promise<SendMessageResult>) => {
+    setActionError(null);
+    void start(agent.id).then(
+      result => {
+        if (!result.ok && !result.busy) setActionError(result.error);
+        refresh();
+      },
+      error => setActionError(errorText(error))
+    );
+  };
 
   const drawerRef = useRef<HTMLDivElement>(null);
   // Focus moves in on open and back to the opener on close; a drawer swapped to another agent keeps its place.
@@ -366,10 +384,17 @@ export function AgentPeekDrawer({ agent, onClose, actions, skin, visible = true 
             {agent.title}
           </Typography>
         </Box>
+        <AgentPrIndicator
+          agentId={agent.id}
+          pr={agent.pr}
+          onOpen={onOpenPr && (() => onOpenPr(agent.id))}
+          testId="orchestrator-peek-pr"
+        />
         <AgentStateChip
           state={agent.state}
           preparing={agent.preparing !== undefined}
           deciding={agent.decision !== undefined}
+          backgroundJobs={agent.background?.running}
         />
         <IconButton
           size="sm"
@@ -410,6 +435,16 @@ export function AgentPeekDrawer({ agent, onClose, actions, skin, visible = true 
           </Box>
         </Box>
       )}
+      {heldRelays.held.length > 0 && (
+        <Box
+          data-testid="orchestrator-peek-held-relays"
+          sx={{ flex: '0 1 auto !important', minHeight: 0, maxHeight: '35%', overflowY: 'auto' }}
+        >
+          {heldRelays.held.map(entry => (
+            <HeldRelayRow key={entry.id} held={entry} onResolve={heldRelays.resolve} onOpenSession={actions.open} />
+          ))}
+        </Box>
+      )}
       <Box
         data-testid="orchestrator-peek-conversation"
         sx={{
@@ -438,16 +473,9 @@ export function AgentPeekDrawer({ agent, onClose, actions, skin, visible = true 
               .respondToApproval(approvalId, answer)
               .then(refresh, error => setActionError(errorText(error)));
           }}
-          onContinue={() => {
-            setActionError(null);
-            void window.b4m.chat.continueReply(agent.id).then(
-              result => {
-                if (result.ok) refresh();
-                else setActionError(result.error);
-              },
-              error => setActionError(errorText(error))
-            );
-          }}
+          onContinue={() => rerun(window.b4m.chat.continueReply)}
+          // Only on a failed turn: regenerating a finished worker would set its task running again.
+          {...(agent.state === 'failed' && { onRegenerate: () => rerun(window.b4m.chat.regenerateReply) })}
         />
       </Box>
 

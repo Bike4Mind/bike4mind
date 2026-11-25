@@ -1,13 +1,29 @@
-import type { MessageBoxOptions, MessageBoxReturnValue } from 'electron';
 import type { ChatService } from './ChatService';
 import type { SessionStore } from './SessionStore';
+
+/** The question asked before archiving a parent session; shaped so Electron's message box takes it as is. */
+export type ArchiveConfirmation = {
+  type: 'question';
+  message: string;
+  detail: string;
+  buttons: string[];
+  defaultId: number;
+  cancelId: number;
+  checkboxLabel?: string;
+  checkboxChecked?: boolean;
+  noLink: boolean;
+};
+
+export type ArchiveConfirmationAnswer = { response: number; checkboxChecked: boolean };
+
+export type ConfirmArchive = (confirmation: ArchiveConfirmation) => Promise<ArchiveConfirmationAnswer>;
 
 export async function archiveFromSidebar(
   service: Pick<ChatService, 'listSessions' | 'childArchiveStatus' | 'setSessionArchived' | 'archiveFinishedChildren'>,
   store: Pick<SessionStore, 'scopeKey'>,
   sessionId: string,
   archived: boolean,
-  confirm: (options: MessageBoxOptions) => Promise<MessageBoxReturnValue>
+  confirm: ConfirmArchive
 ) {
   if (!archived) return service.setSessionArchived(sessionId, false);
   const scope = store.scopeKey();

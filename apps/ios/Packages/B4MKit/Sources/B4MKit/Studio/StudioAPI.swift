@@ -50,15 +50,13 @@ public struct GenerationRequest: Equatable, Sendable {
 
 /// A region edit of an existing image.
 public struct ImageEditRequest: Equatable, Sendable {
-  /// A presigned URL of the source image; it must still be valid when the render runs.
-  public let imageURL: URL
-  public let sessionID: String
+  /// The Files entry of the image to edit.
+  public let sourceFileID: String
   public let modelID: String
   public let regions: [EditRegion]
 
-  public init(imageURL: URL, sessionID: String, modelID: String, regions: [EditRegion]) {
-    self.imageURL = imageURL
-    self.sessionID = sessionID
+  public init(sourceFileID: String, modelID: String, regions: [EditRegion]) {
+    self.sourceFileID = sourceFileID
     self.modelID = modelID
     self.regions = regions
   }
@@ -74,7 +72,7 @@ public struct GenerationStatus: Equatable, Sendable {
   public let phase: GenerationPhase
   /// Short-lived presigned URLs of the output.
   public let resultURLs: [URL]
-  /// The Files entry of a job's output, once it succeeded; nil for image quests and outputs stored outside Files.
+  /// The Files entry of a job's output, once it succeeded; nil for outputs stored outside Files.
   public let resultFileID: String?
 
   public init(phase: GenerationPhase, resultURLs: [URL] = [], resultFileID: String? = nil) {
@@ -87,14 +85,13 @@ public struct GenerationStatus: Equatable, Sendable {
 /// Studio's generation routes, all public v1 contracts (so the Android client uses the same ones).
 public protocol StudioAPI: Sendable {
   func models(for kind: GenerationKind) async throws -> [GenerationModel]
-  func generate(_ request: GenerationRequest) async throws -> GenerationHandle
+  /// One handle per job: an image request for several images starts several.
+  func generate(_ request: GenerationRequest) async throws -> [GenerationHandle]
   func editImage(_ request: ImageEditRequest) async throws -> GenerationHandle
   /// Starts a Scene: a video and a music track muxed into one clip. Free, so it never refuses for credits.
   func composeScene(_ request: SceneRequest) async throws -> GenerationHandle
   func status(of handle: GenerationHandle) async throws -> GenerationStatus
   func cancel(_ handle: GenerationHandle) async throws
-  /// A notebook for edits of images that do not name one (the edit route requires a session).
-  func createSession(name: String) async throws -> String
 }
 
 /// A request the server refused before starting anything, with its `errorCode` when it sent one.

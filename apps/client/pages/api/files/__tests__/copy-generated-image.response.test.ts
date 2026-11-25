@@ -83,7 +83,12 @@ describe('POST /api/files/copy-generated-image response boundary', () => {
     expect(sent).not.toHaveProperty('_id');
     expect(sent).not.toHaveProperty('__v');
     expect(sent).not.toHaveProperty('secretNotInSchema');
-    expect(sent).toMatchObject({ id: 'f1', fileName: 'image.png', fileUrl: 'https://signed.test/img.png' });
+    expect(sent).toMatchObject({
+      id: 'f1',
+      fileName: 'image.png',
+      fileUrl: 'https://signed.test/img.png',
+      created: true,
+    });
     expect(sent.fileUrlExpireAt).toBeDefined();
     expect(h.signUrl).toHaveBeenCalledWith(
       'owned/image.png',
@@ -127,7 +132,7 @@ describe('POST /api/files/copy-generated-image response boundary', () => {
     expect(sent).not.toHaveProperty('_id');
     expect(sent).not.toHaveProperty('__v');
     expect(sent).not.toHaveProperty('secretNotInSchema');
-    expect(sent).toMatchObject({ id: 'f2', fileName: 'image.png' });
+    expect(sent).toMatchObject({ id: 'f2', fileName: 'image.png', created: true });
     expect(sent).not.toHaveProperty('fileUrl');
   });
 });

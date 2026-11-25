@@ -290,6 +290,8 @@ describe('music job end to end with the test provider', () => {
     expect(generate).toHaveBeenCalledTimes(1);
     expect(releaseCreditHold).toHaveBeenCalledTimes(1);
     expect(settleCreditHold).not.toHaveBeenCalled();
+    // A definitive provider failure generated nothing, so there is no usage row.
+    expect(t.deps.recordUsage).not.toHaveBeenCalled();
     generate.mockRestore();
   });
 
@@ -306,6 +308,22 @@ describe('music job end to end with the test provider', () => {
     expect(generate).toHaveBeenCalledTimes(1);
     expect(releaseCreditHold).toHaveBeenCalledTimes(1);
     expect(t.deps.saveToFiles).not.toHaveBeenCalled();
+    // The provider may have generated and billed the song, so it is recorded as an uncharged error.
+    expect(t.deps.recordUsage).toHaveBeenCalledWith(
+      expect.objectContaining({ status: 'error', creditsCharged: 0, costUsd: 0, durationSeconds: 5 })
+    );
+  });
+
+  it('records a submit cut off by the step deadline as an uncharged timeout', async () => {
+    const t = setup();
+    const created = await createMusicJob({ user, request: request(), source: 'studio' }, t.deps);
+    const job = t.jobOf(created);
+    await createMusicJobHandler(t.deps).onTerminal({
+      ...job,
+      state: 'failed',
+      error: { code: 'orphaned_submit', message: 'cut off', cutOffByStepDeadline: true },
+    });
+    expect(t.deps.recordUsage).toHaveBeenCalledWith(expect.objectContaining({ status: 'timeout', creditsCharged: 0 }));
   });
 
   it('fails a job whose last step crashed mid-generate as orphaned_submit without generating again', async () => {
@@ -480,6 +498,7 @@ describe('music job end to end with the test provider', () => {
     const created = await createMusicJob({ user, request: request(), source: 'studio' }, t.deps);
     await t.runToCompletion();
     expect(t.jobOf(created)).toMatchObject({ state: 'failed', error: { code: 'output_too_large' } });
+    expect(t.deps.recordUsage).toHaveBeenCalledWith(expect.objectContaining({ status: 'error', creditsCharged: 0 }));
   });
 
   it('cancels a job before its submit without generating', async () => {

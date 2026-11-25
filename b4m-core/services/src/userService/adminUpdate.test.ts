@@ -4,6 +4,10 @@ import { updateUserSchema } from './update';
 import { checkStorageLimit } from '@bike4mind/utils';
 import { CreditHolderType } from '@bike4mind/common';
 
+vi.mock('@bike4mind/db-core', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/db-core')>()),
+  withTransaction: <T>(fn: () => Promise<T>) => fn(),
+}));
 vi.mock('../friendshipService/sendFriendRequest', () => ({ sendFriendRequest: vi.fn() }));
 
 const ADMIN_ID = 'admin-1';

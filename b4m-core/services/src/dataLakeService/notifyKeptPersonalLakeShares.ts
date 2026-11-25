@@ -3,6 +3,7 @@ import { userDisplayName } from './assembleLakeAccessView';
 import type { KeptPersonalLakeShares } from './reportKeptPersonalLakeShares';
 import { escapeHtml, wrapLakeEmail } from './renderSpendNotificationEmail';
 import type { LakeConfigAuditLogger } from './resolveLakeConfigAuditRetention';
+import { Logger } from '@bike4mind/observability';
 
 type LakeRef = KeptPersonalLakeShares['byOwner'][number]['lakes'][number];
 
@@ -56,7 +57,7 @@ export async function notifyKeptPersonalLakeShares(
 ): Promise<void> {
   if (shares.byOwner.length === 0) return;
   const warn = (msg: string, meta: unknown) =>
-    deps.logger?.warn ? deps.logger.warn(msg, meta) : console.warn(msg, meta);
+    deps.logger?.warn ? deps.logger.warn(msg, meta) : Logger.warn(msg, meta);
   try {
     const [[member], emailRows] = await Promise.all([
       deps.db.users.findByIds([context.departedUserId]),

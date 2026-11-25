@@ -100,6 +100,17 @@ const renderTab = () => {
 
 const openRowMenu = async (toolId: string) => fireEvent.click(await screen.findByTestId(`tool-row-actions-${toolId}`));
 
+// Runs out the search debounce on fake time; the debounce itself is pinned by its own test below.
+const searchFor = async (value: string) => {
+  vi.useFakeTimers();
+  try {
+    fireEvent.change(screen.getByTestId('admin-filter-search-input'), { target: { value } });
+    await act(() => vi.advanceTimersByTimeAsync(300));
+  } finally {
+    vi.useRealTimers();
+  }
+};
+
 describe('ToolDefinitionsTab', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -200,7 +211,7 @@ describe('ToolDefinitionsTab', () => {
       'Search name, description or tags'
     );
 
-    fireEvent.change(screen.getByTestId('admin-filter-search-input'), { target: { value: 'weather' } });
+    await searchFor('weather');
     await waitFor(() => expect(listCalls()).toContain(`${LIST_URL}enabled=all&search=weather&page=1&limit=50`));
 
     fireEvent.click(screen.getByTestId('admin-filter-tool-status'));
@@ -438,7 +449,7 @@ describe('ToolDefinitionsTab', () => {
 
     fireEvent.click(screen.getByTestId('admin-filter-tool-status'));
     fireEvent.click(await screen.findByTestId('admin-filter-tool-status-true'));
-    fireEvent.change(screen.getByTestId('admin-filter-search-input'), { target: { value: 'zzz' } });
+    await searchFor('zzz');
     await waitFor(() => expect(listCalls()).toContain(`${LIST_URL}enabled=true&search=zzz&page=1&limit=50`));
     fireEvent.click(within(await screen.findByTestId('admin-empty-state')).getByTestId('tools-empty-clear-btn'));
 

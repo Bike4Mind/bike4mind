@@ -2,7 +2,7 @@ import type { IUser } from '../types/entities/UserTypes';
 // SafeUser is inferred from the Zod response schema (RFC #483) so the serializer's
 // output type and the parsed response contract can never drift apart. It is exported
 // to the @bike4mind/common barrel from schemas/user, not re-exported here.
-import type { SafeUser } from '../schemas/user';
+import { SELF_VIEW_PASSTHROUGH_FIELDS, type SafeUser } from '../schemas/user';
 import { canAdministerOrganization, type AdministrableOrg, type OrgAuthorityActor } from '../constants/organization';
 
 /**
@@ -58,6 +58,8 @@ export const USER_SECRET_FIELDS = [
   'paymentRiskEventAt',
   'riskReviewAutoCheckedAt',
   'riskEvidence',
+  // Automated holds carry the abuse evidence in `reason`; the user sees the accountState message instead.
+  'interventionHolds',
   'freeCreditClaimEmail',
   'freeQuestStartId',
   'grantPackageId',
@@ -187,12 +189,19 @@ export const ADMIN_ONLY_USER_FIELDS = [
 export type AdminOnlyUserField = (typeof ADMIN_ONLY_USER_FIELDS)[number];
 
 /**
+ * The fields `redactUserSecretsForSelf` copies as-is: those classified as self-visible
+ * (SELF_VIEW_PASSTHROUGH_FIELDS in schemas/user.ts, which the compiler holds to IUser), plus the
+ * `_id` that toJSON() emits.
+ */
+const SELF_VIEW_COPIED_FIELDS = [...Object.keys(SELF_VIEW_PASSTHROUGH_FIELDS), '_id'];
+
+/**
  * Redact secrets from the caller's OWN full profile (self-view endpoints such as
- * users/[id] self and users/[id]/update). Unlike `toSafeUser` (an allowlist for
- * OTHER users), this keeps the broad self-profile but strips secrets: whole-drop
- * for pure-secret fields, and SUBFIELD redaction for the integration objects so
- * the settings UI keeps the non-secret status it depends on (connection state,
- * workspace/site name, baseUrl, etc.). Returns a plain object for serialization.
+ * users/[id] self and users/[id]/update). Like `toSafeUser` it is an allowlist, but a
+ * broad one: every field classified as self-visible, plus SUBFIELD allowlists for the
+ * integration objects so the settings UI keeps the non-secret status it depends on
+ * (connection state, workspace/site name, baseUrl, etc.). Returns a plain object for
+ * serialization.
  *
  * Keep-lists per integration confirmed with product.
  */
@@ -211,14 +220,12 @@ export function redactUserSecretsForSelf(
     typeof (input as { toJSON?: unknown }).toJSON === 'function'
       ? (input as { toJSON: () => Partial<IUser> }).toJSON()
       : input;
-  const u: Record<string, unknown> = { ...user };
-
-  // Drop EVERY secret field first, then rebuild the non-secret status subset for the
-  // integration objects below. Dropping all up front (rather than skipping the
-  // integrations) guarantees that a secret added to USER_SECRET_FIELDS without a
-  // matching rebuild block is dropped WHOLE -- a visible missing-status bug, never a
-  // silent secret exposure. USER_SUBFIELD_REDACTED_FIELDS names the ones that ARE rebuilt.
-  for (const f of USER_SECRET_FIELDS) delete u[f];
+  // Allowlist: a field nobody classified never leaves here. The integration objects below are
+  // rebuilt from their own allowlists.
+  const u: Record<string, unknown> = {};
+  for (const f of SELF_VIEW_COPIED_FIELDS) {
+    if (Object.hasOwn(user, f)) u[f] = (user as Record<string, unknown>)[f];
+  }
 
   // MFA -> keep enrollment status, drop the secret + backup codes.
   if (user.mfa) {

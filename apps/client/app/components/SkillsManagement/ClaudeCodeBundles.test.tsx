@@ -8,12 +8,16 @@ import ClaudeCodeBundles from './ClaudeCodeBundles';
 const h = vi.hoisted(() => ({
   view: { bundles: [] as object[], listings: [] as object[], canEdit: false } as object | undefined,
   loadFailed: false,
+  owners: [] as unknown[],
   save: vi.fn(),
   remove: vi.fn(),
   removeError: undefined as Error | undefined,
 }));
 vi.mock('@client/app/hooks/data/skillMarket', () => ({
-  useSkillBundles: () => ({ data: h.loadFailed ? undefined : h.view, isPending: false, isError: h.loadFailed }),
+  useSkillBundles: (owner: unknown) => {
+    h.owners.push(owner);
+    return { data: h.loadFailed ? undefined : h.view, isPending: false, isError: h.loadFailed };
+  },
   useSaveSkillBundle: () => ({ mutate: h.save, isPending: false }),
   useDeleteSkillBundle: () => ({
     mutate: h.remove,
@@ -50,6 +54,21 @@ beforeEach(() => {
   h.removeError = undefined;
   h.view = { bundles: [bundle], listings, canEdit: false };
   vi.spyOn(window, 'confirm').mockReturnValue(true);
+});
+
+describe('ClaudeCodeBundles for a Space', () => {
+  it('loads the Space bundles and shows the Space marketplace install command', () => {
+    h.owners = [];
+    render(
+      <CssVarsProvider theme={appTheme}>
+        <ClaudeCodeBundles spaceId="sp1" marketplace="b4m-space-sp1" />
+      </CssVarsProvider>
+    );
+    expect(h.owners).toContainEqual({ spaceId: 'sp1' });
+    expect(screen.getByTestId('skill-claude-code-bundle-install')).toHaveTextContent(
+      '/plugin install starter-pack@b4m-space-sp1'
+    );
+  });
 });
 
 describe('ClaudeCodeBundles', () => {

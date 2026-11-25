@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { DATA_LAKES, type IDataLakeAccessGrantDocument, type IDataLakeDocument } from '@bike4mind/common';
 import { grantLakeAccess, revokeLakeAccess } from './manageLakeGrant';
 import type { ManageActor } from './manageRule';
+import { Logger } from '@bike4mind/observability';
 
 const lake = (over: Partial<IDataLakeDocument> = {}): IDataLakeDocument =>
   ({ id: 'lake1', createdByUserId: 'creator', organizationId: 'org1', ...over }) as IDataLakeDocument;
@@ -600,20 +601,20 @@ describe('lake-document stamp', () => {
     expect(record).toHaveBeenCalled();
   });
 
-  it('warns on revoke too, falling back to console when no logger is wired', async () => {
+  it('warns on revoke too, falling back to the global Logger when no logger is wired', async () => {
     const { adapters, lakeArgs, updateLake, record } = makeAdapters({
       existing: grantRow({ principalId: 'u1', role: 'reader' }),
     });
     updateLake.mockResolvedValueOnce(null as never);
-    const consoleWarn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const loggerWarn = vi.spyOn(Logger, 'warn').mockImplementation(() => {});
     try {
       await revokeLakeAccess(owner, ...lakeArgs, revokeInput, adapters);
-      expect(consoleWarn).toHaveBeenCalledWith(expect.stringContaining('not found for the actor stamp'), {
+      expect(loggerWarn).toHaveBeenCalledWith(expect.stringContaining('not found for the actor stamp'), {
         dataLakeId: 'lake1',
       });
       expect(record).toHaveBeenCalled();
     } finally {
-      consoleWarn.mockRestore();
+      loggerWarn.mockRestore();
     }
   });
 });

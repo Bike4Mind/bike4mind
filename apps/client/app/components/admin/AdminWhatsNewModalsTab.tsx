@@ -43,7 +43,7 @@ import CodeIcon from '@mui/icons-material/Code';
 import PlayArrowIcon from '@mui/icons-material/PlayArrow';
 import SaveIcon from '@mui/icons-material/Save';
 import { IModalDocument } from '@bike4mind/common';
-import { useLiveOpsTriageEnv } from '@client/app/hooks/data/admin';
+import { useDeploymentInfo } from '@client/app/hooks/data/admin';
 import {
   useGetWhatsNewModals,
   useDeleteWhatsNewModal,
@@ -107,6 +107,7 @@ import { useMutation } from '@tanstack/react-query';
 import { api } from '@client/app/contexts/ApiContext';
 import { getErrorMessage } from '@client/app/utils/error';
 import ContextHelpButton from '@client/app/components/help/ContextHelpButton';
+import { OptionalDateInput } from '@client/app/components/common/OptionalDateInput';
 import type { AdminStatusTone } from '@client/app/utils/themes/admin';
 import {
   AdminPageHeader,
@@ -134,6 +135,12 @@ function getMaxExpiryDate(): string {
   const date = new Date();
   date.setFullYear(date.getFullYear() + MAX_EXPIRY_YEARS);
   return date.toISOString().split('T')[0];
+}
+
+const DEFAULT_EXPIRY_DAYS = 30;
+
+function defaultExpiryDate(): string {
+  return getLocalDate(DEFAULT_EXPIRY_DAYS);
 }
 
 interface ExpiryStatus {
@@ -286,9 +293,9 @@ function WhatsNewErrorFallback() {
 export default function AdminWhatsNewModalsTab() {
   // isForkProduction distinguishes a fork's production stage from the source deployment. The
   // highlights card stays on the main environments only (source prod, dev, PR previews).
-  const { data: env } = useLiveOpsTriageEnv();
-  const stage = env?.stage || 'unknown';
-  const isForkProduction = env?.isForkProduction ?? false;
+  const { data: deployment } = useDeploymentInfo();
+  const stage = deployment?.stage || 'unknown';
+  const isForkProduction = deployment?.isForkProduction ?? false;
 
   const [createOpen, setCreateOpen] = useState(false);
   const { refetch, isFetching } = useGetWhatsNewModals();
@@ -334,7 +341,7 @@ export default function AdminWhatsNewModalsTab() {
         <ModalsSection createOpen={createOpen} onCreateOpenChange={setCreateOpen} />
 
         {/* Weekly Highlights to Slack - only for main environments (production, dev, or PR previews), not forks */}
-        {shouldShowWeeklyHighlights(env) && <WeeklyHighlightsSection />}
+        {shouldShowWeeklyHighlights(deployment) && <WeeklyHighlightsSection />}
       </Stack>
     </ErrorBoundary>
   );
@@ -615,14 +622,17 @@ function ModalsSection({
                     (Optional - defaults to 30 days)
                   </Typography>
                 </FormLabel>
-                <Input
-                  type="date"
+                <OptionalDateInput
                   value={newModalData.endDate}
-                  onChange={e => setNewModalData(prev => ({ ...prev, endDate: e.target.value }))}
-                  slotProps={{
-                    input: { min: getLocalDate(), max: getMaxExpiryDate() },
-                  }}
-                  data-testid="whats-new-create-enddate-input"
+                  onChange={endDate => setNewModalData(prev => ({ ...prev, endDate }))}
+                  emptyLabel="Defaults to 30 days"
+                  setLabel="Set an expiry date"
+                  clearLabel="Remove expiry date"
+                  initialDate={defaultExpiryDate}
+                  min={getLocalDate()}
+                  max={getMaxExpiryDate()}
+                  aria-label="Expiry Date"
+                  testId="whats-new-create-enddate-input"
                 />
               </FormControl>
               <Stack direction="row" spacing={1} justifyContent="flex-end" sx={{ mt: 1 }}>
@@ -884,18 +894,19 @@ function ModalsSection({
                       (Optional)
                     </Typography>
                   </FormLabel>
-                  <Input
-                    type="date"
+                  <OptionalDateInput
                     value={isVariantModal ? editEndDate : editModalData.endDate}
-                    onChange={e =>
-                      isVariantModal
-                        ? setEditEndDate(e.target.value)
-                        : setEditModalData(prev => ({ ...prev, endDate: e.target.value }))
+                    onChange={endDate =>
+                      isVariantModal ? setEditEndDate(endDate) : setEditModalData(prev => ({ ...prev, endDate }))
                     }
-                    slotProps={{
-                      input: { min: getLocalDate(), max: getMaxExpiryDate() },
-                    }}
-                    data-testid="whats-new-edit-enddate-input"
+                    emptyLabel="No end date"
+                    setLabel="Set an expiry date"
+                    clearLabel="Remove expiry date"
+                    initialDate={defaultExpiryDate}
+                    min={getLocalDate()}
+                    max={getMaxExpiryDate()}
+                    aria-label="Expiry Date"
+                    testId="whats-new-edit-enddate-input"
                   />
                 </FormControl>
                 <Stack direction="row" spacing={1} justifyContent="flex-end" sx={{ mt: 1 }}>
@@ -1108,7 +1119,7 @@ function WeeklyHighlightsSection() {
     }
   }, [configData]);
 
-  // Computed dirty tracking (same pattern as Daily Gen and LiveOps)
+  // Computed dirty tracking (same pattern as Daily Gen)
   const isDirty = configData
     ? JSON.stringify({ enabled, slackChannelId, slackTeamId, llmModel, promptTemplate, attachMarkdownFile }) !==
       JSON.stringify({

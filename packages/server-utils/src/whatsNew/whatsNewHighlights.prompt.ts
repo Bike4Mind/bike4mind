@@ -16,7 +16,6 @@ const ALLOWED_TEMPLATE_VARIABLES = Object.keys(HIGHLIGHTS_TEMPLATE_VARIABLES);
 
 /**
  * Patterns that indicate potential prompt injection attempts
- * Reused from liveopsTriagePrompt.ts for consistency
  */
 const INJECTION_PATTERNS = [
   /ignore\s+(all\s+)?(previous|above|prior)\s+instructions?/i,

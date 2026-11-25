@@ -4,7 +4,17 @@
  * Unlike providerSpendFetchers.ts (daily billed cost), these report tokens per model in hourly
  * buckets within minutes of the call, so a spend signal can be derived the same hour. A non-ok
  * HTTP response throws so the caller can tell a failed read from an idle hour.
+ *
+ * With a scope (providerSpendScope.ts) the report is also grouped by the scoped dimensions and every
+ * row is tagged `inScope`, so one read yields both the scoped and the organization-wide usage.
  */
+
+import {
+  anthropicRowInScope,
+  openAIRowInScope,
+  type AnthropicSpendScope,
+  type OpenAISpendScope,
+} from './providerSpendScope';
 
 /** Per-request timeout for provider API calls (ms). */
 const FETCH_TIMEOUT_MS = 30_000;
@@ -20,6 +30,8 @@ export interface ProviderHourlyUsage {
   outputTokens: number;
   cacheReadTokens: number;
   cacheWriteTokens: number;
+  /** False for usage outside the configured scope; always true without one. */
+  inScope: boolean;
 }
 
 // -- Anthropic Admin API ------------------------------------------------
@@ -31,7 +43,8 @@ export interface ProviderHourlyUsage {
 export async function fetchAnthropicHourlyUsage(
   adminApiKey: string,
   startIso: string,
-  endIso: string
+  endIso: string,
+  scope?: AnthropicSpendScope
 ): Promise<ProviderHourlyUsage[]> {
   const rows: ProviderHourlyUsage[] = [];
   let page: string | undefined;
@@ -44,6 +57,8 @@ export async function fetchAnthropicHourlyUsage(
     url.searchParams.set('ending_at', endIso);
     url.searchParams.set('bucket_width', '1h');
     url.searchParams.append('group_by[]', 'model');
+    if (scope?.workspaceIds) url.searchParams.append('group_by[]', 'workspace_id');
+    if (scope?.apiKeyIds) url.searchParams.append('group_by[]', 'api_key_id');
     url.searchParams.set('limit', '168');
     if (page) url.searchParams.set('page', page);
 
@@ -73,6 +88,7 @@ export async function fetchAnthropicHourlyUsage(
           cacheWriteTokens:
             count(item.cache_creation?.ephemeral_5m_input_tokens) +
             count(item.cache_creation?.ephemeral_1h_input_tokens),
+          inScope: anthropicRowInScope(scope, item),
         });
       }
     }
@@ -85,6 +101,8 @@ export async function fetchAnthropicHourlyUsage(
 
 interface AnthropicUsageItem {
   model?: unknown;
+  workspace_id?: unknown;
+  api_key_id?: unknown;
   uncached_input_tokens?: unknown;
   cache_creation?: { ephemeral_5m_input_tokens?: unknown; ephemeral_1h_input_tokens?: unknown };
   cache_read_input_tokens?: unknown;
@@ -106,7 +124,8 @@ interface AnthropicUsageResponse {
 export async function fetchOpenAIHourlyUsage(
   adminApiKey: string,
   startUnix: number,
-  endUnix: number
+  endUnix: number,
+  scope?: OpenAISpendScope
 ): Promise<ProviderHourlyUsage[]> {
   const rows: ProviderHourlyUsage[] = [];
   let page: string | undefined;
@@ -119,6 +138,8 @@ export async function fetchOpenAIHourlyUsage(
     url.searchParams.set('end_time', String(endUnix));
     url.searchParams.set('bucket_width', '1h');
     url.searchParams.append('group_by[]', 'model');
+    if (scope?.projectIds) url.searchParams.append('group_by[]', 'project_id');
+    if (scope?.apiKeyIds) url.searchParams.append('group_by[]', 'api_key_id');
     url.searchParams.set('limit', '168');
     if (page) url.searchParams.set('page', page);
 
@@ -145,6 +166,7 @@ export async function fetchOpenAIHourlyUsage(
           outputTokens: count(item.output_tokens),
           cacheReadTokens: cached,
           cacheWriteTokens: 0,
+          inScope: openAIRowInScope(scope, item),
         });
       }
     }
@@ -157,6 +179,8 @@ export async function fetchOpenAIHourlyUsage(
 
 interface OpenAIUsageItem {
   model?: unknown;
+  project_id?: unknown;
+  api_key_id?: unknown;
   input_tokens?: unknown;
   input_cached_tokens?: unknown;
   output_tokens?: unknown;

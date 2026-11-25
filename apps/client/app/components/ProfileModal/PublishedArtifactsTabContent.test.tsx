@@ -136,6 +136,22 @@ const publishRateLimited = () => {
   return error;
 };
 
+/**
+ * Types into the search box and runs out the 300ms input debounce on fake timers. The extra
+ * advance lets react-query's setTimeout-batched notifications for the new fetch land before the
+ * clock goes back to real, or they would be dropped with the fake timer queue.
+ */
+const searchFor = async (value: string) => {
+  vi.useFakeTimers();
+  try {
+    fireEvent.change(screen.getByTestId('published-artifacts-search'), { target: { value } });
+    await act(() => vi.advanceTimersByTimeAsync(300));
+    await act(() => vi.advanceTimersByTimeAsync(50));
+  } finally {
+    vi.useRealTimers();
+  }
+};
+
 beforeEach(() => {
   // The view preference is a module-level store backed by localStorage, so it outlives a test unless reset.
   localStorage.clear();
@@ -399,7 +415,7 @@ describe('PublishedArtifactsTabContent - search, facets and paging', () => {
     renderTab();
     await screen.findByTestId('published-artifact-pub-1');
 
-    fireEvent.change(screen.getByTestId('published-artifacts-search'), { target: { value: 'northwind' } });
+    await searchFor('northwind');
 
     await waitFor(() => expect(lastQuery().q).toBe('northwind'));
   });
@@ -470,7 +486,7 @@ describe('PublishedArtifactsTabContent - search, facets and paging', () => {
     await screen.findByTestId('published-artifact-pub-1');
 
     mockList.mockResolvedValue(page([]));
-    fireEvent.change(screen.getByTestId('published-artifacts-search'), { target: { value: 'nothing matches' } });
+    await searchFor('nothing matches');
 
     expect(await screen.findByTestId('published-artifacts-no-matches')).not.toBeNull();
     expect(screen.queryByTestId('published-artifacts-empty')).toBeNull();
@@ -1396,7 +1412,7 @@ describe('PublishedArtifactsTabContent - list / grid view', () => {
     await screen.findByTestId('published-artifact-pub-1');
     goGrid();
 
-    fireEvent.change(screen.getByTestId('published-artifacts-search'), { target: { value: 'planning' } });
+    await searchFor('planning');
     await waitFor(() => expect(lastQuery().q).toBe('planning'));
 
     fireEvent.click(screen.getByTestId('published-artifacts-facet-kind-bundle'));
@@ -1905,7 +1921,7 @@ describe.each(['list', 'grid'] as const)('PublishedArtifactsTabContent - focus a
   it('focuses the search input when the only item in a filtered view is deleted', async () => {
     await renderRows([first]);
     const search = screen.getByTestId('published-artifacts-search');
-    fireEvent.change(search, { target: { value: 'first' } });
+    await searchFor('first');
     await waitFor(() => expect(mockList.mock.calls.some(c => (c[0] as { q?: string }).q === 'first')).toBe(true));
     mockList.mockResolvedValue(page([], { total: 0 }));
 
@@ -2000,7 +2016,7 @@ describe('PublishedArtifactsTabContent - helper text contrast', () => {
     renderTab();
     await screen.findByTestId('published-artifact-pub-1');
     mockList.mockResolvedValue(page([]));
-    fireEvent.change(screen.getByTestId('published-artifacts-search'), { target: { value: 'nothing matches' } });
+    await searchFor('nothing matches');
     expectTokenDimmed(await screen.findByTestId('published-artifacts-no-matches'), 'secondary');
   });
 });

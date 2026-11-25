@@ -98,8 +98,7 @@ describe('QuestBoard', () => {
     const badge = note.querySelector<HTMLButtonElement>('[data-testid="orchestrator-pr-indicator"]')!;
     expect(badge.closest('button')?.parentElement?.closest('button')).toBeNull();
     await act(async () => {
-      badge.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
-      badge.click();
+      badge.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', shiftKey: true, bubbles: true }));
     });
     expect(onOpenPr).toHaveBeenCalledWith('a');
     expect(onSelect).not.toHaveBeenCalled();
@@ -114,7 +113,11 @@ describe('QuestBoard', () => {
     await renderTavern(agents);
     await act(async () => el('orchestrator-tavern-quest-more').click());
     const item = el(`orchestrator-tavern-quest-more-item-a${agents.length - 1}`);
-    await act(async () => item.querySelector<HTMLButtonElement>('[data-testid="orchestrator-pr-indicator"]')!.click());
+    await act(async () =>
+      item
+        .querySelector<HTMLButtonElement>('[data-testid="orchestrator-pr-indicator"]')!
+        .dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, shiftKey: true }))
+    );
     expect(onOpenPr).toHaveBeenCalledWith(`a${agents.length - 1}`);
     expect(onSelect).not.toHaveBeenCalled();
   });

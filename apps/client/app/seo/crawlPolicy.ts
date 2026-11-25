@@ -160,6 +160,19 @@ export function buildSitemapPaths(overlays: readonly PremiumRouteIndexing[]): st
   );
 }
 
+/**
+ * Whether a build for this SST stage publishes the crawl policy above. Production does,
+ * and so does a build with no stage at all (self-host, a plain `next build`), which keeps
+ * the operator's own host crawlable. Every other stage is a preview, staging or personal
+ * deploy whose robots.txt disallows everything.
+ *
+ * Must stay in step with noindexResponseInjection in infra/routerFunctionCode.ts, which
+ * sets `X-Robots-Tag: noindex, nofollow` on the same stages.
+ */
+export function isCrawlableStage(stage: string): boolean {
+  return stage === '' || stage === 'production';
+}
+
 /** Trailing slashes would double up when a path is appended. */
 export function normalizeOrigin(canonicalOrigin: string): string {
   return canonicalOrigin.replace(/\/+$/, '');

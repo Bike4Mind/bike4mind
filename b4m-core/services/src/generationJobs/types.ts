@@ -5,6 +5,7 @@ import type {
   IGenerationJobDocument,
   IGenerationJobDocumentOf,
   IGenerationJobRepository,
+  RunBudgetClaim,
 } from '@bike4mind/common';
 import type { Logger } from '@bike4mind/observability';
 
@@ -86,3 +87,16 @@ export type CancelRequestOutcome =
   | { status: 'requested'; job: IGenerationJobDocument }
   | { status: 'not_cancellable'; job: IGenerationJobDocument }
   | { status: 'unchanged'; job: IGenerationJobDocument | null };
+
+/**
+ * A completion run's budget, injected because services cannot reach the run store (it lives in
+ * @bike4mind/server-utils' runBudgetClaim and @bike4mind/database). Wired in server-utils' generationJobs/wiring.
+ */
+export type RunBudgetAdapters = {
+  /** The all-or-nothing claim: undefined for an unbudgeted run; throws a 422 `run_budget_exhausted`. */
+  claim(runId: string, credits: number): Promise<RunBudgetClaim | undefined>;
+  /** Swaps a claim for what its hold charged: 0 on a release, the charge on settlement. */
+  release(claim: RunBudgetClaim, chargedCredits: number): Promise<void>;
+  /** Runs `work` in one database transaction, so a claim never outlives a hold that rolled back. */
+  transact<T>(work: () => Promise<T>): Promise<T>;
+};

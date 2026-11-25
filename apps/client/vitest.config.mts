@@ -8,8 +8,8 @@ import path from 'path';
 // for every vitest package (safe: vitest 4 accepts vite ^6 || ^7 || ^8). This
 // vite devDep and the plugin-react v6 bump are coupled — keep both or revert both.
 import react from '@vitejs/plugin-react';
-import tsconfigPaths from 'vite-tsconfig-paths';
 import { barrelImportsPlugin } from './vitest.barrelImports';
+import { SLOW_TEST_MS, SlowTestReporter } from './vitest.slowTests';
 
 const INTEGRATION_LANE = process.env.CLIENT_TEST_LANE === 'integration';
 // `test:repo`: the `*.repo.test.ts` files, which read the repo far outside this package (`git grep`
@@ -61,6 +61,25 @@ const NODE_PROJECT_INCLUDE = NODE_TEST_ROOTS.flatMap(root =>
   (LANE_INCLUDE ?? VITEST_DEFAULT_INCLUDE).map(glob => `${root}/${glob}`)
 );
 
+// Unit lane only: test files share their worker instead of each getting a fresh one. Per-file
+// startup (module graph, jsdom, setup) was about two thirds of a CI shard; reuse keeps node's own
+// module cache and the worker warm across files. vitest.setup.reuse.ts hands each file a clean
+// slate in place of the fresh worker. CLIENT_TEST_ISOLATE=1 brings isolation back, to tell an
+// order-dependent test from a real failure. The integration lane stays isolated: one mongod a file.
+const REUSE_WORKERS = !INTEGRATION_LANE && !REPO_LANE && process.env.CLIENT_TEST_ISOLATE !== '1';
+
+// Files that cannot share a worker. Each gets a fresh worker of its own, under the node environment.
+// - creditPreflight.selfhost pins process state before a module node loads only once per process
+//   (the settings schema in @bike4mind/common reads B4M_SELF_HOST as it loads), so it would see, or
+//   leave behind, another file's copy.
+// - remarkPlugins times regexes that are linear only when V8 optimizes them. V8 stops optimizing
+//   new regexps once a process has compiled 1MB of regexp code and holds 16MB of executable code
+//   (TooMuchRegExpCode in V8's regexp.cc), and a reused jsdom worker passes both within a few
+//   component files. No file causes it, so there is nothing to restore. Pure string code: no DOM.
+const ISOLATED_NODE_TESTS = REUSE_WORKERS
+  ? ['server/utils/creditPreflight.selfhost.test.ts', 'app/utils/remarkPlugins.test.ts']
+  : [];
+
 const LANE_EXCLUDE = [
   '**/node_modules/**',
   'e2e',
@@ -76,16 +95,19 @@ const LANE_EXCLUDE = [
 const projectTest = {
   ...sharedTest,
   globals: true,
-  setupFiles: [path.resolve(__dirname, 'vitest.setup.ts')],
-  // Raise the 15s shared floor to 30s. Load-bearing for the integration lane, which holds ~60
-  // real-Mongo suites (createMongoServer/createMongoReplSet): their first write per worker pays an
-  // unavoidable, legitimate cold-start: Mongoose builds every model's indexes on connect (needed
-  // for correctness - the rate-limit suite depends on one, so autoIndex CANNOT be disabled) plus
-  // first-collection creation. Measured at 16-22s under that lane's file parallelism, so 15s (a
-  // unit-test budget) fails 4-ish suites at random - the exact flake. This is not a hang mask: it
-  // is the right budget for integration tests. Attempts to shrink the cold-start instead were
-  // dead ends - autoIndex:false breaks index-dependent suites, and a single shared mongod
-  // serializes every worker's index builds and made it markedly worse.
+  // Order is load-bearing: the reuse reset must run before anything the file's own setup installs.
+  setupFiles: [
+    ...(REUSE_WORKERS ? [path.resolve(__dirname, 'vitest.setup.reuse.ts')] : []),
+    path.resolve(__dirname, 'vitest.setup.ts'),
+    ...(INTEGRATION_LANE ? [path.resolve(__dirname, 'vitest.setup.integration.ts')] : []),
+  ],
+  // forks, not threads: a worker thread ignores a test's process.env.TZ change.
+  ...(REUSE_WORKERS ? { isolate: false, pool: 'forks' as const } : {}),
+  // Raise the 15s shared floor to 30s. Load-bearing for the integration lane, whose real-Mongo
+  // suites (createMongoServer/createMongoReplSet) pay a mongod cold start that a unit-test budget
+  // does not cover under that lane's file parallelism. This is not a hang mask: it is the right
+  // budget for integration tests. vitest.setup.integration.ts keeps that cold start small by
+  // building collections and indexes only for the models a suite asks for.
   testTimeout: 30000,
   // Integration-lane only: these suites exercise real concurrency (compare-and-set races,
   // multi-document transactions) against a real mongod under CI's worker-capped, oversubscribed
@@ -109,8 +131,9 @@ const projectTest = {
 // app bundle, but vitest would load all ~70 Joy components (~0.5s) for every test that renders one,
 // so the plugin does the same rewrite here. See vitest.barrelImports.ts.
 const projectVite = () => ({
-  plugins: [react(), tsconfigPaths(), barrelImportsPlugin(['@mui/joy'])],
+  plugins: [react(), barrelImportsPlugin(['@mui/joy'])],
   resolve: {
+    tsconfigPaths: true,
     alias: {
       '@server': path.resolve(__dirname, 'server'),
       '@client': path.resolve(__dirname, '.'),
@@ -124,9 +147,6 @@ const projectVite = () => ({
     global: 'globalThis',
     'process.env': {},
   },
-  optimizeDeps: {
-    include: ['uuid'],
-  },
 });
 
 export default defineConfig({
@@ -138,6 +158,14 @@ export default defineConfig({
     // below costs no file parallelism, and VITEST_MAX_WORKERS still caps the whole run rather
     // than being handed out once per project.
     ...sharedTest,
+    // Unit lane only: the integration and repo lanes are slow by design. Naming reporters replaces
+    // vitest's defaults, so the GitHub one it adds on its own in Actions is restated here.
+    ...(INTEGRATION_LANE || REPO_LANE
+      ? {}
+      : {
+          slowTestThreshold: SLOW_TEST_MS,
+          reporters: ['default', ...(process.env.GITHUB_ACTIONS ? ['github-actions'] : []), new SlowTestReporter()],
+        }),
     projects: [
       {
         ...projectVite(),
@@ -153,9 +181,28 @@ export default defineConfig({
             ...(INTEGRATION_LANE ? [] : [path.resolve(__dirname, 'vitest.setup.unitMongoose.ts')]),
           ],
           include: NODE_PROJECT_INCLUDE,
-          exclude: LANE_EXCLUDE,
+          exclude: [...LANE_EXCLUDE, ...ISOLATED_NODE_TESTS],
         },
       },
+      ...(ISOLATED_NODE_TESTS.length
+        ? [
+            {
+              ...projectVite(),
+              test: {
+                ...projectTest,
+                name: 'node-isolated',
+                environment: 'node',
+                isolate: true,
+                setupFiles: [
+                  path.resolve(__dirname, 'vitest.setup.ts'),
+                  path.resolve(__dirname, 'vitest.setup.unitMongoose.ts'),
+                ],
+                include: ISOLATED_NODE_TESTS,
+                exclude: LANE_EXCLUDE,
+              },
+            },
+          ]
+        : []),
       {
         ...projectVite(),
         test: {
@@ -165,8 +212,8 @@ export default defineConfig({
           // Left unset in the unit lane on purpose: vitest's own default include applies, so this
           // project is the catch-all and no test file can match zero projects.
           ...(LANE_INCLUDE ? { include: LANE_INCLUDE } : {}),
-          // Excludes exactly what the node project includes - same list, not a restatement of it.
-          exclude: [...LANE_EXCLUDE, ...NODE_PROJECT_INCLUDE],
+          // Excludes exactly what the node projects include - same lists, not a restatement of them.
+          exclude: [...LANE_EXCLUDE, ...NODE_PROJECT_INCLUDE, ...ISOLATED_NODE_TESTS],
         },
       },
     ],

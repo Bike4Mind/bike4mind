@@ -1,11 +1,11 @@
 // TODO: copy of the client package config, duplicated here to avoid a circular
 // dependency. Extract into a dedicated config package.
 
-import * as dotenv from 'dotenv';
+import { existsSync } from 'fs';
 import { initializeConfig } from '@bike4mind/utils';
 import { Resource } from 'sst';
 
-dotenv.config();
+if (existsSync('.env')) process.loadEnvFile('.env');
 
 const Config = initializeConfig({
   MONGODB_URI: Resource.MONGODB_URI.value,
