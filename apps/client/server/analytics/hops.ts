@@ -212,7 +212,7 @@ export async function redeemHop(opts: {
       ...(opts.linkVisit && { sessionId: opts.visitId }),
     });
   } catch (err) {
-    logger.warn('hop redeem failed', { error: err });
+    logger.warn('[b4m-analytics] hop redeem failed', { error: err });
     return { redeemed: false, reason: 'error' };
   }
   if (!hop) return { redeemed: false, reason: 'refused' };
@@ -284,7 +284,7 @@ export async function bindSignupHop(
     if (!hop?.redeemedAt) return undefined;
     return { srcProductId: hop.srcProductId, hopId: hop.hopId, redeemedAt: new Date(hop.redeemedAt) };
   } catch (err) {
-    logger.warn('signup hop not bound', { error: err });
+    logger.warn('[b4m-analytics] signup hop not bound', { error: err });
     return undefined;
   }
 }

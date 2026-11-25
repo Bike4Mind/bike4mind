@@ -80,7 +80,7 @@ export async function recordAccountLane(user: NewAccount): Promise<AccountLane> 
       await userRepository.update({ id: user.id, ...laneFlagsToStore(lane) });
     }
   } catch (err) {
-    logger.warn('account lane not persisted', { error: err });
+    logger.warn('[b4m-analytics] account lane not persisted', { error: err });
   }
   return lane;
 }
@@ -139,7 +139,7 @@ export async function recordSignupAcquisition(opts: {
     }
     return { ...(acquisition && { acquisition }), ...lane };
   } catch (err) {
-    logger.warn('signup acquisition not recorded', { error: err });
+    logger.warn('[b4m-analytics] signup acquisition not recorded', { error: err });
     return lane;
   }
 }
@@ -314,7 +314,7 @@ export async function recordFirstValue(opts: {
     ]);
     return emitted;
   } catch (err) {
-    logger.warn('first_value not recorded', { error: err });
+    logger.warn('[b4m-analytics] first_value not recorded', { error: err });
     return false;
   }
 }

@@ -122,8 +122,8 @@ export async function createUniqueOAuthUser(params: {
       const user = await User.create(buildDoc(candidate));
       if (retry > 0) {
         // Strip control chars before logging: baseUsername/candidate derive from
-        // the provider displayName (attacker-controllable) and this is raw console
-        // output, so a CRLF/ANSI-laden display name could forge adjacent log lines.
+        // the provider displayName (attacker-controllable); the strip keeps the pretty
+        // local log format, which prints values raw, from forging adjacent lines.
         const safe = (s: string) => s.replace(/[\r\n\t]/g, ' ');
         logger.info('[oauth create] requested username was taken; created a suffixed one', {
           requestedUsername: safe(baseUsername),

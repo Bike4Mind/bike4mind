@@ -1,5 +1,5 @@
-import { Logger } from '@bike4mind/observability';
 // @vitest-environment node
+import { Logger } from '@bike4mind/observability';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const send = vi.hoisted(() => vi.fn());

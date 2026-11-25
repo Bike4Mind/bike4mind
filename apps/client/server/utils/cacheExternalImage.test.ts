@@ -57,6 +57,20 @@ describe('cacheExternalImage', () => {
       expect(mockS3Send).not.toHaveBeenCalled();
     });
 
+    it('logs a blocked URL by host only, never its path or query', async () => {
+      const warn = vi.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
+      mockValidateTargetUrl.mockResolvedValue({ valid: false, error: 'URL points to a private or internal network' });
+
+      await cacheExternalImage('http://169.254.169.254/latest/meta-data/?token=secret-q');
+
+      expect(warn).toHaveBeenCalledWith(
+        expect.stringContaining('Blocked'),
+        expect.objectContaining({ urlHost: '169.254.169.254' })
+      );
+      expect(JSON.stringify(warn.mock.calls)).not.toMatch(/meta-data|secret-q/);
+      warn.mockRestore();
+    });
+
     it('blocks localhost URLs and returns original URL without calling S3', async () => {
       const localhostUrl = 'http://localhost:3000/secret';
       mockValidateTargetUrl.mockResolvedValue({

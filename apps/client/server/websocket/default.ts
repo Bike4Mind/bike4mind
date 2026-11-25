@@ -33,7 +33,6 @@ export const handler: APIGatewayProxyWebsocketHandlerV2 = async (event, context)
 
   logger.warn('Unrouted websocket message', {
     action: parsedAction,
-    bodyPreview: (event.body ?? '').substring(0, 200),
     connectionId: event.requestContext?.connectionId,
     routeKey: event.requestContext?.routeKey,
   });

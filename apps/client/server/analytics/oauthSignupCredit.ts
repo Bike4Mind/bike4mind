@@ -96,7 +96,7 @@ export async function creditOAuthSignup(opts: {
       account: user,
     });
   } catch (err) {
-    logger.warn('oauth signup credit not recorded', { error: err });
+    logger.warn('[b4m-analytics] oauth signup credit not recorded', { error: err });
     return [];
   }
 }

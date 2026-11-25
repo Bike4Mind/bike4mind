@@ -61,6 +61,6 @@ describe('requireOriginVerify', () => {
       expect.stringContaining('Blocked direct-origin request'),
       expect.objectContaining({ method: 'GET', path: '/api/publish/serve/a/[redacted]/index.html' })
     );
-    expect(String(warn.mock.calls)).not.toContain(token);
+    expect(JSON.stringify(warn.mock.calls)).not.toContain(token);
   });
 });

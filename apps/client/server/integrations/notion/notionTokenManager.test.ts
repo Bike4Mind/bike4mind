@@ -282,13 +282,16 @@ describe('NotionTokenManager', () => {
       });
       mockFetch.mockResolvedValue({ ok: false, status: 403 });
 
-      await expect(NotionTokenManager.getValidTokens('user-123')).rejects.toThrow(NotionReconnectRequiredError);
+      try {
+        await expect(NotionTokenManager.getValidTokens('user-123')).rejects.toThrow(NotionReconnectRequiredError);
 
-      expect(info).toHaveBeenCalledWith(expect.stringContaining('revoked'), { userId: 'user-123' });
-      expect(JSON.stringify(info.mock.calls)).not.toContain('revoked-token');
-      expect(consoleLog).not.toHaveBeenCalled();
-      info.mockRestore();
-      consoleLog.mockRestore();
+        expect(info).toHaveBeenCalledWith(expect.stringContaining('revoked'), { userId: 'user-123' });
+        expect(JSON.stringify(info.mock.calls)).not.toContain('revoked-token');
+        expect(consoleLog).not.toHaveBeenCalled();
+      } finally {
+        info.mockRestore();
+        consoleLog.mockRestore();
+      }
     });
 
     it('should validate token against Notion API', async () => {

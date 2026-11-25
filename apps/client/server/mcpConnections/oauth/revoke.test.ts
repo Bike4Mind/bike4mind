@@ -62,14 +62,14 @@ describe('revokeConnectionGrant', () => {
       revokeConnectionGrant(connection({ refreshTokenEnc: 'bad:rt' }), {} as never)
     ).resolves.toBeUndefined();
     expect(h.revokeToken).not.toHaveBeenCalled();
-    expect(vi.mocked(Logger.prototype.warn).mock.calls.flat().join(' ')).not.toContain('bad:rt');
+    expect(JSON.stringify(vi.mocked(Logger.prototype.warn).mock.calls)).not.toContain('bad:rt');
   });
 
   it('keeps going when one revocation fails, and logs no token value', async () => {
     h.revokeToken.mockRejectedValueOnce(new Error('boom rt'));
     await revokeConnectionGrant(connection(), {} as never);
     expect(h.revokeToken).toHaveBeenCalledTimes(2);
-    expect(vi.mocked(Logger.prototype.warn).mock.calls.flat().join(' ')).not.toMatch(/\brt\b|\bat\b/);
+    expect(JSON.stringify(vi.mocked(Logger.prototype.warn).mock.calls)).not.toMatch(/\brt\b|\bat\b/);
   });
 
   it('stops waiting at the deadline when the server does not answer', async () => {
