@@ -275,7 +275,9 @@ public struct CaptureClient: CaptureAPI, DelegationSubmitting, ObligationHanding
 
   // MARK: - Helpers
 
-  private static func obligation(from response: AuthorizedRequester.Response, accepting: Set<Int>) throws
+  private static func obligation(
+    from response: AuthorizedRequester.Response, accepting: Set<Int>
+  ) throws
     -> Obligation
   {
     guard accepting.contains(response.status) else {

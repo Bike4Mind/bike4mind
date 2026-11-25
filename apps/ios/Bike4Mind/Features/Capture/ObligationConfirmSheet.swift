@@ -40,7 +40,8 @@ struct ObligationConfirmSheet: View {
     case .extracting:
       ProgressView("Reading the bill...")
     case .failed(let message):
-      ContentUnavailableView("Couldn't read this bill", systemImage: "exclamationmark.triangle", description: Text(message))
+      ContentUnavailableView(
+        "Couldn't read this bill", systemImage: "exclamationmark.triangle", description: Text(message))
     case .done:
       ContentUnavailableView(
         "Saved", systemImage: "checkmark.circle",
