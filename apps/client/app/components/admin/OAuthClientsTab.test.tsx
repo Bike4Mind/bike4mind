@@ -165,6 +165,51 @@ describe('OAuthClientsTab', () => {
     await waitFor(() => expect(screen.queryByTestId('oauth-client-secret-modal')).not.toBeInTheDocument());
   });
 
+  it('closes the register dialog on Escape when idle, but not while the registration is in flight', async () => {
+    let resolveCreate: (v: { client: typeof client; clientSecret: string }) => void = () => {};
+    api.createOAuthClient.mockReturnValue(new Promise(r => (resolveCreate = r)));
+    renderTab();
+    fireEvent.click(await screen.findByTestId('oauth-client-add-btn'));
+    fireEvent.keyDown(screen.getByTestId('oauth-client-create-modal'), { key: 'Escape' });
+    await waitFor(() => expect(screen.queryByTestId('oauth-client-create-modal')).not.toBeInTheDocument());
+
+    fireEvent.click(screen.getByTestId('oauth-client-add-btn'));
+    fireEvent.change(screen.getByTestId('oauth-client-name-input'), { target: { value: 'My App' } });
+    fireEvent.change(screen.getByTestId('oauth-client-redirect-uris-input'), {
+      target: { value: 'https://app.example.test/cb' },
+    });
+    fireEvent.click(screen.getByTestId('oauth-client-create-submit-btn'));
+    await waitFor(() => expect(api.createOAuthClient).toHaveBeenCalled());
+    const closeBtn = await screen.findByTestId('oauth-client-create-modal-close-btn');
+    await waitFor(() => expect(closeBtn).toBeDisabled());
+    expect(
+      within(screen.getByTestId('oauth-client-create-modal')).getByRole('button', { name: 'Cancel' })
+    ).toBeDisabled();
+    fireEvent.keyDown(screen.getByTestId('oauth-client-create-modal'), { key: 'Escape' });
+    expect(screen.getByTestId('oauth-client-create-modal')).toBeInTheDocument();
+
+    resolveCreate({ client, clientSecret: SECRET });
+    await screen.findByTestId('oauth-client-secret-modal');
+  });
+
+  it('keeps the edit dialog open on Escape while the save is in flight', async () => {
+    let resolveUpdate: (v: typeof client) => void = () => {};
+    api.updateOAuthClient.mockReturnValue(new Promise(r => (resolveUpdate = r)));
+    renderTab();
+    await openRowAction('edit');
+    fireEvent.change(screen.getByTestId('oauth-client-edit-uris-input'), {
+      target: { value: 'https://app.example.test/new' },
+    });
+    fireEvent.click(screen.getByTestId('oauth-client-edit-save-btn'));
+    await waitFor(() => expect(screen.getByTestId('oauth-client-edit-modal-close-btn')).toBeDisabled());
+    expect(
+      within(screen.getByTestId('oauth-client-edit-modal')).getByRole('button', { name: 'Cancel' })
+    ).toBeDisabled();
+    fireEvent.keyDown(screen.getByTestId('oauth-client-edit-modal'), { key: 'Escape' });
+    expect(screen.getByTestId('oauth-client-edit-modal')).toBeInTheDocument();
+    resolveUpdate(client);
+  });
+
   it('submits a federated identities payload from the form', async () => {
     api.createOAuthClient.mockResolvedValue({ client, clientSecret: SECRET });
     renderTab();

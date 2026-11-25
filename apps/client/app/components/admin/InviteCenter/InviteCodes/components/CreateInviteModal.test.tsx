@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -95,5 +95,36 @@ describe('CreateInviteModal grant package', () => {
 
     await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
     expect(onSubmit.mock.calls[0][0]).not.toHaveProperty('grantPackageId');
+  });
+});
+
+describe('CreateInviteModal closing', () => {
+  beforeEach(() => {
+    mocks.fetchGrantPackages.mockResolvedValue({ data: [], meta: { total: 0, page: 1, limit: 100, totalPages: 0 } });
+    useRegistrationInvitesStore.getState().setOpenCreate(true);
+  });
+
+  it('closes on Escape when idle', () => {
+    render(<CreateInviteModal onSubmit={vi.fn()} isLoading={false} />, { wrapper: Wrapper });
+    fireEvent.keyDown(screen.getByTestId('create-invite-modal'), { key: 'Escape' });
+    expect(useRegistrationInvitesStore.getState().openCreate).toBe(false);
+  });
+
+  it('starts from a fresh form after the parent closes it on a successful create', async () => {
+    render(<CreateInviteModal onSubmit={vi.fn()} isLoading={false} />, { wrapper: Wrapper });
+    fireEvent.change(screen.getByTestId('create-invite-credits-input'), { target: { value: '500' } });
+    expect(screen.getByTestId('create-invite-credits-input')).toHaveValue(500);
+
+    act(() => useRegistrationInvitesStore.getState().setOpenCreate(false));
+    act(() => useRegistrationInvitesStore.getState().setOpenCreate(true));
+    expect(await screen.findByTestId('create-invite-credits-input')).toHaveValue(25000);
+  });
+
+  it('stays open while the create request is in flight', () => {
+    render(<CreateInviteModal onSubmit={vi.fn()} isLoading />, { wrapper: Wrapper });
+    expect(screen.getByTestId('create-invite-modal-close-btn')).toBeDisabled();
+    expect(screen.getByTestId('create-invite-cancel-btn')).toBeDisabled();
+    fireEvent.keyDown(screen.getByTestId('create-invite-modal'), { key: 'Escape' });
+    expect(useRegistrationInvitesStore.getState().openCreate).toBe(true);
   });
 });

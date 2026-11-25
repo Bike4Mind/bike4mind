@@ -586,7 +586,7 @@ function SecretModal({
       // AdminDialog hands Joy's close reason through. The secret is shown once, so Esc and a backdrop
       // click must not dismiss it. The close button (reason closeClick) and Done close it; Esc and
       // backdrop are pinned in OAuthClientsTab.test.tsx.
-      onClose={(_event?: unknown, reason?: string) => {
+      onClose={reason => {
         if (reason === 'backdropClick' || reason === 'escapeKeyDown') return;
         onClose();
       }}
@@ -987,7 +987,8 @@ export default function OAuthClientsTab() {
 
       <AdminDialog
         open={createOpen}
-        onClose={() => setCreateOpen(false)}
+        onClose={() => !createMutation.isPending && setCreateOpen(false)}
+        closeDisabled={createMutation.isPending}
         title="Register OAuth client"
         width={560}
         data-testid="oauth-client-create-modal"
@@ -1079,7 +1080,12 @@ export default function OAuthClientsTab() {
             )}
 
             <Stack direction="row" justifyContent="flex-end" spacing={1}>
-              <Button variant="plain" color="neutral" onClick={() => setCreateOpen(false)}>
+              <Button
+                variant="plain"
+                color="neutral"
+                disabled={createMutation.isPending}
+                onClick={() => setCreateOpen(false)}
+              >
                 Cancel
               </Button>
               <Button
@@ -1099,7 +1105,8 @@ export default function OAuthClientsTab() {
 
       <AdminDialog
         open={!!editTarget}
-        onClose={() => setEditTarget(null)}
+        onClose={() => !editMutation.isPending && setEditTarget(null)}
+        closeDisabled={editMutation.isPending}
         title="Edit OAuth client"
         width={560}
         data-testid="oauth-client-edit-modal"
@@ -1223,7 +1230,12 @@ export default function OAuthClientsTab() {
             </Alert>
           )}
           <Stack direction="row" justifyContent="flex-end" spacing={1} sx={{ mt: 1 }}>
-            <Button variant="plain" color="neutral" onClick={() => setEditTarget(null)}>
+            <Button
+              variant="plain"
+              color="neutral"
+              disabled={editMutation.isPending}
+              onClick={() => setEditTarget(null)}
+            >
               Cancel
             </Button>
             <Button
@@ -1240,7 +1252,8 @@ export default function OAuthClientsTab() {
 
       <AdminDialog
         open={!!narrowing}
-        onClose={() => setNarrowing(null)}
+        onClose={() => !editMutation.isPending && setNarrowing(null)}
+        closeDisabled={editMutation.isPending}
         role="alertdialog"
         title={narrowing?.removed.length ? 'Remove scopes' : 'Turn off federation'}
         data-testid="oauth-client-edit-narrow-modal"
@@ -1266,7 +1279,12 @@ export default function OAuthClientsTab() {
             </Typography>
           )}
           <Stack direction="row" justifyContent="flex-end" spacing={1} sx={{ mt: 2 }}>
-            <Button variant="plain" color="neutral" onClick={() => setNarrowing(null)}>
+            <Button
+              variant="plain"
+              color="neutral"
+              disabled={editMutation.isPending}
+              onClick={() => setNarrowing(null)}
+            >
               Cancel
             </Button>
             <Button
