@@ -1,7 +1,7 @@
 // apps/client/pages/api/skills/market/[id]/moderate.ts
 import { z } from 'zod';
 import { baseApi } from '@client/server/middlewares/baseApi';
-import { SkillListing, SkillListingReport, SkillListingVersion } from '@bike4mind/database';
+import { SkillListing, SkillListingReport, SkillListingVersion, unpublishListingTemplate } from '@bike4mind/database';
 import { ConflictError, ForbiddenError, NotFoundError } from '@bike4mind/common';
 import {
   adminAudienceIdsFor,
@@ -24,7 +24,8 @@ const bodySchema = z.discriminatedUnion('action', [
  *
  * Delist hides the listing and blocks new imports; existing copies are kept and show a "delisted
  * by moderators" warning. Restore clears a report-threshold hide (dismissing its reports) or
- * reverses a delist when the listing still has an approved version.
+ * reverses a delist when the listing still has an approved version. Delist also unpublishes the
+ * listing's template page; restore does not republish it.
  */
 const handler = baseApi({ auth: 'jwtOnly' }).post(async (req, res) => {
   const actor = { id: req.user!.id, isAdmin: req.user!.isAdmin };
@@ -66,6 +67,7 @@ const handler = baseApi({ auth: 'jwtOnly' }).post(async (req, res) => {
       { $set: { reviewStatus: 'superseded' } }
     );
     await SkillListingReport.updateMany({ listingId, status: 'open' }, { $set: { status: 'actioned', ...resolved } });
+    await unpublishListingTemplate(listingId);
     await notifyUser(
       listing.authorUserId,
       `/${listing.name} was removed from the Skill Market`,

@@ -7,6 +7,7 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { optionalJwtAuth } from '@server/middlewares/optionalJwtAuth';
 import { renderNotFoundPage } from '@server/services/publish/renderNotFoundPage';
 import { isPublicTemplatePage } from '@server/skillMarket/templateImage';
+import { isCrawlerUserAgent } from '@server/utils/crawlerUserAgent';
 import {
   findServableTemplate,
   recordTemplateView,
@@ -85,7 +86,7 @@ const handler = baseApi({ auth: false, allowedMethods: ['GET'] })
       const userId = userIdOf(req);
       if (!userId) {
         if (raw) return res.status(401).json({ error: 'Sign in to view this page' });
-        return sendHtml(res, 200, renderTemplateLoaderShell(), LOADER_CSP);
+        return sendHtml(res, 200, renderTemplateLoaderShell(slug), LOADER_CSP);
       }
       if (!canSeeListing(listing, await audienceIdsFor(userId))) return sendNotFound(req, res);
     }
@@ -101,9 +102,11 @@ const handler = baseApi({ auth: false, allowedMethods: ['GET'] })
     });
     const html = renderTemplatePage(view);
 
-    await recordTemplateView(template).catch(error =>
-      req.logger?.warn('template page: view count update failed', error)
-    );
+    if (!isCrawlerUserAgent(req.headers['user-agent'])) {
+      await recordTemplateView(template).catch(error =>
+        req.logger?.warn('template page: view count update failed', error)
+      );
+    }
 
     if (raw) {
       // Inert on a direct navigation; the loader writes it into its own document.
