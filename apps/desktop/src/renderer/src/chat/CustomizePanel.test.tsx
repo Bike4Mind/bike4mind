@@ -4,7 +4,7 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import type { SkillSummary } from '@shared/skills';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { CustomizeNavItem, CustomizeScreen } from './CustomizePanel';
+import { CustomizeScreen, useCustomizeAttention } from './CustomizePanel';
 import { forgetSkillGroupExpansion } from './skillGroups';
 import { desktopTheme } from '../theme';
 
@@ -473,10 +473,13 @@ describe('the Customize skill groups', () => {
   });
 });
 
-describe('the Customize nav row', () => {
-  it('opens the screen from its stable hook, with no attention badge when nothing needs attention', () => {
-    renderNode(<CustomizeNavItem onOpen={() => {}} />);
-    expect(isVisible(byTestId('chat-customize-btn'))).toBe(true);
-    expect(byTestId('customize-attention-chip')).toBeNull();
+describe('the Customize attention the rail avatar reads', () => {
+  function Probe() {
+    return <span data-testid="customize-attention-probe">{useCustomizeAttention() ?? 'none'}</span>;
+  }
+
+  it('reports nothing when no entry needs attention', () => {
+    renderNode(<Probe />);
+    expect(byTestId('customize-attention-probe')?.textContent).toBe('none');
   });
 });

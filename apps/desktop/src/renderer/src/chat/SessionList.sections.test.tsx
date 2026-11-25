@@ -100,7 +100,6 @@ function Harness({
     <SessionList
       sessions={sessions}
       mode={mode}
-      onModeChange={() => {}}
       loading={false}
       activeId={null}
       statuses={new Map()}

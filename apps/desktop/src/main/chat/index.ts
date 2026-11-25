@@ -1106,7 +1106,7 @@ export function registerChat(
       .catch(error => logger.warn(`CHAT: could not remember recent folder: ${String(error)}`));
   };
   registerSessionCreateIpc(ipcMain, {
-    createSession: () => service.createSession(),
+    createSession: mode => service.createSession(mode),
     createCodeSession: request => service.createCodeSession(request),
     place: (sessionId, sectionId) =>
       placeNewSession(sidebarSections, sessionId, sectionId, error =>

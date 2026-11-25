@@ -768,7 +768,9 @@ describe('runBudget', () => {
       await service.send(root.id, 'Plan the work');
       await waitStream(0);
 
-      expect(mint).toHaveBeenCalledWith(expect.any(String), expect.anything(), root.id, 500);
+      expect(mint).toHaveBeenCalledWith(expect.any(String), expect.anything(), root.id, 500, {
+        organization_id: null,
+      });
       expect(wire(0).run?.runId).toBe(RUN_A);
       finish(0);
       await idle(root.id);

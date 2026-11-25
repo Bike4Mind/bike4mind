@@ -43,13 +43,13 @@ function folderName(directory: string): string {
   return parts[parts.length - 1] ?? directory;
 }
 
-/** Sessions worth offering: not the open one, not archived, most recently touched first. */
+/** Sessions worth offering: not the open one, not archived, not a Studio session, most recently touched first. */
 export function mentionableSessions(
   sessions: readonly ChatSessionSummary[],
   currentSessionId: string | null
 ): MentionableSession[] {
   return sessions
-    .filter(session => session.id !== currentSessionId && !session.archived)
+    .filter(session => session.id !== currentSessionId && !session.archived && session.mode !== 'studio')
     .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
     .map(session => ({
       id: session.id,
