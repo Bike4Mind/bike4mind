@@ -2443,6 +2443,9 @@ importers:
       '@bike4mind/llm-adapters':
         specifier: workspace:*
         version: link:../../b4m-core/llm-adapters
+      '@bike4mind/observability':
+        specifier: workspace:*
+        version: link:../../b4m-core/observability
       '@bike4mind/resource':
         specifier: workspace:*
         version: link:../../b4m-core/resource

@@ -13,6 +13,7 @@ import { DataLakeModel } from './models/ai/DataLakeModel';
 import { readModelListRevision } from './modelListRevision';
 import { seedModelCatalog } from './seeds/seedModelCatalog';
 import { seedModelPrices } from './seeds/seedModelPrices';
+import { Logger } from '@bike4mind/observability';
 
 let catalogWired = false;
 let catalogSeedSettled: Promise<boolean> | null = null;
@@ -80,7 +81,7 @@ async function ensureUniqueIndex(label: string, model: { init(): Promise<unknown
   try {
     await model.init();
   } catch (error) {
-    console.warn(`[${label}] unique index build failed; concurrent writers may duplicate rows`, error);
+    Logger.warn('Unique index build failed; concurrent writers may duplicate rows', { label, error });
   }
 }
 
@@ -110,17 +111,17 @@ async function seedCatalogs(): Promise<boolean> {
   let catalogSeeded = true;
   try {
     const catalog = await seedModelCatalog(modelCatalogRepository);
-    if (catalog.inserted > 0) console.info(`[modelCatalog] seeded ${catalog.inserted} catalog rows`);
+    if (catalog.inserted > 0) Logger.info('[modelCatalog] seeded catalog rows', { inserted: catalog.inserted });
   } catch (error) {
     catalogSeeded = false;
-    console.warn('[modelCatalog] catalog seeding failed; adapter tables remain the fallback', error);
+    Logger.warn('[modelCatalog] catalog seeding failed; adapter tables remain the fallback', { error });
   }
 
   try {
     const prices = await seedModelPrices(modelPriceRepository);
-    if (prices.inserted > 0) console.info(`[modelPriceCatalog] seeded ${prices.inserted} price rows`);
+    if (prices.inserted > 0) Logger.info('[modelPriceCatalog] seeded price rows', { inserted: prices.inserted });
   } catch (error) {
-    console.warn('[modelPriceCatalog] price seeding failed; adapter literals remain the fallback', error);
+    Logger.warn('[modelPriceCatalog] price seeding failed; adapter literals remain the fallback', { error });
   }
 
   return catalogSeeded;
@@ -161,7 +162,7 @@ export const connectDB: typeof baseConnectDB = async (url, logger) => {
     // fire-and-forget promise from ever rejecting, which whenCatalogSeeded's
     // callers rely on.
     catalogSeedSettled = seedCatalogs().catch((error: unknown) => {
-      console.warn('[modelCatalog] seeding failed unexpectedly; adapter tables remain the fallback', error);
+      Logger.warn('[modelCatalog] seeding failed unexpectedly; adapter tables remain the fallback', { error });
       return false;
     });
   }
