@@ -77,7 +77,14 @@ export default $config({
     const { consoleRedactionBanner } = await import('./infra/consoleRedactionBanner');
     const CONSOLE_REDACTION_BANNER = consoleRedactionBanner($cli.paths.root);
     // Loaded here so the grant below exists before any Function is declared; undefined where the stage has no key.
-    const { secretsAtRestKey, secretsAtRestDecryptPermission } = await import('./infra/secretsAtRestKey');
+    const { secretsAtRestKey, secretsAtRestDecryptPermission, secretsAtRestRoleTags } =
+      await import('./infra/secretsAtRestKey');
+    // Marks every role as this stage's, which is what the key policy's Decrypt deny checks.
+    if (secretsAtRestKey) {
+      $transform(aws.iam.Role, args => {
+        args.tags = $output(args.tags).apply(tags => secretsAtRestRoleTags(tags ?? undefined, $app.stage));
+      });
+    }
     $transform(sst.aws.Function, args => {
       if (secretsAtRestKey) {
         const grant = secretsAtRestDecryptPermission(secretsAtRestKey.arn, $app.stage);

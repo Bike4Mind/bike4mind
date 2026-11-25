@@ -10,7 +10,12 @@
 import { execFileSync } from 'node:child_process';
 import { parseArgs } from 'node:util';
 import { DescribeKeyCommand, GenerateDataKeyWithoutPlaintextCommand, KMSClient } from '@aws-sdk/client-kms';
-import { createWrappedStageDataKey, WRAPPED_SECRET_NAME, type WrappedKeyDeps } from './createWrappedStageDataKey';
+import {
+  createWrappedStageDataKey,
+  parseSecretListing,
+  WRAPPED_SECRET_NAME,
+  type WrappedKeyDeps,
+} from './createWrappedStageDataKey';
 
 const { values } = parseArgs({
   options: {
@@ -32,8 +37,7 @@ const kms = new KMSClient({});
 const deps: WrappedKeyDeps = {
   readSecret: async s => {
     const listing = execFileSync('npx', ['sst', 'secret', 'list', '--stage', s], { encoding: 'utf8' });
-    const line = listing.split('\n').find(l => l.startsWith(`${WRAPPED_SECRET_NAME}=`));
-    return line?.slice(WRAPPED_SECRET_NAME.length + 1).trim();
+    return parseSecretListing(listing, WRAPPED_SECRET_NAME);
   },
   describeKey: async key => {
     const { KeyMetadata } = await kms.send(new DescribeKeyCommand({ KeyId: key }));
@@ -60,7 +64,8 @@ createWrappedStageDataKey(
     appName: values.app,
     dryRun: values['dry-run'],
     force: values.force,
-    isPreview: /^pr\d+$/.test(stage),
+    // Same rule as isPreviewStage in infra/constants.ts.
+    isPreview: process.env.IS_PREVIEW === 'true' || /^pr\d+$/.test(stage),
   },
   deps
 ).catch(error => {

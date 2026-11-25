@@ -1,50 +1,22 @@
 /**
- * Access policy and monitoring for the secrets-at-rest key (infra/secretsAtRestKey.ts). Loaded after
- * the ECS services so their task role ARNs can go into the key policy and the alarm pattern.
+ * Monitoring and the reachability probe for the secrets-at-rest key (infra/secretsAtRestKey.ts). A
+ * shared preview key is owned and alarmed outside this stack, so only the probe exists there.
  */
 
-import { chatCompletion } from './chatCompletion';
 import { secrets } from './secrets';
 import { lambdaVpc } from './vpc';
 import { dlqAlarmTopic, oobAlarmTopic } from './dlqAlarms';
 import {
-  secretsAtRestDecryptOutsideAppEventPattern,
+  secretsAtRestDecryptDeniedEventPattern,
   secretsAtRestKey,
   secretsAtRestKeyChangeEventPattern,
-  secretsAtRestKeyPolicy,
   secretsAtRestLogsPolicy,
 } from './secretsAtRestKey';
 
-function createAccess() {
-  if (!secretsAtRestKey) return;
+function createMonitoring(key: aws.kms.Key) {
   // Previews have no alarm topics: the alarm still exists and shows ALARM, it just notifies no one.
   const alarmActions = [dlqAlarmTopic, oobAlarmTopic].flatMap(topic => (topic ? [topic.arn] : []));
-
   const prefix = `${$app.name}-${$app.stage}`;
-  const partition = aws.getPartitionOutput().partition;
-  const accountId = aws.getCallerIdentityOutput().accountId;
-  const region = aws.getRegionOutput().name;
-  const ecsRoleArns = $output([chatCompletion.nodes.taskRole.arn]);
-  const keyArn = $output(secretsAtRestKey.arn);
-
-  if (secretsAtRestKey.key) {
-    new aws.kms.KeyPolicy('SecretsAtRestKeyPolicy', {
-      keyId: secretsAtRestKey.key.keyId,
-      policy: $resolve([partition, accountId, region, ecsRoleArns]).apply(([p, account, r, roles]) =>
-        JSON.stringify(
-          secretsAtRestKeyPolicy({
-            partition: p,
-            accountId: account,
-            region: r,
-            appName: $app.name,
-            stage: $app.stage,
-            ecsRoleArns: roles,
-            pinStage: true,
-          })
-        )
-      ),
-    });
-  }
 
   const logGroup = new aws.cloudwatch.LogGroup('SecretsAtRestKeyLogs', {
     name: `/aws/events/${prefix}-secrets-at-rest-key`,
@@ -59,34 +31,20 @@ function createAccess() {
     {
       id: 'Decrypt',
       name: `${prefix}-secrets-at-rest-decrypt`,
-      description: 'The secrets-at-rest key was used to Decrypt by a caller that is not this stage app',
+      description: 'A Decrypt on the secrets-at-rest key was refused',
       // Decrypt is a read-only management event, which reaches a rule only in this state.
       state: 'ENABLED_WITH_ALL_CLOUDTRAIL_MANAGEMENT_EVENTS',
-      pattern: $resolve([keyArn, ecsRoleArns]).apply(([arn, roles]) =>
-        JSON.stringify(
-          secretsAtRestDecryptOutsideAppEventPattern({
-            keyArn: arn,
-            appName: $app.name,
-            stage: $app.stage,
-            ecsRoleArns: roles,
-          })
-        )
+      pattern: key.arn.apply(arn => JSON.stringify(secretsAtRestDecryptDeniedEventPattern({ keyArn: arn }))),
+    },
+    {
+      id: 'KeyChange',
+      name: `${prefix}-secrets-at-rest-key-change`,
+      description: 'The secrets-at-rest KMS key policy, grants or lifecycle changed',
+      state: undefined,
+      pattern: $resolve([key.keyId, key.arn]).apply(([keyId, arn]) =>
+        JSON.stringify(secretsAtRestKeyChangeEventPattern({ keyId, keyArn: arn }))
       ),
     },
-    // A shared key is changed by its owner, outside this stack.
-    ...(secretsAtRestKey.key
-      ? [
-          {
-            id: 'KeyChange',
-            name: `${prefix}-secrets-at-rest-key-change`,
-            description: 'The secrets-at-rest KMS key policy, grants or lifecycle changed',
-            state: undefined,
-            pattern: $resolve([secretsAtRestKey.key.keyId, keyArn]).apply(([keyId, arn]) =>
-              JSON.stringify(secretsAtRestKeyChangeEventPattern({ keyId, keyArn: arn }))
-            ),
-          },
-        ]
-      : []),
   ];
 
   for (const rule of rules) {
@@ -116,6 +74,11 @@ function createAccess() {
       tags: { Application: 'SecretsAtRest', Severity: 'Critical' },
     });
   }
+}
+
+function createAccess() {
+  if (!secretsAtRestKey) return;
+  if (secretsAtRestKey.key) createMonitoring(secretsAtRestKey.key);
 
   // Manual invoke only, no schedule: shows a VPC-attached function reaches KMS and records Decrypt latency.
   new sst.aws.Function('SecretsAtRestUnwrapProbe', {

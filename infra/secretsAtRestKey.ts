@@ -4,9 +4,10 @@
  * ARN (same ownership pattern as the shared preview certificate); other stages have no key.
  *
  * The key policy, event patterns and IAM grant are pure builders so they can be unit tested.
- * Imports only constants so sst.config.ts can load it before ./infra without a cycle. The access
- * policy and the alarms live in infra/secretsAtRestKeyAccess.ts, because they need the ECS task
- * role ARNs, which in turn depend on this key's ARN.
+ * Imports only constants so sst.config.ts can load it before ./infra without a cycle. The alarms and
+ * the probe live in infra/secretsAtRestKeyAccess.ts.
+ *
+ * The preview key's owner should carry the same policy (secretsAtRestKeyPolicy) and alarm on denied Decrypts.
  */
 
 import { isPreviewStage, runsScheduledJobs } from './constants';
@@ -32,48 +33,18 @@ export function secretsAtRestKeyKind(input: {
 
 const POLICY_VERSION = '2012-10-17';
 
-/** Function names are `<app>-<stage>-<name>`; the Decrypt condition and the alarm both key on this prefix. */
-export const secretsAtRestFunctionNamePrefix = (appName: string, stage: string) => `${appName}-${stage}-`;
+/**
+ * Tag put on every IAM role this stack creates, naming the stage it belongs to. Key policies do not
+ * evaluate lambda:SourceFunctionArn, so "this stage's app" is expressed as a principal tag instead.
+ */
+export const SECRETS_AT_REST_ROLE_TAG = 'b4m:secrets-at-rest-stage';
 
-export function secretsAtRestKeyPolicy(input: {
-  partition: string;
-  accountId: string;
-  region: string;
-  appName: string;
-  stage: string;
-  ecsRoleArns: string[];
-  /** False on the shared preview key, which serves many stages. */
-  pinStage: boolean;
-}) {
-  const functionArnPattern = `arn:${input.partition}:lambda:${input.region}:${input.accountId}:function:${secretsAtRestFunctionNamePrefix(input.appName, input.stage)}*`;
-  const notApp: Record<string, Record<string, string | string[]>> = {
-    ArnNotLike: { 'lambda:SourceFunctionArn': functionArnPattern },
-  };
-  if (input.ecsRoleArns.length > 0) notApp.ArnNotEquals = { 'aws:PrincipalArn': input.ecsRoleArns };
+export function secretsAtRestRoleTags(tags: Record<string, string> | undefined, stage: string) {
+  return { ...tags, [SECRETS_AT_REST_ROLE_TAG]: stage };
+}
 
-  const contextDenies = [
-    {
-      Sid: 'DenyWithoutPurposeContext',
-      Effect: 'Deny',
-      Principal: '*',
-      Action: ['kms:Decrypt', 'kms:ReEncrypt*', 'kms:GenerateDataKeyWithoutPlaintext'],
-      Resource: '*',
-      Condition: { StringNotEquals: { 'kms:EncryptionContext:purpose': SECRETS_AT_REST_PURPOSE } },
-    },
-    ...(input.pinStage
-      ? [
-          {
-            Sid: 'DenyWithoutStageContext',
-            Effect: 'Deny',
-            Principal: '*',
-            Action: ['kms:Decrypt', 'kms:ReEncrypt*', 'kms:GenerateDataKeyWithoutPlaintext'],
-            Resource: '*',
-            Condition: { StringNotEquals: { 'kms:EncryptionContext:stage': input.stage } },
-          },
-        ]
-      : []),
-  ];
-
+export function secretsAtRestKeyPolicy(input: { partition: string; accountId: string; stage: string }) {
+  const contextActions = ['kms:Decrypt', 'kms:ReEncrypt*', 'kms:GenerateDataKeyWithoutPlaintext'];
   return {
     Version: POLICY_VERSION,
     Statement: [
@@ -84,49 +55,59 @@ export function secretsAtRestKeyPolicy(input: {
         Action: 'kms:*',
         Resource: '*',
       },
-      ...contextDenies,
       {
-        // Operators mint the wrapped blob with GenerateDataKeyWithoutPlaintext but can never unwrap it.
+        Sid: 'DenyWithoutPurposeContext',
+        Effect: 'Deny',
+        Principal: '*',
+        Action: contextActions,
+        Resource: '*',
+        Condition: { StringNotEquals: { 'kms:EncryptionContext:purpose': SECRETS_AT_REST_PURPOSE } },
+      },
+      {
+        Sid: 'DenyWithoutStageContext',
+        Effect: 'Deny',
+        Principal: '*',
+        Action: contextActions,
+        Resource: '*',
+        Condition: { StringNotEquals: { 'kms:EncryptionContext:stage': input.stage } },
+      },
+      {
+        // The only blob is minted by GenerateDataKeyWithoutPlaintext. These two return or accept a key
+        // the caller chose, which would let an operator plant a data key whose plaintext they know.
+        Sid: 'DenyChosenOrPlaintextDataKey',
+        Effect: 'Deny',
+        Principal: '*',
+        Action: ['kms:GenerateDataKey', 'kms:Encrypt'],
+        Resource: '*',
+        Condition: { StringEquals: { 'kms:EncryptionContext:purpose': SECRETS_AT_REST_PURPOSE } },
+      },
+      {
+        // Operators mint the wrapped blob but can never unwrap one; only this stage's roles can.
         Sid: 'DenyDecryptOutsideApp',
         Effect: 'Deny',
         Principal: '*',
         Action: ['kms:Decrypt', 'kms:ReEncrypt*'],
         Resource: '*',
-        Condition: notApp,
+        Condition: { StringNotEquals: { [`aws:PrincipalTag/${SECRETS_AT_REST_ROLE_TAG}`]: input.stage } },
       },
     ],
   };
 }
 
-/** Matches a Decrypt on the key by a caller that is neither this stage's Function nor one of its ECS task roles. */
-export function secretsAtRestDecryptOutsideAppEventPattern(input: {
-  keyArn: string;
-  appName: string;
-  stage: string;
-  ecsRoleArns: string[];
-}) {
-  const functionNames = `*/${secretsAtRestFunctionNamePrefix(input.appName, input.stage)}*`;
-  const notEcsRole =
-    input.ecsRoleArns.length > 0
-      ? { sessionContext: { sessionIssuer: { arn: [{ 'anything-but': input.ecsRoleArns }] } } }
-      : {};
+/**
+ * Matches a Decrypt on the key that the key policy or the IAM grant refused. The policy decides who may
+ * decrypt, so the alarm keys on the refusal, not on a caller name that a session or a truncated
+ * Function name could spoof or miss.
+ */
+export function secretsAtRestDecryptDeniedEventPattern(input: { keyArn: string }) {
   return {
     source: ['aws.kms'],
     'detail-type': ['AWS API Call via CloudTrail'],
     detail: {
       eventSource: ['kms.amazonaws.com'],
       eventName: ['Decrypt'],
+      errorCode: ['AccessDenied', 'AccessDeniedException'],
       resources: { ARN: [input.keyArn] },
-      // anything-but does not match an absent field, so callers that are not roles need their own branch.
-      $or: [
-        {
-          userIdentity: {
-            arn: [{ 'anything-but': { wildcard: [functionNames] } }],
-            ...notEcsRole,
-          },
-        },
-        { userIdentity: { type: [{ 'anything-but': ['AssumedRole'] }] } },
-      ],
     },
   };
 }
@@ -188,11 +169,15 @@ export interface SecretsAtRestKey {
 
 function createKey(): SecretsAtRestKey {
   const prefix = `${$app.name}-${$app.stage}`;
-  // The real policy is attached by infra/secretsAtRestKeyAccess.ts once the ECS role ARNs exist.
+  const partition = aws.getPartitionOutput().partition;
+  const accountId = aws.getCallerIdentityOutput().accountId;
   const key = new aws.kms.Key('SecretsAtRestKey', {
     description: `${prefix} secrets at rest data key wrapping`,
     enableKeyRotation: true,
     deletionWindowInDays: 30,
+    policy: $resolve([partition, accountId]).apply(([p, account]) =>
+      JSON.stringify(secretsAtRestKeyPolicy({ partition: p, accountId: account, stage: $app.stage }))
+    ),
   });
   new aws.kms.Alias('SecretsAtRestKeyAlias', {
     name: `alias/${prefix}-secrets-at-rest`,

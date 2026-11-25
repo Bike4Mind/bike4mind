@@ -1,6 +1,20 @@
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 
-vi.mock('sst', () => ({ Resource: { SECRET_ENCRYPTION_KEY_WRAPPED: { value: 'AQID' } } }));
+const kms = vi.hoisted(() => ({ send: vi.fn(async (_command: unknown) => ({})) }));
+
+vi.mock('sst', () => ({
+  Resource: { App: { stage: 'pr7' }, SECRET_ENCRYPTION_KEY_WRAPPED: { value: 'AQID' } },
+}));
+vi.mock('@aws-sdk/client-kms', () => ({
+  KMSClient: vi.fn(function () {
+    return kms;
+  }),
+  DecryptCommand: vi.fn(function (input: unknown) {
+    return { input };
+  }),
+}));
 
 async function load() {
   vi.resetModules();
@@ -32,4 +46,26 @@ describe('runUnwrapProbe', () => {
     expect(result).toMatchObject({ ok: false, error: 'AccessDeniedException' });
     expect(JSON.stringify(result)).not.toContain('secret detail');
   });
+});
+
+describe('handler', () => {
+  it('decrypts the linked blob under the deployed stage from Resource.App', async () => {
+    const { handler } = await load();
+    const result = await handler();
+    expect(result).toMatchObject({ ok: true, coldStart: true });
+    expect(kms.send).toHaveBeenCalledWith({
+      input: {
+        CiphertextBlob: Buffer.from([1, 2, 3]),
+        EncryptionContext: { purpose: 'secrets-at-rest', stage: 'pr7' },
+      },
+    });
+  });
+});
+
+it('uses the same purpose as infra/secretsAtRestKey.ts', () => {
+  const infra = readFileSync(resolve(__dirname, '../../../../infra/secretsAtRestKey.ts'), 'utf8');
+  expect(infra).toContain("SECRETS_AT_REST_PURPOSE = 'secrets-at-rest'");
+  expect(readFileSync(resolve(__dirname, 'secretsAtRestUnwrapProbe.ts'), 'utf8')).toContain(
+    "PURPOSE = 'secrets-at-rest'"
+  );
 });

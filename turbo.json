@@ -242,6 +242,7 @@
         "../client/**/*.ts",
         "../client/tsconfig.json",
         "$TURBO_ROOT$/infra/queues.ts",
+        "$TURBO_ROOT$/infra/secretsAtRestKey.ts",
         "$TURBO_ROOT$/infra/analyticsRollup.ts",
         "$TURBO_ROOT$/infra/cliToolHandler.ts",
         "$TURBO_ROOT$/infra/database.ts",

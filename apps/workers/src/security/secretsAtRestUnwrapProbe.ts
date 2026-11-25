@@ -3,9 +3,10 @@
  * VPC, to show a VPC-attached function reaches KMS (through the NAT) and how long a Decrypt takes.
  * The plaintext is discarded at once; only { ok, decryptMs, coldStart } is returned.
  */
+import { DecryptCommand, KMSClient } from '@aws-sdk/client-kms';
 import { Resource } from 'sst';
 
-/** Must match secretsAtRestEncryptionContext in infra/secretsAtRestKey.ts. */
+/** Must match SECRETS_AT_REST_PURPOSE in infra/secretsAtRestKey.ts (secretsAtRestKey.test.ts checks it). */
 const PURPOSE = 'secrets-at-rest';
 /** A missing route to KMS must fail fast rather than hang until the function timeout. */
 const CONNECT_TIMEOUT_MS = 3000;
@@ -42,17 +43,13 @@ export async function runUnwrapProbe(input: {
 }
 
 export const handler = async (): Promise<UnwrapProbeResult> => {
-  // Imported here so the client is built after the handler's cold-start flag is read.
-  const { KMSClient, DecryptCommand } = await import('@aws-sdk/client-kms');
   const kms = new KMSClient({ requestHandler: { connectionTimeout: CONNECT_TIMEOUT_MS } });
-  const stage = process.env.SST_STAGE ?? '';
-  const result = await runUnwrapProbe({
+  return runUnwrapProbe({
     blobBase64: Resource.SECRET_ENCRYPTION_KEY_WRAPPED.value,
-    stage,
+    stage: Resource.App.stage,
     decrypt: async (blob, context) => {
       // The response, which holds the plaintext data key, is dropped without being read.
       await kms.send(new DecryptCommand({ CiphertextBlob: blob, EncryptionContext: context }));
     },
   });
-  return result;
 };

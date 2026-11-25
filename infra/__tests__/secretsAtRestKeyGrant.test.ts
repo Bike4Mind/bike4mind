@@ -15,9 +15,19 @@ const read = (rel: string) => stripComments(readFileSync(path.join(REPO_ROOT, re
 describe('secrets-at-rest Decrypt grant', () => {
   it('is added to every Function by the global transform', () => {
     const config = read('sst.config.ts');
-    const transform = config.slice(config.indexOf('$transform(sst.aws.Function'));
+    const start = config.indexOf('$transform(sst.aws.Function');
+    // The transform body ends at the first closing `});` at its own indentation.
+    const transform = config.slice(start, config.indexOf('\n    });', start));
     expect(transform).toContain('secretsAtRestDecryptPermission(');
     expect(transform).toMatch(/args\.permissions\s*=/);
+  });
+
+  it('tags every role with the stage through a global role transform', () => {
+    const config = read('sst.config.ts');
+    const start = config.indexOf('$transform(aws.iam.Role');
+    const transform = config.slice(start, config.indexOf('\n      });', start));
+    expect(transform).toContain('secretsAtRestRoleTags(');
+    expect(transform).toContain('args.tags');
   });
 
   it('reaches every ECS service that holds SECRET_ENCRYPTION_KEY', () => {

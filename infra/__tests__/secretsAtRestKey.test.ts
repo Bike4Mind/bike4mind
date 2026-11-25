@@ -22,7 +22,12 @@ vi.mock('../constants', () => ({
 async function load(stage: string, env: Record<string, string> = {}) {
   vi.resetModules();
   vi.stubGlobal('$app', { name: 'app', stage });
-  vi.stubGlobal('aws', { kms: { Key: state.key, Alias: state.alias } });
+  vi.stubGlobal('$resolve', (values: unknown[]) => ({ apply: (fn: (v: unknown[]) => unknown) => fn(values) }));
+  vi.stubGlobal('aws', {
+    kms: { Key: state.key, Alias: state.alias },
+    getPartitionOutput: () => ({ partition: 'test' }),
+    getCallerIdentityOutput: () => ({ accountId: '123456789012' }),
+  });
   for (const [name, value] of Object.entries(env)) vi.stubEnv(name, value);
   return import('../secretsAtRestKey');
 }
@@ -37,20 +42,16 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 
-const policyInput = {
-  partition: 'test',
-  accountId: '123456789012',
-  region: 'us-east-2',
-  appName: 'app',
-  stage: 'production',
-  ecsRoleArns: ['arn:test:iam::123456789012:role/ecs'],
-  pinStage: true,
-};
+const policyInput = { partition: 'test', accountId: '123456789012', stage: 'production' };
 
 describe('key policy', () => {
-  it('pins purpose and stage on dedicated keys, and keeps account administration', async () => {
+  const statementsOf = async () => {
     const { secretsAtRestKeyPolicy } = await load('production');
-    const statements = secretsAtRestKeyPolicy(policyInput).Statement;
+    return secretsAtRestKeyPolicy(policyInput).Statement;
+  };
+
+  it('pins purpose and stage, and keeps account administration', async () => {
+    const statements = await statementsOf();
     expect(statements.find(s => s.Sid === 'EnableAccountAdministration')?.Effect).toBe('Allow');
     expect(statements.find(s => s.Sid === 'DenyWithoutPurposeContext')?.Condition).toEqual({
       StringNotEquals: { 'kms:EncryptionContext:purpose': 'secrets-at-rest' },
@@ -60,48 +61,69 @@ describe('key policy', () => {
     });
   });
 
-  it('drops the stage pin on the shared preview policy', async () => {
-    const { secretsAtRestKeyPolicy } = await load('pr1');
-    const sids = secretsAtRestKeyPolicy({ ...policyInput, pinStage: false }).Statement.map(s => s.Sid);
-    expect(sids).toContain('DenyWithoutPurposeContext');
-    expect(sids).not.toContain('DenyWithoutStageContext');
-  });
-
-  it('denies Decrypt to anything that is not this stage Function or an ECS task role', async () => {
-    const { secretsAtRestKeyPolicy } = await load('production');
-    const deny = secretsAtRestKeyPolicy(policyInput).Statement.find(s => s.Sid === 'DenyDecryptOutsideApp');
-    expect(deny?.Action).toContain('kms:Decrypt');
+  it('denies Decrypt to any principal not tagged as this stage, using no lambda condition key', async () => {
+    const statements = await statementsOf();
+    const deny = statements.find(s => s.Sid === 'DenyDecryptOutsideApp');
+    expect(deny?.Action).toEqual(['kms:Decrypt', 'kms:ReEncrypt*']);
     expect(deny?.Condition).toEqual({
-      ArnNotLike: { 'lambda:SourceFunctionArn': 'arn:test:lambda:us-east-2:123456789012:function:app-production-*' },
-      ArnNotEquals: { 'aws:PrincipalArn': ['arn:test:iam::123456789012:role/ecs'] },
+      StringNotEquals: { 'aws:PrincipalTag/b4m:secrets-at-rest-stage': 'production' },
     });
+    expect(JSON.stringify(statements)).not.toContain('lambda:');
   });
 
-  it('never allows an operator to mint plaintext or unwrap, only GenerateDataKeyWithoutPlaintext with context', async () => {
-    const { secretsAtRestKeyPolicy } = await load('production');
-    const denied = secretsAtRestKeyPolicy(policyInput)
-      .Statement.filter(s => s.Effect === 'Deny')
+  it('denies GenerateDataKey and Encrypt under the purpose context, and leaves GenerateDataKeyWithoutPlaintext minting open', async () => {
+    const statements = await statementsOf();
+    const chosen = statements.find(s => s.Sid === 'DenyChosenOrPlaintextDataKey');
+    expect(chosen).toMatchObject({
+      Effect: 'Deny',
+      Action: ['kms:GenerateDataKey', 'kms:Encrypt'],
+      Condition: { StringEquals: { 'kms:EncryptionContext:purpose': 'secrets-at-rest' } },
+    });
+    const denyActionsAnyContext = statements
+      .filter(s => s.Effect === 'Deny' && !('Condition' in s && s.Condition && 'StringNotEquals' in s.Condition))
       .flatMap(s => s.Action as string[]);
-    expect(denied).toContain('kms:GenerateDataKeyWithoutPlaintext');
+    expect(denyActionsAnyContext).not.toContain('kms:GenerateDataKeyWithoutPlaintext');
+    const ownerOnly = statements.filter(s => s.Sid === 'DenyDecryptOutsideApp').flatMap(s => s.Action as string[]);
+    expect(ownerOnly).not.toContain('kms:GenerateDataKeyWithoutPlaintext');
   });
 });
 
-describe('Decrypt-outside-app event pattern', () => {
-  it('excludes the stage Functions and ECS roles, and still matches non-role callers', async () => {
-    const { secretsAtRestDecryptOutsideAppEventPattern } = await load('production');
-    const pattern = secretsAtRestDecryptOutsideAppEventPattern({
-      keyArn: 'key-arn',
-      appName: 'app',
-      stage: 'production',
-      ecsRoleArns: ['ecs-role'],
+describe('role tags', () => {
+  it('adds the stage tag and keeps the existing ones', async () => {
+    const { secretsAtRestRoleTags } = await load('production');
+    expect(secretsAtRestRoleTags({ a: 'b' }, 'production')).toEqual({
+      a: 'b',
+      'b4m:secrets-at-rest-stage': 'production',
     });
-    expect(pattern.detail.resources).toEqual({ ARN: ['key-arn'] });
-    const [roleBranch, otherBranch] = pattern.detail.$or;
-    expect(roleBranch.userIdentity.arn).toEqual([{ 'anything-but': { wildcard: ['*/app-production-*'] } }]);
-    expect(roleBranch.userIdentity).toMatchObject({
-      sessionContext: { sessionIssuer: { arn: [{ 'anything-but': ['ecs-role'] }] } },
+    expect(secretsAtRestRoleTags(undefined, 'dev')).toEqual({ 'b4m:secrets-at-rest-stage': 'dev' });
+  });
+});
+
+describe('Decrypt-denied event pattern', () => {
+  it('matches only refused Decrypts on the key, with no caller-name matching', async () => {
+    const { secretsAtRestDecryptDeniedEventPattern } = await load('production');
+    const pattern = secretsAtRestDecryptDeniedEventPattern({ keyArn: 'key-arn' });
+    expect(pattern.detail).toEqual({
+      eventSource: ['kms.amazonaws.com'],
+      eventName: ['Decrypt'],
+      errorCode: ['AccessDenied', 'AccessDeniedException'],
+      resources: { ARN: ['key-arn'] },
     });
-    expect(otherBranch.userIdentity.type).toEqual([{ 'anything-but': ['AssumedRole'] }]);
+    expect(JSON.stringify(pattern)).not.toContain('userIdentity');
+  });
+});
+
+describe('Decrypt permission', () => {
+  it('is scoped to the key and pinned to the stage context', async () => {
+    const { secretsAtRestDecryptPermission } = await load('production');
+    expect(secretsAtRestDecryptPermission('arn:x', 'production')).toEqual({
+      actions: ['kms:Decrypt'],
+      resources: ['arn:x'],
+      conditions: [
+        { test: 'StringEquals', variable: 'kms:EncryptionContext:purpose', values: ['secrets-at-rest'] },
+        { test: 'StringEquals', variable: 'kms:EncryptionContext:stage', values: ['production'] },
+      ],
+    });
   });
 });
 
@@ -112,6 +134,8 @@ describe('resolveSecretsAtRestKey', () => {
     expect(secretsAtRestKey?.kind).toBe('dedicated');
     expect(state.key).toHaveBeenCalledTimes(1);
     expect(state.key.mock.calls[0][1]).toMatchObject({ enableKeyRotation: true });
+    const policy = JSON.parse(state.key.mock.calls[0][1].policy as string);
+    expect(policy.Statement.map((s: { Sid: string }) => s.Sid)).toContain('DenyDecryptOutsideApp');
     expect(state.alias.mock.calls[0][1]).toMatchObject({ name: 'alias/app-production-secrets-at-rest' });
   });
 

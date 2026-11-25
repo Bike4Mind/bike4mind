@@ -1,3 +1,5 @@
+import { isPlaceholderValue } from '@bike4mind/common';
+
 /**
  * Mints the per-stage wrapped data key: asks KMS for an AES-256 data key under the stage's secrets-at-rest
  * key, keeps only the wrapped blob and stores it as the SECRET_ENCRYPTION_KEY_WRAPPED SST secret.
@@ -8,8 +10,19 @@
 export const SECRETS_AT_REST_PURPOSE = 'secrets-at-rest';
 
 export const WRAPPED_SECRET_NAME = 'SECRET_ENCRYPTION_KEY_WRAPPED';
-/** The infra default for an unset secret. */
-export const UNSET_SECRET_VALUE = 'not-configured';
+
+/**
+ * Reads a secret's own value from `sst secret list` output. The listing ends with a `# fallback` section
+ * of values inherited from the fallback stage; those are not this stage's, so parsing stops there.
+ * The header text is assumed from the SST CLI and not verified against a live listing.
+ */
+export function parseSecretListing(listing: string, name: string): string | undefined {
+  for (const line of listing.split('\n')) {
+    if (/^#.*fallback/i.test(line)) return undefined;
+    if (line.startsWith(`${name}=`)) return line.slice(name.length + 1).trim();
+  }
+  return undefined;
+}
 
 export const defaultKeyAlias = (appName: string, stage: string) => `alias/${appName}-${stage}-secrets-at-rest`;
 
@@ -47,7 +60,7 @@ export async function createWrappedStageDataKey(
   const context = { purpose: SECRETS_AT_REST_PURPOSE, stage };
 
   const current = await deps.readSecret(stage);
-  if (current !== undefined && current !== UNSET_SECRET_VALUE && !force) {
+  if (!isPlaceholderValue(current) && !force) {
     deps.log(`${WRAPPED_SECRET_NAME} is already set for stage ${stage}; nothing to do (use --force to replace it)`);
     return 'already-set';
   }
