@@ -669,7 +669,7 @@ export interface paths {
     put?: never;
     /**
      * Hand a scanned document to the assistant
-     * @description Reads a document you uploaded (a bill, receipt or letter) and extracts the amount, payee and due date, suggesting one of your data lakes to file it in. The result is `pending`: nothing is filed or briefed until you confirm it with `PATCH /api/v1/obligations/{id}`. Pass `text` when the device already recognized the page; otherwise the file's indexed text is read. Handing off the same file again returns the existing obligation with `200` and is not charged again.
+     * @description Reads a document you uploaded (a bill, receipt or letter) and extracts the amount, payee and due date, suggesting one of your data lakes to file it in. The result is `pending`: nothing is filed or briefed until you confirm it with `PATCH /api/v1/obligations/{id}`. Pass `text` when the device already recognized the page; otherwise the file's indexed text is read. Handing off the same file again returns the existing obligation with `200` and is not charged again. An API key without a data-lake read scope gets no destination suggestion, and `destination` reads `null` on every obligation route.
      */
     post: operations['handOffObligation'];
     delete?: never;
@@ -21816,7 +21816,7 @@ export interface operations {
           'application/json': components['schemas']['ErrorResponse'];
         };
       };
-      /** @description The assistant could not read the document. Nothing was saved; a retry is safe. */
+      /** @description The assistant could not read the document. Nothing was saved, but the reading is charged. */
       502: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
@@ -21971,7 +21971,7 @@ export interface operations {
           'application/json': components['schemas']['ErrorResponse'];
         };
       };
-      /** @description The destination is a data lake you can read but not manage or a built-in one, or the key was minted for a connected app. */
+      /** @description The destination is a data lake you can read but not manage or a built-in one, the request sets or files into a destination with an API key lacking `datalake:write`, or the key was minted for a connected app. */
       403: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
