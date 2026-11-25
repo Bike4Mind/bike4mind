@@ -30,6 +30,7 @@ const OUTCOME_LABELS: Record<CallableFunctionCallRowOutcome, string> = {
   refused: 'Refused',
   queued: 'Queued',
   running: 'Running',
+  data_mismatch: 'Data file changed',
 };
 
 const LABEL_HELP = {

@@ -125,7 +125,26 @@ describe('pyodideSandboxWorkerBody package loading', () => {
   const startWorker = () => {
     const posted: PyodideWorkerResponse[] = [];
     const install = vi.fn().mockResolvedValue(undefined);
+    // A writable bit check on the parent directory stands in for Emscripten's permission check.
+    const fsFiles = new Map<string, { mode: number; data?: Uint8Array }>();
+    const writable = (path: string) => ((fsFiles.get(path.slice(0, path.lastIndexOf('/')))?.mode ?? 0) & 0o200) !== 0;
+    const FS = {
+      analyzePath: (path: string) => ({ exists: fsFiles.has(path) }),
+      mkdir: (path: string) => void fsFiles.set(path, { mode: 0o755 }),
+      readdir: (path: string) => [
+        '.',
+        '..',
+        ...[...fsFiles.keys()].filter(key => key.startsWith(`${path}/`)).map(key => key.slice(path.length + 1)),
+      ],
+      writeFile: (path: string, data: Uint8Array) => {
+        if (!writable(path)) throw new Error('EACCES');
+        fsFiles.set(path, { mode: 0o644, data });
+      },
+      chmod: (path: string, mode: number) => void (fsFiles.get(path)!.mode = mode),
+      unlink: (path: string) => void fsFiles.delete(path),
+    };
     const pyodide = {
+      FS,
       loadPackage: vi.fn().mockResolvedValue(undefined),
       loadPackagesFromImports: vi.fn(async (_code: string, options?: { messageCallback?: (m: string) => void }) => {
         options?.messageCallback?.('Loading scipy, openblas');
@@ -151,7 +170,7 @@ describe('pyodideSandboxWorkerBody package loading', () => {
 
     pyodideSandboxWorkerBody();
     const send = (data: PyodideWorkerMessage) => workerSelf.onmessage!({ data } as MessageEvent<PyodideWorkerMessage>);
-    return { posted, pyodide, install, send };
+    return { posted, pyodide, install, send, fsFiles };
   };
 
   afterEach(() => {
@@ -338,6 +357,21 @@ describe('pyodideSandboxWorkerBody package loading', () => {
       type: 'call-result',
       result: { success: true, contractJson: undefined, valueJson: undefined, output: '' },
     });
+  });
+
+  it('puts pinned files read-only under /data and empties it before the next call', async () => {
+    const { pyodide, send, fsFiles } = startWorker();
+    await send({ type: 'initialize' });
+    const call = { type: 'call' as const, code: 'x = 1', packages: [], paramsJson: '{}', timeoutMs: 1000 };
+    const bytes = new TextEncoder().encode('x,y\n1,2\n').buffer as ArrayBuffer;
+
+    await send({ ...call, nonce: 'd1', files: [{ name: 'points.csv', bytes }] });
+
+    expect(fsFiles.get('/data')?.mode).toBe(0o555);
+    expect(fsFiles.get('/data/points.csv')?.mode).toBe(0o444);
+    expect(() => pyodide.FS.writeFile('/data/new.csv', new Uint8Array(1))).toThrow('EACCES');
+    await send({ ...call, nonce: 'd2' });
+    expect([...fsFiles.keys()]).toEqual(['/data']);
   });
 
   it('reports a runtime failure during a call as a failed call-result', async () => {

@@ -39,6 +39,7 @@ vi.mock('../SaveFunctionDialog', () => ({
   },
 }));
 vi.mock('sonner', () => ({ toast: { error: fns.toastError } }));
+vi.mock('../FunctionDataSection', () => ({ default: () => null }));
 // Its own behavior is in PromoteFunctionSection.test.tsx; here only where it mounts and why it is blocked.
 vi.mock('../PromoteFunctionSection', () => ({
   default: ({ blocked }: { blocked: string | null }) => (
@@ -192,6 +193,7 @@ describe('PythonFunctionPanel', () => {
     expect(callFunction).toHaveBeenLastCalledWith(
       CODE,
       { load: 1000, span: 4, elastic_modulus: 200000000000, second_moment: 0.000008 },
+      [],
       []
     );
     const row = within(result).getByText('deflection').closest('tr') as HTMLElement;
@@ -273,6 +275,7 @@ describe('PythonFunctionPanel', () => {
     expect(callFunction).toHaveBeenLastCalledWith(
       CODE,
       { load: 1000, span: 3, elastic_modulus: 200000000000, second_moment: 0.000008 },
+      [],
       []
     );
   });
@@ -436,7 +439,7 @@ describe('PythonFunctionPanel', () => {
     );
     fireEvent.click(screen.getByTestId('python-function-call-btn'));
     await screen.findByTestId('python-function-result');
-    expect(callFunction).toHaveBeenLastCalledWith(edited, expect.objectContaining({ span: 4 }), []);
+    expect(callFunction).toHaveBeenLastCalledWith(edited, expect.objectContaining({ span: 4 }), [], []);
   });
 });
 
@@ -477,8 +480,8 @@ describe('PythonFunctionPanel tests', () => {
     fireEvent.click(within(section).getByTestId('python-function-tests-run-btn'));
 
     await waitFor(() => expect(statuses()).toEqual(['Passed', 'Passed']));
-    expect(callFunction).toHaveBeenNthCalledWith(2, CODE, STEEL_INPUT, []);
-    expect(callFunction).toHaveBeenNthCalledWith(3, CODE, { ...STEEL_INPUT, span: 2 }, []);
+    expect(callFunction).toHaveBeenNthCalledWith(2, CODE, STEEL_INPUT, [], []);
+    expect(callFunction).toHaveBeenNthCalledWith(3, CODE, { ...STEEL_INPUT, span: 2 }, [], []);
     expect(screen.getAllByTestId('python-function-test-row').map(row => row.textContent)).toEqual([
       '4 m steel beamPassed (2 ms)',
       '2 m steel beamPassed (2 ms)',
@@ -631,7 +634,8 @@ describe('PythonFunctionPanel save controls', () => {
     expect(screen.queryByTestId('python-function-save-btn')).toBeNull();
     expect(screen.queryByTestId('python-function-save-blocked')).toBeNull();
     expect(screen.queryByTestId('python-function-saved-status')).toBeNull();
-    expect(fns.query).not.toHaveBeenCalled();
+    // The hook is disabled for a null artifact, so no lookup is made.
+    expect(fns.query.mock.calls.every(([artifactId]) => artifactId === null)).toBe(true);
   });
 
   it('shows no save controls while the saved tool loads', async () => {

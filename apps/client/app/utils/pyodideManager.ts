@@ -591,7 +591,8 @@ class PyodideManager {
     code: string,
     packages: string[] = [],
     params: Record<string, unknown> | null = null,
-    timeoutMs = params === null ? FUNCTION_READ_TIMEOUT_MS : EXECUTION_TIMEOUT_MS
+    timeoutMs = params === null ? FUNCTION_READ_TIMEOUT_MS : EXECUTION_TIMEOUT_MS,
+    files: { name: string; bytes: ArrayBuffer }[] = []
   ): Promise<PythonFunctionCall> {
     await this.prepareSandbox('none');
     this.refuseIfBusy();
@@ -606,7 +607,7 @@ class PyodideManager {
       this.callNonce = nonce;
       this.runLimitMs = timeoutMs;
       this.updateState({ isExecuting: true, streamingOutput: '' });
-      this.postToSandbox({ type: 'call', code, packages, paramsJson, timeoutMs, nonce });
+      this.postToSandbox({ type: 'call', code, packages, paramsJson, timeoutMs, nonce, files });
     });
   }
 
