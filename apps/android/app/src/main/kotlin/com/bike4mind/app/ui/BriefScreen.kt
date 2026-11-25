@@ -326,7 +326,8 @@ private fun FollowUpControls(decision: BriefDecision, followUp: BriefFollowUp, a
         }
         label?.let { Text(it, style = MaterialTheme.typography.labelMedium, modifier = Modifier.testTag("brief-followup-state")) }
     }
-    if (editing) {
+    // A 409 refetch can settle the follow-up under an open dialog; there is nothing left to save then.
+    if (editing && followUp.isActionable) {
         FollowUpEditDialog(
             decision = decision,
             saving = decision.id in actions.busy,
@@ -337,12 +338,17 @@ private fun FollowUpControls(decision: BriefDecision, followUp: BriefFollowUp, a
     }
 }
 
-/** Hands an approved draft to the device mail app. Bike4Mind never sends it. */
-private fun mailIntent(draft: BriefDraftReply): Intent =
-    Intent(Intent.ACTION_SENDTO, Uri.parse("mailto:" + Uri.encode(draft.to.trim(), "@"))).apply {
+/**
+ * Hands an approved draft to the device mail app. Bike4Mind never sends it. Subject and body ride in the mailto URI
+ * too, since many mail apps ignore the extras on ACTION_SENDTO.
+ */
+private fun mailIntent(draft: BriefDraftReply): Intent {
+    val uri = "mailto:" + Uri.encode(draft.to.trim(), "@") + "?subject=" + Uri.encode(draft.subject) + "&body=" + Uri.encode(draft.body)
+    return Intent(Intent.ACTION_SENDTO, Uri.parse(uri)).apply {
         putExtra(Intent.EXTRA_SUBJECT, draft.subject)
         putExtra(Intent.EXTRA_TEXT, draft.body)
     }
+}
 
 @Composable
 private fun Items(title: String, items: List<BriefItem>, tag: String) {

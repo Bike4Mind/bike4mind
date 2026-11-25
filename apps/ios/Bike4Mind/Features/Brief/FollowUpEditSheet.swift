@@ -14,6 +14,8 @@ struct FollowUpEditSheet: View {
   @State private var subject: String
   @State private var emailBody: String
   @State private var remindAt: Date
+  /// A reminder with no time starts the picker an hour out, but that default is only sent once the user picks.
+  private let initialRemindAt: Date
   @State private var isSaving = false
 
   init(
@@ -27,7 +29,8 @@ struct FollowUpEditSheet: View {
     _to = State(initialValue: decision.draftReply?.to ?? "")
     _subject = State(initialValue: decision.draftReply?.subject ?? "")
     _emailBody = State(initialValue: decision.draftReply?.body ?? "")
-    _remindAt = State(initialValue: decision.followUp?.remindAt ?? Date().addingTimeInterval(3600))
+    initialRemindAt = decision.followUp?.remindAt ?? Date().addingTimeInterval(3600)
+    _remindAt = State(initialValue: initialRemindAt)
   }
 
   private var kind: BriefFollowUpKind? { decision.followUp?.kind }
@@ -91,9 +94,10 @@ struct FollowUpEditSheet: View {
         to: to.trimmingCharacters(in: .whitespacesAndNewlines),
         subject: subject.trimmingCharacters(in: .whitespacesAndNewlines),
         body: emailBody.trimmingCharacters(in: .whitespacesAndNewlines))
-      if draft != decision.draftReply { edit.draftReply = draft }
+      // An email without a draft yet compares as blank fields, so untouched ones do not block a text-only save.
+      if draft != decision.draftReply ?? BriefDraftReply(to: "", subject: "", body: "") { edit.draftReply = draft }
     }
-    if kind == .reminder, remindAt != decision.followUp?.remindAt { edit.remindAt = remindAt }
+    if kind == .reminder, remindAt != initialRemindAt { edit.remindAt = remindAt }
     return edit
   }
 

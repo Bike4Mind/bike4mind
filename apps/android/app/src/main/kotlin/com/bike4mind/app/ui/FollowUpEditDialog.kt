@@ -53,13 +53,15 @@ fun FollowUpEditDialog(decision: BriefDecision, saving: Boolean, error: String?,
     var to by remember { mutableStateOf(decision.draftReply?.to.orEmpty()) }
     var subject by remember { mutableStateOf(decision.draftReply?.subject.orEmpty()) }
     var body by remember { mutableStateOf(decision.draftReply?.body.orEmpty()) }
-    var remindAt by remember {
-        mutableStateOf(decision.followUp?.remindAt?.atZone(zone) ?: ZonedDateTime.now(zone).plusHours(1).withSecond(0).withNano(0))
+    // A reminder with no time starts the pickers an hour out, but that default is only sent once the user picks.
+    val initialRemindAt = remember {
+        decision.followUp?.remindAt?.atZone(zone) ?: ZonedDateTime.now(zone).plusHours(1).withSecond(0).withNano(0)
     }
+    var remindAt by remember { mutableStateOf(initialRemindAt) }
     var pickingDate by remember { mutableStateOf(false) }
     var pickingTime by remember { mutableStateOf(false) }
 
-    val edit = buildEdit(decision, kind, text, BriefDraftReply(to.trim(), subject.trim(), body.trim()), remindAt.toInstant())
+    val edit = buildEdit(decision, kind, text, BriefDraftReply(to.trim(), subject.trim(), body.trim()), remindAt.toInstant(), initialRemindAt.toInstant())
     val complete = edit.text?.isNotEmpty() != false &&
         edit.draftReply?.let { it.to.isNotEmpty() && it.subject.isNotEmpty() && it.body.isNotEmpty() } != false
 
@@ -129,10 +131,11 @@ fun FollowUpEditDialog(decision: BriefDecision, saving: Boolean, error: String?,
     }
 }
 
-private fun buildEdit(decision: BriefDecision, kind: FollowUpKind?, text: String, draft: BriefDraftReply, remindAt: Instant): BriefDecisionEdit =
+private fun buildEdit(decision: BriefDecision, kind: FollowUpKind?, text: String, draft: BriefDraftReply, remindAt: Instant, initialRemindAt: Instant): BriefDecisionEdit =
     BriefDecisionEdit(
         text = text.trim().takeIf { it != decision.text },
-        draftReply = draft.takeIf { kind == FollowUpKind.FOLLOW_UP_EMAIL && it != decision.draftReply },
-        remindAt = remindAt.takeIf { kind == FollowUpKind.REMINDER && it != decision.followUp?.remindAt },
+        // An email without a draft yet compares as blank fields, so untouched ones do not block a text-only save.
+        draftReply = draft.takeIf { kind == FollowUpKind.FOLLOW_UP_EMAIL && it != (decision.draftReply ?: BriefDraftReply("", "", "")) },
+        remindAt = remindAt.takeIf { kind == FollowUpKind.REMINDER && it != initialRemindAt },
     )
 

@@ -254,6 +254,16 @@ final class BriefFollowUpViewModelTests: XCTestCase {
     XCTAssertEqual(model.brief?.decisions.first?.followUp?.state, .approved)
   }
 
+  func testAnEditOfADecisionSettledElsewhereClosesTheForm() async {
+    let followUps = FakeFollowUpAPI(resolve: .failure(.notFound), edit: .failure(.closed))
+    let (model, api) = await loaded([emailDecision(.pending)], followUps: followUps)
+    await api.set(briefWith([emailDecision(.approved)]))
+    let done = await model.editFollowUp(emailDecision(.pending), BriefDecisionEdit(text: "New text"))
+    XCTAssertTrue(done)
+    XCTAssertNil(model.followUpStates["fu-email"])
+    XCTAssertEqual(model.brief?.decisions.first?.followUp?.state, .approved)
+  }
+
   func testAFailedEditKeepsTheDecisionAndReportsWhy() async {
     let followUps = FakeFollowUpAPI(
       resolve: .failure(.notFound), edit: .failure(.invalid("Edit the recipient to an email address first")))

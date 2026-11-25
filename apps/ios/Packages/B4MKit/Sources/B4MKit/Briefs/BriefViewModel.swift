@@ -182,11 +182,14 @@ public final class BriefViewModel {
   /// Saves an edit to a pending follow-up. Returns whether it was saved, so an edit form can stay open with the
   /// user's changes when it was not.
   @discardableResult
+  /// Returns whether the edit form is done: saved, or the follow-up settled elsewhere and can no longer be edited.
   public func editFollowUp(_ decision: BriefDecision, _ edit: BriefDecisionEdit) async -> Bool {
     guard !edit.isEmpty else { return false }
-    return await submitFollowUp(decision) { api, briefID in
-      try await api.editDecision(briefID: briefID, decisionID: decision.id, edit: edit)
-    } != nil
+    let saved =
+      await submitFollowUp(decision) { api, briefID in
+        try await api.editDecision(briefID: briefID, decisionID: decision.id, edit: edit)
+      } != nil
+    return saved || brief?.decisions.first(where: { $0.id == decision.id })?.followUp?.isActionable != true
   }
 
   /// Approves or dismisses a pending follow-up. Returns the draft of an approved follow-up email so the caller can

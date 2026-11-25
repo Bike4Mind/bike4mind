@@ -53,6 +53,9 @@ class BriefController(
 
     private var job: Job? = null
 
+    /** A memo brief started here. The list only carries activity briefs, so it stays reachable by id alone. */
+    private var memoBriefId: String? = null
+
     fun load() = launchExclusive {
         fetch()
         pollWhileComposing()
@@ -64,6 +67,7 @@ class BriefController(
         launchExclusive {
             mutableState.update { it.copy(composing = true, composeTimedOut = false, error = null) }
             val composed = attempt { api.compose() } ?: return@launchExclusive
+            memoBriefId = null
             mutableState.update { it.copy(loading = false, brief = composed) }
             pollWhileComposing()
         }
@@ -76,6 +80,7 @@ class BriefController(
         launchExclusive {
             mutableState.update { it.copy(composing = true, composeTimedOut = false, error = null) }
             val started = attempt { api.followUp(trimmed, ZoneId.systemDefault().id) } ?: return@launchExclusive
+            memoBriefId = started.id
             mutableState.update { it.copy(loading = false, brief = started) }
             pollWhileComposing()
         }
@@ -136,8 +141,8 @@ class BriefController(
     }
 
     private suspend fun fetch() {
-        // A retry/refresh keeps the in-progress brief, even if an older ready one is listed.
-        val requestedId = briefId ?: state.value.brief?.takeIf { it.status == BriefStatus.COMPOSING }?.id
+        // A retry/refresh keeps a memo started here and the in-progress brief, even if an older ready one is listed.
+        val requestedId = memoBriefId ?: briefId ?: state.value.brief?.takeIf { it.status == BriefStatus.COMPOSING }?.id
         val brief = attempt {
             if (requestedId != null) {
                 api.brief(requestedId)

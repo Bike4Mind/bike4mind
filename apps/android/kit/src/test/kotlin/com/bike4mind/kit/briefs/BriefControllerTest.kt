@@ -317,6 +317,26 @@ class BriefControllerTest {
     }
 
     @Test
+    fun aRefreshAfterAMemoKeepsTheMemoBriefOverTheOpenedOrListedOne() = runTest {
+        for (openedId in listOf("b1", null)) {
+            val api = FakeApi()
+            api.listed = listOf(brief("b1", BriefStatus.READY))
+            api.byId["b1"] = ArrayDeque(listOf(brief("b1", BriefStatus.READY)))
+            api.followUpStarted = brief("b2", BriefStatus.COMPOSING)
+            api.byId["b2"] = ArrayDeque(listOf(followUpBrief(email(FollowUpState.PENDING))))
+            val controller = controller(api, briefId = openedId)
+            controller.load()
+            runCurrent()
+            controller.startFollowUp("Email Sam the notes")
+            advanceTimeBy(2_001)
+            runCurrent()
+            controller.load()
+            runCurrent()
+            assertEquals("b2", controller.state.value.brief?.id)
+        }
+    }
+
+    @Test
     fun approvingAnEmailIsSingleFlightAndHandsOffTheDraft() = runTest {
         val api = FakeApi()
         api.byId["b2"] = ArrayDeque(listOf(followUpBrief(email(FollowUpState.PENDING))))
