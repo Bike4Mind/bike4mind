@@ -104,11 +104,14 @@ describe('createHandOffDeps', () => {
       },
     });
     const deps = createHandOffDeps(ctx, logger, { offerLakes: false });
-    const { reply, model, recordUsage } = await deps.complete('user-1', 'prompt');
-    expect(reply).toBe('{"a":1}');
-    expect(model).toBe('ops-model');
+    const store = vi.fn(async (_reply: string, _model: string) => {
+      expect(mocks.recordUsage).not.toHaveBeenCalled();
+      return { sessionId: 'obligation-1', value: 'stored' };
+    });
+    await expect(deps.complete('user-1', 'prompt', store)).resolves.toBe('stored');
+    expect(store).toHaveBeenCalledWith('{"a":1}', 'ops-model');
 
-    await recordUsage('obligation-1');
+    expect(mocks.recordUsage).toHaveBeenCalledTimes(1);
     expect(mocks.recordUsage).toHaveBeenCalledWith(
       expect.objectContaining({
         userId: 'user-1',
@@ -120,5 +123,18 @@ describe('createHandOffDeps', () => {
         logger,
       })
     );
+  });
+
+  it('does not charge when the store throws', async () => {
+    mocks.getOperationsModel.mockResolvedValue({
+      modelId: 'ops-model',
+      modelInfo: { id: 'm' },
+      llm: { complete: async () => {} },
+    });
+    const deps = createHandOffDeps(ctx, logger, { offerLakes: false });
+    await expect(deps.complete('user-1', 'prompt', async () => Promise.reject(new Error('db down')))).rejects.toThrow(
+      'db down'
+    );
+    expect(mocks.recordUsage).not.toHaveBeenCalled();
   });
 });

@@ -42,10 +42,12 @@ export type HandOffDeps = {
   listLakes(): Promise<ObligationLake[]>;
   /** False when the payer cannot cover the call or is frozen; a billing-read failure fails open. */
   canFund(userId: string): Promise<boolean>;
-  complete(
+  /** Runs the model, hands the reply to `store`, then charges under the id it returns; a throwing `store` is not charged. */
+  complete<T>(
     userId: string,
-    prompt: string
-  ): Promise<{ reply: string; model: string; recordUsage(sessionId: string): Promise<void> }>;
+    prompt: string,
+    store: (reply: string, model: string) => Promise<{ sessionId: string; value: T }>
+  ): Promise<T>;
   logger: Logger;
 };
 
@@ -83,35 +85,35 @@ export async function handOffDocument(
     throw insufficientCreditsError('Not enough credits to read this document');
   }
 
-  const { reply, model, recordUsage } = await deps.complete(userId, buildExtractionPrompt(text, lakes));
-  // Pre-generated so a stored row's receipt carries its id. An unreadable reply and the loser of a
-  // concurrent hand-off race are charged under an id no row has: the model call ran either way.
-  const id = new mongoose.Types.ObjectId();
-  let extraction;
-  try {
-    extraction = parseExtraction(reply, lakes);
-  } catch (error) {
-    if (!(error instanceof ObligationExtractionParseError)) throw error;
-    deps.logger.warn('[obligations] model reply was not JSON; nothing stored', { fileId });
-    await recordUsage(id.toString());
-    throw new BadGatewayError('The assistant could not read this document; try again');
-  }
-
-  const result = await deps.obligations.create({
-    _id: id,
-    userId,
-    fileId,
-    documentKind: extraction.documentKind,
-    amountValue: extraction.amount?.value ?? null,
-    currency: extraction.amount?.currency ?? null,
-    payee: extraction.payee,
-    dueDate: extraction.dueDate ? obligationDayToDate(extraction.dueDate) : null,
-    destinationLakeId: extraction.destination?.id ?? null,
-    destinationName: extraction.destination?.name ?? null,
-    summary: extraction.summary,
-    model,
+  const result = await deps.complete(userId, buildExtractionPrompt(text, lakes), async (reply, model) => {
+    // Pre-generated so a stored row's receipt carries its id. An unreadable reply and the loser of a
+    // concurrent hand-off race are charged under an id no row has: the model call ran either way.
+    const id = new mongoose.Types.ObjectId();
+    let extraction;
+    try {
+      extraction = parseExtraction(reply, lakes);
+    } catch (error) {
+      if (!(error instanceof ObligationExtractionParseError)) throw error;
+      deps.logger.warn('[obligations] model reply was not JSON; nothing stored', { fileId });
+      return { sessionId: id.toString(), value: null };
+    }
+    const stored = await deps.obligations.create({
+      _id: id,
+      userId,
+      fileId,
+      documentKind: extraction.documentKind,
+      amountValue: extraction.amount?.value ?? null,
+      currency: extraction.amount?.currency ?? null,
+      payee: extraction.payee,
+      dueDate: extraction.dueDate ? obligationDayToDate(extraction.dueDate) : null,
+      destinationLakeId: extraction.destination?.id ?? null,
+      destinationName: extraction.destination?.name ?? null,
+      summary: extraction.summary,
+      model,
+    });
+    return { sessionId: id.toString(), value: stored };
   });
-  await recordUsage(id.toString());
+  if (!result) throw new BadGatewayError('The assistant could not read this document; try again');
   return result;
 }
 
@@ -134,7 +136,7 @@ export function createHandOffDeps(ctx: AccessContext, logger: Logger, opts: { of
     canFund: async userId =>
       (await checkSessionOperationalCredits({ userId, operationCount: 1, operation: 'scanned document', logger }))
         .allowed,
-    complete: async (userId, prompt) => {
+    complete: async (userId, prompt, store) => {
       const startTime = Date.now();
       const { modelId, llm, modelInfo } = await OperationsModelService.getOperationsModel({ endUserId: userId });
       let reply = '';
@@ -148,19 +150,19 @@ export function createHandOffDeps(ctx: AccessContext, logger: Logger, opts: { of
           if (info) completionInfo = info;
         }
       );
+      const { sessionId, value } = await store(reply, modelId);
       // The obligation id stands in for the session id: the scan belongs to no notebook.
-      const recordUsage = (sessionId: string) =>
-        recordSessionOperationalUsage({
-          userId,
-          sessionId,
-          operation: 'document_obligation',
-          modelId,
-          modelInfo,
-          completionInfo,
-          startTime,
-          logger,
-        });
-      return { reply, model: modelId, recordUsage };
+      await recordSessionOperationalUsage({
+        userId,
+        sessionId,
+        operation: 'document_obligation',
+        modelId,
+        modelInfo,
+        completionInfo,
+        startTime,
+        logger,
+      });
+      return value;
     },
     logger,
   };

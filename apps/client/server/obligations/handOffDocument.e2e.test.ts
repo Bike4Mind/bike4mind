@@ -31,10 +31,10 @@ const OCR = [
 describe('handOffDocument against a real database', () => {
   it('persists amount, payee, due date and destination, and a retry reads the same row', async () => {
     const fileId = new mongoose.Types.ObjectId().toString();
-    const complete = vi.fn(async (_userId: string, prompt: string) => {
+    const complete = vi.fn<HandOffDeps['complete']>(async (_userId, prompt, store) => {
       expect(prompt).toContain('AMOUNT DUE  $184.37');
-      return {
-        reply: JSON.stringify({
+      const { value } = await store(
+        JSON.stringify({
           document_kind: 'invoice',
           payee: 'Acme Water Utility',
           amount: '184.37',
@@ -43,9 +43,9 @@ describe('handOffDocument against a real database', () => {
           destination_index: 2,
           summary: 'Water bill for October service.',
         }),
-        model: 'ops-model',
-        recordUsage: async () => {},
-      };
+        'ops-model'
+      );
+      return value;
     });
     const deps: HandOffDeps = {
       obligations: obligationRepository,

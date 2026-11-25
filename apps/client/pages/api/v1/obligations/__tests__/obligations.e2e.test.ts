@@ -46,19 +46,25 @@ vi.mock('@server/obligations/handOffDocument', async importOriginal => {
       fileText: async () => '',
       listLakes: async () => [{ id: 'lake-bills', name: 'Household bills' }],
       canFund: async () => true,
-      complete: async () => ({
-        reply: JSON.stringify({
-          document_kind: 'invoice',
-          payee: 'Acme Water Utility',
-          amount: '184.37',
-          currency: 'USD',
-          due_date: '2026-12-04',
-          destination_index: 1,
-          summary: 'Water bill for October service.',
-        }),
-        model: 'ops-model',
-        recordUsage: async () => {},
-      }),
+      complete: async (
+        _userId: string,
+        _prompt: string,
+        store: (reply: string, model: string) => Promise<{ value: unknown }>
+      ) =>
+        (
+          await store(
+            JSON.stringify({
+              document_kind: 'invoice',
+              payee: 'Acme Water Utility',
+              amount: '184.37',
+              currency: 'USD',
+              due_date: '2026-12-04',
+              destination_index: 1,
+              summary: 'Water bill for October service.',
+            }),
+            'ops-model'
+          )
+        ).value,
       logger: { warn: () => {} },
     }),
   };

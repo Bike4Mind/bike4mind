@@ -15,8 +15,17 @@ const REPLY = JSON.stringify({
   summary: 'Water bill.',
 });
 
+// Mirrors the production contract: charge under the returned id only after `store` resolves.
+function completeWith(reply: string, recordUsage: (sessionId: string) => Promise<void>): HandOffDeps['complete'] {
+  return async (_userId, _prompt, store) => {
+    const { sessionId, value } = await store(reply, 'ops-model');
+    await recordUsage(sessionId);
+    return value;
+  };
+}
+
 function makeDeps(overrides: Partial<HandOffDeps> = {}) {
-  const recordUsage = vi.fn(async () => {});
+  const recordUsage = vi.fn(async (_sessionId: string) => {});
   const deps: HandOffDeps = {
     obligations: {
       findByFileForUser: vi.fn(async () => null),
@@ -29,7 +38,7 @@ function makeDeps(overrides: Partial<HandOffDeps> = {}) {
     fileText: vi.fn(async () => 'indexed text'),
     listLakes: vi.fn(async () => [{ id: 'lake-1', name: 'Bills' }]),
     canFund: vi.fn(async () => true),
-    complete: vi.fn(async () => ({ reply: REPLY, model: 'ops-model', recordUsage })),
+    complete: vi.fn(completeWith(REPLY, recordUsage)),
     logger: { warn: vi.fn(), info: vi.fn(), error: vi.fn(), debug: vi.fn() } as unknown as HandOffDeps['logger'],
     ...overrides,
   };
@@ -110,9 +119,9 @@ describe('handOffDocument', () => {
   });
 
   it('502s a non-JSON reply, stores nothing and still charges the reading', async () => {
-    const recordUsage = vi.fn(async () => {});
+    const recordUsage = vi.fn(async (_sessionId: string) => {});
     const { deps } = makeDeps({
-      complete: vi.fn(async () => ({ reply: 'Sorry, I cannot help.', model: 'ops-model', recordUsage })),
+      complete: vi.fn(completeWith('Sorry, I cannot help.', recordUsage)),
     });
     await expect(handOffDocument('user-me', { file_id: FILE_ID }, deps)).rejects.toMatchObject({ statusCode: 502 });
     expect(deps.obligations.create).not.toHaveBeenCalled();
