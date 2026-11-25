@@ -59,16 +59,20 @@ const UserTable: React.FC<{
         id: 'user',
         label: 'User',
         render: row => (
-          <Stack direction="row" spacing={1} alignItems="center">
-            <Box>
-              <Typography level="body-sm">{row.name ?? 'Unknown user'}</Typography>
+          <Stack direction="row" spacing={1} alignItems="center" data-testid={`side-apps-user-cell-${row.userId}`}>
+            <Box sx={{ flex: 1, minWidth: 0 }} data-testid={`side-apps-user-text-${row.userId}`}>
+              <Typography level="body-sm" noWrap title={row.name ?? undefined}>
+                {row.name ?? 'Unknown user'}
+              </Typography>
               {row.email && (
-                <Typography level="body-xs" color="neutral">
+                <Typography level="body-xs" color="neutral" noWrap title={row.email}>
                   {row.email}
                 </Typography>
               )}
             </Box>
-            <ViewUserProfile userId={row.userId} size="sm" />
+            <Box sx={{ flexShrink: 0 }} data-testid={`side-apps-user-action-${row.userId}`}>
+              <ViewUserProfile userId={row.userId} size="sm" />
+            </Box>
           </Stack>
         ),
       },

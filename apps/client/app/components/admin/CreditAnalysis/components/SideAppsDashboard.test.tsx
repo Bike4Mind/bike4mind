@@ -180,6 +180,17 @@ describe('SideAppsDashboard', () => {
     expect(useCreditAnalysisStore.getState().sideAppClientId).toBeNull();
   });
 
+  it('keeps the user text shrinkable and the View button fixed, with the full email on hover', () => {
+    useCreditAnalysisStore.setState({ sideAppClientId: 'app-a' });
+    mockUseSideAppUsers.mockReturnValue(ready(usersResponse));
+    renderDashboard();
+    const text = screen.getByTestId('side-apps-user-text-u1');
+    expect(getComputedStyle(text).minWidth).toBe('0px');
+    expect(screen.getByText('one@example.test')).toHaveAttribute('title', 'one@example.test');
+    expect(getComputedStyle(screen.getByText('one@example.test')).textOverflow).toBe('ellipsis');
+    expect(getComputedStyle(screen.getByTestId('side-apps-user-action-u1')).flexShrink).toBe('0');
+  });
+
   it('exports both tables', () => {
     useCreditAnalysisStore.setState({ sideAppClientId: 'app-a' });
     mockUseSideAppUsers.mockReturnValue(ready(usersResponse));
