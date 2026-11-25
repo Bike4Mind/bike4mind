@@ -587,7 +587,6 @@ function worktreesEntry(): ConfigEntry {
     icon: <BranchIcon />,
     label: 'Worktrees',
     summary: 'Worktrees the app made for your projects, and the ones no conversation uses any more.',
-    description: 'Worktrees the app made for your projects, and the ones no conversation uses any more.',
     control: <WorktreesSettings />,
   };
 }
@@ -854,7 +853,9 @@ function SectionPage({
   highlighted: string | undefined;
 }) {
   const rows = pageEntries(section, entries);
-  const single = rows.length === 1 ? rows[0] : undefined;
+  // Keyed on the page's design, not on what rendered: Advanced can be down to one row (Worktrees)
+  // while auth loads, and that row still needs its label.
+  const single = rows.length === 1 && PAGE_ENTRIES[section].length === 1 ? rows[0] : undefined;
   const intro = section === 'permissions' ? (rows[0]?.summary ?? '') : SECTION_INTRO[section];
   return (
     <Stack spacing={single ? 2 : 3}>
@@ -1050,7 +1051,9 @@ export function SettingsScreen({
   const openResult = (id: string) => {
     setQuery('');
     if (!isSettingId(id)) return;
-    setHighlightRequest(request => request + 1);
+    // Only a reopen of the current row needs a replay; any other id re-runs the highlight when the
+    // route lands, and bumping here would first flash the previous row.
+    if (id === setting) setHighlightRequest(request => request + 1);
     onOpenSetting?.({ section: pageOf(id), setting: id });
   };
 
