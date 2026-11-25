@@ -1,3 +1,4 @@
+import { Logger } from '@bike4mind/observability';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 const state = vi.hoisted(() => ({
@@ -26,7 +27,7 @@ describe('loadPythonArtifactDataOrigins', () => {
     state.connect = () => Promise.resolve();
     state.settings = {};
     vi.stubEnv('APP_URL', 'https://app.example.com');
-    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    vi.spyOn(Logger.prototype, 'warn').mockImplementation(() => {});
   });
 
   afterEach(() => {

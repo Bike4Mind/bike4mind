@@ -52,6 +52,14 @@ export const GetFunctionResponseSchema = z.object({ data: PublicFunctionDetailSc
 export const InvokeFunctionRequestSchema = z
   .object({
     input: z.record(z.string(), z.unknown()).describe("The function's inputs, as its `input_schema` describes them."),
+    mode: z
+      .enum(['sync', 'async'])
+      .optional()
+      .describe(
+        '`sync` (default) answers with the result and stops at 45 s. `async` answers 202 with a `call_id` once ' +
+          "every check has passed, runs to the organization's time limit, and keeps the result for 24 hours at " +
+          '`GET /api/v1/functions/calls/{call_id}`.'
+      ),
   })
   .strict();
 
@@ -106,6 +114,30 @@ export const InvokeFunctionFailedErrorSchema = ApiErrorSchema.extend({
 export const InvokeFunctionTimeoutErrorSchema = ApiErrorSchema.extend({
   errorCode: z.literal(REQUEST_TIMEOUT_ERROR_CODE),
   stamp: FunctionStampSchema.optional(),
+});
+
+export const InvokeFunctionQueuedResponseSchema = z.object({
+  call_id: z.string().describe('Poll `GET /api/v1/functions/calls/{call_id}` for the result.'),
+  status: z.literal('queued'),
+});
+
+export const FunctionCallIdParamSchema = z.object({
+  call_id: z.string().describe('The `call_id` an asynchronous invoke answered with.'),
+});
+
+export const GetFunctionCallResponseSchema = z.object({
+  call_id: z.string(),
+  status: z
+    .enum(['queued', 'running', 'finished'])
+    .describe('`queued` and `running` carry nothing else; poll again. `finished` carries how the call ended.'),
+  outcome: z
+    .enum(CALLABLE_FUNCTION_CALL_OUTCOMES)
+    .optional()
+    .describe('How a finished call ended: `ok` carries `output`; any other outcome carries `error`.'),
+  output: z.record(z.string(), z.unknown()).optional().describe('The outputs, checked against `output_schema`.'),
+  stamp: FunctionStampSchema.optional(),
+  error: z.string().optional(),
+  problems: z.array(FunctionProblemSchema).optional(),
 });
 
 export type PublicFunction = z.infer<typeof PublicFunctionSchema>;

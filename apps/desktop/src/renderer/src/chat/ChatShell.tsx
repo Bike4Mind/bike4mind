@@ -176,6 +176,7 @@ import { agentStates, descendantIds } from './orchestrator/roster';
 import { prefersReducedMotion } from './orchestrator/motion';
 import { ThreadDock, type ThreadDockMode } from './orchestrator/ThreadDock';
 import { useOrchestratorPrefs } from './orchestrator/useOrchestrator';
+import { useFillWindow } from './orchestrator/useFillWindow';
 import { useNeedsYouAlerts } from './orchestrator/useNeedsYouAlerts';
 import { SidebarSyncHints } from './SyncHints';
 import { useNewChatRequests } from '../appMenu/newChatRequests';
@@ -946,6 +947,10 @@ export function ChatShell({
   const threadHost = useRef<HTMLDivElement | null>(null);
   const dockToggle = useRef<HTMLButtonElement | null>(null);
   const [conversationRequest, setConversationRequest] = useState(0);
+  // Fill window: the stage takes the whole window, with the rail, sidebar, header, session panel, dock and
+  // composer out of the way until Exit or Escape. Never settles: its own header is already minimal.
+  const fillWindow = useFillWindow(orchestrating && activeId !== null && screen === 'conversation' && inSessionPlace);
+
   // Focus lands on the header toggle, the way back in, rather than on a dock that just hid.
   const closeDock = useCallback(() => {
     setDockOpen(false);
@@ -957,6 +962,8 @@ export function ChatShell({
   );
   const readParentReport = useCallback(
     (reportId: string) => {
+      // The conversation is hidden while the window is filled, so reading it leaves fill window.
+      fillWindow.setOn(false);
       setDockOpen(true);
       setConversationRequest(request => request + 1);
       // After the dock is shown again, or a hidden dock would scroll nothing into view.
@@ -968,13 +975,14 @@ export function ChatShell({
         window.setTimeout(() => reply.removeAttribute('data-report-highlight'), REPORT_HIGHLIGHT_MS);
       });
     },
-    [setDockOpen]
+    [setDockOpen, fillWindow.setOn]
   );
   const focusParentChat = useCallback(() => {
+    fillWindow.setOn(false);
     setDockOpen(true);
     setConversationRequest(request => request + 1);
     setComposerFocus(request => request + 1);
-  }, [setDockOpen]);
+  }, [setDockOpen, fillWindow.setOn]);
 
   // The ambient Tavern: after a quiet spell the dock and composer settle out and leave the scene.
   const ambient = useAmbientSettle({
@@ -985,6 +993,7 @@ export function ChatShell({
       ORCHESTRATOR_VIEW_INFO[orchestratorView].ambient &&
       !orchestratorSplit &&
       !orchestratorPrefs.focus &&
+      !fillWindow.on &&
       introPhase !== 'playing',
     // A reply streaming in is something to watch arrive, not to hide.
     held: () => conversation.streaming || ambientHeld(document),
@@ -1051,7 +1060,7 @@ export function ChatShell({
     },
     [sendToConversation, modelSessionId, conversationId, modelOption]
   );
-  const dockVisible = orchestratorPrefs.dockOpen && !ambient.settled;
+  const dockVisible = orchestratorPrefs.dockOpen && !ambient.settled && !fillWindow.on;
   useEffect(() => {
     if (!persistedId || screen !== 'conversation' || (orchestrating && !dockVisible)) return;
     const acknowledge = () => markSessionViewed(persistedId);
@@ -1185,7 +1194,8 @@ export function ChatShell({
   const panelLayout = sessionPanelLayout(threadRegionWidth, { centeredColumn: !orchestratorShown });
   const panelDocked = panelLayout !== 'overlay';
   const panelShown = panelAvailable && (panelDocked ? panelPrefs.open : panelPopoverOpen);
-  const panelSpace = panelShown && panelLayout === 'push' ? SESSION_PANEL_SPACE : 0;
+  const panelDrawn = panelShown && !fillWindow.on;
+  const panelSpace = panelDrawn && panelLayout === 'push' ? SESSION_PANEL_SPACE : 0;
   // Unmeasured reads as too narrow, the reverse of the panel: a rail drawn before the width is
   // known could overhang the sidebar for a frame, where the footer it falls back to cannot.
   // A pushing panel's reserved space narrows the scroller; the orchestrator's thread dock is narrower still.
@@ -1773,6 +1783,8 @@ export function ChatShell({
         if (!event.currentTarget.contains(event.target)) return;
         if (threadHost.current?.contains(event.target)) return;
         if (event.target.closest('[data-conversation-toggle]')) return;
+        // Fill window hides the dock and Exit brings it back as it was, so neither click closes it.
+        if (event.target.closest('[data-fill-window-toggle]')) return;
         if (event.target.closest('[data-testid="chat-composer-input"]')) return;
         closeDock();
       }}
@@ -1807,87 +1819,90 @@ export function ChatShell({
         </Box>
       )}
 
-      <PlaceRail
-        place={place}
-        sidebarCollapsed={collapsed}
-        onSelect={selectPlaceFromRail}
-        needsYou={needsYou}
-        account={account?.({
-          status: (
-            <TurnDot
-              state={turnState({ streaming: turnOpen, disabled: !activeId || creatingCode, notReady: unbound })}
-            />
-          ),
-          spentAt: conversation.settledTurns,
-          customizeAttention,
-          onOpenCustomize: () => setScreen('customize'),
-          onOpenModels: () => setScreen('models'),
-        })}
-      />
-
-      {inStudio ? (
-        !collapsed && (
-          <StudioSidebar
-            width={readSidebarWidth()}
-            area={studioArea}
-            kind={studioKind}
-            controller={studio && studio.sessionId === studioSession.sessionId ? studio : undefined}
-            unavailableReason={studioPlaceReason}
-            onSelectKind={kind => {
-              setScreen('conversation');
-              setStudioArea('create');
-              setStudioKind(kind);
-            }}
-            onSelectArea={area => {
-              setScreen('conversation');
-              setStudioArea(area);
-            }}
-            onToggleCollapsed={() => setCollapsed(current => !current)}
-          />
-        )
-      ) : inAgents ? null : (
-        <SessionList
-          sessions={sessions}
-          mode={mode}
-          loading={loading}
-          activeId={selectedRosterId ?? activeId}
-          statuses={statuses}
-          prSummaries={prSummaries}
-          collapsed={collapsed}
-          onToggleCollapsed={() => setCollapsed(current => !current)}
-          onSelect={selectSidebarSession}
-          onCreate={() => void onCreate()}
-          onOpenArtifacts={() => setScreen('artifacts')}
-          onOpenMissionControl={() => setScreen('mission-control')}
-          onCreateInProject={directory => void onCreateInProject(directory)}
-          onCreateInSection={sectionId => void onCreateInSection(sectionId)}
-          onDelete={setDeleteSessionId}
-          onTogglePin={session => void togglePin(session)}
-          onToggleArchived={session => void toggleArchived(session)}
-          onRename={(session, title) => void rename(session, title)}
-          onDownload={session => void exportSession(session)}
-          downloadError={exportError}
-          onDismissDownloadError={clearExportError}
-          renameError={renameError}
-          onDismissRenameError={clearRenameError}
-          userSections={userSections}
-          sectionActions={sectionActions}
-          sectionError={sectionError}
-          onDismissSectionError={dismissSectionError}
-          syncHints={
-            onOpenImportSettings
-              ? (empty, fallback) => (
-                  <SidebarSyncHints
-                    empty={empty}
-                    fallback={fallback}
-                    showWebSync={mode === 'chat'}
-                    onOpenSettings={onOpenImportSettings}
-                  />
-                )
-              : undefined
-          }
+      {/* Hidden rather than unmounted in Fill window, so the sidebar keeps its scroll and search. */}
+      <Box data-testid="chat-shell-navigation" sx={{ display: fillWindow.on ? 'none' : 'contents' }}>
+        <PlaceRail
+          place={place}
+          sidebarCollapsed={collapsed}
+          onSelect={selectPlaceFromRail}
+          needsYou={needsYou}
+          account={account?.({
+            status: (
+              <TurnDot
+                state={turnState({ streaming: turnOpen, disabled: !activeId || creatingCode, notReady: unbound })}
+              />
+            ),
+            spentAt: conversation.settledTurns,
+            customizeAttention,
+            onOpenCustomize: () => setScreen('customize'),
+            onOpenModels: () => setScreen('models'),
+          })}
         />
-      )}
+
+        {inStudio ? (
+          !collapsed && (
+            <StudioSidebar
+              width={readSidebarWidth()}
+              area={studioArea}
+              kind={studioKind}
+              controller={studio && studio.sessionId === studioSession.sessionId ? studio : undefined}
+              unavailableReason={studioPlaceReason}
+              onSelectKind={kind => {
+                setScreen('conversation');
+                setStudioArea('create');
+                setStudioKind(kind);
+              }}
+              onSelectArea={area => {
+                setScreen('conversation');
+                setStudioArea(area);
+              }}
+              onToggleCollapsed={() => setCollapsed(current => !current)}
+            />
+          )
+        ) : inAgents ? null : (
+          <SessionList
+            sessions={sessions}
+            mode={mode}
+            loading={loading}
+            activeId={selectedRosterId ?? activeId}
+            statuses={statuses}
+            prSummaries={prSummaries}
+            collapsed={collapsed}
+            onToggleCollapsed={() => setCollapsed(current => !current)}
+            onSelect={selectSidebarSession}
+            onCreate={() => void onCreate()}
+            onOpenArtifacts={() => setScreen('artifacts')}
+            onOpenMissionControl={() => setScreen('mission-control')}
+            onCreateInProject={directory => void onCreateInProject(directory)}
+            onCreateInSection={sectionId => void onCreateInSection(sectionId)}
+            onDelete={setDeleteSessionId}
+            onTogglePin={session => void togglePin(session)}
+            onToggleArchived={session => void toggleArchived(session)}
+            onRename={(session, title) => void rename(session, title)}
+            onDownload={session => void exportSession(session)}
+            downloadError={exportError}
+            onDismissDownloadError={clearExportError}
+            renameError={renameError}
+            onDismissRenameError={clearRenameError}
+            userSections={userSections}
+            sectionActions={sectionActions}
+            sectionError={sectionError}
+            onDismissSectionError={dismissSectionError}
+            syncHints={
+              onOpenImportSettings
+                ? (empty, fallback) => (
+                    <SidebarSyncHints
+                      empty={empty}
+                      fallback={fallback}
+                      showWebSync={mode === 'chat'}
+                      onOpenSettings={onOpenImportSettings}
+                    />
+                  )
+                : undefined
+            }
+          />
+        )}
+      </Box>
 
       {screen !== 'conversation' && updateNotice}
       {screen === 'artifacts' ? (
@@ -1952,7 +1967,10 @@ export function ChatShell({
             data-testid="chat-conversation-column"
             sx={{ flex: 1, minWidth: 0, minHeight: 0, ...columnStackSx, [SESSION_PANEL_SPACE_VAR]: `${panelSpace}px` }}
           >
-            <Box sx={{ borderBottom: '1px solid', borderColor: 'divider' }}>
+            <Box
+              data-testid="chat-conversation-header"
+              sx={{ borderBottom: '1px solid', borderColor: 'divider', display: fillWindow.on ? 'none' : undefined }}
+            >
               <Box sx={{ ...contentColumnSx, py: 1.25, display: 'flex', alignItems: 'center', gap: 1 }}>
                 <Box sx={{ flex: 1, minWidth: 0 }}>
                   {conversation.session ? (
@@ -2147,6 +2165,7 @@ export function ChatShell({
                     conversationRequest={conversationRequest}
                     presenter={stagePresenter}
                     paneSessions={paneSessions}
+                    fillWindow={fillWindow}
                     dockControl={
                       <Tooltip
                         size="sm"
@@ -2191,7 +2210,7 @@ export function ChatShell({
                 </ThreadDock>
               </Box>
 
-              {panelShown && conversation.session && (
+              {panelDrawn && conversation.session && (
                 <SessionPanel
                   // Keyed so an action error or an unfolded list does not follow the user to the next
                   // conversation.
@@ -2273,8 +2292,11 @@ export function ChatShell({
                 </Box>
               </Box>
             )}
-            {/* Hidden, never unmounted, while the Tavern is quiet: the composer keeps its draft and state. */}
-            <Box data-testid="chat-composer-region" sx={{ display: ambient.settled ? 'none' : 'contents' }}>
+            {/* Hidden, never unmounted, while the Tavern is quiet or fills the window: the composer keeps its draft. */}
+            <Box
+              data-testid="chat-composer-region"
+              sx={{ display: ambient.settled || fillWindow.on ? 'none' : 'contents' }}
+            >
               {!panelShown && <TodoPanel todos={plan} turnOpen={turnOpen} />}
 
               {/* A compaction is a round trip the user is waiting on, with nothing streaming into the

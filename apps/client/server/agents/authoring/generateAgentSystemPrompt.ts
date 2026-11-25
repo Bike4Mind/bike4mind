@@ -4,13 +4,15 @@ import {
   apiKeyRepository,
   adminSettingsRepository,
 } from '@bike4mind/database';
-import type { Logger } from '@bike4mind/observability';
+import { Logger } from '@bike4mind/observability';
 import { IAgent, IMessage } from '@bike4mind/common';
 import { BadRequestError, getSettingsByNames } from '@bike4mind/utils';
 import { getAvailableModels, getLlmByModel } from '@bike4mind/llm-adapters';
 import { apiKeyService, meterCompletionBackend, type CompletionMeter } from '@bike4mind/services';
 import { assertSystemPromptGenerationAllowed } from '@server/agents/systemPromptRateLimit';
 import { AuthoringResultError } from '@server/agents/authoring/authoringErrors';
+
+const logger = new Logger({ metadata: { service: 'generateAgentSystemPrompt' } });
 
 // Helper function to create the input data for the PromptCrafter
 const createAgentMetadataForPrompt = (agent: IAgent): string => {
@@ -70,7 +72,7 @@ const createAgentMetadataForPrompt = (agent: IAgent): string => {
           };
         }
       } catch (error) {
-        console.error('Error parsing agent capabilities:', error);
+        logger.error('Error parsing agent capabilities', { error });
       }
       return {
         responseStyle: 'friendly',
