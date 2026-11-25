@@ -67,10 +67,8 @@ describe('AgentStore frontmatter is inert', () => {
   });
 
   it('does not evaluate a `---js` frontmatter block, and keeps scanning valid siblings', async () => {
-    // parseAgentFile must route through parseFrontmatter, not gray-matter's raw
-    // matter() (which eval()s a `---js` engine). Reverting AgentStore.ts to
-    // `matter(content)` runs this payload at load time -> the pwned flag is set.
-    // A `---js` fence yields empty frontmatter, which fails the required-description
+    // parseAgentFile must route through parseFrontmatter, which never evaluates a
+    // `---js` fence. A `---js` fence yields empty frontmatter, which fails the required-description
     // schema, so the hostile file is REJECTED (not loaded) rather than eval'd. The
     // valid sibling makes this two-sided: a no-op scanner regression (which would
     // ALSO leave the flag unset) fails to load `real`, so this no longer passes on
