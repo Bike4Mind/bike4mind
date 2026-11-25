@@ -166,6 +166,30 @@ describe('platform accounting prerequisites', () => {
     expect((await platformAttemptRepository.get('call-1'))?.usage).toBeUndefined();
   });
 
+  for (const method of ['updateOne', 'findOneAndUpdate', 'updateMany'] as const) {
+    it.each([undefined, false])(
+      `enforces strict context validation for ${method} with caller runValidators=%s`,
+      async runValidators => {
+        await dispatched();
+        const filter = { providerCallId: 'call-1' };
+        const mutate = (fields: Record<string, unknown>) =>
+          runValidators === undefined
+            ? PlatformAttempt[method](filter, { $set: fields })
+            : PlatformAttempt[method](filter, { $set: fields }, { runValidators });
+        await expect(mutate({ attribution: { ...attribution, actorUserId: 'subject' } })).rejects.toThrow(
+          'Invalid platform attempt attribution'
+        );
+        await expect(mutate({ usage: { ...fact(), sessionId: 'subject-session' } })).rejects.toThrow(
+          'Invalid platform attempt usage'
+        );
+        await mutate({ attribution });
+        expect((await platformAttemptRepository.get('call-1'))?.attribution).toEqual(attribution);
+        expect((await platformAttemptRepository.get('call-1'))?.usage).toBeUndefined();
+        expect((await platformAttemptRepository.get('call-1'))?.state).toBe('dispatched');
+      }
+    );
+  }
+
   it('rejects dotted context updates, rename destinations and update pipelines before Mixed validation can be bypassed', async () => {
     await dispatched();
     const filter = { providerCallId: 'call-1' };

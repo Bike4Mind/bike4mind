@@ -54,6 +54,7 @@ PlatformAttemptSchema.index({ state: 1, leaseExpiresAt: 1 });
 PlatformAttemptSchema.index({ 'attribution.executionId': 1, state: 1 });
 // Mixed-field validators do not run for dotted writes or update pipelines.
 PlatformAttemptSchema.pre(['updateOne', 'updateMany', 'findOneAndUpdate'], function () {
+  this.setOptions({ runValidators: true });
   const update = this.getUpdate();
   if (Array.isArray(update)) throw new Error('Platform attempt update pipelines are not supported');
   const protectedPath = (path: string) =>
