@@ -141,6 +141,14 @@ export async function revokeInstallerToken(config: GitHubLakeAppConfig, userToke
   });
 }
 
+/** Deletes the user's whole authorization of the App, ending every user token it issued them. Installations are untouched. */
+export async function revokeInstallerAuthorization(config: GitHubLakeAppConfig, userToken: string): Promise<void> {
+  await appOctokit(config).request('DELETE /applications/{client_id}/grant', {
+    client_id: config.clientId,
+    access_token: userToken,
+  });
+}
+
 export async function getInstallation(
   config: GitHubLakeAppConfig,
   installationId: number

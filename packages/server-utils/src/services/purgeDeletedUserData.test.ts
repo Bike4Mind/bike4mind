@@ -15,7 +15,17 @@ const {
   removeFromWatchesMock,
   removeFromEvalSetsMock,
   deleteLimitEventsMock,
+  revoke,
 } = vi.hoisted(() => ({
+  revoke: {
+    notion: vi.fn(),
+    slack: vi.fn(),
+    apple: vi.fn(),
+    githubSignIn: vi.fn(),
+    githubLake: vi.fn(),
+    mcp: vi.fn(),
+    mcpContext: vi.fn(),
+  },
   deleteEmbedMock: vi.fn(),
   deleteRequestsMock: vi.fn(),
   purgePublishedMock: vi.fn(),
@@ -58,6 +68,18 @@ vi.mock('../integrations/google/drive/flagConnectionsStoppedByDisconnect', () =>
 vi.mock('../integrations/jira/revokeAtlassianGrant', () => ({
   revokeAtlassianGrant: revokeAtlassianMock,
 }));
+vi.mock('../integrations/notion/revokeNotionGrant', () => ({ revokeNotionGrant: revoke.notion }));
+vi.mock('../integrations/slack/revokeSlackUserToken', () => ({ revokeSlackUserToken: revoke.slack }));
+vi.mock('../auth/revokeAppleTokens', () => ({ revokeAppleGrant: revoke.apple }));
+vi.mock('../auth/revokeGitHubSignInGrant', () => ({ revokeGitHubSignInGrant: revoke.githubSignIn }));
+vi.mock('../integrations/github/dataLake/githubLakeAuthGrant', () => ({
+  revokeGitHubLakeUserAuthorization: revoke.githubLake,
+}));
+vi.mock('../mcpConnections/oauth/revoke', () => ({ revokeConnectionGrant: revoke.mcp }));
+vi.mock('../mcpConnections/customMcpAccess', () => ({
+  resolveCustomMcpContext: revoke.mcpContext,
+  resolveOwnHosts: () => ['app.example.test'],
+}));
 
 import { purgeDeletedUserData } from './purgeDeletedUserData';
 
@@ -78,6 +100,13 @@ beforeEach(() => {
   revokeAtlassianMock.mockReset().mockResolvedValue('revoked');
   flagConnectionsMock.mockReset().mockResolvedValue({ affectedOrgConnections: 0, affectedPersonalConnections: 0 });
   logger.error.mockReset();
+  revoke.notion.mockReset().mockResolvedValue('revoked');
+  revoke.slack.mockReset().mockResolvedValue('revoked');
+  revoke.apple.mockReset().mockResolvedValue({ status: 'revoked' });
+  revoke.githubSignIn.mockReset().mockResolvedValue('revoked');
+  revoke.githubLake.mockReset().mockResolvedValue(true);
+  revoke.mcp.mockReset().mockResolvedValue(undefined);
+  revoke.mcpContext.mockReset().mockResolvedValue({ network: { ownHosts: ['policy.example.test'] } });
 });
 
 describe('purgeDeletedUserData', () => {
@@ -301,6 +330,101 @@ describe('purgeDeletedUserData', () => {
       expect(deleteRequestsMock).toHaveBeenCalledWith('u1');
       expect(purgePublishedMock).toHaveBeenCalled();
       expect(hideAnnotationsMock).toHaveBeenCalledWith('u1');
+    });
+  });
+  describe('the other provider grants', () => {
+    const authProviders = [
+      { strategy: 'apple', id: 'sub', refreshToken: 'enc-apple' },
+      { strategy: 'github', id: '42', accessToken: 'enc-gh' },
+    ] as never;
+    const mcpConnections = [{ id: 'c1' }, { id: 'c2' }] as never;
+    const allGrants = {
+      googleDrive: null,
+      atlassianConnect: null,
+      notionConnect: { accessToken: 'enc-notion', workspaceId: 'w', workspaceName: 'W', botId: 'b' } as never,
+      slackUserToken: 'enc-slack',
+      authProviders,
+      mcpConnections,
+      githubLakeTokens: ['enc-lake'],
+    };
+    const purge = (integrationGrants: Parameters<typeof purgeDeletedUserData>[1]['integrationGrants']) =>
+      purgeDeletedUserData('u1', { deletedBy: 'admin1', logger, integrationGrants });
+
+    it('revokes Notion, Slack, Apple, GitHub and every MCP grant', async () => {
+      await purge(allGrants);
+
+      expect(revoke.notion).toHaveBeenCalledWith('enc-notion', 'deleted user u1');
+      expect(revoke.slack).toHaveBeenCalledWith('enc-slack', 'deleted user u1');
+      expect(revoke.apple).toHaveBeenCalledWith(authProviders);
+      expect(revoke.githubSignIn).toHaveBeenCalledWith(authProviders, 'deleted user u1');
+      expect(revoke.githubLake).toHaveBeenCalledWith('enc-lake', 'deleted user u1');
+      expect(revoke.mcpContext).toHaveBeenCalledWith('u1');
+      expect(revoke.mcp).toHaveBeenCalledWith({ id: 'c1' }, { ownHosts: ['policy.example.test'] });
+      expect(revoke.mcp).toHaveBeenCalledWith({ id: 'c2' }, { ownHosts: ['policy.example.test'] });
+      expect(logger.error).not.toHaveBeenCalled();
+    });
+
+    it('keeps revoking the others when one provider throws, and logs the one that failed', async () => {
+      revoke.apple.mockRejectedValue(new Error('Apple token revocation failed with status 400'));
+      revoke.notion.mockRejectedValue(new Error('boom'));
+
+      await expect(purge(allGrants)).resolves.toBeUndefined();
+
+      expect(logger.error).toHaveBeenCalledWith(expect.stringContaining('Sign in with Apple grant'));
+      expect(logger.error).toHaveBeenCalledWith(expect.stringContaining('Notion grant'));
+      expect(revoke.slack).toHaveBeenCalled();
+      expect(revoke.githubSignIn).toHaveBeenCalled();
+      expect(revoke.githubLake).toHaveBeenCalled();
+      expect(revoke.mcp).toHaveBeenCalledTimes(2);
+      expect(deleteEmbedMock).toHaveBeenCalledWith('u1');
+    });
+
+    it('revokes MCP grants under the default network policy when the user policy no longer resolves', async () => {
+      revoke.mcpContext.mockRejectedValue(new Error('settings unavailable'));
+
+      await purge(allGrants);
+
+      expect(revoke.mcp).toHaveBeenCalledWith({ id: 'c1' }, { ownHosts: ['app.example.test'] });
+    });
+
+    it('calls no provider when the user held no grant', async () => {
+      await purge({
+        googleDrive: null,
+        atlassianConnect: null,
+        notionConnect: null,
+        slackUserToken: null,
+        authProviders: null,
+        mcpConnections: [],
+        githubLakeTokens: [],
+      });
+
+      for (const fn of [
+        revoke.notion,
+        revoke.slack,
+        revoke.apple,
+        revoke.githubSignIn,
+        revoke.githubLake,
+        revoke.mcp,
+      ]) {
+        expect(fn).not.toHaveBeenCalled();
+      }
+      expect(revoke.mcpContext).not.toHaveBeenCalled();
+      expect(revokeDriveMock).not.toHaveBeenCalled();
+    });
+
+    it('calls no provider when there is no grant snapshot', async () => {
+      await purge(null);
+
+      for (const fn of [
+        revoke.notion,
+        revoke.slack,
+        revoke.apple,
+        revoke.githubSignIn,
+        revoke.githubLake,
+        revoke.mcp,
+      ]) {
+        expect(fn).not.toHaveBeenCalled();
+      }
     });
   });
 });

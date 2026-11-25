@@ -19,7 +19,7 @@ import {
 } from '@bike4mind/server-utils/mcpConnections/oauth/clientIdentity';
 import { withOAuthFetch } from '@bike4mind/server-utils/mcpConnections/oauth/oauthFetch';
 import { redirectUri } from '@bike4mind/server-utils/mcpConnections/oauth/redirectUri';
-import { revokeConnectionGrant } from './revoke';
+import { revokeConnectionGrant } from '@bike4mind/server-utils/mcpConnections/oauth/revoke';
 
 export const sha256Hex = (value: string): string => createHash('sha256').update(value, 'utf8').digest('hex');
 

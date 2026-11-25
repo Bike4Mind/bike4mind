@@ -3,7 +3,13 @@ import { Logger } from '@bike4mind/observability';
 import { decryptToken, encryptToken } from '../../../security/tokenEncryption';
 import { ForbiddenError, InternalServerError } from '../../../utils/errors';
 import { serializeError } from '../../../utils/serializeError';
-import { revokeInstallerToken, type GitHubLakeAppConfig } from './lakeAppClient';
+import {
+  getGitHubLakeAppConfig,
+  gitHubErrorStatus,
+  revokeInstallerAuthorization,
+  revokeInstallerToken,
+  type GitHubLakeAppConfig,
+} from './lakeAppClient';
 
 /**
  * The server-side half of the authorize-first lake connect: the user-to-server token minted by the
@@ -72,5 +78,27 @@ async function revokeGrantToken(config: GitHubLakeAppConfig, encryptedToken: str
   } catch (error) {
     // Not fatal: nothing holds the token any more, and GitHub expires it on its own (8h).
     Logger.warn('GitHub lake connect: could not revoke a user token', { error: serializeError(error) });
+  }
+}
+
+/**
+ * Account deletion: ends the user's authorization of the data-lake App through a token we still hold
+ * (only a flow's live grant holds one). BEST EFFORT: never throws, and a failure is logged with its
+ * status only. Returns whether GitHub accepted the revoke.
+ */
+export async function revokeGitHubLakeUserAuthorization(encryptedToken: string, context: string): Promise<boolean> {
+  const config = getGitHubLakeAppConfig();
+  if (!config) {
+    Logger.warn('GitHub lake: authorization revoke skipped, the App is not configured', { context });
+    return false;
+  }
+  try {
+    const token = decryptToken(encryptedToken);
+    if (!token) return false;
+    await revokeInstallerAuthorization(config, token);
+    return true;
+  } catch (error) {
+    Logger.warn('GitHub lake: could not revoke the user authorization', { context, status: gitHubErrorStatus(error) });
+    return false;
   }
 }

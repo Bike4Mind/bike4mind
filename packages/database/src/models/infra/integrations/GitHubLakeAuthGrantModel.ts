@@ -58,6 +58,12 @@ export const gitHubLakeAuthGrantRepository = {
       .exec();
   },
 
+  async listLiveForUser(userId: string): Promise<IGitHubLakeAuthGrantDoc[]> {
+    return GitHubLakeAuthGrant.find({ userId, expiresAt: { $gt: new Date() } })
+      .lean<IGitHubLakeAuthGrantDoc[]>()
+      .exec();
+  },
+
   /** Atomic take, so two concurrent completions cannot both consume one grant. */
   async consume(nonceHash: string): Promise<IGitHubLakeAuthGrantDoc | null> {
     return GitHubLakeAuthGrant.findOneAndDelete({ nonceHash }).lean<IGitHubLakeAuthGrantDoc>().exec();

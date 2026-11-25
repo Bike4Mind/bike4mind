@@ -1,10 +1,11 @@
 import type { IMcpConnectionDocument } from '@bike4mind/common';
 import { RemoteMcpOAuthError, revokeRemoteMcpToken } from '@bike4mind/mcp/remote';
-import { decryptToken } from '@bike4mind/server-utils/security/tokenEncryption';
+import { Logger } from '@bike4mind/observability';
+import { decryptToken } from '../../security/tokenEncryption';
 import type { FetchLike } from '@modelcontextprotocol/sdk/shared/transport.js';
-import type { RemoteMcpNetworkOptions } from '@bike4mind/server-utils/mcpConnections/customMcpAccess';
-import { loadConnectionClient } from '@bike4mind/server-utils/mcpConnections/oauth/clientIdentity';
-import { withOAuthFetch } from '@bike4mind/server-utils/mcpConnections/oauth/oauthFetch';
+import type { RemoteMcpNetworkOptions } from '../customMcpAccess';
+import { loadConnectionClient } from './clientIdentity';
+import { withOAuthFetch } from './oauthFetch';
 
 /** One deadline for the whole revocation: the caller is a request that is about to delete or clear the grant. */
 export const REVOKE_DEADLINE_MS = 5_000;
@@ -39,7 +40,7 @@ export async function revokeConnectionGrant(
           await revokeRemoteMcpToken(endpoint, { token, hint, client, fetchFn: pinned });
         } catch (error) {
           const code = error instanceof RemoteMcpOAuthError ? error.code : 'request_failed';
-          console.warn(`[mcpOAuth] Revoking the ${hint} of connection ${connection.id} failed (${code})`);
+          Logger.warn(`[mcpOAuth] Revoking the ${hint} of connection ${connection.id} failed (${code})`);
         }
       }
     });
@@ -48,13 +49,13 @@ export async function revokeConnectionGrant(
   let timer: NodeJS.Timeout | undefined;
   const deadline = new Promise<void>(resolve => {
     timer = setTimeout(() => {
-      console.warn(`[mcpOAuth] Revoking the grant of connection ${connection.id} timed out`);
+      Logger.warn(`[mcpOAuth] Revoking the grant of connection ${connection.id} timed out`);
       resolve();
     }, deadlineMs);
   });
   try {
     await Promise.race([
-      revokeAll().catch(() => console.warn(`[mcpOAuth] Could not revoke the grant of connection ${connection.id}`)),
+      revokeAll().catch(() => Logger.warn(`[mcpOAuth] Could not revoke the grant of connection ${connection.id}`)),
       deadline,
     ]);
   } finally {

@@ -8,6 +8,8 @@ const h = vi.hoisted(() => ({
   encryptToken: vi.fn(),
   decryptToken: vi.fn(),
   revokeInstallerToken: vi.fn(),
+  revokeInstallerAuthorization: vi.fn(),
+  getConfig: vi.fn(),
 }));
 
 vi.mock('@bike4mind/database', async importOriginal => {
@@ -23,6 +25,9 @@ vi.mock('../../../security/tokenEncryption', () => ({
 }));
 vi.mock('./lakeAppClient', () => ({
   revokeInstallerToken: h.revokeInstallerToken,
+  revokeInstallerAuthorization: h.revokeInstallerAuthorization,
+  getGitHubLakeAppConfig: h.getConfig,
+  gitHubErrorStatus: (error: { status?: number }) => error.status,
 }));
 
 import {
@@ -30,6 +35,7 @@ import {
   storeGitHubLakeAuthGrant,
   readGitHubLakeUserToken,
   consumeGitHubLakeAuthGrant,
+  revokeGitHubLakeUserAuthorization,
   GITHUB_LAKE_AUTH_GRANT_TTL_MS,
 } from './githubLakeAuthGrant';
 import type { GitHubLakeAppConfig } from './lakeAppClient';
@@ -211,6 +217,38 @@ describe('consumeGitHubLakeAuthGrant', () => {
     await expect(consumeGitHubLakeAuthGrant(CONFIG, 'nonce-hash-a')).resolves.toBeUndefined();
     expect(h.revokeInstallerToken).not.toHaveBeenCalled();
     expect(warn).toHaveBeenCalled();
+    warn.mockRestore();
+  });
+});
+
+describe('revokeGitHubLakeUserAuthorization', () => {
+  beforeEach(() => {
+    h.getConfig.mockReset().mockReturnValue(CONFIG);
+    h.decryptToken.mockReset().mockReturnValue('user-token');
+    h.revokeInstallerAuthorization.mockReset().mockResolvedValue(undefined);
+  });
+
+  it('deletes the App authorization with the decrypted token', async () => {
+    await expect(revokeGitHubLakeUserAuthorization('enc(user-token)', 'deleted user u1')).resolves.toBe(true);
+
+    expect(h.decryptToken).toHaveBeenCalledWith('enc(user-token)');
+    expect(h.revokeInstallerAuthorization).toHaveBeenCalledWith(CONFIG, 'user-token');
+  });
+
+  it('skips the call when the App is not configured on this stage', async () => {
+    h.getConfig.mockReturnValue(null);
+
+    await expect(revokeGitHubLakeUserAuthorization('enc(user-token)', 'deleted user u1')).resolves.toBe(false);
+    expect(h.revokeInstallerAuthorization).not.toHaveBeenCalled();
+  });
+
+  it('resolves false, logging the status and no token, when GitHub refuses', async () => {
+    const warn = vi.spyOn(Logger, 'warn').mockImplementation(() => undefined);
+    h.revokeInstallerAuthorization.mockRejectedValue(Object.assign(new Error('Not Found'), { status: 404 }));
+
+    await expect(revokeGitHubLakeUserAuthorization('enc(user-token)', 'deleted user u1')).resolves.toBe(false);
+    expect(warn).toHaveBeenCalledWith(expect.any(String), { context: 'deleted user u1', status: 404 });
+    expect(JSON.stringify(warn.mock.calls)).not.toContain('user-token');
     warn.mockRestore();
   });
 });

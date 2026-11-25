@@ -170,8 +170,9 @@ async function lockDownAccount(
       if (!updated) return null;
       await recordInTransaction?.(deletion);
 
-      // Read before the clear below: the provider revokes after commit need the stored tokens.
-      integrationGrants = await readUserIntegrationGrants(userId);
+      // Read before the clear below: the provider revokes after commit need the stored tokens. The
+      // sign-in grants (Apple, GitHub) stay until the purge, so the person can still sign in to cancel.
+      integrationGrants = await readUserIntegrationGrants(userId, { signIn: false });
       await User.updateOne(
         { _id: userId },
         {

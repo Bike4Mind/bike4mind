@@ -42,7 +42,7 @@ import {
 import { policyPresetHost } from '@bike4mind/server-utils/mcpConnections/policyPresetHost';
 import { cleanMcpToolText } from '@bike4mind/server-utils/mcpConnections/toolDiscovery';
 import { discoverConnectionTools, type DiscoveryOutcome } from './discovery';
-import { revokeConnectionGrant } from './oauth/revoke';
+import { revokeConnectionGrant } from '@bike4mind/server-utils/mcpConnections/oauth/revoke';
 import {
   CustomMcpPolicyBlockedError,
   CustomMcpUnavailableError,
