@@ -158,3 +158,9 @@ export function dialogueKeyAction(event: {
       return undefined;
   }
 }
+
+/** Marks the dialogue box so the ambient settle-key handler (ChatShell) leaves its answer keys alone. */
+export const TAVERN_DIALOGUE_ATTR = 'data-tavern-dialogue';
+
+export const inTavernDialogue = (target: EventTarget | null): boolean =>
+  target instanceof Element && target.closest(`[${TAVERN_DIALOGUE_ATTR}]`) !== null;

@@ -12,6 +12,7 @@ import {
   dialogueQueue,
   queueIndex,
   reachedEnd,
+  TAVERN_DIALOGUE_ATTR,
   type CommandApproval,
   type DialogueKeyAction,
 } from './dialogue';
@@ -173,6 +174,7 @@ export function TavernDialogue({
       aria-label={`${name} needs you`}
       aria-keyshortcuts="A C D O E ArrowLeft ArrowRight Escape"
       tabIndex={-1}
+      {...{ [TAVERN_DIALOGUE_ATTR]: '' }}
       data-testid="tavern-dialogue"
       data-look={look}
       data-kind={front.kind}
@@ -329,7 +331,9 @@ function QueueNav({
   onPick(key: string): void;
   onMove(step: number): void;
 }) {
-  const shown = queue.slice(0, QUEUE_PORTRAITS);
+  // Slide the window so the front request's portrait is always one of those shown.
+  const start = Math.max(0, Math.min(index - QUEUE_PORTRAITS + 1, queue.length - QUEUE_PORTRAITS));
+  const shown = queue.slice(start, start + QUEUE_PORTRAITS);
   const arrowSx = { ...choiceSx(colors), px: '0.45em' };
   return (
     <Box
@@ -341,7 +345,7 @@ function QueueNav({
       </Box>
       {shown.map((decision, position) => {
         const src = portraitOf(decision.sessionId);
-        const current = position === index;
+        const current = start + position === index;
         return (
           <Box
             key={decisionKey(decision)}
@@ -367,7 +371,7 @@ function QueueNav({
           />
         );
       })}
-      {queue.length > QUEUE_PORTRAITS && <span>{`+${queue.length - QUEUE_PORTRAITS}`}</span>}
+      {queue.length > shown.length && <span>{`+${queue.length - shown.length}`}</span>}
       <span data-testid="tavern-dialogue-position">{`${index + 1} of ${queue.length}`}</span>
       <Box component="button" type="button" aria-label="Next request" onClick={() => onMove(1)} sx={arrowSx}>
         {'\u203a'}

@@ -5,6 +5,7 @@ import type { ChatToolCall } from '@shared/chat';
 import type { PendingDecision } from '@shared/pendingDecisions';
 import { agentFixture, createThemedMount, el, query } from '../testUtils';
 import { TavernDialogue } from './TavernDialogue';
+import { inTavernDialogue } from './dialogue';
 
 const decisions = vi.hoisted(() => ({ byId: new Map<string, PendingDecision[]>() }));
 vi.mock('../useTreeDecisions', () => ({
@@ -157,6 +158,21 @@ describe('TavernDialogue', () => {
     expect(query('tavern-dialogue')).toBeNull();
     await render(undefined, 1);
     expect(document.activeElement).toBe(el('tavern-dialogue'));
+  });
+
+  it('keeps the front request among the queue portraits when it is past the first five', async () => {
+    decisions.byId = new Map([['a', ['1', '2', '3', '4', '5', '6', '7'].map(id => approval('a', `q${id}`))]]);
+    await render('a:approval:q6');
+    expect(el('tavern-dialogue-position').textContent).toBe('6 of 7');
+    const queue = el('tavern-dialogue-queue');
+    expect(queue.querySelectorAll('button[aria-current="true"]')).toHaveLength(1);
+    expect(queue.textContent).toContain('+2');
+  });
+
+  it('marks the box so the settle-key handler leaves its keys alone', async () => {
+    await render();
+    expect(inTavernDialogue(el('tavern-dialogue-code'))).toBe(true);
+    expect(inTavernDialogue(document.body)).toBe(false);
   });
 
   it('brings a clicked character forward by session id', async () => {
