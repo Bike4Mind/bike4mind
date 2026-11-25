@@ -3,6 +3,7 @@ import { checkClientVersion } from '@bike4mind/server-utils/middlewares/clientVe
 import {
   BadRequestError,
   deprecationHeaders,
+  formatZodError,
   isZodError,
   type EndpointContract,
   type PathParamsOf,
@@ -10,7 +11,6 @@ import {
   type RequestBodyOf,
 } from '@bike4mind/common';
 import type { NextFunction, Request, RequestHandler, Response } from 'express';
-import { fromZodError } from 'zod-validation-error';
 
 /**
  * EVERY registrar next-connect 0.13 exposes - patch all of them, not just the
@@ -128,7 +128,7 @@ export function nextRouteForContract<C extends EndpointContract>(
       return schema.parse(value);
     } catch (error) {
       if (contract.validationErrorStatus === 400 && isZodError(error)) {
-        throw new BadRequestError(fromZodError(error).message);
+        throw new BadRequestError(formatZodError(error));
       }
       throw error;
     }
@@ -235,9 +235,8 @@ export function nextRouteForContract<C extends EndpointContract>(
             }
             if (strip) outgoing = result.data;
           } else if (result) {
-            // One line, bounded: this logs per request in production, and a union's raw
-            // ZodError message lists every branch's issues.
-            const violation = fromZodError(result.error, { maxIssuesInMessage: 5 }).message.slice(0, 1000);
+            // Bounded: this logs per request in production, and a union issue lists every branch.
+            const violation = formatZodError(result.error, { maxIssues: 5 }).slice(0, 1000);
             req.logger?.warn(
               `[contract] ${contract.operationId} response ${res.statusCode} violates schema: ${violation}`
             );

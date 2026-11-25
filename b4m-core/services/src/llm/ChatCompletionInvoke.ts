@@ -14,6 +14,7 @@ import {
   LLMModelConfig,
   ModelInfo,
   ORG_TOOL_NOT_ALLOWED_ERROR_CODE,
+  formatZodError,
   getQuestErrorCode,
   PromptMeta,
   PromptMetaZodSchema,
@@ -30,7 +31,6 @@ import {
 import { getAvailableModels, resolveSuccessorChain } from '@bike4mind/llm-adapters';
 import { Logger } from '@bike4mind/observability';
 import { z } from 'zod';
-import { fromZodError } from 'zod-validation-error';
 import { getEffectiveLLMApiKeys } from '../apiKeyService';
 import { IChatCompletionServiceOptions, QuestStartBodySchema } from './ChatCompletionFeatures';
 import {
@@ -670,7 +670,7 @@ export class ChatCompletionInvoke {
       if (!dispatchAttempted) await releaseFreeStart();
       let errorMessage = `Something went wrong. Please try again.`;
       if (isZodError(error)) {
-        errorMessage = fromZodError(error).message;
+        errorMessage = formatZodError(error);
       } else if (error instanceof Error) {
         errorMessage = error.message;
       }

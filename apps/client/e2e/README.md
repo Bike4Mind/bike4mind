@@ -249,7 +249,7 @@ Cloudflare's widget script and adds the secret header to the browser's `/api/otc
 `bypassTurnstile(page)` before it requests a code.
 
 **MFA** needs no extra infra: the MFA setup endpoint returns the `totpSecret`, so a test
-can enroll, then generate valid codes in-test with `otplib`/`speakeasy`.
+can enroll, then generate valid codes in-test with `generateTotp` in `helpers/mfa.ts`.
 
 The OTC verification logic is also covered by unit tests in `b4m-core/services`
 (`sendOTC.test.ts` / `verifyOTC.test.ts`), the endpoint gating by `apps/client/__tests__/otc-code.test.ts`,

@@ -18,7 +18,6 @@ const handler = baseApi().get(async (req, res) => {
 
   const user = await userRepository.findById(userId);
   if (user?.notionConnect?.status === 'connected') {
-    console.log(`[Notion Connect] User ${userId} already connected`);
     return res.json({
       alreadyConnected: true,
       workspaceName: user.notionConnect.workspaceName,
@@ -65,8 +64,6 @@ const handler = baseApi().get(async (req, res) => {
   authUrl.searchParams.set('response_type', 'code');
   authUrl.searchParams.set('owner', 'user'); // Request access to user's workspaces
   authUrl.searchParams.set('state', state);
-
-  console.log('[Notion Connect] OAuth authorization URL generated');
 
   return res.json({ authUrl: authUrl.toString(), state });
 });

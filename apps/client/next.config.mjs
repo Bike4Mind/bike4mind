@@ -173,11 +173,6 @@ const nextConfig = {
     // module load, which check-api-routes-cjs-require.mjs reproduces against the built standalone
     // tree, naming both.
     'sanitize-html',
-    // Nivo packages
-    '@nivo/pie',
-    '@nivo/line',
-    '@nivo/bar',
-
     // All D3 packages
     'd3-shape',
     'd3-scale',

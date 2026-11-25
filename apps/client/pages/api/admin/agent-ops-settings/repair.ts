@@ -66,7 +66,7 @@ const handler = adminApi({
       settings: settingsDoc.toJSON(),
     });
   } catch (error) {
-    console.error('Error repairing AgentOps settings:', error);
+    req.logger.error('Error repairing AgentOps settings', { error });
     res.status(500).json({
       success: false,
       message: 'Failed to repair AgentOps settings',
