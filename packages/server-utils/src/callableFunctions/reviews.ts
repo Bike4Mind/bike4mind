@@ -1,6 +1,7 @@
 import {
   ConflictError,
   NotFoundError,
+  callableFunctionReviewStatus,
   reviewHash,
   toCallableFunctionShared,
   type CallableFunctionAccess,
@@ -27,7 +28,7 @@ export async function isCurrentReview(
   review: Pick<ICallableFunctionReviewDocument, 'enabled' | 'reviewHash'> | null,
   contract: FunctionContract
 ): Promise<boolean> {
-  return review !== null && review.enabled && review.reviewHash === (await reviewHash(contract));
+  return callableFunctionReviewStatus(review, await reviewHash(contract)) === 'reviewed';
 }
 
 /** Whether `userId` holds an enabled review of exactly this interface. */

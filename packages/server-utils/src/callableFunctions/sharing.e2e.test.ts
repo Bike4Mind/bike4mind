@@ -368,6 +368,31 @@ describe('revoking', () => {
     await shareCallableFunction(OWNER, id, { visibility: 'private', userIds: [PERSON.id] });
     expect(await callAs(PERSON, id)).toMatchObject({ outcome: 'refused', reason: 'review_required' });
   });
+
+  it('keeps the review of a person who stays in the share when the edit adds someone', async () => {
+    const id = await seedLiveFunction();
+    await shareCallableFunction(OWNER, id, { visibility: 'private', userIds: [PERSON.id] });
+    await reviewSharedCallableFunction(PERSON, id, { reviewHash: await reviewHash(CONTRACT), approval: 'default' });
+
+    await shareCallableFunction(OWNER, id, { visibility: 'private', userIds: [PERSON.id, STRANGER.id] });
+    expect(await callAs(PERSON, id)).toMatchObject({ outcome: 'ok' });
+  });
+
+  it('ends the reviews of everyone outside the new grant when the share changes scope, and keeps the named people', async () => {
+    const id = await seedLiveFunction();
+    await shareCallableFunction(OWNER, id, {
+      visibility: 'organization',
+      organizationId: ORG_ID,
+      userIds: [PERSON.id],
+    });
+    const hash = await reviewHash(CONTRACT);
+    await reviewSharedCallableFunction(ORG_MEMBER, id, { reviewHash: hash, approval: 'default' });
+    await reviewSharedCallableFunction(PERSON, id, { reviewHash: hash, approval: 'default' });
+
+    await shareCallableFunction(OWNER, id, { visibility: 'private', userIds: [PERSON.id] });
+    const kept = await CallableFunctionReview.find({ functionId: id }).lean();
+    expect(kept.map(row => row.userId)).toEqual([PERSON.id]);
+  });
 });
 
 describe('shareCallableFunction', () => {
