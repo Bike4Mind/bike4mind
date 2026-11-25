@@ -9,7 +9,7 @@ import type {
   SendMessageRequest,
   SendMessageResult,
 } from '@shared/chat';
-import type { CreateCodeSessionIpcRequest, CreateCodeSessionIpcResult } from '@shared/ipc';
+import type { PlacedCodeSessionRequest, PlacedCodeSessionResult } from '@shared/ipc';
 import type { TaskDecisionAnswer } from '@shared/orchestration';
 import type { NewSessionDefaults } from '@shared/sessionDefaults';
 import type { SessionTreeDeletion } from '@shared/worktreeRemoval';
@@ -48,12 +48,13 @@ export function createHostChat(client: HostClient, local: () => LocalDesktop) {
     async createCodeSession({
       sectionId,
       ...request
-    }: CreateCodeSessionIpcRequest): Promise<CreateCodeSessionIpcResult> {
+    }: PlacedCodeSessionRequest): Promise<PlacedCodeSessionResult> {
       const result = await client.request(hostForSession(), 'session/create', request);
       if (!result.ok || !sectionId) return result;
       try {
         return { ...result, sidebarSections: await local().moveToSection(result.session.id, sectionId) };
-      } catch {
+      } catch (cause) {
+        console.warn('Could not place the new session in its section', cause);
         return { ...result, placementFailed: true };
       }
     },
