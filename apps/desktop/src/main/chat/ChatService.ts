@@ -8229,8 +8229,7 @@ export class ChatService {
     const named = withheld
       ? `A device-local session you started (${childId})`
       : `The session you started, ${JSON.stringify(mentionTitle(child.title))} (${childId}),`;
-    // The latest parked call is the one the user is being asked about now.
-    const call = reason === 'approval' ? pendingCallsIn(child.messages).at(-1) : undefined;
+    const call = reason === 'approval' ? this.parkedCallOf(childId, child.messages) : undefined;
     const summary = call && !withheld ? approvalSummary(call) : undefined;
     await this.deliverChildReport(parentId, {
       localOnly: false,
@@ -8242,6 +8241,20 @@ export class ChatService {
         'that conversation, and its report comes here when it finishes. Do not answer for the user.]',
       display: `A session you started is waiting for you: ${what}.`,
     });
+  }
+
+  /**
+   * The call a session is parked on now, the latest if several. A turn in flight has not stored its
+   * calls yet, so its live events are read first; the stored messages cover a turn already settled.
+   */
+  private parkedCallOf(sessionId: string, stored: readonly ChatMessage[]): ChatToolCall | undefined {
+    const parked = new Map<string, ChatToolCall>();
+    for (const event of this.live.get(sessionId)?.events ?? []) {
+      if (event.type !== 'tool-start' && event.type !== 'tool-end') continue;
+      if (event.call.status === 'awaiting-approval' && event.call.approvalId) parked.set(event.call.id, event.call);
+      else parked.delete(event.call.id);
+    }
+    return [...parked.values()].at(-1) ?? pendingCallsIn(stored).at(-1);
   }
 
   /** Remove a child's waiting notice from its parent's queue, if it has not been delivered yet. */

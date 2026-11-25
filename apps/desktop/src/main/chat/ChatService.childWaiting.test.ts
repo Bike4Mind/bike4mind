@@ -1,7 +1,7 @@
 import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import type { ChatSessionStatusEvent } from '@shared/chat';
+import type { ChatSessionStatusEvent, ChatStreamEvent } from '@shared/chat';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ChatService } from './ChatService';
 import { SessionActivity } from './SessionActivity';
@@ -64,6 +64,30 @@ describe('childWaiting', () => {
     expect(notice?.childWaiting).toEqual({ sessionId: child.id, reason: 'approval', summary: 'bash gh pr merge 12' });
     // The model's copy is unchanged.
     expect(notice?.content).toContain('is waiting on the user for an approval');
+  });
+
+  it('names a call parked in a turn still in flight, before the turn stores it', async () => {
+    const parent = await store.create();
+    const child = await store.create(undefined, {
+      origin: { parentSessionId: parent.id, depth: 1, seedPrompt: 'review the PR' },
+    });
+    // The turn's live events, as trackLive keeps them; nothing is stored until the turn settles.
+    const call = { id: 'call-9', name: 'bash', input: { command: 'gh pr checks 7' } };
+    (service as unknown as { live: Map<string, { events: ChatStreamEvent[] }> }).live.set(child.id, {
+      events: [
+        {
+          type: 'tool-start',
+          sessionId: child.id,
+          messageId: 'm',
+          call: { ...call, status: 'awaiting-approval', approvalId: 'a9' },
+        },
+      ],
+    });
+    activity.approvalRequested(child.id);
+    service.sessionStatusChanged(events.at(-1)!);
+
+    await vi.waitFor(async () => expect(await noticesIn(parent.id)).toHaveLength(1));
+    expect((await noticesIn(parent.id))[0]?.childWaiting?.summary).toBe('bash gh pr checks 7');
   });
 
   it('leaves one notice per wait, not per status event', async () => {
