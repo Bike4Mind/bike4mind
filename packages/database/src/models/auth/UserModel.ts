@@ -63,6 +63,7 @@ import { AutoContainmentDecisionModel } from '../infra/security/AutoContainmentD
 import { executeFacetCompatible } from '../../utils/documentdb-compat';
 import { buildCollectionSearchPipeline } from '../../queries/collectionSearchQuery';
 import { NETWORK_META_FIELDS } from './networkMetaFields';
+import { normalizeBusyBlocks, type BusyBlockInterval, type BusyBlocksState } from './busyBlocks';
 
 function escapeRegExp(input: string): string {
   return input.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -228,6 +229,9 @@ const UserPreferencesSchema = new Schema(
         },
         { _id: false }
       ),
+    },
+    busyBlockBrief: {
+      type: new Schema({ enabled: { type: Boolean } }, { _id: false }),
     },
   },
   { _id: false }
@@ -1941,6 +1945,65 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
   }
 
   /**
+   * Replaces the synced busy blocks (normalized by normalizeBusyBlocks) and the due time of the next block
+   * brief. The write is a compare-and-set on `lastBlockBriefEnd`, so a block the reconciler claims between
+   * the read and the write is never re-armed. Disabling clears the blocks and the due time.
+   */
+  async setBusyBlocks(
+    userId: string,
+    input: { enabled: boolean; blocks: BusyBlockInterval[] },
+    now: Date
+  ): Promise<BusyBlocksState> {
+    await this.ensurePreferencesObject(userId);
+    if (!input.enabled) {
+      await this.model.updateOne(
+        { _id: userId },
+        {
+          $set: { 'preferences.busyBlockBrief': { enabled: false } },
+          $unset: { busyBlocks: 1, busyBlocksSyncedAt: 1, nextBlockBriefAt: 1 },
+        },
+        { runValidators: true }
+      );
+      return { enabled: false, blocks: [], nextBlockBriefAt: null };
+    }
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const user = await this.model
+        .findById(userId, { lastBlockBriefEnd: 1 })
+        .lean<Pick<IUserDocument, 'lastBlockBriefEnd'>>();
+      if (!user) return { enabled: false, blocks: [], nextBlockBriefAt: null };
+      const lastBlockBriefEnd = user.lastBlockBriefEnd ?? null;
+      const blocks = normalizeBusyBlocks(input.blocks, { now, lastBlockBriefEnd });
+      const nextBlockBriefAt = blocks[0]?.end ?? null;
+      const set = {
+        'preferences.busyBlockBrief': { enabled: true },
+        busyBlocks: blocks,
+        busyBlocksSyncedAt: now,
+        ...(nextBlockBriefAt ? { nextBlockBriefAt } : {}),
+      };
+      const result = await this.model.updateOne(
+        { _id: userId, lastBlockBriefEnd },
+        nextBlockBriefAt ? { $set: set } : { $set: set, $unset: { nextBlockBriefAt: 1 } },
+        { runValidators: true }
+      );
+      if (result.matchedCount === 1) return { enabled: true, blocks, nextBlockBriefAt };
+    }
+    throw new Error('Busy blocks changed concurrently; retry the sync');
+  }
+
+  async getBusyBlocks(userId: string): Promise<BusyBlocksState> {
+    const user = await this.model
+      .findById(userId, { 'preferences.busyBlockBrief': 1, busyBlocks: 1, nextBlockBriefAt: 1 })
+      .lean<Pick<IUserDocument, 'preferences' | 'busyBlocks' | 'nextBlockBriefAt'>>();
+    const enabled = user?.preferences?.busyBlockBrief?.enabled === true;
+    if (!enabled) return { enabled: false, blocks: [], nextBlockBriefAt: null };
+    return {
+      enabled,
+      blocks: (user?.busyBlocks ?? []).map(({ start, end }) => ({ start, end })),
+      nextBlockBriefAt: user?.nextBlockBriefAt ?? null,
+    };
+  }
+
+  /**
    * Users whose scheduled brief is due, earliest first. The `$type` term is what lets the planner use the
    * `user_nextBriefAt` partial index; without it the scan is a COLLSCAN plus an in-memory sort.
    */
@@ -2214,6 +2277,15 @@ export const UserSchema = new Schema<IUserDocument, IUserModel>(
     deletion: { type: UserDeletionSchema, required: false, default: undefined },
     nextBriefAt: { type: Date },
     lastBriefStartedAt: { type: Date },
+    busyBlocks: {
+      type: [
+        new Schema({ start: { type: Date, required: true }, end: { type: Date, required: true } }, { _id: false }),
+      ],
+      default: undefined,
+    },
+    busyBlocksSyncedAt: { type: Date },
+    nextBlockBriefAt: { type: Date },
+    lastBlockBriefEnd: { type: Date },
     accountFilePurge: {
       type: new Schema(
         {
@@ -2783,6 +2855,11 @@ UserSchema.index(
 UserSchema.index(
   { nextBriefAt: 1 },
   { partialFilterExpression: { nextBriefAt: { $type: 'date' } }, name: 'user_nextBriefAt' }
+);
+// Serves the block-end brief due scan; only opted-in users with a pending block carry the field.
+UserSchema.index(
+  { nextBlockBriefAt: 1 },
+  { partialFilterExpression: { nextBlockBriefAt: { $type: 'date' } }, name: 'user_nextBlockBriefAt' }
 );
 // platformEmailAddress index is already created by the 'unique: true' option in the schema definition
 

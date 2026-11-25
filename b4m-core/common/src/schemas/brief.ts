@@ -185,6 +185,44 @@ export const BriefScheduleResponseSchema = z.object({
     .describe('ISO 8601 instant of the next scheduled brief; null when the schedule is off or unset.'),
 });
 
+/** Bounds on a synced busy-block list. The retry window must stay in step with the reconciler's (apps/workers/src/cron/briefScheduleReconcile.ts). */
+export const BUSY_BLOCK_LIMITS = {
+  maxBlocks: 48,
+  maxDurationMs: 12 * 60 * 60 * 1000,
+  horizonMs: 72 * 60 * 60 * 1000,
+  retryWindowMs: 60 * 60 * 1000,
+} as const;
+
+export const BusyBlockSchema = z
+  .object({
+    start: z.iso.datetime({ offset: true }).describe('ISO 8601 instant the busy interval starts.'),
+    end: z.iso.datetime({ offset: true }).describe('ISO 8601 instant the busy interval ends; after `start`.'),
+  })
+  .refine(block => Date.parse(block.end) > Date.parse(block.start), 'end must be after start')
+  .refine(
+    block => Date.parse(block.end) - Date.parse(block.start) <= BUSY_BLOCK_LIMITS.maxDurationMs,
+    'A busy block can be at most 12 hours'
+  );
+
+export const PutBusyBlocksSchema = z.object({
+  enabled: z
+    .boolean()
+    .describe('Whether a brief is composed when a busy block ends. Disabling clears the stored blocks.'),
+  blocks: z
+    .array(BusyBlockSchema)
+    .max(BUSY_BLOCK_LIMITS.maxBlocks)
+    .describe('Busy intervals from the device calendar, times only; replaces the stored list. Empty is valid.'),
+});
+
+export const BusyBlocksResponseSchema = z.object({
+  enabled: z.boolean(),
+  blocks: z.array(BusyBlockSchema).describe('Stored blocks after merging overlaps and dropping ones already briefed.'),
+  nextBlockBriefAt: z
+    .string()
+    .nullable()
+    .describe('ISO 8601 instant the next block ends and its brief is due; null when off or none is pending.'),
+});
+
 export const PendingDecisionCountSchema = z.object({
   count: z
     .number()
@@ -215,6 +253,9 @@ export type BriefItem = z.infer<typeof BriefItemSchema>;
 export type BriefDecision = z.infer<typeof BriefDecisionSchema>;
 export type BriefSchedule = z.infer<typeof BriefScheduleSchema>;
 export type BriefScheduleResponse = z.infer<typeof BriefScheduleResponseSchema>;
+export type BusyBlock = z.infer<typeof BusyBlockSchema>;
+export type PutBusyBlocks = z.infer<typeof PutBusyBlocksSchema>;
+export type BusyBlocksResponse = z.infer<typeof BusyBlocksResponseSchema>;
 export type BriefApprovalRef = z.infer<typeof BriefApprovalRefSchema>;
 export type BriefQuestionRef = z.infer<typeof BriefQuestionRefSchema>;
 export type BriefReplyRequest = z.infer<typeof BriefReplyRequestSchema>;

@@ -26,6 +26,8 @@ import {
   getBriefContract,
   getBriefScheduleContract,
   putBriefScheduleContract,
+  getBusyBlocksContract,
+  putBusyBlocksContract,
   replyToBriefDecisionContract,
   getPendingDecisionCountContract,
 } from './briefs.contract';
@@ -229,6 +231,8 @@ export const CONTRACTS: readonly EndpointContract[] = [
   getBriefContract,
   getBriefScheduleContract,
   putBriefScheduleContract,
+  getBusyBlocksContract,
+  putBusyBlocksContract,
   listAssistantInstructionsContract,
   createAssistantInstructionContract,
   deleteAssistantInstructionContract,

@@ -10273,6 +10273,138 @@
           "timeZone": "America/New_York"
         }
       },
+      "getBusyBlocksResponse200": {
+        "type": "object",
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          },
+          "blocks": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "start": {
+                  "type": "string",
+                  "format": "date-time",
+                  "description": "ISO 8601 instant the busy interval starts."
+                },
+                "end": {
+                  "type": "string",
+                  "format": "date-time",
+                  "description": "ISO 8601 instant the busy interval ends; after `start`."
+                }
+              },
+              "required": [
+                "start",
+                "end"
+              ]
+            },
+            "description": "Stored blocks after merging overlaps and dropping ones already briefed."
+          },
+          "nextBlockBriefAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "ISO 8601 instant the next block ends and its brief is due; null when off or none is pending."
+          }
+        },
+        "required": [
+          "enabled",
+          "blocks",
+          "nextBlockBriefAt"
+        ]
+      },
+      "putBusyBlocksResponse200": {
+        "type": "object",
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          },
+          "blocks": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "start": {
+                  "type": "string",
+                  "format": "date-time",
+                  "description": "ISO 8601 instant the busy interval starts."
+                },
+                "end": {
+                  "type": "string",
+                  "format": "date-time",
+                  "description": "ISO 8601 instant the busy interval ends; after `start`."
+                }
+              },
+              "required": [
+                "start",
+                "end"
+              ]
+            },
+            "description": "Stored blocks after merging overlaps and dropping ones already briefed."
+          },
+          "nextBlockBriefAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "ISO 8601 instant the next block ends and its brief is due; null when off or none is pending."
+          }
+        },
+        "required": [
+          "enabled",
+          "blocks",
+          "nextBlockBriefAt"
+        ]
+      },
+      "putBusyBlocksRequest": {
+        "type": "object",
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "description": "Whether a brief is composed when a busy block ends. Disabling clears the stored blocks."
+          },
+          "blocks": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "start": {
+                  "type": "string",
+                  "format": "date-time",
+                  "description": "ISO 8601 instant the busy interval starts."
+                },
+                "end": {
+                  "type": "string",
+                  "format": "date-time",
+                  "description": "ISO 8601 instant the busy interval ends; after `start`."
+                }
+              },
+              "required": [
+                "start",
+                "end"
+              ]
+            },
+            "maxItems": 48,
+            "description": "Busy intervals from the device calendar, times only; replaces the stored list. Empty is valid."
+          }
+        },
+        "required": [
+          "enabled",
+          "blocks"
+        ],
+        "example": {
+          "enabled": true,
+          "blocks": [
+            {
+              "start": "2026-11-20T15:00:00.000Z",
+              "end": "2026-11-20T16:00:00.000Z"
+            }
+          ]
+        }
+      },
       "listAssistantInstructionsResponse200": {
         "type": "object",
         "properties": {
@@ -47303,6 +47435,346 @@
             "lang": "Python",
             "label": "requests",
             "source": "import requests\n\nres = requests.put(\n    \"https://your-deployment.example.com/api/v1/briefs/schedule\",\n    headers={\"Authorization\": \"Bearer <access_token>\"},\n    json={\n        \"enabled\": True,\n        \"timeOfDay\": \"08:00\",\n        \"days\": [\n            1,\n            2,\n            3,\n            4,\n            5\n        ],\n        \"timeZone\": \"America/New_York\"\n    },\n)"
+          }
+        ]
+      }
+    },
+    "/api/v1/briefs/busy-blocks": {
+      "get": {
+        "operationId": "getBusyBlocks",
+        "summary": "Get your busy blocks",
+        "description": "Reads the synced busy blocks and when the next block brief is due. Authenticate with a JWT access token of the signed-in user. The busy blocks are the caller's own; only start and end times are accepted, never event titles or attendees. A brief is composed after a block ends only when something arrived during it.",
+        "tags": [
+          "AI"
+        ],
+        "security": [
+          {
+            "jwtAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Your busy blocks.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/getBusyBlocksResponse200"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid JWT.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The account is suspended (`errorCode: account_suspended`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScopeForbiddenResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "405": {
+            "description": "The path does not serve this HTTP method.",
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Allow": {
+                "description": "The methods this path serves. GET implies HEAD.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "426": {
+            "description": "The request declared a client build (`X-Client-Name` + `X-Client-Version`) older than the minimum this API still serves for that client. Upgrade to `minimum_version` or later. Never sent to a request that omits either header.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UpgradeRequiredResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Per-user rate limit exceeded.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "x-codeSamples": [
+          {
+            "lang": "curl",
+            "label": "curl",
+            "source": "curl -s -X GET \"https://your-deployment.example.com/api/v1/briefs/busy-blocks\" \\\n  -H \"Authorization: Bearer <access_token>\""
+          },
+          {
+            "lang": "JavaScript",
+            "label": "fetch",
+            "source": "const res = await fetch(\"https://your-deployment.example.com/api/v1/briefs/busy-blocks\", {\n  method: \"GET\",\n  headers: {\n    \"Authorization\": \"Bearer <access_token>\",\n  },\n});"
+          },
+          {
+            "lang": "Python",
+            "label": "requests",
+            "source": "import requests\n\nres = requests.get(\n    \"https://your-deployment.example.com/api/v1/briefs/busy-blocks\",\n    headers={\"Authorization\": \"Bearer <access_token>\"},\n)"
+          }
+        ]
+      },
+      "put": {
+        "operationId": "putBusyBlocks",
+        "summary": "Sync your busy blocks",
+        "description": "Replaces the stored busy blocks with the device calendar's next busy intervals and returns them merged, with the next due time. Blocks more than 72 hours out and blocks already briefed are dropped. Authenticate with a JWT access token of the signed-in user. The busy blocks are the caller's own; only start and end times are accepted, never event titles or attendees. A brief is composed after a block ends only when something arrived during it.",
+        "tags": [
+          "AI"
+        ],
+        "security": [
+          {
+            "jwtAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/putBusyBlocksRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The stored busy blocks.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/putBusyBlocksResponse200"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed JSON request body.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid JWT.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The account is suspended (`errorCode: account_suspended`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScopeForbiddenResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "405": {
+            "description": "The path does not serve this HTTP method.",
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Allow": {
+                "description": "The methods this path serves. GET implies HEAD.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Request failed validation.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "426": {
+            "description": "The request declared a client build (`X-Client-Name` + `X-Client-Version`) older than the minimum this API still serves for that client. Upgrade to `minimum_version` or later. Never sent to a request that omits either header.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UpgradeRequiredResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Per-user rate limit exceeded.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "x-codeSamples": [
+          {
+            "lang": "curl",
+            "label": "curl",
+            "source": "curl -s -X PUT \"https://your-deployment.example.com/api/v1/briefs/busy-blocks\" \\\n  -H \"Authorization: Bearer <access_token>\" \\\n  -H \"Content-Type: application/json\" \\\n  --data-binary @- <<'B4M_REQUEST_BODY'\n{\n  \"enabled\": true,\n  \"blocks\": [\n    {\n      \"start\": \"2026-11-20T15:00:00.000Z\",\n      \"end\": \"2026-11-20T16:00:00.000Z\"\n    }\n  ]\n}\nB4M_REQUEST_BODY"
+          },
+          {
+            "lang": "JavaScript",
+            "label": "fetch",
+            "source": "const res = await fetch(\"https://your-deployment.example.com/api/v1/briefs/busy-blocks\", {\n  method: \"PUT\",\n  headers: {\n    \"Authorization\": \"Bearer <access_token>\",\n    \"Content-Type\": \"application/json\",\n  },\n  body: JSON.stringify({\n  \"enabled\": true,\n  \"blocks\": [\n    {\n      \"start\": \"2026-11-20T15:00:00.000Z\",\n      \"end\": \"2026-11-20T16:00:00.000Z\"\n    }\n  ]\n}),\n});"
+          },
+          {
+            "lang": "Python",
+            "label": "requests",
+            "source": "import requests\n\nres = requests.put(\n    \"https://your-deployment.example.com/api/v1/briefs/busy-blocks\",\n    headers={\"Authorization\": \"Bearer <access_token>\"},\n    json={\n        \"enabled\": True,\n        \"blocks\": [\n            {\n                \"start\": \"2026-11-20T15:00:00.000Z\",\n                \"end\": \"2026-11-20T16:00:00.000Z\"\n            }\n        ]\n    },\n)"
           }
         ]
       }

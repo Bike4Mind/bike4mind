@@ -530,6 +530,30 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  '/api/v1/briefs/busy-blocks': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * Get your busy blocks
+     * @description Reads the synced busy blocks and when the next block brief is due. Authenticate with a JWT access token of the signed-in user. The busy blocks are the caller's own; only start and end times are accepted, never event titles or attendees. A brief is composed after a block ends only when something arrived during it.
+     */
+    get: operations['getBusyBlocks'];
+    /**
+     * Sync your busy blocks
+     * @description Replaces the stored busy blocks with the device calendar's next busy intervals and returns them merged, with the next due time. Blocks more than 72 hours out and blocks already briefed are dropped. Authenticate with a JWT access token of the signed-in user. The busy blocks are the caller's own; only start and end times are accepted, never event titles or attendees. A brief is composed after a block ends only when something arrived during it.
+     */
+    put: operations['putBusyBlocks'];
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   '/api/v1/assistant/instructions': {
     parameters: {
       query?: never;
@@ -6620,6 +6644,70 @@ export interface components {
       days: number[];
       /** @description IANA time zone name, e.g. `America/New_York`. Send the device zone on every save. */
       timeZone: string;
+    };
+    getBusyBlocksResponse200: {
+      enabled: boolean;
+      /** @description Stored blocks after merging overlaps and dropping ones already briefed. */
+      blocks: {
+        /**
+         * Format: date-time
+         * @description ISO 8601 instant the busy interval starts.
+         */
+        start: string;
+        /**
+         * Format: date-time
+         * @description ISO 8601 instant the busy interval ends; after `start`.
+         */
+        end: string;
+      }[];
+      /** @description ISO 8601 instant the next block ends and its brief is due; null when off or none is pending. */
+      nextBlockBriefAt: string | null;
+    };
+    putBusyBlocksResponse200: {
+      enabled: boolean;
+      /** @description Stored blocks after merging overlaps and dropping ones already briefed. */
+      blocks: {
+        /**
+         * Format: date-time
+         * @description ISO 8601 instant the busy interval starts.
+         */
+        start: string;
+        /**
+         * Format: date-time
+         * @description ISO 8601 instant the busy interval ends; after `start`.
+         */
+        end: string;
+      }[];
+      /** @description ISO 8601 instant the next block ends and its brief is due; null when off or none is pending. */
+      nextBlockBriefAt: string | null;
+    };
+    /**
+     * @example {
+     *       "enabled": true,
+     *       "blocks": [
+     *         {
+     *           "start": "2026-11-20T15:00:00.000Z",
+     *           "end": "2026-11-20T16:00:00.000Z"
+     *         }
+     *       ]
+     *     }
+     */
+    putBusyBlocksRequest: {
+      /** @description Whether a brief is composed when a busy block ends. Disabling clears the stored blocks. */
+      enabled: boolean;
+      /** @description Busy intervals from the device calendar, times only; replaces the stored list. Empty is valid. */
+      blocks: {
+        /**
+         * Format: date-time
+         * @description ISO 8601 instant the busy interval starts.
+         */
+        start: string;
+        /**
+         * Format: date-time
+         * @description ISO 8601 instant the busy interval ends; after `start`.
+         */
+        end: string;
+      }[];
     };
     listAssistantInstructionsResponse200: {
       /** @description Oldest first. */
@@ -20474,6 +20562,190 @@ export interface operations {
         };
         content: {
           'application/json': components['schemas']['putBriefScheduleResponse200'];
+        };
+      };
+      /** @description Malformed JSON request body. */
+      400: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Missing or invalid JWT. */
+      401: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The account is suspended (`errorCode: account_suspended`). */
+      403: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ScopeForbiddenResponse'];
+        };
+      };
+      /** @description The path does not serve this HTTP method. */
+      405: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description The methods this path serves. GET implies HEAD. */
+          Allow?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Request failed validation. */
+      422: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The request declared a client build (`X-Client-Name` + `X-Client-Version`) older than the minimum this API still serves for that client. Upgrade to `minimum_version` or later. Never sent to a request that omits either header. */
+      426: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['UpgradeRequiredResponse'];
+        };
+      };
+      /** @description Per-user rate limit exceeded. */
+      429: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+    };
+  };
+  getBusyBlocks: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Your busy blocks. */
+      200: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['getBusyBlocksResponse200'];
+        };
+      };
+      /** @description Missing or invalid JWT. */
+      401: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The account is suspended (`errorCode: account_suspended`). */
+      403: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ScopeForbiddenResponse'];
+        };
+      };
+      /** @description The path does not serve this HTTP method. */
+      405: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description The methods this path serves. GET implies HEAD. */
+          Allow?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The request declared a client build (`X-Client-Name` + `X-Client-Version`) older than the minimum this API still serves for that client. Upgrade to `minimum_version` or later. Never sent to a request that omits either header. */
+      426: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['UpgradeRequiredResponse'];
+        };
+      };
+      /** @description Per-user rate limit exceeded. */
+      429: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+    };
+  };
+  putBusyBlocks: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['putBusyBlocksRequest'];
+      };
+    };
+    responses: {
+      /** @description The stored busy blocks. */
+      200: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['putBusyBlocksResponse200'];
         };
       };
       /** @description Malformed JSON request body. */

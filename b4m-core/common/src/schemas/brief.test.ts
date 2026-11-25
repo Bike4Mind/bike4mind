@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { BRIEF_LIMITS, BriefDecisionSchema, BriefItemSchema } from './brief';
+import { BRIEF_LIMITS, BriefDecisionSchema, BriefItemSchema, PutBusyBlocksSchema } from './brief';
 
 const draft = { to: 'sender@example.com', subject: 'Re: Renewal', body: 'Confirming the date.' };
 
@@ -56,5 +56,39 @@ describe('BriefItemSchema source', () => {
     expect(
       BriefItemSchema.safeParse({ id: 'x1', text: 't', source: { kind: 'delegation', emailId: 'e1' } }).success
     ).toBe(false);
+  });
+});
+
+describe('PutBusyBlocksSchema', () => {
+  const at = (minutes: number) => new Date(Date.UTC(2026, 10, 20, 15, 0) + minutes * 60_000).toISOString();
+  const block = (startMin: number, endMin: number) => ({ start: at(startMin), end: at(endMin) });
+
+  it.each([
+    ['an empty list', { enabled: true, blocks: [] }],
+    ['a 12-hour block', { enabled: true, blocks: [block(0, 720)] }],
+    ['48 blocks', { enabled: true, blocks: Array.from({ length: 48 }, (_, i) => block(i * 60, i * 60 + 30)) }],
+    ['an offset timestamp', { enabled: false, blocks: [{ start: '2026-11-20T10:00:00-05:00', end: at(30) }] }],
+  ])('accepts %s', (_label, body) => {
+    expect(PutBusyBlocksSchema.safeParse(body).success).toBe(true);
+  });
+
+  it.each([
+    ['end equal to start', { enabled: true, blocks: [block(0, 0)] }],
+    ['end before start', { enabled: true, blocks: [block(30, 0)] }],
+    ['a 12h01m block', { enabled: true, blocks: [block(0, 721)] }],
+    ['49 blocks', { enabled: true, blocks: Array.from({ length: 49 }, (_, i) => block(i * 60, i * 60 + 30)) }],
+    ['a non-array', { enabled: true, blocks: block(0, 30) }],
+    ['a missing enabled flag', { blocks: [] }],
+    ['a date without time', { enabled: true, blocks: [{ start: '2026-11-20', end: at(30) }] }],
+  ])('rejects %s', (_label, body) => {
+    expect(PutBusyBlocksSchema.safeParse(body).success).toBe(false);
+  });
+
+  it('strips event details so only start and end are kept', () => {
+    const parsed = PutBusyBlocksSchema.parse({
+      enabled: true,
+      blocks: [{ ...block(0, 30), title: 'Board meeting', attendees: ['a@example.com'] }],
+    });
+    expect(parsed.blocks[0]).toEqual(block(0, 30));
   });
 });
