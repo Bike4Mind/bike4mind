@@ -38,18 +38,18 @@ const existing: IModal = {
   video: { portraitUrl: 'https://d111.cloudfront.net/tall.mp4' },
 };
 
-const renderEditor = (modalData: IModal, onSave = vi.fn()) => {
+const renderEditor = (modalData: IModal, onSave = vi.fn(), onClose = vi.fn(), isEditMode = true) => {
   render(
     <CssVarsProvider theme={appTheme}>
-      <EditModalNew isOpen onClose={vi.fn()} modalData={modalData} onSave={onSave} isEditMode />
+      <EditModalNew isOpen onClose={onClose} modalData={modalData} onSave={onSave} isEditMode={isEditMode} />
     </CssVarsProvider>
   );
   return onSave;
 };
 
-// The wizard buttons have no test ids, and a role query over the whole editor is slow.
 const clickButton = (label: string) => fireEvent.click(screen.getByText(label, { selector: 'button' }));
-const next = () => clickButton('Next');
+const next = () => fireEvent.click(screen.getByTestId('admin-modal-wizard-next-btn'));
+const back = () => fireEvent.click(screen.getByTestId('admin-modal-wizard-back-btn'));
 
 describe('EditModalNew video', () => {
   it('blocks leaving the media step while a video url is invalid', () => {
@@ -69,7 +69,7 @@ describe('EditModalNew video', () => {
     const minioUrl = 'http://localhost:9000/fab-bucket/modals/u1/tall.mp4';
     const onSave = renderEditor({ ...existing, video: { portraitUrl: minioUrl } });
     for (let i = 0; i < 5; i++) next();
-    clickButton('Update Modal');
+    clickButton('Update modal');
 
     expect(onSave).toHaveBeenCalledWith(expect.objectContaining({ video: { portraitUrl: minioUrl } }));
   });
@@ -77,7 +77,7 @@ describe('EditModalNew video', () => {
   it('drops the video when the modal is saved as a banner', () => {
     const onSave = renderEditor({ ...existing, isBanner: true, textMessage: 'Banner text' });
     for (let i = 0; i < 5; i++) next();
-    clickButton('Update Banner');
+    clickButton('Update banner');
 
     expect(onSave).toHaveBeenCalledWith(expect.objectContaining({ isBanner: true, video: null }));
   });
@@ -93,7 +93,7 @@ describe('EditModalNew video', () => {
     next(); // behavior
     next(); // review
     expect(screen.getByTestId('modal-review-video-text').textContent).toBe('16:9 + 9:16');
-    clickButton('Update Modal');
+    clickButton('Update modal');
 
     expect(onSave).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -105,5 +105,35 @@ describe('EditModalNew video', () => {
         },
       })
     );
+  });
+});
+
+describe('EditModalNew wizard', () => {
+  it('steps forward and back through the dialog', () => {
+    renderEditor(existing);
+    expect(screen.getByTestId('admin-modal-wizard-dialog')).toBeTruthy();
+    expect(screen.getByTestId('admin-modal-wizard-back-btn').hasAttribute('disabled')).toBe(true);
+    next();
+    expect(screen.getByText('Modal content')).toBeTruthy();
+    back();
+    expect(screen.getByText('What would you like to create?')).toBeTruthy();
+  });
+
+  it('switches to the banner steps from the type control', () => {
+    renderEditor({ ...existing, video: null }, vi.fn(), vi.fn(), false);
+    expect(screen.getByText('Create modal', { selector: 'h2' })).toBeTruthy();
+    fireEvent.click(screen.getByTestId('admin-modal-wizard-type-banner'));
+    expect(screen.getByText('Create banner', { selector: 'h2' })).toBeTruthy();
+    expect(screen.getByText('Message')).toBeTruthy();
+    next();
+    expect(screen.getByText('Banner notification')).toBeTruthy();
+  });
+
+  it('calls onClose from the close button and from Cancel', () => {
+    const onClose = vi.fn();
+    renderEditor(existing, vi.fn(), onClose);
+    fireEvent.click(screen.getByTestId('admin-modal-wizard-dialog-close-btn'));
+    fireEvent.click(screen.getByTestId('admin-modal-wizard-cancel-btn'));
+    expect(onClose).toHaveBeenCalledTimes(2);
   });
 });
