@@ -137,8 +137,6 @@ export class WebhookApi {
       body,
     });
 
-    console.log('[JIRA-WEBHOOK-API] registerWebhook raw response:', JSON.stringify(response, null, 2));
-
     if (!response.webhookRegistrationResult || response.webhookRegistrationResult.length === 0) {
       throw new Error('Failed to register webhook: No registration result returned');
     }

@@ -30,12 +30,15 @@ const CORE_NO_CONSOLE_SRC = [
   'b4m-core/llm-adapters',
   'packages/database',
   'b4m-core/services',
+  'b4m-core/common',
 ].map(pkg => `${pkg}/src/**/*.{ts,tsx,mts,cts}`);
 const CORE_NO_CONSOLE_EXEMPT_SCRIPTS = [
   'b4m-core/llm-adapters/src/syncModelDescriptions.ts',
   'packages/database/src/seeds/regenerateModelPriceSeed.ts',
   'packages/database/src/seeds/regenerateModelCatalogSeed.ts',
   'packages/database/src/utils/testModelStats.ts',
+  'b4m-core/common/src/openapi/generate.ts',
+  'b4m-core/common/src/openapi/generateDeployment.ts',
 ];
 
 // B4Mv3 Track 1 — deprecated facade import restrictions.
