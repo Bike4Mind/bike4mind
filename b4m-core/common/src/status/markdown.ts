@@ -380,7 +380,7 @@ export function sanitizeMarkdown(source: string, options: LinkPolicyOptions): st
   return stableSerialization(blocks, options) ?? serializeMarkdown(blocks);
 }
 
-export function escapeHtml(value: string): string {
+function escapeHtml(value: string): string {
   return value
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')

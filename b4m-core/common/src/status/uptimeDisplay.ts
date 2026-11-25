@@ -1,7 +1,7 @@
 import type { BarCode } from './types';
 import type { DisplayState } from './stateOrder';
 
-export const BAR_CODES: readonly BarCode[] = ['o', 'd', 'p', 'm', 'x', 'n'];
+export const BAR_CODES = ['o', 'd', 'p', 'm', 'x', 'n'] as const satisfies readonly BarCode[];
 
 const BAR_CODE_STATE: Record<Exclude<BarCode, 'x' | 'n'>, DisplayState> = {
   o: 'operational',

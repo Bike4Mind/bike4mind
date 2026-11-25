@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { ALL_INCIDENT_STATUSES, INCIDENT_KINDS, INCIDENT_STATUSES, MAINTENANCE_STATUSES } from './isActive';
 import { isHttpsUrl } from './linkPolicy';
+import { BAR_CODES } from './uptimeDisplay';
 import { COMPONENT_IMPACTS, DISPLAY_STATES, OVERALL_IMPACTS, VENDOR_INDICATORS } from './stateOrder';
 import {
   COMPONENT_MONITORING,
@@ -9,6 +10,8 @@ import {
   PUBLIC_INCIDENT_ID_PATTERN,
   PUBLIC_SLUG_PATTERN,
   PUBLIC_UPDATE_ID_PATTERN,
+  STATUS_SCHEMA_VERSION,
+  STATUS_UPTIME_WINDOW_DAYS,
   TEXT_LIMITS,
 } from './types';
 
@@ -110,7 +113,7 @@ function buildPublicSchemas(mode: PublicSchemaMode) {
   const probesTrigger = z.enum(PROBES_TRIGGERS).nullable();
 
   const summary = obj({
-    schemaVersion: z.literal(1),
+    schemaVersion: z.literal(STATUS_SCHEMA_VERSION),
     seq: count,
     generatedAt: timestamp,
     probesAsOf: timestamp,
@@ -139,7 +142,7 @@ function buildPublicSchemas(mode: PublicSchemaMode) {
   });
 
   const incidentDetail = obj({
-    schemaVersion: z.literal(1),
+    schemaVersion: z.literal(STATUS_SCHEMA_VERSION),
     generatedAt: timestamp,
     incident: kindStatus(obj({ ...headScalars, updates: z.array(update(TEXT_LIMITS.updateBody)) })),
     postmortem: postmortem.nullable(),
@@ -148,27 +151,27 @@ function buildPublicSchemas(mode: PublicSchemaMode) {
   const indexRow = kindStatus(obj(headScalars));
 
   const incidentsIndex = obj({
-    schemaVersion: z.literal(1),
+    schemaVersion: z.literal(STATUS_SCHEMA_VERSION),
     generatedAt: timestamp,
-    windowDays: z.literal(90),
+    windowDays: z.literal(STATUS_UPTIME_WINDOW_DAYS),
     incidents: z.array(indexRow),
   });
 
   const archive = obj({
-    schemaVersion: z.literal(1),
+    schemaVersion: z.literal(STATUS_SCHEMA_VERSION),
     year: z.number().int().min(2000).max(9999),
     incidents: z.array(indexRow),
   });
 
   const dayTuple = z.tuple([
-    z.enum(['o', 'd', 'p', 'm', 'x', 'n']),
+    z.enum(BAR_CODES),
     z.number().int().min(0).max(10_000).nullable(),
     z.number().int().nonnegative(),
     z.number().int().nonnegative(),
   ]);
 
   const uptime = obj({
-    schemaVersion: z.literal(1),
+    schemaVersion: z.literal(STATUS_SCHEMA_VERSION),
     generatedAt: timestamp,
     from: z.string().regex(ISO_DAY),
     to: z.string().regex(ISO_DAY),
@@ -186,7 +189,7 @@ function buildPublicSchemas(mode: PublicSchemaMode) {
   });
 
   const breakglass = obj({
-    schemaVersion: z.literal(1),
+    schemaVersion: z.literal(STATUS_SCHEMA_VERSION),
     seq: count,
     updatedAt: timestamp,
     entries: z.array(
@@ -204,7 +207,7 @@ function buildPublicSchemas(mode: PublicSchemaMode) {
   });
 
   const external = obj({
-    schemaVersion: z.literal(1),
+    schemaVersion: z.literal(STATUS_SCHEMA_VERSION),
     seq: count,
     state: z.enum(['up', 'down', 'unknown']),
     since: timestamp,
@@ -213,7 +216,7 @@ function buildPublicSchemas(mode: PublicSchemaMode) {
 
   const statusJson = obj({
     page: obj({ name: z.string().max(TEXT_LIMITS.title), url: httpsUrl, updated_at: timestamp }),
-    status: obj({ indicator: z.enum(['none', 'minor', 'major', 'critical']), description: z.string().max(200) }),
+    status: obj({ indicator: z.enum(OVERALL_IMPACTS), description: z.string().max(200) }),
   });
 
   return {

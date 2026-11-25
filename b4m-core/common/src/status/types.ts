@@ -1,9 +1,6 @@
 import type { ComponentImpact, ComponentState, DisplayState, OverallImpact, VendorIndicator } from './stateOrder';
 import type { IncidentKind, IncidentStatus } from './isActive';
 
-/** Window for step-up on status routes; the shared step-up default stays shorter. */
-export const STATUS_STEP_UP_WINDOW_MS = 60 * 60 * 1000;
-
 export const STATUS_SCHEMA_VERSION = 1;
 export const STATUS_STALE_AFTER_SECONDS = 240;
 export const STATUS_HARD_STALE_AFTER_SECONDS = 900;

@@ -12,4 +12,4 @@ export * from './linkPolicy';
 export * from './templates';
 export * from './uptimeDisplay';
 export * from './sizeLadder';
-export * from './publicKeyPaths';
+export { PUBLIC_SNAPSHOT_KEY_PATHS } from './publicKeyPaths';

@@ -19,8 +19,9 @@ type KeyPaths<T> = T extends Date | string | number | boolean | bigint | null | 
     ? '[]' | `[].${KeyPaths<U>}`
     : { [K in keyof T & string]-?: K | `${K}.${KeyPaths<NonNullable<T[K]>>}` }[keyof T & string];
 
-// Compile-time check that the schema and the document type name exactly the same keys at every depth,
-// without losing `.shape`: a key added to one and not the other fails typecheck.
+// Compile-time check that the schema and the document type name the same keys at every depth, without
+// losing `.shape`: a key added to one and not the other fails typecheck. Optionality and value types
+// are not compared; `z.ZodType<T>` covers only the schema output being assignable to the document.
 const describes =
   <T>() =>
   <S extends z.ZodType<T>>(

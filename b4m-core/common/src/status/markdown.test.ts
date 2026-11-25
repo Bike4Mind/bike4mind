@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
   MAX_MARKDOWN_PARSE_CHARS,
-  escapeHtml,
   normalizePublicText,
   parseMarkdown,
   renderMarkdownHtml,
@@ -53,7 +52,7 @@ describe('escaping and raw HTML', () => {
   it('escapes quotes and ampersands everywhere', () => {
     expect(html('a & b "q" \'s\'')).toBe('<p>a &amp; b &quot;q&quot; &#39;s&#39;</p>');
     expect(html('`<x>&`')).toBe('<p><code>&lt;x&gt;&amp;</code></p>');
-    expect(escapeHtml('<>&"\'')).toBe('&lt;&gt;&amp;&quot;&#39;');
+    expect(html('<>&"\'')).toBe('<p>&lt;&gt;&amp;&quot;&#39;</p>');
   });
 
   it('keeps headings and images as literal text', () => {
