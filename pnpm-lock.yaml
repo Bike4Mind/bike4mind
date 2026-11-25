@@ -2481,9 +2481,6 @@ importers:
       '@types/node':
         specifier: ^24.0.0
         version: 24.12.3
-      '@types/nodemailer':
-        specifier: ^8.0.2
-        version: 8.0.2
       aws-sdk-client-mock:
         specifier: ^4.1.0
         version: 4.1.0
@@ -6076,9 +6073,6 @@ packages:
 
   '@types/node@25.9.6':
     resolution: {integrity: sha512-JR6Q/PV5DKFvjrGFVqQJdeG0qvsqQQLDa3TzFrqVwhqRXqwNaxPo2KYCtCQXpOdIulCouKwT7a6in9nFthBAzw==}
-
-  '@types/nodemailer@8.0.2':
-    resolution: {integrity: sha512-c7M5ox8p0nEOfbJ2E9Qcmt8/QCu/VzsiAhzBiZbvky2PhKZDHpKB3sQHBM5MEZNkCfBOaS6S9//AGPRTNB7IaA==}
 
   '@types/oauth@0.9.6':
     resolution: {integrity: sha512-H9TRCVKBNOhZZmyHLqFt9drPM9l+ShWiqqJijU1B8P3DX3ub84NjxDuy+Hjrz+fEca5Kwip3qPMKNyiLgNJtIA==}
@@ -17478,10 +17472,6 @@ snapshots:
   '@types/node@25.9.6':
     dependencies:
       undici-types: 7.24.6
-
-  '@types/nodemailer@8.0.2':
-    dependencies:
-      '@types/node': 24.12.3
 
   '@types/oauth@0.9.6':
     dependencies:
