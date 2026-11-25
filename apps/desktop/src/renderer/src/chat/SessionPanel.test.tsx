@@ -384,7 +384,6 @@ describe('the Background tasks section', () => {
   it('shows a loop as the only background task, with cadence and a stop control', async () => {
     const stop = vi.fn();
     vi.stubGlobal('b4m', {
-      host: chatBackedHostBridge(),
       ...window.b4m,
       chat: { ...window.b4m.chat, loopCommand: stop },
     });
