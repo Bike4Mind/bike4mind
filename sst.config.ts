@@ -79,7 +79,7 @@ export default $config({
     // Loaded here so the grant below exists before any Function is declared; undefined where the stage has no key.
     const { secretsAtRestKey, secretsAtRestDecryptPermission, secretsAtRestRoleTags } =
       await import('./infra/secretsAtRestKey');
-    // Marks every role as this stage's, which is what the key policy's Decrypt deny checks.
+    // Marks every role but the sandbox one as this stage's, which is what the key policy's Decrypt deny checks.
     if (secretsAtRestKey) {
       // The sandbox role runs user-supplied code and stays untagged: nothing it holds may reach the key.
       $transform(aws.iam.Role, (args, _opts, name) => {

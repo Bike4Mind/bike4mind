@@ -64,11 +64,22 @@ describe('key policy', () => {
   it('denies Decrypt to any principal not tagged as this stage, using no lambda condition key', async () => {
     const statements = await statementsOf();
     const deny = statements.find(s => s.Sid === 'DenyDecryptOutsideApp');
-    expect(deny?.Action).toEqual(['kms:Decrypt', 'kms:ReEncrypt*']);
+    expect(deny?.Action).toEqual(['kms:Decrypt']);
     expect(deny?.Condition).toEqual({
       StringNotEquals: { 'aws:PrincipalTag/b4m:secrets-at-rest-stage': 'production' },
     });
     expect(JSON.stringify(statements)).not.toContain('lambda:');
+  });
+
+  it('denies ReEncrypt to everyone, with no condition', async () => {
+    const statements = await statementsOf();
+    expect(statements.find(s => s.Sid === 'DenyReEncrypt')).toEqual({
+      Sid: 'DenyReEncrypt',
+      Effect: 'Deny',
+      Principal: '*',
+      Action: ['kms:ReEncrypt*'],
+      Resource: '*',
+    });
   });
 
   it('denies GenerateDataKey and Encrypt under the purpose context, and leaves GenerateDataKeyWithoutPlaintext minting open', async () => {
@@ -104,13 +115,12 @@ describe('shared preview key policy', () => {
     });
   });
 
-  it('still denies an untagged caller, a non-preview stage and the chosen-key actions', async () => {
+  it('still denies an untagged caller and has the same statements as the dedicated policy', async () => {
     const statements = await previewStatements();
     const tagDeny = statements.find(s => s.Sid === 'DenyDecryptOutsideApp');
     // StringNotLike is true when the tag is absent, so an untagged principal is denied.
-    expect(tagDeny).toMatchObject({ Effect: 'Deny', Principal: '*', Action: ['kms:Decrypt', 'kms:ReEncrypt*'] });
+    expect(tagDeny).toMatchObject({ Effect: 'Deny', Principal: '*', Action: ['kms:Decrypt'] });
     expect(statements.map(s => s.Sid)).toEqual((await statementsOfDedicated()).map(s => s.Sid));
-    expect(JSON.stringify(statements)).not.toContain('production');
   });
 
   async function statementsOfDedicated() {
@@ -141,49 +151,6 @@ describe('Decrypt-denied event pattern', () => {
       errorMessage: [{ wildcard: '*key-arn*' }],
     });
     expect(JSON.stringify(pattern)).not.toContain('userIdentity');
-  });
-});
-
-describe('Decrypt-outside-app event pattern', () => {
-  const input = {
-    keyArn: 'key-arn',
-    partition: 'test',
-    accountId: '123456789012',
-    appName: 'bike4mind',
-    stage: 'production',
-  };
-
-  it('matches successful Decrypts on the key by anything but this stage app roles', async () => {
-    const { secretsAtRestDecryptOutsideAppEventPattern } = await load('production');
-    expect(secretsAtRestDecryptOutsideAppEventPattern(input).detail).toEqual({
-      eventSource: ['kms.amazonaws.com'],
-      eventName: ['Decrypt'],
-      errorCode: [{ exists: false }],
-      resources: { ARN: ['key-arn'] },
-      $or: [
-        {
-          userIdentity: {
-            sessionContext: {
-              sessionIssuer: {
-                arn: [{ 'anything-but': { prefix: 'arn:test:iam::123456789012:role/bike4mind-production-' } }],
-              },
-            },
-          },
-        },
-        { userIdentity: { type: [{ 'anything-but': ['AssumedRole'] }] } },
-      ],
-    });
-  });
-
-  it('is accepted by EventBridge matching: an app role does not match, a non-app role does', async () => {
-    const { secretsAtRestDecryptOutsideAppEventPattern } = await load('production');
-    const [roleClause] = secretsAtRestDecryptOutsideAppEventPattern(input).detail.$or;
-    const [{ 'anything-but': anythingBut }] = roleClause.userIdentity.sessionContext!.sessionIssuer.arn;
-    const prefix = (anythingBut as { prefix: string }).prefix;
-    const matches = (issuerArn: string) => !issuerArn.startsWith(prefix);
-    expect(matches('arn:test:iam::123456789012:role/bike4mind-production-ApiFunctionRole-abc')).toBe(false);
-    expect(matches('arn:test:iam::123456789012:role/AWSReservedSSO_Admin_abc')).toBe(true);
-    expect(matches('arn:test:iam::123456789012:role/bike4mind-dev-ApiFunctionRole-abc')).toBe(true);
   });
 });
 

@@ -10,17 +10,16 @@ A KMS key wraps a per-stage data key (`SECRET_ENCRYPTION_KEY_WRAPPED`). The keyr
 | Previews (`pr<N>`) | One shared key owned outside any stage; its ARN is passed as `PREVIEW_SECRETS_AT_REST_KEY_ARN`. Unset means no key and no grant |
 | Personal stages | None |
 
-The key policy (`secretsAtRestKeyPolicy`) denies `Decrypt` unless the encryption context is `{ purpose: secrets-at-rest, stage: <stage> }` and the caller's role carries the tag `b4m:secrets-at-rest-stage=<stage>`. A global transform in `sst.config.ts` puts that tag on every IAM role the stack creates, so the stage's Functions and the ChatCompletion task role qualify and operators do not. Operators can mint a blob with `GenerateDataKeyWithoutPlaintext`; `GenerateDataKey` and `Encrypt` under the purpose context are denied to everyone, so nobody can plant a data key whose plaintext they know.
+The key policy (`secretsAtRestKeyPolicy`) denies `Decrypt` unless the encryption context is `{ purpose: secrets-at-rest, stage: <stage> }` and the caller's role carries the tag `b4m:secrets-at-rest-stage=<stage>`. A global transform in `sst.config.ts` puts that tag on every IAM role the stack creates, so the stage's Functions and the ChatCompletion task role qualify and operators do not. The callable-function sandbox role is the one exception and stays untagged. Operators can mint a blob with `GenerateDataKeyWithoutPlaintext`; `GenerateDataKey` and `Encrypt` under the purpose context, and `ReEncrypt`, are denied to everyone, so nobody can plant a data key whose plaintext they know.
 
-The shared preview key's owner creates it with `secretsAtRestPreviewKeyPolicy`, which is the same policy pinned to any `pr*` stage instead of one, and carries the alarms below.
+The shared preview key's owner creates it with `secretsAtRestPreviewKeyPolicy`, which is the same policy pinned to any stage whose name matches `pr*` instead of one, and carries the alarms below.
 
-On production and `dev`, three critical alarms cover the key. Previews have no alarm topic, and the shared preview key's owner carries its own.
+On production and `dev`, two critical alarms cover the key. Previews have no alarm topic, and the shared preview key's owner carries its own.
 
 - A `Decrypt` on the key was refused.
-- A `Decrypt` on the key succeeded for a caller that is not one of the stage's app roles (named `<app>-<stage>-...`).
 - The key policy, a grant or the key lifecycle changed (`PutKeyPolicy`, `CreateGrant`, `ScheduleKeyDeletion`, `DisableKey`, `DisableKeyRotation`).
 
-Residual: the stage tag is the only Decrypt barrier for an IAM admin, who can create or tag a role, or pass the tag as a session tag, and then unwrap. The success-path alarm detects that unwrap after the fact; it does not prevent it. Preventing it is an account-level control (for example a service control policy denying `aws:TagKeys` for `b4m:secrets-at-rest-stage` outside the deploy role) and is the infra owner's call.
+Both rules match `AWS API Call via CloudTrail` events, which EventBridge receives only from a CloudTrail trail that is logging management events (read events included, KMS not excluded). This stack does not create a trail; the account must have one for the alarms to fire.
 
 ## Minting the blob
 

@@ -12,6 +12,17 @@ import { stripComments } from './helpers/infraSource';
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const read = (rel: string) => stripComments(readFileSync(path.join(REPO_ROOT, rel), 'utf8'));
 
+/** The text from `opener` (at `from`, default its first occurrence) to its matching closing brace. */
+function guardedBlock(source: string, opener: string, from = source.indexOf(opener)): string {
+  expect(from).toBeGreaterThan(-1);
+  let depth = 0;
+  for (let i = from + opener.length - 1; i < source.length; i++) {
+    if (source[i] === '{') depth++;
+    if (source[i] === '}' && --depth === 0) return source.slice(from, i + 1);
+  }
+  throw new Error(`unclosed block after ${opener}`);
+}
+
 describe('secrets-at-rest Decrypt grant', () => {
   it('is added to every Function by the global transform', () => {
     const config = read('sst.config.ts');
@@ -20,11 +31,8 @@ describe('secrets-at-rest Decrypt grant', () => {
     const transform = config.slice(start, config.indexOf('\n    });', start));
     expect(transform).toContain('secretsAtRestDecryptPermission(');
     expect(transform).toMatch(/args\.permissions\s*=/);
-    // A keyless stage must not dereference the key.
-    expect(transform.indexOf('if (secretsAtRestKey)')).toBeGreaterThan(-1);
-    expect(transform.indexOf('if (secretsAtRestKey)')).toBeLessThan(
-      transform.indexOf('secretsAtRestDecryptPermission(')
-    );
+    // A keyless stage must not dereference the key: the grant sits inside the guard's braces.
+    expect(guardedBlock(transform, 'if (secretsAtRestKey) {')).toContain('secretsAtRestDecryptPermission(');
   });
 
   it('tags every role with the stage through a global role transform', () => {
@@ -34,17 +42,17 @@ describe('secrets-at-rest Decrypt grant', () => {
     expect(transform).toContain('secretsAtRestRoleTags(');
     expect(transform).toContain('args.tags');
     // The whole transform is registered only where a key exists.
-    const guard = config.lastIndexOf('if (secretsAtRestKey)', start);
-    expect(guard).toBeGreaterThan(-1);
-    expect(config.slice(guard, start)).not.toContain('\n    }');
+    expect(
+      guardedBlock(config, 'if (secretsAtRestKey) {', config.lastIndexOf('if (secretsAtRestKey) {', start))
+    ).toContain('$transform(aws.iam.Role');
   });
 
   it('leaves the sandbox role untagged, by the logical name the role is declared with', () => {
     const transform = read('sst.config.ts');
     const start = transform.indexOf('$transform(aws.iam.Role');
     const body = transform.slice(start, transform.indexOf('\n      });', start));
-    expect(body).toContain("name === 'CallableFunctionRuntimeRole'");
-    expect(body.indexOf("name === 'CallableFunctionRuntimeRole'")).toBeLessThan(body.indexOf('args.tags'));
+    expect(body).toContain("if (name === 'CallableFunctionRuntimeRole') return;");
+    expect(body.indexOf("if (name === 'CallableFunctionRuntimeRole') return;")).toBeLessThan(body.indexOf('args.tags'));
     expect(read('infra/callableFunctionRuntime.ts')).toContain("new aws.iam.Role('CallableFunctionRuntimeRole'");
   });
 

@@ -220,7 +220,7 @@ The four handlers declared in `infra/queues.ts` whose source is generated outsid
 | `apps/workers/src/s3/historyUploadComplete.dispatch` | `infra/buckets.ts` | MongoDB; linked: `allSecrets`, `historyImportBucket`, `websocketApi` | Yes | Connects to MongoDB. |
 | `apps/workers/src/s3/notebookImportComplete.dispatch` | `infra/buckets.ts` | MongoDB; linked: `allSecrets`, `fabFileBucket`, `appFilesBucket`, `generatedImagesBucket`, `historyImportBucket`, `websocketApi` | Yes | Connects to MongoDB. |
 | `apps/workers/src/s3/objectCreated.func` | `infra/queues.ts` | MongoDB; linked: `allSecrets`, `websocketApi`, `fabFileChunkQueue`, `fabFileBucket` | Yes | Connects to MongoDB. |
-| `apps/workers/src/security/secretsAtRestUnwrapProbe.handler` | `infra/secretsAtRestKeyAccess.ts` | KMS `Decrypt` through the NAT; linked: `SECRET_ENCRYPTION_KEY_WRAPPED` | Yes | Proves a VPC-attached function reaches KMS and records `Decrypt` latency; kept in the VPC because that is the path under test. Manual invoke only. |
 | `apps/workers/src/security/alertProcessor.handler` | `infra/securityAlerts.ts` | MongoDB; linked: `eventBus`, `allSecrets` | Yes | Connects to MongoDB. |
 | `apps/workers/src/security/attackSimulation/runner.handler` | `infra/cron.ts` | MongoDB; linked: `allSecrets` | Yes | Connects to MongoDB. |
 | `apps/workers/src/security/cloudScan.handler` | `infra/cron.ts` | MongoDB; linked: `allSecrets` | Yes | Connects to MongoDB. |
+| `apps/workers/src/security/secretsAtRestUnwrapProbe.handler` | `infra/secretsAtRestKeyAccess.ts` | KMS `Decrypt` through the NAT; linked: `SECRET_ENCRYPTION_KEY_WRAPPED` | Yes | Proves a VPC-attached function reaches KMS and records `Decrypt` latency; kept in the VPC because that is the path under test. Manual invoke only. |

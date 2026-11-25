@@ -1,6 +1,7 @@
 /**
  * Monitoring and the reachability probe for the secrets-at-rest key (infra/secretsAtRestKey.ts). A
- * shared preview key is owned and alarmed outside this stack, so only the probe exists there.
+ * shared preview key is owned and alarmed outside this stack, so only the probe exists there. The
+ * rules need a CloudTrail trail that logs management events, which this stack does not create.
  */
 
 import { secrets } from './secrets';
@@ -8,14 +9,12 @@ import { lambdaVpc } from './vpc';
 import { dlqAlarmTopic, oobAlarmTopic } from './dlqAlarms';
 import {
   secretsAtRestDecryptDeniedEventPattern,
-  secretsAtRestDecryptOutsideAppEventPattern,
   secretsAtRestKey,
   secretsAtRestKeyChangeEventPattern,
   secretsAtRestLogsPolicy,
 } from './secretsAtRestKey';
 
 function createMonitoring(key: aws.kms.Key) {
-  // Previews have no alarm topics: the alarm still exists and shows ALARM, it just notifies no one.
   const alarmActions = [dlqAlarmTopic, oobAlarmTopic].flatMap(topic => (topic ? [topic.arn] : []));
   const prefix = `${$app.name}-${$app.stage}`;
 
@@ -28,9 +27,6 @@ function createMonitoring(key: aws.kms.Key) {
     policyDocument: logGroup.arn.apply(arn => JSON.stringify(secretsAtRestLogsPolicy(arn))),
   });
 
-  const partition = aws.getPartitionOutput().partition;
-  const accountId = aws.getCallerIdentityOutput().accountId;
-
   const rules = [
     {
       id: 'Decrypt',
@@ -39,23 +35,6 @@ function createMonitoring(key: aws.kms.Key) {
       // Decrypt is a read-only management event, which reaches a rule only in this state.
       state: 'ENABLED_WITH_ALL_CLOUDTRAIL_MANAGEMENT_EVENTS',
       pattern: key.arn.apply(arn => JSON.stringify(secretsAtRestDecryptDeniedEventPattern({ keyArn: arn }))),
-    },
-    {
-      id: 'DecryptOutsideApp',
-      name: `${prefix}-secrets-at-rest-decrypt-outside-app`,
-      description: 'The secrets-at-rest key was used to Decrypt by a caller outside the stage app roles',
-      state: 'ENABLED_WITH_ALL_CLOUDTRAIL_MANAGEMENT_EVENTS',
-      pattern: $resolve([key.arn, partition, accountId]).apply(([keyArn, p, account]) =>
-        JSON.stringify(
-          secretsAtRestDecryptOutsideAppEventPattern({
-            keyArn,
-            partition: p,
-            accountId: account,
-            appName: $app.name,
-            stage: $app.stage,
-          })
-        )
-      ),
     },
     {
       id: 'KeyChange',

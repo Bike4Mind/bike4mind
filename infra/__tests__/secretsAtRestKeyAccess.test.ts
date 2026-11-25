@@ -66,25 +66,20 @@ beforeEach(() => {
 afterEach(() => vi.unstubAllGlobals());
 
 describe('secrets-at-rest key access wiring', () => {
-  it('on a dedicated key, creates the three rules with one alarm each', async () => {
+  it('on a dedicated key, creates the two rules with one alarm each, keyed on the rule name', async () => {
     await load();
-    expect(created.rules.map(r => r.name)).toEqual([
-      'SecretsAtRestDecryptRule',
-      'SecretsAtRestDecryptOutsideAppRule',
-      'SecretsAtRestKeyChangeRule',
-    ]);
-    expect(created.targets).toHaveLength(3);
-    expect(created.alarms).toHaveLength(3);
+    expect(created.rules.map(r => r.name)).toEqual(['SecretsAtRestDecryptRule', 'SecretsAtRestKeyChangeRule']);
+    expect(created.targets).toHaveLength(2);
+    const ruleNames = created.rules.map(r => r.args.name);
+    expect(created.alarms.map(a => (a.args.dimensions as { RuleName: string }).RuleName)).toEqual(ruleNames);
     expect(created.alarms[0].args).toMatchObject({ namespace: 'AWS/Events', metricName: 'MatchedEvents' });
   });
 
-  it('gives the Decrypt rules the all-management-events state, which read-only events need', async () => {
+  it('gives the Decrypt rule the all-management-events state, which read-only events need', async () => {
     await load();
-    for (const name of ['SecretsAtRestDecryptRule', 'SecretsAtRestDecryptOutsideAppRule']) {
-      expect(created.rules.find(r => r.name === name)?.args.state).toBe(
-        'ENABLED_WITH_ALL_CLOUDTRAIL_MANAGEMENT_EVENTS'
-      );
-    }
+    expect(created.rules.find(r => r.name === 'SecretsAtRestDecryptRule')?.args.state).toBe(
+      'ENABLED_WITH_ALL_CLOUDTRAIL_MANAGEMENT_EVENTS'
+    );
     expect(created.rules.find(r => r.name === 'SecretsAtRestKeyChangeRule')?.args.state).toBeUndefined();
   });
 
@@ -92,9 +87,7 @@ describe('secrets-at-rest key access wiring', () => {
     await load();
     const denied = JSON.parse(created.rules[0].args.eventPattern as string);
     expect(denied.detail.errorMessage).toEqual([{ wildcard: '*arn:test:kms:key*' }]);
-    const outside = JSON.parse(created.rules[1].args.eventPattern as string);
-    expect(outside.detail.resources).toEqual({ ARN: ['arn:test:kms:key'] });
-    const change = JSON.parse(created.rules[2].args.eventPattern as string);
+    const change = JSON.parse(created.rules[1].args.eventPattern as string);
     expect(change.detail.requestParameters.keyId).toEqual(['key-id', 'arn:test:kms:key']);
   });
 

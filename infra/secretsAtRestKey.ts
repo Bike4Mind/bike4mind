@@ -8,7 +8,7 @@
  * the probe live in infra/secretsAtRestKeyAccess.ts.
  *
  * The preview key's owner should carry secretsAtRestPreviewKeyPolicy (the same policy, pinned to any
- * `pr*` stage rather than one) and the same alarms.
+ * stage matching `pr*` rather than one) and the same alarms.
  */
 
 import { isPreviewStage, runsScheduledJobs } from './constants';
@@ -44,14 +44,14 @@ export function secretsAtRestRoleTags(tags: Record<string, string> | undefined, 
   return { ...tags, [SECRETS_AT_REST_ROLE_TAG]: stage };
 }
 
-/** Stages a shared preview key serves: every `pr<N>`. */
+/** Stage glob a shared preview key serves: every stage whose name starts with `pr` (a superset of `pr<N>`). */
 const PREVIEW_STAGE_PATTERN = 'pr*';
 
 function buildKeyPolicy(
   input: { partition: string; accountId: string },
   stageIs: { operator: 'StringNotEquals' | 'StringNotLike'; value: string }
 ) {
-  const contextActions = ['kms:Decrypt', 'kms:ReEncrypt*', 'kms:GenerateDataKeyWithoutPlaintext'];
+  const contextActions = ['kms:Decrypt', 'kms:GenerateDataKeyWithoutPlaintext'];
   return {
     Version: POLICY_VERSION,
     Statement: [
@@ -89,11 +89,19 @@ function buildKeyPolicy(
         Condition: { StringEquals: { 'kms:EncryptionContext:purpose': SECRETS_AT_REST_PURPOSE } },
       },
       {
+        // No caller re-wraps the blob; the grant is Decrypt only.
+        Sid: 'DenyReEncrypt',
+        Effect: 'Deny',
+        Principal: '*',
+        Action: ['kms:ReEncrypt*'],
+        Resource: '*',
+      },
+      {
         // Operators mint the wrapped blob but can never unwrap one; only this stage's roles can.
         Sid: 'DenyDecryptOutsideApp',
         Effect: 'Deny',
         Principal: '*',
-        Action: ['kms:Decrypt', 'kms:ReEncrypt*'],
+        Action: ['kms:Decrypt'],
         Resource: '*',
         Condition: { [stageIs.operator]: { [`aws:PrincipalTag/${SECRETS_AT_REST_ROLE_TAG}`]: stageIs.value } },
       },
@@ -125,38 +133,6 @@ export function secretsAtRestDecryptDeniedEventPattern(input: { keyArn: string }
       errorCode: ['AccessDenied', 'AccessDeniedException'],
       // A refused call has no `resources` or `requestParameters` in CloudTrail; only the message names the key.
       errorMessage: [{ wildcard: `*${input.keyArn}*` }],
-    },
-  };
-}
-
-/**
- * Matches a successful Decrypt on the key by a caller that is not one of this stage's app roles. The
- * stage tag that the key policy trusts can be forged by an IAM admin, which succeeds silently; this
- * catches the unwrap itself. App roles are named `<app>-<stage>-...` by SST. A caller with no role
- * session (an IAM user) has no issuer ARN, so it is matched by identity type.
- */
-export function secretsAtRestDecryptOutsideAppEventPattern(input: {
-  keyArn: string;
-  partition: string;
-  accountId: string;
-  appName: string;
-  stage: string;
-}) {
-  const appRolePrefix = `arn:${input.partition}:iam::${input.accountId}:role/${input.appName}-${input.stage}-`;
-  return {
-    source: ['aws.kms'],
-    'detail-type': ['AWS API Call via CloudTrail'],
-    detail: {
-      eventSource: ['kms.amazonaws.com'],
-      eventName: ['Decrypt'],
-      errorCode: [{ exists: false }],
-      resources: { ARN: [input.keyArn] },
-      $or: [
-        {
-          userIdentity: { sessionContext: { sessionIssuer: { arn: [{ 'anything-but': { prefix: appRolePrefix } }] } } },
-        },
-        { userIdentity: { type: [{ 'anything-but': ['AssumedRole'] }] } },
-      ],
     },
   };
 }
