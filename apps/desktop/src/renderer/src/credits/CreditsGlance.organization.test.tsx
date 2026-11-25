@@ -4,7 +4,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { CssVarsProvider } from '@mui/joy/styles';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AccountProfile, BillingAccount } from '@shared/account';
-import { CreditsAvatarDot, CreditsMenuHeader } from './CreditsGlance';
+import { CreditsMenuHeader } from './CreditsGlance';
 import { creditOutlook } from './creditOutlook';
 import type { CreditsGlance } from './useCreditsGlance';
 
@@ -49,7 +49,6 @@ async function render(glance: CreditsGlance, onTopUp = vi.fn()) {
     root.render(
       <CssVarsProvider>
         <CreditsMenuHeader glance={glance} onTopUp={onTopUp} />
-        <CreditsAvatarDot outlook={glance.outlook} />
       </CssVarsProvider>
     )
   );
@@ -76,13 +75,11 @@ describe('CreditsMenuHeader with an organization paying', () => {
     expect(byTestId('credits-glance')?.textContent).toContain('Organization pool');
     expect(byTestId('credits-ring')).toBeNull();
     expect(byTestId('credits-verdict')).toBeNull();
-    expect(byTestId('credits-avatar-dot')).toBeNull();
   });
 
   it('marks an empty pool, without offering a personal top-up', async () => {
     await render(glanceFor({ id: 'org-1', name: 'Acme', personal: false, credits: 0 }));
     expect(byTestId('credits-verdict')?.textContent).toBe('Out of credits.');
-    expect(byTestId('credits-avatar-dot')).not.toBeNull();
     expect(byTestId('credits-top-up-btn')).toBeNull();
   });
 

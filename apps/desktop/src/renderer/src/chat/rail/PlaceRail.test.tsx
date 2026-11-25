@@ -49,7 +49,16 @@ describe('the place rail', () => {
       node.getAttribute('data-testid')
     );
     expect(ids).toEqual(['place-rail-chat-btn', 'place-rail-code-btn', 'place-rail-studio-btn']);
-    expect(byTestId('place-rail')?.lastElementChild).toBe(byTestId('account-probe'));
+    expect(byTestId('place-rail')?.lastElementChild).toBe(byTestId('rail-foot'));
+    expect(byTestId('rail-foot')?.lastElementChild).toBe(byTestId('account-probe'));
+  });
+
+  it('scrolls the places on a short window, keeping the account cluster outside the scroller', () => {
+    mount(<PlaceRail place="chat" onSelect={() => {}} account={<span data-testid="account-probe" />} />);
+    const places = byTestId('rail-places');
+    expect(places?.contains(byTestId('place-rail-studio-btn'))).toBe(true);
+    expect(places?.contains(byTestId('account-probe'))).toBe(false);
+    expect(getComputedStyle(places as HTMLElement).overflowY).toBe('auto');
   });
 
   it('marks only the active place, and reports a click on another', () => {
