@@ -134,7 +134,7 @@ async function beginComposition(
 export async function startBriefComposition(
   userId: string,
   deps: Deps = defaultDeps,
-  options: { scheduled?: boolean } = {}
+  options: CompositionOptions = {}
 ): Promise<IAssistantBrief> {
   return (await beginComposition(userId, deps, options)).brief;
 }

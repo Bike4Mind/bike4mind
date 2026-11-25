@@ -21,7 +21,7 @@ import {
 } from '@bike4mind/server-utils/briefs/startBriefComposition';
 import { BriefComposeRejectedError, publishBriefCompose } from '@bike4mind/server-utils/briefs/publishBriefCompose';
 import { BriefEvents } from '@bike4mind/server-utils/utils/eventBus';
-import { composeBrief } from '../events/briefCompose';
+import { composeBrief, handler as composeHandler } from '../events/briefCompose';
 // createMongoServer is not exported from the package barrel / dist; deep-import the source.
 import { createMongoServer, MONGO_TEST_TIMEOUT_MS } from '../../../../packages/database/src/__test__/createMongoServer';
 import { RETRY_WINDOW_MS, runBriefScheduleReconcile } from './briefScheduleReconcile';
@@ -43,6 +43,14 @@ vi.mock('@aws-sdk/client-sqs', async importOriginal => ({
   ...(await importOriginal<typeof import('@aws-sdk/client-sqs')>()),
   SQSClient: class {
     send = network.queue;
+  },
+}));
+vi.mock('@workers/utils/eventContext', () => ({ withEventContext: (handler: unknown) => handler }));
+vi.mock('@bike4mind/server-utils/services/operationsModelService', () => ({
+  OperationsModelService: {
+    getOperationsModel: vi.fn(() => {
+      throw new Error('Unexpected model call');
+    }),
   },
 }));
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
@@ -76,7 +84,10 @@ beforeEach(async () => {
     EmailTriageItemModel.collection.deleteMany({}),
   ]);
 });
-afterEach(() => vi.unstubAllEnvs());
+afterEach(() => {
+  vi.unstubAllEnvs();
+  vi.restoreAllMocks();
+});
 
 const insertUser = async (fields: Record<string, unknown>) =>
   (await User.collection.insertOne({ username: 'u', email: 'u@example.com', ...fields })).insertedId.toString();
@@ -93,7 +104,7 @@ const nextBriefAtOf = async (userId: string) => (await userRepository.getBriefSc
 const notifyHeldRuns = vi.fn(async (_userId: string, _block: { start: Date; end: Date }) => {});
 const notifyStaleBlock = vi.fn(async (_userId: string, _block: { start: Date; end: Date }) => {});
 
-const run = (publisher: ScheduledBriefDeps['publishCompose'] = publishCompose) =>
+const run = (publisher: ScheduledBriefDeps['publishCompose'] = publishCompose, at = now) =>
   runBriefScheduleReconcile(
     {
       users: userRepository,
@@ -135,7 +146,7 @@ const run = (publisher: ScheduledBriefDeps['publishCompose'] = publishCompose) =
       notifyHeldBlockRuns: notifyStaleBlock,
       outOfTime: () => false,
     },
-    now
+    at
   );
 
 describe('runBriefScheduleReconcile', () => {
@@ -231,6 +242,104 @@ describe('runBriefScheduleReconcile', () => {
 
     await run();
     expect(await nextBriefAtOf(userId)).toEqual(later);
+  });
+
+  it('keeps a future reminder approved between the reminder read and slot advance', async () => {
+    const userId = await insertUser({ preferences: { briefSchedule: schedule }, nextBriefAt: minutesAgo(2) });
+    const reminderAt = new Date(now.getTime() + 5 * 60_000);
+    const read = assistantBriefRepository.findEarliestPendingReminderAt.bind(assistantBriefRepository);
+    vi.spyOn(assistantBriefRepository, 'findEarliestPendingReminderAt').mockImplementationOnce(async (...args) => {
+      const stale = await read(...args);
+      await insertApprovedReminder(userId, reminderAt);
+      await userRepository.pullNextBriefAtForward(userId, reminderAt);
+      return stale;
+    });
+    expect((await run()).no_activity).toBe(1);
+    expect(await nextBriefAtOf(userId)).toEqual(reminderAt);
+  });
+
+  it('re-arms an accepted slot while an overdue reminder remains unlisted', async () => {
+    const userId = await insertUser({ preferences: { briefSchedule: schedule }, nextBriefAt: minutesAgo(2) });
+    await insertApprovedReminder(userId, minutesAgo(1));
+    expect((await run()).enqueued).toBe(1);
+    expect(await nextBriefAtOf(userId)).toEqual(new Date(now.getTime() + SCHEDULED_BRIEF_MIN_GAP_MS));
+  });
+
+  it('surfaces thirteen due reminders in two capped real compositions before the weekly slot', async () => {
+    vi.useFakeTimers({ now, toFake: ['Date'] });
+    try {
+      const weekly = { ...schedule, days: [now.getUTCDay()], timeZone: 'UTC', timeOfDay: '00:00' };
+      const userId = await insertUser({ preferences: { briefSchedule: weekly }, nextBriefAt: minutesAgo(2) });
+      for (let index = 0; index < 13; index++) await insertApprovedReminder(userId, minutesAgo(index + 1));
+      const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), updateMetadata: vi.fn() };
+      const composePublished = async () => {
+        const event = publishCompose.mock.lastCall?.[0];
+        expect(event).toMatchObject({ userId, scheduled: true });
+        await (composeHandler as unknown as (event: unknown, logger: unknown) => Promise<void>)(
+          { properties: event },
+          logger
+        );
+      };
+      expect((await run()).enqueued).toBe(1);
+      await composePublished();
+      expect(await assistantBriefRepository.findDueReminders(userId, now, 20)).toHaveLength(1);
+      const retryAt = new Date(now.getTime() + SCHEDULED_BRIEF_MIN_GAP_MS);
+      expect(await nextBriefAtOf(userId)).toEqual(retryAt);
+      vi.setSystemTime(retryAt);
+      expect((await run(publishCompose, retryAt)).enqueued).toBe(1);
+      await composePublished();
+      expect(await assistantBriefRepository.findDueReminders(userId, retryAt, 20)).toHaveLength(0);
+      const ready = await AssistantBriefModel.find({ userId, origin: { $ne: 'followUp' }, status: 'ready' }).sort({
+        createdAt: 1,
+      });
+      expect(ready.map(brief => brief.happened.length)).toEqual([12, 1]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('does not restore a due time when the schedule is disabled during post-claim reconciliation', async () => {
+    const userId = await insertUser({ preferences: { briefSchedule: schedule }, nextBriefAt: minutesAgo(2) });
+    await insertApprovedReminder(userId, minutesAgo(1));
+    const read = assistantBriefRepository.findEarliestPendingReminderAt.bind(assistantBriefRepository);
+    vi.spyOn(assistantBriefRepository, 'findEarliestPendingReminderAt').mockImplementation(async (...args) => {
+      const reminder = await read(...args);
+      if (!args[1]) await userRepository.setBriefSchedule(userId, { ...schedule, enabled: false }, null);
+      return reminder;
+    });
+    expect((await run()).enqueued).toBe(1);
+    expect(await nextBriefAtOf(userId)).toBeNull();
+    expect((await userRepository.getBriefSchedule(userId)).schedule?.enabled).toBe(false);
+  });
+
+  it.each([false, true])('retains accepted work after reminder read failure with disabled=%s', async disabled => {
+    const userId = await insertUser({ preferences: { briefSchedule: schedule }, nextBriefAt: minutesAgo(2) });
+    await insertApprovedReminder(userId, minutesAgo(1));
+    const read = assistantBriefRepository.findEarliestPendingReminderAt.bind(assistantBriefRepository);
+    vi.spyOn(assistantBriefRepository, 'findEarliestPendingReminderAt').mockImplementation(async (...args) => {
+      if (!args[1]) {
+        if (disabled) await userRepository.setBriefSchedule(userId, { ...schedule, enabled: false }, null);
+        throw new Error('reminder lookup unavailable');
+      }
+      return read(...args);
+    });
+    const result = await run();
+    expect(result.enqueued).toBe(1);
+    expect(result.failed).toBe(0);
+    expect(await AssistantBriefModel.countDocuments({ userId, status: 'composing' })).toBe(1);
+    expect(await nextBriefAtOf(userId)).toEqual(disabled ? null : new Date(now.getTime() + SCHEDULED_BRIEF_MIN_GAP_MS));
+    expect(publishCompose).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not re-arm overdue reminders while brief pushes are off', async () => {
+    const userId = await insertUser({
+      preferences: { briefSchedule: schedule, pushNotifications: { brief_ready: false } },
+      nextBriefAt: minutesAgo(2),
+    });
+    await insertApprovedReminder(userId, minutesAgo(1));
+    expect((await run()).push_off).toBe(1);
+    expect(await nextBriefAtOf(userId)).toEqual(computeNextBriefAt(schedule, now));
+    expect(await AssistantBriefModel.countDocuments({ userId, status: 'composing' })).toBe(0);
   });
 
   it('retries a debounced slot after the gap when a reminder is already due', async () => {

@@ -262,6 +262,7 @@ export const assistantBriefRepository = {
       userId,
       status: 'ready',
       trigger: 'busy_block',
+      ...ACTIVITY_BRIEF,
       ...(regular && { createdAt: { $gte: regular.createdAt } }),
     })
       .sort({ createdAt: -1 })

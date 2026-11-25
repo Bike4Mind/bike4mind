@@ -182,6 +182,7 @@ export async function composeBrief(
     await settleBriefedEmails(deps, input.userId, briefedEmailIds(composed), composedAt);
     await settleBriefedDelegations(deps, input.userId, briefedDelegationIds(composed, activity), composedAt);
     await settleSurfacedReminders(deps, input.userId, activity, composedAt);
+    if (periodEnd) await notifyIfBlockBrief(deps, brief);
 
     const { body, briefAction } = briefPushContent(composed, activity);
     await deps.push({
@@ -295,7 +296,6 @@ async function settleSurfacedReminders(deps: BriefComposeDeps, userId: string, a
 }
 
 export async function loadActivity(brief: IAssistantBrief, now: Date): Promise<BriefActivity> {
-  // A busy-block brief covers only the block: runs end at its end, emails and questions start at its start.
   const block = brief.trigger === 'busy_block' ? brief.busyBlock : null;
   const { items } = await agentExecutionRepository.findByUserIdPaginated(
     brief.userId,

@@ -4,7 +4,7 @@ import { BriefScheduleSchema } from '@bike4mind/common';
 
 const { contracts, userRepository, assistantBriefRepository } = vi.hoisted(() => ({
   contracts: [] as { operationId: string; auth: string; scopes?: readonly string[]; request?: unknown }[],
-  userRepository: { getBriefSchedule: vi.fn(), setBriefSchedule: vi.fn() },
+  userRepository: { getBriefSchedule: vi.fn(), setBriefSchedule: vi.fn(), pullNextBriefAtForward: vi.fn() },
   assistantBriefRepository: { findEarliestPendingReminderAt: vi.fn() },
 }));
 
@@ -45,7 +45,15 @@ const schedule = { enabled: true, timeOfDay: '08:00', days: [1, 2, 3, 4, 5], tim
 
 describe('/api/v1/briefs/schedule', () => {
   beforeEach(() => {
-    vi.clearAllMocks();
+    vi.resetAllMocks();
+    let stored: { schedule: typeof schedule | null; nextBriefAt: Date | null } = { schedule: null, nextBriefAt: null };
+    userRepository.setBriefSchedule.mockImplementation(async (_id, value: typeof schedule, due: Date | null) => {
+      stored = { schedule: value, nextBriefAt: due };
+    });
+    userRepository.getBriefSchedule.mockImplementation(async () => stored);
+    userRepository.pullNextBriefAtForward.mockImplementation(async (_id, due: Date) => {
+      if (stored.schedule?.enabled && (!stored.nextBriefAt || due < stored.nextBriefAt)) stored.nextBriefAt = due;
+    });
     vi.useFakeTimers({ now: new Date('2026-11-18T12:00:00Z'), toFake: ['Date'] });
     assistantBriefRepository.findEarliestPendingReminderAt.mockResolvedValue(null);
   });
@@ -95,7 +103,7 @@ describe('/api/v1/briefs/schedule', () => {
     const reminder = new Date('2026-11-18T12:30:00.000Z');
     assistantBriefRepository.findEarliestPendingReminderAt.mockResolvedValue(reminder);
     const res = await call('PUT', schedule);
-    expect(userRepository.setBriefSchedule).toHaveBeenCalledWith('user-1', schedule, reminder);
+    expect(userRepository.pullNextBriefAtForward).toHaveBeenCalledWith('user-1', reminder);
     expect(res._getJSONData()).toEqual({ schedule, nextBriefAt: reminder.toISOString() });
   });
 
@@ -117,6 +125,59 @@ describe('/api/v1/briefs/schedule', () => {
     const res = await call('PUT', off);
     expect(userRepository.setBriefSchedule).toHaveBeenCalledWith('user-1', off, null);
     expect(res._getJSONData()).toEqual({ schedule: off, nextBriefAt: null });
+  });
+
+  it('keeps a reminder approved while the schedule replacement is held', async () => {
+    const reminder = new Date('2026-11-18T12:30:00Z');
+    let stored = new Date('2026-11-18T13:00:00Z');
+    let approved = false;
+    assistantBriefRepository.findEarliestPendingReminderAt.mockImplementation(async () => (approved ? reminder : null));
+    userRepository.setBriefSchedule.mockImplementation(async (_id, _schedule, due: Date) => {
+      // An approval pulls the old due time forward immediately before this held write commits.
+      approved = true;
+      stored = reminder;
+      stored = due;
+    });
+    userRepository.pullNextBriefAtForward.mockImplementation(async (_id, due: Date) => {
+      if (due < stored) stored = due;
+    });
+    userRepository.getBriefSchedule.mockImplementation(async () => ({ schedule, nextBriefAt: stored }));
+    const res = await call('PUT', schedule);
+    expect(stored).toEqual(reminder);
+    expect(res._getJSONData()).toEqual({ schedule, nextBriefAt: reminder.toISOString() });
+  });
+
+  it('does not replace a schedule when the initial reminder lookup fails', async () => {
+    assistantBriefRepository.findEarliestPendingReminderAt.mockRejectedValueOnce(new Error('lookup unavailable'));
+    await expect(call('PUT', schedule)).rejects.toThrow('lookup unavailable');
+    expect(userRepository.setBriefSchedule).not.toHaveBeenCalled();
+  });
+
+  it('retains a known earlier reminder when the post-write lookup fails', async () => {
+    const reminder = new Date('2026-11-18T12:05:00Z');
+    let stored = reminder;
+    let written = false;
+    assistantBriefRepository.findEarliestPendingReminderAt.mockImplementation(async () => {
+      if (written) throw new Error('lookup unavailable');
+      return reminder;
+    });
+    userRepository.setBriefSchedule.mockImplementation(async (_id, _schedule, due: Date) => {
+      stored = due;
+      written = true;
+    });
+    userRepository.pullNextBriefAtForward.mockImplementation(async (_id, due: Date) => {
+      if (due < stored) stored = due;
+    });
+    await expect(call('PUT', schedule)).rejects.toThrow('lookup unavailable');
+    expect(stored).toEqual(reminder);
+  });
+
+  it('bounds retry after an unseen approval races a write whose post-read fails', async () => {
+    assistantBriefRepository.findEarliestPendingReminderAt
+      .mockResolvedValueOnce(null)
+      .mockRejectedValueOnce(new Error('lookup unavailable'));
+    await expect(call('PUT', schedule)).rejects.toThrow('lookup unavailable');
+    expect((await userRepository.getBriefSchedule('user-1')).nextBriefAt).toEqual(new Date('2026-11-18T12:15:00Z'));
   });
 
   it('405s a verb the path does not serve', async () => {
