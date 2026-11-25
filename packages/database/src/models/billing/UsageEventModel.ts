@@ -5,6 +5,9 @@ import {
   COMPLETION_RUN_ROLES,
   COMPLETION_SOURCES,
   CreditHolderType,
+  PLATFORM_PAID_REASONS,
+  PLATFORM_USAGE_OWNER_TYPE,
+  USAGE_EVENT_OWNER_TYPES,
   IMongoDocument,
   IFundingCohortCost,
   ILakeUsageSummary,
@@ -79,7 +82,7 @@ const UsageEventSchema = new Schema<IUsageEventDocument>(
     requestId: { type: String, required: true },
     userId: { type: String, required: true },
     ownerId: { type: String, required: true },
-    ownerType: { type: String, required: true, enum: ['User', 'Organization', 'Agent'] as CreditHolderType[] },
+    ownerType: { type: String, required: true, enum: [...USAGE_EVENT_OWNER_TYPES] },
     sessionId: { type: String, required: false },
     projectId: { type: String, required: false },
     dataLakeId: { type: String, required: false },
@@ -206,6 +209,17 @@ const UsageEventSchema = new Schema<IUsageEventDocument>(
       ),
       required: false,
     },
+    // Mirrors UsageEventPlatformPaid.
+    platformPaid: {
+      type: new Schema(
+        {
+          reason: { type: String, required: true, enum: [...PLATFORM_PAID_REASONS] },
+          listingId: { type: String, required: false },
+        },
+        { _id: false }
+      ),
+      required: false,
+    },
   },
   {
     timestamps: true,
@@ -273,11 +287,12 @@ export class UsageEventRepository extends BaseRepository<IUsageEventDocument> im
    * rather than losing it.
    */
   private async resolveFundingBreakdown(event: IUsageEventInput): Promise<IUsageFundingBreakdown | undefined> {
-    if (!this.loadFundingSnapshot || event.creditsCharged <= 0) {
+    const ownerType = event.ownerType;
+    if (!this.loadFundingSnapshot || event.creditsCharged <= 0 || ownerType === PLATFORM_USAGE_OWNER_TYPE) {
       return undefined;
     }
     try {
-      const { lots, currentCredits } = await this.loadFundingSnapshot(event.ownerId, event.ownerType);
+      const { lots, currentCredits } = await this.loadFundingSnapshot(event.ownerId, ownerType);
       return attributeChargeToFundingSources(lots, currentCredits, event.creditsCharged);
     } catch (error) {
       console.warn('[UsageEvent] Funding breakdown lookup failed; recording without it', {

@@ -155,6 +155,33 @@ export const UsageEventRun = z.object({
 export type IUsageEventRun = z.infer<typeof UsageEventRun>;
 
 /**
+ * Owner of a row the platform paid for, such as a skill template's example run. Not a credit
+ * holder: no balance, cap, budget or spend freeze reads it, and per-user/per-org views match on
+ * a User/Organization/Agent ownerId, so these rows stay out of them. userId and ownerId are both
+ * PLATFORM_USAGE_OWNER_ID, so no userId-keyed reader picks one up either.
+ */
+export const PLATFORM_USAGE_OWNER_TYPE = 'Platform' as const;
+export const PLATFORM_USAGE_OWNER_ID = 'platform';
+
+export type UsageEventOwnerType = CreditHolderType | typeof PLATFORM_USAGE_OWNER_TYPE;
+
+export const USAGE_EVENT_OWNER_TYPES: readonly UsageEventOwnerType[] = [
+  ...Object.values(CreditHolderType),
+  PLATFORM_USAGE_OWNER_TYPE,
+];
+
+export const PLATFORM_PAID_REASONS = ['template_example_run'] as const;
+
+/** What a platform-paid row was spent on. Set only on rows owned by PLATFORM_USAGE_OWNER_TYPE. */
+export const UsageEventPlatformPaid = z.object({
+  reason: z.enum(PLATFORM_PAID_REASONS),
+  /** The skill listing whose template example ran. */
+  listingId: z.string().optional(),
+});
+
+export type IUsageEventPlatformPaid = z.infer<typeof UsageEventPlatformPaid>;
+
+/**
  * One row per provider API call. Ties true COGS (costUsd, frozen
  * at write time) to what the user was debited (creditsCharged) so margin per
  * model/user is queryable. Dual-written at settlement time; never part of the
@@ -165,9 +192,9 @@ export const UsageEvent = z.object({
   /** App-level correlation id: questId for chat/image/video, session/run id otherwise. */
   requestId: z.string(),
   userId: z.string(),
-  /** Credit holder actually debited (user or organization). */
+  /** Credit holder actually debited (user or organization), or the platform (PLATFORM_USAGE_OWNER_TYPE). */
   ownerId: z.string(),
-  ownerType: z.enum(CreditHolderType),
+  ownerType: z.union([z.enum(CreditHolderType), z.literal(PLATFORM_USAGE_OWNER_TYPE)]),
   sessionId: z.string().optional(),
   /** Explicit project context validated against access and billing ownership at execution time. */
   projectId: z.string().optional(),
@@ -275,6 +302,7 @@ export const UsageEvent = z.object({
   requestMeta: UsageEventRequestMeta.optional(),
   /** The completion run this call's spend belongs to (see UsageEventRun). */
   run: UsageEventRun.optional(),
+  platformPaid: UsageEventPlatformPaid.optional(),
 
   createdAt: z.date(),
   updatedAt: z.date(),
