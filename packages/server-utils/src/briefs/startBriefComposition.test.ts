@@ -4,6 +4,7 @@ import {
   BriefComposeStartError,
   startBriefComposition,
   startEventBrief,
+  startFollowUpComposition,
   startScheduledBrief,
   type ScheduledBriefDeps,
 } from './startBriefComposition';
@@ -120,6 +121,33 @@ type GatedOver = {
   claimed?: boolean;
   straddling?: Date | null;
 };
+
+describe('startFollowUpComposition', () => {
+  it('creates a follow-up row with the memo, never reusing an in-flight brief, and keeps the memo off the event', async () => {
+    const deps = makeDeps({ inFlight: stored({ status: 'composing' }) });
+    await startFollowUpComposition('u1', { transcript: 'Email Sam', timeZone: 'UTC' }, deps);
+    expect(deps.briefs.findActiveComposing).not.toHaveBeenCalled();
+    expect(deps.briefs.createComposing).toHaveBeenCalledWith({
+      userId: 'u1',
+      periodStart: now,
+      periodEnd: now,
+      origin: 'followUp',
+      followUpInput: { transcript: 'Email Sam', timeZone: 'UTC' },
+    });
+    expect(deps.publishCompose).toHaveBeenCalledWith({ briefId: 'b1', userId: 'u1' });
+  });
+
+  it('discards the row when the event is rejected', async () => {
+    const deps = makeDeps();
+    deps.publishCompose.mockRejectedValue(new BriefComposeRejectedError());
+    await expect(startFollowUpComposition('u1', { transcript: 'memo' }, deps)).rejects.toMatchObject({
+      name: BriefComposeStartError.name,
+      retrySafe: true,
+    });
+    expect(deps.briefs.discardComposing).toHaveBeenCalledWith('b1');
+    expect(deps.briefs.createComposing.mock.calls[0][0].followUpInput).toEqual({ transcript: 'memo' });
+  });
+});
 
 const PREVIOUS_START = new Date('2026-11-17T01:00:00Z');
 const enabledUser = { preferences: { briefSchedule: { enabled: true } } };

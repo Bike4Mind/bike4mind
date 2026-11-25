@@ -58,20 +58,15 @@ async function activityWindow(userId: string, deps: Deps, now: Date): Promise<{ 
   return straddling ? { ...window, periodStart: straddling } : window;
 }
 
-async function beginComposition(
-  userId: string,
-  deps: Deps,
-  options: { scheduled?: boolean }
-): Promise<{ brief: IAssistantBrief; created: boolean }> {
-  const inFlight = await deps.briefs.findActiveComposing(userId, deps.now());
-  if (inFlight) return { brief: inFlight, created: false };
-
-  const { periodStart, periodEnd } = await activityWindow(userId, deps, deps.now());
-
-  const brief = await deps.briefs.createComposing({ userId, periodStart, periodEnd });
+/** Publishes the compose event; a rejected publish discards the row so a retry starts clean. */
+async function publishOrDiscard(
+  brief: IAssistantBrief,
+  deps: Pick<Deps, 'briefs' | 'publishCompose'>,
+  event: { userId: string; scheduled?: boolean }
+): Promise<void> {
   const briefId = brief._id.toString();
   try {
-    await deps.publishCompose({ briefId, userId, ...(options.scheduled ? { scheduled: true } : {}) });
+    await deps.publishCompose({ briefId, ...event });
   } catch (err) {
     let retrySafe = false;
     if (err instanceof BriefComposeRejectedError) {
@@ -84,6 +79,20 @@ async function beginComposition(
     }
     throw new BriefComposeStartError(briefId, retrySafe, err);
   }
+}
+
+async function beginComposition(
+  userId: string,
+  deps: Deps,
+  options: { scheduled?: boolean }
+): Promise<{ brief: IAssistantBrief; created: boolean }> {
+  const inFlight = await deps.briefs.findActiveComposing(userId, deps.now());
+  if (inFlight) return { brief: inFlight, created: false };
+
+  const { periodStart, periodEnd } = await activityWindow(userId, deps, deps.now());
+
+  const brief = await deps.briefs.createComposing({ userId, periodStart, periodEnd });
+  await publishOrDiscard(brief, deps, { userId, ...(options.scheduled ? { scheduled: true } : {}) });
   return { brief, created: true };
 }
 
@@ -97,6 +106,27 @@ export async function startBriefComposition(
   options: { scheduled?: boolean } = {}
 ): Promise<IAssistantBrief> {
   return (await beginComposition(userId, deps, options)).brief;
+}
+
+/**
+ * Starts a follow-up brief composed from a dictated memo. Never reuses an in-flight brief and never touches the
+ * activity window: the memo is stored on the owner's row (cleared on settle), never in the event payload.
+ */
+export async function startFollowUpComposition(
+  userId: string,
+  input: { transcript: string; timeZone?: string },
+  deps: Pick<Deps, 'briefs' | 'publishCompose' | 'now'> = defaultDeps
+): Promise<IAssistantBrief> {
+  const now = deps.now();
+  const brief = await deps.briefs.createComposing({
+    userId,
+    periodStart: now,
+    periodEnd: now,
+    origin: 'followUp',
+    followUpInput: { transcript: input.transcript, ...(input.timeZone && { timeZone: input.timeZone }) },
+  });
+  await publishOrDiscard(brief, deps, { userId });
+  return brief;
 }
 
 export type ScheduledBriefOutcome =

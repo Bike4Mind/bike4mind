@@ -24,6 +24,7 @@ import {
   assembleBrief,
   briefedDelegationIds,
   briefedEmailIds,
+  briefPushBody,
   briefPushContent,
   buildBriefPrompt,
   emptyBrief,
@@ -31,6 +32,7 @@ import {
   type BriefActivity,
   type ComposedBrief,
 } from './briefCompose.composition';
+import { assembleFollowUpBrief, buildFollowUpPrompt } from './briefCompose.followUp';
 
 /**
  * `brief.compose` consumer: composes one user's brief (POST /api/v1/briefs creates the `composing`
@@ -46,13 +48,15 @@ const MAX_RUNS = 30;
 const MAX_APPROVALS = 12;
 const MAX_QUESTIONS = 12;
 const MODEL_MAX_TOKENS = 1500;
+// A follow-up reply carries a whole email draft (up to BRIEF_LIMITS.draftBody chars) besides the items.
+const FOLLOW_UP_MAX_TOKENS = 3000;
 const APPROVAL_SUMMARY_LIMIT = 600;
 
 type LogLike = Pick<Logger, 'info' | 'warn' | 'error'>;
 
 export type BriefComposeDeps = {
   now: () => Date;
-  users: { findById(id: string): Promise<{ id: string } | null> };
+  users: Pick<typeof userRepository, 'findById'>;
   briefs: Pick<
     typeof assistantBriefRepository,
     'findById' | 'markReady' | 'markFailed' | 'discardComposing' | 'removeEmailSourcedItems'
@@ -60,8 +64,8 @@ export type BriefComposeDeps = {
   loadActivity(brief: IAssistantBrief, now: Date): Promise<BriefActivity>;
   /** Whether the call may run: 'ok', or why not (AI access held, or the balance cannot cover it). */
   canCompose(userId: string): Promise<'ok' | 'ai_access_held' | 'insufficient_credits'>;
-  /** Sends the activity prompt to the model and returns its raw reply. */
-  complete(userId: string, briefId: string, prompt: string): Promise<string>;
+  /** Sends the prompt to the model and returns its raw reply. */
+  complete(userId: string, briefId: string, prompt: string, maxTokens?: number): Promise<string>;
   /** The user's standing instruction texts. A failing load means the brief is composed without them. */
   loadInstructions(userId: string): Promise<string[]>;
   push(event: PushNotificationEvent): Promise<void>;
@@ -103,6 +107,11 @@ export async function composeBrief(
   const user = await deps.users.findById(input.userId);
   if (!user) {
     await briefs.markFailed(input.briefId, 'user_missing');
+    return;
+  }
+
+  if (brief.origin === 'followUp') {
+    await composeFollowUp(deps, brief, user.preferences?.briefSchedule?.timeZone);
     return;
   }
 
@@ -156,6 +165,49 @@ export async function composeBrief(
   } catch (error) {
     logger.error('[Brief] composition failed', { briefId: input.briefId, error });
     await briefs.markFailed(input.briefId, 'composition_failed');
+  }
+}
+
+/**
+ * A brief from a dictated memo: no activity load and no empty-window discard, since the user is waiting on it.
+ * Every decision is stored pending; nothing is sent or scheduled here.
+ */
+async function composeFollowUp(deps: BriefComposeDeps, brief: IAssistantBrief, scheduleTimeZone: string | undefined) {
+  const { briefs, logger } = deps;
+  const briefId = brief._id.toString();
+  try {
+    const input = brief.followUpInput;
+    if (!input?.transcript) {
+      await briefs.markFailed(briefId, 'composition_failed');
+      return;
+    }
+    const gate = await deps.canCompose(brief.userId);
+    if (gate !== 'ok') {
+      await briefs.markFailed(briefId, gate);
+      return;
+    }
+    const now = deps.now();
+    const timeZone = input.timeZone ?? scheduleTimeZone ?? 'UTC';
+    const reply = await deps.complete(
+      brief.userId,
+      briefId,
+      buildFollowUpPrompt(input.transcript, now, timeZone),
+      FOLLOW_UP_MAX_TOKENS
+    );
+    const composed = assembleFollowUpBrief(reply, now);
+    if (!(await briefs.markReady(briefId, composed, deps.now()))) return;
+    await deps.push({
+      userId: brief.userId,
+      category: 'brief_ready',
+      title: 'Your follow-ups are ready',
+      body: briefPushBody(composed),
+      deepLink: briefDeepLink(briefId),
+      collapseId: `brief_ready:${briefId}`,
+      briefId,
+    });
+  } catch (error) {
+    logger.error('[Brief] follow-up composition failed', { briefId, error });
+    await briefs.markFailed(briefId, 'composition_failed');
   }
 }
 
@@ -260,7 +312,7 @@ export const handler = withEventContext(async (event, logger) => {
         const funded = await payerCanFundSessionOperation({ payerId: userId, operation: 'assistant brief', logger });
         return funded ? 'ok' : 'insufficient_credits';
       },
-      complete: async (userId, briefId, prompt) => {
+      complete: async (userId, briefId, prompt, maxTokens = MODEL_MAX_TOKENS) => {
         const startTime = Date.now();
         const { modelId, llm, modelInfo } = await OperationsModelService.getOperationsModel({ endUserId: userId });
         let reply = '';
@@ -268,7 +320,7 @@ export const handler = withEventContext(async (event, logger) => {
         await llm.complete(
           modelId,
           [{ role: 'user', content: prompt }],
-          { maxTokens: MODEL_MAX_TOKENS },
+          { maxTokens },
           async (chunks: (string | null | undefined)[], info?: CompletionInfo) => {
             reply += chunks.filter(Boolean).join('');
             if (info) completionInfo = info;

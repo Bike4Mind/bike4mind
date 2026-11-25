@@ -25,6 +25,7 @@ export { getClientConfigContract, getPublicClientConfigContract } from './contra
 export { approvePendingActionContract, denyPendingActionContract } from './contracts/pendingActions.contract';
 export {
   composeBriefContract,
+  composeFollowUpBriefContract,
   listBriefsContract,
   getBriefContract,
   getBriefScheduleContract,

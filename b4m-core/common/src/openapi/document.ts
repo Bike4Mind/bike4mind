@@ -133,6 +133,8 @@ export function infoDescription(scopes: readonly string[] = PUBLIC_DOC_API_KEY_S
       '`GET /api/v1/scene-compositions/{id}` until `state` is `succeeded`, `failed`, `blocked` or `cancelled`.',
     '- **Briefs** (`POST /api/v1/briefs`) return `202`. Poll ' +
       '`GET /api/v1/briefs/{id}` until `status` is `ready` or `failed`.',
+    '- **Follow-up briefs** (`POST /api/v1/briefs/follow-ups`) return `202` too and are polled the same way, ' +
+      'at `GET /api/v1/briefs/{id}`.',
     '- **Brief replies** (`POST /api/v1/briefs/{id}/decisions/{decisionId}/reply`) return `202` with the ' +
       '`executionId` of the agent run your reply started. Poll `GET /api/v1/agent-executions/{id}` with it.',
     '- **Research runs** (`POST /api/v1/data-lakes/{id}/research/runs`) return `202`. Poll ' +

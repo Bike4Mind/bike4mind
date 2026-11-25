@@ -22,6 +22,7 @@ import { getClientConfigContract, getPublicClientConfigContract } from './client
 import { approvePendingActionContract, denyPendingActionContract } from './pendingActions.contract';
 import {
   composeBriefContract,
+  composeFollowUpBriefContract,
   listBriefsContract,
   getBriefContract,
   getBriefScheduleContract,
@@ -225,6 +226,7 @@ export const CONTRACTS: readonly EndpointContract[] = [
   approvePendingActionContract,
   denyPendingActionContract,
   composeBriefContract,
+  composeFollowUpBriefContract,
   listBriefsContract,
   getBriefContract,
   getBriefScheduleContract,

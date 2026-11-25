@@ -1,6 +1,7 @@
 import { defineEndpoint } from '../defineEndpoint';
 import {
   BriefDecisionParamsSchema,
+  BriefFollowUpRequestSchema,
   BriefIdParamSchema,
   BriefListResponseSchema,
   BriefReplyRequestSchema,
@@ -19,7 +20,7 @@ const JWT_ONLY_NOTE =
 
 /**
  * Assistant briefs for native clients. Served by apps/client/pages/api/v1/briefs/index.ts (compose, list),
- * apps/client/pages/api/v1/briefs/[id].ts (read), .../[id]/decisions/[decisionId]/reply.ts (reply) and
+ * apps/client/pages/api/v1/briefs/follow-ups.ts (follow-up intake), apps/client/pages/api/v1/briefs/[id].ts (read), .../[id]/decisions/[decisionId]/reply.ts (reply) and
  * apps/client/pages/api/v1/briefs/schedule.ts (schedule). Composition runs in apps/workers/src/events/briefCompose.ts.
  */
 export const composeBriefContract = defineEndpoint({
@@ -41,6 +42,41 @@ export const composeBriefContract = defineEndpoint({
     429: { description: 'Per-user rate limit exceeded.', schema: ApiErrorSchema },
   },
   codeSample: { authToken: '<access_token>', streaming: false },
+});
+
+export const composeFollowUpBriefContract = defineEndpoint({
+  method: 'post',
+  path: '/api/v1/briefs/follow-ups',
+  operationId: 'composeFollowUpBrief',
+  summary: 'Compose follow-ups from a dictated memo',
+  description:
+    'Turns a dictated memo (the transcript of a voice note after a meeting or call) into a brief whose ' +
+    'decisions propose follow-ups: action items, a follow-up email draft and reminders, each carrying ' +
+    '`followUp` in `pending` state. Nothing is sent or scheduled until you approve a decision. Composition is ' +
+    'asynchronous like `POST /api/v1/briefs`: the response is the brief in `composing` status, then a ' +
+    '`brief_ready` push (or polling `GET /api/v1/briefs/{id}`) signals `ready` or `failed`. Every call starts ' +
+    'a new brief, and a follow-up brief does not change the window the next activity brief covers. ' +
+    JWT_ONLY_NOTE,
+  tags: ['AI'],
+  auth: 'jwtOnly',
+  request: BriefFollowUpRequestSchema,
+  responses: {
+    202: { description: 'The follow-ups are being composed.', schema: BriefSchema },
+    400: {
+      description: 'The transcript is empty, blank or too long, or the time zone is unknown.',
+      schema: ApiErrorSchema,
+    },
+    401: { description: 'Missing or invalid JWT.', schema: ApiErrorSchema },
+    429: { description: 'Per-user rate limit exceeded.', schema: ApiErrorSchema },
+  },
+  codeSample: {
+    authToken: '<access_token>',
+    streaming: false,
+    body: {
+      transcript: 'Email Sam the notes from today and remind me to call the vendor tomorrow at 9.',
+      timeZone: 'America/New_York',
+    },
+  },
 });
 
 export const listBriefsContract = defineEndpoint({

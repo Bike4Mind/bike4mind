@@ -137,7 +137,7 @@ describe('assistant brief settlement', () => {
     expect(await assistantBriefRepository.markReady('brief', content, composedAt)).toBe(true);
     expect(update).toHaveBeenCalledExactlyOnceWith(
       { _id: 'brief', status: 'composing' },
-      { $set: { ...content, status: 'ready', composedAt } },
+      { $set: { ...content, status: 'ready', composedAt }, $unset: { followUpInput: 1 } },
       { runValidators: true }
     );
   });
@@ -148,7 +148,7 @@ describe('assistant brief settlement', () => {
     expect(await assistantBriefRepository.markFailed('brief', 'Unavailable')).toBe(false);
     expect(update).toHaveBeenCalledExactlyOnceWith(
       { _id: 'brief', status: 'composing' },
-      { $set: { status: 'failed', failureReason: 'Unavailable' } },
+      { $set: { status: 'failed', failureReason: 'Unavailable' }, $unset: { followUpInput: 1 } },
       { runValidators: true }
     );
   });

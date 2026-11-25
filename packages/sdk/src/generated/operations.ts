@@ -53,6 +53,10 @@ export const operations = {
     method: 'POST',
     path: '/api/v1/briefs',
   },
+  composeFollowUpBrief: {
+    method: 'POST',
+    path: '/api/v1/briefs/follow-ups',
+  },
   createAgent: {
     method: 'POST',
     path: '/api/v1/agents',
