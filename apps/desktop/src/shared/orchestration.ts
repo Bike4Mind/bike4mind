@@ -522,7 +522,9 @@ export function automaticUpgradeAllowed(
 
 /**
  * The bounds a host holds a task decision answer to before it reaches the worker; the answer is
- * checked against the card's own shapes again where it is applied (sanitizeAnswers).
+ * checked against the card's own shapes again where it is applied (sanitizeAnswers). The answer
+ * shapes are strict on purpose, an exception to the protocol's ignore-unknown-keys rule: an
+ * answer is user input handed to a worker, so an unexpected key is refused, not dropped.
  */
 export const taskDecisionReplySchema = z.object({
   sessionId: z.uuid(),

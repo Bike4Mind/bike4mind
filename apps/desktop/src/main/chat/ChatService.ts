@@ -3328,7 +3328,8 @@ export class ChatService {
 
   /**
    * `allowDiscard` lets cleanup force-remove a dirty or unproven checkout, keeping its branch. Only a
-   * caller that showed the user what is discarded passes it; the host protocol has no such step.
+   * caller that showed the user what is discarded passes it; session/delete carries it as
+   * `allowDiscard` from a client that did.
    */
   async deleteSession(
     sessionId: string,

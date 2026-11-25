@@ -164,6 +164,7 @@ export const hostMethods = {
   // Directories only, never file contents; an absent path means the host's home directory, and
   // `~` or a relative path is taken from it. A path that is missing, not a directory or not
   // readable fails with pathUnavailable. `truncated` says the entry cap cut the list.
+  // Params are optional since 1.2.
   'fs/browse': {
     params: z.object({ path: z.string().optional() }).optional(),
     result: z.object({

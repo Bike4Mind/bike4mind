@@ -248,7 +248,6 @@ export const IPC_CHANNELS = {
   chatSetRolePolicy: 'chat:set-role-policy',
   chatTaskAction: 'chat:task-action',
   chatListTaskDecisions: 'chat:list-task-decisions',
-  /** The user's answer on a worker's decision card. Renderer -> main only; no tool reaches it. */
   /** main -> renderer push; the whole list of decisions workers wait on the user for. */
   chatTaskDecisions: 'chat:task-decisions',
   /**
@@ -773,8 +772,8 @@ export interface BrowserTabRequest {
 /** The request half of starting a session; see CreatedSession for the reply. */
 export interface CreateSessionRequest {
   /**
-   * The user sidebar section the new session belongs to. Main assigns it right after minting the
-   * id and before replying, so the row never shows in the default groups first.
+   * The user sidebar section the new session belongs to. The renderer places the new session in it
+   * right after the host creates it, before the row first shows.
    */
   sectionId?: string;
   /** Omitted means Chat. Code sessions start through their own request; see CreateCodeSessionRequest. */
@@ -801,10 +800,10 @@ export type ArchiveQuestion = NonNullable<HostResult<'session/setArchived'>['con
 export type ArchiveAnswer = { confirmed: true; archiveChildIds: string[] };
 
 /** A Code session's create request, plus the same optional section the Chat one takes. */
-export type CreateCodeSessionIpcRequest = CreateCodeSessionRequest & CreateSessionRequest;
+export type PlacedCodeSessionRequest = CreateCodeSessionRequest & CreateSessionRequest;
 
 /** A Code session's create reply - `ok: false` never carries placement. */
-export type CreateCodeSessionIpcResult = ({ ok: true } & CreatedSession) | { ok: false; error: string };
+export type PlacedCodeSessionResult = ({ ok: true } & CreatedSession) | { ok: false; error: string };
 
 /** The whole surface exposed on `window.b4m`. Mirrored in src/preload/index.d.ts. */
 /**
