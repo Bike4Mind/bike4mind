@@ -4,7 +4,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { CssVarsProvider } from '@mui/joy/styles';
 import type { ChatSession, ChatSessionSummary } from '@shared/chat';
 import type { SidebarSectionsState } from '@shared/sidebarSections';
-import type { WorktreeRemoval } from '@shared/worktreeRemoval';
+import type { SessionWorktreeRemoval } from '@shared/worktreeRemoval';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { desktopTheme } from '../theme';
 import { ChatShell } from './ChatShell';
@@ -69,10 +69,11 @@ const FRESH: ChatSessionSummary = { ...OPEN, id: 'fresh-1', title: 'Fresh thread
 const work: SidebarSectionsState = { sections: [{ id: 'work', name: 'Work' }], assignments: {} };
 const placed: SidebarSectionsState = { ...work, assignments: { 'fresh-1': 'work' } };
 
-const safe: WorktreeRemoval = {
+const safe: SessionWorktreeRemoval = {
   path: '/repo/.b4m/worktrees/test',
   branch: 'b4m/test',
   safe: true,
+  removable: true,
   reason: null,
 };
 
@@ -96,7 +97,7 @@ let host: HTMLElement | null = null;
 let resolveRename: (value: ChatSessionSummary | null) => void = () => {};
 let createSession = vi.fn<(request?: unknown) => Promise<unknown>>();
 const deleteSession = vi.fn<(sessionId: string, removeWorktree: boolean) => Promise<void>>();
-const inspectWorktreeRemoval = vi.fn<(sessionId: string) => Promise<WorktreeRemoval | null>>();
+const inspectWorktreeRemoval = vi.fn<(sessionId: string) => Promise<SessionWorktreeRemoval | null>>();
 
 beforeEach(() => {
   deleteSession.mockReset();

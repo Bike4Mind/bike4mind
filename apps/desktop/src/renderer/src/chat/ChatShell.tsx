@@ -107,7 +107,7 @@ import { openInSessionBrowser } from './prLinks';
 import { usePrSummaries, usePullRequest } from './usePullRequest';
 import { SessionList } from './SessionList';
 import { DeleteSessionDialog } from './DeleteSessionDialog';
-import { isUntouchedImport, projectForGroup, projectGroupDirectory } from './grouping';
+import { isUntouchedImport, nestedSessionsOf, projectForGroup, projectGroupDirectory } from './grouping';
 import { useImportedInline } from './importedInline';
 import { TerminalPanel } from './TerminalPanel';
 import {
@@ -1613,12 +1613,34 @@ export function ChatShell({
   );
 
   const [deleteSessionId, setDeleteSessionId] = useState<string | null>(null);
+  const deleteTarget = useMemo(
+    () => (deleteSessionId ? sessions.find(session => session.id === deleteSessionId) : undefined),
+    [sessions, deleteSessionId]
+  );
+  const deleteNested = useMemo(
+    () => (deleteSessionId ? nestedSessionsOf(sessions, deleteSessionId) : []),
+    [sessions, deleteSessionId]
+  );
   const onDelete = useCallback(
-    async (sessionId: string, removeWorktree: boolean) => {
-      await remove(sessionId, removeWorktree);
-      clearAddFolderAlert(sessionId);
-      clearDefaultsReadFailure(sessionId);
-      setActiveId(current => (current === sessionId ? null : current));
+    async (
+      sessionId: string,
+      removeWorktree: boolean,
+      nestedIds: readonly string[] = [],
+      nestedWorktreeIds: readonly string[] = []
+    ) => {
+      const settle = (ids: readonly string[]) => {
+        for (const id of ids) {
+          clearAddFolderAlert(id);
+          clearDefaultsReadFailure(id);
+        }
+        setActiveId(current => (current && ids.includes(current) ? null : current));
+      };
+      try {
+        settle(await remove(sessionId, removeWorktree, nestedIds, nestedWorktreeIds));
+      } catch (err) {
+        settle((err as { deleted?: string[] }).deleted ?? []);
+        throw err;
+      }
     },
     [remove, clearAddFolderAlert, clearDefaultsReadFailure]
   );
@@ -1802,6 +1824,8 @@ export function ChatShell({
         <DeleteSessionDialog
           key={deleteSessionId}
           sessionId={deleteSessionId}
+          title={deleteTarget?.title ?? ''}
+          nested={deleteNested}
           onDelete={onDelete}
           onClose={() => setDeleteSessionId(null)}
         />
