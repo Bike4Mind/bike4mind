@@ -83,7 +83,8 @@ function CoreTutorialHostInner() {
       if (entry?.sessionId !== currentSessionId || entry.status !== 'in_progress' || !walkIsCurrent(entry, tutorial)) {
         continue;
       }
-      const step = tutorial.steps.find(s => s.id === entry.stepId);
+      // No position is saved until the first step completes, so a walk without one is still on its first step.
+      const step = entry.stepId ? tutorial.steps.find(s => s.id === entry.stepId) : tutorial.steps[0];
       if (!step) continue;
       store.getState().begin({
         moduleId: tutorial.id,

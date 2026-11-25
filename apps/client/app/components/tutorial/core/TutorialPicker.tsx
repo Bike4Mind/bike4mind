@@ -50,7 +50,7 @@ export function TutorialPicker({
       <ModalDialog
         data-testid="tutorial-picker"
         aria-labelledby="tutorial-picker-title"
-        sx={{ width: '100%', maxWidth: 520, maxHeight: 'calc(100dvh - 32px)' }}
+        sx={{ width: 'min(520px, calc(100vw - 32px))', maxHeight: 'calc(100dvh - 32px)' }}
       >
         <ModalClose data-testid="tutorial-picker-close" />
         <DialogTitle id="tutorial-picker-title">Tutorials</DialogTitle>

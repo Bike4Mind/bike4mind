@@ -600,7 +600,7 @@ const ProfileMenu = () => {
               icon={<SchoolOutlinedIcon sx={{ fontSize: '18px' }} />}
               label={t('tutorials.menuLabel', 'Tutorials')}
               onClick={() => {
-                closeToTrigger();
+                closeNavigation();
                 openTutorials(true);
               }}
             />

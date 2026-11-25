@@ -82,6 +82,14 @@ describe('CoreTutorialHost', () => {
     expect(tutorialStoreFor(CORE_TUTORIALS_API_BASE).getState().active?.stepId).toBe('b');
   });
 
+  it('picks up a walk still on its first step, which has no saved position yet', () => {
+    enabled.current = true;
+    runData.modules = [firstSteps];
+    runData.progress = { 'first-steps': { ...inProgressOnS1, stepId: undefined } };
+    renderHost();
+    expect(tutorialStoreFor(CORE_TUTORIALS_API_BASE).getState().active?.stepId).toBe('a');
+  });
+
   it('does not restart a walk the user just left on the same notebook', () => {
     enabled.current = true;
     runData.modules = [firstSteps];

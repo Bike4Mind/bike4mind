@@ -24,7 +24,7 @@ export const FIRST_STEPS_STEPS: TutorialStep[] = [
     id: 'first-steps-done',
     type: 'bridge',
     title: 'You are set',
-    body: 'That is the basics. Open Tutorials from the Help menu any time to take another one.',
+    body: 'That is the basics. Open Tutorials from your account menu or the Help Center any time to take another one.',
     action: 'Done',
   },
 ];
