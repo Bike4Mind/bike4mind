@@ -4,6 +4,7 @@ import {
   convertPipelineForDocumentDB,
   createCompatibleLookup,
 } from '../utils/documentdb-compat';
+import { Logger } from '@bike4mind/observability';
 
 describe('$lookup DocumentDB Compatibility', () => {
   const originalEnv = process.env.USE_DOCUMENTDB_COMPATIBILITY;
@@ -226,7 +227,7 @@ describe('$lookup DocumentDB Compatibility', () => {
     it('should warn about $facet stages in pipeline', () => {
       process.env.USE_DOCUMENTDB_COMPATIBILITY = 'true';
 
-      const consoleSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      const loggerSpy = vi.spyOn(Logger, 'warn').mockImplementation(() => {});
 
       const pipeline = [
         { $match: { isActive: true } },
@@ -240,11 +241,11 @@ describe('$lookup DocumentDB Compatibility', () => {
 
       convertPipelineForDocumentDB(pipeline);
 
-      expect(consoleSpy).toHaveBeenCalledWith(
+      expect(loggerSpy).toHaveBeenCalledWith(
         'Found $facet in pipeline. Consider using executeFacetCompatible instead.'
       );
 
-      consoleSpy.mockRestore();
+      loggerSpy.mockRestore();
     });
 
     it('should not modify pipeline when compatibility is disabled', () => {

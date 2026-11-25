@@ -215,7 +215,7 @@ export const RemoveFromOrganizationDialog: React.FC<DialogProps & { org: Members
         `${name} loses access to the data lakes and groups of ${org.name}.`,
         role === 'manager' && 'Their manager rights are removed.',
         role === 'billingManager' && 'Their billing manager rights are removed.',
-        isActive && 'It is their active organization, so that is cleared too.',
+        isActive && 'It is their home org, so that is cleared too.',
         'Adding them back does not restore what was shared with them.',
       ]
         .filter(Boolean)
@@ -232,6 +232,39 @@ export const RemoveFromOrganizationDialog: React.FC<DialogProps & { org: Members
       }
       onConfirm={handleConfirm}
       data-testid="org-remove-dialog"
+    />
+  );
+};
+
+/**
+ * Clears the home org (`user.organizationId`) only: memberships and roles stay. No undo: nothing sets the
+ * pointer on request; joining an org, accepting an invite or creating one fills it again while it is empty.
+ */
+export const ClearHomeOrgDialog: React.FC<DialogProps & { orgName: string | null }> = ({ user, orgName, onClose }) => {
+  const membership = useAdminUserOrgMembership(user.id);
+  const name = displayName(user);
+  const org = orgName ?? 'their home org';
+
+  const handleConfirm = async (reason: string) => {
+    await membership.clearHomeOrg(reason);
+    onClose();
+    toast.success(`Cleared the home org of ${name}.`);
+  };
+
+  return (
+    <ActionDialog
+      open
+      onClose={onClose}
+      title="Clear home org"
+      description={[
+        `Requests from ${name} that don't name an account, such as API keys and the CLI, are billed to their personal balance instead of ${org}.`,
+        "Access that keys off the home org, such as the org's artifacts and data-lake context, is dropped too.",
+        'Their memberships and roles are not changed.',
+      ].join(' ')}
+      reasonPresets={ADMIN_REASON_PRESETS.homeOrgClear}
+      confirmLabel="Clear home org"
+      onConfirm={handleConfirm}
+      data-testid="org-clear-home-dialog"
     />
   );
 };

@@ -16,6 +16,10 @@ import { forgetLocalContexts, OllamaLocal, type LocalContextSizing } from './Oll
 import { SessionStore } from './SessionStore';
 import type { AccessStore } from './tools/AccessStore';
 
+vi.mock('../git/hostGitArgs', async importOriginal =>
+  (await import('./plainFolderGit.testHelper')).skipGitOutsideRepositories(await importOriginal())
+);
+
 vi.mock('@bike4mind/common', async importOriginal => ({
   ...(await importOriginal<typeof import('@bike4mind/common')>()),
   estimateFit: (await import('./fitStub.testHelper')).stubEstimateFit,
@@ -119,7 +123,7 @@ async function localService(
   await service.renameSession(id, 'Keep title');
   const send = async (text: string) => {
     expect(await service.send(id, text)).toMatchObject({ ok: true });
-    await vi.waitUntil(() => !service.isSessionBusy(id));
+    await vi.waitUntil(() => !service.isSessionBusy(id), { interval: 5 });
   };
   return { service, store, events, requests, id, send };
 }
@@ -131,7 +135,7 @@ it('uses measured Ollama input tokens to compact before the next local turn', as
   await send('second prompt');
   expect(requests).toHaveLength(3);
   expect(requests[1].options?.num_predict).toBe(COMPACT_MAX_TOKENS);
-  expect(events).toContainEqual({ type: 'auto-compact', sessionId: id, running: true });
+  expect(events).toContainEqual({ type: 'auto-compact', sessionId: id, seq: expect.any(Number), running: true });
   expect((await store.get(id))?.messages.some(message => message.boundary)).toBe(true);
 });
 
@@ -144,7 +148,7 @@ it('compacts at the old window when growing the local model fails', async () => 
     expect(grow).toHaveBeenCalled();
     expect(requests).toHaveLength(3);
     expect(requests[1].options?.num_predict).toBe(COMPACT_MAX_TOKENS);
-    expect(events).toContainEqual({ type: 'auto-compact', sessionId: id, running: true });
+    expect(events).toContainEqual({ type: 'auto-compact', sessionId: id, seq: expect.any(Number), running: true });
     expect((await store.get(id))?.messages.some(message => message.boundary)).toBe(true);
   } finally {
     grow.mockRestore();
@@ -169,11 +173,11 @@ it('drops the oldest turns of an overflowing prompt, says so, and compacts befor
   expect(requests).toHaveLength(3);
   expect(requests[2].messages.map(message => message.content)).not.toContain('first prompt');
   expect(requests[2].messages.at(-1)?.content).toBe('second prompt');
-  expect(events).toContainEqual({ type: 'context-trimmed', sessionId: id, dropped: 2 });
+  expect(events).toContainEqual({ type: 'context-trimmed', sessionId: id, seq: expect.any(Number), dropped: 2 });
   expect((await store.get(id))?.messages.at(-1)?.usage).toMatchObject({ inputTokens: 17_000 });
   await send('third prompt');
   expect(requests[3].options?.num_predict).toBe(COMPACT_MAX_TOKENS);
-  expect(events).toContainEqual({ type: 'auto-compact', sessionId: id, running: true });
+  expect(events).toContainEqual({ type: 'auto-compact', sessionId: id, seq: expect.any(Number), running: true });
 });
 
 it('sizes a local summary request to the model window', async () => {
@@ -287,6 +291,7 @@ it('tells the conversation when Auto grows the context past what fits on the GPU
   expect(events).toContainEqual({
     type: 'context-notice',
     sessionId: id,
+    seq: expect.any(Number),
     message: expect.stringContaining('replies will be slower'),
     kind: 'context-size',
   });
@@ -417,9 +422,11 @@ it('keeps the promised compaction when a trimmed reply is stopped', async () => 
   await send('first prompt');
   phase = 'refuse';
   expect(await service.send(id, 'second prompt')).toMatchObject({ ok: true });
-  await vi.waitUntil(() => events.some(event => event.type === 'delta' && event.text.includes('Partial')));
+  await vi.waitUntil(() => events.some(event => event.type === 'delta' && event.text.includes('Partial')), {
+    interval: 5,
+  });
   service.stop(id);
-  await vi.waitUntil(() => !service.isSessionBusy(id));
+  await vi.waitUntil(() => !service.isSessionBusy(id), { interval: 5 });
 
   const before = requests.length;
   await send('third prompt');
@@ -473,9 +480,9 @@ it('keeps the measured size of a trimmed round stopped before its first token, a
 
   phase = 'refuse';
   expect(await service.continueReply(id)).toMatchObject({ ok: true });
-  await vi.waitUntil(() => events.some(event => event.type === 'context-trimmed'));
+  await vi.waitUntil(() => events.some(event => event.type === 'context-trimmed'), { interval: 5 });
   service.stop(id);
-  await vi.waitUntil(() => !service.isSessionBusy(id));
+  await vi.waitUntil(() => !service.isSessionBusy(id), { interval: 5 });
   expect(contextTokens((await store.get(id))?.messages.at(-1))).toBe(16_410);
 
   const before = requests.length;
@@ -501,9 +508,11 @@ it('counts the measured round tool results when the round after it was stopped m
 
   phase = 'stream';
   expect(await service.continueReply(id)).toMatchObject({ ok: true });
-  await vi.waitUntil(() => events.some(event => event.type === 'delta' && event.text.includes('Partial')));
+  await vi.waitUntil(() => events.some(event => event.type === 'delta' && event.text.includes('Partial')), {
+    interval: 5,
+  });
   service.stop(id);
-  await vi.waitUntil(() => !service.isSessionBusy(id));
+  await vi.waitUntil(() => !service.isSessionBusy(id), { interval: 5 });
 
   const before = requests.length;
   await send('next question');
@@ -589,7 +598,7 @@ it('keeps the model and its tools for a local turn whose catalog /api/show timed
   const { id } = await service.createSession();
   await service.renameSession(id, 'Keep title');
   expect(await service.send(id, 'hello')).toMatchObject({ ok: true });
-  await vi.waitUntil(() => !service.isSessionBusy(id));
+  await vi.waitUntil(() => !service.isSessionBusy(id), { interval: 5 });
   expect(timedOut).toBeGreaterThan(0);
   expect(requests[0].tools?.length).toBeGreaterThan(0);
 });

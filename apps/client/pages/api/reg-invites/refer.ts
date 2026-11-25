@@ -17,7 +17,7 @@ import { getLogoUrl, buildEmailLogoImg } from '@bike4mind/server-utils/utils/mai
 import { postMessageToSlack } from '@bike4mind/server-utils/integrations/slack/slack';
 import { Request } from 'express';
 import { z } from 'zod';
-import { escape } from 'html-escaper';
+import { escapeHtml } from '@bike4mind/utils/escapeHtml';
 
 const CreateReferralRequestSchema = z.object({
   userName: z.string(),
@@ -188,9 +188,9 @@ const handler = baseApi()
             <body>
               <div class="content">
                 ${buildEmailLogoImg(brand, logoUrl)}
-                <p>${escape(emailBody)}</p>
-                <p>Invite code: <strong>${escape(inviteCode)}</strong></p>
-                <p><a href="${escape(registrationLink)}">Click here to register</a></p>
+                <p>${escapeHtml(emailBody)}</p>
+                <p>Invite code: <strong>${escapeHtml(inviteCode)}</strong></p>
+                <p><a href="${escapeHtml(registrationLink)}">Click here to register</a></p>
               </div>
             </body>
             </html>

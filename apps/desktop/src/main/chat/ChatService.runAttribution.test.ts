@@ -7,11 +7,16 @@ import type { CompletionRun, CompletionRunAttribution } from '@bike4mind/common'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { TaskContract } from '@shared/orchestration';
 import type { ChatMessage, ChatModelOption } from '@shared/chat';
+import { PERSONAL_PAYER, setBillingPayerSource } from '../account/billingPayer';
 import { ChatService } from './ChatService';
 import { SessionStore } from './SessionStore';
 import type { CompletionRunMinter } from './completionRuns';
 import type { ModelCatalog } from './ModelCatalog';
 import type { AccessStore } from './tools/AccessStore';
+
+vi.mock('../git/hostGitArgs', async importOriginal =>
+  (await import('./plainFolderGit.testHelper')).skipGitOutsideRepositories(await importOriginal())
+);
 
 const contract: TaskContract = {
   version: 1,
@@ -31,7 +36,7 @@ const contract: TaskContract = {
 const RUN_A = '7d0c8f3e-2b1a-4c5d-9e8f-0a1b2c3d4e5f';
 const frame = (payload: unknown) => `data: ${typeof payload === 'string' ? payload : JSON.stringify(payload)}\n\n`;
 const run = (runId: string): CompletionRun => ({ runId, createdAt: '2026-11-10T00:00:00.000Z' });
-type Wire = { model: string; run?: CompletionRunAttribution };
+type Wire = { model: string; run?: CompletionRunAttribution; organization_id?: string };
 type PostCall = [string, Wire, { headers?: Record<string, string> }];
 
 describe('orchestration run attribution', () => {
@@ -79,6 +84,7 @@ describe('orchestration run attribution', () => {
     service = new ChatService(deps);
   });
   afterEach(() => {
+    setBillingPayerSource(() => PERSONAL_PAYER);
     vi.restoreAllMocks();
     service.dispose();
     for (const stream of streams) stream.end();
@@ -115,7 +121,9 @@ describe('orchestration run attribution', () => {
 
     await service.send(parent.id, 'Plan the work');
     await waitStream(0);
-    expect(mint).toHaveBeenCalledWith(expect.any(String), expect.anything(), parent.id, undefined);
+    expect(mint).toHaveBeenCalledWith(expect.any(String), expect.anything(), parent.id, undefined, {
+      organization_id: null,
+    });
     expect(await storedRunId(parent.id)).toBe(RUN_A);
     expect(call(0)[1].run).toEqual({ runId: RUN_A, role: 'root', purpose: 'turn' });
     expect(call(0)[2].headers?.['X-Request-ID']).toBeTruthy();
@@ -157,6 +165,7 @@ describe('orchestration run attribution', () => {
     streams[0].write(frame('[DONE]'));
 
     await vi.waitUntil(() => post.mock.calls.some((_entry, index) => call(index)[1].run?.role === 'worker'), {
+      interval: 5,
       timeout: 5000,
     });
     const child = (await store.list()).find(session => session.origin?.parentSessionId === parent.id);
@@ -331,7 +340,10 @@ describe('orchestration run attribution', () => {
       })
     );
     streams[0].write(frame('[DONE]'));
-    await vi.waitUntil(() => create.mock.calls.some(([, init]) => init?.orchestrationPolicy), { timeout: 5000 });
+    await vi.waitUntil(() => create.mock.calls.some(([, init]) => init?.orchestrationPolicy), {
+      interval: 5,
+      timeout: 5000,
+    });
     const spawned = create.mock.calls.find(([, init]) => init?.orchestrationPolicy)?.[1];
     expect(spawned?.orchestrationPolicy?.serverRunId).toBe(RUN_A);
   });
@@ -605,6 +617,72 @@ describe('orchestration run attribution', () => {
       const parent = await created();
       expect(await service.getRunSpend(parent.id)).toEqual({ status: 'unattributed' });
       expect(usageGet).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('run payer', () => {
+    it('bills every turn of an organization run to that organization after the selection switches', async () => {
+      let selected: string | null = 'org-1';
+      setBillingPayerSource(() => ({ organization_id: selected }));
+      const parent = await created();
+      await service.setSessionOrchestrate(parent.id, true);
+
+      await service.send(parent.id, 'Plan the work');
+      await waitStream(0);
+      expect(mint).toHaveBeenCalledWith(expect.any(String), expect.anything(), parent.id, undefined, {
+        organization_id: 'org-1',
+      });
+      expect(call(0)[1].organization_id).toBe('org-1');
+      expect((await store.get(parent.id))?.orchestrationPolicy?.serverRunOrganizationId).toBe('org-1');
+      finish(0);
+      await idle(parent.id);
+
+      selected = null;
+      await service.send(parent.id, 'Keep going');
+      await waitStream(1);
+      expect(call(1)[1].run?.runId).toBe(RUN_A);
+      expect(call(1)[1].organization_id).toBe('org-1');
+      finish(1);
+      await idle(parent.id);
+      expect(mint).toHaveBeenCalledOnce();
+
+      usageGet.mockResolvedValueOnce({ status: 200, data: { settled: { creditsCharged: 0, requests: 0 } } });
+      await service.getRunSpend(parent.id);
+      expect(usageGet).toHaveBeenCalledWith(
+        `/api/v1/completion-runs/${RUN_A}/usage?organization_id=org-1`,
+        expect.anything()
+      );
+    });
+
+    it('omits the organization on a Personal run even after an organization is selected', async () => {
+      let selected: string | null = null;
+      setBillingPayerSource(() => ({ organization_id: selected }));
+      const parent = await created();
+      await service.setSessionOrchestrate(parent.id, true);
+
+      await service.send(parent.id, 'Plan the work');
+      await waitStream(0);
+      expect(call(0)[1]).not.toHaveProperty('organization_id');
+      finish(0);
+      await idle(parent.id);
+
+      selected = 'org-1';
+      await service.send(parent.id, 'Keep going');
+      await waitStream(1);
+      expect(call(1)[1].run?.runId).toBe(RUN_A);
+      expect(call(1)[1]).not.toHaveProperty('organization_id');
+      finish(1);
+      await idle(parent.id);
+    });
+
+    it('reads the selection at submit time outside a run', async () => {
+      setBillingPayerSource(() => ({ organization_id: 'org-1' }));
+      const parent = await created();
+      await service.send(parent.id, 'Just a question');
+      await waitStream(0);
+      expect(call(0)[1].organization_id).toBe('org-1');
+      finish(0);
+      await idle(parent.id);
     });
   });
 });

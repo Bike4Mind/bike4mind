@@ -544,6 +544,8 @@ export interface IChatCompletionServiceOptions {
    * path) so b4m-core never imports it. Omitted -> no custom tools are offered.
    */
   customMcp?: CustomMcpToolHost;
+  /** When an inline turn must end (epoch ms), passed to each `customMcp` call; unset for queued turns. */
+  customMcpDeadline?: number;
   logEvent: (
     event: LLMEventPayload,
     options?: { session?: mongoose.ClientSession; ability?: MongoAbility }

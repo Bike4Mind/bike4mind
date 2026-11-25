@@ -71,9 +71,13 @@ export function CopyValue({
   );
 }
 
-/** Past-tense only: a time at or after `now` (written since the last tick, or a skewed clock) reads as "now". */
-export function relativeTime(date: Date, now: number): string {
-  const seconds = Math.round(Math.min(date.getTime() - now, 0) / 1000);
+/**
+ * Past-tense by default: a time at or after `now` (written since the last tick, or a skewed clock) reads as "now".
+ * `future` is for scheduled times (an expiry), which read as "in 3 days".
+ */
+export function relativeTime(date: Date, now: number, future = false): string {
+  const delta = date.getTime() - now;
+  const seconds = Math.round((future ? delta : Math.min(delta, 0)) / 1000);
   const formatter = new Intl.RelativeTimeFormat('en', { numeric: 'auto' });
   if (Math.abs(seconds) < 60) return formatter.format(seconds, 'second');
   if (Math.abs(seconds) < 3600) return formatter.format(Math.round(seconds / 60), 'minute');
@@ -94,10 +98,15 @@ export const formatUtc = (date: Date): string =>
     timeZone: 'UTC',
   })} UTC`;
 
-export type EntityTime = { prefix?: string; at: string | Date | null | undefined; 'data-testid'?: string };
+export type EntityTime = {
+  prefix?: string;
+  at: string | Date | null | undefined;
+  future?: boolean;
+  'data-testid'?: string;
+};
 
 /** A relative time with the exact UTC time on hover and focus. Renders nothing for an invalid date. */
-export function RelativeTime({ prefix, at, 'data-testid': testId }: EntityTime) {
+export function RelativeTime({ prefix, at, future, 'data-testid': testId }: EntityTime) {
   const [now, setNow] = useState(Date.now);
   useEffect(() => {
     const timer = setInterval(() => setNow(Date.now()), 60_000);
@@ -118,7 +127,7 @@ export function RelativeTime({ prefix, at, 'data-testid': testId }: EntityTime) 
         sx={{ color: 'admin.inkMuted' }}
         data-testid={testId}
       >
-        {prefix ? `${prefix} ${relativeTime(date, now)}` : relativeTime(date, now)}
+        {prefix ? `${prefix} ${relativeTime(date, now, future)}` : relativeTime(date, now, future)}
       </Typography>
     </Tooltip>
   );

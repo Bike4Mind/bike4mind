@@ -10,6 +10,7 @@ import { Permission } from '@bike4mind/common';
 import User from '../auth/UserModel';
 import BaseRepository from '@bike4mind/db-core';
 import { NotFoundError } from '@bike4mind/utils';
+import { Logger } from '@bike4mind/observability';
 import { convertPipelineForDocumentDB } from '../../utils/documentdb-compat';
 
 export interface IInviteModel extends Model<IInviteDocument, {}>, IInviteModelAdapter {}
@@ -495,7 +496,7 @@ export class InviteRepository extends BaseRepository<IInviteDocument> implements
       const hydrated = result.map(r => this.inviteModel.hydrate(r).toObject());
       return hydrated;
     } catch (e) {
-      console.error('FAILED', e);
+      Logger.error('Invite aggregate query failed', { error: e });
       return [];
     }
   }

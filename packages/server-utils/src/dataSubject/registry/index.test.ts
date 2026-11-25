@@ -167,6 +167,47 @@ describe('account purge reconciliation', () => {
     expect(matched('CallableFunction', { ownerType: 'user', ownerKey: 'other', userId: 'other' })).toEqual([]);
   });
 
+  it("deletes the recipients' reviews of a person's functions before the functions go", () => {
+    expect(DATA_HOLDER_REGISTRY.CallableFunction).toMatchObject({
+      beforeErasure: ['deleteReviewsOfOwnedCallableFunctions'],
+    });
+  });
+
+  it("removes a person from the grants of another person's shared function", () => {
+    const shared = { ownerType: 'user', ownerKey: 'other', userId: 'other' };
+    expect(matched('CallableFunction', { ...shared, grants: { userIds: ['x', userId] } })).toEqual(['pullFromArray']);
+    expect(matched('CallableFunction', { ...shared, grants: { userIds: ['x'] } })).toEqual([]);
+  });
+
+  it("deletes a person's reviews of functions shared with them and leaves another person's alone", () => {
+    expect(matched('CallableFunctionReview', { functionId: 'fn-1', userId })).toEqual(['deleteDocument']);
+    expect(matched('CallableFunctionReview', { functionId: 'fn-1', userId: 'other' })).toEqual([]);
+  });
+
+  it("deletes the function call rows a person made, and only names the owner on someone else's call", () => {
+    expect(matched('CallableFunctionCall', { callerUserId: userId, ownerUserId: userId })).toEqual([
+      'deleteDocument',
+      'anonymize',
+    ]);
+    expect(matched('CallableFunctionCall', { callerUserId: userId, ownerUserId: 'other' })).toEqual(['deleteDocument']);
+    expect(matched('CallableFunctionCall', { callerUserId: 'other', ownerUserId: 'other' })).toEqual([]);
+
+    const holder = DATA_HOLDER_REGISTRY.CallableFunctionCall;
+    if (holder.kind !== 'holder') throw new Error('CallableFunctionCall must be a holder');
+    const recipientCall = {
+      callerUserId: 'recipient',
+      organizationId: 'org-1',
+      apiKeyId: 'key-1',
+      ownerUserId: userId,
+    };
+    const matcher = new SubjectMatcher({ userId, email: null });
+    const ownerMatches = holder.references
+      .filter(reference => matcher.matches(recipientCall, reference))
+      .map(reference => ({ reference, throughArray: false }));
+    expect(ownerMatches.map(match => match.reference.action)).toEqual(['anonymize']);
+    expect(holderExportScope(ownerMatches)).toEqual({ scope: 'matchedPaths', paths: ['ownerUserId'] });
+  });
+
   it('deletes only a personal project and anonymizes the owner of an organization one', () => {
     const holder = DATA_HOLDER_REGISTRY.Project;
     if (holder.kind !== 'holder') throw new Error('Project must be a holder');

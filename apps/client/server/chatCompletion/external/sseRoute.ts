@@ -1,4 +1,5 @@
 import { DAILY_FREE_LIMIT_REACHED_ERROR_CODE, isSpendFrozenError, type ApiCompletionOutcome } from '@bike4mind/common';
+import { resolveCompletionBillingOrgId } from '@server/billing/resolveCompletionBillingOrgId';
 import { createCompletionCreditHolds } from '@server/billing/completionCreditHolds';
 import { assertEvaluationAuthorized, evaluationTransport } from '@server/completionRuns/evaluation';
 import { assertSpendNotFrozen } from '@bike4mind/services/creditService';
@@ -55,6 +56,7 @@ import {
 import type { CompletionSettlement } from '@bike4mind/services/cliCompletions';
 import { checkRateLimit, checkApiKeyRateLimitOrThrow, type ApiKeyInfo } from '@bike4mind/server-utils/cli/auth';
 import { resolveContractAuth } from '@bike4mind/server-utils/cli/resolveContractAuth';
+import { completionFailureCode } from '@server/utils/completionFailureCode';
 import { logCompletionAnalytics } from '@server/utils/logCompletionAnalytics';
 import { findCallerCompletionRun, type CompletionRunCaller } from '@server/completionRuns/callerCompletionRun';
 import { Config } from '@bike4mind/server-utils/utils/config';
@@ -279,6 +281,7 @@ export function registerExternalRoutes(app: Express, track: (p: Promise<void>) =
     };
 
     let completionOutcome: ApiCompletionOutcome = 'unknown';
+    let failureCode: string | undefined;
     let body: z.infer<typeof CompletionRequestSchema> | undefined;
     let userId: string | undefined;
     let apiKeyInfo: ApiKeyInfo | undefined;
@@ -334,7 +337,12 @@ export function registerExternalRoutes(app: Express, track: (p: Promise<void>) =
           endpoint: COMPLETIONS_ENDPOINT,
           source,
           startTime,
-          completion: { requestId, requestedModel: body.model, outcome: () => completionOutcome },
+          completion: {
+            requestId,
+            requestedModel: body.model,
+            outcome: () => completionOutcome,
+            failureCode: () => failureCode,
+          },
           logger,
           track,
         });
@@ -373,12 +381,14 @@ export function registerExternalRoutes(app: Express, track: (p: Promise<void>) =
         }
       }
 
+      const billingOrganizationId = await resolveCompletionBillingOrgId({
+        apiKeyInfo,
+        requestedOrgId: body.organization_id,
+        userId,
+      });
+
       const run = body.run
-        ? await verifyRunOwnership(
-            body.run,
-            { userId, billingOrganizationId: apiKeyInfo?.organizationId },
-            Boolean(body.evaluation)
-          )
+        ? await verifyRunOwnership(body.run, { userId, billingOrganizationId }, Boolean(body.evaluation))
         : undefined;
       if (body.evaluation && !run) throw new BadRequestError('Evaluation requires a verified completion run.');
       if (body.evaluation) assertEvaluationAuthorized(userId);
@@ -397,7 +407,7 @@ export function registerExternalRoutes(app: Express, track: (p: Promise<void>) =
 
       // Before the free-tier cap and every hold; executeCompletion skips its own lookup once this has run.
       await assertSpendNotFrozen(
-        spendFreezeSubjectForRequest({ user: { id: userId }, apiKeyInfo }, apiKeyInfo?.organizationId ?? null),
+        spendFreezeSubjectForRequest({ user: { id: userId }, apiKeyInfo }, billingOrganizationId ?? null),
         { db: { spendFreezes: spendFreezeRepository } }
       );
 
@@ -405,7 +415,7 @@ export function registerExternalRoutes(app: Express, track: (p: Promise<void>) =
       await checkFreeTierDailySpendCap({
         userId,
         userRepository,
-        billingOrganizationId: apiKeyInfo?.organizationId,
+        billingOrganizationId,
         usageEventRepository,
         logger,
       });
@@ -442,7 +452,7 @@ export function registerExternalRoutes(app: Express, track: (p: Promise<void>) =
         scopeActor: actorScopeForKey(apiKeyInfo),
         // Org-billed API keys route spend to the org's shared pool (invariant:
         // organizationId is set iff the key's billingOwnerType is Organization).
-        billingOrganizationId: apiKeyInfo?.organizationId,
+        billingOrganizationId,
         apiKeyBillingOwnerType: apiKeyInfo?.billingOwnerType,
         spendFreezeChecked: true,
         // Correlation id for the usage-event dual write (synthesized downstream if absent).
@@ -516,6 +526,7 @@ export function registerExternalRoutes(app: Express, track: (p: Promise<void>) =
           : jsonError.status < 500
             ? 'rejected'
             : 'failed';
+      if (completionOutcome === 'failed') failureCode = completionFailureCode(error).errorCode;
       // Budget exhaustion is expected, not an operator fault, whoever chose the budget (same policy as
       // /api/chat); emitProcessingFailed already skips it via isOperatorFault. Only a positive
       // max_tokens counts as the caller's: resolveOutputMaxTokens discards the rest.

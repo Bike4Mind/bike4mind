@@ -12,7 +12,7 @@ import { AgentPrIndicator } from './AgentPrIndicator';
  * ./statePalette, ./AgentPrIndicator, React and the UI kit. snapshotView.tsx hosts it.
  */
 
-const DIMMED: ReadonlySet<AgentState> = new Set(['stopped', 'idle']);
+const DIMMED: ReadonlySet<AgentState> = new Set(['paused', 'stopped', 'idle']);
 
 /** Per depth level (px); capped so a deep chain still leaves the lane room for its text. */
 const INDENT_STEP = 20;
@@ -173,7 +173,11 @@ export function Swimlanes({ snapshot, onAction }: { snapshot: ViewSnapshot; onAc
             >
               {lane.line ?? ''}
             </Typography>
-            <AgentPrIndicator pr={lane.pr} onOpen={() => onAction({ kind: 'open-pr', agentId: lane.key })} />
+            <AgentPrIndicator
+              agentId={lane.key}
+              pr={lane.pr}
+              onOpen={() => onAction({ kind: 'open-pr', agentId: lane.key })}
+            />
           </Box>
         );
       })}

@@ -23,7 +23,8 @@ const SkeletonTile = styled('div')({
   backgroundColor: studioColor('surface'),
 });
 
-const SkeletonBlock = styled('div')({
+/** A shimmering placeholder block; size it with `style`. It holds still under reduced motion. */
+export const StudioSkeletonBlock = styled('div')({
   borderRadius: studioRadius('xs'),
   backgroundColor: studioColor('raised'),
   backgroundImage: `linear-gradient(90deg, transparent 0%, ${studioColor('hover')} 50%, transparent 100%)`,
@@ -40,10 +41,10 @@ export const StudioTakesLoading = ({ testId, label }: { testId: string; label: s
   <StudioTakesGrid role="status" aria-label={label} data-testid={testId}>
     {Array.from({ length: SKELETON_TILE_COUNT }, (_, index) => (
       <SkeletonTile key={index} aria-hidden>
-        <SkeletonBlock style={{ aspectRatio: '1 / 1', borderRadius: 0 }} />
+        <StudioSkeletonBlock style={{ aspectRatio: '1 / 1', borderRadius: 0 }} />
         <div style={{ display: 'flex', gap: '8px', padding: '12px' }}>
-          <SkeletonBlock style={{ height: '10px', flex: 1 }} />
-          <SkeletonBlock style={{ height: '10px', width: '48px' }} />
+          <StudioSkeletonBlock style={{ height: '10px', flex: 1 }} />
+          <StudioSkeletonBlock style={{ height: '10px', width: '48px' }} />
         </div>
       </SkeletonTile>
     ))}

@@ -9,6 +9,11 @@ import { runsCheckedInAuto } from './shellApproval.testHelper';
 import { shellApproval } from './shellTools';
 import type { ToolContext } from './types';
 
+vi.mock('node:child_process', async importOriginal => {
+  const actual = await importOriginal<typeof import('node:child_process')>();
+  const { memoizedExecFile } = await import('./execFileMemo.testHelper');
+  return { ...actual, execFile: memoizedExecFile(actual.execFile) };
+});
 vi.mock('./userPath', async importOriginal => ({
   ...(await importOriginal<typeof import('./userPath')>()),
   resolveLoginShellVariables: async () => ({}),

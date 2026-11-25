@@ -19,6 +19,7 @@ export const getEmbeddingModelCost = (model: string, inputTokens: number): numbe
   const rate = usdPerTokenOf(model);
   if (rate === undefined) {
     if (inputTokens > 0) {
+      // eslint-disable-next-line no-console -- alarm signal in pure pricing code shared with the browser bundle
       console.error(`[UNPRICED_EMBEDDING_MODEL] ${model} computed $0 for ${inputTokens} tokens; add its rate`);
     }
     return 0;

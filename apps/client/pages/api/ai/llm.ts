@@ -9,7 +9,7 @@ import {
   chatMessageResponseSchema,
 } from '@bike4mind/common';
 import { ChatCompletionInvoke } from '@bike4mind/services/llm/ChatCompletionInvoke';
-import { SQSService } from '@bike4mind/utils';
+import { NotFoundError, SQSService } from '@bike4mind/utils';
 import { getOrCreateSession } from '@bike4mind/server-utils/managers/sessionManager';
 import { adminRoleWithheldFor } from '@bike4mind/server-utils/auth/apiKeyAdminScope';
 import { resolveSessionOrigin } from '@server/managers/sessionOrigin';
@@ -182,15 +182,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.AI_CHAT] })
       visitId: turnAuth.authOrigin === 'session' ? readVisitId(req.headers.cookie) : undefined,
     });
 
-    // Handle case where quest creation failed (session or quest not found during invoke)
-    if (!quest) {
-      req.logger.error('Quest creation failed - invoke returned undefined (session or quest not found)');
-      return res.status(404).json({
-        error: 'Session not found',
-        message: 'The session may have been deleted or expired. Please start a new session.',
-        code: 'SESSION_NOT_FOUND',
-      });
-    }
+    if (!quest) throw new NotFoundError('Failed to create quest');
 
     // Pushed only once the quest exists, so a failed invoke() does not move the pointer.
     asyncPromises.push(userRepository.update({ id: req.user.id, lastNotebookId: sessionId }));

@@ -39,6 +39,7 @@ import {
 import { newAccountSpendCapAdaptersWithAlert } from '../billing/newAccountSpendCapWithAlert';
 import { recordInsufficientCredits } from '../billing/userLimitEvents';
 import { claimPaidCallRunBudget, releaseRunBudgetClaim } from '../billing/runBudgetClaim';
+import { discardJobInputFiles } from './discardJobInputFiles';
 import { Logger } from '@bike4mind/observability';
 import { modelDiscoveryService } from '@bike4mind/services';
 import {
@@ -746,6 +747,7 @@ export const getImageJobDeps = (): ImageJobDeps => {
     enqueue: enqueueGenerationJob,
     recordUsage: recordImageUsage,
     countNotebookImage,
+    discardInputFiles: (userId, fileIds) => discardJobInputFiles(userId, fileIds, logger),
     now: () => new Date(),
     logger,
   };

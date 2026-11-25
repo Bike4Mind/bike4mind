@@ -8,6 +8,7 @@ import {
   ResearchTaskStatus,
   ResearchTaskType,
   getQuestErrorCode,
+  limitConcurrency,
 } from '@bike4mind/common';
 import { NotFoundError, secureParameters, UnprocessableEntityError, FunctionQueueRunner } from '@bike4mind/utils';
 import type { ICompletionBackend } from '@bike4mind/llm-adapters';
@@ -15,8 +16,6 @@ import { isAiAccessRefusal } from '../userService/accountState';
 import { createSendStatusUpdate } from './utils';
 import type mongoose from 'mongoose';
 import { z } from 'zod';
-import plimit from 'p-limit';
-import pLimit from 'p-limit';
 
 const researchTaskProcessDiscoveredLinksSchema = z.object({
   id: z.string(),
@@ -144,7 +143,7 @@ export const processDiscoveredLinks = async (
       batches.push(uniqueLinks.slice(i, i + BATCH_SIZE));
     }
 
-    const concurrencyLimit = plimit(CONCURRENCY_LIMIT);
+    const concurrencyLimit = limitConcurrency(CONCURRENCY_LIMIT);
     const stats = {
       updated: 0,
       failed: 0,
@@ -361,7 +360,7 @@ export const processDiscoveredLinks = async (
     );
   };
 
-  const sequencial = pLimit(1);
+  const sequencial = limitConcurrency(1);
 
   try {
     await Promise.all(

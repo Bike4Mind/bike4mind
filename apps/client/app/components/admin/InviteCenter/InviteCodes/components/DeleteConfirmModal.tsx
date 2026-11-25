@@ -1,5 +1,6 @@
 import React from 'react';
-import { Box, Button, Modal, ModalClose, Sheet, Typography } from '@mui/joy';
+import { Button, Typography } from '@mui/joy';
+import { AdminDialog, AdminDialogFooter } from '@client/app/components/admin/shared/AdminDialog';
 import { useRegistrationInvitesStore } from '../store';
 
 interface DeleteConfirmModalProps {
@@ -8,6 +9,8 @@ interface DeleteConfirmModalProps {
 
 export const DeleteConfirmModal: React.FC<DeleteConfirmModalProps> = ({ onConfirm }) => {
   const { openDeleteWarning, setOpenDeleteWarning, multiSelected } = useRegistrationInvitesStore();
+  const count = multiSelected.length;
+  const noun = count === 1 ? 'invite' : 'invites';
 
   const handleConfirm = () => {
     onConfirm();
@@ -19,34 +22,30 @@ export const DeleteConfirmModal: React.FC<DeleteConfirmModalProps> = ({ onConfir
   };
 
   return (
-    <Modal
+    <AdminDialog
       open={openDeleteWarning}
       onClose={handleClose}
-      sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center' }}
+      title="Delete invites"
+      role="alertdialog"
+      data-testid="delete-invites-modal"
     >
-      <Sheet
-        sx={{
-          width: '560px',
-          boxShadow: 'lg',
-          borderRadius: '8px',
-          padding: '0px',
-        }}
-      >
-        <ModalClose />
-        <Box textAlign={'center'} mt={'4em'} mb={'2em'}>
-          <Typography mt={'30px'} mb={'20px'} level={'body-md'}>
-            Are you sure you want to delete {multiSelected.length} selected registration invite
-            {multiSelected.length !== 1 ? 's' : ''}?
-          </Typography>
-
-          <Button sx={{ mr: '1em' }} color={'success'} onClick={handleConfirm}>
-            Confirm
-          </Button>
-          <Button color={'danger'} onClick={handleClose}>
-            Cancel
-          </Button>
-        </Box>
-      </Sheet>
-    </Modal>
+      <Typography level="body-md">
+        Are you sure you want to delete {count} selected registration {noun}?
+      </Typography>
+      <AdminDialogFooter>
+        <Button variant="plain" color="neutral" onClick={handleClose} data-testid="delete-invites-cancel-btn">
+          Cancel
+        </Button>
+        <Button
+          variant="solid"
+          color="danger"
+          disabled={count === 0}
+          onClick={handleConfirm}
+          data-testid="delete-invites-confirm-btn"
+        >
+          Delete {count} {noun}
+        </Button>
+      </AdminDialogFooter>
+    </AdminDialog>
   );
 };

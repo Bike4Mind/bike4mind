@@ -1,5 +1,6 @@
 import mongoose, { Schema } from 'mongoose';
 import type { SignupGrantBudgetRepository } from '@bike4mind/common';
+import { Logger } from '@bike4mind/observability';
 
 type SignupGrantBudgetDay = {
   _id: string;
@@ -86,7 +87,7 @@ export const signupGrantBudgetRepository: SignupGrantBudgetRepository = {
         if (existing && existing.spent > headroom) return null;
       }
     }
-    console.warn('[signup-grant-budget] Reservation contended after retries', { day, transactionId });
+    Logger.warn('[signup-grant-budget] Reservation contended after retries', { day, transactionId });
     throw new Error('Signup grant budget reservation contended');
   },
   async refund(day, transactionId, amount) {

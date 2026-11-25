@@ -5,11 +5,14 @@ import {
   CompletionRunSchema,
   CreateCompletionRunRequestSchema,
   CreditHolderType,
+  ForbiddenError,
 } from '@bike4mind/common';
 
-const { contracts, completionRunRepository } = vi.hoisted(() => ({
+const { contracts, completionRunRepository, userRepository, resolveActiveOrg } = vi.hoisted(() => ({
   contracts: [] as { operationId: string; auth: string; scopes?: readonly string[] }[],
   completionRunRepository: { create: vi.fn() },
+  userRepository: { findById: vi.fn() },
+  resolveActiveOrg: vi.fn(),
 }));
 
 vi.mock('@server/middlewares/defineNextRoute', () => ({
@@ -23,7 +26,8 @@ vi.mock('@server/middlewares/defineNextRoute', () => ({
   },
 }));
 vi.mock('@server/middlewares/perUserRateLimit', () => ({ perUserRateLimit: () => vi.fn() }));
-vi.mock('@bike4mind/database', () => ({ completionRunRepository }));
+vi.mock('@bike4mind/database', () => ({ completionRunRepository, userRepository }));
+vi.mock('@bike4mind/server-utils/utils/resolveActiveOrg', () => ({ resolveActiveOrg }));
 
 import handler from '../completion-runs';
 
@@ -94,6 +98,70 @@ describe('POST /api/v1/completion-runs', () => {
     );
   });
 
+  describe('organization_id', () => {
+    const jwtUser = { id: 'user-1', isAdmin: false };
+    const ORG_KEY = {
+      keyId: 'key-1',
+      scopes: [ApiKeyScope.AI_CHAT],
+      billingOwnerType: 'Organization',
+      organizationId: 'org-1',
+    };
+
+    it.each([
+      ['omitted', {}],
+      ['null', { organization_id: null }],
+    ])('binds a signed-in caller run to the user when organization_id is %s', async (_label, validated) => {
+      const res = await call({ validated });
+
+      expect(res._getStatusCode()).toBe(201);
+      expect(completionRunRepository.create).toHaveBeenCalledWith(
+        expect.objectContaining({ ownerType: CreditHolderType.User, ownerId: 'user-1' })
+      );
+      expect(resolveActiveOrg).not.toHaveBeenCalled();
+    });
+
+    it('binds the run to an organization the signed-in caller may use', async () => {
+      userRepository.findById.mockResolvedValueOnce(jwtUser);
+      resolveActiveOrg.mockResolvedValueOnce('org-2');
+
+      const res = await call({ validated: { organization_id: 'org-2' } });
+
+      expect(res._getStatusCode()).toBe(201);
+      expect(resolveActiveOrg).toHaveBeenCalledWith({ user: jwtUser }, 'org-2');
+      expect(completionRunRepository.create).toHaveBeenCalledWith(
+        expect.objectContaining({ userId: 'user-1', ownerType: CreditHolderType.Organization, ownerId: 'org-2' })
+      );
+    });
+
+    it('refuses an organization the signed-in caller may not use, minting nothing', async () => {
+      userRepository.findById.mockResolvedValueOnce(jwtUser);
+      resolveActiveOrg.mockRejectedValueOnce(new ForbiddenError('You are not a member of the selected organization.'));
+
+      await expect(call({ validated: { organization_id: 'org-9' } })).rejects.toMatchObject({ statusCode: 403 });
+      expect(completionRunRepository.create).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ['another organization', 'org-2'],
+      ['null', null],
+    ])('refuses an org-billed key that names %s, minting nothing', async (_label, organization_id) => {
+      await expect(call({ apiKeyInfo: ORG_KEY, validated: { organization_id } })).rejects.toMatchObject({
+        statusCode: 403,
+        additionalInfo: { errorCode: 'billing_organization_mismatch' },
+      });
+      expect(completionRunRepository.create).not.toHaveBeenCalled();
+      expect(resolveActiveOrg).not.toHaveBeenCalled();
+    });
+
+    it("binds an org-billed key run to its organization when organization_id names the key's", async () => {
+      await call({ apiKeyInfo: ORG_KEY, validated: { organization_id: 'org-1' } });
+
+      expect(completionRunRepository.create).toHaveBeenCalledWith(
+        expect.objectContaining({ ownerType: CreditHolderType.Organization, ownerId: 'org-1' })
+      );
+    });
+  });
+
   it('leaves rootSessionId off the response when none was sent', async () => {
     const res = await call({});
 
@@ -116,6 +184,14 @@ describe('POST /api/v1/completion-runs', () => {
       budgetCredits: 5000,
       createdAt: CREATED_AT.toISOString(),
     });
+  });
+
+  it('accepts a trimmed organization_id or null, and rejects an empty one', () => {
+    expect(CreateCompletionRunRequestSchema.parse({ organization_id: ' org-2 ' })).toEqual({
+      organization_id: 'org-2',
+    });
+    expect(CreateCompletionRunRequestSchema.parse({ organization_id: null })).toEqual({ organization_id: null });
+    expect(CreateCompletionRunRequestSchema.safeParse({ organization_id: ' ' }).success).toBe(false);
   });
 
   it('rejects a budget that is not a positive whole number of credits', () => {

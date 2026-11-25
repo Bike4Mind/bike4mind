@@ -138,6 +138,8 @@ const orgMembershipSentence = (entry: AuditEntry): string | null => {
       return `Added to ${org}`;
     case 'org.member.removed':
       return `Removed from ${org}`;
+    case 'user.home_org.cleared':
+      return `Cleared ${org} as home org`;
     case 'org.member.content_reassigned':
       return `Transferred content in ${org}`;
     // Two writers: the admin console targets the user; the team's own role route targets the organization

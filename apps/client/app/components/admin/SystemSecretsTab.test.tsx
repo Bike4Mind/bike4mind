@@ -182,9 +182,16 @@ describe('SystemSecretsTab', () => {
     renderTab();
 
     const chip = await screen.findByTestId('system-secrets-infra-status-SESSION_SECRET');
-    fireEvent.mouseOver(chip);
+    vi.useFakeTimers();
+    try {
+      fireEvent.mouseOver(chip);
+      // Joy's Tooltip opens after its 100ms enterDelay.
+      await act(() => vi.advanceTimersByTimeAsync(100));
+    } finally {
+      vi.useRealTimers();
+    }
 
-    const tooltip = await screen.findByRole('tooltip');
+    const tooltip = screen.getByRole('tooltip');
     expect(tooltip).toHaveTextContent('Still the example value');
     const hint = within(tooltip).getByTestId('system-secrets-infra-hint-SESSION_SECRET');
     expect(hint).toHaveTextContent('npx sst secret set SessionSecret <value>');
@@ -457,7 +464,6 @@ describe('SystemSecretsTab', () => {
     expect(mocks.delete).not.toHaveBeenCalled();
     expect(callsTo(SECRETS_URL)).toBe(1);
   });
-
   it('keeps the header and shows skeleton rows while the lists load', async () => {
     mocks.get.mockReturnValue(new Promise(() => {}));
     renderTab();

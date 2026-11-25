@@ -36,8 +36,9 @@ describe('OrchestrateToggle', () => {
     expect(onSurfaceChange).toHaveBeenCalledWith('orchestrate');
   });
 
-  it('switches back to the conversation, and ignores a click on the shown view', async () => {
+  it('keeps the control and count on the agents surface, switches back, and ignores a click on the shown view', async () => {
     await renderToggle(['done'], 'orchestrate');
+    expect(el('chat-orchestrate-count').textContent).toBe('1');
     act(() => el('chat-surface-toggle-orchestrate').click());
     expect(onSurfaceChange).not.toHaveBeenCalled();
     act(() => el('chat-surface-toggle-chat').click());
@@ -97,26 +98,17 @@ describe('OrchestrateToggle', () => {
     );
   });
 
-  it('marks the shown surface as pressed', async () => {
-    await renderToggle(['done'], 'orchestrate');
-    expect(el('chat-surface-toggle-orchestrate').getAttribute('aria-pressed')).toBe('true');
-    expect(el('chat-surface-toggle-chat').getAttribute('aria-pressed')).toBe('false');
-  });
-
-  it.each(['chat', 'orchestrate'] as const)('highlights only the active %s view', async surface => {
+  it.each(['chat', 'orchestrate'] as const)('presses and highlights only the active %s view', async surface => {
     await renderToggle(['done'], surface);
     const active = el(`chat-surface-toggle-${surface}`);
     const inactive = el(`chat-surface-toggle-${surface === 'chat' ? 'orchestrate' : 'chat'}`);
-    expect(getComputedStyle(active).fontWeight).toBe('600');
-    expect(getComputedStyle(inactive).fontWeight).toBe('400');
-    expect(getComputedStyle(active).backgroundColor).not.toBe(getComputedStyle(inactive).backgroundColor);
-  });
-
-  it('keeps the same control, with the count, on the orchestrate surface', async () => {
-    await renderToggle(['working'], 'orchestrate');
-    expect(el('chat-orchestrate-count').textContent).toBe('1');
-    act(() => el('chat-surface-toggle-chat').click());
-    expect(onSurfaceChange).toHaveBeenCalledWith('chat');
+    expect(active.getAttribute('aria-pressed')).toBe('true');
+    expect(inactive.getAttribute('aria-pressed')).toBe('false');
+    const activeStyle = getComputedStyle(active);
+    const inactiveStyle = getComputedStyle(inactive);
+    expect(activeStyle.fontWeight).toBe('600');
+    expect(inactiveStyle.fontWeight).toBe('400');
+    expect(activeStyle.backgroundColor).not.toBe(inactiveStyle.backgroundColor);
   });
 
   describe('Mod+Shift+O', () => {

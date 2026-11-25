@@ -29,6 +29,7 @@ import {
   replyToBriefDecisionContract,
   getPendingDecisionCountContract,
 } from './briefs.contract';
+import { createDelegationContract, getDelegationContract } from './delegations.contract';
 import { registerPushTokenContract, unregisterPushTokenContract } from './pushTokens.contract';
 import { listHandoffDevicesContract, sendSessionHandoffContract } from './sessionHandoff.contract';
 import {
@@ -61,6 +62,7 @@ import {
 } from './files.contract';
 import { createEmbeddingsContract, listEmbeddingModelsContract } from './embeddings.contract';
 import { postSlackMessageContract } from './slackMessages.contract';
+import { getFunctionContract, invokeFunctionContract, listFunctionsContract } from './functions.contract';
 import { createTextRefinementContract } from './textRefinement.contract';
 import { createDecisionContract, listDecisionModelsContract } from './decisions.contract';
 import { getQuestContract, listQuestFilesContract } from './quest.contract';
@@ -113,6 +115,7 @@ import {
   listDataLakeProposalsContract,
   decideDataLakeProposalContract,
   getDataLakeConfigHistoryContract,
+  undoDataLakeConfigChangeContract,
 } from './dataLakeResearch.contract';
 import { listImageModelsContract } from './imageModels.contract';
 import {
@@ -231,6 +234,8 @@ export const CONTRACTS: readonly EndpointContract[] = [
   deleteAssistantInstructionContract,
   replyToBriefDecisionContract,
   getPendingDecisionCountContract,
+  createDelegationContract,
+  getDelegationContract,
   registerPushTokenContract,
   unregisterPushTokenContract,
   listHandoffDevicesContract,
@@ -287,6 +292,7 @@ export const CONTRACTS: readonly EndpointContract[] = [
   listDataLakeProposalsContract,
   decideDataLakeProposalContract,
   getDataLakeConfigHistoryContract,
+  undoDataLakeConfigChangeContract,
   listImageModelsContract,
   cancelVideoGenerationContract,
   createVideoGenerationContract,
@@ -370,4 +376,7 @@ export const CONTRACTS: readonly EndpointContract[] = [
   postSlackMessageContract,
   mintPersonaContract,
   deletePersonaContract,
+  listFunctionsContract,
+  getFunctionContract,
+  invokeFunctionContract,
 ];

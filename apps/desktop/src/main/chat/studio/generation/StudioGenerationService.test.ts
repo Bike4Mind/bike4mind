@@ -6,9 +6,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { AuthenticatedApiClient, SessionChangedError } from '@bike4mind/client-auth';
 import { AxiosError, type AxiosAdapter } from 'axios';
 import { isCredentialAccepted401 } from '../../../auth/unauthorizedBody';
-import { MUSIC_VALIDATION_ERROR_CODES, VIDEO_VALIDATION_ERROR_CODES } from '@bike4mind/common';
+import { ImageModels, MUSIC_VALIDATION_ERROR_CODES, VIDEO_VALIDATION_ERROR_CODES } from '@bike4mind/common';
 import { createStudioDiagnostics } from '../StudioDiagnostics';
-import { MediaApiClient } from '../../media/MediaApiClient';
+import { MediaApiClient, MediaToolError } from '../../media/MediaApiClient';
 import { MediaStore } from '../../media/MediaStore';
 import { SessionStore } from '../../SessionStore';
 import { sessionScopeKey, type SessionScope } from '../../sessionScope';
@@ -20,7 +20,17 @@ import {
 } from './StudioGenerationService';
 
 const account = { environmentUrl: 'https://example.com', accountId: 'one' };
-const image: StudioGenerationRequest = { kind: 'image', body: { prompt: 'a bicycle', model: 'gpt-image-2' } };
+const image: StudioGenerationRequest = {
+  kind: 'image',
+  body: { mode: 'generate', prompt: 'a bicycle', model: ImageModels.GPT_IMAGE_2 },
+};
+const imageChild = (id: string, overrides: Record<string, unknown> = {}) => ({
+  id,
+  state: 'succeeded',
+  error: null,
+  output: { availability: 'ready', url: `/${id}.png`, content_type: 'image/png', file_id: null, expires_at: null },
+  ...overrides,
+});
 const music: StudioGenerationRequest = { kind: 'music', body: { prompt: 'calm music', model: 'lyria-3.5' } };
 
 describe('Studio generation', () => {
@@ -32,11 +42,9 @@ describe('Studio generation', () => {
   let deps: StudioGenerationDeps;
   let service: StudioGenerationService;
   const client = {
-    createStudioImages: vi.fn(),
-    listStudioImages: vi.fn(),
+    createImageJobGroup: vi.fn(),
+    getImageJob: vi.fn(),
     getFile: vi.fn(),
-    generateImage: vi.fn(),
-    getQuest: vi.fn(),
     fetchGenerated: vi.fn(),
     createMusicGeneration: vi.fn(),
     getMusicGeneration: vi.fn(),
@@ -67,16 +75,16 @@ describe('Studio generation', () => {
           ? {
               scope: sessionScopeKey(scope),
               client: client as unknown as MediaApiClient,
-              cdnUrl: 'https://cdn.example',
             }
           : null,
     };
     service = new StudioGenerationService(deps);
-    client.generateImage.mockResolvedValue({ questId: 'quest' });
-    client.getQuest.mockResolvedValue({
-      id: 'quest',
-      status: 'done',
-      files: [{ name: 'image.png', url: '/image.png', isImage: true }],
+    client.createImageJobGroup.mockResolvedValue({ group_id: 'group', data: [{ id: 'remote-image' }] });
+    client.getImageJob.mockImplementation(async (id: string) => imageChild(id));
+    client.getFile.mockResolvedValue({
+      moderation_status: 'clean',
+      download_url: '/image.png',
+      mime_type: 'image/png',
     });
     client.fetchGenerated.mockResolvedValue({ bytes: Buffer.from('image'), contentType: 'image/png' });
     client.createMusicGeneration.mockResolvedValue({ id: 'song' });
@@ -112,7 +120,7 @@ describe('Studio generation', () => {
       const request = { ...image, selection } as unknown as StudioGenerationRequest;
       await expect(service.submit(session.id, request)).rejects.toThrow();
       expect(authorize).not.toHaveBeenCalled();
-      expect(client.generateImage).not.toHaveBeenCalled();
+      expect(client.createImageJobGroup).not.toHaveBeenCalled();
       expect((await workspaces.get(session.id))?.jobs).toEqual([]);
     }
   );
@@ -122,28 +130,46 @@ describe('Studio generation', () => {
     expect(authorize).not.toHaveBeenCalled();
     authorize.mockResolvedValue(false);
     await expect(service.submit(session.id, image)).rejects.toThrow('not approved');
-    expect(client.generateImage).not.toHaveBeenCalled();
+    expect(client.createImageJobGroup).not.toHaveBeenCalled();
     expect((await workspaces.get(session.id))?.jobs).toEqual([]);
+  });
+  it('rejects an image request without a mode before approval', async () => {
+    const session = await sessions.create();
+    const legacy = { kind: 'image', body: { prompt: 'a bicycle', model: 'gpt-image-2' } };
+    await expect(service.submit(session.id, legacy as unknown as StudioGenerationRequest)).rejects.toThrow();
+    expect(authorize).not.toHaveBeenCalled();
+    expect(client.createImageJobGroup).not.toHaveBeenCalled();
+  });
+  it('settles a saved quest-based image job as unknown without polling or resubmitting', async () => {
+    const session = await sessions.create();
+    const submitted = await service.submit(session.id, image);
+    const { imageBatch: _batch, providerGroupId: _group, providerJobIds: _ids, ...rest } = submitted;
+    await workspaces.upsertJob(session.id, { ...rest, providerJobId: 'quest' });
+    const [recovered] = await new StudioGenerationService(deps).recover(session.id);
+    expect(recovered).toMatchObject({ id: submitted.id, state: 'unknown', providerJobId: 'quest' });
+    expect(recovered.error).toContain('cannot be recovered');
+    expect(client.getImageJob).not.toHaveBeenCalled();
+    expect(client.createImageJobGroup).toHaveBeenCalledTimes(1);
   });
   it('submits one image batch, durably recovers child IDs, and keeps partial successes beside failures', async () => {
     const session = await sessions.create();
-    client.createStudioImages.mockResolvedValue({ groupId: 'group', jobs: [{ id: 'one' }, { id: 'two' }] });
-    client.listStudioImages.mockResolvedValue({
-      data: [
-        { id: 'one', state: 'succeeded', output: { fileId: 'file-one' }, error: null },
-        { id: 'two', state: 'failed', output: null, error: { message: 'Image two failed' } },
-      ],
-      next_cursor: null,
-    });
-    client.getFile.mockResolvedValue({ moderation_status: 'clean', download_url: '/output', mime_type: 'image/png' });
+    client.createImageJobGroup.mockResolvedValue({ group_id: 'group', data: [{ id: 'one' }, { id: 'two' }] });
+    client.getImageJob.mockImplementation(async (id: string) =>
+      id === 'one'
+        ? imageChild(id)
+        : imageChild(id, {
+            state: 'failed',
+            output: null,
+            error: { code: 'provider_error', message: 'Image two failed' },
+          })
+    );
     const job = await service.submit(session.id, {
       kind: 'image',
       count: 2,
-      body: { model: 'gpt-image-2', mode: 'generate', prompt: 'Two images', size: '1024x1024' },
+      body: { model: ImageModels.GPT_IMAGE_2, mode: 'generate', prompt: 'Two images', size: '1024x1024' },
     });
-    expect(client.createStudioImages).toHaveBeenCalledWith(
-      expect.objectContaining({ model: 'gpt-image-2', size: '1024x1024' }),
-      2,
+    expect(client.createImageJobGroup).toHaveBeenCalledWith(
+      { model: 'gpt-image-2', mode: 'generate', prompt: 'Two images', size: '1024x1024', count: 2 },
       expect.any(String)
     );
     expect((await workspaces.getJob(session.id, job.id))?.providerJobIds).toEqual(['one', 'two']);
@@ -154,25 +180,83 @@ describe('Studio generation', () => {
       expect.objectContaining({ state: 'completed', assetIds: [`${job.id}_0`], outputErrors: ['Image two failed'] })
     );
     expect((await workspaces.getAsset(session.id, `${job.id}_0`))?.creation?.settings.count).toBe(2);
+    // The v1 job carries its own signed URL, so no Files lookup is needed.
+    expect(client.fetchGenerated).toHaveBeenCalledWith('/one.png');
+    expect(client.getFile).not.toHaveBeenCalled();
     await service.recover(session.id);
-    expect(client.createStudioImages).toHaveBeenCalledTimes(1);
-    expect(client.generateImage).not.toHaveBeenCalled();
+    expect(client.createImageJobGroup).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps an image batch running while an output is still being scanned', async () => {
+    const session = await sessions.create();
+    client.getImageJob.mockResolvedValue(
+      imageChild('remote-image', {
+        output: { availability: 'pending_scan', url: null, content_type: 'image/png', file_id: null, expires_at: null },
+      })
+    );
+    const job = await service.submit(session.id, image);
+    expect(await service.reconcile(session.id, job.id)).toMatchObject({ state: 'running', assetIds: [] });
+    expect(client.fetchGenerated).not.toHaveBeenCalled();
+  });
+
+  it('rejects an image request the public API cannot carry before saving or sending anything', async () => {
+    const session = await sessions.create();
+    await expect(
+      service.submit(session.id, { ...image, body: { ...image.body, safetyTolerance: 2 } as never })
+    ).rejects.toThrow('provider safety');
+    expect(client.createImageJobGroup).not.toHaveBeenCalled();
+    expect((await workspaces.listJobs(session.id))?.items).toEqual([]);
+  });
+
+  it('does not read an image child again once its output is stored', async () => {
+    const session = await sessions.create();
+    client.createImageJobGroup.mockResolvedValue({ group_id: 'group', data: [{ id: 'one' }, { id: 'two' }] });
+    client.getImageJob.mockImplementation(async (id: string) =>
+      id === 'one' ? imageChild(id) : imageChild(id, { state: 'running', output: null })
+    );
+    const job = await service.submit(session.id, { ...image, count: 2 });
+    expect(await service.reconcile(session.id, job.id)).toMatchObject({ state: 'running', assetIds: [`${job.id}_0`] });
+    client.getImageJob.mockClear();
+    expect(await service.reconcile(session.id, job.id)).toMatchObject({ state: 'running', assetIds: [`${job.id}_0`] });
+    expect(client.getImageJob.mock.calls).toEqual([['two']]);
+  });
+
+  it.each([
+    ['blocked by the scan', imageChild('remote-image', { output: { availability: 'unavailable', url: null } })],
+    ['gone from the server', null],
+  ])('fails an image child that is %s instead of polling it forever', async (_label, child) => {
+    const session = await sessions.create();
+    if (child) client.getImageJob.mockResolvedValue(child);
+    else client.getImageJob.mockRejectedValue(Object.assign(new MediaToolError('Not found'), { status: 404 }));
+    const job = await service.submit(session.id, image);
+    const settled = await service.reconcile(session.id, job.id);
+    expect(settled.state).toBe('failed');
+    expect(settled.error).toMatch(/Image 1 is (unavailable|no longer available)\./);
+  });
+
+  it('leaves a batch to the scheduler when a child read fails for another reason', async () => {
+    const session = await sessions.create();
+    client.getImageJob.mockRejectedValue(Object.assign(new MediaToolError('Server error'), { status: 500 }));
+    const job = await service.submit(session.id, image);
+    await expect(service.reconcile(session.id, job.id)).rejects.toThrow('Server error');
+    expect((await workspaces.getJob(session.id, job.id))?.state).toBe('queued');
   });
 
   it.each([
     [400, 'invalid_request', 'failed'],
-    [400, 'invalid_count', 'failed'],
-    [400, 'storage_quota_exceeded', 'failed'],
-    [402, 'insufficient_credits', 'failed'],
-    [403, 'FEATURE_DISABLED', 'failed'],
+    [400, 'storage_limit_exceeded', 'failed'],
+    [400, 'org_storage_limit_exceeded', 'failed'],
+    [422, 'insufficient_credits', 'failed'],
     [422, 'model_unavailable', 'failed'],
-    [422, 'unsupported_by_model', 'failed'],
+    [422, 'unsupported_size', 'failed'],
     [422, 'input_image_not_found', 'failed'],
     [422, 'unsupported_input_image', 'failed'],
     [422, 'idempotency_key_reused', 'unknown'],
+    [422, 'invalid_idempotency_key', 'unknown'],
     [422, 'unexpected_refusal', 'unknown'],
-    [402, '', 'unknown'],
-    [403, '', 'unknown'],
+    [402, 'insufficient_credits', 'unknown'],
+    [403, 'FEATURE_DISABLED', 'unknown'],
+    [422, '', 'unknown'],
     [500, 'insufficient_credits', 'unknown'],
   ] as const)('settles image HTTP %i %s only according to its admission contract', async (status, code, expected) => {
     const session = await sessions.create();
@@ -194,17 +278,15 @@ describe('Studio generation', () => {
         statusText: String(status),
         headers: {},
         config,
-        data: {
-          ...(code ? (code === 'FEATURE_DISABLED' ? { code } : { error: code }) : {}),
-          message: 'Original server explanation',
-        },
+        // The public error envelope: the message in `error`, the stable code in `errorCode`.
+        data: { error: 'Original server explanation', ...(code && { errorCode: code }) },
       });
     });
     api.getAxiosInstance().defaults.adapter = transport;
-    deps.connection = () => ({ scope: sessionScopeKey(account), client: new MediaApiClient(api), cdnUrl: '' });
+    deps.connection = () => ({ scope: sessionScopeKey(account), client: new MediaApiClient(api) });
     const job = await service.submit(session.id, {
       kind: 'image',
-      body: { mode: 'generate', model: 'gpt-image-2', prompt: 'A garden' },
+      body: { mode: 'generate', model: ImageModels.GPT_IMAGE_2, prompt: 'A garden' },
     });
     expect(job.state).toBe(expected);
     expect(job.error).toContain('Original server explanation');
@@ -252,7 +334,7 @@ describe('Studio generation', () => {
       });
     });
     api.getAxiosInstance().defaults.adapter = transport;
-    deps.connection = () => ({ scope: sessionScopeKey(account), client: new MediaApiClient(api), cdnUrl: '' });
+    deps.connection = () => ({ scope: sessionScopeKey(account), client: new MediaApiClient(api) });
     const request = requests.find(request => request.kind === kind)!;
     const job = await service.submit(session.id, request);
     expect(job.state).toBe(expected);
@@ -306,10 +388,10 @@ describe('Studio generation', () => {
     deps.diagnostic = createStudioDiagnostics(logger);
     await service.submit(session.id, image);
     await service.submit(session.id, image);
-    client.getQuest.mockRejectedValueOnce(new Error('TOKEN private prompt https://signed.test/private-query'));
+    client.getImageJob.mockRejectedValueOnce(new Error('TOKEN private prompt https://signed.test/private-query'));
     const recovered = await service.recover(session.id);
     expect(recovered.map(job => job.state).sort()).toEqual(['completed', 'queued']);
-    expect(client.generateImage).toHaveBeenCalledTimes(2);
+    expect(client.createImageJobGroup).toHaveBeenCalledTimes(2);
     const logged = JSON.stringify(logger.warn.mock.calls);
     expect(logged).toContain('job-recovery');
     for (const secret of ['TOKEN', 'private prompt', 'signed.test', session.id]) expect(logged).not.toContain(secret);
@@ -378,7 +460,7 @@ describe('Studio generation', () => {
     await service.removeAsset(child.id, asset.id);
     await service.importChatAsset(child.id, asset);
     expect(await workspaces.getAsset(child.id, asset.id)).toBeNull();
-    expect(client.generateImage).not.toHaveBeenCalled();
+    expect(client.createImageJobGroup).not.toHaveBeenCalled();
   });
 
   const requests: StudioGenerationRequest[] = [
@@ -396,7 +478,7 @@ describe('Studio generation', () => {
     expect(asset?.creation).toEqual(
       expect.objectContaining({ prompt: 'a bicycle', settings: expect.objectContaining({ model: 'gpt-image-2' }) })
     );
-    expect(client.generateImage).toHaveBeenCalledTimes(1);
+    expect(client.createImageJobGroup).toHaveBeenCalledTimes(1);
   });
   it.each(['none', 'current-session'] as const)(
     'persists %s context selection across job, output and disk reload',
@@ -407,8 +489,8 @@ describe('Studio generation', () => {
       await service.reconcile(session.id, job.id);
       const reloaded = new StudioWorkspaceStore(join(root, 'studio'), sessions);
       expect((await reloaded.getAsset(session.id, `${job.id}_0`))?.creation?.selection).toEqual({ mode });
-      expect(client.generateImage.mock.calls[0]?.[0]).not.toHaveProperty('selection');
-      expect(client.generateImage).toHaveBeenCalledTimes(1);
+      expect(client.createImageJobGroup.mock.calls[0]?.[0]).not.toHaveProperty('selection');
+      expect(client.createImageJobGroup).toHaveBeenCalledTimes(1);
     }
   );
   it('imports a completed chat video into workspace storage without another provider call', async () => {
@@ -437,18 +519,21 @@ describe('Studio generation', () => {
     await service.recover(session.id);
     const expired = await workspaces.getJob(session.id, job.id);
     expect(expired).toEqual(
-      expect.objectContaining({ state: 'unknown', recoveryExpired: true, providerJobId: 'quest' })
+      expect.objectContaining({ state: 'unknown', recoveryExpired: true, providerJobId: 'remote-image' })
     );
-    expect(client.getQuest).not.toHaveBeenCalled();
+    expect(client.getImageJob).not.toHaveBeenCalled();
     await service.reconcile(session.id, job.id);
-    expect(client.getQuest).toHaveBeenCalledTimes(1);
-    expect(client.generateImage).toHaveBeenCalledTimes(1);
+    expect(client.getImageJob).toHaveBeenCalledTimes(1);
+    expect(client.createImageJobGroup).toHaveBeenCalledTimes(1);
   });
   it.each(requests)('adapts $kind with durable output and no repeated spend during recovery', async request => {
     const session = await sessions.create();
     const submitted = await service.submit(session.id, request);
     if (request.kind === 'image') {
-      expect(client.generateImage).toHaveBeenCalledWith({ ...request.body, prompt_resolution: 'literal' });
+      expect(client.createImageJobGroup).toHaveBeenCalledWith(
+        expect.objectContaining({ ...request.body, count: 1 }),
+        submitted.idempotencyKey
+      );
     }
     const restarted = new StudioGenerationService(deps);
     const [job] = await restarted.recover(session.id);
@@ -463,7 +548,7 @@ describe('Studio generation', () => {
     await restarted.recover(session.id);
     expect((await workspaces.get(session.id))?.assets).toHaveLength(1);
     expect(
-      client.generateImage.mock.calls.length +
+      client.createImageJobGroup.mock.calls.length +
         client.createMusicGeneration.mock.calls.length +
         client.createVideoGeneration.mock.calls.length +
         client.synthesizeSpeech.mock.calls.length +
@@ -473,15 +558,15 @@ describe('Studio generation', () => {
 
   it('persists submitting before the network call and quarantines ambiguous submissions', async () => {
     const session = await sessions.create();
-    client.generateImage.mockImplementation(async () => {
+    client.createImageJobGroup.mockImplementation(async () => {
       expect((await workspaces.get(session.id))?.jobs[0].state).toBe('submitting');
       throw new Error('transport timeout');
     });
     const job = await service.submit(session.id, image);
     expect(job.state).toBe('unknown');
     await new StudioGenerationService(deps).recover(session.id);
-    expect(client.generateImage).toHaveBeenCalledTimes(1);
-    expect(client.getQuest).not.toHaveBeenCalled();
+    expect(client.createImageJobGroup).toHaveBeenCalledTimes(1);
+    expect(client.getImageJob).not.toHaveBeenCalled();
   });
 
   it('retains provider IDs on interrupted downloads and serializes concurrent reconciliation', async () => {
@@ -525,7 +610,7 @@ describe('Studio generation', () => {
     await expect(service.locateAsset('../escape', '../asset')).rejects.toThrow();
     scope = { ...account, accountId: 'two' };
     await expect(service.reconcile(first.id, job.id)).rejects.toThrow();
-    expect(client.getQuest).not.toHaveBeenCalled();
+    expect(client.getImageJob).not.toHaveBeenCalled();
     scope = null;
     await expect(service.recover(first.id)).rejects.toThrow('Sign in');
   });
@@ -537,7 +622,7 @@ describe('Studio generation', () => {
       return true;
     });
     await expect(service.submit(session.id, image)).rejects.toThrow('account changed');
-    expect(client.generateImage).not.toHaveBeenCalled();
+    expect(client.createImageJobGroup).not.toHaveBeenCalled();
   });
 
   it('rejects out-of-workspace asset URLs', async () => {

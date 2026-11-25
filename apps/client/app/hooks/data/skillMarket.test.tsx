@@ -12,6 +12,8 @@ vi.mock('@client/app/contexts/ApiContext', () => ({
 
 import {
   useDeleteSkillBundle,
+  useMarketListings,
+  useSkillBundles,
   useListingDetail,
   useReportListing,
   useSaveSkillBundle,
@@ -67,6 +69,61 @@ describe('skillMarket hooks', () => {
     await act(() => result.current.mutateAsync('l1'));
     expect(qc.getQueryState(['skill-market', 'me'])?.isInvalidated).toBe(false);
     expect(qc.getQueryState(['skill-market', 'mine'])?.isInvalidated).toBe(true);
+  });
+
+  describe('browse scope', () => {
+    const base = { q: '', tools: '', minRating: 0, sort: 'top', tags: [] } as const;
+    const browse = async (filters: Parameters<typeof useMarketListings>[0]) => {
+      h.get.mockResolvedValue({ data: { data: [], hasMore: false } });
+      const { wrapper } = setup();
+      const { result } = renderHook(() => useMarketListings(filters), { wrapper });
+      await waitFor(() => expect(result.current.isSuccess).toBe(true));
+      return h.get.mock.calls.at(-1)?.[0] as string;
+    };
+
+    it('sends spaceId with scope space', async () => {
+      const url = await browse({ ...base, scope: 'space', spaceId: 'sp1' });
+      expect(url).toContain('scope=space');
+      expect(url).toContain('spaceId=sp1');
+    });
+
+    it('drops a stale spaceId when the scope is not space', async () => {
+      expect(await browse({ ...base, scope: 'org', spaceId: 'sp1' })).not.toContain('spaceId');
+    });
+  });
+
+  describe('Space bundles', () => {
+    const input = { name: 'Pack', description: 'd', listingIds: ['l1'] };
+    const spaceKey = ['skill-market', 'bundles', 'space', 'sp1'];
+
+    it('lists with spaceId, keyed apart from an org', async () => {
+      h.get.mockResolvedValue({ data: { bundles: [], listings: [], canEdit: true } });
+      const { qc, wrapper } = setup();
+      const { result } = renderHook(() => useSkillBundles({ spaceId: 'sp1' }), { wrapper });
+      await waitFor(() => expect(result.current.isSuccess).toBe(true));
+      expect(h.get).toHaveBeenCalledWith('/api/skills/market/bundles', { params: { spaceId: 'sp1' } });
+      expect(qc.getQueryState(spaceKey)).toBeDefined();
+      expect(qc.getQueryState(['skill-market', 'bundles', 'sp1'])).toBeUndefined();
+    });
+
+    it('creates with a POST that names the Space, then refreshes its bundles', async () => {
+      h.post.mockResolvedValue({ data: { id: 'b1' } });
+      const { qc, wrapper } = setup();
+      const spy = vi.spyOn(qc, 'invalidateQueries');
+      const { result } = renderHook(() => useSaveSkillBundle({ spaceId: 'sp1' }), { wrapper });
+      await act(() => result.current.mutateAsync(input));
+      expect(h.post).toHaveBeenCalledWith('/api/skills/market/bundles', { ...input, spaceId: 'sp1' });
+      expect(spy.mock.calls.map(c => c[0]?.queryKey)).toContainEqual(spaceKey);
+    });
+
+    it('deletes, then refreshes the Space bundles', async () => {
+      h.del.mockResolvedValue(undefined);
+      const { qc, wrapper } = setup();
+      const spy = vi.spyOn(qc, 'invalidateQueries');
+      const { result } = renderHook(() => useDeleteSkillBundle({ spaceId: 'sp1' }), { wrapper });
+      await act(() => result.current.mutateAsync('b1'));
+      expect(spy.mock.calls.map(c => c[0]?.queryKey)).toContainEqual(spaceKey);
+    });
   });
 
   describe('skill bundles', () => {

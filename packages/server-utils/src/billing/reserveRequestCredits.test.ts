@@ -45,6 +45,7 @@ vi.mock('../utils/errors', () => ({
   },
 }));
 vi.mock('@bike4mind/database', () => ({
+  cacheRepository: {},
   creditTransactionRepository: {},
   organizationRepository: { findById: orgFindById, incrementCredits: orgIncrement },
   userRepository: { findById: userFindById, incrementCredits: userIncrement },

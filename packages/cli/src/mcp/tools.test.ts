@@ -81,6 +81,9 @@ describe('TOOL_NAMES', () => {
       'list_research_proposals',
       'decide_research_proposal',
       'get_lake_config_history',
+      'undo_lake_change',
+      'list_functions',
+      'call_function',
     ]);
   });
 });

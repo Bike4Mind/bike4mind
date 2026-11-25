@@ -726,3 +726,20 @@ describe('CompletionMessageSchema content blocks', () => {
     expect(parsed.success).toBe(true);
   });
 });
+
+describe('CompletionRequestSchema organization_id', () => {
+  const base = { model: 'm', messages: [{ role: 'user', content: 'hi' }] };
+
+  it.each([
+    [undefined, undefined],
+    [null, null],
+    [' org-2 ', 'org-2'],
+  ])('parses %j', (input, expected) => {
+    const parsed = CompletionRequestSchema.parse({ ...base, organization_id: input });
+    expect(parsed.organization_id).toBe(expected);
+  });
+
+  it.each(['', '   '])('rejects the blank value %j', value => {
+    expect(CompletionRequestSchema.safeParse({ ...base, organization_id: value }).success).toBe(false);
+  });
+});

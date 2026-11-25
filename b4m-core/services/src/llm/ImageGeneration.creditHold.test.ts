@@ -79,6 +79,10 @@ const makeWallet = (balance: number, userFields: Record<string, unknown> = {}) =
     organizations: { findById: vi.fn(async () => null) },
     creditTransactions: {},
     spendFreezes: { findActiveForSubject: vi.fn(async () => null) },
+    newAccountSpendCap: {
+      adminSettings: { findAll: async () => [], findBySettingNames: async () => [] },
+      personalSpendSince: async () => [],
+    },
     deductCredits: vi.fn(async ({ credits }: { credits: number }) => {
       state.ledger.push(credits);
     }),
@@ -172,7 +176,7 @@ describe('ImageGenerationService credit hold', () => {
     expect(mockGeminiGenerate).not.toHaveBeenCalled();
   });
 
-  it('refuses a paid-only image before enqueueing and gates the remapped model', async () => {
+  it('refuses a paid-only image before enqueueing and gates the selected model', async () => {
     const refusal = new Error('paid plan required');
     const assertAdmission = vi.fn(async () => {
       throw refusal;
@@ -187,11 +191,10 @@ describe('ImageGenerationService credit hold', () => {
           questId: 'quest1',
           prompt: 'image',
           model: ImageModels.GPT_IMAGE_2,
-          background: 'transparent',
         },
       })
     ).rejects.toBe(refusal);
-    expect(assertAdmission).toHaveBeenCalledWith('user1', ImageModels.GPT_IMAGE_1_5, true, undefined);
+    expect(assertAdmission).toHaveBeenCalledWith('user1', ImageModels.GPT_IMAGE_2, true, undefined);
   });
 
   it('lets only as many concurrent generations through as the balance covers', async () => {

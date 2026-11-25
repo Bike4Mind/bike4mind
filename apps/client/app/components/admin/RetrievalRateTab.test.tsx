@@ -1,6 +1,6 @@
 import React from 'react';
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
@@ -13,6 +13,13 @@ vi.mock('@client/app/contexts/ApiContext', () => ({ api: { get: mockGet } }));
 import RetrievalRateTab from './RetrievalRateTab';
 
 const appTheme = extendTheme({ ...getThemeConfig() });
+
+/** Under fake timers: runs the 400ms filter debounce and the fetch it starts. */
+const advance = (ms: number) => act(() => vi.advanceTimersByTimeAsync(ms));
+
+afterEach(() => {
+  vi.useRealTimers();
+});
 
 const renderTab = () => {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -104,8 +111,9 @@ describe('RetrievalRateTab page frame', () => {
 
     const filters = screen.getByTestId('retrieval-rate-filter-bar');
     expect(root.children[1]).toBe(filters);
-    expect(within(filters).getByLabelText('Start date')).toHaveAttribute('type', 'date');
-    expect(within(filters).getByLabelText('End date')).toHaveAttribute('type', 'date');
+    expect(within(filters).getByTestId('retrieval-rate-start-input-empty')).toHaveTextContent('Any date');
+    expect(within(filters).getByTestId('retrieval-rate-end-input-empty')).toHaveTextContent('Any date');
+    expect(within(filters).queryByLabelText('Start date')).toBeNull();
     expect(within(filters).getByLabelText('Answerable cutoff')).toHaveAttribute('type', 'number');
     expect(container.querySelector('.MuiCard-root')).toBeNull();
   });
@@ -165,20 +173,23 @@ describe('RetrievalRateTab page frame', () => {
     expect(screen.queryByTestId('retrieval-rate-clear-dates-btn')).toBeNull();
     expect(screen.queryByTestId('admin-stat-strip')).toBeNull();
 
-    const startInput = screen.getByLabelText('Start date');
     const cutoffInput = screen.getByLabelText('Answerable cutoff');
-    fireEvent.change(startInput, { target: { value: '2026-08-01' } });
+    vi.useFakeTimers();
+    fireEvent.click(screen.getByTestId('retrieval-rate-start-input-set-btn'));
+    fireEvent.change(screen.getByLabelText('Start date'), { target: { value: '2026-08-01' } });
     fireEvent.change(cutoffInput, { target: { value: '0.6' } });
-    await waitFor(() =>
-      expect(mockGet).toHaveBeenLastCalledWith('/api/admin/retrieval-rate?startDate=2026-08-01&answerableMinScore=0.6')
-    );
+    await advance(400);
+    expect(mockGet).toHaveBeenLastCalledWith('/api/admin/retrieval-rate?startDate=2026-08-01&answerableMinScore=0.6');
+    await advance(50);
 
     // Clearing the dates keeps the cutoff and asks for the default window right away, without the
     // typing pause, so the request is already out when the click returns.
-    fireEvent.click(await screen.findByTestId('retrieval-rate-clear-dates-btn'));
+    fireEvent.click(screen.getByTestId('retrieval-rate-clear-dates-btn'));
     expect(mockGet).toHaveBeenLastCalledWith('/api/admin/retrieval-rate?answerableMinScore=0.6');
-    await waitFor(() => expect(screen.queryByTestId('retrieval-rate-clear-dates-btn')).toBeNull());
-    expect(startInput).toHaveValue('');
+    await advance(50);
+    expect(screen.queryByTestId('retrieval-rate-clear-dates-btn')).toBeNull();
+    act(() => screen.getByLabelText('Start date').blur());
+    expect(screen.getByTestId('retrieval-rate-start-input-empty')).toBeInTheDocument();
     expect(cutoffInput).toHaveValue(0.6);
   });
 
@@ -187,17 +198,18 @@ describe('RetrievalRateTab page frame', () => {
     await screen.findByText('25.0%');
     expect(mockGet).toHaveBeenCalledTimes(1);
     expect(screen.queryByTestId('retrieval-rate-apply-btn')).toBeNull();
-    expect(within(screen.getByTestId('retrieval-rate-filter-bar')).queryByRole('button')).toBeNull();
+    fireEvent.click(screen.getByTestId('retrieval-rate-end-input-set-btn'));
 
+    vi.useFakeTimers();
     fireEvent.change(screen.getByLabelText('End date'), { target: { value: '2026-08-28' } });
-    await waitFor(() => expect(mockGet).toHaveBeenLastCalledWith('/api/admin/retrieval-rate?endDate=2026-08-28'));
+    await advance(400);
+    expect(mockGet).toHaveBeenLastCalledWith('/api/admin/retrieval-rate?endDate=2026-08-28');
 
     // Typing a cutoff runs one fold for the finished number, not one per keystroke.
     const cutoff = screen.getByLabelText('Answerable cutoff');
     for (const value of ['0', '0.', '0.3', '0.35']) fireEvent.change(cutoff, { target: { value } });
-    await waitFor(() =>
-      expect(mockGet).toHaveBeenLastCalledWith('/api/admin/retrieval-rate?endDate=2026-08-28&answerableMinScore=0.35')
-    );
+    await advance(400);
+    expect(mockGet).toHaveBeenLastCalledWith('/api/admin/retrieval-rate?endDate=2026-08-28&answerableMinScore=0.35');
     expect(mockGet).toHaveBeenCalledTimes(3);
   });
 

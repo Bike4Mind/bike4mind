@@ -4,13 +4,28 @@ const { resolve } = require('node:path');
 function main(args, spawn = spawnSync) {
   const live = args[0] === '--live' && args[1] === '--accept-paid-requests';
   const extra = args.slice(2);
-  if (live && extra.every(arg => arg === '--final' || arg.startsWith('--config=') || arg.startsWith('--recover-run=')) &&
-      new Set(extra.map(arg => arg.split('=')[0])).size === extra.length) {
-    const result = spawn('pnpm', ['exec', 'electron', '.', '--controlled-cost-evaluation-live',
-      ...extra.map(arg => arg === '--final' ? '--controlled-cost-evaluation-final' : arg.startsWith('--recover-run=')
-        ? `--controlled-cost-evaluation-recover-run=${arg.slice('--recover-run='.length)}`
-        : `--controlled-cost-evaluation-config=${resolve(arg.slice('--config='.length))}`)],
-      { cwd: resolve(__dirname, '..'), stdio: 'inherit', env: process.env });
+  if (
+    live &&
+    extra.every(arg => arg === '--final' || arg.startsWith('--config=') || arg.startsWith('--recover-run=')) &&
+    new Set(extra.map(arg => arg.split('=')[0])).size === extra.length
+  ) {
+    const result = spawn(
+      'pnpm',
+      [
+        'exec',
+        'electron',
+        '.',
+        '--controlled-cost-evaluation-live',
+        ...extra.map(arg =>
+          arg === '--final'
+            ? '--controlled-cost-evaluation-final'
+            : arg.startsWith('--recover-run=')
+              ? `--controlled-cost-evaluation-recover-run=${arg.slice('--recover-run='.length)}`
+              : `--controlled-cost-evaluation-config=${resolve(arg.slice('--config='.length))}`
+        ),
+      ],
+      { cwd: resolve(__dirname, '..'), stdio: 'inherit', env: process.env }
+    );
     return result.status ?? 1;
   }
   if (args.length > 1 || (args.length === 1 && args[0] !== '--dry-run')) {
@@ -21,7 +36,7 @@ function main(args, spawn = spawnSync) {
   }
   const result = spawn(
     'pnpm',
-    ['exec', 'vitest', 'run', 'src/main/chat/ChatService.controlledCost.test.ts', '--maxWorkers=1'],
+    ['exec', 'vitest', 'run', 'src/main/chat/ChatService.usage.test.ts', '-t', 'controlledCost', '--maxWorkers=1'],
     {
       cwd: resolve(__dirname, '..'),
       stdio: 'inherit',

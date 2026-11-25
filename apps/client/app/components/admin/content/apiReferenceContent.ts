@@ -125,7 +125,7 @@ the [generated API docs](/api/v1/docs) (raw spec: \`/api/v1/openapi.json\`, whic
 use to build a typed client). They are deliberately not repeated here, so the two cannot disagree.
 
 - Chat and quests: \`/api/chat\`, \`/api/v1/quests/{id}\`, \`/api/v1/quests/{id}/files\`,
-  \`/api/v1/agent-executions[/{id}]\`
+  \`/api/v1/agent-executions[/{id}]\`, \`/api/v1/delegations[/{id}]\`
 - Sessions: \`/api/v1/sessions\`, \`/api/v1/sessions/{id}\`, \`/api/sessions/{id}\`, \`/api/v1/sessions/{id}/clone\`,
   \`/api/v1/sessions/{id}/files\`, \`/api/v1/sessions/semantic-search\`,
   \`/api/v1/sessions/{id}/messages/{messageId}\`
@@ -165,6 +165,8 @@ use to build a typed client). They are deliberately not repeated here, so the tw
   \`/api/v1/skills/market/versions/{vid}/review\`
 - Release notes: \`/api/v1/whats-new\`, \`/api/v1/whats-new/media/*\` (public, no key needed)
 - Slack (post to channels an org owner enabled): \`/api/v1/slack/messages\`
+- Functions (your live functions; \`functions:invoke\`): \`/api/v1/functions\`, \`/api/v1/functions/{id}\`,
+  \`/api/v1/functions/{id}/invoke\`
 
 Image, video, music and chat work is asynchronous; the Async jobs section of the
 [generated API docs](/api/v1/docs) says what to poll for each kind of job and when it is terminal.

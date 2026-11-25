@@ -39,7 +39,6 @@ const config: Config = {
             '**/__tests__/**',
             'security/**',
             'developers/fleet-usage-export.md',
-            'admin/liveops-triage.md',
             'admin/data-lake-cost-governance.md',
             'features/optihashi.md',
             'features/libreoncology.md',

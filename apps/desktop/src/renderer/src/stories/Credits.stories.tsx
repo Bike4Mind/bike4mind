@@ -1,13 +1,14 @@
 import type { Story, StoryDefault } from './ladleTypes';
 import Avatar from '@mui/joy/Avatar';
-import Box from '@mui/joy/Box';
 import Button from '@mui/joy/Button';
 import Divider from '@mui/joy/Divider';
 import Sheet from '@mui/joy/Sheet';
 import Stack from '@mui/joy/Stack';
 import Typography from '@mui/joy/Typography';
 import type { AccountProfile, CreditExpiry } from '@shared/account';
-import { CreditsAvatarDot, CreditsMenuHeader } from '../credits/CreditsGlance';
+import { CreditsMenuHeader } from '../credits/CreditsGlance';
+import { CreditsOrbFace } from '../credits/CreditsOrb';
+import { creditsOrbState } from '../credits/creditsOrbState';
 import { creditOutlook, DAY_MS, nextRefillAt } from '../credits/creditOutlook';
 import type { CreditsGlance } from '../credits/useCreditsGlance';
 
@@ -37,6 +38,7 @@ function glance(
   };
   return {
     profile,
+    organization: null,
     burnPerDay,
     readAt: NOW,
     outlook: creditOutlook({
@@ -46,6 +48,15 @@ function glance(
       expiring,
       now: NOW,
     }),
+  };
+}
+
+function organizationGlance(credits: number): CreditsGlance {
+  return {
+    ...glance(820, 45, 7),
+    organization: { id: 'org-1', name: 'Acme', personal: false, credits },
+    burnPerDay: null,
+    outlook: creditOutlook({ balance: credits, burnPerDay: 0, refillAt: null, expiring: undefined, now: NOW }),
   };
 }
 
@@ -67,6 +78,8 @@ const CASES: { title: string; glance: CreditsGlance }[] = [
   { title: 'Almost out', glance: glance(180, 300, 7) },
   { title: 'Free plan', glance: glance(820, 45, null, 'free') },
   { title: 'No recent spend', glance: glance(820, 0, 7) },
+  { title: 'Paid by an organization', glance: organizationGlance(48_200) },
+  { title: 'Organization pool empty', glance: organizationGlance(0) },
 ];
 
 /** The strip's avatar and the open menu's top rows, as the account strip draws them. */
@@ -87,13 +100,11 @@ function MenuPreview({ value }: { value: CreditsGlance }) {
       ))}
       <Divider sx={{ my: 0.5 }} />
       <Stack direction="row" spacing={1} alignItems="center" sx={{ px: 1, py: 0.5 }}>
-        <Box sx={{ position: 'relative', display: 'inline-flex' }}>
-          <Avatar size="sm" variant="soft" color="primary">
-            NO
-          </Avatar>
-          <CreditsAvatarDot outlook={value.outlook} />
-        </Box>
-        <Typography level="body-sm">Account strip</Typography>
+        <CreditsOrbFace tone={creditsOrbState(value).tone} level={creditsOrbState(value).level} />
+        <Avatar size="sm" variant="soft" color="primary">
+          NO
+        </Avatar>
+        <Typography level="body-sm">Rail foot</Typography>
       </Stack>
     </Sheet>
   );

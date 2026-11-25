@@ -496,9 +496,13 @@ class McpConnectionRepository extends BaseRepository<ConnectionDoc> implements I
     };
     // A platform connector is off for each user until they switch it on, so none is listed by default.
     const platformIds = (options.platformIds ?? []).filter(id => mongoose.isObjectIdOrHexString(id));
+    // Oldest first, so the same connectors survive the per-turn tool cap on every turn.
+    const oldestFirst = { sort: { createdAt: 1 } };
     const [own, platform] = await Promise.all([
-      this.find({ userId, ownerType: 'user', ...offered }),
-      platformIds.length > 0 ? this.find({ ...PLATFORM_MCP_OWNER, _id: { $in: platformIds }, ...offered }) : [],
+      this.find({ userId, ownerType: 'user', ...offered }, oldestFirst),
+      platformIds.length > 0
+        ? this.find({ ...PLATFORM_MCP_OWNER, _id: { $in: platformIds }, ...offered }, oldestFirst)
+        : [],
     ]);
     if (platform.length === 0) return own;
     // The user's own connection keeps a shared slug whatever its state, so switching it off never

@@ -5,7 +5,17 @@ import { CssVarsProvider } from '@mui/joy/styles';
 import type { ChatSessionStatus, ChatSessionSummary } from '@shared/chat';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { desktopTheme } from '../theme';
-import { ChildrenStrip, chipHint, childChipState, childChips, stripLayout, type ChildChip } from './ChildrenStrip';
+import {
+  ChildrenStrip,
+  chipHint,
+  childChipState,
+  childChips,
+  foldsIntoParty,
+  partyGroups,
+  partySummary,
+  stripLayout,
+  type ChildChip,
+} from './ChildrenStrip';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -19,6 +29,10 @@ window.matchMedia ??= ((query: string) => ({
   removeEventListener: () => {},
   dispatchEvent: () => false,
 })) as typeof window.matchMedia;
+
+// Joy's popups (menus, selects, tooltips, modals) read every ancestor's computed style on each update,
+// and jsdom resolves that against every emotion sheet with no layout to find; the inline style will do.
+window.getComputedStyle = ((element: Element) => (element as HTMLElement).style) as typeof getComputedStyle;
 
 let root: Root | null = null;
 let host: HTMLDivElement | null = null;
@@ -225,5 +239,94 @@ describe('ChildrenStrip', () => {
     expect(items[1].getAttribute('title')).toBe('(cut short)');
     act(() => items[1].click());
     expect(onOpenSession).toHaveBeenCalledWith('d2');
+  });
+
+  it('keeps the chips at the threshold, counting the done menu as one', () => {
+    render(
+      [summary({ id: 'a' }), summary({ id: 'b' }), summary({ id: 'c' }), summary({ id: 'd', lastOutcome: 'finished' })],
+      new Map([
+        ['a', 'processing'],
+        ['b', 'processing'],
+        ['c', 'needs-action'],
+      ])
+    );
+    expect(all('children-strip-chip-btn')).toHaveLength(3);
+    expect(all('children-strip-done-btn')).toHaveLength(1);
+    expect(all('children-strip-party-btn')).toHaveLength(0);
+  });
+
+  it('folds into one Party pill past the threshold, whose roster groups and opens each session', () => {
+    const onOpenSession = vi.fn();
+    render(
+      [
+        summary({ id: 'w1', title: 'Worker one' }),
+        summary({ id: 'w2', title: 'Worker two' }),
+        summary({ id: 'n1', title: 'Asker' }),
+        summary({ id: 'f1', title: 'Broke', lastOutcome: 'failed' }),
+        summary({ id: 'd1', title: 'Shipped', lastOutcome: 'finished' }),
+      ],
+      new Map([
+        ['w1', 'processing'],
+        ['w2', 'processing'],
+        ['n1', 'needs-action'],
+      ]),
+      { onOpenSession }
+    );
+    expect(all('children-strip-chip-btn')).toHaveLength(0);
+    expect(all('children-strip-done-btn')).toHaveLength(0);
+    const pill = all('children-strip-party-btn')[0];
+    expect(all('children-strip-party-summary')[0].textContent).toBe('Party: 5 - 1 needs you');
+    act(() => pill.click());
+    expect(all('children-strip-party-group').map(group => group.getAttribute('data-group'))).toEqual([
+      'needs-you',
+      'working',
+      'done',
+    ]);
+    const items = all('children-strip-party-item');
+    expect(items.map(item => item.getAttribute('data-state'))).toEqual([
+      'needs-action',
+      'processing',
+      'processing',
+      'failed',
+      'finished',
+    ]);
+    act(() => items[0].click());
+    expect(onOpenSession).toHaveBeenCalledWith('n1');
+  });
+});
+
+describe('foldsIntoParty', () => {
+  it('folds only when more than four buttons would be drawn', () => {
+    const live = (n: number) => Array.from({ length: n }, (_, i) => chip({ id: `l${i}`, state: 'processing' }));
+    const done = [chip({ id: 'd', state: 'finished' })];
+    expect(foldsIntoParty(live(4), [])).toBe(false);
+    expect(foldsIntoParty(live(3), done)).toBe(false);
+    expect(foldsIntoParty(live(5), [])).toBe(true);
+    expect(foldsIntoParty(live(4), done)).toBe(true);
+  });
+});
+
+describe('partyGroups', () => {
+  it('orders needs you, working, done, drops empty groups and files failed under done', () => {
+    const groups = partyGroups([
+      chip({ id: 'f', state: 'failed' }),
+      chip({ id: 'n', state: 'needs-action' }),
+      chip({ id: 'd', state: 'finished' }),
+    ]);
+    expect(groups.map(group => [group.key, group.chips.map(c => c.id)])).toEqual([
+      ['needs-you', ['n']],
+      ['done', ['f', 'd']],
+    ]);
+  });
+});
+
+describe('partySummary', () => {
+  it('leads with who needs the user, then who is working, then who did not finish, else all done', () => {
+    const n = (state: ChildChip['state'], count: number) =>
+      Array.from({ length: count }, (_, i) => chip({ id: `${state}${i}`, state }));
+    expect(partySummary([...n('needs-action', 3), ...n('processing', 9)])).toBe('Party: 12 - 3 need you');
+    expect(partySummary([...n('processing', 4), ...n('finished', 2)])).toBe('Party: 6 - 4 working');
+    expect(partySummary([...n('finished', 5), ...n('failed', 1)])).toBe('Party: 6 - 1 did not finish');
+    expect(partySummary(n('finished', 5))).toBe('Party: 5 - all done');
   });
 });

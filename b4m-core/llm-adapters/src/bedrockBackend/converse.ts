@@ -453,9 +453,10 @@ export class ConverseBedrockBackend extends BaseBedrockBackend {
 
   protected override async invokeModel(
     input: { modelId: string; contentType: string; accept: string; body: string },
-    abortSignal?: AbortSignal
+    abortSignal?: AbortSignal,
+    client = this._bedrockRuntime
   ): Promise<{ body?: Uint8Array }> {
-    const response = await this._bedrockRuntime.send(new ConverseCommand(this.toCommandInput(input.body)), {
+    const response = await client.send(new ConverseCommand(this.toCommandInput(input.body)), {
       abortSignal,
     });
     const pseudoChunk: ConversePseudoChunk = {
@@ -468,9 +469,10 @@ export class ConverseBedrockBackend extends BaseBedrockBackend {
 
   protected override async invokeModelStream(
     input: { modelId: string; contentType: string; accept: string; body: string },
-    abortSignal?: AbortSignal
+    abortSignal?: AbortSignal,
+    client = this._bedrockRuntime
   ): Promise<{ body?: AsyncIterable<{ chunk?: { bytes?: Uint8Array } }> }> {
-    const response = await this._bedrockRuntime.send(new ConverseStreamCommand(this.toCommandInput(input.body)), {
+    const response = await client.send(new ConverseStreamCommand(this.toCommandInput(input.body)), {
       abortSignal,
     });
     const stream = response.stream;

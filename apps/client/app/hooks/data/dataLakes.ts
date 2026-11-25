@@ -33,6 +33,7 @@ import type {
   LakeHealthApiResponse,
   LakeMemoryHealth,
   LakeConfigHistoryView,
+  LakeConfigUndoResult,
   ManageableDataLakeConfig,
   RetrievabilityLabeledDataLake,
   TaxonomyTag,
@@ -274,6 +275,30 @@ export function useLakeConfigHistory(dataLakeId: string | null, enabled = true, 
     (query.error.response?.status ?? 0) >= 400 &&
     (query.error.response?.status ?? 0) < 500;
   return { ...query, isForbidden };
+}
+
+/**
+ * Reverse one History row. A refusal is returned to the caller (the row shows it inline) rather than
+ * toasted, since it names the field or reason the user can act on. Every success refreshes History
+ * plus whatever the reversed change touched: the research configs, proposals and file lists all live
+ * under the lake keys.
+ */
+export function useUndoLakeConfigChange(dataLakeId: string | null) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (eventId: string) => {
+      const response = await api.post<{ data: LakeConfigUndoResult }>(
+        `/api/data-lakes/${dataLakeId}/config-history/${eventId}/undo`
+      );
+      return response.data.data;
+    },
+    onSettled: () => {
+      if (!dataLakeId) return;
+      queryClient.invalidateQueries({ queryKey: dataLakeKeys.configHistoryOf(dataLakeId) });
+      queryClient.invalidateQueries({ queryKey: dataLakeKeys.list });
+      queryClient.invalidateQueries({ queryKey: dataLakeKeys.filesRoot });
+    },
+  });
 }
 
 /**

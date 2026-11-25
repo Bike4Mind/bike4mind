@@ -92,7 +92,6 @@ const runOf = (budgeted = false, current: CompletionRunAttribution | undefined =
 describe('paid media calls inside an orchestration run', () => {
   it('sends the run as a tool call on every paid request', async () => {
     const post = vi.fn().mockImplementation((path: string) => {
-      if (path === '/api/ai/generate-image') return Promise.resolve({ quest: { id: 'q1' } });
       if (path === '/api/ai/tts') return Promise.resolve(speech);
       if (path === '/api/v1/music-generations') return Promise.resolve(musicJob);
       if (path === '/api/v1/video-generations') return Promise.resolve(videoJob);
@@ -102,7 +101,6 @@ describe('paid media calls inside an orchestration run', () => {
     const axiosPost = vi.fn().mockResolvedValue({ data: new ArrayBuffer(2), headers: {} });
     const client = clientWith({ post, axiosPost }, runOf());
 
-    await client.generateImage({ prompt: 'a bicycle' } as never);
     await client.synthesizeSpeech({ text: 'hello', provider: 'openai' } as never);
     await client.generateSoundEffect({ text: 'rain' } as never);
     await client.createMusicGeneration({ model: 'm', prompt: 'p' }, 'key-1');
@@ -110,7 +108,7 @@ describe('paid media calls inside an orchestration run', () => {
     await client.createImageJob(imageBody, 'key-3');
 
     const bodies = [...post.mock.calls, ...axiosPost.mock.calls].map(call => call[1] as { run?: unknown });
-    expect(bodies).toHaveLength(6);
+    expect(bodies).toHaveLength(5);
     for (const body of bodies) expect(body.run).toEqual(TOOL_RUN);
   });
 
@@ -135,9 +133,6 @@ describe('paid media calls inside an orchestration run', () => {
   it('turns a budget refusal on the image, video and music submits into RunBudgetExhaustedError', async () => {
     const client = clientWith({ post: vi.fn().mockRejectedValue(exhausted()) }, runOf(true));
 
-    await expect(client.generateImage({ prompt: 'a bicycle' } as never)).rejects.toBeInstanceOf(
-      RunBudgetExhaustedError
-    );
     await expect(client.createVideoGeneration({ model: 'v', prompt: 'p' } as never, 'key-v')).rejects.toBeInstanceOf(
       RunBudgetExhaustedError
     );

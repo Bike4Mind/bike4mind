@@ -16,13 +16,15 @@ import { AgentPrIndicator } from './AgentPrIndicator';
 const TILE_RANK: Record<AgentState, number> = {
   'needs-you': 0,
   working: 1,
+  waiting: 1,
   failed: 2,
+  paused: 2,
   done: 3,
   stopped: 4,
   idle: 4,
 };
 
-const DIMMED: ReadonlySet<AgentState> = new Set(['stopped', 'idle']);
+const DIMMED: ReadonlySet<AgentState> = new Set(['paused', 'stopped', 'idle']);
 
 interface Tile {
   key: string;
@@ -162,6 +164,7 @@ export function TileWall({ snapshot, onAction }: { snapshot: ViewSnapshot; onAct
                 {tile.title}
               </Typography>
               <AgentPrIndicator
+                agentId={tile.key}
                 pr={tile.pr}
                 onOpen={() => onAction({ kind: 'open-pr', agentId: tile.key })}
                 testId="orchestrator-tile-pr"

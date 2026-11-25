@@ -19,6 +19,10 @@ import { ApprovalGate } from './tools/ApprovalGate';
 import { bashExecute } from './tools/shellTools';
 import * as shellScanner from './tools/shellScan';
 
+vi.mock('../git/hostGitArgs', async importOriginal =>
+  (await import('./plainFolderGit.testHelper')).skipGitOutsideRepositories(await importOriginal())
+);
+
 function frame(payload: unknown): string {
   return `data: ${typeof payload === 'string' ? payload : JSON.stringify(payload)}\n\n`;
 }

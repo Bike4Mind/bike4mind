@@ -14,11 +14,11 @@ import {
   KnowledgeType,
   ResearchTaskStatus,
   ResearchTaskType,
+  limitConcurrency,
 } from '@bike4mind/common';
 import { NotFoundError, secureParameters, UnprocessableEntityError, FunctionQueueRunner } from '@bike4mind/utils';
 import { createSendStatusUpdate } from './utils';
 import { z } from 'zod';
-import plimit from 'p-limit';
 import { ssrfSafeDownload } from '@bike4mind/fab-pipeline';
 import { fileTypeFromBuffer } from 'file-type';
 import { SupportedFabFileMimeTypes } from '@bike4mind/common';
@@ -117,7 +117,7 @@ export const downloadRelevantLinks = async (
     currentProgress: currentProgressTracker,
   });
 
-  const limit = plimit(BATCH_SIZE);
+  const limit = limitConcurrency(BATCH_SIZE);
   function getIndex(url: string) {
     return (researchTask as IResearchTaskScrape).urls.findIndex(url => url === url);
   }

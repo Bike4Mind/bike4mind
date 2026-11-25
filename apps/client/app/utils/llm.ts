@@ -450,6 +450,8 @@ export type SendMessageOptions = {
   isImageEdit?: boolean;
   isVariation?: boolean;
   image?: string; // Image to be edited
+  /** The FabFile behind `image`, when the chat shows one; an edit reuses it when it is the caller's own. */
+  imageFileId?: string;
   /**
    * Correct-and-retry: the quest whose answer the user says was wrong. Unlike `isRetry`, which
    * re-runs the flagged quest in place, this sends a NEW turn carrying the user's correction and

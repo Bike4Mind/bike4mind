@@ -5,10 +5,13 @@ import { CHART_ACCENT, CHART_MUTED } from '../utils/chartTheme';
 import { chartColorReport, chartFills } from '../utils/chartTestUtils';
 import { UsageBySourceCard } from './UsageBySourceCard';
 
+const usage = vi.hoisted(() => ({ isError: false, refetch: vi.fn() }));
+
 vi.mock('../hooks/useUsageBySource', () => ({
   useUsageBySource: () => ({
     isLoading: false,
-    isError: false,
+    isError: usage.isError,
+    refetch: usage.refetch,
     data: {
       buckets: [
         { source: 'badge-button', events: 4, uniqueUsers: 2 },
@@ -117,8 +120,34 @@ describe('UsageBySourceCard colors and width', () => {
 
   it('scrolls the table inside its own box below 28rem instead of crushing its columns', () => {
     renderCard();
-    const container = screen.getByTestId('usage-by-source-table');
-    expect(container).toHaveStyle({ overflowX: 'auto' });
-    expect(within(container).getByRole('table')).toHaveStyle({ minWidth: '28rem' });
+    const table = screen.getByTestId('usage-by-source-table');
+    expect(table).toHaveStyle({ minWidth: '28rem' });
+    expect(within(screen.getByTestId('usage-by-source-table-frame')).getByRole('region')).toHaveStyle({
+      overflowX: 'auto',
+    });
+  });
+});
+
+describe('UsageBySourceCard totals and errors', () => {
+  it('shows the totals as tiles and one row per source', () => {
+    renderCard();
+    const strip = screen.getByRole('region', { name: 'Usage totals' });
+    expect(strip).toHaveTextContent(/Total events\s*15/);
+    expect(strip).toHaveTextContent(/Total users\s*9/);
+    expect(screen.getByTestId('usage-by-source-row-web')).toHaveTextContent('33.3%');
+    expect(screen.getAllByTestId(/^usage-by-source-row-/)).toHaveLength(5);
+  });
+
+  it('shows a retryable error instead of an empty table when the read fails', () => {
+    usage.isError = true;
+    try {
+      renderCard();
+      expect(screen.getByRole('alert')).toHaveTextContent('Failed to load usage breakdown.');
+      expect(screen.queryByRole('region', { name: 'Usage totals' })).toBeNull();
+      fireEvent.click(screen.getByTestId('admin-error-retry-btn'));
+      expect(usage.refetch).toHaveBeenCalledTimes(1);
+    } finally {
+      usage.isError = false;
+    }
   });
 });

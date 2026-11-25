@@ -57,8 +57,7 @@ export function isValidSessionId(id: string): boolean {
 }
 
 export type AgentRenameOutcome =
-  | { ok: true; summary: ChatSessionSummary }
-  | { ok: false; reason: 'user-title' | 'missing' };
+  { ok: true; summary: ChatSessionSummary } | { ok: false; reason: 'user-title' | 'missing' };
 
 /**
  * Whether an agent may replace this session's title. Unlocked and agent-set titles are fair game.
@@ -576,14 +575,23 @@ export class SessionStore implements SessionWritesStore {
     id: string,
     rootRunId: string,
     serverRunId: string,
-    expectedScope?: string | null
+    expectedScope?: string | null,
+    organizationId: string | null = null
   ): Promise<ChatSessionSummary | null> {
     return this.mutate(
       id,
       session => {
         const policy = session.orchestrationPolicy;
-        if (policy?.rootRunId !== rootRunId || policy.serverRunId === serverRunId) return null;
-        session.orchestrationPolicy = rootPolicySchema.parse({ ...policy, serverRunId });
+        if (policy?.rootRunId !== rootRunId) return null;
+        if (policy.serverRunId === serverRunId && (policy.serverRunOrganizationId ?? null) === organizationId) {
+          return null;
+        }
+        const { serverRunOrganizationId: _previous, ...rest } = policy;
+        session.orchestrationPolicy = rootPolicySchema.parse({
+          ...rest,
+          serverRunId,
+          ...(organizationId ? { serverRunOrganizationId: organizationId } : {}),
+        });
         return true;
       },
       expectedScope
@@ -605,7 +613,7 @@ export class SessionStore implements SessionWritesStore {
       session => {
         const policy = session.orchestrationPolicy;
         if (policy?.rootRunId !== rootRunId || policy.serverRunId !== refusedRunId) return null;
-        const { serverRunId: _refused, ...rest } = policy;
+        const { serverRunId: _refused, serverRunOrganizationId: _payer, ...rest } = policy;
         session.orchestrationPolicy = rootPolicySchema.parse(rest);
         return true;
       },
@@ -706,6 +714,11 @@ export class SessionStore implements SessionWritesStore {
   async get(id: string): Promise<ChatSession | null> {
     const directory = await this.directoryFor(false);
     return directory ? this.read(directory, id) : null;
+  }
+
+  /** `get`, ordered after the writes already queued for the session. */
+  getAfterWrites(id: string): Promise<ChatSession | null> {
+    return this.serialize(id, () => this.get(id));
   }
 
   async resolveStudioWorkspace(id: string, expectedScope = this.scopeKey()): Promise<StudioWorkspaceIdentity | null> {
@@ -1728,7 +1741,7 @@ export class SessionStore implements SessionWritesStore {
       // project did not survive normalizeProject reads back as an UNBOUND Code session rather
       // than being downgraded: it keeps the chips that can re-point it, and it is safe only
       // because such a session is granted no roots at all - see ChatService.resolveToolScope.
-      mode: parsed.mode === 'code' ? 'code' : 'chat',
+      mode: parsed.mode === 'code' || parsed.mode === 'studio' ? parsed.mode : 'chat',
       approvalMode: normalizeApprovalMode(
         parsed.approvalMode,
         (parsed as StoredSession).approvalModeLaunch,

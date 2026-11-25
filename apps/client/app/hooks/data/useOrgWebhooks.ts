@@ -22,14 +22,12 @@ export const orgWebhookQueryKeys = {
 /**
  * Hook to get organization webhook configuration
  */
-export function useGetOrgWebhookConfig(orgId: string | null | undefined, options?: { revealSecret?: boolean }) {
+export function useGetOrgWebhookConfig(orgId: string | null | undefined) {
   return useQuery({
-    queryKey: [...orgWebhookQueryKeys.config(orgId || ''), { revealSecret: options?.revealSecret }],
+    queryKey: orgWebhookQueryKeys.config(orgId || ''),
     queryFn: async () => {
       if (!orgId) return null;
-      const response = await api.get<IOrgWebhookConfigResponse>(`/api/organizations/${orgId}/webhooks/github`, {
-        params: { revealSecret: options?.revealSecret ? 'true' : undefined },
-      });
+      const response = await api.get<IOrgWebhookConfigResponse>(`/api/organizations/${orgId}/webhooks/github`);
       return response.data;
     },
     enabled: !!orgId,
@@ -56,7 +54,8 @@ export function useCreateOrgWebhookConfig() {
     },
     onSuccess: data => {
       queryClient.invalidateQueries({ queryKey: orgWebhookQueryKeys.all });
-      queryClient.setQueryData(orgWebhookQueryKeys.config(data.organizationId), data);
+      // The plain secret is for the caller of mutateAsync only; keep it out of the shared cache.
+      queryClient.setQueryData(orgWebhookQueryKeys.config(data.organizationId), { ...data, secret: undefined });
       toast.success('Webhook configuration created successfully');
     },
     onError: (error: unknown) => {
@@ -123,7 +122,9 @@ export function useRotateOrgWebhookSecret() {
     },
     onSuccess: data => {
       queryClient.invalidateQueries({ queryKey: orgWebhookQueryKeys.config(data.organizationId) });
-      toast.success('Webhook secret rotated successfully. Please update your GitHub webhook settings.');
+      toast.success(
+        'Webhook secret rotated successfully. Copy the new secret now and update your GitHub webhook settings.'
+      );
     },
     onError: (error: unknown) => {
       toast.error(getErrorMessage(error));

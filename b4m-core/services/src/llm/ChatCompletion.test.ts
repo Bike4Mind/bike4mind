@@ -343,7 +343,11 @@ describe('ChatCompletionProcess', () => {
         create: vi.fn(),
       },
       mcpServers: { find: vi.fn().mockResolvedValue([]) },
-      users: { update: vi.fn() },
+      users: { update: vi.fn(), findById: vi.fn().mockResolvedValue(mockUser) },
+      newAccountSpendCap: {
+        adminSettings: { findAll: async () => [], findBySettingNames: async () => [] },
+        personalSpendSince: async () => [],
+      },
       fabfiles: {},
       fabfilechunks: {},
       adminSettings: {},

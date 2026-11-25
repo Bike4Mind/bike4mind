@@ -2,7 +2,7 @@ import { Alert, Button } from '@mui/joy';
 import WarningAmberRoundedIcon from '@mui/icons-material/WarningAmberRounded';
 import ErrorOutlineRoundedIcon from '@mui/icons-material/ErrorOutlineRounded';
 import { FC } from 'react';
-import prettyBytes from 'pretty-bytes';
+import { prettyBytes } from '@client/app/utils/prettyBytes';
 import { useUser } from '@client/app/contexts/UserContext';
 import { useFileBrowser } from '@client/app/components/Files/fileBrowserStore';
 import {

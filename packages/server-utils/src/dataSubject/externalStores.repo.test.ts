@@ -21,9 +21,16 @@ const infraSources: readonly string[] = readdirSync(infraDir, { recursive: true,
   .filter(file => file.endsWith('.ts') && !file.endsWith('.test.ts') && !file.split(path.sep).includes('__tests__'))
   .map(file => readFileSync(path.join(infraDir, file), 'utf8'));
 
-/** Variables bound to `new sst.aws.<constructorName>(` anywhere under `infra/`, including across a line break or behind a stage-gating ternary. */
-function declaredInInfra(constructorName: string): string[] {
-  const declaration = new RegExp(`const (\\w+)\\s*=\\s*(?:[^;=]*\\?\\s*)?new sst\\.aws\\.${constructorName}\\(`, 'g');
+/** SST components and the raw Pulumi resources beside them; a raw one is used where the component cannot be. */
+const BUCKET = String.raw`(?:sst\.aws\.Bucket|aws\.s3\.Bucket(?:V2)?)`;
+const BUS = String.raw`(?:sst\.aws\.Bus|aws\.cloudwatch\.EventBus)`;
+
+/** Variables bound to `new <constructor>(` anywhere under `infra/`, including across a line break or on either branch of a stage-gating ternary. */
+function declaredInInfra(constructor: string): string[] {
+  const declaration = new RegExp(
+    String.raw`const (\w+)\s*=\s*(?:[^;=]*\?\s*(?:undefined\s*:\s*)?)?new ${constructor}\(`,
+    'g'
+  );
   return infraSources.flatMap(source => [...source.matchAll(declaration)].map(match => match[1])).sort();
 }
 
@@ -45,20 +52,24 @@ const inventoried = (kind: 's3' | 'eventBus') =>
 
 describe('external data stores', () => {
   it('sanity: finds the buckets declared in infra', () => {
-    expect(declaredInInfra('Bucket')).toContain('fabFileBucket');
+    expect(declaredInInfra(BUCKET)).toContain('fabFileBucket');
+  });
+
+  it('finds a raw aws.s3.Bucket declared on the else branch of a stage gate', () => {
+    expect(declaredInInfra(BUCKET)).toContain('callableFunctionDataBucket');
   });
 
   it('every bucket and bus in infra is a named const declaration the inventory check can see', () => {
-    expect(constructedInInfra(/new (sst\.aws\.Bucket|aws\.s3\.Bucket(V2)?)\(/g)).toBe(declaredInInfra('Bucket').length);
-    expect(constructedInInfra(/new (sst\.aws\.Bus|aws\.cloudwatch\.EventBus)\(/g)).toBe(declaredInInfra('Bus').length);
+    expect(constructedInInfra(/new (sst\.aws\.Bucket|aws\.s3\.Bucket(V2)?)\(/g)).toBe(declaredInInfra(BUCKET).length);
+    expect(constructedInInfra(/new (sst\.aws\.Bus|aws\.cloudwatch\.EventBus)\(/g)).toBe(declaredInInfra(BUS).length);
   });
 
   it('inventories exactly the S3 buckets declared in infra', () => {
-    expect(inventoried('s3')).toEqual(declaredInInfra('Bucket'));
+    expect(inventoried('s3')).toEqual(declaredInInfra(BUCKET));
   });
 
   it('inventories exactly the event buses declared in infra', () => {
-    expect(inventoried('eventBus')).toEqual(declaredInInfra('Bus'));
+    expect(inventoried('eventBus')).toEqual(declaredInInfra(BUS));
   });
 
   it.each(EXTERNAL_DATA_STORES.flatMap(store => (store.erasure.action === 'erased' ? [store.erasure.erasedBy] : [])))(

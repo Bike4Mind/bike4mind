@@ -42,7 +42,17 @@ function toViewAgent(agent: AgentView): ViewAgent {
             ),
         },
       }),
-    ...(agent.pr && { pr: { number: agent.pr.number, state: agent.pr.state } }),
+    ...(agent.pr && {
+      pr: {
+        number: agent.pr.number,
+        state: agent.pr.state,
+        ...(agent.pr.repo && { repo: agent.pr.repo }),
+        ...(agent.pr.attention && { attention: agent.pr.attention }),
+        ...(agent.pr.behind && { behind: true }),
+        ...(agent.pr.autoMerge && { autoMerge: true }),
+        ...(agent.pr.stale && { stale: true }),
+      },
+    }),
     ...(agent.usdCost !== undefined && { usdCost: agent.usdCost }),
     ...(agent.credits !== undefined && { credits: agent.credits }),
     ...(agent.plan && { plan: agent.plan }),

@@ -77,6 +77,9 @@ const SITES: Record<string, Array<[call: string, why: string]>> = {
   'apps/workers/src/dataLakes/runLakeResearch.ts': [
     ['recordOperationalUsage(', 'gated-by assertSpendNotFrozen earlier in the run'],
   ],
+  'apps/workers/src/emailIngestion/emailAnalyzer.ts': [
+    ['recordOperationalUsage(', 'record-only (bypassCreditBilling)'],
+  ],
   'apps/workers/src/events/recordSessionOperationalUsage.ts': [
     [
       'recordOperationalUsage(',
@@ -87,6 +90,9 @@ const SITES: Record<string, Array<[call: string, why: string]>> = {
     ['recordOperationalUsage(', 'record-only (bypassCreditBilling)'],
     ['recordOperationalUsage(', 'record-only (settledCredits from its own reservation)'],
     ['reserveRequestCredits(', VIA_RESERVE],
+  ],
+  'apps/workers/src/queueHandlers/orgFeedbackSummary.ts': [
+    ['recordOperationalUsage(', 'record-only (bypassCreditBilling)'],
   ],
   'b4m-core/services/src/billing/recordOperationalUsage.ts': [
     ['decrementCreditsFloored(holderId, params.credits', HELPER],
@@ -106,6 +112,7 @@ const SITES: Record<string, Array<[call: string, why: string]>> = {
   'b4m-core/services/src/creditService/creditHold.ts': [
     ['incrementCredits(ownerId, -requiredCredits', 'gated-by holdCredits own assertSpendNotFrozen'],
     ['incrementCredits(ownerId, requiredCredits', REFUND],
+    ['incrementCredits(ownerId, requiredCredits', REFUND],
     ['incrementCredits(hold.ownerId, hold.reservedCredits', REFUND],
     ['incrementCredits(hold.ownerId, overReserved', REFUND],
   ],
@@ -122,6 +129,7 @@ const SITES: Record<string, Array<[call: string, why: string]>> = {
   ],
   'b4m-core/services/src/llm/ChatCompletionProcess.ts': [
     ['incrementCredits(reservationOwnerId, -requiredCredits', 'gated-by the chat turn freeze check before the hold'],
+    ['incrementCredits(reservationOwnerId, requiredCredits', REFUND],
     ['incrementCredits(reservationOwnerId, requiredCredits', REFUND],
     ['incrementCredits(ownerId, amount', REFUND],
     ['incrementCredits(this.reservedCreditsOwnerId, delta', SETTLEMENT],
