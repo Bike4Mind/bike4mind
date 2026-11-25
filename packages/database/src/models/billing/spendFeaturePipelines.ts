@@ -1,5 +1,11 @@
 import type { PipelineStage } from 'mongoose';
 import {
+  attributedUsageMatch,
+  effectiveUsageDate,
+  platformUsageExpression,
+  usageTimeMatch,
+} from './platformUsageReporting';
+import {
   FEATURE_SPIKE_TRAILING_DAYS,
   SPEND_EXCLUDED_STATUSES,
   SPEND_FAILED_STATUSES,
@@ -10,8 +16,6 @@ import {
 /**
  * Aggregation pipelines behind the Spend explorer's feature view
  * (UsageEventRepository.spendFeatures / spendFeatureUsers / spendActorIds).
- * Error rows count as requests and failures only; cost, credits and units come from the rest.
- * Timeouts count as failures and still carry the provider cost they absorbed.
  */
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -34,27 +38,28 @@ export type SpendScanParams = Pick<SpendFeaturesParams, 'from' | 'to' | 'spikeEn
 
 function scanMatch(params: SpendScanParams): PipelineStage.Match {
   // Half-open [start, to), like the rest of the explorer, so adjacent windows never double count.
-  const clauses: Record<string, unknown>[] = [
-    { createdAt: { $gte: scanStart(params.from, params.spikeEnd), $lt: params.to } },
-  ];
+  const clauses: Record<string, unknown>[] = [usageTimeMatch(scanStart(params.from, params.spikeEnd), params.to)];
   if (params.feature) clauses.push({ feature: params.feature });
   if (params.actorUserId) clauses.push({ userId: params.actorUserId });
   if (params.userFilter) {
     const operator = params.userFilter.mode === 'include' ? '$in' : '$nin';
-    clauses.push({ userId: { [operator]: params.userFilter.userIds } });
+    clauses.push({ ...attributedUsageMatch, userId: { [operator]: params.userFilter.userIds } });
   }
   return { $match: clauses.length === 1 ? clauses[0] : { $and: clauses } };
 }
 
-const counted = { $not: [{ $in: ['$status', [...SPEND_EXCLUDED_STATUSES]] }] };
+const counted = { $or: [platformUsageExpression, { $not: [{ $in: ['$status', [...SPEND_EXCLUDED_STATUSES]] }] }] };
 const failed = { $in: ['$status', [...SPEND_FAILED_STATUSES]] };
 
 /** Per-group sums shared by both pipelines; SpendFeatureTotals says what each one means. */
 function totalsAccumulators(params: { from: Date; spikeEnd: Date }) {
   const { lastDayStart, trailingFrom } = spikeWindow(params.spikeEnd);
-  const inRange = { $gte: ['$createdAt', params.from] };
+  const inRange = { $gte: [effectiveUsageDate, params.from] };
   const countedInRange = { $and: [inRange, counted] };
-  const between = (start: Date, end: Date) => [{ $gte: ['$createdAt', start] }, { $lt: ['$createdAt', end] }];
+  const between = (start: Date, end: Date) => [
+    { $gte: [effectiveUsageDate, start] },
+    { $lt: [effectiveUsageDate, end] },
+  ];
   const sumIf = (condition: unknown, value: unknown) => ({ $sum: { $cond: [condition, value, 0] } });
   return {
     requests: sumIf(inRange, 1),
@@ -91,23 +96,30 @@ export function spendFeaturesPipeline(params: SpendFeaturesParams): PipelineStag
     {
       $facet: {
         totals: [
-          { $group: { _id: { feature: '$feature', userId: '$userId' }, ...totalsAccumulators(params) } },
+          {
+            $group: {
+              _id: { feature: '$feature', userId: { $ifNull: ['$userId', null] } },
+              ...totalsAccumulators(params),
+            },
+          },
           {
             $group: {
               _id: '$_id.feature',
               ...sumFields,
-              distinctUsers: { $sum: { $cond: [{ $gt: ['$requests', 0] }, 1, 0] } },
+              distinctUsers: {
+                $sum: { $cond: [{ $and: [{ $gt: ['$requests', 0] }, { $ne: ['$_id.userId', null] }] }, 1, 0] },
+              },
             },
           },
           { $project: { _id: 0, feature: '$_id', distinctUsers: 1, ...keepFields } },
         ],
         daily: [
-          { $match: { $expr: { $and: [{ $gte: ['$createdAt', params.from] }, counted] } } },
+          { $match: { $expr: { $and: [{ $gte: [effectiveUsageDate, params.from] }, counted] } } },
           {
             $group: {
               _id: {
                 feature: '$feature',
-                day: { $dateToString: { format: '%Y-%m-%d', date: '$createdAt', timezone: 'UTC' } },
+                day: { $dateToString: { format: '%Y-%m-%d', date: effectiveUsageDate, timezone: 'UTC' } },
               },
               costUsd: { $sum: '$costUsd' },
             },
@@ -126,6 +138,7 @@ export function spendFeaturesPipeline(params: SpendFeaturesParams): PipelineStag
 export function spendFeatureUsersPipeline(params: SpendFeatureUsersParams): PipelineStage[] {
   return [
     scanMatch(params),
+    { $match: { ...attributedUsageMatch, userId: { $type: 'string' } } },
     { $group: { _id: '$userId', ...totalsAccumulators(params) } },
     { $match: { requests: { $gt: 0 } } },
     {
@@ -145,5 +158,9 @@ export function spendFeatureUsersPipeline(params: SpendFeatureUsersParams): Pipe
 
 /** Distinct acting users in the scan window, for audience classification. */
 export function spendActorIdsPipeline(params: SpendScanParams): PipelineStage[] {
-  return [scanMatch(params), { $group: { _id: '$userId' } }];
+  return [
+    scanMatch(params),
+    { $match: { ...attributedUsageMatch, userId: { $type: 'string' } } },
+    { $group: { _id: '$userId' } },
+  ];
 }

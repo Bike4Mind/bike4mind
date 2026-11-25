@@ -735,17 +735,6 @@ export function ExternalLinkIcon() {
   );
 }
 
-/** Opens in a window of its own inside this app: a window frame with an arrow leaving it. */
-export function NewWindowIcon() {
-  return (
-    <Glyph>
-      <path d="M7 3.5H3.5a1 1 0 00-1 1v8a1 1 0 001 1h8a1 1 0 001-1V9" />
-      <path d="M2.5 6.5H5" />
-      <path d="M9.5 2.5h4v4M13.5 2.5 8.5 7.5" />
-    </Glyph>
-  );
-}
-
 /** Blank-chat suggestion: a framed picture, a sun over a hill. */
 export function ImageIcon() {
   return (
