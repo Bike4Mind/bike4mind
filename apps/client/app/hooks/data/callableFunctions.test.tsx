@@ -270,6 +270,23 @@ describe('callable function sharing hooks', () => {
     expect(invalidate).toHaveBeenCalled();
   });
 
+  it('drops the cached share once a save or stop lands, so a reopened dialog reads it fresh', async () => {
+    h.put.mockResolvedValue({ data: saved });
+    h.delete.mockResolvedValue({ data: saved });
+    const client = newClient();
+    const key = [...CALLABLE_FUNCTIONS_LIST_QUERY_KEY, 'fn-1', 'grants'];
+    const share = renderWith(() => useShareCallableFunction(), client);
+    const stop = renderWith(() => useStopSharingCallableFunction(), client);
+
+    client.setQueryData(key, { grants: { visibility: 'private' }, people: [] });
+    await act(() => share.result.current.mutateAsync({ id: 'fn-1', visibility: 'private', userIds: ['p'] }));
+    expect(client.getQueryData(key)).toBeUndefined();
+
+    client.setQueryData(key, { grants: { visibility: 'private' }, people: [] });
+    await act(() => stop.result.current.mutateAsync('fn-1'));
+    expect(client.getQueryData(key)).toBeUndefined();
+  });
+
   it('lists what is shared with the caller, and does not ask without a session', async () => {
     h.get.mockResolvedValue({ data: [{ id: 'fn-1' }] });
     const { result } = renderWith(() => useSharedCallableFunctions());

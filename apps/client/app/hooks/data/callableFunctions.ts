@@ -273,6 +273,15 @@ export function useCallableFunctionShare(id: string, enabled = true) {
   });
 }
 
+/**
+ * Removes the cached share after a save instead of refetching it: a refetch in flight keeps the query alive past
+ * `gcTime: 0`, so a dialog reopened meanwhile would seed its form from the pre-save share.
+ */
+function useDropShare() {
+  const queryClient = useQueryClient();
+  return (id: string) => queryClient.removeQueries({ queryKey: shareQueryKey(id) });
+}
+
 export interface CallableFunctionShareInput {
   visibility: CallableFunctionGrantVisibility;
   projectId?: string;
@@ -283,18 +292,22 @@ export interface CallableFunctionShareInput {
 /** Replaces the tool's share; only a live tool can be shared. */
 export const useShareCallableFunction = () => {
   const invalidate = useInvalidateCallableFunctions();
+  const dropShare = useDropShare();
   return useMutation({
     mutationFn: async ({ id, ...share }: CallableFunctionShareInput & { id: string }) =>
       (await api.put<ICallableFunctionPublic>(`${COLLECTION}/${encodeURIComponent(id)}/grants`, share)).data,
+    onSuccess: (_fn, { id }) => dropShare(id),
     onSettled: invalidate,
   });
 };
 
 export const useStopSharingCallableFunction = () => {
   const invalidate = useInvalidateCallableFunctions();
+  const dropShare = useDropShare();
   return useMutation({
     mutationFn: async (id: string) =>
       (await api.delete<ICallableFunctionPublic>(`${COLLECTION}/${encodeURIComponent(id)}/grants`)).data,
+    onSuccess: (_fn, id) => dropShare(id),
     onSettled: invalidate,
   });
 };
