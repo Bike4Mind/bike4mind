@@ -43,12 +43,6 @@ describe('secondary send paths forward the composer preferences', () => {
         throw new Error(`Unbalanced braces after ${opener}`);
       });
 
-  it('every QuestMasterReply handleLLMCommand call spreads turnPreferences', () => {
-    const sites = callSites(read('../GenAI/QuestMasterReply.tsx'), 'handleLLMCommand({');
-    expect(sites).toHaveLength(4);
-    for (const site of sites) expect(site).toMatch(spreadsTurnPreferences);
-  });
-
   it('the SessionMiddle edit/retry resend spreads turnPreferences', () => {
     const sites = callSites(read('../Session/SessionMiddle.tsx'), 'dispatchSend(commandHandlers, imageSendMode, {');
     expect(sites).toHaveLength(1);

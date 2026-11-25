@@ -55,9 +55,18 @@ import { reversePurchaseStanding } from '@server/billing/purchaseReversal';
 import { respondToEarlyFraudWarning } from '@server/billing/earlyFraudWarning';
 import { propagateAccountRisk } from '@bike4mind/server-utils/billing/linkedAccounts';
 import { disputeFacts, resolveLostUserDispute, resolveWonDispute } from '@server/billing/stripeDisputes';
-import { notifyCanceledForNonPayment, notifyPaymentFailed } from '@server/billing/paymentFailureNotice';
+import {
+  notifyCanceledForNonPayment,
+  notifyPaymentActionRequired,
+  notifyPaymentFailed,
+  clearUnpaidNotice,
+  notifyUnpaid,
+} from '@server/billing/paymentFailureNotice';
 import { recordBillingEvent, type BillingEventHints } from '@server/billing/billingEventStore';
-import { SubscriptionOwnerType } from '@bike4mind/server-utils/lib/subscriptions/types';
+import {
+  isCancellableSubscriptionStatus,
+  SubscriptionOwnerType,
+} from '@bike4mind/server-utils/lib/subscriptions/types';
 import { stripeMirrorFields } from '@bike4mind/server-utils/lib/subscriptions/stripeMirror';
 import { releasePlanStorageLimit } from '@bike4mind/server-utils/subscriptions/releasePlanStorageLimit';
 import { emitBillingEvent, emitPurchaseEvents } from '@bike4mind/server-utils/analytics/signupEvents';
@@ -437,8 +446,8 @@ const handler = baseApi({ auth: false }).post(async (req, res) => {
         await emitMetric('Lumina5/Entitlements', 'DunningCleanupFailed', 1, { reason: 'void_failed' });
       }
 
-      // Only when Stripe's retry schedule ended in cancel. A Dashboard setting of "mark unpaid"
-      // never reaches here, and would need the same notice on customer.subscription.updated.
+      // Only when Stripe's retry schedule ended in cancel. "Mark unpaid" is notified from
+      // customer.subscription.updated.
       if (subscription.cancellation_details?.reason === 'payment_failed') {
         await notifyCanceledForNonPayment(updated, req.logger);
       }
@@ -495,6 +504,22 @@ const handler = baseApi({ auth: false }).post(async (req, res) => {
         { subscriptionId: subscription.id },
         { requireAcceptance: true }
       );
+
+      // Dunning that ends by marking the subscription unpaid never reaches customer.subscription.deleted.
+      // Once per unpaid spell: later updates, redeliveries and new invoices in the same state stay silent.
+      if (subscription.status === 'unpaid') {
+        const row = await subscriptionRepository.findByStripeSubscriptionId(subscription.id);
+        if (!row || !isCancellableSubscriptionStatus(row.status)) {
+          req.logger.warn(
+            `Ignoring unpaid notice on subscription ${subscription.id}: no row in this stage, or it is already closed`
+          );
+        } else {
+          await notifyUnpaid(row, req.logger);
+        }
+      } else if (subscription.status === 'active' || subscription.status === 'trialing') {
+        // Recovered states only: a stale past_due event delivered after unpaid must not re-arm it.
+        await clearUnpaidNotice(subscription.id, req.logger);
+      }
 
       break;
     }
@@ -932,6 +957,35 @@ const handler = baseApi({ auth: false }).post(async (req, res) => {
         });
       }
 
+      break;
+    }
+
+    case 'invoice.payment_action_required': {
+      const invoice = event.data.object;
+      const subscriptionRef = invoice.parent?.subscription_details?.subscription ?? invoice.subscription;
+      const subscriptionId = typeof subscriptionRef === 'string' ? subscriptionRef : subscriptionRef?.id;
+
+      if (!subscriptionId) {
+        req.logger.debug(`invoice.payment_action_required ${invoice.id} has no subscription, skipping`);
+        break;
+      }
+
+      // Same ownership guard as invoice.payment_failed: no row in this stage, or a closed one,
+      // means this stage must not email the owner.
+      const subscription = await subscriptionRepository.findByStripeSubscriptionId(subscriptionId);
+      if (!subscription || !isCancellableSubscriptionStatus(subscription.status)) {
+        req.logger.warn(
+          `Ignoring payment action on subscription ${subscriptionId}: no row in this stage, or it is already closed`
+        );
+        break;
+      }
+
+      // notifyPaymentFailed stands down for an invoice that needs authentication, so the org alert
+      // it gates is raised here instead, under this notice's own once-per-invoice claim.
+      const noticeSent = await notifyPaymentActionRequired(subscription, invoice, req.logger);
+      if (noticeSent && subscription.ownerType === SubscriptionOwnerType.Organization && invoice.id) {
+        await notifyOrgEvent({ type: 'payment_failed', organizationId: subscription.ownerId, invoiceId: invoice.id });
+      }
       break;
     }
 

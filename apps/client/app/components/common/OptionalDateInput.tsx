@@ -18,6 +18,9 @@ interface OptionalDateInputProps {
   min?: string;
   max?: string;
   size?: 'sm' | 'md';
+  /** Disables the input and both buttons, so the field cannot be opened, edited or cleared. */
+  disabled?: boolean;
+  error?: boolean;
   'aria-label'?: string;
   /** Goes on the native date input; the empty label and the buttons get `-empty`, `-set-btn` and `-clear-btn` suffixes. */
   testId: string;
@@ -40,6 +43,8 @@ export const OptionalDateInput: FC<OptionalDateInputProps> = ({
   min,
   max,
   size = 'md',
+  disabled = false,
+  error = false,
   'aria-label': ariaLabel,
   testId,
 }) => {
@@ -47,6 +52,12 @@ export const OptionalDateInput: FC<OptionalDateInputProps> = ({
   const setButtonRef = useRef<HTMLButtonElement>(null);
   const pendingFocus = useRef<'input' | 'set' | null>(null);
   const [focusedWithin, setFocusedWithin] = useState(false);
+  // A disabled input loses focus without a reliable blur event, which would otherwise leave focusedWithin stuck.
+  const [wasDisabled, setWasDisabled] = useState(disabled);
+  if (disabled !== wasDisabled) {
+    setWasDisabled(disabled);
+    if (disabled) setFocusedWithin(false);
+  }
   const empty = value === '' && !focusedWithin;
 
   useEffect(() => {
@@ -65,7 +76,8 @@ export const OptionalDateInput: FC<OptionalDateInputProps> = ({
         <Button
           size="sm"
           variant="outlined"
-          color="neutral"
+          color={error ? 'danger' : 'neutral'}
+          disabled={disabled}
           startDecorator={<EventIcon />}
           ref={setButtonRef}
           onClick={() => {
@@ -93,12 +105,15 @@ export const OptionalDateInput: FC<OptionalDateInputProps> = ({
         type="date"
         size={size}
         value={value}
+        disabled={disabled}
+        error={error}
         onChange={event => onChange(event.target.value)}
         endDecorator={
           <IconButton
             size="sm"
             variant="plain"
             color="neutral"
+            disabled={disabled}
             aria-label={clearLabel}
             onClick={() => {
               pendingFocus.current = 'set';

@@ -8,12 +8,19 @@ import {
   type CompletionEvaluationLimits,
   type CompletionEvaluationReceipt,
 } from '@bike4mind/common';
-import { completionRunRepository } from '@bike4mind/database';
+import { adminSettingsRepository, completionRunRepository } from '@bike4mind/database';
 import type { ICompletionOptions } from '@bike4mind/llm-adapters';
 
-export function assertEvaluationAuthorized(userId: string): void {
-  const allowed = (process.env.B4M_EVALUATION_USER_IDS ?? '').split(',').map(id => id.trim());
-  if (!allowed.includes(userId))
+async function allowedIds(settingName: 'evaluationUserIds' | 'evaluationModelIds'): Promise<string[]> {
+  const value = (await adminSettingsRepository.getSettingsValue(settingName)) ?? '';
+  return value
+    .split(',')
+    .map(id => id.trim())
+    .filter(Boolean);
+}
+
+export async function assertEvaluationAuthorized(userId: string): Promise<void> {
+  if (!(await allowedIds('evaluationUserIds')).includes(userId))
     throw new HTTPError(403, 'Evaluation execution is not enabled for this account.', {
       errorCode: 'evaluation_not_enabled',
     });
@@ -39,9 +46,8 @@ export function evaluationTransport(runId: string, requestId: string, onReady?: 
   const transport: NonNullable<NonNullable<ICompletionOptions['_internal']>['evaluation']> = {
     async admit(modelInfo: ModelInfo, wireModel: string, outputLimit: number) {
       if (admitted) throw new BadRequestError('An evaluation attempt cannot dispatch twice.');
-      const pinnedModels = (process.env.B4M_EVALUATION_MODEL_IDS ?? '').split(',').map(id => id.trim());
-      if (!pinnedModels.includes(wireModel))
-        throw new BadRequestError('Evaluation model is not enabled by the deployment.');
+      if (!(await allowedIds('evaluationModelIds')).includes(wireModel))
+        throw new BadRequestError('Evaluation model is not enabled in the evaluationModelIds admin setting.');
       if (
         ![ModelBackend.OpenAI, ModelBackend.Anthropic].includes(modelInfo.backend) ||
         modelInfo.id !== wireModel ||

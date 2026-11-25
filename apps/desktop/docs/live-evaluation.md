@@ -8,10 +8,14 @@ for the signed-in account's evaluation budget.
 
 Build Desktop, launch it normally, sign in to the intended server/account, and
 quit it completely. The evaluator starts only after normal authentication restores.
-The server administrator must independently allow the account through
-`B4M_EVALUATION_USER_IDS` and the exact model ID through `B4M_EVALUATION_MODEL_IDS`
-after verifying its provider identity. Both deployment settings are required.
-A client flag cannot grant administrative permission.
+A server administrator must independently allow the account and the exact model ID
+in Admin > Settings > AI Configuration: add the user ID to **Controlled
+Evaluation: Allowed User IDs** (`evaluationUserIds`) and, after verifying its
+provider identity, the model ID to **Controlled Evaluation: Allowed Model IDs**
+(`evaluationModelIds`). Both are comma-separated, empty by default, and both are
+required. They are read on every evaluation request, so a change applies without a
+redeploy, and clearing them switches evaluation off again. A client flag cannot
+grant administrative permission.
 
 From the repository root:
 

@@ -10,6 +10,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { desktopTheme } from '../theme';
 import { ChatShell } from './ChatShell';
 import { resetCreationToolsCache } from './useCreationTools';
+import { chatBackedHostBridge } from '../__fixtures__/chatBackedHostBridge';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -108,6 +109,7 @@ function stubBridge({
   listCreationTools.mockImplementation(async () => tools);
   (window as unknown as { b4m: unknown }).b4m = new Proxy(
     {
+      host: chatBackedHostBridge(),
       chat: quietBridge({
         listSessions: async () => [session],
         getSession: async () => ({ ...session, messageCount: messages.length, messages }) as ChatSession,

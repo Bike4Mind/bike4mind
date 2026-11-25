@@ -20,6 +20,7 @@ import type { CreatedSession } from '@shared/ipc';
 import type { SidebarSectionsState } from '@shared/sidebarSections';
 import { groupSessions } from './grouping';
 import { useSidebarSections } from './useSidebarSections';
+import { chatBackedHostBridge } from '../__fixtures__/chatBackedHostBridge';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -68,7 +69,9 @@ describe('opening a chat', () => {
       clearContext,
       setApprovalMode,
     };
-    Object.assign(window, { b4m: { chat, claudeImport: { onSessionsChanged: () => () => {} } } });
+    Object.assign(window, {
+      b4m: { host: chatBackedHostBridge(), chat, claudeImport: { onSessionsChanged: () => () => {} } },
+    });
     host = document.createElement('div');
     document.body.appendChild(host);
     root = createRoot(host);
@@ -678,7 +681,9 @@ describe('per-chat setters', () => {
       saves[entry.save] = vi.fn<Save>();
       chat[entry.save] = saves[entry.save];
     }
-    Object.assign(window, { b4m: { chat, claudeImport: { onSessionsChanged: () => () => {} } } });
+    Object.assign(window, {
+      b4m: { host: chatBackedHostBridge(), chat, claudeImport: { onSessionsChanged: () => () => {} } },
+    });
     host = document.createElement('div');
     document.body.appendChild(host);
     root = createRoot(host);
@@ -898,6 +903,7 @@ describe('generation settings', () => {
     setSessionGeneration.mockClear();
     Object.assign(window, {
       b4m: {
+        host: chatBackedHostBridge(),
         chat: {
           getSession: async () => session,
           setSessionGeneration,
@@ -1231,6 +1237,7 @@ describe('imported transcripts and history consent', () => {
     getSession.mockResolvedValue(imported('old'));
     Object.assign(window, {
       b4m: {
+        host: chatBackedHostBridge(),
         chat: {
           getSession,
           setSessionHistory,
@@ -1513,6 +1520,7 @@ describe('sending while navigating', () => {
     Element.prototype.scrollIntoView = () => undefined;
     Object.assign(window, {
       b4m: {
+        host: chatBackedHostBridge(),
         chat: {
           getSession,
           sendMessage,
@@ -1692,6 +1700,7 @@ describe('sharing a folder', () => {
 
   function stubBridge(chat: Record<string, unknown>) {
     (window as unknown as { b4m: unknown }).b4m = {
+      host: chatBackedHostBridge(),
       chat: {
         getQueuedMessages: async () => [],
         onSessionSummary: () => () => undefined,
@@ -1845,6 +1854,7 @@ describe('background notices', () => {
   beforeEach(() => {
     Object.assign(window, {
       b4m: {
+        host: chatBackedHostBridge(),
         chat: {
           getSession: async (id: string) => sessionNamed(id),
           listSessions: async () => [],
@@ -1983,6 +1993,7 @@ describe('refused send', () => {
     sendMessage.mockReset();
     Object.assign(window, {
       b4m: {
+        host: chatBackedHostBridge(),
         chat: {
           getSession: async () => session,
           sendMessage,
@@ -2075,6 +2086,7 @@ describe('summary push', () => {
     getSession.mockReset().mockResolvedValue(empty);
     Object.assign(window, {
       b4m: {
+        host: chatBackedHostBridge(),
         chat: {
           getSession,
           sendMessage: async () => ({ ok: true, messageId: 'm1' }),
@@ -2142,6 +2154,7 @@ describe('delete prefs', () => {
 
   async function mount() {
     (window as unknown as { b4m: unknown }).b4m = {
+      host: chatBackedHostBridge(),
       chat: {
         listSessions: vi.fn(() => Promise.resolve([summary('listed')])),
         deleteSession: vi.fn(() => Promise.resolve()),
@@ -2221,6 +2234,7 @@ describe('reload ordering', () => {
 
   async function mount(listSessions: () => Promise<ChatSessionSummary[]>) {
     (window as unknown as { b4m: unknown }).b4m = {
+      host: chatBackedHostBridge(),
       chat: {
         listSessions,
         onSessionSummary: vi.fn(() => () => {}),
@@ -2257,23 +2271,27 @@ describe('reload ordering', () => {
       const controller = await mount(listSessions);
 
       let firstDone = false;
-      let listedWhenFirstDone: string[] = [];
+      let firstReload: Promise<void> = Promise.resolve();
       await act(async () => {
-        void controller()
+        firstReload = controller()
           .reload()
           .then(() => {
             firstDone = true;
-            listedWhenFirstDone = controller().sessions.map(session => session.id);
           });
         void controller().reload();
         first.resolve([summary('fresh'), summary('old')]);
       });
       expect(firstDone).toBe(false);
 
-      await act(async () => second.resolve([summary('fresh'), summary('old')]));
+      // The listing now crosses the host bridge, so it settles some microtasks after the stub
+      // does; the rendered list is read once act has flushed the update the reload applied.
+      await act(async () => {
+        second.resolve([summary('fresh'), summary('old')]);
+        await firstReload;
+      });
 
       expect(firstDone).toBe(true);
-      expect(listedWhenFirstDone).toContain('fresh');
+      expect(controller().sessions.map(session => session.id)).toContain('fresh');
     });
 
     it('still lets the newer listing win when the older one lands last', async () => {
@@ -2415,6 +2433,7 @@ describe('session placement', () => {
     mode: ChatSessionMode = 'chat'
   ) {
     (window as unknown as { b4m: unknown }).b4m = {
+      host: chatBackedHostBridge(),
       chat: {
         listSessions: vi.fn(() => Promise.resolve([summary('old')])),
         onSessionSummary: vi.fn(() => () => {}),

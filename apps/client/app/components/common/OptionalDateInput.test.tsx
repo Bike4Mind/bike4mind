@@ -7,7 +7,9 @@ import { OptionalDateInput } from './OptionalDateInput';
 
 const appTheme = extendTheme({ ...getThemeConfig() });
 
-const Harness = ({ initial, min, max }: { initial: string; min?: string; max?: string }) => {
+type HarnessProps = { initial: string; min?: string; max?: string; disabled?: boolean; error?: boolean };
+
+const Harness = ({ initial, min, max, disabled, error }: HarnessProps) => {
   const [value, setValue] = useState(initial);
   return (
     <CssVarsProvider theme={appTheme}>
@@ -20,6 +22,8 @@ const Harness = ({ initial, min, max }: { initial: string; min?: string; max?: s
         initialDate={() => '2030-01-15'}
         min={min}
         max={max}
+        disabled={disabled}
+        error={error}
         testId="expiry"
       />
       <output data-testid="value">{value}</output>
@@ -75,5 +79,43 @@ describe('OptionalDateInput', () => {
     render(<Harness initial="2031-02-03" min="2031-01-01" max="2031-12-31" />);
     expect(screen.getByTestId('expiry')).toHaveAttribute('min', '2031-01-01');
     expect(screen.getByTestId('expiry')).toHaveAttribute('max', '2031-12-31');
+  });
+
+  it('cannot be set while disabled', () => {
+    render(<Harness initial="" disabled />);
+    const setButton = screen.getByTestId('expiry-set-btn');
+    expect(setButton).toBeDisabled();
+    fireEvent.click(setButton);
+    expect(screen.getByTestId('expiry-empty')).toBeInTheDocument();
+    expect(screen.getByTestId('value')).toBeEmptyDOMElement();
+  });
+
+  it('cannot be edited or cleared while disabled', () => {
+    render(<Harness initial="2031-02-03" disabled />);
+    expect(screen.getByTestId('expiry')).toBeDisabled();
+    const clearButton = screen.getByRole('button', { name: 'Remove expiry date' });
+    expect(clearButton).toBeDisabled();
+    fireEvent.click(clearButton);
+    expect(screen.getByTestId('expiry')).toHaveValue('2031-02-03');
+    expect(screen.getByTestId('value')).toHaveTextContent('2031-02-03');
+  });
+
+  it('collapses an emptied field that is disabled mid-edit', () => {
+    const { rerender } = render(<Harness initial="2031-02-03" />);
+    const input = screen.getByTestId('expiry');
+    act(() => input.focus());
+    fireEvent.change(input, { target: { value: '' } });
+    expect(screen.getByTestId('expiry')).toBe(input);
+
+    rerender(<Harness initial="2031-02-03" disabled />);
+    expect(screen.getByTestId('expiry-empty')).toBeInTheDocument();
+    expect(screen.getByTestId('expiry-set-btn')).toBeDisabled();
+  });
+
+  it('marks the input as errored only when error is set', () => {
+    const { rerender } = render(<Harness initial="2031-02-03" />);
+    expect(screen.getByTestId('expiry').closest('.MuiInput-root')).not.toHaveClass('Mui-error');
+    rerender(<Harness initial="2031-02-03" error />);
+    expect(screen.getByTestId('expiry').closest('.MuiInput-root')).toHaveClass('Mui-error');
   });
 });

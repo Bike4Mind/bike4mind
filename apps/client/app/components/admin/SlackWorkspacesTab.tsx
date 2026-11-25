@@ -1230,6 +1230,7 @@ const SlackWorkspacesTab: React.FC = () => {
                   initialDate={() => (exportDateEnd && exportDateEnd < todayUtc() ? exportDateEnd : todayUtc())}
                   max={exportDateEnd || undefined}
                   aria-label="Start date"
+                  disabled={exporting}
                   testId="slack-export-date-start-input"
                 />
               </FormControl>
@@ -1247,6 +1248,7 @@ const SlackWorkspacesTab: React.FC = () => {
                   initialDate={() => (exportDateStart && exportDateStart > todayUtc() ? exportDateStart : todayUtc())}
                   min={exportDateStart || undefined}
                   aria-label="End date"
+                  disabled={exporting}
                   testId="slack-export-date-end-input"
                 />
               </FormControl>

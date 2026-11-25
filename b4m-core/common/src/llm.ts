@@ -25,12 +25,6 @@ export const DashboardParamsSchema = z.object({
   promptName: z.string().optional(),
 });
 
-export const QuestMasterParamsSchema = z.object({
-  questMasterPlanId: z.string(),
-  questId: z.string(),
-  subQuestId: z.string(),
-});
-
 export const ResearchModeConfigurationSchema = z.object({
   id: z.string(),
   enabled: z.boolean(),
@@ -336,6 +330,8 @@ export const EnabledPlatformMcpConnectionsSchema = z
   .max(MAX_ENABLED_PLATFORM_MCP_CONNECTIONS)
   .optional();
 
+// Not strict: an older client can still send the retired QuestMaster fields (enableQuestMaster,
+// questMaster). They are stripped on parse and ignored.
 export const ChatCompletionInvokeParamsSchema = z.object({
   /** Notebook session ID */
   sessionId: z.string(),
@@ -391,8 +387,6 @@ export const ChatCompletionInvokeParamsSchema = z.object({
   dashboardParams: DashboardParamsSchema.optional(),
   /** LLM params */
   params: ChatCompletionCreateInputSchema,
-  /** Whether Quest Master is enabled */
-  enableQuestMaster: z.boolean().optional(),
   /**
    * How much of the system stack to put in front of the model, for callers that need a completion
    * they can compare against the bare provider model. Unset keeps the full stack - what every
@@ -483,8 +477,6 @@ export const ChatCompletionInvokeParamsSchema = z.object({
   organizationId: z.string().nullable().optional(),
   /** Tool prompt ID to use for the LLM */
   toolPromptId: z.string().optional(),
-  /** Quest Master related params */
-  questMaster: QuestMasterParamsSchema.optional(),
   /** Research Mode related params */
   researchMode: ResearchModeParamsSchema.optional(),
   /** Fallback model ID to try if primary model fails */

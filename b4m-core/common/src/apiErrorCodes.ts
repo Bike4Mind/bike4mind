@@ -75,6 +75,7 @@ export const API_ERROR_CODES = [
   UNKNOWN_MODEL_ERROR_CODE,
   /** The model is outside the free-tier allowlist; remediation is a paid plan or a model from GET /api/v1/models. */
   MODEL_REQUIRES_SUBSCRIPTION_ERROR_CODE,
+  /** No longer raised: kept because quests that settled before the in-chat QuestMaster plan was retired carry it. */
   FREE_QUEST_LIMIT_REACHED_ERROR_CODE,
   /** An organization-billed API key named a different billing organization; remediation is omitting it. */
   BILLING_ORGANIZATION_MISMATCH_ERROR_CODE,

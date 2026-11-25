@@ -1,4 +1,5 @@
 import B4MKit
+import EventKit
 import SwiftUI
 
 /// Routes between sign-in, the locked screen and the signed-in shell purely from `AuthController.state`;
@@ -65,6 +66,11 @@ struct RootView: View {
       guard phase == .active else { return }
       appDidBecomeActive()
     }
+    .onReceive(NotificationCenter.default.publisher(for: .EKEventStoreChanged)) { _ in
+      guard auth.state == .signedIn else { return }
+      let syncer = services.busyBlockSyncer
+      Task { await syncer.sync(force: true) }
+    }
   }
 
   /// The shell stays mounted under the lock so drafts, optimistic turns and open sheets survive backgrounding.
@@ -112,6 +118,8 @@ struct RootView: View {
       Task { await realtime.resume() }
       services.refreshWidgetCredits()
       services.refreshWidgetPendingDecisions()
+      let syncer = services.busyBlockSyncer
+      Task { await syncer.sync() }
     }
   }
 
