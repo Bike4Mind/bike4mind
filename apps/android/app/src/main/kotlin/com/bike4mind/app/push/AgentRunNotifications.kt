@@ -19,8 +19,9 @@ import com.bike4mind.kit.agents.AgentRunWatch
 /**
  * The ongoing notification for a running agent: Android's counterpart of the iOS Live Activity
  * (apps/ios Widgets/QuestLiveActivity.swift). On Android 16+ it uses ProgressStyle and asks to be promoted, so it
- * shows as a Live Update; older versions get a plain ongoing notification with an indeterminate bar. A run that
- * needs the user turns it into a regular, alerting one; a finished run clears it. While a run shows here,
+ * shows as a Live Update; older versions get a plain ongoing notification. The bar is determinate only when the server
+ * reports a step total for the run, and indeterminate otherwise. A run that needs the user turns it into a regular,
+ * alerting one; a finished run clears it. While a run shows here,
  * AgentRunKeepAlive keeps the app running so the polling behind it survives the user leaving the app.
  */
 internal class AgentRunNotifications(private val context: Context) : AgentRunTracker {
@@ -58,7 +59,7 @@ internal class AgentRunNotifications(private val context: Context) : AgentRunTra
             .setSmallIcon(android.R.drawable.sym_def_app_icon)
             .setContentTitle(run.title)
             .setContentText(progress.stageLabel ?: context.getString(R.string.agent_run_working))
-            .setSubText(progress.iterations?.let { context.getString(R.string.agent_run_iteration, it) })
+            .setSubText(subText(progress))
             .setCategory(NotificationCompat.CATEGORY_PROGRESS)
             .setOngoing(true)
             .setOnlyAlertOnce(true)
@@ -68,14 +69,30 @@ internal class AgentRunNotifications(private val context: Context) : AgentRunTra
             .setTimeoutAfter(STALE_AFTER_MS)
             .setContentIntent(openChat(run))
             .apply {
+                // Most runs have no knowable total (step_progress is null); those keep the indeterminate bar.
+                val steps = progress.steps
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.BAKLAVA) {
-                    // The server reports no step total, so how far along is the stage text and step count.
-                    setStyle(NotificationCompat.ProgressStyle().setProgressIndeterminate(true))
-                } else {
+                    val style = NotificationCompat.ProgressStyle()
+                    if (steps == null) {
+                        style.setProgressIndeterminate(true)
+                    } else {
+                        style.setProgressSegments(listOf(NotificationCompat.ProgressStyle.Segment(steps.total)))
+                            .setProgress(steps.completed)
+                    }
+                    setStyle(style)
+                } else if (steps == null) {
                     setProgress(0, 0, true)
+                } else {
+                    setProgress(steps.total, steps.completed, false)
                 }
             }
             .build()
+
+    /** "2 of 5 steps done" when the total is known, else the iteration count; never iterations against a step total. */
+    private fun subText(progress: AgentRunProgress): String? {
+        progress.steps?.let { return context.getString(R.string.agent_run_steps_done, it.completed, it.total) }
+        return progress.iterations?.let { context.getString(R.string.agent_run_iteration, it) }
+    }
 
     private fun needsUser(run: AgentRunWatch, progress: AgentRunProgress, alert: Boolean) =
         NotificationCompat.Builder(context, PushNotifications.CHANNEL_ID)

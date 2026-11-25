@@ -294,6 +294,7 @@
     <string name="notification_channel_agent_runs">Running agents</string>
     <string name="agent_run_working">Working</string>
     <string name="agent_run_iteration">Step %1$d</string>
+    <string name="agent_run_steps_done">%1$d of %2$d steps done</string>
     <string name="agent_run_chip">Agent</string>
     <string name="agent_run_needs_you">Needs you</string>
 </resources>
