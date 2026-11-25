@@ -1,6 +1,9 @@
 import { defineEndpoint } from '../defineEndpoint';
 import {
+  BriefDecisionEditSchema,
   BriefDecisionParamsSchema,
+  BriefDecisionResolveSchema,
+  BriefDecisionSchema,
   BriefFollowUpRequestSchema,
   BriefIdParamSchema,
   BriefListResponseSchema,
@@ -20,7 +23,8 @@ const JWT_ONLY_NOTE =
 
 /**
  * Assistant briefs for native clients. Served by apps/client/pages/api/v1/briefs/index.ts (compose, list),
- * apps/client/pages/api/v1/briefs/follow-ups.ts (follow-up intake), apps/client/pages/api/v1/briefs/[id].ts (read), .../[id]/decisions/[decisionId]/reply.ts (reply) and
+ * apps/client/pages/api/v1/briefs/follow-ups.ts (follow-up intake), apps/client/pages/api/v1/briefs/[id].ts (read), .../[id]/decisions/[decisionId]/reply.ts (reply),
+ * .../[id]/decisions/[decisionId]/index.ts + resolve.ts (follow-up edit, approve, dismiss) and
  * apps/client/pages/api/v1/briefs/schedule.ts (schedule). Composition runs in apps/workers/src/events/briefCompose.ts.
  */
 export const composeBriefContract = defineEndpoint({
@@ -210,6 +214,77 @@ export const replyToBriefDecisionContract = defineEndpoint({
     streaming: false,
     body: { text: 'Go with the second option.', choiceIndex: 1 },
   },
+});
+
+const FOLLOW_UP_DECISION_ERRORS = {
+  401: { description: 'Missing or invalid JWT.', schema: ApiErrorSchema },
+  404: {
+    description: 'No such brief or decision, it is not yours, or the decision is not a follow-up.',
+    schema: ApiErrorSchema,
+  },
+  409: {
+    description: 'The follow-up was already approved or dismissed (`errorCode: "decision_closed"`).',
+    schema: ApiErrorSchema,
+  },
+  429: { description: 'Per-user rate limit exceeded.', schema: ApiErrorSchema },
+} as const;
+
+export const editBriefDecisionContract = defineEndpoint({
+  method: 'patch',
+  path: '/api/v1/briefs/{id}/decisions/{decisionId}',
+  operationId: 'editBriefDecision',
+  summary: 'Edit a proposed follow-up',
+  description:
+    'Changes a follow-up decision (one carrying `followUp`) while it is still `pending`: `text` on any kind, ' +
+    '`draftReply` fields only on a `followUpEmail`, `remindAt` only on a `reminder`. The response is the ' +
+    'updated decision. Once the follow-up is approved or dismissed it cannot change; that is `409` with ' +
+    '`errorCode: "decision_closed"`. ' +
+    JWT_ONLY_NOTE,
+  tags: ['AI'],
+  auth: 'jwtOnly',
+  pathParams: BriefDecisionParamsSchema,
+  request: BriefDecisionEditSchema,
+  responses: {
+    200: { description: 'The updated decision.', schema: BriefDecisionSchema },
+    400: {
+      description: 'No field to change, or a field that does not apply to this kind of follow-up.',
+      schema: ApiErrorSchema,
+    },
+    ...FOLLOW_UP_DECISION_ERRORS,
+  },
+  codeSample: {
+    authToken: '<access_token>',
+    streaming: false,
+    body: { draftReply: { to: 'sam@example.com' } },
+  },
+});
+
+export const resolveBriefDecisionContract = defineEndpoint({
+  method: 'post',
+  path: '/api/v1/briefs/{id}/decisions/{decisionId}/resolve',
+  operationId: 'resolveBriefDecision',
+  summary: 'Approve or dismiss a proposed follow-up',
+  description:
+    'Approves or dismisses a `pending` follow-up decision, once; the response is the updated decision. ' +
+    'Approving records your approval and nothing more: the server never sends a `followUpEmail` (hand the ' +
+    'approved `draftReply` to the device mail app) and needs `draftReply.to` to be an email address first. ' +
+    'An approved `reminder` needs a `remindAt` and is listed in the first brief composed at or after it; with ' +
+    'a brief schedule on, the next scheduled brief is moved earlier to that time. A second approve or dismiss ' +
+    'is `409` with `errorCode: "decision_closed"`. ' +
+    JWT_ONLY_NOTE,
+  tags: ['AI'],
+  auth: 'jwtOnly',
+  pathParams: BriefDecisionParamsSchema,
+  request: BriefDecisionResolveSchema,
+  responses: {
+    200: { description: 'The updated decision.', schema: BriefDecisionSchema },
+    400: {
+      description: 'Approving an email whose recipient is not an email address, or a reminder with no time.',
+      schema: ApiErrorSchema,
+    },
+    ...FOLLOW_UP_DECISION_ERRORS,
+  },
+  codeSample: { authToken: '<access_token>', streaming: false, body: { outcome: 'approve' } },
 });
 
 /** Served by apps/client/pages/api/v1/pending-decisions.ts; counted by apps/client/server/briefs/countPendingDecisions.ts. */

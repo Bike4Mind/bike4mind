@@ -31,6 +31,8 @@ export {
   getBriefScheduleContract,
   putBriefScheduleContract,
   replyToBriefDecisionContract,
+  editBriefDecisionContract,
+  resolveBriefDecisionContract,
   getPendingDecisionCountContract,
 } from './contracts/briefs.contract';
 export { createDelegationContract, getDelegationContract } from './contracts/delegations.contract';

@@ -52,6 +52,27 @@ describe('userRepository brief schedule', () => {
     expect(raw?.preferences.briefSchedule).toEqual({ ...schedule, enabled: false });
   });
 
+  it('pulls an enabled schedule forward to an earlier reminder, never later', async () => {
+    const userId = await insertUser(null);
+    await userRepository.setBriefSchedule(userId, schedule, DUE);
+    const later = new Date(DUE.getTime() + 60_000);
+    expect(await userRepository.pullNextBriefAtForward(userId, later)).toBe(false);
+    expect((await userRepository.getBriefSchedule(userId)).nextBriefAt).toEqual(DUE);
+    const earlier = new Date(DUE.getTime() - 60_000);
+    expect(await userRepository.pullNextBriefAtForward(userId, earlier)).toBe(true);
+    expect((await userRepository.getBriefSchedule(userId)).nextBriefAt).toEqual(earlier);
+  });
+
+  it('does not pull forward a schedule that is off or missing', async () => {
+    const off = await insertUser(null);
+    await userRepository.setBriefSchedule(off, { ...schedule, enabled: false }, null);
+    const none = await insertUser({ language: 'fr' });
+    for (const userId of [off, none]) {
+      expect(await userRepository.pullNextBriefAtForward(userId, DUE)).toBe(false);
+      expect((await userRepository.getBriefSchedule(userId)).nextBriefAt).toBeNull();
+    }
+  });
+
   it('the due scan is served by the partial index', async () => {
     await User.syncIndexes();
     let filter: Record<string, unknown> | undefined;

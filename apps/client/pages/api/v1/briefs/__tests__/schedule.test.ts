@@ -2,9 +2,10 @@ import { createMocks } from 'node-mocks-http';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { BriefScheduleSchema } from '@bike4mind/common';
 
-const { contracts, userRepository } = vi.hoisted(() => ({
+const { contracts, userRepository, assistantBriefRepository } = vi.hoisted(() => ({
   contracts: [] as { operationId: string; auth: string; scopes?: readonly string[]; request?: unknown }[],
   userRepository: { getBriefSchedule: vi.fn(), setBriefSchedule: vi.fn() },
+  assistantBriefRepository: { findEarliestPendingReminderAt: vi.fn() },
 }));
 
 vi.mock('@server/middlewares/defineNextRoute', () => ({
@@ -29,7 +30,7 @@ vi.mock('@server/middlewares/dispatchByMethod', () => ({
       routes[req.method] ? routes[req.method](req, res) : res.status(405).end(),
 }));
 vi.mock('@server/middlewares/perUserRateLimit', () => ({ perUserRateLimit: () => vi.fn() }));
-vi.mock('@bike4mind/database', () => ({ userRepository }));
+vi.mock('@bike4mind/database', () => ({ userRepository, assistantBriefRepository }));
 
 import handler from '../schedule';
 
@@ -46,6 +47,7 @@ describe('/api/v1/briefs/schedule', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.useFakeTimers({ now: new Date('2026-11-18T12:00:00Z'), toFake: ['Date'] });
+    assistantBriefRepository.findEarliestPendingReminderAt.mockResolvedValue(null);
   });
 
   it('is JWT-only with no scopes, and PUT validates against BriefScheduleSchema', () => {
@@ -87,6 +89,27 @@ describe('/api/v1/briefs/schedule', () => {
     const due = new Date('2026-11-18T13:00:00.000Z');
     expect(userRepository.setBriefSchedule).toHaveBeenCalledWith('user-1', schedule, due);
     expect(res._getJSONData()).toEqual({ schedule, nextBriefAt: due.toISOString() });
+  });
+
+  it('PUT keeps the due time at an approved reminder that comes before the next slot', async () => {
+    const reminder = new Date('2026-11-18T12:30:00.000Z');
+    assistantBriefRepository.findEarliestPendingReminderAt.mockResolvedValue(reminder);
+    const res = await call('PUT', schedule);
+    expect(userRepository.setBriefSchedule).toHaveBeenCalledWith('user-1', schedule, reminder);
+    expect(res._getJSONData()).toEqual({ schedule, nextBriefAt: reminder.toISOString() });
+  });
+
+  it('PUT ignores a reminder later than the next slot, and any reminder when the schedule is off', async () => {
+    assistantBriefRepository.findEarliestPendingReminderAt.mockResolvedValue(new Date('2026-11-19T09:00:00.000Z'));
+    await call('PUT', schedule);
+    expect(userRepository.setBriefSchedule).toHaveBeenCalledWith(
+      'user-1',
+      schedule,
+      new Date('2026-11-18T13:00:00.000Z')
+    );
+    const off = { ...schedule, enabled: false };
+    await call('PUT', off);
+    expect(userRepository.setBriefSchedule).toHaveBeenLastCalledWith('user-1', off, null);
   });
 
   it('PUT with the schedule off keeps it and clears the due time', async () => {

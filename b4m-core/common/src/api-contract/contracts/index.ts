@@ -28,6 +28,8 @@ import {
   getBriefScheduleContract,
   putBriefScheduleContract,
   replyToBriefDecisionContract,
+  editBriefDecisionContract,
+  resolveBriefDecisionContract,
   getPendingDecisionCountContract,
 } from './briefs.contract';
 import { createDelegationContract, getDelegationContract } from './delegations.contract';
@@ -235,6 +237,8 @@ export const CONTRACTS: readonly EndpointContract[] = [
   createAssistantInstructionContract,
   deleteAssistantInstructionContract,
   replyToBriefDecisionContract,
+  editBriefDecisionContract,
+  resolveBriefDecisionContract,
   getPendingDecisionCountContract,
   createDelegationContract,
   getDelegationContract,

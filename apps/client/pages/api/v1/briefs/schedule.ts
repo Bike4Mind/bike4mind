@@ -1,10 +1,11 @@
 /**
  * GET /api/v1/briefs/schedule - the caller's brief schedule and next due time.
- * PUT /api/v1/briefs/schedule - replace it; recomputes `nextBriefAt` in the schedule's own time zone.
+ * PUT /api/v1/briefs/schedule - replace it; recomputes `nextBriefAt` in the schedule's own time zone, kept no later
+ *   than the earliest approved reminder still waiting to be listed.
  * JWT only; reads and writes only `req.user`.
  */
 import { getBriefScheduleContract, putBriefScheduleContract } from '@bike4mind/common';
-import { userRepository } from '@bike4mind/database';
+import { assistantBriefRepository, userRepository } from '@bike4mind/database';
 import { computeNextBriefAt } from '@bike4mind/server-utils/briefs/briefSchedule';
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
 import { dispatchByMethod } from '@server/middlewares/dispatchByMethod';
@@ -25,7 +26,9 @@ const putRoute = nextRouteForContract(putBriefScheduleContract, {
   rateLimit: perUserRateLimit('PUT /api/v1/briefs/schedule'),
 }).put(async (req, res) => {
   const schedule = req.validated;
-  const nextBriefAt = computeNextBriefAt(schedule, new Date());
+  const nextSlot = computeNextBriefAt(schedule, new Date());
+  const reminderAt = nextSlot ? await assistantBriefRepository.findEarliestPendingReminderAt(req.user.id) : null;
+  const nextBriefAt = nextSlot && reminderAt && reminderAt < nextSlot ? reminderAt : nextSlot;
   await userRepository.setBriefSchedule(req.user.id, schedule, nextBriefAt);
   return res.json({ schedule, nextBriefAt: nextBriefAt?.toISOString() ?? null });
 });

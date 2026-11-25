@@ -197,6 +197,10 @@ export const operations = {
     method: 'POST',
     path: '/api/v1/pending-actions/{questId}/deny',
   },
+  editBriefDecision: {
+    method: 'PATCH',
+    path: '/api/v1/briefs/{id}/decisions/{decisionId}',
+  },
   editImage: {
     method: 'POST',
     path: '/api/v1/image-edits',
@@ -616,6 +620,10 @@ export const operations = {
   rescanSkillMarketVersion: {
     method: 'POST',
     path: '/api/v1/skills/market/versions/{vid}/rescan',
+  },
+  resolveBriefDecision: {
+    method: 'POST',
+    path: '/api/v1/briefs/{id}/decisions/{decisionId}/resolve',
   },
   reviewSkillMarketVersion: {
     method: 'POST',
