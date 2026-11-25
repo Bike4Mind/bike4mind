@@ -4636,7 +4636,7 @@
   },
   "b4m-core/slack/src/user-link-helpers.ts": {
     "@typescript-eslint/no-explicit-any": {
-      "count": 2
+      "count": 1
     }
   },
   "b4m-core/slack/src/views/AppHomeBuilder.test.ts": {
