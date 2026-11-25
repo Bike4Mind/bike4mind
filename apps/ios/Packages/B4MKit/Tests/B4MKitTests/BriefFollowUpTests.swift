@@ -25,7 +25,8 @@ final class BriefFollowUpClientTests: XCTestCase {
   }
 
   private func sentBody(_ transport: FakeTransport) async throws -> [String: Any] {
-    let request = try XCTUnwrap(await transport.requests.first)
+    let requests = await transport.requests
+    let request = try XCTUnwrap(requests.first)
     let body = try XCTUnwrap(request.httpBody)
     return try XCTUnwrap(try JSONSerialization.jsonObject(with: body) as? [String: Any])
   }
@@ -50,7 +51,8 @@ final class BriefFollowUpClientTests: XCTestCase {
     let (client, transport) = client(202, BriefClientTests.readyJSON)
     let brief = try await client.followUp(transcript: "Email Sam the notes", timeZone: "Europe/Paris")
     XCTAssertEqual(brief.id, "b1")
-    let request = try XCTUnwrap(await transport.requests.first)
+    let requests = await transport.requests
+    let request = try XCTUnwrap(requests.first)
     XCTAssertEqual(request.httpMethod, "POST")
     XCTAssertEqual(request.url?.path(), "/api/v1/briefs/follow-ups")
     let sent = try await sentBody(transport)
@@ -68,7 +70,8 @@ final class BriefFollowUpClientTests: XCTestCase {
       briefID: "b2", decisionID: "fu-reminder-1",
       edit: BriefDecisionEdit(remindAt: Date(timeIntervalSince1970: 1_794_992_400)))
     XCTAssertEqual(updated.followUp?.kind, .reminder)
-    let request = try XCTUnwrap(await transport.requests.first)
+    let requests = await transport.requests
+    let request = try XCTUnwrap(requests.first)
     XCTAssertEqual(request.httpMethod, "PATCH")
     XCTAssertEqual(request.url?.path(), "/api/v1/briefs/b2/decisions/fu-reminder-1")
     let sent = try await sentBody(transport)
@@ -81,7 +84,8 @@ final class BriefFollowUpClientTests: XCTestCase {
     let (client, transport) = client(200, decision)
     let updated = try await client.resolveDecision(briefID: "b2", decisionID: "fu-action-1", outcome: .dismiss)
     XCTAssertEqual(updated.followUp?.state, .dismissed)
-    let request = try XCTUnwrap(await transport.requests.first)
+    let requests = await transport.requests
+    let request = try XCTUnwrap(requests.first)
     XCTAssertEqual(request.url?.path(), "/api/v1/briefs/b2/decisions/fu-action-1/resolve")
     let sent = try await sentBody(transport)
     XCTAssertEqual(sent["outcome"] as? String, "dismiss")
@@ -91,8 +95,10 @@ final class BriefFollowUpClientTests: XCTestCase {
     let cases: [(Int, String, BriefDecisionFailure)] = [
       (409, #"{"error":"Already settled","errorCode":"decision_closed"}"#, .closed),
       (404, "{}", .notFound),
-      (400, #"{"error":"Edit the recipient to an email address first"}"#,
-       .invalid("Edit the recipient to an email address first")),
+      (
+        400, #"{"error":"Edit the recipient to an email address first"}"#,
+        .invalid("Edit the recipient to an email address first")
+      ),
       (400, "{}", .invalid(BriefClient.fallbackInvalidDecision)),
       (409, #"{"error":"Busy"}"#, .api(.server(status: 409))),
       (429, "{}", .api(.rateLimited)),

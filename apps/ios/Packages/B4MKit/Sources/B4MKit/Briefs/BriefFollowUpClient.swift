@@ -8,7 +8,9 @@ public protocol BriefFollowUpAPI: Sendable {
   /// - Throws: `BriefDecisionFailure`.
   func editDecision(briefID: String, decisionID: String, edit: BriefDecisionEdit) async throws -> BriefDecision
   /// - Throws: `BriefDecisionFailure`.
-  func resolveDecision(briefID: String, decisionID: String, outcome: BriefDecisionOutcome) async throws
+  func resolveDecision(
+    briefID: String, decisionID: String, outcome: BriefDecisionOutcome
+  ) async throws
     -> BriefDecision
 }
 
@@ -83,8 +85,7 @@ extension BriefClient: BriefFollowUpAPI {
     return brief
   }
 
-  public func editDecision(briefID: String, decisionID: String, edit: BriefDecisionEdit) async throws -> BriefDecision
-  {
+  public func editDecision(briefID: String, decisionID: String, edit: BriefDecisionEdit) async throws -> BriefDecision {
     try await sendDecision(method: "PATCH", briefID: briefID, decisionID: decisionID, suffix: "", body: edit)
   }
 
