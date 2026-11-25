@@ -21,7 +21,7 @@ describe('OverviewTab coverage help', () => {
         />
       </CssVarsProvider>
     );
-    fireEvent.click(screen.getByRole('button', { name: 'About Events Over Time' }));
+    fireEvent.click(screen.getByRole('button', { name: 'About Events over time' }));
     const tooltip = await screen.findByRole('tooltip');
     expect(tooltip).toHaveTextContent(expected);
     expect(tooltip).not.toHaveTextContent(excluded);
@@ -74,9 +74,19 @@ describe('OverviewTab sections', () => {
       </CssVarsProvider>
     );
 
+  it('counts the whole window as days only when every date in it is present', () => {
+    render(
+      <CssVarsProvider>
+        <OverviewTab chartData={chartData} showUsageBySource={false} isCompleteWindow />
+      </CssVarsProvider>
+    );
+    expect(screen.getByTestId('overview-events-over-time-caption')).toHaveTextContent('3 events across 2 days');
+    expect(screen.getByTestId('overview-events-over-time-caption')).not.toHaveTextContent('active');
+  });
+
   it('sums each chart into its caption', () => {
     renderTab();
-    expect(screen.getByTestId('overview-events-over-time-caption')).toHaveTextContent('3 events across 2 days');
+    expect(screen.getByTestId('overview-events-over-time-caption')).toHaveTextContent('3 events across 2 active days');
     expect(screen.getByTestId('overview-events-by-category-caption')).toHaveTextContent(
       'Session is the largest category with 3 events'
     );

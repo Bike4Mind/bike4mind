@@ -118,12 +118,14 @@ export const UsageBySourceCard: React.FC = () => {
       <Stack direction="row" flexWrap="wrap" justifyContent="space-between" alignItems="center" gap={1} sx={{ mb: 1 }}>
         <Stack direction="row" alignItems="center">
           <Typography level="title-md" component="h3" sx={{ color: 'admin.ink' }}>
-            Usage by Source
+            Usage by source
           </Typography>
-          <AnalyticsTermHelp
-            term="Usage by Source"
-            description="Groups recorded activity by its source. Sources can be apps, entry points, or automatic/manual triggers, so this is not a comparison of apps alone. Events without a source are excluded."
-          />
+          <Box sx={{ display: 'flex', '& svg': { fontSize: 16 } }}>
+            <AnalyticsTermHelp
+              term="Usage by source"
+              description="Groups recorded activity by its source. Sources can be apps, entry points, or automatic/manual triggers, so this is not a comparison of apps alone. Events without a source are excluded."
+            />
+          </Box>
         </Stack>
         <FilterToolbar data-testid="usage-by-source-toolbar">
           <Select
@@ -191,7 +193,7 @@ export const UsageBySourceCard: React.FC = () => {
         )}
 
         <Box sx={{ flex: 1, minWidth: 0, width: '100%' }}>
-          {/* Below 28rem the table scrolls inside its frame instead of crushing its four columns. */}
+          {/* Below 28rem the table scrolls sideways instead of crushing its four columns. */}
           <DataTable
             label="Usage by source"
             testId="usage-by-source-table"

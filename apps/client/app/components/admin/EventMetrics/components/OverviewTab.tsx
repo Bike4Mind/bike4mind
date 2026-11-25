@@ -64,7 +64,7 @@ export const OverviewTab: React.FC<OverviewTabProps> = ({
         '& > .overview-wide': { gridColumn: '1 / -1' },
       }}
     >
-      {/* Usage by Source has its own admin endpoint, so it loads regardless of this tab's filters. */}
+      {/* Usage by source has its own admin endpoint, so it loads regardless of this tab's filters. */}
       {showUsageBySource && (
         <Box className="overview-wide" sx={{ minWidth: 0 }}>
           <UsageBySourceCard />
@@ -73,11 +73,11 @@ export const OverviewTab: React.FC<OverviewTabProps> = ({
 
       <Box className="overview-wide" sx={{ minWidth: 0 }}>
         <ChartSection
-          title="Events Over Time"
+          title="Events over time"
           testId="overview-events-over-time"
           help={
             <AnalyticsTermHelp
-              term="Events Over Time"
+              term="Events over time"
               description={
                 isCompleteWindow
                   ? 'Number of recorded events on each UTC date across the complete seven-day window. Every date is included, with zero for days without activity. Each event counts once, even if the same person acts repeatedly. Today is still in progress.'
@@ -90,7 +90,7 @@ export const OverviewTab: React.FC<OverviewTabProps> = ({
               ? noEvents
               : {
                   kind: 'ready',
-                  caption: `${plural(totalEvents, 'event')} across ${plural(timeSeriesData.length, 'day')}`,
+                  caption: `${plural(totalEvents, 'event')} across ${plural(timeSeriesData.length, isCompleteWindow ? 'day' : 'active day')}`,
                   chart: (
                     <ResponsiveContainer width="100%" height={300}>
                       <LineChart data={timeSeriesData}>
@@ -127,11 +127,11 @@ export const OverviewTab: React.FC<OverviewTabProps> = ({
       </Box>
 
       <ChartSection
-        title="Events by Category"
+        title="Events by category"
         testId="overview-events-by-category"
         help={
           <AnalyticsTermHelp
-            term="Events by Category"
+            term="Events by category"
             description="Groups the events in this report by keywords in their names, such as Session, File or Auth. Each slice counts recorded events, not distinct users. Events whose names match none of these groups appear as Other."
           />
         }
@@ -197,11 +197,11 @@ export const OverviewTab: React.FC<OverviewTabProps> = ({
       />
 
       <ChartSection
-        title="Top 10 Events"
+        title="Top 10 events"
         testId="overview-top-events"
         help={
           <AnalyticsTermHelp
-            term="Top 10 Events"
+            term="Top 10 events"
             description="The ten most frequently recorded event names in this report. Each occurrence counts once. A feature can record several kinds of events, and one person can generate many events, so this is not a ranking of features by number of users."
           />
         }

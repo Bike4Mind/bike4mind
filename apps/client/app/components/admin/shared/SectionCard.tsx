@@ -40,7 +40,8 @@ export function SectionCard({
         <Typography level="title-md" component="h3" sx={{ color: 'admin.ink', mr: help ? 0 : 'auto' }}>
           {title}
         </Typography>
-        {help && <Box sx={{ display: 'flex', mr: 'auto', ml: -0.5 }}>{help}</Box>}
+        {/* The guide caps a heading's help icon at 16 px. */}
+        {help && <Box sx={{ display: 'flex', mr: 'auto', ml: -0.5, '& svg': { fontSize: 16 } }}>{help}</Box>}
         {action}
       </Stack>
       {body === 'facts' ? (
