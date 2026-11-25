@@ -282,6 +282,11 @@ const noDeadPaletteTokens = [
   },
 ];
 
+const noRandomUUIDMember = {
+  selector: "MemberExpression[property.name='randomUUID']",
+  message: "crypto.randomUUID is undefined outside secure contexts (plain-http LAN). Use randomUuid from '@bike4mind/common'.",
+};
+
 // A regex can only recognise a token shape. It cannot know that `primary.25` or `warning.550` name
 // a shade this palette does not have, or that `neutral.outlinedHoverBorder` was a Joy key that a
 // version bump removed - those are just as dead, and only the built theme can tell. That half is
@@ -945,6 +950,22 @@ export default defineConfig([
       // so a local/parameter named `open` is untouched.
       'no-restricted-globals': ['error', { name: 'open', message: WINDOW_OPEN_MESSAGE }],
     },
+  },
+
+  // Browser code must not call crypto.randomUUID directly: it is secure-context only, so it throws on a
+  // plain-http LAN self-host. The SPA block's selectors are repeated here because a later
+  // no-restricted-syntax replaces earlier options for the same files.
+  {
+    files: ['apps/client/app/**/*.{ts,tsx}'],
+    ignores: ['**/*.{test,spec}.{ts,tsx}', '**/__tests__/**', 'apps/client/app/serwist/**'],
+    rules: {
+      'no-restricted-syntax': ['error', ...noWindowOpenInClientUi, ...noDeadPaletteTokens, noRandomUUIDMember],
+    },
+  },
+  {
+    files: ['b4m-core/common/src/**/*.{ts,tsx}'],
+    ignores: ['**/*.{test,spec}.{ts,tsx}', '**/__tests__/**', 'b4m-core/common/src/utils/randomUuid.ts'],
+    rules: { 'no-restricted-syntax': ['error', noRandomUUIDMember] },
   },
 
   // RFC #483 Phase 2 - an API route must not send a raw entity document; see
