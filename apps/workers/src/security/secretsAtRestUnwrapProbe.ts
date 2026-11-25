@@ -1,7 +1,7 @@
 /**
  * Manual health check for the secrets-at-rest key: unwraps the stage's wrapped data key from inside the
  * VPC, to show a VPC-attached function reaches KMS (through the NAT) and how long a Decrypt takes.
- * The plaintext is discarded at once; only { ok, decryptMs, coldStart } is returned or logged.
+ * The plaintext is discarded at once; only { ok, decryptMs, coldStart } is returned.
  */
 import { Resource } from 'sst';
 
@@ -54,6 +54,5 @@ export const handler = async (): Promise<UnwrapProbeResult> => {
       await kms.send(new DecryptCommand({ CiphertextBlob: blob, EncryptionContext: context }));
     },
   });
-  console.log(JSON.stringify(result));
   return result;
 };
