@@ -178,7 +178,11 @@ export function useSessions(keepIds: readonly string[] = []): SessionsController
       if (ticket !== latestReload.current) return latestListing.current;
       if (editsBefore !== localEdits.current) return reload();
       setSessions(sessionsFromPage(page));
-      setPaging({ loaded: page.sessions.length, nextCursor: page.nextCursor, total: page.total });
+      // The ref is written here too, not only on render: a page reply landing before the next
+      // render must already see the moved cursor.
+      const next = { loaded: page.sessions.length, nextCursor: page.nextCursor, total: page.total };
+      pagingRef.current = next;
+      setPaging(next);
       setLoading(false);
     })();
     latestListing.current = listing;

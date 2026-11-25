@@ -53,6 +53,9 @@ function pagingHost(count: number) {
     release: async (index = 0) => {
       await act(async () => held[index]?.());
     },
+    releaseAll: async () => {
+      await act(async () => held.forEach(release => release()));
+    },
     add: (index: number) => (all = [summary(index), ...all].sort(compareSessionsForPage)),
     remove: (id: string) => (all = all.filter(session => session.id !== id)),
   };
@@ -157,6 +160,21 @@ describe('useSessions paging', () => {
     await host.release(1);
     // The stale page is dropped; the next one starts from the reload's cursor, so s99 is not lost.
     expect(current().loadingMore).toBe(false);
+    expect(current().sessions).toHaveLength(SESSION_PAGE_SIZE);
+    await act(async () => current().loadMore());
+    expect(current().sessions).toHaveLength(2 * SESSION_PAGE_SIZE);
+    expect(ids(current())).toContain('s99');
+  });
+
+  it('keeps every row when the reload and the page reply land before the next render', async () => {
+    const host = pagingHost(250);
+    const { current } = await mount();
+    host.hold();
+    host.hold();
+    act(() => void current().reload());
+    act(() => current().loadMore());
+    host.add(-1);
+    await host.releaseAll();
     expect(current().sessions).toHaveLength(SESSION_PAGE_SIZE);
     await act(async () => current().loadMore());
     expect(current().sessions).toHaveLength(2 * SESSION_PAGE_SIZE);
