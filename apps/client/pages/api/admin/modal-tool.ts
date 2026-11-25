@@ -21,17 +21,38 @@ const requestSchema = z.object({
   query: z.string().describe('Natural language query about modals'),
   context: z
     .object({
-      chatHistory: z.array(z.any()).optional(),
+      chatHistory: z.array(z.unknown()).optional(),
       sessionId: z.string().optional(),
     })
     .optional(),
 });
 
+type ModalToolContext = z.infer<typeof requestSchema>['context'];
+
+type ModalToolParams = {
+  action: string;
+  type?: 'modal' | 'banner';
+  title?: string;
+  message?: string;
+  description?: string;
+  enabled?: boolean;
+  priority?: number | null;
+  tags?: string[];
+  fromContext?: boolean;
+  chatHistory?: unknown[];
+  filter?: Record<string, unknown>;
+  modalId?: string;
+  startDate?: string | null;
+  endDate?: string | null;
+  addTags?: string[];
+  removeTags?: string[];
+};
+
 /**
  * API endpoint that processes natural language modal requests
  */
 const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
-  asyncHandler(async (req: any, res: any) => {
+  asyncHandler(async (req, res) => {
     // Silently fail for callers without modal management access (admins and settings:manage delegates)
     if (!req.ability?.can('manage', 'Modal')) {
       logger.info('Modal tool access denied (no modal management permission) - returning silent failure');
@@ -96,11 +117,19 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
 /**
  * Use LLM to intelligently parse natural language query into tool parameters
  */
-export async function parseNaturalLanguageQueryDirect(query: string, context: any, meter: CompletionMeter) {
+export async function parseNaturalLanguageQueryDirect(
+  query: string,
+  context: ModalToolContext,
+  meter: CompletionMeter
+) {
   return parseNaturalLanguageQuery(query, context, meter);
 }
 
-async function parseNaturalLanguageQuery(query: string, context: any, meter: CompletionMeter) {
+async function parseNaturalLanguageQuery(
+  query: string,
+  context: ModalToolContext,
+  meter: CompletionMeter
+): Promise<ModalToolParams> {
   try {
     // Dynamically import OperationsModelService only when needed (server-side only)
     const { OperationsModelService } = await import('@bike4mind/server-utils/services/operationsModelService');
@@ -311,7 +340,7 @@ What is the user's intent?`;
       const intent = JSON.parse(jsonString);
 
       // Build parameters based on the LLM's intent recognition
-      const params: any = {
+      const params: ModalToolParams = {
         action: intent.action || 'list', // Default to list if unclear
       };
 
@@ -329,50 +358,41 @@ What is the user's intent?`;
           params.chatHistory = context?.chatHistory;
         }
 
-        // Check for attached image usage
-        if (intent.parameters?.useAttachedImage && context?.attachments) {
-          const imageAttachment = context.attachments.find((att: any) => att.type === 'image');
-          if (imageAttachment?.url) {
-            params.imageUrl = imageAttachment.url;
-            logger.info('Using attached image URL');
-          }
-        }
-
         // Add logging to debug what we're getting
         logger.info('LLM CREATE params', {
           titleLength: params.title?.length ?? 0,
           descriptionLength: params.description?.length ?? 0,
           messageLength: params.message?.length ?? 0,
-          hasImageUrl: Boolean(params.imageUrl),
         });
       } else if (intent.action === 'list') {
-        params.filter = intent.parameters?.filter || {};
+        const filter: Record<string, unknown> = intent.parameters?.filter || {};
+        params.filter = filter;
 
         // Apply entity type filter
         if (intent.entityType === 'modal') {
-          params.filter.type = 'modal';
+          filter.type = 'modal';
         } else if (intent.entityType === 'banner') {
-          params.filter.type = 'banner';
+          filter.type = 'banner';
         }
         // 'both' means no type filter
 
         // Apply enabled filter if specified
         if (intent.parameters?.enabled !== undefined) {
-          params.filter.enabled = intent.parameters.enabled;
+          filter.enabled = intent.parameters.enabled;
         }
 
         // Apply advanced filters from LLM parsing
         if (intent.parameters?.filter?.minPriority !== undefined) {
-          params.filter.minPriority = intent.parameters.filter.minPriority;
+          filter.minPriority = intent.parameters.filter.minPriority;
         }
         if (intent.parameters?.filter?.maxPriority !== undefined) {
-          params.filter.maxPriority = intent.parameters.filter.maxPriority;
+          filter.maxPriority = intent.parameters.filter.maxPriority;
         }
         if (intent.parameters?.filter?.tags && intent.parameters.filter.tags.length > 0) {
-          params.filter.tags = intent.parameters.filter.tags;
+          filter.tags = intent.parameters.filter.tags;
         }
         if (intent.parameters?.filter?.dateRange) {
-          params.filter.dateRange = intent.parameters.filter.dateRange;
+          filter.dateRange = intent.parameters.filter.dateRange;
         }
       } else if (intent.action === 'update' || intent.action === 'delete') {
         params.modalId = intent.parameters?.modalId;
@@ -420,21 +440,21 @@ What is the user's intent?`;
       logger.warn('Falling back to simple pattern matching');
 
       // Fallback to simple pattern matching if LLM fails
-      return fallbackParsing(query, context);
+      return fallbackParsing(query);
     }
   } catch (error) {
     // A credit or admission refusal must reach the admin, not degrade silently to pattern matching.
     if (error instanceof HTTPError) throw error;
     logger.error('Error in LLM intent recognition:', error);
     // Fallback to simple pattern matching
-    return fallbackParsing(query, context);
+    return fallbackParsing(query);
   }
 }
 
 /**
  * Fallback parsing using simple pattern matching
  */
-function fallbackParsing(query: string, context?: any) {
+function fallbackParsing(query: string): ModalToolParams {
   const lower = query.toLowerCase();
 
   logger.info('Fallback parsing for query', { queryLength: query.length });
@@ -459,37 +479,35 @@ function fallbackParsing(query: string, context?: any) {
     (lower.includes('we have') && !lower.includes('create'))
   ) {
     logger.info('Detected as LIST action (question/query)');
-    const params: any = {
-      action: 'list',
-      filter: {},
-    };
+    const filter: Record<string, unknown> = {};
+    const params: ModalToolParams = { action: 'list', filter };
 
     if (lower.includes('banner') && !lower.includes('modal')) {
-      params.filter.type = 'banner';
+      filter.type = 'banner';
     } else if (lower.includes('modal') && !lower.includes('banner')) {
-      params.filter.type = 'modal';
+      filter.type = 'modal';
     }
 
     if (lower.includes('enabled') || lower.includes('active')) {
-      params.filter.enabled = true;
+      filter.enabled = true;
     } else if (lower.includes('disabled') || lower.includes('inactive')) {
-      params.filter.enabled = false;
+      filter.enabled = false;
     }
 
     // Check for priority filters
     const priorityMatch = query.match(/priority\s+(?:above|over|greater\s+than|>)\s+(\d+)/i);
     if (priorityMatch) {
-      params.filter.minPriority = parseInt(priorityMatch[1]);
+      filter.minPriority = parseInt(priorityMatch[1]);
     }
     const maxPriorityMatch = query.match(/priority\s+(?:below|under|less\s+than|<)\s+(\d+)/i);
     if (maxPriorityMatch) {
-      params.filter.maxPriority = parseInt(maxPriorityMatch[1]);
+      filter.maxPriority = parseInt(maxPriorityMatch[1]);
     }
 
     // Check for tag filters
     const tagMatch = query.match(/tagged?\s+(?:for\s+|with\s+)?["']?([^"']+?)["']?(?:\s+and|\s+or|$)/i);
     if (tagMatch) {
-      params.filter.tags = [tagMatch[1].trim()];
+      filter.tags = [tagMatch[1].trim()];
     }
 
     return params;
@@ -749,25 +767,7 @@ function fallbackParsing(query: string, context?: any) {
     }
   }
 
-  // Check for image attachment references
-  let useAttachedImage = false;
-  const imagePatterns = [
-    /attached\s+image/i,
-    /use\s+the\s+image/i,
-    /with\s+the\s+image/i,
-    /image\s+attached/i,
-    /provided\s+image/i,
-  ];
-
-  for (const pattern of imagePatterns) {
-    if (pattern.test(query)) {
-      useAttachedImage = true;
-      logger.info('Detected request to use attached image');
-      break;
-    }
-  }
-
-  const result: any = {
+  const result: ModalToolParams = {
     action: 'create',
     type,
     title: title || `New ${type === 'banner' ? 'Banner' : 'Modal'}`,
@@ -778,16 +778,7 @@ function fallbackParsing(query: string, context?: any) {
     tags: [],
   };
 
-  // If user requested to use attached image, extract it from context
-  if (useAttachedImage && context?.attachments) {
-    const imageAttachment = context.attachments.find((att: any) => att.type === 'image');
-    if (imageAttachment?.url) {
-      result.imageUrl = imageAttachment.url;
-      logger.info('Using attached image URL in fallback');
-    }
-  }
-
-  logger.info('Fallback parsing result for CREATE', { action: result.action, hasImageUrl: Boolean(result.imageUrl) });
+  logger.info('Fallback parsing result for CREATE', { action: result.action });
   return result;
 }
 

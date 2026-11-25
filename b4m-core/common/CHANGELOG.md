@@ -1,5 +1,25 @@
 # @bike4mind/common
 
+## 31.0.0
+
+### Major Changes
+
+- [#8557](https://github.com/Bike4Mind/bike4mind/pull/8557) [`862fa66`](https://github.com/Bike4Mind/bike4mind/commit/862fa66be1993684c7d6610daef38970456b04fe) Thanks [@wescarda](https://github.com/wescarda)! - remove the v4 QuestMaster chat-plan path and its questmasterplans readers
+
+### Minor Changes
+
+- [#8515](https://github.com/Bike4Mind/bike4mind/pull/8515) [`aac27dd`](https://github.com/Bike4Mind/bike4mind/commit/aac27ddd6b392a7464e18a1d986bb818c69788dc) Thanks [@cleffrem-dev](https://github.com/cleffrem-dev)! - scan a document and hand it to the assistant
+
+- [#8521](https://github.com/Bike4Mind/bike4mind/pull/8521) [`47f5337`](https://github.com/Bike4Mind/bike4mind/commit/47f53374181e4612f0c166ca428c85ce44059c8d) Thanks [@cleffrem-dev](https://github.com/cleffrem-dev)! - calendar-aware brief when a busy block ends
+
+- [#8539](https://github.com/Bike4Mind/bike4mind/pull/8539) [`ad578f3`](https://github.com/Bike4Mind/bike4mind/commit/ad578f3419df2cccd8152884ab108655aeed9b79) Thanks [@angelolao](https://github.com/angelolao)! - add platform usage accounting prerequisites
+
+- [#8567](https://github.com/Bike4Mind/bike4mind/pull/8567) [`10bc07d`](https://github.com/Bike4Mind/bike4mind/commit/10bc07dddc658343591617b2dd912b482e65412c) Thanks [@vinchi777](https://github.com/vinchi777)! - move evaluation allowlists into admin settings
+
+### Patch Changes
+
+- [#8527](https://github.com/Bike4Mind/bike4mind/pull/8527) [`c9da20b`](https://github.com/Bike4Mind/bike4mind/commit/c9da20bd0903e95df4333dd797c20c7c8e7397ef) Thanks [@maconard](https://github.com/maconard)! - replace six dependencies and align desktop versions
+
 ## 30.0.0
 
 ### Major Changes

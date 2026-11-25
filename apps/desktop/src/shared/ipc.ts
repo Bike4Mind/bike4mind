@@ -4,7 +4,7 @@ import type { NewSessionDefaults } from './sessionDefaults';
 import type { StudioApi } from './studioIpc';
 import type { LibraryApi } from './library';
 import type { PendingTaskDecision, RolePolicy, TaskAction, TaskDecisionAnswer } from './orchestration';
-import type { AppWorktree, WorktreeRemoval, WorktreeSweepItem } from './worktreeRemoval';
+import type { AppWorktree, SessionTreeDeletion, SessionWorktreeRemoval, WorktreeSweepItem } from './worktreeRemoval';
 import type { LoopResult, LoopState } from './loop';
 import type { RunSpend } from './runSpend';
 import type { PromptCacheTtl } from '@bike4mind/common';
@@ -283,6 +283,7 @@ export const IPC_CHANNELS = {
   chatGetSession: 'chat:get-session',
   chatRenameSession: 'chat:rename-session',
   chatDeleteSession: 'chat:delete-session',
+  chatDeleteSessionTree: 'chat:delete-session-tree',
   chatInspectWorktreeRemoval: 'chat:inspect-worktree-removal',
   chatListWorktrees: 'chat:list-worktrees',
   chatRemoveWorktrees: 'chat:remove-worktrees',
@@ -1111,7 +1112,18 @@ export interface DesktopApi {
     getSession(sessionId: string, viewed?: boolean): Promise<ChatSession | null>;
     renameSession(sessionId: string, title: string): Promise<ChatSessionSummary | null>;
     deleteSession(sessionId: string, removeWorktree?: boolean): Promise<void>;
-    inspectWorktreeRemoval(sessionId: string): Promise<WorktreeRemoval | null>;
+    /**
+     * Deletes the listed nested sessions, deepest first, then the session itself. `removeWorktree`
+     * is the parent's worktree; `nestedWorktreeIds` are the nested sessions whose worktrees go too.
+     */
+    deleteSessionTree(
+      sessionId: string,
+      nestedIds: string[],
+      removeWorktree?: boolean,
+      nestedWorktreeIds?: string[]
+    ): Promise<SessionTreeDeletion>;
+    /** `alsoDeleting` are nested sessions deleted with it, which then do not hold its worktree. */
+    inspectWorktreeRemoval(sessionId: string, alsoDeleting?: string[]): Promise<SessionWorktreeRemoval | null>;
     /** Checkouts under the repository's app worktree root, with the conversation that owns each. */
     listWorktrees(directory: string): Promise<AppWorktree[]>;
     /** Removes the named orphan checkouts, or every safe one when `paths` is omitted. */

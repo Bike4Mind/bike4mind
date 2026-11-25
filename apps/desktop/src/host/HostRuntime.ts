@@ -339,9 +339,21 @@ export class HostRuntime {
     return archiveFromSidebar(this.service, this.store, sessionId, archived, decision);
   }
 
-  async deleteSession(sessionId: string, removeWorktree: boolean): Promise<void> {
-    await this.service.deleteSession(sessionId, removeWorktree);
+  /** `allowDiscard` only from a client that showed what cleanup discards; see ChatService.deleteSession. */
+  async deleteSession(sessionId: string, removeWorktree: boolean, allowDiscard = false): Promise<void> {
+    await this.service.deleteSession(sessionId, removeWorktree, { allowDiscard });
     await this.pullRequests?.().forget(sessionId);
+  }
+
+  async deleteSessionTree(
+    sessionId: string,
+    nestedIds: readonly string[],
+    removeWorktree: boolean,
+    nestedWorktreeIds: readonly string[]
+  ) {
+    const result = await this.service.deleteSessionTree(sessionId, nestedIds, removeWorktree, nestedWorktreeIds);
+    for (const id of result.deleted) await this.pullRequests?.().forget(id);
+    return result;
   }
 
   sendMessage(request: SendMessageRequest) {

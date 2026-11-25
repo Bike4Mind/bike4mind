@@ -1013,9 +1013,12 @@ export function registerChat(
   ipcMain.handle(IPC_CHANNELS.chatRenameSession, (_event, sessionId: string, title: string) =>
     runtime.renameSession(sessionId, title)
   );
-  ipcMain.handle(IPC_CHANNELS.chatInspectWorktreeRemoval, (_event, sessionId: unknown) => {
+  const isIdList = (value: unknown): value is string[] =>
+    Array.isArray(value) && value.every(id => typeof id === 'string');
+  ipcMain.handle(IPC_CHANNELS.chatInspectWorktreeRemoval, (_event, sessionId: unknown, alsoDeleting: unknown) => {
     if (typeof sessionId !== 'string') throw new Error('Invalid conversation id');
-    return service.inspectSessionWorktreeRemoval(sessionId);
+    if (alsoDeleting !== undefined && !isIdList(alsoDeleting)) throw new Error('Invalid conversation list');
+    return service.inspectSessionWorktreeRemoval(sessionId, alsoDeleting);
   });
   // Only a repository the user already has a conversation or recent folder for is ever touched.
   const knownRepository = async (directory: string) => {
@@ -1043,8 +1046,23 @@ export function registerChat(
     if (typeof sessionId !== 'string' || (removeWorktree !== undefined && typeof removeWorktree !== 'boolean')) {
       throw new Error('Invalid delete request');
     }
-    await runtime.deleteSession(sessionId, removeWorktree === true);
+    // The Electron dialog lists what cleanup discards before the user confirms.
+    await runtime.deleteSession(sessionId, removeWorktree === true, true);
   });
+  ipcMain.handle(
+    IPC_CHANNELS.chatDeleteSessionTree,
+    (_event, sessionId: unknown, nestedIds: unknown, removeWorktree: unknown, nestedWorktreeIds: unknown) => {
+      if (
+        typeof sessionId !== 'string' ||
+        !isIdList(nestedIds) ||
+        (removeWorktree !== undefined && typeof removeWorktree !== 'boolean') ||
+        (nestedWorktreeIds !== undefined && !isIdList(nestedWorktreeIds))
+      ) {
+        throw new Error('Invalid delete request');
+      }
+      return runtime.deleteSessionTree(sessionId, nestedIds, removeWorktree === true, nestedWorktreeIds ?? []);
+    }
+  );
   const isKnownSession = (sessionId: string) =>
     store.get(sessionId).then(
       session => session !== null,
