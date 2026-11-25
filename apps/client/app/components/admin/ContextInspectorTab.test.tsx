@@ -493,23 +493,58 @@ describe('ContextInspectorTab alert settings', () => {
     expect(mocks.saveSettings).not.toHaveBeenCalled();
   });
 
-  it('writes the telemetry switch at once, outside the SaveBar', async () => {
+  it('stages the telemetry switch for the SaveBar, with the chip and banner on the saved value', async () => {
+    renderTab();
+    await screen.findByTestId('context-inspector-entry-e1');
+    const toggle = screen.getByTestId('context-inspector-telemetry-toggle');
+    fireEvent.click(toggle);
+
+    expect(toggle).not.toBeChecked();
+    expect(mocks.updateSettings).not.toHaveBeenCalled();
+    expect(mocks.saveSettings).not.toHaveBeenCalled();
+    expect(screen.getByTestId('admin-save-bar')).toHaveTextContent('1 unsaved change');
+    expect(screen.getByTestId('context-inspector-telemetry-chip')).toHaveTextContent('Enabled');
+    expect(screen.queryByTestId('context-inspector-disabled-banner')).toBeNull();
+    expect(mocks.useBlocker).toHaveBeenLastCalledWith(expect.objectContaining({ enableBeforeUnload: true }));
+
+    fireEvent.click(screen.getByTestId('admin-save-confirm-btn'));
+    await waitFor(() =>
+      expect(mocks.saveSettings).toHaveBeenCalledExactlyOnceWith({ key: 'EnableContextTelemetry', value: false })
+    );
+    expect(mocks.updateSettings).not.toHaveBeenCalled();
+    await waitFor(() => expect(screen.queryByTestId('admin-save-bar')).toBeNull());
+  });
+
+  it('keeps the disabled banner until turning collection on is saved, and discards it without a write', async () => {
+    mocks.settings.EnableContextTelemetry = false;
+    renderTab();
+    await screen.findByTestId('context-inspector-entry-e1');
+    const toggle = screen.getByTestId('context-inspector-telemetry-toggle');
+    fireEvent.click(toggle);
+
+    expect(toggle).toBeChecked();
+    expect(screen.getByTestId('context-inspector-disabled-banner')).toBeInTheDocument();
+    expect(screen.getByTestId('context-inspector-telemetry-chip')).toHaveTextContent('Disabled');
+
+    fireEvent.click(screen.getByTestId('admin-save-discard-btn'));
+    expect(toggle).not.toBeChecked();
+    expect(screen.queryByTestId('admin-save-bar')).toBeNull();
+    expect(mocks.saveSettings).not.toHaveBeenCalled();
+    expect(mocks.updateSettings).not.toHaveBeenCalled();
+  });
+
+  it('puts a failed telemetry save on the SaveBar and keeps the switch staged', async () => {
+    mocks.saveSettings.mockRejectedValue(new Error('forbidden'));
     renderTab();
     await screen.findByTestId('context-inspector-entry-e1');
     fireEvent.click(screen.getByTestId('context-inspector-telemetry-toggle'));
-    expect(mocks.updateSettings).toHaveBeenCalledWith({ key: 'EnableContextTelemetry', value: false });
-    expect(mocks.saveSettings).not.toHaveBeenCalled();
-    expect(screen.queryByTestId('admin-save-bar')).toBeNull();
-    expect(screen.queryByTestId('context-inspector-telemetry-error')).toBeNull();
-  });
+    fireEvent.click(screen.getByTestId('admin-save-confirm-btn'));
 
-  it('shows a danger banner when the telemetry switch write fails', async () => {
-    mocks.updateError = new Error('forbidden');
-    renderTab();
-    await screen.findByTestId('context-inspector-entry-e1');
-    const banner = screen.getByTestId('context-inspector-telemetry-error');
-    expect(banner).toHaveClass('MuiAlert-colorDanger');
-    expect(banner).toHaveTextContent('Could not change telemetry collection: forbidden');
+    expect(await within(screen.getByTestId('admin-save-bar')).findByRole('alert')).toHaveTextContent(
+      'Telemetry collection was not saved: forbidden.'
+    );
+    expect(screen.getByTestId('context-inspector-telemetry-toggle')).not.toBeChecked();
+    expect(screen.getByTestId('context-inspector-telemetry-chip')).toHaveTextContent('Enabled');
   });
 });
 

@@ -53,8 +53,7 @@ export const describeMoneyValue = (key: string, value: unknown): string => {
 
 /**
  * The before-and-after line for a `changesCustomerPrice` setting (BaseSetting in @bike4mind/common).
- * Shared so both save paths read identically: the per-field confirm in AdminSettingInputField
- * (unstaged, no SettingsDraftProvider) and the batched SaveBar warning (staged).
+ * AdminSettingInputField hands it to the SaveBar, which shows it in the warning dialog before it saves.
  */
 export const moneyChangeWarning = (key: string, name: string, before: unknown, after: unknown): string =>
   `${name} changes what customers pay: ${describeMoneyValue(key, before)} to ${describeMoneyValue(key, after)}.`;

@@ -17,7 +17,6 @@ const componentsByFile = {
   'MigrateUsersTab.tsx': ['Card', 'Modal'],
   'ModelMetrics/components/RawDataTab.tsx': ['Table', 'Card'],
   'ModelMetrics/components/SpendTab.tsx': ['Table'],
-  'OrganizationProfile.tsx': ['Card'],
   'RateLimits/components/OverviewTab.tsx': ['Table'],
   'RateLimits/index.tsx': ['Table'],
   'ScopedOverridesByScope.tsx': ['Card'],
