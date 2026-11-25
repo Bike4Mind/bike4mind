@@ -1214,21 +1214,14 @@ const generatedMediaPurgeQueueSubscription = generatedMediaPurgeQueue.subscribe(
     timeout: '5 minutes',
     vpc: lambdaVpc,
     // Links its own queue: a run that hits its deadline re-enqueues what it did not reach.
-    link: [...allSecrets, generatedImagesBucket, routerDistributionId, generatedMediaPurgeQueue],
+    link: [...allSecrets, generatedImagesBucket, generatedMediaPurgeQueue],
     environment: {
       ...DEFAULT_LAMBDA_ENVIRONMENT,
     },
-    permissions: [
-      {
-        actions: ['cloudfront:CreateInvalidation'],
-        resources: [router.nodes.cdn.apply(cdn => cdn.nodes.distribution.arn)],
-      },
-    ],
   },
   {
     ...SINGLE_RECORD_BATCH,
-    // Each run flushes up to 500 exact CDN paths (MAX_DELETES_PER_RUN in purgeDeletedNotebookMedia.ts), so
-    // 2 runs hold a third of the in-flight quota publish takedowns share; 2 is the SQS minimum.
+    // 2 is the SQS minimum; each run deletes at most MAX_DELETES_PER_RUN keys (purgeDeletedNotebookMedia.ts).
     // Capped at the event source rather than on the function, so throttled polls never burn the DLQ retries.
     transform: { eventSourceMapping: { scalingConfig: { maximumConcurrency: 2 } } },
   }

@@ -45,6 +45,10 @@ vi.mock('@bike4mind/server-utils/services/cdn/invalidateRouterCdn', async import
   ...(await importOriginal<typeof import('@bike4mind/server-utils/services/cdn/invalidateRouterCdn')>()),
   createCdnInvalidationBatch: () => ({ add: vi.fn(), flush: vi.fn() }),
 }));
+vi.mock('@bike4mind/server-utils/utils/storage/index', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/server-utils/utils/storage/index')>()),
+  getGeneratedImageStorage: () => ({ deletePermanently: vi.fn(), deletePrefixPermanently: vi.fn() }),
+}));
 vi.mock('@bike4mind/services', async importOriginal => {
   const actual = await importOriginal<typeof import('@bike4mind/services')>();
   return { ...actual, authSessionService: { ...actual.authSessionService, endRealtimeConnections: vi.fn() } };
