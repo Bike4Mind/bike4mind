@@ -50,6 +50,7 @@ import { ensureToolPairingIntegrity } from '../toolPairingUtils';
 import { TOOL_CHANGES_BETA } from '../toolChanges';
 import { SafetyRefusalError } from '../llmRefusalErrors';
 import { appendIdentityReminder, buildIdentityReminder, shouldOmitIdentityReminder } from '../identityReminder';
+import { replayableText } from '../replayPreToolText';
 
 /**
  * The completion loop logs a safety refusal only at debug and leaves the warning to the backend
@@ -322,6 +323,8 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
   private replayContent: AssistantBlock[] = [];
   /** The assistant content array pushToolMessages last pushed, which a parallel sibling's result joins. */
   private replayedTurn: unknown[] | undefined;
+  /** The text `replayContent` wrote before its tool calls, until the first rebuilt turn takes it. */
+  private replayText: string | undefined;
   /** Catalog view of the model being completed; see DispatchModel. */
   private readonly _dispatch = new DispatchModel();
 
@@ -349,6 +352,7 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
     if (taken.length > 0) {
       this.replayContent = taken;
       this.replayedTurn = undefined;
+      this.replayText = taken.map(b => (b.type === 'text' && typeof b.text === 'string' ? b.text : '')).join('');
     }
     return taken.filter(isReasoningBlock) as ClaudeReasoningBlock[];
   }
@@ -1687,10 +1691,18 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
       return;
     }
 
-    const assistantContent: IMessage['content'] =
-      reasoningBlocks.length > 0
-        ? [...(reasoningBlocks as Array<{ type: 'thinking'; thinking: string; signature: string }>), toolUseBlock]
-        : [toolUseBlock];
+    // The model must see the text it wrote before the call, or it restates it next round and the
+    // reply shows it twice. Only the first turn of a parallel round carries it.
+    const preToolText = this.replayContent.some(b => b.type === 'tool_use' && b.id === tool.id)
+      ? replayableText(this.replayText)
+      : undefined;
+    this.replayText = undefined;
+
+    const assistantContent = [
+      ...(reasoningBlocks as Array<{ type: 'thinking'; thinking: string; signature: string }>),
+      ...(preToolText ? [{ type: 'text' as const, text: preToolText }] : []),
+      toolUseBlock,
+    ] as IMessage['content'];
 
     messages.push({
       role: 'assistant',
