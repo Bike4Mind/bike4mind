@@ -342,6 +342,19 @@ describe('break-glass sequence and retraction', () => {
     expect(merged.incidents[0].unreconciled).toBe(true);
   });
 
+  it('a future-dated probesAsOf does not move an unreconciled entry start or set staleAsOf', () => {
+    const entries = [entry({ id: 'bg00000013', writtenSeq: 13, startedAt: secondsAgo(3600) })];
+    const base = mergeStatusSources(summaryAged(10, { breakglassAppliedSeq: 12 }), makeBreakglass(entries), null, NOW);
+    const future = mergeStatusSources(
+      summaryAged(-3600, { breakglassAppliedSeq: 12 }),
+      makeBreakglass(entries),
+      null,
+      NOW
+    );
+    expect(future.incidents[0].startedAt).toBe(base.incidents[0].startedAt);
+    expect(future.components.every(c => c.staleAsOf === null)).toBe(true);
+  });
+
   it('a retraction after reconcile is not resurrected by the stale break-glass copy', () => {
     const merged = mergeStatusSources(summary(5), makeBreakglass([entry({ writtenSeq: 5 })]), null, NOW);
     expect(merged.incidents).toEqual([]);

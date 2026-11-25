@@ -227,6 +227,7 @@ export function mergeStatusSources(
   const ageSeconds = S ? (nowMs - ms(S.probesAsOf)) / 1000 : null;
   const fresh =
     S !== null && ageSeconds !== null && ageSeconds >= -FUTURE_TOLERANCE_MS / 1000 && ageSeconds <= S.staleAfterSeconds;
+  const futureDated = ageSeconds !== null && ageSeconds < -FUTURE_TOLERANCE_MS / 1000;
   const hardStale = S !== null && ageSeconds !== null && ageSeconds > S.hardStaleAfterSeconds;
   const mode: MergeMode = !S ? 'unavailable' : hardStale ? 'hard_stale' : fresh ? 'fresh' : 'stale';
 
@@ -245,7 +246,7 @@ export function mergeStatusSources(
     !externalOverrideActive;
 
   const outageCandidates: number[] = [];
-  if (S && !fresh) outageCandidates.push(ms(S.probesAsOf));
+  if (S && !fresh && !futureDated) outageCandidates.push(ms(S.probesAsOf));
   if (E && E.state === 'down') outageCandidates.push(ms(E.since));
   const parseable = outageCandidates.filter(Number.isFinite);
   const outageStartMs = parseable.length > 0 ? Math.min(...parseable) : null;
@@ -343,7 +344,7 @@ export function mergeStatusSources(
         : floorToSummary
           ? row.maintenance
           : null,
-      staleAsOf: S && !fresh ? S.probesAsOf : null,
+      staleAsOf: S && !fresh && !futureDated ? S.probesAsOf : null,
     };
   };
 
