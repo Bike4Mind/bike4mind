@@ -6,5 +6,4 @@ export default {
   'AdminModalTabNew.tsx': [[2, '1fd68f8a7bbdebfd']],
   'AdminWhatsNewModalsTab.tsx': [[1, '94dcaedbfc5cdc3c']],
   'SreAgentTab.tsx': [[11, '5f9ffda28ac67420']],
-  'email/EmailJobDetail.tsx': [[2, '81717d4fa42f09a7']],
 };
