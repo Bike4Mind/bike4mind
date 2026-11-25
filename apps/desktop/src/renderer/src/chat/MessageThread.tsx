@@ -55,6 +55,8 @@ import { SelectionActions } from './SelectionActions';
 import { automaticSummary, displayText, relaySummaryParts } from './relayRows';
 import { MentionedText, SessionLink } from './SessionLink';
 import { ChildReportCard } from './ChildReportCard';
+import { childCardLayout, type ChildCardsLive } from './childCardLayout';
+import { ChildSessionCards } from './ChildSessionCards';
 import { callsIn, roundsOf } from './replyRounds';
 import { skillChipColor, skillSourceLabel } from './skillMenu';
 import { useShowDollarCosts } from './costDisplay';
@@ -979,6 +981,7 @@ function WindowedTurns({
   for (let index = start; index < to; index++) {
     const message = messages[index]!;
     const node = turn(message, index, index === start ? skip : 0, to);
+    if (node === null) continue;
     if (isReplyTurn(message)) {
       closeRun();
       items.push(node);
@@ -1015,6 +1018,7 @@ export function MessageThread({
   onEditMessage,
   onRegenerate,
   findable = false,
+  childSessions,
 }: {
   messages: ChatMessage[];
   /** Needed to read attachment bytes back; they are stored per conversation. */
@@ -1061,6 +1065,8 @@ export function MessageThread({
   onRegenerate?: () => void;
   /** Mod+F opens a find bar over this thread. Only one thread on screen should take it. */
   findable?: boolean;
+  /** Live state of the sessions this one started, for their cards; without it a card goes by its latest notice. */
+  childSessions?: ChildCardsLive;
 }) {
   const bottom = useRef<HTMLDivElement>(null);
   const host = useRef<HTMLDivElement>(null);
@@ -1079,6 +1085,7 @@ export function MessageThread({
   const regenerable = !streaming && onRegenerate ? regenerableReply(messages) : null;
   const budgetPaused = useMemo(() => budgetPausedReplyIndex(messages), [messages]);
   const regenerateWarns = useMemo(() => (regenerable ? turnsChangedThings([regenerable]) : false), [regenerable]);
+  const childCards = useMemo(() => childCardLayout(messages, childSessions), [messages, childSessions]);
   // Through a ref so UserTurn's memo holds: the callback changes with every thread update.
   const editRef = useRef(onEditMessage);
   editRef.current = onEditMessage;
@@ -1094,6 +1101,11 @@ export function MessageThread({
     if (message.boundary) return <BoundaryRow key={message.id} message={message} />;
     if (message.automatic) return <AutomaticTurn key={message.id} message={message} />;
     if (message.relay) return <RelayTurn key={message.id} message={message} />;
+    if (childCards.folded.has(message.id)) {
+      return index === childCards.anchor ? (
+        <ChildSessionCards key="child-session-cards" cards={childCards.cards} />
+      ) : null;
+    }
     if (message.system) return <SystemTurn key={message.id} message={message} />;
     if (message.role === 'user') {
       // An optimistic prompt has no stored id yet for main to rewind to.
