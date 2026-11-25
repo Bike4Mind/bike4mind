@@ -81,7 +81,9 @@ export default $config({
       await import('./infra/secretsAtRestKey');
     // Marks every role as this stage's, which is what the key policy's Decrypt deny checks.
     if (secretsAtRestKey) {
-      $transform(aws.iam.Role, args => {
+      // The sandbox role runs user-supplied code and stays untagged: nothing it holds may reach the key.
+      $transform(aws.iam.Role, (args, _opts, name) => {
+        if (name === 'CallableFunctionRuntimeRole') return;
         args.tags = $output(args.tags).apply(tags => secretsAtRestRoleTags(tags ?? undefined, $app.stage));
       });
     }

@@ -8,8 +8,15 @@ import { Resource } from 'sst';
 
 /** Must match SECRETS_AT_REST_PURPOSE in infra/secretsAtRestKey.ts (secretsAtRestKey.test.ts checks it). */
 const PURPOSE = 'secrets-at-rest';
-/** A missing route to KMS must fail fast rather than hang until the function timeout. */
-const CONNECT_TIMEOUT_MS = 3000;
+/** A missing route or a stalled response must fail fast, well inside the 10 s function timeout. */
+const TIMEOUT_MS = 3000;
+
+// Module level so warm invocations reuse the connection and decryptMs excludes the TLS handshake.
+// One attempt: the default retries would stack three timeouts against the function timeout.
+const kms = new KMSClient({
+  maxAttempts: 1,
+  requestHandler: { connectionTimeout: TIMEOUT_MS, socketTimeout: TIMEOUT_MS },
+});
 
 let warm = false;
 
@@ -43,7 +50,6 @@ export async function runUnwrapProbe(input: {
 }
 
 export const handler = async (): Promise<UnwrapProbeResult> => {
-  const kms = new KMSClient({ requestHandler: { connectionTimeout: CONNECT_TIMEOUT_MS } });
   return runUnwrapProbe({
     blobBase64: Resource.SECRET_ENCRYPTION_KEY_WRAPPED.value,
     stage: Resource.App.stage,

@@ -8,6 +8,7 @@ import { lambdaVpc } from './vpc';
 import { dlqAlarmTopic, oobAlarmTopic } from './dlqAlarms';
 import {
   secretsAtRestDecryptDeniedEventPattern,
+  secretsAtRestDecryptOutsideAppEventPattern,
   secretsAtRestKey,
   secretsAtRestKeyChangeEventPattern,
   secretsAtRestLogsPolicy,
@@ -27,6 +28,9 @@ function createMonitoring(key: aws.kms.Key) {
     policyDocument: logGroup.arn.apply(arn => JSON.stringify(secretsAtRestLogsPolicy(arn))),
   });
 
+  const partition = aws.getPartitionOutput().partition;
+  const accountId = aws.getCallerIdentityOutput().accountId;
+
   const rules = [
     {
       id: 'Decrypt',
@@ -35,6 +39,23 @@ function createMonitoring(key: aws.kms.Key) {
       // Decrypt is a read-only management event, which reaches a rule only in this state.
       state: 'ENABLED_WITH_ALL_CLOUDTRAIL_MANAGEMENT_EVENTS',
       pattern: key.arn.apply(arn => JSON.stringify(secretsAtRestDecryptDeniedEventPattern({ keyArn: arn }))),
+    },
+    {
+      id: 'DecryptOutsideApp',
+      name: `${prefix}-secrets-at-rest-decrypt-outside-app`,
+      description: 'The secrets-at-rest key was used to Decrypt by a caller outside the stage app roles',
+      state: 'ENABLED_WITH_ALL_CLOUDTRAIL_MANAGEMENT_EVENTS',
+      pattern: $resolve([key.arn, partition, accountId]).apply(([keyArn, p, account]) =>
+        JSON.stringify(
+          secretsAtRestDecryptOutsideAppEventPattern({
+            keyArn,
+            partition: p,
+            accountId: account,
+            appName: $app.name,
+            stage: $app.stage,
+          })
+        )
+      ),
     },
     {
       id: 'KeyChange',

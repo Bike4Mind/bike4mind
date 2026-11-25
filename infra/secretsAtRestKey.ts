@@ -7,7 +7,8 @@
  * Imports only constants so sst.config.ts can load it before ./infra without a cycle. The alarms and
  * the probe live in infra/secretsAtRestKeyAccess.ts.
  *
- * The preview key's owner should carry the same policy (secretsAtRestKeyPolicy) and alarm on denied Decrypts.
+ * The preview key's owner should carry secretsAtRestPreviewKeyPolicy (the same policy, pinned to any
+ * `pr*` stage rather than one) and the same alarms.
  */
 
 import { isPreviewStage, runsScheduledJobs } from './constants';
@@ -43,7 +44,13 @@ export function secretsAtRestRoleTags(tags: Record<string, string> | undefined, 
   return { ...tags, [SECRETS_AT_REST_ROLE_TAG]: stage };
 }
 
-export function secretsAtRestKeyPolicy(input: { partition: string; accountId: string; stage: string }) {
+/** Stages a shared preview key serves: every `pr<N>`. */
+const PREVIEW_STAGE_PATTERN = 'pr*';
+
+function buildKeyPolicy(
+  input: { partition: string; accountId: string },
+  stageIs: { operator: 'StringNotEquals' | 'StringNotLike'; value: string }
+) {
   const contextActions = ['kms:Decrypt', 'kms:ReEncrypt*', 'kms:GenerateDataKeyWithoutPlaintext'];
   return {
     Version: POLICY_VERSION,
@@ -69,7 +76,7 @@ export function secretsAtRestKeyPolicy(input: { partition: string; accountId: st
         Principal: '*',
         Action: contextActions,
         Resource: '*',
-        Condition: { StringNotEquals: { 'kms:EncryptionContext:stage': input.stage } },
+        Condition: { [stageIs.operator]: { 'kms:EncryptionContext:stage': stageIs.value } },
       },
       {
         // The only blob is minted by GenerateDataKeyWithoutPlaintext. These two return or accept a key
@@ -88,10 +95,19 @@ export function secretsAtRestKeyPolicy(input: { partition: string; accountId: st
         Principal: '*',
         Action: ['kms:Decrypt', 'kms:ReEncrypt*'],
         Resource: '*',
-        Condition: { StringNotEquals: { [`aws:PrincipalTag/${SECRETS_AT_REST_ROLE_TAG}`]: input.stage } },
+        Condition: { [stageIs.operator]: { [`aws:PrincipalTag/${SECRETS_AT_REST_ROLE_TAG}`]: stageIs.value } },
       },
     ],
   };
+}
+
+export function secretsAtRestKeyPolicy(input: { partition: string; accountId: string; stage: string }) {
+  return buildKeyPolicy(input, { operator: 'StringNotEquals', value: input.stage });
+}
+
+/** For the shared preview key: no single stage is pinned, any `pr*` stage's tagged roles qualify. */
+export function secretsAtRestPreviewKeyPolicy(input: { partition: string; accountId: string }) {
+  return buildKeyPolicy(input, { operator: 'StringNotLike', value: PREVIEW_STAGE_PATTERN });
 }
 
 /**
@@ -109,6 +125,38 @@ export function secretsAtRestDecryptDeniedEventPattern(input: { keyArn: string }
       errorCode: ['AccessDenied', 'AccessDeniedException'],
       // A refused call has no `resources` or `requestParameters` in CloudTrail; only the message names the key.
       errorMessage: [{ wildcard: `*${input.keyArn}*` }],
+    },
+  };
+}
+
+/**
+ * Matches a successful Decrypt on the key by a caller that is not one of this stage's app roles. The
+ * stage tag that the key policy trusts can be forged by an IAM admin, which succeeds silently; this
+ * catches the unwrap itself. App roles are named `<app>-<stage>-...` by SST. A caller with no role
+ * session (an IAM user) has no issuer ARN, so it is matched by identity type.
+ */
+export function secretsAtRestDecryptOutsideAppEventPattern(input: {
+  keyArn: string;
+  partition: string;
+  accountId: string;
+  appName: string;
+  stage: string;
+}) {
+  const appRolePrefix = `arn:${input.partition}:iam::${input.accountId}:role/${input.appName}-${input.stage}-`;
+  return {
+    source: ['aws.kms'],
+    'detail-type': ['AWS API Call via CloudTrail'],
+    detail: {
+      eventSource: ['kms.amazonaws.com'],
+      eventName: ['Decrypt'],
+      errorCode: [{ exists: false }],
+      resources: { ARN: [input.keyArn] },
+      $or: [
+        {
+          userIdentity: { sessionContext: { sessionIssuer: { arn: [{ 'anything-but': { prefix: appRolePrefix } }] } } },
+        },
+        { userIdentity: { type: [{ 'anything-but': ['AssumedRole'] }] } },
+      ],
     },
   };
 }

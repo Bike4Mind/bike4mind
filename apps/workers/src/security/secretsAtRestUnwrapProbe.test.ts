@@ -49,6 +49,19 @@ describe('runUnwrapProbe', () => {
 });
 
 describe('handler', () => {
+  it('builds one client that fails fast: a single attempt and bounded connect and socket time', async () => {
+    const { KMSClient } = await import('@aws-sdk/client-kms');
+    vi.mocked(KMSClient).mockClear();
+    const { handler } = await load();
+    await handler();
+    await handler();
+    expect(KMSClient).toHaveBeenCalledTimes(1);
+    expect(KMSClient).toHaveBeenCalledWith({
+      maxAttempts: 1,
+      requestHandler: { connectionTimeout: 3000, socketTimeout: 3000 },
+    });
+  });
+
   it('decrypts the linked blob under the deployed stage from Resource.App', async () => {
     const { handler } = await load();
     const result = await handler();

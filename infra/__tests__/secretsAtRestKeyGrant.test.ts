@@ -20,6 +20,11 @@ describe('secrets-at-rest Decrypt grant', () => {
     const transform = config.slice(start, config.indexOf('\n    });', start));
     expect(transform).toContain('secretsAtRestDecryptPermission(');
     expect(transform).toMatch(/args\.permissions\s*=/);
+    // A keyless stage must not dereference the key.
+    expect(transform.indexOf('if (secretsAtRestKey)')).toBeGreaterThan(-1);
+    expect(transform.indexOf('if (secretsAtRestKey)')).toBeLessThan(
+      transform.indexOf('secretsAtRestDecryptPermission(')
+    );
   });
 
   it('tags every role with the stage through a global role transform', () => {
@@ -28,6 +33,19 @@ describe('secrets-at-rest Decrypt grant', () => {
     const transform = config.slice(start, config.indexOf('\n      });', start));
     expect(transform).toContain('secretsAtRestRoleTags(');
     expect(transform).toContain('args.tags');
+    // The whole transform is registered only where a key exists.
+    const guard = config.lastIndexOf('if (secretsAtRestKey)', start);
+    expect(guard).toBeGreaterThan(-1);
+    expect(config.slice(guard, start)).not.toContain('\n    }');
+  });
+
+  it('leaves the sandbox role untagged, by the logical name the role is declared with', () => {
+    const transform = read('sst.config.ts');
+    const start = transform.indexOf('$transform(aws.iam.Role');
+    const body = transform.slice(start, transform.indexOf('\n      });', start));
+    expect(body).toContain("name === 'CallableFunctionRuntimeRole'");
+    expect(body.indexOf("name === 'CallableFunctionRuntimeRole'")).toBeLessThan(body.indexOf('args.tags'));
+    expect(read('infra/callableFunctionRuntime.ts')).toContain("new aws.iam.Role('CallableFunctionRuntimeRole'");
   });
 
   it('reaches every ECS service that holds SECRET_ENCRYPTION_KEY', () => {
