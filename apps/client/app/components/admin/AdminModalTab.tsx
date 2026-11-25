@@ -88,6 +88,7 @@ const columns: DataColumn<IModalDocument>[] = [
   {
     id: 'description',
     label: 'Description',
+    width: '11rem',
     render: modal => (
       <Typography level="body-sm" title={modal.description || undefined} sx={{ ...ellipsis, color: 'admin.inkMuted' }}>
         {modal.description}
@@ -97,7 +98,7 @@ const columns: DataColumn<IModalDocument>[] = [
   {
     id: 'targeting',
     label: 'Targeting',
-    width: '10rem',
+    width: '8rem',
     render: modal => (
       <Typography level="body-sm" sx={ellipsis}>
         {modal.tags?.length ? modal.tags.join(', ') : 'All users'}
@@ -293,7 +294,7 @@ const ModalsAdminTab: React.FC = () => {
         onRetry={() => modals.refetch()}
         pageResetKey={searchQuery}
         onRowActivate={handleEditClick}
-        minWidth="72rem"
+        minWidth="68rem"
         empty={
           searchQuery.trim() ? (
             <EmptyState
