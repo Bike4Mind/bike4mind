@@ -168,7 +168,7 @@ const handler = adminApi({
 
       return res.json(result);
     } catch (error) {
-      logger.error('Error in admin logo upload', { error });
+      req.logger.error('Error in admin logo upload', { error });
       throw error;
     }
   })
@@ -212,7 +212,7 @@ const handler = adminApi({
 
       return res.json(result);
     } catch (error) {
-      logger.error('Error in admin logo delete', { error });
+      req.logger.error('Error in admin logo delete', { error });
       throw error;
     }
   });

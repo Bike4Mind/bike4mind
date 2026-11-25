@@ -3,6 +3,9 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 import crypto from 'crypto';
 
+const CLIENT_SECRET = 'client-secret-xyz';
+const REDIRECT_URI = 'https://redirect.example/cb-secret';
+
 const { JWT_SECRET, mockFindById, mockReadStateNonceHash, mockClearStateNonce, mockAuditSuccess, mockAuditFailure } =
   vi.hoisted(() => ({
     JWT_SECRET: 'test-secret',
@@ -14,6 +17,18 @@ const { JWT_SECRET, mockFindById, mockReadStateNonceHash, mockClearStateNonce, m
   }));
 
 const mockLogger = vi.hoisted(() => ({ warn: vi.fn(), error: vi.fn(), info: vi.fn() }));
+
+/** Every log arg as text, with Errors expanded: JSON.stringify renders an Error as {}. */
+const loggedText = () =>
+  JSON.stringify(
+    [mockLogger.error.mock.calls, mockLogger.warn.mock.calls, mockLogger.info.mock.calls],
+    (_key, value) => (value instanceof Error ? { message: value.message, stack: value.stack } : value)
+  );
+
+const expectNoSecretsLogged = (secrets: string[]) => {
+  const logged = loggedText();
+  for (const secret of secrets) expect(logged).not.toContain(secret);
+};
 
 vi.mock('@server/middlewares/baseApi', () => ({
   baseApi: () => {
@@ -30,9 +45,15 @@ vi.mock('@server/middlewares/baseApi', () => ({
   },
 }));
 
-vi.mock('@bike4mind/database', () => ({ userRepository: { findById: (...a: unknown[]) => mockFindById(...a) } }));
+vi.mock('@bike4mind/database', () => ({
+  userRepository: { findById: (...a: unknown[]) => mockFindById(...a), update: vi.fn() },
+}));
 vi.mock('@bike4mind/server-utils/integrations/jira/atlassianConfig', () => ({
-  getAtlassianOAuthConfig: vi.fn(async () => ({ clientId: 'c', clientSecret: 's', redirectUri: 'r' })),
+  getAtlassianOAuthConfig: vi.fn(async () => ({
+    clientId: 'c',
+    clientSecret: CLIENT_SECRET,
+    redirectUri: REDIRECT_URI,
+  })),
 }));
 vi.mock('@bike4mind/server-utils/utils/config', () => ({ Config: { JWT_SECRET } }));
 vi.mock('@bike4mind/server-utils/auth/oauthFlowCookie', () => ({
@@ -168,8 +189,10 @@ describe('GET /api/mcp-servers/atlassian/callback - authorization not completed'
   });
 });
 
+const AUTH_CODE_SECRETS = ['auth-code', CLIENT_SECRET, 'redirect.example', 'cb-secret'];
+
 describe('GET /api/mcp-servers/atlassian/callback - token exchange failure', () => {
-  it('logs only the status, never the code, response body or redirect_uri', async () => {
+  it('logs only the status, never the code, response body, redirect_uri or client secret', async () => {
     mockReadStateNonceHash.mockReturnValue(NONCE_HASH);
     mockFindById.mockResolvedValue({ atlassianConnect: { status: 'pending' } });
     const fetchSpy = vi
@@ -184,13 +207,54 @@ describe('GET /api/mcp-servers/atlassian/callback - token exchange failure', () 
       userId: USER_ID,
       status: 400,
     });
-    const logged = JSON.stringify([
-      mockLogger.error.mock.calls,
-      mockLogger.warn.mock.calls,
-      mockLogger.info.mock.calls,
-    ]);
-    expect(logged).not.toContain('auth-code');
-    expect(logged).not.toContain('provider-body-secret');
-    expect(logged).not.toContain('"r"');
+    expectNoSecretsLogged([...AUTH_CODE_SECRETS, 'provider-body-secret']);
+  });
+});
+
+describe('GET /api/mcp-servers/atlassian/callback - later branches', () => {
+  const tokens = () =>
+    new Response(
+      JSON.stringify({ access_token: 'access-token-xyz', refresh_token: 'refresh-token-xyz', expires_in: 3600 }),
+      {
+        status: 200,
+      }
+    );
+  const secrets = [...AUTH_CODE_SECRETS, 'access-token-xyz', 'refresh-token-xyz', 'resources-body-secret'];
+
+  beforeEach(() => {
+    mockReadStateNonceHash.mockReturnValue(NONCE_HASH);
+    mockFindById.mockResolvedValue({ atlassianConnect: { status: 'pending' } });
+  });
+
+  it('logs no token or code when the accessible-resources fetch fails', async () => {
+    const fetchSpy = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(tokens())
+      .mockResolvedValueOnce(new Response('resources-body-secret', { status: 500 }));
+
+    await run();
+    fetchSpy.mockRestore();
+
+    expect(mockLogger.error).toHaveBeenCalledWith('Atlassian accessible-resources fetch failed', {
+      userId: USER_ID,
+      status: 500,
+    });
+    expectNoSecretsLogged(secrets);
+  });
+
+  it('logs no token or code on success', async () => {
+    const fetchSpy = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(tokens())
+      .mockResolvedValueOnce(new Response(JSON.stringify([{ id: 'site-1', name: 'n', scopes: [] }]), { status: 200 }));
+
+    await run();
+    fetchSpy.mockRestore();
+
+    expect(mockLogger.info).toHaveBeenCalledWith(
+      'Atlassian tokens stored',
+      expect.objectContaining({ userId: USER_ID })
+    );
+    expectNoSecretsLogged(secrets);
   });
 });

@@ -41,8 +41,7 @@ const handler = baseApi().post(async (req, res) => {
     });
 
     if (!tokenResponse.ok) {
-      const error = await tokenResponse.text();
-      throw new Error(`Token refresh failed: ${error}`);
+      throw new Error(`Token refresh failed with status ${tokenResponse.status}`);
     }
 
     const tokenData: TokenResponse = await tokenResponse.json();

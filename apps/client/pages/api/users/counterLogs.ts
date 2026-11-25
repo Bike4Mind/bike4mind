@@ -242,7 +242,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
           expiresAt: new Date(Date.now() + 3600000), // 1 hour from now
         });
       } catch (error) {
-        req.logger.error('Failed to cache logs: %s', { error });
+        req.logger.error('Failed to cache logs', { error });
       }
 
       // Sliced from what was fetched, not from the cache entry: the byte budget only bounds what is

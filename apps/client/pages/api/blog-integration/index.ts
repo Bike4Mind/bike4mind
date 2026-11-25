@@ -43,7 +43,7 @@ const handler = baseApi()
         },
       });
     } catch (error) {
-      req.logger.error('Error', { error });
+      req.logger.error('Failed to fetch blog settings', { error });
       return res.status(500).json({
         error: 'Failed to fetch blog settings',
         message: error instanceof Error ? error.message : 'Unknown error',
@@ -140,7 +140,7 @@ const handler = baseApi()
         message: 'Blog integration configured successfully',
       });
     } catch (error) {
-      req.logger.error('Error', { error });
+      req.logger.error('Failed to save blog settings', { error });
       return res.status(500).json({
         error: 'Failed to save blog settings',
         message: error instanceof Error ? error.message : 'Unknown error',
@@ -159,7 +159,7 @@ const handler = baseApi()
         message: 'Blog integration disconnected successfully',
       });
     } catch (error) {
-      req.logger.error('Error', { error });
+      req.logger.error('Failed to disconnect blog', { error });
       return res.status(500).json({
         error: 'Failed to disconnect blog',
         message: error instanceof Error ? error.message : 'Unknown error',

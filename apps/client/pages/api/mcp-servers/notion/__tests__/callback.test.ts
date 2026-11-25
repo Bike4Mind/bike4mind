@@ -3,9 +3,24 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 import crypto from 'crypto';
 
+const CLIENT_SECRET = 'client-secret-xyz';
+const REDIRECT_URI = 'https://redirect.example/cb-secret';
+
 const { mockAuditFailure } = vi.hoisted(() => ({ mockAuditFailure: vi.fn() }));
 
 const mockLogger = vi.hoisted(() => ({ warn: vi.fn(), error: vi.fn(), info: vi.fn() }));
+
+/** Every log arg as text, with Errors expanded: JSON.stringify renders an Error as {}. */
+const loggedText = () =>
+  JSON.stringify(
+    [mockLogger.error.mock.calls, mockLogger.warn.mock.calls, mockLogger.info.mock.calls],
+    (_key, value) => (value instanceof Error ? { message: value.message, stack: value.stack } : value)
+  );
+
+const expectNoSecretsLogged = (secrets: string[]) => {
+  const logged = loggedText();
+  for (const secret of secrets) expect(logged).not.toContain(secret);
+};
 
 vi.mock('@server/middlewares/baseApi', () => ({
   baseApi: () => {
@@ -28,7 +43,7 @@ vi.mock('@bike4mind/database', () => ({
   userRepository: { findById: vi.fn(), update: vi.fn(), updateMany: mockUpdateMany },
 }));
 vi.mock('@server/integrations/notion', () => ({
-  getNotionOAuthConfig: vi.fn(async () => ({ clientId: 'c', clientSecret: 's', redirectUri: 'r' })),
+  getNotionOAuthConfig: vi.fn(async () => ({ clientId: 'c', clientSecret: CLIENT_SECRET, redirectUri: REDIRECT_URI })),
   NOTION_OAUTH_TOKEN_URL: 'https://api.notion.com/v1/oauth/token',
   NOTION_API_BASE_URL: 'https://api.notion.com/v1',
   NOTION_VERSION: '2022-06-28',
@@ -120,28 +135,45 @@ describe('GET /api/mcp-servers/notion/callback - authorization not completed', (
   });
 });
 
+const signedState = () => {
+  const timestamp = Date.now();
+  const signature = crypto.createHmac('sha256', 'test-secret').update(`user-1:csrf:${timestamp}`).digest('hex');
+  return JSON.stringify({ userId: 'user-1', csrfToken: 'csrf', timestamp, signature });
+};
+
+const AUTH_CODE_SECRETS = ['auth-code', CLIENT_SECRET, 'redirect.example', 'cb-secret'];
+
 describe('GET /api/mcp-servers/notion/callback - token exchange failure', () => {
-  it('logs only the status, never the code, response body or redirect_uri', async () => {
-    const timestamp = Date.now();
-    const signature = crypto.createHmac('sha256', 'test-secret').update(`user-1:csrf:${timestamp}`).digest('hex');
-    const state = JSON.stringify({ userId: 'user-1', csrfToken: 'csrf', timestamp, signature });
+  it('logs only the status, never the code, response body, redirect_uri or client secret', async () => {
     mockUpdateMany.mockResolvedValue({ modifiedCount: 1 });
     const fetchSpy = vi
       .spyOn(globalThis, 'fetch')
       .mockResolvedValue(new Response('provider-body-secret', { status: 400 }));
 
-    const res = await call({ code: 'auth-code', state });
+    const res = await call({ code: 'auth-code', state: signedState() });
     fetchSpy.mockRestore();
 
     expect(res._getRedirectUrl()).toContain('notion=error');
     expect(mockLogger.error).toHaveBeenCalledWith('Notion token exchange failed', { userId: 'user-1', status: 400 });
-    const logged = JSON.stringify([
-      mockLogger.error.mock.calls,
-      mockLogger.warn.mock.calls,
-      mockLogger.info.mock.calls,
-    ]);
-    expect(logged).not.toContain('auth-code');
-    expect(logged).not.toContain('provider-body-secret');
-    expect(logged).not.toContain('"r"');
+    expectNoSecretsLogged([...AUTH_CODE_SECRETS, 'provider-body-secret']);
+  });
+});
+
+describe('GET /api/mcp-servers/notion/callback - success', () => {
+  it('logs no token or code', async () => {
+    mockUpdateMany.mockResolvedValue({ modifiedCount: 1 });
+    const fetchSpy = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ access_token: 'access-token-xyz', workspace_id: 'w1' }), { status: 200 })
+      )
+      .mockResolvedValueOnce(new Response('search-body-secret', { status: 500 }));
+
+    const res = await call({ code: 'auth-code', state: signedState() });
+    fetchSpy.mockRestore();
+
+    expect(res._getRedirectUrl()).toContain('notion=connected');
+    expect(mockLogger.info).toHaveBeenCalledWith('Notion tokens stored', { userId: 'user-1', status: 'connected' });
+    expectNoSecretsLogged([...AUTH_CODE_SECRETS, 'access-token-xyz', 'search-body-secret']);
   });
 });

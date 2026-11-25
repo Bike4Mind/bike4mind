@@ -493,7 +493,7 @@ const handler = baseApi().get<Request<{}, {}, {}, Record<string, string>>>(async
     if (error instanceof z.ZodError) {
       return res.status(400).json({ message: 'Invalid query parameters', error: error.issues });
     } else {
-      req.logger.error('Error', { error });
+      req.logger.error('Failed to list users', { error });
       return res.status(500).json({ message: 'Internal Server Error' });
     }
   }
