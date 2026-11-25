@@ -10,6 +10,7 @@ import { roundsOf } from './replyRounds';
 import { setReplyStatShown } from './replyStatsPrefs';
 import { STALL_AFTER_MS, describeActivity, writingProse } from './statusLine';
 import { useConversation } from './useChat';
+import { chatBackedHostBridge } from '../__fixtures__/chatBackedHostBridge';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -81,6 +82,7 @@ describe('the live thread, driven by stream events', () => {
     vi.stubGlobal('cancelAnimationFrame', () => undefined);
     Element.prototype.scrollIntoView = () => undefined;
     (window as unknown as { b4m: unknown }).b4m = {
+      host: chatBackedHostBridge(),
       chat: {
         getSession: async () => ({ id: SESSION, messages: [] }),
         getQueuedMessages: async () => [],

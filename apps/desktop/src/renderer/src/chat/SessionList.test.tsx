@@ -10,6 +10,7 @@ import { setImportedInline } from './importedInline';
 import { foldedParents, setNestingEnabled, toggleFolded } from './nestedSessions';
 import { SessionList } from './SessionList';
 import { useSessions } from './useChat';
+import { chatBackedHostBridge } from '../__fixtures__/chatBackedHostBridge';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -94,6 +95,7 @@ async function mount(
   activeId: string | null = null
 ) {
   (window as unknown as { b4m: unknown }).b4m = {
+    host: chatBackedHostBridge(),
     chat: {
       listSessions: async () => sessions,
       onSessionSummary: () => () => undefined,

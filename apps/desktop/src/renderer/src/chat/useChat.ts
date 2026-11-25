@@ -27,6 +27,8 @@ import { normalizeSessionTitle } from '@shared/chat';
 import { isUntouchedImport } from './grouping';
 import type { GenerationSettings } from '@shared/generation';
 import type { CreatedSession } from '@shared/ipc';
+import { LOCAL_HOST_ID } from '@shared/hostBridge';
+import { hostClient } from '../host/HostClient';
 import type { ModelRuntimeStatus } from '@shared/models';
 import type { SidebarSectionsState } from '@shared/sidebarSections';
 import { appendArrived, OPTIMISTIC_ID_PREFIX } from './arrivedMessage';
@@ -131,7 +133,7 @@ export function useSessions(): SessionsController {
     const ticket = ++latestReload.current;
     const editsBefore = localEdits.current;
     const listing = (async (): Promise<void> => {
-      const next = await window.b4m.chat.listSessions();
+      const { sessions: next } = await hostClient.request(LOCAL_HOST_ID, 'session/list');
       if (ticket !== latestReload.current) return latestListing.current;
       if (editsBefore !== localEdits.current) return reload();
       setSessions(next);
@@ -166,7 +168,8 @@ export function useSessions(): SessionsController {
   // window does not hold is ignored - the push reaches every window, including ones that have
   // not listed that session yet.
   useEffect(() => {
-    return window.b4m.chat.onSessionSummary(summary => {
+    return hostClient.onNotification('session/summaryChanged', ({ summary }, hostId) => {
+      if (hostId !== LOCAL_HOST_ID) return;
       editSessions(current => current.map(entry => (entry.id === summary.id ? summary : entry)));
     });
   }, []);
@@ -347,7 +350,8 @@ export function useSessionStatusFeed(): SessionStatusFeed {
     // already stale for a session - so it is applied only to sessions no push has covered.
     const pushed = new Set<string>();
 
-    const unsubscribe = window.b4m.chat.onSessionStatus(event => {
+    const unsubscribe = hostClient.onNotification('session/statusChanged', ({ event }, hostId) => {
+      if (hostId !== LOCAL_HOST_ID) return;
       pushed.add(event.sessionId);
       setFeed(current => {
         const statuses = applyStatusEvents(current.statuses, [event]);
@@ -366,7 +370,7 @@ export function useSessionStatusFeed(): SessionStatusFeed {
       });
     });
 
-    void window.b4m.chat.getSessionStatuses().then(snapshot => {
+    void hostClient.request(LOCAL_HOST_ID, 'session/statuses').then(({ statuses: snapshot }) => {
       if (!live) return;
       const unspoken = snapshot.filter(entry => !pushed.has(entry.sessionId));
       setFeed(current => ({
@@ -851,8 +855,8 @@ export function useConversation(
   // The header reads the open conversation's own copy of the title, so the sidebar's patch is
   // not enough: without this, the row renames itself and the heading above the thread does not.
   useEffect(() => {
-    return window.b4m.chat.onSessionSummary(summary => {
-      if (summary.id !== activeSessionId.current) return;
+    return hostClient.onNotification('session/summaryChanged', ({ summary }, hostId) => {
+      if (hostId !== LOCAL_HOST_ID || summary.id !== activeSessionId.current) return;
       historyVersion.current++;
       // The project too: a worktree landing under an open session is pushed this way, and the
       // chips have to stop saying it is on its way.
