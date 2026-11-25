@@ -176,6 +176,53 @@ describe('CompletionRunModel', () => {
       });
     });
 
+    it('caps what a claim takes above its minimum at its share of the rest', async () => {
+      const { runId } = await completionRunRepository.create({ ...owner, budgetCredits: 251 });
+
+      // A parent sized to its full output budget no longer takes the whole run, so a worker still fits:
+      // 20 + half of the other 231.
+      await expect(completionRunRepository.claimBudget(runId, 251, 20, 0.5)).resolves.toEqual({
+        kind: 'claimed',
+        credits: 136,
+      });
+      await expect(completionRunRepository.claimBudget(runId, 200, 20, 0.5)).resolves.toEqual({
+        kind: 'claimed',
+        credits: 68,
+      });
+      // A claim smaller than its share is taken whole.
+      await expect(completionRunRepository.claimBudget(runId, 30, 20, 0.5)).resolves.toEqual({
+        kind: 'claimed',
+        credits: 30,
+      });
+      await expect(completionRunRepository.claimBudget(runId, 100, 20, 0.5)).resolves.toMatchObject({
+        kind: 'exhausted',
+        committedCredits: 234,
+      });
+    });
+
+    it('shares only the headroom past a large minimum, so a long-context round keeps its output room', async () => {
+      const { runId } = await completionRunRepository.create({ ...owner, budgetCredits: 500 });
+
+      // Halving the whole 500 would leave this round no more than its 263 minimum.
+      await expect(completionRunRepository.claimBudget(runId, 1850, 263, 0.5)).resolves.toEqual({
+        kind: 'claimed',
+        credits: 382,
+      });
+      // A top-up asks for no minimum: the share then applies to all that is left.
+      await expect(completionRunRepository.claimBudget(runId, 1850, 0, 0.5)).resolves.toEqual({
+        kind: 'claimed',
+        credits: 59,
+      });
+    });
+
+    it('rejects a share outside (0, 1]', async () => {
+      const { runId } = await completionRunRepository.create({ ...owner, budgetCredits: 100 });
+
+      await expect(completionRunRepository.claimBudget(runId, 50, 10, 0)).rejects.toThrow('maxShareOfRemaining');
+      await expect(completionRunRepository.claimBudget(runId, 50, 10, 1.5)).rejects.toThrow('maxShareOfRemaining');
+      await expect(completionRunRepository.findById(runId)).resolves.toMatchObject({ committedCredits: 0 });
+    });
+
     it('releases the unused part of a claim on settlement and the whole claim on a refund', async () => {
       const { runId } = await completionRunRepository.create({ ...owner, budgetCredits: 100 });
       await completionRunRepository.claimBudget(runId, 60, 10);
