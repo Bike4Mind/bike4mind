@@ -113,6 +113,21 @@ describe('GET /api/skills/market/[id]/template/preview', () => {
     ]);
   });
 
+  it('repeats the CSP as a meta tag for the srcDoc frame, without frame-ancestors, and opens links outside it', async () => {
+    const { res, run } = call();
+    await run();
+    const html = String(res._getData());
+    const meta = html.match(/<meta http-equiv="Content-Security-Policy" content="([^"]*)">/);
+
+    const policy = (meta?.[1] ?? '').replace(/&#39;/g, "'");
+
+    expect(policy).toContain("default-src 'none'");
+    expect(policy).toContain(`script-src ${TEMPLATE_EXAMPLE_SCRIPT_HASH}`);
+    expect(policy).not.toContain('frame-ancestors');
+    expect(html.match(/<a (?!target="_blank")/g) ?? []).toEqual([]);
+    expect(html).toContain('<a target="_blank" rel="noopener noreferrer" class="cta"');
+  });
+
   it('renders the single-column page with no script when there is no example', async () => {
     h.build.mockResolvedValue(pageView({ example: null, freeRun: null }));
     const { res, run } = call();

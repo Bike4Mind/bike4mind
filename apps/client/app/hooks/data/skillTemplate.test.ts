@@ -4,7 +4,7 @@ const h = vi.hoisted(() => ({ get: vi.fn() }));
 vi.mock('@client/app/contexts/ApiContext', () => ({ api: { get: h.get } }));
 
 import type { SkillTemplateEditorView } from '@bike4mind/common';
-import { skillTemplatePollMs, waitForGeneratedImage } from './skillTemplate';
+import { nextSkillTemplatePoll, skillTemplatePollMs, waitForGeneratedImage } from './skillTemplate';
 
 const quest = (data: Record<string, unknown>) => ({ data });
 
@@ -62,5 +62,38 @@ describe('skillTemplatePollMs', () => {
     const view = { template: null, previewImageStatus: 'pending' } as unknown as SkillTemplateEditorView;
     expect(skillTemplatePollMs(view, 1)).toBe(3000);
     expect(skillTemplatePollMs(undefined, 1)).toBe(false);
+  });
+});
+
+describe('nextSkillTemplatePoll', () => {
+  const running = (runAt: string) =>
+    ({
+      template: { example: { status: 'running', runAt } },
+      previewImageStatus: null,
+    }) as unknown as SkillTemplateEditorView;
+
+  it('counts polls per run, so a second run in the same session is still polled', () => {
+    let state = { key: '', polls: 0 };
+    let last: number | false = false;
+    for (let i = 0; i < 400; i += 1) {
+      const next = nextSkillTemplatePoll(state, running('2026-01-01T00:00:00Z'));
+      state = next.state;
+      last = next.ms;
+    }
+    expect(last).toBe(false);
+
+    expect(nextSkillTemplatePoll(state, running('2026-01-01T01:00:00Z')).ms).toBe(3000);
+  });
+
+  it('restarts the budget for a new image after a run used it up', () => {
+    const pending = (fabFileId: string) =>
+      ({
+        template: { previewImage: { fabFileId } },
+        previewImageStatus: 'pending',
+      }) as unknown as SkillTemplateEditorView;
+    let state = { key: '', polls: 0 };
+    for (let i = 0; i < 150; i += 1) state = nextSkillTemplatePoll(state, pending('f1')).state;
+    expect(nextSkillTemplatePoll(state, pending('f1')).ms).toBe(false);
+    expect(nextSkillTemplatePoll(state, pending('f2')).ms).toBe(3000);
   });
 });

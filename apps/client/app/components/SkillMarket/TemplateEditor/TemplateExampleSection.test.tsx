@@ -195,4 +195,20 @@ describe('replyParagraphs', () => {
     ]);
     expect(replyParagraphs('One block only')).toHaveLength(1);
   });
+
+  it('never splits inside a fenced code block', () => {
+    const reply = 'Intro\n\n```js\nconst a = 1;\n\nconst b = 2;\n```\n\nOutro\n\n~~~\nx\n\ny\n~~~';
+    const parts = replyParagraphs(reply);
+    expect(parts.map(p => p.text)).toEqual([
+      'Intro',
+      '```js\nconst a = 1;\n\nconst b = 2;\n```',
+      'Outro',
+      '~~~\nx\n\ny\n~~~',
+    ]);
+    for (const part of parts) expect(reply.slice(0, part.end).split(/^ {0,3}(?:```|~~~)/m).length % 2).toBe(1);
+  });
+
+  it('keeps an unclosed fence as one trailing paragraph', () => {
+    expect(replyParagraphs('Intro\n\n```\na\n\nb').map(p => p.text)).toEqual(['Intro', '```\na\n\nb']);
+  });
 });

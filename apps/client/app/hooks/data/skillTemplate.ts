@@ -1,3 +1,4 @@
+import { useRef } from 'react';
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '@client/app/contexts/ApiContext';
 import type {
@@ -33,13 +34,39 @@ export function skillTemplatePollMs(data: SkillTemplateEditorView | undefined, p
   return false;
 }
 
-export const useSkillTemplate = (listingId: string) =>
-  useQuery({
+/** Names what is being waited on, so the poll budget restarts for each new run or image. */
+export function skillTemplatePollKey(data: SkillTemplateEditorView | undefined): string {
+  if (data?.template?.example?.status === 'running') return `example:${String(data.template.example.runAt ?? '')}`;
+  if (data?.previewImageStatus === 'pending') return `image:${data.template?.previewImage?.fabFileId ?? ''}`;
+  return '';
+}
+
+export type SkillTemplatePollState = { key: string; polls: number };
+
+/** One refetch decision, counting polls per run: the count restarts whenever the key changes. */
+export function nextSkillTemplatePoll(
+  state: SkillTemplatePollState,
+  data: SkillTemplateEditorView | undefined
+): { state: SkillTemplatePollState; ms: number | false } {
+  const key = skillTemplatePollKey(data);
+  const polls = state.key === key ? state.polls : 0;
+  const ms = skillTemplatePollMs(data, polls);
+  return { state: { key, polls: ms === false ? polls : polls + 1 }, ms };
+}
+
+export const useSkillTemplate = (listingId: string) => {
+  const pollState = useRef<SkillTemplatePollState>({ key: '', polls: 0 });
+  return useQuery({
     queryKey: skillTemplateKey(listingId),
     queryFn: async () => (await api.get<SkillTemplateEditorView>(`/api/skills/market/${listingId}/template`)).data,
-    refetchInterval: query => skillTemplatePollMs(query.state.data, query.state.dataUpdateCount),
+    refetchInterval: query => {
+      const next = nextSkillTemplatePoll(pollState.current, query.state.data);
+      pollState.current = next.state;
+      return next.ms;
+    },
     retry: false,
   });
+};
 
 type GenerationQuest = { images?: string[]; type?: string; status?: string };
 

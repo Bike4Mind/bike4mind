@@ -314,6 +314,21 @@ export function templatePageCsp(view: Pick<TemplatePageView, 'freeRun' | 'exampl
   );
 }
 
+/**
+ * The preview route's page as the editor frames it in a srcDoc, which never sees response headers:
+ * the CSP as a meta tag (frame-ancestors cannot be set that way), and links opening a new context,
+ * which the frame's sandbox refuses, so the app never loads inside it.
+ */
+export function withPreviewFrameGuards(html: string, csp: string): string {
+  const policy = csp
+    .split('; ')
+    .filter(directive => !directive.startsWith('frame-ancestors'))
+    .join('; ');
+  return html
+    .replace('<head>', `<head>\n<meta http-equiv="Content-Security-Policy" content="${escapeHtml(policy)}">`)
+    .replace(/<a /g, '<a target="_blank" rel="noopener noreferrer" ');
+}
+
 const freeRunRunPath = (slug: string): string => `/api/skills/template/run/${encodeURIComponent(slug)}`;
 
 function signupBlock(slug: string, brand: string, visible: boolean): string {

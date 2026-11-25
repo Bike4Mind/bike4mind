@@ -29,12 +29,39 @@ import { getErrorMessage } from '@client/app/utils/error';
 
 export const EXAMPLE_STALE_TEXT = 'A newer version of this skill was approved. Re-run the example to update the page.';
 
-/** The reply's paragraphs with the offset each ends at; a trim cuts the reply at one of those ends. */
+/** Offset ranges covered by ``` or ~~~ fenced blocks; an unclosed fence runs to the end. */
+function fencedRanges(text: string): Array<[number, number]> {
+  const ranges: Array<[number, number]> = [];
+  let open: { char: string; size: number; start: number } | null = null;
+  let offset = 0;
+  for (const line of text.split('\n')) {
+    const marker = /^ {0,3}(`{3,}|~{3,})/.exec(line);
+    if (marker) {
+      const char = marker[1][0];
+      const size = marker[1].length;
+      if (!open) open = { char, size, start: offset };
+      else if (char === open.char && size >= open.size && !line.slice(marker[0].length).trim()) {
+        ranges.push([open.start, offset + line.length]);
+        open = null;
+      }
+    }
+    offset += line.length + 1;
+  }
+  if (open) ranges.push([open.start, text.length]);
+  return ranges;
+}
+
+/**
+ * The reply's paragraphs with the offset each ends at; a trim cuts the reply at one of those ends.
+ * A blank line inside a fenced code block is not a break, so a trim never leaves a fence unclosed.
+ */
 export function replyParagraphs(reply: string): Array<{ text: string; start: number; end: number }> {
   const paragraphs: Array<{ text: string; start: number; end: number }> = [];
+  const fences = fencedRanges(reply);
   const breaks = /\n\s*\n/g;
   let start = 0;
   for (let match = breaks.exec(reply); match; match = breaks.exec(reply)) {
+    if (fences.some(([from, to]) => match.index >= from && match.index < to)) continue;
     if (reply.slice(start, match.index).trim()) {
       paragraphs.push({ text: reply.slice(start, match.index), start, end: match.index });
     }
