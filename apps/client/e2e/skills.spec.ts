@@ -179,10 +179,12 @@ test.describe('Skills - list, create, detail, edit, share', () => {
     await test.step('share dialog opens; unknown email surfaces an error', async () => {
       await skillsPage.openShareDialog();
       await expect(page.getByTestId('skill-share-dialog')).toContainText('Not shared with anyone yet');
-      await skillsPage.addShareByEmail(`nobody-${TEST_RUN_ID}@example.com`);
-      await expect(page.getByTestId('skill-share-error')).toContainText('No user found', {
-        timeout: TIMEOUTS.VISIBLE,
-      });
+      const unknownEmail = `nobody-${TEST_RUN_ID}@example.com`;
+      await skillsPage.addShareByEmail(unknownEmail);
+      await expect(page.getByTestId('skill-share-error')).toContainText(
+        `No one in your organizations has the email "${unknownEmail}"`,
+        { timeout: TIMEOUTS.VISIBLE }
+      );
     });
 
     await test.step('global-write auto-enables global-read + warning, and PUT .../share fires', async () => {
