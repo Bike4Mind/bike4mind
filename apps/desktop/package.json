@@ -12,6 +12,7 @@
   "scripts": {
     "dev": "electron-vite dev",
     "build": "electron-vite build",
+    "build:host": "vite build --config vite.host.config.ts",
     "package": "electron-vite build && node scripts/package-local.cjs",
     "package:mac": "electron-vite build && node scripts/package-local.cjs --mac",
     "package:win": "electron-vite build && node scripts/package-local.cjs --win",
