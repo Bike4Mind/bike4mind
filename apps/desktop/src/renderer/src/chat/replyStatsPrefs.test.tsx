@@ -505,7 +505,7 @@ describe('the reply stats settings', () => {
     act(() =>
       root.render(
         <CssVarsProvider>
-          <SettingsScreen auth={null} onClose={() => undefined} />
+          <SettingsScreen auth={null} section="models" onClose={() => undefined} />
           <TurnStatus
             turn={{
               startedAt: Date.now(),
