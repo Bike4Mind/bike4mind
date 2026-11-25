@@ -16,7 +16,17 @@ export const AuditActorSchema = z.object({
 export type AuditActor = z.infer<typeof AuditActorSchema>;
 
 export const AuditTargetSchema = z.object({
-  kind: z.enum(['user', 'organization', 'settings', 'oauthClient', 'apiKey', 'system', 'curatedCatalog', 'adminRole']),
+  kind: z.enum([
+    'user',
+    'organization',
+    'settings',
+    'oauthClient',
+    'apiKey',
+    'system',
+    'curatedCatalog',
+    'adminRole',
+    'space',
+  ]),
   id: z.string(),
   displayName: z.string(),
 });

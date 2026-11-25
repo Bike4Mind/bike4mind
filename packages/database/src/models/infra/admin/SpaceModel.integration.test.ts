@@ -42,6 +42,58 @@ describe('SpaceModel', () => {
     });
   });
 
+  describe('searchAll', () => {
+    it('matches the name case-insensitively and treats the term literally', async () => {
+      await createSpace({ name: 'Quantum Lab' });
+      await createSpace({ name: 'Design' });
+      await createSpace({ name: 'a.c' });
+      await createSpace({ name: 'abc' });
+      const byName = await spaceRepository.searchAll({ search: 'quantum', page: 1, limit: 10, sort: 'name' });
+      expect(byName.data.map(s => s.name)).toEqual(['Quantum Lab']);
+      const literal = await spaceRepository.searchAll({ search: 'a.c', page: 1, limit: 10, sort: 'name' });
+      expect(literal.data.map(s => s.name)).toEqual(['a.c']);
+    });
+
+    it('matches the owner ids the caller resolved', async () => {
+      await createSpace({ name: 'One', ownerUserId: 'owner-a' });
+      await createSpace({ name: 'Two', ownerUserId: 'owner-b' });
+      const result = await spaceRepository.searchAll({
+        search: 'ada@example.com',
+        ownerUserIds: ['owner-a'],
+        page: 1,
+        limit: 10,
+        sort: 'name',
+      });
+      expect(result.data.map(s => s.name)).toEqual(['One']);
+      expect(result.total).toBe(1);
+    });
+
+    it('skips deleted Spaces, pages, counts and sorts', async () => {
+      const gone = await createSpace({ name: 'Gone' });
+      await spaceRepository.softDelete(String(gone.id), OWNER);
+      for (const name of ['Bravo', 'Alpha', 'Charlie']) await createSpace({ name });
+
+      const first = await spaceRepository.searchAll({ page: 1, limit: 2, sort: 'name' });
+      expect(first.total).toBe(3);
+      expect(first.data.map(s => s.name)).toEqual(['Alpha', 'Bravo']);
+      const second = await spaceRepository.searchAll({ page: 2, limit: 2, sort: 'name' });
+      expect(second.data.map(s => s.name)).toEqual(['Charlie']);
+      const newest = await spaceRepository.searchAll({ page: 1, limit: 3, sort: 'createdAt' });
+      expect(newest.data.map(s => s.name)).toEqual(['Charlie', 'Alpha', 'Bravo']);
+    });
+  });
+
+  describe('removeMember without an actor', () => {
+    it('removes a member of any role, blocks them, and never the owner', async () => {
+      const space = await createSpace({ members: [member('u1', 'admin')] });
+      const id = String(space.id);
+      const after = await spaceRepository.removeMember(id, 'u1', { block: true });
+      expect(after?.members).toHaveLength(0);
+      expect(after?.removedUserIds).toEqual(['u1']);
+      expect(await spaceRepository.removeMember(id, OWNER, { block: true })).toBeNull();
+    });
+  });
+
   describe('addMember', () => {
     it('respects the cap', async () => {
       const space = await createSpace();

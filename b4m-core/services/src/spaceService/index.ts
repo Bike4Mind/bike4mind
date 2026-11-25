@@ -11,7 +11,9 @@ import { loadForMember } from './loadForMember';
 import { joinViaDomain } from './joinViaDomain';
 import { listDomainSuggestions } from './listDomainSuggestions';
 import { recheckDomainMembers } from './recheckDomainMembers';
-import { notifySpaceDomainReleased } from './notifySpaceDomainReleased';
+import { notifySpaceDomainReleased, notifySpaceDeletedByAdmin } from './notifySpaceDomainReleased';
+import { adminRemove } from './adminRemove';
+import { adminRemoveMember } from './adminRemoveMember';
 import type { SpaceWithUsers } from './get';
 import type { SpaceDomainSuggestion } from './listDomainSuggestions';
 
@@ -30,6 +32,9 @@ export {
   listDomainSuggestions,
   recheckDomainMembers,
   notifySpaceDomainReleased,
+  notifySpaceDeletedByAdmin,
+  adminRemove,
+  adminRemoveMember,
 };
 
 export type { SpaceWithUsers, SpaceDomainSuggestion };
