@@ -342,6 +342,12 @@ describe('confirmed obligations in the brief', () => {
     expect(assembleBrief(reply, activity).happened[0].text).toBe('Due Nov 20: Power bill');
   });
 
+  it('names a payment when payee, amount and summary are all empty', () => {
+    const bare = obligation(1, { payee: null, amount: null, currency: null, summary: '' });
+    const activity = { ...baseActivity(), obligations: [bare] };
+    expect(assembleBrief(reply, activity).happened[0].text).toBe('Due Nov 20: a payment');
+  });
+
   it('keeps obligations when the section cap cuts the rest', () => {
     const activity = {
       ...baseActivity(),
