@@ -56,6 +56,7 @@ function startFakeApi() {
     if (path === '/api/identify') return json(response, { user: { id: USER_ID, email: 'rider@example.com' } });
     if (path === '/api/settings/fetch') return json(response, {});
     if (path === '/api/settings/serverConfig') return json(response, {});
+    if (path === '/api/skills') return json(response, { data: [] });
     if (path === '/api/models' || path === '/api/v1/models' || path === '/api/v1/video-models') {
       return json(response, { data: [], models: [] });
     }
